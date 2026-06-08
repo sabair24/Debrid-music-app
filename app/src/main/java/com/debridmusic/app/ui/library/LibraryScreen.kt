@@ -9,6 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PlaylistPlay
@@ -39,6 +40,7 @@ fun LibraryScreen(
     onSettingsClick: () -> Unit,
     onDownloadsClick: () -> Unit = {},
     onStreamOnlineClick: () -> Unit = {},
+    onSoulseekClick: () -> Unit = {},
     onPlaylistClick: (Long) -> Unit = {},
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
@@ -96,6 +98,9 @@ fun LibraryScreen(
                         }
                         IconButton(onClick = onStreamOnlineClick) {
                             Icon(Icons.Default.CloudDownload, "Stream online")
+                        }
+                        IconButton(onClick = onSoulseekClick) {
+                            Icon(Icons.Default.People, "Soulseek P2P")
                         }
                         IconButton(onClick = onDownloadsClick) {
                             Icon(Icons.Default.Download, "Downloads")

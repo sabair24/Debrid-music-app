@@ -14,6 +14,7 @@ import com.debridmusic.app.ui.library.LibraryScreen
 import com.debridmusic.app.ui.player.PlayerScreen
 import com.debridmusic.app.ui.playlist.PlaylistDetailScreen
 import com.debridmusic.app.ui.settings.SettingsScreen
+import com.debridmusic.app.ui.soulseek.SoulseekSearchScreen
 
 sealed class Screen(val route: String) {
     object Library : Screen("library")
@@ -21,6 +22,7 @@ sealed class Screen(val route: String) {
     object Settings : Screen("settings")
     object CatalogueSearch : Screen("catalogue_search")
     object Downloads : Screen("downloads")
+    object SoulseekSearch : Screen("soulseek_search")
     object AlbumDetail : Screen("album/{albumId}") {
         fun createRoute(albumId: Long) = "album/$albumId"
     }
@@ -49,6 +51,7 @@ fun AppNavHost(navController: NavHostController) {
                 },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onStreamOnlineClick = { navController.navigate(Screen.CatalogueSearch.route) },
+                onSoulseekClick = { navController.navigate(Screen.SoulseekSearch.route) },
                 onDownloadsClick = { navController.navigate(Screen.Downloads.route) },
                 onPlaylistClick = { playlistId ->
                     navController.navigate(Screen.PlaylistDetail.createRoute(playlistId))
@@ -69,6 +72,13 @@ fun AppNavHost(navController: NavHostController) {
 
         composable(Screen.Settings.route) {
             SettingsScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Screen.SoulseekSearch.route) {
+            SoulseekSearchScreen(
+                onBack = { navController.popBackStack() },
+                onNowPlayingClick = { navController.navigate(Screen.NowPlaying.route) },
+            )
         }
 
         composable(Screen.Downloads.route) {

@@ -25,6 +25,9 @@ data class SettingsUiState(
     val torBoxUser: TorBoxUser? = null,
     val torBoxValidating: Boolean = false,
     val torBoxError: String? = null,
+    // Soulseek
+    val slskUsername: String = "",
+    val slskPassword: String = "",
     // EQ
     val eqEnabled: Boolean = false,
     val eqBands: List<Float> = List(5) { 0f },
@@ -82,6 +85,10 @@ class SettingsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            combine(settingsStore.slskUsername, settingsStore.slskPassword) { u, p -> u to p }
+                .collect { (u, p) -> _state.update { it.copy(slskUsername = u, slskPassword = p) } }
+        }
+        viewModelScope.launch {
             combine(
                 settingsStore.lastFmUsername,
                 settingsStore.lastFmSessionKey,
@@ -127,6 +134,15 @@ class SettingsViewModel @Inject constructor(
                 .onFailure { e ->
                     _state.update { it.copy(torBoxValidating = false, torBoxError = e.message) }
                 }
+        }
+    }
+
+    fun setSlskUsername(v: String) = _state.update { it.copy(slskUsername = v) }
+    fun setSlskPassword(v: String) = _state.update { it.copy(slskPassword = v) }
+    fun saveSlskCredentials() {
+        viewModelScope.launch {
+            settingsStore.setSlskUsername(_state.value.slskUsername)
+            settingsStore.setSlskPassword(_state.value.slskPassword)
         }
     }
 

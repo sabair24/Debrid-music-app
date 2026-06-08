@@ -118,6 +118,48 @@ fun SettingsScreen(
 
             HorizontalDivider()
 
+            // ── Soulseek ─────────────────────────────────────────────────────
+            SectionHeader("Soulseek P2P")
+
+            Text(
+                text = "Search and download music directly from other users via the Soulseek P2P network. Uses your own soulseek.net account.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            var showSlskPassword by remember { mutableStateOf(false) }
+
+            OutlinedTextField(
+                value = state.slskUsername,
+                onValueChange = viewModel::setSlskUsername,
+                label = { Text("Soulseek username") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            OutlinedTextField(
+                value = state.slskPassword,
+                onValueChange = viewModel::setSlskPassword,
+                label = { Text("Soulseek password") },
+                singleLine = true,
+                visualTransformation = if (showSlskPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    IconButton(onClick = { showSlskPassword = !showSlskPassword }) {
+                        Icon(if (showSlskPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility, null)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Button(
+                onClick = viewModel::saveSlskCredentials,
+                enabled = state.slskUsername.isNotBlank() && state.slskPassword.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Save Soulseek credentials") }
+
+            HorizontalDivider()
+
             // ── Metadata sources ─────────────────────────────────────────────
             SectionHeader("Metadata sources")
 

@@ -56,6 +56,13 @@ class SettingsStore @Inject constructor(
 
     suspend fun setCrossFadeDurationMs(ms: Int) { dataStore.edit { it[KEY_CROSSFADE_MS] = ms } }
 
+    // ── Soulseek ──────────────────────────────────────────────────────────────
+    val slskUsername: Flow<String> = dataStore.data.map { it[KEY_SLSK_USERNAME] ?: "" }
+    val slskPassword: Flow<String> = dataStore.data.map { it[KEY_SLSK_PASSWORD] ?: "" }
+
+    suspend fun setSlskUsername(v: String) { dataStore.edit { it[KEY_SLSK_USERNAME] = v } }
+    suspend fun setSlskPassword(v: String) { dataStore.edit { it[KEY_SLSK_PASSWORD] = v } }
+
     companion object {
         val KEY_LASTFM_API_KEY = stringPreferencesKey("last_fm_api_key")
         val KEY_DISCOGS_TOKEN = stringPreferencesKey("discogs_token")
@@ -65,5 +72,7 @@ class SettingsStore @Inject constructor(
         val KEY_EQ_ENABLED = booleanPreferencesKey("eq_enabled")
         val KEY_EQ_BANDS = stringPreferencesKey("eq_bands")
         val KEY_CROSSFADE_MS = intPreferencesKey("crossfade_ms")
+        val KEY_SLSK_USERNAME = stringPreferencesKey("slsk_username")
+        val KEY_SLSK_PASSWORD = stringPreferencesKey("slsk_password")
     }
 }
