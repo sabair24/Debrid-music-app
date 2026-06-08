@@ -232,7 +232,7 @@ private fun TvSearchResultRow(
                 if (event.key == Key.DirectionCenter && event.type == KeyEventType.KeyUp) {
                     when (streamState) {
                         is StreamState.Idle, is StreamState.Error -> onStream()
-                        is StreamState.Ready -> onNowPlaying()
+                        is StreamState.Ready, is StreamState.ReadyAlbum -> onNowPlaying()
                         else -> onCancel()
                     }
                     true
@@ -351,6 +351,11 @@ private fun TvSearchResultRow(
             is StreamState.Ready -> {
                 Button(onClick = onNowPlaying, modifier = Modifier.height(48.dp)) {
                     Text("Speelt")
+                }
+            }
+            is StreamState.ReadyAlbum -> {
+                Button(onClick = onNowPlaying, modifier = Modifier.height(48.dp)) {
+                    Text("${streamState.tracks.size} tracks")
                 }
             }
             is StreamState.Error -> {
