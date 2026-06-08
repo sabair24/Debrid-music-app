@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.debridmusic.app.data.remote.dto.TorBoxFile
 import com.debridmusic.app.data.remote.dto.TorBoxSearchResult
 import com.debridmusic.app.data.remote.dto.TorBoxTorrentItem
+import com.debridmusic.app.domain.model.Track
 import com.debridmusic.app.download.OfflineDownloadManager
 import com.debridmusic.app.player.PlayerController
 import com.debridmusic.app.torbox.StreamState
@@ -65,8 +66,10 @@ class CatalogueSearchViewModel @Inject constructor(
 
             flow.collect { state ->
                 _state.update { it.copy(streamState = state) }
-                if (state is StreamState.Ready) {
-                    playStreamUrl(state)
+                when (state) {
+                    is StreamState.Ready -> playStreamUrl(state)
+                    is StreamState.ReadyAlbum -> playAlbumQueue(state)
+                    else -> {}
                 }
             }
         }
@@ -78,13 +81,40 @@ class CatalogueSearchViewModel @Inject constructor(
     }
 
     private fun playStreamUrl(ready: StreamState.Ready) {
-        // Build a synthetic Track and play it via ExoPlayer
         playerController.playRemoteUrl(
             url = ready.streamUrl,
             title = ready.file.shortName ?: ready.file.name,
             artist = extractArtistFromName(ready.torrentItem.name),
             album = ready.torrentItem.name,
         )
+    }
+
+    private fun playAlbumQueue(ready: StreamState.ReadyAlbum) {
+        val albumName = ready.torrentItem.name
+        val artist = extractArtistFromName(albumName)
+        val tracks = ready.tracks.mapIndexed { index, albumTrack ->
+            Track(
+                id = -(index + 1L),
+                title = albumTrack.file.shortName ?: albumTrack.file.name,
+                artistName = artist,
+                albumTitle = albumName,
+                albumId = -1L,
+                artistId = -1L,
+                uri = albumTrack.url,
+                durationMs = 0L,
+                trackNumber = index + 1,
+                discNumber = 1,
+                year = null,
+                artworkUri = null,
+                genre = null,
+                bitrate = null,
+                sampleRate = null,
+                isLossless = albumTrack.file.isFlac,
+                fileSize = albumTrack.file.size,
+                dateAdded = System.currentTimeMillis(),
+            )
+        }
+        playerController.playQueue(tracks)
     }
 
     fun downloadCurrentStream() {

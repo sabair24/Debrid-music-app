@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
@@ -165,6 +166,7 @@ fun CatalogueSearchScreen(
                                 else StreamState.Idle,
                                 isDownloading = state.downloadingHash == result.hash,
                                 onStream = { viewModel.stream(result) },
+                                onStreamAlbum = { viewModel.stream(result, albumMode = true) },
                                 onCancel = { viewModel.cancelStream() },
                                 onNowPlaying = onNowPlayingClick,
                                 onDownload = { viewModel.downloadCurrentStream() },
@@ -187,6 +189,7 @@ private fun TorBoxResultItem(
     streamState: StreamState,
     isDownloading: Boolean,
     onStream: () -> Unit,
+    onStreamAlbum: () -> Unit,
     onCancel: () -> Unit,
     onNowPlaying: () -> Unit,
     onDownload: () -> Unit,
@@ -247,8 +250,15 @@ private fun TorBoxResultItem(
                     IconButton(onClick = onStream) {
                         Icon(
                             Icons.Default.PlayArrow,
-                            "Stream",
+                            "Stream best track",
                             tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    IconButton(onClick = onStreamAlbum) {
+                        Icon(
+                            Icons.Default.Album,
+                            "Stream full album",
+                            tint = MaterialTheme.colorScheme.secondary,
                         )
                     }
                 }
@@ -266,6 +276,11 @@ private fun TorBoxResultItem(
                         }
                     }
                     TextButton(onClick = onNowPlaying) { Text("Playing") }
+                }
+                is StreamState.ReadyAlbum -> {
+                    TextButton(onClick = onNowPlaying) {
+                        Text("${streamState.tracks.size} tracks")
+                    }
                 }
                 is StreamState.Error -> {
                     TextButton(onClick = onStream) {
