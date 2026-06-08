@@ -6,6 +6,8 @@ import com.debridmusic.app.data.local.SettingsStore
 import com.debridmusic.app.data.remote.dto.TorBoxUser
 import com.debridmusic.app.metadata.EnrichmentProgress
 import com.debridmusic.app.metadata.MetadataEnricher
+import com.debridmusic.app.player.EqController
+import com.debridmusic.app.player.ScrobbleManager
 import com.debridmusic.app.torbox.TorBoxAuthInterceptor
 import com.debridmusic.app.torbox.TorBoxRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -23,6 +25,19 @@ data class SettingsUiState(
     val torBoxUser: TorBoxUser? = null,
     val torBoxValidating: Boolean = false,
     val torBoxError: String? = null,
+    // EQ
+    val eqEnabled: Boolean = false,
+    val eqBands: List<Float> = List(5) { 0f },
+    val eqRangeDb: ClosedFloatingPointRange<Float> = -12f..12f,
+    // Cross-fade
+    val crossFadeDurationMs: Int = 0,
+    // Last.fm scrobble
+    val lastFmUsername: String = "",
+    val lastFmSessionKey: String = "",
+    val lastFmApiSecret: String = "",
+    val lastFmPassword: String = "",
+    val lastFmLoginLoading: Boolean = false,
+    val lastFmLoginError: String? = null,
 )
 
 @HiltViewModel
@@ -31,6 +46,8 @@ class SettingsViewModel @Inject constructor(
     private val metadataEnricher: MetadataEnricher,
     private val torBoxRepository: TorBoxRepository,
     private val torBoxAuthInterceptor: TorBoxAuthInterceptor,
+    val eqController: EqController,
+    private val scrobbleManager: ScrobbleManager,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SettingsUiState())
@@ -42,11 +59,45 @@ class SettingsViewModel @Inject constructor(
                 settingsStore.lastFmApiKey,
                 settingsStore.discogsToken,
                 settingsStore.torBoxApiKey,
-            ) { lfm, discogs, torbox -> Triple(lfm, discogs, torbox) }
-                .collect { (lfm, discogs, torbox) ->
-                    _state.update { it.copy(lastFmApiKey = lfm, discogsToken = discogs, torBoxApiKey = torbox) }
+                settingsStore.eqEnabled,
+                settingsStore.eqBandGains,
+            ) { lfm, discogs, torbox, eqOn, eqBands -> listOf(lfm, discogs, torbox, eqOn.toString(), eqBands) }
+                .collect { (lfm, discogs, torbox, eqOn, eqBands) ->
+                    val gains = eqBands.split(",").mapNotNull { it.toFloatOrNull() }
+                    _state.update {
+                        it.copy(
+                            lastFmApiKey = lfm,
+                            discogsToken = discogs,
+                            torBoxApiKey = torbox,
+                            eqEnabled = eqOn.toBoolean(),
+                            eqBands = gains.ifEmpty { List(5) { 0f } },
+                        )
+                    }
                     torBoxAuthInterceptor.apiKey = torbox
                 }
+        }
+        viewModelScope.launch {
+            settingsStore.crossFadeDurationMs.collect { ms ->
+                _state.update { it.copy(crossFadeDurationMs = ms) }
+            }
+        }
+        viewModelScope.launch {
+            combine(
+                settingsStore.lastFmUsername,
+                settingsStore.lastFmSessionKey,
+            ) { u, sk -> Pair(u, sk) }.collect { (u, sk) ->
+                _state.update { it.copy(lastFmUsername = u, lastFmSessionKey = sk) }
+            }
+        }
+        viewModelScope.launch {
+            eqController.isEnabled.collect { enabled ->
+                _state.update { it.copy(eqEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            eqController.bands.collect { bands ->
+                _state.update { it.copy(eqBands = bands, eqRangeDb = eqController.bandRangeDb) }
+            }
         }
     }
 
@@ -85,12 +136,52 @@ class SettingsViewModel @Inject constructor(
                 _state.update { it.copy(enrichProgress = progress) }
             }
             _state.update {
-                it.copy(
-                    isEnriching = false,
-                    enrichProgress = null,
-                    enrichResult = "Enriched $count items",
-                )
+                it.copy(isEnriching = false, enrichProgress = null, enrichResult = "Enriched $count items")
             }
+        }
+    }
+
+    // ── EQ ───────────────────────────────────────────────────────────────────
+    fun setEqEnabled(enabled: Boolean) = eqController.setEnabled(enabled, viewModelScope)
+
+    fun setEqBandGain(index: Int, gainDb: Float) =
+        eqController.setBandGain(index, gainDb, viewModelScope)
+
+    // ── Cross-fade ────────────────────────────────────────────────────────────
+    fun setCrossFadeDuration(ms: Int) {
+        _state.update { it.copy(crossFadeDurationMs = ms) }
+        viewModelScope.launch { settingsStore.setCrossFadeDurationMs(ms) }
+    }
+
+    // ── Last.fm scrobble ──────────────────────────────────────────────────────
+    fun setLastFmPassword(pw: String) = _state.update { it.copy(lastFmPassword = pw) }
+    fun setLastFmApiSecret(secret: String) = _state.update { it.copy(lastFmApiSecret = secret) }
+
+    fun loginLastFm() {
+        val s = _state.value
+        if (s.lastFmUsername.isBlank() || s.lastFmPassword.isBlank() ||
+            s.lastFmApiKey.isBlank() || s.lastFmApiSecret.isBlank()) return
+        _state.update { it.copy(lastFmLoginLoading = true, lastFmLoginError = null) }
+        viewModelScope.launch {
+            scrobbleManager.login(
+                username = s.lastFmUsername,
+                password = s.lastFmPassword,
+                apiKey = s.lastFmApiKey,
+                apiSecret = s.lastFmApiSecret,
+            ).onSuccess {
+                _state.update { it.copy(lastFmLoginLoading = false, lastFmPassword = "") }
+            }.onFailure { e ->
+                _state.update { it.copy(lastFmLoginLoading = false, lastFmLoginError = e.message) }
+            }
+        }
+    }
+
+    fun setLastFmUsernameInput(u: String) = _state.update { it.copy(lastFmUsername = u) }
+
+    fun logoutLastFm() {
+        viewModelScope.launch {
+            settingsStore.clearLastFmSession()
+            _state.update { it.copy(lastFmSessionKey = "", lastFmUsername = "") }
         }
     }
 }

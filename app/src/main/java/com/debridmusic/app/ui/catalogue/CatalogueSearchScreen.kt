@@ -8,6 +8,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -162,9 +163,11 @@ fun CatalogueSearchScreen(
                                 isStreaming = state.streamingId == result.hash,
                                 streamState = if (state.streamingId == result.hash) state.streamState
                                 else StreamState.Idle,
+                                isDownloading = state.downloadingHash == result.hash,
                                 onStream = { viewModel.stream(result) },
                                 onCancel = { viewModel.cancelStream() },
                                 onNowPlaying = onNowPlayingClick,
+                                onDownload = { viewModel.downloadCurrentStream() },
                             )
                             HorizontalDivider(
                                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
@@ -182,9 +185,11 @@ private fun TorBoxResultItem(
     result: TorBoxSearchResult,
     isStreaming: Boolean,
     streamState: StreamState,
+    isDownloading: Boolean,
     onStream: () -> Unit,
     onCancel: () -> Unit,
     onNowPlaying: () -> Unit,
+    onDownload: () -> Unit,
 ) {
     val isFlac = result.name.contains("flac", ignoreCase = true)
     val isMp3 = result.name.contains("mp3", ignoreCase = true) || result.name.contains("320", ignoreCase = false)
@@ -253,6 +258,13 @@ private fun TorBoxResultItem(
                     }
                 }
                 is StreamState.Ready -> {
+                    if (isDownloading) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                    } else {
+                        IconButton(onClick = onDownload) {
+                            Icon(Icons.Default.Download, "Download", tint = MaterialTheme.colorScheme.primary)
+                        }
+                    }
                     TextButton(onClick = onNowPlaying) { Text("Playing") }
                 }
                 is StreamState.Error -> {

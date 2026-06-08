@@ -5,6 +5,8 @@ import androidx.room.Room
 import com.debridmusic.app.data.local.AppDatabase
 import com.debridmusic.app.data.local.dao.AlbumDao
 import com.debridmusic.app.data.local.dao.ArtistDao
+import com.debridmusic.app.data.local.dao.DownloadDao
+import com.debridmusic.app.data.local.dao.PlaylistDao
 import com.debridmusic.app.data.local.dao.TrackDao
 import dagger.Module
 import dagger.Provides
@@ -25,12 +27,15 @@ object AppModule {
     @Provides @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): AppDatabase =
         Room.databaseBuilder(ctx, AppDatabase::class.java, "debrid_music.db")
+            .addMigrations(AppDatabase.MIGRATION_1_2)
             .fallbackToDestructiveMigration()
             .build()
 
     @Provides fun provideTrackDao(db: AppDatabase): TrackDao = db.trackDao()
     @Provides fun provideAlbumDao(db: AppDatabase): AlbumDao = db.albumDao()
     @Provides fun provideArtistDao(db: AppDatabase): ArtistDao = db.artistDao()
+    @Provides fun providePlaylistDao(db: AppDatabase): PlaylistDao = db.playlistDao()
+    @Provides fun provideDownloadDao(db: AppDatabase): DownloadDao = db.downloadDao()
 
     @Provides @Singleton
     fun provideOkHttpClient(): OkHttpClient =
@@ -39,7 +44,8 @@ object AppModule {
                 level = HttpLoggingInterceptor.Level.BASIC
             })
             .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
             .build()
 
     @Provides @Singleton
@@ -49,5 +55,4 @@ object AppModule {
             .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-
 }

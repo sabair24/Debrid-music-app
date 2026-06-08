@@ -6,8 +6,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sync
@@ -19,10 +23,12 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.debridmusic.app.domain.model.Album
+import com.debridmusic.app.ui.components.AddToPlaylistDialog
 import com.debridmusic.app.ui.components.AlbumArtwork
 import com.debridmusic.app.ui.components.AlbumCard
 import com.debridmusic.app.ui.components.MiniPlayer
 import com.debridmusic.app.ui.components.TrackItem
+import com.debridmusic.app.ui.playlist.PlaylistsScreen
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -31,7 +37,9 @@ fun LibraryScreen(
     onAlbumClick: (Long) -> Unit,
     onArtistClick: (Long) -> Unit,
     onSettingsClick: () -> Unit,
+    onDownloadsClick: () -> Unit = {},
     onStreamOnlineClick: () -> Unit = {},
+    onPlaylistClick: (Long) -> Unit = {},
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -89,6 +97,9 @@ fun LibraryScreen(
                         IconButton(onClick = onStreamOnlineClick) {
                             Icon(Icons.Default.CloudDownload, "Stream online")
                         }
+                        IconButton(onClick = onDownloadsClick) {
+                            Icon(Icons.Default.Download, "Downloads")
+                        }
                         IconButton(onClick = onSettingsClick) {
                             Icon(Icons.Default.Settings, "Settings")
                         }
@@ -139,6 +150,11 @@ fun LibraryScreen(
                         onClick = { viewModel.setTab(LibraryTab.ARTISTS) },
                         text = { Text("Artists") },
                     )
+                    Tab(
+                        selected = state.tab == LibraryTab.PLAYLISTS,
+                        onClick = { viewModel.setTab(LibraryTab.PLAYLISTS) },
+                        text = { Text("Playlists") },
+                    )
                 }
             }
 
@@ -152,6 +168,7 @@ fun LibraryScreen(
                             viewModel.playTrack(track, state.searchResults)
                             onTrackClick()
                         },
+                        onAddToPlaylist = { track -> viewModel.showAddToPlaylist(track) },
                     )
                 }
 
@@ -171,6 +188,7 @@ fun LibraryScreen(
                                 viewModel.playTrack(track, state.tracks)
                                 onTrackClick()
                             },
+                            onAddToPlaylist = { track -> viewModel.showAddToPlaylist(track) },
                         )
                     }
                 }
@@ -196,8 +214,32 @@ fun LibraryScreen(
                         )
                     }
                 }
+
+                state.tab == LibraryTab.PLAYLISTS -> {
+                    PlaylistsScreen(
+                        playlists = state.playlists,
+                        showCreateDialog = state.showCreatePlaylist,
+                        newPlaylistName = state.newPlaylistName,
+                        onNewNameChange = viewModel::setNewPlaylistName,
+                        onShowCreate = viewModel::showCreatePlaylist,
+                        onHideCreate = viewModel::hideCreatePlaylist,
+                        onCreate = viewModel::createPlaylist,
+                        onDelete = viewModel::deletePlaylist,
+                        onPlaylistClick = onPlaylistClick,
+                    )
+                }
             }
         }
+    }
+
+    // Add-to-playlist dialog
+    state.addToPlaylistTrack?.let { track ->
+        AddToPlaylistDialog(
+            playlists = state.playlists,
+            onDismiss = viewModel::hideAddToPlaylist,
+            onAddToPlaylist = viewModel::addTrackToPlaylist,
+            onCreateAndAdd = viewModel::createPlaylistAndAddTrack,
+        )
     }
 }
 
@@ -207,6 +249,7 @@ private fun TrackList(
     currentTrackId: Long?,
     isPlaying: Boolean,
     onTrackClick: (com.debridmusic.app.domain.model.Track) -> Unit,
+    onAddToPlaylist: (com.debridmusic.app.domain.model.Track) -> Unit,
 ) {
     LazyColumn(
         contentPadding = PaddingValues(vertical = 8.dp),
@@ -217,6 +260,7 @@ private fun TrackList(
                 track = track,
                 isPlaying = isPlaying && track.id == currentTrackId,
                 onTrackClick = onTrackClick,
+                onMoreClick = onAddToPlaylist,
             )
             HorizontalDivider(
                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),

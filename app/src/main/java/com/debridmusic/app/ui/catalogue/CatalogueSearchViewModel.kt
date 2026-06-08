@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.debridmusic.app.data.remote.dto.TorBoxFile
 import com.debridmusic.app.data.remote.dto.TorBoxSearchResult
 import com.debridmusic.app.data.remote.dto.TorBoxTorrentItem
+import com.debridmusic.app.download.OfflineDownloadManager
 import com.debridmusic.app.player.PlayerController
 import com.debridmusic.app.torbox.StreamState
 import com.debridmusic.app.torbox.TorBoxRepository
@@ -19,14 +20,16 @@ data class CatalogueSearchUiState(
     val results: List<TorBoxSearchResult> = emptyList(),
     val isSearching: Boolean = false,
     val searchError: String? = null,
-    val streamingId: String? = null,   // hash of the item being streamed
+    val streamingId: String? = null,
     val streamState: StreamState = StreamState.Idle,
+    val downloadingHash: String? = null,
 )
 
 @HiltViewModel
 class CatalogueSearchViewModel @Inject constructor(
     private val torBoxRepository: TorBoxRepository,
     val playerController: PlayerController,
+    private val offlineDownloadManager: OfflineDownloadManager,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(CatalogueSearchUiState())
@@ -84,8 +87,25 @@ class CatalogueSearchViewModel @Inject constructor(
         )
     }
 
+    fun downloadCurrentStream() {
+        val ready = _state.value.streamState as? StreamState.Ready ?: return
+        val hash = _state.value.streamingId ?: return
+        _state.update { it.copy(downloadingHash = hash) }
+        viewModelScope.launch {
+            offlineDownloadManager.startDownload(
+                title = ready.file.shortName ?: ready.file.name,
+                artist = extractArtistFromName(ready.torrentItem.name),
+                album = ready.torrentItem.name,
+                sourceUrl = ready.streamUrl,
+            ).collect { status ->
+                if (status.name == "DONE" || status.name == "FAILED") {
+                    _state.update { it.copy(downloadingHash = null) }
+                }
+            }
+        }
+    }
+
     private fun extractArtistFromName(torrentName: String): String {
-        // Try "Artist - Album" pattern
         val dash = torrentName.indexOf(" - ")
         return if (dash > 0) torrentName.substring(0, dash).trim() else torrentName
     }

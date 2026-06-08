@@ -9,8 +9,10 @@ import androidx.navigation.navArgument
 import com.debridmusic.app.ui.album.AlbumDetailScreen
 import com.debridmusic.app.ui.artist.ArtistDetailScreen
 import com.debridmusic.app.ui.catalogue.CatalogueSearchScreen
+import com.debridmusic.app.ui.downloads.DownloadsScreen
 import com.debridmusic.app.ui.library.LibraryScreen
 import com.debridmusic.app.ui.player.PlayerScreen
+import com.debridmusic.app.ui.playlist.PlaylistDetailScreen
 import com.debridmusic.app.ui.settings.SettingsScreen
 
 sealed class Screen(val route: String) {
@@ -18,11 +20,15 @@ sealed class Screen(val route: String) {
     object NowPlaying : Screen("now_playing")
     object Settings : Screen("settings")
     object CatalogueSearch : Screen("catalogue_search")
+    object Downloads : Screen("downloads")
     object AlbumDetail : Screen("album/{albumId}") {
         fun createRoute(albumId: Long) = "album/$albumId"
     }
     object ArtistDetail : Screen("artist/{artistId}") {
         fun createRoute(artistId: Long) = "artist/$artistId"
+    }
+    object PlaylistDetail : Screen("playlist/{playlistId}") {
+        fun createRoute(playlistId: Long) = "playlist/$playlistId"
     }
 }
 
@@ -43,6 +49,10 @@ fun AppNavHost(navController: NavHostController) {
                 },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onStreamOnlineClick = { navController.navigate(Screen.CatalogueSearch.route) },
+                onDownloadsClick = { navController.navigate(Screen.Downloads.route) },
+                onPlaylistClick = { playlistId ->
+                    navController.navigate(Screen.PlaylistDetail.createRoute(playlistId))
+                },
             )
         }
 
@@ -59,6 +69,13 @@ fun AppNavHost(navController: NavHostController) {
 
         composable(Screen.Settings.route) {
             SettingsScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Screen.Downloads.route) {
+            DownloadsScreen(
+                onBack = { navController.popBackStack() },
+                onNowPlayingClick = { navController.navigate(Screen.NowPlaying.route) },
+            )
         }
 
         composable(
@@ -80,6 +97,16 @@ fun AppNavHost(navController: NavHostController) {
                 onAlbumClick = { albumId ->
                     navController.navigate(Screen.AlbumDetail.createRoute(albumId))
                 },
+                onNowPlayingClick = { navController.navigate(Screen.NowPlaying.route) },
+            )
+        }
+
+        composable(
+            route = Screen.PlaylistDetail.route,
+            arguments = listOf(navArgument("playlistId") { type = NavType.LongType }),
+        ) {
+            PlaylistDetailScreen(
+                onBack = { navController.popBackStack() },
                 onNowPlayingClick = { navController.navigate(Screen.NowPlaying.route) },
             )
         }

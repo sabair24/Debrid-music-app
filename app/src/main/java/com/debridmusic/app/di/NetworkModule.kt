@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
 import com.debridmusic.app.data.remote.api.CoverArtArchiveApi
 import com.debridmusic.app.data.remote.api.LastFmApi
+import com.debridmusic.app.data.remote.api.LastFmScrobbleApi
 import com.debridmusic.app.data.remote.api.MusicBrainzApi
 import com.debridmusic.app.data.remote.api.TorBoxApi
 import com.debridmusic.app.torbox.TorBoxAuthInterceptor
@@ -73,6 +74,10 @@ object NetworkModule {
     @Provides @Singleton
     fun provideLastFmApi(@Named("lastfm") retrofit: Retrofit): LastFmApi =
         retrofit.create(LastFmApi::class.java)
+
+    @Provides @Singleton
+    fun provideLastFmScrobbleApi(@Named("lastfm") retrofit: Retrofit): LastFmScrobbleApi =
+        retrofit.create(LastFmScrobbleApi::class.java)
 
     @Provides @Singleton @Named("torbox")
     fun provideTorBoxRetrofit(

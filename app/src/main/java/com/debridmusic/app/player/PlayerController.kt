@@ -11,6 +11,9 @@ import com.debridmusic.app.domain.model.Track
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,9 +23,13 @@ import javax.inject.Singleton
 @Singleton
 class PlayerController @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val crossFadeManager: CrossFadeManager,
+    private val scrobbleManager: ScrobbleManager,
 ) {
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
+
+    private val controllerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
@@ -39,6 +46,9 @@ class PlayerController @Inject constructor(
     private var currentQueue: List<Track> = emptyList()
 
     fun connect() {
+        crossFadeManager.init(controllerScope)
+        scrobbleManager.init(this, controllerScope)
+
         val sessionToken = SessionToken(
             context,
             ComponentName(context, MusicPlayerService::class.java)
@@ -96,8 +106,7 @@ class PlayerController @Inject constructor(
             .setMediaId("remote:$url")
             .setMediaMetadata(metadata)
             .build()
-        // Represent as a synthetic Track so currentTrack flow updates
-        val syntheticTrack = com.debridmusic.app.domain.model.Track(
+        val syntheticTrack = Track(
             id = -1L,
             title = title,
             artistName = artist,
@@ -127,9 +136,12 @@ class PlayerController @Inject constructor(
     }
 
     fun updatePosition() {
-        controller?.let {
-            _positionMs.value = it.currentPosition
-            _durationMs.value = it.duration.coerceAtLeast(0L)
+        controller?.let { ctrl ->
+            val pos = ctrl.currentPosition
+            val dur = ctrl.duration.coerceAtLeast(0L)
+            _positionMs.value = pos
+            _durationMs.value = dur
+            crossFadeManager.checkFadeOut(ctrl, pos, dur)
         }
     }
 
@@ -142,6 +154,7 @@ class PlayerController @Inject constructor(
             val index = controller?.currentMediaItemIndex ?: return
             _currentTrack.value = currentQueue.getOrNull(index)
             _durationMs.value = controller?.duration?.coerceAtLeast(0L) ?: 0L
+            crossFadeManager.onTrackTransition(controller, controllerScope)
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {

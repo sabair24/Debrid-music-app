@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.debridmusic.app.data.repository.MusicRepository
 import com.debridmusic.app.domain.model.Album
 import com.debridmusic.app.domain.model.Artist
+import com.debridmusic.app.domain.model.Playlist
 import com.debridmusic.app.domain.model.Track
 import com.debridmusic.app.player.PlayerController
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -12,19 +13,25 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-enum class LibraryTab { TRACKS, ALBUMS, ARTISTS }
+enum class LibraryTab { TRACKS, ALBUMS, ARTISTS, PLAYLISTS }
 
 data class LibraryUiState(
     val tab: LibraryTab = LibraryTab.TRACKS,
     val tracks: List<Track> = emptyList(),
     val albums: List<Album> = emptyList(),
     val artists: List<Artist> = emptyList(),
+    val playlists: List<Playlist> = emptyList(),
     val searchQuery: String = "",
     val searchResults: List<Track> = emptyList(),
     val isSearching: Boolean = false,
     val isScanning: Boolean = false,
     val scanMessage: String? = null,
     val totalTracks: Int = 0,
+    // Playlist create dialog
+    val showCreatePlaylist: Boolean = false,
+    val newPlaylistName: String = "",
+    // Add-to-playlist dialog
+    val addToPlaylistTrack: Track? = null,
 )
 
 @HiltViewModel
@@ -53,13 +60,18 @@ class LibraryViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            repository.observePlaylists().collect { playlists ->
+                _state.update { it.copy(playlists = playlists) }
+            }
+        }
+        viewModelScope.launch {
             repository.trackCount().collect { count ->
                 _state.update { it.copy(totalTracks = count) }
             }
         }
     }
 
-    fun setTab(tab: LibraryTab) { _state.update { it.copy(tab = tab) } }
+    fun setTab(tab: LibraryTab) = _state.update { it.copy(tab = tab) }
 
     fun setSearchQuery(query: String) {
         _state.update { it.copy(searchQuery = query, isSearching = query.isNotBlank()) }
@@ -95,4 +107,41 @@ class LibraryViewModel @Inject constructor(
         playerController.playQueue(tracks, index)
     }
 
+    // ── Playlist management ───────────────────────────────────────────────────
+    fun showCreatePlaylist() = _state.update { it.copy(showCreatePlaylist = true, newPlaylistName = "") }
+    fun hideCreatePlaylist() = _state.update { it.copy(showCreatePlaylist = false) }
+    fun setNewPlaylistName(name: String) = _state.update { it.copy(newPlaylistName = name) }
+
+    fun createPlaylist() {
+        val name = _state.value.newPlaylistName.trim()
+        if (name.isBlank()) return
+        viewModelScope.launch {
+            repository.createPlaylist(name)
+            _state.update { it.copy(showCreatePlaylist = false) }
+        }
+    }
+
+    fun deletePlaylist(id: Long) {
+        viewModelScope.launch { repository.deletePlaylist(id) }
+    }
+
+    fun showAddToPlaylist(track: Track) = _state.update { it.copy(addToPlaylistTrack = track) }
+    fun hideAddToPlaylist() = _state.update { it.copy(addToPlaylistTrack = null) }
+
+    fun addTrackToPlaylist(playlistId: Long) {
+        val track = _state.value.addToPlaylistTrack ?: return
+        viewModelScope.launch {
+            repository.addTrackToPlaylist(playlistId, track.id)
+            _state.update { it.copy(addToPlaylistTrack = null) }
+        }
+    }
+
+    fun createPlaylistAndAddTrack(name: String) {
+        val track = _state.value.addToPlaylistTrack ?: return
+        viewModelScope.launch {
+            val id = repository.createPlaylist(name)
+            repository.addTrackToPlaylist(id, track.id)
+            _state.update { it.copy(addToPlaylistTrack = null) }
+        }
+    }
 }

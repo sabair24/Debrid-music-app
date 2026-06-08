@@ -3,12 +3,20 @@ package com.debridmusic.app.data.repository
 import com.debridmusic.app.data.local.dao.AlbumDao
 import com.debridmusic.app.data.local.dao.AlbumWithCount
 import com.debridmusic.app.data.local.dao.ArtistDao
+import com.debridmusic.app.data.local.dao.DownloadDao
+import com.debridmusic.app.data.local.dao.PlaylistDao
 import com.debridmusic.app.data.local.dao.TrackDao
 import com.debridmusic.app.data.local.entity.AlbumEntity
 import com.debridmusic.app.data.local.entity.ArtistEntity
+import com.debridmusic.app.data.local.entity.DownloadEntity
+import com.debridmusic.app.data.local.entity.DownloadStatus
+import com.debridmusic.app.data.local.entity.PlaylistEntity
+import com.debridmusic.app.data.local.entity.PlaylistTrackCrossRef
 import com.debridmusic.app.data.local.entity.TrackEntity
 import com.debridmusic.app.domain.model.Album
 import com.debridmusic.app.domain.model.Artist
+import com.debridmusic.app.domain.model.Download
+import com.debridmusic.app.domain.model.Playlist
 import com.debridmusic.app.domain.model.Track
 import com.debridmusic.app.scanner.MediaScanner
 import kotlinx.coroutines.flow.Flow
@@ -21,8 +29,11 @@ class MusicRepository @Inject constructor(
     private val trackDao: TrackDao,
     private val albumDao: AlbumDao,
     private val artistDao: ArtistDao,
+    private val playlistDao: PlaylistDao,
+    private val downloadDao: DownloadDao,
     private val mediaScanner: MediaScanner,
 ) {
+    // ── Library ───────────────────────────────────────────────────────────────
     fun observeTracks(): Flow<List<Track>> =
         trackDao.observeAll().map { list -> list.map { it.toDomain() } }
 
@@ -41,8 +52,7 @@ class MusicRepository @Inject constructor(
     fun observeTracksByArtist(artistId: Long): Flow<List<Track>> =
         trackDao.observeByArtist(artistId).map { list -> list.map { it.toDomain() } }
 
-    suspend fun search(query: String): List<Track> =
-        trackDao.search(query).map { it.toDomain() }
+    suspend fun search(query: String): List<Track> = trackDao.search(query).map { it.toDomain() }
 
     fun trackCount(): Flow<Int> = trackDao.countAll()
 
@@ -53,6 +63,37 @@ class MusicRepository @Inject constructor(
     suspend fun getAlbum(id: Long): Album? = albumDao.getById(id)?.toDomain()
 
     suspend fun getArtist(id: Long): Artist? = artistDao.getById(id)?.toDomain()
+
+    // ── Playlists ─────────────────────────────────────────────────────────────
+    fun observePlaylists(): Flow<List<Playlist>> =
+        playlistDao.observeAllWithCount().map { list ->
+            list.map { Playlist(it.id, it.name, it.trackCount, it.createdAt) }
+        }
+
+    suspend fun createPlaylist(name: String): Long =
+        playlistDao.insert(PlaylistEntity(name = name))
+
+    suspend fun deletePlaylist(id: Long) = playlistDao.deleteById(id)
+
+    suspend fun addTrackToPlaylist(playlistId: Long, trackId: Long) {
+        val order = (playlistDao.maxSortOrder(playlistId) ?: -1) + 1
+        playlistDao.addTrack(PlaylistTrackCrossRef(playlistId, trackId, order))
+    }
+
+    suspend fun removeTrackFromPlaylist(playlistId: Long, trackId: Long) =
+        playlistDao.removeTrack(playlistId, trackId)
+
+    fun observePlaylistTracks(playlistId: Long): Flow<List<Track>> =
+        playlistDao.observePlaylistTracks(playlistId).map { refs ->
+            refs.mapNotNull { ref -> trackDao.getById(ref.trackId)?.toDomain() }
+        }
+
+    suspend fun getPlaylists(): List<Playlist> =
+        playlistDao.getAll().map { Playlist(it.id, it.name, 0, it.createdAt) }
+
+    // ── Downloads ─────────────────────────────────────────────────────────────
+    fun observeDownloads(): Flow<List<Download>> =
+        downloadDao.observeAll().map { list -> list.map { it.toDomain() } }
 }
 
 // ---------- mapping extensions ----------
@@ -109,4 +150,17 @@ fun ArtistEntity.toDomain() = Artist(
     imageUri = imageUri,
     musicBrainzId = musicBrainzId,
     albumCount = 0,
+)
+
+fun DownloadEntity.toDomain() = Download(
+    id = id,
+    title = title,
+    artist = artist,
+    album = album,
+    sourceUrl = sourceUrl,
+    localPath = localPath,
+    sizeBytes = sizeBytes,
+    downloadedBytes = downloadedBytes,
+    status = DownloadStatus.valueOf(status),
+    dateAdded = dateAdded,
 )
