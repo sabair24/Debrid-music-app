@@ -8,7 +8,6 @@ import com.debridmusic.app.domain.model.Artist
 import com.debridmusic.app.domain.model.Track
 import com.debridmusic.app.player.PlayerController
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -96,10 +95,4 @@ class LibraryViewModel @Inject constructor(
         playerController.playQueue(tracks, index)
     }
 
-    fun playAlbum(album: Album) {
-        viewModelScope.launch {
-            val tracks = repository.observeTracksByAlbum(album.id).first()
-            if (tracks.isNotEmpty()) playerController.playQueue(tracks, 0)
-        }
-    }
 }

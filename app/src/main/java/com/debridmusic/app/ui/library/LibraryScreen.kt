@@ -1,13 +1,14 @@
 package com.debridmusic.app.ui.library
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,6 +20,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.debridmusic.app.domain.model.Album
 import com.debridmusic.app.ui.components.AlbumArtwork
 import com.debridmusic.app.ui.components.AlbumCard
+import com.debridmusic.app.ui.components.MiniPlayer
 import com.debridmusic.app.ui.components.TrackItem
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -27,9 +29,7 @@ fun LibraryScreen(
     onTrackClick: () -> Unit,
     onAlbumClick: (Long) -> Unit,
     onArtistClick: (Long) -> Unit,
-    onBack: (() -> Unit)? = null,
-    filterAlbumId: Long? = null,
-    filterArtistId: Long? = null,
+    onSettingsClick: () -> Unit,
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -38,24 +38,9 @@ fun LibraryScreen(
     val positionMs by viewModel.playerController.positionMs.collectAsStateWithLifecycle()
     val durationMs by viewModel.playerController.durationMs.collectAsStateWithLifecycle()
 
-    // Determine display mode
-    val isFiltered = filterAlbumId != null || filterArtistId != null
-
-    val displayTracks = when {
-        state.isSearching -> state.searchResults
-        filterAlbumId != null -> state.tracks.filter { it.albumId == filterAlbumId }
-        filterArtistId != null -> state.tracks.filter { it.artistId == filterArtistId }
-        else -> when (state.tab) {
-            LibraryTab.TRACKS -> state.tracks
-            else -> state.tracks
-        }
-    }
-
     val progress = if (durationMs > 0) positionMs.toFloat() / durationMs.toFloat() else 0f
 
-    LaunchedEffect(Unit) {
-        viewModel.playerController.connect()
-    }
+    LaunchedEffect(Unit) { viewModel.playerController.connect() }
 
     Scaffold(
         topBar = {
@@ -74,47 +59,33 @@ fun LibraryScreen(
                             modifier = Modifier.fillMaxWidth(),
                         )
                     } else {
-                        Text(
-                            text = when {
-                                filterAlbumId != null -> state.albums
-                                    .find { it.id == filterAlbumId }?.title ?: "Album"
-                                filterArtistId != null -> state.artists
-                                    .find { it.id == filterArtistId }?.name ?: "Artist"
-                                else -> "Library"
-                            }
-                        )
-                    }
-                },
-                navigationIcon = {
-                    if (onBack != null) {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                        }
+                        Text("Library")
                     }
                 },
                 actions = {
                     if (state.isSearching) {
                         IconButton(onClick = viewModel::clearSearch) {
-                            Icon(Icons.Default.Close, contentDescription = "Clear search")
+                            Icon(Icons.Default.Close, "Clear search")
                         }
                     } else {
                         IconButton(onClick = { viewModel.setSearchQuery(" ") }) {
-                            Icon(Icons.Default.Search, contentDescription = "Search")
+                            Icon(Icons.Default.Search, "Search")
                         }
-                        if (!isFiltered) {
-                            IconButton(
-                                onClick = viewModel::scanLocalMedia,
-                                enabled = !state.isScanning,
-                            ) {
-                                if (state.isScanning) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(20.dp),
-                                        strokeWidth = 2.dp,
-                                    )
-                                } else {
-                                    Icon(Icons.Default.Sync, contentDescription = "Scan music")
-                                }
+                        IconButton(
+                            onClick = viewModel::scanLocalMedia,
+                            enabled = !state.isScanning,
+                        ) {
+                            if (state.isScanning) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                            } else {
+                                Icon(Icons.Default.Sync, "Scan music")
                             }
+                        }
+                        IconButton(onClick = onSettingsClick) {
+                            Icon(Icons.Default.Settings, "Settings")
                         }
                     }
                 },
@@ -125,7 +96,7 @@ fun LibraryScreen(
         },
         bottomBar = {
             if (currentTrack != null) {
-                com.debridmusic.app.ui.components.MiniPlayer(
+                MiniPlayer(
                     track = currentTrack,
                     isPlaying = isPlaying,
                     progress = progress,
@@ -138,11 +109,12 @@ fun LibraryScreen(
         containerColor = MaterialTheme.colorScheme.background,
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+
             state.scanMessage?.let { msg ->
                 Snackbar(modifier = Modifier.padding(16.dp)) { Text(msg) }
             }
 
-            if (!isFiltered && !state.isSearching) {
+            if (!state.isSearching) {
                 TabRow(
                     selectedTabIndex = state.tab.ordinal,
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -168,45 +140,47 @@ fun LibraryScreen(
             when {
                 state.isSearching -> {
                     TrackList(
-                        tracks = displayTracks,
+                        tracks = state.searchResults,
                         currentTrackId = currentTrack?.id,
                         isPlaying = isPlaying,
                         onTrackClick = { track ->
-                            viewModel.playTrack(track, displayTracks)
+                            viewModel.playTrack(track, state.searchResults)
                             onTrackClick()
                         },
                     )
                 }
-                isFiltered || state.tab == LibraryTab.TRACKS -> {
-                    if (displayTracks.isEmpty()) {
-                        EmptyState(message = if (state.totalTracks == 0)
-                            "No tracks found.\nTap the scan button to import local music."
-                        else "No tracks in this view.")
+
+                state.tab == LibraryTab.TRACKS -> {
+                    if (state.tracks.isEmpty()) {
+                        EmptyState(
+                            message = if (state.totalTracks == 0)
+                                "No tracks found.\nTap the scan button to import local music."
+                            else "No tracks."
+                        )
                     } else {
                         TrackList(
-                            tracks = displayTracks,
+                            tracks = state.tracks,
                             currentTrackId = currentTrack?.id,
                             isPlaying = isPlaying,
                             onTrackClick = { track ->
-                                viewModel.playTrack(track, displayTracks)
+                                viewModel.playTrack(track, state.tracks)
                                 onTrackClick()
                             },
                         )
                     }
                 }
+
                 state.tab == LibraryTab.ALBUMS -> {
                     if (state.albums.isEmpty()) {
                         EmptyState(message = "No albums found.")
                     } else {
                         AlbumGrid(
                             albums = state.albums,
-                            onAlbumClick = { album ->
-                                viewModel.playAlbum(album)
-                                onAlbumClick(album.id)
-                            },
+                            onAlbumClick = { album -> onAlbumClick(album.id) },
                         )
                     }
                 }
+
                 state.tab == LibraryTab.ARTISTS -> {
                     if (state.artists.isEmpty()) {
                         EmptyState(message = "No artists found.")
@@ -257,7 +231,6 @@ private fun AlbumGrid(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.fillMaxSize(),
     ) {
-        // Chunked 2-column grid using LazyRow rows
         val rows = albums.chunked(2)
         items(rows) { row ->
             Row(
