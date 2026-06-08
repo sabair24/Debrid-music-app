@@ -1,5 +1,6 @@
 package com.debridmusic.app.ui.playlist
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -79,7 +80,9 @@ fun PlaylistsScreen(
                                 )
                             }
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onPlaylistClick(playlist.id) },
                         colors = ListItemDefaults.colors(
                             containerColor = MaterialTheme.colorScheme.background,
                         ),

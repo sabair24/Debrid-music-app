@@ -22,10 +22,8 @@ class EqController @Inject constructor(
     private val _bands = MutableStateFlow(List(5) { 0f })
     val bands: StateFlow<List<Float>> = _bands.asStateFlow()
 
-    // Center frequencies shown in UI (Hz)
     val bandLabels = listOf("60 Hz", "230 Hz", "910 Hz", "3.6 kHz", "14 kHz")
 
-    // Range the hardware supports (millibels). Populated after attach.
     var bandRangeDb: ClosedFloatingPointRange<Float> = -12f..12f
         private set
 
@@ -33,9 +31,11 @@ class EqController @Inject constructor(
         equalizer?.release()
         try {
             equalizer = Equalizer(0, audioSessionId).apply {
-                val range = bandLevelRange
-                bandRangeDb = (range[0] / 100f)..(range[1] / 100f)
-                // Load persisted settings
+                val range = bandLevelRange  // ShortArray [min, max] in millibels
+                val minMb = range[0].toInt()
+                val maxMb = range[1].toInt()
+                bandRangeDb = (minMb / 100f)..(maxMb / 100f)
+
                 scope.launch {
                     settingsStore.eqEnabled.collect { enabled ->
                         _isEnabled.value = enabled
@@ -49,8 +49,9 @@ class EqController @Inject constructor(
                         if (gains.size >= count) {
                             _bands.value = gains.take(count)
                             gains.take(count).forEachIndexed { i, gainDb ->
-                                val mb = (gainDb * 100f).toInt().toShort()
-                                    .coerceIn(range[0], range[1])
+                                val mb = (gainDb * 100f).toInt()
+                                    .coerceIn(minMb, maxMb)
+                                    .toShort()
                                 setBandLevel(i.toShort(), mb)
                             }
                         }
@@ -58,7 +59,7 @@ class EqController @Inject constructor(
                 }
             }
         } catch (_: Exception) {
-            // Equalizer unavailable on this device
+            // Equalizer unavailable on this device/session
         }
     }
 
@@ -74,8 +75,10 @@ class EqController @Inject constructor(
         current[index] = gainDb
         _bands.value = current
         equalizer?.let { eq ->
-            val mb = (gainDb * 100f).toInt().toShort()
-                .coerceIn(eq.bandLevelRange[0], eq.bandLevelRange[1])
+            val range = eq.bandLevelRange
+            val mb = (gainDb * 100f).toInt()
+                .coerceIn(range[0].toInt(), range[1].toInt())
+                .toShort()
             eq.setBandLevel(index.toShort(), mb)
         }
         scope.launch { settingsStore.setEqBandGains(current.joinToString(",")) }
@@ -86,6 +89,3 @@ class EqController @Inject constructor(
         equalizer = null
     }
 }
-
-private fun Short.coerceIn(min: Short, max: Short): Short =
-    maxOf(min, minOf(max, this))
