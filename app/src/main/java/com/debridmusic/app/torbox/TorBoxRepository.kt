@@ -46,7 +46,6 @@ class TorBoxRepository @Inject constructor(
     }
 
     suspend fun search(query: String): Result<List<TorBoxSearchResult>> = runCatching {
-        syncApiKey()
         val resp = api.search(query)
         if (!resp.success) error(resp.detail ?: resp.error ?: "Search failed")
         (resp.data ?: emptyList()).sortedWith(
@@ -56,7 +55,6 @@ class TorBoxRepository @Inject constructor(
     }
 
     suspend fun validateApiKey(): Result<TorBoxUser> = runCatching {
-        syncApiKey()
         val resp = api.getUserInfo()
         if (!resp.success) error(resp.detail ?: resp.error ?: "Invalid API key")
         resp.data ?: error("No user data")
@@ -64,8 +62,7 @@ class TorBoxRepository @Inject constructor(
 
     fun streamResult(result: TorBoxSearchResult): Flow<StreamState> = flow {
         emit(StreamState.Queuing(result.name))
-        syncApiKey()
-        val apiKey = settingsStore.torBoxApiKey.first()
+        val apiKey = authInterceptor.apiKey.ifBlank { settingsStore.torBoxApiKey.first() }
 
         val torrentId = addOrFindTorrent(result)
 
@@ -92,8 +89,7 @@ class TorBoxRepository @Inject constructor(
 
     fun streamAlbum(result: TorBoxSearchResult): Flow<StreamState> = flow {
         emit(StreamState.Queuing(result.name))
-        syncApiKey()
-        val apiKey = settingsStore.torBoxApiKey.first()
+        val apiKey = authInterceptor.apiKey.ifBlank { settingsStore.torBoxApiKey.first() }
 
         val torrentId = addOrFindTorrent(result)
 

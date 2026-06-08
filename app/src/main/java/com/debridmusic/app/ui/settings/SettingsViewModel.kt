@@ -117,6 +117,8 @@ class SettingsViewModel @Inject constructor(
     fun validateTorBoxKey() {
         _state.update { it.copy(torBoxValidating = true, torBoxUser = null, torBoxError = null) }
         viewModelScope.launch {
+            // Save to DataStore first so syncApiKey() inside the repository reads the correct value
+            settingsStore.setTorBoxApiKey(_state.value.torBoxApiKey)
             torBoxAuthInterceptor.apiKey = _state.value.torBoxApiKey
             torBoxRepository.validateApiKey()
                 .onSuccess { user ->
