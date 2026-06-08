@@ -116,46 +116,46 @@ if ! "$cygwin" && ! "$darwin" && ! "$nonstop" ; then
     esac
 fi
 
-# Collect all arguments for the java command, stacking in reverse order:
-#   * args from the command line
-#   * the main class name
-#   * -classpath
-#   * -D...appname settings
-#   * --module-path (only if needed)
-#   * DEFAULT_JVM_OPTS, JAVA_OPTS, and GRADLE_OPTS environment variables.
-
 # For Cygwin or MSYS, switch paths to Windows format before running java
 if "$cygwin" || "$msys" ; then
     APP_HOME=$( cygpath --path --mixed "$APP_HOME" )
     CLASSPATH=$( cygpath --path --mixed "$CLASSPATH" )
-
     JAVACMD=$( cygpath --unix "$JAVACMD" )
-
-    # Now convert the arguments - kludge to limit ourselves to /bin/sh
     for arg do
         if
             case $arg in                                #(
-              -*)   false ;;                            # don't mess with options #(
-              /?*)  t=${arg#/} t=/${t%%/*}             # looks like a POSIX filepath
+              -*)   false ;;                            #(
+              /?*)  t=${arg#/} t=/${t%%/*}
                     [ -e "$t" ] ;;                     #(
               *)    false ;;
             esac
         then
             arg=$( cygpath --path --ignore --mixed "$arg" )
         fi
-        # Roll the args list around exactly as many times as the number of
-        # temporary variables we created.
-        # shellcheck disable=SC2059
         set -- "$@" "$arg"
         shift
     done
 fi
 
+# Collect all arguments for the java command:
+set -- \
+        "-Dorg.gradle.appname=$APP_BASE_NAME" \
+        -classpath "$CLASSPATH" \
+        org.gradle.wrapper.GradleWrapperMain \
+        "$@"
 
-# Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
-# shellcheck disable=SC2086
-exec "$JAVACMD" $DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS \
-    "-Dorg.gradle.appname=$APP_BASE_NAME" \
-    -classpath "$CLASSPATH" \
-    org.gradle.wrapper.GradleWrapperMain \
-    "$@"
+# Stop when "xargs" is not available.
+if ! command -v xargs >/dev/null 2>&1
+then
+    die "xargs is not available"
+fi
+
+# Use "xargs" to parse quoted args.
+eval "set -- $(
+        printf '%s\n' "$DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS" |
+        xargs -n1 |
+        sed ' s~[^a-zA-Z0-9/=@_-]~\\&~g; ' |
+        tr '\n' ' '
+    ) $@"
+
+exec "$JAVACMD" "$@"
