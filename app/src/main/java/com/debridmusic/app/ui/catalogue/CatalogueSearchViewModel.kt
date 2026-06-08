@@ -75,6 +75,31 @@ class CatalogueSearchViewModel @Inject constructor(
         }
     }
 
+    fun streamTrackPicker(result: TorBoxSearchResult) {
+        if (_state.value.streamingId == result.hash) return
+        streamJob?.cancel()
+        _state.update { it.copy(streamingId = result.hash, streamState = StreamState.Idle) }
+
+        streamJob = viewModelScope.launch {
+            torBoxRepository.streamTrackPicker(result).collect { state ->
+                _state.update { it.copy(streamState = state) }
+            }
+        }
+    }
+
+    fun playSelectedTrack(torrentItem: com.debridmusic.app.data.remote.dto.TorBoxTorrentItem, file: TorBoxFile) {
+        viewModelScope.launch {
+            val result = runCatching { torBoxRepository.resolveTrackUrl(torrentItem, file) }
+            result.onSuccess { url ->
+                val ready = StreamState.Ready(url, torrentItem, file)
+                _state.update { it.copy(streamState = ready) }
+                playStreamUrl(ready)
+            }.onFailure { e ->
+                _state.update { it.copy(streamState = StreamState.Error(e.message ?: "Failed to resolve URL")) }
+            }
+        }
+    }
+
     fun cancelStream() {
         streamJob?.cancel()
         _state.update { it.copy(streamingId = null, streamState = StreamState.Idle) }

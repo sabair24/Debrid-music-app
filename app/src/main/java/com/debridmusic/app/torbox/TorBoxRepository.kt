@@ -10,6 +10,7 @@ import com.debridmusic.app.data.remote.dto.TorBoxUser
 import java.net.URLEncoder
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import javax.inject.Inject
@@ -22,6 +23,10 @@ sealed class StreamState {
     data class Ready(val streamUrl: String, val torrentItem: TorBoxTorrentItem, val file: TorBoxFile) : StreamState()
     data class ReadyAlbum(
         val tracks: List<AlbumTrack>,
+        val torrentItem: TorBoxTorrentItem,
+    ) : StreamState()
+    data class TrackList(
+        val files: List<TorBoxFile>,
         val torrentItem: TorBoxTorrentItem,
     ) : StreamState()
     data class Error(val message: String) : StreamState()
@@ -39,10 +44,6 @@ class TorBoxRepository @Inject constructor(
     private val settingsStore: SettingsStore,
     private val authInterceptor: TorBoxAuthInterceptor,
 ) {
-    init {
-        // Kept intentionally empty — key synced via syncApiKey()
-    }
-
     suspend fun syncApiKey() {
         val key = settingsStore.torBoxApiKey.first()
         authInterceptor.apiKey = key
@@ -80,27 +81,20 @@ class TorBoxRepository @Inject constructor(
         val apiKey = authInterceptor.apiKey
 
         val torrentId = addOrFindTorrent(result)
-
         val ready = pollUntilReady(torrentId) { state -> emit(state) }
 
-        // Pick best audio file (prefer FLAC, then by size desc)
         val audioFiles = ready.files?.filter { it.isAudio } ?: emptyList()
         if (audioFiles.isEmpty()) error("No audio files found in this torrent")
-        val bestFile = audioFiles.maxWithOrNull(
-            compareBy<TorBoxFile> { if (it.isFlac) 1 else 0 }
-                .thenByDescending { it.size }
-        )!!
-
-        val dlResp = api.requestDownload(
-            token = apiKey,
-            torrentId = ready.id,
-            fileId = bestFile.id,
+        val bestFile = audioFiles.maxWith(
+            compareBy<TorBoxFile> { if (it.isFlac) 1 else 0 }.thenByDescending { it.size }
         )
+
+        val dlResp = api.requestDownload(token = apiKey, torrentId = ready.id, fileId = bestFile.id)
         if (!dlResp.success) error(dlResp.detail ?: dlResp.error ?: "Failed to get download link")
         val url = dlResp.data ?: error("Empty download URL")
 
         emit(StreamState.Ready(url, ready, bestFile))
-    }
+    }.catch { e -> emit(StreamState.Error(e.message ?: "Stream failed")) }
 
     fun streamAlbum(result: TorBoxSearchResult): Flow<StreamState> = flow {
         emit(StreamState.Queuing(result.name))
@@ -108,32 +102,47 @@ class TorBoxRepository @Inject constructor(
         val apiKey = authInterceptor.apiKey
 
         val torrentId = addOrFindTorrent(result)
-
         val ready = pollUntilReady(torrentId) { state -> emit(state) }
 
         val audioFiles = (ready.files ?: emptyList())
             .filter { it.isAudio }
             .sortedWith(
-                compareByDescending<TorBoxFile> { if (it.isFlac) 1 else 0 }
-                    .thenBy { it.name }
+                compareByDescending<TorBoxFile> { if (it.isFlac) 1 else 0 }.thenBy { it.name }
             )
-
         if (audioFiles.isEmpty()) error("No audio files found")
 
-        // Resolve stream URLs for all tracks
         val tracks = audioFiles.mapNotNull { file ->
-            val dlResp = api.requestDownload(
-                token = apiKey,
-                torrentId = ready.id,
-                fileId = file.id,
-            )
-            if (dlResp.success) dlResp.data?.let { url -> AlbumTrack(url, file) }
-            else null
+            val dlResp = api.requestDownload(token = apiKey, torrentId = ready.id, fileId = file.id)
+            if (dlResp.success) dlResp.data?.let { url -> AlbumTrack(url, file) } else null
         }
-
         if (tracks.isEmpty()) error("Could not resolve stream URLs for any track")
 
         emit(StreamState.ReadyAlbum(tracks, ready))
+    }.catch { e -> emit(StreamState.Error(e.message ?: "Album stream failed")) }
+
+    fun streamTrackPicker(result: TorBoxSearchResult): Flow<StreamState> = flow {
+        emit(StreamState.Queuing(result.name))
+        syncApiKey()
+
+        val torrentId = addOrFindTorrent(result)
+        val ready = pollUntilReady(torrentId) { state -> emit(state) }
+
+        val audioFiles = (ready.files ?: emptyList())
+            .filter { it.isAudio }
+            .sortedWith(
+                compareByDescending<TorBoxFile> { if (it.isFlac) 1 else 0 }.thenBy { it.name }
+            )
+        if (audioFiles.isEmpty()) error("No audio files found")
+
+        emit(StreamState.TrackList(audioFiles, ready))
+    }.catch { e -> emit(StreamState.Error(e.message ?: "Failed to load tracks")) }
+
+    suspend fun resolveTrackUrl(torrentItem: TorBoxTorrentItem, file: TorBoxFile): String {
+        syncApiKey()
+        val apiKey = authInterceptor.apiKey
+        val dlResp = api.requestDownload(token = apiKey, torrentId = torrentItem.id, fileId = file.id)
+        if (!dlResp.success) error(dlResp.detail ?: dlResp.error ?: "Failed to get download link")
+        return dlResp.data ?: error("Empty download URL")
     }
 
     private suspend fun addOrFindTorrent(result: TorBoxSearchResult): Long {
@@ -141,6 +150,8 @@ class TorBoxRepository @Inject constructor(
         return when {
             createResp.success -> createResp.data?.torrentId
             createResp.detail?.contains("already", ignoreCase = true) == true ->
+                findTorrentByHash(result.hash)?.id
+            createResp.error?.contains("already", ignoreCase = true) == true ->
                 findTorrentByHash(result.hash)?.id
             else -> error(createResp.detail ?: createResp.error ?: "Failed to add torrent")
         } ?: error("Could not resolve torrent ID")

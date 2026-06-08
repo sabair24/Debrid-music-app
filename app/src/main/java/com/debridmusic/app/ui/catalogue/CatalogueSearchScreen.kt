@@ -1,5 +1,6 @@
 package com.debridmusic.app.ui.catalogue
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -10,6 +11,7 @@ import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -25,7 +27,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.debridmusic.app.data.remote.dto.TorBoxFile
 import com.debridmusic.app.data.remote.dto.TorBoxSearchResult
+import com.debridmusic.app.data.remote.dto.TorBoxTorrentItem
 import com.debridmusic.app.torbox.StreamState
 import com.debridmusic.app.ui.components.MiniPlayer
 import java.util.Locale
@@ -47,7 +51,33 @@ fun CatalogueSearchScreen(
     val keyboard = LocalSoftwareKeyboardController.current
     val progress = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
 
+    // Track-picker bottom sheet
+    val trackListState = state.streamState as? StreamState.TrackList
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var showSheet by remember { mutableStateOf(false) }
+
+    LaunchedEffect(trackListState) {
+        if (trackListState != null) showSheet = true
+    }
+
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
+
+    if (showSheet && trackListState != null) {
+        TrackPickerSheet(
+            sheetState = sheetState,
+            torrentItem = trackListState.torrentItem,
+            files = trackListState.files,
+            onDismiss = {
+                showSheet = false
+                viewModel.cancelStream()
+            },
+            onPickTrack = { torrentItem, file ->
+                showSheet = false
+                viewModel.playSelectedTrack(torrentItem, file)
+                onNowPlayingClick()
+            },
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -117,7 +147,7 @@ fun CatalogueSearchScreen(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                             Spacer(Modifier.height(12.dp))
-                            Text("Searching TorBox…", style = MaterialTheme.typography.bodyMedium)
+                            Text("Searching…", style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }
@@ -167,6 +197,7 @@ fun CatalogueSearchScreen(
                                 isDownloading = state.downloadingHash == result.hash,
                                 onStream = { viewModel.stream(result) },
                                 onStreamAlbum = { viewModel.stream(result, albumMode = true) },
+                                onStreamTrackPicker = { viewModel.streamTrackPicker(result) },
                                 onCancel = { viewModel.cancelStream() },
                                 onNowPlaying = onNowPlayingClick,
                                 onDownload = { viewModel.downloadCurrentStream() },
@@ -182,6 +213,72 @@ fun CatalogueSearchScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TrackPickerSheet(
+    sheetState: SheetState,
+    torrentItem: TorBoxTorrentItem,
+    files: List<TorBoxFile>,
+    onDismiss: () -> Unit,
+    onPickTrack: (TorBoxTorrentItem, TorBoxFile) -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Text(
+            text = "Kies een track",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        )
+        HorizontalDivider()
+        LazyColumn(
+            contentPadding = PaddingValues(bottom = 24.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            items(files) { file ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPickTrack(torrentItem, file) }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = file.shortName ?: file.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (file.isFlac) {
+                                Text(
+                                    "FLAC",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            Text(
+                                formatSize(file.size),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = "Play",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+            }
+        }
+    }
+}
+
 @Composable
 private fun TorBoxResultItem(
     result: TorBoxSearchResult,
@@ -190,6 +287,7 @@ private fun TorBoxResultItem(
     isDownloading: Boolean,
     onStream: () -> Unit,
     onStreamAlbum: () -> Unit,
+    onStreamTrackPicker: () -> Unit,
     onCancel: () -> Unit,
     onNowPlaying: () -> Unit,
     onDownload: () -> Unit,
@@ -220,9 +318,7 @@ private fun TorBoxResultItem(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.height(2.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
                         text = formatSize(result.size),
                         style = MaterialTheme.typography.bodySmall,
@@ -234,35 +330,30 @@ private fun TorBoxResultItem(
                         color = if (result.seeders > 5) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    result.sources?.firstOrNull()?.let { src ->
-                        Text(
-                            text = src,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
                 }
             }
 
-            // Stream button / state
             when (streamState) {
                 is StreamState.Idle -> {
+                    // ► best track
                     IconButton(onClick = onStream) {
-                        Icon(
-                            Icons.Default.PlayArrow,
-                            "Stream best track",
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
+                        Icon(Icons.Default.PlayArrow, "Stream best track", tint = MaterialTheme.colorScheme.primary)
                     }
+                    // ≡ track picker
+                    IconButton(onClick = onStreamTrackPicker) {
+                        Icon(Icons.Default.List, "Pick track", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    // 💿 full album queue
                     IconButton(onClick = onStreamAlbum) {
-                        Icon(
-                            Icons.Default.Album,
-                            "Stream full album",
-                            tint = MaterialTheme.colorScheme.secondary,
-                        )
+                        Icon(Icons.Default.Album, "Stream full album", tint = MaterialTheme.colorScheme.secondary)
                     }
                 }
                 is StreamState.Queuing, is StreamState.Preparing -> {
+                    IconButton(onClick = onCancel) {
+                        Icon(Icons.Default.Close, "Cancel", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                is StreamState.TrackList -> {
                     IconButton(onClick = onCancel) {
                         Icon(Icons.Default.Close, "Cancel", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -290,7 +381,6 @@ private fun TorBoxResultItem(
             }
         }
 
-        // Inline status for the item currently streaming
         if (isStreaming) {
             Spacer(Modifier.height(6.dp))
             when (streamState) {
