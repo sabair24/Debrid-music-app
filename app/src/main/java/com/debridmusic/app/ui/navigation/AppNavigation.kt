@@ -8,6 +8,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.debridmusic.app.ui.album.AlbumDetailScreen
 import com.debridmusic.app.ui.artist.ArtistDetailScreen
+import com.debridmusic.app.ui.catalogue.CatalogueSearchScreen
 import com.debridmusic.app.ui.library.LibraryScreen
 import com.debridmusic.app.ui.player.PlayerScreen
 import com.debridmusic.app.ui.settings.SettingsScreen
@@ -16,6 +17,7 @@ sealed class Screen(val route: String) {
     object Library : Screen("library")
     object NowPlaying : Screen("now_playing")
     object Settings : Screen("settings")
+    object CatalogueSearch : Screen("catalogue_search")
     object AlbumDetail : Screen("album/{albumId}") {
         fun createRoute(albumId: Long) = "album/$albumId"
     }
@@ -40,6 +42,14 @@ fun AppNavHost(navController: NavHostController) {
                     navController.navigate(Screen.ArtistDetail.createRoute(artistId))
                 },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
+                onStreamOnlineClick = { navController.navigate(Screen.CatalogueSearch.route) },
+            )
+        }
+
+        composable(Screen.CatalogueSearch.route) {
+            CatalogueSearchScreen(
+                onBack = { navController.popBackStack() },
+                onNowPlayingClick = { navController.navigate(Screen.NowPlaying.route) },
             )
         }
 

@@ -7,6 +7,8 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.debridmusic.app.data.remote.api.CoverArtArchiveApi
 import com.debridmusic.app.data.remote.api.LastFmApi
 import com.debridmusic.app.data.remote.api.MusicBrainzApi
+import com.debridmusic.app.data.remote.api.TorBoxApi
+import com.debridmusic.app.torbox.TorBoxAuthInterceptor
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -71,4 +73,23 @@ object NetworkModule {
     @Provides @Singleton
     fun provideLastFmApi(@Named("lastfm") retrofit: Retrofit): LastFmApi =
         retrofit.create(LastFmApi::class.java)
+
+    @Provides @Singleton @Named("torbox")
+    fun provideTorBoxRetrofit(
+        okHttpClient: OkHttpClient,
+        authInterceptor: TorBoxAuthInterceptor,
+    ): Retrofit =
+        Retrofit.Builder()
+            .baseUrl("https://api.torbox.app/v1/")
+            .client(
+                okHttpClient.newBuilder()
+                    .addInterceptor(authInterceptor)
+                    .build()
+            )
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+
+    @Provides @Singleton
+    fun provideTorBoxApi(@Named("torbox") retrofit: Retrofit): TorBoxApi =
+        retrofit.create(TorBoxApi::class.java)
 }

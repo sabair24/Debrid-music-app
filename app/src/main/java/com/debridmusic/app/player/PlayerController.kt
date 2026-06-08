@@ -85,6 +85,47 @@ class PlayerController @Inject constructor(
 
     fun skipToPrevious() { controller?.seekToPreviousMediaItem() }
 
+    fun playRemoteUrl(url: String, title: String, artist: String, album: String) {
+        val metadata = MediaMetadata.Builder()
+            .setTitle(title)
+            .setArtist(artist)
+            .setAlbumTitle(album)
+            .build()
+        val item = MediaItem.Builder()
+            .setUri(url)
+            .setMediaId("remote:$url")
+            .setMediaMetadata(metadata)
+            .build()
+        // Represent as a synthetic Track so currentTrack flow updates
+        val syntheticTrack = com.debridmusic.app.domain.model.Track(
+            id = -1L,
+            title = title,
+            artistName = artist,
+            albumTitle = album,
+            albumId = -1L,
+            artistId = -1L,
+            uri = url,
+            durationMs = 0L,
+            trackNumber = 0,
+            discNumber = 1,
+            year = null,
+            artworkUri = null,
+            genre = null,
+            bitrate = null,
+            sampleRate = null,
+            isLossless = url.contains("flac", ignoreCase = true),
+            fileSize = 0L,
+            dateAdded = System.currentTimeMillis(),
+        )
+        currentQueue = listOf(syntheticTrack)
+        _currentTrack.value = syntheticTrack
+        controller?.run {
+            setMediaItem(item)
+            prepare()
+            play()
+        }
+    }
+
     fun updatePosition() {
         controller?.let {
             _positionMs.value = it.currentPosition

@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sync
@@ -30,6 +31,7 @@ fun LibraryScreen(
     onAlbumClick: (Long) -> Unit,
     onArtistClick: (Long) -> Unit,
     onSettingsClick: () -> Unit,
+    onStreamOnlineClick: () -> Unit = {},
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -83,6 +85,9 @@ fun LibraryScreen(
                             } else {
                                 Icon(Icons.Default.Sync, "Scan music")
                             }
+                        }
+                        IconButton(onClick = onStreamOnlineClick) {
+                            Icon(Icons.Default.CloudDownload, "Stream online")
                         }
                         IconButton(onClick = onSettingsClick) {
                             Icon(Icons.Default.Settings, "Settings")
