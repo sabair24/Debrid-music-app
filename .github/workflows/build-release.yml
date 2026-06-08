@@ -1,0 +1,92 @@
+name: Build & Release APK
+
+on:
+  push:
+    branches: [ "main", "claude/flac-music-android-tv-6dO6z" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK platform 34
+        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Rename APK with version info
+        run: |
+          VERSION=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          BUILD=${{ github.run_number }}
+          BRANCH=$(echo "${GITHUB_REF_NAME}" | sed 's|/|-|g')
+          mv app/build/outputs/apk/debug/app-debug.apk \
+             app/build/outputs/apk/debug/DebridMusic-v${VERSION}-build${BUILD}-debug.apk
+          echo "APK_NAME=DebridMusic-v${VERSION}-build${BUILD}-debug.apk" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: debrid-music-debug-build${{ github.run_number }}
+          path: app/build/outputs/apk/debug/${{ env.APK_NAME }}
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}-build${{ github.run_number }}
+          name: "Debrid Music v${{ env.VERSION }} (build ${{ github.run_number }})"
+          body: |
+            ## Debrid Music v${{ env.VERSION }}
+
+            Android music app with TorBox debrid integration.
+
+            ### Features
+            - Stream FLAC/MP3 directly from TorBox debrid
+            - Stream full albums as a track queue
+            - Local library scanner (FLAC, MP3, M4A, OGG, …)
+            - Android TV support
+            - Last.fm scrobbling
+            - 5-band equalizer & cross-fade
+            - MusicBrainz metadata enrichment
+
+            ### Install
+            Download the APK below and sideload on your Android device or TV.
+            You will need your [TorBox API key](https://torbox.app).
+
+            > **Note:** This is a debug build. You may need to enable "Install from unknown sources" on your device.
+          draft: false
+          prerelease: false
+          files: app/build/outputs/apk/debug/${{ env.APK_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

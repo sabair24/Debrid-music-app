@@ -1,0 +1,69 @@
+package com.debridmusic.app.data.local
+
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
+import javax.inject.Inject
+import javax.inject.Singleton
+
+@Singleton
+class SettingsStore @Inject constructor(
+    private val dataStore: DataStore<Preferences>,
+) {
+    // ── Existing keys ─────────────────────────────────────────────────────────
+    val lastFmApiKey: Flow<String> = dataStore.data.map { it[KEY_LASTFM_API_KEY] ?: "" }
+    val discogsToken: Flow<String> = dataStore.data.map { it[KEY_DISCOGS_TOKEN] ?: "" }
+    val torBoxApiKey: Flow<String> = dataStore.data.map { it[KEY_TORBOX_API_KEY] ?: "" }
+
+    suspend fun setLastFmApiKey(key: String) { dataStore.edit { it[KEY_LASTFM_API_KEY] = key } }
+    suspend fun setDiscogsToken(token: String) { dataStore.edit { it[KEY_DISCOGS_TOKEN] = token } }
+    suspend fun setTorBoxApiKey(key: String) { dataStore.edit { it[KEY_TORBOX_API_KEY] = key } }
+
+    // ── Last.fm scrobble ──────────────────────────────────────────────────────
+    val lastFmSessionKey: Flow<String> = dataStore.data.map { it[KEY_LASTFM_SESSION_KEY] ?: "" }
+    val lastFmUsername: Flow<String> = dataStore.data.map { it[KEY_LASTFM_USERNAME] ?: "" }
+
+    // In-memory only — never persist raw passwords
+    val lastFmApiSecret = MutableStateFlow("")
+
+    suspend fun setLastFmSessionKey(key: String) { dataStore.edit { it[KEY_LASTFM_SESSION_KEY] = key } }
+    suspend fun setLastFmUsername(name: String) { dataStore.edit { it[KEY_LASTFM_USERNAME] = name } }
+    suspend fun setLastFmApiSecret(secret: String) { lastFmApiSecret.value = secret }
+
+    suspend fun clearLastFmSession() {
+        dataStore.edit {
+            it.remove(KEY_LASTFM_SESSION_KEY)
+            it.remove(KEY_LASTFM_USERNAME)
+        }
+        lastFmApiSecret.value = ""
+    }
+
+    // ── EQ ───────────────────────────────────────────────────────────────────
+    val eqEnabled: Flow<Boolean> = dataStore.data.map { it[KEY_EQ_ENABLED] ?: false }
+    val eqBandGains: Flow<String> = dataStore.data.map { it[KEY_EQ_BANDS] ?: "0,0,0,0,0" }
+
+    suspend fun setEqEnabled(enabled: Boolean) { dataStore.edit { it[KEY_EQ_ENABLED] = enabled } }
+    suspend fun setEqBandGains(csv: String) { dataStore.edit { it[KEY_EQ_BANDS] = csv } }
+
+    // ── Cross-fade ───────────────────────────────────────────────────────────
+    val crossFadeDurationMs: Flow<Int> = dataStore.data.map { it[KEY_CROSSFADE_MS] ?: 0 }
+
+    suspend fun setCrossFadeDurationMs(ms: Int) { dataStore.edit { it[KEY_CROSSFADE_MS] = ms } }
+
+    companion object {
+        val KEY_LASTFM_API_KEY = stringPreferencesKey("last_fm_api_key")
+        val KEY_DISCOGS_TOKEN = stringPreferencesKey("discogs_token")
+        val KEY_TORBOX_API_KEY = stringPreferencesKey("torbox_api_key")
+        val KEY_LASTFM_SESSION_KEY = stringPreferencesKey("lastfm_session_key")
+        val KEY_LASTFM_USERNAME = stringPreferencesKey("lastfm_username")
+        val KEY_EQ_ENABLED = booleanPreferencesKey("eq_enabled")
+        val KEY_EQ_BANDS = stringPreferencesKey("eq_bands")
+        val KEY_CROSSFADE_MS = intPreferencesKey("crossfade_ms")
+    }
+}

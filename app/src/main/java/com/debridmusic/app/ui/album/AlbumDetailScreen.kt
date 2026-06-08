@@ -1,0 +1,193 @@
+package com.debridmusic.app.ui.album
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
+import com.debridmusic.app.ui.components.MiniPlayer
+import com.debridmusic.app.ui.components.TrackItem
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AlbumDetailScreen(
+    onBack: () -> Unit,
+    onNowPlayingClick: () -> Unit,
+    viewModel: AlbumDetailViewModel = hiltViewModel(),
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val currentTrack by viewModel.playerController.currentTrack.collectAsStateWithLifecycle()
+    val isPlaying by viewModel.playerController.isPlaying.collectAsStateWithLifecycle()
+    val positionMs by viewModel.playerController.positionMs.collectAsStateWithLifecycle()
+    val durationMs by viewModel.playerController.durationMs.collectAsStateWithLifecycle()
+
+    val progress = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(state.album?.title ?: "") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ),
+            )
+        },
+        bottomBar = {
+            if (currentTrack != null) {
+                MiniPlayer(
+                    track = currentTrack,
+                    isPlaying = isPlaying,
+                    progress = progress,
+                    onPlayPause = { viewModel.playerController.togglePlayPause() },
+                    onSkipNext = { viewModel.playerController.skipToNext() },
+                    onClick = onNowPlayingClick,
+                )
+            }
+        },
+        containerColor = MaterialTheme.colorScheme.background,
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+        ) {
+            // Album header
+            item {
+                Box(modifier = Modifier.fillMaxWidth().height(280.dp)) {
+                    // Blurred backdrop
+                    state.album?.artworkUri?.let { uri ->
+                        AsyncImage(
+                            model = uri,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } ?: Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                    )
+                    // Gradient overlay
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.3f),
+                                        MaterialTheme.colorScheme.background,
+                                    )
+                                )
+                            )
+                    )
+                    // Album artwork + info
+                    Row(
+                        verticalAlignment = Alignment.Bottom,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
+                    ) {
+                        state.album?.artworkUri?.let { uri ->
+                            AsyncImage(
+                                model = uri,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(120.dp)
+                                    .let { it },
+                            )
+                        }
+                        Spacer(Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = state.album?.title ?: "",
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = state.album?.artistName ?: "",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            state.album?.year?.let { year ->
+                                Text(
+                                    text = buildString {
+                                        append(year)
+                                        state.album?.genre?.let { append(" • $it") }
+                                        append(" • ${state.tracks.size} tracks")
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            state.album?.musicBrainzId?.let {
+                                Text(
+                                    text = "MusicBrainz verified",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Play all button
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(
+                        onClick = viewModel::playAll,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Play all")
+                    }
+                }
+            }
+
+            // Track list
+            itemsIndexed(state.tracks, key = { _, t -> t.id }) { _, track ->
+                TrackItem(
+                    track = track,
+                    isPlaying = isPlaying && track.id == currentTrack?.id,
+                    onTrackClick = { t ->
+                        viewModel.playTrack(t)
+                        onNowPlayingClick()
+                    },
+                    showArtwork = false,
+                    showAlbum = false,
+                )
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                    modifier = Modifier.padding(start = 16.dp),
+                )
+            }
+        }
+    }
+}
