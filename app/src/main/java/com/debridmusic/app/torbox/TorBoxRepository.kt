@@ -168,7 +168,8 @@ class TorBoxRepository @Inject constructor(
             when {
                 found == null -> { /* not indexed yet */ }
                 found.isFailed -> error("Torrent failed: ${found.status}")
-                found.isReady -> return found
+                found.isReady && found.files?.any { it.isAudio } == true -> return found
+                found.isReady -> { /* ready but files list not yet populated — keep polling */ }
                 else -> onProgress(StreamState.Preparing(found.name, found.progress))
             }
             delay(delayMs)

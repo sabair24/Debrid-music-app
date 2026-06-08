@@ -75,7 +75,13 @@ class SoulseekClient @Inject constructor(
                 val deadline = System.currentTimeMillis() + 8_000L
 
                 while (System.currentTimeMillis() < deadline && results.size < 80) {
-                    val msg = try { server.readMessage() } catch (_: Exception) { break }
+                    val msg = try {
+                        server.readMessage()
+                    } catch (_: java.net.SocketTimeoutException) {
+                        continue // no message yet, keep waiting until deadline
+                    } catch (_: Exception) {
+                        break   // real connection error
+                    }
                     val buf = ByteBuffer.wrap(msg).order(ByteOrder.LITTLE_ENDIAN)
                     val code = buf.readUInt32().toInt()
 
