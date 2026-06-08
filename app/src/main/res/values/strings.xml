@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Debrid Music</string>
+    <string name="library">Library</string>
+    <string name="search">Search</string>
+    <string name="settings">Settings</string>
+    <string name="now_playing">Now Playing</string>
+    <string name="unknown_artist">Unknown Artist</string>
+    <string name="unknown_album">Unknown Album</string>
+    <string name="unknown_track">Unknown Track</string>
+    <string name="scan_music">Scan local music</string>
+    <string name="scanning">Scanning…</string>
+    <string name="no_tracks">No tracks found. Tap the scan button to import local music.</string>
+    <string name="notification_channel_playback">Playback</string>
+    <string name="notification_channel_playback_desc">Music playback controls</string>
+</resources>
