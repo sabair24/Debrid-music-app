@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
+import com.debridmusic.app.data.remote.api.BitSearchApi
 import com.debridmusic.app.data.remote.api.CoverArtArchiveApi
 import com.debridmusic.app.data.remote.api.LastFmApi
 import com.debridmusic.app.data.remote.api.LastFmScrobbleApi
@@ -97,4 +98,16 @@ object NetworkModule {
     @Provides @Singleton
     fun provideTorBoxApi(@Named("torbox") retrofit: Retrofit): TorBoxApi =
         retrofit.create(TorBoxApi::class.java)
+
+    @Provides @Singleton @Named("bitsearch")
+    fun provideBitSearchRetrofit(okHttpClient: OkHttpClient): Retrofit =
+        Retrofit.Builder()
+            .baseUrl("https://bitsearch.eu/")
+            .client(okHttpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+
+    @Provides @Singleton
+    fun provideBitSearchApi(@Named("bitsearch") retrofit: Retrofit): BitSearchApi =
+        retrofit.create(BitSearchApi::class.java)
 }

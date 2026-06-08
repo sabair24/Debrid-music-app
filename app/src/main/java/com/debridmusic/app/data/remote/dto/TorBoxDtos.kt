@@ -83,6 +83,23 @@ data class TorBoxFile(
 
 // data field is a plain string URL
 
+// ── BitSearch (external torrent search) ──────────────────────────────────────
+
+data class BitSearchResponse(
+    val success: Boolean = false,
+    val query: String? = null,
+    val results: List<BitSearchResult>? = null,
+)
+
+data class BitSearchResult(
+    val infohash: String = "",
+    val title: String = "",
+    val size: Long = 0L,
+    val seeders: Int = 0,
+    val leechers: Int = 0,
+    val verified: Boolean = false,
+)
+
 // ── User ──────────────────────────────────────────────────────────────────────
 
 data class TorBoxUser(
