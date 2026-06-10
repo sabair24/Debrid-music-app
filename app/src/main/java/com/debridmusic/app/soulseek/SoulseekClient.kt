@@ -133,10 +133,13 @@ class SoulseekClient @Inject constructor(
         val peer = SlskSocket(ip, port)
         try {
             peer.connect()
-            peer.setSoTimeout(5_000)
-            peer.send(buildPeerInit(ourUsername, "P", token))
+            peer.setSoTimeout(8_000)
+            // ConnectToPeer flow: send PierceFirewall (code 0) with the server-relayed
+            // token so the peer can match this connection to their pending search result.
+            // PeerInit (code 1) is only for connections WE initiate without the server relay.
+            peer.send(buildPierceFirewall(token))
 
-            repeat(4) {
+            repeat(8) {
                 val msg = try { peer.readMessage() } catch (_: Exception) { return }
                 val buf = ByteBuffer.wrap(msg).order(ByteOrder.LITTLE_ENDIAN)
                 val code = buf.readUInt32().toInt()
@@ -325,6 +328,11 @@ class SoulseekClient @Inject constructor(
             writeSlskString(query)
         }
 
+    // Sent when WE respond to a server ConnectToPeer relay (the peer is waiting for this token)
+    private fun buildPierceFirewall(token: Long): ByteArray =
+        buildSlskMessage(0) { writeUInt32(token) }
+
+    // Sent when WE initiate a direct peer connection (downloads, etc.)
     private fun buildPeerInit(username: String, type: String, token: Long): ByteArray =
         buildSlskMessage(1) {
             writeSlskString(username)
