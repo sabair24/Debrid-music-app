@@ -63,6 +63,8 @@ class SoulseekClient @Inject constructor(
             val results = CopyOnWriteArrayList<SoulseekFile>()
             val ticket = ticketGen.incrementAndGet()
             val server = SlskSocket(SERVER_HOST, SERVER_PORT)
+            var ctpCount = 0                              // ConnectToPeer messages received
+            val peerConnected = AtomicInteger(0)          // peers we successfully connected to
 
             try {
                 server.connect()
@@ -72,9 +74,9 @@ class SoulseekClient @Inject constructor(
                 server.setSoTimeout(2_000)
 
                 val peerJobs = mutableListOf<Job>()
-                val deadline = System.currentTimeMillis() + 8_000L
+                val deadline = System.currentTimeMillis() + 12_000L // 12s to collect CTP messages
 
-                while (System.currentTimeMillis() < deadline && results.size < 80) {
+                while (System.currentTimeMillis() < deadline && results.size < 200) {
                     val msg = try {
                         server.readMessage()
                     } catch (_: java.net.SocketTimeoutException) {
@@ -86,6 +88,7 @@ class SoulseekClient @Inject constructor(
                     val code = buf.readUInt32().toInt()
 
                     if (code == 18) { // ConnectToPeer
+                        ctpCount++
                         runCatching {
                             val peerUser = buf.readSlskString()
                             val type = buf.readSlskString()
@@ -95,7 +98,7 @@ class SoulseekClient @Inject constructor(
 
                             if (type == "P" && ip != "0.0.0.0" && port > 0) {
                                 val job = CoroutineScope(Dispatchers.IO).launch {
-                                    collectPeerResults(username, ip, port, token, ticket, results)
+                                    collectPeerResults(username, ip, port, token, ticket, results, peerConnected)
                                 }
                                 peerJobs.add(job)
                             }
@@ -103,15 +106,15 @@ class SoulseekClient @Inject constructor(
                     }
                 }
 
-                // Wait for in-flight peer connections to finish
-                withTimeoutOrNull(2_500L) { peerJobs.forEach { it.join() } }
+                // Wait for in-flight peer connections to finish (generous budget)
+                withTimeoutOrNull(10_000L) { peerJobs.forEach { it.join() } }
                 peerJobs.forEach { it.cancel() }
 
             } finally {
                 server.close()
             }
 
-            results
+            val audioResults = results
                 .filter { it.isAudio }
                 .sortedWith(
                     compareByDescending<SoulseekFile> { if (it.isFlac) 1 else 0 }
@@ -119,6 +122,16 @@ class SoulseekClient @Inject constructor(
                         .thenByDescending { it.speed }
                         .thenByDescending { it.size }
                 )
+
+            // Surface debug counts when results are empty so we can diagnose the stage
+            if (audioResults.isEmpty()) {
+                error("Geen resultaten — " +
+                    "ingelogd: ja, " +
+                    "CTP-berichten: $ctpCount, " +
+                    "peers verbonden: ${peerConnected.get()}, " +
+                    "ruw: ${results.size}")
+            }
+            audioResults
         }
     }
 
@@ -129,11 +142,13 @@ class SoulseekClient @Inject constructor(
         token: Long,
         ticket: Int,
         results: CopyOnWriteArrayList<SoulseekFile>,
+        peerConnected: AtomicInteger,
     ) {
         val peer = SlskSocket(ip, port)
         try {
             peer.connect()
-            peer.setSoTimeout(8_000)
+            peerConnected.incrementAndGet()
+            peer.setSoTimeout(10_000)
             // ConnectToPeer flow: send PierceFirewall (code 0) with the server-relayed
             // token so the peer can match this connection to their pending search result.
             // PeerInit (code 1) is only for connections WE initiate without the server relay.
