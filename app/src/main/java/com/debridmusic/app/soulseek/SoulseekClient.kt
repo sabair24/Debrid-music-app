@@ -71,21 +71,37 @@ class SoulseekClient @Inject constructor(
                 loginServer(server, username, password)
                 server.send(buildSetWaitPort(0))
                 server.send(buildFileSearch(ticket, query))
-                server.setSoTimeout(2_000)
+                // Do NOT set a short socket timeout here — a short timeout that fires
+                // mid-message corrupts the stream (readFully reads partial data, next
+                // message is misframed). Instead we update the timeout to the remaining
+                // deadline before every read, so the socket times out only when the
+                // deadline is truly reached.
 
                 val peerJobs = mutableListOf<Job>()
-                val deadline = System.currentTimeMillis() + 12_000L // 12s to collect CTP messages
+                val deadline = System.currentTimeMillis() + 14_000L
+                val seenCodes = mutableListOf<Int>()  // first 15 codes for diagnostics
+                var loopEndReason = "timeout"
 
                 while (System.currentTimeMillis() < deadline && results.size < 200) {
+                    val remaining = deadline - System.currentTimeMillis()
+                    if (remaining <= 0) break
+                    server.setSoTimeout(remaining.coerceIn(200, 60_000).toInt())
+
                     val msg = try {
                         server.readMessage()
                     } catch (_: java.net.SocketTimeoutException) {
-                        continue // no message yet, keep waiting until deadline
-                    } catch (_: Exception) {
-                        break   // real connection error
+                        loopEndReason = "timeout"
+                        break // clean deadline expiry
+                    } catch (e: java.io.EOFException) {
+                        loopEndReason = "EOF(server dropped)"
+                        break
+                    } catch (e: Exception) {
+                        loopEndReason = "err:${e.javaClass.simpleName}"
+                        break
                     }
                     val buf = ByteBuffer.wrap(msg).order(ByteOrder.LITTLE_ENDIAN)
                     val code = buf.readUInt32().toInt()
+                    if (seenCodes.size < 15) seenCodes.add(code)
 
                     if (code == 18) { // ConnectToPeer
                         ctpCount++
@@ -125,10 +141,13 @@ class SoulseekClient @Inject constructor(
 
             // Surface debug counts when results are empty so we can diagnose the stage
             if (audioResults.isEmpty()) {
+                val codesStr = if (seenCodes.isEmpty()) "geen" else seenCodes.joinToString(",")
                 error("Geen resultaten — " +
                     "ingelogd: ja, " +
-                    "CTP-berichten: $ctpCount, " +
-                    "peers verbonden: ${peerConnected.get()}, " +
+                    "einde: $loopEndReason, " +
+                    "codes: $codesStr, " +
+                    "CTP: $ctpCount, " +
+                    "peers: ${peerConnected.get()}, " +
                     "ruw: ${results.size}")
             }
             audioResults
