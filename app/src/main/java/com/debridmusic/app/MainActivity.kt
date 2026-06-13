@@ -42,10 +42,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestStoragePermissions() {
-        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(Manifest.permission.READ_MEDIA_AUDIO)
-        } else {
-            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        val permissions = when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
+                arrayOf(Manifest.permission.READ_MEDIA_AUDIO)
+            // Android 9 and below need WRITE too, so downloaded tracks can be
+            // saved into the public Music library (scoped storage doesn't apply yet).
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ->
+                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            else ->
+                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
         permissionLauncher.launch(permissions)
     }

@@ -21,30 +21,37 @@ import javax.inject.Singleton
 class LibraryPublisher @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
-    suspend fun publish(tempPath: String, displayName: String, artist: String): String =
+    suspend fun publish(
+        tempPath: String,
+        originalFileName: String,
+        title: String,
+        artist: String,
+        album: String,
+    ): String =
         withContext(Dispatchers.IO) {
             val src = File(tempPath)
             if (!src.exists() || src.length() == 0L) error("Gedownload bestand ontbreekt")
-            val fileName = sanitize(displayName)
-            val title = fileName.substringBeforeLast('.', fileName)
+            val ext = originalFileName.substringAfterLast('.', "mp3")
+            val fileName = sanitize(if (title.isNotBlank()) "$title.$ext" else originalFileName)
             val mime = mimeFor(fileName)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                publishViaMediaStore(src, fileName, title, artist, mime)
+                publishViaMediaStore(src, fileName, title.ifBlank { fileName.substringBeforeLast('.') }, artist, album, mime)
             } else {
                 publishViaFile(src, fileName)
             }
         }
 
     private fun publishViaMediaStore(
-        src: File, fileName: String, title: String, artist: String, mime: String,
+        src: File, fileName: String, title: String, artist: String, album: String, mime: String,
     ): String {
         val resolver = context.contentResolver
         val collection = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         val values = ContentValues().apply {
             put(MediaStore.Audio.Media.DISPLAY_NAME, fileName)
             put(MediaStore.Audio.Media.TITLE, title)
-            put(MediaStore.Audio.Media.ARTIST, artist)
+            if (artist.isNotBlank()) put(MediaStore.Audio.Media.ARTIST, artist)
+            if (album.isNotBlank()) put(MediaStore.Audio.Media.ALBUM, album)
             put(MediaStore.Audio.Media.MIME_TYPE, mime)
             put(MediaStore.Audio.Media.IS_MUSIC, 1)
             put(MediaStore.Audio.Media.RELATIVE_PATH, "Music/DebridMusic")

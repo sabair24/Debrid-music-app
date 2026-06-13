@@ -403,6 +403,8 @@ class SoulseekClient @Inject constructor(
                         send(SlskDownloadState.Error("Geen reactie van uploader (slot bezet of offline). Probeer een ander resultaat."))
                 }
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e // normal cancel (user navigated away / cancelled) — don't emit Error
         } catch (e: Exception) {
             send(SlskDownloadState.Error(e.message ?: "Download mislukt"))
         } finally {

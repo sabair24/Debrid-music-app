@@ -62,6 +62,15 @@
             </intent-filter>
         </activity>
 
+        <!-- Crash screen — separate process so it survives the crashing process -->
+        <activity
+            android:name=".CrashActivity"
+            android:exported="false"
+            android:process=":crash"
+            android:launchMode="singleInstance"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.DebridMusic" />
+
         <!-- FileProvider — shares the downloaded update APK with the package installer -->
         <provider
             android:name="androidx.core.content.FileProvider"

@@ -42,7 +42,10 @@ class SlskSocket(private val host: String, private val port: Int) {
         val lenBuf = ByteArray(4)
         readFully(lenBuf)
         val len = ByteBuffer.wrap(lenBuf).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL
-        val payload = ByteArray(len.toInt().coerceAtMost(4 * 1024 * 1024)) // max 4 MB per message
+        // Clamp on the Long BEFORE toInt() — a length >= 0x80000000 would otherwise
+        // become a negative Int and throw NegativeArraySizeException.
+        val size = len.coerceIn(0L, 4L * 1024 * 1024).toInt() // max 4 MB per message
+        val payload = ByteArray(size)
         readFully(payload)
         payload
     }

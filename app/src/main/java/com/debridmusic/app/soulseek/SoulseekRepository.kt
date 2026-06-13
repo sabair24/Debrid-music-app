@@ -1,11 +1,14 @@
 package com.debridmusic.app.soulseek
 
 import com.debridmusic.app.data.local.SettingsStore
+import com.debridmusic.app.metadata.MetadataEnricher
 import com.debridmusic.app.scanner.MediaScanner
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -15,6 +18,8 @@ class SoulseekRepository @Inject constructor(
     private val settingsStore: SettingsStore,
     private val libraryPublisher: LibraryPublisher,
     private val mediaScanner: MediaScanner,
+    private val metadataEnricher: MetadataEnricher,
+    private val appScope: CoroutineScope,
 ) {
     private suspend fun credentials(): Pair<String, String> {
         val username = settingsStore.slskUsername.first()
@@ -36,12 +41,22 @@ class SoulseekRepository @Inject constructor(
         val (username, password) = credentials()
         client.download(username, password, file).collect { state ->
             if (state is SlskDownloadState.Done) {
-                // Move the file into the public Music library and refresh the
-                // in-app library so it shows up under the user's collection.
+                // Parse real artist/album/title from the Soulseek folder path so the
+                // track lands in the library with usable tags (not the uploader name).
+                val meta = SoulseekPath.parse(file.filename)
                 val publishedUri = runCatching {
-                    libraryPublisher.publish(state.localPath, file.displayName, file.username)
+                    libraryPublisher.publish(
+                        tempPath = state.localPath,
+                        originalFileName = file.displayName,
+                        title = meta.title,
+                        artist = meta.artist,
+                        album = meta.album,
+                    )
                 }.getOrNull()
+                // Import into the in-app library, then enrich (cover art, album,
+                // artist) in the background so the Done state isn't blocked.
                 runCatching { mediaScanner.scanDevice() }
+                appScope.launch { runCatching { metadataEnricher.enrichAll() } }
                 emit(SlskDownloadState.Done(publishedUri ?: state.localPath))
             } else {
                 emit(state)
