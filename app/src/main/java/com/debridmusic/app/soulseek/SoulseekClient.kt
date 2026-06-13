@@ -64,7 +64,9 @@ class SoulseekClient @Inject constructor(
             val ticket = ticketGen.incrementAndGet()
             val server = SlskSocket(SERVER_HOST, SERVER_PORT)
             var ctpCount = 0                              // ConnectToPeer messages received
-            val peerConnected = AtomicInteger(0)          // peers we successfully connected to
+            val peerConnected = AtomicInteger(0)          // peers we successfully TCP-connected to
+            val peerGotMsg   = AtomicInteger(0)           // peers that sent us any message after PierceFirewall
+            val peerGotCode9 = AtomicInteger(0)           // peers that sent code-9 (SearchResults)
 
             val seenCodes = mutableListOf<Int>()  // first 15 codes for diagnostics
             var loopEndReason = "timeout"
@@ -81,7 +83,7 @@ class SoulseekClient @Inject constructor(
                 // deadline is truly reached.
 
                 val peerJobs = mutableListOf<Job>()
-                val deadline = System.currentTimeMillis() + 14_000L
+                val deadline = System.currentTimeMillis() + 20_000L
 
                 while (System.currentTimeMillis() < deadline && results.size < 200) {
                     val remaining = deadline - System.currentTimeMillis()
@@ -113,9 +115,10 @@ class SoulseekClient @Inject constructor(
                             val port = buf.readUInt32().toInt()
                             val token = buf.readUInt32()
 
-                            if (type == "P" && ip != "0.0.0.0" && port > 0 && peerJobs.size < 12) {
+                            if (type == "P" && ip != "0.0.0.0" && port > 0 && peerJobs.size < 50) {
                                 val job = CoroutineScope(Dispatchers.IO).launch {
-                                    collectPeerResults(username, ip, port, token, ticket, results, peerConnected)
+                                    collectPeerResults(ip, port, token, ticket, results,
+                                        peerConnected, peerGotMsg, peerGotCode9)
                                 }
                                 peerJobs.add(job)
                             }
@@ -124,7 +127,7 @@ class SoulseekClient @Inject constructor(
                 }
 
                 // Wait for in-flight peer connections to finish (generous budget)
-                withTimeoutOrNull(10_000L) { peerJobs.forEach { it.join() } }
+                withTimeoutOrNull(12_000L) { peerJobs.forEach { it.join() } }
                 peerJobs.forEach { it.cancel() }
 
             } finally {
@@ -149,6 +152,8 @@ class SoulseekClient @Inject constructor(
                     "codes: $codesStr, " +
                     "CTP: $ctpCount, " +
                     "peers: ${peerConnected.get()}, " +
+                    "peer_msg: ${peerGotMsg.get()}, " +
+                    "code9: ${peerGotCode9.get()}, " +
                     "ruw: ${results.size}")
             }
             audioResults
@@ -156,30 +161,33 @@ class SoulseekClient @Inject constructor(
     }
 
     private suspend fun collectPeerResults(
-        ourUsername: String,
         ip: String,
         port: Int,
         token: Long,
         ticket: Int,
         results: CopyOnWriteArrayList<SoulseekFile>,
         peerConnected: AtomicInteger,
+        peerGotMsg: AtomicInteger,
+        peerGotCode9: AtomicInteger,
     ) {
         val peer = SlskSocket(ip, port)
         try {
             peer.connect(connectTimeoutMs = 5_000)
             peerConnected.incrementAndGet()
-            peer.setSoTimeout(8_000)
+            peer.setSoTimeout(5_000)
             // ConnectToPeer flow: send PierceFirewall (code 0) with the server-relayed
             // token so the peer can match this connection to their pending search result.
             // PeerInit (code 1) is only for connections WE initiate without the server relay.
             peer.send(buildPierceFirewall(token))
 
-            repeat(8) {
+            repeat(10) {
                 val msg = try { peer.readMessage() } catch (_: Exception) { return }
+                peerGotMsg.incrementAndGet()
                 val buf = ByteBuffer.wrap(msg).order(ByteOrder.LITTLE_ENDIAN)
                 val code = buf.readUInt32().toInt()
 
                 if (code == 9) { // SearchResults
+                    peerGotCode9.incrementAndGet()
                     val raw = ByteArray(buf.remaining()).also { buf.get(it) }
                     val data = tryZlibDecompress(raw)
                     parseSearchResults(ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN), ticket, results)
