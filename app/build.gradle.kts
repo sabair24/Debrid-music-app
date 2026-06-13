@@ -6,6 +6,21 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// Pin the entire Compose stack to one consistent train. A transitive constraint
+// was dragging androidx.compose.foundation/ui up to the current 1.10.x while the
+// pinned material-ripple (1.6.8) / material3 (1.2.1) stayed behind. Foundation
+// 1.10's clickable requires the new ripple (IndicationNodeFactory) and crashes on
+// the old PlatformRipple, so ANY clickable (e.g. the mini-player) crashed the app.
+configurations.all {
+    resolutionStrategy.eachDependency {
+        when {
+            requested.group == "androidx.compose.material3" -> useVersion("1.3.1")
+            requested.group.startsWith("androidx.compose") &&
+                requested.group != "androidx.compose" -> useVersion("1.7.6")
+        }
+    }
+}
+
 android {
     namespace = "com.debridmusic.app"
     compileSdk = 35
