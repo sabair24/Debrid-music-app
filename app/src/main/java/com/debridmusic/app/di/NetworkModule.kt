@@ -6,6 +6,8 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
 import com.debridmusic.app.data.remote.api.BitSearchApi
 import com.debridmusic.app.data.remote.api.CoverArtArchiveApi
+import com.debridmusic.app.data.remote.api.DeezerApi
+import com.debridmusic.app.data.remote.api.TheAudioDbApi
 import com.debridmusic.app.data.remote.api.LastFmApi
 import com.debridmusic.app.data.remote.api.LastFmScrobbleApi
 import com.debridmusic.app.data.remote.api.MusicBrainzApi
@@ -134,4 +136,30 @@ object NetworkModule {
     @Provides @Singleton
     fun provideGitHubApi(@Named("github") retrofit: Retrofit): GitHubApi =
         retrofit.create(GitHubApi::class.java)
+
+    // ── Metadata enrichment (keyless) ───────────────────────────────────────────
+    @Provides @Singleton @Named("deezer")
+    fun provideDeezerRetrofit(okHttpClient: OkHttpClient): Retrofit =
+        Retrofit.Builder()
+            .baseUrl("https://api.deezer.com/")
+            .client(okHttpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+
+    @Provides @Singleton
+    fun provideDeezerApi(@Named("deezer") retrofit: Retrofit): DeezerApi =
+        retrofit.create(DeezerApi::class.java)
+
+    @Provides @Singleton @Named("theaudiodb")
+    fun provideTheAudioDbRetrofit(okHttpClient: OkHttpClient): Retrofit =
+        Retrofit.Builder()
+            // "123" is TheAudioDB's free public test key.
+            .baseUrl("https://www.theaudiodb.com/api/v1/json/123/")
+            .client(okHttpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+
+    @Provides @Singleton
+    fun provideTheAudioDbApi(@Named("theaudiodb") retrofit: Retrofit): TheAudioDbApi =
+        retrofit.create(TheAudioDbApi::class.java)
 }

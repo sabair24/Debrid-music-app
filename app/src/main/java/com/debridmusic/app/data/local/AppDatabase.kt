@@ -25,7 +25,7 @@ import com.debridmusic.app.data.local.entity.TrackEntity
         PlaylistTrackCrossRef::class,
         DownloadEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -66,6 +66,24 @@ abstract class AppDatabase : RoomDatabase() {
                             "status TEXT NOT NULL DEFAULT 'QUEUED', " +
                             "dateAdded INTEGER NOT NULL)"
                 )
+            }
+        }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE albums ADD COLUMN description TEXT")
+                db.execSQL("ALTER TABLE albums ADD COLUMN secondaryArtworkUri TEXT")
+                db.execSQL("ALTER TABLE albums ADD COLUMN label TEXT")
+                db.execSQL("ALTER TABLE albums ADD COLUMN releaseDate TEXT")
+                db.execSQL("ALTER TABLE albums ADD COLUMN deezerId INTEGER")
+                db.execSQL("ALTER TABLE albums ADD COLUMN theAudioDbId TEXT")
+                db.execSQL("ALTER TABLE albums ADD COLUMN manualOverride INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE artists ADD COLUMN bannerUri TEXT")
+                db.execSQL("ALTER TABLE artists ADD COLUMN secondaryImageUri TEXT")
+                db.execSQL("ALTER TABLE artists ADD COLUMN genre TEXT")
+                db.execSQL("ALTER TABLE artists ADD COLUMN deezerId INTEGER")
+                db.execSQL("ALTER TABLE artists ADD COLUMN theAudioDbId TEXT")
+                db.execSQL("ALTER TABLE artists ADD COLUMN manualOverride INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

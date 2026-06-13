@@ -6,8 +6,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
+import com.debridmusic.app.ui.metadata.MetadataCandidate
+import com.debridmusic.app.ui.metadata.MetadataEditorDialog
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +48,14 @@ fun AlbumDetailScreen(
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, "Back")
                     }
+                },
+                actions = {
+                    if (state.refreshing) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    IconButton(onClick = viewModel::reEnrich) { Icon(Icons.Default.Refresh, "Metadata verversen") }
+                    IconButton(onClick = viewModel::openEditor) { Icon(Icons.Default.Edit, "Metadata zoeken") }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -171,6 +183,25 @@ fun AlbumDetailScreen(
                 }
             }
 
+            // Enriched album info (label + description)
+            state.album?.let { al ->
+                if (!al.label.isNullOrBlank() || !al.description.isNullOrBlank()) {
+                    item {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            al.label?.takeIf { it.isNotBlank() }?.let {
+                                Text("Label · $it", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            al.description?.takeIf { it.isNotBlank() }?.let {
+                                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 8, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                }
+            }
+
             // Track list
             itemsIndexed(state.tracks, key = { _, t -> t.id }) { _, track ->
                 TrackItem(
@@ -189,5 +220,24 @@ fun AlbumDetailScreen(
                 )
             }
         }
+    }
+
+    if (state.editorOpen) {
+        MetadataEditorDialog(
+            title = "Albummetadata zoeken",
+            initialQuery = listOfNotNull(state.album?.title, state.album?.artistName).joinToString(" "),
+            searching = state.searching,
+            candidates = state.candidates.map {
+                MetadataCandidate(
+                    title = it.title,
+                    subtitle = listOfNotNull(it.artistName.ifBlank { null }, it.year?.toString()).joinToString(" · "),
+                    thumbnailUrl = it.thumbnailUrl,
+                    source = it.source,
+                )
+            },
+            onSearch = viewModel::searchMetadata,
+            onPick = { idx -> viewModel.applyMatch(state.candidates[idx]) },
+            onDismiss = viewModel::closeEditor,
+        )
     }
 }

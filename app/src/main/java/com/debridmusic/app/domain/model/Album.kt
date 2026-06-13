@@ -10,4 +10,9 @@ data class Album(
     val trackCount: Int,
     val genre: String?,
     val musicBrainzId: String?,
+    val description: String? = null,
+    val secondaryArtworkUri: String? = null,
+    val label: String? = null,
+    val releaseDate: String? = null,
+    val manualOverride: Boolean = false,
 )

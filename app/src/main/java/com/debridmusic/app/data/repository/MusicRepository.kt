@@ -18,6 +18,7 @@ import com.debridmusic.app.domain.model.Artist
 import com.debridmusic.app.domain.model.Download
 import com.debridmusic.app.domain.model.Playlist
 import com.debridmusic.app.domain.model.Track
+import com.debridmusic.app.metadata.MetadataEnricher
 import com.debridmusic.app.scanner.MediaScanner
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -32,6 +33,7 @@ class MusicRepository @Inject constructor(
     private val playlistDao: PlaylistDao,
     private val downloadDao: DownloadDao,
     private val mediaScanner: MediaScanner,
+    private val enricher: MetadataEnricher,
 ) {
     // ── Library ───────────────────────────────────────────────────────────────
     fun observeTracks(): Flow<List<Track>> =
@@ -94,6 +96,16 @@ class MusicRepository @Inject constructor(
     // ── Downloads ─────────────────────────────────────────────────────────────
     fun observeDownloads(): Flow<List<Download>> =
         downloadDao.observeAll().map { list -> list.map { it.toDomain() } }
+
+    // ── Metadata: manual search + re-fetch ──────────────────────────────────────
+    suspend fun searchAlbumMetadata(q: String) = enricher.searchAlbumCandidates(q)
+    suspend fun searchArtistMetadata(q: String) = enricher.searchArtistCandidates(q)
+    suspend fun applyAlbumMetadata(albumId: Long, m: MetadataEnricher.AlbumMatch) =
+        enricher.applyAlbumMatch(albumId, m)
+    suspend fun applyArtistMetadata(artistId: Long, m: MetadataEnricher.ArtistMatch) =
+        enricher.applyArtistMatch(artistId, m)
+    suspend fun reEnrichAlbum(id: Long) = enricher.reEnrichAlbum(id)
+    suspend fun reEnrichArtist(id: Long) = enricher.reEnrichArtist(id)
 }
 
 // ---------- mapping extensions ----------
@@ -141,6 +153,11 @@ fun AlbumEntity.toDomain() = Album(
     trackCount = 0,
     genre = genre,
     musicBrainzId = musicBrainzId,
+    description = description,
+    secondaryArtworkUri = secondaryArtworkUri,
+    label = label,
+    releaseDate = releaseDate,
+    manualOverride = manualOverride,
 )
 
 fun ArtistEntity.toDomain() = Artist(
@@ -150,6 +167,10 @@ fun ArtistEntity.toDomain() = Artist(
     imageUri = imageUri,
     musicBrainzId = musicBrainzId,
     albumCount = 0,
+    bannerUri = bannerUri,
+    secondaryImageUri = secondaryImageUri,
+    genre = genre,
+    manualOverride = manualOverride,
 )
 
 fun DownloadEntity.toDomain() = Download(

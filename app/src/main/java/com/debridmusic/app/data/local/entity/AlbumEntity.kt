@@ -26,4 +26,12 @@ data class AlbumEntity(
     val artworkUri: String? = null,
     val genre: String? = null,
     val musicBrainzId: String? = null,
+    // Rich metadata (enrichment)
+    val description: String? = null,
+    val secondaryArtworkUri: String? = null,   // back cover
+    val label: String? = null,
+    val releaseDate: String? = null,            // ISO yyyy-MM-dd
+    val deezerId: Long? = null,
+    val theAudioDbId: String? = null,
+    val manualOverride: Boolean = false,        // user picked this match → don't auto-overwrite
 )

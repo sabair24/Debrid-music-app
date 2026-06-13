@@ -10,8 +10,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
+import com.debridmusic.app.ui.metadata.MetadataCandidate
+import com.debridmusic.app.ui.metadata.MetadataEditorDialog
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,6 +55,14 @@ fun ArtistDetailScreen(
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, "Back")
                     }
+                },
+                actions = {
+                    if (state.refreshing) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    IconButton(onClick = viewModel::reEnrich) { Icon(Icons.Default.Refresh, "Metadata verversen") }
+                    IconButton(onClick = viewModel::openEditor) { Icon(Icons.Default.Edit, "Metadata zoeken") }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -221,5 +233,24 @@ fun ArtistDetailScreen(
 
             item { Spacer(Modifier.height(16.dp)) }
         }
+    }
+
+    if (state.editorOpen) {
+        MetadataEditorDialog(
+            title = "Artiestmetadata zoeken",
+            initialQuery = state.artist?.name.orEmpty(),
+            searching = state.searching,
+            candidates = state.candidates.map {
+                MetadataCandidate(
+                    title = it.name,
+                    subtitle = "",
+                    thumbnailUrl = it.imageUrl,
+                    source = it.source,
+                )
+            },
+            onSearch = viewModel::searchMetadata,
+            onPick = { idx -> viewModel.applyMatch(state.candidates[idx]) },
+            onDismiss = viewModel::closeEditor,
+        )
     }
 }
