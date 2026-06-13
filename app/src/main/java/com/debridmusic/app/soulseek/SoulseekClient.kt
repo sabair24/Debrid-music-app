@@ -66,6 +66,9 @@ class SoulseekClient @Inject constructor(
             var ctpCount = 0                              // ConnectToPeer messages received
             val peerConnected = AtomicInteger(0)          // peers we successfully connected to
 
+            val seenCodes = mutableListOf<Int>()  // first 15 codes for diagnostics
+            var loopEndReason = "timeout"
+
             try {
                 server.connect()
                 loginServer(server, username, password)
@@ -79,8 +82,6 @@ class SoulseekClient @Inject constructor(
 
                 val peerJobs = mutableListOf<Job>()
                 val deadline = System.currentTimeMillis() + 14_000L
-                val seenCodes = mutableListOf<Int>()  // first 15 codes for diagnostics
-                var loopEndReason = "timeout"
 
                 while (System.currentTimeMillis() < deadline && results.size < 200) {
                     val remaining = deadline - System.currentTimeMillis()
