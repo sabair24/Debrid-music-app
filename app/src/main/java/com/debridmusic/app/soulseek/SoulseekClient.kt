@@ -160,6 +160,20 @@ class SoulseekClient @Inject constructor(
         }
     }
 
+    // Connects to the Soulseek server and attempts a login. Returns success or a
+    // failure with the server's reason. Used by Settings to confirm credentials.
+    suspend fun testLogin(username: String, password: String): Result<Unit> = runCatching {
+        withContext(Dispatchers.IO) {
+            val server = SlskSocket(SERVER_HOST, SERVER_PORT)
+            try {
+                server.connect()
+                loginServer(server, username, password) // throws on failure
+            } finally {
+                server.close()
+            }
+        }
+    }
+
     private suspend fun collectPeerResults(
         ip: String,
         port: Int,
@@ -371,13 +385,14 @@ class SoulseekClient @Inject constructor(
             writeSlskString(query)
         }
 
-    // Sent when WE respond to a server ConnectToPeer relay (the peer is waiting for this token)
+    // Sent when WE respond to a server ConnectToPeer relay (the peer is waiting for this token).
+    // Peer-init messages use a 1-byte code — see buildSlskInitMessage.
     private fun buildPierceFirewall(token: Long): ByteArray =
-        buildSlskMessage(0) { writeUInt32(token) }
+        buildSlskInitMessage(0) { writeUInt32(token) }
 
     // Sent when WE initiate a direct peer connection (downloads, etc.)
     private fun buildPeerInit(username: String, type: String, token: Long): ByteArray =
-        buildSlskMessage(1) {
+        buildSlskInitMessage(1) {
             writeSlskString(username)
             writeSlskString(type)
             writeUInt32(token)

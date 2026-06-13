@@ -152,11 +152,34 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
 
+            if (state.slskLoggedIn) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = "Ingelogd als ${state.slskUsername}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            state.slskError?.let { err ->
+                Text(err, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+
             Button(
                 onClick = viewModel::saveSlskCredentials,
-                enabled = state.slskUsername.isNotBlank() && state.slskPassword.isNotBlank(),
+                enabled = state.slskUsername.isNotBlank() && state.slskPassword.isNotBlank() && !state.slskVerifying,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Save Soulseek credentials") }
+            ) {
+                if (state.slskVerifying) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Inloggen…")
+                } else {
+                    Text("Opslaan & inloggen")
+                }
+            }
 
             HorizontalDivider()
 

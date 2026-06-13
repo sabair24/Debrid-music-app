@@ -8,6 +8,7 @@ import com.debridmusic.app.metadata.EnrichmentProgress
 import com.debridmusic.app.metadata.MetadataEnricher
 import com.debridmusic.app.player.EqController
 import com.debridmusic.app.player.ScrobbleManager
+import com.debridmusic.app.soulseek.SoulseekRepository
 import com.debridmusic.app.torbox.TorBoxAuthInterceptor
 import com.debridmusic.app.torbox.TorBoxRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -28,6 +29,9 @@ data class SettingsUiState(
     // Soulseek
     val slskUsername: String = "",
     val slskPassword: String = "",
+    val slskVerifying: Boolean = false,
+    val slskLoggedIn: Boolean = false,
+    val slskError: String? = null,
     // EQ
     val eqEnabled: Boolean = false,
     val eqBands: List<Float> = List(5) { 0f },
@@ -49,6 +53,7 @@ class SettingsViewModel @Inject constructor(
     private val metadataEnricher: MetadataEnricher,
     private val torBoxRepository: TorBoxRepository,
     private val torBoxAuthInterceptor: TorBoxAuthInterceptor,
+    private val soulseekRepository: SoulseekRepository,
     val eqController: EqController,
     private val scrobbleManager: ScrobbleManager,
 ) : ViewModel() {
@@ -137,12 +142,29 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun setSlskUsername(v: String) = _state.update { it.copy(slskUsername = v) }
-    fun setSlskPassword(v: String) = _state.update { it.copy(slskPassword = v) }
+    fun setSlskUsername(v: String) =
+        _state.update { it.copy(slskUsername = v, slskLoggedIn = false, slskError = null) }
+    fun setSlskPassword(v: String) =
+        _state.update { it.copy(slskPassword = v, slskLoggedIn = false, slskError = null) }
+
+    // Saves the credentials AND verifies them against the Soulseek server in one
+    // step, so the user gets an immediate "logged in" confirmation and never has
+    // to guess whether the save worked.
     fun saveSlskCredentials() {
+        val u = _state.value.slskUsername.trim()
+        val p = _state.value.slskPassword
+        if (u.isBlank() || p.isBlank()) return
+        _state.update { it.copy(slskVerifying = true, slskLoggedIn = false, slskError = null) }
         viewModelScope.launch {
-            settingsStore.setSlskUsername(_state.value.slskUsername)
-            settingsStore.setSlskPassword(_state.value.slskPassword)
+            settingsStore.setSlskUsername(u)
+            settingsStore.setSlskPassword(p)
+            soulseekRepository.testLogin(u, p)
+                .onSuccess {
+                    _state.update { it.copy(slskVerifying = false, slskLoggedIn = true, slskError = null) }
+                }
+                .onFailure { e ->
+                    _state.update { it.copy(slskVerifying = false, slskLoggedIn = false, slskError = e.message ?: "Inloggen mislukt") }
+                }
         }
     }
 

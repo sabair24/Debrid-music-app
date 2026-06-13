@@ -27,6 +27,9 @@ class SoulseekRepository @Inject constructor(
         return client.search(creds.first, creds.second, query)
     }
 
+    suspend fun testLogin(username: String, password: String): Result<Unit> =
+        client.testLogin(username, password)
+
     fun download(file: SoulseekFile): Flow<SlskDownloadState> = flow {
         val (username, password) = credentials()
         emitAll(client.download(username, password, file))
