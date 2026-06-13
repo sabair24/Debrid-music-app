@@ -9,16 +9,21 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import com.debridmusic.app.ui.components.AlbumArtwork
+import com.debridmusic.app.ui.theme.rememberDominantColor
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,19 +37,30 @@ fun PlayerScreen(
     val durationMs by viewModel.durationMs.collectAsStateWithLifecycle()
 
     val progress = if (durationMs > 0) positionMs.toFloat() / durationMs.toFloat() else 0f
+    val accent by rememberDominantColor(track?.artworkUri, MaterialTheme.colorScheme.primary)
+    val bg = MaterialTheme.colorScheme.background
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.surfaceVariant,
-                        MaterialTheme.colorScheme.background,
+    Box(modifier = Modifier.fillMaxSize().background(bg)) {
+        // Immersive blurred-artwork backdrop with a dynamic colour scrim
+        track?.artworkUri?.let { uri ->
+            AsyncImage(
+                model = uri,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().blur(48.dp).alpha(0.55f),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0.0f to accent.copy(alpha = 0.45f),
+                        0.5f to bg.copy(alpha = 0.85f),
+                        1.0f to bg,
                     )
                 )
-            )
-    ) {
+        )
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.fillMaxSize(),
@@ -139,8 +155,8 @@ fun PlayerScreen(
                         viewModel.seekTo((frac * durationMs).toLong())
                     },
                     colors = SliderDefaults.colors(
-                        thumbColor = MaterialTheme.colorScheme.primary,
-                        activeTrackColor = MaterialTheme.colorScheme.primary,
+                        thumbColor = accent,
+                        activeTrackColor = accent,
                         inactiveTrackColor = MaterialTheme.colorScheme.outline,
                     ),
                 )
@@ -182,8 +198,8 @@ fun PlayerScreen(
 
                 FloatingActionButton(
                     onClick = viewModel::togglePlayPause,
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    containerColor = accent,
+                    contentColor = Color.White,
                     modifier = Modifier.size(64.dp),
                 ) {
                     Icon(

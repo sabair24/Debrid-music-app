@@ -141,4 +141,7 @@ dependencies {
 
     // Preferences
     implementation(libs.androidx.datastore.preferences)
+
+    // Palette — dynamic accent colours from artwork (Roon-style theming)
+    implementation(libs.androidx.palette)
 }

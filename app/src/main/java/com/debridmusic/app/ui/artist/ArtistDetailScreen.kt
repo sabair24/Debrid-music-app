@@ -20,9 +20,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.debridmusic.app.ui.theme.rememberDominantColor
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
@@ -46,6 +49,10 @@ fun ArtistDetailScreen(
     val durationMs by viewModel.playerController.durationMs.collectAsStateWithLifecycle()
 
     val progress = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
+    val accent by rememberDominantColor(
+        state.artist?.imageUri ?: state.artist?.bannerUri,
+        MaterialTheme.colorScheme.primary,
+    )
 
     Scaffold(
         topBar = {
@@ -88,61 +95,69 @@ fun ArtistDetailScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            // Artist hero image
+            // Artist hero — full-bleed fan-art banner with a dynamic colour scrim
             item {
-                Box(modifier = Modifier.fillMaxWidth().height(240.dp)) {
-                    state.artist?.imageUri?.let { uri ->
+                val backdrop = state.artist?.bannerUri ?: state.artist?.imageUri
+                Box(modifier = Modifier.fillMaxWidth().height(320.dp)) {
+                    if (backdrop != null) {
                         AsyncImage(
-                            model = uri,
+                            model = backdrop,
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize(),
                         )
-                    } ?: Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                    )
+                    } else {
+                        Box(Modifier.fillMaxSize().background(accent.copy(alpha = 0.35f)))
+                    }
+                    // Dynamic gradient: fades the artwork into a tinted scrim, then bg
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .background(
                                 Brush.verticalGradient(
-                                    colors = listOf(
-                                        MaterialTheme.colorScheme.background.copy(alpha = 0.1f),
-                                        MaterialTheme.colorScheme.background,
-                                    )
+                                    0.0f to Color.Transparent,
+                                    0.45f to accent.copy(alpha = 0.25f),
+                                    0.8f to MaterialTheme.colorScheme.background.copy(alpha = 0.85f),
+                                    1.0f to MaterialTheme.colorScheme.background,
                                 )
                             )
                     )
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomStart)
-                            .padding(16.dp),
+                            .padding(20.dp),
                     ) {
                         Text(
                             text = state.artist?.name ?: "",
-                            style = MaterialTheme.typography.headlineLarge,
-                            color = MaterialTheme.colorScheme.onBackground,
+                            style = MaterialTheme.typography.displaySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        if (state.tracks.isNotEmpty()) {
-                            Text(
-                                text = "${state.tracks.size} tracks • ${state.albums.size} albums",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = buildString {
+                                state.artist?.genre?.takeIf { it.isNotBlank() }?.let { append(it); append("  •  ") }
+                                append("${state.albums.size} albums  •  ${state.tracks.size} tracks")
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White.copy(alpha = 0.85f),
+                        )
                     }
                 }
             }
 
-            // Play button
+            // Play button (tinted with the artwork's accent colour)
             item {
                 Row(modifier = Modifier.padding(16.dp)) {
-                    Button(onClick = {
-                        viewModel.playAll()
-                        onNowPlayingClick()
-                    }) {
+                    Button(
+                        onClick = {
+                            viewModel.playAll()
+                            onNowPlayingClick()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = Color.White),
+                    ) {
                         Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("Play all")

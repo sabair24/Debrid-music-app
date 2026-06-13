@@ -15,10 +15,13 @@ import com.debridmusic.app.ui.metadata.MetadataEditorDialog
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.debridmusic.app.ui.theme.rememberDominantColor
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
@@ -39,6 +42,7 @@ fun AlbumDetailScreen(
     val durationMs by viewModel.playerController.durationMs.collectAsStateWithLifecycle()
 
     val progress = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
+    val accent by rememberDominantColor(state.album?.artworkUri, MaterialTheme.colorScheme.primary)
 
     Scaffold(
         topBar = {
@@ -90,23 +94,22 @@ fun AlbumDetailScreen(
                             model = uri,
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier.fillMaxSize().blur(40.dp),
                         )
                     } ?: Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .background(accent.copy(alpha = 0.35f))
                     )
-                    // Gradient overlay
+                    // Dynamic colour gradient overlay
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .background(
                                 Brush.verticalGradient(
-                                    colors = listOf(
-                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.3f),
-                                        MaterialTheme.colorScheme.background,
-                                    )
+                                    0.0f to accent.copy(alpha = 0.35f),
+                                    0.6f to MaterialTheme.colorScheme.background.copy(alpha = 0.85f),
+                                    1.0f to MaterialTheme.colorScheme.background,
                                 )
                             )
                     )
@@ -174,6 +177,7 @@ fun AlbumDetailScreen(
                 ) {
                     Button(
                         onClick = viewModel::playAll,
+                        colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = Color.White),
                         modifier = Modifier.weight(1f),
                     ) {
                         Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(18.dp))
