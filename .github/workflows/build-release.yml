@@ -65,33 +65,34 @@ jobs:
           path: app/build/outputs/apk/debug/${{ env.APK_NAME }}
           retention-days: 30
 
-      - name: Create GitHub Release
-        if: github.ref == 'refs/heads/main'
+      # Publishes only the built APK to a SEPARATE PUBLIC repo so the in-app
+      # updater can read releases and download the APK without authentication,
+      # while this source repo stays private.
+      # One-time setup required (see repo README / setup notes):
+      #   1. Create a public repo: sabair24/Debrid-music-app-releases
+      #   2. Create a Personal Access Token with "contents: write" on it
+      #   3. Add it here as the secret RELEASES_TOKEN
+      - name: Publish APK to public releases repo
+        if: github.ref == 'refs/heads/main' && env.RELEASES_TOKEN != ''
+        env:
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
         uses: softprops/action-gh-release@v2
         with:
+          repository: sabair24/Debrid-music-app-releases
+          token: ${{ secrets.RELEASES_TOKEN }}
           tag_name: v${{ env.VERSION }}-build${{ github.run_number }}
           name: "Debrid Music v${{ env.VERSION }} (build ${{ github.run_number }})"
           body: |
-            ## Debrid Music v${{ env.VERSION }}
+            ## Debrid Music v${{ env.VERSION }} (build ${{ github.run_number }})
 
-            Android music app with TorBox debrid integration.
-
-            ### Features
-            - Stream FLAC/MP3 directly from TorBox debrid
-            - Stream full albums as a track queue
-            - Local library scanner (FLAC, MP3, M4A, OGG, …)
-            - Android TV support
-            - Last.fm scrobbling
-            - 5-band equalizer & cross-fade
-            - MusicBrainz metadata enrichment
+            Android music app — TorBox debrid + Soulseek P2P.
 
             ### Install
             Download the APK below and sideload on your Android device or TV.
-            You will need your [TorBox API key](https://torbox.app).
+            From a build with the in-app updater installed, future updates are
+            one tap inside the app (Settings → App-updates).
 
-            > **Note:** This is a debug build. You may need to enable "Install from unknown sources" on your device.
+            > You may need to enable "Install from unknown sources" on your device.
           draft: false
           prerelease: false
           files: app/build/outputs/apk/debug/${{ env.APK_NAME }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

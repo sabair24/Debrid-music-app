@@ -22,8 +22,10 @@ android {
         versionName = "1.0.0"
 
         // Used by the in-app updater to compare against the latest GitHub release.
+        // Points at the PUBLIC releases repo (source stays private), so the
+        // unauthenticated update check and APK download work on-device.
         buildConfigField("int", "BUILD_NUMBER", "$ciBuildNumber")
-        buildConfigField("String", "GITHUB_REPO", "\"sabair24/Debrid-music-app\"")
+        buildConfigField("String", "GITHUB_REPO", "\"sabair24/Debrid-music-app-releases\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
