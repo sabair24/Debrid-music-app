@@ -6,6 +6,7 @@ import kotlinx.coroutines.withContext
 import java.io.EOFException
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -17,8 +18,9 @@ class SlskSocket(private val host: String, private val port: Int) {
 
     val isConnected: Boolean get() = socket?.let { !it.isClosed && it.isConnected } ?: false
 
-    suspend fun connect() = withContext(Dispatchers.IO) {
-        val s = Socket(host, port)
+    suspend fun connect(connectTimeoutMs: Int = 6_000) = withContext(Dispatchers.IO) {
+        val s = Socket()
+        s.connect(InetSocketAddress(host, port), connectTimeoutMs)
         s.soTimeout = 30_000
         input = s.getInputStream()
         output = s.getOutputStream()

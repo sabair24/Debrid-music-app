@@ -112,7 +112,7 @@ class SoulseekClient @Inject constructor(
                             val port = buf.readUInt32().toInt()
                             val token = buf.readUInt32()
 
-                            if (type == "P" && ip != "0.0.0.0" && port > 0) {
+                            if (type == "P" && ip != "0.0.0.0" && port > 0 && peerJobs.size < 12) {
                                 val job = CoroutineScope(Dispatchers.IO).launch {
                                     collectPeerResults(username, ip, port, token, ticket, results, peerConnected)
                                 }
@@ -165,9 +165,9 @@ class SoulseekClient @Inject constructor(
     ) {
         val peer = SlskSocket(ip, port)
         try {
-            peer.connect()
+            peer.connect(connectTimeoutMs = 5_000)
             peerConnected.incrementAndGet()
-            peer.setSoTimeout(10_000)
+            peer.setSoTimeout(8_000)
             // ConnectToPeer flow: send PierceFirewall (code 0) with the server-relayed
             // token so the peer can match this connection to their pending search result.
             // PeerInit (code 1) is only for connections WE initiate without the server relay.
