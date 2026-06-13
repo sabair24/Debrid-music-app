@@ -5,6 +5,7 @@ import com.debridmusic.app.soulseek.proto.*
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import java.io.ByteArrayOutputStream
@@ -13,6 +14,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.random.Random
@@ -260,107 +262,166 @@ class SoulseekClient @Inject constructor(
         username: String,
         password: String,
         file: SoulseekFile,
-    ): Flow<SlskDownloadState> = flow {
-        // 1. Get peer address from server
+    ): Flow<SlskDownloadState> = channelFlow {
         val server = SlskSocket(SERVER_HOST, SERVER_PORT)
+        var pConn: SlskSocket? = null
+        val fileSize = AtomicLong(0L)
         try {
             server.connect()
             loginServer(server, username, password)
             server.send(buildSetWaitPort(0))
+
+            // Resolve the uploader's address.
             server.send(buildGetPeerAddress(file.username))
             server.setSoTimeout(10_000)
-
             val addrData = readUntilCode(server, 3)
             val addrBuf = ByteBuffer.wrap(addrData).order(ByteOrder.LITTLE_ENDIAN)
             addrBuf.readSlskString() // peer username
             val peerIp = addrBuf.readSlskIp()
             val peerPort = addrBuf.readUInt32().toInt()
+            if (peerIp == "0.0.0.0" || peerPort == 0) {
+                error("Deze gebruiker is niet bereikbaar (firewalled). Probeer een ander resultaat.")
+            }
 
-            if (peerIp == "0.0.0.0" || peerPort == 0) error("Peer is offline or unreachable")
-            server.close()
-
-            // 2. Connect to peer and request file
-            val peer = SlskSocket(peerIp, peerPort)
-            peer.connect()
-            peer.setSoTimeout(20_000)
-
+            // Open a peer (P) connection and ask for the file. We send both
+            // QueueUpload (the polite queue request) and a direct TransferRequest,
+            // so cooperative clients start the upload either way.
             val dlToken = ticketGen.incrementAndGet().toLong()
+            val peer = SlskSocket(peerIp, peerPort).also { pConn = it }
+            peer.connect(connectTimeoutMs = 8_000)
             peer.send(buildPeerInit(username, "P", dlToken))
+            peer.send(buildQueueUpload(file.filename))
             peer.send(buildTransferRequest(0, dlToken, file.filename))
+            send(SlskDownloadState.Queued("Aangevraagd — wachten op upload-slot…"))
 
-            // Read up to 5 messages looking for TransferResponse (code 41)
-            var fileSize = 0L
-            var transferAllowed = false
-            var denyReason = "No response"
+            // The uploader can't reach us (we're firewalled), so the actual bytes
+            // arrive on a separate "F" connection that it asks the server to relay
+            // via ConnectToPeer. Meanwhile we watch the P connection for the
+            // transfer hand-shake. These run concurrently.
+            val denyReason = java.util.concurrent.atomic.AtomicReference<String?>(null)
 
-            repeat(5) {
-                if (transferAllowed) return@repeat
-                val msg = try { peer.readMessage() } catch (_: Exception) { return@repeat }
+            // P-connection reader: capture file size and accept the upload.
+            val pJob = launch(Dispatchers.IO) {
+                runCatching {
+                    peer.setSoTimeout(60_000)
+                    repeat(40) {
+                        val msg = peer.readMessage()
+                        val buf = ByteBuffer.wrap(msg).order(ByteOrder.LITTLE_ENDIAN)
+                        when (buf.readUInt32().toInt()) {
+                            41 -> { // TransferResponse to our request
+                                buf.readUInt32() // token
+                                if (buf.readBool()) fileSize.compareAndSet(0L, buf.readUInt64())
+                                else denyReason.set(buf.readSlskString())
+                            }
+                            40 -> { // peer initiates the upload
+                                buf.readUInt32() // direction
+                                val tok = buf.readUInt32()
+                                buf.readSlskString() // filename
+                                if (buf.remaining() >= 8) fileSize.compareAndSet(0L, buf.readUInt64())
+                                peer.send(buildTransferResponse(tok, true)) // accept
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Server loop: wait for the ConnectToPeer "F" relay, then pull the file.
+            val deadline = System.currentTimeMillis() + 90_000L
+            var delivered = false
+            while (System.currentTimeMillis() < deadline && !delivered) {
+                val remaining = deadline - System.currentTimeMillis()
+                server.setSoTimeout(remaining.coerceIn(500, 60_000).toInt())
+                val msg = try {
+                    server.readMessage()
+                } catch (_: java.net.SocketTimeoutException) {
+                    break
+                } catch (_: Exception) {
+                    break
+                }
                 val buf = ByteBuffer.wrap(msg).order(ByteOrder.LITTLE_ENDIAN)
-                val code = buf.readUInt32().toInt()
-                if (code == 41) { // TransferResponse
-                    buf.readUInt32() // token
-                    transferAllowed = buf.readBool()
-                    if (transferAllowed) {
-                        fileSize = buf.readUInt64()
+                if (buf.readUInt32().toInt() != 18) continue // only ConnectToPeer
+
+                buf.readSlskString() // peer username
+                val type = buf.readSlskString()
+                val ip = buf.readSlskIp()
+                val port = buf.readUInt32().toInt()
+                val ctpToken = buf.readUInt32()
+                if (type != "F" || ip == "0.0.0.0" || port <= 0) continue
+
+                // This is the file connection. Pierce, read the transfer ticket,
+                // send our offset, then stream the bytes.
+                val fConn = SlskSocket(ip, port)
+                try {
+                    fConn.connect(connectTimeoutMs = 8_000)
+                    fConn.send(buildPierceFirewall(ctpToken))
+                    fConn.setSoTimeout(60_000)
+                    val inp = fConn.rawInputStream()
+                    readRaw(inp, 4) // transfer ticket (uint32) — we have one DL in flight
+                    fConn.sendRaw(ByteArray(8)) // offset = 0
+
+                    val ext = file.extension.ifBlank { "mp3" }
+                    val tempFile = File(context.cacheDir, "slsk_${ticketGen.incrementAndGet()}.$ext")
+                    var received = 0L
+                    var lastEmit = 0L
+                    val total = fileSize.get()
+                    tempFile.outputStream().use { out ->
+                        val data = ByteArray(65_536)
+                        while (true) {
+                            if (total > 0 && received >= total) break
+                            val n = inp.read(data)
+                            if (n < 0) break
+                            out.write(data, 0, n)
+                            received += n
+                            if (received - lastEmit >= 262_144L) {
+                                send(SlskDownloadState.Downloading(received, total))
+                                lastEmit = received
+                            }
+                        }
+                    }
+                    fConn.close()
+
+                    if (received > 0 && (total == 0L || received >= total)) {
+                        send(SlskDownloadState.Done(tempFile.absolutePath))
+                        delivered = true
                     } else {
-                        denyReason = buf.readSlskString()
+                        tempFile.delete()
                     }
+                } catch (_: Exception) {
+                    runCatching { fConn.close() }
                 }
             }
 
-            if (!transferAllowed) {
-                peer.close()
-                if (denyReason.contains("Queued", ignoreCase = true)) {
-                    emit(SlskDownloadState.Queued(denyReason))
-                } else {
-                    error("Transfer denied: $denyReason")
-                }
-                return@flow
-            }
-
-            // 3. Send offset (0 = from start), then stream file bytes
-            peer.sendRaw(ByteArray(8)) // 8-byte LE uint64 = 0
-            peer.setSoTimeout(60_000)
-
-            val ext = file.extension.ifBlank { "tmp" }
-            val tempFile = File(context.cacheDir, "slsk_${System.currentTimeMillis()}.$ext")
-            var received = 0L
-            var lastEmit = 0L
-
-            val inp = peer.rawInputStream()
-            tempFile.outputStream().use { out ->
-                val buf = ByteArray(65_536)
-                while (received < fileSize || fileSize == 0L) {
-                    val toRead = if (fileSize > 0) minOf(buf.size.toLong(), fileSize - received).toInt()
-                                 else buf.size
-                    val n = inp.read(buf, 0, toRead)
-                    if (n < 0) break
-                    out.write(buf, 0, n)
-                    received += n
-                    // Emit progress at most every 256 KB
-                    if (received - lastEmit >= 262_144L || received >= fileSize) {
-                        emit(SlskDownloadState.Downloading(received, fileSize))
-                        lastEmit = received
-                    }
-                    if (fileSize > 0 && received >= fileSize) break
+            pJob.cancel()
+            if (!delivered) {
+                val reason = denyReason.get()
+                when {
+                    reason != null && reason.contains("Queued", ignoreCase = true) ->
+                        send(SlskDownloadState.Queued("In wachtrij bij gebruiker — probeer later of een ander resultaat."))
+                    reason != null ->
+                        send(SlskDownloadState.Error("Geweigerd door uploader: $reason"))
+                    else ->
+                        send(SlskDownloadState.Error("Geen reactie van uploader (slot bezet of offline). Probeer een ander resultaat."))
                 }
             }
-
-            peer.close()
-
-            if (fileSize == 0L || received >= fileSize) {
-                emit(SlskDownloadState.Done(tempFile.absolutePath))
-            } else {
-                tempFile.delete()
-                error("Incomplete download: $received / $fileSize bytes")
-            }
-
         } catch (e: Exception) {
-            server.close()
-            emit(SlskDownloadState.Error(e.message ?: "Download failed"))
+            send(SlskDownloadState.Error(e.message ?: "Download mislukt"))
+        } finally {
+            runCatching { pConn?.close() }
+            runCatching { server.close() }
         }
     }.flowOn(Dispatchers.IO)
+
+    // Reads exactly [n] bytes from a raw peer stream (used for the transfer ticket).
+    private fun readRaw(input: java.io.InputStream, n: Int): ByteArray {
+        val buf = ByteArray(n)
+        var off = 0
+        while (off < n) {
+            val r = input.read(buf, off, n - off)
+            if (r < 0) break
+            off += r
+        }
+        return buf
+    }
 
     // ── Server message builders ────────────────────────────────────────────────
 
@@ -403,6 +464,17 @@ class SoulseekClient @Inject constructor(
             writeUInt32(direction.toLong())
             writeUInt32(ticket)
             writeSlskString(filename)
+        }
+
+    // Polite "add me to your upload queue for this file" (PeerQueueUpload).
+    private fun buildQueueUpload(filename: String): ByteArray =
+        buildSlskMessage(43) { writeSlskString(filename) }
+
+    // Our reply when a peer offers to upload (PeerTransferResponse): accept it.
+    private fun buildTransferResponse(token: Long, allowed: Boolean): ByteArray =
+        buildSlskMessage(41) {
+            writeUInt32(token)
+            writeUInt8(if (allowed) 1 else 0)
         }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

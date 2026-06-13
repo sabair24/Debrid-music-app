@@ -64,8 +64,13 @@ class SoulseekSearchViewModel @Inject constructor(
                     }
                     is SlskDownloadState.Done -> {
                         _state.update { it.copy(downloadingFile = null, downloadProgress = 0f) }
+                        // localPath is already a playable URI: content:// (MediaStore,
+                        // Android 10+) or file://… on older versions.
+                        val uri = dlState.localPath.let {
+                            if (it.startsWith("content://") || it.startsWith("file://")) it else "file://$it"
+                        }
                         playerController.playRemoteUrl(
-                            url = "file://${dlState.localPath}",
+                            url = uri,
                             title = file.displayName,
                             artist = file.username,
                             album = "",

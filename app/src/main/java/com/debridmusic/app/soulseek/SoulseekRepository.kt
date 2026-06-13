@@ -1,9 +1,9 @@
 package com.debridmusic.app.soulseek
 
 import com.debridmusic.app.data.local.SettingsStore
+import com.debridmusic.app.scanner.MediaScanner
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import javax.inject.Inject
@@ -13,6 +13,8 @@ import javax.inject.Singleton
 class SoulseekRepository @Inject constructor(
     private val client: SoulseekClient,
     private val settingsStore: SettingsStore,
+    private val libraryPublisher: LibraryPublisher,
+    private val mediaScanner: MediaScanner,
 ) {
     private suspend fun credentials(): Pair<String, String> {
         val username = settingsStore.slskUsername.first()
@@ -32,6 +34,18 @@ class SoulseekRepository @Inject constructor(
 
     fun download(file: SoulseekFile): Flow<SlskDownloadState> = flow {
         val (username, password) = credentials()
-        emitAll(client.download(username, password, file))
+        client.download(username, password, file).collect { state ->
+            if (state is SlskDownloadState.Done) {
+                // Move the file into the public Music library and refresh the
+                // in-app library so it shows up under the user's collection.
+                val publishedUri = runCatching {
+                    libraryPublisher.publish(state.localPath, file.displayName, file.username)
+                }.getOrNull()
+                runCatching { mediaScanner.scanDevice() }
+                emit(SlskDownloadState.Done(publishedUri ?: state.localPath))
+            } else {
+                emit(state)
+            }
+        }
     }.catch { e -> emit(SlskDownloadState.Error(e.message ?: "Download failed")) }
 }
