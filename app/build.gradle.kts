@@ -46,9 +46,26 @@ android {
         vectorDrawables { useSupportLibrary = true }
     }
 
+    // Stable signing key committed to this (private) repo so every CI build is
+    // signed identically. Without this each build got a fresh debug key, so
+    // updates failed with a signature mismatch and required an uninstall — which
+    // also broke the in-app updater. App-signing key only; the source repo is private.
+    signingConfigs {
+        create("stable") {
+            storeFile = file("debridmusic.keystore")
+            storePassword = "debridmusic"
+            keyAlias = "debridmusic"
+            keyPassword = "debridmusic"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("stable")
+        }
         release {
             isMinifyEnabled = true
+            signingConfig = signingConfigs.getByName("stable")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

@@ -17,3 +17,5 @@ app/build/
 local.properties
 *.jks
 *.keystore
+# …except the project's stable app-signing key (private repo, needed by CI)
+!app/debridmusic.keystore
