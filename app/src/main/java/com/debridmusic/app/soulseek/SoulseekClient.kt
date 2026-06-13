@@ -1,6 +1,7 @@
 package com.debridmusic.app.soulseek
 
 import android.content.Context
+import android.util.Log
 import com.debridmusic.app.soulseek.proto.*
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
@@ -47,6 +48,7 @@ sealed class SlskDownloadState {
 
 private const val SERVER_HOST = "server.slsknet.org"
 private const val SERVER_PORT = 2242
+private const val DL_TAG = "SlskDownload"
 
 @Singleton
 class SoulseekClient @Inject constructor(
@@ -279,6 +281,7 @@ class SoulseekClient @Inject constructor(
             addrBuf.readSlskString() // peer username
             val peerIp = addrBuf.readSlskIp()
             val peerPort = addrBuf.readUInt32().toInt()
+            Log.d(DL_TAG, "addr ${file.username} -> $peerIp:$peerPort")
             if (peerIp == "0.0.0.0" || peerPort == 0) {
                 error("Deze gebruiker is niet bereikbaar (firewalled). Probeer een ander resultaat.")
             }
@@ -292,7 +295,9 @@ class SoulseekClient @Inject constructor(
             peer.send(buildPeerInit(username, "P", dlToken))
             peer.send(buildQueueUpload(file.filename))
             peer.send(buildTransferRequest(0, dlToken, file.filename))
-            send(SlskDownloadState.Queued("Aangevraagd — wachten op upload-slot…"))
+            Log.d(DL_TAG, "P-connected, request sent for ${file.filename}")
+            // Non-terminal "working" signal (totalBytes=0 -> spinner, not an error).
+            send(SlskDownloadState.Downloading(0L, 0L))
 
             // The uploader can't reach us (we're firewalled), so the actual bytes
             // arrive on a separate "F" connection that it asks the server to relay
@@ -307,11 +312,12 @@ class SoulseekClient @Inject constructor(
                     repeat(40) {
                         val msg = peer.readMessage()
                         val buf = ByteBuffer.wrap(msg).order(ByteOrder.LITTLE_ENDIAN)
-                        when (buf.readUInt32().toInt()) {
+                        when (val pc = buf.readUInt32().toInt()) {
                             41 -> { // TransferResponse to our request
                                 buf.readUInt32() // token
-                                if (buf.readBool()) fileSize.compareAndSet(0L, buf.readUInt64())
-                                else denyReason.set(buf.readSlskString())
+                                val allowed = buf.readBool()
+                                if (allowed) { fileSize.compareAndSet(0L, buf.readUInt64()); Log.d(DL_TAG, "P: TransferResponse allowed size=${fileSize.get()}") }
+                                else { val r = buf.readSlskString(); denyReason.set(r); Log.d(DL_TAG, "P: TransferResponse denied: $r") }
                             }
                             40 -> { // peer initiates the upload
                                 buf.readUInt32() // direction
@@ -319,7 +325,9 @@ class SoulseekClient @Inject constructor(
                                 buf.readSlskString() // filename
                                 if (buf.remaining() >= 8) fileSize.compareAndSet(0L, buf.readUInt64())
                                 peer.send(buildTransferResponse(tok, true)) // accept
+                                Log.d(DL_TAG, "P: peer TransferRequest, accepted, size=${fileSize.get()}")
                             }
+                            else -> Log.d(DL_TAG, "P: code $pc")
                         }
                     }
                 }
@@ -346,10 +354,12 @@ class SoulseekClient @Inject constructor(
                 val ip = buf.readSlskIp()
                 val port = buf.readUInt32().toInt()
                 val ctpToken = buf.readUInt32()
+                Log.d(DL_TAG, "server: ConnectToPeer type=$type $ip:$port")
                 if (type != "F" || ip == "0.0.0.0" || port <= 0) continue
 
                 // This is the file connection. Pierce, read the transfer ticket,
                 // send our offset, then stream the bytes.
+                Log.d(DL_TAG, "F: connecting $ip:$port")
                 val fConn = SlskSocket(ip, port)
                 try {
                     fConn.connect(connectTimeoutMs = 8_000)
@@ -358,6 +368,7 @@ class SoulseekClient @Inject constructor(
                     val inp = fConn.rawInputStream()
                     readRaw(inp, 4) // transfer ticket (uint32) — we have one DL in flight
                     fConn.sendRaw(ByteArray(8)) // offset = 0
+                    Log.d(DL_TAG, "F: pierced, ticket read, streaming (size=${fileSize.get()})")
 
                     val ext = file.extension.ifBlank { "mp3" }
                     val tempFile = File(context.cacheDir, "slsk_${ticketGen.incrementAndGet()}.$ext")
@@ -380,17 +391,20 @@ class SoulseekClient @Inject constructor(
                     }
                     fConn.close()
 
+                    Log.d(DL_TAG, "F: stream ended received=$received total=$total")
                     if (received > 0 && (total == 0L || received >= total)) {
                         send(SlskDownloadState.Done(tempFile.absolutePath))
                         delivered = true
                     } else {
                         tempFile.delete()
                     }
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    Log.d(DL_TAG, "F: error ${e.javaClass.simpleName}: ${e.message}")
                     runCatching { fConn.close() }
                 }
             }
 
+            Log.d(DL_TAG, "download end, delivered=$delivered deny=${denyReason.get()}")
             pJob.cancel()
             if (!delivered) {
                 val reason = denyReason.get()

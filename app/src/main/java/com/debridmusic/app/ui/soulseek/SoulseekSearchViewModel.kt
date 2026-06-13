@@ -22,7 +22,9 @@ data class SoulseekUiState(
     val results: List<SoulseekFile> = emptyList(),
     val downloadingFile: SoulseekFile? = null,
     val downloadProgress: Float = 0f,
+    val downloadStatus: String? = null,
     val downloadError: String? = null,
+    val downloadInfo: String? = null,
 )
 
 @HiltViewModel
@@ -52,7 +54,10 @@ class SoulseekSearchViewModel @Inject constructor(
     fun downloadAndPlay(file: SoulseekFile) {
         if (_state.value.downloadingFile != null) return
         downloadJob?.cancel()
-        _state.update { it.copy(downloadingFile = file, downloadProgress = 0f, downloadError = null) }
+        _state.update { it.copy(
+            downloadingFile = file, downloadProgress = 0f,
+            downloadStatus = "Verbinden…", downloadError = null, downloadInfo = null,
+        ) }
 
         downloadJob = viewModelScope.launch {
             repository.download(file).collect { dlState ->
@@ -60,10 +65,14 @@ class SoulseekSearchViewModel @Inject constructor(
                     is SlskDownloadState.Downloading -> {
                         val progress = if (dlState.totalBytes > 0)
                             dlState.bytesReceived.toFloat() / dlState.totalBytes else 0f
-                        _state.update { it.copy(downloadProgress = progress) }
+                        _state.update { it.copy(
+                            downloadProgress = progress,
+                            downloadStatus = if (dlState.totalBytes > 0) "Downloaden…"
+                                             else "Aangevraagd — wachten op upload-slot…",
+                        ) }
                     }
                     is SlskDownloadState.Done -> {
-                        _state.update { it.copy(downloadingFile = null, downloadProgress = 0f) }
+                        _state.update { it.copy(downloadingFile = null, downloadProgress = 0f, downloadStatus = null) }
                         // localPath is already a playable URI: content:// (MediaStore,
                         // Android 10+) or file://… on older versions.
                         val uri = dlState.localPath.let {
@@ -76,14 +85,19 @@ class SoulseekSearchViewModel @Inject constructor(
                             album = "",
                         )
                     }
+                    // Queued is informational (the uploader put us in their queue) — not a
+                    // hard error, and we keep the results list visible.
                     is SlskDownloadState.Queued -> {
                         _state.update { it.copy(
-                            downloadingFile = null,
-                            downloadError = "Gequeued: ${dlState.reason} — probeer een ander bestand",
+                            downloadingFile = null, downloadProgress = 0f, downloadStatus = null,
+                            downloadInfo = dlState.reason,
                         ) }
                     }
                     is SlskDownloadState.Error -> {
-                        _state.update { it.copy(downloadingFile = null, downloadError = dlState.message) }
+                        _state.update { it.copy(
+                            downloadingFile = null, downloadProgress = 0f, downloadStatus = null,
+                            downloadInfo = dlState.message,
+                        ) }
                     }
                 }
             }
@@ -92,6 +106,8 @@ class SoulseekSearchViewModel @Inject constructor(
 
     fun cancelDownload() {
         downloadJob?.cancel()
-        _state.update { it.copy(downloadingFile = null, downloadProgress = 0f) }
+        _state.update { it.copy(downloadingFile = null, downloadProgress = 0f, downloadStatus = null) }
     }
+
+    fun clearDownloadInfo() = _state.update { it.copy(downloadInfo = null) }
 }

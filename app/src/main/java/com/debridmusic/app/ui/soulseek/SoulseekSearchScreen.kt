@@ -42,8 +42,17 @@ fun SoulseekSearchScreen(
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     val progress = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
+    val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
+
+    // Show queued/failed-download messages without wiping the results list.
+    LaunchedEffect(state.downloadInfo) {
+        state.downloadInfo?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearDownloadInfo()
+        }
+    }
 
     // Navigate to now playing when download finishes and playback starts
     LaunchedEffect(currentTrack) {
@@ -102,6 +111,7 @@ fun SoulseekSearchScreen(
                 )
             }
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = MaterialTheme.colorScheme.background,
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
@@ -126,18 +136,6 @@ fun SoulseekSearchScreen(
                             Text("Fout", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
                             Spacer(Modifier.height(8.dp))
                             Text(state.searchError ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-
-                state.downloadError != null -> {
-                    Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("Download mislukt", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
-                            Spacer(Modifier.height(8.dp))
-                            Text(state.downloadError ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.height(16.dp))
-                            Button(onClick = { viewModel.setQuery(state.query) }) { Text("Opnieuw zoeken") }
                         }
                     }
                 }
@@ -174,10 +172,8 @@ fun SoulseekSearchScreen(
                                 file = file,
                                 isDownloading = state.downloadingFile == file,
                                 downloadProgress = if (state.downloadingFile == file) state.downloadProgress else 0f,
-                                onDownload = {
-                                    viewModel.downloadAndPlay(file)
-                                    onNowPlayingClick()
-                                },
+                                downloadStatus = if (state.downloadingFile == file) state.downloadStatus else null,
+                                onDownload = { viewModel.downloadAndPlay(file) },
                                 onCancel = viewModel::cancelDownload,
                             )
                             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
@@ -194,6 +190,7 @@ private fun SlskFileRow(
     file: SoulseekFile,
     isDownloading: Boolean,
     downloadProgress: Float,
+    downloadStatus: String?,
     onDownload: () -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -270,18 +267,27 @@ private fun SlskFileRow(
             }
         }
 
-        if (isDownloading && downloadProgress > 0f) {
+        if (isDownloading) {
             Spacer(Modifier.height(4.dp))
-            LinearProgressIndicator(
-                progress = { downloadProgress },
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.primary,
-            )
-            Text(
-                "${(downloadProgress * 100).toInt()}%  ·  ${formatBytes((file.size * downloadProgress).toLong())} / ${formatBytes(file.size)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (downloadProgress > 0f) {
+                LinearProgressIndicator(
+                    progress = { downloadProgress },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    "${(downloadProgress * 100).toInt()}%  ·  ${formatBytes((file.size * downloadProgress).toLong())} / ${formatBytes(file.size)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
+                Text(
+                    downloadStatus ?: "Bezig…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
