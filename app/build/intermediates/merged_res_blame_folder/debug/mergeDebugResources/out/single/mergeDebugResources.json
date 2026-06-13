@@ -1,0 +1,22 @@
+[
+    {
+        "merged": "com.debridmusic.app-debug-4:/drawable_ic_launcher_background.xml.flat",
+        "source": "com.debridmusic.app-main-6:/drawable/ic_launcher_background.xml"
+    },
+    {
+        "merged": "com.debridmusic.app-debug-4:/mipmap-anydpi-v26_ic_launcher_round.xml.flat",
+        "source": "com.debridmusic.app-main-6:/mipmap-anydpi-v26/ic_launcher_round.xml"
+    },
+    {
+        "merged": "com.debridmusic.app-debug-4:/mipmap-anydpi-v26_ic_launcher.xml.flat",
+        "source": "com.debridmusic.app-main-6:/mipmap-anydpi-v26/ic_launcher.xml"
+    },
+    {
+        "merged": "com.debridmusic.app-debug-4:/drawable_ic_launcher_foreground.xml.flat",
+        "source": "com.debridmusic.app-main-6:/drawable/ic_launcher_foreground.xml"
+    },
+    {
+        "merged": "com.debridmusic.app-debug-4:/xml_file_provider_paths.xml.flat",
+        "source": "com.debridmusic.app-main-6:/xml/file_provider_paths.xml"
+    }
+]

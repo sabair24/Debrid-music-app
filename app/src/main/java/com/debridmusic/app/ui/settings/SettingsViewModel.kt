@@ -11,6 +11,7 @@ import com.debridmusic.app.player.ScrobbleManager
 import com.debridmusic.app.soulseek.SoulseekRepository
 import com.debridmusic.app.torbox.TorBoxAuthInterceptor
 import com.debridmusic.app.torbox.TorBoxRepository
+import com.debridmusic.app.update.UpdateRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -45,6 +46,16 @@ data class SettingsUiState(
     val lastFmPassword: String = "",
     val lastFmLoginLoading: Boolean = false,
     val lastFmLoginError: String? = null,
+    // App updates (GitHub Releases)
+    val updateChecking: Boolean = false,
+    val updateAvailable: Boolean = false,
+    val updateVersion: String = "",
+    val updateNotes: String = "",
+    val updateApkUrl: String? = null,
+    val updateUpToDate: Boolean = false,
+    val updateDownloading: Boolean = false,
+    val updateProgress: Float = 0f,
+    val updateError: String? = null,
 )
 
 @HiltViewModel
@@ -54,6 +65,7 @@ class SettingsViewModel @Inject constructor(
     private val torBoxRepository: TorBoxRepository,
     private val torBoxAuthInterceptor: TorBoxAuthInterceptor,
     private val soulseekRepository: SoulseekRepository,
+    private val updateRepository: UpdateRepository,
     val eqController: EqController,
     private val scrobbleManager: ScrobbleManager,
 ) : ViewModel() {
@@ -109,6 +121,51 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             eqController.bands.collect { bands ->
                 _state.update { it.copy(eqBands = bands, eqRangeDb = eqController.bandRangeDb) }
+            }
+        }
+        // Quietly check for an update when Settings opens.
+        checkForUpdate(silent = true)
+    }
+
+    // ── App updates ────────────────────────────────────────────────────────────
+    fun checkForUpdate(silent: Boolean = false) {
+        if (_state.value.updateChecking || _state.value.updateDownloading) return
+        _state.update { it.copy(updateChecking = true, updateError = null, updateUpToDate = false) }
+        viewModelScope.launch {
+            updateRepository.check()
+                .onSuccess { info ->
+                    _state.update {
+                        it.copy(
+                            updateChecking = false,
+                            updateAvailable = info.available,
+                            updateVersion = info.versionLabel,
+                            updateNotes = info.notes,
+                            updateApkUrl = info.apkUrl,
+                            updateUpToDate = !info.available,
+                        )
+                    }
+                }
+                .onFailure { e ->
+                    _state.update {
+                        it.copy(updateChecking = false, updateError = if (silent) null else (e.message ?: "Controle mislukt"))
+                    }
+                }
+        }
+    }
+
+    fun downloadUpdate() {
+        val url = _state.value.updateApkUrl ?: return
+        if (_state.value.updateDownloading) return
+        _state.update { it.copy(updateDownloading = true, updateProgress = 0f, updateError = null) }
+        viewModelScope.launch {
+            runCatching {
+                updateRepository.downloadAndInstall(url) { p ->
+                    _state.update { it.copy(updateProgress = p) }
+                }
+            }.onSuccess {
+                _state.update { it.copy(updateDownloading = false) }
+            }.onFailure { e ->
+                _state.update { it.copy(updateDownloading = false, updateError = e.message ?: "Update mislukt") }
             }
         }
     }

@@ -44,6 +44,8 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build Debug APK
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
         run: ./gradlew assembleDebug --stacktrace
 
       - name: Rename APK with version info

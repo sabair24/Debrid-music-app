@@ -11,6 +11,7 @@ import com.debridmusic.app.data.remote.api.LastFmScrobbleApi
 import com.debridmusic.app.data.remote.api.MusicBrainzApi
 import com.debridmusic.app.data.remote.api.TorBoxApi
 import com.debridmusic.app.torbox.TorBoxAuthInterceptor
+import com.debridmusic.app.update.GitHubApi
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -110,4 +111,27 @@ object NetworkModule {
     @Provides @Singleton
     fun provideBitSearchApi(@Named("bitsearch") retrofit: Retrofit): BitSearchApi =
         retrofit.create(BitSearchApi::class.java)
+
+    @Provides @Singleton @Named("github")
+    fun provideGitHubRetrofit(okHttpClient: OkHttpClient): Retrofit =
+        Retrofit.Builder()
+            .baseUrl("https://api.github.com/")
+            .client(
+                okHttpClient.newBuilder()
+                    .addInterceptor { chain ->
+                        // GitHub's API rejects requests without a User-Agent (HTTP 403).
+                        val req = chain.request().newBuilder()
+                            .header("User-Agent", "DebridMusic-Android")
+                            .header("Accept", "application/vnd.github+json")
+                            .build()
+                        chain.proceed(req)
+                    }
+                    .build()
+            )
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+
+    @Provides @Singleton
+    fun provideGitHubApi(@Named("github") retrofit: Retrofit): GitHubApi =
+        retrofit.create(GitHubApi::class.java)
 }

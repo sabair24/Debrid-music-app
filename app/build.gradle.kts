@@ -10,12 +10,20 @@ android {
     namespace = "com.debridmusic.app"
     compileSdk = 35
 
+    // CI passes the GitHub Actions run number as BUILD_NUMBER. Locally it
+    // defaults to 0 so a dev build always sees the published release as newer.
+    val ciBuildNumber = System.getenv("BUILD_NUMBER")?.toIntOrNull() ?: 0
+
     defaultConfig {
         applicationId = "com.debridmusic.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
+        versionCode = ciBuildNumber.coerceAtLeast(1)
         versionName = "1.0.0"
+
+        // Used by the in-app updater to compare against the latest GitHub release.
+        buildConfigField("int", "BUILD_NUMBER", "$ciBuildNumber")
+        buildConfigField("String", "GITHUB_REPO", "\"sabair24/Debrid-music-app\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -37,7 +45,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
 
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }

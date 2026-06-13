@@ -9,6 +9,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Equalizer
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
@@ -21,6 +22,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.debridmusic.app.BuildConfig
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -57,6 +59,82 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
+
+            // ── App updates ──────────────────────────────────────────────────
+            SectionHeader("App-updates")
+
+            Text(
+                text = "Huidige versie: ${BuildConfig.VERSION_NAME} (build ${BuildConfig.BUILD_NUMBER})",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            if (state.updateAvailable) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "Nieuwe versie beschikbaar: ${state.updateVersion}",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                        if (state.updateNotes.isNotBlank()) {
+                            Text(
+                                state.updateNotes.take(300),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        }
+                        if (state.updateDownloading) {
+                            LinearProgressIndicator(
+                                progress = { state.updateProgress },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Text(
+                                "Downloaden… ${(state.updateProgress * 100).roundToInt()}%",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        } else {
+                            Button(onClick = viewModel::downloadUpdate, modifier = Modifier.fillMaxWidth()) {
+                                Icon(Icons.Default.SystemUpdate, null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Nu updaten")
+                            }
+                        }
+                    }
+                }
+            } else {
+                OutlinedButton(
+                    onClick = { viewModel.checkForUpdate() },
+                    enabled = !state.updateChecking,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (state.updateChecking) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Controleren…")
+                    } else {
+                        Icon(Icons.Default.SystemUpdate, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Controleer op updates")
+                    }
+                }
+                if (state.updateUpToDate) {
+                    Text(
+                        "Je hebt de nieuwste versie.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            state.updateError?.let { err ->
+                Text(err, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+
+            HorizontalDivider()
 
             // ── TorBox ──────────────────────────────────────────────────────
             SectionHeader("TorBox")
