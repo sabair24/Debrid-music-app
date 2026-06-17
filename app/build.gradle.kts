@@ -148,8 +148,6 @@ dependencies {
     // SAF — user-chosen download location (incl. SD card)
     implementation(libs.androidx.documentfile)
 
-    // Tidal official SDK (auth/player) is deferred: it requires Kotlin 2.2+, but this
-    // app is on 2.0. Enable after the Kotlin/Compose-compiler/KSP toolchain upgrade.
-    // implementation(libs.tidal.auth)
-    // implementation(libs.tidal.player)
+    // Tidal official SDK (now on Kotlin 2.2). Auth first; player added after auth builds.
+    implementation(libs.tidal.auth)
 }
