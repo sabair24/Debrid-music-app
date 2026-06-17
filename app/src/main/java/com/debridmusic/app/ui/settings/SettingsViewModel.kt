@@ -183,7 +183,8 @@ class SettingsViewModel @Inject constructor(
             tidalAuthManager.reset()
             val resp = runCatching { tidalAuthManager.startDeviceLogin() }.getOrNull()
             if (resp == null) {
-                _state.update { it.copy(tidalBusy = false, tidalError = "Kon login niet starten — controleer je Client ID/Secret.") }
+                val why = tidalAuthManager.lastError
+                _state.update { it.copy(tidalBusy = false, tidalError = "Login niet gestart: ${why ?: "controleer Client ID/Secret"}") }
             } else {
                 _state.update {
                     it.copy(

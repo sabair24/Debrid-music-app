@@ -23,6 +23,10 @@ class TidalAuthManager @Inject constructor(
 ) {
     private var auth: TidalAuth? = null
 
+    /** Last failure detail from the Tidal SDK, for surfacing in the UI. */
+    var lastError: String? = null
+        private set
+
     private suspend fun instance(): TidalAuth? {
         auth?.let { return it }
         val clientId = settingsStore.tidalClientId.first()
@@ -45,17 +49,22 @@ class TidalAuthManager @Inject constructor(
 
     /** Starts device login; returns the code + verification URL to show the user. */
     suspend fun startDeviceLogin(): DeviceAuthorizationResponse? {
-        val a = instance() ?: return null
+        lastError = null
+        val a = instance() ?: run { lastError = "Geen Client ID ingesteld"; return null }
         return when (val r = a.auth.initializeDeviceLogin()) {
             is AuthResult.Success -> r.data
-            else -> null
+            is AuthResult.Failure -> { lastError = r.message.toString(); null }
         }
     }
 
     /** Polls until the user authorizes the code (or it expires). Returns success. */
     suspend fun completeDeviceLogin(deviceCode: String): Boolean {
+        lastError = null
         val a = instance() ?: return false
-        return a.auth.finalizeDeviceLogin(deviceCode) is AuthResult.Success
+        return when (val r = a.auth.finalizeDeviceLogin(deviceCode)) {
+            is AuthResult.Success -> true
+            is AuthResult.Failure -> { lastError = r.message.toString(); false }
+        }
     }
 
     suspend fun logout() {
