@@ -6,6 +6,7 @@ import com.debridmusic.app.data.remote.dto.TorBoxFile
 import com.debridmusic.app.data.remote.dto.TorBoxSearchResult
 import com.debridmusic.app.data.remote.dto.TorBoxTorrentItem
 import com.debridmusic.app.domain.model.Track
+import com.debridmusic.app.download.DownloadRequest
 import com.debridmusic.app.download.OfflineDownloadManager
 import com.debridmusic.app.metadata.StreamArtworkResolver
 import com.debridmusic.app.player.PlayerController
@@ -25,6 +26,7 @@ data class CatalogueSearchUiState(
     val streamingId: String? = null,
     val streamState: StreamState = StreamState.Idle,
     val downloadingHash: String? = null,
+    val downloadInfo: String? = null,
 )
 
 @HiltViewModel
@@ -149,27 +151,48 @@ class CatalogueSearchViewModel @Inject constructor(
         playerController.playQueue(tracks)
     }
 
+    /** Queue the currently-streaming track for offline download (sequential queue). */
     fun downloadCurrentStream() {
         val ready = _state.value.streamState as? StreamState.Ready ?: return
-        val hash = _state.value.streamingId ?: return
-        _state.update { it.copy(downloadingHash = hash) }
         viewModelScope.launch {
             val title = ready.file.shortName ?: ready.file.name
             val artist = extractArtistFromName(ready.torrentItem.name)
             val album = ready.torrentItem.name
-            offlineDownloadManager.startDownload(
-                title = title,
-                artist = artist,
-                album = album,
-                sourceUrl = ready.streamUrl,
-                artworkUri = artworkResolver.resolve(artist, title, album),
-            ).collect { status ->
-                if (status.name == "DONE" || status.name == "FAILED") {
-                    _state.update { it.copy(downloadingHash = null) }
-                }
-            }
+            offlineDownloadManager.enqueue(
+                DownloadRequest(title, artist, album, ready.streamUrl, artworkResolver.resolve(artist, title, album))
+            )
+            _state.update { it.copy(downloadInfo = "\"$title\" toegevoegd aan downloads") }
         }
     }
+
+    /** Queue a single track picked from the track-picker sheet. */
+    fun downloadPickedTrack(torrentItem: TorBoxTorrentItem, file: TorBoxFile) {
+        viewModelScope.launch {
+            val url = runCatching { torBoxRepository.resolveTrackUrl(torrentItem, file) }.getOrNull() ?: return@launch
+            val title = file.shortName ?: file.name
+            val artist = extractArtistFromName(torrentItem.name)
+            offlineDownloadManager.enqueue(
+                DownloadRequest(title, artist, torrentItem.name, url, artworkResolver.resolve(artist, title, torrentItem.name))
+            )
+            _state.update { it.copy(downloadInfo = "\"$title\" toegevoegd aan downloads") }
+        }
+    }
+
+    /** Queue every audio track of a torrent — full-album download (sequential). */
+    fun downloadAllTracks(torrentItem: TorBoxTorrentItem, files: List<TorBoxFile>) {
+        viewModelScope.launch {
+            val artist = extractArtistFromName(torrentItem.name)
+            val art = artworkResolver.resolve(artist, torrentItem.name, torrentItem.name)
+            val requests = files.mapNotNull { file ->
+                val url = runCatching { torBoxRepository.resolveTrackUrl(torrentItem, file) }.getOrNull() ?: return@mapNotNull null
+                DownloadRequest(file.shortName ?: file.name, artist, torrentItem.name, url, art)
+            }
+            offlineDownloadManager.enqueueAll(requests)
+            _state.update { it.copy(downloadInfo = "${requests.size} tracks toegevoegd aan downloads") }
+        }
+    }
+
+    fun clearDownloadInfo() = _state.update { it.copy(downloadInfo = null) }
 
     private fun extractArtistFromName(torrentName: String): String {
         val dash = torrentName.indexOf(" - ")

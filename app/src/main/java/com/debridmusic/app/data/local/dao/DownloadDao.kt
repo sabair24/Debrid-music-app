@@ -22,6 +22,9 @@ interface DownloadDao {
     @Query("SELECT COALESCE(SUM(sizeBytes), 0) FROM downloads WHERE status = 'DONE'")
     suspend fun completedSizeBytes(): Long
 
+    @Query("SELECT * FROM downloads WHERE status = 'QUEUED' ORDER BY dateAdded ASC LIMIT 1")
+    suspend fun nextQueued(): DownloadEntity?
+
     @Query("SELECT * FROM downloads WHERE status = 'DONE' AND localPath != '' ORDER BY dateAdded ASC")
     suspend fun getCompletedOldestFirst(): List<DownloadEntity>
 

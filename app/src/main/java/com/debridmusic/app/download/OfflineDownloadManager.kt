@@ -9,11 +9,11 @@ import com.debridmusic.app.data.local.dao.DownloadDao
 import com.debridmusic.app.data.local.entity.DownloadEntity
 import com.debridmusic.app.data.local.entity.DownloadStatus
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -21,42 +21,74 @@ import java.io.OutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** A track to enqueue for offline download. */
+data class DownloadRequest(
+    val title: String,
+    val artist: String,
+    val album: String,
+    val sourceUrl: String,
+    val artworkUri: String? = null,
+)
+
 @Singleton
 class OfflineDownloadManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val downloadDao: DownloadDao,
     private val okHttpClient: OkHttpClient,
     private val settingsStore: SettingsStore,
+    private val appScope: CoroutineScope,
 ) {
     fun observeAll() = downloadDao.observeAll()
 
-    fun startDownload(
-        title: String,
-        artist: String,
-        album: String,
-        sourceUrl: String,
-        artworkUri: String? = null,
-    ): Flow<DownloadStatus> = flow {
-        val id = downloadDao.insert(
-            DownloadEntity(title = title, artist = artist, album = album, sourceUrl = sourceUrl, artworkUri = artworkUri)
-        )
-        emit(DownloadStatus.QUEUED)
+    // Only one download runs at a time; everything else waits in the queue.
+    private val queueMutex = Mutex()
 
-        val ext = if (sourceUrl.contains("flac", ignoreCase = true)) "flac" else "mp3"
-        val safeName = "${title}_${artist}".replace(Regex("[^a-zA-Z0-9._-]"), "_")
-        val fileName = "$safeName.$ext"
-        val dest = resolveDestination(fileName, ext)
+    /** Queue one track. Returns immediately; the worker processes downloads serially. */
+    fun enqueue(request: DownloadRequest) = enqueueAll(listOf(request))
 
+    /** Queue many tracks (e.g. a full album); they download one after another. */
+    fun enqueueAll(requests: List<DownloadRequest>) {
+        if (requests.isEmpty()) return
+        appScope.launch {
+            requests.forEach { r ->
+                downloadDao.insert(
+                    DownloadEntity(
+                        title = r.title, artist = r.artist, album = r.album,
+                        sourceUrl = r.sourceUrl, artworkUri = r.artworkUri,
+                        status = DownloadStatus.QUEUED.name,
+                    )
+                )
+            }
+            processQueue()
+        }
+    }
+
+    /** Drains the QUEUED downloads sequentially. Guarded so only one drain runs. */
+    private suspend fun processQueue() {
+        if (!queueMutex.tryLock()) return // a drain is already in progress
         try {
-            downloadDao.update(downloadDao.getById(id)!!.copy(status = DownloadStatus.DOWNLOADING.name))
-            emit(DownloadStatus.DOWNLOADING)
+            while (true) {
+                val next = downloadDao.nextQueued() ?: break
+                downloadOne(next)
+            }
+            enforceQuota()
+        } finally {
+            queueMutex.unlock()
+        }
+    }
 
-            val response = okHttpClient.newCall(Request.Builder().url(sourceUrl).build()).execute()
+    private suspend fun downloadOne(entity: DownloadEntity) {
+        val id = entity.id
+        val ext = if (entity.sourceUrl.contains("flac", ignoreCase = true)) "flac" else "mp3"
+        val safeName = "${entity.title}_${entity.artist}".replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val dest = resolveDestination("$safeName.$ext", ext)
+        try {
+            downloadDao.update(entity.copy(status = DownloadStatus.DOWNLOADING.name))
+            val response = okHttpClient.newCall(Request.Builder().url(entity.sourceUrl).build()).execute()
             val body = response.body ?: error("Empty response body")
             val totalBytes = body.contentLength().coerceAtLeast(0L)
             var downloadedBytes = 0L
             var lastUpdateBytes = 0L
-
             body.byteStream().use { input ->
                 dest.openOutput().use { output ->
                     val buffer = ByteArray(65_536)
@@ -66,32 +98,28 @@ class OfflineDownloadManager @Inject constructor(
                         downloadedBytes += n
                         if (downloadedBytes - lastUpdateBytes > 512_000L) {
                             lastUpdateBytes = downloadedBytes
-                            downloadDao.update(
-                                downloadDao.getById(id)!!.copy(
-                                    downloadedBytes = downloadedBytes, sizeBytes = totalBytes, localPath = dest.localPath,
-                                )
-                            )
+                            downloadDao.getById(id)?.let {
+                                downloadDao.update(it.copy(downloadedBytes = downloadedBytes, sizeBytes = totalBytes, localPath = dest.localPath))
+                            }
                         }
                     }
                 }
             }
-
-            downloadDao.update(
-                downloadDao.getById(id)!!.copy(
-                    status = DownloadStatus.DONE.name,
-                    downloadedBytes = downloadedBytes,
-                    sizeBytes = if (totalBytes > 0) totalBytes else downloadedBytes,
-                    localPath = dest.localPath,
+            downloadDao.getById(id)?.let {
+                downloadDao.update(
+                    it.copy(
+                        status = DownloadStatus.DONE.name,
+                        downloadedBytes = downloadedBytes,
+                        sizeBytes = if (totalBytes > 0) totalBytes else downloadedBytes,
+                        localPath = dest.localPath,
+                    )
                 )
-            )
-            emit(DownloadStatus.DONE)
-            enforceQuota()
+            }
         } catch (e: Exception) {
             dest.delete()
             downloadDao.getById(id)?.let { downloadDao.update(it.copy(status = DownloadStatus.FAILED.name)) }
-            emit(DownloadStatus.FAILED)
         }
-    }.flowOn(Dispatchers.IO)
+    }
 
     suspend fun deleteDownload(id: Long) {
         val entity = downloadDao.getById(id) ?: return
@@ -102,7 +130,6 @@ class OfflineDownloadManager @Inject constructor(
     // ── Storage management ──────────────────────────────────────────────────────
     suspend fun downloadsSizeBytes(): Long = downloadDao.completedSizeBytes()
 
-    /** Total bytes in the app cache dir (Soulseek temp files, update APK, etc.). */
     fun cacheSizeBytes(): Long = context.cacheDir.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
 
     fun clearCache() {
@@ -113,7 +140,6 @@ class OfflineDownloadManager @Inject constructor(
         downloadDao.getCompleted().forEach { deleteLocal(it.localPath); downloadDao.deleteById(it.id) }
     }
 
-    /** Deletes oldest completed downloads until under the configured size cap. */
     suspend fun enforceQuota() {
         val max = settingsStore.maxDownloadBytes.first()
         if (max <= 0L) return

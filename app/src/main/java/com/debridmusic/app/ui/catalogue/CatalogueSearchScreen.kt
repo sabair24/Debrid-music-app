@@ -50,6 +50,14 @@ fun CatalogueSearchScreen(
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     val progress = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(state.downloadInfo) {
+        state.downloadInfo?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearDownloadInfo()
+        }
+    }
 
     // Track-picker bottom sheet
     val trackListState = state.streamState as? StreamState.TrackList
@@ -75,6 +83,11 @@ fun CatalogueSearchScreen(
                 showSheet = false
                 viewModel.playSelectedTrack(torrentItem, file)
                 onNowPlayingClick()
+            },
+            onDownloadTrack = { torrentItem, file -> viewModel.downloadPickedTrack(torrentItem, file) },
+            onDownloadAll = { torrentItem, files ->
+                showSheet = false
+                viewModel.downloadAllTracks(torrentItem, files)
             },
         )
     }
@@ -138,6 +151,7 @@ fun CatalogueSearchScreen(
                 )
             }
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = MaterialTheme.colorScheme.background,
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
@@ -221,16 +235,28 @@ private fun TrackPickerSheet(
     files: List<TorBoxFile>,
     onDismiss: () -> Unit,
     onPickTrack: (TorBoxTorrentItem, TorBoxFile) -> Unit,
+    onDownloadTrack: (TorBoxTorrentItem, TorBoxFile) -> Unit,
+    onDownloadAll: (TorBoxTorrentItem, List<TorBoxFile>) -> Unit,
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
     ) {
-        Text(
-            text = "Kies een track",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            Text(
+                text = "Tracks (${files.size})",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = { onDownloadAll(torrentItem, files) }) {
+                Icon(Icons.Default.Download, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Download album")
+            }
+        }
         HorizontalDivider()
         LazyColumn(
             contentPadding = PaddingValues(bottom = 24.dp),
@@ -267,11 +293,12 @@ private fun TrackPickerSheet(
                             )
                         }
                     }
-                    Icon(
-                        Icons.Default.PlayArrow,
-                        contentDescription = "Play",
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
+                    IconButton(onClick = { onPickTrack(torrentItem, file) }) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = "Afspelen", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(onClick = { onDownloadTrack(torrentItem, file) }) {
+                        Icon(Icons.Default.Download, contentDescription = "Download", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
             }
