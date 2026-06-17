@@ -198,6 +198,74 @@ fun SettingsScreen(
 
             HorizontalDivider()
 
+            // ── Tidal ─────────────────────────────────────────────────────────
+            SectionHeader("Tidal")
+            Text(
+                text = "Log in met je eigen Tidal-account via de officiële Tidal-SDK. Vereist een gratis Client ID van developer.tidal.com.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            if (state.tidalLoggedIn) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Ingelogd bij Tidal", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+                    OutlinedButton(onClick = viewModel::tidalLogout) { Text("Uitloggen") }
+                }
+            } else {
+                OutlinedTextField(
+                    value = state.tidalClientId,
+                    onValueChange = viewModel::setTidalClientId,
+                    label = { Text("Tidal Client ID") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = state.tidalClientSecret,
+                    onValueChange = viewModel::setTidalClientSecret,
+                    label = { Text("Tidal Client Secret") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                if (state.tidalUserCode != null) {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer), modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("1. Open de link en log in bij Tidal", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Text("Code: ${state.tidalUserCode}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            val url = state.tidalVerifyUrl
+                            if (url != null) {
+                                Text(url, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                                OutlinedButton(onClick = {
+                                    runCatching {
+                                        val u = if (url.startsWith("http")) url else "https://$url"
+                                        ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(u)))
+                                    }
+                                }) { Text("Open Tidal-login") }
+                            }
+                            Button(onClick = viewModel::completeTidalLogin, enabled = !state.tidalBusy, modifier = Modifier.fillMaxWidth()) {
+                                if (state.tidalBusy) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary); Spacer(Modifier.width(8.dp)) }
+                                Text("2. Ik heb ingelogd → voltooien")
+                            }
+                        }
+                    }
+                } else {
+                    Button(
+                        onClick = viewModel::startTidalLogin,
+                        enabled = state.tidalClientId.isNotBlank() && !state.tidalBusy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        if (state.tidalBusy) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary); Spacer(Modifier.width(8.dp)) }
+                        Text("Log in bij Tidal")
+                    }
+                }
+                state.tidalError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+            }
+
+            HorizontalDivider()
+
             // ── TorBox ──────────────────────────────────────────────────────
             SectionHeader("TorBox")
 

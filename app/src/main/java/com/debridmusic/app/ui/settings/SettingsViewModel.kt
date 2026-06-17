@@ -61,6 +61,15 @@ data class SettingsUiState(
     val cacheSizeBytes: Long = 0L,
     val maxDownloadBytes: Long = 0L,
     val downloadFolder: String = "App-opslag (standaard)",
+    // Tidal
+    val tidalClientId: String = "",
+    val tidalClientSecret: String = "",
+    val tidalLoggedIn: Boolean = false,
+    val tidalBusy: Boolean = false,
+    val tidalUserCode: String? = null,
+    val tidalVerifyUrl: String? = null,
+    val tidalDeviceCode: String? = null,
+    val tidalError: String? = null,
 )
 
 @HiltViewModel
@@ -72,6 +81,7 @@ class SettingsViewModel @Inject constructor(
     private val soulseekRepository: SoulseekRepository,
     private val updateRepository: UpdateRepository,
     private val offlineDownloadManager: com.debridmusic.app.download.OfflineDownloadManager,
+    private val tidalAuthManager: com.debridmusic.app.tidal.TidalAuthManager,
     val eqController: EqController,
     private val scrobbleManager: ScrobbleManager,
 ) : ViewModel() {
@@ -141,8 +151,74 @@ class SettingsViewModel @Inject constructor(
                 }
         }
         refreshStorage()
+        viewModelScope.launch {
+            val id = settingsStore.tidalClientId.first()
+            val secret = settingsStore.tidalClientSecret.first()
+            _state.update { it.copy(tidalClientId = id, tidalClientSecret = secret) }
+            if (id.isNotBlank()) _state.update { it.copy(tidalLoggedIn = tidalAuthManager.isLoggedIn()) }
+        }
         // Quietly check for an update when Settings opens.
         checkForUpdate(silent = true)
+    }
+
+    // ── Tidal ────────────────────────────────────────────────────────────────────
+    fun setTidalClientId(v: String) = _state.update { it.copy(tidalClientId = v) }
+    fun setTidalClientSecret(v: String) = _state.update { it.copy(tidalClientSecret = v) }
+
+    fun saveTidalCreds() {
+        viewModelScope.launch {
+            settingsStore.setTidalClientId(_state.value.tidalClientId.trim())
+            settingsStore.setTidalClientSecret(_state.value.tidalClientSecret.trim())
+            tidalAuthManager.reset()
+            _state.update { it.copy(tidalLoggedIn = tidalAuthManager.isLoggedIn(), tidalError = null) }
+        }
+    }
+
+    fun startTidalLogin() {
+        _state.update { it.copy(tidalBusy = true, tidalError = null) }
+        viewModelScope.launch {
+            // Persist creds first so the SDK initializes with them.
+            settingsStore.setTidalClientId(_state.value.tidalClientId.trim())
+            settingsStore.setTidalClientSecret(_state.value.tidalClientSecret.trim())
+            tidalAuthManager.reset()
+            val resp = runCatching { tidalAuthManager.startDeviceLogin() }.getOrNull()
+            if (resp == null) {
+                _state.update { it.copy(tidalBusy = false, tidalError = "Kon login niet starten — controleer je Client ID/Secret.") }
+            } else {
+                _state.update {
+                    it.copy(
+                        tidalBusy = false,
+                        tidalUserCode = resp.userCode,
+                        tidalVerifyUrl = resp.verificationUriComplete?.takeIf { it.isNotBlank() } ?: resp.verificationUri,
+                        tidalDeviceCode = resp.deviceCode,
+                    )
+                }
+            }
+        }
+    }
+
+    fun completeTidalLogin() {
+        val code = _state.value.tidalDeviceCode ?: return
+        _state.update { it.copy(tidalBusy = true, tidalError = null) }
+        viewModelScope.launch {
+            val ok = runCatching { tidalAuthManager.completeDeviceLogin(code) }.getOrDefault(false)
+            _state.update {
+                it.copy(
+                    tidalBusy = false,
+                    tidalLoggedIn = ok,
+                    tidalUserCode = if (ok) null else it.tidalUserCode,
+                    tidalDeviceCode = if (ok) null else it.tidalDeviceCode,
+                    tidalError = if (ok) null else "Login niet voltooid — autoriseer eerst de code en probeer opnieuw.",
+                )
+            }
+        }
+    }
+
+    fun tidalLogout() {
+        viewModelScope.launch {
+            tidalAuthManager.logout()
+            _state.update { it.copy(tidalLoggedIn = false, tidalUserCode = null, tidalDeviceCode = null) }
+        }
     }
 
     // ── Storage management ──────────────────────────────────────────────────────
