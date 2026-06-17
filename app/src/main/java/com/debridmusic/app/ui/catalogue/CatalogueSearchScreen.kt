@@ -330,6 +330,13 @@ private fun TorBoxResultItem(
                         color = if (result.seeders > 5) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    result.source?.takeIf { it.isNotBlank() }?.let { src ->
+                        Text(
+                            text = src,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                        )
+                    }
                 }
             }
 

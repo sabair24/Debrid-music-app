@@ -1,13 +1,12 @@
 package com.debridmusic.app.torbox
 
 import com.debridmusic.app.data.local.SettingsStore
-import com.debridmusic.app.data.remote.api.BitSearchApi
 import com.debridmusic.app.data.remote.api.TorBoxApi
 import com.debridmusic.app.data.remote.dto.TorBoxFile
 import com.debridmusic.app.data.remote.dto.TorBoxSearchResult
 import com.debridmusic.app.data.remote.dto.TorBoxTorrentItem
 import com.debridmusic.app.data.remote.dto.TorBoxUser
-import java.net.URLEncoder
+import com.debridmusic.app.search.SearchAggregator
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -40,7 +39,7 @@ data class AlbumTrack(
 @Singleton
 class TorBoxRepository @Inject constructor(
     private val api: TorBoxApi,
-    private val bitSearchApi: BitSearchApi,
+    private val searchAggregator: SearchAggregator,
     private val settingsStore: SettingsStore,
     private val authInterceptor: TorBoxAuthInterceptor,
 ) {
@@ -49,24 +48,10 @@ class TorBoxRepository @Inject constructor(
         authInterceptor.apiKey = key
     }
 
+    // Aggregates all enabled torrent sources (Pirate Bay, BitSearch, Knaben, …),
+    // deduped + sorted by seeders. Resolution to a stream still goes via TorBox.
     suspend fun search(query: String): Result<List<TorBoxSearchResult>> = runCatching {
-        val resp = bitSearchApi.search(query)
-        if (!resp.success) error("Search failed")
-        (resp.results ?: emptyList())
-            .sortedByDescending { it.seeders }
-            .map { r ->
-                val dn = URLEncoder.encode(r.title, "UTF-8")
-                val magnet = "magnet:?xt=urn:btih:${r.infohash.lowercase()}&dn=$dn"
-                TorBoxSearchResult(
-                    rawTitle = r.title,
-                    name = r.title,
-                    size = r.size,
-                    seeders = r.seeders,
-                    leechers = r.leechers,
-                    magnet = magnet,
-                    hash = r.infohash.lowercase(),
-                )
-            }
+        searchAggregator.search(query)
     }
 
     suspend fun validateApiKey(): Result<TorBoxUser> = runCatching {

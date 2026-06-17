@@ -4,9 +4,11 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
+import com.debridmusic.app.data.remote.api.ApibayApi
 import com.debridmusic.app.data.remote.api.BitSearchApi
 import com.debridmusic.app.data.remote.api.CoverArtArchiveApi
 import com.debridmusic.app.data.remote.api.DeezerApi
+import com.debridmusic.app.data.remote.api.KnabenApi
 import com.debridmusic.app.data.remote.api.TheAudioDbApi
 import com.debridmusic.app.data.remote.api.LastFmApi
 import com.debridmusic.app.data.remote.api.LastFmScrobbleApi
@@ -162,4 +164,29 @@ object NetworkModule {
     @Provides @Singleton
     fun provideTheAudioDbApi(@Named("theaudiodb") retrofit: Retrofit): TheAudioDbApi =
         retrofit.create(TheAudioDbApi::class.java)
+
+    // ── Torrent indexers (multi-source search) ──────────────────────────────────
+    @Provides @Singleton @Named("apibay")
+    fun provideApibayRetrofit(okHttpClient: OkHttpClient): Retrofit =
+        Retrofit.Builder()
+            .baseUrl("https://apibay.org/")
+            .client(okHttpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+
+    @Provides @Singleton
+    fun provideApibayApi(@Named("apibay") retrofit: Retrofit): ApibayApi =
+        retrofit.create(ApibayApi::class.java)
+
+    @Provides @Singleton @Named("knaben")
+    fun provideKnabenRetrofit(okHttpClient: OkHttpClient): Retrofit =
+        Retrofit.Builder()
+            .baseUrl("https://api.knaben.org/")
+            .client(okHttpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+
+    @Provides @Singleton
+    fun provideKnabenApi(@Named("knaben") retrofit: Retrofit): KnabenApi =
+        retrofit.create(KnabenApi::class.java)
 }
