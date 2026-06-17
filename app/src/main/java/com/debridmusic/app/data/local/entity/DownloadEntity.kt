@@ -17,4 +17,5 @@ data class DownloadEntity(
     val downloadedBytes: Long = 0L,
     val status: String = DownloadStatus.QUEUED.name,
     val dateAdded: Long = System.currentTimeMillis(),
+    val artworkUri: String? = null,
 )

@@ -7,6 +7,7 @@ import com.debridmusic.app.data.remote.dto.TorBoxSearchResult
 import com.debridmusic.app.data.remote.dto.TorBoxTorrentItem
 import com.debridmusic.app.domain.model.Track
 import com.debridmusic.app.download.OfflineDownloadManager
+import com.debridmusic.app.metadata.StreamArtworkResolver
 import com.debridmusic.app.player.PlayerController
 import com.debridmusic.app.torbox.StreamState
 import com.debridmusic.app.torbox.TorBoxRepository
@@ -31,6 +32,7 @@ class CatalogueSearchViewModel @Inject constructor(
     private val torBoxRepository: TorBoxRepository,
     val playerController: PlayerController,
     private val offlineDownloadManager: OfflineDownloadManager,
+    private val artworkResolver: StreamArtworkResolver,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(CatalogueSearchUiState())
@@ -105,18 +107,23 @@ class CatalogueSearchViewModel @Inject constructor(
         _state.update { it.copy(streamingId = null, streamState = StreamState.Idle) }
     }
 
-    private fun playStreamUrl(ready: StreamState.Ready) {
+    private suspend fun playStreamUrl(ready: StreamState.Ready) {
+        val title = ready.file.shortName ?: ready.file.name
+        val artist = extractArtistFromName(ready.torrentItem.name)
+        val album = ready.torrentItem.name
         playerController.playRemoteUrl(
             url = ready.streamUrl,
-            title = ready.file.shortName ?: ready.file.name,
-            artist = extractArtistFromName(ready.torrentItem.name),
-            album = ready.torrentItem.name,
+            title = title,
+            artist = artist,
+            album = album,
+            artworkUri = artworkResolver.resolve(artist, title, album),
         )
     }
 
-    private fun playAlbumQueue(ready: StreamState.ReadyAlbum) {
+    private suspend fun playAlbumQueue(ready: StreamState.ReadyAlbum) {
         val albumName = ready.torrentItem.name
         val artist = extractArtistFromName(albumName)
+        val art = artworkResolver.resolve(artist, albumName, albumName)
         val tracks = ready.tracks.mapIndexed { index, albumTrack ->
             Track(
                 id = -(index + 1L),
@@ -130,7 +137,7 @@ class CatalogueSearchViewModel @Inject constructor(
                 trackNumber = index + 1,
                 discNumber = 1,
                 year = null,
-                artworkUri = null,
+                artworkUri = art,
                 genre = null,
                 bitrate = null,
                 sampleRate = null,
@@ -147,11 +154,15 @@ class CatalogueSearchViewModel @Inject constructor(
         val hash = _state.value.streamingId ?: return
         _state.update { it.copy(downloadingHash = hash) }
         viewModelScope.launch {
+            val title = ready.file.shortName ?: ready.file.name
+            val artist = extractArtistFromName(ready.torrentItem.name)
+            val album = ready.torrentItem.name
             offlineDownloadManager.startDownload(
-                title = ready.file.shortName ?: ready.file.name,
-                artist = extractArtistFromName(ready.torrentItem.name),
-                album = ready.torrentItem.name,
+                title = title,
+                artist = artist,
+                album = album,
                 sourceUrl = ready.streamUrl,
+                artworkUri = artworkResolver.resolve(artist, title, album),
             ).collect { status ->
                 if (status.name == "DONE" || status.name == "FAILED") {
                     _state.update { it.copy(downloadingHash = null) }

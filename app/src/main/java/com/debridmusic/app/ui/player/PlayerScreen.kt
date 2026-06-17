@@ -35,6 +35,8 @@ fun PlayerScreen(
     val isPlaying by viewModel.isPlaying.collectAsStateWithLifecycle()
     val positionMs by viewModel.positionMs.collectAsStateWithLifecycle()
     val durationMs by viewModel.durationMs.collectAsStateWithLifecycle()
+    val shuffleEnabled by viewModel.shuffleEnabled.collectAsStateWithLifecycle()
+    val repeatMode by viewModel.repeatMode.collectAsStateWithLifecycle()
 
     val progress = if (durationMs > 0) positionMs.toFloat() / durationMs.toFloat() else 0f
     val accent by rememberDominantColor(track?.artworkUri, MaterialTheme.colorScheme.primary)
@@ -187,6 +189,16 @@ fun PlayerScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 24.dp),
             ) {
+                val inactive = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                IconButton(onClick = viewModel::toggleShuffle) {
+                    Icon(
+                        imageVector = Icons.Default.Shuffle,
+                        contentDescription = "Shuffle",
+                        tint = if (shuffleEnabled) accent else inactive,
+                        modifier = Modifier.size(26.dp),
+                    )
+                }
+
                 IconButton(onClick = viewModel::skipToPrevious) {
                     Icon(
                         imageVector = Icons.Default.SkipPrevious,
@@ -215,6 +227,16 @@ fun PlayerScreen(
                         contentDescription = "Next",
                         tint = MaterialTheme.colorScheme.onBackground,
                         modifier = Modifier.size(36.dp),
+                    )
+                }
+
+                IconButton(onClick = viewModel::cycleRepeat) {
+                    Icon(
+                        imageVector = if (repeatMode == com.debridmusic.app.domain.model.RepeatMode.ONE)
+                            Icons.Default.RepeatOne else Icons.Default.Repeat,
+                        contentDescription = "Repeat",
+                        tint = if (repeatMode == com.debridmusic.app.domain.model.RepeatMode.OFF) inactive else accent,
+                        modifier = Modifier.size(26.dp),
                     )
                 }
             }

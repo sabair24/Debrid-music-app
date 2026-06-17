@@ -18,6 +18,8 @@ class PlayerViewModel @Inject constructor(
     val currentTrack = playerController.currentTrack
     val positionMs = playerController.positionMs
     val durationMs = playerController.durationMs
+    val shuffleEnabled = playerController.shuffleEnabled
+    val repeatMode = playerController.repeatMode
 
     init {
         viewModelScope.launch {
@@ -32,4 +34,6 @@ class PlayerViewModel @Inject constructor(
     fun skipToNext() = playerController.skipToNext()
     fun skipToPrevious() = playerController.skipToPrevious()
     fun seekTo(positionMs: Long) = playerController.seekTo(positionMs)
+    fun toggleShuffle() = playerController.toggleShuffle()
+    fun cycleRepeat() = playerController.cycleRepeat()
 }

@@ -20,8 +20,11 @@ import com.debridmusic.app.domain.model.Playlist
 import com.debridmusic.app.domain.model.Track
 import com.debridmusic.app.metadata.MetadataEnricher
 import com.debridmusic.app.scanner.MediaScanner
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -34,7 +37,9 @@ class MusicRepository @Inject constructor(
     private val downloadDao: DownloadDao,
     private val mediaScanner: MediaScanner,
     private val enricher: MetadataEnricher,
+    private val appScope: CoroutineScope,
 ) {
+    private val enrichMutex = Mutex()
     // ── Library ───────────────────────────────────────────────────────────────
     fun observeTracks(): Flow<List<Track>> =
         trackDao.observeAll().map { list -> list.map { it.toDomain() } }
@@ -58,7 +63,20 @@ class MusicRepository @Inject constructor(
 
     fun trackCount(): Flow<Int> = trackDao.countAll()
 
-    suspend fun scanLocalMedia(): Int = mediaScanner.scanDevice()
+    suspend fun scanLocalMedia(): Int {
+        val count = mediaScanner.scanDevice()
+        enrichInBackground() // auto-fetch artwork/bios/descriptions, non-blocking
+        return count
+    }
+
+    /** Fire-and-forget metadata enrichment; guarded so passes never overlap. */
+    fun enrichInBackground() {
+        appScope.launch {
+            if (enrichMutex.tryLock()) {
+                try { enricher.enrichAll() } finally { enrichMutex.unlock() }
+            }
+        }
+    }
 
     suspend fun getTrack(id: Long): Track? = trackDao.getById(id)?.toDomain()
 
@@ -184,4 +202,5 @@ fun DownloadEntity.toDomain() = Download(
     downloadedBytes = downloadedBytes,
     status = DownloadStatus.valueOf(status),
     dateAdded = dateAdded,
+    artworkUri = artworkUri,
 )

@@ -63,6 +63,13 @@ class SettingsStore @Inject constructor(
     suspend fun setSlskUsername(v: String) { dataStore.edit { it[KEY_SLSK_USERNAME] = v } }
     suspend fun setSlskPassword(v: String) { dataStore.edit { it[KEY_SLSK_PASSWORD] = v } }
 
+    // ── Playback (shuffle / repeat) ─────────────────────────────────────────────
+    val shuffleEnabled: Flow<Boolean> = dataStore.data.map { it[KEY_SHUFFLE_ENABLED] ?: false }
+    val repeatMode: Flow<Int> = dataStore.data.map { it[KEY_REPEAT_MODE] ?: 0 } // RepeatMode ordinal
+
+    suspend fun setShuffleEnabled(enabled: Boolean) { dataStore.edit { it[KEY_SHUFFLE_ENABLED] = enabled } }
+    suspend fun setRepeatMode(ordinal: Int) { dataStore.edit { it[KEY_REPEAT_MODE] = ordinal } }
+
     companion object {
         val KEY_LASTFM_API_KEY = stringPreferencesKey("last_fm_api_key")
         val KEY_DISCOGS_TOKEN = stringPreferencesKey("discogs_token")
@@ -74,5 +81,7 @@ class SettingsStore @Inject constructor(
         val KEY_CROSSFADE_MS = intPreferencesKey("crossfade_ms")
         val KEY_SLSK_USERNAME = stringPreferencesKey("slsk_username")
         val KEY_SLSK_PASSWORD = stringPreferencesKey("slsk_password")
+        val KEY_SHUFFLE_ENABLED = booleanPreferencesKey("shuffle_enabled")
+        val KEY_REPEAT_MODE = intPreferencesKey("repeat_mode")
     }
 }

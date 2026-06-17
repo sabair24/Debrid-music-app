@@ -13,6 +13,7 @@ data class Download(
     val downloadedBytes: Long,
     val status: DownloadStatus,
     val dateAdded: Long,
+    val artworkUri: String? = null,
 ) {
     val progress: Float get() = if (sizeBytes > 0) downloadedBytes.toFloat() / sizeBytes else 0f
     val isComplete: Boolean get() = status == DownloadStatus.DONE

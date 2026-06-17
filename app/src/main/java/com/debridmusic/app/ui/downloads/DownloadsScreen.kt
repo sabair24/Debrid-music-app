@@ -117,6 +117,11 @@ private fun DownloadItem(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
         ) {
+            com.debridmusic.app.ui.components.AlbumArtwork(
+                uri = download.artworkUri,
+                size = 48.dp,
+            )
+            Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = download.title,

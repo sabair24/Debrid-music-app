@@ -2,9 +2,11 @@ package com.debridmusic.app.ui.soulseek
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.debridmusic.app.metadata.StreamArtworkResolver
 import com.debridmusic.app.player.PlayerController
 import com.debridmusic.app.soulseek.SlskDownloadState
 import com.debridmusic.app.soulseek.SoulseekFile
+import com.debridmusic.app.soulseek.SoulseekPath
 import com.debridmusic.app.soulseek.SoulseekRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -31,6 +33,7 @@ data class SoulseekUiState(
 class SoulseekSearchViewModel @Inject constructor(
     private val repository: SoulseekRepository,
     val playerController: PlayerController,
+    private val artworkResolver: StreamArtworkResolver,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SoulseekUiState())
@@ -78,11 +81,13 @@ class SoulseekSearchViewModel @Inject constructor(
                         val uri = dlState.localPath.let {
                             if (it.startsWith("content://") || it.startsWith("file://")) it else "file://$it"
                         }
+                        val meta = SoulseekPath.parse(file.filename)
                         playerController.playRemoteUrl(
                             url = uri,
-                            title = file.displayName,
-                            artist = file.username,
-                            album = "",
+                            title = meta.title.ifBlank { file.displayName },
+                            artist = meta.artist.ifBlank { file.username },
+                            album = meta.album,
+                            artworkUri = artworkResolver.resolve(meta.artist, meta.title, meta.album),
                         )
                     }
                     // Queued is informational (the uploader put us in their queue) — not a

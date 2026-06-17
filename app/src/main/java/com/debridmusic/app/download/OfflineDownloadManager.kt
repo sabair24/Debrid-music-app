@@ -29,9 +29,11 @@ class OfflineDownloadManager @Inject constructor(
         artist: String,
         album: String,
         sourceUrl: String,
+        artworkUri: String? = null,
     ): Flow<DownloadStatus> = flow {
         val entity = DownloadEntity(
             title = title, artist = artist, album = album, sourceUrl = sourceUrl,
+            artworkUri = artworkUri,
         )
         val id = downloadDao.insert(entity)
         emit(DownloadStatus.QUEUED)

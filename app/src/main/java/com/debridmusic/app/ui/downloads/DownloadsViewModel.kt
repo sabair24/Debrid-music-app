@@ -41,6 +41,7 @@ class DownloadsViewModel @Inject constructor(
                                 downloadedBytes = entity.downloadedBytes,
                                 status = DownloadStatus.valueOf(entity.status),
                                 dateAdded = entity.dateAdded,
+                                artworkUri = entity.artworkUri,
                             )
                         }.getOrNull()
                     })
@@ -51,11 +52,15 @@ class DownloadsViewModel @Inject constructor(
 
     fun playDownload(download: Download) {
         if (!download.isComplete) return
+        val uri = download.localPath.let {
+            if (it.startsWith("content://") || it.startsWith("file://")) it else "file://$it"
+        }
         playerController.playRemoteUrl(
-            url = "file://${download.localPath}",
+            url = uri,
             title = download.title,
             artist = download.artist,
             album = download.album,
+            artworkUri = download.artworkUri,
         )
     }
 

@@ -7,6 +7,8 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.debridmusic.app.data.local.SettingsStore
+import com.debridmusic.app.domain.model.RepeatMode
 import com.debridmusic.app.domain.model.Track
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
@@ -17,6 +19,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -25,6 +29,7 @@ class PlayerController @Inject constructor(
     @ApplicationContext private val context: Context,
     private val crossFadeManager: CrossFadeManager,
     private val scrobbleManager: ScrobbleManager,
+    private val settingsStore: SettingsStore,
 ) {
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
@@ -43,6 +48,12 @@ class PlayerController @Inject constructor(
     private val _durationMs = MutableStateFlow(0L)
     val durationMs: StateFlow<Long> = _durationMs.asStateFlow()
 
+    private val _shuffleEnabled = MutableStateFlow(false)
+    val shuffleEnabled: StateFlow<Boolean> = _shuffleEnabled.asStateFlow()
+
+    private val _repeatMode = MutableStateFlow(RepeatMode.OFF)
+    val repeatMode: StateFlow<RepeatMode> = _repeatMode.asStateFlow()
+
     private var currentQueue: List<Track> = emptyList()
 
     fun connect() {
@@ -57,7 +68,52 @@ class PlayerController @Inject constructor(
         controllerFuture?.addListener({
             controller = controllerFuture?.get()
             controller?.addListener(playerListener)
+            // Restore persisted shuffle/repeat onto the freshly-connected controller.
+            controllerScope.launch {
+                val shuffle = settingsStore.shuffleEnabled.first()
+                val repeat = RepeatMode.entries.getOrElse(settingsStore.repeatMode.first()) { RepeatMode.OFF }
+                controller?.shuffleModeEnabled = shuffle
+                controller?.repeatMode = repeat.toMedia3()
+                _shuffleEnabled.value = shuffle
+                _repeatMode.value = repeat
+            }
         }, MoreExecutors.directExecutor())
+    }
+
+    // ── Shuffle / repeat ────────────────────────────────────────────────────────
+    fun toggleShuffle() = setShuffle(!_shuffleEnabled.value)
+
+    fun setShuffle(enabled: Boolean) {
+        controller?.shuffleModeEnabled = enabled
+        _shuffleEnabled.value = enabled
+        controllerScope.launch { settingsStore.setShuffleEnabled(enabled) }
+    }
+
+    fun cycleRepeat() {
+        val next = when (_repeatMode.value) {
+            RepeatMode.OFF -> RepeatMode.ALL
+            RepeatMode.ALL -> RepeatMode.ONE
+            RepeatMode.ONE -> RepeatMode.OFF
+        }
+        setRepeat(next)
+    }
+
+    fun setRepeat(mode: RepeatMode) {
+        controller?.repeatMode = mode.toMedia3()
+        _repeatMode.value = mode
+        controllerScope.launch { settingsStore.setRepeatMode(mode.ordinal) }
+    }
+
+    private fun RepeatMode.toMedia3(): Int = when (this) {
+        RepeatMode.OFF -> Player.REPEAT_MODE_OFF
+        RepeatMode.ONE -> Player.REPEAT_MODE_ONE
+        RepeatMode.ALL -> Player.REPEAT_MODE_ALL
+    }
+
+    private fun Int.toRepeatMode(): RepeatMode = when (this) {
+        Player.REPEAT_MODE_ONE -> RepeatMode.ONE
+        Player.REPEAT_MODE_ALL -> RepeatMode.ALL
+        else -> RepeatMode.OFF
     }
 
     fun disconnect() {
@@ -95,11 +151,12 @@ class PlayerController @Inject constructor(
 
     fun skipToPrevious() { controller?.seekToPreviousMediaItem() }
 
-    fun playRemoteUrl(url: String, title: String, artist: String, album: String) {
+    fun playRemoteUrl(url: String, title: String, artist: String, album: String, artworkUri: String? = null) {
         val metadata = MediaMetadata.Builder()
             .setTitle(title)
             .setArtist(artist)
             .setAlbumTitle(album)
+            .setArtworkUri(artworkUri?.let { android.net.Uri.parse(it) })
             .build()
         val item = MediaItem.Builder()
             .setUri(url)
@@ -118,7 +175,7 @@ class PlayerController @Inject constructor(
             trackNumber = 0,
             discNumber = 1,
             year = null,
-            artworkUri = null,
+            artworkUri = artworkUri,
             genre = null,
             bitrate = null,
             sampleRate = null,
@@ -162,6 +219,14 @@ class PlayerController @Inject constructor(
                 _isPlaying.value = it.isPlaying
                 _durationMs.value = it.duration.coerceAtLeast(0L)
             }
+        }
+
+        override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+            _shuffleEnabled.value = shuffleModeEnabled
+        }
+
+        override fun onRepeatModeChanged(repeatMode: Int) {
+            _repeatMode.value = repeatMode.toRepeatMode()
         }
     }
 

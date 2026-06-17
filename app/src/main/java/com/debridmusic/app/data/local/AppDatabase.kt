@@ -25,7 +25,7 @@ import com.debridmusic.app.data.local.entity.TrackEntity
         PlaylistTrackCrossRef::class,
         DownloadEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -84,6 +84,12 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE artists ADD COLUMN deezerId INTEGER")
                 db.execSQL("ALTER TABLE artists ADD COLUMN theAudioDbId TEXT")
                 db.execSQL("ALTER TABLE artists ADD COLUMN manualOverride INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE downloads ADD COLUMN artworkUri TEXT")
             }
         }
     }

@@ -215,7 +215,7 @@ fun AlbumDetailScreen(
                         viewModel.playTrack(t)
                         onNowPlayingClick()
                     },
-                    showArtwork = false,
+                    showArtwork = true,
                     showAlbum = false,
                 )
                 HorizontalDivider(
