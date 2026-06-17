@@ -22,6 +22,7 @@ gson = "2.11.0"
 datastorePreferences = "1.1.1"
 palette = "1.0.0"
 documentfile = "1.0.1"
+jsoup = "1.18.3"
 tidalAuth = "0.11.3"
 tidalPlayer = "0.0.66"
 
@@ -61,6 +62,7 @@ androidx-tv-material = { group = "androidx.tv", name = "tv-material", version.re
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastorePreferences" }
 androidx-palette = { group = "androidx.palette", name = "palette-ktx", version.ref = "palette" }
 androidx-documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
+jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
 tidal-auth = { group = "com.tidal.sdk", name = "auth", version.ref = "tidalAuth" }
 tidal-player = { group = "com.tidal.sdk", name = "player", version.ref = "tidalPlayer" }
 

@@ -5,6 +5,7 @@ import com.debridmusic.app.data.remote.dto.TorBoxSearchResult
 import com.debridmusic.app.search.sources.ApibaySource
 import com.debridmusic.app.search.sources.BitSearchSource
 import com.debridmusic.app.search.sources.KnabenSource
+import com.debridmusic.app.search.sources.RuTrackerSource
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -22,8 +23,9 @@ class SearchAggregator @Inject constructor(
     bitSearch: BitSearchSource,
     apibay: ApibaySource,
     knaben: KnabenSource,
+    ruTracker: RuTrackerSource,
 ) {
-    private val sources: List<SearchSource> = listOf(apibay, bitSearch, knaben)
+    private val sources: List<SearchSource> = listOf(apibay, bitSearch, knaben, ruTracker)
 
     suspend fun search(query: String): List<TorBoxSearchResult> = coroutineScope {
         val perSource = sources.map { source ->

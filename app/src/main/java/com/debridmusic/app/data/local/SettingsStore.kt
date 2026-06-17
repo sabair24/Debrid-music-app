@@ -64,6 +64,13 @@ class SettingsStore @Inject constructor(
     suspend fun setSlskUsername(v: String) { dataStore.edit { it[KEY_SLSK_USERNAME] = v } }
     suspend fun setSlskPassword(v: String) { dataStore.edit { it[KEY_SLSK_PASSWORD] = v } }
 
+    // ── RuTracker (torrent source) ──────────────────────────────────────────────
+    val ruTrackerUsername: Flow<String> = dataStore.data.map { it[KEY_RUTRACKER_USER] ?: "" }
+    val ruTrackerPassword: Flow<String> = dataStore.data.map { it[KEY_RUTRACKER_PASS] ?: "" }
+
+    suspend fun setRuTrackerUsername(v: String) { dataStore.edit { it[KEY_RUTRACKER_USER] = v } }
+    suspend fun setRuTrackerPassword(v: String) { dataStore.edit { it[KEY_RUTRACKER_PASS] = v } }
+
     // ── Storage management ──────────────────────────────────────────────────────
     val downloadTreeUri: Flow<String> = dataStore.data.map { it[KEY_DOWNLOAD_TREE_URI] ?: "" }
     // 0 = unlimited. Default 4 GB.
@@ -97,6 +104,8 @@ class SettingsStore @Inject constructor(
         val KEY_CROSSFADE_MS = intPreferencesKey("crossfade_ms")
         val KEY_SLSK_USERNAME = stringPreferencesKey("slsk_username")
         val KEY_SLSK_PASSWORD = stringPreferencesKey("slsk_password")
+        val KEY_RUTRACKER_USER = stringPreferencesKey("rutracker_user")
+        val KEY_RUTRACKER_PASS = stringPreferencesKey("rutracker_pass")
         val KEY_SHUFFLE_ENABLED = booleanPreferencesKey("shuffle_enabled")
         val KEY_REPEAT_MODE = intPreferencesKey("repeat_mode")
         val KEY_TIDAL_CLIENT_ID = stringPreferencesKey("tidal_client_id")

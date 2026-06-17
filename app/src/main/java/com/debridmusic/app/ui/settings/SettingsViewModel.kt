@@ -30,6 +30,9 @@ data class SettingsUiState(
     // Soulseek
     val slskUsername: String = "",
     val slskPassword: String = "",
+    // RuTracker (torrent source)
+    val ruTrackerUsername: String = "",
+    val ruTrackerPassword: String = "",
     val slskVerifying: Boolean = false,
     val slskLoggedIn: Boolean = false,
     val slskError: String? = null,
@@ -122,6 +125,10 @@ class SettingsViewModel @Inject constructor(
                 .collect { (u, p) -> _state.update { it.copy(slskUsername = u, slskPassword = p) } }
         }
         viewModelScope.launch {
+            combine(settingsStore.ruTrackerUsername, settingsStore.ruTrackerPassword) { u, p -> u to p }
+                .collect { (u, p) -> _state.update { it.copy(ruTrackerUsername = u, ruTrackerPassword = p) } }
+        }
+        viewModelScope.launch {
             combine(
                 settingsStore.lastFmUsername,
                 settingsStore.lastFmSessionKey,
@@ -212,6 +219,16 @@ class SettingsViewModel @Inject constructor(
                     tidalError = if (ok) null else "Login niet voltooid — autoriseer eerst de code en probeer opnieuw.",
                 )
             }
+        }
+    }
+
+    // ── RuTracker ────────────────────────────────────────────────────────────────
+    fun setRuTrackerUsername(v: String) = _state.update { it.copy(ruTrackerUsername = v) }
+    fun setRuTrackerPassword(v: String) = _state.update { it.copy(ruTrackerPassword = v) }
+    fun saveRuTracker() {
+        viewModelScope.launch {
+            settingsStore.setRuTrackerUsername(_state.value.ruTrackerUsername.trim())
+            settingsStore.setRuTrackerPassword(_state.value.ruTrackerPassword)
         }
     }
 

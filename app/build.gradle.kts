@@ -148,6 +148,9 @@ dependencies {
     // SAF — user-chosen download location (incl. SD card)
     implementation(libs.androidx.documentfile)
 
+    // Jsoup — HTML scraping for the RuTracker search source
+    implementation(libs.jsoup)
+
     // Tidal official SDK (now on Kotlin 2.2). Auth first; player added after auth builds.
     implementation(libs.tidal.auth)
 }

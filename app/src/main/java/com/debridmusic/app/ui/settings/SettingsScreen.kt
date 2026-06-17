@@ -391,6 +391,41 @@ fun SettingsScreen(
 
             HorizontalDivider()
 
+            // ── RuTracker ─────────────────────────────────────────────────────
+            SectionHeader("RuTracker (zoekbron)")
+            Text(
+                text = "Voeg RuTracker toe als torrent-bron (veel lossless/FLAC). Vereist je eigen RuTracker-login. Kan onbetrouwbaar zijn (CAPTCHA bij eerste login, ISP-blokkade).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            var showRuPass by remember { mutableStateOf(false) }
+            OutlinedTextField(
+                value = state.ruTrackerUsername,
+                onValueChange = viewModel::setRuTrackerUsername,
+                label = { Text("RuTracker gebruikersnaam") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = state.ruTrackerPassword,
+                onValueChange = viewModel::setRuTrackerPassword,
+                label = { Text("RuTracker wachtwoord") },
+                singleLine = true,
+                visualTransformation = if (showRuPass) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    IconButton(onClick = { showRuPass = !showRuPass }) {
+                        Icon(if (showRuPass) Icons.Default.VisibilityOff else Icons.Default.Visibility, null)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(onClick = viewModel::saveRuTracker, modifier = Modifier.fillMaxWidth()) {
+                Text("RuTracker opslaan")
+            }
+
+            HorizontalDivider()
+
             // ── Metadata sources ─────────────────────────────────────────────
             SectionHeader("Metadata sources")
 
