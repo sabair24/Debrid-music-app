@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -63,6 +64,14 @@ class SettingsStore @Inject constructor(
     suspend fun setSlskUsername(v: String) { dataStore.edit { it[KEY_SLSK_USERNAME] = v } }
     suspend fun setSlskPassword(v: String) { dataStore.edit { it[KEY_SLSK_PASSWORD] = v } }
 
+    // ── Storage management ──────────────────────────────────────────────────────
+    val downloadTreeUri: Flow<String> = dataStore.data.map { it[KEY_DOWNLOAD_TREE_URI] ?: "" }
+    // 0 = unlimited. Default 4 GB.
+    val maxDownloadBytes: Flow<Long> = dataStore.data.map { it[KEY_MAX_DOWNLOAD_BYTES] ?: (4L * 1024 * 1024 * 1024) }
+
+    suspend fun setDownloadTreeUri(uri: String) { dataStore.edit { it[KEY_DOWNLOAD_TREE_URI] = uri } }
+    suspend fun setMaxDownloadBytes(bytes: Long) { dataStore.edit { it[KEY_MAX_DOWNLOAD_BYTES] = bytes } }
+
     // ── Tidal (official SDK) ────────────────────────────────────────────────────
     val tidalClientId: Flow<String> = dataStore.data.map { it[KEY_TIDAL_CLIENT_ID] ?: "" }
     val tidalClientSecret: Flow<String> = dataStore.data.map { it[KEY_TIDAL_CLIENT_SECRET] ?: "" }
@@ -92,5 +101,7 @@ class SettingsStore @Inject constructor(
         val KEY_REPEAT_MODE = intPreferencesKey("repeat_mode")
         val KEY_TIDAL_CLIENT_ID = stringPreferencesKey("tidal_client_id")
         val KEY_TIDAL_CLIENT_SECRET = stringPreferencesKey("tidal_client_secret")
+        val KEY_DOWNLOAD_TREE_URI = stringPreferencesKey("download_tree_uri")
+        val KEY_MAX_DOWNLOAD_BYTES = longPreferencesKey("max_download_bytes")
     }
 }

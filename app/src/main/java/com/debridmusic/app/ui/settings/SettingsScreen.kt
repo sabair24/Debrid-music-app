@@ -37,6 +37,21 @@ fun SettingsScreen(
     var showLastFmSecret by remember { mutableStateOf(false) }
     var showLastFmPassword by remember { mutableStateOf(false) }
 
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val folderPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                ctx.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
+            viewModel.setDownloadTreeUri(uri.toString())
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -59,6 +74,53 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
+
+            // ── Storage ──────────────────────────────────────────────────────
+            SectionHeader("Opslag")
+
+            Text(
+                text = "Downloads: ${formatStorageBytes(state.downloadsSizeBytes)}  ·  Cache: ${formatStorageBytes(state.cacheSizeBytes)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "Downloadmap: ${state.downloadFolder}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            // Max-size cap presets
+            Text("Maximale download-grootte", style = MaterialTheme.typography.bodyMedium)
+            val caps = listOf(
+                0L to "Onbeperkt",
+                2L * 1024 * 1024 * 1024 to "2 GB",
+                4L * 1024 * 1024 * 1024 to "4 GB",
+                8L * 1024 * 1024 * 1024 to "8 GB",
+                16L * 1024 * 1024 * 1024 to "16 GB",
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                caps.forEach { (bytes, label) ->
+                    FilterChip(
+                        selected = state.maxDownloadBytes == bytes,
+                        onClick = { viewModel.setMaxDownloadBytes(bytes) },
+                        label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                    )
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = { folderPicker.launch(null) }, modifier = Modifier.weight(1f)) {
+                    Text("Kies map")
+                }
+                OutlinedButton(onClick = viewModel::clearCache, modifier = Modifier.weight(1f)) {
+                    Text("Wis cache")
+                }
+            }
+            OutlinedButton(onClick = viewModel::clearDownloads, modifier = Modifier.fillMaxWidth()) {
+                Text("Wis alle downloads")
+            }
+
+            HorizontalDivider()
 
             // ── App updates ──────────────────────────────────────────────────
             SectionHeader("App-updates")
@@ -492,6 +554,13 @@ fun SettingsScreen(
             Spacer(Modifier.height(32.dp))
         }
     }
+}
+
+private fun formatStorageBytes(bytes: Long): String {
+    if (bytes <= 0) return "0 MB"
+    val gb = bytes / 1_073_741_824.0
+    val mb = bytes / 1_048_576.0
+    return if (gb >= 1.0) "%.1f GB".format(gb) else "%.0f MB".format(mb)
 }
 
 @Composable

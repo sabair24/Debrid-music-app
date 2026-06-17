@@ -56,6 +56,11 @@ data class SettingsUiState(
     val updateDownloading: Boolean = false,
     val updateProgress: Float = 0f,
     val updateError: String? = null,
+    // Storage
+    val downloadsSizeBytes: Long = 0L,
+    val cacheSizeBytes: Long = 0L,
+    val maxDownloadBytes: Long = 0L,
+    val downloadFolder: String = "App-opslag (standaard)",
 )
 
 @HiltViewModel
@@ -66,6 +71,7 @@ class SettingsViewModel @Inject constructor(
     private val torBoxAuthInterceptor: TorBoxAuthInterceptor,
     private val soulseekRepository: SoulseekRepository,
     private val updateRepository: UpdateRepository,
+    private val offlineDownloadManager: com.debridmusic.app.download.OfflineDownloadManager,
     val eqController: EqController,
     private val scrobbleManager: ScrobbleManager,
 ) : ViewModel() {
@@ -123,9 +129,49 @@ class SettingsViewModel @Inject constructor(
                 _state.update { it.copy(eqBands = bands, eqRangeDb = eqController.bandRangeDb) }
             }
         }
+        viewModelScope.launch {
+            combine(settingsStore.maxDownloadBytes, settingsStore.downloadTreeUri) { max, tree -> max to tree }
+                .collect { (max, tree) ->
+                    _state.update {
+                        it.copy(
+                            maxDownloadBytes = max,
+                            downloadFolder = if (tree.isBlank()) "App-opslag (standaard)" else folderNameFromTreeUri(tree),
+                        )
+                    }
+                }
+        }
+        refreshStorage()
         // Quietly check for an update when Settings opens.
         checkForUpdate(silent = true)
     }
+
+    // ── Storage management ──────────────────────────────────────────────────────
+    fun refreshStorage() {
+        viewModelScope.launch {
+            val downloads = offlineDownloadManager.downloadsSizeBytes()
+            val cache = offlineDownloadManager.cacheSizeBytes()
+            _state.update { it.copy(downloadsSizeBytes = downloads, cacheSizeBytes = cache) }
+        }
+    }
+
+    fun setMaxDownloadBytes(bytes: Long) {
+        viewModelScope.launch { settingsStore.setMaxDownloadBytes(bytes); offlineDownloadManager.enforceQuota(); refreshStorage() }
+    }
+
+    fun setDownloadTreeUri(uri: String) {
+        viewModelScope.launch { settingsStore.setDownloadTreeUri(uri) }
+    }
+
+    fun clearDownloads() {
+        viewModelScope.launch { offlineDownloadManager.clearAllDownloads(); refreshStorage() }
+    }
+
+    fun clearCache() {
+        offlineDownloadManager.clearCache(); refreshStorage()
+    }
+
+    private fun folderNameFromTreeUri(uri: String): String =
+        uri.substringAfterLast("%3A").substringAfterLast('/').ifBlank { "Gekozen map" }
 
     // ── App updates ────────────────────────────────────────────────────────────
     fun checkForUpdate(silent: Boolean = false) {

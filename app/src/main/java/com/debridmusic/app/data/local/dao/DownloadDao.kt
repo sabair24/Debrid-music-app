@@ -19,6 +19,12 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads WHERE status = 'DONE' AND localPath != ''")
     suspend fun getCompleted(): List<DownloadEntity>
 
+    @Query("SELECT COALESCE(SUM(sizeBytes), 0) FROM downloads WHERE status = 'DONE'")
+    suspend fun completedSizeBytes(): Long
+
+    @Query("SELECT * FROM downloads WHERE status = 'DONE' AND localPath != '' ORDER BY dateAdded ASC")
+    suspend fun getCompletedOldestFirst(): List<DownloadEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(download: DownloadEntity): Long
 
