@@ -63,6 +63,13 @@ class SettingsStore @Inject constructor(
     suspend fun setSlskUsername(v: String) { dataStore.edit { it[KEY_SLSK_USERNAME] = v } }
     suspend fun setSlskPassword(v: String) { dataStore.edit { it[KEY_SLSK_PASSWORD] = v } }
 
+    // ── Tidal (official SDK) ────────────────────────────────────────────────────
+    val tidalClientId: Flow<String> = dataStore.data.map { it[KEY_TIDAL_CLIENT_ID] ?: "" }
+    val tidalClientSecret: Flow<String> = dataStore.data.map { it[KEY_TIDAL_CLIENT_SECRET] ?: "" }
+
+    suspend fun setTidalClientId(v: String) { dataStore.edit { it[KEY_TIDAL_CLIENT_ID] = v } }
+    suspend fun setTidalClientSecret(v: String) { dataStore.edit { it[KEY_TIDAL_CLIENT_SECRET] = v } }
+
     // ── Playback (shuffle / repeat) ─────────────────────────────────────────────
     val shuffleEnabled: Flow<Boolean> = dataStore.data.map { it[KEY_SHUFFLE_ENABLED] ?: false }
     val repeatMode: Flow<Int> = dataStore.data.map { it[KEY_REPEAT_MODE] ?: 0 } // RepeatMode ordinal
@@ -83,5 +90,7 @@ class SettingsStore @Inject constructor(
         val KEY_SLSK_PASSWORD = stringPreferencesKey("slsk_password")
         val KEY_SHUFFLE_ENABLED = booleanPreferencesKey("shuffle_enabled")
         val KEY_REPEAT_MODE = intPreferencesKey("repeat_mode")
+        val KEY_TIDAL_CLIENT_ID = stringPreferencesKey("tidal_client_id")
+        val KEY_TIDAL_CLIENT_SECRET = stringPreferencesKey("tidal_client_secret")
     }
 }
