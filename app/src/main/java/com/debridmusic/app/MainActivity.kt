@@ -13,12 +13,16 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.navigation.compose.rememberNavController
+import com.debridmusic.app.player.PlayerController
 import com.debridmusic.app.ui.navigation.AppNavHost
 import com.debridmusic.app.ui.theme.DebridMusicTheme
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    @Inject lateinit var playerController: PlayerController
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -28,6 +32,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         requestStoragePermissions()
+        // Connect the media controller once at app start (independent of which
+        // screen is shown), so playback works from Home/Search, not just Library.
+        playerController.connect()
         setContent {
             DebridMusicTheme {
                 Surface(

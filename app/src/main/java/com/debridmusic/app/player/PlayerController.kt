@@ -57,6 +57,7 @@ class PlayerController @Inject constructor(
     private var currentQueue: List<Track> = emptyList()
 
     fun connect() {
+        if (controllerFuture != null) return // idempotent — safe to call from multiple entry points
         crossFadeManager.init(controllerScope)
         scrobbleManager.init(this, controllerScope)
 
