@@ -22,7 +22,12 @@ class DebridMusicApp : Application() {
         // Auto-enrich an existing library on launch (non-blocking, off the main thread).
         appScope.launch {
             runCatching {
-                if (musicRepository.trackCount().first() > 0) musicRepository.enrichInBackground()
+                if (musicRepository.trackCount().first() > 0) {
+                    // Fill cover-less tracks from their album cover immediately, then do
+                    // the slower online metadata pass.
+                    musicRepository.backfillArtworkInBackground()
+                    musicRepository.enrichInBackground()
+                }
             }
         }
     }

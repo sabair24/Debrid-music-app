@@ -78,6 +78,11 @@ class MusicRepository @Inject constructor(
         }
     }
 
+    /** Fast, network-free: fill any cover-less track from its album cover right away. */
+    fun backfillArtworkInBackground() {
+        appScope.launch { runCatching { enricher.backfillTrackArtwork() } }
+    }
+
     suspend fun getTrack(id: Long): Track? = trackDao.getById(id)?.toDomain()
 
     suspend fun getAlbum(id: Long): Album? = albumDao.getById(id)?.toDomain()
@@ -165,7 +170,7 @@ class MusicRepository @Inject constructor(
             if (rowId > 0) added++ // -1 = ignored duplicate (same uri)
         }
         // Auto-fetch full metadata (cover, genre, year, label, bio) in the background.
-        if (added > 0) enrichInBackground()
+        if (added > 0) { backfillArtworkInBackground(); enrichInBackground() }
         return added
     }
 }
