@@ -6,6 +6,8 @@ import com.debridmusic.app.data.local.dao.ArtistDao
 import com.debridmusic.app.data.local.dao.TrackDao
 import com.debridmusic.app.data.local.entity.AlbumEntity
 import com.debridmusic.app.data.local.entity.ArtistEntity
+import com.debridmusic.app.data.local.entity.TrackEntity
+import com.debridmusic.app.data.remote.dto.DeezerTrack
 import com.debridmusic.app.data.remote.DiscogsAuthInterceptor
 import com.debridmusic.app.data.remote.api.CoverArtArchiveApi
 import com.debridmusic.app.data.remote.api.DeezerApi
@@ -105,8 +107,11 @@ class MetadataEnricher @Inject constructor(
         discogsToken: String = "",
     ): Boolean {
         if (!force && albumIn.manualOverride) return false
+        // "Done" once the core fields are filled; a Deezer-matched album must also have
+        // its record type (so existing albums re-run once to fetch type + official titles).
         if (!force && albumIn.artworkUri != null && albumIn.description != null &&
-            albumIn.genre != null && albumIn.musicBrainzId != null) return false
+            albumIn.genre != null && albumIn.musicBrainzId != null &&
+            (albumIn.deezerId == null || albumIn.recordType != null)) return false
 
         var a = albumIn
         var changed = false
@@ -125,6 +130,7 @@ class MetadataEnricher @Inject constructor(
                     releaseDate = a.releaseDate ?: full.releaseDate,
                     year = a.year ?: full.releaseDate?.take(4)?.toIntOrNull(),
                     deezerId = a.deezerId ?: full.id,
+                    recordType = a.recordType ?: full.recordType,
                 )
                 changed = true
             }
@@ -199,7 +205,90 @@ class MetadataEnricher @Inject constructor(
 
         // Propagate the cover to this album's tracks (overwrite stale covers on force).
         backfillTrackArtwork(a.id, a.artworkUri, overwrite = force)
+        // Replace torrent-filename track titles with Deezer's official titles (safe match).
+        a.deezerId?.let { alignTrackTitles(a.id, it) }
         return changed
+    }
+
+    /**
+     * Replaces local (torrent-filename) track titles with Deezer's official titles.
+     * Safe by design: when the track counts match it trusts position only if the
+     * titles broadly agree, otherwise it renames a track only on a strong title match,
+     * so a wrong album match or bonus tracks never produce garbage titles.
+     */
+    private suspend fun alignTrackTitles(albumId: Long, deezerAlbumId: Long) {
+        val official = runCatching { deezerApi.albumTracks(deezerAlbumId).data.orEmpty() }
+            .getOrNull()?.filter { !it.title.isNullOrBlank() } ?: return
+        if (official.isEmpty()) return
+        val local = trackDao.observeByAlbum(albumId).first()
+        if (local.isEmpty()) return
+
+        val officialSorted = official.sortedBy { it.trackPosition ?: Int.MAX_VALUE }
+        val localSorted = local.sortedBy { it.trackNumber }
+
+        val positional = localSorted.size == officialSorted.size && run {
+            val avg = localSorted.indices
+                .map { titleSimilarity(localSorted[it].title, officialSorted[it].title!!) }
+                .average()
+            avg >= 0.5 // counts match AND titles broadly agree → trust positions
+        }
+
+        if (positional) {
+            localSorted.forEachIndexed { i, t -> applyOfficial(t, officialSorted[i]) }
+        } else {
+            val used = HashSet<Long>()
+            localSorted.forEach { t ->
+                val best = officialSorted.filter { it.id !in used }
+                    .maxByOrNull { titleSimilarity(t.title, it.title!!) } ?: return@forEach
+                if (titleSimilarity(t.title, best.title!!) >= 0.85) {
+                    used.add(best.id)
+                    applyOfficial(t, best)
+                }
+            }
+        }
+    }
+
+    private suspend fun applyOfficial(track: TrackEntity, official: DeezerTrack) {
+        val title = official.title!!.trim()
+        val number = official.trackPosition ?: track.trackNumber
+        if (track.title != title || track.trackNumber != number) {
+            trackDao.update(track.copy(title = title, trackNumber = number))
+        }
+    }
+
+    // 0..1 similarity of two track titles after stripping leading track numbers,
+    // extensions and non-alphanumerics.
+    private fun titleSimilarity(a: String, b: String): Double {
+        val x = normalizeTitle(a)
+        val y = normalizeTitle(b)
+        if (x.isEmpty() || y.isEmpty()) return 0.0
+        if (x == y) return 1.0
+        val dist = levenshtein(x, y)
+        return 1.0 - dist.toDouble() / maxOf(x.length, y.length)
+    }
+
+    private fun normalizeTitle(s: String): String =
+        s.lowercase()
+            .replace(Regex("^\\s*\\d{1,3}\\s*[-._)\\]]+\\s*"), "") // leading "01 - "
+            .replace(Regex("\\.[a-z0-9]{2,4}$"), "")               // file extension
+            .replace(Regex("[^a-z0-9]"), "")
+
+    private fun levenshtein(a: String, b: String): Int {
+        val dp = IntArray(b.length + 1) { it }
+        for (i in 1..a.length) {
+            var prev = dp[0]
+            dp[0] = i
+            for (j in 1..b.length) {
+                val tmp = dp[j]
+                dp[j] = minOf(
+                    dp[j] + 1,
+                    dp[j - 1] + 1,
+                    prev + if (a[i - 1] == b[j - 1]) 0 else 1,
+                )
+                prev = tmp
+            }
+        }
+        return dp[b.length]
     }
 
     /**
@@ -401,11 +490,14 @@ class MetadataEnricher @Inject constructor(
             releaseDate = deezerFull?.releaseDate ?: discogsFull?.released?.takeIf { it.length >= 8 } ?: album.releaseDate,
             year = (deezerFull?.releaseDate?.take(4)?.toIntOrNull()) ?: discogsFull?.year ?: m.year ?: album.year,
             deezerId = m.deezerId ?: album.deezerId,
+            recordType = deezerFull?.recordType ?: album.recordType,
             // reset stale fields so backfill re-fetches description/back for the new album
             description = null, secondaryArtworkUri = null, musicBrainzId = null, theAudioDbId = null,
             manualOverride = true,
         )
         albumDao.update(updated)
+        // Apply the chosen album's official track titles.
+        updated.deezerId?.let { alignTrackTitles(albumId, it) }
         // Backfill description/back-cover from other sources for the chosen album.
         enrichAlbum(updated.copy(manualOverride = false), force = true)
         // Re-assert the override flag (enrichAlbum wrote manualOverride=false copy's value).

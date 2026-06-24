@@ -144,6 +144,13 @@ fun AlbumDetailScreen(
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.primary,
                             )
+                            state.album?.recordType?.takeIf { it.isNotBlank() }?.let { type ->
+                                Text(
+                                    text = type.replaceFirstChar { it.uppercase() },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                             state.album?.year?.let { year ->
                                 Text(
                                     text = buildString {

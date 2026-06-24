@@ -25,7 +25,7 @@ import com.debridmusic.app.data.local.entity.TrackEntity
         PlaylistTrackCrossRef::class,
         DownloadEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -100,6 +100,13 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE tracks ADD COLUMN torrentHash TEXT")
                 db.execSQL("ALTER TABLE tracks ADD COLUMN torrentFileName TEXT")
                 db.execSQL("ALTER TABLE downloads ADD COLUMN addToLibrary INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        // Album record type (album / single / ep) from Deezer.
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE albums ADD COLUMN recordType TEXT")
             }
         }
     }

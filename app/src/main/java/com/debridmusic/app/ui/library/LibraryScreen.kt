@@ -210,7 +210,8 @@ fun LibraryScreen(
                         EmptyState(message = "No albums found.")
                     } else {
                         AlbumGrid(
-                            albums = state.albums,
+                            albums = state.albums.filterNot { it.isSingle },
+                            singles = state.albums.filter { it.isSingle },
                             onAlbumClick = { album -> onAlbumClick(album.id) },
                         )
                     }
@@ -302,28 +303,50 @@ private fun TrackList(
 private fun AlbumGrid(
     albums: List<Album>,
     onAlbumClick: (Album) -> Unit,
+    singles: List<Album> = emptyList(),
 ) {
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.fillMaxSize(),
     ) {
-        val rows = albums.chunked(2)
-        items(rows) { row ->
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                row.forEach { album ->
-                    AlbumCard(
-                        album = album,
-                        onAlbumClick = onAlbumClick,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                if (row.size == 1) Spacer(modifier = Modifier.weight(1f))
-            }
+        // Section header only shown when singles are split out separately.
+        if (singles.isNotEmpty() && albums.isNotEmpty()) {
+            item { SectionHeader("Albums") }
         }
+        items(albums.chunked(2)) { row -> AlbumRow(row, onAlbumClick) }
+
+        if (singles.isNotEmpty()) {
+            item { SectionHeader("Singles") }
+            items(singles.chunked(2)) { row -> AlbumRow(row, onAlbumClick) }
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+    )
+}
+
+@Composable
+private fun AlbumRow(row: List<Album>, onAlbumClick: (Album) -> Unit) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        row.forEach { album ->
+            AlbumCard(
+                album = album,
+                onAlbumClick = onAlbumClick,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        if (row.size == 1) Spacer(modifier = Modifier.weight(1f))
     }
 }
 
