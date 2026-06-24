@@ -6,6 +6,7 @@ import com.debridmusic.app.data.local.SettingsStore
 import com.debridmusic.app.data.remote.DiscogsAuthInterceptor
 import com.debridmusic.app.data.remote.api.DiscogsApi
 import com.debridmusic.app.data.remote.dto.TorBoxUser
+import com.debridmusic.app.data.repository.DiscogsRepository
 import com.debridmusic.app.metadata.EnrichmentProgress
 import com.debridmusic.app.metadata.MetadataEnricher
 import com.debridmusic.app.player.EqController
@@ -25,6 +26,8 @@ data class SettingsUiState(
     val discogsValidating: Boolean = false,
     val discogsUsername: String? = null,
     val discogsError: String? = null,
+    val discogsSyncing: Boolean = false,
+    val discogsSyncResult: String? = null,
     val torBoxApiKey: String = "",
     val isEnriching: Boolean = false,
     val enrichProgress: EnrichmentProgress? = null,
@@ -88,6 +91,7 @@ class SettingsViewModel @Inject constructor(
     private val torBoxAuthInterceptor: TorBoxAuthInterceptor,
     private val discogsApi: DiscogsApi,
     private val discogsAuthInterceptor: DiscogsAuthInterceptor,
+    private val discogsRepository: DiscogsRepository,
     private val soulseekRepository: SoulseekRepository,
     private val updateRepository: UpdateRepository,
     private val offlineDownloadManager: com.debridmusic.app.download.OfflineDownloadManager,
@@ -340,6 +344,22 @@ class SettingsViewModel @Inject constructor(
                 }
                 .onFailure {
                     _state.update { it.copy(discogsValidating = false, discogsError = "Token ongeldig of netwerkfout") }
+                }
+        }
+    }
+
+    // Syncs the user's Discogs collection into the local cache (shown in Library → Discogs).
+    fun syncDiscogsCollection() {
+        if (_state.value.discogsSyncing) return
+        _state.update { it.copy(discogsSyncing = true, discogsError = null, discogsSyncResult = null) }
+        viewModelScope.launch {
+            settingsStore.setDiscogsToken(_state.value.discogsToken.trim())
+            discogsRepository.fetchAndCacheCollection(System.currentTimeMillis())
+                .onSuccess { count ->
+                    _state.update { it.copy(discogsSyncing = false, discogsSyncResult = "$count albums gesynchroniseerd") }
+                }
+                .onFailure { e ->
+                    _state.update { it.copy(discogsSyncing = false, discogsError = e.message ?: "Sync mislukt") }
                 }
         }
     }

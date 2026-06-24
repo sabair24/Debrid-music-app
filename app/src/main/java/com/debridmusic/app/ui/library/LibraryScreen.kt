@@ -20,6 +20,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -45,6 +46,7 @@ fun LibraryScreen(
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val uriHandler = LocalUriHandler.current
     val currentTrack by viewModel.playerController.currentTrack.collectAsStateWithLifecycle()
     val isPlaying by viewModel.playerController.isPlaying.collectAsStateWithLifecycle()
     val positionMs by viewModel.playerController.positionMs.collectAsStateWithLifecycle()
@@ -160,6 +162,11 @@ fun LibraryScreen(
                         onClick = { viewModel.setTab(LibraryTab.PLAYLISTS) },
                         text = { Text("Playlists") },
                     )
+                    Tab(
+                        selected = state.tab == LibraryTab.DISCOGS,
+                        onClick = { viewModel.setTab(LibraryTab.DISCOGS) },
+                        text = { Text("Discogs") },
+                    )
                 }
             }
 
@@ -232,6 +239,22 @@ fun LibraryScreen(
                         onDelete = viewModel::deletePlaylist,
                         onPlaylistClick = onPlaylistClick,
                     )
+                }
+
+                state.tab == LibraryTab.DISCOGS -> {
+                    if (state.discogsCollection.isEmpty()) {
+                        EmptyState(
+                            message = "Nog geen Discogs-collectie.\nGa naar Instellingen → Discogs en tik op \"Sync Discogs-collectie\"."
+                        )
+                    } else {
+                        AlbumGrid(
+                            albums = state.discogsCollection,
+                            // Discogs items aren't local albums; open the release on discogs.com.
+                            onAlbumClick = { album ->
+                                runCatching { uriHandler.openUri("https://www.discogs.com/release/${album.id}") }
+                            },
+                        )
+                    }
                 }
             }
         }
