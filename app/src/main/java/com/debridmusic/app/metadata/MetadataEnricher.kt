@@ -69,6 +69,9 @@ class MetadataEnricher @Inject constructor(
         albums.forEachIndexed { idx, album ->
             onProgress(EnrichmentProgress(idx, total, album.title))
             if (enrichAlbum(album, discogsToken = discogsToken)) enriched++
+            // Always backfill any track that still lacks a cover from its album,
+            // even when the album itself needed no enrichment.
+            backfillTrackArtwork(album.id)
             delay(MB_RATE_LIMIT_MS)
         }
         artists.forEachIndexed { idx, artist ->
@@ -195,12 +198,17 @@ class MetadataEnricher @Inject constructor(
         albumDao.update(a)
 
         // Propagate artwork to tracks that lack it
-        a.artworkUri?.let { art ->
-            trackDao.observeByAlbum(a.id).first()
-                .filter { it.artworkUri == null }
-                .forEach { trackDao.update(it.copy(artworkUri = art)) }
-        }
+        backfillTrackArtwork(a.id, a.artworkUri)
         return changed
+    }
+
+    /** Copies the album cover onto any track in that album that still has none. */
+    private suspend fun backfillTrackArtwork(albumId: Long, knownArt: String? = null) {
+        val art = knownArt ?: albumDao.getById(albumId)?.artworkUri ?: return
+        if (art.isBlank()) return
+        trackDao.observeByAlbum(albumId).first()
+            .filter { it.artworkUri.isNullOrBlank() }
+            .forEach { trackDao.update(it.copy(artworkUri = art)) }
     }
 
     // ── Artist ──────────────────────────────────────────────────────────────────

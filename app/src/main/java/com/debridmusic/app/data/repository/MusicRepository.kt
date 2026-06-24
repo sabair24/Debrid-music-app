@@ -164,6 +164,8 @@ class MusicRepository @Inject constructor(
             )
             if (rowId > 0) added++ // -1 = ignored duplicate (same uri)
         }
+        // Auto-fetch full metadata (cover, genre, year, label, bio) in the background.
+        if (added > 0) enrichInBackground()
         return added
     }
 }
