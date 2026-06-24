@@ -449,6 +449,8 @@ fun SettingsScreen(
                 value = state.discogsToken,
                 onValueChange = viewModel::setDiscogsToken,
                 label = { Text("Discogs token (optional)") },
+                placeholder = { Text("discogs.com/settings/developers") },
+                supportingText = { Text("Adds Discogs cover art, genres & artist bios during library enrichment.") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )

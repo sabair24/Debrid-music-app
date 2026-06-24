@@ -6,8 +6,10 @@ import com.debridmusic.app.data.local.dao.ArtistDao
 import com.debridmusic.app.data.local.dao.TrackDao
 import com.debridmusic.app.data.local.entity.AlbumEntity
 import com.debridmusic.app.data.local.entity.ArtistEntity
+import com.debridmusic.app.data.remote.DiscogsAuthInterceptor
 import com.debridmusic.app.data.remote.api.CoverArtArchiveApi
 import com.debridmusic.app.data.remote.api.DeezerApi
+import com.debridmusic.app.data.remote.api.DiscogsApi
 import com.debridmusic.app.data.remote.api.LastFmApi
 import com.debridmusic.app.data.remote.api.MusicBrainzApi
 import com.debridmusic.app.data.remote.api.TheAudioDbApi
@@ -15,6 +17,10 @@ import com.debridmusic.app.data.remote.dto.bestCover
 import com.debridmusic.app.data.remote.dto.bestFrontUrl
 import com.debridmusic.app.data.remote.dto.bestImage
 import com.debridmusic.app.data.remote.dto.genreName
+import com.debridmusic.app.data.remote.dto.labelName
+import com.debridmusic.app.data.remote.dto.primaryImage
+import com.debridmusic.app.data.remote.dto.secondaryImage
+import com.debridmusic.app.data.remote.dto.stripDiscogsMarkup
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
@@ -46,6 +52,8 @@ class MetadataEnricher @Inject constructor(
     private val lastFmApi: LastFmApi,
     private val deezerApi: DeezerApi,
     private val theAudioDbApi: TheAudioDbApi,
+    private val discogsApi: DiscogsApi,
+    private val discogsAuth: DiscogsAuthInterceptor,
     private val settingsStore: SettingsStore,
 ) {
     suspend fun enrichAll(
@@ -55,32 +63,44 @@ class MetadataEnricher @Inject constructor(
         val albums = albumDao.observeAll().first()
         val artists = artistDao.observeAll().first()
         val lastFmKey = settingsStore.lastFmApiKey.first()
+        val discogsToken = syncDiscogsToken()
         val total = albums.size + artists.size
 
         albums.forEachIndexed { idx, album ->
             onProgress(EnrichmentProgress(idx, total, album.title))
-            if (enrichAlbum(album)) enriched++
+            if (enrichAlbum(album, discogsToken = discogsToken)) enriched++
             delay(MB_RATE_LIMIT_MS)
         }
         artists.forEachIndexed { idx, artist ->
             onProgress(EnrichmentProgress(albums.size + idx, total, artist.name))
-            if (enrichArtist(artist, lastFmKey)) enriched++
+            if (enrichArtist(artist, lastFmKey, discogsToken = discogsToken)) enriched++
             delay(MB_RATE_LIMIT_MS)
         }
         onProgress(EnrichmentProgress(total, total))
         return enriched
     }
 
-    suspend fun reEnrichAlbum(albumId: Long): Boolean =
-        albumDao.getById(albumId)?.let { enrichAlbum(it, force = true) } ?: false
+    suspend fun reEnrichAlbum(albumId: Long): Boolean {
+        val token = syncDiscogsToken()
+        return albumDao.getById(albumId)?.let { enrichAlbum(it, force = true, discogsToken = token) } ?: false
+    }
 
     suspend fun reEnrichArtist(artistId: Long): Boolean {
         val key = settingsStore.lastFmApiKey.first()
-        return artistDao.getById(artistId)?.let { enrichArtist(it, key, force = true) } ?: false
+        val token = syncDiscogsToken()
+        return artistDao.getById(artistId)?.let { enrichArtist(it, key, force = true, discogsToken = token) } ?: false
     }
 
+    /** Pushes the saved Discogs token into the interceptor and returns it (blank = disabled). */
+    private suspend fun syncDiscogsToken(): String =
+        settingsStore.discogsToken.first().also { discogsAuth.token = it }
+
     // ── Album ───────────────────────────────────────────────────────────────────
-    private suspend fun enrichAlbum(albumIn: AlbumEntity, force: Boolean = false): Boolean {
+    private suspend fun enrichAlbum(
+        albumIn: AlbumEntity,
+        force: Boolean = false,
+        discogsToken: String = "",
+    ): Boolean {
         if (!force && albumIn.manualOverride) return false
         if (!force && albumIn.artworkUri != null && albumIn.description != null &&
             albumIn.genre != null && albumIn.musicBrainzId != null) return false
@@ -107,7 +127,27 @@ class MetadataEnricher @Inject constructor(
             }
         }
 
-        // 2. MusicBrainz + Cover Art Archive — MBID + cover fallback
+        // 2. Discogs — cover + genre + label + year (needs the user's token)
+        if (discogsToken.isNotBlank() && (a.artworkUri == null || a.genre == null || a.label == null)) {
+            runCatching {
+                val res = discogsApi.searchRelease(a.title.cleanForQuery(), a.artistName).results
+                    ?.firstOrNull { it.type == "release" || it.type == "master" }
+                if (res != null) {
+                    val full = runCatching { discogsApi.getRelease(res.id) }.getOrNull()
+                    a = a.copy(
+                        artworkUri = a.artworkUri ?: full?.primaryImage() ?: res.bestImage(),
+                        secondaryArtworkUri = a.secondaryArtworkUri ?: full?.secondaryImage(),
+                        genre = a.genre ?: full?.genreName() ?: res.genre?.firstOrNull() ?: res.style?.firstOrNull(),
+                        label = a.label ?: full?.labelName() ?: res.label?.firstOrNull(),
+                        year = a.year ?: full?.year ?: res.year?.toIntOrNull(),
+                        releaseDate = a.releaseDate ?: full?.released?.takeIf { it.length >= 8 },
+                    )
+                    changed = true
+                }
+            }
+        }
+
+        // 3. MusicBrainz + Cover Art Archive — MBID + cover fallback
         if (a.musicBrainzId == null || a.artworkUri == null) {
             runCatching {
                 val best = musicBrainzApi.searchRelease(buildMbReleaseQuery(a.title, a.artistName))
@@ -127,7 +167,7 @@ class MetadataEnricher @Inject constructor(
             }
         }
 
-        // 3. TheAudioDB — description + back cover + art/genre fallback
+        // 4. TheAudioDB — description + back cover + art/genre fallback
         if (a.description == null || a.secondaryArtworkUri == null || a.artworkUri == null) {
             runCatching {
                 val tadb = a.musicBrainzId?.let { theAudioDbApi.albumByMbid(it).album?.firstOrNull() }
@@ -146,7 +186,7 @@ class MetadataEnricher @Inject constructor(
             }
         }
 
-        // 4. Cross-fill: use the artist image if we still have no cover
+        // 5. Cross-fill: use the artist image if we still have no cover
         if (a.artworkUri == null) {
             artistDao.getById(a.artistId)?.imageUri?.let { a = a.copy(artworkUri = it); changed = true }
         }
@@ -164,7 +204,12 @@ class MetadataEnricher @Inject constructor(
     }
 
     // ── Artist ──────────────────────────────────────────────────────────────────
-    private suspend fun enrichArtist(artistIn: ArtistEntity, lastFmApiKey: String, force: Boolean = false): Boolean {
+    private suspend fun enrichArtist(
+        artistIn: ArtistEntity,
+        lastFmApiKey: String,
+        force: Boolean = false,
+        discogsToken: String = "",
+    ): Boolean {
         if (!force && artistIn.manualOverride) return false
         if (!force && artistIn.biography != null && artistIn.imageUri != null &&
             artistIn.bannerUri != null && artistIn.genre != null) return false
@@ -180,6 +225,21 @@ class MetadataEnricher @Inject constructor(
             if (hit != null) {
                 ar = ar.copy(imageUri = ar.imageUri ?: hit.bestImage(), deezerId = ar.deezerId ?: hit.id)
                 changed = true
+            }
+        }
+
+        // 1b. Discogs — artist image + profile/bio (needs the user's token)
+        if (discogsToken.isNotBlank() && (ar.imageUri == null || ar.biography == null)) {
+            runCatching {
+                val res = discogsApi.searchArtist(ar.name).results?.firstOrNull { it.type == "artist" }
+                if (res != null) {
+                    val full = runCatching { discogsApi.getArtist(res.id) }.getOrNull()
+                    ar = ar.copy(
+                        imageUri = ar.imageUri ?: full?.bestImage() ?: res.bestImage(),
+                        biography = ar.biography ?: full?.profile?.stripDiscogsMarkup()?.takeIf { it.isNotBlank() },
+                    )
+                    changed = true
+                }
             }
         }
 

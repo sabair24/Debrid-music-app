@@ -7,7 +7,9 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.debridmusic.app.data.remote.api.ApibayApi
 import com.debridmusic.app.data.remote.api.BitSearchApi
 import com.debridmusic.app.data.remote.api.CoverArtArchiveApi
+import com.debridmusic.app.data.remote.DiscogsAuthInterceptor
 import com.debridmusic.app.data.remote.api.DeezerApi
+import com.debridmusic.app.data.remote.api.DiscogsApi
 import com.debridmusic.app.data.remote.api.KnabenApi
 import com.debridmusic.app.data.remote.api.TheAudioDbApi
 import com.debridmusic.app.data.remote.api.LastFmApi
@@ -164,6 +166,26 @@ object NetworkModule {
     @Provides @Singleton
     fun provideTheAudioDbApi(@Named("theaudiodb") retrofit: Retrofit): TheAudioDbApi =
         retrofit.create(TheAudioDbApi::class.java)
+
+    // Discogs — token-authed (see DiscogsAuthInterceptor), rich metadata + artwork.
+    @Provides @Singleton @Named("discogs")
+    fun provideDiscogsRetrofit(
+        okHttpClient: OkHttpClient,
+        discogsAuthInterceptor: DiscogsAuthInterceptor,
+    ): Retrofit =
+        Retrofit.Builder()
+            .baseUrl("https://api.discogs.com/")
+            .client(
+                okHttpClient.newBuilder()
+                    .addInterceptor(discogsAuthInterceptor)
+                    .build()
+            )
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+
+    @Provides @Singleton
+    fun provideDiscogsApi(@Named("discogs") retrofit: Retrofit): DiscogsApi =
+        retrofit.create(DiscogsApi::class.java)
 
     // ── Torrent indexers (multi-source search) ──────────────────────────────────
     @Provides @Singleton @Named("apibay")
