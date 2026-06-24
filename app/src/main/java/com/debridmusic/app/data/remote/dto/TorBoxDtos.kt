@@ -32,6 +32,10 @@ data class TorBoxSearchResult(
 
 data class TorBoxCreateData(
     @SerializedName("torrent_id") val torrentId: Long = 0,
+    // Non-cached magnets are accepted into the download queue and come back with a
+    // `queued_id` instead of a `torrent_id`; in that case `torrent_id` is absent (→ 0)
+    // and the torrent must be tracked by its infohash until it lands in the user's list.
+    @SerializedName("queued_id") val queuedId: Long? = null,
     val name: String? = null,
     val hash: String? = null,
     val detail: String? = null,
