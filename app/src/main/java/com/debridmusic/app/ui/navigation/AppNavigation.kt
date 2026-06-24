@@ -89,8 +89,8 @@ fun AppNavHost(navController: NavHostController) {
                 onArtistClick = { artistId ->
                     navController.navigate(Screen.ArtistDetail.createRoute(artistId))
                 },
-                onSettingsClick = { navController.navigate(Screen.Settings.route) },
-                onStreamOnlineClick = { navController.navigate(Screen.CatalogueSearch.route) },
+                onSettingsClick = { switchTab(Screen.Settings.route) },
+                onStreamOnlineClick = { switchTab(Screen.CatalogueSearch.route) },
                 onSoulseekClick = { navController.navigate(Screen.SoulseekSearch.route) },
                 onDownloadsClick = { navController.navigate(Screen.Downloads.route) },
                 onPlaylistClick = { playlistId ->
