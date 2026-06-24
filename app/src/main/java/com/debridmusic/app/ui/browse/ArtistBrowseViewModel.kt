@@ -3,6 +3,7 @@ package com.debridmusic.app.ui.browse
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.debridmusic.app.data.remote.dto.TorBoxSearchResult
 import com.debridmusic.app.data.repository.BrowseRepository
 import com.debridmusic.app.domain.model.ArtistDiscography
 import com.debridmusic.app.domain.model.BrowseTrack
@@ -19,8 +20,7 @@ import javax.inject.Inject
 data class ArtistBrowseUiState(
     val discography: ArtistDiscography? = null,
     val isLoading: Boolean = true,
-    val resolving: Boolean = false,
-    val statusMessage: String? = null,
+    val sourcePicker: SourcePickerState? = null,
 )
 
 @HiltViewModel
@@ -43,21 +43,32 @@ class ArtistBrowseViewModel @Inject constructor(
         }
     }
 
-    fun playSong(track: BrowseTrack) {
-        if (_state.value.resolving) return
-        _state.update { it.copy(resolving = true, statusMessage = "Bron zoeken…") }
+    // Tapping a top song shows its torrent sources (Stremio-style).
+    fun showSourcesForTrack(track: BrowseTrack) {
+        _state.update {
+            it.copy(sourcePicker = SourcePickerState(
+                title = track.title, artist = track.artist, album = track.album, matchSong = track.title,
+            ))
+        }
         viewModelScope.launch {
-            val result = browsePlayer.playSong(track.artist, track.album, track.title) { msg ->
-                _state.update { it.copy(statusMessage = msg) }
+            val sources = browsePlayer.findSources(track.artist, track.album, track.title)
+            _state.update { st -> st.sourcePicker?.let { st.copy(sourcePicker = it.copy(loading = false, sources = sources)) } ?: st }
+        }
+    }
+
+    fun pickSource(result: TorBoxSearchResult) {
+        val picker = _state.value.sourcePicker ?: return
+        _state.update { it.copy(sourcePicker = picker.copy(resolvingHash = result.hash, message = "Voorbereiden…")) }
+        viewModelScope.launch {
+            val r = browsePlayer.playResult(result, picker.artist, picker.album, picker.matchSong, picker.shuffle) { msg ->
+                _state.update { st -> st.sourcePicker?.let { st.copy(sourcePicker = it.copy(message = msg)) } ?: st }
             }
-            _state.update {
-                it.copy(
-                    resolving = false,
-                    statusMessage = if (result.isFailure) "Geen bron voor \"${track.title}\"" else null,
-                )
+            _state.update { st ->
+                if (r.isSuccess) st.copy(sourcePicker = null)
+                else st.sourcePicker?.let { st.copy(sourcePicker = it.copy(resolvingHash = null, message = "Bron mislukt — kies een andere")) } ?: st
             }
         }
     }
 
-    fun clearStatus() = _state.update { it.copy(statusMessage = null) }
+    fun dismissSources() = _state.update { it.copy(sourcePicker = null) }
 }

@@ -1,5 +1,6 @@
 package com.debridmusic.app.player
 
+import com.debridmusic.app.data.remote.dto.TorBoxSearchResult
 import com.debridmusic.app.domain.model.Track
 import com.debridmusic.app.metadata.StreamArtworkResolver
 import com.debridmusic.app.torbox.StreamState
@@ -30,6 +31,45 @@ class BrowsePlayer @Inject constructor(
     suspend fun playAlbum(
         artist: String, album: String, shuffle: Boolean, onProgress: (String) -> Unit,
     ): Result<Unit> = resolveAndPlay("$artist $album", artist, album, null, shuffle, onProgress)
+
+    /** Stremio-style: list the torrent sources for a song (or album), cached-first. */
+    suspend fun findSources(artist: String, album: String, song: String?): List<TorBoxSearchResult> {
+        val queries = buildList {
+            if (!song.isNullOrBlank()) add("$artist $song")
+            if (album.isNotBlank()) add("$artist $album")
+            if (isEmpty()) add(artist)
+        }
+        val all = queries.flatMap { torBoxRepository.search(it).getOrDefault(emptyList()) }
+        return all.distinctBy { it.hash.ifBlank { it.name } }
+            .sortedWith(compareByDescending<TorBoxSearchResult> { it.cached }.thenByDescending { it.seeders })
+            .take(MAX_SOURCES)
+    }
+
+    /** Play one specific source the user picked (album torrent; optionally start on a song). */
+    suspend fun playResult(
+        result: TorBoxSearchResult,
+        displayArtist: String,
+        displayAlbum: String,
+        matchSong: String?,
+        shuffle: Boolean,
+        onProgress: (String) -> Unit,
+    ): Result<Unit> = runCatching {
+        onProgress("Voorbereiden…")
+        var played = false
+        var error: String? = null
+        torBoxRepository.streamAlbum(result).collect { st ->
+            when (st) {
+                is StreamState.ReadyAlbum -> {
+                    playReadyAlbum(st, displayArtist, displayAlbum, matchSong, shuffle); played = true
+                }
+                is StreamState.Error -> error = st.message
+                is StreamState.Preparing -> onProgress("Voorbereiden…")
+                else -> {}
+            }
+        }
+        if (!played) error(error ?: "Bron mislukt")
+        Unit
+    }
 
     private suspend fun resolveAndPlay(
         searchQuery: String,
@@ -106,5 +146,6 @@ class BrowsePlayer @Inject constructor(
 
     private companion object {
         const val MAX_TRY = 3
+        const val MAX_SOURCES = 25
     }
 }
