@@ -197,24 +197,28 @@ class MetadataEnricher @Inject constructor(
         if (!changed && !force) return false
         albumDao.update(a)
 
-        // Propagate artwork to tracks that lack it
-        backfillTrackArtwork(a.id, a.artworkUri)
+        // Propagate the cover to this album's tracks (overwrite stale covers on force).
+        backfillTrackArtwork(a.id, a.artworkUri, overwrite = force)
         return changed
     }
 
-    /** Copies the album cover onto any track in that album that still has none. */
-    private suspend fun backfillTrackArtwork(albumId: Long, knownArt: String? = null) {
+    /**
+     * Aligns an album's tracks with its cover. By default only fills tracks that have
+     * none; with [overwrite] it also replaces a stale/wrong cover (every track in an
+     * album shares the album cover in this app).
+     */
+    private suspend fun backfillTrackArtwork(albumId: Long, knownArt: String? = null, overwrite: Boolean = false) {
         val art = knownArt ?: albumDao.getById(albumId)?.artworkUri ?: return
         if (art.isBlank()) return
         trackDao.observeByAlbum(albumId).first()
-            .filter { it.artworkUri.isNullOrBlank() }
+            .filter { if (overwrite) it.artworkUri != art else it.artworkUri.isNullOrBlank() }
             .forEach { trackDao.update(it.copy(artworkUri = art)) }
     }
 
     /**
-     * Fast, network-free pass: copy every album's existing cover onto its tracks that
-     * still lack one. Runs instantly (no rate limits), so library covers show up right
-     * away — independent of the slower online [enrichAll].
+     * Fast, network-free pass: align every track with its album cover. Fixes both
+     * cover-less tracks and existing tracks left with a stale/broken cover from before
+     * the album was enriched or manually corrected. Runs instantly (no rate limits).
      */
     suspend fun backfillTrackArtwork(): Int {
         var filled = 0
@@ -222,7 +226,7 @@ class MetadataEnricher @Inject constructor(
             val art = album.artworkUri
             if (!art.isNullOrBlank()) {
                 trackDao.observeByAlbum(album.id).first()
-                    .filter { it.artworkUri.isNullOrBlank() }
+                    .filter { it.artworkUri != art }
                     .forEach { trackDao.update(it.copy(artworkUri = art)); filled++ }
             }
         }
