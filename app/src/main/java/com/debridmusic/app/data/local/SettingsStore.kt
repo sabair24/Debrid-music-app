@@ -82,9 +82,12 @@ class SettingsStore @Inject constructor(
     val downloadTreeUri: Flow<String> = dataStore.data.map { it[KEY_DOWNLOAD_TREE_URI] ?: "" }
     // 0 = unlimited. Default 4 GB.
     val maxDownloadBytes: Flow<Long> = dataStore.data.map { it[KEY_MAX_DOWNLOAD_BYTES] ?: (4L * 1024 * 1024 * 1024) }
+    // How many downloads run in parallel (1..10, default 5).
+    val maxConcurrentDownloads: Flow<Int> = dataStore.data.map { (it[KEY_MAX_CONCURRENT_DOWNLOADS] ?: 5).coerceIn(1, 10) }
 
     suspend fun setDownloadTreeUri(uri: String) { dataStore.edit { it[KEY_DOWNLOAD_TREE_URI] = uri } }
     suspend fun setMaxDownloadBytes(bytes: Long) { dataStore.edit { it[KEY_MAX_DOWNLOAD_BYTES] = bytes } }
+    suspend fun setMaxConcurrentDownloads(n: Int) { dataStore.edit { it[KEY_MAX_CONCURRENT_DOWNLOADS] = n.coerceIn(1, 10) } }
 
     // ── Tidal (official SDK) ────────────────────────────────────────────────────
     val tidalClientId: Flow<String> = dataStore.data.map { it[KEY_TIDAL_CLIENT_ID] ?: "" }
@@ -121,5 +124,6 @@ class SettingsStore @Inject constructor(
         val KEY_TIDAL_CLIENT_SECRET = stringPreferencesKey("tidal_client_secret")
         val KEY_DOWNLOAD_TREE_URI = stringPreferencesKey("download_tree_uri")
         val KEY_MAX_DOWNLOAD_BYTES = longPreferencesKey("max_download_bytes")
+        val KEY_MAX_CONCURRENT_DOWNLOADS = intPreferencesKey("max_concurrent_downloads")
     }
 }

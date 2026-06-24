@@ -44,10 +44,9 @@ class OfflineDownloadManager @Inject constructor(
 ) {
     fun observeAll() = downloadDao.observeAll()
 
-    // Up to MAX_CONCURRENT downloads run at once; the rest wait in the queue.
+    // Up to the user's configured limit run at once; the rest wait in the queue.
     private val drainMutex = Mutex()   // only one drainer coroutine at a time
     private val claimMutex = Mutex()   // atomically claim the next queued row
-    private val slots = Semaphore(MAX_CONCURRENT)
 
     /** Queue one track. Returns immediately; the worker processes downloads serially. */
     fun enqueue(request: DownloadRequest) = enqueueAll(listOf(request))
@@ -69,10 +68,11 @@ class OfflineDownloadManager @Inject constructor(
         }
     }
 
-    /** Drains QUEUED downloads with up to MAX_CONCURRENT running in parallel. */
+    /** Drains QUEUED downloads with up to the configured number running in parallel. */
     private suspend fun processQueue() {
         if (!drainMutex.tryLock()) return // a drain is already in progress
         try {
+            val slots = Semaphore(settingsStore.maxConcurrentDownloads.first())
             do {
                 coroutineScope {
                     val jobs = mutableListOf<Job>()
@@ -215,7 +215,6 @@ class OfflineDownloadManager @Inject constructor(
     }
 
     private companion object {
-        const val MAX_CONCURRENT = 3        // parallel downloads
         const val BUFFER_SIZE = 262_144     // 256 KB read/write buffer
     }
 }

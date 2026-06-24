@@ -120,6 +120,18 @@ fun SettingsScreen(
                 Text("Wis alle downloads")
             }
 
+            Text(
+                "Gelijktijdige downloads: ${state.maxConcurrentDownloads}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Slider(
+                value = state.maxConcurrentDownloads.toFloat(),
+                onValueChange = { viewModel.setMaxConcurrentDownloads(it.toInt()) },
+                valueRange = 1f..10f,
+                steps = 8,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
             HorizontalDivider()
 
             // ── App updates ──────────────────────────────────────────────────
