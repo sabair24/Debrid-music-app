@@ -7,7 +7,6 @@ import com.debridmusic.app.data.local.dao.TrackDao
 import com.debridmusic.app.data.local.entity.AlbumEntity
 import com.debridmusic.app.data.local.entity.ArtistEntity
 import com.debridmusic.app.data.local.entity.TrackEntity
-import com.debridmusic.app.data.remote.dto.DeezerTrack
 import com.debridmusic.app.data.remote.DiscogsAuthInterceptor
 import com.debridmusic.app.data.remote.api.CoverArtArchiveApi
 import com.debridmusic.app.data.remote.api.DeezerApi
@@ -205,56 +204,99 @@ class MetadataEnricher @Inject constructor(
 
         // Propagate the cover to this album's tracks (overwrite stale covers on force).
         backfillTrackArtwork(a.id, a.artworkUri, overwrite = force)
-        // Replace torrent-filename track titles with Deezer's official titles (safe match).
-        a.deezerId?.let { alignTrackTitles(a.id, it) }
+        // Replace torrent-filename track titles with official titles (Deezer→Discogs).
+        alignTrackTitles(a.id, a, discogsToken)
         return changed
     }
 
+    private data class OfficialTrack(val title: String, val position: Int)
+
     /**
-     * Replaces local (torrent-filename) track titles with Deezer's official titles.
-     * Safe by design: when the track counts match it trusts position only if the
-     * titles broadly agree, otherwise it renames a track only on a strong title match,
-     * so a wrong album match or bonus tracks never produce garbage titles.
+     * Replaces local (torrent-filename) track titles with the official titles from
+     * Deezer, falling back to Discogs when Deezer has no (good) match — many releases
+     * (e.g. local/indie singles) only exist on Discogs. Safe by design: it picks the
+     * source that best fits the local tracks and only renames on strong agreement, so a
+     * wrong album match or bonus tracks never produce garbage titles.
      */
-    private suspend fun alignTrackTitles(albumId: Long, deezerAlbumId: Long) {
-        val official = runCatching { deezerApi.albumTracks(deezerAlbumId).data.orEmpty() }
-            .getOrNull()?.filter { !it.title.isNullOrBlank() } ?: return
-        if (official.isEmpty()) return
+    private suspend fun alignTrackTitles(
+        albumId: Long,
+        a: AlbumEntity,
+        discogsToken: String,
+        deezerId: Long? = a.deezerId,
+        discogsReleaseId: Long? = null,
+    ) {
         val local = trackDao.observeByAlbum(albumId).first()
         if (local.isEmpty()) return
 
-        val officialSorted = official.sortedBy { it.trackPosition ?: Int.MAX_VALUE }
-        val localSorted = local.sortedBy { it.trackNumber }
+        var best = deezerId?.let { deezerTracklist(it) }.orEmpty()
+        var bestScore = if (best.isNotEmpty()) avgBestSimilarity(local, best) else 0.0
 
-        val positional = localSorted.size == officialSorted.size && run {
-            val avg = localSorted.indices
-                .map { titleSimilarity(localSorted[it].title, officialSorted[it].title!!) }
-                .average()
-            avg >= 0.5 // counts match AND titles broadly agree → trust positions
+        // Try Discogs when Deezer is missing or only a weak match.
+        if (discogsToken.isNotBlank() && bestScore < 0.6) {
+            val relId = discogsReleaseId ?: findDiscogsReleaseId(a)
+            val discogs = relId?.let { discogsTracklist(it) }.orEmpty()
+            if (discogs.isNotEmpty()) {
+                val score = avgBestSimilarity(local, discogs)
+                if (score > bestScore) { best = discogs; bestScore = score }
+            }
         }
+        if (best.isEmpty() || bestScore < 0.4) return // nothing fits → leave titles alone
+        applyAlignment(local, best)
+    }
 
+    private suspend fun applyAlignment(local: List<TrackEntity>, official: List<OfficialTrack>) {
+        val officialSorted = official.sortedBy { it.position }
+        val localSorted = local.sortedBy { it.trackNumber }
+        val positional = localSorted.size == officialSorted.size && run {
+            localSorted.indices
+                .map { titleSimilarity(localSorted[it].title, officialSorted[it].title) }
+                .average() >= 0.5 // counts match AND titles broadly agree → trust positions
+        }
         if (positional) {
             localSorted.forEachIndexed { i, t -> applyOfficial(t, officialSorted[i]) }
         } else {
-            val used = HashSet<Long>()
+            val used = HashSet<Int>()
             localSorted.forEach { t ->
-                val best = officialSorted.filter { it.id !in used }
-                    .maxByOrNull { titleSimilarity(t.title, it.title!!) } ?: return@forEach
-                if (titleSimilarity(t.title, best.title!!) >= 0.85) {
-                    used.add(best.id)
-                    applyOfficial(t, best)
+                val idx = officialSorted.indices.filter { it !in used }
+                    .maxByOrNull { titleSimilarity(t.title, officialSorted[it].title) } ?: return@forEach
+                if (titleSimilarity(t.title, officialSorted[idx].title) >= 0.85) {
+                    used.add(idx)
+                    applyOfficial(t, officialSorted[idx])
                 }
             }
         }
     }
 
-    private suspend fun applyOfficial(track: TrackEntity, official: DeezerTrack) {
-        val title = official.title!!.trim()
-        val number = official.trackPosition ?: track.trackNumber
-        if (track.title != title || track.trackNumber != number) {
-            trackDao.update(track.copy(title = title, trackNumber = number))
+    private suspend fun applyOfficial(track: TrackEntity, official: OfficialTrack) {
+        if (track.title != official.title || track.trackNumber != official.position) {
+            trackDao.update(track.copy(title = official.title, trackNumber = official.position))
         }
     }
+
+    // Mean of each local track's best similarity to any official title — how well a
+    // candidate tracklist fits this album.
+    private fun avgBestSimilarity(local: List<TrackEntity>, official: List<OfficialTrack>): Double {
+        if (official.isEmpty()) return 0.0
+        return local.map { t -> official.maxOf { titleSimilarity(t.title, it.title) } }.average()
+    }
+
+    private suspend fun deezerTracklist(deezerAlbumId: Long): List<OfficialTrack> =
+        runCatching { deezerApi.albumTracks(deezerAlbumId).data.orEmpty() }.getOrNull().orEmpty()
+            .filter { !it.title.isNullOrBlank() }
+            .sortedBy { it.trackPosition ?: Int.MAX_VALUE }
+            .mapIndexed { i, t -> OfficialTrack(t.title!!.trim(), t.trackPosition ?: (i + 1)) }
+
+    private suspend fun discogsTracklist(releaseId: Long): List<OfficialTrack> {
+        val rel = runCatching { discogsApi.getRelease(releaseId) }.getOrNull() ?: return emptyList()
+        return rel.tracklist.orEmpty()
+            .filter { (it.type == null || it.type == "track") && !it.title.isNullOrBlank() }
+            .mapIndexed { i, t -> OfficialTrack(t.title!!.trim(), i + 1) }
+    }
+
+    private suspend fun findDiscogsReleaseId(a: AlbumEntity): Long? = runCatching {
+        discogsApi.searchRelease(a.title.cleanForQuery(), a.artistName).results
+            ?.firstOrNull { it.type == "release" }?.id
+    }.getOrNull()
 
     // 0..1 similarity of two track titles after stripping leading track numbers,
     // extensions and non-alphanumerics.
@@ -496,8 +538,8 @@ class MetadataEnricher @Inject constructor(
             manualOverride = true,
         )
         albumDao.update(updated)
-        // Apply the chosen album's official track titles.
-        updated.deezerId?.let { alignTrackTitles(albumId, it) }
+        // Apply the chosen album's official track titles (Deezer or Discogs).
+        alignTrackTitles(albumId, updated, syncDiscogsToken(), m.deezerId, m.discogsReleaseId)
         // Backfill description/back-cover from other sources for the chosen album.
         enrichAlbum(updated.copy(manualOverride = false), force = true)
         // Re-assert the override flag (enrichAlbum wrote manualOverride=false copy's value).
