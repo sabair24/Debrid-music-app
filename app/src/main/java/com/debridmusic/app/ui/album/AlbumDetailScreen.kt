@@ -217,6 +217,7 @@ fun AlbumDetailScreen(
                     },
                     showArtwork = true,
                     showAlbum = false,
+                    fallbackArtworkUri = state.album?.artworkUri,
                 )
                 HorizontalDivider(
                     color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),

@@ -20,6 +20,7 @@ fun TrackItem(
     onMoreClick: ((Track) -> Unit)? = null,
     showArtwork: Boolean = true,
     showAlbum: Boolean = true,
+    fallbackArtworkUri: String? = null,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -30,7 +31,8 @@ fun TrackItem(
             .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
         if (showArtwork) {
-            AlbumArtwork(uri = track.artworkUri, size = 48.dp)
+            // Fall back to the album cover when the track itself has no artwork.
+            AlbumArtwork(uri = track.artworkUri?.takeIf { it.isNotBlank() } ?: fallbackArtworkUri, size = 48.dp)
             Spacer(Modifier.width(12.dp))
         }
 

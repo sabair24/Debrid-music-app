@@ -14,6 +14,7 @@ import com.debridmusic.app.data.local.entity.ArtistEntity
 import com.debridmusic.app.data.local.entity.DownloadEntity
 import com.debridmusic.app.data.local.entity.DownloadStatus
 import com.debridmusic.app.data.local.entity.TrackEntity
+import com.debridmusic.app.metadata.MetadataEnricher
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -50,6 +51,7 @@ class OfflineDownloadManager @Inject constructor(
     private val trackDao: TrackDao,
     private val okHttpClient: OkHttpClient,
     private val settingsStore: SettingsStore,
+    private val enricher: MetadataEnricher,
     private val appScope: CoroutineScope,
 ) {
     fun observeAll() = downloadDao.observeAll()
@@ -57,6 +59,8 @@ class OfflineDownloadManager @Inject constructor(
     // Up to the user's configured limit run at once; the rest wait in the queue.
     private val drainMutex = Mutex()   // only one drainer coroutine at a time
     private val claimMutex = Mutex()   // atomically claim the next queued row
+    // Set when a finished download is added to the library, so we enrich once at the end.
+    private val pendingEnrich = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** Queue one track. Returns immediately; the worker processes downloads serially. */
     fun enqueue(request: DownloadRequest) = enqueueAll(listOf(request))
@@ -99,6 +103,10 @@ class OfflineDownloadManager @Inject constructor(
                 // Re-check in case tracks were queued while we were draining.
             } while (downloadDao.nextQueued() != null)
             enforceQuota()
+            // Auto-fetch full metadata (cover, genre, year, …) for newly added tracks.
+            if (pendingEnrich.getAndSet(false)) {
+                runCatching { enricher.enrichAll() }
+            }
         } finally {
             drainMutex.unlock()
         }
@@ -171,6 +179,7 @@ class OfflineDownloadManager @Inject constructor(
                     fileSize = d.sizeBytes, sourceType = "local",
                 ),
             )
+            pendingEnrich.set(true)
         }
     }
 
