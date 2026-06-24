@@ -3,6 +3,7 @@ package com.debridmusic.app.ui.catalogue
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -30,7 +31,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.debridmusic.app.data.remote.dto.TorBoxFile
 import com.debridmusic.app.data.remote.dto.TorBoxSearchResult
 import com.debridmusic.app.data.remote.dto.TorBoxTorrentItem
+import com.debridmusic.app.domain.model.BrowseArtist
 import com.debridmusic.app.torbox.StreamState
+import com.debridmusic.app.ui.components.AlbumArtwork
 import com.debridmusic.app.ui.components.MiniPlayer
 import java.util.Locale
 
@@ -39,6 +42,7 @@ import java.util.Locale
 fun CatalogueSearchScreen(
     onBack: () -> Unit,
     onNowPlayingClick: () -> Unit,
+    onArtistClick: (Long) -> Unit = {},
     viewModel: CatalogueSearchViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -194,7 +198,7 @@ fun CatalogueSearchScreen(
                     }
                 }
 
-                state.results.isEmpty() -> {
+                state.results.isEmpty() && state.artists.isEmpty() -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("No results", style = MaterialTheme.typography.bodyMedium)
                     }
@@ -202,6 +206,29 @@ fun CatalogueSearchScreen(
 
                 else -> {
                     LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
+                        if (state.artists.isNotEmpty()) {
+                            item {
+                                Text(
+                                    "Artiesten",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp),
+                                )
+                            }
+                            item {
+                                LazyRow(contentPadding = PaddingValues(horizontal = 12.dp)) {
+                                    items(state.artists, key = { it.id }) { artist ->
+                                        ArtistChip(artist = artist) { onArtistClick(artist.id) }
+                                    }
+                                }
+                            }
+                            item {
+                                Text(
+                                    "Bronnen",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
+                                )
+                            }
+                        }
                         items(state.results, key = { it.hash.ifBlank { it.name } }) { result ->
                             TorBoxResultItem(
                                 result = result,
@@ -224,6 +251,26 @@ fun CatalogueSearchScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ArtistChip(artist: BrowseArtist, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .width(96.dp)
+            .clickable { onClick() }
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        AlbumArtwork(uri = artist.imageUri, size = 80.dp, cornerRadius = 40.dp)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = artist.name,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

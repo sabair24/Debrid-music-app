@@ -47,6 +47,16 @@ data class DeezerAlbum(
 data class DeezerGenresWrapper(val data: List<DeezerGenre>? = null)
 data class DeezerGenre(val id: Int? = null, val name: String? = null)
 
+data class DeezerTrack(
+    val id: Long = 0,
+    val title: String? = null,
+    val duration: Int? = null,                                   // seconds
+    @SerializedName("track_position") val trackPosition: Int? = null,
+    @SerializedName("disk_number") val diskNumber: Int? = null,
+    val artist: DeezerArtist? = null,
+    val album: DeezerAlbum? = null,
+)
+
 fun DeezerArtist.bestImage(): String? =
     listOf(pictureXl, pictureBig, pictureMedium, picture).firstOrNull { !it.isNullOrBlank() }
 

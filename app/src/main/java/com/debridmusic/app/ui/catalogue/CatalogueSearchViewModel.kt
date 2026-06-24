@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import com.debridmusic.app.data.remote.dto.TorBoxFile
 import com.debridmusic.app.data.remote.dto.TorBoxSearchResult
 import com.debridmusic.app.data.remote.dto.TorBoxTorrentItem
+import com.debridmusic.app.data.repository.BrowseRepository
+import com.debridmusic.app.domain.model.BrowseArtist
 import com.debridmusic.app.domain.model.Track
 import com.debridmusic.app.download.DownloadRequest
 import com.debridmusic.app.download.OfflineDownloadManager
@@ -21,6 +23,7 @@ import javax.inject.Inject
 data class CatalogueSearchUiState(
     val query: String = "",
     val results: List<TorBoxSearchResult> = emptyList(),
+    val artists: List<BrowseArtist> = emptyList(),
     val isSearching: Boolean = false,
     val searchError: String? = null,
     val streamingId: String? = null,
@@ -35,6 +38,7 @@ class CatalogueSearchViewModel @Inject constructor(
     val playerController: PlayerController,
     private val offlineDownloadManager: OfflineDownloadManager,
     private val artworkResolver: StreamArtworkResolver,
+    private val browseRepository: BrowseRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(CatalogueSearchUiState())
@@ -47,7 +51,12 @@ class CatalogueSearchViewModel @Inject constructor(
     fun search() {
         val query = _state.value.query.trim()
         if (query.isBlank()) return
-        _state.update { it.copy(isSearching = true, results = emptyList(), searchError = null) }
+        _state.update { it.copy(isSearching = true, results = emptyList(), artists = emptyList(), searchError = null) }
+        // Artist matches (Deezer) load in parallel and feed the "Stremio" browse.
+        viewModelScope.launch {
+            val artists = browseRepository.searchArtists(query)
+            _state.update { it.copy(artists = artists) }
+        }
         viewModelScope.launch {
             torBoxRepository.search(query)
                 .onSuccess { results ->
