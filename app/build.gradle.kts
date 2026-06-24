@@ -25,8 +25,9 @@ android {
     namespace = "com.debridmusic.app"
     compileSdk = 35
 
-    // CI passes the GitHub Actions run number as BUILD_NUMBER. Locally it
-    // defaults to 0 so a dev build always sees the published release as newer.
+    // CI passes (GitHub Actions run number + a fixed offset) as BUILD_NUMBER so
+    // published builds always outrank older sideloaded installs; see the workflow.
+    // Locally it defaults to 0 so a dev build always sees the published release as newer.
     val ciBuildNumber = System.getenv("BUILD_NUMBER")?.toIntOrNull() ?: 0
 
     defaultConfig {
