@@ -14,17 +14,19 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # Offset the raw Actions run number by a fixed base. Earlier sideloaded
-    # installs carry build numbers (e.g. 100) that are higher than the current
-    # run_number (~55), so without this the in-app updater would never see a CI
-    # build as "newer". The SAME value feeds both the app's BuildConfig and the
-    # release tag, so the updater's tag-vs-BuildConfig comparison stays consistent.
-    env:
-      BUILD_NUMBER: ${{ github.run_number + 10000 }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Offset the raw Actions run number by a fixed base. Earlier sideloaded
+      # installs carry build numbers (e.g. 100) that are higher than the current
+      # run_number (~55), so without this the in-app updater would never see a CI
+      # build as "newer". GitHub Actions expressions have no arithmetic, so we
+      # compute it in the shell and export it for the later steps. The SAME value
+      # feeds both the app's BuildConfig and the release tag, keeping the updater's
+      # tag-vs-BuildConfig comparison consistent.
+      - name: Compute build number
+        run: echo "BUILD_NUMBER=$(( ${{ github.run_number }} + 10000 ))" >> "$GITHUB_ENV"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
