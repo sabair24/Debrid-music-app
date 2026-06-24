@@ -17,7 +17,11 @@ class KnabenSource @Inject constructor(
     override suspend fun search(query: String): List<TorBoxSearchResult> {
         val resp = api.search(KnabenRequest(query = query))
         return resp.hits.orEmpty().mapNotNull { hit ->
-            val hash = hit.hash ?: return@mapNotNull null
+            // Knaben can return entries with a missing/blank/malformed infohash; without a
+            // valid one TorBox can never resolve the magnet, leaving the row stuck on
+            // "Adding to TorBox…". Drop those rather than surface a dead result.
+            val hash = hit.hash?.trim()?.takeIf { INFOHASH.matches(it) }?.lowercase()
+                ?: return@mapNotNull null
             val title = hit.title ?: return@mapNotNull null
             TorBoxSearchResult(
                 rawTitle = title, name = title,
@@ -25,9 +29,14 @@ class KnabenSource @Inject constructor(
                 seeders = hit.seeders ?: 0,
                 leechers = hit.peers ?: 0,
                 magnet = hit.magnetUrl?.takeIf { it.isNotBlank() } ?: magnetFor(hash, title),
-                hash = hash.lowercase(),
+                hash = hash,
                 source = "Knaben",
             )
         }
+    }
+
+    private companion object {
+        // 40-char hex (SHA-1) or 32-char base32 infohash.
+        val INFOHASH = Regex("^([0-9a-fA-F]{40}|[A-Za-z2-7]{32})$")
     }
 }

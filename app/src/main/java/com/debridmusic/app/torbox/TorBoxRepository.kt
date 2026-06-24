@@ -65,8 +65,8 @@ class TorBoxRepository @Inject constructor(
         syncApiKey()
         val apiKey = authInterceptor.apiKey
 
-        val torrentId = addOrFindTorrent(result)
-        val ready = pollUntilReady(torrentId) { state -> emit(state) }
+        val torrentRef = addOrFindTorrent(result)
+        val ready = pollUntilReady(torrentRef) { state -> emit(state) }
 
         val audioFiles = ready.files?.filter { it.isAudio } ?: emptyList()
         if (audioFiles.isEmpty()) error("No audio files found in this torrent")
@@ -86,8 +86,8 @@ class TorBoxRepository @Inject constructor(
         syncApiKey()
         val apiKey = authInterceptor.apiKey
 
-        val torrentId = addOrFindTorrent(result)
-        val ready = pollUntilReady(torrentId) { state -> emit(state) }
+        val torrentRef = addOrFindTorrent(result)
+        val ready = pollUntilReady(torrentRef) { state -> emit(state) }
 
         val audioFiles = (ready.files ?: emptyList())
             .filter { it.isAudio }
@@ -109,8 +109,8 @@ class TorBoxRepository @Inject constructor(
         emit(StreamState.Queuing(result.name))
         syncApiKey()
 
-        val torrentId = addOrFindTorrent(result)
-        val ready = pollUntilReady(torrentId) { state -> emit(state) }
+        val torrentRef = addOrFindTorrent(result)
+        val ready = pollUntilReady(torrentRef) { state -> emit(state) }
 
         val audioFiles = (ready.files ?: emptyList())
             .filter { it.isAudio }
@@ -130,26 +130,39 @@ class TorBoxRepository @Inject constructor(
         return dlResp.data ?: error("Empty download URL")
     }
 
-    private suspend fun addOrFindTorrent(result: TorBoxSearchResult): Long {
+    // Identifies an added torrent for polling. `id` may be null while a non-cached
+    // torrent sits in the queue (no torrent_id yet) — in that window it can only be
+    // matched by its infohash, so we always carry the hash too.
+    private data class TorrentRef(val id: Long?, val hash: String)
+
+    private suspend fun addOrFindTorrent(result: TorBoxSearchResult): TorrentRef {
         val createResp = api.addMagnet(result.magnet)
+        // Prefer the canonical hash TorBox parsed from the magnet; fall back to ours.
+        val hash = createResp.data?.hash?.takeIf { it.isNotBlank() } ?: result.hash
+        if (hash.isBlank()) error("Torrent has no infohash")
         return when {
-            createResp.success -> createResp.data?.torrentId
+            // Cached torrents return a real torrent_id; queued ones don't (→ 0), and are
+            // tracked by hash until they appear in the list. Either way we can proceed.
+            createResp.success -> TorrentRef(createResp.data?.torrentId?.takeIf { it > 0 }, hash)
             createResp.detail?.contains("already", ignoreCase = true) == true ->
-                findTorrentByHash(result.hash)?.id
+                TorrentRef(findTorrentByHash(hash)?.id, hash)
             createResp.error?.contains("already", ignoreCase = true) == true ->
-                findTorrentByHash(result.hash)?.id
+                TorrentRef(findTorrentByHash(hash)?.id, hash)
             else -> error(createResp.detail ?: createResp.error ?: "Failed to add torrent")
-        } ?: error("Could not resolve torrent ID")
+        }
     }
 
     private suspend fun pollUntilReady(
-        torrentId: Long,
+        ref: TorrentRef,
         onProgress: suspend (StreamState) -> Unit,
     ): TorBoxTorrentItem {
         var delayMs = 2_000L
         for (attempt in 0 until 30) {
             val listResp = api.listTorrents(bypassCache = true)
-            val found = listResp.data?.firstOrNull { it.id == torrentId }
+            val found = listResp.data?.firstOrNull { item ->
+                (ref.id != null && item.id == ref.id) ||
+                    item.hash?.equals(ref.hash, ignoreCase = true) == true
+            }
             when {
                 found == null -> { /* not indexed yet */ }
                 found.isFailed -> error("Torrent failed: ${found.status}")

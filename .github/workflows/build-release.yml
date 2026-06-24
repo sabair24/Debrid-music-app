@@ -2,7 +2,7 @@ name: Build & Release APK
 
 on:
   push:
-    branches: [ "main", "claude/flac-music-android-tv-6dO6z" ]
+    branches: [ "main", "claude/**" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
