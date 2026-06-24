@@ -18,4 +18,6 @@ data class DownloadEntity(
     val status: String = DownloadStatus.QUEUED.name,
     val dateAdded: Long = System.currentTimeMillis(),
     val artworkUri: String? = null,
+    // When true, the finished file is also inserted into the library as a local track.
+    val addToLibrary: Boolean = false,
 )

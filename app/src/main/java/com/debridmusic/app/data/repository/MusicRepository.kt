@@ -124,6 +124,48 @@ class MusicRepository @Inject constructor(
         enricher.applyArtistMatch(artistId, m)
     suspend fun reEnrichAlbum(id: Long) = enricher.reEnrichAlbum(id)
     suspend fun reEnrichArtist(id: Long) = enricher.reEnrichArtist(id)
+
+    // ── Add to library ──────────────────────────────────────────────────────────
+    /** One torrent-backed track to save into the library ("online"). */
+    data class OnlineTrackInput(
+        val title: String,
+        val fileName: String,
+        val trackNumber: Int,
+        val isFlac: Boolean,
+        val sizeBytes: Long,
+    )
+
+    /** Saves an album of online (torrent-backed) tracks; re-resolved on play. */
+    suspend fun addOnlineAlbum(
+        artistName: String,
+        albumTitle: String,
+        artworkUri: String?,
+        year: Int?,
+        torrentHash: String,
+        tracks: List<OnlineTrackInput>,
+    ): Int {
+        val artistId = artistDao.getByName(artistName)?.id
+            ?: artistDao.insert(ArtistEntity(name = artistName, imageUri = artworkUri))
+        val albumId = albumDao.getByTitleAndArtist(albumTitle, artistId)?.id
+            ?: albumDao.insert(
+                AlbumEntity(title = albumTitle, artistId = artistId, artistName = artistName, artworkUri = artworkUri, year = year),
+            )
+        var added = 0
+        tracks.forEach { t ->
+            val rowId = trackDao.insert(
+                TrackEntity(
+                    title = t.title, artistName = artistName, albumTitle = albumTitle,
+                    albumId = albumId, artistId = artistId,
+                    uri = "torbox://$torrentHash/${t.fileName}",
+                    durationMs = 0L, trackNumber = t.trackNumber, artworkUri = artworkUri, year = year,
+                    isLossless = t.isFlac, fileSize = t.sizeBytes,
+                    sourceType = "online", torrentHash = torrentHash, torrentFileName = t.fileName,
+                ),
+            )
+            if (rowId > 0) added++ // -1 = ignored duplicate (same uri)
+        }
+        return added
+    }
 }
 
 // ---------- mapping extensions ----------
@@ -147,6 +189,9 @@ fun TrackEntity.toDomain() = Track(
     isLossless = isLossless,
     fileSize = fileSize,
     dateAdded = dateAdded,
+    sourceType = sourceType,
+    torrentHash = torrentHash,
+    torrentFileName = torrentFileName,
 )
 
 fun AlbumWithCount.toDomain() = Album(

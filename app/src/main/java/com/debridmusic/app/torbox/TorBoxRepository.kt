@@ -7,6 +7,7 @@ import com.debridmusic.app.data.remote.dto.TorBoxSearchResult
 import com.debridmusic.app.data.remote.dto.TorBoxTorrentItem
 import com.debridmusic.app.data.remote.dto.TorBoxUser
 import com.debridmusic.app.search.SearchAggregator
+import com.debridmusic.app.search.magnetFor
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -152,6 +153,21 @@ class TorBoxRepository @Inject constructor(
 
         emit(StreamState.TrackList(audioFiles, ready))
     }.catch { e -> emit(StreamState.Error(e.message ?: "Failed to load tracks")) }
+
+    /** Re-resolves a saved "online" library track (by infohash + file name) to a fresh stream URL. */
+    suspend fun resolveOnlineTrack(hash: String, fileName: String): String {
+        syncApiKey()
+        val apiKey = authInterceptor.apiKey
+        val result = TorBoxSearchResult(name = fileName, hash = hash, magnet = magnetFor(hash, fileName))
+        val ref = addOrFindTorrent(result)
+        val ready = pollUntilReady(ref, patient = true) { }
+        val file = ready.files?.firstOrNull { it.name == fileName || it.shortName == fileName }
+            ?: ready.files?.firstOrNull { it.isAudio }
+            ?: error("Bestand niet gevonden in torrent")
+        val dl = api.requestDownload(token = apiKey, torrentId = ready.id, fileId = file.id)
+        if (!dl.success) error(dl.detail ?: dl.error ?: "Kon download-URL niet ophalen")
+        return dl.data ?: error("Lege download-URL")
+    }
 
     suspend fun resolveTrackUrl(torrentItem: TorBoxTorrentItem, file: TorBoxFile): String {
         syncApiKey()

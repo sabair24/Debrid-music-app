@@ -20,6 +20,7 @@ data class PlaylistDetailUiState(
 class PlaylistDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: MusicRepository,
+    private val libraryPlayer: com.debridmusic.app.player.LibraryPlayer,
     val playerController: PlayerController,
 ) : ViewModel() {
 
@@ -45,13 +46,13 @@ class PlaylistDetailViewModel @Inject constructor(
     fun playAll() {
         val tracks = _state.value.tracks
         if (tracks.isEmpty()) return
-        playerController.playQueue(tracks, 0)
+        viewModelScope.launch { libraryPlayer.play(tracks, 0) }
     }
 
     fun playTrack(track: Track) {
         val tracks = _state.value.tracks
         val index = tracks.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
-        playerController.playQueue(tracks, index)
+        viewModelScope.launch { libraryPlayer.play(tracks, index) }
     }
 
     fun removeTrack(trackId: Long) {

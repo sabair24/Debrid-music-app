@@ -27,6 +27,7 @@ data class AlbumDetailUiState(
 class AlbumDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: MusicRepository,
+    private val libraryPlayer: com.debridmusic.app.player.LibraryPlayer,
     val playerController: PlayerController,
 ) : ViewModel() {
 
@@ -50,12 +51,12 @@ class AlbumDetailViewModel @Inject constructor(
     fun playTrack(track: Track) {
         val queue = _state.value.tracks
         val index = queue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
-        playerController.playQueue(queue, index)
+        viewModelScope.launch { libraryPlayer.play(queue, index) }
     }
 
     fun playAll() {
         val tracks = _state.value.tracks
-        if (tracks.isNotEmpty()) playerController.playQueue(tracks, 0)
+        if (tracks.isNotEmpty()) viewModelScope.launch { libraryPlayer.play(tracks, 0) }
     }
 
     // ── Manual metadata search ──────────────────────────────────────────────────
