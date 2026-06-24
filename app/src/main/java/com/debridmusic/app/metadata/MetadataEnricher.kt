@@ -304,37 +304,72 @@ class MetadataEnricher @Inject constructor(
     data class AlbumMatch(
         val source: String, val title: String, val artistName: String,
         val year: Int?, val thumbnailUrl: String?, val deezerId: Long?,
+        val discogsReleaseId: Long? = null,
     )
     data class ArtistMatch(
         val source: String, val name: String, val imageUrl: String?, val deezerId: Long?,
+        val discogsArtistId: Long? = null,
     )
 
-    suspend fun searchAlbumCandidates(query: String): List<AlbumMatch> = runCatching {
-        deezerApi.searchAlbum(query, limit = 12).data.orEmpty().mapNotNull { d ->
-            val t = d.title ?: return@mapNotNull null
-            AlbumMatch(
-                source = "Deezer", title = t, artistName = d.artist?.name ?: "",
-                year = d.releaseDate?.take(4)?.toIntOrNull(), thumbnailUrl = d.bestCover(), deezerId = d.id,
-            )
-        }
-    }.getOrDefault(emptyList())
+    // Returns Deezer + Discogs (if a token is set) candidates so the picker shows both.
+    suspend fun searchAlbumCandidates(query: String): List<AlbumMatch> {
+        val deezer = runCatching {
+            deezerApi.searchAlbum(query, limit = 12).data.orEmpty().mapNotNull { d ->
+                val t = d.title ?: return@mapNotNull null
+                AlbumMatch(
+                    source = "Deezer", title = t, artistName = d.artist?.name ?: "",
+                    year = d.releaseDate?.take(4)?.toIntOrNull(), thumbnailUrl = d.bestCover(), deezerId = d.id,
+                )
+            }
+        }.getOrDefault(emptyList())
+        val discogs = runCatching {
+            if (syncDiscogsToken().isBlank()) emptyList()
+            else discogsApi.search(query, type = "release").results.orEmpty()
+                .filter { it.type == "release" || it.type == "master" }
+                .mapNotNull { r ->
+                    val raw = r.title ?: return@mapNotNull null
+                    val (artist, title) = splitDiscogsTitle(raw)
+                    AlbumMatch(
+                        source = "Discogs", title = title, artistName = artist,
+                        year = r.year?.toIntOrNull(), thumbnailUrl = r.bestImage(),
+                        deezerId = null, discogsReleaseId = r.id.takeIf { r.type == "release" },
+                    )
+                }
+        }.getOrDefault(emptyList())
+        return deezer + discogs
+    }
 
-    suspend fun searchArtistCandidates(query: String): List<ArtistMatch> = runCatching {
-        deezerApi.searchArtist(query, limit = 12).data.orEmpty().mapNotNull { d ->
-            val n = d.name ?: return@mapNotNull null
-            ArtistMatch(source = "Deezer", name = n, imageUrl = d.bestImage(), deezerId = d.id)
-        }
-    }.getOrDefault(emptyList())
+    suspend fun searchArtistCandidates(query: String): List<ArtistMatch> {
+        val deezer = runCatching {
+            deezerApi.searchArtist(query, limit = 12).data.orEmpty().mapNotNull { d ->
+                val n = d.name ?: return@mapNotNull null
+                ArtistMatch(source = "Deezer", name = n, imageUrl = d.bestImage(), deezerId = d.id)
+            }
+        }.getOrDefault(emptyList())
+        val discogs = runCatching {
+            if (syncDiscogsToken().isBlank()) emptyList()
+            else discogsApi.search(query, type = "artist").results.orEmpty()
+                .filter { it.type == "artist" }
+                .mapNotNull { r ->
+                    val n = r.title ?: return@mapNotNull null
+                    ArtistMatch(source = "Discogs", name = n, imageUrl = r.bestImage(), deezerId = null, discogsArtistId = r.id)
+                }
+        }.getOrDefault(emptyList())
+        return deezer + discogs
+    }
 
     suspend fun applyAlbumMatch(albumId: Long, m: AlbumMatch) {
         val album = albumDao.getById(albumId) ?: return
-        val full = m.deezerId?.let { runCatching { deezerApi.getAlbum(it) }.getOrNull() }
+        val deezerFull = m.deezerId?.let { runCatching { deezerApi.getAlbum(it) }.getOrNull() }
+        val discogsFull = m.discogsReleaseId?.let {
+            syncDiscogsToken(); runCatching { discogsApi.getRelease(it) }.getOrNull()
+        }
         val updated = album.copy(
-            artworkUri = full?.bestCover() ?: m.thumbnailUrl ?: album.artworkUri,
-            genre = full?.genreName() ?: album.genre,
-            label = full?.label ?: album.label,
-            releaseDate = full?.releaseDate ?: album.releaseDate,
-            year = (full?.releaseDate?.take(4)?.toIntOrNull()) ?: m.year ?: album.year,
+            artworkUri = deezerFull?.bestCover() ?: discogsFull?.primaryImage() ?: m.thumbnailUrl ?: album.artworkUri,
+            genre = deezerFull?.genreName() ?: discogsFull?.genreName() ?: album.genre,
+            label = deezerFull?.label ?: discogsFull?.labelName() ?: album.label,
+            releaseDate = deezerFull?.releaseDate ?: discogsFull?.released?.takeIf { it.length >= 8 } ?: album.releaseDate,
+            year = (deezerFull?.releaseDate?.take(4)?.toIntOrNull()) ?: discogsFull?.year ?: m.year ?: album.year,
             deezerId = m.deezerId ?: album.deezerId,
             // reset stale fields so backfill re-fetches description/back for the new album
             description = null, secondaryArtworkUri = null, musicBrainzId = null, theAudioDbId = null,
@@ -349,17 +384,28 @@ class MetadataEnricher @Inject constructor(
 
     suspend fun applyArtistMatch(artistId: Long, m: ArtistMatch) {
         val artist = artistDao.getById(artistId) ?: return
-        val full = m.deezerId?.let { runCatching { deezerApi.getArtist(it) }.getOrNull() }
+        val deezerFull = m.deezerId?.let { runCatching { deezerApi.getArtist(it) }.getOrNull() }
+        val discogsFull = m.discogsArtistId?.let {
+            syncDiscogsToken(); runCatching { discogsApi.getArtist(it) }.getOrNull()
+        }
         val updated = artist.copy(
-            imageUri = full?.bestImage() ?: m.imageUrl ?: artist.imageUri,
+            imageUri = deezerFull?.bestImage() ?: discogsFull?.bestImage() ?: m.imageUrl ?: artist.imageUri,
             deezerId = m.deezerId ?: artist.deezerId,
-            biography = null, bannerUri = null, musicBrainzId = null, theAudioDbId = null,
+            // keep the Discogs bio if the user picked a Discogs artist; else let backfill fetch one
+            biography = discogsFull?.profile?.stripDiscogsMarkup()?.takeIf { it.isNotBlank() },
+            bannerUri = null, musicBrainzId = null, theAudioDbId = null,
             manualOverride = true,
         )
         artistDao.update(updated)
         val key = settingsStore.lastFmApiKey.first()
         enrichArtist(updated.copy(manualOverride = false), key, force = true)
         artistDao.getById(artistId)?.let { artistDao.update(it.copy(manualOverride = true)) }
+    }
+
+    // Discogs release titles are "Artist - Album"; split into (artist, album).
+    private fun splitDiscogsTitle(t: String): Pair<String, String> {
+        val idx = t.indexOf(" - ")
+        return if (idx > 0) t.substring(0, idx).trim() to t.substring(idx + 3).trim() else "" to t.trim()
     }
 
     private fun buildMbReleaseQuery(albumTitle: String, artistName: String): String {

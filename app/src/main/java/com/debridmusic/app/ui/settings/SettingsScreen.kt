@@ -455,6 +455,33 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
 
+            state.discogsUsername?.let { user ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = "Token geldig · ingelogd als $user",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            state.discogsError?.let { err ->
+                Text(err, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+
+            OutlinedButton(
+                onClick = viewModel::validateDiscogsToken,
+                enabled = state.discogsToken.isNotBlank() && !state.discogsValidating,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (state.discogsValidating) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text("Test Discogs-token")
+            }
+
             Button(onClick = viewModel::saveKeys, modifier = Modifier.fillMaxWidth()) {
                 Text("Save API keys")
             }

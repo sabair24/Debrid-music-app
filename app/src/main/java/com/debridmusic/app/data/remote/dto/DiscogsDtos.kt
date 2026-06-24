@@ -50,6 +50,13 @@ data class DiscogsArtistDetail(
     val images: List<DiscogsImage>? = null,
 )
 
+// Returned by GET /oauth/identity — used to verify the user's token.
+data class DiscogsIdentity(
+    val id: Long = 0,
+    val username: String? = null,
+    @SerializedName("resource_url") val resourceUrl: String? = null,
+)
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 fun DiscogsSearchResult.bestImage(): String? =
