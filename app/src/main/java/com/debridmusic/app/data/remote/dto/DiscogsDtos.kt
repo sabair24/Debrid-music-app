@@ -33,6 +33,12 @@ data class DiscogsRelease(
     val labels: List<DiscogsLabel>? = null,
     val images: List<DiscogsImage>? = null,
     val tracklist: List<DiscogsTrack>? = null,
+    val formats: List<DiscogsFormat>? = null,
+)
+
+data class DiscogsFormat(
+    val name: String? = null,                 // "Vinyl", "CD", "File", …
+    val descriptions: List<String>? = null,   // e.g. ["Single", "Maxi-Single"], ["EP"], ["Album", "LP"]
 )
 
 data class DiscogsTrack(
@@ -119,6 +125,17 @@ fun DiscogsRelease.genreName(): String? =
     (genres?.firstOrNull { it.isNotBlank() } ?: styles?.firstOrNull { it.isNotBlank() })
 
 fun DiscogsRelease.labelName(): String? = labels?.firstOrNull { !it.name.isNullOrBlank() }?.name
+
+// Maps Discogs format descriptions to a Deezer-style record type (single / ep / album).
+fun DiscogsRelease.recordType(): String? {
+    val descs = formats?.flatMap { it.descriptions.orEmpty() }.orEmpty()
+    return when {
+        descs.any { it.contains("Single", ignoreCase = true) } -> "single"
+        descs.any { it.equals("EP", ignoreCase = true) } -> "ep"
+        descs.any { it.contains("Album", ignoreCase = true) || it.contains("LP", ignoreCase = true) } -> "album"
+        else -> null
+    }
+}
 
 fun DiscogsArtistDetail.bestImage(): String? = images?.firstNotNullOfOrNull { it.bestUri() }
 

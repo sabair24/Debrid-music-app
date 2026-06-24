@@ -20,6 +20,7 @@ import com.debridmusic.app.data.remote.dto.bestImage
 import com.debridmusic.app.data.remote.dto.genreName
 import com.debridmusic.app.data.remote.dto.labelName
 import com.debridmusic.app.data.remote.dto.primaryImage
+import com.debridmusic.app.data.remote.dto.recordType
 import com.debridmusic.app.data.remote.dto.secondaryImage
 import com.debridmusic.app.data.remote.dto.stripDiscogsMarkup
 import kotlinx.coroutines.delay
@@ -526,18 +527,26 @@ class MetadataEnricher @Inject constructor(
             syncDiscogsToken(); runCatching { discogsApi.getRelease(it) }.getOrNull()
         }
         val updated = album.copy(
+            title = m.title.takeIf { it.isNotBlank() } ?: album.title,
+            artistName = m.artistName.takeIf { it.isNotBlank() } ?: album.artistName,
             artworkUri = deezerFull?.bestCover() ?: discogsFull?.primaryImage() ?: m.thumbnailUrl ?: album.artworkUri,
             genre = deezerFull?.genreName() ?: discogsFull?.genreName() ?: album.genre,
             label = deezerFull?.label ?: discogsFull?.labelName() ?: album.label,
             releaseDate = deezerFull?.releaseDate ?: discogsFull?.released?.takeIf { it.length >= 8 } ?: album.releaseDate,
             year = (deezerFull?.releaseDate?.take(4)?.toIntOrNull()) ?: discogsFull?.year ?: m.year ?: album.year,
             deezerId = m.deezerId ?: album.deezerId,
-            recordType = deezerFull?.recordType ?: album.recordType,
+            recordType = deezerFull?.recordType ?: discogsFull?.recordType() ?: album.recordType,
             // reset stale fields so backfill re-fetches description/back for the new album
             description = null, secondaryArtworkUri = null, musicBrainzId = null, theAudioDbId = null,
             manualOverride = true,
         )
         albumDao.update(updated)
+        // Reflect a renamed album on its tracks so the library is consistent.
+        if (updated.title != album.title) {
+            trackDao.observeByAlbum(albumId).first()
+                .filter { it.albumTitle != updated.title }
+                .forEach { trackDao.update(it.copy(albumTitle = updated.title)) }
+        }
         // Apply the chosen album's official track titles (Deezer or Discogs).
         alignTrackTitles(albumId, updated, syncDiscogsToken(), m.deezerId, m.discogsReleaseId)
         // Backfill description/back-cover from other sources for the chosen album.
