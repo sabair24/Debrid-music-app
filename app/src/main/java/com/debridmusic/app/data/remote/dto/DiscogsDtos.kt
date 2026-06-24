@@ -57,6 +57,43 @@ data class DiscogsIdentity(
     @SerializedName("resource_url") val resourceUrl: String? = null,
 )
 
+// ── User collection ──────────────────────────────────────────────────────────
+
+data class DiscogsCollectionResponse(
+    val pagination: DiscogsPagination? = null,
+    val releases: List<DiscogsCollectionRelease>? = null,
+)
+
+data class DiscogsPagination(val page: Int = 1, val pages: Int = 1, val items: Int = 0)
+
+data class DiscogsCollectionRelease(
+    @SerializedName("basic_information") val basicInformation: DiscogsBasicInformation? = null,
+)
+
+data class DiscogsBasicInformation(
+    val id: Long = 0,                          // release id
+    val title: String? = null,
+    val year: Int? = null,
+    @SerializedName("cover_image") val coverImage: String? = null,
+    val thumb: String? = null,
+    val artists: List<DiscogsCollectionArtist>? = null,
+)
+
+data class DiscogsCollectionArtist(val name: String? = null)
+
+// Flat, persisted (DataStore JSON) representation of one collection album.
+data class DiscogsCollectionAlbum(
+    val releaseId: Long,
+    val title: String,
+    val artist: String,
+    val artworkUri: String?,
+    val year: Int?,
+)
+
+// Discogs disambiguates same-named artists with a trailing " (2)"; drop it for display.
+fun String.cleanDiscogsArtist(): String =
+    replace(Regex("\\s*\\(\\d+\\)\\s*$"), "").trim()
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 fun DiscogsSearchResult.bestImage(): String? =

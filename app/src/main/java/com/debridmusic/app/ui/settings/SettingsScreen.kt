@@ -482,6 +482,25 @@ fun SettingsScreen(
                 Text("Test Discogs-token")
             }
 
+            OutlinedButton(
+                onClick = viewModel::syncDiscogsCollection,
+                enabled = state.discogsToken.isNotBlank() && !state.discogsSyncing,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (state.discogsSyncing) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text("Sync Discogs-collectie")
+            }
+            state.discogsSyncResult?.let { msg ->
+                Text(
+                    "✓ $msg — te zien in Bibliotheek → Discogs",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+
             Button(onClick = viewModel::saveKeys, modifier = Modifier.fillMaxWidth()) {
                 Text("Save API keys")
             }

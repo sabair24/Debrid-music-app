@@ -2,6 +2,7 @@ package com.debridmusic.app.ui.library
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.debridmusic.app.data.repository.DiscogsRepository
 import com.debridmusic.app.data.repository.MusicRepository
 import com.debridmusic.app.domain.model.Album
 import com.debridmusic.app.domain.model.Artist
@@ -13,7 +14,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-enum class LibraryTab { TRACKS, ALBUMS, ARTISTS, PLAYLISTS }
+enum class LibraryTab { TRACKS, ALBUMS, ARTISTS, PLAYLISTS, DISCOGS }
 
 data class LibraryUiState(
     val tab: LibraryTab = LibraryTab.TRACKS,
@@ -21,6 +22,7 @@ data class LibraryUiState(
     val albums: List<Album> = emptyList(),
     val artists: List<Artist> = emptyList(),
     val playlists: List<Playlist> = emptyList(),
+    val discogsCollection: List<Album> = emptyList(),
     val searchQuery: String = "",
     val searchResults: List<Track> = emptyList(),
     val isSearching: Boolean = false,
@@ -37,6 +39,7 @@ data class LibraryUiState(
 @HiltViewModel
 class LibraryViewModel @Inject constructor(
     private val repository: MusicRepository,
+    private val discogsRepository: DiscogsRepository,
     val playerController: PlayerController,
 ) : ViewModel() {
 
@@ -67,6 +70,11 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             repository.trackCount().collect { count ->
                 _state.update { it.copy(totalTracks = count) }
+            }
+        }
+        viewModelScope.launch {
+            discogsRepository.observeCollection().collect { albums ->
+                _state.update { it.copy(discogsCollection = albums) }
             }
         }
     }

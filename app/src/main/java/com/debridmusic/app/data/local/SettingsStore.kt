@@ -26,6 +26,13 @@ class SettingsStore @Inject constructor(
     suspend fun setDiscogsToken(token: String) { dataStore.edit { it[KEY_DISCOGS_TOKEN] = token } }
     suspend fun setTorBoxApiKey(key: String) { dataStore.edit { it[KEY_TORBOX_API_KEY] = key } }
 
+    // ── Discogs collection cache (synced from the user's Discogs account) ────────
+    val discogsCollectionJson: Flow<String> = dataStore.data.map { it[KEY_DISCOGS_COLLECTION_JSON] ?: "" }
+    val discogsLastSyncTime: Flow<Long> = dataStore.data.map { it[KEY_DISCOGS_LAST_SYNC] ?: 0L }
+
+    suspend fun setDiscogsCollectionJson(json: String) { dataStore.edit { it[KEY_DISCOGS_COLLECTION_JSON] = json } }
+    suspend fun setDiscogsLastSyncTime(millis: Long) { dataStore.edit { it[KEY_DISCOGS_LAST_SYNC] = millis } }
+
     // ── Last.fm scrobble ──────────────────────────────────────────────────────
     val lastFmSessionKey: Flow<String> = dataStore.data.map { it[KEY_LASTFM_SESSION_KEY] ?: "" }
     val lastFmUsername: Flow<String> = dataStore.data.map { it[KEY_LASTFM_USERNAME] ?: "" }
@@ -96,6 +103,8 @@ class SettingsStore @Inject constructor(
     companion object {
         val KEY_LASTFM_API_KEY = stringPreferencesKey("last_fm_api_key")
         val KEY_DISCOGS_TOKEN = stringPreferencesKey("discogs_token")
+        val KEY_DISCOGS_COLLECTION_JSON = stringPreferencesKey("discogs_collection_json")
+        val KEY_DISCOGS_LAST_SYNC = longPreferencesKey("discogs_last_sync")
         val KEY_TORBOX_API_KEY = stringPreferencesKey("torbox_api_key")
         val KEY_LASTFM_SESSION_KEY = stringPreferencesKey("lastfm_session_key")
         val KEY_LASTFM_USERNAME = stringPreferencesKey("lastfm_username")
