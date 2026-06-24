@@ -210,7 +210,10 @@ class TorBoxRepository @Inject constructor(
         // can fall back to a cached source. When the user explicitly picked this
         // source (patient), wait much longer and let TorBox download it.
         var noProgressMs = 0L
-        val maxAttempts = if (patient) 90 else 30
+        // Torrent is ready but exposes no playable audio (e.g. DSD/SACD .dsf/.dff).
+        // Waiting won't help — bail soon with a clear message so the user can pick another.
+        var readyNoAudioMs = 0L
+        val maxAttempts = if (patient) 45 else 30
         val stallTimeoutMs = if (patient) PATIENT_STALL_TIMEOUT_MS else STALL_TIMEOUT_MS
         for (attempt in 0 until maxAttempts) {
             val listResp = api.listTorrents(bypassCache = true)
@@ -222,12 +225,13 @@ class TorBoxRepository @Inject constructor(
                 found == null -> noProgressMs += delayMs            // not indexed yet
                 found.isFailed -> error("Torrent failed: ${found.status}")
                 found.isReady && found.files?.any { it.isAudio } == true -> return found
-                found.isReady -> { /* ready but files list not yet populated — keep polling */ }
+                found.isReady -> readyNoAudioMs += delayMs          // ready but no supported audio yet
                 else -> {
                     onProgress(StreamState.Preparing(found.name, found.progress))
                     if (found.progress <= 0f) noProgressMs += delayMs else noProgressMs = 0L
                 }
             }
+            if (readyNoAudioMs >= READY_NO_AUDIO_TIMEOUT_MS) error("Geen afspeelbare audio in deze bron (bijv. DSD/SACD)")
             if (noProgressMs >= stallTimeoutMs) error("Source stalled — no progress")
             delay(delayMs)
             if (attempt >= 2) delayMs = (delayMs * 1.5).toLong().coerceAtMost(10_000L)
@@ -245,7 +249,8 @@ class TorBoxRepository @Inject constructor(
     private companion object {
         const val CACHED_CHECK_LIMIT = 40        // only check the top N results
         const val CACHED_CHECK_BATCH = 20        // hashes per checkcached request
-        const val STALL_TIMEOUT_MS = 25_000L     // give up on a non-progressing source
-        const val PATIENT_STALL_TIMEOUT_MS = 90_000L  // user explicitly picked → wait longer
+        const val STALL_TIMEOUT_MS = 25_000L          // give up on a non-progressing source
+        const val PATIENT_STALL_TIMEOUT_MS = 45_000L  // user explicitly picked → wait longer
+        const val READY_NO_AUDIO_TIMEOUT_MS = 18_000L // ready but no playable audio (DSD/SACD)
     }
 }

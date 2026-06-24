@@ -14,6 +14,7 @@ import com.debridmusic.app.player.BrowsePlayer
 import com.debridmusic.app.player.PlayerController
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -83,6 +84,9 @@ class AlbumBrowseViewModel @Inject constructor(
             val r = browsePlayer.playResult(result, picker.artist, picker.album, picker.matchSong, picker.shuffle) { msg ->
                 _state.update { st -> st.sourcePicker?.let { st.copy(sourcePicker = it.copy(message = msg)) } ?: st }
             }
+            // If the user picked another source meanwhile, this job was cancelled —
+            // don't let a stale result overwrite the new pick's status.
+            ensureActive()
             _state.update { st ->
                 if (r.isSuccess) st.copy(sourcePicker = null)
                 else st.sourcePicker?.let { st.copy(sourcePicker = it.copy(resolvingHash = null, message = "Bron mislukt — kies een andere")) } ?: st

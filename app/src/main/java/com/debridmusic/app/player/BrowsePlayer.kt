@@ -56,8 +56,9 @@ class BrowsePlayer @Inject constructor(
     private fun TorBoxSearchResult.isLikelyPlayable(): Boolean {
         val n = name.lowercase()
         val singleImage = "image" in n && ".cue" in n
-        val ape = Regex("\\bape\\b").containsMatchIn(n)
-        return !singleImage && !ape
+        // APE and DSD/SACD aren't decodable by the player.
+        val unsupported = Regex("\\b(ape|sacd|dsd|dsf|dff)\\b").containsMatchIn(n)
+        return !singleImage && !unsupported
     }
 
     /** Play one specific source the user picked (album torrent; optionally start on a song). */
@@ -72,9 +73,9 @@ class BrowsePlayer @Inject constructor(
         onProgress("Voorbereiden…")
         var played = false
         var error: String? = null
-        // patient = the user explicitly picked this source, so wait for TorBox to
-        // download a non-cached torrent (and show live progress) instead of bailing.
-        torBoxRepository.streamAlbum(result, patient = true).collect { st ->
+        // Cached sources should resolve fast — don't wait long if one is actually
+        // stuck. Only be patient for non-cached torrents that must download first.
+        torBoxRepository.streamAlbum(result, patient = !result.cached).collect { st ->
             when (st) {
                 is StreamState.ReadyAlbum -> {
                     playReadyAlbum(st, displayArtist, displayAlbum, matchSong, shuffle); played = true
