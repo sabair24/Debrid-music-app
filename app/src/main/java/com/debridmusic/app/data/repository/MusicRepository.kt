@@ -211,6 +211,7 @@ fun AlbumWithCount.toDomain() = Album(
     trackCount = trackCount,
     genre = genre,
     musicBrainzId = musicBrainzId,
+    recordType = recordType,
 )
 
 fun AlbumEntity.toDomain() = Album(
@@ -227,6 +228,7 @@ fun AlbumEntity.toDomain() = Album(
     secondaryArtworkUri = secondaryArtworkUri,
     label = label,
     releaseDate = releaseDate,
+    recordType = recordType,
     manualOverride = manualOverride,
 )
 

@@ -14,5 +14,9 @@ data class Album(
     val secondaryArtworkUri: String? = null,
     val label: String? = null,
     val releaseDate: String? = null,
+    val recordType: String? = null,
     val manualOverride: Boolean = false,
-)
+) {
+    /** True for a Deezer "single" record type. */
+    val isSingle: Boolean get() = recordType?.equals("single", ignoreCase = true) == true
+}

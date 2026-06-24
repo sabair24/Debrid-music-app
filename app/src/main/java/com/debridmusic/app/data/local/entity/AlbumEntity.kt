@@ -33,5 +33,6 @@ data class AlbumEntity(
     val releaseDate: String? = null,            // ISO yyyy-MM-dd
     val deezerId: Long? = null,
     val theAudioDbId: String? = null,
+    val recordType: String? = null,            // Deezer record_type: album / single / ep
     val manualOverride: Boolean = false,        // user picked this match → don't auto-overwrite
 )

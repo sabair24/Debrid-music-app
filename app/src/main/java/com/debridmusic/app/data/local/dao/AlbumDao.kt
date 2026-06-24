@@ -50,5 +50,6 @@ data class AlbumWithCount(
     val artworkUri: String?,
     val genre: String?,
     val musicBrainzId: String?,
+    val recordType: String? = null,
     val trackCount: Int,
 )

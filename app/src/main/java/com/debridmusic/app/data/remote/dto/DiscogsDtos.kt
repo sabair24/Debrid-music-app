@@ -32,6 +32,14 @@ data class DiscogsRelease(
     val styles: List<String>? = null,
     val labels: List<DiscogsLabel>? = null,
     val images: List<DiscogsImage>? = null,
+    val tracklist: List<DiscogsTrack>? = null,
+)
+
+data class DiscogsTrack(
+    val position: String? = null,             // "A1", "1", … (vinyl side or index)
+    @SerializedName("type_") val type: String? = null,   // "track" | "heading" | "index"
+    val title: String? = null,
+    val duration: String? = null,
 )
 
 data class DiscogsLabel(val name: String? = null)
