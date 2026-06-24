@@ -49,9 +49,31 @@ class TorBoxRepository @Inject constructor(
     }
 
     // Aggregates all enabled torrent sources (Pirate Bay, BitSearch, Knaben, …),
-    // deduped + sorted by seeders. Resolution to a stream still goes via TorBox.
+    // deduped + sorted by seeders, then flags which are instantly available
+    // (cached on TorBox) and ranks those first.
     suspend fun search(query: String): Result<List<TorBoxSearchResult>> = runCatching {
-        searchAggregator.search(query)
+        markCachedAndRank(searchAggregator.search(query))
+    }
+
+    // Best-effort: ask TorBox which of the top results are cached, flag them, and
+    // sort cached-first (then by seeders). Any failure leaves the list untouched.
+    private suspend fun markCachedAndRank(results: List<TorBoxSearchResult>): List<TorBoxSearchResult> {
+        if (results.isEmpty()) return results
+        syncApiKey()
+        val cachedHashes = runCatching {
+            results.take(CACHED_CHECK_LIMIT)
+                .filter { it.hash.isNotBlank() }
+                .chunked(CACHED_CHECK_BATCH)
+                .flatMap { chunk ->
+                    val resp = api.checkCached(hashes = chunk.joinToString(",") { it.hash })
+                    resp.data.orEmpty().mapNotNull { it.hash?.lowercase() }
+                }
+                .toSet()
+        }.getOrDefault(emptySet())
+        if (cachedHashes.isEmpty()) return results
+        return results
+            .map { if (it.hash.lowercase() in cachedHashes) it.copy(cached = true) else it }
+            .sortedWith(compareByDescending<TorBoxSearchResult> { it.cached }.thenByDescending { it.seeders })
     }
 
     suspend fun validateApiKey(): Result<TorBoxUser> = runCatching {
@@ -157,6 +179,10 @@ class TorBoxRepository @Inject constructor(
         onProgress: suspend (StreamState) -> Unit,
     ): TorBoxTorrentItem {
         var delayMs = 2_000L
+        // Time spent with no download progress (torrent missing or stuck at 0%).
+        // A non-cached torrent with no healthy seeders sits here; bail early so the
+        // caller can fall back to a cached source instead of waiting ~4.6 min.
+        var noProgressMs = 0L
         for (attempt in 0 until 30) {
             val listResp = api.listTorrents(bypassCache = true)
             val found = listResp.data?.firstOrNull { item ->
@@ -164,12 +190,16 @@ class TorBoxRepository @Inject constructor(
                     item.hash?.equals(ref.hash, ignoreCase = true) == true
             }
             when {
-                found == null -> { /* not indexed yet */ }
+                found == null -> noProgressMs += delayMs            // not indexed yet
                 found.isFailed -> error("Torrent failed: ${found.status}")
                 found.isReady && found.files?.any { it.isAudio } == true -> return found
                 found.isReady -> { /* ready but files list not yet populated — keep polling */ }
-                else -> onProgress(StreamState.Preparing(found.name, found.progress))
+                else -> {
+                    onProgress(StreamState.Preparing(found.name, found.progress))
+                    if (found.progress <= 0f) noProgressMs += delayMs else noProgressMs = 0L
+                }
             }
+            if (noProgressMs >= STALL_TIMEOUT_MS) error("Source stalled — no progress")
             delay(delayMs)
             if (attempt >= 2) delayMs = (delayMs * 1.5).toLong().coerceAtMost(10_000L)
         }
@@ -181,5 +211,11 @@ class TorBoxRepository @Inject constructor(
         return listResp.data?.firstOrNull {
             it.hash?.equals(hash, ignoreCase = true) == true
         }
+    }
+
+    private companion object {
+        const val CACHED_CHECK_LIMIT = 40       // only check the top N results
+        const val CACHED_CHECK_BATCH = 20       // hashes per checkcached request
+        const val STALL_TIMEOUT_MS = 25_000L    // give up on a non-progressing source
     }
 }

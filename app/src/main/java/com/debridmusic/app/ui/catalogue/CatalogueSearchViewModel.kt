@@ -65,17 +65,31 @@ class CatalogueSearchViewModel @Inject constructor(
         _state.update { it.copy(streamingId = result.hash, streamState = StreamState.Idle) }
 
         streamJob = viewModelScope.launch {
-            val flow = if (albumMode) torBoxRepository.streamAlbum(result)
-            else torBoxRepository.streamResult(result)
-
-            flow.collect { state ->
-                _state.update { it.copy(streamState = state) }
-                when (state) {
-                    is StreamState.Ready -> playStreamUrl(state)
-                    is StreamState.ReadyAlbum -> playAlbumQueue(state)
-                    else -> {}
-                }
+            // Try the tapped result first, then fall back to other cached (instant)
+            // results if it stalls/fails — so a dead torrent doesn't sink the tap.
+            val candidates = buildList {
+                add(result)
+                addAll(_state.value.results.filter { it.hash != result.hash && it.cached }.take(MAX_FALLBACKS))
             }
+            var lastError: StreamState.Error? = null
+            for ((index, candidate) in candidates.withIndex()) {
+                if (index > 0) _state.update { it.copy(streamState = StreamState.Queuing(candidate.name)) }
+                var terminalError: StreamState.Error? = null
+                var played = false
+                val flow = if (albumMode) torBoxRepository.streamAlbum(candidate)
+                else torBoxRepository.streamResult(candidate)
+                flow.collect { state ->
+                    when (state) {
+                        is StreamState.Ready -> { _state.update { it.copy(streamState = state) }; playStreamUrl(state); played = true }
+                        is StreamState.ReadyAlbum -> { _state.update { it.copy(streamState = state) }; playAlbumQueue(state); played = true }
+                        is StreamState.Error -> terminalError = state
+                        else -> _state.update { it.copy(streamState = state) }
+                    }
+                }
+                if (played) return@launch
+                lastError = terminalError
+            }
+            _state.update { it.copy(streamState = lastError ?: StreamState.Error("Geen werkende bron gevonden")) }
         }
     }
 
@@ -197,5 +211,9 @@ class CatalogueSearchViewModel @Inject constructor(
     private fun extractArtistFromName(torrentName: String): String {
         val dash = torrentName.indexOf(" - ")
         return if (dash > 0) torrentName.substring(0, dash).trim() else torrentName
+    }
+
+    private companion object {
+        const val MAX_FALLBACKS = 3   // cached alternatives to try if the tap stalls
     }
 }

@@ -346,6 +346,14 @@ private fun TorBoxResultItem(
                 )
                 Spacer(Modifier.height(2.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (result.cached) {
+                        Text(
+                            text = "⚡ Instant",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                     Text(
                         text = formatSize(result.size),
                         style = MaterialTheme.typography.bodySmall,
