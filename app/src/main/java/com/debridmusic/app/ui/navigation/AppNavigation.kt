@@ -14,6 +14,8 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.navArgument
 import com.debridmusic.app.ui.album.AlbumDetailScreen
 import com.debridmusic.app.ui.artist.ArtistDetailScreen
+import com.debridmusic.app.ui.browse.AlbumBrowseScreen
+import com.debridmusic.app.ui.browse.ArtistBrowseScreen
 import com.debridmusic.app.ui.catalogue.CatalogueSearchScreen
 import com.debridmusic.app.ui.downloads.DownloadsScreen
 import com.debridmusic.app.ui.home.HomeScreen
@@ -39,6 +41,13 @@ sealed class Screen(val route: String) {
     }
     object PlaylistDetail : Screen("playlist/{playlistId}") {
         fun createRoute(playlistId: Long) = "playlist/$playlistId"
+    }
+    // Online "Stremio-style" browse (Deezer ids), distinct from local detail screens.
+    object ArtistBrowse : Screen("artist_browse/{deezerArtistId}") {
+        fun createRoute(deezerArtistId: Long) = "artist_browse/$deezerArtistId"
+    }
+    object AlbumBrowse : Screen("album_browse/{deezerAlbumId}") {
+        fun createRoute(deezerAlbumId: Long) = "album_browse/$deezerAlbumId"
     }
 }
 
@@ -103,6 +112,9 @@ fun AppNavHost(navController: NavHostController) {
             CatalogueSearchScreen(
                 onBack = { navController.popBackStack() },
                 onNowPlayingClick = { navController.navigate(Screen.NowPlaying.route) },
+                onArtistClick = { deezerArtistId ->
+                    navController.navigate(Screen.ArtistBrowse.createRoute(deezerArtistId))
+                },
             )
         }
 
@@ -156,6 +168,29 @@ fun AppNavHost(navController: NavHostController) {
             arguments = listOf(navArgument("playlistId") { type = NavType.LongType }),
         ) {
             PlaylistDetailScreen(
+                onBack = { navController.popBackStack() },
+                onNowPlayingClick = { navController.navigate(Screen.NowPlaying.route) },
+            )
+        }
+
+        composable(
+            route = Screen.ArtistBrowse.route,
+            arguments = listOf(navArgument("deezerArtistId") { type = NavType.LongType }),
+        ) {
+            ArtistBrowseScreen(
+                onBack = { navController.popBackStack() },
+                onAlbumClick = { deezerAlbumId ->
+                    navController.navigate(Screen.AlbumBrowse.createRoute(deezerAlbumId))
+                },
+                onNowPlayingClick = { navController.navigate(Screen.NowPlaying.route) },
+            )
+        }
+
+        composable(
+            route = Screen.AlbumBrowse.route,
+            arguments = listOf(navArgument("deezerAlbumId") { type = NavType.LongType }),
+        ) {
+            AlbumBrowseScreen(
                 onBack = { navController.popBackStack() },
                 onNowPlayingClick = { navController.navigate(Screen.NowPlaying.route) },
             )
