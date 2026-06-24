@@ -1,6 +1,7 @@
 package com.debridmusic.app.data.remote.api
 
 import com.debridmusic.app.data.remote.dto.DiscogsArtistDetail
+import com.debridmusic.app.data.remote.dto.DiscogsIdentity
 import com.debridmusic.app.data.remote.dto.DiscogsRelease
 import com.debridmusic.app.data.remote.dto.DiscogsSearchResponse
 import retrofit2.http.GET
@@ -10,6 +11,18 @@ import retrofit2.http.Query
 // Discogs database API. Auth (the user's token) + User-Agent are added by
 // DiscogsAuthInterceptor; search endpoints require authentication.
 interface DiscogsApi {
+    // Verifies the token: returns the authenticated user, or HTTP 401 if invalid.
+    @GET("oauth/identity")
+    suspend fun identity(): DiscogsIdentity
+
+    // Free-text search (used by the manual metadata picker).
+    @GET("database/search")
+    suspend fun search(
+        @Query("q") query: String,
+        @Query("type") type: String = "release",
+        @Query("per_page") perPage: Int = 12,
+    ): DiscogsSearchResponse
+
     @GET("database/search")
     suspend fun searchRelease(
         @Query("release_title") releaseTitle: String,

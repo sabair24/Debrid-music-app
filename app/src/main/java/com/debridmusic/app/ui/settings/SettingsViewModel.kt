@@ -3,6 +3,8 @@ package com.debridmusic.app.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.debridmusic.app.data.local.SettingsStore
+import com.debridmusic.app.data.remote.DiscogsAuthInterceptor
+import com.debridmusic.app.data.remote.api.DiscogsApi
 import com.debridmusic.app.data.remote.dto.TorBoxUser
 import com.debridmusic.app.metadata.EnrichmentProgress
 import com.debridmusic.app.metadata.MetadataEnricher
@@ -20,6 +22,9 @@ import javax.inject.Inject
 data class SettingsUiState(
     val lastFmApiKey: String = "",
     val discogsToken: String = "",
+    val discogsValidating: Boolean = false,
+    val discogsUsername: String? = null,
+    val discogsError: String? = null,
     val torBoxApiKey: String = "",
     val isEnriching: Boolean = false,
     val enrichProgress: EnrichmentProgress? = null,
@@ -81,6 +86,8 @@ class SettingsViewModel @Inject constructor(
     private val metadataEnricher: MetadataEnricher,
     private val torBoxRepository: TorBoxRepository,
     private val torBoxAuthInterceptor: TorBoxAuthInterceptor,
+    private val discogsApi: DiscogsApi,
+    private val discogsAuthInterceptor: DiscogsAuthInterceptor,
     private val soulseekRepository: SoulseekRepository,
     private val updateRepository: UpdateRepository,
     private val offlineDownloadManager: com.debridmusic.app.download.OfflineDownloadManager,
@@ -311,8 +318,31 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setLastFmApiKey(key: String) = _state.update { it.copy(lastFmApiKey = key) }
-    fun setDiscogsToken(token: String) = _state.update { it.copy(discogsToken = token) }
+    fun setDiscogsToken(token: String) =
+        _state.update { it.copy(discogsToken = token, discogsUsername = null, discogsError = null) }
     fun setTorBoxApiKey(key: String) = _state.update { it.copy(torBoxApiKey = key, torBoxUser = null, torBoxError = null) }
+
+    // Saves + verifies the Discogs token against /oauth/identity so the user gets an
+    // immediate "valid, logged in as X" confirmation instead of guessing.
+    fun validateDiscogsToken() {
+        val token = _state.value.discogsToken.trim()
+        _state.update { it.copy(discogsValidating = true, discogsUsername = null, discogsError = null) }
+        viewModelScope.launch {
+            settingsStore.setDiscogsToken(token)
+            discogsAuthInterceptor.token = token
+            if (token.isBlank()) {
+                _state.update { it.copy(discogsValidating = false, discogsError = "Voer eerst een token in") }
+                return@launch
+            }
+            runCatching { discogsApi.identity() }
+                .onSuccess { id ->
+                    _state.update { it.copy(discogsValidating = false, discogsUsername = id.username ?: "onbekend") }
+                }
+                .onFailure {
+                    _state.update { it.copy(discogsValidating = false, discogsError = "Token ongeldig of netwerkfout") }
+                }
+        }
+    }
 
     fun saveKeys() {
         viewModelScope.launch {
