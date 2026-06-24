@@ -66,21 +66,10 @@ fun ArtistBrowseScreen(
                         Text(title, style = MaterialTheme.typography.headlineSmall)
                     }
                 }
-                state.statusMessage?.let { msg ->
-                    item {
-                        Text(
-                            msg,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                        )
-                    }
-                }
-
                 if (disco.topTracks.isNotEmpty()) {
                     item { SectionTitle("Top songs") }
                     items(disco.topTracks.take(10)) { track ->
-                        BrowseTrackRow(track.position.takeIf { it > 0 } ?: 1, track) { viewModel.playSong(track) }
+                        BrowseTrackRow(track.position.takeIf { it > 0 } ?: 1, track) { viewModel.showSourcesForTrack(track) }
                     }
                 }
                 if (disco.albums.isNotEmpty()) {
@@ -102,5 +91,13 @@ fun ArtistBrowseScreen(
                 item { Spacer(Modifier.height(16.dp)) }
             }
         }
+    }
+
+    state.sourcePicker?.let { picker ->
+        SourcePickerSheet(
+            picker = picker,
+            onPick = { viewModel.pickSource(it) },
+            onDismiss = { viewModel.dismissSources() },
+        )
     }
 }

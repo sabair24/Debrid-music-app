@@ -3,6 +3,7 @@ package com.debridmusic.app.ui.browse
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.debridmusic.app.data.remote.dto.TorBoxSearchResult
 import com.debridmusic.app.data.repository.BrowseRepository
 import com.debridmusic.app.domain.model.BrowseAlbum
 import com.debridmusic.app.domain.model.BrowseTrack
@@ -20,8 +21,7 @@ data class AlbumBrowseUiState(
     val album: BrowseAlbum? = null,
     val tracks: List<BrowseTrack> = emptyList(),
     val isLoading: Boolean = true,
-    val resolving: Boolean = false,
-    val statusMessage: String? = null,
+    val sourcePicker: SourcePickerState? = null,
 )
 
 @HiltViewModel
@@ -44,34 +44,42 @@ class AlbumBrowseViewModel @Inject constructor(
         }
     }
 
-    fun playTrack(track: BrowseTrack) = resolve("Bron zoeken…", "Geen bron voor \"${track.title}\"") {
-        browsePlayer.playSong(track.artist, track.album.ifBlank { albumTitle() }, track.title, it)
-    }
+    // Tapping a track shows its torrent sources (Stremio-style); picking one plays
+    // the album starting on that track.
+    fun showSourcesForTrack(track: BrowseTrack) =
+        openPicker(track.title, track.album.ifBlank { albumTitle() }, matchSong = track.title, shuffle = false)
 
-    fun playAlbum(shuffle: Boolean) {
+    fun showAlbumSources(shuffle: Boolean) {
         val album = _state.value.album ?: return
-        resolve(
-            progress = if (shuffle) "Shuffle voorbereiden…" else "Album voorbereiden…",
-            failure = "Geen bron voor dit album",
-        ) { onProgress -> browsePlayer.playAlbum(album.artist, album.title, shuffle, onProgress) }
+        openPicker(album.title, album.title, matchSong = null, shuffle = shuffle)
     }
 
-    private fun albumTitle(): String = _state.value.album?.title.orEmpty()
-
-    private fun resolve(
-        progress: String,
-        failure: String,
-        block: suspend ((String) -> Unit) -> Result<Unit>,
-    ) {
-        if (_state.value.resolving) return
-        _state.update { it.copy(resolving = true, statusMessage = progress) }
+    private fun openPicker(title: String, albumForSearch: String, matchSong: String?, shuffle: Boolean) {
+        val artist = _state.value.album?.artist.orEmpty()
+        _state.update {
+            it.copy(sourcePicker = SourcePickerState(title = title, artist = artist, album = albumForSearch, matchSong = matchSong, shuffle = shuffle))
+        }
         viewModelScope.launch {
-            val result = block { msg -> _state.update { it.copy(statusMessage = msg) } }
-            _state.update {
-                it.copy(resolving = false, statusMessage = if (result.isFailure) failure else null)
+            val sources = browsePlayer.findSources(artist, albumForSearch, matchSong)
+            _state.update { st -> st.sourcePicker?.let { st.copy(sourcePicker = it.copy(loading = false, sources = sources)) } ?: st }
+        }
+    }
+
+    fun pickSource(result: TorBoxSearchResult) {
+        val picker = _state.value.sourcePicker ?: return
+        _state.update { it.copy(sourcePicker = picker.copy(resolvingHash = result.hash, message = "Voorbereiden…")) }
+        viewModelScope.launch {
+            val r = browsePlayer.playResult(result, picker.artist, picker.album, picker.matchSong, picker.shuffle) { msg ->
+                _state.update { st -> st.sourcePicker?.let { st.copy(sourcePicker = it.copy(message = msg)) } ?: st }
+            }
+            _state.update { st ->
+                if (r.isSuccess) st.copy(sourcePicker = null)
+                else st.sourcePicker?.let { st.copy(sourcePicker = it.copy(resolvingHash = null, message = "Bron mislukt — kies een andere")) } ?: st
             }
         }
     }
 
-    fun clearStatus() = _state.update { it.copy(statusMessage = null) }
+    fun dismissSources() = _state.update { it.copy(sourcePicker = null) }
+
+    private fun albumTitle(): String = _state.value.album?.title.orEmpty()
 }

@@ -72,28 +72,32 @@ fun AlbumBrowseScreen(
                         )
                         Spacer(Modifier.height(12.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Button(onClick = { viewModel.playAlbum(shuffle = false) }, enabled = !state.resolving) {
+                            Button(onClick = { viewModel.showAlbumSources(shuffle = false) }) {
                                 Icon(Icons.Default.PlayArrow, null, Modifier.size(18.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text("Speel album")
                             }
-                            OutlinedButton(onClick = { viewModel.playAlbum(shuffle = true) }, enabled = !state.resolving) {
+                            OutlinedButton(onClick = { viewModel.showAlbumSources(shuffle = true) }) {
                                 Icon(Icons.Default.Shuffle, null, Modifier.size(18.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text("Shuffle")
                             }
                         }
-                        state.statusMessage?.let { msg ->
-                            Spacer(Modifier.height(8.dp))
-                            Text(msg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                        }
                     }
                 }
                 items(state.tracks) { track ->
-                    BrowseTrackRow(track.position.takeIf { it > 0 } ?: 1, track) { viewModel.playTrack(track) }
+                    BrowseTrackRow(track.position.takeIf { it > 0 } ?: 1, track) { viewModel.showSourcesForTrack(track) }
                 }
                 item { Spacer(Modifier.height(16.dp)) }
             }
         }
+    }
+
+    state.sourcePicker?.let { picker ->
+        SourcePickerSheet(
+            picker = picker,
+            onPick = { viewModel.pickSource(it) },
+            onDismiss = { viewModel.dismissSources() },
+        )
     }
 }
