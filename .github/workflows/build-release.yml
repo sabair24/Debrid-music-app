@@ -18,6 +18,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Offset the raw Actions run number by a fixed base. Earlier sideloaded
+      # installs carry build numbers (e.g. 100) that are higher than the current
+      # run_number (~55), so without this the in-app updater would never see a CI
+      # build as "newer". GitHub Actions expressions have no arithmetic, so we
+      # compute it in the shell and export it for the later steps. The SAME value
+      # feeds both the app's BuildConfig and the release tag, keeping the updater's
+      # tag-vs-BuildConfig comparison consistent.
+      - name: Compute build number
+        run: echo "BUILD_NUMBER=$(( ${{ github.run_number }} + 10000 ))" >> "$GITHUB_ENV"
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -44,14 +54,12 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build Debug APK
-        env:
-          BUILD_NUMBER: ${{ github.run_number }}
         run: ./gradlew assembleDebug --stacktrace
 
       - name: Rename APK with version info
         run: |
           VERSION=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          BUILD=${{ github.run_number }}
+          BUILD=${BUILD_NUMBER}
           BRANCH=$(echo "${GITHUB_REF_NAME}" | sed 's|/|-|g')
           mv app/build/outputs/apk/debug/app-debug.apk \
              app/build/outputs/apk/debug/DebridMusic-v${VERSION}-build${BUILD}-debug.apk
@@ -61,7 +69,7 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: debrid-music-debug-build${{ github.run_number }}
+          name: debrid-music-debug-build${{ env.BUILD_NUMBER }}
           path: app/build/outputs/apk/debug/${{ env.APK_NAME }}
           retention-days: 30
 
@@ -80,10 +88,10 @@ jobs:
         with:
           repository: sabair24/Debrid-music-app-releases
           token: ${{ secrets.RELEASES_TOKEN }}
-          tag_name: v${{ env.VERSION }}-build${{ github.run_number }}
-          name: "Debrid Music v${{ env.VERSION }} (build ${{ github.run_number }})"
+          tag_name: v${{ env.VERSION }}-build${{ env.BUILD_NUMBER }}
+          name: "Debrid Music v${{ env.VERSION }} (build ${{ env.BUILD_NUMBER }})"
           body: |
-            ## Debrid Music v${{ env.VERSION }} (build ${{ github.run_number }})
+            ## Debrid Music v${{ env.VERSION }} (build ${{ env.BUILD_NUMBER }})
 
             Android music app — TorBox debrid + Soulseek P2P.
 
