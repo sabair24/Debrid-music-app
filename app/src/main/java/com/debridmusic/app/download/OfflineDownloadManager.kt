@@ -5,9 +5,15 @@ import android.net.Uri
 import android.os.Environment
 import androidx.documentfile.provider.DocumentFile
 import com.debridmusic.app.data.local.SettingsStore
+import com.debridmusic.app.data.local.dao.AlbumDao
+import com.debridmusic.app.data.local.dao.ArtistDao
 import com.debridmusic.app.data.local.dao.DownloadDao
+import com.debridmusic.app.data.local.dao.TrackDao
+import com.debridmusic.app.data.local.entity.AlbumEntity
+import com.debridmusic.app.data.local.entity.ArtistEntity
 import com.debridmusic.app.data.local.entity.DownloadEntity
 import com.debridmusic.app.data.local.entity.DownloadStatus
+import com.debridmusic.app.data.local.entity.TrackEntity
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -32,12 +38,16 @@ data class DownloadRequest(
     val album: String,
     val sourceUrl: String,
     val artworkUri: String? = null,
+    val addToLibrary: Boolean = false,
 )
 
 @Singleton
 class OfflineDownloadManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val downloadDao: DownloadDao,
+    private val artistDao: ArtistDao,
+    private val albumDao: AlbumDao,
+    private val trackDao: TrackDao,
     private val okHttpClient: OkHttpClient,
     private val settingsStore: SettingsStore,
     private val appScope: CoroutineScope,
@@ -60,7 +70,7 @@ class OfflineDownloadManager @Inject constructor(
                     DownloadEntity(
                         title = r.title, artist = r.artist, album = r.album,
                         sourceUrl = r.sourceUrl, artworkUri = r.artworkUri,
-                        status = DownloadStatus.QUEUED.name,
+                        status = DownloadStatus.QUEUED.name, addToLibrary = r.addToLibrary,
                     )
                 )
             }
@@ -131,18 +141,36 @@ class OfflineDownloadManager @Inject constructor(
                 }
             }
             downloadDao.getById(id)?.let {
-                downloadDao.update(
-                    it.copy(
-                        status = DownloadStatus.DONE.name,
-                        downloadedBytes = downloadedBytes,
-                        sizeBytes = if (totalBytes > 0) totalBytes else downloadedBytes,
-                        localPath = dest.localPath,
-                    )
+                val done = it.copy(
+                    status = DownloadStatus.DONE.name,
+                    downloadedBytes = downloadedBytes,
+                    sizeBytes = if (totalBytes > 0) totalBytes else downloadedBytes,
+                    localPath = dest.localPath,
                 )
+                downloadDao.update(done)
+                if (done.addToLibrary) addDownloadToLibrary(done)
             }
         } catch (e: Exception) {
             dest.delete()
             downloadDao.getById(id)?.let { downloadDao.update(it.copy(status = DownloadStatus.FAILED.name)) }
+        }
+    }
+
+    /** Inserts a finished download into the library as a local track (artist/album upserted). */
+    private suspend fun addDownloadToLibrary(d: DownloadEntity) {
+        runCatching {
+            val artistId = artistDao.getByName(d.artist)?.id
+                ?: artistDao.insert(ArtistEntity(name = d.artist, imageUri = d.artworkUri))
+            val albumId = albumDao.getByTitleAndArtist(d.album, artistId)?.id
+                ?: albumDao.insert(AlbumEntity(title = d.album, artistId = artistId, artistName = d.artist, artworkUri = d.artworkUri))
+            trackDao.insert(
+                TrackEntity(
+                    title = d.title, artistName = d.artist, albumTitle = d.album,
+                    albumId = albumId, artistId = artistId, uri = d.localPath, durationMs = 0L,
+                    artworkUri = d.artworkUri, isLossless = d.localPath.endsWith(".flac", ignoreCase = true),
+                    fileSize = d.sizeBytes, sourceType = "local",
+                ),
+            )
         }
     }
 

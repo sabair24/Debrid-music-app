@@ -19,7 +19,12 @@ data class Track(
     val isLossless: Boolean,
     val fileSize: Long,
     val dateAdded: Long,
+    val sourceType: String = "local",
+    val torrentHash: String? = null,
+    val torrentFileName: String? = null,
 ) {
+    val isOnline: Boolean get() = sourceType == "online"
+
     val formattedDuration: String get() {
         val totalSeconds = durationMs / 1000
         val minutes = totalSeconds / 60

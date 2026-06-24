@@ -40,6 +40,7 @@ data class LibraryUiState(
 class LibraryViewModel @Inject constructor(
     private val repository: MusicRepository,
     private val discogsRepository: DiscogsRepository,
+    private val libraryPlayer: com.debridmusic.app.player.LibraryPlayer,
     val playerController: PlayerController,
 ) : ViewModel() {
 
@@ -112,7 +113,7 @@ class LibraryViewModel @Inject constructor(
     fun playTrack(track: Track, queue: List<Track>? = null) {
         val tracks = queue ?: _state.value.tracks
         val index = tracks.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
-        playerController.playQueue(tracks, index)
+        viewModelScope.launch { libraryPlayer.play(tracks, index) }
     }
 
     // ── Playlist management ───────────────────────────────────────────────────

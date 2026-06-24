@@ -42,4 +42,9 @@ data class TrackEntity(
     val isLossless: Boolean = false,
     val fileSize: Long = 0,
     val dateAdded: Long = System.currentTimeMillis(),
+    // "local" = playable file in `uri`; "online" = torrent-backed, re-resolved on
+    // play using torrentHash + torrentFileName.
+    val sourceType: String = "local",
+    val torrentHash: String? = null,
+    val torrentFileName: String? = null,
 )

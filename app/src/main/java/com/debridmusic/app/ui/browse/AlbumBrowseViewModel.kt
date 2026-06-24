@@ -5,8 +5,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.debridmusic.app.data.remote.dto.TorBoxSearchResult
 import com.debridmusic.app.data.repository.BrowseRepository
+import com.debridmusic.app.data.repository.MusicRepository
 import com.debridmusic.app.domain.model.BrowseAlbum
 import com.debridmusic.app.domain.model.BrowseTrack
+import com.debridmusic.app.download.DownloadRequest
+import com.debridmusic.app.download.OfflineDownloadManager
 import com.debridmusic.app.player.BrowsePlayer
 import com.debridmusic.app.player.PlayerController
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -23,6 +26,8 @@ data class AlbumBrowseUiState(
     val tracks: List<BrowseTrack> = emptyList(),
     val isLoading: Boolean = true,
     val sourcePicker: SourcePickerState? = null,
+    val addStatus: String? = null,
+    val addBusy: Boolean = false,
 )
 
 @HiltViewModel
@@ -30,6 +35,8 @@ class AlbumBrowseViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val browseRepository: BrowseRepository,
     private val browsePlayer: BrowsePlayer,
+    private val musicRepository: MusicRepository,
+    private val offlineDownloadManager: OfflineDownloadManager,
     val playerController: PlayerController,
 ) : ViewModel() {
 
@@ -87,6 +94,51 @@ class AlbumBrowseViewModel @Inject constructor(
         resolveJob?.cancel()
         _state.update { it.copy(sourcePicker = null) }
     }
+
+    /** Save the album to the library as "online" tracks (re-resolved on play). */
+    fun saveToLibrary() {
+        val album = _state.value.album ?: return
+        if (_state.value.addBusy) return
+        _state.update { it.copy(addBusy = true, addStatus = "Bewaren…") }
+        viewModelScope.launch {
+            browsePlayer.resolveAlbum(album.artist, album.title) { msg -> _state.update { it.copy(addStatus = msg) } }
+                .onSuccess { resolved ->
+                    val n = musicRepository.addOnlineAlbum(
+                        artistName = album.artist, albumTitle = album.title,
+                        artworkUri = album.artworkUri, year = album.year, torrentHash = resolved.hash,
+                        tracks = resolved.tracks.map {
+                            MusicRepository.OnlineTrackInput(it.title, it.fileName, it.trackNumber, it.isFlac, it.sizeBytes)
+                        },
+                    )
+                    _state.update { it.copy(addBusy = false, addStatus = "$n nummers bewaard in Bibliotheek") }
+                }
+                .onFailure { e -> _state.update { it.copy(addBusy = false, addStatus = "Bewaren mislukt: ${e.message}") } }
+        }
+    }
+
+    /** Download the album to the device and add it to the library as local tracks. */
+    fun downloadToLibrary() {
+        val album = _state.value.album ?: return
+        if (_state.value.addBusy) return
+        _state.update { it.copy(addBusy = true, addStatus = "Bron zoeken…") }
+        viewModelScope.launch {
+            browsePlayer.resolveAlbum(album.artist, album.title) { msg -> _state.update { it.copy(addStatus = msg) } }
+                .onSuccess { resolved ->
+                    offlineDownloadManager.enqueueAll(
+                        resolved.tracks.map { t ->
+                            DownloadRequest(
+                                title = t.title, artist = album.artist, album = album.title,
+                                sourceUrl = t.url, artworkUri = album.artworkUri, addToLibrary = true,
+                            )
+                        },
+                    )
+                    _state.update { it.copy(addBusy = false, addStatus = "${resolved.tracks.size} nummers downloaden → Bibliotheek") }
+                }
+                .onFailure { e -> _state.update { it.copy(addBusy = false, addStatus = "Download mislukt: ${e.message}") } }
+        }
+    }
+
+    fun clearAddStatus() = _state.update { it.copy(addStatus = null) }
 
     private fun albumTitle(): String = _state.value.album?.title.orEmpty()
 }

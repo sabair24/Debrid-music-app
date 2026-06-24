@@ -8,9 +8,11 @@ import com.debridmusic.app.domain.model.Artist
 import com.debridmusic.app.domain.model.Track
 import com.debridmusic.app.player.PlayerController
 import dagger.hilt.android.lifecycle.HiltViewModel
+import com.debridmusic.app.player.LibraryPlayer
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class HomeUiState(
@@ -22,6 +24,7 @@ data class HomeUiState(
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val repository: MusicRepository,
+    private val libraryPlayer: LibraryPlayer,
     val playerController: PlayerController,
 ) : ViewModel() {
 
@@ -34,6 +37,6 @@ class HomeViewModel @Inject constructor(
 
     fun playTrack(track: Track, queue: List<Track>) {
         val index = queue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
-        playerController.playQueue(queue, index)
+        viewModelScope.launch { libraryPlayer.play(queue, index) }
     }
 }

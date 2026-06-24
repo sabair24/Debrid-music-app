@@ -90,6 +90,45 @@ class BrowsePlayer @Inject constructor(
         Unit
     }
 
+    data class ResolvedTrack(
+        val title: String, val fileName: String, val url: String,
+        val isFlac: Boolean, val sizeBytes: Long, val trackNumber: Int,
+    )
+    data class ResolvedAlbum(val hash: String, val tracks: List<ResolvedTrack>)
+
+    /** Resolves an album's torrent into per-file URLs — used by "save online" and "download". */
+    suspend fun resolveAlbum(artist: String, album: String, onProgress: (String) -> Unit): Result<ResolvedAlbum> = runCatching {
+        onProgress("Bron zoeken…")
+        val results = torBoxRepository.search("$artist $album").getOrDefault(emptyList())
+        if (results.isEmpty()) error("Geen bron gevonden")
+        val ordered = (results.filter { it.cached } + results.filterNot { it.cached }).take(MAX_TRY)
+        var lastError: String? = null
+        for (res in ordered) {
+            var out: ResolvedAlbum? = null
+            var err: String? = null
+            torBoxRepository.streamAlbum(res).collect { st ->
+                when (st) {
+                    is StreamState.ReadyAlbum -> out = ResolvedAlbum(
+                        hash = res.hash,
+                        tracks = st.tracks.mapIndexed { i, at ->
+                            ResolvedTrack(
+                                title = (at.file.shortName ?: at.file.name).substringBeforeLast('.'),
+                                fileName = at.file.name, url = at.url,
+                                isFlac = at.file.isFlac, sizeBytes = at.file.size, trackNumber = i + 1,
+                            )
+                        },
+                    )
+                    is StreamState.Error -> err = st.message
+                    is StreamState.Preparing -> onProgress("Voorbereiden…")
+                    else -> {}
+                }
+            }
+            out?.let { return@runCatching it }
+            lastError = err
+        }
+        error(lastError ?: "Geen werkende bron")
+    }
+
     private suspend fun resolveAndPlay(
         searchQuery: String,
         displayArtist: String,

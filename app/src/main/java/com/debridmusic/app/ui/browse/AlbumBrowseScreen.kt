@@ -5,6 +5,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.LibraryAdd
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.*
@@ -82,6 +84,23 @@ fun AlbumBrowseScreen(
                                 Spacer(Modifier.width(6.dp))
                                 Text("Shuffle")
                             }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            OutlinedButton(onClick = { viewModel.saveToLibrary() }, enabled = !state.addBusy) {
+                                Icon(Icons.Default.LibraryAdd, null, Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Bewaar")
+                            }
+                            OutlinedButton(onClick = { viewModel.downloadToLibrary() }, enabled = !state.addBusy) {
+                                Icon(Icons.Default.Download, null, Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Download")
+                            }
+                        }
+                        state.addStatus?.let { msg ->
+                            Spacer(Modifier.height(6.dp))
+                            Text(msg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                         }
                     }
                 }
