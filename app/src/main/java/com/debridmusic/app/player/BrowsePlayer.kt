@@ -41,8 +41,23 @@ class BrowsePlayer @Inject constructor(
         }
         val all = queries.flatMap { torBoxRepository.search(it).getOrDefault(emptyList()) }
         return all.distinctBy { it.hash.ifBlank { it.name } }
-            .sortedWith(compareByDescending<TorBoxSearchResult> { it.cached }.thenByDescending { it.seeders })
+            .sortedWith(
+                // Cached first, then likely-playable (split FLAC/MP3 over APE / single
+                // image+.cue), then by seeders.
+                compareByDescending<TorBoxSearchResult> { it.cached }
+                    .thenByDescending { it.isLikelyPlayable() }
+                    .thenByDescending { it.seeders },
+            )
             .take(MAX_SOURCES)
+    }
+
+    // APE isn't playable by the player, and "image + .cue" rips are a single huge
+    // file (no per-track split) — deprioritize both.
+    private fun TorBoxSearchResult.isLikelyPlayable(): Boolean {
+        val n = name.lowercase()
+        val singleImage = "image" in n && ".cue" in n
+        val ape = Regex("\\bape\\b").containsMatchIn(n)
+        return !singleImage && !ape
     }
 
     /** Play one specific source the user picked (album torrent; optionally start on a song). */
@@ -57,17 +72,21 @@ class BrowsePlayer @Inject constructor(
         onProgress("Voorbereiden…")
         var played = false
         var error: String? = null
-        torBoxRepository.streamAlbum(result).collect { st ->
+        // patient = the user explicitly picked this source, so wait for TorBox to
+        // download a non-cached torrent (and show live progress) instead of bailing.
+        torBoxRepository.streamAlbum(result, patient = true).collect { st ->
             when (st) {
                 is StreamState.ReadyAlbum -> {
                     playReadyAlbum(st, displayArtist, displayAlbum, matchSong, shuffle); played = true
                 }
                 is StreamState.Error -> error = st.message
-                is StreamState.Preparing -> onProgress("Voorbereiden…")
+                is StreamState.Preparing -> onProgress(
+                    if (st.progress > 0f) "Downloaden ${(st.progress * 100).toInt()}%…" else "Voorbereiden…",
+                )
                 else -> {}
             }
         }
-        if (!played) error(error ?: "Bron mislukt")
+        if (!played) error(error ?: "Bron niet beschikbaar (niet gecached / weinig seeds)")
         Unit
     }
 

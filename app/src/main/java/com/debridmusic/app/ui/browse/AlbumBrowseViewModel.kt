@@ -10,6 +10,7 @@ import com.debridmusic.app.domain.model.BrowseTrack
 import com.debridmusic.app.player.BrowsePlayer
 import com.debridmusic.app.player.PlayerController
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,6 +37,8 @@ class AlbumBrowseViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(AlbumBrowseUiState())
     val state: StateFlow<AlbumBrowseUiState> = _state.asStateFlow()
+
+    private var resolveJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -68,7 +71,8 @@ class AlbumBrowseViewModel @Inject constructor(
     fun pickSource(result: TorBoxSearchResult) {
         val picker = _state.value.sourcePicker ?: return
         _state.update { it.copy(sourcePicker = picker.copy(resolvingHash = result.hash, message = "Voorbereiden…")) }
-        viewModelScope.launch {
+        resolveJob?.cancel()
+        resolveJob = viewModelScope.launch {
             val r = browsePlayer.playResult(result, picker.artist, picker.album, picker.matchSong, picker.shuffle) { msg ->
                 _state.update { st -> st.sourcePicker?.let { st.copy(sourcePicker = it.copy(message = msg)) } ?: st }
             }
@@ -79,7 +83,10 @@ class AlbumBrowseViewModel @Inject constructor(
         }
     }
 
-    fun dismissSources() = _state.update { it.copy(sourcePicker = null) }
+    fun dismissSources() {
+        resolveJob?.cancel()
+        _state.update { it.copy(sourcePicker = null) }
+    }
 
     private fun albumTitle(): String = _state.value.album?.title.orEmpty()
 }

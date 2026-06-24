@@ -82,13 +82,13 @@ class TorBoxRepository @Inject constructor(
         resp.data ?: error("No user data")
     }
 
-    fun streamResult(result: TorBoxSearchResult): Flow<StreamState> = flow {
+    fun streamResult(result: TorBoxSearchResult, patient: Boolean = false): Flow<StreamState> = flow {
         emit(StreamState.Queuing(result.name))
         syncApiKey()
         val apiKey = authInterceptor.apiKey
 
         val torrentRef = addOrFindTorrent(result)
-        val ready = pollUntilReady(torrentRef) { state -> emit(state) }
+        val ready = pollUntilReady(torrentRef, patient) { state -> emit(state) }
 
         val audioFiles = ready.files?.filter { it.isAudio } ?: emptyList()
         if (audioFiles.isEmpty()) error("No audio files found in this torrent")
@@ -103,13 +103,13 @@ class TorBoxRepository @Inject constructor(
         emit(StreamState.Ready(url, ready, bestFile))
     }.catch { e -> emit(StreamState.Error(e.message ?: "Stream failed")) }
 
-    fun streamAlbum(result: TorBoxSearchResult): Flow<StreamState> = flow {
+    fun streamAlbum(result: TorBoxSearchResult, patient: Boolean = false): Flow<StreamState> = flow {
         emit(StreamState.Queuing(result.name))
         syncApiKey()
         val apiKey = authInterceptor.apiKey
 
         val torrentRef = addOrFindTorrent(result)
-        val ready = pollUntilReady(torrentRef) { state -> emit(state) }
+        val ready = pollUntilReady(torrentRef, patient) { state -> emit(state) }
 
         val audioFiles = (ready.files ?: emptyList())
             .filter { it.isAudio }
@@ -176,14 +176,18 @@ class TorBoxRepository @Inject constructor(
 
     private suspend fun pollUntilReady(
         ref: TorrentRef,
+        patient: Boolean = false,
         onProgress: suspend (StreamState) -> Unit,
     ): TorBoxTorrentItem {
         var delayMs = 2_000L
         // Time spent with no download progress (torrent missing or stuck at 0%).
-        // A non-cached torrent with no healthy seeders sits here; bail early so the
-        // caller can fall back to a cached source instead of waiting ~4.6 min.
+        // A non-cached torrent with no healthy seeders sits here; bail so the caller
+        // can fall back to a cached source. When the user explicitly picked this
+        // source (patient), wait much longer and let TorBox download it.
         var noProgressMs = 0L
-        for (attempt in 0 until 30) {
+        val maxAttempts = if (patient) 90 else 30
+        val stallTimeoutMs = if (patient) PATIENT_STALL_TIMEOUT_MS else STALL_TIMEOUT_MS
+        for (attempt in 0 until maxAttempts) {
             val listResp = api.listTorrents(bypassCache = true)
             val found = listResp.data?.firstOrNull { item ->
                 (ref.id != null && item.id == ref.id) ||
@@ -199,7 +203,7 @@ class TorBoxRepository @Inject constructor(
                     if (found.progress <= 0f) noProgressMs += delayMs else noProgressMs = 0L
                 }
             }
-            if (noProgressMs >= STALL_TIMEOUT_MS) error("Source stalled — no progress")
+            if (noProgressMs >= stallTimeoutMs) error("Source stalled — no progress")
             delay(delayMs)
             if (attempt >= 2) delayMs = (delayMs * 1.5).toLong().coerceAtMost(10_000L)
         }
@@ -214,8 +218,9 @@ class TorBoxRepository @Inject constructor(
     }
 
     private companion object {
-        const val CACHED_CHECK_LIMIT = 40       // only check the top N results
-        const val CACHED_CHECK_BATCH = 20       // hashes per checkcached request
-        const val STALL_TIMEOUT_MS = 25_000L    // give up on a non-progressing source
+        const val CACHED_CHECK_LIMIT = 40        // only check the top N results
+        const val CACHED_CHECK_BATCH = 20        // hashes per checkcached request
+        const val STALL_TIMEOUT_MS = 25_000L     // give up on a non-progressing source
+        const val PATIENT_STALL_TIMEOUT_MS = 90_000L  // user explicitly picked → wait longer
     }
 }
