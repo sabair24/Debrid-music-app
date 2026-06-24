@@ -4,7 +4,11 @@ import android.app.PendingIntent
 import android.content.Intent
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.debridmusic.app.MainActivity
@@ -13,12 +17,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import okhttp3.OkHttpClient
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class MusicPlayerService : MediaSessionService() {
 
     @Inject lateinit var eqController: EqController
+    @Inject lateinit var okHttpClient: OkHttpClient
 
     private lateinit var player: ExoPlayer
     private var mediaSession: MediaSession? = null
@@ -26,7 +32,22 @@ class MusicPlayerService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        // Stream over our tuned OkHttp client (shorter timeouts, bigger pool, retries).
+        // DefaultDataSource still handles local file:// / content:// downloads.
+        val dataSourceFactory = DefaultDataSource.Factory(this, OkHttpDataSource.Factory(okHttpClient))
+        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
+        // Start playback sooner: only ~1.5s needs to buffer before audio begins.
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                /* minBufferMs= */ 15_000,
+                /* maxBufferMs= */ 60_000,
+                /* bufferForPlaybackMs= */ 1_500,
+                /* bufferForPlaybackAfterRebufferMs= */ 3_000,
+            )
+            .build()
         player = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(mediaSourceFactory)
+            .setLoadControl(loadControl)
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)

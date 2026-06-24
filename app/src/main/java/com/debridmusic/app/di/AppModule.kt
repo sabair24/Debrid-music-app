@@ -16,6 +16,8 @@ import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
@@ -48,12 +50,14 @@ object AppModule {
     @Provides @Singleton
     fun provideOkHttpClient(): OkHttpClient =
         OkHttpClient.Builder()
-            .addInterceptor(HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BASIC
-            })
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(120, TimeUnit.SECONDS)
+            // Bigger pool + dispatcher: the 4 search sources, metadata enrichment and
+            // artwork all fire in parallel; the default 5-per-host cap throttles them.
+            .connectionPool(ConnectionPool(maxIdleConnections = 12, keepAliveDuration = 5L, timeUnit = TimeUnit.MINUTES))
+            .dispatcher(Dispatcher().apply { maxRequests = 128; maxRequestsPerHost = 24 })
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
             .build()
 
     @Provides @Singleton

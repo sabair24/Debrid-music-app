@@ -7,6 +7,9 @@ import com.debridmusic.app.data.remote.dto.TorBoxSearchResult
 import com.debridmusic.app.data.remote.dto.TorBoxTorrentItem
 import com.debridmusic.app.data.remote.dto.TorBoxUser
 import com.debridmusic.app.search.SearchAggregator
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -61,14 +64,20 @@ class TorBoxRepository @Inject constructor(
         if (results.isEmpty()) return results
         syncApiKey()
         val cachedHashes = runCatching {
-            results.take(CACHED_CHECK_LIMIT)
-                .filter { it.hash.isNotBlank() }
-                .chunked(CACHED_CHECK_BATCH)
-                .flatMap { chunk ->
-                    val resp = api.checkCached(hashes = chunk.joinToString(",") { it.hash })
-                    resp.data.orEmpty().mapNotNull { it.hash?.lowercase() }
-                }
-                .toSet()
+            coroutineScope {
+                results.take(CACHED_CHECK_LIMIT)
+                    .filter { it.hash.isNotBlank() }
+                    .chunked(CACHED_CHECK_BATCH)
+                    .map { chunk ->
+                        async {
+                            api.checkCached(hashes = chunk.joinToString(",") { it.hash })
+                                .data.orEmpty().mapNotNull { it.hash?.lowercase() }
+                        }
+                    }
+                    .awaitAll()
+                    .flatten()
+                    .toSet()
+            }
         }.getOrDefault(emptySet())
         if (cachedHashes.isEmpty()) return results
         return results

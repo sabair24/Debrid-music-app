@@ -52,11 +52,17 @@ class SearchAggregator @Inject constructor(
 
     companion object {
         private const val TAG = "SearchAggregator"
-        private const val SOURCE_TIMEOUT_MS = 15_000L
+        private const val SOURCE_TIMEOUT_MS = 10_000L
         private val ADULT = Regex(
             "(?i)(\\bxxx\\b|\\.xxx\\.|\\bporn|brazzers|wowgirls|analvids|nubile|thisisglamour|" +
                 "onlyfans|hardcore|\\bmilf\\b|playboy|penthouse|kleenex|\\bsex\\.)",
         )
-        private val VIDEO = Regex("(?i)(\\b(480p|720p|1080p|2160p|x264|x265|hevc|bluray|web-?dl|hdrip|dvdrip)\\b|\\.(mp4|mkv|avi)\\b)")
+        private val VIDEO = Regex(
+            "(?i)(" +
+                "\\b(480p|576p|720p|1080p|1080i|2160p|x264|x265|h\\.?264|h\\.?265|hevc|xvid|divx|" +
+                "blu-?ray|web-?dl|webrip|hdrip|hdtv|pdtv|dvdrip|remux|uhd)\\b" +
+                "|\\bmusic\\s*video\\b|\\bfilm\\b" +
+                "|\\.(mp4|mkv|avi|m4v|wmv|mov|vob)\\b)",
+        )
     }
 }
