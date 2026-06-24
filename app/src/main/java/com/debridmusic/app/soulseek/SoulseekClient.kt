@@ -364,7 +364,8 @@ class SoulseekClient @Inject constructor(
                 try {
                     fConn.connect(connectTimeoutMs = 8_000)
                     fConn.send(buildPierceFirewall(ctpToken))
-                    fConn.setSoTimeout(60_000)
+                    // 45s read timeout = stall guard: a dead uploader aborts faster.
+                    fConn.setSoTimeout(45_000)
                     val inp = fConn.rawInputStream()
                     readRaw(inp, 4) // transfer ticket (uint32) — we have one DL in flight
                     fConn.sendRaw(ByteArray(8)) // offset = 0
@@ -375,15 +376,15 @@ class SoulseekClient @Inject constructor(
                     var received = 0L
                     var lastEmit = 0L
                     val total = fileSize.get()
-                    tempFile.outputStream().use { out ->
-                        val data = ByteArray(65_536)
+                    tempFile.outputStream().buffered(262_144).use { out ->
+                        val data = ByteArray(262_144) // 256 KB
                         while (true) {
                             if (total > 0 && received >= total) break
                             val n = inp.read(data)
                             if (n < 0) break
                             out.write(data, 0, n)
                             received += n
-                            if (received - lastEmit >= 262_144L) {
+                            if (received - lastEmit >= 1_000_000L) {
                                 send(SlskDownloadState.Downloading(received, total))
                                 lastEmit = received
                             }

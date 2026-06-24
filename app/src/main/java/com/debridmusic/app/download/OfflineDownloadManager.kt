@@ -10,9 +10,13 @@ import com.debridmusic.app.data.local.entity.DownloadEntity
 import com.debridmusic.app.data.local.entity.DownloadStatus
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -40,8 +44,10 @@ class OfflineDownloadManager @Inject constructor(
 ) {
     fun observeAll() = downloadDao.observeAll()
 
-    // Only one download runs at a time; everything else waits in the queue.
-    private val queueMutex = Mutex()
+    // Up to MAX_CONCURRENT downloads run at once; the rest wait in the queue.
+    private val drainMutex = Mutex()   // only one drainer coroutine at a time
+    private val claimMutex = Mutex()   // atomically claim the next queued row
+    private val slots = Semaphore(MAX_CONCURRENT)
 
     /** Queue one track. Returns immediately; the worker processes downloads serially. */
     fun enqueue(request: DownloadRequest) = enqueueAll(listOf(request))
@@ -63,18 +69,37 @@ class OfflineDownloadManager @Inject constructor(
         }
     }
 
-    /** Drains the QUEUED downloads sequentially. Guarded so only one drain runs. */
+    /** Drains QUEUED downloads with up to MAX_CONCURRENT running in parallel. */
     private suspend fun processQueue() {
-        if (!queueMutex.tryLock()) return // a drain is already in progress
+        if (!drainMutex.tryLock()) return // a drain is already in progress
         try {
-            while (true) {
-                val next = downloadDao.nextQueued() ?: break
-                downloadOne(next)
-            }
+            do {
+                coroutineScope {
+                    val jobs = mutableListOf<Job>()
+                    while (true) {
+                        slots.acquire()
+                        val next = claimNext()
+                        if (next == null) { slots.release(); break }
+                        jobs += launch {
+                            try { downloadOne(next) } finally { slots.release() }
+                        }
+                    }
+                    jobs.joinAll()
+                }
+                // Re-check in case tracks were queued while we were draining.
+            } while (downloadDao.nextQueued() != null)
             enforceQuota()
         } finally {
-            queueMutex.unlock()
+            drainMutex.unlock()
         }
+    }
+
+    /** Atomically pull the next QUEUED row and mark it DOWNLOADING so no two workers grab it. */
+    private suspend fun claimNext(): DownloadEntity? = claimMutex.withLock {
+        val next = downloadDao.nextQueued() ?: return@withLock null
+        val claimed = next.copy(status = DownloadStatus.DOWNLOADING.name)
+        downloadDao.update(claimed)
+        claimed
     }
 
     private suspend fun downloadOne(entity: DownloadEntity) {
@@ -83,20 +108,20 @@ class OfflineDownloadManager @Inject constructor(
         val safeName = "${entity.title}_${entity.artist}".replace(Regex("[^a-zA-Z0-9._-]"), "_")
         val dest = resolveDestination("$safeName.$ext", ext)
         try {
-            downloadDao.update(entity.copy(status = DownloadStatus.DOWNLOADING.name))
+            // status already set to DOWNLOADING by claimNext()
             val response = okHttpClient.newCall(Request.Builder().url(entity.sourceUrl).build()).execute()
             val body = response.body ?: error("Empty response body")
             val totalBytes = body.contentLength().coerceAtLeast(0L)
             var downloadedBytes = 0L
             var lastUpdateBytes = 0L
             body.byteStream().use { input ->
-                dest.openOutput().use { output ->
-                    val buffer = ByteArray(65_536)
+                dest.openOutput().buffered(BUFFER_SIZE).use { output ->
+                    val buffer = ByteArray(BUFFER_SIZE)
                     var n: Int
                     while (input.read(buffer).also { n = it } != -1) {
                         output.write(buffer, 0, n)
                         downloadedBytes += n
-                        if (downloadedBytes - lastUpdateBytes > 512_000L) {
+                        if (downloadedBytes - lastUpdateBytes > 2_000_000L) {
                             lastUpdateBytes = downloadedBytes
                             downloadDao.getById(id)?.let {
                                 downloadDao.update(it.copy(downloadedBytes = downloadedBytes, sizeBytes = totalBytes, localPath = dest.localPath))
@@ -187,5 +212,10 @@ class OfflineDownloadManager @Inject constructor(
         } else {
             runCatching { File(localPath).delete() }
         }
+    }
+
+    private companion object {
+        const val MAX_CONCURRENT = 3        // parallel downloads
+        const val BUFFER_SIZE = 262_144     // 256 KB read/write buffer
     }
 }
