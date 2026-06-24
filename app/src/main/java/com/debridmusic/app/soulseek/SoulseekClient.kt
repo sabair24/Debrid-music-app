@@ -49,6 +49,8 @@ sealed class SlskDownloadState {
 private const val SERVER_HOST = "server.slsknet.org"
 private const val SERVER_PORT = 2242
 private const val DL_TAG = "SlskDownload"
+// Stop a search early once we have this many results, instead of waiting the full window.
+private const val EARLY_RESULT_TARGET = 40
 
 @Singleton
 class SoulseekClient @Inject constructor(
@@ -87,9 +89,16 @@ class SoulseekClient @Inject constructor(
                 // deadline is truly reached.
 
                 val peerJobs = mutableListOf<Job>()
-                val deadline = System.currentTimeMillis() + 20_000L
+                val deadline = System.currentTimeMillis() + 14_000L
+                // Don't return before this — give peers a moment to reply — but once
+                // we have plenty of results, stop early instead of waiting the full window.
+                val softMin = System.currentTimeMillis() + 5_000L
 
                 while (System.currentTimeMillis() < deadline && results.size < 200) {
+                    if (results.size >= EARLY_RESULT_TARGET && System.currentTimeMillis() >= softMin) {
+                        loopEndReason = "enough"
+                        break
+                    }
                     val remaining = deadline - System.currentTimeMillis()
                     if (remaining <= 0) break
                     server.setSoTimeout(remaining.coerceIn(200, 60_000).toInt())
@@ -130,8 +139,13 @@ class SoulseekClient @Inject constructor(
                     }
                 }
 
-                // Wait for in-flight peer connections to finish (generous budget)
-                withTimeoutOrNull(12_000L) { peerJobs.forEach { it.join() } }
+                // Wait for in-flight peer connections to finish, but stop as soon as
+                // we have plenty of results so a fast search returns quickly.
+                withTimeoutOrNull(8_000L) {
+                    while (peerJobs.any { it.isActive } && results.size < EARLY_RESULT_TARGET) {
+                        kotlinx.coroutines.delay(150)
+                    }
+                }
                 peerJobs.forEach { it.cancel() }
 
             } finally {

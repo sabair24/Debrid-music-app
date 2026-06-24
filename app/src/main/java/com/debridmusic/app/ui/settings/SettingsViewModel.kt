@@ -71,6 +71,7 @@ data class SettingsUiState(
     val downloadsSizeBytes: Long = 0L,
     val cacheSizeBytes: Long = 0L,
     val maxDownloadBytes: Long = 0L,
+    val maxConcurrentDownloads: Int = 5,
     val downloadFolder: String = "App-opslag (standaard)",
     // Tidal
     val tidalClientId: String = "",
@@ -168,6 +169,11 @@ class SettingsViewModel @Inject constructor(
                     }
                 }
         }
+        viewModelScope.launch {
+            settingsStore.maxConcurrentDownloads.collect { n ->
+                _state.update { it.copy(maxConcurrentDownloads = n) }
+            }
+        }
         refreshStorage()
         viewModelScope.launch {
             val id = settingsStore.tidalClientId.first()
@@ -261,6 +267,11 @@ class SettingsViewModel @Inject constructor(
 
     fun setMaxDownloadBytes(bytes: Long) {
         viewModelScope.launch { settingsStore.setMaxDownloadBytes(bytes); offlineDownloadManager.enforceQuota(); refreshStorage() }
+    }
+
+    fun setMaxConcurrentDownloads(n: Int) {
+        _state.update { it.copy(maxConcurrentDownloads = n) }
+        viewModelScope.launch { settingsStore.setMaxConcurrentDownloads(n) }
     }
 
     fun setDownloadTreeUri(uri: String) {
