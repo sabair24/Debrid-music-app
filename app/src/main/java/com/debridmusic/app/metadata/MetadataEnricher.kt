@@ -211,6 +211,24 @@ class MetadataEnricher @Inject constructor(
             .forEach { trackDao.update(it.copy(artworkUri = art)) }
     }
 
+    /**
+     * Fast, network-free pass: copy every album's existing cover onto its tracks that
+     * still lack one. Runs instantly (no rate limits), so library covers show up right
+     * away — independent of the slower online [enrichAll].
+     */
+    suspend fun backfillTrackArtwork(): Int {
+        var filled = 0
+        albumDao.observeAll().first().forEach { album ->
+            val art = album.artworkUri
+            if (!art.isNullOrBlank()) {
+                trackDao.observeByAlbum(album.id).first()
+                    .filter { it.artworkUri.isNullOrBlank() }
+                    .forEach { trackDao.update(it.copy(artworkUri = art)); filled++ }
+            }
+        }
+        return filled
+    }
+
     // ── Artist ──────────────────────────────────────────────────────────────────
     private suspend fun enrichArtist(
         artistIn: ArtistEntity,

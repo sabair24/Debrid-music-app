@@ -105,7 +105,8 @@ class OfflineDownloadManager @Inject constructor(
             enforceQuota()
             // Auto-fetch full metadata (cover, genre, year, …) for newly added tracks.
             if (pendingEnrich.getAndSet(false)) {
-                runCatching { enricher.enrichAll() }
+                runCatching { enricher.backfillTrackArtwork() } // instant covers from album
+                runCatching { enricher.enrichAll() }            // slower online metadata
             }
         } finally {
             drainMutex.unlock()
