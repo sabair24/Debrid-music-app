@@ -26,6 +26,15 @@ data class TorBoxSearchResult(
     val category: String? = null,
     val imdbId: String? = null,
     val source: String? = null,
+    // True when this torrent is already cached on TorBox → resolves instantly.
+    val cached: Boolean = false,
+)
+
+// One entry of the checkcached response (format=list).
+data class TorBoxCachedItem(
+    val hash: String? = null,
+    val name: String? = null,
+    val size: Long = 0L,
 )
 
 // ── Create torrent ───────────────────────────────────────────────────────────
