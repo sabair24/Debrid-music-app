@@ -21,16 +21,20 @@ class BrowsePlayer @Inject constructor(
 ) {
     /** Try a per-song torrent first, then fall back to the album torrent. */
     suspend fun playSong(
-        artist: String, album: String, song: String, onProgress: (String) -> Unit,
+        artist: String, album: String, song: String,
+        exclude: Set<String> = emptySet(),
+        onProgress: (String) -> Unit,
     ): Result<Unit> {
-        val first = resolveAndPlay("$artist $song", artist, album.ifBlank { song }, song, false, onProgress)
+        val first = resolveAndPlay("$artist $song", artist, album.ifBlank { song }, song, false, exclude, onProgress)
         if (first.isSuccess || album.isBlank()) return first
-        return resolveAndPlay("$artist $album", artist, album, song, false, onProgress)
+        return resolveAndPlay("$artist $album", artist, album, song, false, exclude, onProgress)
     }
 
     suspend fun playAlbum(
-        artist: String, album: String, shuffle: Boolean, onProgress: (String) -> Unit,
-    ): Result<Unit> = resolveAndPlay("$artist $album", artist, album, null, shuffle, onProgress)
+        artist: String, album: String, shuffle: Boolean,
+        exclude: Set<String> = emptySet(),
+        onProgress: (String) -> Unit,
+    ): Result<Unit> = resolveAndPlay("$artist $album", artist, album, null, shuffle, exclude, onProgress)
 
     /** Stremio-style: list the torrent sources for a song (or album), cached-first. */
     suspend fun findSources(artist: String, album: String, song: String?): List<TorBoxSearchResult> {
@@ -58,7 +62,10 @@ class BrowsePlayer @Inject constructor(
         val singleImage = "image" in n && ".cue" in n
         // APE and DSD/SACD aren't decodable by the player.
         val unsupported = Regex("\\b(ape|sacd|dsd|dsf|dff)\\b").containsMatchIn(n)
-        return !singleImage && !unsupported
+        // Hi-res / audiophile rips (24-96, 24bit, 96kHz, MFSL) are often single-image
+        // or huge and frequently stall — deprioritize them behind plain FLAC/MP3.
+        val hiRes = Regex("24[ ._-]?96|24[ ._-]?bit|24[ ._-]?192|\\b\\d{2,3}\\s?khz|\\bmfsl\\b").containsMatchIn(n)
+        return !singleImage && !unsupported && !hiRes
     }
 
     /** Play one specific source the user picked (album torrent; optionally start on a song). */
@@ -136,13 +143,21 @@ class BrowsePlayer @Inject constructor(
         displayAlbum: String,
         matchSong: String?,
         shuffle: Boolean,
+        exclude: Set<String>,
         onProgress: (String) -> Unit,
     ): Result<Unit> = runCatching {
         onProgress("Bron zoeken…")
         val results = torBoxRepository.search(searchQuery).getOrDefault(emptyList())
+            .filterNot { it.hash.isNotBlank() && it.hash.lowercase() in exclude }
         if (results.isEmpty()) error("Geen bron gevonden")
-        // Cached (instant) first, then the rest; try a few before giving up.
-        val ordered = (results.filter { it.cached } + results.filterNot { it.cached }).take(MAX_TRY)
+        // Cached (instant) first, then likely-playable, then the rest; try a few before giving up.
+        val ordered = results
+            .sortedWith(
+                compareByDescending<TorBoxSearchResult> { it.cached }
+                    .thenByDescending { it.isLikelyPlayable() }
+                    .thenByDescending { it.seeders },
+            )
+            .take(MAX_TRY)
         var lastError: String? = null
         for (res in ordered) {
             var played = false
