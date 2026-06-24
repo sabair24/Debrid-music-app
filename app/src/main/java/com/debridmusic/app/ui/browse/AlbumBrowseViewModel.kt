@@ -81,15 +81,28 @@ class AlbumBrowseViewModel @Inject constructor(
         _state.update { it.copy(sourcePicker = picker.copy(resolvingHash = result.hash, message = "Voorbereiden…")) }
         resolveJob?.cancel()
         resolveJob = viewModelScope.launch {
-            val r = browsePlayer.playResult(result, picker.artist, picker.album, picker.matchSong, picker.shuffle) { msg ->
+            val progress: (String) -> Unit = { msg ->
                 _state.update { st -> st.sourcePicker?.let { st.copy(sourcePicker = it.copy(message = msg)) } ?: st }
+            }
+            var r = browsePlayer.playResult(result, picker.artist, picker.album, picker.matchSong, picker.shuffle, progress)
+            // If the picked source fails/stalls, auto-fall back to another playable
+            // source (skipping the one that just failed) instead of leaving the user stuck.
+            if (r.isFailure) {
+                ensureActive()
+                progress("Andere bron proberen…")
+                val exclude = setOfNotNull(result.hash.takeIf { it.isNotBlank() }?.lowercase())
+                r = if (picker.matchSong != null) {
+                    browsePlayer.playSong(picker.artist, picker.album, picker.matchSong, exclude, progress)
+                } else {
+                    browsePlayer.playAlbum(picker.artist, picker.album, picker.shuffle, exclude, progress)
+                }
             }
             // If the user picked another source meanwhile, this job was cancelled —
             // don't let a stale result overwrite the new pick's status.
             ensureActive()
             _state.update { st ->
                 if (r.isSuccess) st.copy(sourcePicker = null)
-                else st.sourcePicker?.let { st.copy(sourcePicker = it.copy(resolvingHash = null, message = "Bron mislukt — kies een andere")) } ?: st
+                else st.sourcePicker?.let { st.copy(sourcePicker = it.copy(resolvingHash = null, message = "Geen werkende bron — probeer een andere")) } ?: st
             }
         }
     }
