@@ -41,6 +41,9 @@ interface TrackDao {
     @Query("DELETE FROM tracks WHERE uri = :uri")
     suspend fun deleteByUri(uri: String)
 
+    @Query("DELETE FROM tracks WHERE sourceType = 'server'")
+    suspend fun deleteServerTracks()
+
     @Query("""
         SELECT * FROM tracks
         WHERE title LIKE '%' || :query || '%'

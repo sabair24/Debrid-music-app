@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Permit plain-HTTP traffic so the app can reach a self-hosted music server on the
+  local network (LAN servers commonly run over http://<ip>:<port>). All of the app's
+  built-in APIs use hardcoded https:// URLs, so they continue to use TLS regardless;
+  this flag only *permits* cleartext where a URL explicitly uses http.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

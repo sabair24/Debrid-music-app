@@ -22,8 +22,10 @@ data class Track(
     val sourceType: String = "local",
     val torrentHash: String? = null,
     val torrentFileName: String? = null,
+    val serverTrackId: String? = null,
 ) {
     val isOnline: Boolean get() = sourceType == "online"
+    val isServer: Boolean get() = sourceType == "server"
 
     val formattedDuration: String get() {
         val totalSeconds = durationMs / 1000

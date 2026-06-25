@@ -34,6 +34,7 @@ fun SettingsScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     var showLastFmKey by remember { mutableStateOf(false) }
     var showTorBoxKey by remember { mutableStateOf(false) }
+    var showServerToken by remember { mutableStateOf(false) }
     var showLastFmSecret by remember { mutableStateOf(false) }
     var showLastFmPassword by remember { mutableStateOf(false) }
 
@@ -333,6 +334,65 @@ fun SettingsScreen(
                         Spacer(Modifier.width(8.dp))
                     }
                     Text("Save & verify")
+                }
+            }
+
+            HorizontalDivider()
+
+            // ── Music server ─────────────────────────────────────────────────
+            SectionHeader("Muziekserver")
+
+            Text(
+                text = "Stream van je eigen PC-server. Vul het adres en token uit de server in.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            OutlinedTextField(
+                value = state.serverUrl,
+                onValueChange = viewModel::setServerUrl,
+                label = { Text("Server-URL") },
+                placeholder = { Text("http://192.168.1.10:4533") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = state.serverToken,
+                onValueChange = viewModel::setServerToken,
+                label = { Text("Token") },
+                placeholder = { Text("Wordt door de server geprint") },
+                singleLine = true,
+                visualTransformation = if (showServerToken) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    IconButton(onClick = { showServerToken = !showServerToken }) {
+                        Icon(if (showServerToken) Icons.Default.VisibilityOff else Icons.Default.Visibility, null)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            state.serverStatus?.let { status ->
+                Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = viewModel::testServerConnection,
+                    enabled = state.serverUrl.isNotBlank() && !state.serverBusy,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Test verbinding") }
+                Button(
+                    onClick = viewModel::syncServerLibrary,
+                    enabled = state.serverUrl.isNotBlank() && !state.serverBusy,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    if (state.serverBusy) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Synchroniseren")
                 }
             }
 

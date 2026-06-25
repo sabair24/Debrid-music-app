@@ -21,6 +21,7 @@ import com.debridmusic.app.domain.model.Track
 import com.debridmusic.app.metadata.MetadataEnricher
 import com.debridmusic.app.scanner.MediaScanner
 import kotlinx.coroutines.CoroutineScope
+import com.debridmusic.app.server.ServerCatalogDto
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.flowOn
@@ -191,6 +192,56 @@ class MusicRepository @Inject constructor(
         if (added > 0) { backfillArtworkInBackground(); enrichInBackground() }
         return added
     }
+
+    /**
+     * Replaces all "server" tracks with the latest catalog from the self-hosted music
+     * server. Stream/art URLs carry the token as a query param so the player and Coil
+     * fetch them through the shared OkHttp client. Returns the number of tracks synced.
+     */
+    suspend fun syncServerLibrary(catalog: ServerCatalogDto, baseUrl: String, token: String): Int {
+        val base = baseUrl.trim().trimEnd('/')
+        fun streamUrl(id: String) = "$base/stream/$id?token=$token"
+        fun artUrl(ref: String) = "$base/art/$ref?token=$token"
+
+        trackDao.deleteServerTracks()
+
+        val artistMap = HashMap<String, Long>()
+        catalog.artists.forEach { a ->
+            artistMap[a.id] = artistDao.getByName(a.name)?.id
+                ?: artistDao.insert(ArtistEntity(name = a.name, imageUri = a.artworkRef?.let { artUrl(it) }))
+        }
+        val albumMap = HashMap<String, Long>()
+        catalog.albums.forEach { al ->
+            val localArtistId = artistMap[al.artistId]
+                ?: artistDao.getByName(al.artistName)?.id
+                ?: artistDao.insert(ArtistEntity(name = al.artistName))
+            artistMap[al.artistId] = localArtistId
+            albumMap[al.id] = albumDao.getByTitleAndArtist(al.title, localArtistId)?.id
+                ?: albumDao.insert(
+                    AlbumEntity(
+                        title = al.title, artistId = localArtistId, artistName = al.artistName,
+                        artworkUri = artUrl(al.id), year = al.year,
+                    )
+                )
+        }
+        var added = 0
+        catalog.tracks.forEach { t ->
+            val rowId = trackDao.insert(
+                TrackEntity(
+                    title = t.title, artistName = t.artistName, albumTitle = t.albumTitle,
+                    albumId = albumMap[t.albumId], artistId = artistMap[t.artistId],
+                    uri = streamUrl(t.id), durationMs = t.durationMs,
+                    trackNumber = t.trackNo, discNumber = t.discNo, year = t.year,
+                    artworkUri = artUrl(t.albumId), genre = t.genre,
+                    bitrate = t.bitrate, sampleRate = t.sampleRate, isLossless = t.lossless,
+                    fileSize = t.sizeBytes, sourceType = "server", serverTrackId = t.id,
+                )
+            )
+            if (rowId > 0) added++
+        }
+        albumDao.deleteEmpty()
+        return added
+    }
 }
 
 // ---------- mapping extensions ----------
@@ -217,6 +268,7 @@ fun TrackEntity.toDomain() = Track(
     sourceType = sourceType,
     torrentHash = torrentHash,
     torrentFileName = torrentFileName,
+    serverTrackId = serverTrackId,
 )
 
 fun AlbumWithCount.toDomain() = Album(

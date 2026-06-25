@@ -1,7 +1,9 @@
 package com.debridmusic.app
 
 import android.app.Application
+import com.debridmusic.app.data.local.SettingsStore
 import com.debridmusic.app.data.repository.MusicRepository
+import com.debridmusic.app.server.ServerRepository
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
@@ -12,6 +14,8 @@ import javax.inject.Inject
 class DebridMusicApp : Application() {
 
     @Inject lateinit var musicRepository: MusicRepository
+    @Inject lateinit var serverRepository: ServerRepository
+    @Inject lateinit var settingsStore: SettingsStore
     @Inject lateinit var appScope: CoroutineScope
 
     override fun onCreate() {
@@ -28,6 +32,19 @@ class DebridMusicApp : Application() {
                     musicRepository.cleanupEmptyAlbumsInBackground()
                     musicRepository.backfillArtworkInBackground()
                     musicRepository.enrichInBackground()
+                }
+            }
+        }
+        // Refresh the self-hosted music server catalog on launch (if configured).
+        appScope.launch {
+            runCatching {
+                val url = settingsStore.serverUrl.first()
+                val token = settingsStore.serverToken.first()
+                if (url.isNotBlank()) {
+                    serverRepository.configure(url, token)
+                    val catalog = serverRepository.fetchCatalog()
+                    musicRepository.syncServerLibrary(catalog, url, token)
+                    settingsStore.setServerLastSync(System.currentTimeMillis())
                 }
             }
         }
