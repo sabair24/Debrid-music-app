@@ -51,13 +51,13 @@ sealed class Screen(val route: String) {
     }
 }
 
-private val TOP_LEVEL_ROUTES = BOTTOM_DESTS.map { it.route }.toSet()
-
 @Composable
 fun AppNavHost(navController: NavHostController) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
-    val showBottomBar = currentRoute in TOP_LEVEL_ROUTES
+    // Keep the bottom nav bar on every screen (incl. detail screens) so the user can
+    // always jump between tabs; only the full-screen player hides it.
+    val showBottomBar = currentRoute != null && currentRoute != Screen.NowPlaying.route
 
     fun switchTab(route: String) {
         if (route == currentRoute) return
