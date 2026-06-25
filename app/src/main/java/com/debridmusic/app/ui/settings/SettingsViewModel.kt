@@ -82,6 +82,12 @@ data class SettingsUiState(
     val tidalVerifyUrl: String? = null,
     val tidalDeviceCode: String? = null,
     val tidalError: String? = null,
+    // Self-hosted music server
+    val serverUrl: String = "",
+    val serverToken: String = "",
+    val serverBusy: Boolean = false,
+    val serverStatus: String? = null,
+    val serverLastSync: Long = 0L,
 )
 
 @HiltViewModel
@@ -99,6 +105,8 @@ class SettingsViewModel @Inject constructor(
     private val tidalAuthManager: com.debridmusic.app.tidal.TidalAuthManager,
     val eqController: EqController,
     private val scrobbleManager: ScrobbleManager,
+    private val serverRepository: com.debridmusic.app.server.ServerRepository,
+    private val musicRepository: com.debridmusic.app.data.repository.MusicRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SettingsUiState())
@@ -130,6 +138,15 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             settingsStore.crossFadeDurationMs.collect { ms ->
                 _state.update { it.copy(crossFadeDurationMs = ms) }
+            }
+        }
+        // Self-hosted music server: keep the repository configured with the latest URL/token.
+        viewModelScope.launch {
+            combine(settingsStore.serverUrl, settingsStore.serverToken, settingsStore.serverLastSync) { url, token, sync ->
+                Triple(url, token, sync)
+            }.collect { (url, token, sync) ->
+                serverRepository.configure(url, token)
+                _state.update { it.copy(serverUrl = url, serverToken = token, serverLastSync = sync) }
             }
         }
         viewModelScope.launch {
@@ -336,6 +353,48 @@ class SettingsViewModel @Inject constructor(
     fun setDiscogsToken(token: String) =
         _state.update { it.copy(discogsToken = token, discogsUsername = null, discogsError = null) }
     fun setTorBoxApiKey(key: String) = _state.update { it.copy(torBoxApiKey = key, torBoxUser = null, torBoxError = null) }
+
+    // ── Self-hosted music server ────────────────────────────────────────────────
+    fun setServerUrl(v: String) = _state.update { it.copy(serverUrl = v, serverStatus = null) }
+    fun setServerToken(v: String) = _state.update { it.copy(serverToken = v, serverStatus = null) }
+
+    /** Persists URL + token and verifies the connection via /health. */
+    fun testServerConnection() {
+        if (_state.value.serverBusy) return
+        _state.update { it.copy(serverBusy = true, serverStatus = "Verbinden…") }
+        viewModelScope.launch {
+            val url = _state.value.serverUrl.trim().trimEnd('/')
+            val token = _state.value.serverToken.trim()
+            settingsStore.setServerUrl(url)
+            settingsStore.setServerToken(token)
+            serverRepository.configure(url, token)
+            serverRepository.testConnection()
+                .onSuccess { h -> _state.update { it.copy(serverBusy = false, serverStatus = "Verbonden — server ${h.version}") } }
+                .onFailure { _state.update { it.copy(serverBusy = false, serverStatus = "Verbinding mislukt — controleer URL/token") } }
+        }
+    }
+
+    /** Pulls the server catalog and replaces the "server" tracks in the library. */
+    fun syncServerLibrary() {
+        if (_state.value.serverBusy) return
+        _state.update { it.copy(serverBusy = true, serverStatus = "Synchroniseren…") }
+        viewModelScope.launch {
+            val url = _state.value.serverUrl.trim().trimEnd('/')
+            val token = _state.value.serverToken.trim()
+            settingsStore.setServerUrl(url)
+            settingsStore.setServerToken(token)
+            serverRepository.configure(url, token)
+            runCatching {
+                val catalog = serverRepository.fetchCatalog()
+                musicRepository.syncServerLibrary(catalog, url, token)
+            }.onSuccess { n ->
+                settingsStore.setServerLastSync(System.currentTimeMillis())
+                _state.update { it.copy(serverBusy = false, serverStatus = "$n nummers gesynchroniseerd") }
+            }.onFailure {
+                _state.update { it.copy(serverBusy = false, serverStatus = "Synchroniseren mislukt: ${it.message}") }
+            }
+        }
+    }
 
     // Saves + verifies the Discogs token against /oauth/identity so the user gets an
     // immediate "valid, logged in as X" confirmation instead of guessing.

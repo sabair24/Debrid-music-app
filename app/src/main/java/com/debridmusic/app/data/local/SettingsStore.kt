@@ -103,6 +103,15 @@ class SettingsStore @Inject constructor(
     suspend fun setShuffleEnabled(enabled: Boolean) { dataStore.edit { it[KEY_SHUFFLE_ENABLED] = enabled } }
     suspend fun setRepeatMode(ordinal: Int) { dataStore.edit { it[KEY_REPEAT_MODE] = ordinal } }
 
+    // ── Self-hosted music server ────────────────────────────────────────────────
+    val serverUrl: Flow<String> = dataStore.data.map { it[KEY_SERVER_URL] ?: "" }
+    val serverToken: Flow<String> = dataStore.data.map { it[KEY_SERVER_TOKEN] ?: "" }
+    val serverLastSync: Flow<Long> = dataStore.data.map { it[KEY_SERVER_LAST_SYNC] ?: 0L }
+
+    suspend fun setServerUrl(v: String) { dataStore.edit { it[KEY_SERVER_URL] = v.trim().trimEnd('/') } }
+    suspend fun setServerToken(v: String) { dataStore.edit { it[KEY_SERVER_TOKEN] = v.trim() } }
+    suspend fun setServerLastSync(millis: Long) { dataStore.edit { it[KEY_SERVER_LAST_SYNC] = millis } }
+
     companion object {
         val KEY_LASTFM_API_KEY = stringPreferencesKey("last_fm_api_key")
         val KEY_DISCOGS_TOKEN = stringPreferencesKey("discogs_token")
@@ -125,5 +134,8 @@ class SettingsStore @Inject constructor(
         val KEY_DOWNLOAD_TREE_URI = stringPreferencesKey("download_tree_uri")
         val KEY_MAX_DOWNLOAD_BYTES = longPreferencesKey("max_download_bytes")
         val KEY_MAX_CONCURRENT_DOWNLOADS = intPreferencesKey("max_concurrent_downloads")
+        val KEY_SERVER_URL = stringPreferencesKey("server_url")
+        val KEY_SERVER_TOKEN = stringPreferencesKey("server_token")
+        val KEY_SERVER_LAST_SYNC = longPreferencesKey("server_last_sync")
     }
 }

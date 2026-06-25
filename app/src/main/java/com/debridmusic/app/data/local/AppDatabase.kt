@@ -25,7 +25,7 @@ import com.debridmusic.app.data.local.entity.TrackEntity
         PlaylistTrackCrossRef::class,
         DownloadEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -107,6 +107,13 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_5_6 = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE albums ADD COLUMN recordType TEXT")
+            }
+        }
+
+        // Self-hosted music server tracks (re-resolved on play via serverTrackId).
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tracks ADD COLUMN serverTrackId TEXT")
             }
         }
     }

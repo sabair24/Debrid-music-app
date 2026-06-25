@@ -47,4 +47,7 @@ data class TrackEntity(
     val sourceType: String = "local",
     val torrentHash: String? = null,
     val torrentFileName: String? = null,
+    // "server" tracks live on the user's self-hosted music server; the stream URL in
+    // `uri` is refreshed from this id (+ current server URL/token) before playback.
+    val serverTrackId: String? = null,
 )
