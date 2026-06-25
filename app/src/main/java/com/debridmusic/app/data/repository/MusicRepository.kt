@@ -23,7 +23,9 @@ import com.debridmusic.app.scanner.MediaScanner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import javax.inject.Inject
@@ -42,26 +44,33 @@ class MusicRepository @Inject constructor(
 ) {
     private val enrichMutex = Mutex()
     // ── Library ───────────────────────────────────────────────────────────────
-    // conflate(): during a burst of DB writes (e.g. background metadata enrichment)
-    // only the latest list is rendered, so the UI thread isn't flooded with
-    // recompositions and stays responsive.
+    // flowOn(Default): map each row to the domain model OFF the main thread, so a
+    // burst of DB writes (e.g. background metadata enrichment) doesn't run heavy
+    // list mapping on the UI thread. conflate(): only the latest list is delivered,
+    // so the UI stays responsive (navigation taps keep working) during the burst.
     fun observeTracks(): Flow<List<Track>> =
-        trackDao.observeAll().map { list -> list.map { it.toDomain() } }.conflate()
+        trackDao.observeAll().map { list -> list.map { it.toDomain() } }
+            .conflate().flowOn(Dispatchers.Default)
 
     fun observeRecentlyAdded(limit: Int = 20): Flow<List<Track>> =
-        trackDao.observeRecentlyAdded(limit).map { list -> list.map { it.toDomain() } }.conflate()
+        trackDao.observeRecentlyAdded(limit).map { list -> list.map { it.toDomain() } }
+            .conflate().flowOn(Dispatchers.Default)
 
     fun observeAlbums(): Flow<List<Album>> =
-        albumDao.observeAlbumsWithTrackCount().map { list -> list.map { it.toDomain() } }.conflate()
+        albumDao.observeAlbumsWithTrackCount().map { list -> list.map { it.toDomain() } }
+            .conflate().flowOn(Dispatchers.Default)
 
     fun observeArtists(): Flow<List<Artist>> =
-        artistDao.observeArtistsWithTracks().map { list -> list.map { it.toDomain() } }.conflate()
+        artistDao.observeArtistsWithTracks().map { list -> list.map { it.toDomain() } }
+            .conflate().flowOn(Dispatchers.Default)
 
     fun observeTracksByAlbum(albumId: Long): Flow<List<Track>> =
         trackDao.observeByAlbum(albumId).map { list -> list.map { it.toDomain() } }
+            .conflate().flowOn(Dispatchers.Default)
 
     fun observeTracksByArtist(artistId: Long): Flow<List<Track>> =
         trackDao.observeByArtist(artistId).map { list -> list.map { it.toDomain() } }
+            .conflate().flowOn(Dispatchers.Default)
 
     suspend fun search(query: String): List<Track> = trackDao.search(query).map { it.toDomain() }
 
@@ -120,7 +129,7 @@ class MusicRepository @Inject constructor(
     fun observePlaylistTracks(playlistId: Long): Flow<List<Track>> =
         playlistDao.observePlaylistTracks(playlistId).map { refs ->
             refs.mapNotNull { ref -> trackDao.getById(ref.trackId)?.toDomain() }
-        }
+        }.conflate().flowOn(Dispatchers.Default)
 
     suspend fun getPlaylists(): List<Playlist> =
         playlistDao.getAll().map { Playlist(it.id, it.name, 0, it.createdAt) }

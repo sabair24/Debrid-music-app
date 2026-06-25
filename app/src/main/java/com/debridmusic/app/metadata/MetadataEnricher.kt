@@ -23,8 +23,10 @@ import com.debridmusic.app.data.remote.dto.primaryImage
 import com.debridmusic.app.data.remote.dto.recordType
 import com.debridmusic.app.data.remote.dto.secondaryImage
 import com.debridmusic.app.data.remote.dto.stripDiscogsMarkup
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -58,9 +60,12 @@ class MetadataEnricher @Inject constructor(
     private val discogsAuth: DiscogsAuthInterceptor,
     private val settingsStore: SettingsStore,
 ) {
+    // Runs on a background dispatcher: the matching work (title similarity, sorting)
+    // and the coroutine's resumes must stay off the main thread so the UI keeps
+    // responding while a library is being enriched.
     suspend fun enrichAll(
         onProgress: suspend (EnrichmentProgress) -> Unit = {},
-    ): Int {
+    ): Int = withContext(Dispatchers.Default) {
         var enriched = 0
         val albums = albumDao.observeAll().first()
         val artists = artistDao.observeAll().first()
@@ -82,18 +87,18 @@ class MetadataEnricher @Inject constructor(
             delay(MB_RATE_LIMIT_MS)
         }
         onProgress(EnrichmentProgress(total, total))
-        return enriched
+        enriched
     }
 
-    suspend fun reEnrichAlbum(albumId: Long): Boolean {
+    suspend fun reEnrichAlbum(albumId: Long): Boolean = withContext(Dispatchers.Default) {
         val token = syncDiscogsToken()
-        return albumDao.getById(albumId)?.let { enrichAlbum(it, force = true, discogsToken = token) } ?: false
+        albumDao.getById(albumId)?.let { enrichAlbum(it, force = true, discogsToken = token) } ?: false
     }
 
-    suspend fun reEnrichArtist(artistId: Long): Boolean {
+    suspend fun reEnrichArtist(artistId: Long): Boolean = withContext(Dispatchers.Default) {
         val key = settingsStore.lastFmApiKey.first()
         val token = syncDiscogsToken()
-        return artistDao.getById(artistId)?.let { enrichArtist(it, key, force = true, discogsToken = token) } ?: false
+        artistDao.getById(artistId)?.let { enrichArtist(it, key, force = true, discogsToken = token) } ?: false
     }
 
     /** Pushes the saved Discogs token into the interceptor and returns it (blank = disabled). */
@@ -523,8 +528,8 @@ class MetadataEnricher @Inject constructor(
         return deezer + discogs
     }
 
-    suspend fun applyAlbumMatch(albumId: Long, m: AlbumMatch) {
-        val album = albumDao.getById(albumId) ?: return
+    suspend fun applyAlbumMatch(albumId: Long, m: AlbumMatch) = withContext(Dispatchers.Default) {
+        val album = albumDao.getById(albumId) ?: return@withContext
         val deezerFull = m.deezerId?.let { runCatching { deezerApi.getAlbum(it) }.getOrNull() }
         val discogsFull = m.discogsReleaseId?.let {
             syncDiscogsToken(); runCatching { discogsApi.getRelease(it) }.getOrNull()
@@ -559,10 +564,11 @@ class MetadataEnricher @Inject constructor(
         albumDao.getById(albumId)?.let { albumDao.update(it.copy(manualOverride = true)) }
         // Drop any album left without tracks after the re-tag.
         runCatching { albumDao.deleteEmpty() }
+        Unit
     }
 
-    suspend fun applyArtistMatch(artistId: Long, m: ArtistMatch) {
-        val artist = artistDao.getById(artistId) ?: return
+    suspend fun applyArtistMatch(artistId: Long, m: ArtistMatch) = withContext(Dispatchers.Default) {
+        val artist = artistDao.getById(artistId) ?: return@withContext
         val deezerFull = m.deezerId?.let { runCatching { deezerApi.getArtist(it) }.getOrNull() }
         val discogsFull = m.discogsArtistId?.let {
             syncDiscogsToken(); runCatching { discogsApi.getArtist(it) }.getOrNull()
@@ -579,6 +585,7 @@ class MetadataEnricher @Inject constructor(
         val key = settingsStore.lastFmApiKey.first()
         enrichArtist(updated.copy(manualOverride = false), key, force = true)
         artistDao.getById(artistId)?.let { artistDao.update(it.copy(manualOverride = true)) }
+        Unit
     }
 
     // Discogs release titles are "Artist - Album"; split into (artist, album).
