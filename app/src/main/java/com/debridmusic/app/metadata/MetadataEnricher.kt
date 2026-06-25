@@ -253,8 +253,9 @@ class MetadataEnricher @Inject constructor(
                 .map { titleSimilarity(localSorted[it].title, officialSorted[it].title) }
                 .average() >= 0.5 // counts match AND titles broadly agree → trust positions
         }
+        val updates = mutableListOf<TrackEntity>()
         if (positional) {
-            localSorted.forEachIndexed { i, t -> applyOfficial(t, officialSorted[i]) }
+            localSorted.forEachIndexed { i, t -> retitled(t, officialSorted[i])?.let(updates::add) }
         } else {
             val used = HashSet<Int>()
             localSorted.forEach { t ->
@@ -262,17 +263,17 @@ class MetadataEnricher @Inject constructor(
                     .maxByOrNull { titleSimilarity(t.title, officialSorted[it].title) } ?: return@forEach
                 if (titleSimilarity(t.title, officialSorted[idx].title) >= 0.85) {
                     used.add(idx)
-                    applyOfficial(t, officialSorted[idx])
+                    retitled(t, officialSorted[idx])?.let(updates::add)
                 }
             }
         }
+        // One batched write per album → a single DB invalidation, not one per track.
+        if (updates.isNotEmpty()) trackDao.updateAll(updates)
     }
 
-    private suspend fun applyOfficial(track: TrackEntity, official: OfficialTrack) {
-        if (track.title != official.title || track.trackNumber != official.position) {
-            trackDao.update(track.copy(title = official.title, trackNumber = official.position))
-        }
-    }
+    private fun retitled(track: TrackEntity, official: OfficialTrack): TrackEntity? =
+        if (track.title != official.title || track.trackNumber != official.position)
+            track.copy(title = official.title, trackNumber = official.position) else null
 
     // Mean of each local track's best similarity to any official title — how well a
     // candidate tracklist fits this album.
@@ -342,9 +343,10 @@ class MetadataEnricher @Inject constructor(
     private suspend fun backfillTrackArtwork(albumId: Long, knownArt: String? = null, overwrite: Boolean = false) {
         val art = knownArt ?: albumDao.getById(albumId)?.artworkUri ?: return
         if (art.isBlank()) return
-        trackDao.observeByAlbum(albumId).first()
+        val changed = trackDao.observeByAlbum(albumId).first()
             .filter { if (overwrite) it.artworkUri != art else it.artworkUri.isNullOrBlank() }
-            .forEach { trackDao.update(it.copy(artworkUri = art)) }
+            .map { it.copy(artworkUri = art) }
+        if (changed.isNotEmpty()) trackDao.updateAll(changed)
     }
 
     /**
@@ -357,9 +359,10 @@ class MetadataEnricher @Inject constructor(
         albumDao.observeAll().first().forEach { album ->
             val art = album.artworkUri
             if (!art.isNullOrBlank()) {
-                trackDao.observeByAlbum(album.id).first()
+                val changed = trackDao.observeByAlbum(album.id).first()
                     .filter { it.artworkUri != art }
-                    .forEach { trackDao.update(it.copy(artworkUri = art)); filled++ }
+                    .map { it.copy(artworkUri = art) }
+                if (changed.isNotEmpty()) { trackDao.updateAll(changed); filled += changed.size }
             }
         }
         return filled
@@ -543,9 +546,10 @@ class MetadataEnricher @Inject constructor(
         albumDao.update(updated)
         // Reflect a renamed album on its tracks so the library is consistent.
         if (updated.title != album.title) {
-            trackDao.observeByAlbum(albumId).first()
+            val changed = trackDao.observeByAlbum(albumId).first()
                 .filter { it.albumTitle != updated.title }
-                .forEach { trackDao.update(it.copy(albumTitle = updated.title)) }
+                .map { it.copy(albumTitle = updated.title) }
+            if (changed.isNotEmpty()) trackDao.updateAll(changed)
         }
         // Apply the chosen album's official track titles (Deezer or Discogs).
         alignTrackTitles(albumId, updated, syncDiscogsToken(), m.deezerId, m.discogsReleaseId)
