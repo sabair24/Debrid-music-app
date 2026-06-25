@@ -22,6 +22,7 @@ import com.debridmusic.app.metadata.MetadataEnricher
 import com.debridmusic.app.scanner.MediaScanner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -41,17 +42,20 @@ class MusicRepository @Inject constructor(
 ) {
     private val enrichMutex = Mutex()
     // ── Library ───────────────────────────────────────────────────────────────
+    // conflate(): during a burst of DB writes (e.g. background metadata enrichment)
+    // only the latest list is rendered, so the UI thread isn't flooded with
+    // recompositions and stays responsive.
     fun observeTracks(): Flow<List<Track>> =
-        trackDao.observeAll().map { list -> list.map { it.toDomain() } }
+        trackDao.observeAll().map { list -> list.map { it.toDomain() } }.conflate()
 
     fun observeRecentlyAdded(limit: Int = 20): Flow<List<Track>> =
-        trackDao.observeRecentlyAdded(limit).map { list -> list.map { it.toDomain() } }
+        trackDao.observeRecentlyAdded(limit).map { list -> list.map { it.toDomain() } }.conflate()
 
     fun observeAlbums(): Flow<List<Album>> =
-        albumDao.observeAlbumsWithTrackCount().map { list -> list.map { it.toDomain() } }
+        albumDao.observeAlbumsWithTrackCount().map { list -> list.map { it.toDomain() } }.conflate()
 
     fun observeArtists(): Flow<List<Artist>> =
-        artistDao.observeArtistsWithTracks().map { list -> list.map { it.toDomain() } }
+        artistDao.observeArtistsWithTracks().map { list -> list.map { it.toDomain() } }.conflate()
 
     fun observeTracksByAlbum(albumId: Long): Flow<List<Track>> =
         trackDao.observeByAlbum(albumId).map { list -> list.map { it.toDomain() } }

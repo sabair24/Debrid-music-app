@@ -31,6 +31,10 @@ interface TrackDao {
     @Update
     suspend fun update(track: TrackEntity)
 
+    /** Updates many tracks in one transaction → a single DB invalidation (less UI churn). */
+    @Update
+    suspend fun updateAll(tracks: List<TrackEntity>)
+
     @Query("DELETE FROM tracks WHERE id = :id")
     suspend fun deleteById(id: Long)
 
