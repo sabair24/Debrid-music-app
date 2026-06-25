@@ -553,6 +553,8 @@ class MetadataEnricher @Inject constructor(
         enrichAlbum(updated.copy(manualOverride = false), force = true)
         // Re-assert the override flag (enrichAlbum wrote manualOverride=false copy's value).
         albumDao.getById(albumId)?.let { albumDao.update(it.copy(manualOverride = true)) }
+        // Drop any album left without tracks after the re-tag.
+        runCatching { albumDao.deleteEmpty() }
     }
 
     suspend fun applyArtistMatch(artistId: Long, m: ArtistMatch) {

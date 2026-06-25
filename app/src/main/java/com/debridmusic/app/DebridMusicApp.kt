@@ -23,8 +23,9 @@ class DebridMusicApp : Application() {
         appScope.launch {
             runCatching {
                 if (musicRepository.trackCount().first() > 0) {
-                    // Fill cover-less tracks from their album cover immediately, then do
-                    // the slower online metadata pass.
+                    // Remove orphan (track-less) albums, fill cover-less tracks from their
+                    // album cover immediately, then do the slower online metadata pass.
+                    musicRepository.cleanupEmptyAlbumsInBackground()
                     musicRepository.backfillArtworkInBackground()
                     musicRepository.enrichInBackground()
                 }
