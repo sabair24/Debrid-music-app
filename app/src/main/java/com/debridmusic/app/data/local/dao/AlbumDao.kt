@@ -31,11 +31,16 @@ interface AlbumDao {
     @Query("DELETE FROM albums WHERE id = :id")
     suspend fun deleteById(id: Long)
 
+    /** Removes orphan albums that have no tracks (e.g. left over after a re-tag). */
+    @Query("DELETE FROM albums WHERE id NOT IN (SELECT DISTINCT albumId FROM tracks)")
+    suspend fun deleteEmpty(): Int
+
     @Query("""
         SELECT al.*, COUNT(t.id) as trackCount
         FROM albums al
         LEFT JOIN tracks t ON t.albumId = al.id
         GROUP BY al.id
+        HAVING COUNT(t.id) > 0
         ORDER BY al.title ASC
     """)
     fun observeAlbumsWithTrackCount(): Flow<List<AlbumWithCount>>

@@ -83,6 +83,11 @@ class MusicRepository @Inject constructor(
         appScope.launch { runCatching { enricher.backfillTrackArtwork() } }
     }
 
+    /** Removes orphan albums left with no tracks (e.g. after re-tagging an album). */
+    fun cleanupEmptyAlbumsInBackground() {
+        appScope.launch { runCatching { albumDao.deleteEmpty() } }
+    }
+
     suspend fun getTrack(id: Long): Track? = trackDao.getById(id)?.toDomain()
 
     suspend fun getAlbum(id: Long): Album? = albumDao.getById(id)?.toDomain()
