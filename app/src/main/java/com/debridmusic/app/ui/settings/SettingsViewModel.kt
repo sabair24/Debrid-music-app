@@ -390,8 +390,8 @@ class SettingsViewModel @Inject constructor(
             }.onSuccess { n ->
                 settingsStore.setServerLastSync(System.currentTimeMillis())
                 _state.update { it.copy(serverBusy = false, serverStatus = "$n nummers gesynchroniseerd") }
-            }.onFailure {
-                _state.update { it.copy(serverBusy = false, serverStatus = "Synchroniseren mislukt: ${it.message}") }
+            }.onFailure { e ->
+                _state.update { it.copy(serverBusy = false, serverStatus = "Synchroniseren mislukt: ${e.message}") }
             }
         }
     }
