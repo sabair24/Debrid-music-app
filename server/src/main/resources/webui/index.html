@@ -602,18 +602,24 @@ async function doSoulseekSearch(q){
     files.forEach(f=>res.appendChild(soulseekRow(f)));
   }catch(e){ st.textContent='Zoeken mislukt: '+e.message; }
 }
+// displayName/isFlac are computed (non-serialized) server-side, so derive them here from filename.
+function slskParts(f){
+  const segs=(f.filename||'').replace(/\\/g,'/').split('/').filter(Boolean);
+  return { name: segs[segs.length-1] || f.filename || '?', folder: segs[segs.length-2] || '' };
+}
+const slskIsFlac = f => /\.flac$/i.test(f.filename||'');
 function soulseekRow(f){
   const row=document.createElement('div'); row.className='row';
-  const meta=[f.username, gb(f.size), f.bitrate?f.bitrate+'kbps':'', f.durationSec?fmtS(f.durationSec):'', f.freeSlots?'<span style="color:var(--accent2)">vrij</span>':('wachtrij '+f.queueLength)].filter(Boolean).join(' · ');
+  const p=slskParts(f);
   row.innerHTML=`
-    <div class="info"><div class="tt">${esc(f.displayName)}</div><div class="aa">${meta}</div></div>
-    ${f.isFlac?'<span class="badge">FLAC</span>':''}
+    <div class="info"><div class="tt">${esc(p.name)}</div><div class="aa">${esc(p.folder)?'<span style="opacity:.85">'+esc(p.folder)+'</span> · ':''}${[f.username, gb(f.size), f.bitrate?f.bitrate+'kbps':'', f.durationSec?fmtS(f.durationSec):''].filter(Boolean).join(' · ')} · ${f.freeSlots?'<span style="color:var(--accent2)">vrij</span>':('wachtrij '+f.queueLength)}</div></div>
+    ${slskIsFlac(f)?'<span class="badge">FLAC</span>':''}
     <button class="rowico" title="Download">⬇</button>`;
   row.querySelector('button').onclick=()=>slskDownload(f);
   return row;
 }
 async function slskDownload(f){
-  try{ await jpost(api('/api/soulseek/download'), f); toast('Download gestart: '+f.displayName); pollSlskJobs(); }
+  try{ await jpost(api('/api/soulseek/download'), f); toast('Download gestart: '+slskParts(f).name); pollSlskJobs(); }
   catch(e){ toast('Download mislukt: '+e.message); }
 }
 let slskTimer=null;
