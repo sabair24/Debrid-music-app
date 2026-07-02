@@ -34,6 +34,6 @@ if (Test-Path $icon) { $iconArg = @('--icon', $icon) }
   --vendor 'DebridMusic' `
   --java-options '-Xmx768m' `
   @iconArg `
-  --add-modules java.base,java.desktop,java.sql,java.naming,java.xml,java.management,java.logging,jdk.unsupported,java.net.http
+  --add-modules java.base,java.desktop,java.sql,java.naming,java.xml,java.management,java.logging,jdk.unsupported,java.net.http,jdk.crypto.ec,jdk.crypto.cryptoki
 
 Write-Host "`nBuilt: $dist\DebridMusic\DebridMusic.exe"
