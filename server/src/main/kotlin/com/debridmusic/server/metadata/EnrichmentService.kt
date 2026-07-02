@@ -44,34 +44,39 @@ class EnrichmentService(
     @Volatile private var done = 0
     @Volatile private var total = 0
     @Volatile private var fetched = 0
+    @Volatile private var pending = false
 
     fun status() = EnrichStatusDto(running, done, total, fetched)
 
-    /** Kick off enrichment in the background (no-op if already running). */
+    /** Kick off enrichment in the background; if a pass is already running, re-runs after it. */
     fun enrichInBackground() {
         appScope.launch { runCatching { enrichAll() }.onFailure { log.warn("enrich failed: {}", it.message) } }
     }
 
     suspend fun enrichAll() {
-        if (!mutex.tryLock()) return
+        if (!mutex.tryLock()) { pending = true; return }   // a pass is running → ask it to loop once more
         try {
-            running = true; done = 0; fetched = 0
-            artCacheDir.mkdirs()
-            val albums = store.albums()
-            total = albums.size
-            log.info("Enrichment: scanning {} albums for missing art…", total)
-            for (a in albums) {
-                done++
-                val cache = File(artCacheDir, "${a.id}.jpg")
-                if (cache.isFile || artwork.hasLocalArt(a.id)) continue
-                val cover = runCatching { deezerCover(a.artistName, a.title) }.getOrNull() ?: continue
-                runCatching {
-                    val resp = Http.get(cover, timeoutMs = 15_000)
-                    if (resp.ok && resp.bytes.size > 1_000) { cache.writeBytes(resp.bytes); fetched++ }
+            running = true
+            do {
+                pending = false
+                done = 0; fetched = 0
+                artCacheDir.mkdirs()
+                val albums = store.albums()
+                total = albums.size
+                log.info("Enrichment: scanning {} albums for missing art…", total)
+                for (a in albums) {
+                    done++
+                    val cache = File(artCacheDir, "${a.id}.jpg")
+                    if (cache.isFile || artwork.hasLocalArt(a.id)) continue
+                    val cover = runCatching { deezerCover(a.artistName, a.title) }.getOrNull() ?: continue
+                    runCatching {
+                        val resp = Http.get(cover, timeoutMs = 15_000)
+                        if (resp.ok && resp.bytes.size > 1_000) { cache.writeBytes(resp.bytes); fetched++ }
+                    }
+                    delay(250) // be polite to Deezer
                 }
-                delay(250) // be polite to Deezer
-            }
-            log.info("Enrichment done: fetched {} covers", fetched)
+                log.info("Enrichment pass done: fetched {} covers", fetched)
+            } while (pending)
         } finally {
             running = false
             mutex.unlock()

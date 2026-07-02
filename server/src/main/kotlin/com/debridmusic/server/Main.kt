@@ -51,9 +51,11 @@ fun runHeadlessServer(args: Array<String>) {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val aggregator = SearchAggregator(listOf(ApibaySource(), BitSearchSource(), KnabenSource(), RuTrackerSource(settings)))
     val torBoxClient = TorBoxClient { settings.get(ServerSettings.TORBOX_API_KEY) }
-    val online = OnlineService(settings, aggregator, torBoxClient, config.musicRoots.first(), onLibraryChanged = { scanner.scan() }, appScope)
     val enrichment = EnrichmentService(store, artwork, java.io.File(config.dataDir, "artcache"), appScope)
-    val soulseek = com.debridmusic.server.soulseek.SoulseekService(settings, com.debridmusic.server.soulseek.SoulseekClient(), config.musicRoots.first(), onLibraryChanged = { scanner.scan() }, appScope)
+    // Any library change (a download landing, a new file) rescans AND fetches missing covers.
+    val onLibraryChanged: () -> Unit = { scanner.scan(); enrichment.enrichInBackground() }
+    val online = OnlineService(settings, aggregator, torBoxClient, config.musicRoots.first(), onLibraryChanged, appScope)
+    val soulseek = com.debridmusic.server.soulseek.SoulseekService(settings, com.debridmusic.server.soulseek.SoulseekClient(), config.musicRoots.first(), onLibraryChanged, appScope)
 
     log.info("Music roots: {}", config.musicRoots.joinToString { it.absolutePath })
     log.info("Indexing…")
@@ -61,7 +63,7 @@ fun runHeadlessServer(args: Array<String>) {
     log.info("Indexed {} tracks", store.trackCount())
     enrichment.enrichInBackground()
 
-    FileWatcher(config.musicRoots, onChange = { scanner.scan() }).start()
+    FileWatcher(config.musicRoots, onChange = { onLibraryChanged() }).start()
 
     log.info("Auth token: {}", config.authToken)
     log.info("Open the app in a browser: {}?token={}", NetworkInfo.lanBaseUrl(config.port), config.authToken)

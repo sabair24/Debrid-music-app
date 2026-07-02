@@ -67,14 +67,15 @@ object DesktopMain {
         val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val aggregator = SearchAggregator(listOf(ApibaySource(), BitSearchSource(), KnabenSource(), RuTrackerSource(settings)))
         val torBoxClient = TorBoxClient { settings.get(ServerSettings.TORBOX_API_KEY) }
-        val online = OnlineService(settings, aggregator, torBoxClient, config.musicRoots.first(), onLibraryChanged = { scanner.scan() }, appScope)
         val enrichment = EnrichmentService(store, artwork, File(config.dataDir, "artcache"), appScope)
-        val soulseek = com.debridmusic.server.soulseek.SoulseekService(settings, com.debridmusic.server.soulseek.SoulseekClient(), config.musicRoots.first(), onLibraryChanged = { scanner.scan() }, appScope)
+        val onLibraryChanged: () -> Unit = { scanner.scan(); enrichment.enrichInBackground() }
+        val online = OnlineService(settings, aggregator, torBoxClient, config.musicRoots.first(), onLibraryChanged, appScope)
+        val soulseek = com.debridmusic.server.soulseek.SoulseekService(settings, com.debridmusic.server.soulseek.SoulseekClient(), config.musicRoots.first(), onLibraryChanged, appScope)
 
         log.info("Indexing {}…", roots.joinToString { it.absolutePath })
         scanner.scan()
         enrichment.enrichInBackground()
-        FileWatcher(config.musicRoots, onChange = { scanner.scan() }).start()
+        FileWatcher(config.musicRoots, onChange = { onLibraryChanged() }).start()
 
         val engine = embeddedServer(Netty, port = port, host = "0.0.0.0") {
             configureServer(config, store, artwork, ingest, cast, settings, online, enrichment, soulseek)

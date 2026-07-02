@@ -16,6 +16,10 @@ data class SoulseekFile(
     val sampleRate: Int? = null,
     val bitDepth: Int? = null,
     val isVbr: Boolean = false,
+    // Parsed from the path (filled server-side) so the UI can show clean labels.
+    val title: String = "",
+    val artist: String = "",
+    val album: String = "",
 ) {
     val displayName: String get() = filename.replace('\\', '/').substringAfterLast('/')
     val extension: String get() = displayName.substringAfterLast('.', "").lowercase()

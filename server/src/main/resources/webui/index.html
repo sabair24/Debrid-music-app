@@ -298,7 +298,9 @@ function render(view){
   if(view==='online') return renderOnline(m);
   if(view==='soulseek') return renderSoulseek(m);
 }
-function coverHtml(ref){ return `<div class="cover">${ref?`<img loading="lazy" src="${artUrl(ref)}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'cover',innerHTML:\`${PH}\`}).firstChild)">`:PH}<div class="play"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div></div>`; }
+// Placeholder always sits behind; the cover image is layered on top and simply
+// removed (revealing the placeholder) if it fails to load.
+function coverHtml(ref){ return `<div class="cover">${PH}${ref?`<img loading="lazy" src="${artUrl(ref)}" onerror="this.remove()">`:''}<div class="play"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div></div>`; }
 
 function renderAlbums(m, albums){
   if(!albums.length) return m.innerHTML=`<div class="empty">No albums found.</div>`;
@@ -341,7 +343,7 @@ async function openAlbum(a){
   const tracks = await jget(api('/api/library/tracks?albumId='+encodeURIComponent(a.id)));
   m.innerHTML = `
     <div class="detail-head">
-      <div class="cover" style="width:210px;height:210px">${a.artworkRef?`<img src="${artUrl(a.artworkRef)}">`:PH}</div>
+      <div class="cover" style="width:210px;height:210px">${PH}${a.artworkRef?`<img src="${artUrl(a.artworkRef)}" onerror="this.remove()">`:''}</div>
       <div class="meta">
         <div class="sub">Album</div><h1>${esc(a.title)}</h1>
         <div class="sub">${esc(a.artistName)}${a.year?' · '+a.year:''} · ${tracks.length} tracks</div>
@@ -608,11 +610,18 @@ function slskParts(f){
   return { name: segs[segs.length-1] || f.filename || '?', folder: segs[segs.length-2] || '' };
 }
 const slskIsFlac = f => /\.flac$/i.test(f.filename||'');
+function slskTitle(f){
+  // The filename/title usually already reads "Artist - Track"; the parsed "artist"
+  // is often just the uploader's share folder, so we don't prepend it.
+  return (f.title||'').trim() || slskParts(f).name;
+}
 function soulseekRow(f){
   const row=document.createElement('div'); row.className='row';
-  const p=slskParts(f);
+  const album=(f.album||'').trim()||slskParts(f).folder;
+  const specs=[f.username, gb(f.size), f.bitrate?f.bitrate+'kbps':'', f.durationSec?fmtS(f.durationSec):''].filter(Boolean).join(' · ');
+  const slots=f.freeSlots?'<span style="color:var(--accent2)">vrij</span>':('wachtrij '+f.queueLength);
   row.innerHTML=`
-    <div class="info"><div class="tt">${esc(p.name)}</div><div class="aa">${esc(p.folder)?'<span style="opacity:.85">'+esc(p.folder)+'</span> · ':''}${[f.username, gb(f.size), f.bitrate?f.bitrate+'kbps':'', f.durationSec?fmtS(f.durationSec):''].filter(Boolean).join(' · ')} · ${f.freeSlots?'<span style="color:var(--accent2)">vrij</span>':('wachtrij '+f.queueLength)}</div></div>
+    <div class="info"><div class="tt">${esc(slskTitle(f))}</div><div class="aa">${album?'<span style="opacity:.85">'+esc(album)+'</span> · ':''}${specs} · ${slots}</div></div>
     ${slskIsFlac(f)?'<span class="badge">FLAC</span>':''}
     <button class="rowico" title="Download">⬇</button>`;
   row.querySelector('button').onclick=()=>slskDownload(f);

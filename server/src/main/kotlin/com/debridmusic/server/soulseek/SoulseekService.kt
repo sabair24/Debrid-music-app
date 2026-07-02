@@ -37,7 +37,10 @@ class SoulseekService(
 
     suspend fun search(query: String): List<SoulseekFile> {
         val (u, p) = creds()
-        return client.search(u, p, query)
+        return client.search(u, p, query).map { f ->
+            val m = SoulseekPath.parse(f.filename)
+            f.copy(title = m.title, artist = m.artist, album = m.album)
+        }
     }
 
     fun jobs(): List<DownloadJobDto> = jobs.map { DownloadJobDto(it.id, it.name, it.user, it.status, it.progress) }
