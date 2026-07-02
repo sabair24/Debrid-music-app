@@ -51,7 +51,7 @@ fun runHeadlessServer(args: Array<String>) {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val aggregator = SearchAggregator(listOf(ApibaySource(), BitSearchSource(), KnabenSource(), RuTrackerSource(settings)))
     val torBoxClient = TorBoxClient { settings.get(ServerSettings.TORBOX_API_KEY) }
-    val enrichment = EnrichmentService(store, artwork, java.io.File(config.dataDir, "artcache"), appScope)
+    val enrichment = EnrichmentService(store, artwork, java.io.File(config.dataDir, "artcache"), appScope, settings)
     // Any library change (a download landing, a new file) rescans AND fetches missing covers.
     val onLibraryChanged: () -> Unit = { scanner.scan(); enrichment.enrichInBackground() }
     val online = OnlineService(settings, aggregator, torBoxClient, config.musicRoots.first(), onLibraryChanged, appScope)

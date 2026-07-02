@@ -41,7 +41,7 @@ object Http {
 
     private fun builder(url: String, timeoutMs: Long, headers: Map<String, String>): HttpRequest.Builder {
         val b = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMillis(timeoutMs))
-        b.header("User-Agent", UA)
+        if (headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) b.header("User-Agent", UA)
         headers.forEach { (k, v) -> b.header(k, v) }
         return b
     }

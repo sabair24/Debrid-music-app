@@ -67,7 +67,7 @@ object DesktopMain {
         val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val aggregator = SearchAggregator(listOf(ApibaySource(), BitSearchSource(), KnabenSource(), RuTrackerSource(settings)))
         val torBoxClient = TorBoxClient { settings.get(ServerSettings.TORBOX_API_KEY) }
-        val enrichment = EnrichmentService(store, artwork, File(config.dataDir, "artcache"), appScope)
+        val enrichment = EnrichmentService(store, artwork, File(config.dataDir, "artcache"), appScope, settings)
         val onLibraryChanged: () -> Unit = { scanner.scan(); enrichment.enrichInBackground() }
         val online = OnlineService(settings, aggregator, torBoxClient, config.musicRoots.first(), onLibraryChanged, appScope)
         val soulseek = com.debridmusic.server.soulseek.SoulseekService(settings, com.debridmusic.server.soulseek.SoulseekClient(), config.musicRoots.first(), onLibraryChanged, appScope)
@@ -84,7 +84,7 @@ object DesktopMain {
         val localUrl = "http://localhost:$port/?token=$token"
         val lanUrl = "${NetworkInfo.lanBaseUrl(port)}/?token=$token"
         installTray(config, store, localUrl, lanUrl, token, engine)
-        openBrowser(localUrl)
+        openAppWindow(localUrl)
         log.info("DebridMusic running. Local: {}  LAN: {}", localUrl, lanUrl)
     }
 
@@ -125,7 +125,7 @@ object DesktopMain {
 
         fun item(label: String, action: () -> Unit) = MenuItem(label).apply { addActionListener { action() } }
 
-        popup.add(item("Open DebridMusic") { openBrowser(localUrl) })
+        popup.add(item("Open DebridMusic") { openAppWindow(localUrl) })
         popup.add(item("Copy access token") { copyToClipboard(token) })
         popup.add(item("Copy LAN link (phone / iPad)") { copyToClipboard(lanUrl) })
         popup.addSeparator()
@@ -140,7 +140,7 @@ object DesktopMain {
 
         val icon = TrayIcon(trayImage(), "DebridMusic — ${store.trackCount()} tracks", popup).apply {
             isImageAutoSize = true
-            addActionListener { openBrowser(localUrl) } // double-click opens the app
+            addActionListener { openAppWindow(localUrl) } // double-click opens the app
         }
         runCatching { tray.add(icon) }
         runCatching {
@@ -164,6 +164,35 @@ object DesktopMain {
         g.fillRect(8, 3, 2, 8)                 // stem
         g.dispose()
         return img
+    }
+
+    /**
+     * Open the UI as a standalone app window (Edge/Chrome `--app=` mode: own window,
+     * own taskbar entry, no address bar/tabs). Falls back to the default browser.
+     */
+    private fun openAppWindow(url: String) {
+        val profile = File(ServerConfig.desktopDataDir(), "appwindow").absolutePath
+        val pf = System.getenv("ProgramFiles")
+        val pf86 = System.getenv("ProgramFiles(x86)")
+        val local = System.getenv("LOCALAPPDATA")
+        val candidates = listOfNotNull(
+            pf86?.let { "$it\\Microsoft\\Edge\\Application\\msedge.exe" },
+            pf?.let { "$it\\Microsoft\\Edge\\Application\\msedge.exe" },
+            pf?.let { "$it\\Google\\Chrome\\Application\\chrome.exe" },
+            pf86?.let { "$it\\Google\\Chrome\\Application\\chrome.exe" },
+            local?.let { "$it\\Google\\Chrome\\Application\\chrome.exe" },
+        )
+        val exe = candidates.firstOrNull { File(it).isFile }
+        if (exe != null) {
+            val ok = runCatching {
+                ProcessBuilder(
+                    exe, "--app=$url", "--user-data-dir=$profile",
+                    "--window-size=1320,880", "--no-first-run", "--no-default-browser-check",
+                ).start()
+            }.isSuccess
+            if (ok) return
+        }
+        openBrowser(url)
     }
 
     private fun openBrowser(url: String) = runCatching {
