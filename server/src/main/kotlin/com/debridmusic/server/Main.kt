@@ -11,6 +11,7 @@ import com.debridmusic.server.search.BitSearchSource
 import com.debridmusic.server.search.KnabenSource
 import com.debridmusic.server.search.RuTrackerSource
 import com.debridmusic.server.search.SearchAggregator
+import com.debridmusic.server.metadata.EnrichmentService
 import com.debridmusic.server.service.ArtworkService
 import com.debridmusic.server.service.IngestService
 import com.debridmusic.server.torbox.OnlineService
@@ -43,7 +44,7 @@ fun runHeadlessServer(args: Array<String>) {
 
     val store = IndexStore(config.indexFile)
     val scanner = LibraryScanner(config.musicRoots, store)
-    val artwork = ArtworkService(config.musicRoots, store)
+    val artwork = ArtworkService(config.musicRoots, store, java.io.File(config.dataDir, "artcache"))
     val ingest = IngestService(config.musicRoots, scanner, store)
     val cast = CastManager(store, UpnpCast(), lanBaseUrlFor = { host -> NetworkInfo.lanBaseUrlFor(host, config.port) }, token = config.authToken)
     val settings = ServerSettings(java.io.File(config.dataDir, "settings.properties"))
@@ -51,11 +52,14 @@ fun runHeadlessServer(args: Array<String>) {
     val aggregator = SearchAggregator(listOf(ApibaySource(), BitSearchSource(), KnabenSource(), RuTrackerSource(settings)))
     val torBoxClient = TorBoxClient { settings.get(ServerSettings.TORBOX_API_KEY) }
     val online = OnlineService(settings, aggregator, torBoxClient, config.musicRoots.first(), onLibraryChanged = { scanner.scan() }, appScope)
+    val enrichment = EnrichmentService(store, artwork, java.io.File(config.dataDir, "artcache"), appScope)
+    val soulseek = com.debridmusic.server.soulseek.SoulseekService(settings, com.debridmusic.server.soulseek.SoulseekClient(), config.musicRoots.first(), onLibraryChanged = { scanner.scan() }, appScope)
 
     log.info("Music roots: {}", config.musicRoots.joinToString { it.absolutePath })
     log.info("Indexing…")
     scanner.scan()
     log.info("Indexed {} tracks", store.trackCount())
+    enrichment.enrichInBackground()
 
     FileWatcher(config.musicRoots, onChange = { scanner.scan() }).start()
 
@@ -64,6 +68,6 @@ fun runHeadlessServer(args: Array<String>) {
     log.info("Listening on http://{}:{}", config.bindAddress, config.port)
 
     embeddedServer(Netty, port = config.port, host = config.bindAddress) {
-        configureServer(config, store, artwork, ingest, cast, settings, online)
+        configureServer(config, store, artwork, ingest, cast, settings, online, enrichment, soulseek)
     }.start(wait = true)
 }

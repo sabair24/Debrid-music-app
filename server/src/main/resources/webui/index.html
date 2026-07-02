@@ -173,6 +173,7 @@
       <button class="nav-btn" data-view="tracks"><svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1014 17V7h4V3h-6z"/></svg>All tracks</button>
       <div class="sep"></div>
       <button class="nav-btn" data-view="online"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm6.93 6h-2.95a15.7 15.7 0 00-1.38-3.56A8 8 0 0118.93 8zM12 4c.83 1.2 1.48 2.53 1.91 4h-3.82c.43-1.47 1.08-2.8 1.91-4zM4.26 14a7.9 7.9 0 010-4h3.38a16.6 16.6 0 000 4H4.26zm.81 2h2.95c.32 1.25.78 2.45 1.38 3.56A8 8 0 015.07 16zm2.95-8H5.07a8 8 0 014.33-3.56A15.7 15.7 0 008.02 8zM12 20c-.83-1.2-1.48-2.53-1.91-4h3.82A13.4 13.4 0 0112 20zm2.34-6H9.66a14.9 14.9 0 010-4h4.68a14.9 14.9 0 010 4zm.24 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8 8 0 01-4.33 3.56zM16.36 14a16.6 16.6 0 000-4h3.38a7.9 7.9 0 010 4h-3.38z"/></svg>Online zoeken</button>
+      <button class="nav-btn" data-view="soulseek"><svg viewBox="0 0 24 24"><path d="M18 16a3 3 0 00-2.4 1.2l-5.3-3A3 3 0 0010.4 13l5.2-3A3 3 0 1015 8l-5.2 3a3 3 0 100 4l5.3 3A3 3 0 1018 16z"/></svg>Soulseek</button>
       <div class="hint" id="libHint">—</div>
       <div class="hint">Casting to Sonos / Shield uses the speaker picker in the player bar.</div>
     </nav>
@@ -233,6 +234,13 @@
       </div>
       <div class="field"><label>Discogs token <span class="set" id="set-discogs_token"></span></label><input type="password" id="f-discogs_token" autocomplete="off"></div>
       <div class="field"><label>Last.fm API-sleutel <span class="set" id="set-lastfm_key"></span></label><input type="password" id="f-lastfm_key" autocomplete="off"></div>
+      <div class="field" style="border-top:1px solid var(--line);padding-top:14px">
+        <label>Bibliotheek verrijken</label>
+        <div style="display:flex;gap:10px;align-items:center">
+          <button class="btn ghost" id="enrichBtn" type="button">Cover art ophalen</button>
+          <span class="muted" id="enrichStatus" style="margin:0"></span>
+        </div>
+      </div>
       <div class="actions">
         <button class="btn ghost" onclick="closeSettings()">Annuleren</button>
         <button class="btn primary" id="saveSettings">Opslaan</button>
@@ -288,6 +296,7 @@ function render(view){
   if(view==='artists') return renderArtists(m, CATALOG.artists);
   if(view==='tracks') return renderTrackList(m, 'All tracks', CATALOG.tracks, true);
   if(view==='online') return renderOnline(m);
+  if(view==='soulseek') return renderSoulseek(m);
 }
 function coverHtml(ref){ return `<div class="cover">${ref?`<img loading="lazy" src="${artUrl(ref)}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'cover',innerHTML:\`${PH}\`}).firstChild)">`:PH}<div class="play"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div></div>`; }
 
@@ -563,8 +572,69 @@ async function pollJobs(){
 }
 async function refreshCatalog(){ try{ CATALOG = await jget(api('/api/catalog')); $('#statusText').textContent = CATALOG.tracks.length+' tracks'; }catch(e){} }
 
+// ── Soulseek P2P ─────────────────────────────────────────────────
+function renderSoulseek(m){
+  m.innerHTML = `<h1>Soulseek</h1>
+    <div style="display:flex;gap:10px;margin:0 0 16px;max-width:620px">
+      <div class="search" style="flex:1;max-width:none">
+        <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 10-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1114 9.5 4.5 4.5 0 019.5 14z"/></svg>
+        <input id="sq" placeholder="Artiest, album of nummer…" autocomplete="off">
+      </div>
+      <button class="btn primary" id="sGo">Zoek</button>
+    </div>
+    <div id="sJobs"></div>
+    <div id="sStatus" class="empty" style="display:none"></div>
+    <div id="sResults" class="tracks" style="margin-top:6px"></div>`;
+  const go=()=>doSoulseekSearch($('#sq').value.trim());
+  $('#sGo').onclick=go; $('#sq').onkeydown=e=>{ if(e.key==='Enter') go(); };
+  $('#sq').focus();
+  pollSlskJobs();
+  jget(api('/api/soulseek/status')).then(s=>{ if(!s.available){ $('#sStatus').style.display='block'; $('#sStatus').innerHTML='Stel eerst je Soulseek-login in via ⚙ Instellingen.'; } }).catch(()=>{});
+}
+async function doSoulseekSearch(q){
+  if(!q) return;
+  const st=$('#sStatus'), res=$('#sResults'); res.innerHTML='';
+  st.style.display='block'; st.textContent='Zoeken op Soulseek (kan ~15s duren)…';
+  try{
+    const files = await jget(api('/api/soulseek/search?q='+encodeURIComponent(q)));
+    st.style.display='none';
+    if(!files.length){ res.innerHTML='<div class="empty">Niets gevonden (of geen peers met vrije slots).</div>'; return; }
+    files.forEach(f=>res.appendChild(soulseekRow(f)));
+  }catch(e){ st.textContent='Zoeken mislukt: '+e.message; }
+}
+function soulseekRow(f){
+  const row=document.createElement('div'); row.className='row';
+  const meta=[f.username, gb(f.size), f.bitrate?f.bitrate+'kbps':'', f.durationSec?fmtS(f.durationSec):'', f.freeSlots?'<span style="color:var(--accent2)">vrij</span>':('wachtrij '+f.queueLength)].filter(Boolean).join(' · ');
+  row.innerHTML=`
+    <div class="info"><div class="tt">${esc(f.displayName)}</div><div class="aa">${meta}</div></div>
+    ${f.isFlac?'<span class="badge">FLAC</span>':''}
+    <button class="rowico" title="Download">⬇</button>`;
+  row.querySelector('button').onclick=()=>slskDownload(f);
+  return row;
+}
+async function slskDownload(f){
+  try{ await jpost(api('/api/soulseek/download'), f); toast('Download gestart: '+f.displayName); pollSlskJobs(); }
+  catch(e){ toast('Download mislukt: '+e.message); }
+}
+let slskTimer=null;
+async function pollSlskJobs(){
+  try{
+    const jobs=await jget(api('/api/soulseek/jobs')); const el=$('#sJobs'); if(!el) return;
+    const active=jobs.filter(j=>j.status==='downloading'); const recent=jobs.slice(0,6);
+    el.innerHTML = recent.length ? '<div style="margin:0 0 14px">'+recent.map(j=>{
+      const pct=Math.round((j.progress||0)*100); const col=j.status==='done'?'var(--accent2)':j.status==='failed'?'#e0555f':'var(--accent)';
+      return `<div style="display:flex;align-items:center;gap:10px;padding:6px 0">
+        <span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px">${esc(j.name)}</span>
+        <div class="bar" style="width:160px"><div class="fill" style="width:${pct}%;background:${col}"></div></div>
+        <span style="font-size:11.5px;color:var(--muted);width:64px;text-align:right">${j.status==='done'?'klaar':j.status==='failed'?'mislukt':pct+'%'}</span></div>`; }).join('')+'</div>' : '';
+    clearTimeout(slskTimer);
+    if(active.length) slskTimer=setTimeout(pollSlskJobs, 1500);
+    else if(recent.some(j=>j.status==='done')) refreshCatalog();
+  }catch(e){}
+}
+
 // ── settings ────────────────────────────────────────────────────
-const SKEYS = ['torbox_api_key','soulseek_user','soulseek_pass','rutracker_user','rutracker_pass','discogs_token','lastfm_key'];
+const SKEYS =['torbox_api_key','soulseek_user','soulseek_pass','rutracker_user','rutracker_pass','discogs_token','lastfm_key'];
 $('#btnSettings').onclick = openSettings;
 async function openSettings(){
   $('#settingsModal').classList.add('show');
@@ -572,6 +642,15 @@ async function openSettings(){
     const p = await jget(api('/api/settings'));
     SKEYS.forEach(k=>{ $('#f-'+k).value=''; $('#set-'+k).textContent = p[k] ? '✓ ingesteld' : ''; });
   }catch(e){ toast('Kon instellingen niet laden'); }
+  pollEnrich();
+}
+$('#enrichBtn').onclick = async ()=>{ try{ await jpost(api('/api/enrich'), {}); pollEnrich(); }catch(e){ toast('Fout: '+e.message); } };
+async function pollEnrich(){
+  try{
+    const s = await jget(api('/api/enrich/status')); const el=$('#enrichStatus'); if(!el) return;
+    if(s.running){ el.textContent = `Bezig… ${s.done}/${s.total} (${s.fetched} gevonden)`; setTimeout(pollEnrich, 1500); }
+    else { el.textContent = s.fetched>0 ? `${s.fetched} covers opgehaald` : (s.total ? 'Bijgewerkt' : ''); if(s.fetched>0) refreshCatalog(); }
+  }catch(e){}
 }
 function closeSettings(){ $('#settingsModal').classList.remove('show'); }
 $('#settingsModal').onclick = (e)=>{ if(e.target.id==='settingsModal') closeSettings(); };

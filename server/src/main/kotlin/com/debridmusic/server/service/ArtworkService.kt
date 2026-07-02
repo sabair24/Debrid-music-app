@@ -6,12 +6,27 @@ import java.io.File
 
 class Artwork(val bytes: ByteArray, val contentType: String)
 
-/** Resolves album cover art: embedded tag picture first, else cover/folder image in the album dir. */
+/**
+ * Resolves album cover art: embedded tag picture first, else cover/folder image in the
+ * album dir, else a web-fetched cover cached by the enrichment service ([artCacheDir]).
+ */
 class ArtworkService(
     private val roots: List<File>,
     private val store: IndexStore,
+    private val artCacheDir: File = File("."),
 ) {
-    fun forAlbum(albumId: String): Artwork? {
+    /** Full resolution incl. the enrichment cache — used to serve /art. */
+    fun forAlbum(albumId: String): Artwork? = localArt(albumId) ?: cachedArt(albumId)
+
+    /** Cached web cover written by the enrichment service, if any. */
+    fun cachedArt(albumId: String): Artwork? =
+        File(artCacheDir, "$albumId.jpg").takeIf { it.isFile }?.let { Artwork(it.readBytes(), "image/jpeg") }
+
+    /** True when the album has embedded/folder art locally (no network needed). */
+    fun hasLocalArt(albumId: String): Boolean = localArt(albumId) != null
+
+    /** Embedded picture or a folder cover image; null if the album has neither. */
+    fun localArt(albumId: String): Artwork? {
         val track = store.firstTrackOfAlbum(albumId) ?: return null
         val file = File(roots.getOrNull(track.rootIndex) ?: return null, track.relPath)
         if (!file.isFile) return null

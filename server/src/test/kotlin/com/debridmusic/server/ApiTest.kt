@@ -55,8 +55,11 @@ class ApiTest {
         val aggregator = com.debridmusic.server.search.SearchAggregator(emptyList())
         val torBoxClient = com.debridmusic.server.torbox.TorBoxClient { settings.get(ServerSettings.TORBOX_API_KEY) }
         val online = com.debridmusic.server.torbox.OnlineService(settings, aggregator, torBoxClient, config.musicRoots.first(), onLibraryChanged = {}, appScope)
+        val artworkSvc = ArtworkService(config.musicRoots, store, File(config.dataDir, "artcache"))
+        val enrichment = com.debridmusic.server.metadata.EnrichmentService(store, artworkSvc, File(config.dataDir, "artcache"), appScope)
+        val soulseek = com.debridmusic.server.soulseek.SoulseekService(settings, com.debridmusic.server.soulseek.SoulseekClient(), config.musicRoots.first(), onLibraryChanged = {}, appScope)
         application {
-            configureServer(config, store, ArtworkService(config.musicRoots, store), IngestService(config.musicRoots, scanner, store), cast, settings, online)
+            configureServer(config, store, artworkSvc, IngestService(config.musicRoots, scanner, store), cast, settings, online, enrichment, soulseek)
         }
     }
 

@@ -11,6 +11,7 @@ import com.debridmusic.server.search.BitSearchSource
 import com.debridmusic.server.search.KnabenSource
 import com.debridmusic.server.search.RuTrackerSource
 import com.debridmusic.server.search.SearchAggregator
+import com.debridmusic.server.metadata.EnrichmentService
 import com.debridmusic.server.service.ArtworkService
 import com.debridmusic.server.service.IngestService
 import com.debridmusic.server.torbox.OnlineService
@@ -59,7 +60,7 @@ object DesktopMain {
 
         val store = IndexStore(config.indexFile)
         val scanner = LibraryScanner(config.musicRoots, store)
-        val artwork = ArtworkService(config.musicRoots, store)
+        val artwork = ArtworkService(config.musicRoots, store, File(config.dataDir, "artcache"))
         val ingest = IngestService(config.musicRoots, scanner, store)
         val cast = CastManager(store, UpnpCast(), lanBaseUrlFor = { host -> NetworkInfo.lanBaseUrlFor(host, port) }, token = token)
         val settings = ServerSettings(File(config.dataDir, "settings.properties"))
@@ -67,13 +68,16 @@ object DesktopMain {
         val aggregator = SearchAggregator(listOf(ApibaySource(), BitSearchSource(), KnabenSource(), RuTrackerSource(settings)))
         val torBoxClient = TorBoxClient { settings.get(ServerSettings.TORBOX_API_KEY) }
         val online = OnlineService(settings, aggregator, torBoxClient, config.musicRoots.first(), onLibraryChanged = { scanner.scan() }, appScope)
+        val enrichment = EnrichmentService(store, artwork, File(config.dataDir, "artcache"), appScope)
+        val soulseek = com.debridmusic.server.soulseek.SoulseekService(settings, com.debridmusic.server.soulseek.SoulseekClient(), config.musicRoots.first(), onLibraryChanged = { scanner.scan() }, appScope)
 
         log.info("Indexing {}…", roots.joinToString { it.absolutePath })
         scanner.scan()
+        enrichment.enrichInBackground()
         FileWatcher(config.musicRoots, onChange = { scanner.scan() }).start()
 
         val engine = embeddedServer(Netty, port = port, host = "0.0.0.0") {
-            configureServer(config, store, artwork, ingest, cast, settings, online)
+            configureServer(config, store, artwork, ingest, cast, settings, online, enrichment, soulseek)
         }.start(wait = false)
 
         val localUrl = "http://localhost:$port/?token=$token"

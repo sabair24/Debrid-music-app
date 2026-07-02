@@ -4,6 +4,7 @@ import com.debridmusic.server.ServerConfig
 import com.debridmusic.server.ServerSettings
 import com.debridmusic.server.cast.CastManager
 import com.debridmusic.server.index.IndexStore
+import com.debridmusic.server.metadata.EnrichmentService
 import com.debridmusic.server.model.CastControlRequest
 import com.debridmusic.server.model.CastDeviceDto
 import com.debridmusic.server.model.CastPlayRequest
@@ -14,6 +15,8 @@ import com.debridmusic.server.model.TokenRequest
 import com.debridmusic.server.model.TokenResponse
 import com.debridmusic.server.service.ArtworkService
 import com.debridmusic.server.service.IngestService
+import com.debridmusic.server.soulseek.SoulseekFile
+import com.debridmusic.server.soulseek.SoulseekService
 import com.debridmusic.server.torbox.OnlineDownloadRequest
 import com.debridmusic.server.torbox.OnlineService
 import com.debridmusic.server.torbox.ResolvedDto
@@ -41,6 +44,8 @@ fun Application.configureServer(
     castManager: CastManager,
     settings: ServerSettings,
     online: OnlineService,
+    enrichment: EnrichmentService,
+    soulseek: SoulseekService,
 ) {
     val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
@@ -169,6 +174,27 @@ fun Application.configureServer(
                     .onFailure { call.respond(HttpStatusCode.BadGateway, mapOf("error" to (it.message ?: "download failed"))) }
             }
             get("/online/jobs") { call.respond(online.jobs()) }
+
+            // ── Metadata enrichment (cover art via Deezer) ───────────────────
+            post("/enrich") { enrichment.enrichInBackground(); call.respond(enrichment.status()) }
+            get("/enrich/status") { call.respond(enrichment.status()) }
+
+            // ── Soulseek P2P ─────────────────────────────────────────────────
+            get("/soulseek/status") { call.respond(mapOf("available" to soulseek.available())) }
+            get("/soulseek/search") {
+                val q = call.request.queryParameters["q"].orEmpty()
+                if (q.isBlank()) { call.respond(emptyList<SoulseekFile>()); return@get }
+                runCatching { soulseek.search(q) }
+                    .onSuccess { call.respond(it) }
+                    .onFailure { call.respond(HttpStatusCode.BadGateway, mapOf("error" to (it.message ?: "search failed"))) }
+            }
+            post("/soulseek/download") {
+                val file = call.receive<SoulseekFile>()
+                val queued = soulseek.enqueue(file)
+                if (queued) call.respond(mapOf("queued" to true))
+                else call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Stel je Soulseek-login in (Instellingen)."))
+            }
+            get("/soulseek/jobs") { call.respond(soulseek.jobs()) }
 
             // ── Server settings (API keys / logins) ──────────────────────────
             // GET returns only which keys are set (never the secret values).
