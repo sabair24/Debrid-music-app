@@ -47,11 +47,7 @@ data class ServerConfig(
             val dataDir = File(value("DATA_DIR", "./data")!!).absoluteFile
             dataDir.mkdirs()
 
-            // Persist a generated token so it stays stable across restarts.
-            val tokenFile = File(dataDir, "token.txt")
-            val token = value("AUTH_TOKEN")?.takeIf { it.isNotBlank() }
-                ?: tokenFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
-                ?: randomToken().also { tokenFile.writeText(it) }
+            val token = loadOrCreateToken(dataDir, value("AUTH_TOKEN"))
 
             return ServerConfig(
                 musicRoots = roots,
@@ -62,6 +58,23 @@ data class ServerConfig(
                 password = value("PASSWORD", token)!!,
                 dataDir = dataDir,
             )
+        }
+
+        /** Stable, per-machine token: honour an override, else reuse/persist one in [dataDir]. */
+        fun loadOrCreateToken(dataDir: File, override: String? = null): String {
+            dataDir.mkdirs()
+            val tokenFile = File(dataDir, "token.txt")
+            return override?.takeIf { it.isNotBlank() }
+                ?: tokenFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
+                ?: randomToken().also { tokenFile.writeText(it) }
+        }
+
+        /** A user-writable data directory (the packaged app can't write under Program Files). */
+        fun desktopDataDir(): File {
+            val base = System.getenv("LOCALAPPDATA")?.let { File(it) }
+                ?: System.getenv("XDG_DATA_HOME")?.let { File(it) }
+                ?: File(System.getProperty("user.home"))
+            return File(base, "DebridMusic").apply { mkdirs() }
         }
 
         private fun randomToken(): String {

@@ -88,3 +88,19 @@ data class IngestMetadata(
 
 @Serializable
 data class IngestResponse(val trackId: String, val streamPath: String)
+
+// ── Casting (Sonos / DLNA renderers) ─────────────────────────────────────────
+
+@Serializable
+data class CastDeviceDto(val id: String, val name: String, val host: String)
+
+@Serializable
+data class CastPlayRequest(
+    val device: String,
+    val trackId: String? = null,
+    val queue: List<String> = emptyList(),
+    val index: Int = 0,
+)
+
+@Serializable
+data class CastControlRequest(val device: String, val action: String, val value: Int? = null)

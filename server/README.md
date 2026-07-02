@@ -4,6 +4,37 @@ A lightweight, self-hosted music server. It indexes one or more folders on your 
 streams to the DebridMusic apps (Android phone, Shield TV, and the upcoming iPad/Mac apps)
 over your LAN. Single Kotlin/Ktor fat-JAR — runs anywhere with Java 17+.
 
+It also ships a **built-in web app** (browse + play your library in any browser) and can
+**cast to Sonos / DLNA renderers** on the network.
+
+## Windows desktop app
+
+The easiest way to run it on a PC is the packaged desktop app — a self-contained
+`DebridMusic.exe` (bundles its own JRE, no Java install needed):
+
+```powershell
+# build it (needs a JDK 17+ on JAVA_HOME; uses its jpackage)
+powershell -ExecutionPolicy Bypass -File server\package-windows.ps1
+# -> server\dist\DebridMusic\DebridMusic.exe
+```
+
+Double-click `DebridMusic.exe`. It:
+- indexes your music folder (defaults to `D:\Flac music 2024`; a folder picker appears the
+  first time if that path doesn't exist — change it later from the tray menu),
+- lives in the **system tray** (Open app · Copy access token · Copy LAN link · Change folder),
+- opens the web app in your browser at `http://localhost:4533/?token=…`,
+- keeps its index + token in `%LOCALAPPDATA%\DebridMusic`.
+
+Open the same **LAN link** (`http://<pc-ip>:4533/?token=…`, shown in the tray) on your
+iPad, phone or Shield TV browser to use the app there too.
+
+### Casting to Sonos / DLNA
+The web app's speaker picker (bottom-right of the player bar) lists renderers found on the
+LAN via SSDP — Sonos, DLNA receivers, etc. Pick one and playback happens on that device;
+the stream URL handed to the speaker uses the PC's LAN IP on the *same subnet* as the
+speaker. (Chromecast/Shield-cast is not UPnP — use the native Android TV client for that,
+or a UPnP-renderer app on the Shield.)
+
 ## Run
 
 ```bash

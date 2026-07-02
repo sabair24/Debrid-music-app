@@ -1,7 +1,11 @@
 package com.debridmusic.server.api
 
 import com.debridmusic.server.ServerConfig
+import com.debridmusic.server.cast.CastManager
 import com.debridmusic.server.index.IndexStore
+import com.debridmusic.server.model.CastControlRequest
+import com.debridmusic.server.model.CastDeviceDto
+import com.debridmusic.server.model.CastPlayRequest
 import com.debridmusic.server.model.CatalogDto
 import com.debridmusic.server.model.HealthDto
 import com.debridmusic.server.model.IngestMetadata
@@ -29,8 +33,13 @@ fun Application.configureServer(
     store: IndexStore,
     artwork: ArtworkService,
     ingest: IngestService,
+    castManager: CastManager,
 ) {
     val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+    // The single-page web UI (bundled in resources). Served without auth; the page
+    // itself picks up the access token from the ?token= query the desktop app opens with.
+    val webUi = object {}.javaClass.classLoader.getResource("webui/index.html")?.readText()
 
     install(ContentNegotiation) { json(json) }
     install(PartialContent)      // HTTP Range support for /stream
@@ -51,6 +60,12 @@ fun Application.configureServer(
     }
 
     routing {
+        // Web UI (PC "main app" — also reachable from iPad/Shield browsers on the LAN).
+        get("/") {
+            if (webUi != null) call.respondText(webUi, ContentType.Text.Html)
+            else call.respondText("DebridMusic server is running.", ContentType.Text.Plain)
+        }
+
         get("/health") {
             call.respond(HealthDto(version = ServerConfig.VERSION))
         }
@@ -88,6 +103,25 @@ fun Application.configureServer(
             get("/search") {
                 val q = call.request.queryParameters["q"].orEmpty()
                 call.respond(if (q.isBlank()) com.debridmusic.server.model.SearchResultDto() else store.search(q))
+            }
+
+            // ── Casting to Sonos / DLNA renderers ────────────────────────────
+            get("/cast/devices") {
+                val devices = runCatching { castManager.devices() }.getOrDefault(emptyList())
+                call.respond(devices.map { CastDeviceDto(it.id, it.name, it.host) })
+            }
+            post("/cast/play") {
+                val req = call.receive<CastPlayRequest>()
+                val queue = if (req.queue.isNotEmpty()) req.queue else listOfNotNull(req.trackId)
+                runCatching { castManager.play(req.device, queue, req.index) }
+                    .onSuccess { call.respond(mapOf("ok" to true)) }
+                    .onFailure { call.respond(HttpStatusCode.BadGateway, mapOf("error" to (it.message ?: "cast failed"))) }
+            }
+            post("/cast/control") {
+                val req = call.receive<CastControlRequest>()
+                runCatching { castManager.control(req.device, req.action, req.value) }
+                    .onSuccess { call.respond(mapOf("ok" to true)) }
+                    .onFailure { call.respond(HttpStatusCode.BadGateway, mapOf("error" to (it.message ?: "control failed"))) }
             }
             post("/ingest") {
                 val multipart = call.receiveMultipart()

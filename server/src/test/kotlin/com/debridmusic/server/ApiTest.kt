@@ -1,6 +1,8 @@
 package com.debridmusic.server
 
 import com.debridmusic.server.api.configureServer
+import com.debridmusic.server.cast.CastManager
+import com.debridmusic.server.cast.UpnpCast
 import com.debridmusic.server.index.IndexStore
 import com.debridmusic.server.index.ScannedTrack
 import com.debridmusic.server.model.HealthDto
@@ -47,8 +49,9 @@ class ApiTest {
 
     private fun ApplicationTestBuilder.setup(config: ServerConfig, store: IndexStore) {
         val scanner = LibraryScanner(config.musicRoots, store)
+        val cast = CastManager(store, UpnpCast(), lanBaseUrlFor = { "http://127.0.0.1:${config.port}" }, token = config.authToken)
         application {
-            configureServer(config, store, ArtworkService(config.musicRoots, store), IngestService(config.musicRoots, scanner, store))
+            configureServer(config, store, ArtworkService(config.musicRoots, store), IngestService(config.musicRoots, scanner, store), cast)
         }
     }
 

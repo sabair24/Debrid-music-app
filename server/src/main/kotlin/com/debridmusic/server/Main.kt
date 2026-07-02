@@ -1,16 +1,22 @@
 package com.debridmusic.server
 
 import com.debridmusic.server.api.configureServer
+import com.debridmusic.server.cast.CastManager
+import com.debridmusic.server.cast.UpnpCast
 import com.debridmusic.server.index.IndexStore
 import com.debridmusic.server.scan.FileWatcher
 import com.debridmusic.server.scan.LibraryScanner
 import com.debridmusic.server.service.ArtworkService
 import com.debridmusic.server.service.IngestService
+import com.debridmusic.server.util.NetworkInfo
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import org.slf4j.LoggerFactory
 
-fun main(args: Array<String>) {
+fun main(args: Array<String>) = runHeadlessServer(args)
+
+/** Headless CLI/service startup (blocks). The desktop tray app calls this when there's no display. */
+fun runHeadlessServer(args: Array<String>) {
     val log = LoggerFactory.getLogger("DebridMusicServer")
     val config = runCatching { ServerConfig.load(args) }.getOrElse {
         System.err.println("Configuration error: ${it.message}")
@@ -29,6 +35,7 @@ fun main(args: Array<String>) {
     val scanner = LibraryScanner(config.musicRoots, store)
     val artwork = ArtworkService(config.musicRoots, store)
     val ingest = IngestService(config.musicRoots, scanner, store)
+    val cast = CastManager(store, UpnpCast(), lanBaseUrlFor = { host -> NetworkInfo.lanBaseUrlFor(host, config.port) }, token = config.authToken)
 
     log.info("Music roots: {}", config.musicRoots.joinToString { it.absolutePath })
     log.info("Indexing…")
@@ -38,9 +45,10 @@ fun main(args: Array<String>) {
     FileWatcher(config.musicRoots, onChange = { scanner.scan() }).start()
 
     log.info("Auth token: {}", config.authToken)
+    log.info("Open the app in a browser: {}?token={}", NetworkInfo.lanBaseUrl(config.port), config.authToken)
     log.info("Listening on http://{}:{}", config.bindAddress, config.port)
 
     embeddedServer(Netty, port = config.port, host = config.bindAddress) {
-        configureServer(config, store, artwork, ingest)
+        configureServer(config, store, artwork, ingest, cast)
     }.start(wait = true)
 }
