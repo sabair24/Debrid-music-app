@@ -175,9 +175,18 @@ fun Application.configureServer(
             }
             get("/online/jobs") { call.respond(online.jobs()) }
 
-            // ── Metadata enrichment (cover art via Deezer) ───────────────────
+            // ── Metadata enrichment (cover art) ──────────────────────────────
             post("/enrich") { enrichment.enrichInBackground(); call.respond(enrichment.status()) }
             get("/enrich/status") { call.respond(enrichment.status()) }
+            get("/enrich/covers") {
+                val q = call.request.queryParameters["q"].orEmpty()
+                call.respond(if (q.isBlank()) emptyList() else enrichment.searchCovers(q))
+            }
+            post("/enrich/setcover") {
+                val req = call.receive<com.debridmusic.server.metadata.CoverSetRequest>()
+                if (enrichment.setCover(req.albumId, req.url)) call.respond(mapOf("ok" to true))
+                else call.respond(HttpStatusCode.BadGateway, mapOf("error" to "kon cover niet ophalen"))
+            }
 
             // ── Soulseek P2P ─────────────────────────────────────────────────
             get("/soulseek/status") { call.respond(mapOf("available" to soulseek.available())) }

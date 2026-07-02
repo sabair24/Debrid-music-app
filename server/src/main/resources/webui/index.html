@@ -350,12 +350,48 @@ async function openAlbum(a){
         <div class="sub">${esc(a.artistName)}${a.year?' · '+a.year:''} · ${tracks.length} tracks</div>
         <button class="btn primary" id="playAll"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg> Play</button>
         <button class="btn ghost" id="shuffleAll" style="margin-left:8px"><svg viewBox="0 0 24 24"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5z"/></svg> Shuffle</button>
+        <button class="btn ghost" id="pickCover" style="margin-left:8px"><svg viewBox="0 0 24 24"><path d="M21 5v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2zM8.5 13.5L5 18h14l-4.5-6-3.5 4.5-2.5-3z"/></svg> Cover</button>
       </div>
     </div>
     <div class="tracks" id="tr"></div>`;
   const tr=$('#tr'); tracks.forEach((t,i)=>tr.appendChild(trackRow(t,i,tracks)));
   $('#playAll').onclick=()=>{ shuffle=false; setQueue(tracks,0); };
   $('#shuffleAll').onclick=()=>{ shuffle=true; setQueue(tracks, Math.floor(Math.random()*tracks.length)); };
+  $('#pickCover').onclick=()=>openCoverPicker(a);
+}
+function openCoverPicker(a){
+  const modal=document.createElement('div'); modal.className='modal show';
+  const prefill=((a.artistName && a.artistName!=='Various' && a.artistName!=='Various Artists' && a.artistName!=='Unknown Artist')?a.artistName+' ':'')+a.title;
+  modal.innerHTML=`<div class="box" style="width:min(660px,94vw)">
+    <h2>Cover kiezen</h2>
+    <div class="muted">${esc(a.artistName)} — ${esc(a.title)}</div>
+    <div style="display:flex;gap:10px;margin:12px 0">
+      <input id="cpq" style="flex:1;padding:10px 12px;border-radius:9px;border:1px solid var(--line);background:var(--bg2);color:var(--text);outline:none" value="${esc(prefill)}">
+      <button class="btn primary" id="cpGo">Zoek</button>
+    </div>
+    <div id="cpGrid" class="grid" style="grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px;max-height:52vh;overflow:auto"></div>
+    <div class="actions"><button class="btn ghost" id="cpClose">Sluiten</button></div></div>`;
+  document.body.appendChild(modal);
+  const grid=modal.querySelector('#cpGrid');
+  const search=async()=>{
+    grid.innerHTML='<div class="muted">Zoeken…</div>';
+    try{
+      const res=await jget(api('/api/enrich/covers?q='+encodeURIComponent(modal.querySelector('#cpq').value.trim())));
+      if(!res.length){ grid.innerHTML='<div class="muted">Niets gevonden.</div>'; return; }
+      grid.innerHTML='';
+      res.forEach(c=>{
+        const cell=document.createElement('div'); cell.className='card'; cell.style.padding='8px';
+        cell.innerHTML=`<div class="cover"><img src="${esc(c.thumb)}" onerror="this.remove()"></div><div class="s" style="margin-top:6px">${esc(c.source)}</div>`;
+        cell.onclick=async()=>{ try{ await jpost(api('/api/enrich/setcover'),{albumId:a.id,url:c.url}); toast('Cover ingesteld'); modal.remove(); openAlbum(a); refreshCatalog(); }catch(e){ toast('Mislukt: '+e.message); } };
+        grid.appendChild(cell);
+      });
+    }catch(e){ grid.innerHTML='<div class="muted">Fout: '+esc(e.message)+'</div>'; }
+  };
+  modal.querySelector('#cpGo').onclick=search;
+  modal.querySelector('#cpq').onkeydown=e=>{ if(e.key==='Enter') search(); };
+  modal.querySelector('#cpClose').onclick=()=>modal.remove();
+  modal.onclick=e=>{ if(e.target===modal) modal.remove(); };
+  search();
 }
 function renderTrackList(m,title,tracks,showArtist){
   m.innerHTML=`<h1>${esc(title)}<span class="count">${tracks.length}</span></h1><div class="tracks" id="tr"></div>`;

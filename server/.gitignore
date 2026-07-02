@@ -1,6 +1,7 @@
 .gradle/
 build/
 dist/
+installer/
 data/
 *.log
 config.properties

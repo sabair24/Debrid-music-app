@@ -17,10 +17,27 @@ import java.net.URLEncoder
 @Serializable
 data class EnrichStatusDto(val running: Boolean, val done: Int, val total: Int, val fetched: Int)
 
+@Serializable
+data class CoverCandidateDto(val source: String, val url: String, val thumb: String, val title: String)
+
+@Serializable
+data class CoverSetRequest(val albumId: String, val url: String)
+
 @Serializable private data class DeezerAlbumSearch(val data: List<DeezerAlbum> = emptyList())
-@Serializable private data class DeezerAlbum(@SerialName("cover_big") val coverBig: String? = null, @SerialName("cover_xl") val coverXl: String? = null)
+@Serializable private data class DeezerAlbum(
+    val title: String? = null,
+    @SerialName("cover_big") val coverBig: String? = null,
+    @SerialName("cover_xl") val coverXl: String? = null,
+    @SerialName("cover_medium") val coverMedium: String? = null,
+    val artist: DeezerArtist? = null,
+)
+@Serializable private data class DeezerArtist(val name: String? = null)
 @Serializable private data class DiscogsSearch(val results: List<DiscogsResult> = emptyList())
-@Serializable private data class DiscogsResult(@SerialName("cover_image") val coverImage: String? = null, val thumb: String? = null)
+@Serializable private data class DiscogsResult(
+    @SerialName("cover_image") val coverImage: String? = null,
+    val thumb: String? = null,
+    val title: String? = null,
+)
 @Serializable private data class MbSearch(val releases: List<MbRelease> = emptyList())
 @Serializable private data class MbRelease(val id: String = "")
 
@@ -51,6 +68,37 @@ class EnrichmentService(
     @Volatile private var srcMb = 0
 
     fun status() = EnrichStatusDto(running, done, total, fetched)
+
+    /** Candidate covers from Deezer + Discogs for the manual picker. */
+    fun searchCovers(query: String): List<CoverCandidateDto> {
+        val out = ArrayList<CoverCandidateDto>()
+        runCatching {
+            val resp = Http.get("https://api.deezer.com/search/album?q=${enc(query)}&limit=8")
+            if (resp.ok) Http.json.decodeFromString<DeezerAlbumSearch>(resp.body).data.forEach {
+                val url = it.coverXl ?: it.coverBig
+                if (!url.isNullOrBlank()) out += CoverCandidateDto("Deezer", url, it.coverMedium ?: url,
+                    listOfNotNull(it.artist?.name, it.title).joinToString(" – "))
+            }
+        }
+        settings.get(ServerSettings.DISCOGS_TOKEN)?.let { token ->
+            runCatching {
+                val resp = Http.get("https://api.discogs.com/database/search?type=release&per_page=12&token=${enc(token)}&q=${enc(query)}", mapOf("User-Agent" to UA_APP))
+                if (resp.ok) Http.json.decodeFromString<DiscogsSearch>(resp.body).results.forEach {
+                    val url = it.coverImage
+                    if (!url.isNullOrBlank() && !url.contains("spacer")) out += CoverCandidateDto("Discogs", url, it.thumb ?: url, it.title ?: "")
+                }
+            }
+        }
+        return out.take(24)
+    }
+
+    /** Manually set an album's cover from a chosen URL (persists in the art cache). */
+    fun setCover(albumId: String, url: String): Boolean {
+        val bytes = downloadImage(url) ?: return false
+        artCacheDir.mkdirs()
+        File(artCacheDir, "$albumId.jpg").writeBytes(bytes)
+        return true
+    }
 
     fun enrichInBackground() {
         appScope.launch { runCatching { enrichAll() }.onFailure { log.warn("enrich failed: {}", it.message) } }
@@ -84,15 +132,17 @@ class EnrichmentService(
     }
 
     /** Try each source in turn; return the first real image's bytes. */
-    private suspend fun findCover(artist: String, album: String): ByteArray? {
-        if (album.isBlank() || album.equals("Unknown Album", ignoreCase = true)) return null
+    private suspend fun findCover(artistRaw: String, albumRaw: String): ByteArray? {
+        val album = cleanAlbum(albumRaw)
+        if (album.isBlank() || albumRaw.equals("Unknown Album", true) || albumRaw.equals("Flac music 2024", true)) return null
+        val artist = cleanArtist(artistRaw)
         val generic = artist.trim().lowercase() in GENERIC_ARTISTS
         val query = if (generic) album else "$artist $album"
 
         deezerCover(query)?.let { url -> downloadImage(url)?.let { srcDeezer++; return it } }
 
         settings.get(ServerSettings.DISCOGS_TOKEN)?.let { token ->
-            discogsCover(if (generic) album else artist, album, generic, token)?.let { url ->
+            discogsCover(artist, album, generic, token)?.let { url ->
                 downloadImage(url)?.let { srcDiscogs++; return it }
             }
         }
@@ -108,12 +158,18 @@ class EnrichmentService(
         return parsed.data.firstOrNull()?.let { it.coverXl ?: it.coverBig }?.takeIf { it.isNotBlank() }
     }
 
+    /** Discogs: exact release_title(+artist) first, then a forgiving free-text `q=` fallback. */
     private fun discogsCover(artist: String, album: String, generic: Boolean, token: String): String? {
-        val url = buildString {
+        discogsSearch(buildString {
             append("https://api.discogs.com/database/search?type=release&token=").append(enc(token))
             append("&release_title=").append(enc(album))
             if (!generic && artist.isNotBlank()) append("&artist=").append(enc(artist))
-        }
+        })?.let { return it }
+        val q = if (generic) album else "$artist $album"
+        return discogsSearch("https://api.discogs.com/database/search?type=release&token=${enc(token)}&q=${enc(q)}")
+    }
+
+    private fun discogsSearch(url: String): String? {
         val resp = Http.get(url, mapOf("User-Agent" to UA_APP))
         if (!resp.ok) return null
         val parsed = runCatching { Http.json.decodeFromString<DiscogsSearch>(resp.body) }.getOrNull() ?: return null
@@ -121,6 +177,14 @@ class EnrichmentService(
             .mapNotNull { it.coverImage ?: it.thumb }
             .firstOrNull { it.isNotBlank() && !it.contains("spacer.gif") }
     }
+
+    // Strip catalog numbers / format tokens / "feat." so DB lookups match.
+    private val ALBUM_JUNK = Regex(
+        "\\((?:[A-Za-z]{1,4}[\\s-]?\\d{2,6}|maxi[-\\s]?cd|maxi|single|radio(?:\\s+mix)?|extended(?:\\s+\\w+)?|original(?:\\s+mix)?|\\d{4}|[\\w\\s]*remix|edit|vinyl|promo|re-?issue)\\)|\\[[^]]*]",
+        RegexOption.IGNORE_CASE,
+    )
+    private fun cleanAlbum(s: String) = s.replace(ALBUM_JUNK, "").replace(Regex("\\s{2,}"), " ").trim(' ', '-', '_', '.')
+    private fun cleanArtist(s: String) = s.replace(Regex("\\s+(feat\\.?|ft\\.?|featuring)\\s+.*$", RegexOption.IGNORE_CASE), "").trim()
 
     /** MusicBrainz release search → CoverArtArchive front image bytes. Rate-limited. */
     private suspend fun musicbrainzCover(artist: String, album: String): ByteArray? {
