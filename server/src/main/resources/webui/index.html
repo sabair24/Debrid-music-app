@@ -41,6 +41,21 @@
   .status{margin-left:auto;font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:8px}
   .dot{width:8px;height:8px;border-radius:50%;background:#3ad07a;box-shadow:0 0 8px #3ad07a}
   .dot.off{background:#e0555f;box-shadow:0 0 8px #e0555f}
+  .iconbtn{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;color:var(--muted);border:1px solid var(--line);background:var(--panel)}
+  .iconbtn:hover{color:#fff;background:var(--panel2)}
+  .iconbtn svg{width:18px;height:18px;fill:currentColor}
+  .modal{position:fixed;inset:0;background:rgba(6,7,11,.72);display:none;place-items:center;z-index:60;backdrop-filter:blur(3px)}
+  .modal.show{display:grid}
+  .modal .box{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px;width:min(520px,94vw);max-height:88vh;overflow:auto;box-shadow:var(--shadow)}
+  .modal h2{margin:0 0 4px}
+  .modal .muted{color:var(--muted);font-size:13px;margin-bottom:16px}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:5px}
+  .field input{width:100%;padding:10px 12px;border-radius:9px;border:1px solid var(--line);background:var(--bg2);color:var(--text);outline:none}
+  .field input:focus{border-color:var(--accent)}
+  .field .set{color:var(--accent2);font-size:11px}
+  .modal .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:18px}
+  .row2{display:flex;gap:12px}.row2 .field{flex:1}
 
   /* layout */
   .body{flex:1;display:flex;min-height:0}
@@ -95,6 +110,8 @@
   .row .rowplay{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;opacity:0}
   .row:hover .rowplay{opacity:1;background:var(--accent)}
   .row .rowplay svg{width:13px;height:13px;fill:#fff;margin-left:1px}
+  .row .rowico{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:var(--muted);border:1px solid var(--line);font-size:15px;flex:none}
+  .row .rowico:hover{color:#fff;background:var(--panel2)}
 
   /* now playing bar */
   .player{position:fixed;left:0;right:0;bottom:0;height:88px;background:linear-gradient(#12141d,#0d0f16);
@@ -144,6 +161,9 @@
       <input id="q" placeholder="Search artists, albums, tracks…" autocomplete="off" />
     </div>
     <div class="status"><span class="dot" id="conn"></span><span id="statusText">connecting…</span></div>
+    <button class="iconbtn" id="btnSettings" title="Instellingen">
+      <svg viewBox="0 0 24 24"><path d="M19.14 12.94a7.49 7.49 0 000-1.88l2.03-1.58a.5.5 0 00.12-.64l-1.92-3.32a.5.5 0 00-.61-.22l-2.39.96a7 7 0 00-1.62-.94l-.36-2.54a.5.5 0 00-.5-.42h-3.84a.5.5 0 00-.5.42l-.36 2.54c-.58.24-1.12.55-1.62.94l-2.39-.96a.5.5 0 00-.61.22L2.71 8.84a.5.5 0 00.12.64l2.03 1.58a7.49 7.49 0 000 1.88l-2.03 1.58a.5.5 0 00-.12.64l1.92 3.32c.14.24.42.34.61.22l2.39-.96c.5.39 1.04.7 1.62.94l.36 2.54c.05.24.25.42.5.42h3.84c.25 0 .45-.18.5-.42l.36-2.54c.58-.24 1.12-.55 1.62-.94l2.39.96c.19.12.47.02.61-.22l1.92-3.32a.5.5 0 00-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1112 8.5a3.5 3.5 0 010 7z"/></svg>
+    </button>
   </header>
 
   <div class="body">
@@ -152,6 +172,7 @@
       <button class="nav-btn" data-view="artists"><svg viewBox="0 0 24 24"><path d="M16 11a4 4 0 10-4-4 4 4 0 004 4zm-8 0a4 4 0 10-4-4 4 4 0 004 4zm0 2c-2.7 0-8 1.34-8 4v3h8v-3c0-.97.7-1.86 1.8-2.56A13.6 13.6 0 008 13zm8 0c-.29 0-.62.02-.97.05C17.9 14.16 19 15.24 19 16.5V19h5v-3c0-2.66-5.3-4-8-4z"/></svg>Artists</button>
       <button class="nav-btn" data-view="tracks"><svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1014 17V7h4V3h-6z"/></svg>All tracks</button>
       <div class="sep"></div>
+      <button class="nav-btn" data-view="online"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm6.93 6h-2.95a15.7 15.7 0 00-1.38-3.56A8 8 0 0118.93 8zM12 4c.83 1.2 1.48 2.53 1.91 4h-3.82c.43-1.47 1.08-2.8 1.91-4zM4.26 14a7.9 7.9 0 010-4h3.38a16.6 16.6 0 000 4H4.26zm.81 2h2.95c.32 1.25.78 2.45 1.38 3.56A8 8 0 015.07 16zm2.95-8H5.07a8 8 0 014.33-3.56A15.7 15.7 0 008.02 8zM12 20c-.83-1.2-1.48-2.53-1.91-4h3.82A13.4 13.4 0 0112 20zm2.34-6H9.66a14.9 14.9 0 010-4h4.68a14.9 14.9 0 010 4zm.24 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8 8 0 01-4.33 3.56zM16.36 14a16.6 16.6 0 000-4h3.38a7.9 7.9 0 010 4h-3.38z"/></svg>Online zoeken</button>
       <div class="hint" id="libHint">—</div>
       <div class="hint">Casting to Sonos / Shield uses the speaker picker in the player bar.</div>
     </nav>
@@ -194,6 +215,28 @@
       <p style="color:var(--muted)">Paste the access token shown in the DebridMusic app window (or in <code>data/token.txt</code>).</p>
       <input id="gateToken" placeholder="access token" />
       <button class="btn primary" style="width:100%;justify-content:center" onclick="saveToken()">Connect</button>
+    </div>
+  </div>
+
+  <div class="modal" id="settingsModal">
+    <div class="box">
+      <h2>Instellingen</h2>
+      <div class="muted">Sleutels/logins worden alleen op deze PC bewaard. Leeg laten = ongewijzigd.</div>
+      <div class="field"><label>TorBox API-sleutel <span class="set" id="set-torbox_api_key"></span></label><input type="password" id="f-torbox_api_key" placeholder="tb_…" autocomplete="off"></div>
+      <div class="row2">
+        <div class="field"><label>Soulseek gebruiker <span class="set" id="set-soulseek_user"></span></label><input type="text" id="f-soulseek_user" autocomplete="off"></div>
+        <div class="field"><label>Soulseek wachtwoord <span class="set" id="set-soulseek_pass"></span></label><input type="password" id="f-soulseek_pass" autocomplete="off"></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>RuTracker gebruiker <span class="set" id="set-rutracker_user"></span></label><input type="text" id="f-rutracker_user" autocomplete="off"></div>
+        <div class="field"><label>RuTracker wachtwoord <span class="set" id="set-rutracker_pass"></span></label><input type="password" id="f-rutracker_pass" autocomplete="off"></div>
+      </div>
+      <div class="field"><label>Discogs token <span class="set" id="set-discogs_token"></span></label><input type="password" id="f-discogs_token" autocomplete="off"></div>
+      <div class="field"><label>Last.fm API-sleutel <span class="set" id="set-lastfm_key"></span></label><input type="password" id="f-lastfm_key" autocomplete="off"></div>
+      <div class="actions">
+        <button class="btn ghost" onclick="closeSettings()">Annuleren</button>
+        <button class="btn primary" id="saveSettings">Opslaan</button>
+      </div>
     </div>
   </div>
 
@@ -244,6 +287,7 @@ function render(view){
   if(view==='albums') return renderAlbums(m, CATALOG.albums);
   if(view==='artists') return renderArtists(m, CATALOG.artists);
   if(view==='tracks') return renderTrackList(m, 'All tracks', CATALOG.tracks, true);
+  if(view==='online') return renderOnline(m);
 }
 function coverHtml(ref){ return `<div class="cover">${ref?`<img loading="lazy" src="${artUrl(ref)}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'cover',innerHTML:\`${PH}\`}).firstChild)">`:PH}<div class="play"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div></div>`; }
 
@@ -394,6 +438,148 @@ async function loadDevices(){
   }catch(e){/* casting optional */}
 }
 $('#speaker').onchange=()=>{ if(device()==='browser'&&queue[qIndex]){ /* switch back to browser */ } };
+
+// ── online search (TorBox debrid) ───────────────────────────────
+const gb = b => b>=1e9 ? (b/1e9).toFixed(2)+' GB' : b>=1e6 ? Math.round(b/1e6)+' MB' : Math.round(b/1e3)+' KB';
+let onlineResults = [];
+function renderOnline(m){
+  m.innerHTML = `<h1>Online zoeken</h1>
+    <div style="display:flex;gap:10px;margin:0 0 16px;max-width:620px">
+      <div class="search" style="flex:1;max-width:none">
+        <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 10-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1114 9.5 4.5 4.5 0 019.5 14z"/></svg>
+        <input id="oq" placeholder="Artiest, album of nummer…" autocomplete="off">
+      </div>
+      <button class="btn primary" id="oGo">Zoek</button>
+    </div>
+    <div id="oJobs"></div>
+    <div id="oStatus" class="empty" style="display:none"></div>
+    <div id="oResults" class="tracks" style="margin-top:6px"></div>`;
+  const go=()=>doOnlineSearch($('#oq').value.trim());
+  $('#oGo').onclick=go; $('#oq').onkeydown=e=>{ if(e.key==='Enter') go(); };
+  $('#oq').focus();
+  pollJobs();
+}
+async function doOnlineSearch(q){
+  if(!q) return;
+  const st=$('#oStatus'), res=$('#oResults'); res.innerHTML='';
+  st.style.display='block'; st.textContent='Zoeken over Pirate Bay, BitSearch, Knaben, RuTracker…';
+  try{
+    onlineResults = await jget(api('/api/online/search?q='+encodeURIComponent(q)));
+    st.style.display='none';
+    if(!onlineResults.length){ res.innerHTML='<div class="empty">Niets gevonden.</div>'; return; }
+    onlineResults.forEach((r,i)=>res.appendChild(onlineRow(r,i)));
+  }catch(e){ st.textContent='Zoeken mislukt: '+e.message; }
+}
+function onlineRow(r,i){
+  const row=document.createElement('div'); row.className='row';
+  const flac = /flac/i.test(r.name);
+  row.innerHTML = `
+    <div class="info">
+      <div class="tt">${esc(r.name)}</div>
+      <div class="aa">${esc(r.source||'')} · ${r.seeders} seeders · ${gb(r.size)} ${r.cached?'· <span style="color:var(--accent2)">⚡ Instant</span>':''}</div>
+    </div>
+    ${flac?'<span class="badge">FLAC</span>':''}
+    <button class="rowplay" title="Afspelen" style="opacity:1;background:var(--accent)"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+    <button class="rowico" title="Kies nummer">☰</button>
+    <button class="rowico" title="Download album">⬇</button>`;
+  const [play,list,dl]=row.querySelectorAll('button');
+  play.onclick=()=>onlinePlay(r);
+  list.onclick=()=>onlineTracklist(r);
+  dl.onclick=()=>onlineDownload(r,null,'Album');
+  return row;
+}
+async function onlinePlay(r){
+  toast('Bron voorbereiden…');
+  try{
+    const {url}=await jpost(api('/api/online/resolve'), r);
+    playExternal(url, r.name, r.source||'Online');
+  }catch(e){ toast('Kan niet afspelen: '+e.message); }
+}
+async function onlineDownload(r, fileId, label){
+  try{
+    const res=await jpost(api('/api/online/download'), {result:r, fileId});
+    toast((res.queued||0)+' nummer(s) naar downloads'); pollJobs();
+  }catch(e){ toast('Download mislukt: '+e.message); }
+}
+async function onlineTracklist(r){
+  toast('Bron voorbereiden…');
+  try{
+    const tl=await jpost(api('/api/online/tracklist'), r);
+    openTrackSheet(tl, r);
+  }catch(e){ toast('Kan tracks niet laden: '+e.message); }
+}
+function openTrackSheet(tl, r){
+  const modal=document.createElement('div'); modal.className='modal show';
+  modal.innerHTML=`<div class="box"><h2>${esc(tl.torrentName)}</h2>
+    <div class="muted">${tl.files.length} nummers — <a href="#" id="dlAll" style="color:var(--accent2)">alles downloaden</a></div>
+    <div class="tracks" id="sheetTracks"></div>
+    <div class="actions"><button class="btn ghost" id="sheetClose">Sluiten</button></div></div>`;
+  document.body.appendChild(modal);
+  const box=modal.querySelector('#sheetTracks');
+  tl.files.forEach((f,i)=>{
+    const row=document.createElement('div'); row.className='row';
+    row.innerHTML=`<div class="no">${i+1}</div>
+      <div class="info"><div class="tt">${esc(f.name)}</div><div class="aa">${gb(f.size)}</div></div>
+      ${f.flac?'<span class="badge">FLAC</span>':''}
+      <button class="rowplay" style="opacity:1;background:var(--accent)"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+      <button class="rowico">⬇</button>`;
+    const [play,dl]=row.querySelectorAll('button');
+    play.onclick=async()=>{ toast('Laden…'); try{ const {url}=await jget(api('/api/online/resolveTrack?torrentId='+tl.torrentId+'&fileId='+f.id)); playExternal(url, f.name, r.source||'Online'); }catch(e){ toast('Fout: '+e.message);} };
+    dl.onclick=()=>onlineDownload(r, f.id, f.name);
+    box.appendChild(row);
+  });
+  modal.querySelector('#dlAll').onclick=(e)=>{ e.preventDefault(); onlineDownload(r,null,'Album'); };
+  modal.querySelector('#sheetClose').onclick=()=>modal.remove();
+  modal.onclick=(e)=>{ if(e.target===modal) modal.remove(); };
+}
+// play a direct (TorBox) url in the browser, bypassing /stream
+function playExternal(url, title, artist){
+  queue=[]; qIndex=-1;
+  $('#npTitle').textContent=title; $('#npArtist').textContent=artist; $('#npArt').src='';
+  document.querySelectorAll('.row.playing').forEach(r=>r.classList.remove('playing'));
+  if(device()!=='browser'){ toast('Online tracks spelen in de browser'); $('#speaker').value='browser'; }
+  audio.src=url; audio.play().catch(()=>{}); setPP(true);
+}
+let jobsTimer=null;
+async function pollJobs(){
+  try{
+    const jobs=await jget(api('/api/online/jobs'));
+    const el=$('#oJobs'); if(!el) return;
+    const active=jobs.filter(j=>j.status==='downloading');
+    const recent=jobs.slice(0,6);
+    if(!recent.length){ el.innerHTML=''; }
+    else el.innerHTML='<div style="margin:0 0 14px">'+recent.map(j=>{
+      const pct=Math.round((j.progress||0)*100);
+      const col=j.status==='done'?'var(--accent2)':j.status==='failed'?'#e0555f':'var(--accent)';
+      return `<div style="display:flex;align-items:center;gap:10px;padding:6px 0">
+        <span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px">${esc(j.name)}</span>
+        <div class="bar" style="width:160px"><div class="fill" style="width:${pct}%;background:${col}"></div></div>
+        <span style="font-size:11.5px;color:var(--muted);width:64px;text-align:right">${j.status==='done'?'klaar':j.status==='failed'?'mislukt':pct+'%'}</span>
+      </div>`; }).join('')+'</div>';
+    clearTimeout(jobsTimer);
+    if(active.length) jobsTimer=setTimeout(pollJobs, 1500);
+    else if(recent.some(j=>j.status==='done')) { refreshCatalog(); } // pick up downloaded tracks silently
+  }catch(e){}
+}
+async function refreshCatalog(){ try{ CATALOG = await jget(api('/api/catalog')); $('#statusText').textContent = CATALOG.tracks.length+' tracks'; }catch(e){} }
+
+// ── settings ────────────────────────────────────────────────────
+const SKEYS = ['torbox_api_key','soulseek_user','soulseek_pass','rutracker_user','rutracker_pass','discogs_token','lastfm_key'];
+$('#btnSettings').onclick = openSettings;
+async function openSettings(){
+  $('#settingsModal').classList.add('show');
+  try{
+    const p = await jget(api('/api/settings'));
+    SKEYS.forEach(k=>{ $('#f-'+k).value=''; $('#set-'+k).textContent = p[k] ? '✓ ingesteld' : ''; });
+  }catch(e){ toast('Kon instellingen niet laden'); }
+}
+function closeSettings(){ $('#settingsModal').classList.remove('show'); }
+$('#settingsModal').onclick = (e)=>{ if(e.target.id==='settingsModal') closeSettings(); };
+$('#saveSettings').onclick = async ()=>{
+  const body={}; SKEYS.forEach(k=>{ const v=$('#f-'+k).value.trim(); if(v) body[k]=v; });
+  try{ await jpost(api('/api/settings'), body); toast('Instellingen opgeslagen'); closeSettings(); }
+  catch(e){ toast('Opslaan mislukt: '+e.message); }
+};
 
 // ── boot ────────────────────────────────────────────────────────
 async function boot(){

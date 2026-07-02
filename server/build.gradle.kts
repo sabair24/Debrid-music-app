@@ -29,6 +29,10 @@ dependencies {
     implementation("io.ktor:ktor-server-call-logging-jvm:$ktorVersion")
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+
+    // HTML scraping for the RuTracker source (pure JVM).
+    implementation("org.jsoup:jsoup:1.17.2")
 
     // SQLite index (raw JDBC, no ORM).
     implementation("org.xerial:sqlite-jdbc:3.46.0.0")

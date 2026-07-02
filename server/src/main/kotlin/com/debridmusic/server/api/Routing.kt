@@ -1,6 +1,7 @@
 package com.debridmusic.server.api
 
 import com.debridmusic.server.ServerConfig
+import com.debridmusic.server.ServerSettings
 import com.debridmusic.server.cast.CastManager
 import com.debridmusic.server.index.IndexStore
 import com.debridmusic.server.model.CastControlRequest
@@ -13,6 +14,10 @@ import com.debridmusic.server.model.TokenRequest
 import com.debridmusic.server.model.TokenResponse
 import com.debridmusic.server.service.ArtworkService
 import com.debridmusic.server.service.IngestService
+import com.debridmusic.server.torbox.OnlineDownloadRequest
+import com.debridmusic.server.torbox.OnlineService
+import com.debridmusic.server.torbox.ResolvedDto
+import com.debridmusic.server.search.SearchResult
 import io.ktor.http.*
 import io.ktor.http.content.*
 import io.ktor.serialization.kotlinx.json.*
@@ -34,6 +39,8 @@ fun Application.configureServer(
     artwork: ArtworkService,
     ingest: IngestService,
     castManager: CastManager,
+    settings: ServerSettings,
+    online: OnlineService,
 ) {
     val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
@@ -122,6 +129,54 @@ fun Application.configureServer(
                 runCatching { castManager.control(req.device, req.action, req.value) }
                     .onSuccess { call.respond(mapOf("ok" to true)) }
                     .onFailure { call.respond(HttpStatusCode.BadGateway, mapOf("error" to (it.message ?: "control failed"))) }
+            }
+
+            // ── Online: search / stream / download via TorBox ────────────────
+            get("/online/search") {
+                val q = call.request.queryParameters["q"].orEmpty()
+                if (q.isBlank()) { call.respond(emptyList<SearchResult>()); return@get }
+                runCatching { online.search(q) }
+                    .onSuccess { call.respond(it) }
+                    .onFailure { call.respond(HttpStatusCode.BadGateway, mapOf("error" to (it.message ?: "search failed"))) }
+            }
+            get("/online/status") {
+                call.respond(mapOf("torboxReady" to online.torBoxReady()))
+            }
+            post("/online/resolve") {
+                val result = call.receive<SearchResult>()
+                runCatching { online.resolveStreamUrl(result) }
+                    .onSuccess { call.respond(ResolvedDto(it, result.name)) }
+                    .onFailure { call.respond(HttpStatusCode.BadGateway, mapOf("error" to (it.message ?: "resolve failed"))) }
+            }
+            post("/online/tracklist") {
+                val result = call.receive<SearchResult>()
+                runCatching { online.tracklist(result) }
+                    .onSuccess { call.respond(it) }
+                    .onFailure { call.respond(HttpStatusCode.BadGateway, mapOf("error" to (it.message ?: "tracklist failed"))) }
+            }
+            get("/online/resolveTrack") {
+                val torrentId = call.request.queryParameters["torrentId"]?.toLongOrNull()
+                val fileId = call.request.queryParameters["fileId"]?.toLongOrNull()
+                if (torrentId == null || fileId == null) { call.respond(HttpStatusCode.BadRequest); return@get }
+                runCatching { online.resolveTrackUrl(torrentId, fileId) }
+                    .onSuccess { call.respond(ResolvedDto(it, "")) }
+                    .onFailure { call.respond(HttpStatusCode.BadGateway, mapOf("error" to (it.message ?: "resolve failed"))) }
+            }
+            post("/online/download") {
+                val req = call.receive<OnlineDownloadRequest>()
+                runCatching { online.enqueueDownload(req.result, req.fileId) }
+                    .onSuccess { call.respond(mapOf("queued" to it)) }
+                    .onFailure { call.respond(HttpStatusCode.BadGateway, mapOf("error" to (it.message ?: "download failed"))) }
+            }
+            get("/online/jobs") { call.respond(online.jobs()) }
+
+            // ── Server settings (API keys / logins) ──────────────────────────
+            // GET returns only which keys are set (never the secret values).
+            get("/settings") { call.respond(settings.presence()) }
+            post("/settings") {
+                val updates = runCatching { call.receive<Map<String, String>>() }.getOrDefault(emptyMap())
+                settings.set(updates)
+                call.respond(settings.presence())
             }
             post("/ingest") {
                 val multipart = call.receiveMultipart()

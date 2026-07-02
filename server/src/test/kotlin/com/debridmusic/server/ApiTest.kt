@@ -50,8 +50,13 @@ class ApiTest {
     private fun ApplicationTestBuilder.setup(config: ServerConfig, store: IndexStore) {
         val scanner = LibraryScanner(config.musicRoots, store)
         val cast = CastManager(store, UpnpCast(), lanBaseUrlFor = { "http://127.0.0.1:${config.port}" }, token = config.authToken)
+        val settings = ServerSettings(File(config.dataDir, "settings.properties"))
+        val appScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+        val aggregator = com.debridmusic.server.search.SearchAggregator(emptyList())
+        val torBoxClient = com.debridmusic.server.torbox.TorBoxClient { settings.get(ServerSettings.TORBOX_API_KEY) }
+        val online = com.debridmusic.server.torbox.OnlineService(settings, aggregator, torBoxClient, config.musicRoots.first(), onLibraryChanged = {}, appScope)
         application {
-            configureServer(config, store, ArtworkService(config.musicRoots, store), IngestService(config.musicRoots, scanner, store), cast)
+            configureServer(config, store, ArtworkService(config.musicRoots, store), IngestService(config.musicRoots, scanner, store), cast, settings, online)
         }
     }
 

@@ -6,11 +6,21 @@ import com.debridmusic.server.cast.UpnpCast
 import com.debridmusic.server.index.IndexStore
 import com.debridmusic.server.scan.FileWatcher
 import com.debridmusic.server.scan.LibraryScanner
+import com.debridmusic.server.search.ApibaySource
+import com.debridmusic.server.search.BitSearchSource
+import com.debridmusic.server.search.KnabenSource
+import com.debridmusic.server.search.RuTrackerSource
+import com.debridmusic.server.search.SearchAggregator
 import com.debridmusic.server.service.ArtworkService
 import com.debridmusic.server.service.IngestService
+import com.debridmusic.server.torbox.OnlineService
+import com.debridmusic.server.torbox.TorBoxClient
 import com.debridmusic.server.util.NetworkInfo
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import org.slf4j.LoggerFactory
 
 fun main(args: Array<String>) = runHeadlessServer(args)
@@ -36,6 +46,11 @@ fun runHeadlessServer(args: Array<String>) {
     val artwork = ArtworkService(config.musicRoots, store)
     val ingest = IngestService(config.musicRoots, scanner, store)
     val cast = CastManager(store, UpnpCast(), lanBaseUrlFor = { host -> NetworkInfo.lanBaseUrlFor(host, config.port) }, token = config.authToken)
+    val settings = ServerSettings(java.io.File(config.dataDir, "settings.properties"))
+    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val aggregator = SearchAggregator(listOf(ApibaySource(), BitSearchSource(), KnabenSource(), RuTrackerSource(settings)))
+    val torBoxClient = TorBoxClient { settings.get(ServerSettings.TORBOX_API_KEY) }
+    val online = OnlineService(settings, aggregator, torBoxClient, config.musicRoots.first(), onLibraryChanged = { scanner.scan() }, appScope)
 
     log.info("Music roots: {}", config.musicRoots.joinToString { it.absolutePath })
     log.info("Indexing…")
@@ -49,6 +64,6 @@ fun runHeadlessServer(args: Array<String>) {
     log.info("Listening on http://{}:{}", config.bindAddress, config.port)
 
     embeddedServer(Netty, port = config.port, host = config.bindAddress) {
-        configureServer(config, store, artwork, ingest, cast)
+        configureServer(config, store, artwork, ingest, cast, settings, online)
     }.start(wait = true)
 }
