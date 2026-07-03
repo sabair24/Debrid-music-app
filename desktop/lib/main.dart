@@ -9,6 +9,7 @@ import 'models.dart';
 import 'online.dart';
 import 'player.dart';
 import 'settings.dart';
+import 'soulseek.dart';
 import 'torbox.dart';
 
 const _bg = Color(0xFF0C0D12);
@@ -42,7 +43,8 @@ Future<void> main() async {
   await settings.load();
   final library = LibraryStore();
   final online = OnlineService(settings);
-  final downloads = DownloadManager(online, library.rootPath, () async {
+  final soulseek = SoulseekService(settings);
+  final downloads = DownloadManager(online, soulseek, library.rootPath, () async {
     await library.scan();
     await library.enrich(settings);
   });
@@ -53,6 +55,7 @@ Future<void> main() async {
         ChangeNotifierProvider<LibraryStore>.value(value: library),
         ChangeNotifierProvider<PlayerStore>(create: (_) => PlayerStore()),
         Provider<OnlineService>.value(value: online),
+        Provider<SoulseekService>.value(value: soulseek),
         ChangeNotifierProvider<DownloadManager>.value(value: downloads),
       ],
       child: const DebridApp(),
@@ -883,6 +886,12 @@ class _ZoomView extends StatelessWidget {
 }
 
 // ── Online search (TorBox) ───────────────────────────────────────────────────
+String _fmtBytes(int b) => b >= 1000000000
+    ? '${(b / 1e9).toStringAsFixed(2)} GB'
+    : b >= 1000000
+        ? '${(b / 1e6).round()} MB'
+        : '${(b / 1e3).round()} KB';
+
 class OnlineSearchScreen extends StatefulWidget {
   const OnlineSearchScreen({super.key});
   @override
@@ -891,27 +900,41 @@ class OnlineSearchScreen extends StatefulWidget {
 
 class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   final _c = TextEditingController();
-  List<SearchResult> _results = [];
-  bool _busy = false;
+  List<SearchResult> _torrents = [];
+  List<SoulseekFile> _slsk = [];
+  bool _busy = false; // torrent search in progress
+  bool _slskBusy = false; // soulseek search in progress
   String? _status;
 
   Future<void> _search() async {
     final q = _c.text.trim();
     if (q.isEmpty) return;
+    final online = context.read<OnlineService>();
+    final soulseek = context.read<SoulseekService>();
     setState(() {
       _busy = true;
-      _results = [];
-      _status = 'Zoeken over Pirate Bay, BitSearch, Knaben…';
+      _slskBusy = soulseek.available;
+      _torrents = [];
+      _slsk = [];
+      _status = 'Zoeken over Pirate Bay, BitSearch, Knaben${soulseek.available ? " + Soulseek…" : "…"}';
     });
+    // Soulseek runs alongside the torrent search and fills in when it returns.
+    if (soulseek.available) {
+      soulseek.search(q).then((r) {
+        if (mounted) setState(() { _slsk = r; _slskBusy = false; });
+      }).catchError((_) {
+        if (mounted) setState(() => _slskBusy = false);
+      });
+    }
     try {
-      final r = await context.read<OnlineService>().search(q);
+      final r = await online.search(q);
       if (!mounted) return;
       setState(() {
-        _results = r;
-        _status = r.isEmpty ? 'Niets gevonden.' : null;
+        _torrents = r;
+        _status = null;
       });
     } catch (e) {
-      if (mounted) setState(() => _status = 'Zoeken mislukt: $e');
+      if (mounted) setState(() => _status = 'Torrent-zoeken mislukt: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -936,17 +959,24 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     }
   }
 
+  void _pickTracks(SearchResult r) {
+    showDialog(context: context, builder: (_) => _TrackPickerDialog(r));
+  }
+
+  Future<void> _downloadSlsk(SoulseekFile f) async {
+    try {
+      await context.read<DownloadManager>().enqueueSoulseek(f);
+      _toast('“${f.displayName}” via Soulseek…');
+    } catch (e) {
+      _toast('Download mislukt: $e');
+    }
+  }
+
   void _toast(String m) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(m), duration: const Duration(seconds: 2)));
   }
-
-  String _gb(int b) => b >= 1000000000
-      ? '${(b / 1e9).toStringAsFixed(2)} GB'
-      : b >= 1000000
-          ? '${(b / 1e6).round()} MB'
-          : '${(b / 1e3).round()} KB';
 
   @override
   void dispose() {
@@ -956,6 +986,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final soulseekReady = context.read<SoulseekService>().available;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1042,59 +1073,283 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         if (_status != null)
           Padding(padding: const EdgeInsets.all(24), child: Text(_status!, style: const TextStyle(color: _muted))),
         Expanded(
-          child: ListView.builder(
-            itemCount: _results.length,
-            itemBuilder: (_, i) {
-              final r = _results[i];
-              final flac = RegExp('flac', caseSensitive: false).hasMatch(r.name);
-              return Container(
-                margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(8)),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(r.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontWeight: FontWeight.w600)),
-                          const SizedBox(height: 2),
-                          Row(
-                            children: [
-                              Text('${r.source} · ${r.seeders} seeders · ${_gb(r.size)}',
-                                  style: const TextStyle(color: _muted, fontSize: 12)),
-                              if (r.cached)
-                                const Padding(
-                                    padding: EdgeInsets.only(left: 8),
-                                    child: Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12))),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (flac)
-                      Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 8),
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF0F2521),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: const Color(0xFF24493F)),
-                        ),
-                        child: const Text('FLAC', style: TextStyle(color: _accent2, fontSize: 10.5)),
-                      ),
-                    IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, onPressed: () => _play(r)),
-                    IconButton(icon: const Icon(Icons.download_rounded), color: _muted, onPressed: () => _download(r)),
-                  ],
-                ),
-              );
-            },
+          child: ListView(
+            padding: const EdgeInsets.only(bottom: 24),
+            children: [
+              if (_torrents.isNotEmpty) _sectionHeader('Torrents · TorBox', _torrents.length, _busy),
+              ..._torrents.map(_torrentRow),
+              // Soulseek section — always show a header once a search ran, so the user
+              // knows whether P2P is on and whether it's still loading.
+              if (_status == null || _slsk.isNotEmpty || _slskBusy)
+                _slskSectionHeader(soulseekReady),
+              ..._slsk.map(_slskRow),
+            ],
           ),
         ),
       ],
+    );
+  }
+
+  Widget _sectionHeader(String title, int count, bool loading) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 14, 24, 6),
+        child: Row(
+          children: [
+            Text(title.toUpperCase(),
+                style: const TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
+            const SizedBox(width: 8),
+            Text('$count', style: const TextStyle(color: _muted, fontSize: 11.5)),
+            if (loading) ...const [
+              SizedBox(width: 8),
+              SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
+            ],
+          ],
+        ),
+      );
+
+  Widget _slskSectionHeader(bool ready) {
+    if (!ready) {
+      return const Padding(
+        padding: EdgeInsets.fromLTRB(24, 16, 24, 6),
+        child: Text('SOULSEEK · log in via Instellingen om P2P mee te zoeken',
+            style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
+      );
+    }
+    return _sectionHeader('Soulseek · P2P', _slsk.length, _slskBusy);
+  }
+
+  Widget _torrentRow(SearchResult r) {
+    final flac = RegExp('flac', caseSensitive: false).hasMatch(r.name);
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(8)),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(r.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 2),
+                Row(
+                  children: [
+                    Text('${r.source} · ${r.seeders} seeders · ${_fmtBytes(r.size)}',
+                        style: const TextStyle(color: _muted, fontSize: 12)),
+                    if (r.cached)
+                      const Padding(
+                          padding: EdgeInsets.only(left: 8),
+                          child: Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12))),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          if (flac) _flacBadge(),
+          IconButton(
+              icon: const Icon(Icons.play_arrow_rounded),
+              color: _accent,
+              tooltip: 'Beste nummer afspelen',
+              onPressed: () => _play(r)),
+          IconButton(
+              icon: const Icon(Icons.queue_music_rounded),
+              color: _muted,
+              tooltip: 'Kies nummer',
+              onPressed: () => _pickTracks(r)),
+          IconButton(
+              icon: const Icon(Icons.download_rounded),
+              color: _muted,
+              tooltip: 'Alles downloaden',
+              onPressed: () => _download(r)),
+        ],
+      ),
+    );
+  }
+
+  Widget _slskRow(SoulseekFile f) {
+    final status = f.freeSlots ? 'vrij' : 'wachtrij ${f.queueLength}';
+    final quality = f.isFlac ? 'FLAC' : ((f.bitrate ?? 0) > 0 ? '${f.bitrate}kbps' : '');
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(8)),
+      child: Row(
+        children: [
+          Icon(f.freeSlots ? Icons.circle : Icons.schedule_rounded,
+              size: 10, color: f.freeSlots ? _accent2 : _muted),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(f.displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 2),
+                Text('$status · ${f.username} · ${_fmtBytes(f.size)}${quality.isNotEmpty ? " · $quality" : ""}',
+                    style: const TextStyle(color: _muted, fontSize: 12)),
+              ],
+            ),
+          ),
+          if (f.isFlac) _flacBadge(),
+          IconButton(
+              icon: const Icon(Icons.download_rounded),
+              color: _accent,
+              tooltip: 'Downloaden via Soulseek',
+              onPressed: () => _downloadSlsk(f)),
+        ],
+      ),
+    );
+  }
+
+  Widget _flacBadge() => Container(
+        margin: const EdgeInsets.symmetric(horizontal: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0F2521),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFF24493F)),
+        ),
+        child: const Text('FLAC', style: TextStyle(color: _accent2, fontSize: 10.5)),
+      );
+}
+
+/// Resolves a torrent's audio files and lets the user play or download any single track.
+class _TrackPickerDialog extends StatefulWidget {
+  final SearchResult result;
+  const _TrackPickerDialog(this.result);
+  @override
+  State<_TrackPickerDialog> createState() => _TrackPickerDialogState();
+}
+
+class _TrackPickerDialogState extends State<_TrackPickerDialog> {
+  bool _loading = true;
+  String? _error;
+  TbTorrent? _torrent;
+  List<TbFile> _files = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final (t, f) = await context.read<OnlineService>().tracklist(widget.result);
+      if (!mounted) return;
+      setState(() {
+        _torrent = t;
+        _files = f;
+        _loading = false;
+      });
+    } catch (e) {
+      if (mounted) setState(() { _error = '$e'; _loading = false; });
+    }
+  }
+
+  Future<void> _play(TbFile f) async {
+    try {
+      final url = await context.read<OnlineService>().resolveTrackUrl(_torrent!.id, f.id);
+      if (!mounted) return;
+      context.read<PlayerStore>().playUrl(url, title: f.label, artist: widget.result.source);
+      Navigator.pop(context);
+    } catch (e) {
+      _snack('Afspelen mislukt: $e');
+    }
+  }
+
+  Future<void> _download(TbFile f) async {
+    try {
+      await context.read<DownloadManager>().enqueue(widget.result, fileId: f.id);
+      _snack('“${f.label}” naar downloads');
+    } catch (e) {
+      _snack('Download mislukt: $e');
+    }
+  }
+
+  void _snack(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), duration: const Duration(seconds: 2)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: _bg,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: Container(
+        width: 560,
+        constraints: const BoxConstraints(maxHeight: 560),
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(widget.result.name,
+                maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            const Text('Kies een nummer om af te spelen of los te downloaden',
+                style: TextStyle(color: _muted, fontSize: 12)),
+            const SizedBox(height: 14),
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 40),
+                child: Center(
+                  child: Column(children: [
+                    CircularProgressIndicator(color: _accent),
+                    SizedBox(height: 14),
+                    Text('Bron voorbereiden bij TorBox…', style: TextStyle(color: _muted, fontSize: 12.5)),
+                  ]),
+                ),
+              )
+            else if (_error != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Text(_error!, style: const TextStyle(color: Colors.redAccent)),
+              )
+            else
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: _files.length,
+                  itemBuilder: (_, i) {
+                    final f = _files[i];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(f.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5)),
+                                Text('${_fmtBytes(f.size)}${f.isFlac ? " · FLAC" : ""}',
+                                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                              icon: const Icon(Icons.play_arrow_rounded, size: 22),
+                              color: _accent,
+                              tooltip: 'Afspelen',
+                              onPressed: () => _play(f)),
+                          IconButton(
+                              icon: const Icon(Icons.download_rounded, size: 20),
+                              color: _muted,
+                              tooltip: 'Download dit nummer',
+                              onPressed: () => _download(f)),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(onPressed: () => Navigator.pop(context), child: const Text('Sluiten')),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

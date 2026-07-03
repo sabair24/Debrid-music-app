@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import 'search.dart';
 import 'settings.dart';
+import 'soulseek.dart';
 import 'torbox.dart';
 
 /// TorBox search + resolve + download, ported from the server's OnlineService.
@@ -145,6 +146,31 @@ class OnlineService {
   }
 }
 
+/// Soulseek search (with the first-character "*" quirk) + credentials gate.
+class SoulseekService {
+  final AppSettings settings;
+  final SoulseekClient client = SoulseekClient();
+  SoulseekService(this.settings);
+
+  bool get available => settings.soulseekUser.isNotEmpty && settings.soulseekPass.isNotEmpty;
+
+  Future<List<SoulseekFile>> search(String query) async {
+    if (!available) return [];
+    final q = query.trim();
+    // Soulseek quirk: the first character is often dropped — also try a "*"-prefixed variant.
+    final variants = <String>{q};
+    if (q.length > 2) variants.add('*${q.substring(1)}');
+    final all = <SoulseekFile>[];
+    for (final v in variants) {
+      try {
+        all.addAll(await client.search(settings.soulseekUser, settings.soulseekPass, v));
+      } catch (_) {}
+    }
+    final seen = <String>{};
+    return all.where((f) => seen.add('${f.username}|${f.filename}')).toList();
+  }
+}
+
 class DownloadJob {
   final String name;
   double progress;
@@ -152,14 +178,46 @@ class DownloadJob {
   DownloadJob(this.name) : progress = 0, status = 'downloading';
 }
 
-/// Streams TorBox downloads into the music library (with progress), then rescans.
+/// Streams TorBox + Soulseek downloads into the music library (with progress), then rescans.
 class DownloadManager extends ChangeNotifier {
   final OnlineService online;
+  final SoulseekService soulseek;
   final String musicRoot;
   final Future<void> Function() onLibraryChanged;
-  DownloadManager(this.online, this.musicRoot, this.onLibraryChanged);
+  DownloadManager(this.online, this.soulseek, this.musicRoot, this.onLibraryChanged);
 
   final List<DownloadJob> jobs = [];
+
+  Future<void> enqueueSoulseek(SoulseekFile file) async {
+    if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
+    final dir = Directory('$musicRoot${Platform.pathSeparator}DebridMusic Downloads${Platform.pathSeparator}Soulseek');
+    await dir.create(recursive: true);
+    final dest = File('${dir.path}${Platform.pathSeparator}${_sanitize(file.displayName)}');
+    final job = DownloadJob(file.displayName);
+    jobs.insert(0, job);
+    notifyListeners();
+    unawaited(() async {
+      final res = await soulseek.client.download(
+        soulseek.settings.soulseekUser, soulseek.settings.soulseekPass, file, dest, (rec, tot) {
+        if (tot > 0) {
+          final p = (rec / tot).clamp(0.0, 1.0);
+          if (p - job.progress > 0.02) {
+            job.progress = p;
+            notifyListeners();
+          }
+        }
+      });
+      if (res is SlskDone) {
+        job.progress = 1;
+        job.status = 'done';
+        notifyListeners();
+        await onLibraryChanged();
+      } else {
+        job.status = 'failed';
+        notifyListeners();
+      }
+    }());
+  }
 
   Future<int> enqueue(SearchResult result, {int? fileId}) async {
     final (torrent, files) = await online.resolveForDownload(result, fileId);
