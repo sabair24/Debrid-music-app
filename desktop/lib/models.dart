@@ -29,12 +29,21 @@ class Album {
   final String artist;
   final List<Track> tracks;
 
+  /// A web-fetched cover (Deezer/Discogs/MusicBrainz), set by the enricher.
+  Uint8List? enriched;
+  int? year;
+  String? genre;
+
   Album(this.title, this.artist, this.tracks);
 
-  Uint8List? get cover {
+  /// Embedded cover from the audio file itself, if any.
+  Uint8List? get embedded {
     for (final t in tracks) {
       if (t.cover != null) return t.cover;
     }
     return null;
   }
+
+  /// Best available cover: embedded first, then the enriched one.
+  Uint8List? get cover => embedded ?? enriched;
 }

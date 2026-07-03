@@ -7,6 +7,7 @@ import 'package:window_manager/window_manager.dart';
 import 'library.dart';
 import 'models.dart';
 import 'player.dart';
+import 'settings.dart';
 
 const _bg = Color(0xFF0C0D12);
 const _panel = Color(0xFF181B26);
@@ -35,17 +36,21 @@ Future<void> main() async {
     },
   );
 
+  final settings = AppSettings();
+  await settings.load();
   final library = LibraryStore();
   runApp(
     MultiProvider(
       providers: [
+        ChangeNotifierProvider<AppSettings>.value(value: settings),
         ChangeNotifierProvider<LibraryStore>.value(value: library),
         ChangeNotifierProvider<PlayerStore>(create: (_) => PlayerStore()),
       ],
       child: const DebridApp(),
     ),
   );
-  library.scan();
+  // Scan, then fill in missing covers from the web (cached on disk).
+  library.scan().then((_) => library.enrich(settings));
 }
 
 class DebridApp extends StatelessWidget {
@@ -154,13 +159,34 @@ class _HomeShellState extends State<HomeShell> {
           _navBtn(Icons.album_rounded, 'Albums', 0),
           _navBtn(Icons.people_alt_rounded, 'Artiesten', 1),
           const Spacer(),
+          Material(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: () => showDialog(context: context, builder: (_) => const SettingsDialog()),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                child: Row(
+                  children: [
+                    Icon(Icons.settings_rounded, size: 18, color: _muted),
+                    SizedBox(width: 11),
+                    Text('Instellingen',
+                        style: TextStyle(color: _muted, fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ),
+            ),
+          ),
           Consumer<LibraryStore>(
             builder: (_, lib, __) => Padding(
               padding: const EdgeInsets.all(8),
               child: Text(
                 lib.scanning
                     ? 'Bibliotheek scannen… ${lib.scanned}'
-                    : '${lib.albums.length} albums · ${lib.tracks.length} nummers',
+                    : (lib.enriching
+                        ? 'Covers ophalen…'
+                        : '${lib.albums.length} albums · ${lib.tracks.length} nummers'),
                 style: const TextStyle(color: Color(0xFF5F6478), fontSize: 11.5),
               ),
             ),
@@ -627,6 +653,123 @@ class PlayerBar extends StatelessWidget {
   double _progress(PlayerStore p) {
     if (p.duration.inMilliseconds == 0) return 0;
     return (p.position.inMilliseconds / p.duration.inMilliseconds).clamp(0.0, 1.0);
+  }
+}
+
+// ── Settings dialog ──────────────────────────────────────────────────────────
+class SettingsDialog extends StatefulWidget {
+  const SettingsDialog({super.key});
+  @override
+  State<SettingsDialog> createState() => _SettingsDialogState();
+}
+
+class _SettingsDialogState extends State<SettingsDialog> {
+  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm;
+
+  @override
+  void initState() {
+    super.initState();
+    final s = context.read<AppSettings>();
+    _discogs = TextEditingController(text: s.discogsToken);
+    _torbox = TextEditingController(text: s.torboxToken);
+    _slskUser = TextEditingController(text: s.soulseekUser);
+    _slskPass = TextEditingController(text: s.soulseekPass);
+    _lastfm = TextEditingController(text: s.lastfmKey);
+  }
+
+  @override
+  void dispose() {
+    _discogs.dispose();
+    _torbox.dispose();
+    _slskUser.dispose();
+    _slskPass.dispose();
+    _lastfm.dispose();
+    super.dispose();
+  }
+
+  Widget _field(String label, TextEditingController c, {bool obscure = false}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(color: _muted, fontSize: 12.5)),
+          const SizedBox(height: 5),
+          TextField(
+            controller: c,
+            obscureText: obscure,
+            style: const TextStyle(fontSize: 14),
+            decoration: InputDecoration(
+              isDense: true,
+              filled: true,
+              fillColor: const Color(0xFF14161F),
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
+              enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
+              focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _accent)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        width: 480,
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Instellingen', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            const Text('Sleutels blijven alleen op deze PC.', style: TextStyle(color: _muted, fontSize: 13)),
+            const SizedBox(height: 18),
+            _field('TorBox API-sleutel', _torbox),
+            _field('Discogs token', _discogs),
+            Row(
+              children: [
+                Expanded(child: _field('Soulseek gebruiker', _slskUser)),
+                const SizedBox(width: 12),
+                Expanded(child: _field('Soulseek wachtwoord', _slskPass, obscure: true)),
+              ],
+            ),
+            _field('Last.fm API-sleutel', _lastfm),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuleren')),
+                const SizedBox(width: 8),
+                FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  onPressed: () async {
+                    final s = context.read<AppSettings>();
+                    final lib = context.read<LibraryStore>();
+                    s.discogsToken = _discogs.text.trim();
+                    s.torboxToken = _torbox.text.trim();
+                    s.soulseekUser = _slskUser.text.trim();
+                    s.soulseekPass = _slskPass.text.trim();
+                    s.lastfmKey = _lastfm.text.trim();
+                    await s.save();
+                    if (context.mounted) Navigator.pop(context);
+                    lib.enrich(s); // pick up covers that need the (new) Discogs token
+                  },
+                  child: const Text('Opslaan'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

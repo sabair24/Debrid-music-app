@@ -1,7 +1,9 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
+import 'enrichment.dart';
 import 'models.dart';
+import 'settings.dart';
 
 /// Scans a music folder, reads tags + embedded covers, and groups into albums.
 class LibraryStore extends ChangeNotifier {
@@ -72,6 +74,25 @@ class LibraryStore extends ChangeNotifier {
       return Album(ts.first.album, ts.first.artist, ts);
     }).toList()
       ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+  }
+
+  bool enriching = false;
+
+  /// Fill missing album covers from the web (Deezer/Discogs/MusicBrainz), cached on disk.
+  Future<void> enrich(AppSettings settings) async {
+    enriching = true;
+    final enricher = CoverEnricher(settings);
+    for (final album in albums) {
+      if (album.embedded != null) continue;
+      Uint8List? bytes = await enricher.cached(album);
+      bytes ??= await enricher.fetchAndCache(album);
+      if (bytes != null) {
+        album.enriched = bytes;
+        notifyListeners();
+      }
+    }
+    enriching = false;
+    notifyListeners();
   }
 
   List<String> get artists {
