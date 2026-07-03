@@ -10,6 +10,8 @@ class Track {
   final Uint8List? cover;
   final Duration? duration;
   final bool isFlac;
+  final int? year;
+  final String? genre;
 
   Track({
     required this.path,
@@ -20,6 +22,8 @@ class Track {
     this.cover,
     this.duration,
     this.isFlac = false,
+    this.year,
+    this.genre,
   });
 }
 
@@ -31,10 +35,16 @@ class Album {
 
   /// A web-fetched cover (Deezer/Discogs/MusicBrainz), set by the enricher.
   Uint8List? enriched;
-  int? year;
-  String? genre;
 
   Album(this.title, this.artist, this.tracks);
+
+  int? get year => tracks.map((t) => t.year).firstWhere((y) => y != null, orElse: () => null);
+  String? get genre {
+    for (final t in tracks) {
+      if (t.genre != null && t.genre!.isNotEmpty) return t.genre;
+    }
+    return null;
+  }
 
   /// Embedded cover from the audio file itself, if any.
   Uint8List? get embedded {

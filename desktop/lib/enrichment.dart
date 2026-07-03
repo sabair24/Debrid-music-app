@@ -20,16 +20,18 @@ class CoverEnricher {
   static final _featRe = RegExp(r'\s+(feat\.?|ft\.?|featuring)\s+.*$', caseSensitive: false);
   static const _generic = {'various', 'various artists', 'va', 'onbekende artiest', 'unknown artist', 'unknown', ''};
 
-  Directory get cacheDir {
+  static String _dir(String name) {
     final base = Platform.environment['APPDATA'] ?? Directory.current.path;
     final sep = Platform.pathSeparator;
-    return Directory('$base${sep}DebridMusic${sep}covers');
+    return '$base${sep}DebridMusic$sep$name';
   }
+
+  Directory get cacheDir => Directory(_dir('covers'));
+  Directory get artistDir => Directory(_dir('artists'));
 
   // Stable FNV-1a hash (Dart's String.hashCode is randomized per run, so it can't
   // be used for a persistent on-disk cache key).
-  String keyFor(Album a) {
-    final s = '${a.artist.toLowerCase()}|${a.title.toLowerCase()}';
+  static String _fnv(String s) {
     var h = 0x811c9dc5;
     for (final c in s.codeUnits) {
       h ^= c;
@@ -38,12 +40,39 @@ class CoverEnricher {
     return h.toRadixString(16);
   }
 
-  File _cacheFile(Album a) =>
-      File('${cacheDir.path}${Platform.pathSeparator}${keyFor(a)}.jpg');
+  String keyFor(Album a) => _fnv('${a.artist.toLowerCase()}|${a.title.toLowerCase()}');
+  File _cacheFile(Album a) => File('${cacheDir.path}${Platform.pathSeparator}${keyFor(a)}.jpg');
+  File _artistFile(String name) => File('${artistDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.jpg');
 
   Future<Uint8List?> cached(Album a) async {
     final f = _cacheFile(a);
     return await f.exists() ? f.readAsBytes() : null;
+  }
+
+  Future<Uint8List?> cachedArtist(String name) async {
+    final f = _artistFile(name);
+    return await f.exists() ? f.readAsBytes() : null;
+  }
+
+  /// Fetch + cache an artist photo from Deezer (keyless).
+  Future<Uint8List?> fetchArtistImage(String name) async {
+    if (_generic.contains(name.trim().toLowerCase())) return null;
+    try {
+      final r = await http.get(Uri.parse('https://api.deezer.com/search/artist?q=${Uri.encodeComponent(name)}&limit=1'));
+      if (r.statusCode != 200) return null;
+      final data = (jsonDecode(r.body)['data'] as List?) ?? const [];
+      if (data.isEmpty) return null;
+      final url = (data.first['picture_xl'] ?? data.first['picture_big']) as String?;
+      if (url == null || url.isEmpty) return null;
+      final b = await _download(url);
+      if (b != null) {
+        await artistDir.create(recursive: true);
+        await _artistFile(name).writeAsBytes(b);
+      }
+      return b;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Fetch + cache a cover for [a]; returns the bytes (or null if nothing found).

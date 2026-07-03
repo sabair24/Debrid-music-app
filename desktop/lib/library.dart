@@ -58,6 +58,8 @@ class LibraryStore extends ChangeNotifier {
         cover: cover,
         duration: meta.duration,
         isFlac: _ext(file.path) == '.flac',
+        year: (meta.year != null && meta.year!.year > 1000) ? meta.year!.year : null,
+        genre: (meta.genres.isNotEmpty) ? meta.genres.first : null,
       );
     } catch (_) {
       return null;
@@ -77,6 +79,7 @@ class LibraryStore extends ChangeNotifier {
   }
 
   bool enriching = false;
+  final Map<String, Uint8List> artistImages = {};
 
   /// Fill missing album covers from the web (Deezer/Discogs/MusicBrainz), cached on disk.
   Future<void> enrich(AppSettings settings) async {
@@ -93,6 +96,20 @@ class LibraryStore extends ChangeNotifier {
     }
     enriching = false;
     notifyListeners();
+  }
+
+  /// Fetch artist photos (Deezer), cached on disk.
+  Future<void> enrichArtists(AppSettings settings) async {
+    final enricher = CoverEnricher(settings);
+    for (final name in artists) {
+      if (artistImages.containsKey(name)) continue;
+      Uint8List? bytes = await enricher.cachedArtist(name);
+      bytes ??= await enricher.fetchArtistImage(name);
+      if (bytes != null) {
+        artistImages[name] = bytes;
+        notifyListeners();
+      }
+    }
   }
 
   List<String> get artists {

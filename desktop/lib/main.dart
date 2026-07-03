@@ -49,8 +49,11 @@ Future<void> main() async {
       child: const DebridApp(),
     ),
   );
-  // Scan, then fill in missing covers from the web (cached on disk).
-  library.scan().then((_) => library.enrich(settings));
+  // Scan, then fill in missing covers + artist photos from the web (cached on disk).
+  library.scan().then((_) async {
+    await library.enrich(settings);
+    await library.enrichArtists(settings);
+  });
 }
 
 class DebridApp extends StatelessWidget {
@@ -381,8 +384,15 @@ class AlbumDetailPage extends StatelessWidget {
                 const SizedBox(height: 6),
                 Text(album.title, style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 6),
-                Text('${album.artist} · ${album.tracks.length} nummers',
-                    style: const TextStyle(color: _muted)),
+                Text(
+                  [
+                    album.artist,
+                    if (album.year != null) '${album.year}',
+                    if (album.genre != null) album.genre!,
+                    '${album.tracks.length} nummers',
+                  ].join(' · '),
+                  style: const TextStyle(color: _muted),
+                ),
                 const SizedBox(height: 18),
                 FilledButton.icon(
                   style: FilledButton.styleFrom(
@@ -484,21 +494,41 @@ class _ArtistsViewState extends State<ArtistsView> {
   @override
   Widget build(BuildContext context) {
     if (_selected != null) {
-      final albums = widget.lib.albums.where((a) => a.artist == _selected).toList();
+      final name = _selected!;
+      final albums = widget.lib.albums.where((a) => a.artist == name).toList();
+      final trackCount = albums.fold<int>(0, (s, a) => s + a.tracks.length);
+      final img = widget.lib.artistImages[name];
       return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 0, 0),
-              child: TextButton.icon(
-                onPressed: () => setState(() => _selected = null),
-                icon: const Icon(Icons.arrow_back_rounded, size: 18),
-                label: Text(_selected!),
-              ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 0, 0),
+            child: TextButton.icon(
+              onPressed: () => setState(() => _selected = null),
+              icon: const Icon(Icons.arrow_back_rounded, size: 18),
+              label: const Text('Artiesten'),
             ),
           ),
-          Expanded(child: AlbumsGrid(albums: albums, title: _selected)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
+            child: Row(
+              children: [
+                cover(img, size: 96, circle: true),
+                const SizedBox(width: 18),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(name, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 4),
+                    Text('${albums.length} albums · $trackCount nummers',
+                        style: const TextStyle(color: _muted)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Expanded(child: AlbumsGrid(albums: albums, title: 'Albums')),
         ],
       );
     }
@@ -521,7 +551,8 @@ class _ArtistsViewState extends State<ArtistsView> {
                 childAspectRatio: .82),
             delegate: SliverChildBuilderDelegate((_, i) {
               final name = artists[i];
-              final art = widget.lib.albums.firstWhere((a) => a.artist == name).cover;
+              final art = widget.lib.artistImages[name] ??
+                  widget.lib.albums.firstWhere((a) => a.artist == name).cover;
               return GestureDetector(
                 onTap: () => setState(() => _selected = name),
                 child: Column(
