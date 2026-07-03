@@ -78,6 +78,11 @@ fun Application.configureServer(
             else call.respondText("DebridMusic server is running.", ContentType.Text.Plain)
         }
 
+        get("/logo.png") {
+            val bytes = object {}.javaClass.classLoader.getResourceAsStream("webui/logo.png")?.readBytes()
+            if (bytes != null) call.respondBytes(bytes, ContentType.Image.PNG) else call.respond(HttpStatusCode.NotFound)
+        }
+
         get("/health") {
             call.respond(HealthDto(version = ServerConfig.VERSION))
         }

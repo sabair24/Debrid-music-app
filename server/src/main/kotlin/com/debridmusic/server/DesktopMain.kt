@@ -153,6 +153,10 @@ object DesktopMain {
     }
 
     private fun trayImage(): Image {
+        // Prefer the bundled branded logo; fall back to a drawn note.
+        runCatching {
+            object {}.javaClass.classLoader.getResourceAsStream("webui/logo.png")?.use { javax.imageio.ImageIO.read(it) }
+        }.getOrNull()?.let { return it }
         val size = 16
         val img = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
         val g = img.createGraphics()
@@ -160,8 +164,8 @@ object DesktopMain {
         g.paint = GradientPaint(0f, 0f, Color(0x7c5cff), size.toFloat(), size.toFloat(), Color(0x00d4c8))
         g.fillRoundRect(0, 0, size, size, 6, 6)
         g.color = Color.WHITE
-        g.fillOval(4, 9, 5, 5)                 // note head
-        g.fillRect(8, 3, 2, 8)                 // stem
+        g.fillOval(4, 9, 5, 5)
+        g.fillRect(8, 3, 2, 8)
         g.dispose()
         return img
     }

@@ -69,12 +69,30 @@ data class ServerConfig(
                 ?: randomToken().also { tokenFile.writeText(it) }
         }
 
-        /** A user-writable data directory (the packaged app can't write under Program Files). */
+        /**
+         * User-writable data directory. Uses Roaming AppData so it never lives inside the
+         * install folder (the installer targets %LOCALAPPDATA%\DebridMusic — sharing that
+         * with live data broke updates/uninstall). Migrates once from the legacy location.
+         */
         fun desktopDataDir(): File {
-            val base = System.getenv("LOCALAPPDATA")?.let { File(it) }
+            val base = System.getenv("APPDATA")?.let { File(it) }
                 ?: System.getenv("XDG_DATA_HOME")?.let { File(it) }
-                ?: File(System.getProperty("user.home"))
-            return File(base, "DebridMusic").apply { mkdirs() }
+                ?: File(System.getProperty("user.home"), ".config")
+            val dir = File(base, "DebridMusic").apply { mkdirs() }
+            migrateLegacyData(dir)
+            return dir
+        }
+
+        /** Copy creds/settings/covers from the old %LOCALAPPDATA%\DebridMusic once, so nothing is lost. */
+        private fun migrateLegacyData(dir: File) {
+            if (File(dir, "settings.properties").isFile) return
+            val legacy = System.getenv("LOCALAPPDATA")?.let { File(it, "DebridMusic") } ?: return
+            if (!legacy.isDirectory || legacy.absolutePath == dir.absolutePath) return
+            listOf("settings.properties", "token.txt", "music_roots.txt").forEach { name ->
+                File(legacy, name).takeIf { it.isFile }?.let { runCatching { it.copyTo(File(dir, name), overwrite = false) } }
+            }
+            File(legacy, "artcache").takeIf { it.isDirectory }
+                ?.let { runCatching { it.copyRecursively(File(dir, "artcache"), overwrite = false) } }
         }
 
         private fun randomToken(): String {
