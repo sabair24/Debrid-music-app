@@ -13,7 +13,7 @@ void main() {
 
     final lib = LibraryStore();
     await lib.scan();
-    final before = lib.albums.where((a) => a.embedded != null).length;
+    final before = lib.albums.where((a) => a.embeddedCover != null).length;
     // ignore: avoid_print
     print('albums with embedded cover: $before / ${lib.albums.length}');
 
@@ -21,7 +21,7 @@ void main() {
     final after = lib.albums.where((a) => a.cover != null).length;
     // ignore: avoid_print
     print('albums with ANY cover after enrich: $after / ${lib.albums.length}');
-    for (final a in lib.albums.where((a) => a.embedded == null).take(8)) {
+    for (final a in lib.albums.where((a) => a.embeddedCover == null).take(8)) {
       // ignore: avoid_print
       print('   ${a.enriched != null ? "OK " : "-- "} ${a.artist} — ${a.title}');
     }

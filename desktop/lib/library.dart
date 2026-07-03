@@ -1,21 +1,70 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'enrichment.dart';
 import 'models.dart';
 import 'settings.dart';
 
-/// Scans a music folder, reads tags + embedded covers, and groups into albums.
+const _audioExt = {'.flac', '.mp3', '.m4a', '.wav', '.ogg', '.opus', '.aac', '.wma', '.alac'};
+
+String _ext(String p) {
+  final i = p.lastIndexOf('.');
+  return i < 0 ? '' : p.substring(i).toLowerCase();
+}
+
+String _baseName(String p) {
+  final s = p.replaceAll('\\', '/').split('/').last;
+  final i = s.lastIndexOf('.');
+  return i < 0 ? s : s.substring(0, i);
+}
+
+/// Pass 1 (runs in a background isolate): read tags only — fast + low memory.
+List<Map<String, dynamic>> _scanTags(String root) {
+  final out = <Map<String, dynamic>>[];
+  final dir = Directory(root);
+  if (!dir.existsSync()) return out;
+  for (final e in dir.listSync(recursive: true, followLinks: false)) {
+    if (e is! File || !_audioExt.contains(_ext(e.path))) continue;
+    try {
+      final m = readMetadata(e, getImage: false);
+      out.add({
+        'path': e.path,
+        'title': (m.title?.trim().isNotEmpty ?? false) ? m.title!.trim() : _baseName(e.path),
+        'artist': (m.artist?.trim().isNotEmpty ?? false) ? m.artist!.trim() : 'Onbekende artiest',
+        'album': m.album?.trim() ?? '', // empty => single
+        'trackNo': m.trackNumber ?? 0,
+        'durationMs': m.duration?.inMilliseconds ?? 0,
+        'isFlac': _ext(e.path) == '.flac',
+        'year': (m.year != null && m.year!.year > 1000) ? m.year!.year : null,
+        'genre': (m.genres.isNotEmpty) ? m.genres.first : null,
+      });
+    } catch (_) {}
+  }
+  return out;
+}
+
+/// Pass 2 (background isolate): read one embedded cover per album.
+Map<String, Uint8List> _readCovers(List<String> paths) {
+  final out = <String, Uint8List>{};
+  for (final p in paths) {
+    try {
+      final m = readMetadata(File(p), getImage: true);
+      if (m.pictures.isNotEmpty) out[p] = m.pictures.first.bytes;
+    } catch (_) {}
+  }
+  return out;
+}
+
+/// Scans the music folder, groups into albums/singles, reads covers, and enriches.
 class LibraryStore extends ChangeNotifier {
   final List<Track> tracks = [];
   List<Album> albums = [];
   bool scanning = false;
   int scanned = 0;
+  bool enriching = false;
+  final Map<String, Uint8List> artistImages = {};
   String rootPath = r'D:\Flac music 2024';
-
-  static const _audioExt = {
-    '.flac', '.mp3', '.m4a', '.wav', '.ogg', '.opus', '.aac', '.wma', '.alac'
-  };
 
   Future<void> scan() async {
     scanning = true;
@@ -24,69 +73,58 @@ class LibraryStore extends ChangeNotifier {
     albums = [];
     notifyListeners();
 
-    final dir = Directory(rootPath);
-    if (await dir.exists()) {
-      await for (final entity in dir.list(recursive: true, followLinks: false)) {
-        if (entity is File && _audioExt.contains(_ext(entity.path))) {
-          final t = _read(entity);
-          if (t != null) {
-            tracks.add(t);
-            scanned++;
-            if (scanned % 15 == 0) notifyListeners();
-          }
-        }
-      }
-    }
+    // Pass 1 — tags, off the UI thread.
+    final raw = await Isolate.run(() => _scanTags(rootPath));
+    tracks.addAll(raw.map(_trackFromMap));
+    scanned = tracks.length;
     _buildAlbums();
     scanning = false;
     notifyListeners();
+
+    // Pass 2 — one cover per album, off the UI thread.
+    final firstPaths = albums.map((a) => a.tracks.first.path).toList();
+    final covers = await Isolate.run(() => _readCovers(firstPaths));
+    for (final a in albums) {
+      a.embeddedCover = covers[a.tracks.first.path];
+    }
+    notifyListeners();
   }
 
-  Track? _read(File file) {
-    try {
-      final meta = readMetadata(file, getImage: true);
-      final cover = meta.pictures.isNotEmpty ? meta.pictures.first.bytes : null;
-      final title = (meta.title != null && meta.title!.trim().isNotEmpty)
-          ? meta.title!.trim()
-          : _baseName(file.path);
-      return Track(
-        path: file.path,
-        title: title,
-        artist: (meta.artist?.trim().isNotEmpty ?? false) ? meta.artist!.trim() : 'Onbekende artiest',
-        album: (meta.album?.trim().isNotEmpty ?? false) ? meta.album!.trim() : _parentName(file.path),
-        trackNo: meta.trackNumber ?? 0,
-        cover: cover,
-        duration: meta.duration,
-        isFlac: _ext(file.path) == '.flac',
-        year: (meta.year != null && meta.year!.year > 1000) ? meta.year!.year : null,
-        genre: (meta.genres.isNotEmpty) ? meta.genres.first : null,
+  Track _trackFromMap(Map<String, dynamic> m) => Track(
+        path: m['path'] as String,
+        title: m['title'] as String,
+        artist: m['artist'] as String,
+        album: m['album'] as String,
+        trackNo: m['trackNo'] as int,
+        duration: (m['durationMs'] as int) > 0 ? Duration(milliseconds: m['durationMs'] as int) : null,
+        isFlac: m['isFlac'] as bool,
+        year: m['year'] as int?,
+        genre: m['genre'] as String?,
       );
-    } catch (_) {
-      return null;
-    }
-  }
 
   void _buildAlbums() {
     final map = <String, List<Track>>{};
     for (final t in tracks) {
-      map.putIfAbsent('${t.artist.toLowerCase()}|${t.album.toLowerCase()}', () => []).add(t);
+      // No album tag => its own single (never grouped under the root folder name).
+      final key = t.album.isEmpty
+          ? 'single::${t.path}'
+          : 'album::${t.artist.toLowerCase()}|${t.album.toLowerCase()}';
+      map.putIfAbsent(key, () => []).add(t);
     }
-    albums = map.values.map((ts) {
-      ts.sort((a, b) => a.trackNo.compareTo(b.trackNo));
-      return Album(ts.first.album, ts.first.artist, ts);
+    albums = map.entries.map((e) {
+      final ts = e.value..sort((a, b) => a.trackNo.compareTo(b.trackNo));
+      final single = e.key.startsWith('single::');
+      return Album(single ? ts.first.title : ts.first.album, ts.first.artist, ts, isSingle: single);
     }).toList()
       ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
   }
-
-  bool enriching = false;
-  final Map<String, Uint8List> artistImages = {};
 
   /// Fill missing album covers from the web (Deezer/Discogs/MusicBrainz), cached on disk.
   Future<void> enrich(AppSettings settings) async {
     enriching = true;
     final enricher = CoverEnricher(settings);
     for (final album in albums) {
-      if (album.embedded != null) continue;
+      if (album.embeddedCover != null) continue;
       Uint8List? bytes = await enricher.cached(album);
       bytes ??= await enricher.fetchAndCache(album);
       if (bytes != null) {
@@ -119,21 +157,5 @@ class LibraryStore extends ChangeNotifier {
     }
     final list = set.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     return list;
-  }
-
-  String _ext(String p) {
-    final i = p.lastIndexOf('.');
-    return i < 0 ? '' : p.substring(i).toLowerCase();
-  }
-
-  String _baseName(String p) {
-    final s = p.replaceAll('\\', '/').split('/').last;
-    final i = s.lastIndexOf('.');
-    return i < 0 ? s : s.substring(0, i);
-  }
-
-  String _parentName(String p) {
-    final parts = p.replaceAll('\\', '/').split('/');
-    return parts.length >= 2 ? parts[parts.length - 2] : 'Onbekend album';
   }
 }

@@ -9,12 +9,16 @@ void main() {
     await lib.scan();
     // ignore: avoid_print
     print('SCAN RESULT: tracks=${lib.tracks.length} albums=${lib.albums.length} artists=${lib.artists.length}');
-    final withCover = lib.tracks.where((t) => t.cover != null).length;
+    final withCover = lib.albums.where((a) => a.embeddedCover != null).length;
     // ignore: avoid_print
-    print('tracks with embedded cover: $withCover / ${lib.tracks.length}');
-    for (final a in lib.albums.take(5)) {
+    print('albums with embedded cover: $withCover / ${lib.albums.length}');
+    final singles = lib.albums.where((a) => a.isSingle).length;
+    // ignore: avoid_print
+    print('singles: $singles; fake "Flac music 2024" album present: '
+        '${lib.albums.any((a) => a.title.toLowerCase().contains("flac music 2024"))}');
+    for (final a in lib.albums.take(6)) {
       // ignore: avoid_print
-      print('  • ${a.title} — ${a.artist} (${a.tracks.length} nr, cover=${a.cover != null}, flac=${a.tracks.first.isFlac})');
+      print('  • ${a.isSingle ? "[single] " : ""}${a.title} — ${a.artist} (${a.tracks.length} nr)');
     }
     expect(lib.tracks.length, greaterThan(0));
   }, timeout: const Timeout(Duration(minutes: 4)));

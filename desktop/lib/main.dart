@@ -364,7 +364,8 @@ class AlbumDetailPage extends StatelessWidget {
                 SliverToBoxAdapter(child: _header(context)),
                 SliverList(
                   delegate: SliverChildBuilderDelegate(
-                    (_, i) => TrackRow(track: album.tracks[i], index: i, queue: album.tracks),
+                    (_, i) => TrackRow(
+                        track: album.tracks[i], index: i, queue: album.tracks, albumCover: album.cover),
                     childCount: album.tracks.length,
                   ),
                 ),
@@ -410,7 +411,7 @@ class AlbumDetailPage extends StatelessWidget {
                     backgroundColor: _accent,
                     padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
                   ),
-                  onPressed: () => player.playQueue(album.tracks, 0),
+                  onPressed: () => player.playQueue(album.tracks, 0, cover: album.cover),
                   icon: const Icon(Icons.play_arrow_rounded),
                   label: const Text('Afspelen'),
                 ),
@@ -427,7 +428,9 @@ class TrackRow extends StatefulWidget {
   final Track track;
   final int index;
   final List<Track> queue;
-  const TrackRow({super.key, required this.track, required this.index, required this.queue});
+  final Uint8List? albumCover;
+  const TrackRow(
+      {super.key, required this.track, required this.index, required this.queue, this.albumCover});
   @override
   State<TrackRow> createState() => _TrackRowState();
 }
@@ -444,7 +447,9 @@ class _TrackRowState extends State<TrackRow> {
       onExit: (_) => setState(() => _hover = false),
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
-        onTap: () => context.read<PlayerStore>().playQueue(widget.queue, widget.index),
+        onTap: () => context
+            .read<PlayerStore>()
+            .playQueue(widget.queue, widget.index, cover: widget.albumCover),
         child: Container(
           margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
@@ -607,7 +612,16 @@ class PlayerBar extends StatelessWidget {
             width: 280,
             child: Row(
               children: [
-                cover(t?.cover, size: 54, radius: 8),
+                GestureDetector(
+                  onTap: t == null
+                      ? null
+                      : () => Navigator.of(context)
+                          .push(MaterialPageRoute(builder: (_) => const NowPlayingScreen())),
+                  child: MouseRegion(
+                    cursor: t == null ? MouseCursor.defer : SystemMouseCursors.click,
+                    child: cover(p.currentCover, size: 54, radius: 8),
+                  ),
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -636,11 +650,16 @@ class PlayerBar extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     IconButton(
+                      icon: const Icon(Icons.shuffle_rounded, size: 20),
+                      color: p.shuffle ? _accent : _muted,
+                      onPressed: p.toggleShuffle,
+                    ),
+                    IconButton(
                       icon: const Icon(Icons.skip_previous_rounded),
                       color: _muted,
                       onPressed: p.hasPrev || p.position > const Duration(seconds: 3) ? p.prev : null,
                     ),
-                    const SizedBox(width: 4),
+                    const SizedBox(width: 2),
                     Container(
                       decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
                       child: IconButton(
@@ -650,11 +669,17 @@ class PlayerBar extends StatelessWidget {
                         onPressed: t == null ? null : p.playPause,
                       ),
                     ),
-                    const SizedBox(width: 4),
+                    const SizedBox(width: 2),
                     IconButton(
                       icon: const Icon(Icons.skip_next_rounded),
                       color: _muted,
                       onPressed: p.hasNext ? p.next : null,
+                    ),
+                    IconButton(
+                      icon: Icon(p.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded,
+                          size: 20),
+                      color: p.repeat == RepeatMode.off ? _muted : _accent,
+                      onPressed: p.cycleRepeat,
                     ),
                   ],
                 ),
@@ -695,6 +720,165 @@ class PlayerBar extends StatelessWidget {
   double _progress(PlayerStore p) {
     if (p.duration.inMilliseconds == 0) return 0;
     return (p.position.inMilliseconds / p.duration.inMilliseconds).clamp(0.0, 1.0);
+  }
+}
+
+// ── Now playing (full screen, enlargeable art) ───────────────────────────────
+class NowPlayingScreen extends StatelessWidget {
+  const NowPlayingScreen({super.key});
+  @override
+  Widget build(BuildContext context) {
+    final p = context.watch<PlayerStore>();
+    final t = p.current;
+    final prog = p.duration.inMilliseconds == 0
+        ? 0.0
+        : (p.position.inMilliseconds / p.duration.inMilliseconds).clamp(0.0, 1.0);
+    return Scaffold(
+      backgroundColor: _bg,
+      body: Stack(
+        children: [
+          if (p.currentCover != null)
+            Positioned.fill(
+              child: Opacity(opacity: .22, child: Image.memory(p.currentCover!, fit: BoxFit.cover)),
+            ),
+          Positioned.fill(child: Container(color: _bg.withValues(alpha: .5))),
+          SafeArea(
+            child: Column(
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: IconButton(
+                    icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 30),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ),
+                const Spacer(),
+                GestureDetector(
+                  onTap: p.currentCover == null
+                      ? null
+                      : () => showDialog(context: context, builder: (_) => _ZoomView(p.currentCover!)),
+                  child: MouseRegion(
+                    cursor: p.currentCover == null ? MouseCursor.defer : SystemMouseCursors.zoomIn,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(color: Colors.black.withValues(alpha: .5), blurRadius: 44, offset: const Offset(0, 22))
+                        ],
+                      ),
+                      child: cover(p.currentCover, size: 360, radius: 16),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 30),
+                Text(t?.title ?? '—',
+                    style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w800), textAlign: TextAlign.center),
+                const SizedBox(height: 6),
+                Text(t?.artist ?? '', style: const TextStyle(color: _muted, fontSize: 15)),
+                const SizedBox(height: 26),
+                SizedBox(
+                  width: 540,
+                  child: Row(
+                    children: [
+                      Text(_fmt(p.position), style: const TextStyle(color: _muted, fontSize: 12)),
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: 4,
+                            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                            activeTrackColor: _accent,
+                            inactiveTrackColor: const Color(0xFF2A2F42),
+                            thumbColor: Colors.white,
+                          ),
+                          child: Slider(
+                            value: prog,
+                            onChanged: t == null || p.duration.inMilliseconds == 0
+                                ? null
+                                : (v) => p.seek(Duration(milliseconds: (v * p.duration.inMilliseconds).round())),
+                          ),
+                        ),
+                      ),
+                      Text(_fmt(p.duration), style: const TextStyle(color: _muted, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    IconButton(
+                        icon: const Icon(Icons.shuffle_rounded),
+                        iconSize: 24,
+                        color: p.shuffle ? _accent : _muted,
+                        onPressed: p.toggleShuffle),
+                    const SizedBox(width: 12),
+                    IconButton(
+                        icon: const Icon(Icons.skip_previous_rounded),
+                        iconSize: 34,
+                        color: _text,
+                        onPressed: p.hasPrev || p.position > const Duration(seconds: 3) ? p.prev : null),
+                    const SizedBox(width: 8),
+                    Container(
+                      decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                      child: IconButton(
+                        icon: Icon(p.playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
+                        color: _bg,
+                        iconSize: 40,
+                        onPressed: t == null ? null : p.playPause,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                        icon: const Icon(Icons.skip_next_rounded),
+                        iconSize: 34,
+                        color: _text,
+                        onPressed: p.hasNext ? p.next : null),
+                    const SizedBox(width: 12),
+                    IconButton(
+                        icon: Icon(p.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded),
+                        iconSize: 24,
+                        color: p.repeat == RepeatMode.off ? _muted : _accent,
+                        onPressed: p.cycleRepeat),
+                  ],
+                ),
+                const Spacer(),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ZoomView extends StatelessWidget {
+  final Uint8List bytes;
+  const _ZoomView(this.bytes);
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.black,
+      insetPadding: EdgeInsets.zero,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: InteractiveViewer(
+              minScale: 0.8,
+              maxScale: 5,
+              child: Center(child: Image.memory(bytes)),
+            ),
+          ),
+          Positioned(
+            top: 16,
+            right: 16,
+            child: IconButton(
+              icon: const Icon(Icons.close_rounded, color: Colors.white, size: 28),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
