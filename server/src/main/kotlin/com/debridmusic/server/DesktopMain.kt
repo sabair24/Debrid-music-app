@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory
 import java.awt.*
 import java.awt.image.BufferedImage
 import java.io.File
+import java.net.HttpURLConnection
 import java.net.URI
 import javax.swing.JFileChooser
 import javax.swing.JOptionPane
@@ -44,15 +45,40 @@ object DesktopMain {
 
     @JvmStatic
     fun main(args: Array<String>) {
+        // Wrap everything so a startup error shows a real message instead of the
+        // launcher's cryptic "Failed to launch JVM" (which appears when the JVM
+        // process exits non-zero — e.g. a second instance hitting a busy port).
+        try {
+            runDesktop(args)
+        } catch (e: Throwable) {
+            log.error("DebridMusic startup failed", e)
+            if (!GraphicsEnvironment.isHeadless()) runCatching {
+                JOptionPane.showMessageDialog(
+                    null, "DebridMusic kon niet starten:\n\n${e.message}", "DebridMusic", JOptionPane.ERROR_MESSAGE,
+                )
+            }
+        }
+    }
+
+    private fun runDesktop(args: Array<String>) {
         if (GraphicsEnvironment.isHeadless()) { runHeadlessServer(args); return } // no display → headless server
 
         val dataDir = ServerConfig.desktopDataDir()
         val port = (System.getenv("PORT") ?: "4533").toIntOrNull() ?: 4533
-        val roots = resolveMusicRoots(dataDir) ?: run {
-            JOptionPane.showMessageDialog(null, "No music folder selected. Exiting.")
+        val token = ServerConfig.loadOrCreateToken(dataDir, System.getenv("AUTH_TOKEN"))
+
+        // Single-instance: if DebridMusic is already running, just open its window and exit
+        // cleanly (this is why Electron apps like Somati don't error on a second click).
+        if (isAlreadyRunning(port)) {
+            log.info("DebridMusic is already running — opening its window instead of starting a second copy.")
+            openAppWindow("http://localhost:$port/?token=$token")
             return
         }
-        val token = ServerConfig.loadOrCreateToken(dataDir, System.getenv("AUTH_TOKEN"))
+
+        val roots = resolveMusicRoots(dataDir) ?: run {
+            JOptionPane.showMessageDialog(null, "Geen muziekmap gekozen. Afsluiten.")
+            return
+        }
         val config = ServerConfig(
             musicRoots = roots, bindAddress = "0.0.0.0", port = port, authToken = token,
             username = "music", password = token, dataDir = dataDir,
@@ -170,6 +196,15 @@ object DesktopMain {
         return img
     }
 
+    /** True if a DebridMusic server already answers /health on this port. */
+    private fun isAlreadyRunning(port: Int): Boolean = runCatching {
+        val conn = URI("http://localhost:$port/health").toURL().openConnection() as HttpURLConnection
+        conn.connectTimeout = 900; conn.readTimeout = 900
+        val ok = conn.responseCode == 200
+        conn.disconnect()
+        ok
+    }.getOrDefault(false)
+
     /**
      * Open the UI as a standalone app window (Edge/Chrome `--app=` mode: own window,
      * own taskbar entry, no address bar/tabs). Falls back to the default browser.
@@ -192,6 +227,7 @@ object DesktopMain {
                 ProcessBuilder(
                     exe, "--app=$url", "--user-data-dir=$profile",
                     "--window-size=1320,880", "--no-first-run", "--no-default-browser-check",
+                    "--disable-features=Translate,TranslateUI", "--disable-translate",
                 ).start()
             }.isSuccess
             if (ok) return
