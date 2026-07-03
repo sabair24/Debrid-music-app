@@ -6,8 +6,10 @@ import 'package:window_manager/window_manager.dart';
 
 import 'library.dart';
 import 'models.dart';
+import 'online.dart';
 import 'player.dart';
 import 'settings.dart';
+import 'torbox.dart';
 
 const _bg = Color(0xFF0C0D12);
 const _panel = Color(0xFF181B26);
@@ -39,12 +41,19 @@ Future<void> main() async {
   final settings = AppSettings();
   await settings.load();
   final library = LibraryStore();
+  final online = OnlineService(settings);
+  final downloads = DownloadManager(online, library.rootPath, () async {
+    await library.scan();
+    await library.enrich(settings);
+  });
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider<AppSettings>.value(value: settings),
         ChangeNotifierProvider<LibraryStore>.value(value: library),
         ChangeNotifierProvider<PlayerStore>(create: (_) => PlayerStore()),
+        Provider<OnlineService>.value(value: online),
+        ChangeNotifierProvider<DownloadManager>.value(value: downloads),
       ],
       child: const DebridApp(),
     ),
@@ -161,6 +170,7 @@ class _HomeShellState extends State<HomeShell> {
           ),
           _navBtn(Icons.album_rounded, 'Albums', 0),
           _navBtn(Icons.people_alt_rounded, 'Artiesten', 1),
+          _navBtn(Icons.travel_explore_rounded, 'Online zoeken', 2),
           const Spacer(),
           Material(
             color: Colors.transparent,
@@ -227,6 +237,7 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   Widget _content() {
+    if (_view == 2) return const OnlineSearchScreen();
     return Consumer<LibraryStore>(
       builder: (_, lib, __) {
         if (lib.scanning && lib.albums.isEmpty) {
@@ -684,6 +695,223 @@ class PlayerBar extends StatelessWidget {
   double _progress(PlayerStore p) {
     if (p.duration.inMilliseconds == 0) return 0;
     return (p.position.inMilliseconds / p.duration.inMilliseconds).clamp(0.0, 1.0);
+  }
+}
+
+// ── Online search (TorBox) ───────────────────────────────────────────────────
+class OnlineSearchScreen extends StatefulWidget {
+  const OnlineSearchScreen({super.key});
+  @override
+  State<OnlineSearchScreen> createState() => _OnlineSearchScreenState();
+}
+
+class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
+  final _c = TextEditingController();
+  List<SearchResult> _results = [];
+  bool _busy = false;
+  String? _status;
+
+  Future<void> _search() async {
+    final q = _c.text.trim();
+    if (q.isEmpty) return;
+    setState(() {
+      _busy = true;
+      _results = [];
+      _status = 'Zoeken over Pirate Bay, BitSearch, Knaben…';
+    });
+    try {
+      final r = await context.read<OnlineService>().search(q);
+      if (!mounted) return;
+      setState(() {
+        _results = r;
+        _status = r.isEmpty ? 'Niets gevonden.' : null;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _status = 'Zoeken mislukt: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _play(SearchResult r) async {
+    _toast('Bron voorbereiden…');
+    try {
+      final url = await context.read<OnlineService>().resolveStreamUrl(r);
+      if (mounted) context.read<PlayerStore>().playUrl(url, title: r.name, artist: r.source);
+    } catch (e) {
+      _toast('Kan niet afspelen: $e');
+    }
+  }
+
+  Future<void> _download(SearchResult r) async {
+    try {
+      final n = await context.read<DownloadManager>().enqueue(r);
+      _toast('$n nummer(s) naar downloads');
+    } catch (e) {
+      _toast('Download mislukt: $e');
+    }
+  }
+
+  void _toast(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(m), duration: const Duration(seconds: 2)));
+  }
+
+  String _gb(int b) => b >= 1000000000
+      ? '${(b / 1e9).toStringAsFixed(2)} GB'
+      : b >= 1000000
+          ? '${(b / 1e6).round()} MB'
+          : '${(b / 1e3).round()} KB';
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(24, 22, 24, 8),
+          child: Text('Online zoeken', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _c,
+                  onSubmitted: (_) => _search(),
+                  decoration: InputDecoration(
+                    hintText: 'Artiest, album of nummer…',
+                    filled: true,
+                    fillColor: _panel,
+                    prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(11), borderSide: const BorderSide(color: _line)),
+                    enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(11), borderSide: const BorderSide(color: _line)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                    backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18)),
+                onPressed: _busy ? null : _search,
+                child: const Text('Zoek'),
+              ),
+            ],
+          ),
+        ),
+        Consumer<DownloadManager>(
+          builder: (_, dm, __) {
+            final recent = dm.jobs.take(5).toList();
+            if (recent.isEmpty) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+              child: Column(
+                children: recent
+                    .map((j) => Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 3),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                  child: Text(j.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 12.5))),
+                              SizedBox(
+                                width: 160,
+                                child: LinearProgressIndicator(
+                                  value: j.status == 'done' ? 1 : j.progress,
+                                  backgroundColor: const Color(0xFF2A2F42),
+                                  color: j.status == 'failed'
+                                      ? Colors.red
+                                      : (j.status == 'done' ? _accent2 : _accent),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              SizedBox(
+                                width: 54,
+                                child: Text(
+                                  j.status == 'done'
+                                      ? 'klaar'
+                                      : (j.status == 'failed' ? 'mislukt' : '${(j.progress * 100).round()}%'),
+                                  textAlign: TextAlign.right,
+                                  style: const TextStyle(color: _muted, fontSize: 11.5),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ))
+                    .toList(),
+              ),
+            );
+          },
+        ),
+        if (_status != null)
+          Padding(padding: const EdgeInsets.all(24), child: Text(_status!, style: const TextStyle(color: _muted))),
+        Expanded(
+          child: ListView.builder(
+            itemCount: _results.length,
+            itemBuilder: (_, i) {
+              final r = _results[i];
+              final flac = RegExp('flac', caseSensitive: false).hasMatch(r.name);
+              return Container(
+                margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(8)),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(r.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontWeight: FontWeight.w600)),
+                          const SizedBox(height: 2),
+                          Row(
+                            children: [
+                              Text('${r.source} · ${r.seeders} seeders · ${_gb(r.size)}',
+                                  style: const TextStyle(color: _muted, fontSize: 12)),
+                              if (r.cached)
+                                const Padding(
+                                    padding: EdgeInsets.only(left: 8),
+                                    child: Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12))),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (flac)
+                      Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0F2521),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: const Color(0xFF24493F)),
+                        ),
+                        child: const Text('FLAC', style: TextStyle(color: _accent2, fontSize: 10.5)),
+                      ),
+                    IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, onPressed: () => _play(r)),
+                    IconButton(icon: const Icon(Icons.download_rounded), color: _muted, onPressed: () => _download(r)),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
   }
 }
 

@@ -40,6 +40,11 @@ class PlayerStore extends ChangeNotifier {
     await _openCurrent();
   }
 
+  /// Play a remote URL (e.g. a resolved TorBox stream) as a one-item queue.
+  Future<void> playUrl(String url, {required String title, required String artist}) async {
+    await playQueue([Track(path: url, title: title, artist: artist, album: '')], 0);
+  }
+
   Future<void> _openCurrent() async {
     final t = current;
     if (t == null) return;
