@@ -61,11 +61,15 @@ Future<void> main() async {
       child: const DebridApp(),
     ),
   );
-  // Scan, then fill in missing covers + artist photos from the web (cached on disk).
-  library.scan().then((_) async {
+  // Scan, then fill in missing covers + artist photos (cache-first, then web).
+  // Wrapped so a scan hiccup can never prevent enrichment from running.
+  () async {
+    try {
+      await library.scan();
+    } catch (_) {}
     await library.enrich(settings);
     await library.enrichArtists(settings);
-  });
+  }();
 }
 
 class DebridApp extends StatelessWidget {

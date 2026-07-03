@@ -46,19 +46,25 @@ class CoverEnricher {
 
   Future<Uint8List?> cached(Album a) async {
     final f = _cacheFile(a);
-    return await f.exists() ? f.readAsBytes() : null;
+    if (!await f.exists()) return null;
+    final b = await f.readAsBytes();
+    return b.length > 100 ? b : null; // skip empty/corrupt cache files
   }
 
   Future<Uint8List?> cachedArtist(String name) async {
     final f = _artistFile(name);
-    return await f.exists() ? f.readAsBytes() : null;
+    if (!await f.exists()) return null;
+    final b = await f.readAsBytes();
+    return b.length > 100 ? b : null;
   }
 
   /// Fetch + cache an artist photo from Deezer (keyless).
   Future<Uint8List?> fetchArtistImage(String name) async {
     if (_generic.contains(name.trim().toLowerCase())) return null;
     try {
-      final r = await http.get(Uri.parse('https://api.deezer.com/search/artist?q=${Uri.encodeComponent(name)}&limit=1'));
+      final r = await http
+          .get(Uri.parse('https://api.deezer.com/search/artist?q=${Uri.encodeComponent(name)}&limit=1'))
+          .timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return null;
       final data = (jsonDecode(r.body)['data'] as List?) ?? const [];
       if (data.isEmpty) return null;
@@ -109,7 +115,9 @@ class CoverEnricher {
 
   Future<String?> _deezerCover(String query) async {
     try {
-      final r = await http.get(Uri.parse('https://api.deezer.com/search/album?q=${Uri.encodeComponent(query)}&limit=1'));
+      final r = await http
+          .get(Uri.parse('https://api.deezer.com/search/album?q=${Uri.encodeComponent(query)}&limit=1'))
+          .timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return null;
       final data = (jsonDecode(r.body)['data'] as List?) ?? const [];
       if (data.isEmpty) return null;
@@ -124,7 +132,7 @@ class CoverEnricher {
   Future<String?> _discogsCover(String artist, String album, bool generic) async {
     Future<String?> search(String url) async {
       try {
-        final r = await http.get(Uri.parse(url), headers: {'User-Agent': _ua});
+        final r = await http.get(Uri.parse(url), headers: {'User-Agent': _ua}).timeout(const Duration(seconds: 8));
         if (r.statusCode != 200) return null;
         final results = (jsonDecode(r.body)['results'] as List?) ?? const [];
         for (final it in results) {
@@ -151,7 +159,7 @@ class CoverEnricher {
       final r = await http.get(
         Uri.parse('https://musicbrainz.org/ws/2/release/?query=${Uri.encodeComponent(q)}&fmt=json&limit=3'),
         headers: {'User-Agent': _ua},
-      );
+      ).timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return null;
       final releases = (jsonDecode(r.body)['releases'] as List?) ?? const [];
       for (final rel in releases.take(3)) {
@@ -166,7 +174,7 @@ class CoverEnricher {
 
   Future<Uint8List?> _download(String url) async {
     try {
-      final r = await http.get(Uri.parse(url), headers: {'User-Agent': _ua});
+      final r = await http.get(Uri.parse(url), headers: {'User-Agent': _ua}).timeout(const Duration(seconds: 12));
       if (r.statusCode == 200 && r.bodyBytes.length > 1500 && _isImage(r.bodyBytes)) {
         return r.bodyBytes;
       }

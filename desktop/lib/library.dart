@@ -81,13 +81,21 @@ class LibraryStore extends ChangeNotifier {
     scanning = false;
     notifyListeners();
 
-    // Pass 2 — one cover per album, off the UI thread.
+    // Pass 2 — one embedded cover per album, off the UI thread. Guarded with a
+    // timeout: a malformed file that makes readMetadata hang can never stall
+    // startup (which would also block cover enrichment from ever running).
     final firstPaths = albums.map((a) => a.tracks.first.path).toList();
-    final covers = await Isolate.run(() => _readCovers(firstPaths));
-    for (final a in albums) {
-      a.embeddedCover = covers[a.tracks.first.path];
+    try {
+      final covers =
+          await Isolate.run(() => _readCovers(firstPaths)).timeout(const Duration(seconds: 30));
+      for (final a in albums) {
+        final c = covers[a.tracks.first.path];
+        if (c != null && c.isNotEmpty) a.embeddedCover = c;
+      }
+      notifyListeners();
+    } catch (_) {
+      // Timed out or failed — cached + web covers still fill in via enrich().
     }
-    notifyListeners();
   }
 
   Track _trackFromMap(Map<String, dynamic> m) => Track(
@@ -119,14 +127,23 @@ class LibraryStore extends ChangeNotifier {
       ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
   }
 
-  /// Fill missing album covers from the web (Deezer/Discogs/MusicBrainz), cached on disk.
+  /// Fill missing album covers. Phase 1 loads everything already on disk (instant,
+  /// can't hang); phase 2 fetches the rest from the web (each call has a timeout).
   Future<void> enrich(AppSettings settings) async {
-    enriching = true;
     final enricher = CoverEnricher(settings);
+    // Phase 1 — instant: on-disk cache only, no network.
     for (final album in albums) {
-      if (album.embeddedCover != null) continue;
-      Uint8List? bytes = await enricher.cached(album);
-      bytes ??= await enricher.fetchAndCache(album);
+      if (album.cover != null) continue;
+      final bytes = await enricher.cached(album);
+      if (bytes != null) album.enriched = bytes;
+    }
+    notifyListeners();
+    // Phase 2 — network fill for whatever is still missing.
+    enriching = true;
+    notifyListeners();
+    for (final album in albums) {
+      if (album.cover != null) continue;
+      final bytes = await enricher.fetchAndCache(album);
       if (bytes != null) {
         album.enriched = bytes;
         notifyListeners();
@@ -136,13 +153,18 @@ class LibraryStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Fetch artist photos (Deezer), cached on disk.
+  /// Artist photos (Deezer). Phase 1 = disk cache (instant), phase 2 = network.
   Future<void> enrichArtists(AppSettings settings) async {
     final enricher = CoverEnricher(settings);
     for (final name in artists) {
       if (artistImages.containsKey(name)) continue;
-      Uint8List? bytes = await enricher.cachedArtist(name);
-      bytes ??= await enricher.fetchArtistImage(name);
+      final bytes = await enricher.cachedArtist(name);
+      if (bytes != null) artistImages[name] = bytes;
+    }
+    notifyListeners();
+    for (final name in artists) {
+      if (artistImages.containsKey(name)) continue;
+      final bytes = await enricher.fetchArtistImage(name);
       if (bytes != null) {
         artistImages[name] = bytes;
         notifyListeners();
