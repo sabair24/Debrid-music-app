@@ -1,0 +1,158 @@
+name: DebridMusic Windows Build & Installer
+
+# Native Flutter Windows app (in desktop/). Builds a real .exe + Inno Setup installer.
+#   • tag win-v*        → build + GitHub Release
+#   • workflow_dispatch → manual build (artifact)
+on:
+  push:
+    tags:
+      - 'win-v*'
+  workflow_dispatch:
+    inputs:
+      version_override:
+        description: 'Version override (e.g. 0.1.0)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: desktop
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.6'
+          channel: 'stable'
+          cache: true
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          $override = "${{ github.event.inputs.version_override }}"
+          if ($override -ne "") {
+            $version = $override
+          } else {
+            $content = Get-Content pubspec.yaml -Raw
+            if ($content -match 'version:\s*([\d]+\.[\d]+\.[\d]+)') { $version = $Matches[1] } else { $version = "0.1.0" }
+          }
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          echo "Version: $version"
+
+      - name: Build Windows (release)
+        shell: pwsh
+        run: |
+          flutter config --enable-windows-desktop
+          flutter build windows --release
+
+      - name: Verify build output
+        shell: pwsh
+        run: |
+          $dir = "build\windows\x64\runner\Release"
+          if (-not (Test-Path "$dir\debridmusic.exe")) { echo "MISSING: $dir\debridmusic.exe"; Get-ChildItem $dir; exit 1 }
+          echo "OK: $dir\debridmusic.exe"
+
+      - name: Download VC++ Redistributable
+        shell: pwsh
+        run: Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "vc_redist.x64.exe" -UseBasicParsing
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --yes --no-progress
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { echo "Inno Setup missing"; exit 1 }
+
+      - name: Write installer script
+        shell: pwsh
+        run: |
+          $ver      = "${{ steps.version.outputs.VERSION }}"
+          $wsDesktop = (Get-Location).Path
+          $buildDir = "$wsDesktop\build\windows\x64\runner\Release"
+          $icoFile  = "$wsDesktop\windows\runner\resources\app_icon.ico"
+          $vcRedist = "$wsDesktop\vc_redist.x64.exe"
+          $outDir   = "$wsDesktop\installer_output"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $useIcon = (Test-Path $icoFile) -and ((Get-Item $icoFile).Length -gt 500)
+
+          $L = [System.Collections.Generic.List[string]]::new()
+          $L.Add("[Setup]")
+          $L.Add("AppId={{6D2B9E4C-4E2A-4C7E-9F3A-DEBR1DMUS1C01}")
+          $L.Add("AppName=DebridMusic")
+          $L.Add("AppVersion=$ver")
+          $L.Add("AppVerName=DebridMusic $ver")
+          $L.Add("AppPublisher=DebridMusic")
+          $L.Add("DefaultDirName={autopf}\DebridMusic")
+          $L.Add("DefaultGroupName=DebridMusic")
+          $L.Add("AllowNoIcons=yes")
+          $L.Add("OutputDir=$outDir")
+          $L.Add("OutputBaseFilename=DebridMusic-Setup-v$ver")
+          if ($useIcon) { $L.Add("SetupIconFile=$icoFile") }
+          $L.Add("Compression=lzma2/ultra64")
+          $L.Add("SolidCompression=yes")
+          $L.Add("WizardStyle=modern")
+          $L.Add("PrivilegesRequired=lowest")
+          $L.Add("ArchitecturesAllowed=x64compatible")
+          $L.Add("ArchitecturesInstallIn64BitMode=x64compatible")
+          $L.Add("")
+          $L.Add("[Languages]")
+          $L.Add('Name: "dutch"; MessagesFile: "compiler:Languages\Dutch.isl"')
+          $L.Add('Name: "english"; MessagesFile: "compiler:Default.isl"')
+          $L.Add("")
+          $L.Add("[Tasks]")
+          $L.Add('Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"')
+          $L.Add("")
+          $L.Add("[Files]")
+          $L.Add("Source: `"$buildDir\*`"; DestDir: `"{app}`"; Flags: ignoreversion recursesubdirs createallsubdirs")
+          $L.Add("Source: `"$vcRedist`"; DestDir: `"{tmp}`"; Flags: deleteafterinstall")
+          $L.Add("")
+          $L.Add("[Icons]")
+          $L.Add('Name: "{group}\DebridMusic"; Filename: "{app}\debridmusic.exe"')
+          $L.Add('Name: "{group}\{cm:UninstallProgram,DebridMusic}"; Filename: "{uninstallexe}"')
+          $L.Add('Name: "{autodesktop}\DebridMusic"; Filename: "{app}\debridmusic.exe"; Tasks: desktopicon')
+          $L.Add("")
+          $L.Add("[Run]")
+          $L.Add('Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Visual C++ Runtime installeren..."; Flags: waituntilterminated')
+          $L.Add('Filename: "{app}\debridmusic.exe"; Description: "{cm:LaunchProgram,DebridMusic}"; Flags: nowait postinstall skipifsilent')
+          $L | Out-File -FilePath "installer.iss" -Encoding UTF8
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+          if ($LASTEXITCODE -ne 0) { echo "Inno Setup failed"; exit 1 }
+          Get-ChildItem installer_output\ | Format-Table Name, @{N='MB';E={[math]::Round($_.Length/1MB,1)}} -AutoSize
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DebridMusic-Windows-v${{ steps.version.outputs.VERSION }}
+          path: desktop/installer_output/*.exe
+          retention-days: 30
+
+      - name: GitHub Release (on win-v tag)
+        if: startsWith(github.ref, 'refs/tags/win-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/installer_output/*.exe
+          name: DebridMusic ${{ steps.version.outputs.VERSION }} (Windows)
+          body: |
+            ## DebridMusic v${{ steps.version.outputs.VERSION }} — native Windows app
+            Download and run the Setup.exe. Requires Windows 10/11 (64-bit).
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
