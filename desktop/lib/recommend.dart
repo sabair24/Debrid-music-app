@@ -29,7 +29,7 @@ class RecommendService {
   Future<int?> _artistId(String name) async {
     final j = await _get('$_base/search/artist?q=${Uri.encodeComponent(name)}&limit=1');
     final data = (j?['data'] as List?) ?? const [];
-    return data.isEmpty ? null : data.first['id'] as int;
+    return data.isEmpty ? null : (data.first['id'] as int?);
   }
 
   List<RecTrack> _tracks(Map<String, dynamic>? j) {
@@ -54,6 +54,8 @@ class RecommendService {
   /// Deduped radio built from an artist + a few related artists' top tracks,
   /// for more variety in a longer queue.
   Future<List<RecTrack>> mixRadio(String artist) async {
+    final id = await _artistId(artist);
+    if (id == null) return artistRadio(artist);
     final out = <RecTrack>[];
     final seen = <String>{};
     void add(Iterable<RecTrack> ts) {
@@ -62,14 +64,14 @@ class RecommendService {
       }
     }
 
-    add(await artistRadio(artist));
-    final id = await _artistId(artist);
-    if (id != null) {
-      final rel = (await _get('$_base/artist/$id/related?limit=4'))?['data'] as List? ?? const [];
-      for (final a in rel.take(4)) {
-        final aid = a['id'];
-        add(_tracks(await _get('$_base/artist/$aid/top?limit=5')));
-      }
+    // Seed radio + related-artist list concurrently (reusing the one artist id).
+    final radioF = _get('$_base/artist/$id/radio');
+    final relF = _get('$_base/artist/$id/related?limit=4');
+    add(_tracks(await radioF));
+    final rel = ((await relF)?['data'] as List?) ?? const [];
+    final tops = await Future.wait(rel.take(4).map((a) => _get('$_base/artist/${a['id']}/top?limit=5')));
+    for (final t in tops) {
+      add(_tracks(t));
     }
     out.shuffle();
     return out;

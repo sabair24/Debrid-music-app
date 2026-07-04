@@ -97,7 +97,9 @@ class TorBox {
     if (hashes.isEmpty || !hasKey) return {};
     try {
       final q = Uri.encodeComponent(hashes.join(','));
-      final r = await http.get(Uri.parse('$_base/torrents/checkcached?hash=$q&format=list&list_files=false'), headers: _auth);
+      final r = await http
+          .get(Uri.parse('$_base/torrents/checkcached?hash=$q&format=list&list_files=false'), headers: _auth)
+          .timeout(const Duration(seconds: 15));
       if (r.statusCode != 200) return {};
       final data = (jsonDecode(r.body)['data'] as List?) ?? const [];
       return data.map((e) => (e['hash'] as String?)?.toLowerCase()).whereType<String>().toSet();
@@ -109,7 +111,9 @@ class TorBox {
   /// Returns (success, torrentId?, hash?, detail).
   Future<(bool, int?, String?, String)> addMagnet(String magnet) async {
     try {
-      final r = await http.post(Uri.parse('$_base/torrents/createtorrent'), headers: _auth, body: {'magnet': magnet});
+      final r = await http
+          .post(Uri.parse('$_base/torrents/createtorrent'), headers: _auth, body: {'magnet': magnet})
+          .timeout(const Duration(seconds: 15));
       final j = jsonDecode(r.body) as Map<String, dynamic>;
       final data = j['data'] as Map<String, dynamic>?;
       final detail = (j['detail'] ?? j['error'] ?? '').toString();
@@ -122,7 +126,9 @@ class TorBox {
 
   Future<List<TbTorrent>> listTorrents() async {
     try {
-      final r = await http.get(Uri.parse('$_base/torrents/mylist?bypass_cache=true'), headers: _auth);
+      final r = await http
+          .get(Uri.parse('$_base/torrents/mylist?bypass_cache=true'), headers: _auth)
+          .timeout(const Duration(seconds: 15));
       if (r.statusCode != 200) return [];
       final data = (jsonDecode(r.body)['data'] as List?) ?? const [];
       return data.map((e) => TbTorrent.fromJson(e as Map<String, dynamic>)).toList();
@@ -138,7 +144,7 @@ class TorBox {
       final r = await http.get(
         Uri.parse('$_base/torrents/requestdl?token=$tok&torrent_id=$torrentId&file_id=$fileId&zip_link=false'),
         headers: _auth,
-      );
+      ).timeout(const Duration(seconds: 15));
       if (r.statusCode != 200) return null;
       final url = jsonDecode(r.body)['data'] as String?;
       return (url != null && url.isNotEmpty) ? url : null;

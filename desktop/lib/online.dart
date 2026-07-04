@@ -120,27 +120,51 @@ class OnlineService {
   }
 
   /// Resolve a recommended track (artist + title) to a playable URL — instant-cached
-  /// TorBox sources only, so Radio stays snappy. Returns null if nothing cached matches.
+  /// TorBox sources only, and picks the file that actually matches [title] (so an
+  /// album torrent doesn't play the wrong song). Returns null if nothing matches.
   Future<String?> resolveRadio(String artist, String title) async {
     if (!torbox.hasKey) return null;
     final results = await search('$artist $title');
-    final titleLc = title.toLowerCase();
+    if (results.isEmpty) return null;
     int score(SearchResult r) {
       final n = r.name.toLowerCase();
       var s = 0;
-      if (n.contains(titleLc)) s += 50;
+      if (_titleMatch(r.name, title)) s += 60;
       if (RegExp('flac', caseSensitive: false).hasMatch(n)) s += 10;
       if (r.size < 120 * 1000 * 1000) s += 20; // small => likely a single track, not an album
       return s + (r.seeders > 0 ? 3 : 0);
     }
 
-    final cached = results.where((r) => r.cached).toList()..sort((a, b) => score(b) - score(a));
-    for (final r in cached.take(3)) {
+    final top = (results.toList()..sort((a, b) => score(b) - score(a))).take(10).toList();
+    // Directly cache-check these candidates — search() only flags the top 40 overall.
+    Set<String> cachedSet = {};
+    try {
+      cachedSet = await torbox.checkCached(top.map((r) => r.hash.toLowerCase()).toList());
+    } catch (_) {}
+    final candidates = top.where((r) => r.cached || cachedSet.contains(r.hash.toLowerCase())).toList();
+    for (final r in candidates.take(3)) {
       try {
-        return await resolveStreamUrl(r);
+        final (item, files) = await resolveForDownload(r, null);
+        TbFile? pick;
+        for (final f in files) {
+          if (_titleMatch(f.name, title)) {
+            pick = f;
+            break;
+          }
+        }
+        pick ??= files.length == 1 ? files.first : null; // single-track torrent
+        if (pick == null) continue; // multi-track, no title match => avoid the wrong song
+        final url = await torbox.requestDownload(item.id, pick.id);
+        if (url != null) return url;
       } catch (_) {}
     }
     return null;
+  }
+
+  bool _titleMatch(String name, String title) {
+    String n(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    final t = n(title);
+    return t.length >= 3 && n(name).contains(t);
   }
 
   /// (torrent, audio files) for the track picker.

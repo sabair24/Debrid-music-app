@@ -977,6 +977,9 @@ Future<void> startRadio(BuildContext context, String artist) async {
             local: index['${_radioNorm(r.artist)}|${_radioNorm(r.title)}'],
           ))
       .toList();
+  // Lead with an owned track so the radio starts instantly (no first-track sourcing wait).
+  final li = items.indexWhere((i) => i.isLocal);
+  if (li > 0) items.insert(0, items.removeAt(li));
   await player.playRadio(items);
 }
 
