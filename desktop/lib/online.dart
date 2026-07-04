@@ -119,6 +119,30 @@ class OnlineService {
     return url;
   }
 
+  /// Resolve a recommended track (artist + title) to a playable URL — instant-cached
+  /// TorBox sources only, so Radio stays snappy. Returns null if nothing cached matches.
+  Future<String?> resolveRadio(String artist, String title) async {
+    if (!torbox.hasKey) return null;
+    final results = await search('$artist $title');
+    final titleLc = title.toLowerCase();
+    int score(SearchResult r) {
+      final n = r.name.toLowerCase();
+      var s = 0;
+      if (n.contains(titleLc)) s += 50;
+      if (RegExp('flac', caseSensitive: false).hasMatch(n)) s += 10;
+      if (r.size < 120 * 1000 * 1000) s += 20; // small => likely a single track, not an album
+      return s + (r.seeders > 0 ? 3 : 0);
+    }
+
+    final cached = results.where((r) => r.cached).toList()..sort((a, b) => score(b) - score(a));
+    for (final r in cached.take(3)) {
+      try {
+        return await resolveStreamUrl(r);
+      } catch (_) {}
+    }
+    return null;
+  }
+
   /// (torrent, audio files) for the track picker.
   Future<(TbTorrent, List<TbFile>)> tracklist(SearchResult r) async {
     if (!torbox.hasKey) throw 'Stel eerst je TorBox-sleutel in (Instellingen).';

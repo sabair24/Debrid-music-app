@@ -10,6 +10,7 @@ import 'library.dart';
 import 'models.dart';
 import 'online.dart';
 import 'player.dart';
+import 'recommend.dart';
 import 'settings.dart';
 import 'soulseek.dart';
 import 'tidal.dart';
@@ -48,6 +49,7 @@ Future<void> main() async {
   final online = OnlineService(settings);
   final soulseek = SoulseekService(settings);
   final tidal = TidalService(settings);
+  final player = PlayerStore()..resolver = online.resolveRadio;
   final downloads = DownloadManager(online, soulseek, library.rootPath, () async {
     await library.scan();
     await library.enrich(settings);
@@ -57,7 +59,7 @@ Future<void> main() async {
       providers: [
         ChangeNotifierProvider<AppSettings>.value(value: settings),
         ChangeNotifierProvider<LibraryStore>.value(value: library),
-        ChangeNotifierProvider<PlayerStore>(create: (_) => PlayerStore()),
+        ChangeNotifierProvider<PlayerStore>.value(value: player),
         Provider<OnlineService>.value(value: online),
         Provider<SoulseekService>.value(value: soulseek),
         Provider<TidalService>.value(value: tidal),
@@ -418,14 +420,30 @@ class AlbumDetailPage extends StatelessWidget {
                   style: const TextStyle(color: _muted),
                 ),
                 const SizedBox(height: 18),
-                FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: _accent,
-                    padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
-                  ),
-                  onPressed: () => player.playQueue(album.tracks, 0, cover: album.cover),
-                  icon: const Icon(Icons.play_arrow_rounded),
-                  label: const Text('Afspelen'),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: _accent,
+                        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+                      ),
+                      onPressed: () => player.playQueue(album.tracks, 0, cover: album.cover),
+                      icon: const Icon(Icons.play_arrow_rounded),
+                      label: const Text('Afspelen'),
+                    ),
+                    const SizedBox(width: 10),
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: _panel2,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                      ),
+                      onPressed: () => startRadio(context, album.artist),
+                      icon: const Icon(Icons.radio_rounded, size: 20),
+                      label: const Text('Radio'),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -551,6 +569,14 @@ class _ArtistsViewState extends State<ArtistsView> {
                     const SizedBox(height: 4),
                     Text('${albums.length} albums · $trackCount nummers',
                         style: const TextStyle(color: _muted)),
+                    const SizedBox(height: 10),
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                          backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10)),
+                      onPressed: () => startRadio(context, name),
+                      icon: const Icon(Icons.radio_rounded, size: 18),
+                      label: const Text('Radio'),
+                    ),
                   ],
                 ),
               ],
@@ -649,10 +675,14 @@ class PlayerBar extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontWeight: FontWeight.w600)),
-                      Text(t?.artist ?? 'Niets aan het spelen',
+                      Text(
+                          p.radioMode && p.radioStatus.isNotEmpty
+                              ? p.radioStatus
+                              : (t?.artist ?? 'Niets aan het spelen'),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: _muted, fontSize: 12.5)),
+                          style: TextStyle(
+                              color: p.radioMode && p.radioStatus.isNotEmpty ? _accent2 : _muted, fontSize: 12.5)),
                     ],
                   ),
                 ),
@@ -909,6 +939,45 @@ String _fmtBytes(int b) => b >= 1000000000
 // Shared source-result rendering + actions (used by direct search AND browse sources).
 void _srcToast(BuildContext context, String m) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), duration: const Duration(seconds: 2)));
+}
+
+// ── Radio / Smart Shuffle ────────────────────────────────────────────────────
+String _radioNorm(String s) {
+  var x = s.toLowerCase();
+  final f = x.indexOf(' feat');
+  if (f > 0) x = x.substring(0, f);
+  return x.replaceAll(RegExp(r'[^a-z0-9]'), '');
+}
+
+/// Build a Radio queue around [artist]: Deezer recommendations, matched against the
+/// local library (owned tracks play instantly; the rest resolve via TorBox on demand).
+Future<void> startRadio(BuildContext context, String artist) async {
+  final player = context.read<PlayerStore>();
+  final lib = context.read<LibraryStore>();
+  _srcToast(context, '📻 Radio starten voor $artist…');
+  List<RecTrack> recs;
+  try {
+    recs = await RecommendService().mixRadio(artist);
+  } catch (_) {
+    recs = const [];
+  }
+  if (!context.mounted) return;
+  if (recs.isEmpty) {
+    _srcToast(context, 'Geen radio gevonden voor $artist.');
+    return;
+  }
+  final index = <String, Track>{};
+  for (final t in lib.tracks) {
+    index.putIfAbsent('${_radioNorm(t.artist)}|${_radioNorm(t.title)}', () => t);
+  }
+  final items = recs
+      .map((r) => RadioItem(
+            artist: r.artist,
+            title: r.title,
+            local: index['${_radioNorm(r.artist)}|${_radioNorm(r.title)}'],
+          ))
+      .toList();
+  await player.playRadio(items);
 }
 
 Future<void> _playTorrent(BuildContext context, SearchResult r) async {
