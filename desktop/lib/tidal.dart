@@ -42,11 +42,12 @@ class TidalService {
 
   String _b64url(List<int> bytes) => base64Url.encode(bytes).replaceAll('=', '');
 
-  File _callbackFile() {
+  static String _dataDir() {
     final base = Platform.environment['APPDATA'] ?? Directory.current.path;
-    final sep = Platform.pathSeparator;
-    return File('$base${sep}DebridMusic${sep}tidal_cb.txt');
+    return '$base${Platform.pathSeparator}DebridMusic';
   }
+
+  File _callbackFile() => File('${_dataDir()}${Platform.pathSeparator}tidal_cb.txt');
 
   /// Extract the auth code from a callback URL / pasted text (or a bare code).
   static String? extractCode(String text) {
@@ -76,7 +77,8 @@ class TidalService {
       if (await cb.exists()) await cb.delete();
     } catch (_) {}
 
-    final authUri = Uri.parse(_authorizeUrl).replace(queryParameters: {
+    // Build the query manually so spaces in scope become %20 (TIDAL can reject '+').
+    final params = <String, String>{
       'response_type': 'code',
       'client_id': settings.tidalClientId,
       'redirect_uri': redirectUri,
@@ -84,8 +86,13 @@ class TidalService {
       'code_challenge_method': 'S256',
       'code_challenge': challenge,
       'state': state,
-    });
-    await _openBrowser(authUri.toString());
+    };
+    final authUrl = '$_authorizeUrl?${params.entries.map((e) => '${e.key}=${Uri.encodeComponent(e.value)}').join('&')}';
+    // Debug: write the exact URL so it can be inspected if TIDAL errors.
+    try {
+      await File('${_dataDir()}${Platform.pathSeparator}tidal_auth_url.txt').writeAsString(authUrl);
+    } catch (_) {}
+    await _openBrowser(authUrl);
 
     String? code;
     for (var i = 0; i < 600; i++) {
@@ -138,7 +145,12 @@ class TidalService {
     final r = await http
         .post(Uri.parse(_tokenUrl), headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: body)
         .timeout(const Duration(seconds: 15));
-    if (r.statusCode != 200) throw 'Token-uitwisseling mislukt (${r.statusCode}): ${r.body}';
+    if (r.statusCode != 200) {
+      try {
+        await File('${_dataDir()}${Platform.pathSeparator}tidal_error.txt').writeAsString('exchange ${r.statusCode}: ${r.body}');
+      } catch (_) {}
+      throw 'Token-uitwisseling mislukt (${r.statusCode}): ${r.body}';
+    }
     _storeToken(jsonDecode(r.body) as Map<String, dynamic>);
     await settings.save();
   }
