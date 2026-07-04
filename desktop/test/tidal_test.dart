@@ -11,9 +11,16 @@ void main() {
     final t = TidalService(s);
     expect(t.configured, false);
     expect(t.connected, false);
-    expect(TidalService.redirectUri, 'http://localhost:8971/tidal/callback');
+    expect(TidalService.redirectUri, 'debridmusic://tidal/callback');
     s.tidalClientId = 'abc';
     expect(TidalService(s).configured, true);
+  });
+
+  test('extractCode from callback url / bare code', () {
+    expect(TidalService.extractCode('"debridmusic://tidal/callback?code=ABC123&state=x"'), 'ABC123');
+    expect(TidalService.extractCode('debridmusic://tidal/callback?code=XYZ'), 'XYZ');
+    expect(TidalService.extractCode('ABC123'), 'ABC123');
+    expect(TidalService.extractCode('debridmusic://tidal/callback'), null);
   });
 
   test('parseTracks maps title + primary artist from JSON:API', () {

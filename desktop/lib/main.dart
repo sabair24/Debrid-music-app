@@ -1187,6 +1187,60 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     }
   }
 
+  Future<void> _manualTidal() async {
+    final tidal = context.read<TidalService>();
+    final ctrl = TextEditingController();
+    final pasted = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: _panel,
+        title: const Text('TIDAL-code plakken', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        content: SizedBox(
+          width: 460,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Plak de volledige "debridmusic://…"-URL (of enkel de code) die je browser na het inloggen toonde.',
+                  style: TextStyle(color: _muted, fontSize: 12.5)),
+              const SizedBox(height: 10),
+              TextField(
+                controller: ctrl,
+                autofocus: true,
+                style: const TextStyle(fontSize: 13),
+                decoration: InputDecoration(
+                  isDense: true,
+                  filled: true,
+                  fillColor: const Color(0xFF14161F),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuleren')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _accent),
+            onPressed: () => Navigator.pop(context, ctrl.text.trim()),
+            child: const Text('Verbind'),
+          ),
+        ],
+      ),
+    );
+    if (pasted == null || pasted.isEmpty) return;
+    setState(() => _tidalConnecting = true);
+    try {
+      await tidal.completeManual(pasted);
+      if (mounted) _srcToast(context, 'TIDAL verbonden ✓');
+    } catch (e) {
+      if (mounted) _srcToast(context, 'Mislukt: $e');
+    } finally {
+      if (mounted) setState(() => _tidalConnecting = false);
+    }
+  }
+
   Future<void> _searchArtists(String q) async {
     setState(() { _artistsBusy = true; _artists = []; _status = null; });
     try {
@@ -1375,6 +1429,12 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                   : const Icon(Icons.link_rounded, size: 18),
               label: Text(_tidalConnecting ? 'Bezig… (log in in je browser)' : 'Verbind TIDAL'),
               onPressed: _tidalConnecting ? null : _connectTidal,
+            ),
+            const SizedBox(height: 6),
+            TextButton(
+              onPressed: _tidalConnecting ? null : _manualTidal,
+              child: const Text('Lukt het automatisch niet? Plak de URL handmatig',
+                  style: TextStyle(color: _muted, fontSize: 12.5)),
             ),
           ],
         ),
@@ -2024,7 +2084,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(color: const Color(0xFF14161F), borderRadius: BorderRadius.circular(8)),
                       child: const Text(
-                          'Zet in je TIDAL-app deze Redirect URI erbij:\nhttp://localhost:8971/tidal/callback',
+                          'Redirect URI (staat al in je TIDAL-app):\ndebridmusic://tidal/callback',
                           style: TextStyle(color: _muted, fontSize: 11.5, height: 1.45)),
                     ),
                   ],

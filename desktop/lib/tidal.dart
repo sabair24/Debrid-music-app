@@ -28,9 +28,13 @@ class TidalService {
   static const _authorizeUrl = 'https://login.tidal.com/authorize';
   static const _tokenUrl = 'https://auth.tidal.com/v1/oauth2/token';
   static const _apiBase = 'https://openapi.tidal.com/v2';
-  static const port = 8971;
-  static const redirectUri = 'http://localhost:$port/tidal/callback';
+  // TIDAL rejects http/localhost redirects, so we use the registered custom scheme.
+  // A Windows URI-scheme handler (added by the installer) writes the callback URL
+  // to tidal_cb.txt, which the app polls.
+  static const redirectUri = 'debridmusic://tidal/callback';
   static const _scopes = 'user.read collection.read playlists.read search.read recommendations.read';
+
+  String? _pendingVerifier; // held between opening the browser and the redirect coming back
 
   bool get configured => settings.tidalClientId.isNotEmpty;
   bool get connected => settings.tidalAccessToken.isNotEmpty && settings.tidalRefreshToken.isNotEmpty;
@@ -38,39 +42,39 @@ class TidalService {
 
   String _b64url(List<int> bytes) => base64Url.encode(bytes).replaceAll('=', '');
 
-  /// Interactive login: opens the browser to TIDAL, catches the redirect on
-  /// localhost, and exchanges the code (PKCE) for tokens. The user's password
-  /// is only ever entered on TIDAL's own page.
+  File _callbackFile() {
+    final base = Platform.environment['APPDATA'] ?? Directory.current.path;
+    final sep = Platform.pathSeparator;
+    return File('$base${sep}DebridMusic${sep}tidal_cb.txt');
+  }
+
+  /// Extract the auth code from a callback URL / pasted text (or a bare code).
+  static String? extractCode(String text) {
+    final t = text.replaceAll('"', '').trim();
+    final q = t.indexOf('?');
+    if (q >= 0) {
+      try {
+        return Uri.splitQueryString(t.substring(q + 1))['code'];
+      } catch (_) {}
+    }
+    return (t.isEmpty || t.contains(' ') || t.contains('://')) ? null : t; // else treat as a bare code
+  }
+
+  /// Interactive login: opens the browser to TIDAL, then polls the file that the
+  /// registered debridmusic:// URI-scheme handler writes. The user's password is
+  /// only ever entered on TIDAL's own page.
   Future<void> login() async {
     if (settings.tidalClientId.isEmpty) throw 'Vul eerst je TIDAL Client ID in (Instellingen).';
     final rnd = Random.secure();
     final verifier = _b64url(List<int>.generate(32, (_) => rnd.nextInt(256)));
     final challenge = _b64url(sha256.convert(ascii.encode(verifier)).bytes);
     final state = _b64url(List<int>.generate(8, (_) => rnd.nextInt(256)));
+    _pendingVerifier = verifier;
 
-    HttpServer server;
+    final cb = _callbackFile();
     try {
-      server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
-    } catch (e) {
-      throw 'Kan poort $port niet openen voor de TIDAL-login: $e';
-    }
-    final codeC = Completer<String>();
-    final sub = server.listen((req) async {
-      final code = req.uri.queryParameters['code'];
-      final err = req.uri.queryParameters['error'];
-      req.response.headers.contentType = ContentType.html;
-      req.response.write(
-        '<html><body style="background:#0C0D12;color:#eee;font-family:Segoe UI,sans-serif;text-align:center;padding-top:90px">'
-        '<h2 style="color:#7C5CFF">DebridMusic</h2>'
-        '<p>${code != null ? "TIDAL verbonden — je kan dit venster sluiten." : "Login mislukt: ${err ?? "geen code"}"}</p>'
-        '</body></html>');
-      await req.response.close();
-      if (code != null) {
-        if (!codeC.isCompleted) codeC.complete(code);
-      } else if (!codeC.isCompleted) {
-        codeC.completeError(err ?? 'geen code ontvangen');
-      }
-    });
+      if (await cb.exists()) await cb.delete();
+    } catch (_) {}
 
     final authUri = Uri.parse(_authorizeUrl).replace(queryParameters: {
       'response_type': 'code',
@@ -83,13 +87,31 @@ class TidalService {
     });
     await _openBrowser(authUri.toString());
 
-    String code;
-    try {
-      code = await codeC.future.timeout(const Duration(minutes: 5));
-    } finally {
-      await sub.cancel();
-      await server.close(force: true);
+    String? code;
+    for (var i = 0; i < 600; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (connected) return; // completed via manual paste
+      if (await cb.exists()) {
+        try {
+          code = extractCode(await cb.readAsString());
+          await cb.delete();
+        } catch (_) {}
+        if (code != null) break;
+      }
     }
+    if (code == null) {
+      throw 'Geen TIDAL-code ontvangen. Klik "Openen" als je browser dat vraagt, of plak de debridmusic://-URL handmatig.';
+    }
+    await _exchange(code, verifier);
+    await _fetchProfile();
+  }
+
+  /// Manual fallback: exchange a code the user pasted (full callback URL or bare code).
+  Future<void> completeManual(String pasted) async {
+    final code = extractCode(pasted);
+    if (code == null || code.isEmpty) throw 'Geen geldige code gevonden in wat je plakte.';
+    final verifier = _pendingVerifier;
+    if (verifier == null) throw 'Klik eerst "Verbind TIDAL" (dan opent de browser).';
     await _exchange(code, verifier);
     await _fetchProfile();
   }
