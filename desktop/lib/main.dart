@@ -1307,8 +1307,6 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             _modeChip('Bladeren', 0),
             const SizedBox(width: 8),
             _modeChip('Direct zoeken', 1),
-            const SizedBox(width: 8),
-            _modeChip('TIDAL', 2),
           ]),
         ),
         Padding(
@@ -1984,7 +1982,7 @@ class SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
-  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _tidalId, _tidalSecret;
+  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm;
 
   @override
   void initState() {
@@ -1995,8 +1993,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskUser = TextEditingController(text: s.soulseekUser);
     _slskPass = TextEditingController(text: s.soulseekPass);
     _lastfm = TextEditingController(text: s.lastfmKey);
-    _tidalId = TextEditingController(text: s.tidalClientId);
-    _tidalSecret = TextEditingController(text: s.tidalClientSecret);
   }
 
   @override
@@ -2006,8 +2002,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskUser.dispose();
     _slskPass.dispose();
     _lastfm.dispose();
-    _tidalId.dispose();
-    _tidalSecret.dispose();
     super.dispose();
   }
 
@@ -2072,21 +2066,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
                       ],
                     ),
                     _field('Last.fm API-sleutel', _lastfm),
-                    const Divider(color: _line, height: 26),
-                    const Text('TIDAL', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
-                    const SizedBox(height: 2),
-                    const Text('Voor je bibliotheek + metadata; afspelen loopt via de bronnen.',
-                        style: TextStyle(color: _muted, fontSize: 11.5)),
-                    const SizedBox(height: 8),
-                    _field('TIDAL Client ID', _tidalId),
-                    _field('TIDAL Client Secret', _tidalSecret, obscure: true),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(color: const Color(0xFF14161F), borderRadius: BorderRadius.circular(8)),
-                      child: const Text(
-                          'Redirect URI (staat al in je TIDAL-app):\ndebridmusic://tidal/callback',
-                          style: TextStyle(color: _muted, fontSize: 11.5, height: 1.45)),
-                    ),
                   ],
                 ),
               ),
@@ -2107,8 +2086,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     s.soulseekUser = _slskUser.text.trim();
                     s.soulseekPass = _slskPass.text.trim();
                     s.lastfmKey = _lastfm.text.trim();
-                    s.tidalClientId = _tidalId.text.trim();
-                    s.tidalClientSecret = _tidalSecret.text.trim();
                     await s.save();
                     if (context.mounted) Navigator.pop(context);
                     lib.enrich(s); // pick up covers that need the (new) Discogs token
