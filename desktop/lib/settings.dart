@@ -10,6 +10,14 @@ class AppSettings extends ChangeNotifier {
   String lastfmKey = '';
   String soulseekUser = '';
   String soulseekPass = '';
+  // TIDAL: client id/secret entered by the user; the rest is managed by the OAuth flow.
+  String tidalClientId = '';
+  String tidalClientSecret = '';
+  String tidalAccessToken = '';
+  String tidalRefreshToken = '';
+  int tidalExpiry = 0; // epoch ms when the access token expires
+  String tidalUserId = '';
+  String tidalCountry = '';
 
   static File file() {
     final base = Platform.environment['APPDATA'] ??
@@ -29,6 +37,13 @@ class AppSettings extends ChangeNotifier {
         lastfmKey = (m['lastfm_key'] ?? '') as String;
         soulseekUser = (m['soulseek_user'] ?? '') as String;
         soulseekPass = (m['soulseek_pass'] ?? '') as String;
+        tidalClientId = (m['tidal_client_id'] ?? '') as String;
+        tidalClientSecret = (m['tidal_client_secret'] ?? '') as String;
+        tidalAccessToken = (m['tidal_access_token'] ?? '') as String;
+        tidalRefreshToken = (m['tidal_refresh_token'] ?? '') as String;
+        tidalExpiry = (m['tidal_expiry'] ?? 0) as int;
+        tidalUserId = (m['tidal_user_id'] ?? '') as String;
+        tidalCountry = (m['tidal_country'] ?? '') as String;
       }
     } catch (_) {}
     notifyListeners();
@@ -44,6 +59,13 @@ class AppSettings extends ChangeNotifier {
         'lastfm_key': lastfmKey,
         'soulseek_user': soulseekUser,
         'soulseek_pass': soulseekPass,
+        'tidal_client_id': tidalClientId,
+        'tidal_client_secret': tidalClientSecret,
+        'tidal_access_token': tidalAccessToken,
+        'tidal_refresh_token': tidalRefreshToken,
+        'tidal_expiry': tidalExpiry,
+        'tidal_user_id': tidalUserId,
+        'tidal_country': tidalCountry,
       }));
     } catch (_) {}
     notifyListeners();

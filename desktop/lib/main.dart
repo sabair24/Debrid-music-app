@@ -12,6 +12,7 @@ import 'online.dart';
 import 'player.dart';
 import 'settings.dart';
 import 'soulseek.dart';
+import 'tidal.dart';
 import 'torbox.dart';
 
 const _bg = Color(0xFF0C0D12);
@@ -46,6 +47,7 @@ Future<void> main() async {
   final library = LibraryStore();
   final online = OnlineService(settings);
   final soulseek = SoulseekService(settings);
+  final tidal = TidalService(settings);
   final downloads = DownloadManager(online, soulseek, library.rootPath, () async {
     await library.scan();
     await library.enrich(settings);
@@ -58,6 +60,7 @@ Future<void> main() async {
         ChangeNotifierProvider<PlayerStore>(create: (_) => PlayerStore()),
         Provider<OnlineService>.value(value: online),
         Provider<SoulseekService>.value(value: soulseek),
+        Provider<TidalService>.value(value: tidal),
         ChangeNotifierProvider<DownloadManager>.value(value: downloads),
       ],
       child: const DebridApp(),
@@ -1131,7 +1134,7 @@ class OnlineSearchScreen extends StatefulWidget {
 class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   final _c = TextEditingController();
   final _catalog = CatalogService();
-  int _mode = 0; // 0 = Bladeren (Stremio browse), 1 = Direct (raw sources)
+  int _mode = 0; // 0 = Bladeren, 1 = Direct, 2 = TIDAL
   // browse
   List<CatalogArtist> _artists = [];
   bool _artistsBusy = false;
@@ -1140,14 +1143,47 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   List<SoulseekFile> _slsk = [];
   bool _busy = false, _slskBusy = false;
   String? _status;
+  // tidal
+  List<TidalTrack> _tidalTracks = [];
+  bool _tidalBusy = false, _tidalConnecting = false;
+  int? _tidalExpanded;
 
   Future<void> _search() async {
     final q = _c.text.trim();
     if (q.isEmpty) return;
     if (_mode == 0) {
       await _searchArtists(q);
-    } else {
+    } else if (_mode == 1) {
       await _searchDirect(q);
+    } else {
+      await _searchTidal(q);
+    }
+  }
+
+  Future<void> _searchTidal(String q) async {
+    final tidal = context.read<TidalService>();
+    if (!tidal.connected) return;
+    setState(() { _tidalBusy = true; _tidalTracks = []; _tidalExpanded = null; _status = null; });
+    try {
+      final t = await tidal.searchTracks(q);
+      if (mounted) setState(() { _tidalTracks = t; _status = t.isEmpty ? 'Geen TIDAL-resultaten.' : null; });
+    } catch (e) {
+      if (mounted) setState(() => _status = 'TIDAL-zoeken mislukt: $e');
+    } finally {
+      if (mounted) setState(() => _tidalBusy = false);
+    }
+  }
+
+  Future<void> _connectTidal() async {
+    final tidal = context.read<TidalService>();
+    setState(() => _tidalConnecting = true);
+    try {
+      await tidal.login();
+      if (mounted) _srcToast(context, 'TIDAL verbonden ✓');
+    } catch (e) {
+      if (mounted) _srcToast(context, 'TIDAL-login mislukt: $e');
+    } finally {
+      if (mounted) setState(() => _tidalConnecting = false);
     }
   }
 
@@ -1217,6 +1253,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             _modeChip('Bladeren', 0),
             const SizedBox(width: 8),
             _modeChip('Direct zoeken', 1),
+            const SizedBox(width: 8),
+            _modeChip('TIDAL', 2),
           ]),
         ),
         Padding(
@@ -1228,7 +1266,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                   controller: _c,
                   onSubmitted: (_) => _search(),
                   decoration: InputDecoration(
-                    hintText: _mode == 0 ? 'Zoek een artiest…' : 'Artiest, album of nummer…',
+                    hintText: _mode == 0
+                        ? 'Zoek een artiest…'
+                        : (_mode == 2 ? 'Zoek in TIDAL…' : 'Artiest, album of nummer…'),
                     filled: true,
                     fillColor: _panel,
                     prefixIcon: const Icon(Icons.search_rounded, size: 20),
@@ -1243,7 +1283,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
               FilledButton(
                 style: FilledButton.styleFrom(
                     backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18)),
-                onPressed: (_busy || _artistsBusy) ? null : _search,
+                onPressed: (_busy || _artistsBusy || _tidalBusy) ? null : _search,
                 child: const Text('Zoek'),
               ),
             ],
@@ -1297,7 +1337,94 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ),
         if (_status != null)
           Padding(padding: const EdgeInsets.all(24), child: Text(_status!, style: const TextStyle(color: _muted))),
-        Expanded(child: _mode == 0 ? _browseResults() : _directResults(soulseekReady)),
+        Expanded(
+            child: _mode == 0
+                ? _browseResults()
+                : (_mode == 1 ? _directResults(soulseekReady) : _tidalResults())),
+      ],
+    );
+  }
+
+  Widget _tidalResults() {
+    final tidal = context.read<TidalService>();
+    if (!tidal.configured) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text('Stel je TIDAL Client ID + Secret in via Instellingen (⚙) om TIDAL te gebruiken.',
+              textAlign: TextAlign.center, style: TextStyle(color: _muted)),
+        ),
+      );
+    }
+    if (!tidal.connected) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 24),
+              child: Text('Verbind je TIDAL-account om je muziek te doorzoeken.\n'
+                  'Je logt in op TIDAL zelf — DebridMusic ziet je wachtwoord niet.',
+                  textAlign: TextAlign.center, style: TextStyle(color: _muted)),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14)),
+              icon: _tidalConnecting
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.link_rounded, size: 18),
+              label: Text(_tidalConnecting ? 'Bezig… (log in in je browser)' : 'Verbind TIDAL'),
+              onPressed: _tidalConnecting ? null : _connectTidal,
+            ),
+          ],
+        ),
+      );
+    }
+    if (_tidalBusy) return const Center(child: CircularProgressIndicator(color: _accent));
+    if (_tidalTracks.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text('Verbonden met TIDAL ✓  — zoek een nummer; de bronnen (torrent/Soulseek) verschijnen eronder.',
+              textAlign: TextAlign.center, style: TextStyle(color: _muted)),
+        ),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.only(bottom: 24),
+      itemCount: _tidalTracks.length,
+      itemBuilder: (_, i) => _tidalTrackRow(i, _tidalTracks[i]),
+    );
+  }
+
+  Widget _tidalTrackRow(int i, TidalTrack t) {
+    final open = _tidalExpanded == i;
+    return Column(
+      children: [
+        InkWell(
+          onTap: () => setState(() => _tidalExpanded = open ? null : i),
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            decoration: BoxDecoration(color: open ? _panel : Colors.transparent, borderRadius: BorderRadius.circular(8)),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                      if (t.artist.isNotEmpty)
+                        Text(t.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                Icon(open ? Icons.expand_less_rounded : Icons.travel_explore_rounded, size: 18, color: open ? _accent : _muted),
+              ],
+            ),
+          ),
+        ),
+        if (open) Padding(padding: const EdgeInsets.only(bottom: 8), child: SourcesView(query: t.sourceQuery)),
       ],
     );
   }
@@ -1797,7 +1924,7 @@ class SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
-  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm;
+  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _tidalId, _tidalSecret;
 
   @override
   void initState() {
@@ -1808,6 +1935,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskUser = TextEditingController(text: s.soulseekUser);
     _slskPass = TextEditingController(text: s.soulseekPass);
     _lastfm = TextEditingController(text: s.lastfmKey);
+    _tidalId = TextEditingController(text: s.tidalClientId);
+    _tidalSecret = TextEditingController(text: s.tidalClientSecret);
   }
 
   @override
@@ -1817,6 +1946,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskUser.dispose();
     _slskPass.dispose();
     _lastfm.dispose();
+    _tidalId.dispose();
+    _tidalSecret.dispose();
     super.dispose();
   }
 
@@ -1856,6 +1987,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Container(
         width: 480,
+        constraints: const BoxConstraints(maxHeight: 640),
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1865,17 +1997,41 @@ class _SettingsDialogState extends State<SettingsDialog> {
             const SizedBox(height: 4),
             const Text('Sleutels blijven alleen op deze PC.', style: TextStyle(color: _muted, fontSize: 13)),
             const SizedBox(height: 18),
-            _field('TorBox API-sleutel', _torbox),
-            _field('Discogs token', _discogs),
-            Row(
-              children: [
-                Expanded(child: _field('Soulseek gebruiker', _slskUser)),
-                const SizedBox(width: 12),
-                Expanded(child: _field('Soulseek wachtwoord', _slskPass, obscure: true)),
-              ],
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _field('TorBox API-sleutel', _torbox),
+                    _field('Discogs token', _discogs),
+                    Row(
+                      children: [
+                        Expanded(child: _field('Soulseek gebruiker', _slskUser)),
+                        const SizedBox(width: 12),
+                        Expanded(child: _field('Soulseek wachtwoord', _slskPass, obscure: true)),
+                      ],
+                    ),
+                    _field('Last.fm API-sleutel', _lastfm),
+                    const Divider(color: _line, height: 26),
+                    const Text('TIDAL', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
+                    const SizedBox(height: 2),
+                    const Text('Voor je bibliotheek + metadata; afspelen loopt via de bronnen.',
+                        style: TextStyle(color: _muted, fontSize: 11.5)),
+                    const SizedBox(height: 8),
+                    _field('TIDAL Client ID', _tidalId),
+                    _field('TIDAL Client Secret', _tidalSecret, obscure: true),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(color: const Color(0xFF14161F), borderRadius: BorderRadius.circular(8)),
+                      child: const Text(
+                          'Zet in je TIDAL-app deze Redirect URI erbij:\nhttp://localhost:8971/tidal/callback',
+                          style: TextStyle(color: _muted, fontSize: 11.5, height: 1.45)),
+                    ),
+                  ],
+                ),
+              ),
             ),
-            _field('Last.fm API-sleutel', _lastfm),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
@@ -1891,6 +2047,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     s.soulseekUser = _slskUser.text.trim();
                     s.soulseekPass = _slskPass.text.trim();
                     s.lastfmKey = _lastfm.text.trim();
+                    s.tidalClientId = _tidalId.text.trim();
+                    s.tidalClientSecret = _tidalSecret.text.trim();
                     await s.save();
                     if (context.mounted) Navigator.pop(context);
                     lib.enrich(s); // pick up covers that need the (new) Discogs token
