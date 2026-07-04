@@ -4,6 +4,7 @@ import 'package:media_kit/media_kit.dart' hide Track;
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'catalog.dart';
 import 'library.dart';
 import 'models.dart';
 import 'online.dart';
@@ -896,6 +897,225 @@ String _fmtBytes(int b) => b >= 1000000000
         ? '${(b / 1e6).round()} MB'
         : '${(b / 1e3).round()} KB';
 
+// Shared source-result rendering + actions (used by direct search AND browse sources).
+void _srcToast(BuildContext context, String m) {
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), duration: const Duration(seconds: 2)));
+}
+
+Future<void> _playTorrent(BuildContext context, SearchResult r) async {
+  _srcToast(context, 'Bron voorbereiden…');
+  try {
+    final url = await context.read<OnlineService>().resolveStreamUrl(r);
+    if (context.mounted) context.read<PlayerStore>().playUrl(url, title: r.name, artist: r.source);
+  } catch (e) {
+    if (context.mounted) _srcToast(context, 'Kan niet afspelen: $e');
+  }
+}
+
+Future<void> _downloadTorrent(BuildContext context, SearchResult r) async {
+  try {
+    final n = await context.read<DownloadManager>().enqueue(r);
+    if (context.mounted) _srcToast(context, '$n nummer(s) naar downloads');
+  } catch (e) {
+    if (context.mounted) _srcToast(context, 'Download mislukt: $e');
+  }
+}
+
+void _pickTorrentTracks(BuildContext context, SearchResult r) {
+  showDialog(context: context, builder: (_) => _TrackPickerDialog(r));
+}
+
+Future<void> _downloadSoulseek(BuildContext context, SoulseekFile f) async {
+  try {
+    await context.read<DownloadManager>().enqueueSoulseek(f);
+    if (context.mounted) _srcToast(context, '“${f.displayName}” via Soulseek…');
+  } catch (e) {
+    if (context.mounted) _srcToast(context, 'Download mislukt: $e');
+  }
+}
+
+Widget _flacBadge() => Container(
+      margin: const EdgeInsets.symmetric(horizontal: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F2521),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0xFF24493F)),
+      ),
+      child: const Text('FLAC', style: TextStyle(color: _accent2, fontSize: 10.5)),
+    );
+
+Widget _sourceHeader(String title, int count, bool loading) => Padding(
+      padding: const EdgeInsets.fromLTRB(24, 14, 24, 6),
+      child: Row(
+        children: [
+          Text(title.toUpperCase(),
+              style: const TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
+          const SizedBox(width: 8),
+          Text('$count', style: const TextStyle(color: _muted, fontSize: 11.5)),
+          if (loading) ...const [
+            SizedBox(width: 8),
+            SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
+          ],
+        ],
+      ),
+    );
+
+Widget _torrentTile(BuildContext context, SearchResult r) {
+  final flac = RegExp('flac', caseSensitive: false).hasMatch(r.name);
+  return Container(
+    margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(8)),
+    child: Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(r.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 2),
+              Row(
+                children: [
+                  Text('${r.source} · ${r.seeders} seeders · ${_fmtBytes(r.size)}',
+                      style: const TextStyle(color: _muted, fontSize: 12)),
+                  if (r.cached)
+                    const Padding(
+                        padding: EdgeInsets.only(left: 8),
+                        child: Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12))),
+                ],
+              ),
+            ],
+          ),
+        ),
+        if (flac) _flacBadge(),
+        IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, tooltip: 'Beste nummer afspelen', onPressed: () => _playTorrent(context, r)),
+        IconButton(icon: const Icon(Icons.queue_music_rounded), color: _muted, tooltip: 'Kies nummer', onPressed: () => _pickTorrentTracks(context, r)),
+        IconButton(icon: const Icon(Icons.download_rounded), color: _muted, tooltip: 'Alles downloaden', onPressed: () => _downloadTorrent(context, r)),
+      ],
+    ),
+  );
+}
+
+Widget _soulseekTile(BuildContext context, SoulseekFile f) {
+  final status = f.freeSlots ? 'vrij' : 'wachtrij ${f.queueLength}';
+  final quality = f.isFlac ? 'FLAC' : ((f.bitrate ?? 0) > 0 ? '${f.bitrate}kbps' : '');
+  return Container(
+    margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(8)),
+    child: Row(
+      children: [
+        Icon(f.freeSlots ? Icons.circle : Icons.schedule_rounded, size: 10, color: f.freeSlots ? _accent2 : _muted),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(f.displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 2),
+              Text('$status · ${f.username} · ${_fmtBytes(f.size)}${quality.isNotEmpty ? " · $quality" : ""}',
+                  style: const TextStyle(color: _muted, fontSize: 12)),
+            ],
+          ),
+        ),
+        if (f.isFlac) _flacBadge(),
+        IconButton(icon: const Icon(Icons.download_rounded), color: _accent, tooltip: 'Downloaden via Soulseek', onPressed: () => _downloadSoulseek(context, f)),
+      ],
+    ),
+  );
+}
+
+/// Network cover with a graceful placeholder (album browse / artist photos from Deezer).
+Widget _netCover(String? url, {double size = 160, double radius = 12, bool circle = false}) {
+  final shape = circle ? BoxShape.circle : BoxShape.rectangle;
+  final br = circle ? null : BorderRadius.circular(radius);
+  final placeholder = Container(
+    width: size,
+    height: size,
+    decoration: BoxDecoration(
+      shape: shape,
+      borderRadius: br,
+      gradient: const LinearGradient(colors: [Color(0xFF242838), Color(0xFF1A1D29)]),
+    ),
+    child: Icon(circle ? Icons.person_rounded : Icons.album_rounded, color: _muted.withValues(alpha: .4), size: size * .34),
+  );
+  if (url == null || url.isEmpty) return placeholder;
+  return Container(
+    width: size,
+    height: size,
+    clipBehavior: Clip.antiAlias,
+    decoration: BoxDecoration(shape: shape, borderRadius: br),
+    child: Image.network(url, fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => placeholder,
+        loadingBuilder: (c, w, p) => p == null ? w : placeholder),
+  );
+}
+
+/// Combined torrent + Soulseek sources for one query — the "streams" list under a track/album.
+class SourcesView extends StatefulWidget {
+  final String query;
+  const SourcesView({super.key, required this.query});
+  @override
+  State<SourcesView> createState() => _SourcesViewState();
+}
+
+class _SourcesViewState extends State<SourcesView> {
+  List<SearchResult> _torrents = [];
+  List<SoulseekFile> _slsk = [];
+  bool _tBusy = true, _sBusy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _run());
+  }
+
+  Future<void> _run() async {
+    final online = context.read<OnlineService>();
+    final soulseek = context.read<SoulseekService>();
+    if (mounted) setState(() { _tBusy = true; _sBusy = soulseek.available; });
+    if (soulseek.available) {
+      soulseek.search(widget.query).then((r) {
+        if (mounted) setState(() { _slsk = r; _sBusy = false; });
+      }).catchError((_) { if (mounted) setState(() => _sBusy = false); });
+    }
+    try {
+      final r = await online.search(widget.query);
+      if (mounted) setState(() => _torrents = r);
+    } catch (_) {}
+    if (mounted) setState(() => _tBusy = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ready = context.read<SoulseekService>().available;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sourceHeader('Torrents · TorBox', _torrents.length, _tBusy),
+        if (_torrents.isEmpty && !_tBusy)
+          const Padding(
+              padding: EdgeInsets.fromLTRB(24, 2, 24, 6),
+              child: Text('Geen torrents gevonden.', style: TextStyle(color: _muted, fontSize: 12.5))),
+        ..._torrents.map((r) => _torrentTile(context, r)),
+        if (ready)
+          _sourceHeader('Soulseek · P2P', _slsk.length, _sBusy)
+        else
+          const Padding(
+              padding: EdgeInsets.fromLTRB(24, 14, 24, 6),
+              child: Text('SOULSEEK · log in via Instellingen',
+                  style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6))),
+        if (ready && _slsk.isEmpty && !_sBusy)
+          const Padding(
+              padding: EdgeInsets.fromLTRB(24, 2, 24, 6),
+              child: Text('Geen Soulseek-bronnen.', style: TextStyle(color: _muted, fontSize: 12.5))),
+        ..._slsk.map((f) => _soulseekTile(context, f)),
+      ],
+    );
+  }
+}
+
 class OnlineSearchScreen extends StatefulWidget {
   const OnlineSearchScreen({super.key});
   @override
@@ -904,15 +1124,40 @@ class OnlineSearchScreen extends StatefulWidget {
 
 class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   final _c = TextEditingController();
+  final _catalog = CatalogService();
+  int _mode = 0; // 0 = Bladeren (Stremio browse), 1 = Direct (raw sources)
+  // browse
+  List<CatalogArtist> _artists = [];
+  bool _artistsBusy = false;
+  // direct
   List<SearchResult> _torrents = [];
   List<SoulseekFile> _slsk = [];
-  bool _busy = false; // torrent search in progress
-  bool _slskBusy = false; // soulseek search in progress
+  bool _busy = false, _slskBusy = false;
   String? _status;
 
   Future<void> _search() async {
     final q = _c.text.trim();
     if (q.isEmpty) return;
+    if (_mode == 0) {
+      await _searchArtists(q);
+    } else {
+      await _searchDirect(q);
+    }
+  }
+
+  Future<void> _searchArtists(String q) async {
+    setState(() { _artistsBusy = true; _artists = []; _status = null; });
+    try {
+      final a = await _catalog.searchArtists(q);
+      if (mounted) setState(() { _artists = a; _status = a.isEmpty ? 'Geen artiesten gevonden.' : null; });
+    } catch (e) {
+      if (mounted) setState(() => _status = 'Zoeken mislukt: $e');
+    } finally {
+      if (mounted) setState(() => _artistsBusy = false);
+    }
+  }
+
+  Future<void> _searchDirect(String q) async {
     final online = context.read<OnlineService>();
     final soulseek = context.read<SoulseekService>();
     setState(() {
@@ -922,7 +1167,6 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       _slsk = [];
       _status = 'Zoeken over Pirate Bay, BitSearch, Knaben${soulseek.available ? " + Soulseek…" : "…"}';
     });
-    // Soulseek runs alongside the torrent search and fills in when it returns.
     if (soulseek.available) {
       soulseek.search(q).then((r) {
         if (mounted) setState(() { _slsk = r; _slskBusy = false; });
@@ -932,11 +1176,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     }
     try {
       final r = await online.search(q);
-      if (!mounted) return;
-      setState(() {
-        _torrents = r;
-        _status = null;
-      });
+      if (mounted) setState(() { _torrents = r; _status = null; });
     } catch (e) {
       if (mounted) setState(() => _status = 'Torrent-zoeken mislukt: $e');
     } finally {
@@ -944,42 +1184,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     }
   }
 
-  Future<void> _play(SearchResult r) async {
-    _toast('Bron voorbereiden…');
-    try {
-      final url = await context.read<OnlineService>().resolveStreamUrl(r);
-      if (mounted) context.read<PlayerStore>().playUrl(url, title: r.name, artist: r.source);
-    } catch (e) {
-      _toast('Kan niet afspelen: $e');
-    }
-  }
-
-  Future<void> _download(SearchResult r) async {
-    try {
-      final n = await context.read<DownloadManager>().enqueue(r);
-      _toast('$n nummer(s) naar downloads');
-    } catch (e) {
-      _toast('Download mislukt: $e');
-    }
-  }
-
-  void _pickTracks(SearchResult r) {
-    showDialog(context: context, builder: (_) => _TrackPickerDialog(r));
-  }
-
-  Future<void> _downloadSlsk(SoulseekFile f) async {
-    try {
-      await context.read<DownloadManager>().enqueueSoulseek(f);
-      _toast('“${f.displayName}” via Soulseek…');
-    } catch (e) {
-      _toast('Download mislukt: $e');
-    }
-  }
-
-  void _toast(String m) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(m), duration: const Duration(seconds: 2)));
+  void _setMode(int m) {
+    if (m == _mode) return;
+    setState(() { _mode = m; _status = null; });
   }
 
   @override
@@ -999,6 +1206,14 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           child: Text('Online zoeken', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
         ),
         Padding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 10),
+          child: Row(children: [
+            _modeChip('Bladeren', 0),
+            const SizedBox(width: 8),
+            _modeChip('Direct zoeken', 1),
+          ]),
+        ),
+        Padding(
           padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
           child: Row(
             children: [
@@ -1007,7 +1222,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                   controller: _c,
                   onSubmitted: (_) => _search(),
                   decoration: InputDecoration(
-                    hintText: 'Artiest, album of nummer…',
+                    hintText: _mode == 0 ? 'Zoek een artiest…' : 'Artiest, album of nummer…',
                     filled: true,
                     fillColor: _panel,
                     prefixIcon: const Icon(Icons.search_rounded, size: 20),
@@ -1022,7 +1237,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
               FilledButton(
                 style: FilledButton.styleFrom(
                     backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18)),
-                onPressed: _busy ? null : _search,
+                onPressed: (_busy || _artistsBusy) ? null : _search,
                 child: const Text('Zoek'),
               ),
             ],
@@ -1076,143 +1291,79 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ),
         if (_status != null)
           Padding(padding: const EdgeInsets.all(24), child: Text(_status!, style: const TextStyle(color: _muted))),
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.only(bottom: 24),
-            children: [
-              if (_torrents.isNotEmpty) _sectionHeader('Torrents · TorBox', _torrents.length, _busy),
-              ..._torrents.map(_torrentRow),
-              // Soulseek section — always show a header once a search ran, so the user
-              // knows whether P2P is on and whether it's still loading.
-              if (_status == null || _slsk.isNotEmpty || _slskBusy)
-                _slskSectionHeader(soulseekReady),
-              ..._slsk.map(_slskRow),
-            ],
-          ),
-        ),
+        Expanded(child: _mode == 0 ? _browseResults() : _directResults(soulseekReady)),
       ],
     );
   }
 
-  Widget _sectionHeader(String title, int count, bool loading) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 14, 24, 6),
-        child: Row(
-          children: [
-            Text(title.toUpperCase(),
-                style: const TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
-            const SizedBox(width: 8),
-            Text('$count', style: const TextStyle(color: _muted, fontSize: 11.5)),
-            if (loading) ...const [
-              SizedBox(width: 8),
-              SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
-            ],
-          ],
+  Widget _modeChip(String label, int m) {
+    final sel = _mode == m;
+    return GestureDetector(
+      onTap: () => _setMode(m),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: sel ? _accent : _panel,
+          borderRadius: BorderRadius.circular(9),
+          border: Border.all(color: sel ? _accent : _line),
         ),
-      );
+        child: Text(label, style: TextStyle(color: sel ? Colors.white : _muted, fontSize: 13, fontWeight: FontWeight.w600)),
+      ),
+    );
+  }
 
-  Widget _slskSectionHeader(bool ready) {
-    if (!ready) {
-      return const Padding(
-        padding: EdgeInsets.fromLTRB(24, 16, 24, 6),
-        child: Text('SOULSEEK · log in via Instellingen om P2P mee te zoeken',
-            style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
+  Widget _browseResults() {
+    if (_artistsBusy) return const Center(child: CircularProgressIndicator(color: _accent));
+    if (_artists.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text('Zoek een artiest om hun albums en bronnen (torrent/Soulseek) te bladeren.',
+              textAlign: TextAlign.center, style: TextStyle(color: _muted)),
+        ),
       );
     }
-    return _sectionHeader('Soulseek · P2P', _slsk.length, _slskBusy);
-  }
-
-  Widget _torrentRow(SearchResult r) {
-    final flac = RegExp('flac', caseSensitive: false).hasMatch(r.name);
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(8)),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(r.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    Text('${r.source} · ${r.seeders} seeders · ${_fmtBytes(r.size)}',
-                        style: const TextStyle(color: _muted, fontSize: 12)),
-                    if (r.cached)
-                      const Padding(
-                          padding: EdgeInsets.only(left: 8),
-                          child: Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12))),
-                  ],
-                ),
-              ],
-            ),
+    return GridView.builder(
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 150, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: .8),
+      itemCount: _artists.length,
+      itemBuilder: (_, i) {
+        final a = _artists[i];
+        return InkWell(
+          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ArtistBrowsePage(a))),
+          borderRadius: BorderRadius.circular(12),
+          child: Column(
+            children: [
+              _netCover(a.picture, size: 116, circle: true),
+              const SizedBox(height: 6),
+              Text(a.name,
+                  maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+            ],
           ),
-          if (flac) _flacBadge(),
-          IconButton(
-              icon: const Icon(Icons.play_arrow_rounded),
-              color: _accent,
-              tooltip: 'Beste nummer afspelen',
-              onPressed: () => _play(r)),
-          IconButton(
-              icon: const Icon(Icons.queue_music_rounded),
-              color: _muted,
-              tooltip: 'Kies nummer',
-              onPressed: () => _pickTracks(r)),
-          IconButton(
-              icon: const Icon(Icons.download_rounded),
-              color: _muted,
-              tooltip: 'Alles downloaden',
-              onPressed: () => _download(r)),
-        ],
-      ),
+        );
+      },
     );
   }
 
-  Widget _slskRow(SoulseekFile f) {
-    final status = f.freeSlots ? 'vrij' : 'wachtrij ${f.queueLength}';
-    final quality = f.isFlac ? 'FLAC' : ((f.bitrate ?? 0) > 0 ? '${f.bitrate}kbps' : '');
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(8)),
-      child: Row(
-        children: [
-          Icon(f.freeSlots ? Icons.circle : Icons.schedule_rounded,
-              size: 10, color: f.freeSlots ? _accent2 : _muted),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(f.displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
-                const SizedBox(height: 2),
-                Text('$status · ${f.username} · ${_fmtBytes(f.size)}${quality.isNotEmpty ? " · $quality" : ""}',
-                    style: const TextStyle(color: _muted, fontSize: 12)),
-              ],
-            ),
-          ),
-          if (f.isFlac) _flacBadge(),
-          IconButton(
-              icon: const Icon(Icons.download_rounded),
-              color: _accent,
-              tooltip: 'Downloaden via Soulseek',
-              onPressed: () => _downloadSlsk(f)),
-        ],
-      ),
+  Widget _directResults(bool soulseekReady) {
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 24),
+      children: [
+        if (_torrents.isNotEmpty) _sourceHeader('Torrents · TorBox', _torrents.length, _busy),
+        ..._torrents.map((r) => _torrentTile(context, r)),
+        if (_status == null || _slsk.isNotEmpty || _slskBusy)
+          (soulseekReady
+              ? _sourceHeader('Soulseek · P2P', _slsk.length, _slskBusy)
+              : const Padding(
+                  padding: EdgeInsets.fromLTRB(24, 16, 24, 6),
+                  child: Text('SOULSEEK · log in via Instellingen om P2P mee te zoeken',
+                      style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)))),
+        ..._slsk.map((f) => _soulseekTile(context, f)),
+      ],
     );
   }
-
-  Widget _flacBadge() => Container(
-        margin: const EdgeInsets.symmetric(horizontal: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        decoration: BoxDecoration(
-          color: const Color(0xFF0F2521),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: const Color(0xFF24493F)),
-        ),
-        child: const Text('FLAC', style: TextStyle(color: _accent2, fontSize: 10.5)),
-      );
 }
 
 /// Resolves a torrent's audio files and lets the user play or download any single track.
@@ -1354,6 +1505,224 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ── Stremio-style online browse: artist → albums → tracks → sources ──────────
+class ArtistBrowsePage extends StatefulWidget {
+  final CatalogArtist artist;
+  const ArtistBrowsePage(this.artist, {super.key});
+  @override
+  State<ArtistBrowsePage> createState() => _ArtistBrowsePageState();
+}
+
+class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
+  final _catalog = CatalogService();
+  List<CatalogAlbum> _albums = [];
+  bool _busy = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final a = await _catalog.artistAlbums(widget.artist.id);
+      if (mounted) setState(() { _albums = a; _busy = false; });
+    } catch (_) {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _bg,
+      body: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 20, 10),
+              child: Row(
+                children: [
+                  IconButton(icon: const Icon(Icons.arrow_back_rounded), onPressed: () => Navigator.pop(context)),
+                  const SizedBox(width: 4),
+                  _netCover(widget.artist.picture, size: 76, circle: true),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(widget.artist.name, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+                        const SizedBox(height: 2),
+                        Text(_busy ? 'Albums laden…' : '${_albums.length} albums',
+                            style: const TextStyle(color: _muted, fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_busy)
+            const SliverToBoxAdapter(
+                child: Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator(color: _accent))))
+          else
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 6, 20, 40),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: 180, mainAxisSpacing: 14, crossAxisSpacing: 14, childAspectRatio: .74),
+                delegate: SliverChildBuilderDelegate((_, i) => _albumCard(_albums[i]), childCount: _albums.length),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _albumCard(CatalogAlbum al) {
+    final sub = [if (al.year != null) al.year!, al.isSingle ? 'Single' : '${al.trackCount} nummers'].join(' · ');
+    return InkWell(
+      onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => AlbumBrowsePage(widget.artist.name, al))),
+      borderRadius: BorderRadius.circular(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: LayoutBuilder(builder: (_, c) => _netCover(al.cover, size: c.maxWidth))),
+          const SizedBox(height: 6),
+          Text(al.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+          Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 11)),
+        ],
+      ),
+    );
+  }
+}
+
+class AlbumBrowsePage extends StatefulWidget {
+  final String artistName;
+  final CatalogAlbum album;
+  const AlbumBrowsePage(this.artistName, this.album, {super.key});
+  @override
+  State<AlbumBrowsePage> createState() => _AlbumBrowsePageState();
+}
+
+class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
+  static const _albumLevel = -1;
+  final _catalog = CatalogService();
+  List<CatalogTrack> _tracks = [];
+  bool _busy = true;
+  int? _expanded; // track index whose sources are shown; -1 = whole album
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final (_, tracks) = await _catalog.albumTracks(widget.album.id);
+      if (mounted) setState(() { _tracks = tracks; _busy = false; });
+    } catch (_) {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _toggle(int i) => setState(() => _expanded = _expanded == i ? null : i);
+
+  @override
+  Widget build(BuildContext context) {
+    final al = widget.album;
+    return Scaffold(
+      backgroundColor: _bg,
+      body: ListView(
+        padding: const EdgeInsets.only(bottom: 40),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 20, 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                IconButton(icon: const Icon(Icons.arrow_back_rounded), onPressed: () => Navigator.pop(context)),
+                const SizedBox(width: 4),
+                _netCover(al.cover, size: 128),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 6),
+                      Text(al.title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 4),
+                      Text('${widget.artistName}${al.year != null ? " · ${al.year}" : ""} · ${al.trackCount} nummers',
+                          style: const TextStyle(color: _muted, fontSize: 13)),
+                      const SizedBox(height: 12),
+                      FilledButton.icon(
+                        style: FilledButton.styleFrom(backgroundColor: _panel2, foregroundColor: Colors.white),
+                        icon: Icon(_expanded == _albumLevel ? Icons.expand_less_rounded : Icons.travel_explore_rounded, size: 18),
+                        label: const Text('Bronnen voor album'),
+                        onPressed: () => _toggle(_albumLevel),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (_expanded == _albumLevel)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: SourcesView(query: '${widget.artistName} ${al.title}'),
+            ),
+          if (_busy)
+            const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator(color: _accent)))
+          else if (_tracks.isEmpty)
+            const Padding(padding: EdgeInsets.all(24), child: Text('Geen tracklijst gevonden.', style: TextStyle(color: _muted)))
+          else
+            ..._tracks.asMap().entries.map((e) => _trackRow(e.key, e.value)),
+        ],
+      ),
+    );
+  }
+
+  Widget _trackRow(int i, CatalogTrack t) {
+    final open = _expanded == i;
+    return Column(
+      children: [
+        InkWell(
+          onTap: () => _toggle(i),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 11),
+            color: open ? _panel : Colors.transparent,
+            child: Row(
+              children: [
+                SizedBox(
+                    width: 26,
+                    child: Text(t.position > 0 ? '${t.position}' : '${i + 1}',
+                        style: const TextStyle(color: _muted, fontSize: 13))),
+                Expanded(
+                    child: Text(t.title,
+                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500))),
+                Text(t.durationLabel, style: const TextStyle(color: _muted, fontSize: 12)),
+                const SizedBox(width: 10),
+                Icon(open ? Icons.expand_less_rounded : Icons.travel_explore_rounded,
+                    size: 18, color: open ? _accent : _muted),
+              ],
+            ),
+          ),
+        ),
+        if (open)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: SourcesView(query: '${widget.artistName} ${t.title}'),
+          ),
+      ],
     );
   }
 }
