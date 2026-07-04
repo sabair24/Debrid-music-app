@@ -64,6 +64,7 @@ class LibraryStore extends ChangeNotifier {
   int scanned = 0;
   bool enriching = false;
   final Map<String, Uint8List> artistImages = {};
+  final Map<String, String> artistBios = {};
   String rootPath = r'D:\Flac music 2024';
 
   Future<void> scan() async {
@@ -153,21 +154,31 @@ class LibraryStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Artist photos (Deezer). Phase 1 = disk cache (instant), phase 2 = network.
+  /// Artist photos (Deezer) + bios (TheAudioDB). Phase 1 = disk cache (instant),
+  /// phase 2 = network for whatever is still missing.
   Future<void> enrichArtists(AppSettings settings) async {
     final enricher = CoverEnricher(settings);
+    // Phase 1 — instant: on-disk cache only.
     for (final name in artists) {
-      if (artistImages.containsKey(name)) continue;
-      final bytes = await enricher.cachedArtist(name);
-      if (bytes != null) artistImages[name] = bytes;
+      if (!artistImages.containsKey(name)) {
+        final b = await enricher.cachedArtist(name);
+        if (b != null) artistImages[name] = b;
+      }
+      if (!artistBios.containsKey(name)) {
+        final bio = await enricher.cachedBio(name);
+        if (bio != null) artistBios[name] = bio;
+      }
     }
     notifyListeners();
+    // Phase 2 — network fill.
     for (final name in artists) {
-      if (artistImages.containsKey(name)) continue;
-      final bytes = await enricher.fetchArtistImage(name);
-      if (bytes != null) {
-        artistImages[name] = bytes;
-        notifyListeners();
+      if (!artistImages.containsKey(name)) {
+        final b = await enricher.fetchArtistImage(name);
+        if (b != null) { artistImages[name] = b; notifyListeners(); }
+      }
+      if (!artistBios.containsKey(name)) {
+        final bio = await enricher.fetchArtistBio(name);
+        if (bio != null) { artistBios[name] = bio; notifyListeners(); }
       }
     }
   }

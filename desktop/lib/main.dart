@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'catalog.dart';
+import 'enrichment.dart';
 import 'library.dart';
 import 'models.dart';
 import 'online.dart';
@@ -552,6 +553,11 @@ class _ArtistsViewState extends State<ArtistsView> {
               ],
             ),
           ),
+          if (widget.lib.artistBios[name] != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+              child: BioText(name, widget.lib.artistBios[name]!),
+            ),
           Expanded(child: AlbumsGrid(albums: albums, title: 'Albums')),
         ],
       );
@@ -1509,6 +1515,42 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
   }
 }
 
+/// Collapsed artist bio (3 lines) that opens the full text in a dialog on tap.
+class BioText extends StatelessWidget {
+  final String artist;
+  final String text;
+  const BioText(this.artist, this.text, {super.key});
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: _panel,
+          title: Text(artist, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          content: SizedBox(
+            width: 540,
+            child: SingleChildScrollView(
+              child: Text(text, style: const TextStyle(color: Color(0xFFC7CBDA), fontSize: 13.5, height: 1.5)),
+            ),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Sluiten'))],
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(text, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 13, height: 1.45)),
+          const Padding(
+            padding: EdgeInsets.only(top: 3),
+            child: Text('Lees meer', style: TextStyle(color: _accent, fontSize: 12.5, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ── Stremio-style online browse: artist → albums → tracks → sources ──────────
 class ArtistBrowsePage extends StatefulWidget {
   final CatalogArtist artist;
@@ -1520,12 +1562,14 @@ class ArtistBrowsePage extends StatefulWidget {
 class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   final _catalog = CatalogService();
   List<CatalogAlbum> _albums = [];
+  String? _bio;
   bool _busy = true;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _loadBio();
   }
 
   Future<void> _load() async {
@@ -1535,6 +1579,13 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     } catch (_) {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _loadBio() async {
+    final enricher = CoverEnricher(context.read<AppSettings>());
+    var bio = await enricher.cachedBio(widget.artist.name);
+    bio ??= await enricher.fetchArtistBio(widget.artist.name);
+    if (mounted && bio != null) setState(() => _bio = bio);
   }
 
   @override
@@ -1567,6 +1618,13 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
               ),
             ),
           ),
+          if (_bio != null)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
+                child: BioText(widget.artist.name, _bio!),
+              ),
+            ),
           if (_busy)
             const SliverToBoxAdapter(
                 child: Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator(color: _accent))))
@@ -1585,7 +1643,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   }
 
   Widget _albumCard(CatalogAlbum al) {
-    final sub = [if (al.year != null) al.year!, al.isSingle ? 'Single' : '${al.trackCount} nummers'].join(' · ');
+    final sub = [
+      if (al.year != null) al.year!,
+      if (al.isSingle) 'Single' else if (al.trackCount > 0) '${al.trackCount} nummers',
+    ].join(' · ');
     return InkWell(
       onTap: () => Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => AlbumBrowsePage(widget.artist.name, al))),
@@ -1659,7 +1720,8 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                       const SizedBox(height: 6),
                       Text(al.title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
                       const SizedBox(height: 4),
-                      Text('${widget.artistName}${al.year != null ? " · ${al.year}" : ""} · ${al.trackCount} nummers',
+                      Text(
+                          '${widget.artistName}${al.year != null ? " · ${al.year}" : ""}${_tracks.isNotEmpty ? " · ${_tracks.length} nummers" : ""}',
                           style: const TextStyle(color: _muted, fontSize: 13)),
                       const SizedBox(height: 12),
                       FilledButton.icon(

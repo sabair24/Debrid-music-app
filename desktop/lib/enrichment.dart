@@ -28,6 +28,7 @@ class CoverEnricher {
 
   Directory get cacheDir => Directory(_dir('covers'));
   Directory get artistDir => Directory(_dir('artists'));
+  Directory get bioDir => Directory(_dir('bios'));
 
   // Stable FNV-1a hash (Dart's String.hashCode is randomized per run, so it can't
   // be used for a persistent on-disk cache key).
@@ -43,6 +44,7 @@ class CoverEnricher {
   String keyFor(Album a) => _fnv('${a.artist.toLowerCase()}|${a.title.toLowerCase()}');
   File _cacheFile(Album a) => File('${cacheDir.path}${Platform.pathSeparator}${keyFor(a)}.jpg');
   File _artistFile(String name) => File('${artistDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.jpg');
+  File _bioFile(String name) => File('${bioDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.txt');
 
   Future<Uint8List?> cached(Album a) async {
     final f = _cacheFile(a);
@@ -76,6 +78,35 @@ class CoverEnricher {
         await _artistFile(name).writeAsBytes(b);
       }
       return b;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String?> cachedBio(String name) async {
+    final f = _bioFile(name);
+    if (!await f.exists()) return null;
+    final s = (await f.readAsString()).trim();
+    return s.isEmpty ? null : s;
+  }
+
+  /// Artist biography from TheAudioDB (keyless test key). Prefers Dutch, falls back to English.
+  Future<String?> fetchArtistBio(String name) async {
+    if (_generic.contains(name.trim().toLowerCase())) return null;
+    try {
+      final r = await http.get(
+        Uri.parse('https://theaudiodb.com/api/v1/json/2/search.php?s=${Uri.encodeComponent(name)}'),
+        headers: {'User-Agent': _ua},
+      ).timeout(const Duration(seconds: 8));
+      if (r.statusCode != 200) return null;
+      final artists = (jsonDecode(r.body)['artists'] as List?) ?? const [];
+      if (artists.isEmpty) return null;
+      final a = artists.first as Map<String, dynamic>;
+      final bio = ((a['strBiographyNL'] ?? a['strBiographyEN']) as String?)?.trim();
+      if (bio == null || bio.isEmpty) return null;
+      await bioDir.create(recursive: true);
+      await _bioFile(name).writeAsString(bio);
+      return bio;
     } catch (_) {
       return null;
     }
