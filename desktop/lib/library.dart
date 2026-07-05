@@ -183,7 +183,12 @@ class LibraryStore extends ChangeNotifier {
     // new scan succeeds, so a rescan never blanks the UI — the app stays usable.
     List<Map<String, dynamic>> raw;
     try {
-      raw = await Isolate.run(() => _scanTags(rootPath)).timeout(const Duration(seconds: 120));
+      // Capture a plain String — NOT `this`. Referencing the instance field `rootPath`
+      // directly makes the isolate closure capture the whole LibraryStore, which fails
+      // to send once widgets have attached (non-sendable) listeners → the scan would
+      // silently return nothing and the library shows empty.
+      final root = rootPath;
+      raw = await Isolate.run(() => _scanTags(root)).timeout(const Duration(seconds: 120));
     } catch (_) {
       // Timed out or failed — keep whatever library we already have loaded.
       scanning = false;
