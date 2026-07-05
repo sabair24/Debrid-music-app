@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'online.dart';
+import 'rutracker.dart';
 import 'settings.dart';
 import 'torbox.dart';
 
@@ -19,7 +20,8 @@ class ConnectionChecker {
   final AppSettings settings;
   final TorBox torbox;
   final SoulseekService soulseek;
-  ConnectionChecker(this.settings, this.torbox, this.soulseek);
+  final RuTrackerService rutracker;
+  ConnectionChecker(this.settings, this.torbox, this.soulseek, this.rutracker);
 
   Future<ConnResult> torboxCheck() async {
     if (settings.torboxToken.trim().isEmpty) return const ConnResult(ConnState.absent, 'Geen sleutel ingevuld');
@@ -59,6 +61,20 @@ class ConnectionChecker {
       return await soulseek.verify()
           ? ConnResult(ConnState.ok, 'Ingelogd als ${settings.soulseekUser}')
           : const ConnResult(ConnState.fail, 'Login geweigerd');
+    } catch (_) {
+      return const ConnResult(ConnState.fail, 'Geen verbinding');
+    }
+  }
+
+  /// RuTracker: valid only when a live session cookie authenticates. Returns
+  /// [ConnState.fail] with a hint to log in (via the RuTracker "Inloggen" button)
+  /// when credentials exist but there's no working session yet.
+  Future<ConnResult> rutrackerCheck() async {
+    if (!rutracker.configured) return const ConnResult(ConnState.absent, 'Geen login ingevuld');
+    try {
+      return await rutracker.verify()
+          ? ConnResult(ConnState.ok, 'Ingelogd als ${settings.rutrackerUser}')
+          : const ConnResult(ConnState.fail, 'Nog niet ingelogd — klik Inloggen');
     } catch (_) {
       return const ConnResult(ConnState.fail, 'Geen verbinding');
     }

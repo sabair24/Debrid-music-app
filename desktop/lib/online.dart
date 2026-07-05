@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import 'rutracker.dart';
 import 'search.dart';
 import 'settings.dart';
 import 'soulseek.dart';
@@ -12,10 +13,17 @@ import 'torbox.dart';
 class OnlineService {
   final AppSettings settings;
   final TorBox torbox;
+  final RuTrackerService rutracker;
   final SearchAggregator aggregator;
   OnlineService(this.settings)
       : torbox = TorBox(() => settings.torboxToken),
-        aggregator = SearchAggregator([ApibaySource(), BitSearchSource(), KnabenSource()]);
+        rutracker = RuTrackerService(settings),
+        aggregator = SearchAggregator([
+          ApibaySource(),
+          BitSearchSource(),
+          KnabenSource(),
+          RuTrackerSource(RuTrackerService(settings)),
+        ]);
 
   bool get torboxReady => torbox.hasKey;
 

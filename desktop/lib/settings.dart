@@ -10,6 +10,9 @@ class AppSettings extends ChangeNotifier {
   String lastfmKey = '';
   String soulseekUser = '';
   String soulseekPass = '';
+  String rutrackerUser = '';
+  String rutrackerPass = '';
+  String rutrackerCookie = ''; // bb_session cookie, kept so we don't re-login (or re-captcha) each run
   // TIDAL: client id/secret entered by the user; the rest is managed by the OAuth flow.
   String tidalClientId = '';
   String tidalClientSecret = '';
@@ -37,6 +40,9 @@ class AppSettings extends ChangeNotifier {
         lastfmKey = (m['lastfm_key'] ?? '') as String;
         soulseekUser = (m['soulseek_user'] ?? '') as String;
         soulseekPass = (m['soulseek_pass'] ?? '') as String;
+        rutrackerUser = (m['rutracker_user'] ?? '') as String;
+        rutrackerPass = (m['rutracker_pass'] ?? '') as String;
+        rutrackerCookie = (m['rutracker_cookie'] ?? '') as String;
         tidalClientId = (m['tidal_client_id'] ?? '') as String;
         tidalClientSecret = (m['tidal_client_secret'] ?? '') as String;
         tidalAccessToken = (m['tidal_access_token'] ?? '') as String;
@@ -59,6 +65,9 @@ class AppSettings extends ChangeNotifier {
         'lastfm_key': lastfmKey,
         'soulseek_user': soulseekUser,
         'soulseek_pass': soulseekPass,
+        'rutracker_user': rutrackerUser,
+        'rutracker_pass': rutrackerPass,
+        'rutracker_cookie': rutrackerCookie,
         'tidal_client_id': tidalClientId,
         'tidal_client_secret': tidalClientSecret,
         'tidal_access_token': tidalAccessToken,

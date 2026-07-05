@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'rutracker.dart';
 import 'torbox.dart';
 
 String _magnetFor(String hash, String name) =>
@@ -118,6 +119,16 @@ class KnabenSource implements SearchSource {
       return [];
     }
   }
+}
+
+/// RuTracker (login + scrape) — only contributes when the user is logged in.
+class RuTrackerSource implements SearchSource {
+  final RuTrackerService service;
+  RuTrackerSource(this.service);
+  @override
+  String get id => 'rutracker';
+  @override
+  Future<List<SearchResult>> search(String query) => service.search(query);
 }
 
 /// Runs sources in parallel, dedupes by hash, drops junk, sorts by seeders.

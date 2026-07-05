@@ -13,6 +13,7 @@ import 'models.dart';
 import 'online.dart';
 import 'player.dart';
 import 'recommend.dart';
+import 'rutracker.dart';
 import 'settings.dart';
 import 'soulseek.dart';
 import 'tidal.dart';
@@ -2653,7 +2654,7 @@ class SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
-  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm;
+  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _rtUser, _rtPass;
 
   @override
   void initState() {
@@ -2664,9 +2665,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskUser = TextEditingController(text: s.soulseekUser);
     _slskPass = TextEditingController(text: s.soulseekPass);
     _lastfm = TextEditingController(text: s.lastfmKey);
+    _rtUser = TextEditingController(text: s.rutrackerUser);
+    _rtPass = TextEditingController(text: s.rutrackerPass);
   }
 
   bool _testing = false;
+  bool _rtBusy = false;
   final Map<String, ConnResult> _conn = {};
 
   @override
@@ -2676,20 +2680,27 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskUser.dispose();
     _slskPass.dispose();
     _lastfm.dispose();
+    _rtUser.dispose();
+    _rtPass.dispose();
     super.dispose();
   }
 
   /// Test the credentials as currently typed (without saving to disk).
   Future<void> _testAll() async {
+    final real = context.read<AppSettings>();
     final probe = AppSettings()
       ..torboxToken = _torbox.text.trim()
       ..discogsToken = _discogs.text.trim()
       ..soulseekUser = _slskUser.text.trim()
-      ..soulseekPass = _slskPass.text.trim();
-    final checker = ConnectionChecker(probe, TorBox(() => probe.torboxToken), SoulseekService(probe));
+      ..soulseekPass = _slskPass.text.trim()
+      ..rutrackerUser = _rtUser.text.trim()
+      ..rutrackerPass = _rtPass.text
+      ..rutrackerCookie = real.rutrackerCookie; // RuTracker validity depends on the live session
+    final checker = ConnectionChecker(
+        probe, TorBox(() => probe.torboxToken), SoulseekService(probe), RuTrackerService(probe));
     setState(() {
       _testing = true;
-      for (final k in ['torbox', 'discogs', 'soulseek']) {
+      for (final k in ['torbox', 'discogs', 'soulseek', 'rutracker']) {
         _conn[k] = const ConnResult(ConnState.checking);
       }
     });
@@ -2702,11 +2713,94 @@ class _SettingsDialogState extends State<SettingsDialog> {
       run('torbox', checker.torboxCheck),
       run('discogs', checker.discogsCheck),
       run('soulseek', checker.soulseekCheck),
+      run('rutracker', checker.rutrackerCheck),
     ]);
     if (mounted) setState(() => _testing = false);
   }
 
-  Widget _statusRow(String label, String key) {
+  /// Log in to RuTracker (persisting the typed creds first), solving a CAPTCHA if asked.
+  Future<void> _rtLogin() async {
+    final settings = context.read<AppSettings>();
+    final rt = context.read<OnlineService>().rutracker;
+    settings.rutrackerUser = _rtUser.text.trim();
+    settings.rutrackerPass = _rtPass.text;
+    await settings.save();
+    setState(() {
+      _rtBusy = true;
+      _conn['rutracker'] = const ConnResult(ConnState.checking);
+    });
+    try {
+      var result = await rt.login();
+      while (result.captcha != null && mounted) {
+        final answer = await _captchaDialog(result.captcha!);
+        if (answer == null || answer.isEmpty) {
+          if (mounted) setState(() => _conn['rutracker'] = const ConnResult(ConnState.fail, 'Login geannuleerd'));
+          return;
+        }
+        result = await rt.login(captchaAnswer: answer, captcha: result.captcha);
+      }
+      if (!mounted) return;
+      setState(() => _conn['rutracker'] = result.ok
+          ? ConnResult(ConnState.ok, 'Ingelogd als ${settings.rutrackerUser}')
+          : ConnResult(ConnState.fail, result.error ?? 'Login mislukt'));
+    } finally {
+      if (mounted) setState(() => _rtBusy = false);
+    }
+  }
+
+  Future<String?> _captchaDialog(RtCaptcha cap) {
+    final ctrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: _panel,
+        title: const Text('RuTracker CAPTCHA', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        content: SizedBox(
+          width: 320,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Typ de tekens uit de afbeelding over.',
+                  style: TextStyle(color: _muted, fontSize: 12.5)),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(6),
+                color: Colors.white,
+                child: Image.network(cap.imageUrl,
+                    height: 72,
+                    errorBuilder: (_, __, ___) =>
+                        const Text('Afbeelding kon niet laden', style: TextStyle(color: Colors.black54))),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: ctrl,
+                autofocus: true,
+                onSubmitted: (v) => Navigator.pop(context, v.trim()),
+                decoration: InputDecoration(
+                  isDense: true,
+                  filled: true,
+                  fillColor: const Color(0xFF14161F),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuleren')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _accent),
+            onPressed: () => Navigator.pop(context, ctrl.text.trim()),
+            child: const Text('Verstuur'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusRow(String label, String key, {Widget? trailing}) {
     final r = _conn[key];
     IconData icon;
     Color color;
@@ -2750,6 +2844,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
               width: 84,
               child: Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
           Expanded(child: Text(text, style: TextStyle(fontSize: 12.5, color: color))),
+          if (trailing != null) trailing,
         ],
       ),
     );
@@ -2815,6 +2910,13 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         Expanded(child: _field('Soulseek wachtwoord', _slskPass, obscure: true)),
                       ],
                     ),
+                    Row(
+                      children: [
+                        Expanded(child: _field('RuTracker gebruiker', _rtUser)),
+                        const SizedBox(width: 12),
+                        Expanded(child: _field('RuTracker wachtwoord', _rtPass, obscure: true)),
+                      ],
+                    ),
                     _field('Last.fm API-sleutel', _lastfm),
                     const SizedBox(height: 4),
                     const Divider(color: _line, height: 1),
@@ -2838,6 +2940,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     _statusRow('TorBox', 'torbox'),
                     _statusRow('Discogs', 'discogs'),
                     _statusRow('Soulseek', 'soulseek'),
+                    _statusRow('RuTracker', 'rutracker',
+                        trailing: TextButton(
+                          onPressed: _rtBusy ? null : _rtLogin,
+                          style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8)),
+                          child: Text(_rtBusy ? 'Bezig…' : 'Inloggen', style: const TextStyle(fontSize: 12.5)),
+                        )),
                   ],
                 ),
               ),
@@ -2857,6 +2965,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     s.torboxToken = _torbox.text.trim();
                     s.soulseekUser = _slskUser.text.trim();
                     s.soulseekPass = _slskPass.text.trim();
+                    s.rutrackerUser = _rtUser.text.trim();
+                    s.rutrackerPass = _rtPass.text;
                     s.lastfmKey = _lastfm.text.trim();
                     await s.save();
                     if (context.mounted) Navigator.pop(context);
