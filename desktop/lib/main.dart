@@ -1016,6 +1016,7 @@ class _OntdekViewState extends State<OntdekView> {
   bool _busy = false;
   String? _status;
   int? _expanded;
+  int? _playing; // row whose source is being resolved (shows a spinner)
 
   @override
   void initState() {
@@ -1058,9 +1059,10 @@ class _OntdekViewState extends State<OntdekView> {
     }
   }
 
-  Future<void> _play(RecTrack t) async {
+  Future<void> _play(int i, RecTrack t) async {
     final online = context.read<OnlineService>();
     final player = context.read<PlayerStore>();
+    setState(() => _playing = i);
     _srcToast(context, 'Bron voorbereiden voor ${t.title}…');
     try {
       final url = await online.resolveRadio(t.artist, t.title, instantOnly: false);
@@ -1072,6 +1074,8 @@ class _OntdekViewState extends State<OntdekView> {
       player.playUrl(url, title: t.title, artist: t.artist);
     } catch (e) {
       if (mounted) _srcToast(context, 'Kan niet afspelen: $e');
+    } finally {
+      if (mounted) setState(() => _playing = null);
     }
   }
 
@@ -1134,7 +1138,12 @@ class _OntdekViewState extends State<OntdekView> {
                   ],
                 ),
               ),
-              IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, tooltip: 'Afspelen', onPressed: () => _play(t)),
+              _playing == i
+                  ? const SizedBox(
+                      width: 48,
+                      height: 48,
+                      child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))))
+                  : IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, tooltip: 'Afspelen', onPressed: () => _play(i, t)),
               IconButton(icon: const Icon(Icons.radio_rounded, size: 20), color: _muted, tooltip: 'Radio hieruit', onPressed: () => startRadio(context, t.artist)),
               IconButton(
                   icon: Icon(open ? Icons.expand_less_rounded : Icons.download_rounded, size: 20),
