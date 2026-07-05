@@ -1576,13 +1576,11 @@ Future<void> _playTorrent(BuildContext context, SearchResult r) async {
   }
 }
 
-Future<void> _downloadTorrent(BuildContext context, SearchResult r) async {
-  try {
-    final n = await context.read<DownloadManager>().enqueue(r);
-    if (context.mounted) _srcToast(context, '$n nummer(s) naar downloads');
-  } catch (e) {
-    if (context.mounted) _srcToast(context, 'Download mislukt: $e');
-  }
+void _downloadTorrent(BuildContext context, SearchResult r) {
+  context.read<DownloadManager>().enqueue(r);
+  _srcToast(context, r.cached
+      ? 'Downloaden gestart — zie de downloadlijst.'
+      : 'Voorbereiden bij TorBox (kan even duren bij weinig seeders) — zie de downloadlijst.');
 }
 
 void _pickTorrentTracks(BuildContext context, SearchResult r) {
@@ -1596,6 +1594,59 @@ Future<void> _downloadSoulseek(BuildContext context, SoulseekFile f) async {
   } catch (e) {
     if (context.mounted) _srcToast(context, 'Download mislukt: $e');
   }
+}
+
+/// The most complete album folder among Soulseek hits (most audio files from ONE peer's
+/// folder) — so "Download album" grabs a coherent album from a single source.
+List<SoulseekFile> _bestSoulseekFolder(List<SoulseekFile> files) {
+  final groups = <String, List<SoulseekFile>>{};
+  for (final f in files) {
+    final p = f.filename.replaceAll('/', '\\');
+    final folder = p.contains('\\') ? p.substring(0, p.lastIndexOf('\\')) : p;
+    groups.putIfAbsent('${f.username}|$folder', () => []).add(f);
+  }
+  final ranked = groups.values.toList()
+    ..sort((a, b) {
+      if (a.length != b.length) return b.length.compareTo(a.length); // most tracks
+      final fa = a.where((f) => f.freeSlots).length, fb = b.where((f) => f.freeSlots).length;
+      return fb.compareTo(fa); // then most free-slot peers
+    });
+  return ranked.isEmpty ? const [] : ranked.first;
+}
+
+Future<void> _downloadSoulseekAlbum(BuildContext context, List<SoulseekFile> folder) async {
+  final n = await context.read<DownloadManager>().enqueueSoulseekAll(folder);
+  if (context.mounted) {
+    _srcToast(context, '$n nummer(s) via Soulseek — volg de voortgang in de downloadlijst.');
+  }
+}
+
+/// Soulseek section header with a "Download album" action for the best complete folder.
+Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy) {
+  final folder = _bestSoulseekFolder(slsk);
+  return Padding(
+    padding: const EdgeInsets.fromLTRB(24, 14, 18, 6),
+    child: Row(
+      children: [
+        const Text('SOULSEEK · P2P',
+            style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
+        const SizedBox(width: 8),
+        Text('${slsk.length}', style: const TextStyle(color: _muted, fontSize: 11.5)),
+        if (busy) ...const [
+          SizedBox(width: 8),
+          SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
+        ],
+        const Spacer(),
+        if (folder.length >= 2)
+          TextButton.icon(
+            onPressed: () => _downloadSoulseekAlbum(context, folder),
+            icon: const Icon(Icons.library_add_rounded, size: 16),
+            label: Text('Download album (${folder.length})'),
+            style: TextButton.styleFrom(foregroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 8)),
+          ),
+      ],
+    ),
+  );
 }
 
 Widget _qualityBadge(Quality q) {
@@ -1839,7 +1890,7 @@ class _SourcesViewState extends State<SourcesView> {
               child: Text('Geen torrents gevonden.', style: TextStyle(color: _muted, fontSize: 12.5))),
         ...torrents.map((r) => _torrentTile(context, r)),
         if (ready)
-          _sourceHeader('Soulseek · P2P', slsk.length, _sBusy)
+          _soulseekHeader(context, slsk, _sBusy)
         else
           const Padding(
               padding: EdgeInsets.fromLTRB(24, 14, 24, 6),
@@ -2121,7 +2172,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                               SizedBox(
                                 width: 160,
                                 child: LinearProgressIndicator(
-                                  value: j.status == 'done' ? 1 : j.progress,
+                                  value: j.status == 'done'
+                                      ? 1
+                                      : (j.status == 'preparing' && j.progress <= 0 ? null : j.progress),
                                   backgroundColor: const Color(0xFF2A2F42),
                                   color: j.status == 'failed'
                                       ? Colors.red
@@ -2130,11 +2183,15 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                               ),
                               const SizedBox(width: 10),
                               SizedBox(
-                                width: 54,
+                                width: 70,
                                 child: Text(
                                   j.status == 'done'
                                       ? 'klaar'
-                                      : (j.status == 'failed' ? 'mislukt' : '${(j.progress * 100).round()}%'),
+                                      : (j.status == 'failed'
+                                          ? 'mislukt'
+                                          : (j.status == 'preparing'
+                                              ? (j.progress > 0 ? 'TorBox ${(j.progress * 100).round()}%' : 'voorbereiden')
+                                              : '${(j.progress * 100).round()}%')),
                                   textAlign: TextAlign.right,
                                   style: const TextStyle(color: _muted, fontSize: 11.5),
                                 ),
@@ -2416,7 +2473,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ...torrents.map((r) => _torrentTile(context, r)),
         if (_status == null || _slsk.isNotEmpty || _slskBusy)
           (soulseekReady
-              ? _sourceHeader('Soulseek · P2P', slsk.length, _slskBusy)
+              ? _soulseekHeader(context, slsk, _slskBusy)
               : const Padding(
                   padding: EdgeInsets.fromLTRB(24, 16, 24, 6),
                   child: Text('SOULSEEK · log in via Instellingen om P2P mee te zoeken',
@@ -2440,6 +2497,7 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
   String? _error;
   TbTorrent? _torrent;
   List<TbFile> _files = [];
+  double _prep = 0;
 
   @override
   void initState() {
@@ -2449,7 +2507,9 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
 
   Future<void> _load() async {
     try {
-      final (t, f) = await context.read<OnlineService>().tracklist(widget.result);
+      final (t, f) = await context.read<OnlineService>().tracklist(widget.result, onProgress: (p, s) {
+        if (mounted) setState(() => _prep = p);
+      });
       if (!mounted) return;
       setState(() {
         _torrent = t;
@@ -2472,13 +2532,9 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
     }
   }
 
-  Future<void> _download(TbFile f) async {
-    try {
-      await context.read<DownloadManager>().enqueue(widget.result, fileId: f.id);
-      _snack('“${f.label}” naar downloads');
-    } catch (e) {
-      _snack('Download mislukt: $e');
-    }
+  void _download(TbFile f) {
+    context.read<DownloadManager>().enqueue(widget.result, fileId: f.id);
+    _snack('“${f.label}” naar downloads');
   }
 
   void _snack(String m) {
@@ -2506,13 +2562,30 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
                 style: TextStyle(color: _muted, fontSize: 12)),
             const SizedBox(height: 14),
             if (_loading)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 40),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
                 child: Center(
                   child: Column(children: [
-                    CircularProgressIndicator(color: _accent),
-                    SizedBox(height: 14),
-                    Text('Bron voorbereiden bij TorBox…', style: TextStyle(color: _muted, fontSize: 12.5)),
+                    const CircularProgressIndicator(color: _accent),
+                    const SizedBox(height: 16),
+                    Text(
+                        _prep > 0
+                            ? 'TorBox haalt de torrent op… ${(_prep * 100).round()}%'
+                            : 'Bron voorbereiden bij TorBox…',
+                        style: const TextStyle(color: _muted, fontSize: 12.5)),
+                    if (_prep > 0) ...[
+                      const SizedBox(height: 10),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: LinearProgressIndicator(
+                            value: _prep, minHeight: 4, backgroundColor: _panel2, color: _accent),
+                      ),
+                    ],
+                    if (!widget.result.cached) ...const [
+                      SizedBox(height: 10),
+                      Text('Niet-gecachte torrents met weinig seeders kunnen even duren.',
+                          textAlign: TextAlign.center, style: TextStyle(color: _muted, fontSize: 11)),
+                    ],
                   ]),
                 ),
               )

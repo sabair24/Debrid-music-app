@@ -62,17 +62,21 @@ class OnlineService {
     throw detail.isNotEmpty ? detail : 'Kon torrent niet toevoegen';
   }
 
-  Future<TbTorrent> _pollReady(int? id, String hash, {bool patient = false}) async {
+  Future<TbTorrent> _pollReady(int? id, String hash,
+      {bool patient = false, void Function(double progress, String status)? onProgress}) async {
     var delayMs = 2000;
     var noProgress = 0;
     var readyNoAudio = 0;
-    final maxAttempts = patient ? 45 : 30;
-    final stallTimeout = patient ? 45000 : 25000;
+    // Big, low-seed torrents (a whole discography) take TorBox a long time to fetch from
+    // few peers — be patient and, crucially, report progress so it's not a mystery spinner.
+    final maxAttempts = patient ? 120 : 30;
+    final stallTimeout = patient ? 90000 : 25000;
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
       final list = await torbox.listTorrents();
       final item = list.cast<TbTorrent?>().firstWhere(
           (t) => (id != null && t?.id == id) || (t?.hash?.toLowerCase() == hash.toLowerCase()),
           orElse: () => null);
+      onProgress?.call(item?.progress ?? 0, item?.status ?? 'toevoegen');
       if (item == null) {
         noProgress += delayMs;
       } else if (item.isFailed) {
@@ -182,10 +186,11 @@ class OnlineService {
   }
 
   /// (torrent, audio files) for the track picker.
-  Future<(TbTorrent, List<TbFile>)> tracklist(SearchResult r) async {
+  Future<(TbTorrent, List<TbFile>)> tracklist(SearchResult r,
+      {void Function(double, String)? onProgress}) async {
     if (!torbox.hasKey) throw 'Stel eerst je TorBox-sleutel in (Instellingen).';
     final (id, hash) = await _addOrFind(r);
-    final item = await _pollReady(id, hash);
+    final item = await _pollReady(id, hash, patient: !r.cached, onProgress: onProgress);
     final files = _sortedAudio(item);
     if (files.isEmpty) throw 'Geen audio in deze torrent';
     return (item, files);
@@ -198,10 +203,11 @@ class OnlineService {
   }
 
   /// Resolve the torrent + the files to download (all audio, or one file).
-  Future<(TbTorrent, List<TbFile>)> resolveForDownload(SearchResult r, int? fileId) async {
+  Future<(TbTorrent, List<TbFile>)> resolveForDownload(SearchResult r, int? fileId,
+      {void Function(double, String)? onProgress}) async {
     if (!torbox.hasKey) throw 'Stel eerst je TorBox-sleutel in (Instellingen).';
     final (id, hash) = await _addOrFind(r);
-    final item = await _pollReady(id, hash, patient: !r.cached);
+    final item = await _pollReady(id, hash, patient: !r.cached, onProgress: onProgress);
     final files = fileId != null ? item.files.where((f) => f.id == fileId).toList() : _sortedAudio(item);
     if (files.isEmpty) throw 'Geen audio gevonden';
     return (item, files);
@@ -296,18 +302,47 @@ class DownloadManager extends ChangeNotifier {
     }());
   }
 
-  Future<int> enqueue(SearchResult result, {int? fileId}) async {
-    final (torrent, files) = await online.resolveForDownload(result, fileId);
-    final destDir = Directory('$musicRoot${Platform.pathSeparator}DebridMusic Downloads${Platform.pathSeparator}${_sanitize(torrent.name)}');
-    await destDir.create(recursive: true);
+  /// Add a torrent download. Non-blocking: a "preparing" job shows TorBox's fetch progress
+  /// immediately (so a big/low-seed torrent isn't a mystery spinner), then per-file jobs
+  /// start once TorBox has it ready.
+  void enqueue(SearchResult result, {int? fileId}) {
+    final prep = DownloadJob(fileId != null ? result.name : 'Voorbereiden: ${result.name}')..status = 'preparing';
+    jobs.insert(0, prep);
+    notifyListeners();
+    unawaited(() async {
+      try {
+        final (torrent, files) = await online.resolveForDownload(result, fileId, onProgress: (p, s) {
+          prep.progress = p;
+          notifyListeners();
+        });
+        jobs.remove(prep);
+        final destDir = Directory(
+            '$musicRoot${Platform.pathSeparator}DebridMusic Downloads${Platform.pathSeparator}${_sanitize(torrent.name)}');
+        await destDir.create(recursive: true);
+        for (final f in files) {
+          final job = DownloadJob(f.label);
+          jobs.insert(0, job);
+          notifyListeners();
+          unawaited(_download(torrent.id, f, destDir, job));
+        }
+        notifyListeners();
+      } catch (e) {
+        prep.status = 'failed';
+        notifyListeners();
+      }
+    }());
+  }
+
+  /// Download every file in a list (used by "Download album" from Soulseek).
+  Future<int> enqueueSoulseekAll(List<SoulseekFile> files) async {
+    var n = 0;
     for (final f in files) {
-      final job = DownloadJob(f.label);
-      jobs.insert(0, job);
-      notifyListeners();
-      // Sequential per-file within this call; UI can queue more.
-      unawaited(_download(torrent.id, f, destDir, job));
+      try {
+        await enqueueSoulseek(f);
+        n++;
+      } catch (_) {}
     }
-    return files.length;
+    return n;
   }
 
   Future<void> _download(int torrentId, TbFile f, Directory destDir, DownloadJob job) async {
