@@ -33,6 +33,7 @@ class PlayerStore extends ChangeNotifier {
   Future<String?> Function(String artist, String title)? resolver;
   Future<List<RadioItem>> Function()? radioExtend; // fetch more items to keep radio endless
   bool _extending = false;
+  int _radioSession = 0; // bumped per playRadio() so a stale extend can't pollute a new radio
   List<RadioItem> get radioQueue => _radio;
   int get radioIndex => _radioIndex;
 
@@ -107,6 +108,8 @@ class PlayerStore extends ChangeNotifier {
   /// Start a Radio / Smart-Shuffle queue of mixed local + online items.
   Future<void> playRadio(List<RadioItem> items, {int start = 0}) async {
     radioMode = true;
+    _radioSession++; // invalidate any in-flight extend from a previous radio
+    _extending = false;
     currentCover = null;
     _radio = items;
     _radioIndex = items.isEmpty ? -1 : start.clamp(0, items.length - 1);
@@ -174,12 +177,14 @@ class PlayerStore extends ChangeNotifier {
   void _maybeExtend() {
     if (radioExtend == null || _extending || _radioIndex < _radio.length - 3) return;
     _extending = true;
+    final session = _radioSession; // tie this extend to the current radio
     radioExtend!().then((more) {
+      if (session != _radioSession) return; // a newer radio started; drop this batch
       if (radioMode && more.isNotEmpty) _radio.addAll(more);
       _extending = false;
       notifyListeners();
     }).catchError((_) {
-      _extending = false;
+      if (session == _radioSession) _extending = false;
     });
   }
 
