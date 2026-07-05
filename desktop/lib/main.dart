@@ -7,6 +7,7 @@ import 'package:window_manager/window_manager.dart';
 import 'catalog.dart';
 import 'enrichment.dart';
 import 'library.dart';
+import 'metadata.dart';
 import 'models.dart';
 import 'online.dart';
 import 'player.dart';
@@ -71,6 +72,7 @@ Future<void> main() async {
   // Scan, then fill in missing covers + artist photos (cache-first, then web).
   // Wrapped so a scan hiccup can never prevent enrichment from running.
   () async {
+    await library.loadCorrections(); // apply manual fixes as tracks are built
     try {
       await library.scan();
     } catch (_) {}
@@ -357,9 +359,38 @@ class _AlbumCardState extends State<AlbumCard> {
 }
 
 // ── Album detail ─────────────────────────────────────────────────────────────
-class AlbumDetailPage extends StatelessWidget {
+class AlbumDetailPage extends StatefulWidget {
   final Album album;
   const AlbumDetailPage({super.key, required this.album});
+  @override
+  State<AlbumDetailPage> createState() => _AlbumDetailPageState();
+}
+
+class _AlbumDetailPageState extends State<AlbumDetailPage> {
+  late Album album = widget.album;
+
+  // A correction rebuilds the album list into new objects; re-point at the regrouped
+  // album (matched by track path) so this page shows the fixed title/artist/cover.
+  void _refresh() {
+    final paths = widget.album.tracks.map((t) => t.path).toSet();
+    for (final a in context.read<LibraryStore>().albums) {
+      if (a.tracks.any((t) => paths.contains(t.path))) {
+        setState(() => album = a);
+        return;
+      }
+    }
+    setState(() {});
+  }
+
+  Future<void> _edit() async {
+    final changed = await showDialog<bool>(context: context, builder: (_) => MetadataEditor(album));
+    if (changed == true && mounted) {
+      _refresh();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Metadata bijgewerkt'), duration: Duration(seconds: 2)),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -376,6 +407,14 @@ class AlbumDetailPage extends StatelessWidget {
                     icon: const Icon(Icons.arrow_back_rounded),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
+                  actions: [
+                    IconButton(
+                      icon: const Icon(Icons.edit_rounded),
+                      tooltip: 'Metadata corrigeren',
+                      onPressed: _edit,
+                    ),
+                    const SizedBox(width: 8),
+                  ],
                 ),
                 SliverToBoxAdapter(child: _header(context)),
                 SliverList(
@@ -408,7 +447,7 @@ class AlbumDetailPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Album', style: TextStyle(color: _muted)),
+                Text(album.isSingle ? 'Single' : 'Album', style: const TextStyle(color: _muted)),
                 const SizedBox(height: 6),
                 Text(album.title, style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 6),
@@ -454,6 +493,241 @@ class AlbumDetailPage extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Manual metadata editor: search Deezer/Discogs/MusicBrainz for the correct
+/// release and apply its cover/artist/title to a wrong album or single.
+class MetadataEditor extends StatefulWidget {
+  final Album album;
+  const MetadataEditor(this.album, {super.key});
+  @override
+  State<MetadataEditor> createState() => _MetadataEditorState();
+}
+
+class _MetadataEditorState extends State<MetadataEditor> {
+  late final TextEditingController _artist = TextEditingController(text: widget.album.artist);
+  late final TextEditingController _title = TextEditingController(text: widget.album.title);
+  late final TextEditingController _query =
+      TextEditingController(text: '${widget.album.artist} ${widget.album.title}'.trim());
+  String _provider = 'Deezer';
+  bool _searching = false;
+  bool _applying = false;
+  List<MetaResult> _results = const [];
+  MetaResult? _picked;
+  Uint8List? _pickedCover;
+
+  @override
+  void dispose() {
+    _artist.dispose();
+    _title.dispose();
+    _query.dispose();
+    super.dispose();
+  }
+
+  Future<void> _search() async {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _searching = true;
+      _results = const [];
+    });
+    final res = await MetadataSearch(context.read<AppSettings>())
+        .search(_provider, _query.text, track: widget.album.isSingle);
+    if (!mounted) return;
+    setState(() {
+      _results = res;
+      _searching = false;
+    });
+  }
+
+  Future<void> _pick(MetaResult m) async {
+    final newTitle = widget.album.isSingle ? m.title : m.album;
+    setState(() {
+      _picked = m;
+      _pickedCover = null;
+      if (m.artist.isNotEmpty) _artist.text = m.artist;
+      if (newTitle.isNotEmpty) _title.text = newTitle;
+    });
+    if (m.coverUrl != null) {
+      final bytes = await CoverEnricher(context.read<AppSettings>()).downloadImage(m.coverUrl!);
+      if (mounted && identical(_picked, m)) setState(() => _pickedCover = bytes);
+    }
+  }
+
+  Future<void> _apply() async {
+    setState(() => _applying = true);
+    await context.read<LibraryStore>().applyCorrection(
+          widget.album,
+          context.read<AppSettings>(),
+          artist: _artist.text,
+          albumTitle: widget.album.isSingle ? null : _title.text,
+          title: widget.album.isSingle ? _title.text : null,
+          coverBytes: _pickedCover,
+        );
+    if (mounted) Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isSingle = widget.album.isSingle;
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: 580,
+        height: 640,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Text('Metadata corrigeren',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                  const Spacer(),
+                  IconButton(
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: () => Navigator.of(context).pop(false)),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  cover(_pickedCover ?? widget.album.cover, size: 88),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      children: [
+                        _field(_artist, 'Artiest'),
+                        const SizedBox(height: 8),
+                        _field(_title, isSingle ? 'Titel' : 'Album'),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Container(
+                    decoration: BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(8)),
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: _provider,
+                        dropdownColor: _panel2,
+                        items: MetadataSearch.providers
+                            .map((p) => DropdownMenuItem(value: p, child: Text(p)))
+                            .toList(),
+                        onChanged: (v) => setState(() => _provider = v ?? 'Deezer'),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: _query,
+                      onSubmitted: (_) => _search(),
+                      decoration: _inputDeco('Zoeken…'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    style: FilledButton.styleFrom(backgroundColor: _accent),
+                    onPressed: _searching ? null : _search,
+                    child: const Text('Zoeken'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: _searching
+                    ? const Center(child: CircularProgressIndicator(color: _accent))
+                    : _results.isEmpty
+                        ? const Center(
+                            child: Text('Zoek hierboven een correcte versie.',
+                                style: TextStyle(color: _muted)))
+                        : ListView.builder(
+                            itemCount: _results.length,
+                            itemBuilder: (_, i) {
+                              final m = _results[i];
+                              final sel = identical(_picked, m);
+                              return InkWell(
+                                onTap: () => _pick(m),
+                                child: Container(
+                                  margin: const EdgeInsets.only(bottom: 6),
+                                  padding: const EdgeInsets.all(6),
+                                  decoration: BoxDecoration(
+                                    color: sel ? _accent.withValues(alpha: 0.18) : _panel2,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: sel ? _accent : Colors.transparent),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      _netCover(m.coverUrl, size: 44, radius: 6),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(m.title,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(fontWeight: FontWeight.w600)),
+                                            Text(m.artist.isEmpty ? '—' : m.artist,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(color: _muted, fontSize: 12)),
+                                          ],
+                                        ),
+                                      ),
+                                      if (sel) const Icon(Icons.check_circle_rounded, color: _accent),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: const Text('Annuleren', style: TextStyle(color: _muted)),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    style: FilledButton.styleFrom(backgroundColor: _accent),
+                    onPressed: _applying ? null : _apply,
+                    child: _applying
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Text('Toepassen'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _field(TextEditingController c, String label) => TextField(controller: c, decoration: _inputDeco(label));
+
+  InputDecoration _inputDeco(String label) => InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: _muted),
+        isDense: true,
+        filled: true,
+        fillColor: _panel2,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+      );
 }
 
 class TrackRow extends StatefulWidget {

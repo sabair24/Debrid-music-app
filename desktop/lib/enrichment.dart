@@ -29,6 +29,7 @@ class CoverEnricher {
   Directory get cacheDir => Directory(_dir('covers'));
   Directory get artistDir => Directory(_dir('artists'));
   Directory get bioDir => Directory(_dir('bios'));
+  Directory get fixDir => Directory(_dir('fixcovers'));
 
   // Stable FNV-1a hash (Dart's String.hashCode is randomized per run, so it can't
   // be used for a persistent on-disk cache key).
@@ -43,6 +44,24 @@ class CoverEnricher {
 
   String keyFor(Album a) => _fnv('${a.artist.toLowerCase()}|${a.title.toLowerCase()}');
   File _cacheFile(Album a) => File('${cacheDir.path}${Platform.pathSeparator}${keyFor(a)}.jpg');
+  File _fixFile(Album a) => File('${fixDir.path}${Platform.pathSeparator}${keyFor(a)}.jpg');
+
+  /// A user-corrected cover (manual editor), if one was saved for this album.
+  Future<Uint8List?> fixedCover(Album a) async {
+    final f = _fixFile(a);
+    if (!await f.exists()) return null;
+    final b = await f.readAsBytes();
+    return b.length > 100 ? b : null;
+  }
+
+  /// Persist a user-picked cover for [a] (survives rescans; top display priority).
+  Future<void> saveFixedCover(Album a, Uint8List bytes) async {
+    await fixDir.create(recursive: true);
+    await _fixFile(a).writeAsBytes(bytes);
+  }
+
+  /// Download raw image bytes for a chosen cover URL (with the right User-Agent).
+  Future<Uint8List?> downloadImage(String url) => _download(url);
   File _artistFile(String name) => File('${artistDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.jpg');
   File _bioFile(String name) => File('${bioDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.txt');
 

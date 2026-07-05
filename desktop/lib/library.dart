@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'package:flutter/foundation.dart';
@@ -68,6 +69,103 @@ class LibraryStore extends ChangeNotifier {
   final Map<String, String> artistBios = {};
   String rootPath = r'D:\Flac music 2024';
 
+  // Manual metadata corrections (non-destructive): file path -> {title,artist,album}.
+  // Applied to scanned tracks so wrong tags are fixed without touching the files.
+  final Map<String, Map<String, String>> _corrections = {};
+
+  String get _appDir {
+    final base = Platform.environment['APPDATA'] ?? Directory.current.path;
+    return '$base${Platform.pathSeparator}DebridMusic';
+  }
+
+  File get _correctionsFile => File('$_appDir${Platform.pathSeparator}corrections.json');
+
+  Future<void> loadCorrections() async {
+    try {
+      final f = _correctionsFile;
+      if (!await f.exists()) return;
+      final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      _corrections.clear();
+      j.forEach((path, v) {
+        if (v is Map) {
+          _corrections[path] = v.map((k, val) => MapEntry(k.toString(), val.toString()));
+        }
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _saveCorrections() async {
+    try {
+      await Directory(_appDir).create(recursive: true);
+      await _correctionsFile.writeAsString(jsonEncode(_corrections));
+    } catch (_) {}
+  }
+
+  Track _applyCorrection(Track t) {
+    final c = _corrections[t.path];
+    if (c == null) return t;
+    return Track(
+      path: t.path,
+      title: c['title'] ?? t.title,
+      artist: c['artist'] ?? t.artist,
+      album: c.containsKey('album') ? c['album']! : t.album,
+      trackNo: t.trackNo,
+      duration: t.duration,
+      isFlac: t.isFlac,
+      year: t.year,
+      genre: t.genre,
+    );
+  }
+
+  /// Apply a manual correction to [target] (artist/album for an album, title for a
+  /// single) and optionally a user-picked cover. Persisted + reflected immediately.
+  Future<void> applyCorrection(
+    Album target,
+    AppSettings settings, {
+    String? artist,
+    String? albumTitle,
+    String? title,
+    Uint8List? coverBytes,
+  }) async {
+    for (final t in target.tracks) {
+      final c = _corrections.putIfAbsent(t.path, () => {});
+      if (artist != null && artist.trim().isNotEmpty) c['artist'] = artist.trim();
+      if (albumTitle != null && albumTitle.trim().isNotEmpty && !target.isSingle) {
+        c['album'] = albumTitle.trim();
+      }
+      if (title != null && title.trim().isNotEmpty && target.isSingle) c['title'] = title.trim();
+    }
+    await _saveCorrections();
+
+    // Re-apply corrections to the in-memory tracks + regroup.
+    final corrected = tracks.map(_applyCorrection).toList();
+    tracks
+      ..clear()
+      ..addAll(corrected);
+    _buildAlbums();
+
+    // Find the regrouped album this correction produced, and attach the new cover.
+    final newArtist = (artist?.trim().isNotEmpty ?? false) ? artist!.trim() : target.artist;
+    final newTitle = target.isSingle
+        ? ((title?.trim().isNotEmpty ?? false) ? title!.trim() : target.title)
+        : ((albumTitle?.trim().isNotEmpty ?? false) ? albumTitle!.trim() : target.title);
+    final paths = target.tracks.map((t) => t.path).toSet();
+    Album? match;
+    for (final a in albums) {
+      final sameId = a.artist.toLowerCase() == newArtist.toLowerCase() &&
+          a.title.toLowerCase() == newTitle.toLowerCase();
+      if (sameId || a.tracks.any((t) => paths.contains(t.path))) {
+        match = a;
+        if (sameId) break;
+      }
+    }
+    if (match != null && coverBytes != null && coverBytes.isNotEmpty) {
+      match.correctedCover = coverBytes;
+      await CoverEnricher(settings).saveFixedCover(match, coverBytes);
+    }
+    notifyListeners();
+  }
+
   Future<void> scan() async {
     // Never run two scans at once (a rescan after a download must not race the
     // startup scan over `tracks`). Coalesce concurrent requests into one re-run.
@@ -94,7 +192,7 @@ class LibraryStore extends ChangeNotifier {
     }
     tracks
       ..clear()
-      ..addAll(raw.map(_trackFromMap));
+      ..addAll(raw.map(_trackFromMap).map(_applyCorrection));
     scanned = tracks.length;
     _buildAlbums();
     scanning = false;
@@ -156,8 +254,14 @@ class LibraryStore extends ChangeNotifier {
   /// can't hang); phase 2 fetches the rest from the web (each call has a timeout).
   Future<void> enrich(AppSettings settings) async {
     final enricher = CoverEnricher(settings);
-    // Phase 1 — instant: on-disk cache only, no network.
+    // Phase 1 — instant: on-disk cache only, no network. User-corrected covers first
+    // (they win over embedded/enriched and must survive a rescan).
     for (final album in albums) {
+      final fixed = await enricher.fixedCover(album);
+      if (fixed != null) {
+        album.correctedCover = fixed;
+        continue;
+      }
       if (album.cover != null) continue;
       final bytes = await enricher.cached(album);
       if (bytes != null) album.enriched = bytes;

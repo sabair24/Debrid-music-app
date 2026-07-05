@@ -39,9 +39,13 @@ class Album {
   /// Web-fetched cover (Deezer/Discogs/MusicBrainz), set by the enricher.
   Uint8List? enriched;
 
+  /// User-picked cover via the manual metadata editor — wins over everything and
+  /// survives rescans (a wrong embedded cover must not come back).
+  Uint8List? correctedCover;
+
   Album(this.title, this.artist, this.tracks, {this.isSingle = false});
 
-  Uint8List? get cover => embeddedCover ?? enriched;
+  Uint8List? get cover => correctedCover ?? embeddedCover ?? enriched;
 
   int? get year {
     for (final t in tracks) {
