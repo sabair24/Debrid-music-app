@@ -76,4 +76,27 @@ class RecommendService {
     out.shuffle();
     return out;
   }
+
+  /// Discovery feed: top tracks from artists related to the given library seeds.
+  Future<List<RecTrack>> discover(List<String> seeds) async {
+    final out = <RecTrack>[];
+    final seen = <String>{};
+    void add(Iterable<RecTrack> ts) {
+      for (final t in ts) {
+        if (seen.add('${t.artist.toLowerCase()}|${t.title.toLowerCase()}')) out.add(t);
+      }
+    }
+
+    for (final s in seeds.take(4)) {
+      final id = await _artistId(s);
+      if (id == null) continue;
+      final rel = ((await _get('$_base/artist/$id/related?limit=4'))?['data'] as List?) ?? const [];
+      final tops = await Future.wait(rel.take(4).map((a) => _get('$_base/artist/${a['id']}/top?limit=6')));
+      for (final t in tops) {
+        add(_tracks(t));
+      }
+    }
+    out.shuffle();
+    return out;
+  }
 }

@@ -185,6 +185,7 @@ class _HomeShellState extends State<HomeShell> {
           _navBtn(Icons.album_rounded, 'Albums', 0),
           _navBtn(Icons.people_alt_rounded, 'Artiesten', 1),
           _navBtn(Icons.travel_explore_rounded, 'Online zoeken', 2),
+          _navBtn(Icons.auto_awesome_rounded, 'Ontdek', 3),
           const Spacer(),
           Material(
             color: Colors.transparent,
@@ -252,6 +253,7 @@ class _HomeShellState extends State<HomeShell> {
 
   Widget _content() {
     if (_view == 2) return const OnlineSearchScreen();
+    if (_view == 3) return const OntdekView();
     return Consumer<LibraryStore>(
       builder: (_, lib, __) {
         if (lib.scanning && lib.albums.isEmpty) {
@@ -951,13 +953,28 @@ String _radioNorm(String s) {
 
 /// Build a Radio queue around [artist]: Deezer recommendations, matched against the
 /// local library (owned tracks play instantly; the rest resolve via TorBox on demand).
+List<RadioItem> _radioItemsFor(List<RecTrack> recs, LibraryStore lib) {
+  final index = <String, Track>{};
+  for (final t in lib.tracks) {
+    index.putIfAbsent('${_radioNorm(t.artist)}|${_radioNorm(t.title)}', () => t);
+  }
+  return recs
+      .map((r) => RadioItem(
+            artist: r.artist,
+            title: r.title,
+            local: index['${_radioNorm(r.artist)}|${_radioNorm(r.title)}'],
+          ))
+      .toList();
+}
+
 Future<void> startRadio(BuildContext context, String artist) async {
   final player = context.read<PlayerStore>();
   final lib = context.read<LibraryStore>();
   _srcToast(context, '📻 Radio starten voor $artist…');
+  final rec = RecommendService();
   List<RecTrack> recs;
   try {
-    recs = await RecommendService().mixRadio(artist);
+    recs = await rec.mixRadio(artist);
   } catch (_) {
     recs = const [];
   }
@@ -966,21 +983,171 @@ Future<void> startRadio(BuildContext context, String artist) async {
     _srcToast(context, 'Geen radio gevonden voor $artist.');
     return;
   }
-  final index = <String, Track>{};
-  for (final t in lib.tracks) {
-    index.putIfAbsent('${_radioNorm(t.artist)}|${_radioNorm(t.title)}', () => t);
-  }
-  final items = recs
-      .map((r) => RadioItem(
-            artist: r.artist,
-            title: r.title,
-            local: index['${_radioNorm(r.artist)}|${_radioNorm(r.title)}'],
-          ))
-      .toList();
+  final items = _radioItemsFor(recs, lib);
   // Lead with an owned track so the radio starts instantly (no first-track sourcing wait).
   final li = items.indexWhere((i) => i.isLocal);
   if (li > 0) items.insert(0, items.removeAt(li));
+  // Keep it endless: fetch a fresh batch when the queue runs low.
+  player.radioExtend = () async {
+    try {
+      return _radioItemsFor(await rec.mixRadio(artist), lib);
+    } catch (_) {
+      return <RadioItem>[];
+    }
+  };
   await player.playRadio(items);
+}
+
+bool _genericArtist(String s) {
+  final x = s.trim().toLowerCase();
+  return x.isEmpty || x == 'various' || x == 'various artists' || x == 'va' || x == 'onbekende artiest';
+}
+
+// ── Ontdek (discovery feed) ──────────────────────────────────────────────────
+class OntdekView extends StatefulWidget {
+  const OntdekView({super.key});
+  @override
+  State<OntdekView> createState() => _OntdekViewState();
+}
+
+class _OntdekViewState extends State<OntdekView> {
+  final _rec = RecommendService();
+  List<RecTrack> _tracks = [];
+  bool _busy = false;
+  String? _status;
+  int? _expanded;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  Future<void> _load() async {
+    final lib = context.read<LibraryStore>();
+    final seeds = lib.artists.where((a) => !_genericArtist(a)).toList()..shuffle();
+    if (seeds.isEmpty) {
+      setState(() => _status = 'Nog geen bibliotheek om op te ontdekken.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _tracks = [];
+      _status = null;
+      _expanded = null;
+    });
+    final owned = <String>{};
+    for (final t in lib.tracks) {
+      owned.add('${_radioNorm(t.artist)}|${_radioNorm(t.title)}');
+    }
+    List<RecTrack> recs;
+    try {
+      recs = await _rec.discover(seeds.take(4).toList());
+    } catch (_) {
+      recs = const [];
+    }
+    final fresh = recs
+        .where((r) => !owned.contains('${_radioNorm(r.artist)}|${_radioNorm(r.title)}'))
+        .toList();
+    if (mounted) {
+      setState(() {
+        _tracks = fresh;
+        _busy = false;
+        _status = fresh.isEmpty ? 'Niets nieuws gevonden — ververs eens.' : null;
+      });
+    }
+  }
+
+  Future<void> _play(RecTrack t) async {
+    final online = context.read<OnlineService>();
+    final player = context.read<PlayerStore>();
+    _srcToast(context, 'Bron zoeken voor ${t.title}…');
+    try {
+      final url = await online.resolveRadio(t.artist, t.title);
+      if (!mounted) return;
+      if (url == null) {
+        _srcToast(context, 'Geen instant bron — open de bronnen (⬇) om te downloaden.');
+        return;
+      }
+      player.playUrl(url, title: t.title, artist: t.artist);
+    } catch (e) {
+      if (mounted) _srcToast(context, 'Kan niet afspelen: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 22, 24, 8),
+          child: Row(
+            children: [
+              const Text('Ontdek', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+              const SizedBox(width: 12),
+              const Expanded(
+                  child: Text('Nieuwe muziek op basis van je bibliotheek',
+                      style: TextStyle(color: _muted, fontSize: 13))),
+              IconButton(
+                  onPressed: _busy ? null : _load,
+                  icon: const Icon(Icons.refresh_rounded),
+                  color: _muted,
+                  tooltip: 'Ververs'),
+            ],
+          ),
+        ),
+        if (_status != null)
+          Padding(padding: const EdgeInsets.all(24), child: Text(_status!, style: const TextStyle(color: _muted))),
+        if (_busy)
+          const Expanded(child: Center(child: CircularProgressIndicator(color: _accent)))
+        else
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.only(bottom: 24),
+              itemCount: _tracks.length,
+              itemBuilder: (_, i) => _row(i, _tracks[i]),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _row(int i, RecTrack t) {
+    final open = _expanded == i;
+    return Column(
+      children: [
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(color: open ? _panel : Colors.transparent, borderRadius: BorderRadius.circular(8)),
+          child: Row(
+            children: [
+              _netCover(t.cover, size: 44, radius: 6),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                    Text(t.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 12)),
+                  ],
+                ),
+              ),
+              IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, tooltip: 'Afspelen', onPressed: () => _play(t)),
+              IconButton(icon: const Icon(Icons.radio_rounded, size: 20), color: _muted, tooltip: 'Radio hieruit', onPressed: () => startRadio(context, t.artist)),
+              IconButton(
+                  icon: Icon(open ? Icons.expand_less_rounded : Icons.download_rounded, size: 20),
+                  color: _muted,
+                  tooltip: 'Bronnen / download',
+                  onPressed: () => setState(() => _expanded = open ? null : i)),
+            ],
+          ),
+        ),
+        if (open) Padding(padding: const EdgeInsets.only(bottom: 8), child: SourcesView(query: t.query)),
+      ],
+    );
+  }
 }
 
 Future<void> _playTorrent(BuildContext context, SearchResult r) async {

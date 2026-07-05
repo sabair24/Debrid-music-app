@@ -31,6 +31,8 @@ class PlayerStore extends ChangeNotifier {
   bool radioMode = false;
   String radioStatus = '';
   Future<String?> Function(String artist, String title)? resolver;
+  Future<List<RadioItem>> Function()? radioExtend; // fetch more items to keep radio endless
+  bool _extending = false;
   List<RadioItem> get radioQueue => _radio;
   int get radioIndex => _radioIndex;
 
@@ -146,6 +148,7 @@ class PlayerStore extends ChangeNotifier {
         await _player.open(Media(path), play: true);
         if (gen != _radioGen) return; // superseded while opening
         _prefetchNext();
+        _maybeExtend();
         return;
       }
       if (_radioIndex >= _radio.length - 1) break; // don't overrun the end
@@ -154,15 +157,30 @@ class PlayerStore extends ChangeNotifier {
     _radioIndex = _radio.isEmpty ? -1 : _radioIndex.clamp(0, _radio.length - 1);
     radioStatus = 'Radio klaar';
     notifyListeners();
+    _maybeExtend();
   }
 
-  /// Warm the next online item's URL so it's ready in time (shares the in-flight call).
+  /// Warm the next couple of online items so skipping ahead is snappy (shares the call).
   void _prefetchNext() {
-    final ni = _radioIndex + 1;
-    if (ni >= _radio.length) return;
-    final it = _radio[ni];
-    if (it.isLocal || it.url != null || it.failed) return;
-    _resolveItem(it);
+    for (var i = 1; i <= 2; i++) {
+      final ni = _radioIndex + i;
+      if (ni >= _radio.length) break;
+      final it = _radio[ni];
+      if (!it.isLocal && it.url == null && !it.failed) _resolveItem(it);
+    }
+  }
+
+  /// Keep the radio endless: near the tail, fetch and append more recommendations.
+  void _maybeExtend() {
+    if (radioExtend == null || _extending || _radioIndex < _radio.length - 3) return;
+    _extending = true;
+    radioExtend!().then((more) {
+      if (radioMode && more.isNotEmpty) _radio.addAll(more);
+      _extending = false;
+      notifyListeners();
+    }).catchError((_) {
+      _extending = false;
+    });
   }
 
   void _rebuildOrder({Track? start}) {
