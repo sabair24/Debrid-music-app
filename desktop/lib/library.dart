@@ -137,12 +137,31 @@ class LibraryStore extends ChangeNotifier {
     }
     await _saveCorrections();
 
+    // Preserve already-loaded covers across the regroup. _buildAlbums() creates fresh
+    // Album objects, so without this every album's embedded/enriched cover is dropped
+    // (only the corrected album carries a correctedCover) and the whole grid goes blank
+    // until the next scan/enrich. Keyed by first-track path, which is stable per album.
+    final coversByPath = <String, List<Uint8List?>>{};
+    for (final a in albums) {
+      coversByPath[a.tracks.first.path] = [a.embeddedCover, a.enriched, a.correctedCover];
+    }
+
     // Re-apply corrections to the in-memory tracks + regroup.
     final corrected = tracks.map(_applyCorrection).toList();
     tracks
       ..clear()
       ..addAll(corrected);
     _buildAlbums();
+
+    // Restore the preserved covers onto the rebuilt albums.
+    for (final a in albums) {
+      final saved = coversByPath[a.tracks.first.path];
+      if (saved != null) {
+        a.embeddedCover ??= saved[0];
+        a.enriched ??= saved[1];
+        a.correctedCover ??= saved[2];
+      }
+    }
 
     // Find the regrouped album this correction produced, and attach the new cover.
     final newArtist = (artist?.trim().isNotEmpty ?? false) ? artist!.trim() : target.artist;
