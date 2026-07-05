@@ -69,6 +69,16 @@ class LibraryStore extends ChangeNotifier {
   final Map<String, String> artistBios = {};
   String rootPath = r'D:\Flac music 2024';
 
+  // Fast lookups for the flat Tracks view (covers) and playback resume (path → track).
+  final Map<String, Album> _albumByPath = {};
+  final Map<String, Track> _trackByPath = {};
+
+  /// The album cover for a track (covers live on the Album, not the Track).
+  Uint8List? coverForTrack(Track t) => _albumByPath[t.path]?.cover;
+
+  /// Resolve a saved file path back to a library track (for resume).
+  Track? trackByPath(String path) => _trackByPath[path];
+
   // Manual metadata corrections (non-destructive): file path -> {title,artist,album}.
   // Applied to scanned tracks so wrong tags are fixed without touching the files.
   final Map<String, Map<String, String>> _corrections = {};
@@ -272,6 +282,16 @@ class LibraryStore extends ChangeNotifier {
       return Album(single ? ts.first.title : ts.first.album, ts.first.artist, ts, isSingle: single);
     }).toList()
       ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+
+    // Rebuild the flat-track lookups (cover-per-track + path→track for resume).
+    _albumByPath.clear();
+    _trackByPath.clear();
+    for (final a in albums) {
+      for (final t in a.tracks) {
+        _albumByPath[t.path] = a;
+        _trackByPath[t.path] = t;
+      }
+    }
   }
 
   /// Fill missing album covers. Phase 1 loads everything already on disk (instant,

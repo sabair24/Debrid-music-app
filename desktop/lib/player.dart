@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'models.dart';
@@ -45,6 +47,24 @@ class PlayerStore extends ChangeNotifier {
   Duration position = Duration.zero;
   Duration duration = Duration.zero;
 
+  /// Resolves an album cover for a track (set by main to LibraryStore.coverForTrack)
+  /// so the flat Tracks queue shows the right cover per song.
+  Uint8List? Function(Track)? coverResolver;
+
+  // Resume: persist the library queue + position so the app reopens where you left off.
+  bool _resumable = false;
+  bool _restoring = false; // block saves while restore() opens+seeks (position blips to 0)
+  DateTime _lastPosSave = DateTime.fromMillisecondsSinceEpoch(0);
+  bool resumedPaused = false; // true right after a startup restore (awaiting the user's play)
+
+  String get _appDir {
+    final base = Platform.environment['APPDATA'] ?? Directory.current.path;
+    return '$base${Platform.pathSeparator}DebridMusic';
+  }
+
+  File get _queueFile => File('$_appDir${Platform.pathSeparator}resume_queue.json');
+  File get _posFile => File('$_appDir${Platform.pathSeparator}resume_pos.json');
+
   Track? get current {
     if (radioMode) {
       if (_radioIndex >= 0 && _radioIndex < _radio.length) {
@@ -64,10 +84,13 @@ class PlayerStore extends ChangeNotifier {
   PlayerStore() {
     _player.stream.playing.listen((p) {
       playing = p;
+      if (p) resumedPaused = false;
+      if (!p) _saveProgress(force: true); // capture the spot on pause
       notifyListeners();
     });
     _player.stream.position.listen((p) {
       position = p;
+      _saveProgress(); // throttled
       notifyListeners();
     });
     _player.stream.duration.listen((d) {
@@ -89,15 +112,34 @@ class PlayerStore extends ChangeNotifier {
 
   Future<void> playQueue(List<Track> tracks, int index, {Uint8List? cover}) async {
     radioMode = false;
+    _resumable = true;
+    resumedPaused = false;
     currentCover = cover;
     _original = List.of(tracks);
     _rebuildOrder(start: (index >= 0 && index < _original.length) ? _original[index] : null);
     await _openCurrent();
+    _saveQueue();
+  }
+
+  /// Shuffle the whole library (or any list): every track plays exactly once (repeat
+  /// off), starting from a random one. Scales to tens of thousands of tracks.
+  Future<void> shuffleAll(List<Track> tracks) async {
+    radioMode = false;
+    _resumable = true;
+    resumedPaused = false;
+    shuffle = true;
+    currentCover = null;
+    _original = List.of(tracks);
+    _order = List.of(_original)..shuffle();
+    _index = _order.isEmpty ? -1 : 0;
+    await _openCurrent();
+    _saveQueue();
   }
 
   /// Play a remote URL (e.g. a resolved TorBox stream) as a one-item queue.
   Future<void> playUrl(String url, {required String title, required String artist}) async {
     radioMode = false;
+    _resumable = false;
     currentCover = null;
     _original = [Track(path: url, title: title, artist: artist, album: '')];
     _order = List.of(_original);
@@ -108,6 +150,7 @@ class PlayerStore extends ChangeNotifier {
   /// Start a Radio / Smart-Shuffle queue of mixed local + online items.
   Future<void> playRadio(List<RadioItem> items, {int start = 0}) async {
     radioMode = true;
+    _resumable = false;
     _radioSession++; // invalidate any in-flight extend from a previous radio
     _extending = false;
     currentCover = null;
@@ -146,7 +189,7 @@ class PlayerStore extends ChangeNotifier {
       final path = it.isLocal ? it.local!.path : it.url;
       if (path != null) {
         radioStatus = '';
-        currentCover = null;
+        currentCover = it.isLocal ? coverResolver?.call(it.local!) : null;
         notifyListeners();
         await _player.open(Media(path), play: true);
         if (gen != _radioGen) return; // superseded while opening
@@ -205,7 +248,9 @@ class PlayerStore extends ChangeNotifier {
   Future<void> _openCurrent() async {
     final t = current;
     if (t == null) return;
+    if (coverResolver != null) currentCover = coverResolver!(t);
     await _player.open(Media(t.path), play: true);
+    _saveProgress(force: true); // track changed → persist the new spot
     notifyListeners();
   }
 
@@ -264,6 +309,77 @@ class PlayerStore extends ChangeNotifier {
   void cycleRepeat() {
     repeat = RepeatMode.values[(repeat.index + 1) % RepeatMode.values.length];
     notifyListeners();
+  }
+
+  // ── Resume (persist the library queue + position) ──────────────────────────
+  Future<void> _saveQueue() async {
+    if (!_resumable) return;
+    try {
+      await Directory(_appDir).create(recursive: true);
+      await _queueFile.writeAsString(jsonEncode({
+        'order': _order.map((t) => t.path).toList(),
+        'shuffle': shuffle,
+        'repeat': repeat.index,
+      }));
+    } catch (_) {}
+  }
+
+  Future<void> _saveProgress({bool force = false}) async {
+    if (!_resumable || _restoring) return;
+    final now = DateTime.now();
+    if (!force && now.difference(_lastPosSave).inSeconds < 5) return; // throttle
+    _lastPosSave = now;
+    final t = current;
+    if (t == null) return;
+    try {
+      await Directory(_appDir).create(recursive: true);
+      await _posFile.writeAsString(jsonEncode({
+        'index': _index,
+        'positionMs': position.inMilliseconds,
+        'path': t.path,
+      }));
+    } catch (_) {}
+  }
+
+  /// On startup, reopen the last library queue at the saved song + position — PAUSED,
+  /// so nothing blasts out; the player bar shows it and the user presses play to resume.
+  Future<void> restore(Track? Function(String path) resolveTrack) async {
+    _restoring = true;
+    try {
+      if (!await _queueFile.exists()) return;
+      final q = jsonDecode(await _queueFile.readAsString()) as Map<String, dynamic>;
+      final paths = ((q['order'] as List?) ?? const []).cast<String>();
+      final tracks = paths.map(resolveTrack).whereType<Track>().toList();
+      if (tracks.isEmpty) return;
+      shuffle = q['shuffle'] == true;
+      repeat = RepeatMode.values[((q['repeat'] as int?) ?? 0).clamp(0, RepeatMode.values.length - 1)];
+      _original = List.of(tracks);
+      _order = tracks;
+
+      var idx = 0, posMs = 0;
+      if (await _posFile.exists()) {
+        final p = jsonDecode(await _posFile.readAsString()) as Map<String, dynamic>;
+        final byPath = _order.indexWhere((t) => t.path == (p['path'] as String? ?? ''));
+        idx = byPath >= 0 ? byPath : ((p['index'] as int?) ?? 0);
+        posMs = (p['positionMs'] as int?) ?? 0;
+      }
+      _index = idx.clamp(0, _order.length - 1);
+      _resumable = true;
+      radioMode = false;
+      final t = current;
+      if (t == null) return;
+      currentCover = coverResolver?.call(t);
+      await _player.open(Media(t.path), play: false); // reopen PAUSED
+      if (posMs > 0) {
+        await _player.seek(Duration(milliseconds: posMs));
+        position = Duration(milliseconds: posMs);
+      }
+      resumedPaused = true;
+      notifyListeners();
+    } catch (_) {
+    } finally {
+      _restoring = false;
+    }
   }
 
   @override

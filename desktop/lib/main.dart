@@ -53,7 +53,9 @@ Future<void> main() async {
   final online = OnlineService(settings);
   final soulseek = SoulseekService(settings);
   final tidal = TidalService(settings);
-  final player = PlayerStore()..resolver = online.resolveRadio;
+  final player = PlayerStore()
+    ..resolver = online.resolveRadio
+    ..coverResolver = library.coverForTrack;
   final downloads = DownloadManager(online, soulseek, library.rootPath, () async {
     await library.scan();
     await library.enrich(settings);
@@ -80,6 +82,8 @@ Future<void> main() async {
       await library.scan();
     } catch (_) {}
     await library.enrich(settings);
+    // Reopen the last queue where you left off (paused) — covers are loaded by now.
+    await player.restore(library.trackByPath);
     await library.enrichArtists(settings);
   }();
 }
@@ -188,6 +192,7 @@ class _HomeShellState extends State<HomeShell> {
             ),
           ),
           _navBtn(Icons.album_rounded, 'Albums', 0),
+          _navBtn(Icons.music_note_rounded, 'Tracks', 4),
           _navBtn(Icons.people_alt_rounded, 'Artiesten', 1),
           _navBtn(Icons.travel_explore_rounded, 'Online zoeken', 2),
           _navBtn(Icons.auto_awesome_rounded, 'Ontdek', 3),
@@ -259,6 +264,7 @@ class _HomeShellState extends State<HomeShell> {
   Widget _content() {
     if (_view == 2) return const OnlineSearchScreen();
     if (_view == 3) return const OntdekView();
+    if (_view == 4) return const TracksView();
     return Consumer<LibraryStore>(
       builder: (_, lib, __) {
         if (lib.scanning && lib.albums.isEmpty) {
@@ -1298,6 +1304,110 @@ Future<void> startRadio(BuildContext context, String artist) async {
 bool _genericArtist(String s) {
   final x = s.trim().toLowerCase();
   return x.isEmpty || x == 'various' || x == 'various artists' || x == 'va' || x == 'onbekende artiest';
+}
+
+// ── Tracks (flat, all library songs) ─────────────────────────────────────────
+class TracksView extends StatelessWidget {
+  const TracksView({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    final player = context.watch<PlayerStore>();
+    final tracks = lib.tracks;
+    if (lib.scanning && tracks.isEmpty) {
+      return const Center(child: CircularProgressIndicator(color: _accent));
+    }
+    if (tracks.isEmpty) {
+      return const Center(child: Text('Geen tracks gevonden.', style: TextStyle(color: _muted)));
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(28, 22, 24, 10),
+          child: Row(
+            children: [
+              const Text('Tracks', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+              const SizedBox(width: 10),
+              Text('${tracks.length}', style: const TextStyle(color: _muted, fontSize: 14)),
+              const Spacer(),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                    backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12)),
+                onPressed: () => player.shuffleAll(tracks),
+                icon: const Icon(Icons.shuffle_rounded, size: 18),
+                label: const Text('Shuffle alles'),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                    backgroundColor: _panel2,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12)),
+                onPressed: () => player.playQueue(tracks, 0),
+                icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                label: const Text('Speel alles'),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.only(bottom: 12),
+            itemCount: tracks.length,
+            itemExtent: 56, // fixed height → smooth scrolling at 10k+ tracks
+            itemBuilder: (_, i) {
+              final t = tracks[i];
+              final isCurrent = !player.radioMode && player.current?.path == t.path;
+              return InkWell(
+                onTap: () => player.playQueue(tracks, i),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  color: isCurrent ? _panel : Colors.transparent,
+                  child: Row(
+                    children: [
+                      SizedBox(width: 22, child: Text('${i + 1}', style: const TextStyle(color: _muted, fontSize: 11))),
+                      cover(lib.coverForTrack(t), size: 40, radius: 6),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(t.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: isCurrent ? _accent : _text)),
+                            Text(t.artist,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 12, color: _muted)),
+                          ],
+                        ),
+                      ),
+                      if (t.isFlac)
+                        const Padding(
+                          padding: EdgeInsets.only(right: 12),
+                          child: Text('FLAC', style: TextStyle(color: _accent2, fontSize: 10.5, fontWeight: FontWeight.w600)),
+                        ),
+                      Text(_fmt(t.duration), style: const TextStyle(color: _muted, fontSize: 12)),
+                      const SizedBox(width: 10),
+                      Icon(isCurrent && player.playing ? Icons.volume_up_rounded : Icons.play_arrow_rounded,
+                          color: isCurrent ? _accent : _muted, size: 19),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 // ── Ontdek (discovery feed) ──────────────────────────────────────────────────
