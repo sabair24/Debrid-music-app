@@ -228,29 +228,21 @@ class SoulseekService {
     return client.verifyLogin(settings.soulseekUser, settings.soulseekPass);
   }
 
-  /// [onPartial] streams merged results as they arrive (both variants run in parallel).
+  /// [onPartial] streams merged results as they arrive. Both query variants now share a
+  /// SINGLE login (searchMulti) instead of one login each.
   Future<List<SoulseekFile>> search(String query, {void Function(List<SoulseekFile>)? onPartial}) async {
     if (!available) return [];
     final q = query.trim();
     // Soulseek quirk: the first character is often dropped — also try a "*"-prefixed variant.
     final variants = <String>{q};
     if (q.length > 2) variants.add('*${q.substring(1)}');
-    final merged = <String, SoulseekFile>{}; // username|filename → file
-    void mergeEmit(List<SoulseekFile> partial) {
-      for (final f in partial) {
-        merged['${f.username}|${f.filename}'] = f;
-      }
-      if (onPartial != null) onPartial(sortSoulseek(merged.values));
+    try {
+      return await client.searchMulti(
+          settings.soulseekUser, settings.soulseekPass, variants.toList(),
+          onPartial: onPartial);
+    } catch (_) {
+      return [];
     }
-
-    // Run both variants concurrently (was sequential = up to 2× the wait). Each variant
-    // streams straight into `merged` via mergeEmit — no need to re-merge the return value.
-    await Future.wait(variants.map((v) async {
-      try {
-        await client.search(settings.soulseekUser, settings.soulseekPass, v, onPartial: mergeEmit);
-      } catch (_) {}
-    }));
-    return sortSoulseek(merged.values);
   }
 }
 
@@ -333,13 +325,15 @@ class DownloadManager extends ChangeNotifier {
     }());
   }
 
-  /// Download every file in a list (used by "Download album" from Soulseek).
+  /// Download every file in a list (used by "Download album" from Soulseek). Staggered
+  /// so a whole album doesn't open a burst of Soulseek connections at once.
   Future<int> enqueueSoulseekAll(List<SoulseekFile> files) async {
     var n = 0;
     for (final f in files) {
       try {
         await enqueueSoulseek(f);
         n++;
+        await Future.delayed(const Duration(milliseconds: 1200));
       } catch (_) {}
     }
     return n;

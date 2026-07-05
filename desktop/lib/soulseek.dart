@@ -145,68 +145,76 @@ class SoulseekClient {
   final _rng = Random();
   int _nextTicket() => 10000 + _rng.nextInt(900000);
 
-  /// Search the Soulseek network. Returns audio files, FLAC/free-slot first.
-  /// [onPartial] streams results as peers respond (like the native client), so the
-  /// UI can show the first hits within a second or two instead of waiting the whole window.
-  Future<List<SoulseekFile>> search(String user, String pass, String query,
+  /// Search Soulseek covering all [queries] (the raw query + its "*"-variant) on ONE
+  /// short-lived connection with a SINGLE login — instead of one login per variant, which
+  /// (during heavy use) made Soulseek temporarily block the account for too many logins.
+  /// Short-lived on purpose: a persistent connection would fight the download connections
+  /// (Soulseek allows only one connection per username). [onPartial] streams merged hits.
+  Future<List<SoulseekFile>> searchMulti(String user, String pass, List<String> queries,
       {void Function(List<SoulseekFile>)? onPartial}) async {
-    final ticket = _nextTicket();
-    final results = <SoulseekFile>[];
-    final peerJobs = <Future<void>>[];
-    void emit() {
-      if (onPartial != null) onPartial(sortSoulseek(results));
+    final tickets = <int>{};
+    final byTicket = <int, String>{};
+    for (final q in queries) {
+      final t = _nextTicket();
+      tickets.add(t);
+      byTicket[t] = q;
+    }
+    final merged = <String, SoulseekFile>{}; // username|filename → file (dedup across variants)
+    void addFiles(List<SoulseekFile> files) {
+      for (final f in files) {
+        merged['${f.username}|${f.filename}'] = f;
+      }
+      if (onPartial != null) onPartial(sortSoulseek(merged.values));
     }
 
+    final peerJobs = <Future<void>>[];
     Socket? server;
     try {
       server = await Socket.connect(_host, _port, timeout: const Duration(seconds: 8));
       final conn = _Conn(server);
-      conn.send(_message(1, (_W()..str(user)..str(pass)..u32(160)..str(_md5hex(pass))..u32(17)).bytes()));
-
       final done = Completer<void>();
-      // Shorter window than before (was 13s). Combined with streaming + running the two
-      // query variants in parallel (SoulseekService), the first results show in ~1-2s.
       final deadline = DateTime.now().add(const Duration(seconds: 8));
       final sub = conn.messages.listen((payload) {
         final r = _R(payload);
         final code = r.u32();
         if (code == 1) {
-          final ok = r.u8() != 0;
-          if (!ok) {
-            if (!done.isCompleted) done.completeError('Soulseek-login geweigerd: ${r.str()}');
+          if (r.u8() == 0) {
+            if (!done.isCompleted) done.completeError('Soulseek-login geweigerd');
             return;
           }
           conn.send(_message(2, (_W()..u32(0)).bytes())); // SetWaitPort(0)
-          conn.send(_message(26, (_W()..u32(ticket)..str(query)).bytes())); // FileSearch
+          for (final t in byTicket.keys) {
+            conn.send(_message(26, (_W()..u32(t)..str(byTicket[t]!)).bytes())); // FileSearch
+          }
         } else if (code == 18) {
           r.str(); // peer user
           final type = r.str();
           final ip = r.ip();
           final port = r.u32();
           final token = r.u32();
-          if (type == 'P' && ip != '0.0.0.0' && port > 0 && peerJobs.length < 60) {
-            peerJobs.add(_collectPeer(ip, port, token, ticket, results, emit));
+          if (type == 'P' && ip != '0.0.0.0' && port > 0 && peerJobs.length < 100) {
+            peerJobs.add(_collectPeer(ip, port, token, tickets, addFiles));
           }
         }
       }, onError: (_) {}, onDone: () { if (!done.isCompleted) done.complete(); });
 
+      conn.send(_message(1, (_W()..str(user)..str(pass)..u32(160)..str(_md5hex(pass))..u32(17)).bytes()));
       final poll = Timer.periodic(const Duration(milliseconds: 300), (t) {
-        if (DateTime.now().isAfter(deadline) || results.length >= 300) {
+        if (DateTime.now().isAfter(deadline) || merged.length >= 400) {
           t.cancel();
           if (!done.isCompleted) done.complete();
         }
       });
-      await done.future.timeout(const Duration(seconds: 10), onTimeout: () {});
+      await done.future.timeout(const Duration(seconds: 12), onTimeout: () {});
       poll.cancel();
       await sub.cancel();
       await Future.wait(peerJobs).timeout(const Duration(seconds: 3)).catchError((_) => <void>[]);
     } catch (e) {
-      if (results.isEmpty) rethrow;
+      if (merged.isEmpty) rethrow;
     } finally {
       server?.destroy();
     }
-
-    return sortSoulseek(results);
+    return sortSoulseek(merged.values);
   }
 
   /// Log in only (no search) to confirm the credentials — for the status check.
@@ -236,7 +244,7 @@ class SoulseekClient {
   }
 
   Future<void> _collectPeer(
-      String ip, int port, int token, int ticket, List<SoulseekFile> results, void Function() onBatch) async {
+      String ip, int port, int token, Set<int> validTickets, void Function(List<SoulseekFile>) onBatch) async {
     Socket? peer;
     try {
       peer = await Socket.connect(ip, port, timeout: const Duration(seconds: 5));
@@ -248,8 +256,8 @@ class SoulseekClient {
         count++;
         final code = _R(payload).u32();
         if (code == 9) {
-          _parseResults(_zlib(Uint8List.sublistView(payload, 4)), ticket, results);
-          onBatch(); // stream this peer's hits to the UI immediately
+          final files = _parseResults(_zlib(Uint8List.sublistView(payload, 4)), validTickets);
+          if (files.isNotEmpty) onBatch(files);
           if (!done.isCompleted) done.complete();
         } else if (count >= 10 && !done.isCompleted) {
           done.complete();
@@ -262,10 +270,11 @@ class SoulseekClient {
     }
   }
 
-  void _parseResults(Uint8List data, int ticket, List<SoulseekFile> results) {
+  /// Parse a peer's FileSearchResponse; returns its files if the ticket is one of ours.
+  List<SoulseekFile> _parseResults(Uint8List data, Set<int> validTickets) {
     final r = _R(data);
     final peerUser = r.str();
-    if (r.u32() != ticket) return;
+    if (!validTickets.contains(r.u32())) return const [];
     final count = r.u32().clamp(0, 500);
     final files = <SoulseekFile>[];
     for (var i = 0; i < count; i++) {
@@ -293,9 +302,7 @@ class SoulseekClient {
     final freeSlots = r.remaining > 0 ? r.boolean() : false;
     final speed = r.remaining >= 4 ? r.u32() : 0;
     final queueLen = r.remaining >= 4 ? r.u32() : 0;
-    for (final f in files) {
-      results.add(f.copyWith(freeSlots: freeSlots, speed: speed, queueLength: queueLen));
-    }
+    return [for (final f in files) f.copyWith(freeSlots: freeSlots, speed: speed, queueLength: queueLen)];
   }
 
   /// Download one file to [destFile]. Firewalled/relayed transfer, streams to disk.
