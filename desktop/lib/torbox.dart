@@ -93,6 +93,21 @@ class TorBox {
   bool get hasKey => apiKey().trim().isNotEmpty;
   Map<String, String> get _auth => hasKey ? {'Authorization': 'Bearer ${apiKey()}'} : {};
 
+  /// Confirm the API key is valid (used by the connection-status check).
+  Future<bool> verify() async {
+    if (!hasKey) return false;
+    try {
+      final r = await http
+          .get(Uri.parse('$_base/user/me?settings=false'), headers: _auth)
+          .timeout(const Duration(seconds: 12));
+      if (r.statusCode != 200) return false;
+      final j = jsonDecode(r.body);
+      return j is Map && (j['success'] == true || j['data'] != null);
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<Set<String>> checkCached(List<String> hashes) async {
     if (hashes.isEmpty || !hasKey) return {};
     try {

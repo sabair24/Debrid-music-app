@@ -39,6 +39,22 @@ class CatalogTrack {
   }
 }
 
+/// An album search hit — carries the artist name so browse can open its tracklist.
+class CatalogAlbumHit {
+  final CatalogAlbum album;
+  final String artist;
+  const CatalogAlbumHit(this.album, this.artist);
+}
+
+/// A track search hit — tapped to open torrent/Soulseek sources directly.
+class CatalogTrackHit {
+  final String title;
+  final String artist;
+  final String? cover;
+  const CatalogTrackHit(this.title, this.artist, this.cover);
+  String get query => artist.isEmpty ? title : '$artist $title';
+}
+
 class CatalogService {
   static const _base = 'https://api.deezer.com';
 
@@ -64,6 +80,31 @@ class CatalogService {
               (a['nb_album'] ?? 0) as int,
             ))
         .where((a) => a.name.isNotEmpty)
+        .toList();
+  }
+
+  /// Browse: albums matching a query (each keeps its artist for the tracklist page).
+  Future<List<CatalogAlbumHit>> searchAlbums(String q) async {
+    final j = await _get('$_base/search/album?q=${Uri.encodeComponent(q)}&limit=20');
+    final data = (j?['data'] as List?) ?? const [];
+    return data
+        .map((a) => CatalogAlbumHit(_album(a), (a['artist']?['name'] ?? '') as String))
+        .where((h) => h.album.title.isNotEmpty)
+        .toList();
+  }
+
+  /// Browse: individual tracks matching a query (→ sources on tap).
+  Future<List<CatalogTrackHit>> searchTracks(String q) async {
+    final j = await _get('$_base/search?q=${Uri.encodeComponent(q)}&limit=25');
+    final data = (j?['data'] as List?) ?? const [];
+    final seen = <String>{};
+    return data
+        .map((t) => CatalogTrackHit(
+              (t['title'] ?? '') as String,
+              (t['artist']?['name'] ?? '') as String,
+              (t['album']?['cover_medium'] ?? t['album']?['cover']) as String?,
+            ))
+        .where((h) => h.title.isNotEmpty && seen.add('${h.artist.toLowerCase()}|${h.title.toLowerCase()}'))
         .toList();
   }
 

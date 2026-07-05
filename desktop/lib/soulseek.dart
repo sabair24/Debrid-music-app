@@ -195,6 +195,32 @@ class SoulseekClient {
     return audio;
   }
 
+  /// Log in only (no search) to confirm the credentials — for the status check.
+  Future<bool> verifyLogin(String user, String pass) async {
+    Socket? server;
+    try {
+      server = await Socket.connect(_host, _port, timeout: const Duration(seconds: 8));
+      final conn = _Conn(server);
+      conn.send(_message(1, (_W()..str(user)..str(pass)..u32(160)..str(_md5hex(pass))..u32(17)).bytes()));
+      final done = Completer<bool>();
+      final sub = conn.messages.listen((payload) {
+        final r = _R(payload);
+        if (r.u32() == 1 && !done.isCompleted) done.complete(r.u8() != 0);
+      }, onError: (_) {
+        if (!done.isCompleted) done.complete(false);
+      }, onDone: () {
+        if (!done.isCompleted) done.complete(false);
+      });
+      final ok = await done.future.timeout(const Duration(seconds: 12), onTimeout: () => false);
+      await sub.cancel();
+      return ok;
+    } catch (_) {
+      return false;
+    } finally {
+      server?.destroy();
+    }
+  }
+
   Future<void> _collectPeer(String ip, int port, int token, int ticket, List<SoulseekFile> results) async {
     Socket? peer;
     try {

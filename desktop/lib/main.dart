@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'catalog.dart';
+import 'connectivity.dart';
 import 'enrichment.dart';
 import 'library.dart';
 import 'metadata.dart';
@@ -1677,9 +1678,12 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   final _c = TextEditingController();
   final _catalog = CatalogService();
   int _mode = 0; // 0 = Bladeren, 1 = Direct, 2 = TIDAL
-  // browse
+  // browse (artists + albums + tracks)
   List<CatalogArtist> _artists = [];
-  bool _artistsBusy = false;
+  List<CatalogAlbumHit> _albumHits = [];
+  List<CatalogTrackHit> _trackHits = [];
+  bool _browseBusy = false;
+  int? _trackExpanded;
   // direct
   List<SearchResult> _torrents = [];
   List<SoulseekFile> _slsk = [];
@@ -1694,7 +1698,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     final q = _c.text.trim();
     if (q.isEmpty) return;
     if (_mode == 0) {
-      await _searchArtists(q);
+      await _searchBrowse(q);
     } else if (_mode == 1) {
       await _searchDirect(q);
     } else {
@@ -1783,15 +1787,34 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     }
   }
 
-  Future<void> _searchArtists(String q) async {
-    setState(() { _artistsBusy = true; _artists = []; _status = null; });
+  Future<void> _searchBrowse(String q) async {
+    setState(() {
+      _browseBusy = true;
+      _artists = [];
+      _albumHits = [];
+      _trackHits = [];
+      _trackExpanded = null;
+      _status = null;
+    });
     try {
-      final a = await _catalog.searchArtists(q);
-      if (mounted) setState(() { _artists = a; _status = a.isEmpty ? 'Geen artiesten gevonden.' : null; });
+      final res = await Future.wait([
+        _catalog.searchArtists(q),
+        _catalog.searchAlbums(q),
+        _catalog.searchTracks(q),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _artists = res[0] as List<CatalogArtist>;
+        _albumHits = res[1] as List<CatalogAlbumHit>;
+        _trackHits = res[2] as List<CatalogTrackHit>;
+        _status = (_artists.isEmpty && _albumHits.isEmpty && _trackHits.isEmpty)
+            ? 'Niets gevonden.'
+            : null;
+      });
     } catch (e) {
       if (mounted) setState(() => _status = 'Zoeken mislukt: $e');
     } finally {
-      if (mounted) setState(() => _artistsBusy = false);
+      if (mounted) setState(() => _browseBusy = false);
     }
   }
 
@@ -1861,7 +1884,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                   onSubmitted: (_) => _search(),
                   decoration: InputDecoration(
                     hintText: _mode == 0
-                        ? 'Zoek een artiest…'
+                        ? 'Zoek artiest, album of nummer…'
                         : (_mode == 2 ? 'Zoek in TIDAL…' : 'Artiest, album of nummer…'),
                     filled: true,
                     fillColor: _panel,
@@ -1877,7 +1900,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
               FilledButton(
                 style: FilledButton.styleFrom(
                     backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18)),
-                onPressed: (_busy || _artistsBusy || _tidalBusy) ? null : _search,
+                onPressed: (_busy || _browseBusy || _tidalBusy) ? null : _search,
                 child: const Text('Zoek'),
               ),
             ],
@@ -2046,37 +2069,143 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   }
 
   Widget _browseResults() {
-    if (_artistsBusy) return const Center(child: CircularProgressIndicator(color: _accent));
-    if (_artists.isEmpty) {
+    if (_browseBusy) return const Center(child: CircularProgressIndicator(color: _accent));
+    if (_artists.isEmpty && _albumHits.isEmpty && _trackHits.isEmpty) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(24),
-          child: Text('Zoek een artiest om hun albums en bronnen (torrent/Soulseek) te bladeren.',
+          child: Text('Zoek een artiest, album of nummer — bronnen (torrent/Soulseek) verschijnen eronder.',
               textAlign: TextAlign.center, style: TextStyle(color: _muted)),
         ),
       );
     }
-    return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-          maxCrossAxisExtent: 150, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: .8),
-      itemCount: _artists.length,
-      itemBuilder: (_, i) {
-        final a = _artists[i];
-        return InkWell(
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ArtistBrowsePage(a))),
-          borderRadius: BorderRadius.circular(12),
-          child: Column(
-            children: [
-              _netCover(a.picture, size: 116, circle: true),
-              const SizedBox(height: 6),
-              Text(a.name,
-                  maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
-            ],
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 24),
+      children: [
+        if (_artists.isNotEmpty) ...[
+          _browseHeader('Artiesten', _artists.length),
+          SizedBox(
+            height: 158,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              itemCount: _artists.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 12),
+              itemBuilder: (_, i) {
+                final a = _artists[i];
+                return InkWell(
+                  onTap: () =>
+                      Navigator.of(context).push(MaterialPageRoute(builder: (_) => ArtistBrowsePage(a))),
+                  borderRadius: BorderRadius.circular(12),
+                  child: SizedBox(
+                    width: 116,
+                    child: Column(
+                      children: [
+                        _netCover(a.picture, size: 116, circle: true),
+                        const SizedBox(height: 6),
+                        Text(a.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
           ),
-        );
-      },
+        ],
+        if (_albumHits.isNotEmpty) ...[
+          _browseHeader('Albums', _albumHits.length),
+          SizedBox(
+            height: 186,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              itemCount: _albumHits.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 12),
+              itemBuilder: (_, i) {
+                final h = _albumHits[i];
+                return InkWell(
+                  onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => AlbumBrowsePage(h.artist, h.album))),
+                  borderRadius: BorderRadius.circular(12),
+                  child: SizedBox(
+                    width: 132,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _netCover(h.album.cover, size: 132, radius: 10),
+                        const SizedBox(height: 6),
+                        Text(h.album.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                        Text(h.artist,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 11.5, color: _muted)),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+        if (_trackHits.isNotEmpty) ...[
+          _browseHeader('Nummers', _trackHits.length),
+          ..._trackHits.asMap().entries.map((e) => _browseTrackRow(e.key, e.value)),
+        ],
+      ],
+    );
+  }
+
+  Widget _browseHeader(String title, int count) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 14, 24, 8),
+        child: Text('${title.toUpperCase()}  ·  $count',
+            style: const TextStyle(
+                color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
+      );
+
+  Widget _browseTrackRow(int i, CatalogTrackHit t) {
+    final open = _trackExpanded == i;
+    return Column(
+      children: [
+        InkWell(
+          onTap: () => setState(() => _trackExpanded = open ? null : i),
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            decoration:
+                BoxDecoration(color: open ? _panel : Colors.transparent, borderRadius: BorderRadius.circular(8)),
+            child: Row(
+              children: [
+                _netCover(t.cover, size: 42, radius: 6),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(t.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
+                      Text(t.artist,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12, color: _muted)),
+                    ],
+                  ),
+                ),
+                Icon(open ? Icons.expand_less_rounded : Icons.chevron_right_rounded, color: _muted),
+              ],
+            ),
+          ),
+        ),
+        if (open) Padding(padding: const EdgeInsets.only(bottom: 8), child: SourcesView(query: t.query)),
+      ],
     );
   }
 
@@ -2537,6 +2666,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _lastfm = TextEditingController(text: s.lastfmKey);
   }
 
+  bool _testing = false;
+  final Map<String, ConnResult> _conn = {};
+
   @override
   void dispose() {
     _discogs.dispose();
@@ -2545,6 +2677,82 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskPass.dispose();
     _lastfm.dispose();
     super.dispose();
+  }
+
+  /// Test the credentials as currently typed (without saving to disk).
+  Future<void> _testAll() async {
+    final probe = AppSettings()
+      ..torboxToken = _torbox.text.trim()
+      ..discogsToken = _discogs.text.trim()
+      ..soulseekUser = _slskUser.text.trim()
+      ..soulseekPass = _slskPass.text.trim();
+    final checker = ConnectionChecker(probe, TorBox(() => probe.torboxToken), SoulseekService(probe));
+    setState(() {
+      _testing = true;
+      for (final k in ['torbox', 'discogs', 'soulseek']) {
+        _conn[k] = const ConnResult(ConnState.checking);
+      }
+    });
+    Future<void> run(String key, Future<ConnResult> Function() f) async {
+      final r = await f();
+      if (mounted) setState(() => _conn[key] = r);
+    }
+
+    await Future.wait([
+      run('torbox', checker.torboxCheck),
+      run('discogs', checker.discogsCheck),
+      run('soulseek', checker.soulseekCheck),
+    ]);
+    if (mounted) setState(() => _testing = false);
+  }
+
+  Widget _statusRow(String label, String key) {
+    final r = _conn[key];
+    IconData icon;
+    Color color;
+    String text;
+    switch (r?.state) {
+      case ConnState.ok:
+        icon = Icons.check_circle_rounded;
+        color = _accent2;
+        text = r!.detail;
+        break;
+      case ConnState.fail:
+        icon = Icons.cancel_rounded;
+        color = Colors.redAccent;
+        text = r!.detail;
+        break;
+      case ConnState.absent:
+        icon = Icons.remove_circle_outline_rounded;
+        color = _muted;
+        text = r!.detail;
+        break;
+      case ConnState.checking:
+        icon = Icons.hourglass_top_rounded;
+        color = _muted;
+        text = 'Testen…';
+        break;
+      default:
+        icon = Icons.circle_outlined;
+        color = _muted;
+        text = 'Nog niet getest';
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          r?.state == ConnState.checking
+              ? const SizedBox(
+                  width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _muted))
+              : Icon(icon, size: 18, color: color),
+          const SizedBox(width: 10),
+          SizedBox(
+              width: 84,
+              child: Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+          Expanded(child: Text(text, style: TextStyle(fontSize: 12.5, color: color))),
+        ],
+      ),
+    );
   }
 
   Widget _field(String label, TextEditingController c, {bool obscure = false}) {
@@ -2608,6 +2816,28 @@ class _SettingsDialogState extends State<SettingsDialog> {
                       ],
                     ),
                     _field('Last.fm API-sleutel', _lastfm),
+                    const SizedBox(height: 4),
+                    const Divider(color: _line, height: 1),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        const Text('Verbindingen',
+                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                        const Spacer(),
+                        TextButton.icon(
+                          onPressed: _testing ? null : _testAll,
+                          icon: _testing
+                              ? const SizedBox(
+                                  width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
+                              : const Icon(Icons.wifi_tethering_rounded, size: 16),
+                          label: Text(_testing ? 'Testen…' : 'Test verbindingen'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    _statusRow('TorBox', 'torbox'),
+                    _statusRow('Discogs', 'discogs'),
+                    _statusRow('Soulseek', 'soulseek'),
                   ],
                 ),
               ),

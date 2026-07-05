@@ -206,6 +206,12 @@ class SoulseekService {
 
   bool get available => settings.soulseekUser.isNotEmpty && settings.soulseekPass.isNotEmpty;
 
+  /// Confirm the Soulseek login works (used by the connection-status check).
+  Future<bool> verify() async {
+    if (!available) return false;
+    return client.verifyLogin(settings.soulseekUser, settings.soulseekPass);
+  }
+
   Future<List<SoulseekFile>> search(String query) async {
     if (!available) return [];
     final q = query.trim();
