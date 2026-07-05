@@ -63,20 +63,38 @@ class LibraryStore extends ChangeNotifier {
   bool scanning = false;
   int scanned = 0;
   bool enriching = false;
+  bool _rescanQueued = false;
   final Map<String, Uint8List> artistImages = {};
   final Map<String, String> artistBios = {};
   String rootPath = r'D:\Flac music 2024';
 
   Future<void> scan() async {
+    // Never run two scans at once (a rescan after a download must not race the
+    // startup scan over `tracks`). Coalesce concurrent requests into one re-run.
+    if (scanning) {
+      _rescanQueued = true;
+      return;
+    }
     scanning = true;
     scanned = 0;
-    tracks.clear();
-    albums = [];
     notifyListeners();
 
-    // Pass 1 — tags, off the UI thread.
-    final raw = await Isolate.run(() => _scanTags(rootPath));
-    tracks.addAll(raw.map(_trackFromMap));
+    // Pass 1 — tags, off the UI thread, with a timeout. A single malformed file that
+    // makes readMetadata hang must NOT stall the scan forever (that left the app stuck
+    // on "scannen… 0" after a download). The current library is kept intact until the
+    // new scan succeeds, so a rescan never blanks the UI — the app stays usable.
+    List<Map<String, dynamic>> raw;
+    try {
+      raw = await Isolate.run(() => _scanTags(rootPath)).timeout(const Duration(seconds: 120));
+    } catch (_) {
+      // Timed out or failed — keep whatever library we already have loaded.
+      scanning = false;
+      notifyListeners();
+      return;
+    }
+    tracks
+      ..clear()
+      ..addAll(raw.map(_trackFromMap));
     scanned = tracks.length;
     _buildAlbums();
     scanning = false;
@@ -96,6 +114,12 @@ class LibraryStore extends ChangeNotifier {
       notifyListeners();
     } catch (_) {
       // Timed out or failed — cached + web covers still fill in via enrich().
+    }
+
+    // A rescan requested while this one was running — run it once now.
+    if (_rescanQueued) {
+      _rescanQueued = false;
+      await scan();
     }
   }
 
