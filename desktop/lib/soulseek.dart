@@ -50,6 +50,19 @@ sealed class SlskResult {}
 class SlskDone extends SlskResult { final String path; SlskDone(this.path); }
 class SlskFail extends SlskResult { final String reason; SlskFail(this.reason); }
 
+/// Audio files, best-first: FLAC, then free slots, then speed, then size.
+List<SoulseekFile> sortSoulseek(Iterable<SoulseekFile> files) {
+  final audio = files.where((f) => f.isAudio).toList();
+  audio.sort((a, b) {
+    final fa = a.isFlac ? 1 : 0, fb = b.isFlac ? 1 : 0;
+    if (fa != fb) return fb - fa;
+    if (a.freeSlots != b.freeSlots) return a.freeSlots ? -1 : 1;
+    if (a.speed != b.speed) return b.speed.compareTo(a.speed);
+    return b.size.compareTo(a.size);
+  });
+  return audio;
+}
+
 // ── wire helpers (little-endian) ─────────────────────────────────────────────
 class _W {
   final _b = BytesBuilder();
@@ -133,10 +146,17 @@ class SoulseekClient {
   int _nextTicket() => 10000 + _rng.nextInt(900000);
 
   /// Search the Soulseek network. Returns audio files, FLAC/free-slot first.
-  Future<List<SoulseekFile>> search(String user, String pass, String query) async {
+  /// [onPartial] streams results as peers respond (like the native client), so the
+  /// UI can show the first hits within a second or two instead of waiting the whole window.
+  Future<List<SoulseekFile>> search(String user, String pass, String query,
+      {void Function(List<SoulseekFile>)? onPartial}) async {
     final ticket = _nextTicket();
     final results = <SoulseekFile>[];
     final peerJobs = <Future<void>>[];
+    void emit() {
+      if (onPartial != null) onPartial(sortSoulseek(results));
+    }
+
     Socket? server;
     try {
       server = await Socket.connect(_host, _port, timeout: const Duration(seconds: 8));
@@ -144,7 +164,9 @@ class SoulseekClient {
       conn.send(_message(1, (_W()..str(user)..str(pass)..u32(160)..str(_md5hex(pass))..u32(17)).bytes()));
 
       final done = Completer<void>();
-      final deadline = DateTime.now().add(const Duration(seconds: 13));
+      // Shorter window than before (was 13s). Combined with streaming + running the two
+      // query variants in parallel (SoulseekService), the first results show in ~1-2s.
+      final deadline = DateTime.now().add(const Duration(seconds: 8));
       final sub = conn.messages.listen((payload) {
         final r = _R(payload);
         final code = r.u32();
@@ -163,7 +185,7 @@ class SoulseekClient {
           final port = r.u32();
           final token = r.u32();
           if (type == 'P' && ip != '0.0.0.0' && port > 0 && peerJobs.length < 60) {
-            peerJobs.add(_collectPeer(ip, port, token, ticket, results));
+            peerJobs.add(_collectPeer(ip, port, token, ticket, results, emit));
           }
         }
       }, onError: (_) {}, onDone: () { if (!done.isCompleted) done.complete(); });
@@ -174,25 +196,17 @@ class SoulseekClient {
           if (!done.isCompleted) done.complete();
         }
       });
-      await done.future.timeout(const Duration(seconds: 16), onTimeout: () {});
+      await done.future.timeout(const Duration(seconds: 10), onTimeout: () {});
       poll.cancel();
       await sub.cancel();
-      await Future.wait(peerJobs).timeout(const Duration(seconds: 4)).catchError((_) => <void>[]);
+      await Future.wait(peerJobs).timeout(const Duration(seconds: 3)).catchError((_) => <void>[]);
     } catch (e) {
       if (results.isEmpty) rethrow;
     } finally {
       server?.destroy();
     }
 
-    final audio = results.where((f) => f.isAudio).toList();
-    audio.sort((a, b) {
-      final fa = a.isFlac ? 1 : 0, fb = b.isFlac ? 1 : 0;
-      if (fa != fb) return fb - fa;
-      if (a.freeSlots != b.freeSlots) return a.freeSlots ? -1 : 1;
-      if (a.speed != b.speed) return b.speed.compareTo(a.speed);
-      return b.size.compareTo(a.size);
-    });
-    return audio;
+    return sortSoulseek(results);
   }
 
   /// Log in only (no search) to confirm the credentials — for the status check.
@@ -221,7 +235,8 @@ class SoulseekClient {
     }
   }
 
-  Future<void> _collectPeer(String ip, int port, int token, int ticket, List<SoulseekFile> results) async {
+  Future<void> _collectPeer(
+      String ip, int port, int token, int ticket, List<SoulseekFile> results, void Function() onBatch) async {
     Socket? peer;
     try {
       peer = await Socket.connect(ip, port, timeout: const Duration(seconds: 5));
@@ -234,6 +249,7 @@ class SoulseekClient {
         final code = _R(payload).u32();
         if (code == 9) {
           _parseResults(_zlib(Uint8List.sublistView(payload, 4)), ticket, results);
+          onBatch(); // stream this peer's hits to the UI immediately
           if (!done.isCompleted) done.complete();
         } else if (count >= 10 && !done.isCompleted) {
           done.complete();

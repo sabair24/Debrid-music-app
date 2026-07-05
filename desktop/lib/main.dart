@@ -1697,12 +1697,16 @@ class _SourcesViewState extends State<SourcesView> {
     final soulseek = context.read<SoulseekService>();
     if (mounted) setState(() { _tBusy = true; _sBusy = soulseek.available; });
     if (soulseek.available) {
-      soulseek.search(widget.query).then((r) {
+      soulseek.search(widget.query, onPartial: (p) {
+        if (mounted) setState(() => _slsk = p);
+      }).then((r) {
         if (mounted) setState(() { _slsk = r; _sBusy = false; });
       }).catchError((_) { if (mounted) setState(() => _sBusy = false); });
     }
     try {
-      final r = await online.search(widget.query);
+      final r = await online.search(widget.query, onPartial: (p) {
+        if (mounted) setState(() => _torrents = p);
+      });
       if (mounted) setState(() => _torrents = r);
     } catch (_) {}
     if (mounted) setState(() => _tBusy = false);
@@ -1763,6 +1767,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   bool _busy = false, _slskBusy = false;
   String? _status;
   QFilter _filter = QFilter.all;
+  int _searchGen = 0; // guards streaming callbacks from a superseded search
   // tidal
   List<TidalTrack> _tidalTracks = [];
   bool _tidalBusy = false, _tidalConnecting = false;
@@ -1895,27 +1900,33 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   Future<void> _searchDirect(String q) async {
     final online = context.read<OnlineService>();
     final soulseek = context.read<SoulseekService>();
+    final gen = ++_searchGen; // a newer search invalidates this one's streaming callbacks
+    bool live() => mounted && gen == _searchGen;
     setState(() {
       _busy = true;
       _slskBusy = soulseek.available;
       _torrents = [];
       _slsk = [];
-      _status = 'Zoeken over Pirate Bay, BitSearch, Knaben${soulseek.available ? " + Soulseek…" : "…"}';
+      _status = 'Zoeken…';
     });
     if (soulseek.available) {
-      soulseek.search(q).then((r) {
-        if (mounted) setState(() { _slsk = r; _slskBusy = false; });
+      soulseek.search(q, onPartial: (p) {
+        if (live()) setState(() => _slsk = p); // stream results as peers respond
+      }).then((r) {
+        if (live()) setState(() { _slsk = r; _slskBusy = false; });
       }).catchError((_) {
-        if (mounted) setState(() => _slskBusy = false);
+        if (live()) setState(() => _slskBusy = false);
       });
     }
     try {
-      final r = await online.search(q);
-      if (mounted) setState(() { _torrents = r; _status = null; });
+      final r = await online.search(q, onPartial: (p) {
+        if (live()) setState(() { _torrents = p; _status = null; }); // fast sources show first
+      });
+      if (live()) setState(() { _torrents = r; _status = null; });
     } catch (e) {
-      if (mounted) setState(() => _status = 'Torrent-zoeken mislukt: $e');
+      if (live()) setState(() => _status = 'Torrent-zoeken mislukt: $e');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (live()) setState(() => _busy = false);
     }
   }
 

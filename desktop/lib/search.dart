@@ -143,23 +143,25 @@ class SearchAggregator {
       r'(\b(480p|576p|720p|1080p|1080i|2160p|x264|x265|h\.?264|h\.?265|hevc|xvid|divx|blu-?ray|web-?dl|webrip|hdrip|hdtv|dvdrip|remux|uhd)\b|\bmusic\s*video\b|\bfilm\b|\.(mp4|mkv|avi|m4v|wmv|mov)\b)',
       caseSensitive: false);
 
-  Future<List<SearchResult>> search(String query) async {
-    final lists = await Future.wait(sources.map((s) async {
-      try {
-        return await s.search(query).timeout(const Duration(seconds: 12));
-      } catch (_) {
-        return <SearchResult>[];
-      }
-    }));
-    final all = lists.expand((e) => e).where((r) => r.hash.isNotEmpty && !_isJunk(r.name));
+  /// [onPartial] fires each time a source finishes, so fast indexers (apibay/BitSearch)
+  /// show immediately instead of waiting for the slowest (RuTracker's topic lookups).
+  Future<List<SearchResult>> search(String query, {void Function(List<SearchResult>)? onPartial}) async {
     final byHash = <String, SearchResult>{};
-    for (final r in all) {
-      final k = r.hash.toLowerCase();
-      final cur = byHash[k];
-      if (cur == null || r.seeders > cur.seeders) byHash[k] = r;
-    }
-    final out = byHash.values.toList()..sort((a, b) => b.seeders.compareTo(a.seeders));
-    return out;
+    List<SearchResult> snapshot() =>
+        byHash.values.toList()..sort((a, b) => b.seeders.compareTo(a.seeders));
+
+    await Future.wait(sources.map((s) async {
+      try {
+        final list = await s.search(query).timeout(const Duration(seconds: 12));
+        for (final r in list.where((r) => r.hash.isNotEmpty && !_isJunk(r.name))) {
+          final k = r.hash.toLowerCase();
+          final cur = byHash[k];
+          if (cur == null || r.seeders > cur.seeders) byHash[k] = r;
+        }
+        if (onPartial != null) onPartial(snapshot());
+      } catch (_) {}
+    }));
+    return snapshot();
   }
 
   bool _isJunk(String name) => _adult.hasMatch(name) || _video.hasMatch(name);

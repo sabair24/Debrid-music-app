@@ -27,8 +27,10 @@ class OnlineService {
 
   bool get torboxReady => torbox.hasKey;
 
-  Future<List<SearchResult>> search(String query) async {
-    final results = await aggregator.search(query);
+  Future<List<SearchResult>> search(String query, {void Function(List<SearchResult>)? onPartial}) async {
+    // Stream raw hits as each source finishes (fast perceived results); the ⚡Instant
+    // cache marks are applied on the final pass below.
+    final results = await aggregator.search(query, onPartial: onPartial);
     if (!torbox.hasKey) return results;
     // Mark instantly-cached results (top 40, batches of 20).
     final top = results.take(40).map((r) => r.hash.toLowerCase()).toList();
@@ -220,20 +222,29 @@ class SoulseekService {
     return client.verifyLogin(settings.soulseekUser, settings.soulseekPass);
   }
 
-  Future<List<SoulseekFile>> search(String query) async {
+  /// [onPartial] streams merged results as they arrive (both variants run in parallel).
+  Future<List<SoulseekFile>> search(String query, {void Function(List<SoulseekFile>)? onPartial}) async {
     if (!available) return [];
     final q = query.trim();
     // Soulseek quirk: the first character is often dropped — also try a "*"-prefixed variant.
     final variants = <String>{q};
     if (q.length > 2) variants.add('*${q.substring(1)}');
-    final all = <SoulseekFile>[];
-    for (final v in variants) {
-      try {
-        all.addAll(await client.search(settings.soulseekUser, settings.soulseekPass, v));
-      } catch (_) {}
+    final merged = <String, SoulseekFile>{}; // username|filename → file
+    void mergeEmit(List<SoulseekFile> partial) {
+      for (final f in partial) {
+        merged['${f.username}|${f.filename}'] = f;
+      }
+      if (onPartial != null) onPartial(sortSoulseek(merged.values));
     }
-    final seen = <String>{};
-    return all.where((f) => seen.add('${f.username}|${f.filename}')).toList();
+
+    // Run both variants concurrently (was sequential = up to 2× the wait). Each variant
+    // streams straight into `merged` via mergeEmit — no need to re-merge the return value.
+    await Future.wait(variants.map((v) async {
+      try {
+        await client.search(settings.soulseekUser, settings.soulseekPass, v, onPartial: mergeEmit);
+      } catch (_) {}
+    }));
+    return sortSoulseek(merged.values);
   }
 }
 
