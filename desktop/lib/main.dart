@@ -1061,12 +1061,12 @@ class _OntdekViewState extends State<OntdekView> {
   Future<void> _play(RecTrack t) async {
     final online = context.read<OnlineService>();
     final player = context.read<PlayerStore>();
-    _srcToast(context, 'Bron zoeken voor ${t.title}…');
+    _srcToast(context, 'Bron voorbereiden voor ${t.title}…');
     try {
-      final url = await online.resolveRadio(t.artist, t.title);
+      final url = await online.resolveRadio(t.artist, t.title, instantOnly: false);
       if (!mounted) return;
       if (url == null) {
-        _srcToast(context, 'Geen instant bron — open de bronnen (⬇) om te downloaden.');
+        _srcToast(context, 'Geen bron gevonden — open de bronnen (⬇) om te downloaden.');
         return;
       }
       player.playUrl(url, title: t.title, artist: t.artist);

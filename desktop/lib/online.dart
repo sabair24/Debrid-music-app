@@ -119,10 +119,11 @@ class OnlineService {
     return url;
   }
 
-  /// Resolve a recommended track (artist + title) to a playable URL — instant-cached
-  /// TorBox sources only, and picks the file that actually matches [title] (so an
-  /// album torrent doesn't play the wrong song). Returns null if nothing matches.
-  Future<String?> resolveRadio(String artist, String title) async {
+  /// Resolve a recommended track (artist + title) to a playable URL, picking the file
+  /// that actually matches [title] (so an album torrent doesn't play the wrong song).
+  /// [instantOnly] true (Radio) = cached TorBox sources only, for speed; false (an
+  /// explicit play) also tries un-cached sources (slower). Returns null if nothing matches.
+  Future<String?> resolveRadio(String artist, String title, {bool instantOnly = true}) async {
     if (!torbox.hasKey) return null;
     final results = await search('$artist $title');
     if (results.isEmpty) return null;
@@ -141,10 +142,13 @@ class OnlineService {
     try {
       cachedSet = await torbox.checkCached(top.map((r) => r.hash.toLowerCase()).toList());
     } catch (_) {}
-    final candidates = top.where((r) => r.cached || cachedSet.contains(r.hash.toLowerCase())).toList();
-    for (final r in candidates.take(3)) {
+    bool isCached(SearchResult r) => r.cached || cachedSet.contains(r.hash.toLowerCase());
+    final cached = top.where(isCached).toList();
+    // Cached first; for an explicit play, fall back to un-cached (slower) sources too.
+    final candidates = instantOnly ? cached : [...cached, ...top.where((r) => !isCached(r))];
+    for (final r in candidates.take(instantOnly ? 3 : 4)) {
       try {
-        final (item, files) = await resolveForDownload(r, null);
+        final (item, files) = await resolveForDownload(r, null); // patient poll when not cached
         TbFile? pick;
         for (final f in files) {
           if (_titleMatch(f.name, title)) {
