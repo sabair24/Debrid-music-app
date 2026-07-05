@@ -12,6 +12,7 @@ import 'metadata.dart';
 import 'models.dart';
 import 'online.dart';
 import 'player.dart';
+import 'quality.dart';
 import 'recommend.dart';
 import 'rutracker.dart';
 import 'settings.dart';
@@ -1487,15 +1488,79 @@ Future<void> _downloadSoulseek(BuildContext context, SoulseekFile f) async {
   }
 }
 
-Widget _flacBadge() => Container(
-      margin: const EdgeInsets.symmetric(horizontal: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0F2521),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: const Color(0xFF24493F)),
+Widget _qualityBadge(Quality q) {
+  Color fg, bg, border;
+  switch (q.tier) {
+    case QTier.hires: // hi-res lossless (24-bit / >48kHz / DSD) — gold
+      fg = const Color(0xFFF2C14E);
+      bg = const Color(0xFF2A2413);
+      border = const Color(0xFF5A4A1E);
+      break;
+    case QTier.lossless: // CD-quality lossless — teal
+      fg = _accent2;
+      bg = const Color(0xFF0F2521);
+      border = const Color(0xFF24493F);
+      break;
+    case QTier.lossy: // MP3/AAC — blue-grey
+      fg = const Color(0xFFA9B6E8);
+      bg = const Color(0xFF161A2C);
+      border = const Color(0xFF2A3350);
+      break;
+    case QTier.unknown: // unclear — subtle grey
+      fg = _muted;
+      bg = const Color(0xFF1A1D29);
+      border = _line;
+      break;
+  }
+  return Container(
+    margin: const EdgeInsets.symmetric(horizontal: 8),
+    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+    decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6), border: Border.all(color: border)),
+    child: Text(q.label, style: TextStyle(color: fg, fontSize: 10.5, fontWeight: FontWeight.w600)),
+  );
+}
+
+Quality _slskQuality(SoulseekFile f) => qualityFromFile(
+      name: f.displayName,
+      ext: f.ext,
+      isFlac: f.isFlac,
+      bitrate: f.bitrate,
+      durationSec: f.durationSec,
+      size: f.size,
+      isVbr: f.isVbr,
+    );
+
+/// A row of quality-filter chips (Alles / Lossless / Hi-Res / MP3), shared by the
+/// direct-search results and the browse "Bronnen" panel.
+Widget _filterChipsRow(QFilter current, ValueChanged<QFilter> onChanged) => Padding(
+      padding: const EdgeInsets.fromLTRB(22, 6, 20, 2),
+      child: Row(
+        children: [
+          const Icon(Icons.tune_rounded, size: 15, color: _muted),
+          const SizedBox(width: 8),
+          ...QFilter.values.map((f) {
+            final sel = current == f;
+            return Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: InkWell(
+                onTap: () => onChanged(f),
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: sel ? _accent : _panel,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: sel ? _accent : _line),
+                  ),
+                  child: Text(f.label,
+                      style: TextStyle(
+                          color: sel ? Colors.white : _muted, fontSize: 12, fontWeight: FontWeight.w600)),
+                ),
+              ),
+            );
+          }),
+        ],
       ),
-      child: const Text('FLAC', style: TextStyle(color: _accent2, fontSize: 10.5)),
     );
 
 Widget _sourceHeader(String title, int count, bool loading) => Padding(
@@ -1515,7 +1580,7 @@ Widget _sourceHeader(String title, int count, bool loading) => Padding(
     );
 
 Widget _torrentTile(BuildContext context, SearchResult r) {
-  final flac = RegExp('flac', caseSensitive: false).hasMatch(r.name);
+  final q = qualityFromName(r.name);
   return Container(
     margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -1541,7 +1606,7 @@ Widget _torrentTile(BuildContext context, SearchResult r) {
             ],
           ),
         ),
-        if (flac) _flacBadge(),
+        _qualityBadge(q),
         IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, tooltip: 'Beste nummer afspelen', onPressed: () => _playTorrent(context, r)),
         IconButton(icon: const Icon(Icons.queue_music_rounded), color: _muted, tooltip: 'Kies nummer', onPressed: () => _pickTorrentTracks(context, r)),
         IconButton(icon: const Icon(Icons.download_rounded), color: _muted, tooltip: 'Alles downloaden', onPressed: () => _downloadTorrent(context, r)),
@@ -1552,7 +1617,7 @@ Widget _torrentTile(BuildContext context, SearchResult r) {
 
 Widget _soulseekTile(BuildContext context, SoulseekFile f) {
   final status = f.freeSlots ? 'vrij' : 'wachtrij ${f.queueLength}';
-  final quality = f.isFlac ? 'FLAC' : ((f.bitrate ?? 0) > 0 ? '${f.bitrate}kbps' : '');
+  final q = _slskQuality(f);
   return Container(
     margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -1567,12 +1632,14 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f) {
             children: [
               Text(f.displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 2),
-              Text('$status · ${f.username} · ${_fmtBytes(f.size)}${quality.isNotEmpty ? " · $quality" : ""}',
+              Text(
+                  '$status · ${f.username} · ${_fmtBytes(f.size)}'
+                  '${f.durationSec != null && f.durationSec! > 0 ? " · ${_fmt(Duration(seconds: f.durationSec!))}" : ""}',
                   style: const TextStyle(color: _muted, fontSize: 12)),
             ],
           ),
         ),
-        if (f.isFlac) _flacBadge(),
+        _qualityBadge(q),
         IconButton(icon: const Icon(Icons.download_rounded), color: _accent, tooltip: 'Downloaden via Soulseek', onPressed: () => _downloadSoulseek(context, f)),
       ],
     ),
@@ -1617,6 +1684,7 @@ class _SourcesViewState extends State<SourcesView> {
   List<SearchResult> _torrents = [];
   List<SoulseekFile> _slsk = [];
   bool _tBusy = true, _sBusy = false;
+  QFilter _filter = QFilter.all;
 
   @override
   void initState() {
@@ -1643,27 +1711,31 @@ class _SourcesViewState extends State<SourcesView> {
   @override
   Widget build(BuildContext context) {
     final ready = context.read<SoulseekService>().available;
+    final torrents = _torrents.where((r) => _filter.matches(qualityFromName(r.name))).toList();
+    final slsk = _slsk.where((f) => _filter.matches(_slskQuality(f))).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _sourceHeader('Torrents · TorBox', _torrents.length, _tBusy),
-        if (_torrents.isEmpty && !_tBusy)
+        if (_torrents.isNotEmpty || _slsk.isNotEmpty)
+          _filterChipsRow(_filter, (f) => setState(() => _filter = f)),
+        _sourceHeader('Torrents · TorBox', torrents.length, _tBusy),
+        if (torrents.isEmpty && !_tBusy)
           const Padding(
               padding: EdgeInsets.fromLTRB(24, 2, 24, 6),
               child: Text('Geen torrents gevonden.', style: TextStyle(color: _muted, fontSize: 12.5))),
-        ..._torrents.map((r) => _torrentTile(context, r)),
+        ...torrents.map((r) => _torrentTile(context, r)),
         if (ready)
-          _sourceHeader('Soulseek · P2P', _slsk.length, _sBusy)
+          _sourceHeader('Soulseek · P2P', slsk.length, _sBusy)
         else
           const Padding(
               padding: EdgeInsets.fromLTRB(24, 14, 24, 6),
               child: Text('SOULSEEK · log in via Instellingen',
                   style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6))),
-        if (ready && _slsk.isEmpty && !_sBusy)
+        if (ready && slsk.isEmpty && !_sBusy)
           const Padding(
               padding: EdgeInsets.fromLTRB(24, 2, 24, 6),
               child: Text('Geen Soulseek-bronnen.', style: TextStyle(color: _muted, fontSize: 12.5))),
-        ..._slsk.map((f) => _soulseekTile(context, f)),
+        ...slsk.map((f) => _soulseekTile(context, f)),
       ],
     );
   }
@@ -1690,6 +1762,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   List<SoulseekFile> _slsk = [];
   bool _busy = false, _slskBusy = false;
   String? _status;
+  QFilter _filter = QFilter.all;
   // tidal
   List<TidalTrack> _tidalTracks = [];
   bool _tidalBusy = false, _tidalConnecting = false;
@@ -2211,19 +2284,23 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   }
 
   Widget _directResults(bool soulseekReady) {
+    final torrents = _torrents.where((r) => _filter.matches(qualityFromName(r.name))).toList();
+    final slsk = _slsk.where((f) => _filter.matches(_slskQuality(f))).toList();
     return ListView(
       padding: const EdgeInsets.only(bottom: 24),
       children: [
-        if (_torrents.isNotEmpty) _sourceHeader('Torrents · TorBox', _torrents.length, _busy),
-        ..._torrents.map((r) => _torrentTile(context, r)),
+        if (_torrents.isNotEmpty || _slsk.isNotEmpty)
+          _filterChipsRow(_filter, (f) => setState(() => _filter = f)),
+        if (torrents.isNotEmpty) _sourceHeader('Torrents · TorBox', torrents.length, _busy),
+        ...torrents.map((r) => _torrentTile(context, r)),
         if (_status == null || _slsk.isNotEmpty || _slskBusy)
           (soulseekReady
-              ? _sourceHeader('Soulseek · P2P', _slsk.length, _slskBusy)
+              ? _sourceHeader('Soulseek · P2P', slsk.length, _slskBusy)
               : const Padding(
                   padding: EdgeInsets.fromLTRB(24, 16, 24, 6),
                   child: Text('SOULSEEK · log in via Instellingen om P2P mee te zoeken',
                       style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)))),
-        ..._slsk.map((f) => _soulseekTile(context, f)),
+        ...slsk.map((f) => _soulseekTile(context, f)),
       ],
     );
   }
