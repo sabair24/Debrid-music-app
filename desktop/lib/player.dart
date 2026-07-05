@@ -371,6 +371,11 @@ class PlayerStore extends ChangeNotifier {
       currentCover = coverResolver?.call(t);
       await _player.open(Media(t.path), play: false); // reopen PAUSED
       if (posMs > 0) {
+        // The seek only sticks once libmpv has loaded the file (duration known);
+        // seeking too early is silently dropped → playback would restart at 0.
+        for (var i = 0; i < 40 && duration <= Duration.zero; i++) {
+          await Future.delayed(const Duration(milliseconds: 75));
+        }
         await _player.seek(Duration(milliseconds: posMs));
         position = Duration(milliseconds: posMs);
       }
