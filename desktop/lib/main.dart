@@ -946,6 +946,9 @@ void _srcToast(BuildContext context, String m) {
 // ── Radio / Smart Shuffle ────────────────────────────────────────────────────
 String _radioNorm(String s) {
   var x = s.toLowerCase();
+  // Drop version/edition suffixes — "(2012 Remaster)", "[Live]", "- Single Version" —
+  // so a clean library file matches a Deezer title that carries them (and vice-versa).
+  x = x.replaceAll(RegExp(r'[\(\[].*?[\)\]]'), ' ');
   final f = x.indexOf(' feat');
   if (f > 0) x = x.substring(0, f);
   return x.replaceAll(RegExp(r'[^a-z0-9]'), '');
@@ -967,6 +970,25 @@ List<RadioItem> _radioItemsFor(List<RecTrack> recs, LibraryStore lib) {
       .toList();
 }
 
+/// Library-forward ordering for Smart Shuffle: play mostly tracks the listener already
+/// owns (instant, gap-free) with online discovery sprinkled in (~2 owned : 1 online).
+/// Starts on an owned track so there's no first-track sourcing wait, and never leaves a
+/// long silent stretch churning through uncached online tracks. If the seed yields no
+/// owned tracks (e.g. a discovery seed), the mix is returned unchanged (all discovery).
+List<RadioItem> _smartShuffle(List<RadioItem> items) {
+  final owned = items.where((i) => i.isLocal).toList();
+  final online = items.where((i) => !i.isLocal).toList();
+  if (owned.isEmpty || online.isEmpty) return items;
+  final out = <RadioItem>[];
+  var oi = 0, ni = 0;
+  while (oi < owned.length || ni < online.length) {
+    if (oi < owned.length) out.add(owned[oi++]);
+    if (oi < owned.length) out.add(owned[oi++]);
+    if (ni < online.length) out.add(online[ni++]);
+  }
+  return out;
+}
+
 Future<void> startRadio(BuildContext context, String artist) async {
   final player = context.read<PlayerStore>();
   final lib = context.read<LibraryStore>();
@@ -983,14 +1005,12 @@ Future<void> startRadio(BuildContext context, String artist) async {
     _srcToast(context, 'Geen radio gevonden voor $artist.');
     return;
   }
-  final items = _radioItemsFor(recs, lib);
-  // Lead with an owned track so the radio starts instantly (no first-track sourcing wait).
-  final li = items.indexWhere((i) => i.isLocal);
-  if (li > 0) items.insert(0, items.removeAt(li));
-  // Keep it endless: fetch a fresh batch when the queue runs low.
+  // Library-forward smart shuffle: lead with owned tracks (instant), mix in discovery.
+  final items = _smartShuffle(_radioItemsFor(recs, lib));
+  // Keep it endless: fetch a fresh (also library-forward) batch when the queue runs low.
   player.radioExtend = () async {
     try {
-      return _radioItemsFor(await rec.mixRadio(artist), lib);
+      return _smartShuffle(_radioItemsFor(await rec.mixRadio(artist), lib));
     } catch (_) {
       return <RadioItem>[];
     }
