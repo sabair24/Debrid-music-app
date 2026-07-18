@@ -1710,6 +1710,16 @@ Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy,
             style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
         const SizedBox(width: 8),
         Text('${slsk.length}', style: const TextStyle(color: _muted, fontSize: 11.5)),
+        // Back-off notice: after a refused login the app stops touching Soulseek entirely, so the
+        // user knows WHY there are no results (instead of thinking the search is just empty).
+        if (context.read<SoulseekService>().blocked) ...[
+          const SizedBox(width: 10),
+          Icon(Icons.pause_circle_outline_rounded, size: 13, color: Colors.orange.shade300),
+          const SizedBox(width: 4),
+          Text(
+              'gepauzeerd — login geweigerd, wacht nog ${(context.read<SoulseekService>().blockedFor?.inMinutes ?? 0) + 1} min',
+              style: TextStyle(color: Colors.orange.shade300, fontSize: 11.5)),
+        ],
         if (busy) ...const [
           SizedBox(width: 8),
           SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),

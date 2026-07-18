@@ -151,6 +151,22 @@ class SoulseekClient {
   /// rate-limits repeated logins and blocks the account on a burst.
   SlskSession newSession(String user, String pass) => SlskSession(this, user, pass);
 
+  // ── Circuit breaker ───────────────────────────────────────────────────────
+  // If Soulseek refuses a login (the account is rate-limited/blocked), STOP touching Soulseek
+  // entirely for a while. Without this, ordinary use — every album you open fires a background
+  // search — keeps hammering a blocked account and keeps extending the block. Shared by search,
+  // verify AND downloads because they all go through this one client instance.
+  DateTime? _blockedUntil;
+
+  /// True while we're backing off after a refused login — callers must NOT connect.
+  bool get blocked => _blockedUntil != null && DateTime.now().isBefore(_blockedUntil!);
+
+  /// How much of the back-off is left (null when not backing off) — for the UI.
+  Duration? get blockedFor => blocked ? _blockedUntil!.difference(DateTime.now()) : null;
+
+  void noteLoginRefused() => _blockedUntil = DateTime.now().add(const Duration(minutes: 30));
+  void noteLoginOk() => _blockedUntil = null;
+
   /// Search Soulseek covering all [queries] (the raw query + its "*"-variant) on ONE
   /// short-lived connection with a SINGLE login — instead of one login per variant, which
   /// (during heavy use) made Soulseek temporarily block the account for too many logins.
@@ -158,6 +174,7 @@ class SoulseekClient {
   /// (Soulseek allows only one connection per username). [onPartial] streams merged hits.
   Future<List<SoulseekFile>> searchMulti(String user, String pass, List<String> queries,
       {void Function(List<SoulseekFile>)? onPartial}) async {
+    if (blocked) return const []; // backing off after a refused login — don't touch the server
     final tickets = <int>{};
     final byTicket = <int, String>{};
     for (final q in queries) {
@@ -185,9 +202,11 @@ class SoulseekClient {
         final code = r.u32();
         if (code == 1) {
           if (r.u8() == 0) {
+            noteLoginRefused(); // back off — stop hammering a blocked account
             if (!done.isCompleted) done.completeError('Soulseek-login geweigerd');
             return;
           }
+          noteLoginOk();
           conn.send(_message(2, (_W()..u32(0)).bytes())); // SetWaitPort(0)
           for (final t in byTicket.keys) {
             conn.send(_message(26, (_W()..u32(t)..str(byTicket[t]!)).bytes())); // FileSearch
@@ -225,6 +244,7 @@ class SoulseekClient {
 
   /// Log in only (no search) to confirm the credentials — for the status check.
   Future<bool> verifyLogin(String user, String pass) async {
+    if (blocked) return false; // backing off after a refused login — don't touch the server
     Socket? server;
     try {
       server = await Socket.connect(_host, _port, timeout: const Duration(seconds: 8));
@@ -241,6 +261,11 @@ class SoulseekClient {
       });
       final ok = await done.future.timeout(const Duration(seconds: 12), onTimeout: () => false);
       await sub.cancel();
+      if (ok) {
+        noteLoginOk();
+      } else {
+        noteLoginRefused();
+      }
       return ok;
     } catch (_) {
       return false;
@@ -412,6 +437,7 @@ class SlskSession {
   /// e.g. the native client is also online — can't storm re-logins).
   Future<bool> _ensure() async {
     if (_alive) return true;
+    if (client.blocked) return false; // global back-off after a refused login
     if (_loginTries >= 2) return false;
     final now = DateTime.now();
     if (_lastLoginAttempt != null && now.difference(_lastLoginAttempt!) < const Duration(seconds: 10)) {
@@ -448,9 +474,11 @@ class SlskSession {
       c.send(_message(1, (_W()..str(user)..str(pass)..u32(160)..str(_md5hex(pass))..u32(17)).bytes()));
       final ok = await login.future.timeout(const Duration(seconds: 12), onTimeout: () => false);
       if (!ok) {
+        client.noteLoginRefused(); // trip the global breaker — stop all Soulseek traffic for a while
         _drop();
         return false;
       }
+      client.noteLoginOk();
       c.send(_message(2, (_W()..u32(0)).bytes())); // SetWaitPort(0)
       _conn = c;
       _loginTries = 0; // healthy login → reset the consecutive-failure counter

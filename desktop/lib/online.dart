@@ -222,6 +222,11 @@ class SoulseekService {
 
   bool get available => settings.soulseekUser.isNotEmpty && settings.soulseekPass.isNotEmpty;
 
+  /// True while the client is backing off after a refused login (account rate-limited/blocked).
+  /// While this holds, NOTHING touches Soulseek — so normal browsing can't keep feeding the block.
+  bool get blocked => client.blocked;
+  Duration? get blockedFor => client.blockedFor;
+
   /// Confirm the Soulseek login works (used by the connection-status check).
   Future<bool> verify() async {
     if (!available) return false;
