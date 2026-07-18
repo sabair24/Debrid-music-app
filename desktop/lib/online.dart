@@ -265,33 +265,37 @@ class DownloadManager extends ChangeNotifier {
 
   Future<void> enqueueSoulseek(SoulseekFile file) async {
     if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
-    final dir = Directory('$musicRoot${Platform.pathSeparator}DebridMusic Downloads${Platform.pathSeparator}Soulseek');
-    await dir.create(recursive: true);
-    final dest = File('${dir.path}${Platform.pathSeparator}${_sanitize(file.displayName)}');
     final job = DownloadJob(file.displayName);
     jobs.insert(0, job);
     notifyListeners();
-    unawaited(() async {
-      final res = await soulseek.client.download(
+    unawaited(_soulseekTransfer(file, job));
+  }
+
+  /// The actual Soulseek transfer for one file (awaitable). Returns true on success.
+  Future<bool> _soulseekTransfer(SoulseekFile file, DownloadJob job) async {
+    final dir = Directory('$musicRoot${Platform.pathSeparator}DebridMusic Downloads${Platform.pathSeparator}Soulseek');
+    await dir.create(recursive: true);
+    final dest = File('${dir.path}${Platform.pathSeparator}${_sanitize(file.displayName)}');
+    final res = await soulseek.client.download(
         soulseek.settings.soulseekUser, soulseek.settings.soulseekPass, file, dest, (rec, tot) {
-        if (tot > 0) {
-          final p = (rec / tot).clamp(0.0, 1.0);
-          if (p - job.progress > 0.02) {
-            job.progress = p;
-            notifyListeners();
-          }
+      if (tot > 0) {
+        final p = (rec / tot).clamp(0.0, 1.0);
+        if (p - job.progress > 0.02) {
+          job.progress = p;
+          notifyListeners();
         }
-      });
-      if (res is SlskDone) {
-        job.progress = 1;
-        job.status = 'done';
-        notifyListeners();
-        await onLibraryChanged();
-      } else {
-        job.status = 'failed';
-        notifyListeners();
       }
-    }());
+    });
+    if (res is SlskDone) {
+      job.progress = 1;
+      job.status = 'done';
+      notifyListeners();
+      await onLibraryChanged();
+      return true;
+    }
+    job.status = 'failed';
+    notifyListeners();
+    return false;
   }
 
   /// Add a torrent download. Non-blocking: a "preparing" job shows TorBox's fetch progress
@@ -325,16 +329,23 @@ class DownloadManager extends ChangeNotifier {
     }());
   }
 
-  /// Download every file in a list (used by "Download album" from Soulseek). Staggered
-  /// so a whole album doesn't open a burst of Soulseek connections at once.
+  /// Download every file in a list (used by "Download album" from Soulseek), ONE AT A TIME.
+  /// Sequential is deliberate: Soulseek allows only one connection per username, so
+  /// downloading a whole album concurrently would open many connections that kick each
+  /// other — and spread the logins over time instead of a burst that trips the login block.
   Future<int> enqueueSoulseekAll(List<SoulseekFile> files) async {
+    if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
     var n = 0;
     for (final f in files) {
+      final job = DownloadJob(f.displayName);
+      jobs.insert(0, job);
+      notifyListeners();
       try {
-        await enqueueSoulseek(f);
-        n++;
-        await Future.delayed(const Duration(milliseconds: 1200));
-      } catch (_) {}
+        if (await _soulseekTransfer(f, job)) n++; // await → next only after this finishes
+      } catch (_) {
+        job.status = 'failed';
+        notifyListeners();
+      }
     }
     return n;
   }
