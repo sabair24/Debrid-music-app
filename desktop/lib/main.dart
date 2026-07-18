@@ -1612,13 +1612,61 @@ List<SoulseekFile> _slskCandidates(List<SoulseekFile> all, SoulseekFile f) {
   return out.isEmpty ? [f] : out;
 }
 
+String _slskKey(SoulseekFile f) => '${f.username}|${f.filename}';
+
 Future<void> _downloadSoulseek(BuildContext context, SoulseekFile f, List<SoulseekFile> all) async {
   try {
-    await context.read<DownloadManager>().enqueueSoulseekBest(_slskCandidates(all, f));
+    await context.read<DownloadManager>().enqueueSoulseekBest(_slskCandidates(all, f), key: _slskKey(f));
     if (context.mounted) _srcToast(context, '“${f.displayName}” via Soulseek…');
   } catch (e) {
     if (context.mounted) _srcToast(context, 'Download mislukt: $e');
   }
+}
+
+/// A download button that turns into a live progress ring while THIS key's job runs — so the
+/// user sees progress right on the tile/track row, without opening the download list. Shows a
+/// check when done and a retry (with the failure reason as tooltip) when it failed.
+Widget _downloadControl(BuildContext context,
+    {required String jobKey, required VoidCallback onDownload, String tooltip = 'Downloaden via Soulseek'}) {
+  return Consumer<DownloadManager>(
+    builder: (_, dm, __) {
+      final job = dm.jobByKey(jobKey);
+      final status = job?.status;
+      if (status == 'downloading' || status == 'preparing') {
+        final pct = (job!.progress * 100).round();
+        return Tooltip(
+          message: job.detail ?? 'Bezig…',
+          child: SizedBox(
+            width: 40,
+            height: 40,
+            child: Stack(alignment: Alignment.center, children: [
+              SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2.4,
+                    value: job.progress > 0 ? job.progress : null,
+                    color: _accent,
+                    backgroundColor: const Color(0xFF2A2F42)),
+              ),
+              Text('$pct', style: const TextStyle(fontSize: 8.5, color: _muted, fontWeight: FontWeight.w700)),
+            ]),
+          ),
+        );
+      }
+      if (status == 'done') {
+        return const Padding(padding: EdgeInsets.all(9), child: Icon(Icons.check_circle_rounded, color: _accent2, size: 20));
+      }
+      if (status == 'failed') {
+        return IconButton(
+            icon: const Icon(Icons.refresh_rounded),
+            color: Colors.redAccent,
+            tooltip: job?.detail != null ? 'Mislukt: ${job!.detail} — opnieuw' : 'Mislukt — opnieuw proberen',
+            onPressed: onDownload);
+      }
+      return IconButton(icon: const Icon(Icons.download_rounded), color: _accent, tooltip: tooltip, onPressed: onDownload);
+    },
+  );
 }
 
 /// The most complete album folder among Soulseek hits (most audio files from ONE peer's
@@ -1831,7 +1879,7 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
           ),
         ),
         _qualityBadge(q),
-        IconButton(icon: const Icon(Icons.download_rounded), color: _accent, tooltip: 'Downloaden via Soulseek', onPressed: () => _downloadSoulseek(context, f, all)),
+        _downloadControl(context, jobKey: _slskKey(f), onDownload: () => _downloadSoulseek(context, f, all)),
       ],
     ),
   );
@@ -2186,10 +2234,30 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           builder: (_, dm, __) {
             final recent = dm.jobs.take(5).toList();
             if (recent.isEmpty) return const SizedBox.shrink();
+            final hasFinished = dm.jobs.any((j) => j.status == 'done' || j.status == 'failed');
             return Padding(
               padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
               child: Column(
-                children: recent
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      const Text('DOWNLOADS',
+                          style: TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: .6)),
+                      const Spacer(),
+                      if (hasFinished)
+                        TextButton.icon(
+                          onPressed: () => dm.clearFinished(),
+                          icon: const Icon(Icons.clear_all_rounded, size: 15),
+                          label: const Text('Wis afgeronde'),
+                          style: TextButton.styleFrom(
+                              foregroundColor: _muted,
+                              padding: const EdgeInsets.symmetric(horizontal: 8),
+                              textStyle: const TextStyle(fontSize: 12)),
+                        ),
+                    ],
+                  ),
+                  ...recent
                     .map((j) => Padding(
                           padding: const EdgeInsets.symmetric(vertical: 3),
                           child: Row(
@@ -2241,8 +2309,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                               ),
                             ],
                           ),
-                        ))
-                    .toList(),
+                        )),
+                ],
               ),
             );
           },
@@ -2850,10 +2918,17 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   bool _busy = true;
   int? _expanded; // track index whose sources are shown; -1 = whole album
 
+  // Soulseek sources for the WHOLE album, pre-loaded in the background with ONE search when the
+  // page opens — so tapping a track's download button is instant (no per-track search). Kept to
+  // one search per album-open on purpose (never a per-track burst) so we don't trip the login block.
+  List<SoulseekFile> _albumSlsk = [];
+  bool _slskBusy = false;
+
   @override
   void initState() {
     super.initState();
     _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _preloadSoulseek());
   }
 
   Future<void> _load() async {
@@ -2862,6 +2937,57 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       if (mounted) setState(() { _tracks = tracks; _busy = false; });
     } catch (_) {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _preloadSoulseek() async {
+    if (!mounted) return;
+    final soulseek = context.read<SoulseekService>();
+    if (!soulseek.available) return;
+    setState(() => _slskBusy = true);
+    try {
+      final r = await soulseek.search('${widget.artistName} ${widget.album.title}', onPartial: (p) {
+        if (mounted) setState(() => _albumSlsk = p);
+      });
+      if (mounted) setState(() { _albumSlsk = r; _slskBusy = false; });
+    } catch (_) {
+      if (mounted) setState(() => _slskBusy = false);
+    }
+  }
+
+  /// Pre-loaded Soulseek copies of one track, matched by title-word overlap (title words must be
+  /// (almost) all present in the filename). Empty if the album-wide search didn't cover it.
+  List<SoulseekFile> _slskForTitle(String title) {
+    final tw = _slskWords(title);
+    if (tw.isEmpty) return const [];
+    return _albumSlsk.where((f) {
+      if (!f.isAudio) return false;
+      final fw = _slskWords(f.displayName);
+      return fw.isNotEmpty && tw.intersection(fw).length / tw.length >= 0.75;
+    }).toList();
+  }
+
+  Future<void> _downloadTrack(CatalogTrack t, int i) async {
+    final dm = context.read<DownloadManager>();
+    final soulseek = context.read<SoulseekService>();
+    var cands = _slskForTitle(t.title);
+    if (cands.isEmpty) {
+      // Not covered by the album-wide preload → ONE on-demand Soulseek search for just this track.
+      if (mounted) _srcToast(context, 'Bron zoeken voor “${t.title}”…');
+      try {
+        final r = await soulseek.search('${widget.artistName} ${t.title}');
+        cands = r.where((f) => f.isAudio).toList();
+      } catch (_) {}
+    }
+    if (cands.isEmpty) {
+      if (mounted) _srcToast(context, 'Geen Soulseek-bron gevonden voor “${t.title}”.');
+      return;
+    }
+    try {
+      await dm.enqueueSoulseekBest(cands, key: 'alb:${widget.album.id}:$i');
+      if (mounted) _srcToast(context, '“${t.title}” via Soulseek…');
+    } catch (e) {
+      if (mounted) _srcToast(context, 'Download mislukt: $e');
     }
   }
 
@@ -2925,6 +3051,8 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
 
   Widget _trackRow(int i, CatalogTrack t) {
     final open = _expanded == i;
+    final soulseekReady = context.read<SoulseekService>().available;
+    final srcCount = soulseekReady ? _slskForTitle(t.title).length : 0;
     return Column(
       children: [
         InkWell(
@@ -2942,8 +3070,25 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                     child: Text(t.title,
                         maxLines: 1, overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500))),
+                // "N bronnen klaar" hint (or a tiny spinner while the album search is still running).
+                if (soulseekReady && srcCount > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Text('$srcCount ⌄',
+                        style: const TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
+                  )
+                else if (soulseekReady && _slskBusy)
+                  const Padding(
+                    padding: EdgeInsets.only(right: 8),
+                    child: SizedBox(width: 11, height: 11, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
+                  ),
                 Text(t.durationLabel, style: const TextStyle(color: _muted, fontSize: 12)),
-                const SizedBox(width: 10),
+                if (soulseekReady)
+                  _downloadControl(context,
+                      jobKey: 'alb:${widget.album.id}:$i',
+                      onDownload: () => _downloadTrack(t, i),
+                      tooltip: 'Download via Soulseek'),
+                const SizedBox(width: 2),
                 Icon(open ? Icons.expand_less_rounded : Icons.travel_explore_rounded,
                     size: 18, color: open ? _accent : _muted),
               ],

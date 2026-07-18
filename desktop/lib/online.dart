@@ -248,10 +248,11 @@ class SoulseekService {
 
 class DownloadJob {
   final String name;
+  final String? key; // stable id so a specific tile/track row can show THIS job's progress inline
   double progress;
   String status; // downloading | done | failed | preparing
   String? detail; // failure reason, or "poging 2/5 · peer" while falling back
-  DownloadJob(this.name) : progress = 0, status = 'downloading';
+  DownloadJob(this.name, {this.key}) : progress = 0, status = 'downloading';
 }
 
 /// Streams TorBox + Soulseek downloads into the music library (with progress), then rescans.
@@ -263,6 +264,20 @@ class DownloadManager extends ChangeNotifier {
   DownloadManager(this.online, this.soulseek, this.musicRoot, this.onLibraryChanged);
 
   final List<DownloadJob> jobs = [];
+
+  /// The most recent job with this key (or null) — lets a tile/track row show its own progress.
+  DownloadJob? jobByKey(String key) {
+    for (final j in jobs) {
+      if (j.key == key) return j;
+    }
+    return null;
+  }
+
+  /// Remove finished (done/failed) jobs from the list; keep anything still in progress.
+  void clearFinished() {
+    jobs.removeWhere((j) => j.status == 'done' || j.status == 'failed');
+    notifyListeners();
+  }
 
   /// Rank peers offering the SAME track, best-first: free slots first (a busy/queued peer just
   /// stalls), then lossless over lossy (this is a FLAC library — don't grab an MP3 when a FLAC
@@ -279,11 +294,19 @@ class DownloadManager extends ChangeNotifier {
   Future<void> enqueueSoulseek(SoulseekFile file) => enqueueSoulseekBest([file]);
 
   /// Download one track, trying its candidate peers best-first until one succeeds.
-  /// [candidates] are copies of the SAME track from different peers.
-  Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates) async {
+  /// [candidates] are copies of the SAME track from different peers. [key] lets the UI show
+  /// this job's live progress inline on the tile/track row that started it.
+  Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates, {String? key}) async {
     if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
     if (candidates.isEmpty) return false;
-    final job = DownloadJob(candidates.first.displayName);
+    // Don't start a duplicate if this exact key is already in progress.
+    if (key != null) {
+      final existing = jobByKey(key);
+      if (existing != null && (existing.status == 'downloading' || existing.status == 'preparing')) {
+        return false;
+      }
+    }
+    final job = DownloadJob(candidates.first.displayName, key: key);
     jobs.insert(0, job);
     notifyListeners();
     return _soulseekBest(candidates, job);

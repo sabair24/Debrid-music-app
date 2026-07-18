@@ -347,8 +347,14 @@ class SoulseekClient {
         }
       }, onError: (_) {}, onDone: () {});
 
-      final (ip, port) = await addr.future.timeout(const Duration(seconds: 10));
-      if (ip == '0.0.0.0' || port == 0) return SlskFail('Uploader niet bereikbaar (firewalled)');
+      final (String, int) peerAddr;
+      try {
+        peerAddr = await addr.future.timeout(const Duration(seconds: 10));
+      } catch (_) {
+        return SlskFail('Uploader reageert niet'); // server didn't return the peer's address in time
+      }
+      final (ip, port) = peerAddr;
+      if (ip == '0.0.0.0' || port == 0) return SlskFail('Uploader niet bereikbaar');
 
       peer = await Socket.connect(ip, port, timeout: const Duration(seconds: 8));
       final pconn = _Conn(peer);
@@ -402,8 +408,8 @@ class SoulseekClient {
       await ssub.cancel();
       await psub.cancel();
       return result;
-    } catch (e) {
-      return SlskFail(e.toString());
+    } catch (_) {
+      return SlskFail('Verbinding mislukt');
     } finally {
       server?.destroy();
       peer?.destroy();
