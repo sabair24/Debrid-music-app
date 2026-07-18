@@ -265,6 +265,46 @@ class DownloadManager extends ChangeNotifier {
 
   final List<DownloadJob> jobs = [];
 
+  // ── Shared Soulseek download session ──────────────────────────────────────
+  // Soulseek allows ONE login per username and blocks on a burst of logins. So ALL Soulseek
+  // downloads run on a single shared, logged-in session, SERIALIZED (one at a time) via a gate.
+  // Clicking 10 tracks = 1 login (reused), not 10 concurrent logins that kick each other. The
+  // session auto-closes ~2 min after the last download, freeing Soulseek's single connection so
+  // the native client can be used again.
+  SlskSession? _slskSession;
+  Future<void> _slskGate = Future.value();
+  Timer? _slskIdle;
+
+  Future<T> _withSlsk<T>(Future<T> Function(SlskSession) body) {
+    final result = _slskGate.then((_) async {
+      _slskIdle?.cancel();
+      final s = _slskSession ??= soulseek.client
+          .newSession(soulseek.settings.soulseekUser, soulseek.settings.soulseekPass);
+      try {
+        return await body(s);
+      } finally {
+        _scheduleSlskClose();
+      }
+    });
+    _slskGate = result.then((_) {}, onError: (_) {}); // serialize the next call after this one
+    return result;
+  }
+
+  void _scheduleSlskClose() {
+    _slskIdle?.cancel();
+    _slskIdle = Timer(const Duration(seconds: 120), () {
+      _slskSession?.close();
+      _slskSession = null;
+    });
+  }
+
+  @override
+  void dispose() {
+    _slskIdle?.cancel();
+    _slskSession?.close();
+    super.dispose();
+  }
+
   /// The most recent job with this key (or null) — lets a tile/track row show its own progress.
   DownloadJob? jobByKey(String key) {
     for (final j in jobs) {
@@ -309,11 +349,14 @@ class DownloadManager extends ChangeNotifier {
     final job = DownloadJob(candidates.first.displayName, key: key);
     jobs.insert(0, job);
     notifyListeners();
-    return _soulseekBest(candidates, job);
+    // Runs on the shared, serialized session → reuses the one login (no new login per click).
+    return _withSlsk((s) => _soulseekBest(candidates, job, s));
   }
 
-  /// Fallback loop: try up to 5 peers best-first; the first that delivers wins.
-  Future<bool> _soulseekBest(List<SoulseekFile> candidates, DownloadJob job) async {
+  /// Fallback loop: try up to 5 peers best-first; the first that delivers wins. All attempts
+  /// reuse [session]'s single login — trying another peer costs a new peer connection, NOT a
+  /// new server login.
+  Future<bool> _soulseekBest(List<SoulseekFile> candidates, DownloadJob job, SlskSession session) async {
     final ranked = [...candidates]..sort(_rankSlsk);
     final tries = ranked.length < 5 ? ranked.length : 5;
     for (var i = 0; i < tries; i++) {
@@ -322,13 +365,20 @@ class DownloadManager extends ChangeNotifier {
       job.progress = 0;
       job.detail = tries > 1 ? 'poging ${i + 1}/$tries · ${f.username}' : f.username;
       notifyListeners();
-      final res = await _rawTransfer(f, job);
+      SlskResult res;
+      try {
+        res = await _rawTransfer(session, f, job);
+      } catch (_) {
+        res = SlskFail('Downloadfout'); // any unexpected throw → treat as a failed attempt, keep going
+      }
       if (res is SlskDone) {
         job.progress = 1;
         job.status = 'done';
         job.detail = null;
         notifyListeners();
-        await onLibraryChanged();
+        try {
+          await onLibraryChanged();
+        } catch (_) {/* library rescan hiccup shouldn't un-succeed the download */}
         return true;
       }
       job.detail = (res as SlskFail).reason;
@@ -339,13 +389,12 @@ class DownloadManager extends ChangeNotifier {
     return false;
   }
 
-  /// The raw single-peer transfer (updates progress only; no status finalization).
-  Future<SlskResult> _rawTransfer(SoulseekFile file, DownloadJob job) async {
+  /// The raw single-peer transfer over [session] (updates progress only; no status finalization).
+  Future<SlskResult> _rawTransfer(SlskSession session, SoulseekFile file, DownloadJob job) async {
     final dir = Directory('$musicRoot${Platform.pathSeparator}DebridMusic Downloads${Platform.pathSeparator}Soulseek');
     await dir.create(recursive: true);
     final dest = File('${dir.path}${Platform.pathSeparator}${_sanitize(file.displayName)}');
-    return soulseek.client.download(
-        soulseek.settings.soulseekUser, soulseek.settings.soulseekPass, file, dest, (rec, tot) {
+    return session.download(file, dest, (rec, tot) {
       if (tot > 0) {
         final p = (rec / tot).clamp(0.0, 1.0);
         if (p - job.progress > 0.02) {
@@ -390,9 +439,8 @@ class DownloadManager extends ChangeNotifier {
   /// Download a whole album (used by "Download album" from Soulseek), ONE TRACK AT A TIME.
   /// Each element of [tracks] is the candidate peers for one track (the same song offered by
   /// several peers) — so a track whose best peer is busy falls back to another peer instead of
-  /// failing. Sequential is deliberate: Soulseek allows only one connection per username, so a
-  /// whole album at once would open many connections that kick each other — and it spreads the
-  /// logins over time instead of a burst that trips the login block.
+  /// failing. Sequential AND single-login: the WHOLE album runs on ONE session (one login), so a
+  /// 12-track album costs 1 login, not one per track/peer — the burst that tripped the block.
   Future<int> enqueueSoulseekAlbum(List<List<SoulseekFile>> tracks) async {
     if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
     var n = 0;
@@ -402,7 +450,8 @@ class DownloadManager extends ChangeNotifier {
       jobs.insert(0, job);
       notifyListeners();
       try {
-        if (await _soulseekBest(cands, job)) n++; // await → next only after this finishes
+        // Each track runs on the shared serialized session → the whole album reuses ONE login.
+        if (await _withSlsk((s) => _soulseekBest(cands, job, s))) n++;
       } catch (_) {
         job.status = 'failed';
         notifyListeners();

@@ -145,6 +145,12 @@ class SoulseekClient {
   final _rng = Random();
   int _nextTicket() => 10000 + _rng.nextInt(900000);
 
+  /// A download session that logs in ONCE and reuses that connection for every download in it
+  /// (see [SlskSession]). Use one session per batch (a whole album, or a single track's peer
+  /// fallback) so downloading N tracks costs ONE login, not one per peer attempt — Soulseek
+  /// rate-limits repeated logins and blocks the account on a burst.
+  SlskSession newSession(String user, String pass) => SlskSession(this, user, pass);
+
   /// Search Soulseek covering all [queries] (the raw query + its "*"-variant) on ONE
   /// short-lived connection with a SINGLE login — instead of one login per variant, which
   /// (during heavy use) made Soulseek temporarily block the account for too many logins.
@@ -305,117 +311,9 @@ class SoulseekClient {
     return [for (final f in files) f.copyWith(freeSlots: freeSlots, speed: speed, queueLength: queueLen)];
   }
 
-  /// Download one file to [destFile]. Firewalled/relayed transfer, streams to disk.
-  Future<SlskResult> download(String user, String pass, SoulseekFile file, File destFile, void Function(int, int) onProgress) async {
-    Socket? server;
-    Socket? peer;
-    try {
-      server = await Socket.connect(_host, _port, timeout: const Duration(seconds: 8));
-      final sconn = _Conn(server);
-      sconn.send(_message(1, (_W()..str(user)..str(pass)..u32(160)..str(_md5hex(pass))..u32(17)).bytes()));
-      sconn.send(_message(2, (_W()..u32(0)).bytes()));
-      sconn.send(_message(3, (_W()..str(file.username)).bytes())); // GetPeerAddress
-
-      final addr = Completer<(String, int)>();
-      final delivered = Completer<SlskResult>();
-      final dlToken = _nextTicket();
-      final fileSize = _Box(0);
-      var fStarted = false; // did the actual file ('F') transfer begin?
-      String? deny;
-
-      final ssub = sconn.messages.listen((payload) async {
-        final r = _R(payload);
-        final code = r.u32();
-        if (code == 3) {
-          r.str(); // username
-          final ip = r.ip();
-          final port = r.u32();
-          if (!addr.isCompleted) addr.complete((ip, port));
-        } else if (code == 18) {
-          r.str();
-          final type = r.str();
-          final ip = r.ip();
-          final port = r.u32();
-          final ctpToken = r.u32();
-          if (type == 'F' && ip != '0.0.0.0' && port > 0 && !delivered.isCompleted) {
-            fStarted = true; // real bytes are (about to be) flowing — cancel the fast-fail
-            final ok = await _streamFile(ip, port, ctpToken, fileSize.v, destFile, onProgress);
-            if (!delivered.isCompleted) {
-              delivered.complete(ok ? SlskDone(destFile.path) : SlskFail('Overdracht afgebroken'));
-            }
-          }
-        }
-      }, onError: (_) {}, onDone: () {});
-
-      final (String, int) peerAddr;
-      try {
-        peerAddr = await addr.future.timeout(const Duration(seconds: 10));
-      } catch (_) {
-        return SlskFail('Uploader reageert niet'); // server didn't return the peer's address in time
-      }
-      final (ip, port) = peerAddr;
-      if (ip == '0.0.0.0' || port == 0) return SlskFail('Uploader niet bereikbaar');
-
-      peer = await Socket.connect(ip, port, timeout: const Duration(seconds: 8));
-      final pconn = _Conn(peer);
-      pconn.send(_initMessage(1, (_W()..str(user)..str('P')..u32(dlToken)).bytes())); // PeerInit "P"
-      pconn.send(_message(43, (_W()..str(file.filename)).bytes())); // QueueUpload
-      pconn.send(_message(40, (_W()..u32(0)..u32(dlToken)..str(file.filename)).bytes())); // TransferRequest
-      onProgress(0, 0);
-
-      // Fast fallback: if the transfer hasn't begun within 20s (peer queued/busy/offline),
-      // stop waiting so the caller can try the next peer — instead of hanging ~90s per peer.
-      // Once bytes are flowing (fStarted) the 90s backstop below governs the transfer itself.
-      final startTimer = Timer(const Duration(seconds: 20), () {
-        if (!fStarted && !delivered.isCompleted) {
-          delivered.complete(deny != null && deny!.toLowerCase().contains('queued')
-              ? SlskFail('In wachtrij bij uploader')
-              : SlskFail(deny != null ? 'Geweigerd: $deny' : 'Geen reactie (slot bezet of offline)'));
-        }
-      });
-
-      final psub = pconn.messages.listen((payload) {
-        final r = _R(payload);
-        final code = r.u32();
-        if (code == 41) {
-          r.u32();
-          if (r.boolean()) {
-            if (fileSize.v == 0) fileSize.v = r.u64();
-          } else {
-            deny = r.str();
-          }
-        } else if (code == 40) {
-          r.u32();
-          final tok = r.u32();
-          r.str();
-          if (r.remaining >= 8 && fileSize.v == 0) fileSize.v = r.u64();
-          pconn.send(_message(41, (_W()..u32(tok)..u8(1)).bytes())); // accept
-        }
-      }, onError: (_) {}, onDone: () {});
-
-      // Generous hard cap for a legitimately large slow transfer (a hi-res FLAC over a slow peer
-      // can take minutes). The 20s fast-start timer above and the 30s stall watchdog in
-      // _streamFile handle non-progress fast, so this only fires if something truly wedges.
-      final result = await delivered.future.timeout(const Duration(seconds: 900), onTimeout: () {
-        if (deny != null) {
-          return deny!.toLowerCase().contains('queued')
-              ? SlskFail('In wachtrij bij uploader')
-              : SlskFail('Geweigerd: $deny');
-        }
-        return SlskFail('Geen reactie van uploader (slot bezet of offline)');
-      });
-      startTimer.cancel();
-      await ssub.cancel();
-      await psub.cancel();
-      return result;
-    } catch (_) {
-      return SlskFail('Verbinding mislukt');
-    } finally {
-      server?.destroy();
-      peer?.destroy();
-    }
-  }
-
+  // Single-file download now lives in [SlskSession.download] — it reuses ONE login per batch
+  // instead of logging in per call (which burst-tripped Soulseek's login block). [_streamFile]
+  // (the actual byte pump) stays here and is shared by the session.
   Future<bool> _streamFile(String ip, int port, int ctpToken, int total, File destFile, void Function(int, int) onProgress) async {
     Socket? f;
     Timer? stall;
@@ -479,4 +377,190 @@ class SoulseekClient {
 class _Box {
   int v;
   _Box(this.v);
+}
+
+/// A reusable, logged-in Soulseek SERVER connection for a batch of downloads.
+///
+/// Soulseek allows only ONE login per username and rate-limits/blocks repeated logins. The
+/// old per-file `download()` logged in fresh EVERY call, and the peer-fallback tried up to 5
+/// peers per track → a whole album could fire dozens of logins in a minute and trip the block.
+/// A session logs in ONCE and routes every GetPeerAddress (code 3) + firewalled ConnectToPeer
+/// (code 18 'F') through the same connection. Downloads run one-at-a-time on a session (album +
+/// fallback are sequential), so the active download owns the response handlers. Call [close]
+/// when done to free Soulseek's single connection slot.
+class SlskSession {
+  final SoulseekClient client;
+  final String user, pass;
+  SlskSession(this.client, this.user, this.pass);
+
+  Socket? _server;
+  _Conn? _conn;
+  StreamSubscription<Uint8List>? _sub;
+  int _loginTries = 0; // consecutive failed logins — capped so a blocked account isn't hammered
+  DateTime? _lastLoginAttempt; // throttle re-logins (guards a kick/re-login storm)
+
+  // Handlers for the CURRENTLY-active download (sequential → at most one at a time).
+  String? _wantUser; // username we're currently awaiting a GetPeerAddress for
+  Completer<(String, int)>? _addr;
+  void Function(String ip, int port, int token)? _onF;
+
+  bool get _alive => _conn != null;
+
+  /// Connect + log in once; reuse on later calls. Reconnects only if the socket dropped.
+  /// Two guards against a login burst tripping the block: (a) at most 2 CONSECUTIVE failed logins
+  /// per session; (b) at most one login attempt per 10s (so a kicked/oscillating connection —
+  /// e.g. the native client is also online — can't storm re-logins).
+  Future<bool> _ensure() async {
+    if (_alive) return true;
+    if (_loginTries >= 2) return false;
+    final now = DateTime.now();
+    if (_lastLoginAttempt != null && now.difference(_lastLoginAttempt!) < const Duration(seconds: 10)) {
+      return false;
+    }
+    _lastLoginAttempt = now;
+    _loginTries++;
+    try {
+      final s = await Socket.connect(SoulseekClient._host, SoulseekClient._port, timeout: const Duration(seconds: 8));
+      _server = s; // own the socket NOW so _drop() closes it on ANY failure path (no leak)
+      final c = _Conn(s);
+      final login = Completer<bool>();
+      _sub = c.messages.listen((payload) {
+        final r = _R(payload);
+        final code = r.u32();
+        if (code == 1) {
+          if (!login.isCompleted) login.complete(r.u8() != 0);
+        } else if (code == 3) {
+          final uname = r.str();
+          final ip = r.ip();
+          final port = r.u32();
+          // Only complete the active waiter if the echoed username matches — a late code-3 from a
+          // previous download must not hand this download the wrong peer.
+          if (_addr != null && !_addr!.isCompleted && uname == _wantUser) _addr!.complete((ip, port));
+        } else if (code == 18) {
+          r.str();
+          final type = r.str();
+          final ip = r.ip();
+          final port = r.u32();
+          final tok = r.u32();
+          if (type == 'F' && ip != '0.0.0.0' && port > 0) _onF?.call(ip, port, tok);
+        }
+      }, onError: (_) => _drop(), onDone: _drop);
+      c.send(_message(1, (_W()..str(user)..str(pass)..u32(160)..str(_md5hex(pass))..u32(17)).bytes()));
+      final ok = await login.future.timeout(const Duration(seconds: 12), onTimeout: () => false);
+      if (!ok) {
+        _drop();
+        return false;
+      }
+      c.send(_message(2, (_W()..u32(0)).bytes())); // SetWaitPort(0)
+      _conn = c;
+      _loginTries = 0; // healthy login → reset the consecutive-failure counter
+      return true;
+    } catch (_) {
+      _drop();
+      return false;
+    }
+  }
+
+  void _drop() {
+    _sub?.cancel();
+    _sub = null;
+    _server?.destroy();
+    _server = null;
+    _conn = null;
+  }
+
+  /// Close the session's server connection (frees Soulseek's single connection slot).
+  void close() => _drop();
+
+  /// Download one file over the shared, already-logged-in connection. Same transfer logic as the
+  /// standalone path (fast-start, stall watchdog, friendly errors) but WITHOUT its own login.
+  Future<SlskResult> download(SoulseekFile file, File destFile, void Function(int, int) onProgress) async {
+    if (!await _ensure()) return SlskFail('Kan niet inloggen bij Soulseek');
+    Socket? peer;
+    try {
+      // GetPeerAddress on the shared connection.
+      final addr = Completer<(String, int)>();
+      _wantUser = file.username;
+      _addr = addr;
+      _conn!.send(_message(3, (_W()..str(file.username)).bytes()));
+      final (String, int) peerAddr;
+      try {
+        peerAddr = await addr.future.timeout(const Duration(seconds: 10));
+      } catch (_) {
+        return SlskFail('Uploader reageert niet');
+      } finally {
+        _addr = null;
+        _wantUser = null;
+      }
+      final (ip, port) = peerAddr;
+      if (ip == '0.0.0.0' || port == 0) return SlskFail('Uploader niet bereikbaar');
+
+      final delivered = Completer<SlskResult>();
+      final dlToken = client._nextTicket();
+      final fileSize = _Box(0);
+      var fStarted = false;
+      String? deny;
+
+      // Firewalled ConnectToPeer 'F' arrives on the shared connection → stream the file.
+      // Guard on fStarted too: a duplicate/late 'F' must not launch a SECOND _streamFile writing
+      // the same dest file concurrently.
+      _onF = (fip, fport, ftok) async {
+        if (fStarted || delivered.isCompleted) return;
+        fStarted = true;
+        final ok = await client._streamFile(fip, fport, ftok, fileSize.v, destFile, onProgress);
+        if (!delivered.isCompleted) {
+          delivered.complete(ok ? SlskDone(destFile.path) : SlskFail('Overdracht afgebroken'));
+        }
+      };
+
+      peer = await Socket.connect(ip, port, timeout: const Duration(seconds: 8));
+      final pconn = _Conn(peer);
+      pconn.send(_initMessage(1, (_W()..str(user)..str('P')..u32(dlToken)).bytes())); // PeerInit "P"
+      pconn.send(_message(43, (_W()..str(file.filename)).bytes())); // QueueUpload
+      pconn.send(_message(40, (_W()..u32(0)..u32(dlToken)..str(file.filename)).bytes())); // TransferRequest
+      onProgress(0, 0);
+
+      final startTimer = Timer(const Duration(seconds: 20), () {
+        if (!fStarted && !delivered.isCompleted) {
+          delivered.complete(deny != null && deny!.toLowerCase().contains('queued')
+              ? SlskFail('In wachtrij bij uploader')
+              : SlskFail(deny != null ? 'Geweigerd: $deny' : 'Geen reactie (slot bezet of offline)'));
+        }
+      });
+
+      final psub = pconn.messages.listen((payload) {
+        final r = _R(payload);
+        final code = r.u32();
+        if (code == 41) {
+          r.u32();
+          if (r.boolean()) {
+            if (fileSize.v == 0) fileSize.v = r.u64();
+          } else {
+            deny = r.str();
+          }
+        } else if (code == 40) {
+          r.u32();
+          final tok = r.u32();
+          r.str();
+          if (r.remaining >= 8 && fileSize.v == 0) fileSize.v = r.u64();
+          pconn.send(_message(41, (_W()..u32(tok)..u8(1)).bytes())); // accept
+        }
+      }, onError: (_) {}, onDone: () {});
+
+      final result = await delivered.future.timeout(const Duration(seconds: 900), onTimeout: () {
+        if (deny != null) {
+          return deny!.toLowerCase().contains('queued') ? SlskFail('In wachtrij bij uploader') : SlskFail('Geweigerd: $deny');
+        }
+        return SlskFail('Geen reactie van uploader (slot bezet of offline)');
+      });
+      startTimer.cancel();
+      await psub.cancel();
+      return result;
+    } catch (_) {
+      return SlskFail('Verbinding mislukt');
+    } finally {
+      _onF = null;
+      peer?.destroy();
+    }
+  }
 }
