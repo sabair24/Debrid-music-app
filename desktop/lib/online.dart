@@ -249,7 +249,8 @@ class SoulseekService {
 class DownloadJob {
   final String name;
   double progress;
-  String status; // downloading | done | failed
+  String status; // downloading | done | failed | preparing
+  String? detail; // failure reason, or "poging 2/5 · peer" while falling back
   DownloadJob(this.name) : progress = 0, status = 'downloading';
 }
 
@@ -263,20 +264,62 @@ class DownloadManager extends ChangeNotifier {
 
   final List<DownloadJob> jobs = [];
 
-  Future<void> enqueueSoulseek(SoulseekFile file) async {
-    if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
-    final job = DownloadJob(file.displayName);
-    jobs.insert(0, job);
-    notifyListeners();
-    unawaited(_soulseekTransfer(file, job));
+  /// Rank peers offering the SAME track, best-first: free slots, then shortest queue,
+  /// then fastest, then biggest (a bigger FLAC is usually the better rip). Picking a good
+  /// peer is what makes a Soulseek download actually complete — a busy/queued peer just stalls.
+  static int _rankSlsk(SoulseekFile a, SoulseekFile b) {
+    if (a.freeSlots != b.freeSlots) return a.freeSlots ? -1 : 1;
+    if (a.queueLength != b.queueLength) return a.queueLength.compareTo(b.queueLength);
+    if (a.speed != b.speed) return b.speed.compareTo(a.speed);
+    return b.size.compareTo(a.size);
   }
 
-  /// The actual Soulseek transfer for one file (awaitable). Returns true on success.
-  Future<bool> _soulseekTransfer(SoulseekFile file, DownloadJob job) async {
+  Future<void> enqueueSoulseek(SoulseekFile file) => enqueueSoulseekBest([file]);
+
+  /// Download one track, trying its candidate peers best-first until one succeeds.
+  /// [candidates] are copies of the SAME track from different peers.
+  Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates) async {
+    if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
+    if (candidates.isEmpty) return false;
+    final job = DownloadJob(candidates.first.displayName);
+    jobs.insert(0, job);
+    notifyListeners();
+    return _soulseekBest(candidates, job);
+  }
+
+  /// Fallback loop: try up to 5 peers best-first; the first that delivers wins.
+  Future<bool> _soulseekBest(List<SoulseekFile> candidates, DownloadJob job) async {
+    final ranked = [...candidates]..sort(_rankSlsk);
+    final tries = ranked.length < 5 ? ranked.length : 5;
+    for (var i = 0; i < tries; i++) {
+      final f = ranked[i];
+      job.status = 'downloading';
+      job.progress = 0;
+      job.detail = tries > 1 ? 'poging ${i + 1}/$tries · ${f.username}' : f.username;
+      notifyListeners();
+      final res = await _rawTransfer(f, job);
+      if (res is SlskDone) {
+        job.progress = 1;
+        job.status = 'done';
+        job.detail = null;
+        notifyListeners();
+        await onLibraryChanged();
+        return true;
+      }
+      job.detail = (res as SlskFail).reason;
+      notifyListeners();
+    }
+    job.status = 'failed';
+    notifyListeners();
+    return false;
+  }
+
+  /// The raw single-peer transfer (updates progress only; no status finalization).
+  Future<SlskResult> _rawTransfer(SoulseekFile file, DownloadJob job) async {
     final dir = Directory('$musicRoot${Platform.pathSeparator}DebridMusic Downloads${Platform.pathSeparator}Soulseek');
     await dir.create(recursive: true);
     final dest = File('${dir.path}${Platform.pathSeparator}${_sanitize(file.displayName)}');
-    final res = await soulseek.client.download(
+    return soulseek.client.download(
         soulseek.settings.soulseekUser, soulseek.settings.soulseekPass, file, dest, (rec, tot) {
       if (tot > 0) {
         final p = (rec / tot).clamp(0.0, 1.0);
@@ -286,16 +329,6 @@ class DownloadManager extends ChangeNotifier {
         }
       }
     });
-    if (res is SlskDone) {
-      job.progress = 1;
-      job.status = 'done';
-      notifyListeners();
-      await onLibraryChanged();
-      return true;
-    }
-    job.status = 'failed';
-    notifyListeners();
-    return false;
   }
 
   /// Add a torrent download. Non-blocking: a "preparing" job shows TorBox's fetch progress
@@ -329,19 +362,22 @@ class DownloadManager extends ChangeNotifier {
     }());
   }
 
-  /// Download every file in a list (used by "Download album" from Soulseek), ONE AT A TIME.
-  /// Sequential is deliberate: Soulseek allows only one connection per username, so
-  /// downloading a whole album concurrently would open many connections that kick each
-  /// other — and spread the logins over time instead of a burst that trips the login block.
-  Future<int> enqueueSoulseekAll(List<SoulseekFile> files) async {
+  /// Download a whole album (used by "Download album" from Soulseek), ONE TRACK AT A TIME.
+  /// Each element of [tracks] is the candidate peers for one track (the same song offered by
+  /// several peers) — so a track whose best peer is busy falls back to another peer instead of
+  /// failing. Sequential is deliberate: Soulseek allows only one connection per username, so a
+  /// whole album at once would open many connections that kick each other — and it spreads the
+  /// logins over time instead of a burst that trips the login block.
+  Future<int> enqueueSoulseekAlbum(List<List<SoulseekFile>> tracks) async {
     if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
     var n = 0;
-    for (final f in files) {
-      final job = DownloadJob(f.displayName);
+    for (final cands in tracks) {
+      if (cands.isEmpty) continue;
+      final job = DownloadJob(cands.first.displayName);
       jobs.insert(0, job);
       notifyListeners();
       try {
-        if (await _soulseekTransfer(f, job)) n++; // await → next only after this finishes
+        if (await _soulseekBest(cands, job)) n++; // await → next only after this finishes
       } catch (_) {
         job.status = 'failed';
         notifyListeners();

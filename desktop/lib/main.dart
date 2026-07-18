@@ -1587,9 +1587,34 @@ void _pickTorrentTracks(BuildContext context, SearchResult r) {
   showDialog(context: context, builder: (_) => _TrackPickerDialog(r));
 }
 
-Future<void> _downloadSoulseek(BuildContext context, SoulseekFile f) async {
+/// Significant words of a Soulseek filename (lowercased, no extension, no track numbers) —
+/// used to recognise the SAME track offered by different peers.
+Set<String> _slskWords(String displayName) {
+  final noExt = displayName.toLowerCase().replaceAll(RegExp(r'\.[a-z0-9]{2,4}$'), '');
+  final words = noExt.split(RegExp(r'[^a-z0-9]+')).where((w) => w.length > 1).toSet();
+  words.removeWhere((w) => RegExp(r'^\d{1,3}$').hasMatch(w)); // drop bare track numbers
+  return words;
+}
+
+/// Containment similarity of two word sets (0..1) — high when one filename's words are a
+/// near-subset of the other's, which tolerates "01 - Everybody" vs "Artist - Everybody".
+double _slskSim(Set<String> a, Set<String> b) {
+  if (a.isEmpty || b.isEmpty) return 0;
+  final inter = a.intersection(b).length;
+  final m = a.length < b.length ? a.length : b.length;
+  return inter / m;
+}
+
+/// Every peer in [all] offering the same track as [f] (including f itself), best-first.
+List<SoulseekFile> _slskCandidates(List<SoulseekFile> all, SoulseekFile f) {
+  final key = _slskWords(f.displayName);
+  final out = all.where((o) => o.isAudio && _slskSim(key, _slskWords(o.displayName)) >= 0.8).toList();
+  return out.isEmpty ? [f] : out;
+}
+
+Future<void> _downloadSoulseek(BuildContext context, SoulseekFile f, List<SoulseekFile> all) async {
   try {
-    await context.read<DownloadManager>().enqueueSoulseek(f);
+    await context.read<DownloadManager>().enqueueSoulseekBest(_slskCandidates(all, f));
     if (context.mounted) _srcToast(context, '“${f.displayName}” via Soulseek…');
   } catch (e) {
     if (context.mounted) _srcToast(context, 'Download mislukt: $e');
@@ -1614,15 +1639,20 @@ List<SoulseekFile> _bestSoulseekFolder(List<SoulseekFile> files) {
   return ranked.isEmpty ? const [] : ranked.first;
 }
 
-Future<void> _downloadSoulseekAlbum(BuildContext context, List<SoulseekFile> folder) async {
-  final n = await context.read<DownloadManager>().enqueueSoulseekAll(folder);
+Future<void> _downloadSoulseekAlbum(
+    BuildContext context, List<SoulseekFile> folder, List<SoulseekFile> all) async {
+  // Each folder track → its cross-peer candidates, so a busy peer for one track falls back
+  // to another peer offering the same song instead of failing the whole album.
+  final tracks = [for (final f in folder) _slskCandidates(all, f)];
+  final n = await context.read<DownloadManager>().enqueueSoulseekAlbum(tracks);
   if (context.mounted) {
     _srcToast(context, '$n nummer(s) via Soulseek — volg de voortgang in de downloadlijst.');
   }
 }
 
 /// Soulseek section header with a "Download album" action for the best complete folder.
-Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy) {
+/// [all] is the full (unfiltered) result set — used to find fallback peers per track.
+Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy, List<SoulseekFile> all) {
   final folder = _bestSoulseekFolder(slsk);
   return Padding(
     padding: const EdgeInsets.fromLTRB(24, 14, 18, 6),
@@ -1639,7 +1669,7 @@ Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy)
         const Spacer(),
         if (folder.length >= 2)
           TextButton.icon(
-            onPressed: () => _downloadSoulseekAlbum(context, folder),
+            onPressed: () => _downloadSoulseekAlbum(context, folder, all),
             icon: const Icon(Icons.library_add_rounded, size: 16),
             label: Text('Download album (${folder.length})'),
             style: TextButton.styleFrom(foregroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 8)),
@@ -1776,7 +1806,7 @@ Widget _torrentTile(BuildContext context, SearchResult r) {
   );
 }
 
-Widget _soulseekTile(BuildContext context, SoulseekFile f) {
+Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> all) {
   final status = f.freeSlots ? 'vrij' : 'wachtrij ${f.queueLength}';
   final q = _slskQuality(f);
   return Container(
@@ -1801,7 +1831,7 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f) {
           ),
         ),
         _qualityBadge(q),
-        IconButton(icon: const Icon(Icons.download_rounded), color: _accent, tooltip: 'Downloaden via Soulseek', onPressed: () => _downloadSoulseek(context, f)),
+        IconButton(icon: const Icon(Icons.download_rounded), color: _accent, tooltip: 'Downloaden via Soulseek', onPressed: () => _downloadSoulseek(context, f, all)),
       ],
     ),
   );
@@ -1890,7 +1920,7 @@ class _SourcesViewState extends State<SourcesView> {
               child: Text('Geen torrents gevonden.', style: TextStyle(color: _muted, fontSize: 12.5))),
         ...torrents.map((r) => _torrentTile(context, r)),
         if (ready)
-          _soulseekHeader(context, slsk, _sBusy)
+          _soulseekHeader(context, slsk, _sBusy, _slsk)
         else
           const Padding(
               padding: EdgeInsets.fromLTRB(24, 14, 24, 6),
@@ -1900,7 +1930,7 @@ class _SourcesViewState extends State<SourcesView> {
           const Padding(
               padding: EdgeInsets.fromLTRB(24, 2, 24, 6),
               child: Text('Geen Soulseek-bronnen.', style: TextStyle(color: _muted, fontSize: 12.5))),
-        ...slsk.map((f) => _soulseekTile(context, f)),
+        ...slsk.map((f) => _soulseekTile(context, f, _slsk)),
       ],
     );
   }
@@ -2165,10 +2195,23 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                           child: Row(
                             children: [
                               Expanded(
-                                  child: Text(j.name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(fontSize: 12.5))),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(j.name,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(fontSize: 12.5)),
+                                      if (j.detail != null && j.detail!.isNotEmpty)
+                                        Text(j.detail!,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                                fontSize: 10.5,
+                                                color: j.status == 'failed' ? Colors.red.shade300 : _muted)),
+                                    ],
+                                  )),
                               SizedBox(
                                 width: 160,
                                 child: LinearProgressIndicator(
@@ -2473,12 +2516,12 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ...torrents.map((r) => _torrentTile(context, r)),
         if (_status == null || _slsk.isNotEmpty || _slskBusy)
           (soulseekReady
-              ? _soulseekHeader(context, slsk, _slskBusy)
+              ? _soulseekHeader(context, slsk, _slskBusy, _slsk)
               : const Padding(
                   padding: EdgeInsets.fromLTRB(24, 16, 24, 6),
                   child: Text('SOULSEEK · log in via Instellingen om P2P mee te zoeken',
                       style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)))),
-        ...slsk.map((f) => _soulseekTile(context, f)),
+        ...slsk.map((f) => _soulseekTile(context, f, _slsk)),
       ],
     );
   }
