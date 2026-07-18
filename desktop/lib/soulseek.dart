@@ -387,7 +387,10 @@ class SoulseekClient {
         }
       }, onError: (_) {}, onDone: () {});
 
-      final result = await delivered.future.timeout(const Duration(seconds: 90), onTimeout: () {
+      // Generous hard cap for a legitimately large slow transfer (a hi-res FLAC over a slow peer
+      // can take minutes). The 20s fast-start timer above and the 30s stall watchdog in
+      // _streamFile handle non-progress fast, so this only fires if something truly wedges.
+      final result = await delivered.future.timeout(const Duration(seconds: 900), onTimeout: () {
         if (deny != null) {
           return deny!.toLowerCase().contains('queued')
               ? SlskFail('In wachtrij bij uploader')
@@ -409,8 +412,10 @@ class SoulseekClient {
 
   Future<bool> _streamFile(String ip, int port, int ctpToken, int total, File destFile, void Function(int, int) onProgress) async {
     Socket? f;
+    Timer? stall;
     try {
       f = await Socket.connect(ip, port, timeout: const Duration(seconds: 8));
+      final sock = f;
       f.add(_initMessage(0, (_W()..u32(ctpToken)).bytes())); // PierceFirewall
       await destFile.parent.create(recursive: true);
       final sink = destFile.openWrite();
@@ -418,7 +423,16 @@ class SoulseekClient {
       var skipped = 0;
       var lastEmit = 0;
       final headerSent = _Box(0);
+      // Stall watchdog: keep going as long as bytes keep arriving (a slow-but-working peer must
+      // be allowed to finish a big FLAC); only abort if the transfer goes silent for 30s. Closing
+      // the socket ends the await-for below. This replaces relying on a fixed total-time cap.
+      void bump() {
+        stall?.cancel();
+        stall = Timer(const Duration(seconds: 30), () => sock.destroy());
+      }
+      bump();
       await for (final chunk in f) {
+        bump();
         var data = chunk;
         if (skipped < 4) {
           final take = min(4 - skipped, data.length);
@@ -438,6 +452,7 @@ class SoulseekClient {
           onProgress(received, total);
         }
       }
+      stall?.cancel();
       await sink.close();
       final ok = received > 0 && (total == 0 || received >= total);
       if (ok) {
@@ -449,6 +464,7 @@ class SoulseekClient {
     } catch (_) {
       return false;
     } finally {
+      stall?.cancel();
       f?.destroy();
     }
   }
