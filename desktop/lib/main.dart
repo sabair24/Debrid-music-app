@@ -1920,7 +1920,7 @@ class _SourcesViewState extends State<SourcesView> {
               child: Text('Geen torrents gevonden.', style: TextStyle(color: _muted, fontSize: 12.5))),
         ...torrents.map((r) => _torrentTile(context, r)),
         if (ready)
-          _soulseekHeader(context, slsk, _sBusy, _slsk)
+          _soulseekHeader(context, slsk, _sBusy, slsk)
         else
           const Padding(
               padding: EdgeInsets.fromLTRB(24, 14, 24, 6),
@@ -1930,7 +1930,7 @@ class _SourcesViewState extends State<SourcesView> {
           const Padding(
               padding: EdgeInsets.fromLTRB(24, 2, 24, 6),
               child: Text('Geen Soulseek-bronnen.', style: TextStyle(color: _muted, fontSize: 12.5))),
-        ...slsk.map((f) => _soulseekTile(context, f, _slsk)),
+        ...slsk.map((f) => _soulseekTile(context, f, slsk)),
       ],
     );
   }
@@ -2516,12 +2516,12 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ...torrents.map((r) => _torrentTile(context, r)),
         if (_status == null || _slsk.isNotEmpty || _slskBusy)
           (soulseekReady
-              ? _soulseekHeader(context, slsk, _slskBusy, _slsk)
+              ? _soulseekHeader(context, slsk, _slskBusy, slsk)
               : const Padding(
                   padding: EdgeInsets.fromLTRB(24, 16, 24, 6),
                   child: Text('SOULSEEK · log in via Instellingen om P2P mee te zoeken',
                       style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)))),
-        ...slsk.map((f) => _soulseekTile(context, f, _slsk)),
+        ...slsk.map((f) => _soulseekTile(context, f, slsk)),
       ],
     );
   }

@@ -264,11 +264,13 @@ class DownloadManager extends ChangeNotifier {
 
   final List<DownloadJob> jobs = [];
 
-  /// Rank peers offering the SAME track, best-first: free slots, then shortest queue,
-  /// then fastest, then biggest (a bigger FLAC is usually the better rip). Picking a good
-  /// peer is what makes a Soulseek download actually complete — a busy/queued peer just stalls.
+  /// Rank peers offering the SAME track, best-first: free slots first (a busy/queued peer just
+  /// stalls), then lossless over lossy (this is a FLAC library — don't grab an MP3 when a FLAC
+  /// is just as reachable), then shortest queue, then fastest, then biggest (better rip).
   static int _rankSlsk(SoulseekFile a, SoulseekFile b) {
     if (a.freeSlots != b.freeSlots) return a.freeSlots ? -1 : 1;
+    final la = a.isFlac ? 1 : 0, lb = b.isFlac ? 1 : 0;
+    if (la != lb) return lb - la;
     if (a.queueLength != b.queueLength) return a.queueLength.compareTo(b.queueLength);
     if (a.speed != b.speed) return b.speed.compareTo(a.speed);
     return b.size.compareTo(a.size);
