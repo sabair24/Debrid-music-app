@@ -320,6 +320,8 @@ class SoulseekClient {
       final delivered = Completer<SlskResult>();
       final dlToken = _nextTicket();
       final fileSize = _Box(0);
+      var fStarted = false; // did the actual file ('F') transfer begin?
+      String? deny;
 
       final ssub = sconn.messages.listen((payload) async {
         final r = _R(payload);
@@ -336,8 +338,11 @@ class SoulseekClient {
           final port = r.u32();
           final ctpToken = r.u32();
           if (type == 'F' && ip != '0.0.0.0' && port > 0 && !delivered.isCompleted) {
+            fStarted = true; // real bytes are (about to be) flowing — cancel the fast-fail
             final ok = await _streamFile(ip, port, ctpToken, fileSize.v, destFile, onProgress);
-            if (ok && !delivered.isCompleted) delivered.complete(SlskDone(destFile.path));
+            if (!delivered.isCompleted) {
+              delivered.complete(ok ? SlskDone(destFile.path) : SlskFail('Overdracht afgebroken'));
+            }
           }
         }
       }, onError: (_) {}, onDone: () {});
@@ -352,7 +357,17 @@ class SoulseekClient {
       pconn.send(_message(40, (_W()..u32(0)..u32(dlToken)..str(file.filename)).bytes())); // TransferRequest
       onProgress(0, 0);
 
-      String? deny;
+      // Fast fallback: if the transfer hasn't begun within 20s (peer queued/busy/offline),
+      // stop waiting so the caller can try the next peer — instead of hanging ~90s per peer.
+      // Once bytes are flowing (fStarted) the 90s backstop below governs the transfer itself.
+      final startTimer = Timer(const Duration(seconds: 20), () {
+        if (!fStarted && !delivered.isCompleted) {
+          delivered.complete(deny != null && deny!.toLowerCase().contains('queued')
+              ? SlskFail('In wachtrij bij uploader')
+              : SlskFail(deny != null ? 'Geweigerd: $deny' : 'Geen reactie (slot bezet of offline)'));
+        }
+      });
+
       final psub = pconn.messages.listen((payload) {
         final r = _R(payload);
         final code = r.u32();
@@ -380,6 +395,7 @@ class SoulseekClient {
         }
         return SlskFail('Geen reactie van uploader (slot bezet of offline)');
       });
+      startTimer.cancel();
       await ssub.cancel();
       await psub.cancel();
       return result;
