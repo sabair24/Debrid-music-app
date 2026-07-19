@@ -69,6 +69,41 @@ class CatalogService {
     }
   }
 
+  /// Top albums right now (Deezer global chart) — for the home screen.
+  Future<List<CatalogAlbumHit>> chartAlbums() async {
+    final j = await _get('$_base/chart/0/albums?limit=25');
+    final data = (j?['data'] as List?) ?? const [];
+    return data
+        .map((a) => CatalogAlbumHit(_album(a), (a['artist']?['name'] ?? '') as String))
+        .where((h) => h.album.title.isNotEmpty)
+        .toList();
+  }
+
+  /// Newest releases (Deezer editorial) — for the home screen.
+  Future<List<CatalogAlbumHit>> newReleases() async {
+    final j = await _get('$_base/editorial/0/releases?limit=25');
+    final data = (j?['data'] as List?) ?? const [];
+    return data
+        .map((a) => CatalogAlbumHit(_album(a), (a['artist']?['name'] ?? '') as String))
+        .where((h) => h.album.title.isNotEmpty)
+        .toList();
+  }
+
+  /// Top tracks right now (Deezer global chart) — for the home screen.
+  Future<List<CatalogTrackHit>> chartTracks() async {
+    final j = await _get('$_base/chart/0/tracks?limit=25');
+    final data = (j?['data'] as List?) ?? const [];
+    final seen = <String>{};
+    return data
+        .map((t) => CatalogTrackHit(
+              (t['title'] ?? '') as String,
+              (t['artist']?['name'] ?? '') as String,
+              (t['album']?['cover_medium'] ?? t['album']?['cover']) as String?,
+            ))
+        .where((h) => h.title.isNotEmpty && seen.add('${h.artist.toLowerCase()}|${h.title.toLowerCase()}'))
+        .toList();
+  }
+
   Future<List<CatalogArtist>> searchArtists(String q) async {
     final j = await _get('$_base/search/artist?q=${Uri.encodeComponent(q)}&limit=25');
     final data = (j?['data'] as List?) ?? const [];

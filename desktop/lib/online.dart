@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'organize.dart';
+import 'quality.dart';
 import 'rutracker.dart';
 import 'search.dart';
 import 'settings.dart';
@@ -341,16 +342,42 @@ class DownloadManager extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Rank peers offering the SAME track, best-first: free slots first (a busy/queued peer just
-  /// stalls), then lossless over lossy (this is a FLAC library — don't grab an MP3 when a FLAC
-  /// is just as reachable), then shortest queue, then fastest, then biggest (better rip).
+  /// Rank peers offering the SAME track by QUALITY first: the user always wants the best copy
+  /// available (24-bit hi-res FLAC → CD FLAC → … → MP3 only as an absolute last resort). The
+  /// peer-fallback then falls through if the top pick won't actually download, so availability
+  /// only breaks ties between EQUAL-quality copies.
   static int _rankSlsk(SoulseekFile a, SoulseekFile b) {
+    final qa = _slskScore(a), qb = _slskScore(b);
+    if (qa != qb) return qb - qa; // higher quality first
     if (a.freeSlots != b.freeSlots) return a.freeSlots ? -1 : 1;
-    final la = a.isFlac ? 1 : 0, lb = b.isFlac ? 1 : 0;
-    if (la != lb) return lb - la;
     if (a.queueLength != b.queueLength) return a.queueLength.compareTo(b.queueLength);
     if (a.speed != b.speed) return b.speed.compareTo(a.speed);
     return b.size.compareTo(a.size);
+  }
+
+  /// A comparable quality score: format tier dominates (lossless ≫ lossy), then effective
+  /// bitrate distinguishes hi-res (24/192 ≈ 4000k) from CD (16/44 ≈ 900k) within a tier.
+  static int _slskScore(SoulseekFile f) {
+    final q = qualityFromFile(
+      name: f.displayName,
+      ext: f.ext,
+      isFlac: f.isFlac,
+      bitrate: f.bitrate,
+      durationSec: f.durationSec,
+      size: f.size,
+      isVbr: f.isVbr,
+    );
+    final tier = switch (q.tier) {
+      QTier.hires => 3,
+      QTier.lossless => 2,
+      QTier.lossy => 1,
+      QTier.unknown => 0,
+    };
+    var kbps = f.bitrate ?? 0;
+    if (kbps <= 0 && (f.durationSec ?? 0) > 0 && f.size > 0) {
+      kbps = (f.size * 8 / f.durationSec! / 1000).round();
+    }
+    return tier * 1000000 + kbps.clamp(0, 999999);
   }
 
   Future<void> enqueueSoulseek(SoulseekFile file) => enqueueSoulseekBest([file]);

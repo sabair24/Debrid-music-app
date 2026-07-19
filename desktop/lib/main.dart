@@ -139,6 +139,19 @@ Widget cover(Uint8List? bytes, {double size = 160, double radius = 12, bool circ
   );
 }
 
+/// Album ordering options for the Albums view.
+enum AlbumSort { titel, artiest, jaarNieuw, jaarOud, toegevoegd }
+
+extension AlbumSortX on AlbumSort {
+  String get label => switch (this) {
+        AlbumSort.titel => 'Titel (A–Z)',
+        AlbumSort.artiest => 'Artiest',
+        AlbumSort.jaarNieuw => 'Jaar (nieuw→oud)',
+        AlbumSort.jaarOud => 'Jaar (oud→nieuw)',
+        AlbumSort.toegevoegd => 'Recent toegevoegd',
+      };
+}
+
 // ── Home shell ───────────────────────────────────────────────────────────────
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
@@ -147,12 +160,13 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
-  int _view = 0; // 0 albums, 1 artists, 2 online, 3 ontdek, 4 tracks
+  int _view = 5; // 0 albums, 1 artists, 2 online, 3 ontdek, 4 tracks, 5 start (default)
 
   // Library search + quality filter (applies to Albums / Tracks / Artiesten).
   final _searchCtl = TextEditingController();
   String _q = '';
   QFilter _qFilter = QFilter.all;
+  AlbumSort _sort = AlbumSort.titel;
 
   @override
   void dispose() {
@@ -232,6 +246,33 @@ class _HomeShellState extends State<HomeShell> {
                 ),
               );
             }),
+            if (_view == 0) ...[
+              const SizedBox(width: 8),
+              PopupMenuButton<AlbumSort>(
+                tooltip: 'Sorteren',
+                initialValue: _sort,
+                onSelected: (s) => setState(() => _sort = s),
+                color: _panel,
+                position: PopupMenuPosition.under,
+                itemBuilder: (_) => AlbumSort.values
+                    .map((s) => PopupMenuItem(value: s, child: Text(s.label, style: const TextStyle(fontSize: 13))))
+                    .toList(),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: _panel,
+                    borderRadius: BorderRadius.circular(11),
+                    border: Border.all(color: _line),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.sort_rounded, size: 16, color: _muted),
+                    const SizedBox(width: 6),
+                    Text(_sort.label, style: const TextStyle(fontSize: 12.5, color: _muted)),
+                    const Icon(Icons.arrow_drop_down_rounded, size: 18, color: _muted),
+                  ]),
+                ),
+              ),
+            ],
           ],
         ),
       );
@@ -288,6 +329,7 @@ class _HomeShellState extends State<HomeShell> {
               ],
             ),
           ),
+          _navBtn(Icons.home_rounded, 'Start', 5),
           _navBtn(Icons.album_rounded, 'Albums', 0),
           _navBtn(Icons.music_note_rounded, 'Tracks', 4),
           _navBtn(Icons.people_alt_rounded, 'Artiesten', 1),
@@ -359,6 +401,7 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   Widget _content() {
+    if (_view == 5) return const HomeStartView();
     if (_view == 2) return const OnlineSearchScreen();
     if (_view == 3) return const OntdekView();
     if (_view == 4) return TracksView(match: _matches, query: _q);
@@ -381,10 +424,30 @@ class _HomeShellState extends State<HomeShell> {
           );
         }
         return _view == 0
-            ? AlbumsGrid(albums: albums, title: _q.isEmpty ? null : '${albums.length} resultaten')
+            ? AlbumsGrid(albums: _sortAlbums(albums), title: _q.isEmpty ? null : '${albums.length} resultaten')
             : ArtistsView(lib: lib, albums: albums);
       },
     );
+  }
+
+  List<Album> _sortAlbums(List<Album> src) {
+    final list = [...src];
+    switch (_sort) {
+      case AlbumSort.titel:
+        list.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+      case AlbumSort.artiest:
+        list.sort((a, b) {
+          final c = a.artist.toLowerCase().compareTo(b.artist.toLowerCase());
+          return c != 0 ? c : (a.year ?? 0).compareTo(b.year ?? 0);
+        });
+      case AlbumSort.jaarNieuw:
+        list.sort((a, b) => (b.year ?? 0).compareTo(a.year ?? 0));
+      case AlbumSort.jaarOud:
+        list.sort((a, b) => (a.year ?? 9999).compareTo(b.year ?? 9999));
+      case AlbumSort.toegevoegd:
+        list.sort((a, b) => b.addedMs.compareTo(a.addedMs));
+    }
+    return list;
   }
 
   String _qFilterLabel(QFilter f) => switch (f) {
@@ -1589,6 +1652,166 @@ class TracksView extends StatelessWidget {
 }
 
 // ── Ontdek (discovery feed) ──────────────────────────────────────────────────
+// ── Start / welcome screen (TIDAL-style rows) ────────────────────────────────
+class HomeStartView extends StatefulWidget {
+  const HomeStartView({super.key});
+  @override
+  State<HomeStartView> createState() => _HomeStartViewState();
+}
+
+class _HomeStartViewState extends State<HomeStartView> {
+  final _catalog = CatalogService();
+  final _rec = RecommendService();
+  List<CatalogAlbumHit> _charts = [];
+  List<CatalogAlbumHit> _releases = [];
+  List<RecTrack> _forYou = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  Future<void> _load() async {
+    final lib = context.read<LibraryStore>();
+    final seeds = lib.artists.where((a) => !_genericArtist(a)).toList()..shuffle();
+    if (mounted) setState(() => _loading = true);
+    // Kick everything off together, then collect (each guarded so one failure doesn't kill the page).
+    final releasesF = _catalog.newReleases();
+    final chartsF = _catalog.chartAlbums();
+    final forYouF = seeds.isEmpty ? Future.value(<RecTrack>[]) : _rec.discover(seeds.take(3).toList());
+    List<CatalogAlbumHit> rel = [], ch = [];
+    List<RecTrack> fy = [];
+    try {
+      rel = await releasesF;
+    } catch (_) {}
+    try {
+      ch = await chartsF;
+    } catch (_) {}
+    try {
+      fy = await forYouF;
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _releases = rel;
+      _charts = ch;
+      _forYou = fy;
+      _loading = false;
+    });
+  }
+
+  String _greeting() {
+    final h = DateTime.now().hour;
+    if (h < 6) return 'Goedenacht';
+    if (h < 12) return 'Goedemorgen';
+    if (h < 18) return 'Goedemiddag';
+    return 'Goedenavond';
+  }
+
+  Future<void> _playRec(RecTrack t) async {
+    final online = context.read<OnlineService>();
+    final player = context.read<PlayerStore>();
+    _srcToast(context, 'Bron voorbereiden voor ${t.title}…');
+    try {
+      final url = await online.resolveRadio(t.artist, t.title, instantOnly: false);
+      if (!mounted) return;
+      if (url == null) {
+        _srcToast(context, 'Geen bron gevonden — zoek het op via Online zoeken.');
+        return;
+      }
+      player.playUrl(url, title: t.title, artist: t.artist);
+    } catch (_) {
+      if (mounted) _srcToast(context, 'Kan niet afspelen.');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    final recent = [...lib.albums.where((a) => a.addedMs > 0)]..sort((a, b) => b.addedMs.compareTo(a.addedMs));
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 32),
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(28, 26, 28, 2),
+          child: Text('${_greeting()} 👋', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+        ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(28, 0, 28, 6),
+          child: Text('Ontdek nieuwe muziek en pak op waar je gebleven was',
+              style: TextStyle(color: _muted, fontSize: 13.5)),
+        ),
+        if (recent.isNotEmpty) _section('Recent toegevoegd', _localRow(recent.take(15).toList())),
+        if (_forYou.isNotEmpty) _section('Aanbevolen voor jou', _recRow(_forYou.take(15).toList())),
+        _section('Top van dit moment',
+            _charts.isEmpty && _loading ? _loadingRow() : _catalogRow(_charts.take(20).toList())),
+        _section('Nieuwe releases',
+            _releases.isEmpty && _loading ? _loadingRow() : _catalogRow(_releases.take(20).toList())),
+      ],
+    );
+  }
+
+  Widget _section(String title, Widget row) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(28, 22, 28, 12),
+            child: Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          ),
+          SizedBox(height: 194, child: row),
+        ],
+      );
+
+  Widget _loadingRow() => const Center(child: CircularProgressIndicator(color: _accent, strokeWidth: 2.4));
+
+  Widget _localRow(List<Album> albums) => ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        itemCount: albums.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 14),
+        itemBuilder: (_, i) => _card(
+            cover(albums[i].cover, size: 140), albums[i].title, albums[i].artist,
+            () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: albums[i])))),
+      );
+
+  Widget _catalogRow(List<CatalogAlbumHit> hits) => ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        itemCount: hits.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 14),
+        itemBuilder: (_, i) => _card(
+            _netCover(hits[i].album.cover, size: 140), hits[i].album.title, hits[i].artist,
+            () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => AlbumBrowsePage(hits[i].artist, hits[i].album)))),
+      );
+
+  Widget _recRow(List<RecTrack> ts) => ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        itemCount: ts.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 14),
+        itemBuilder: (_, i) => _card(_netCover(ts[i].cover, size: 140), ts[i].title, ts[i].artist, () => _playRec(ts[i])),
+      );
+
+  Widget _card(Widget art, String title, String subtitle, VoidCallback onTap) => SizedBox(
+        width: 140,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              art,
+              const SizedBox(height: 8),
+              Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+              Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 12)),
+            ],
+          ),
+        ),
+      );
+}
+
 class OntdekView extends StatefulWidget {
   const OntdekView({super.key});
   @override

@@ -30,6 +30,10 @@ List<Map<String, dynamic>> _scanTags(String root) {
     if (e is! File || !_audioExt.contains(_ext(e.path))) continue;
     try {
       final m = readMetadata(e, getImage: false);
+      var addedMs = 0;
+      try {
+        addedMs = e.statSync().modified.millisecondsSinceEpoch;
+      } catch (_) {}
       out.add({
         'path': e.path,
         'title': (m.title?.trim().isNotEmpty ?? false) ? m.title!.trim() : _baseName(e.path),
@@ -40,6 +44,7 @@ List<Map<String, dynamic>> _scanTags(String root) {
         'isFlac': _ext(e.path) == '.flac',
         'year': (m.year != null && m.year!.year > 1000) ? m.year!.year : null,
         'genre': (m.genres.isNotEmpty) ? m.genres.first : null,
+        'addedMs': addedMs,
       });
     } catch (_) {}
   }
@@ -215,6 +220,7 @@ class LibraryStore extends ChangeNotifier {
       isFlac: t.isFlac,
       year: t.year,
       genre: t.genre,
+      addedMs: t.addedMs,
     );
   }
 
@@ -359,6 +365,7 @@ class LibraryStore extends ChangeNotifier {
         isFlac: m['isFlac'] as bool,
         year: m['year'] as int?,
         genre: m['genre'] as String?,
+        addedMs: (m['addedMs'] as int?) ?? 0,
       );
 
   void _buildAlbums() {

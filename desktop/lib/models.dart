@@ -13,6 +13,9 @@ class Track {
   final int? year;
   final String? genre;
 
+  /// File modified time (ms since epoch) — used for "recently added" sorting + the home screen.
+  final int addedMs;
+
   Track({
     required this.path,
     required this.title,
@@ -23,6 +26,7 @@ class Track {
     this.isFlac = false,
     this.year,
     this.genre,
+    this.addedMs = 0,
   });
 }
 
@@ -59,5 +63,14 @@ class Album {
       if (t.genre != null && t.genre!.isNotEmpty) return t.genre;
     }
     return null;
+  }
+
+  /// Most recent file time among the tracks — "recently added".
+  int get addedMs {
+    var m = 0;
+    for (final t in tracks) {
+      if (t.addedMs > m) m = t.addedMs;
+    }
+    return m;
   }
 }
