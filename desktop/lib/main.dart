@@ -517,6 +517,25 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Watch the library so a delete (or correction) shows up here immediately — _buildAlbums
+    // creates NEW Album objects, so holding on to the original would keep showing stale tracks.
+    final lib = context.watch<LibraryStore>();
+    final paths = album.tracks.map((t) => t.path).toSet();
+    Album? fresh;
+    for (final a in lib.albums) {
+      if (a.tracks.any((t) => paths.contains(t.path))) {
+        fresh = a;
+        break;
+      }
+    }
+    if (fresh != null) {
+      album = fresh;
+    } else if (lib.albums.isNotEmpty && !lib.scanning) {
+      // Every track of this album is gone — there's nothing left to show.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.of(context).maybePop();
+      });
+    }
     return Scaffold(
       body: Column(
         children: [
