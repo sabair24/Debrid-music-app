@@ -1665,39 +1665,45 @@ class _HomeStartViewState extends State<HomeStartView> {
   List<CatalogAlbumHit> _charts = [];
   List<CatalogAlbumHit> _releases = [];
   List<RecTrack> _forYou = [];
-  bool _loading = true;
+  bool _chartsLoading = true;
+  bool _seedsRequested = false; // the library's artists have been used to load the personal rows
+  bool _seedsLoading = false;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    // Charts need no library — load them right away.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadCharts());
   }
 
-  Future<void> _load() async {
-    final lib = context.read<LibraryStore>();
-    final seeds = lib.artists.where((a) => !_genericArtist(a)).toList()..shuffle();
-    if (mounted) setState(() => _loading = true);
-    // Kick everything off together, then collect (each guarded so one failure doesn't kill the page).
-    final releasesF = seeds.isEmpty ? Future.value(<CatalogAlbumHit>[]) : _catalog.latestFromArtists(seeds);
-    final chartsF = _catalog.chartAlbums();
-    final forYouF = seeds.isEmpty ? Future.value(<RecTrack>[]) : _rec.discover(seeds.take(6).toList());
-    List<CatalogAlbumHit> rel = [], ch = [];
+  Future<void> _loadCharts() async {
+    try {
+      final c = await _catalog.chartAlbums();
+      if (mounted) setState(() => _charts = c);
+    } catch (_) {}
+    if (mounted) setState(() => _chartsLoading = false);
+  }
+
+  /// The personal rows depend on the scanned library. On a cold start the scan is still running
+  /// when this view first builds, so we load these ONCE the library actually has artists (driven
+  /// from build via context.watch) — not eagerly with an empty seed list.
+  Future<void> _loadSeeds(List<String> seeds) async {
+    if (mounted) setState(() => _seedsLoading = true);
+    final relF = _catalog.latestFromArtists(seeds);
+    final fyF = _rec.discover(seeds.take(6).toList());
+    List<CatalogAlbumHit> rel = [];
     List<RecTrack> fy = [];
     try {
-      rel = await releasesF;
+      rel = await relF;
     } catch (_) {}
     try {
-      ch = await chartsF;
-    } catch (_) {}
-    try {
-      fy = await forYouF;
+      fy = await fyF;
     } catch (_) {}
     if (!mounted) return;
     setState(() {
       _releases = rel;
-      _charts = ch;
       _forYou = fy;
-      _loading = false;
+      _seedsLoading = false;
     });
   }
 
@@ -1729,7 +1735,15 @@ class _HomeStartViewState extends State<HomeStartView> {
   @override
   Widget build(BuildContext context) {
     final lib = context.watch<LibraryStore>();
+    final artists = lib.artists.where((a) => !_genericArtist(a)).toList();
+    // Fire the personal rows the first time the library actually has artists.
+    if (!_seedsRequested && artists.isNotEmpty) {
+      _seedsRequested = true;
+      final seeds = [...artists]..shuffle();
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadSeeds(seeds));
+    }
     final recent = [...lib.albums.where((a) => a.addedMs > 0)]..sort((a, b) => b.addedMs.compareTo(a.addedMs));
+    final anyLoading = _chartsLoading || _seedsLoading || (!_seedsRequested && lib.scanning);
     return ListView(
       padding: const EdgeInsets.only(bottom: 32),
       children: [
@@ -1743,14 +1757,16 @@ class _HomeStartViewState extends State<HomeStartView> {
               style: TextStyle(color: _muted, fontSize: 13.5)),
         ),
         if (recent.isNotEmpty) _section('Recent toegevoegd', _localRow(recent.take(15).toList())),
-        if (_forYou.isNotEmpty) _section('Aanbevolen voor jou', _recRow(_forYou.take(15).toList())),
-        if (_charts.isNotEmpty || _loading)
+        if (_forYou.isNotEmpty || _seedsLoading)
+          _section('Aanbevolen voor jou',
+              _forYou.isEmpty ? _loadingRow() : _recRow(_forYou.take(15).toList())),
+        if (_charts.isNotEmpty || _chartsLoading)
           _section('Top van dit moment',
-              _charts.isEmpty && _loading ? _loadingRow() : _catalogRow(_charts.take(20).toList())),
-        if (_releases.isNotEmpty || _loading)
+              _charts.isEmpty ? _loadingRow() : _catalogRow(_charts.take(20).toList())),
+        if (_releases.isNotEmpty || _seedsLoading)
           _section('Nieuw van jouw artiesten',
-              _releases.isEmpty && _loading ? _loadingRow() : _catalogRow(_releases.take(20).toList())),
-        if (!_loading && _charts.isEmpty && _releases.isEmpty && _forYou.isEmpty && recent.isEmpty)
+              _releases.isEmpty ? _loadingRow() : _catalogRow(_releases.take(20).toList())),
+        if (!anyLoading && _charts.isEmpty && _releases.isEmpty && _forYou.isEmpty && recent.isEmpty)
           const Padding(
             padding: EdgeInsets.fromLTRB(28, 40, 28, 0),
             child: Text('Nog niks om te tonen — download wat muziek of ga naar Online zoeken.',
