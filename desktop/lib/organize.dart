@@ -42,8 +42,17 @@ RelKind classifyRelease({required String album, required String artist, int trac
 }
 
 /// Make one path segment safe on Windows (and not absurdly long).
+///
+/// Also CANONICALISES the typography first: tags for the same album disagree about apostrophes
+/// and dashes ("Backstreet's Back" vs "Backstreet’s Back"), which otherwise creates two folders
+/// for one album — the same duplicate problem the library grouping had.
 String safeSeg(String s) {
-  var out = s.trim().replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1f]'), '-');
+  var out = s
+      .trim()
+      .replaceAll(RegExp(r"[‘’ʼ´`]"), "'")
+      .replaceAll(RegExp(r'[“”]'), '"')
+      .replaceAll(RegExp(r'[‐-―−]'), '-');
+  out = out.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1f]'), '-');
   out = out.replaceAll(RegExp(r'\s+'), ' ').replaceAll(RegExp(r'[. ]+$'), '');
   if (out.isEmpty) out = 'Onbekend';
   return out.length <= 80 ? out : out.substring(0, 80).trim();
