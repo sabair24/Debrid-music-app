@@ -170,7 +170,15 @@ class _HomeShellState extends State<HomeShell> {
     }
     if (_q.isEmpty) return true;
     final q = normKey(_q);
-    return normKey(t.title).contains(q) || normKey(t.artist).contains(q) || normKey(t.album).contains(q);
+    if (normKey(t.title).contains(q) || normKey(t.artist).contains(q) || normKey(t.album).contains(q)) {
+      return true;
+    }
+    // Second pass with punctuation squashed out, so "backstreets back" finds "Backstreet's Back".
+    final qs = searchKey(_q);
+    if (qs.isEmpty) return false;
+    return searchKey(t.title).contains(qs) ||
+        searchKey(t.artist).contains(qs) ||
+        searchKey(t.album).contains(qs);
   }
 
   Widget _searchBar() => Padding(

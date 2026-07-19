@@ -18,6 +18,11 @@ String normKey(String s) {
   return stripped.trim().replaceAll(RegExp(r'\s+'), ' ');
 }
 
+/// Even looser key, for SEARCH only: drop every non-alphanumeric character entirely (instead of
+/// turning it into a space). normKey("Backstreet's Back") is "backstreet s back", so someone
+/// typing "backstreets back" would find nothing; squashed, both become "backstreetsback".
+String searchKey(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
 /// Album names that mean "this is a compilation", not a studio album. Deliberately narrow — a
 /// wrong guess only misfiles, and the user explicitly wants Live/Best-of/compilations KEPT as
 /// their own releases rather than merged away.
