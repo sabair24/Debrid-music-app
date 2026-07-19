@@ -1678,9 +1678,9 @@ class _HomeStartViewState extends State<HomeStartView> {
     final seeds = lib.artists.where((a) => !_genericArtist(a)).toList()..shuffle();
     if (mounted) setState(() => _loading = true);
     // Kick everything off together, then collect (each guarded so one failure doesn't kill the page).
-    final releasesF = _catalog.newReleases();
+    final releasesF = seeds.isEmpty ? Future.value(<CatalogAlbumHit>[]) : _catalog.latestFromArtists(seeds);
     final chartsF = _catalog.chartAlbums();
-    final forYouF = seeds.isEmpty ? Future.value(<RecTrack>[]) : _rec.discover(seeds.take(3).toList());
+    final forYouF = seeds.isEmpty ? Future.value(<RecTrack>[]) : _rec.discover(seeds.take(6).toList());
     List<CatalogAlbumHit> rel = [], ch = [];
     List<RecTrack> fy = [];
     try {
@@ -1744,10 +1744,18 @@ class _HomeStartViewState extends State<HomeStartView> {
         ),
         if (recent.isNotEmpty) _section('Recent toegevoegd', _localRow(recent.take(15).toList())),
         if (_forYou.isNotEmpty) _section('Aanbevolen voor jou', _recRow(_forYou.take(15).toList())),
-        _section('Top van dit moment',
-            _charts.isEmpty && _loading ? _loadingRow() : _catalogRow(_charts.take(20).toList())),
-        _section('Nieuwe releases',
-            _releases.isEmpty && _loading ? _loadingRow() : _catalogRow(_releases.take(20).toList())),
+        if (_charts.isNotEmpty || _loading)
+          _section('Top van dit moment',
+              _charts.isEmpty && _loading ? _loadingRow() : _catalogRow(_charts.take(20).toList())),
+        if (_releases.isNotEmpty || _loading)
+          _section('Nieuw van jouw artiesten',
+              _releases.isEmpty && _loading ? _loadingRow() : _catalogRow(_releases.take(20).toList())),
+        if (!_loading && _charts.isEmpty && _releases.isEmpty && _forYou.isEmpty && recent.isEmpty)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(28, 40, 28, 0),
+            child: Text('Nog niks om te tonen — download wat muziek of ga naar Online zoeken.',
+                style: TextStyle(color: _muted)),
+          ),
       ],
     );
   }

@@ -79,14 +79,31 @@ class CatalogService {
         .toList();
   }
 
-  /// Newest releases (Deezer editorial) — for the home screen.
-  Future<List<CatalogAlbumHit>> newReleases() async {
-    final j = await _get('$_base/editorial/0/releases?limit=25');
-    final data = (j?['data'] as List?) ?? const [];
-    return data
-        .map((a) => CatalogAlbumHit(_album(a), (a['artist']?['name'] ?? '') as String))
-        .where((h) => h.album.title.isNotEmpty)
-        .toList();
+  /// Newest albums from the artists the user already listens to (Deezer's global "editorial
+  /// releases" endpoint is deprecated / empty). This is more personal anyway — "new from your
+  /// artists". Runs the per-artist lookups concurrently and returns newest-release-first.
+  Future<List<CatalogAlbumHit>> latestFromArtists(List<String> names) async {
+    final picks = names.take(6).toList();
+    final results = await Future.wait(picks.map((name) async {
+      try {
+        final aj = await _get('$_base/search/artist?q=${Uri.encodeComponent(name)}&limit=1');
+        final ad = (aj?['data'] as List?) ?? const [];
+        if (ad.isEmpty) return <CatalogAlbumHit>[];
+        final albums = await artistAlbums(ad.first['id'] as int); // newest-first, deduped
+        return albums.where((a) => !a.isSingle).take(2).map((a) => CatalogAlbumHit(a, name)).toList();
+      } catch (_) {
+        return <CatalogAlbumHit>[];
+      }
+    }));
+    final out = <CatalogAlbumHit>[];
+    final seen = <String>{};
+    for (final list in results) {
+      for (final h in list) {
+        if (h.album.title.isNotEmpty && seen.add(h.album.title.toLowerCase())) out.add(h);
+      }
+    }
+    out.sort((a, b) => (b.album.releaseDate ?? '').compareTo(a.album.releaseDate ?? ''));
+    return out;
   }
 
   /// Top tracks right now (Deezer global chart) — for the home screen.
