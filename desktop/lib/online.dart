@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import 'organize.dart';
 import 'rutracker.dart';
 import 'search.dart';
 import 'settings.dart';
@@ -255,9 +256,9 @@ class DownloadJob {
   final String name;
   final String? key; // stable id so a specific tile/track row can show THIS job's progress inline
   double progress;
-  String status; // downloading | done | failed | preparing
+  String status; // queued | downloading | done | failed | preparing
   String? detail; // failure reason, or "poging 2/5 · peer" while falling back
-  DownloadJob(this.name, {this.key}) : progress = 0, status = 'downloading';
+  DownloadJob(this.name, {this.key, this.status = 'downloading'}) : progress = 0;
 }
 
 /// Streams TorBox + Soulseek downloads into the music library (with progress), then rescans.
@@ -367,10 +368,13 @@ class DownloadManager extends ChangeNotifier {
         return false;
       }
     }
-    final job = DownloadJob(candidates.first.displayName, key: key);
+    // Starts as 'queued': with parallel downloads a job can sit waiting for a slot, and showing a
+    // spinning progress ring for it looked like a stuck download. _soulseekBest flips it to
+    // 'downloading' once it actually starts.
+    final job = DownloadJob(candidates.first.displayName, key: key, status: 'queued');
     jobs.insert(0, job);
     notifyListeners();
-    // Runs on the shared, serialized session → reuses the one login (no new login per click).
+    // Runs on the shared session → reuses the one login (no new login per click).
     return _withSlsk((s) => _soulseekBest(candidates, job, s));
   }
 
@@ -393,6 +397,11 @@ class DownloadManager extends ChangeNotifier {
         res = SlskFail('Downloadfout'); // any unexpected throw → treat as a failed attempt, keep going
       }
       if (res is SlskDone) {
+        // File it away tidily (Albums/Singles/Compilaties per artist) before the rescan picks
+        // it up, so the library never sees the loose landing-zone copy.
+        try {
+          await placeFile(File(res.path), _downloadsRoot);
+        } catch (_) {/* leave it where it landed — the scan still finds it */}
         job.progress = 1;
         job.status = 'done';
         job.detail = null;
@@ -410,9 +419,14 @@ class DownloadManager extends ChangeNotifier {
     return false;
   }
 
+  /// Root of the app's own, tidily-organised download tree. Only ever writes inside here — the
+  /// user's existing collection elsewhere under musicRoot is never touched or moved.
+  String get _downloadsRoot => '$musicRoot${Platform.pathSeparator}DebridMusic Downloads';
+
   /// The raw single-peer transfer over [session] (updates progress only; no status finalization).
   Future<SlskResult> _rawTransfer(SlskSession session, SoulseekFile file, DownloadJob job) async {
-    final dir = Directory('$musicRoot${Platform.pathSeparator}DebridMusic Downloads${Platform.pathSeparator}Soulseek');
+    // Land in a staging folder; placeFile() moves it into Albums/Singles/Compilaties after.
+    final dir = Directory('$_downloadsRoot${Platform.pathSeparator}_inkomend');
     await dir.create(recursive: true);
     final dest = File('${dir.path}${Platform.pathSeparator}${_sanitize(file.displayName)}');
     return session.download(file, dest, (rec, tot) {
@@ -467,7 +481,7 @@ class DownloadManager extends ChangeNotifier {
     final running = <Future<bool>>[];
     for (final cands in tracks) {
       if (cands.isEmpty) continue;
-      final job = DownloadJob(cands.first.displayName);
+      final job = DownloadJob(cands.first.displayName, status: 'queued');
       jobs.insert(0, job);
       // Start them ALL now — _withSlsk runs up to _slskMaxParallel at once on the ONE shared
       // login and queues the rest, so a whole album downloads in parallel like the native client.

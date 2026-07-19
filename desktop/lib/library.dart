@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'enrichment.dart';
 import 'models.dart';
+import 'organize.dart';
 import 'settings.dart';
 
 const _audioExt = {'.flac', '.mp3', '.m4a', '.wav', '.ogg', '.opus', '.aac', '.wma', '.alac'};
@@ -71,6 +72,33 @@ class LibraryStore extends ChangeNotifier {
 
   // Fast lookups for the flat Tracks view (covers) and playback resume (path → track).
   final Map<String, Album> _albumByPath = {};
+
+  /// normalised "artist|title" → the copy we already have. Lets a download be skipped instead of
+  /// creating a duplicate. Version markers stay in the key, so "(Live)" / "(Radio Edit)" / a
+  /// compilation cut are all still treated as DIFFERENT tracks and download normally.
+  final Map<String, Track> _owned = {};
+
+  /// The track we already own that matches this artist+title (null if we don't have it).
+  Track? ownedTrack(String artist, String title) => _owned[trackIdentity(artist, title)];
+
+  /// Keep one copy per track within an album — the best format, then the longest/biggest — so a
+  /// second download of the same song doesn't show up twice in the tracklist.
+  List<Track> _dedupeTracks(List<Track> ts) {
+    final best = <String, Track>{};
+    for (final t in ts) {
+      final id = trackIdentity(t.artist, t.title);
+      final cur = best[id];
+      if (cur == null) {
+        best[id] = t;
+        continue;
+      }
+      final better = formatRank(t.path) > formatRank(cur.path) ||
+          (formatRank(t.path) == formatRank(cur.path) &&
+              (t.duration?.inMilliseconds ?? 0) > (cur.duration?.inMilliseconds ?? 0));
+      if (better) best[id] = t;
+    }
+    return best.values.toList();
+  }
   final Map<String, Track> _trackByPath = {};
 
   /// The album cover for a track (covers live on the Album, not the Track).
@@ -271,17 +299,26 @@ class LibraryStore extends ChangeNotifier {
     final map = <String, List<Track>>{};
     for (final t in tracks) {
       // No album tag => its own single (never grouped under the root folder name).
+      // Group on NORMALISED artist+album: "Backstreet's Back" with a curly ’ and with a
+      // straight ' are the same album and must not show up twice.
       final key = t.album.isEmpty
           ? 'single::${t.path}'
-          : 'album::${t.artist.toLowerCase()}|${t.album.toLowerCase()}';
+          : 'album::${normKey(t.artist)}|${normKey(t.album)}';
       map.putIfAbsent(key, () => []).add(t);
     }
     albums = map.entries.map((e) {
-      final ts = e.value..sort((a, b) => a.trackNo.compareTo(b.trackNo));
       final single = e.key.startsWith('single::');
+      final ts = single ? e.value : _dedupeTracks(e.value);
+      ts.sort((a, b) => a.trackNo.compareTo(b.trackNo));
       return Album(single ? ts.first.title : ts.first.album, ts.first.artist, ts, isSingle: single);
     }).toList()
       ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+
+    // Rebuild the "do I already own this?" index used to skip duplicate downloads.
+    _owned.clear();
+    for (final t in tracks) {
+      _owned.putIfAbsent(trackIdentity(t.artist, t.title), () => t);
+    }
 
     // Rebuild the flat-track lookups (cover-per-track + path→track for resume).
     _albumByPath.clear();

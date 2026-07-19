@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
@@ -11,6 +12,7 @@ import 'library.dart';
 import 'metadata.dart';
 import 'models.dart';
 import 'online.dart';
+import 'organize.dart';
 import 'player.dart';
 import 'quality.dart';
 import 'recommend.dart';
@@ -1632,6 +1634,17 @@ Widget _downloadControl(BuildContext context,
     builder: (_, dm, __) {
       final job = dm.jobByKey(jobKey);
       final status = job?.status;
+      if (status == 'queued') {
+        // Waiting for a download slot — show a queue clock, NOT a spinner (a spinning ring here
+        // looked like a stuck download when several tracks were started at once).
+        return const Padding(
+          padding: EdgeInsets.all(9),
+          child: Tooltip(
+            message: 'In wachtrij…',
+            child: Icon(Icons.schedule_rounded, color: _muted, size: 19),
+          ),
+        );
+      }
       if (status == 'downloading' || status == 'preparing') {
         final pct = (job!.progress * 100).round();
         return Tooltip(
@@ -2310,9 +2323,11 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                                       ? 'klaar'
                                       : (j.status == 'failed'
                                           ? 'mislukt'
-                                          : (j.status == 'preparing'
-                                              ? (j.progress > 0 ? 'TorBox ${(j.progress * 100).round()}%' : 'voorbereiden')
-                                              : '${(j.progress * 100).round()}%')),
+                                          : (j.status == 'queued'
+                                              ? 'wachtrij'
+                                              : (j.status == 'preparing'
+                                                  ? (j.progress > 0 ? 'TorBox ${(j.progress * 100).round()}%' : 'voorbereiden')
+                                                  : '${(j.progress * 100).round()}%'))),
                                   textAlign: TextAlign.right,
                                   style: const TextStyle(color: _muted, fontSize: 11.5),
                                 ),
@@ -2977,9 +2992,17 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     }).toList();
   }
 
+  /// The copy of this track already in the library (null if we don't have it). Version markers
+  /// are part of the identity, so a Live/Radio-Edit/compilation cut still counts as NOT owned.
+  Track? _owned(CatalogTrack t) => context.read<LibraryStore>().ownedTrack(widget.artistName, t.title);
+
   Future<void> _downloadTrack(CatalogTrack t, int i) async {
     final dm = context.read<DownloadManager>();
     final soulseek = context.read<SoulseekService>();
+    if (_owned(t) != null) {
+      _srcToast(context, '“${t.title}” heb je al — niet opnieuw gedownload.');
+      return;
+    }
     var cands = _slskForTitle(t.title);
     if (cands.isEmpty) {
       // Not covered by the album-wide preload → ONE on-demand Soulseek search for just this track.
@@ -3093,7 +3116,15 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                     child: SizedBox(width: 11, height: 11, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
                   ),
                 Text(t.durationLabel, style: const TextStyle(color: _muted, fontSize: 12)),
-                if (soulseekReady)
+                if (_owned(t) != null)
+                  const Padding(
+                    padding: EdgeInsets.all(9),
+                    child: Tooltip(
+                      message: 'Al in je bibliotheek',
+                      child: Icon(Icons.library_add_check_rounded, color: _accent2, size: 19),
+                    ),
+                  )
+                else if (soulseekReady)
                   _downloadControl(context,
                       jobKey: 'alb:${widget.album.id}:$i',
                       onDownload: () => _downloadTrack(t, i),
@@ -3140,6 +3171,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
   bool _testing = false;
   bool _rtBusy = false;
+  bool _tidying = false;
+  String? _tidyResult;
   final Map<String, ConnResult> _conn = {};
 
   @override
@@ -3152,6 +3185,26 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _rtUser.dispose();
     _rtPass.dispose();
     super.dispose();
+  }
+
+  /// Sort the app's download folder into Albums/Singles/Compilaties per artist and drop exact
+  /// duplicate tracks (best format/size wins). Never touches the user's own collection.
+  Future<void> _tidyDownloads() async {
+    final lib = context.read<LibraryStore>();
+    setState(() {
+      _tidying = true;
+      _tidyResult = null;
+    });
+    try {
+      final root = '${lib.rootPath}${Platform.pathSeparator}DebridMusic Downloads';
+      final report = await tidyDownloads(root);
+      await lib.scan();
+      if (mounted) setState(() => _tidyResult = 'Klaar — $report');
+    } catch (e) {
+      if (mounted) setState(() => _tidyResult = 'Opruimen mislukt: $e');
+    } finally {
+      if (mounted) setState(() => _tidying = false);
+    }
   }
 
   /// Test the credentials as currently typed (without saving to disk).
@@ -3415,6 +3468,43 @@ class _SettingsDialogState extends State<SettingsDialog> {
                           style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8)),
                           child: Text(_rtBusy ? 'Bezig…' : 'Inloggen', style: const TextStyle(fontSize: 12.5)),
                         )),
+                    const SizedBox(height: 10),
+                    const Divider(color: _line, height: 1),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Downloads opruimen',
+                                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                              SizedBox(height: 2),
+                              Text(
+                                  'Sorteert je downloads in Albums / Singles / Compilaties per artiest en '
+                                  'gooit dubbele nummers weg (beste kwaliteit blijft). Raakt alleen de map '
+                                  '“DebridMusic Downloads” aan — je eigen collectie blijft ongemoeid.',
+                                  style: TextStyle(color: _muted, fontSize: 11.5)),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        FilledButton.icon(
+                          style: FilledButton.styleFrom(backgroundColor: _panel2, foregroundColor: Colors.white),
+                          onPressed: _tidying ? null : _tidyDownloads,
+                          icon: _tidying
+                              ? const SizedBox(
+                                  width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
+                              : const Icon(Icons.cleaning_services_rounded, size: 16),
+                          label: Text(_tidying ? 'Bezig…' : 'Opruimen'),
+                        ),
+                      ],
+                    ),
+                    if (_tidyResult != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(_tidyResult!, style: TextStyle(color: _accent2, fontSize: 12)),
+                      ),
                   ],
                 ),
               ),
