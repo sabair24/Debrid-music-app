@@ -118,6 +118,69 @@ class LibraryStore extends ChangeNotifier {
 
   File get _correctionsFile => File('$_appDir${Platform.pathSeparator}corrections.json');
 
+  // ── Hidden tracks ─────────────────────────────────────────────────────────
+  // "Remove from library only" keeps the FILE on disk but excludes it from the library. The
+  // paths live in hidden.json so a rescan doesn't bring them straight back.
+  final Set<String> _hidden = {};
+  File get _hiddenFile => File('$_appDir${Platform.pathSeparator}hidden.json');
+
+  Future<void> loadHidden() async {
+    try {
+      final f = _hiddenFile;
+      if (!await f.exists()) return;
+      final j = jsonDecode(await f.readAsString()) as List<dynamic>;
+      _hidden
+        ..clear()
+        ..addAll(j.map((e) => e.toString()));
+    } catch (_) {}
+  }
+
+  Future<void> _saveHidden() async {
+    try {
+      await Directory(_appDir).create(recursive: true);
+      await _hiddenFile.writeAsString(jsonEncode(_hidden.toList()));
+    } catch (_) {}
+  }
+
+  /// Number of files currently hidden but still on disk (shown in Settings so it's not a
+  /// one-way door — the user can always bring them back).
+  int get hiddenCount => _hidden.length;
+
+  /// Un-hide everything: the files are still on disk, so a rescan restores them.
+  Future<void> restoreHidden() async {
+    _hidden.clear();
+    await _saveHidden();
+    await scan();
+  }
+
+  /// Remove tracks from the library. With [fromDisk] the files are DELETED permanently;
+  /// otherwise they're only excluded from the library and stay on disk.
+  /// Returns how many files were actually deleted from disk.
+  Future<int> removeTracks(Iterable<String> paths, {required bool fromDisk}) async {
+    final list = paths.toList();
+    var deleted = 0;
+    if (fromDisk) {
+      for (final p in list) {
+        try {
+          final f = File(p);
+          if (await f.exists()) {
+            await f.delete();
+            deleted++;
+          }
+        } catch (_) {/* locked/permission — leave it, it stays visible */}
+      }
+      // Files are gone, so they can't come back on a rescan; no need to remember them.
+      _hidden.removeAll(list);
+    } else {
+      _hidden.addAll(list);
+    }
+    await _saveHidden();
+    tracks.removeWhere((t) => list.contains(t.path));
+    _buildAlbums();
+    notifyListeners();
+    return deleted;
+  }
+
   Future<void> loadCorrections() async {
     try {
       final f = _correctionsFile;
@@ -254,7 +317,10 @@ class LibraryStore extends ChangeNotifier {
     }
     tracks
       ..clear()
-      ..addAll(raw.map(_trackFromMap).map(_applyCorrection));
+      ..addAll(raw
+          .map(_trackFromMap)
+          .where((t) => !_hidden.contains(t.path)) // "removed from library only" stays removed
+          .map(_applyCorrection));
     scanned = tracks.length;
     _buildAlbums();
     scanning = false;

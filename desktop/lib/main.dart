@@ -80,6 +80,7 @@ Future<void> main() async {
   // Wrapped so a scan hiccup can never prevent enrichment from running.
   () async {
     await library.loadCorrections(); // apply manual fixes as tracks are built
+    await library.loadHidden(); // keep "removed from library only" tracks out
     try {
       await library.scan();
     } catch (_) {}
@@ -146,7 +147,86 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
-  int _view = 0; // 0 albums, 1 artists
+  int _view = 0; // 0 albums, 1 artists, 2 online, 3 ontdek, 4 tracks
+
+  // Library search + quality filter (applies to Albums / Tracks / Artiesten).
+  final _searchCtl = TextEditingController();
+  String _q = '';
+  QFilter _qFilter = QFilter.all;
+
+  @override
+  void dispose() {
+    _searchCtl.dispose();
+    super.dispose();
+  }
+
+  bool get _searchable => _view == 0 || _view == 1 || _view == 4;
+
+  /// Does this track match the current search box + quality filter?
+  bool _matches(Track t) {
+    if (!_qFilter.matches(qualityFromFile(
+        name: t.title, ext: t.isFlac ? 'flac' : 'mp3', isFlac: t.isFlac, durationSec: t.duration?.inSeconds))) {
+      return false;
+    }
+    if (_q.isEmpty) return true;
+    final q = normKey(_q);
+    return normKey(t.title).contains(q) || normKey(t.artist).contains(q) || normKey(t.album).contains(q);
+  }
+
+  Widget _searchBar() => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 18, 24, 4),
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _searchCtl,
+                onChanged: (v) => setState(() => _q = v.trim()),
+                style: const TextStyle(fontSize: 14),
+                decoration: InputDecoration(
+                  isDense: true,
+                  hintText: 'Zoek in je bibliotheek — artiest, album of nummer…',
+                  hintStyle: const TextStyle(color: _muted, fontSize: 13.5),
+                  prefixIcon: const Icon(Icons.search_rounded, size: 19, color: _muted),
+                  suffixIcon: _q.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: const Icon(Icons.close_rounded, size: 17, color: _muted),
+                          tooltip: 'Wissen',
+                          onPressed: () => setState(() {
+                            _q = '';
+                            _searchCtl.clear();
+                          }),
+                        ),
+                  filled: true,
+                  fillColor: _panel,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 13, horizontal: 12),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(11), borderSide: const BorderSide(color: _line)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(11), borderSide: const BorderSide(color: _line)),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            ...QFilter.values.map((f) {
+              final sel = _qFilter == f;
+              return Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: ChoiceChip(
+                  label: Text(_qFilterLabel(f), style: const TextStyle(fontSize: 12)),
+                  selected: sel,
+                  onSelected: (_) => setState(() => _qFilter = f),
+                  backgroundColor: _panel,
+                  selectedColor: _accent,
+                  labelStyle: TextStyle(color: sel ? Colors.white : _muted),
+                  side: BorderSide(color: sel ? _accent : _line),
+                  showCheckmark: false,
+                ),
+              );
+            }),
+          ],
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -158,7 +238,14 @@ class _HomeShellState extends State<HomeShell> {
               children: [
                 _railView(),
                 Container(width: 1, color: _line),
-                Expanded(child: _content()),
+                Expanded(
+                  child: Column(
+                    children: [
+                      if (_searchable) _searchBar(),
+                      Expanded(child: _content()),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -266,7 +353,7 @@ class _HomeShellState extends State<HomeShell> {
   Widget _content() {
     if (_view == 2) return const OnlineSearchScreen();
     if (_view == 3) return const OntdekView();
-    if (_view == 4) return const TracksView();
+    if (_view == 4) return TracksView(match: _matches, query: _q);
     return Consumer<LibraryStore>(
       builder: (_, lib, __) {
         if (lib.scanning && lib.albums.isEmpty) {
@@ -277,10 +364,27 @@ class _HomeShellState extends State<HomeShell> {
               child: Text('Geen muziek gevonden in D:\\Flac music 2024',
                   style: TextStyle(color: _muted)));
         }
-        return _view == 0 ? AlbumsGrid(albums: lib.albums) : ArtistsView(lib: lib);
+        // An album stays in view when any of its tracks matches (so searching an artist or a
+        // single song still surfaces the album it lives on).
+        final albums = lib.albums.where((a) => a.tracks.any(_matches)).toList();
+        if (albums.isEmpty) {
+          return Center(
+            child: Text('Niets gevonden voor “$_q”.', style: const TextStyle(color: _muted)),
+          );
+        }
+        return _view == 0
+            ? AlbumsGrid(albums: albums, title: _q.isEmpty ? null : '${albums.length} resultaten')
+            : ArtistsView(lib: lib, albums: albums);
       },
     );
   }
+
+  String _qFilterLabel(QFilter f) => switch (f) {
+        QFilter.all => 'Alles',
+        QFilter.lossless => 'Lossless',
+        QFilter.hires => 'Hi-Res',
+        QFilter.mp3 => 'MP3',
+      };
 }
 
 // ── Albums grid ──────────────────────────────────────────────────────────────
@@ -423,6 +527,15 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       icon: const Icon(Icons.edit_rounded),
                       tooltip: 'Metadata corrigeren',
                       onPressed: _edit,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      tooltip: album.isSingle ? 'Nummer verwijderen' : 'Album verwijderen',
+                      onPressed: () async {
+                        await _confirmDelete(context, '“${album.title}”',
+                            album.tracks.map((t) => t.path).toList());
+                        if (context.mounted) Navigator.of(context).maybePop();
+                      },
                     ),
                     const SizedBox(width: 8),
                   ],
@@ -806,6 +919,20 @@ class _TrackRowState extends State<TrackRow> {
                   child: const Text('FLAC', style: TextStyle(color: _accent2, fontSize: 10.5)),
                 ),
               Text(_fmt(t.duration), style: const TextStyle(color: _muted, fontSize: 13)),
+              // Delete appears on hover so it can't be hit by accident.
+              SizedBox(
+                width: 34,
+                child: _hover
+                    ? IconButton(
+                        icon: const Icon(Icons.delete_outline_rounded, size: 17),
+                        color: _muted,
+                        tooltip: 'Nummer verwijderen',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        onPressed: () => _confirmDelete(context, '“${t.title}”', [t.path]),
+                      )
+                    : null,
+              ),
             ],
           ),
         ),
@@ -817,18 +944,24 @@ class _TrackRowState extends State<TrackRow> {
 // ── Artists ──────────────────────────────────────────────────────────────────
 class ArtistsView extends StatefulWidget {
   final LibraryStore lib;
-  const ArtistsView({super.key, required this.lib});
+
+  /// Albums already narrowed by the shell's search/filter (defaults to the whole library).
+  final List<Album>? albums;
+  const ArtistsView({super.key, required this.lib, this.albums});
   @override
   State<ArtistsView> createState() => _ArtistsViewState();
 }
 
 class _ArtistsViewState extends State<ArtistsView> {
   String? _selected;
+
+  List<Album> get _source => widget.albums ?? widget.lib.albums;
+
   @override
   Widget build(BuildContext context) {
     if (_selected != null) {
       final name = _selected!;
-      final albums = widget.lib.albums.where((a) => a.artist == name).toList();
+      final albums = _source.where((a) => a.artist == name).toList();
       final trackCount = albums.fold<int>(0, (s, a) => s + a.tracks.length);
       final img = widget.lib.artistImages[name];
       return Column(
@@ -878,13 +1011,19 @@ class _ArtistsViewState extends State<ArtistsView> {
         ],
       );
     }
-    final artists = widget.lib.artists;
+    // Only artists that still have a matching album after the shell's search/filter.
+    final visible = {for (final a in _source) a.artist};
+    final artists = widget.lib.artists.where(visible.contains).toList();
+    if (artists.isEmpty) {
+      return const Center(child: Text('Geen artiesten gevonden.', style: TextStyle(color: _muted)));
+    }
     return CustomScrollView(
       slivers: [
-        const SliverPadding(
-          padding: EdgeInsets.fromLTRB(24, 22, 24, 8),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(24, 22, 24, 8),
           sliver: SliverToBoxAdapter(
-            child: Text('Artiesten', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+            child: Text('Artiesten${artists.length == widget.lib.artists.length ? "" : " · ${artists.length}"}',
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
           ),
         ),
         SliverPadding(
@@ -898,7 +1037,7 @@ class _ArtistsViewState extends State<ArtistsView> {
             delegate: SliverChildBuilderDelegate((_, i) {
               final name = artists[i];
               final art = widget.lib.artistImages[name] ??
-                  widget.lib.albums.firstWhere((a) => a.artist == name).cover;
+                  _source.firstWhere((a) => a.artist == name).cover;
               return GestureDetector(
                 onTap: () => setState(() => _selected = name),
                 child: Column(
@@ -1310,18 +1449,28 @@ bool _genericArtist(String s) {
 
 // ── Tracks (flat, all library songs) ─────────────────────────────────────────
 class TracksView extends StatelessWidget {
-  const TracksView({super.key});
+  /// Library search + quality filter from the shell (null = show everything).
+  final bool Function(Track)? match;
+  final String query;
+  const TracksView({super.key, this.match, this.query = ''});
 
   @override
   Widget build(BuildContext context) {
     final lib = context.watch<LibraryStore>();
     final player = context.watch<PlayerStore>();
-    final tracks = lib.tracks;
-    if (lib.scanning && tracks.isEmpty) {
+    final all = lib.tracks;
+    final tracks = match == null ? all : all.where(match!).toList();
+    if (lib.scanning && all.isEmpty) {
       return const Center(child: CircularProgressIndicator(color: _accent));
     }
-    if (tracks.isEmpty) {
+    if (all.isEmpty) {
       return const Center(child: Text('Geen tracks gevonden.', style: TextStyle(color: _muted)));
+    }
+    if (tracks.isEmpty) {
+      return Center(
+        child: Text(query.isEmpty ? 'Niets binnen dit filter.' : 'Niets gevonden voor “$query”.',
+            style: const TextStyle(color: _muted)),
+      );
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1612,6 +1761,49 @@ List<SoulseekFile> _slskCandidates(List<SoulseekFile> all, SoulseekFile f) {
   final key = _slskWords(f.displayName);
   final out = all.where((o) => o.isAudio && _slskSim(key, _slskWords(o.displayName)) >= 0.8).toList();
   return out.isEmpty ? [f] : out;
+}
+
+/// Ask what "delete" should mean, then do it. [what] names the thing ("het album “Bad”"), and
+/// [paths] are the files it covers. Deliberately two distinct choices — removing something from
+/// the library must never silently wipe the files off disk.
+Future<void> _confirmDelete(BuildContext context, String what, List<String> paths) async {
+  final n = paths.length;
+  final choice = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: _panel,
+      title: Text('$what verwijderen?', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+      content: Text(
+        'Dit gaat over $n bestand${n == 1 ? "" : "en"}.\n\n'
+        '• Alleen uit bibliotheek: het blijft op je pc staan, maar verdwijnt uit de app.\n'
+        '• Ook van pc: de bestanden worden definitief verwijderd.',
+        style: const TextStyle(color: _muted, fontSize: 13, height: 1.45),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Annuleren')),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, 'library'),
+          child: const Text('Alleen uit bibliotheek'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+          onPressed: () => Navigator.pop(ctx, 'disk'),
+          child: const Text('Ook van pc'),
+        ),
+      ],
+    ),
+  );
+  if (choice == null || !context.mounted) return;
+
+  final lib = context.read<LibraryStore>();
+  final fromDisk = choice == 'disk';
+  final deleted = await lib.removeTracks(paths, fromDisk: fromDisk);
+  if (!context.mounted) return;
+  _srcToast(
+      context,
+      fromDisk
+          ? '$what verwijderd — $deleted bestand${deleted == 1 ? "" : "en"} van je pc gewist.'
+          : '$what uit je bibliotheek gehaald (bestanden staan er nog).');
 }
 
 String _slskKey(SoulseekFile f) => '${f.username}|${f.filename}';
@@ -3505,6 +3697,32 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(_tidyResult!, style: TextStyle(color: _accent2, fontSize: 12)),
                       ),
+                    // Tracks removed "from library only" are still on disk — offer them back.
+                    Consumer<LibraryStore>(
+                      builder: (_, lib, __) => lib.hiddenCount == 0
+                          ? const SizedBox.shrink()
+                          : Padding(
+                              padding: const EdgeInsets.only(top: 12),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                        '${lib.hiddenCount} nummer(s) verborgen uit je bibliotheek '
+                                        '(staan nog wel op je pc).',
+                                        style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  TextButton.icon(
+                                    onPressed: () => lib.restoreHidden(),
+                                    icon: const Icon(Icons.undo_rounded, size: 15),
+                                    label: const Text('Terugzetten'),
+                                    style: TextButton.styleFrom(
+                                        foregroundColor: _accent, textStyle: const TextStyle(fontSize: 12)),
+                                  ),
+                                ],
+                              ),
+                            ),
+                    ),
                   ],
                 ),
               ),
