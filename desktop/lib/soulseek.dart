@@ -410,9 +410,13 @@ class _Box {
 /// old per-file `download()` logged in fresh EVERY call, and the peer-fallback tried up to 5
 /// peers per track → a whole album could fire dozens of logins in a minute and trip the block.
 /// A session logs in ONCE and routes every GetPeerAddress (code 3) + firewalled ConnectToPeer
-/// (code 18 'F') through the same connection. Downloads run one-at-a-time on a session (album +
-/// fallback are sequential), so the active download owns the response handlers. Call [close]
-/// when done to free Soulseek's single connection slot.
+/// (code 18 'F') through the same connection.
+///
+/// Downloads run CONCURRENTLY on that single login (like the native client): a file transfer is a
+/// separate peer socket and costs no login, so many can run at once. Server replies are routed to
+/// the right download by PEER USERNAME (both code 3 and code 18 carry it as their first field).
+/// Transfers from the SAME peer are serialised — a peer grants one upload slot at a time, and it
+/// keeps the username→waiter routing unambiguous. Call [close] to free Soulseek's connection slot.
 class SlskSession {
   final SoulseekClient client;
   final String user, pass;
@@ -423,11 +427,12 @@ class SlskSession {
   StreamSubscription<Uint8List>? _sub;
   int _loginTries = 0; // consecutive failed logins — capped so a blocked account isn't hammered
   DateTime? _lastLoginAttempt; // throttle re-logins (guards a kick/re-login storm)
+  Future<bool>? _ensuring; // in-flight login, shared by concurrent downloads (never 2 logins)
 
-  // Handlers for the CURRENTLY-active download (sequential → at most one at a time).
-  String? _wantUser; // username we're currently awaiting a GetPeerAddress for
-  Completer<(String, int)>? _addr;
-  void Function(String ip, int port, int token)? _onF;
+  // Per-peer routing for the concurrently-active downloads.
+  final Map<String, Completer<(String, int)>> _addrWaiters = {};
+  final Map<String, void Function(String ip, int port, int token)> _fWaiters = {};
+  final Map<String, Future<void>> _peerLocks = {}; // one transfer at a time per peer
 
   bool get _alive => _conn != null;
 
@@ -435,7 +440,14 @@ class SlskSession {
   /// Two guards against a login burst tripping the block: (a) at most 2 CONSECUTIVE failed logins
   /// per session; (b) at most one login attempt per 10s (so a kicked/oscillating connection —
   /// e.g. the native client is also online — can't storm re-logins).
-  Future<bool> _ensure() async {
+  /// Concurrency-safe: if several downloads start at once they all await the SAME login attempt
+  /// (never two logins). Returns true once the shared connection is up.
+  Future<bool> _ensure() {
+    if (_alive) return Future.value(true);
+    return _ensuring ??= _login().whenComplete(() => _ensuring = null);
+  }
+
+  Future<bool> _login() async {
     if (_alive) return true;
     if (client.blocked) return false; // global back-off after a refused login
     if (_loginTries >= 2) return false;
@@ -456,19 +468,20 @@ class SlskSession {
         if (code == 1) {
           if (!login.isCompleted) login.complete(r.u8() != 0);
         } else if (code == 3) {
+          // GetPeerAddress reply — route to the download waiting on THIS peer.
           final uname = r.str();
           final ip = r.ip();
           final port = r.u32();
-          // Only complete the active waiter if the echoed username matches — a late code-3 from a
-          // previous download must not hand this download the wrong peer.
-          if (_addr != null && !_addr!.isCompleted && uname == _wantUser) _addr!.complete((ip, port));
+          final w = _addrWaiters[uname];
+          if (w != null && !w.isCompleted) w.complete((ip, port));
         } else if (code == 18) {
-          r.str();
+          // ConnectToPeer — the username is the first field, so route 'F' to that peer's download.
+          final uname = r.str();
           final type = r.str();
           final ip = r.ip();
           final port = r.u32();
           final tok = r.u32();
-          if (type == 'F' && ip != '0.0.0.0' && port > 0) _onF?.call(ip, port, tok);
+          if (type == 'F' && ip != '0.0.0.0' && port > 0) _fWaiters[uname]?.call(ip, port, tok);
         }
       }, onError: (_) => _drop(), onDone: _drop);
       c.send(_message(1, (_W()..str(user)..str(pass)..u32(160)..str(_md5hex(pass))..u32(17)).bytes()));
@@ -500,16 +513,35 @@ class SlskSession {
   /// Close the session's server connection (frees Soulseek's single connection slot).
   void close() => _drop();
 
-  /// Download one file over the shared, already-logged-in connection. Same transfer logic as the
-  /// standalone path (fast-start, stall watchdog, friendly errors) but WITHOUT its own login.
+  /// Download one file over the shared, already-logged-in connection. Safe to call CONCURRENTLY for
+  /// different peers — replies are routed by username. Two downloads from the SAME peer are
+  /// serialised (a peer grants one slot at a time, and it keeps routing unambiguous).
   Future<SlskResult> download(SoulseekFile file, File destFile, void Function(int, int) onProgress) async {
+    if (!await _ensure()) return SlskFail('Kan niet inloggen bij Soulseek');
+    // Queue behind any transfer already running for this same peer.
+    final prev = _peerLocks[file.username];
+    final mine = Completer<void>();
+    _peerLocks[file.username] = mine.future;
+    if (prev != null) {
+      try {
+        await prev;
+      } catch (_) {}
+    }
+    try {
+      return await _transfer(file, destFile, onProgress);
+    } finally {
+      mine.complete();
+      if (identical(_peerLocks[file.username], mine.future)) _peerLocks.remove(file.username);
+    }
+  }
+
+  Future<SlskResult> _transfer(SoulseekFile file, File destFile, void Function(int, int) onProgress) async {
     if (!await _ensure()) return SlskFail('Kan niet inloggen bij Soulseek');
     Socket? peer;
     try {
-      // GetPeerAddress on the shared connection.
+      // GetPeerAddress on the shared connection, routed back to us by username.
       final addr = Completer<(String, int)>();
-      _wantUser = file.username;
-      _addr = addr;
+      _addrWaiters[file.username] = addr;
       _conn!.send(_message(3, (_W()..str(file.username)).bytes()));
       final (String, int) peerAddr;
       try {
@@ -517,8 +549,7 @@ class SlskSession {
       } catch (_) {
         return SlskFail('Uploader reageert niet');
       } finally {
-        _addr = null;
-        _wantUser = null;
+        _addrWaiters.remove(file.username);
       }
       final (ip, port) = peerAddr;
       if (ip == '0.0.0.0' || port == 0) return SlskFail('Uploader niet bereikbaar');
@@ -529,10 +560,10 @@ class SlskSession {
       var fStarted = false;
       String? deny;
 
-      // Firewalled ConnectToPeer 'F' arrives on the shared connection → stream the file.
+      // Firewalled ConnectToPeer 'F' for THIS peer arrives on the shared connection → stream it.
       // Guard on fStarted too: a duplicate/late 'F' must not launch a SECOND _streamFile writing
       // the same dest file concurrently.
-      _onF = (fip, fport, ftok) async {
+      _fWaiters[file.username] = (fip, fport, ftok) async {
         if (fStarted || delivered.isCompleted) return;
         fStarted = true;
         final ok = await client._streamFile(fip, fport, ftok, fileSize.v, destFile, onProgress);
@@ -587,7 +618,7 @@ class SlskSession {
     } catch (_) {
       return SlskFail('Verbinding mislukt');
     } finally {
-      _onF = null;
+      _fWaiters.remove(file.username);
       peer?.destroy();
     }
   }

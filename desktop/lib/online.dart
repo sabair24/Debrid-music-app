@@ -271,33 +271,49 @@ class DownloadManager extends ChangeNotifier {
   final List<DownloadJob> jobs = [];
 
   // ── Shared Soulseek download session ──────────────────────────────────────
-  // Soulseek allows ONE login per username and blocks on a burst of logins. So ALL Soulseek
-  // downloads run on a single shared, logged-in session, SERIALIZED (one at a time) via a gate.
-  // Clicking 10 tracks = 1 login (reused), not 10 concurrent logins that kick each other. The
-  // session auto-closes ~2 min after the last download, freeing Soulseek's single connection so
-  // the native client can be used again.
+  // Soulseek allows ONE login per username and blocks on a burst of logins — but a file TRANSFER
+  // is a separate peer socket and costs no login. So (like the native client) all downloads share
+  // ONE logged-in session and run in PARALLEL on it, up to [_slskMaxParallel] at a time; the rest
+  // queue. The session auto-closes ~2 min after the last download, freeing Soulseek's single
+  // connection so the native client can be used again.
+  static const _slskMaxParallel = 6;
   SlskSession? _slskSession;
-  Future<void> _slskGate = Future.value();
   Timer? _slskIdle;
+  int _slskActive = 0;
+  final List<Completer<void>> _slskWaiting = [];
 
-  Future<T> _withSlsk<T>(Future<T> Function(SlskSession) body) {
-    final result = _slskGate.then((_) async {
-      _slskIdle?.cancel();
+  /// Live count of Soulseek downloads running / waiting (for the UI).
+  int get slskActive => _slskActive;
+  int get slskQueued => _slskWaiting.length;
+
+  Future<T> _withSlsk<T>(Future<T> Function(SlskSession) body) async {
+    if (_slskActive >= _slskMaxParallel) {
+      final wait = Completer<void>();
+      _slskWaiting.add(wait);
+      await wait.future;
+    }
+    _slskActive++;
+    _slskIdle?.cancel();
+    try {
+      // newSession() does NOT log in; the login happens lazily inside the session and is shared by
+      // concurrent callers, so N parallel downloads still cost exactly ONE login.
       final s = _slskSession ??= soulseek.client
           .newSession(soulseek.settings.soulseekUser, soulseek.settings.soulseekPass);
-      try {
-        return await body(s);
-      } finally {
+      return await body(s);
+    } finally {
+      _slskActive--;
+      if (_slskWaiting.isNotEmpty) {
+        _slskWaiting.removeAt(0).complete(); // let the next queued download start
+      } else if (_slskActive == 0) {
         _scheduleSlskClose();
       }
-    });
-    _slskGate = result.then((_) {}, onError: (_) {}); // serialize the next call after this one
-    return result;
+    }
   }
 
   void _scheduleSlskClose() {
     _slskIdle?.cancel();
     _slskIdle = Timer(const Duration(seconds: 120), () {
+      if (_slskActive > 0) return; // still busy — don't pull the connection out from under it
       _slskSession?.close();
       _slskSession = null;
     });
@@ -448,21 +464,22 @@ class DownloadManager extends ChangeNotifier {
   /// 12-track album costs 1 login, not one per track/peer — the burst that tripped the block.
   Future<int> enqueueSoulseekAlbum(List<List<SoulseekFile>> tracks) async {
     if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
-    var n = 0;
+    final running = <Future<bool>>[];
     for (final cands in tracks) {
       if (cands.isEmpty) continue;
       final job = DownloadJob(cands.first.displayName);
       jobs.insert(0, job);
-      notifyListeners();
-      try {
-        // Each track runs on the shared serialized session → the whole album reuses ONE login.
-        if (await _withSlsk((s) => _soulseekBest(cands, job, s))) n++;
-      } catch (_) {
+      // Start them ALL now — _withSlsk runs up to _slskMaxParallel at once on the ONE shared
+      // login and queues the rest, so a whole album downloads in parallel like the native client.
+      running.add(_withSlsk((s) => _soulseekBest(cands, job, s)).catchError((_) {
         job.status = 'failed';
         notifyListeners();
-      }
+        return false;
+      }));
     }
-    return n;
+    notifyListeners();
+    final results = await Future.wait(running);
+    return results.where((ok) => ok).length;
   }
 
   Future<void> _download(int torrentId, TbFile f, Directory destDir, DownloadJob job) async {
