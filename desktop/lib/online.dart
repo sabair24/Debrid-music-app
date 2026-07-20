@@ -235,11 +235,28 @@ class SoulseekService {
     return client.verifyLogin(settings.soulseekUser, settings.soulseekPass);
   }
 
-  /// [onPartial] streams merged results as they arrive. Both query variants now share a
-  /// SINGLE login (searchMulti) instead of one login each.
+  /// [onPartial] streams merged results as they arrive. Both query variants share a SINGLE login
+  /// (searchMulti) instead of one login each.
+  ///
+  /// Soulseek requires EVERY term to appear in a peer's path, so a long "Artist Title" query can
+  /// come back completely empty while the artist alone has plenty (measured: "jaafar jackson got
+  /// me singing" → 0 hits even after 30s, "jaafar jackson" → hits within 2s). So when a multi-word
+  /// query finds nothing, retry once with just the first two words (usually the artist) rather
+  /// than telling the user there are no sources. Only on an empty result, so it costs an extra
+  /// login only in the rare case it actually helps.
   Future<List<SoulseekFile>> search(String query, {void Function(List<SoulseekFile>)? onPartial}) async {
+    final first = await _searchOnce(query, onPartial);
+    if (first.isNotEmpty) return first;
+    final words = query.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    if (words.length < 3) return first;
+    final broader = words.take(2).join(' ');
+    return _searchOnce(broader, onPartial);
+  }
+
+  Future<List<SoulseekFile>> _searchOnce(String query, void Function(List<SoulseekFile>)? onPartial) async {
     if (!available) return [];
     final q = query.trim();
+    if (q.isEmpty) return [];
     // Soulseek quirk: the first character is often dropped — also try a "*"-prefixed variant.
     final variants = <String>{q};
     if (q.length > 2) variants.add('*${q.substring(1)}');
