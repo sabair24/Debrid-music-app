@@ -50,6 +50,13 @@ sealed class SlskResult {}
 class SlskDone extends SlskResult { final String path; SlskDone(this.path); }
 class SlskFail extends SlskResult { final String reason; SlskFail(this.reason); }
 
+/// The uploader has us in its queue — not a failure: the download should WAIT and retry,
+/// exactly like the native client's transfer list does.
+class SlskQueued extends SlskResult {
+  final int place; // position in the uploader's queue (0 = unknown)
+  SlskQueued(this.place);
+}
+
 /// Audio files, best-first: FLAC, then free slots, then speed, then size.
 List<SoulseekFile> sortSoulseek(Iterable<SoulseekFile> files) {
   final audio = files.where((f) => f.isAudio).toList();
@@ -139,6 +146,125 @@ class _Conn {
   void _close() { if (!_controller.isClosed) _controller.close(); }
 }
 
+/// One INCOMING peer connection. It parses the init message itself rather than going through
+/// [_Conn], because what follows the init decides the wire format: for a message connection the
+/// rest is length-prefixed Soulseek messages, but for a file connection ('F') it is a raw byte
+/// stream that must never be run through the message framer.
+class _Inbound {
+  final Socket sock;
+  final SoulseekClient owner;
+  final _buf = BytesBuilder();
+  final _raw = StreamController<Uint8List>();
+  late final StreamSubscription<Uint8List> _sub;
+  Timer? _idle;
+  // 0 = awaiting init, 1 = framed messages, 2 = raw file stream, 3 = dead.
+  int _mode = 0;
+
+  _Inbound(this.sock, this.owner) {
+    _sub = sock.listen(_onData, onError: (_) => _drop(), onDone: _drop);
+    _bump(const Duration(seconds: 30));
+  }
+
+  /// Raw bytes after the init message — the file stream. Only valid after [takeRaw].
+  Stream<Uint8List> get raw => _raw.stream;
+  void send(List<int> b) {
+    if (_mode != 3) sock.add(b);
+  }
+
+  void destroy() => _drop();
+
+  /// Switch this connection to raw mode: no more message framing, bytes go to [raw].
+  /// Only called from init routing, so [_process] is on the stack and drains what's left.
+  void takeRaw() {
+    if (_mode == 3) return;
+    _mode = 2;
+    _idle?.cancel(); // the transfer runs its own stall watchdog
+  }
+
+  /// Claim this connection's messages instead of letting them fall through to the client's
+  /// search-result handling. Deliberately NOT broadcast: the controller buffers, so a reply that
+  /// arrives before the caller gets around to listening is queued rather than dropped.
+  /// Must be called synchronously while routing, for the same reason.
+  Stream<Uint8List> takeMessages() {
+    _messages ??= StreamController<Uint8List>();
+    return _messages!.stream;
+  }
+
+  StreamController<Uint8List>? _messages;
+
+  void _bump(Duration d) {
+    _idle?.cancel();
+    _idle = Timer(d, _drop);
+  }
+
+  void _onData(Uint8List data) {
+    if (_mode == 3) return;
+    if (_mode == 2) {
+      _raw.add(data);
+      return;
+    }
+    _buf.add(data);
+    final bytes = _buf.takeBytes();
+    var off = 0;
+    while (bytes.length - off >= 4) {
+      final len = bytes[off] | (bytes[off + 1] << 8) | (bytes[off + 2] << 16) | (bytes[off + 3] << 24);
+      if (len < 0 || bytes.length - off < 4 + len) break;
+      final payload = Uint8List.sublistView(bytes, off + 4, off + 4 + len);
+      off += 4 + len;
+      if (_mode == 0) {
+        _mode = 1;
+        final wanted = _handleInit(payload); // may flip us to raw mode, or drop us outright
+        if (_mode == 2) {
+          // Everything after the init belongs to the file stream, unframed.
+          if (off < bytes.length) _raw.add(bytes.sublist(off));
+          return;
+        }
+        if (!wanted || _mode == 3) {
+          _drop();
+          return;
+        }
+        continue;
+      }
+      _bump(const Duration(seconds: 30));
+      if (_messages != null && !_messages!.isClosed) {
+        _messages!.add(payload);
+      } else {
+        owner._onFramed(payload);
+      }
+      if (_mode == 3) return;
+    }
+    _buf.clear();
+    if (off < bytes.length) _buf.add(bytes.sublist(off));
+  }
+
+  bool _handleInit(Uint8List payload) {
+    if (payload.isEmpty) return false;
+    final r = _R(payload);
+    final code = r.u8();
+    if (code == 0) {
+      if (r.remaining < 4) return false;
+      return owner._routeInbound(this, 0, '', '', r.u32());
+    }
+    if (code == 1) {
+      final user = r.str();
+      final type = r.str();
+      final token = r.remaining >= 4 ? r.u32() : 0;
+      return owner._routeInbound(this, 1, user, type, token);
+    }
+    return false;
+  }
+
+  void _drop() {
+    if (_mode == 3) return;
+    _mode = 3;
+    _idle?.cancel();
+    _sub.cancel();
+    if (!_raw.isClosed) _raw.close();
+    if (_messages != null && !_messages!.isClosed) _messages!.close();
+    sock.destroy();
+  }
+}
+
 class SoulseekClient {
   static const _host = 'server.slsknet.org';
   static const _port = 2242;
@@ -156,6 +282,16 @@ class SoulseekClient {
 
   /// ticket → sink for results arriving on INCOMING connections.
   final Map<int, void Function(List<SoulseekFile>)> _searchSinks = {};
+
+  /// token → handler for a peer we asked the SERVER to make call us back (ConnectToPeer). This
+  /// is how you reach a FIREWALLED uploader: we can't dial them, so the server tells them to dial
+  /// us, and they arrive here with PierceFirewall(token).
+  final Map<int, void Function(_Inbound)> _pierceWaiters = {};
+
+  /// username → handler for the FILE connection the uploader opens to us (PeerInit type 'F').
+  /// This is the normal direction: the uploader always dials the downloader, so a firewalled
+  /// uploader can only ever deliver if we are listening.
+  final Map<String, void Function(_Inbound)> _fInbound = {};
 
   /// Bind the listening port once. Returns the port actually advertised (0 = not listening, e.g.
   /// the port is taken because the native client is running — then we simply behave as before).
@@ -180,35 +316,35 @@ class SoulseekClient {
   /// An incoming peer connection. The FIRST message is an init message (1-byte code):
   /// PeerInit(1) = username/type/token, PierceFirewall(0) = token. After that they're ordinary
   /// peer messages, and a 'P' (peer) connection is what carries FileSearchResponse (code 9).
-  void _onInbound(Socket sock) {
-    final conn = _Conn(sock);
-    var sawInit = false;
-    Timer? idle;
-    void bump() {
-      idle?.cancel();
-      idle = Timer(const Duration(seconds: 30), () => sock.destroy());
-    }
+  void _onInbound(Socket sock) => _Inbound(sock, this);
 
-    bump();
-    conn.messages.listen((payload) {
-      bump();
-      if (!sawInit) {
-        sawInit = true;
-        return; // PeerInit / PierceFirewall — we only care about what follows
-      }
-      if (payload.length < 4) return;
-      final code = _R(payload).u32();
-      if (code != 9) return; // only search responses are interesting on an inbound connection
-      final (ticket, files) = _parseAny(_zlib(Uint8List.sublistView(payload, 4)));
-      final sink = _searchSinks[ticket];
-      if (sink != null && files.isNotEmpty) sink(files);
-    }, onError: (_) {
-      idle?.cancel();
-      sock.destroy();
-    }, onDone: () {
-      idle?.cancel();
-      sock.destroy();
-    });
+  /// Routes a fully-initialised incoming connection. Returns false if nobody wanted it.
+  bool _routeInbound(_Inbound c, int initCode, String user, String type, int token) {
+    if (initCode == 0) {
+      // PierceFirewall — a peer the SERVER told to call us back, for a ConnectToPeer we sent.
+      final p = _pierceWaiters.remove(token);
+      if (p == null) return false;
+      p(c);
+      return true;
+    }
+    // PeerInit. 'F' = the uploader is opening the FILE connection to us; anything else ('P') is a
+    // normal peer message connection, which is how search results arrive.
+    if (type == 'F') {
+      final f = _fInbound.remove(user);
+      if (f == null) return false;
+      f(c);
+      return true;
+    }
+    return true; // keep framing: search results
+  }
+
+  void _onFramed(Uint8List payload) {
+    if (payload.length < 4) return;
+    final code = _R(payload).u32();
+    if (code != 9) return; // only search responses are interesting on an inbound connection
+    final (ticket, files) = _parseAny(_zlib(Uint8List.sublistView(payload, 4)));
+    final sink = _searchSinks[ticket];
+    if (sink != null && files.isNotEmpty) sink(files);
   }
 
   /// A download session that logs in ONCE and reuses that connection for every download in it
@@ -428,13 +564,36 @@ class SoulseekClient {
   // (the actual byte pump) stays here and is shared by the session.
   Future<bool> _streamFile(String ip, int port, int ctpToken, int total, File destFile, void Function(int, int) onProgress) async {
     Socket? f;
-    Timer? stall;
     try {
       f = await Socket.connect(ip, port, timeout: const Duration(seconds: 8));
       final sock = f;
       f.add(_initMessage(0, (_W()..u32(ctpToken)).bytes())); // PierceFirewall
+      return await _pump(f, f.add, () => sock.destroy(), total, destFile, onProgress);
+    } catch (_) {
+      return false;
+    } finally {
+      f?.destroy();
+    }
+  }
+
+  /// The actual byte pump of a Soulseek file transfer, independent of HOW the connection was made:
+  /// we may have dialled the uploader (see [_streamFile]) or — for a firewalled uploader — it may
+  /// have dialled US and arrived on the listening port. Both hand the same raw stream in here.
+  /// Wire format from this point: [u32 ticket] echoed by the uploader, then we answer with a
+  /// [u64 offset], then the file bytes flow.
+  Future<bool> _pump(
+    Stream<Uint8List> input,
+    void Function(List<int>) send,
+    void Function() abort,
+    int total,
+    File destFile,
+    void Function(int, int) onProgress,
+  ) async {
+    Timer? stall;
+    IOSink? sink;
+    try {
       await destFile.parent.create(recursive: true);
-      final sink = destFile.openWrite();
+      sink = destFile.openWrite();
       var received = 0;
       var skipped = 0;
       var lastEmit = 0;
@@ -444,10 +603,10 @@ class SoulseekClient {
       // the socket ends the await-for below. This replaces relying on a fixed total-time cap.
       void bump() {
         stall?.cancel();
-        stall = Timer(const Duration(seconds: 30), () => sock.destroy());
+        stall = Timer(const Duration(seconds: 30), abort);
       }
       bump();
-      await for (final chunk in f) {
+      await for (final chunk in input) {
         bump();
         var data = chunk;
         if (skipped < 4) {
@@ -456,7 +615,7 @@ class SoulseekClient {
           data = Uint8List.sublistView(data, take);
           if (skipped == 4 && headerSent.v == 0) {
             headerSent.v = 1;
-            f.add(Uint8List(8)); // offset = 0
+            send(Uint8List(8)); // offset = 0
           }
           if (data.isEmpty) continue;
         }
@@ -470,6 +629,7 @@ class SoulseekClient {
       }
       stall?.cancel();
       await sink.close();
+      sink = null;
       final ok = received > 0 && (total == 0 || received >= total);
       if (ok) {
         onProgress(received, total > 0 ? total : received);
@@ -481,7 +641,14 @@ class SoulseekClient {
       return false;
     } finally {
       stall?.cancel();
-      f?.destroy();
+      // An abort mid-stream must still release the file handle, or the retry's openWrite() on
+      // Windows hits a sharing violation and every following attempt "fails" for the wrong reason.
+      if (sink != null) {
+        try {
+          await sink.close();
+        } catch (_) {}
+        await destFile.delete().catchError((_) => destFile);
+      }
     }
   }
 }
@@ -603,7 +770,8 @@ class SlskSession {
   /// Download one file over the shared, already-logged-in connection. Safe to call CONCURRENTLY for
   /// different peers — replies are routed by username. Two downloads from the SAME peer are
   /// serialised (a peer grants one slot at a time, and it keeps routing unambiguous).
-  Future<SlskResult> download(SoulseekFile file, File destFile, void Function(int, int) onProgress) async {
+  Future<SlskResult> download(SoulseekFile file, File destFile, void Function(int, int) onProgress,
+      {void Function(SlskQueued)? onStatus}) async {
     if (!await _ensure()) return SlskFail('Kan niet inloggen bij Soulseek');
     // Queue behind any transfer already running for this same peer.
     final prev = _peerLocks[file.username];
@@ -615,31 +783,58 @@ class SlskSession {
       } catch (_) {}
     }
     try {
-      return await _transfer(file, destFile, onProgress);
+      return await _transfer(file, destFile, onProgress, onStatus: onStatus);
     } finally {
       mine.complete();
       if (identical(_peerLocks[file.username], mine.future)) _peerLocks.remove(file.username);
     }
   }
 
-  Future<SlskResult> _transfer(SoulseekFile file, File destFile, void Function(int, int) onProgress) async {
+  /// Ask the SERVER to tell [username] to call US back. This is the only way to reach an uploader
+  /// that is itself firewalled: we can't dial them, but they can dial us — provided we are
+  /// listening on an advertised port. They arrive with PierceFirewall(token).
+  Future<(_Inbound, Stream<Uint8List>)?> _reverseConnect(String username) async {
+    if (await client.ensureListening() == 0) return null; // not reachable ourselves → no point
+    final token = client._nextTicket();
+    final got = Completer<(_Inbound, Stream<Uint8List>)>();
+    client._pierceWaiters[token] = (c) {
+      // takeMessages() synchronously, before the connection's read loop moves on: anything the
+      // peer already sent must land in our queue, not in the search-result sink.
+      if (!got.isCompleted) got.complete((c, c.takeMessages()));
+    };
+    try {
+      _conn!.send(_message(18, (_W()..u32(token)..str(username)..str('P')).bytes()));
+      return await got.future.timeout(const Duration(seconds: 15));
+    } catch (_) {
+      return null;
+    } finally {
+      client._pierceWaiters.remove(token);
+    }
+  }
+
+  Future<SlskResult> _transfer(SoulseekFile file, File destFile, void Function(int, int) onProgress,
+      {void Function(SlskQueued)? onStatus}) async {
     if (!await _ensure()) return SlskFail('Kan niet inloggen bij Soulseek');
+    // The uploader opens the file connection TO us, so we must be listening before we ask for the
+    // file — not only after a search happened to bind the port earlier in this process.
+    await client.ensureListening();
     Socket? peer;
+    _Inbound? viaServer;
+    _Inbound? fileConn;
     try {
       // GetPeerAddress on the shared connection, routed back to us by username.
       final addr = Completer<(String, int)>();
       _addrWaiters[file.username] = addr;
       _conn!.send(_message(3, (_W()..str(file.username)).bytes()));
-      final (String, int) peerAddr;
+      (String, int) peerAddr = ('0.0.0.0', 0);
       try {
         peerAddr = await addr.future.timeout(const Duration(seconds: 10));
       } catch (_) {
-        return SlskFail('Uploader reageert niet');
+        // no address — the reverse path below is still worth a try
       } finally {
         _addrWaiters.remove(file.username);
       }
       final (ip, port) = peerAddr;
-      if (ip == '0.0.0.0' || port == 0) return SlskFail('Uploader niet bereikbaar');
 
       final delivered = Completer<SlskResult>();
       final dlToken = client._nextTicket();
@@ -647,9 +842,29 @@ class SlskSession {
       var fStarted = false;
       String? deny;
 
-      // Firewalled ConnectToPeer 'F' for THIS peer arrives on the shared connection → stream it.
-      // Guard on fStarted too: a duplicate/late 'F' must not launch a SECOND _streamFile writing
-      // the same dest file concurrently.
+      Future<void> runPump(Stream<Uint8List> input, void Function(List<int>) send, void Function() abort) async {
+        final ok = await client._pump(input, send, abort, fileSize.v, destFile, onProgress);
+        if (!delivered.isCompleted) {
+          delivered.complete(ok ? SlskDone(destFile.path) : SlskFail('Overdracht afgebroken'));
+        }
+      }
+
+      // (1) The uploader opens the FILE connection to US — the normal direction, and the ONLY one
+      // that works when the uploader is firewalled. Reaches us because we advertise a listen port.
+      client._fInbound[file.username] = (c) {
+        if (fStarted || delivered.isCompleted) {
+          c.destroy();
+          return;
+        }
+        fStarted = true;
+        fileConn = c; // so the finally below always closes it, success or not
+        c.takeRaw();
+        runPump(c.raw, c.send, c.destroy);
+      };
+
+      // (2) Firewalled ConnectToPeer 'F' for THIS peer arrives on the shared connection → we dial.
+      // Guard on fStarted too: a duplicate/late 'F' must not launch a SECOND pump writing the same
+      // dest file concurrently.
       _fWaiters[file.username] = (fip, fport, ftok) async {
         if (fStarted || delivered.isCompleted) return;
         fStarted = true;
@@ -659,22 +874,58 @@ class SlskSession {
         }
       };
 
-      peer = await Socket.connect(ip, port, timeout: const Duration(seconds: 8));
-      final pconn = _Conn(peer);
-      pconn.send(_initMessage(1, (_W()..str(user)..str('P')..u32(dlToken)).bytes())); // PeerInit "P"
-      pconn.send(_message(43, (_W()..str(file.filename)).bytes())); // QueueUpload
-      pconn.send(_message(40, (_W()..u32(0)..u32(dlToken)..str(file.filename)).bytes())); // TransferRequest
+      // Message connection: dial the uploader, and if that fails have the server flip it around.
+      void Function(Uint8List) psend;
+      Stream<Uint8List> pmsgs;
+      if (ip != '0.0.0.0' && port > 0) {
+        try {
+          peer = await Socket.connect(ip, port, timeout: const Duration(seconds: 8));
+        } catch (_) {
+          peer = null;
+        }
+      }
+      if (peer != null) {
+        final pconn = _Conn(peer);
+        psend = pconn.send;
+        pmsgs = pconn.messages;
+        pconn.send(_initMessage(1, (_W()..str(user)..str('P')..u32(dlToken)).bytes())); // PeerInit "P"
+      } else {
+        final rev = await _reverseConnect(file.username);
+        if (rev == null) return SlskFail('Uploader niet bereikbaar (firewall)');
+        viaServer = rev.$1;
+        psend = (b) => rev.$1.send(b);
+        pmsgs = rev.$2;
+        // No PeerInit here: the peer initiated, the handshake is already done.
+      }
+      psend(_message(43, (_W()..str(file.filename)).bytes())); // QueueUpload
+      psend(_message(40, (_W()..u32(0)..u32(dlToken)..str(file.filename)).bytes())); // TransferRequest
       onProgress(0, 0);
 
+      // "Queued" is NOT a failure — the uploader has accepted us and will start when a slot frees.
+      // The native client simply keeps the row waiting, so we do too: hold the connection (which
+      // holds our queue position; reconnecting would send us to the back) and report the wait.
+      var queued = false;
+      var place = 0;
+      Timer? poll;
       final startTimer = Timer(const Duration(seconds: 20), () {
-        if (!fStarted && !delivered.isCompleted) {
-          delivered.complete(deny != null && deny!.toLowerCase().contains('queued')
-              ? SlskFail('In wachtrij bij uploader')
-              : SlskFail(deny != null ? 'Geweigerd: $deny' : 'Geen reactie (slot bezet of offline)'));
-        }
+        if (fStarted || delivered.isCompleted || queued) return;
+        delivered.complete(SlskFail(deny != null ? 'Geweigerd: $deny' : 'Geen reactie (slot bezet of offline)'));
       });
 
-      final psub = pconn.messages.listen((payload) {
+      void noteQueued() {
+        if (queued) return;
+        queued = true;
+        onStatus?.call(SlskQueued(0));
+        // Ask for our position now and then, so the UI can show it moving.
+        poll = Timer.periodic(const Duration(seconds: 30), (_) {
+          if (fStarted || delivered.isCompleted) return;
+          try {
+            psend(_message(51, (_W()..str(file.filename)).bytes())); // PlaceInQueueRequest
+          } catch (_) {/* peer hung up; onDone below settles the transfer */}
+        });
+      }
+
+      final psub = pmsgs.listen((payload) {
         final r = _R(payload);
         final code = r.u32();
         if (code == 41) {
@@ -683,30 +934,49 @@ class SlskSession {
             if (fileSize.v == 0) fileSize.v = r.u64();
           } else {
             deny = r.str();
+            if (deny!.toLowerCase().contains('queued')) noteQueued();
           }
         } else if (code == 40) {
           r.u32();
           final tok = r.u32();
           r.str();
           if (r.remaining >= 8 && fileSize.v == 0) fileSize.v = r.u64();
-          pconn.send(_message(41, (_W()..u32(tok)..u8(1)).bytes())); // accept
+          psend(_message(41, (_W()..u32(tok)..u8(1)).bytes())); // accept
+        } else if (code == 44) {
+          // PlaceInQueueResponse(filename, place)
+          r.str();
+          if (r.remaining >= 4) {
+            place = r.u32();
+            if (queued && !fStarted) onStatus?.call(SlskQueued(place));
+          }
         }
-      }, onError: (_) {}, onDone: () {});
+      }, onError: (_) {}, onDone: () {
+        // The uploader hung up before starting: if we were queued, that's a retryable wait.
+        if (!fStarted && !delivered.isCompleted && queued) delivered.complete(SlskQueued(place));
+      });
 
-      final result = await delivered.future.timeout(const Duration(seconds: 900), onTimeout: () {
-        if (deny != null) {
-          return deny!.toLowerCase().contains('queued') ? SlskFail('In wachtrij bij uploader') : SlskFail('Geweigerd: $deny');
-        }
+      // A queued transfer may legitimately take a long time; 30 min matches leaving the native
+      // client open. Past that we hand back SlskQueued so the manager retries rather than fails.
+      final result = await delivered.future.timeout(const Duration(seconds: 1800), onTimeout: () {
+        // fStarted means bytes were already flowing, so this is a stalled transfer, not a wait.
+        if (queued && !fStarted) return SlskQueued(place);
+        if (deny != null) return SlskFail('Geweigerd: $deny');
         return SlskFail('Geen reactie van uploader (slot bezet of offline)');
       });
       startTimer.cancel();
+      poll?.cancel();
       await psub.cancel();
       return result;
     } catch (_) {
       return SlskFail('Verbinding mislukt');
     } finally {
       _fWaiters.remove(file.username);
+      client._fInbound.remove(file.username);
       peer?.destroy();
+      viaServer?.destroy();
+      // Also on the paths that return while a pump is still running (timeout / throw): tearing the
+      // socket down ends that pump, so it can never keep writing while the next peer is tried.
+      fileConn?.destroy();
     }
   }
 }

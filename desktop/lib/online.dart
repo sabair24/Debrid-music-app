@@ -275,8 +275,10 @@ class DownloadJob {
   final String name;
   final String? key; // stable id so a specific tile/track row can show THIS job's progress inline
   double progress;
-  String status; // queued | downloading | done | failed | preparing
+  String status; // queued | waiting | downloading | done | failed | preparing
   String? detail; // failure reason, or "poging 2/5 · peer" while falling back
+  int queuePlace = 0; // position in the uploader's queue while status == 'waiting' (0 = unknown)
+  bool get busy => status == 'queued' || status == 'waiting' || status == 'downloading' || status == 'preparing';
   DownloadJob(this.name, {this.key, this.status = 'downloading'}) : progress = 0;
 }
 
@@ -299,41 +301,54 @@ class DownloadManager extends ChangeNotifier {
   static const _slskMaxParallel = 6;
   SlskSession? _slskSession;
   Timer? _slskIdle;
-  int _slskActive = 0;
+  int _slskActive = 0; // downloads holding a PARALLEL SLOT (a queued one gives its slot back)
+  int _slskUsers = 0; // downloads still using the SESSION, queued ones included
   final List<Completer<void>> _slskWaiting = [];
 
   /// Live count of Soulseek downloads running / waiting (for the UI).
   int get slskActive => _slskActive;
   int get slskQueued => _slskWaiting.length;
 
-  Future<T> _withSlsk<T>(Future<T> Function(SlskSession) body) async {
+  /// [body] gets a `releaseSlot` callback: a download that ends up waiting in an uploader's queue
+  /// holds its peer connection (losing it would cost our queue position) but must NOT keep
+  /// occupying one of the parallel slots — otherwise one busy uploader stalls everything else.
+  Future<T> _withSlsk<T>(Future<T> Function(SlskSession, void Function()) body) async {
     if (_slskActive >= _slskMaxParallel) {
       final wait = Completer<void>();
       _slskWaiting.add(wait);
       await wait.future;
     }
     _slskActive++;
+    _slskUsers++;
     _slskIdle?.cancel();
+    var released = false;
+    void release() {
+      if (released) return;
+      released = true;
+      _slskActive--;
+      if (_slskWaiting.isNotEmpty) _slskWaiting.removeAt(0).complete(); // let the next one start
+    }
+
     try {
       // newSession() does NOT log in; the login happens lazily inside the session and is shared by
       // concurrent callers, so N parallel downloads still cost exactly ONE login.
       final s = _slskSession ??= soulseek.client
           .newSession(soulseek.settings.soulseekUser, soulseek.settings.soulseekPass);
-      return await body(s);
+      return await body(s, release);
     } finally {
-      _slskActive--;
-      if (_slskWaiting.isNotEmpty) {
-        _slskWaiting.removeAt(0).complete(); // let the next queued download start
-      } else if (_slskActive == 0) {
-        _scheduleSlskClose();
-      }
+      release();
+      _slskUsers--;
+      // Judged on _slskUsers, NOT _slskActive: a download waiting in an uploader's queue has given
+      // its slot back but is still on this session. Closing it under them would drop the wait AND
+      // force a fresh login for the retry — the exact login burst that gets the account blocked.
+      if (_slskUsers == 0) _scheduleSlskClose();
     }
   }
 
   void _scheduleSlskClose() {
     _slskIdle?.cancel();
     _slskIdle = Timer(const Duration(seconds: 120), () {
-      if (_slskActive > 0) return; // still busy — don't pull the connection out from under it
+      if (_slskUsers > 0) return; // still busy — don't pull the connection out from under it
       _slskSession?.close();
       _slskSession = null;
     });
@@ -409,7 +424,7 @@ class DownloadManager extends ChangeNotifier {
     // Don't start a duplicate if this exact key is already in progress.
     if (key != null) {
       final existing = jobByKey(key);
-      if (existing != null && (existing.status == 'downloading' || existing.status == 'preparing')) {
+      if (existing != null && existing.busy) {
         return false;
       }
     }
@@ -420,32 +435,49 @@ class DownloadManager extends ChangeNotifier {
     jobs.insert(0, job);
     notifyListeners();
     // Runs on the shared session → reuses the one login (no new login per click).
-    return _withSlsk((s) => _soulseekBest(candidates, job, s));
+    return _withSlsk((s, release) => _soulseekBest(candidates, job, s, release));
   }
 
   /// Fallback loop: try up to 5 peers best-first; the first that delivers wins. All attempts
   /// reuse [session]'s single login — trying another peer costs a new peer connection, NOT a
   /// new server login.
-  Future<bool> _soulseekBest(List<SoulseekFile> candidates, DownloadJob job, SlskSession session) async {
+  Future<bool> _soulseekBest(
+      List<SoulseekFile> candidates, DownloadJob job, SlskSession session, void Function() releaseSlot) async {
     final ranked = [...candidates]..sort(_rankSlsk);
     final tries = ranked.length < 5 ? ranked.length : 5;
+    var everQueued = false;
     for (var i = 0; i < tries; i++) {
       final f = ranked[i];
       job.status = 'downloading';
       job.progress = 0;
+      job.queuePlace = 0;
       job.detail = tries > 1 ? 'poging ${i + 1}/$tries · ${f.username}' : f.username;
       notifyListeners();
       SlskResult res;
       try {
-        res = await _rawTransfer(session, f, job);
+        res = await _rawTransfer(session, f, job, () {
+          // The uploader queued us: keep waiting (that's what the native client does) but hand our
+          // parallel slot to the next download so one busy peer can't stall the batch.
+          everQueued = true;
+          releaseSlot();
+        });
       } catch (_) {
         res = SlskFail('Downloadfout'); // any unexpected throw → treat as a failed attempt, keep going
+      }
+      if (res is SlskQueued) {
+        // Waited out the uploader's queue without a slot ever opening — move on to the next peer.
+        job.detail = 'uploader bleef bezet · ${f.username}';
+        notifyListeners();
+        continue;
       }
       if (res is SlskDone) {
         // File it away tidily (Albums/Singles/Compilaties per artist) before the rescan picks
         // it up, so the library never sees the loose landing-zone copy.
+        final staged = File(res.path);
         try {
-          await placeFile(File(res.path), _downloadsRoot);
+          await placeFile(staged, _downloadsRoot);
+          // Non-recursive: only removes the per-peer staging folder once it's actually empty.
+          await staged.parent.delete();
         } catch (_) {/* leave it where it landed — the scan still finds it */}
         job.progress = 1;
         job.status = 'done';
@@ -460,6 +492,8 @@ class DownloadManager extends ChangeNotifier {
       notifyListeners();
     }
     job.status = 'failed';
+    job.queuePlace = 0;
+    if (everQueued) job.detail = 'alle uploaders bleven bezet — probeer later opnieuw';
     notifyListeners();
     return false;
   }
@@ -469,12 +503,21 @@ class DownloadManager extends ChangeNotifier {
   String get _downloadsRoot => '$musicRoot${Platform.pathSeparator}DebridMusic Downloads';
 
   /// The raw single-peer transfer over [session] (updates progress only; no status finalization).
-  Future<SlskResult> _rawTransfer(SlskSession session, SoulseekFile file, DownloadJob job) async {
+  Future<SlskResult> _rawTransfer(
+      SlskSession session, SoulseekFile file, DownloadJob job, void Function() onQueued) async {
     // Land in a staging folder; placeFile() moves it into Albums/Singles/Compilaties after.
-    final dir = Directory('$_downloadsRoot${Platform.pathSeparator}_inkomend');
+    // Per-PEER subfolder: candidates for the same track share a display name, so a slow attempt
+    // that is still winding down can never write into the file the next attempt just opened.
+    final dir = Directory(
+        '$_downloadsRoot${Platform.pathSeparator}_inkomend${Platform.pathSeparator}${_sanitize(file.username)}');
     await dir.create(recursive: true);
     final dest = File('${dir.path}${Platform.pathSeparator}${_sanitize(file.displayName)}');
     return session.download(file, dest, (rec, tot) {
+      if (job.status == 'waiting') {
+        job.status = 'downloading'; // bytes are flowing — the wait is over
+        job.queuePlace = 0;
+        job.detail = file.username;
+      }
       if (tot > 0) {
         final p = (rec / tot).clamp(0.0, 1.0);
         if (p - job.progress > 0.02) {
@@ -482,6 +525,12 @@ class DownloadManager extends ChangeNotifier {
           notifyListeners();
         }
       }
+    }, onStatus: (q) {
+      job.status = 'waiting';
+      job.queuePlace = q.place;
+      job.detail = q.place > 0 ? 'wachten op ${file.username} · plaats ${q.place}' : 'wachten op ${file.username}';
+      notifyListeners();
+      onQueued();
     });
   }
 
@@ -530,7 +579,7 @@ class DownloadManager extends ChangeNotifier {
       jobs.insert(0, job);
       // Start them ALL now — _withSlsk runs up to _slskMaxParallel at once on the ONE shared
       // login and queues the rest, so a whole album downloads in parallel like the native client.
-      running.add(_withSlsk((s) => _soulseekBest(cands, job, s)).catchError((_) {
+      running.add(_withSlsk((s, release) => _soulseekBest(cands, job, s, release)).catchError((_) {
         job.status = 'failed';
         notifyListeners();
         return false;

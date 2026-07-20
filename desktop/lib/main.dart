@@ -335,6 +335,10 @@ class _HomeShellState extends State<HomeShell> {
           _navBtn(Icons.people_alt_rounded, 'Artiesten', 1),
           _navBtn(Icons.travel_explore_rounded, 'Online zoeken', 2),
           _navBtn(Icons.auto_awesome_rounded, 'Ontdek', 3),
+          Consumer<DownloadManager>(
+            builder: (_, dm, __) => _navBtn(Icons.download_rounded, 'Mijn downloads', 6,
+                badge: dm.jobs.where((j) => j.busy).length),
+          ),
           const Spacer(),
           Material(
             color: Colors.transparent,
@@ -373,7 +377,7 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
-  Widget _navBtn(IconData icon, String label, int index) {
+  Widget _navBtn(IconData icon, String label, int index, {int badge = 0}) {
     final active = _view == index;
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
@@ -389,9 +393,20 @@ class _HomeShellState extends State<HomeShell> {
               children: [
                 Icon(icon, size: 18, color: active ? Colors.white : _muted),
                 const SizedBox(width: 11),
-                Text(label,
-                    style: TextStyle(
-                        color: active ? Colors.white : _muted, fontWeight: FontWeight.w600)),
+                Expanded(
+                  child: Text(label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: active ? Colors.white : _muted, fontWeight: FontWeight.w600)),
+                ),
+                if (badge > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(color: _accent, borderRadius: BorderRadius.circular(9)),
+                    child: Text('$badge',
+                        style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, color: Colors.white)),
+                  ),
               ],
             ),
           ),
@@ -402,6 +417,7 @@ class _HomeShellState extends State<HomeShell> {
 
   Widget _content() {
     if (_view == 5) return const HomeStartView();
+    if (_view == 6) return const DownloadsView();
     if (_view == 2) return const OnlineSearchScreen();
     if (_view == 3) return const OntdekView();
     if (_view == 4) return TracksView(match: _matches, query: _q);
@@ -2096,6 +2112,160 @@ Future<void> _downloadSoulseek(BuildContext context, SoulseekFile f, List<Soulse
 /// A download button that turns into a live progress ring while THIS key's job runs — so the
 /// user sees progress right on the tile/track row, without opening the download list. Shows a
 /// check when done and a retry (with the failure reason as tooltip) when it failed.
+/// Everything the app is downloading, in one place — the equivalent of the native Soulseek
+/// transfer list. Split into what's still running and what's finished, because a track that is
+/// merely WAITING for an uploader's slot is not a failure and shouldn't look like one.
+class DownloadsView extends StatelessWidget {
+  const DownloadsView({super.key});
+
+  static String statusLabel(DownloadJob j) => switch (j.status) {
+        'done' => 'Klaar',
+        'failed' => 'Mislukt',
+        'waiting' => j.queuePlace > 0 ? 'Wacht op peer · plaats ${j.queuePlace}' : 'Wacht op peer',
+        'queued' => 'In wachtrij',
+        'preparing' => j.progress > 0 ? 'Voorbereiden ${(j.progress * 100).round()}%' : 'Voorbereiden',
+        _ => 'Bezig ${(j.progress * 100).round()}%',
+      };
+
+  static Color statusColor(DownloadJob j) => switch (j.status) {
+        'done' => _accent2,
+        'failed' => Colors.redAccent,
+        'waiting' => const Color(0xFFE0B341),
+        _ => _accent,
+      };
+
+  static IconData statusIcon(DownloadJob j) => switch (j.status) {
+        'done' => Icons.check_circle_rounded,
+        'failed' => Icons.error_rounded,
+        'waiting' => Icons.hourglass_top_rounded,
+        'queued' => Icons.schedule_rounded,
+        _ => Icons.downloading_rounded,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<DownloadManager>(
+      builder: (_, dm, __) {
+        final active = dm.jobs.where((j) => j.busy).toList();
+        final finished = dm.jobs.where((j) => !j.busy).toList();
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(28, 22, 28, 30),
+          children: [
+            Row(
+              children: [
+                const Text('Mijn downloads',
+                    style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
+                const SizedBox(width: 14),
+                if (active.isNotEmpty)
+                  Text('${dm.slskActive} bezig · ${dm.slskQueued} in wachtrij',
+                      style: const TextStyle(color: _muted, fontSize: 12.5)),
+                const Spacer(),
+                if (finished.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: dm.clearFinished,
+                    icon: const Icon(Icons.clear_all_rounded, size: 16),
+                    label: const Text('Wis afgeronde'),
+                    style: TextButton.styleFrom(foregroundColor: _muted),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            if (dm.jobs.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 60),
+                child: Center(
+                  child: Text('Nog geen downloads.\nStart er een vanuit een album of via Online zoeken.',
+                      textAlign: TextAlign.center, style: TextStyle(color: _muted, height: 1.6)),
+                ),
+              ),
+            if (active.isNotEmpty) ...[
+              const _DlHeader('BEZIG'),
+              ...active.map((j) => _DlRow(job: j)),
+              const SizedBox(height: 22),
+            ],
+            if (finished.isNotEmpty) ...[
+              const _DlHeader('AFGEROND'),
+              ...finished.map((j) => _DlRow(job: j)),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _DlHeader extends StatelessWidget {
+  final String text;
+  const _DlHeader(this.text);
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text(text,
+            style: const TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: .8)),
+      );
+}
+
+class _DlRow extends StatelessWidget {
+  final DownloadJob job;
+  const _DlRow({required this.job});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = DownloadsView.statusColor(job);
+    final indeterminate = job.status == 'queued' || job.status == 'waiting';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: _panel,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _line),
+      ),
+      child: Row(
+        children: [
+          Icon(DownloadsView.statusIcon(job), size: 19, color: color),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(job.name,
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5)),
+                if (job.detail != null && job.detail!.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(job.detail!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 11, color: job.status == 'failed' ? Colors.red.shade300 : _muted)),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 16),
+          SizedBox(
+            width: 190,
+            child: LinearProgressIndicator(
+              value: job.status == 'done' ? 1 : (indeterminate || job.progress <= 0 ? null : job.progress),
+              backgroundColor: const Color(0xFF2A2F42),
+              color: color,
+            ),
+          ),
+          const SizedBox(width: 14),
+          SizedBox(
+            width: 150,
+            child: Text(DownloadsView.statusLabel(job),
+                textAlign: TextAlign.right,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11.5, color: color, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 Widget _downloadControl(BuildContext context,
     {required String jobKey, required VoidCallback onDownload, String tooltip = 'Downloaden via Soulseek'}) {
   return Consumer<DownloadManager>(
@@ -2110,6 +2280,27 @@ Widget _downloadControl(BuildContext context,
           child: Tooltip(
             message: 'In wachtrij…',
             child: Icon(Icons.schedule_rounded, color: _muted, size: 19),
+          ),
+        );
+      }
+      if (status == 'waiting') {
+        // The uploader has us in its queue and will start when a slot frees — exactly what the
+        // native client shows as "Queued". Not a failure, so no red: an hourglass plus the place.
+        final place = job!.queuePlace;
+        return Tooltip(
+          message: job.detail ?? 'Wachten op peer…',
+          child: SizedBox(
+            width: 40,
+            height: 40,
+            child: Stack(alignment: Alignment.center, children: [
+              const Icon(Icons.hourglass_top_rounded, color: Color(0xFFE0B341), size: 19),
+              if (place > 0)
+                Positioned(
+                  bottom: 2,
+                  child: Text('$place',
+                      style: const TextStyle(fontSize: 8.5, color: _muted, fontWeight: FontWeight.w700)),
+                ),
+            ]),
           ),
         );
       }
