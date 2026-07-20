@@ -2673,10 +2673,32 @@ class _SourcesViewState extends State<SourcesView> {
           const Padding(
               padding: EdgeInsets.fromLTRB(24, 2, 24, 6),
               child: Text('Geen Soulseek-bronnen.', style: TextStyle(color: _muted, fontSize: 12.5))),
-        ...slsk.map((f) => _soulseekTile(context, f, slsk)),
+        ..._slskTiles(context, slsk),
       ],
     );
   }
+}
+
+/// Rows are built eagerly inside a plain ListView, so a broad query (3500+ hits is normal for a
+/// popular track) would build every one of them on every rebuild and lock the UI. Results are
+/// quality-sorted, so showing the head is no loss — and the full list is still handed to each
+/// tile as its candidate pool, so downloading keeps every fallback peer.
+const _slskShown = 250;
+
+List<Widget> _slskTiles(BuildContext context, List<SoulseekFile> slsk) {
+  final shown = slsk.length <= _slskShown ? slsk : slsk.sublist(0, _slskShown);
+  return [
+    ...shown.map((f) => _soulseekTile(context, f, slsk)),
+    if (slsk.length > _slskShown)
+      Padding(
+        padding: const EdgeInsets.fromLTRB(24, 10, 24, 16),
+        child: Text(
+          'Nog ${slsk.length - _slskShown} bronnen niet getoond — de beste staan bovenaan. '
+          'Verfijn je zoekopdracht om ze te zien.',
+          style: const TextStyle(color: _muted, fontSize: 12),
+        ),
+      ),
+  ];
 }
 
 class OnlineSearchScreen extends StatefulWidget {
@@ -3286,7 +3308,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                   padding: EdgeInsets.fromLTRB(24, 16, 24, 6),
                   child: Text('SOULSEEK · log in via Instellingen om P2P mee te zoeken',
                       style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)))),
-        ...slsk.map((f) => _soulseekTile(context, f, slsk)),
+        ..._slskTiles(context, slsk),
       ],
     );
   }

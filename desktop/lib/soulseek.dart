@@ -385,11 +385,21 @@ class SoulseekClient {
       byTicket[t] = q;
     }
     final merged = <String, SoulseekFile>{}; // username|filename → file (dedup across variants)
+    // Results arrive in many small batches — a broad query brings thousands across hundreds of
+    // them. Sorting and re-rendering everything per batch is quadratic and froze the UI for
+    // ~30s, so coalesce: collect freely, publish at most a few times a second.
+    Timer? emit;
+    void publish() {
+      emit = null;
+      onPartial!(sortSoulseek(merged.values));
+    }
+
     void addFiles(List<SoulseekFile> files) {
       for (final f in files) {
         merged['${f.username}|${f.filename}'] = f;
       }
-      if (onPartial != null) onPartial(sortSoulseek(merged.values));
+      if (onPartial == null) return;
+      emit ??= Timer(const Duration(milliseconds: 300), publish);
     }
 
     // Accept results from peers that connect TO us (the firewalled ones we can't reach outbound).
@@ -450,6 +460,7 @@ class SoulseekClient {
       for (final t in tickets) {
         _searchSinks.remove(t);
       }
+      emit?.cancel(); // the return value below is the final, complete list
       server?.destroy();
     }
     return sortSoulseek(merged.values);
