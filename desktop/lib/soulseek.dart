@@ -784,8 +784,12 @@ class SlskSession {
   Future<SlskResult> download(SoulseekFile file, File destFile, void Function(int, int) onProgress,
       {void Function(SlskQueued)? onStatus, bool waitInQueue = true}) async {
     if (!await _ensure()) return SlskFail('Kan niet inloggen bij Soulseek');
-    // Queue behind any transfer already running for this same peer.
+    // One transfer per peer at a time. If another of our downloads already holds this peer, that
+    // counts as busy: during the quick sweep we move straight on to the next source rather than
+    // block — otherwise a download parked in this peer's queue (up to 30 min) silently stalls
+    // every other download that happens to rank the same peer first.
     final prev = _peerLocks[file.username];
+    if (prev != null && !waitInQueue) return SlskQueued(0);
     final mine = Completer<void>();
     _peerLocks[file.username] = mine.future;
     if (prev != null) {
