@@ -771,7 +771,7 @@ class SlskSession {
   /// different peers — replies are routed by username. Two downloads from the SAME peer are
   /// serialised (a peer grants one slot at a time, and it keeps routing unambiguous).
   Future<SlskResult> download(SoulseekFile file, File destFile, void Function(int, int) onProgress,
-      {void Function(SlskQueued)? onStatus}) async {
+      {void Function(SlskQueued)? onStatus, bool waitInQueue = true}) async {
     if (!await _ensure()) return SlskFail('Kan niet inloggen bij Soulseek');
     // Queue behind any transfer already running for this same peer.
     final prev = _peerLocks[file.username];
@@ -783,7 +783,7 @@ class SlskSession {
       } catch (_) {}
     }
     try {
-      return await _transfer(file, destFile, onProgress, onStatus: onStatus);
+      return await _transfer(file, destFile, onProgress, onStatus: onStatus, waitInQueue: waitInQueue);
     } finally {
       mine.complete();
       if (identical(_peerLocks[file.username], mine.future)) _peerLocks.remove(file.username);
@@ -812,8 +812,10 @@ class SlskSession {
     }
   }
 
+  /// [waitInQueue] false = a "queued" reply ends the attempt at once (so the caller can sweep the
+  /// other peers first); true = hold the connection and wait for a slot, keeping our queue place.
   Future<SlskResult> _transfer(SoulseekFile file, File destFile, void Function(int, int) onProgress,
-      {void Function(SlskQueued)? onStatus}) async {
+      {void Function(SlskQueued)? onStatus, bool waitInQueue = true}) async {
     if (!await _ensure()) return SlskFail('Kan niet inloggen bij Soulseek');
     // The uploader opens the file connection TO us, so we must be listening before we ask for the
     // file — not only after a search happened to bind the port earlier in this process.
@@ -915,6 +917,12 @@ class SlskSession {
       void noteQueued() {
         if (queued) return;
         queued = true;
+        if (!waitInQueue) {
+          // The caller would rather try another peer than sit in this one's queue. Report it and
+          // let go immediately — a free peer beats a good place in a busy peer's line.
+          if (!delivered.isCompleted) delivered.complete(SlskQueued(place));
+          return;
+        }
         onStatus?.call(SlskQueued(0));
         // Ask for our position now and then, so the UI can show it moving.
         poll = Timer.periodic(const Duration(seconds: 30), (_) {

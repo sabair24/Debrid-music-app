@@ -445,7 +445,42 @@ class DownloadManager extends ChangeNotifier {
       List<SoulseekFile> candidates, DownloadJob job, SlskSession session, void Function() releaseSlot) async {
     final ranked = [...candidates]..sort(_rankSlsk);
     final tries = ranked.length < 5 ? ranked.length : 5;
-    var everQueued = false;
+
+    /// Shared success path: file the track away tidily (Albums/Singles/Compilaties per artist)
+    /// before the rescan picks it up, so the library never sees the loose landing-zone copy.
+    Future<bool> succeed(SlskDone res) async {
+      final staged = File(res.path);
+      try {
+        await placeFile(staged, _downloadsRoot);
+        // Non-recursive: only removes the per-peer staging folder once it's actually empty.
+        await staged.parent.delete();
+      } catch (_) {/* leave it where it landed — the scan still finds it */}
+      job.progress = 1;
+      job.status = 'done';
+      job.queuePlace = 0;
+      job.detail = null;
+      notifyListeners();
+      try {
+        await onLibraryChanged();
+      } catch (_) {/* library rescan hiccup shouldn't un-succeed the download */}
+      return true;
+    }
+
+    Future<SlskResult> attempt(SoulseekFile f, {required bool wait}) async {
+      try {
+        return await _rawTransfer(session, f, job, () {
+          // Only reached when waiting: hand our parallel slot to the next download so one busy
+          // peer can't stall the batch, while we keep our place in this uploader's queue.
+          releaseSlot();
+        }, waitInQueue: wait);
+      } catch (_) {
+        return SlskFail('Downloadfout'); // unexpected throw → a failed attempt, keep going
+      }
+    }
+
+    // Pass 1 — find someone who is FREE RIGHT NOW. A peer that puts us in its queue is dropped
+    // immediately rather than waited on: a free peer beats a good place in a busy peer's line.
+    final busy = <SoulseekFile>[];
     for (var i = 0; i < tries; i++) {
       final f = ranked[i];
       job.status = 'downloading';
@@ -453,47 +488,32 @@ class DownloadManager extends ChangeNotifier {
       job.queuePlace = 0;
       job.detail = tries > 1 ? 'poging ${i + 1}/$tries · ${f.username}' : f.username;
       notifyListeners();
-      SlskResult res;
-      try {
-        res = await _rawTransfer(session, f, job, () {
-          // The uploader queued us: keep waiting (that's what the native client does) but hand our
-          // parallel slot to the next download so one busy peer can't stall the batch.
-          everQueued = true;
-          releaseSlot();
-        });
-      } catch (_) {
-        res = SlskFail('Downloadfout'); // any unexpected throw → treat as a failed attempt, keep going
-      }
+      final res = await attempt(f, wait: false);
+      if (res is SlskDone) return succeed(res);
       if (res is SlskQueued) {
-        // Waited out the uploader's queue without a slot ever opening — move on to the next peer.
-        job.detail = 'uploader bleef bezet · ${f.username}';
-        notifyListeners();
-        continue;
+        busy.add(f); // worth waiting on later if nobody turns out to be free
+        job.detail = '${f.username} is bezet · volgende bron';
+      } else {
+        job.detail = (res as SlskFail).reason;
       }
-      if (res is SlskDone) {
-        // File it away tidily (Albums/Singles/Compilaties per artist) before the rescan picks
-        // it up, so the library never sees the loose landing-zone copy.
-        final staged = File(res.path);
-        try {
-          await placeFile(staged, _downloadsRoot);
-          // Non-recursive: only removes the per-peer staging folder once it's actually empty.
-          await staged.parent.delete();
-        } catch (_) {/* leave it where it landed — the scan still finds it */}
-        job.progress = 1;
-        job.status = 'done';
-        job.detail = null;
-        notifyListeners();
-        try {
-          await onLibraryChanged();
-        } catch (_) {/* library rescan hiccup shouldn't un-succeed the download */}
-        return true;
-      }
-      job.detail = (res as SlskFail).reason;
       notifyListeners();
     }
+
+    // Pass 2 — nobody was free, so now we do wait, best quality first.
+    for (final f in busy) {
+      job.status = 'waiting';
+      job.progress = 0;
+      job.detail = 'wachten op ${f.username}';
+      notifyListeners();
+      final res = await attempt(f, wait: true);
+      if (res is SlskDone) return succeed(res);
+      job.detail = res is SlskQueued ? '${f.username} bleef bezet' : (res as SlskFail).reason;
+      notifyListeners();
+    }
+
     job.status = 'failed';
     job.queuePlace = 0;
-    if (everQueued) job.detail = 'alle uploaders bleven bezet — probeer later opnieuw';
+    if (busy.isNotEmpty) job.detail = 'alle uploaders bleven bezet — probeer later opnieuw';
     notifyListeners();
     return false;
   }
@@ -515,7 +535,8 @@ class DownloadManager extends ChangeNotifier {
 
   /// The raw single-peer transfer over [session] (updates progress only; no status finalization).
   Future<SlskResult> _rawTransfer(
-      SlskSession session, SoulseekFile file, DownloadJob job, void Function() onQueued) async {
+      SlskSession session, SoulseekFile file, DownloadJob job, void Function() onQueued,
+      {bool waitInQueue = true}) async {
     // Land in a staging folder; placeFile() moves it into Albums/Singles/Compilaties after.
     // Per-PEER subfolder: candidates for the same track share a display name, so a slow attempt
     // that is still winding down can never write into the file the next attempt just opened.
@@ -542,7 +563,7 @@ class DownloadManager extends ChangeNotifier {
       job.detail = q.place > 0 ? 'wachten op ${file.username} · plaats ${q.place}' : 'wachten op ${file.username}';
       notifyListeners();
       onQueued();
-    }));
+    }, waitInQueue: waitInQueue));
   }
 
   /// Add a torrent download. Non-blocking: a "preparing" job shows TorBox's fetch progress
