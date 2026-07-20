@@ -10,6 +10,10 @@ class AppSettings extends ChangeNotifier {
   String lastfmKey = '';
   String soulseekUser = '';
   String soulseekPass = '';
+  /// Port we LISTEN on for incoming Soulseek peers. Soulseek only delivers a firewalled peer's
+  /// search results if we are reachable, so 0 (= don't listen) loses most results. Use the same
+  /// port the native client uses, since the router already forwards it.
+  int soulseekPort = 0;
   String rutrackerUser = '';
   String rutrackerPass = '';
   String rutrackerCookie = ''; // bb_session cookie, kept so we don't re-login (or re-captcha) each run
@@ -40,6 +44,7 @@ class AppSettings extends ChangeNotifier {
         lastfmKey = (m['lastfm_key'] ?? '') as String;
         soulseekUser = (m['soulseek_user'] ?? '') as String;
         soulseekPass = (m['soulseek_pass'] ?? '') as String;
+        soulseekPort = (m['soulseek_port'] ?? 0) as int;
         rutrackerUser = (m['rutracker_user'] ?? '') as String;
         rutrackerPass = (m['rutracker_pass'] ?? '') as String;
         rutrackerCookie = (m['rutracker_cookie'] ?? '') as String;
@@ -65,6 +70,7 @@ class AppSettings extends ChangeNotifier {
         'lastfm_key': lastfmKey,
         'soulseek_user': soulseekUser,
         'soulseek_pass': soulseekPass,
+        'soulseek_port': soulseekPort,
         'rutracker_user': rutrackerUser,
         'rutracker_pass': rutrackerPass,
         'rutracker_cookie': rutrackerCookie,

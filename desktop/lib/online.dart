@@ -257,6 +257,7 @@ class SoulseekService {
     if (!available) return [];
     final q = query.trim();
     if (q.isEmpty) return [];
+    client.listenPort = settings.soulseekPort; // so firewalled peers can reach us with results
     // Soulseek quirk: the first character is often dropped — also try a "*"-prefixed variant.
     final variants = <String>{q};
     if (q.length > 2) variants.add('*${q.substring(1)}');

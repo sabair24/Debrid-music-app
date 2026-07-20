@@ -3632,7 +3632,7 @@ class SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
-  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _rtUser, _rtPass;
+  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _rtUser, _rtPass, _slskPort;
 
   @override
   void initState() {
@@ -3642,6 +3642,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _torbox = TextEditingController(text: s.torboxToken);
     _slskUser = TextEditingController(text: s.soulseekUser);
     _slskPass = TextEditingController(text: s.soulseekPass);
+    _slskPort = TextEditingController(text: s.soulseekPort > 0 ? s.soulseekPort.toString() : "");
     _lastfm = TextEditingController(text: s.lastfmKey);
     _rtUser = TextEditingController(text: s.rutrackerUser);
     _rtPass = TextEditingController(text: s.rutrackerPass);
@@ -3659,6 +3660,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _torbox.dispose();
     _slskUser.dispose();
     _slskPass.dispose();
+    _slskPort.dispose();
     _lastfm.dispose();
     _rtUser.dispose();
     _rtPass.dispose();
@@ -3693,6 +3695,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       ..discogsToken = _discogs.text.trim()
       ..soulseekUser = _slskUser.text.trim()
       ..soulseekPass = _slskPass.text.trim()
+      ..soulseekPort = int.tryParse(_slskPort.text.trim()) ?? 0
       ..rutrackerUser = _rtUser.text.trim()
       ..rutrackerPass = _rtPass.text
       ..rutrackerCookie = real.rutrackerCookie; // RuTracker validity depends on the live session
@@ -3910,6 +3913,15 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         Expanded(child: _field('Soulseek wachtwoord', _slskPass, obscure: true)),
                       ],
                     ),
+                    _field('Soulseek luisterpoort (zelfde als de native app)', _slskPort),
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 8),
+                      child: Text(
+                          'Zonder open poort ziet de app alleen peers die zelf bereikbaar zijn — dat is waarom '
+                          'de native app soms méér vindt. Vul dezelfde poort in die SoulseekQt gebruikt (die '
+                          'staat al doorgestuurd in je router) en zet er een Windows Firewall-uitzondering op.',
+                          style: TextStyle(color: _muted, fontSize: 11.5)),
+                    ),
                     Row(
                       children: [
                         Expanded(child: _field('RuTracker gebruiker', _rtUser)),
@@ -4028,6 +4040,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     s.torboxToken = _torbox.text.trim();
                     s.soulseekUser = _slskUser.text.trim();
                     s.soulseekPass = _slskPass.text.trim();
+                    s.soulseekPort = int.tryParse(_slskPort.text.trim()) ?? 0;
                     s.rutrackerUser = _rtUser.text.trim();
                     s.rutrackerPass = _rtPass.text;
                     s.lastfmKey = _lastfm.text.trim();

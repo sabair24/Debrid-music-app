@@ -145,6 +145,72 @@ class SoulseekClient {
   final _rng = Random();
   int _nextTicket() => 10000 + _rng.nextInt(900000);
 
+  // ── Incoming peer connections ─────────────────────────────────────────────
+  // Soulseek delivers a search result by having the PEER connect to the searcher. A peer that is
+  // itself firewalled can't be reached by us either, so unless WE are reachable its results are
+  // lost — measured: of 15 peers referred for one query only 4 were connectable. Listening on a
+  // (router-forwarded) port is what lets those peers reach us, matching the native client.
+  int listenPort = 0; // 0 = don't listen (set from settings)
+  ServerSocket? _listener;
+  int get boundPort => _listener?.port ?? 0;
+
+  /// ticket → sink for results arriving on INCOMING connections.
+  final Map<int, void Function(List<SoulseekFile>)> _searchSinks = {};
+
+  /// Bind the listening port once. Returns the port actually advertised (0 = not listening, e.g.
+  /// the port is taken because the native client is running — then we simply behave as before).
+  Future<int> ensureListening() async {
+    if (_listener != null) return _listener!.port;
+    if (listenPort <= 0) return 0;
+    try {
+      final s = await ServerSocket.bind(InternetAddress.anyIPv4, listenPort);
+      _listener = s;
+      s.listen(_onInbound, onError: (_) {}, cancelOnError: false);
+      return s.port;
+    } catch (_) {
+      return 0; // port busy / blocked — fall back to the old firewalled behaviour
+    }
+  }
+
+  void stopListening() {
+    _listener?.close();
+    _listener = null;
+  }
+
+  /// An incoming peer connection. The FIRST message is an init message (1-byte code):
+  /// PeerInit(1) = username/type/token, PierceFirewall(0) = token. After that they're ordinary
+  /// peer messages, and a 'P' (peer) connection is what carries FileSearchResponse (code 9).
+  void _onInbound(Socket sock) {
+    final conn = _Conn(sock);
+    var sawInit = false;
+    Timer? idle;
+    void bump() {
+      idle?.cancel();
+      idle = Timer(const Duration(seconds: 30), () => sock.destroy());
+    }
+
+    bump();
+    conn.messages.listen((payload) {
+      bump();
+      if (!sawInit) {
+        sawInit = true;
+        return; // PeerInit / PierceFirewall — we only care about what follows
+      }
+      if (payload.length < 4) return;
+      final code = _R(payload).u32();
+      if (code != 9) return; // only search responses are interesting on an inbound connection
+      final (ticket, files) = _parseAny(_zlib(Uint8List.sublistView(payload, 4)));
+      final sink = _searchSinks[ticket];
+      if (sink != null && files.isNotEmpty) sink(files);
+    }, onError: (_) {
+      idle?.cancel();
+      sock.destroy();
+    }, onDone: () {
+      idle?.cancel();
+      sock.destroy();
+    });
+  }
+
   /// A download session that logs in ONCE and reuses that connection for every download in it
   /// (see [SlskSession]). Use one session per batch (a whole album, or a single track's peer
   /// fallback) so downloading N tracks costs ONE login, not one per peer attempt — Soulseek
@@ -190,6 +256,12 @@ class SoulseekClient {
       if (onPartial != null) onPartial(sortSoulseek(merged.values));
     }
 
+    // Accept results from peers that connect TO us (the firewalled ones we can't reach outbound).
+    final advertise = await ensureListening();
+    for (final t in tickets) {
+      _searchSinks[t] = addFiles;
+    }
+
     final peerJobs = <Future<void>>[];
     Socket? server;
     try {
@@ -207,7 +279,9 @@ class SoulseekClient {
             return;
           }
           noteLoginOk();
-          conn.send(_message(2, (_W()..u32(0)).bytes())); // SetWaitPort(0)
+          // Advertise our real listening port when we have one: peers we can't dial out to will
+          // then connect to US with their results (that's how the native client sees them all).
+          conn.send(_message(2, (_W()..u32(advertise)).bytes())); // SetWaitPort
           for (final t in byTicket.keys) {
             conn.send(_message(26, (_W()..u32(t)..str(byTicket[t]!)).bytes())); // FileSearch
           }
@@ -237,6 +311,9 @@ class SoulseekClient {
     } catch (e) {
       if (merged.isEmpty) rethrow;
     } finally {
+      for (final t in tickets) {
+        _searchSinks.remove(t);
+      }
       server?.destroy();
     }
     return sortSoulseek(merged.values);
@@ -303,10 +380,17 @@ class SoulseekClient {
 
   /// Parse a peer's FileSearchResponse; returns its files if the ticket is one of ours.
   List<SoulseekFile> _parseResults(Uint8List data, Set<int> validTickets) {
+    final (ticket, files) = _parseAny(data);
+    return validTickets.contains(ticket) ? files : const [];
+  }
+
+  /// Parse a FileSearchResponse and return its ticket + files (no filtering) — incoming
+  /// connections need the ticket to know WHICH search the results belong to.
+  (int, List<SoulseekFile>) _parseAny(Uint8List data) {
     final r = _R(data);
     final peerUser = r.str();
-    if (!validTickets.contains(r.u32())) return const [];
-    final count = r.u32().clamp(0, 500);
+    final ticket = r.remaining >= 4 ? r.u32() : -1;
+    final count = r.remaining >= 4 ? r.u32().clamp(0, 500) : 0;
     final files = <SoulseekFile>[];
     for (var i = 0; i < count; i++) {
       if (r.remaining < 5) break;
@@ -333,7 +417,10 @@ class SoulseekClient {
     final freeSlots = r.remaining > 0 ? r.boolean() : false;
     final speed = r.remaining >= 4 ? r.u32() : 0;
     final queueLen = r.remaining >= 4 ? r.u32() : 0;
-    return [for (final f in files) f.copyWith(freeSlots: freeSlots, speed: speed, queueLength: queueLen)];
+    return (
+      ticket,
+      [for (final f in files) f.copyWith(freeSlots: freeSlots, speed: speed, queueLength: queueLen)]
+    );
   }
 
   // Single-file download now lives in [SlskSession.download] — it reuses ONE login per batch
@@ -492,7 +579,7 @@ class SlskSession {
         return false;
       }
       client.noteLoginOk();
-      c.send(_message(2, (_W()..u32(0)).bytes())); // SetWaitPort(0)
+      c.send(_message(2, (_W()..u32(client.boundPort)).bytes())); // SetWaitPort (real port if listening)
       _conn = c;
       _loginTries = 0; // healthy login → reset the consecutive-failure counter
       return true;
