@@ -35,6 +35,28 @@ List<Map<String, dynamic>> _scanTags(String root) {
       addedMs = st.modified.millisecondsSinceEpoch;
       sizeBytes = st.size;
     } catch (_) {}
+    // FLAC goes through our own parser first: the package throws on tags it can't parse (a vinyl
+    // "A3" track number is enough) and LEAKS THE FILE HANDLE when it does, which would leave that
+    // track unmovable and undeletable for the rest of the session. See readTags().
+    if (_ext(e.path) == '.flac') {
+      final v = readFlacTags(e);
+      if (v != null && (v.title != null || v.artist != null || v.album != null)) {
+        out.add({
+          'path': e.path,
+          'title': v.title ?? _baseName(e.path),
+          'artist': v.artist ?? 'Onbekende artiest',
+          'album': v.album ?? '',
+          'trackNo': v.trackNo,
+          'durationMs': v.duration?.inMilliseconds ?? 0,
+          'isFlac': true,
+          'year': v.year,
+          'genre': v.genre,
+          'addedMs': addedMs,
+          'sizeBytes': sizeBytes,
+        });
+        continue;
+      }
+    }
     try {
       final m = readMetadata(e, getImage: false);
       out.add({
@@ -50,25 +72,7 @@ List<Map<String, dynamic>> _scanTags(String root) {
         'addedMs': addedMs,
         'sizeBytes': sizeBytes,
       });
-    } catch (_) {
-      // The package throws on tags it can't parse (e.g. a vinyl "A3" track number) and the track
-      // would vanish from the library entirely. Read it ourselves rather than drop it.
-      final v = readFlacTags(e);
-      if (v == null) continue;
-      out.add({
-        'path': e.path,
-        'title': (v.title?.isNotEmpty ?? false) ? v.title! : _baseName(e.path),
-        'artist': (v.artist?.isNotEmpty ?? false) ? v.artist! : 'Onbekende artiest',
-        'album': v.album ?? '',
-        'trackNo': v.trackNo,
-        'durationMs': v.duration?.inMilliseconds ?? 0,
-        'isFlac': _ext(e.path) == '.flac',
-        'year': v.year,
-        'genre': v.genre,
-        'addedMs': addedMs,
-        'sizeBytes': sizeBytes,
-      });
-    }
+    } catch (_) {}
   }
   return out;
 }

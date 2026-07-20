@@ -73,9 +73,26 @@ class TrackTags {
 }
 
 /// Read the tags of a downloaded file (falls back to the filename for the title).
+///
+/// FLAC is read with our own parser FIRST, and not only because the package chokes on values like
+/// a vinyl "A3" track number: when it throws it leaves the file HANDLE OPEN, so that track can
+/// never be moved or deleted again for the rest of the session — a download would sit stuck in the
+/// staging folder forever. Avoiding the throwing path is the only way to avoid the leak.
 TrackTags? readTags(File f) {
   final base = f.uri.pathSegments.last;
   final noExt = base.contains('.') ? base.substring(0, base.lastIndexOf('.')) : base;
+
+  if (base.toLowerCase().endsWith('.flac')) {
+    final v = readFlacTags(f);
+    if (v != null && (v.title != null || v.artist != null || v.album != null)) {
+      return TrackTags(
+        title: v.title ?? noExt,
+        artist: v.artist ?? '',
+        album: v.album ?? '',
+        trackNo: v.trackNo,
+      );
+    }
+  }
   try {
     final m = readMetadata(f, getImage: false);
     return TrackTags(
@@ -85,16 +102,7 @@ TrackTags? readTags(File f) {
       trackNo: m.trackNumber ?? 0,
     );
   } catch (_) {
-    // The package rejects some perfectly playable files (a vinyl "A3" track number is enough).
-    // Falling back keeps the download out of the staging folder instead of losing it there.
-    final v = readFlacTags(f);
-    if (v == null) return null;
-    return TrackTags(
-      title: (v.title?.isNotEmpty ?? false) ? v.title! : noExt,
-      artist: v.artist ?? '',
-      album: v.album ?? '',
-      trackNo: v.trackNo,
-    );
+    return null;
   }
 }
 
@@ -156,11 +164,30 @@ Future<String> placeFile(File src, String root, {RelKind? kind, TrackTags? tags}
       }
       await dest.delete().catchError((_) => dest);
     }
-    final moved = await src.rename(dest.path);
-    return moved.path;
+    return await _move(src, dest);
   } catch (_) {
     return src.path; // cross-device or locked — leave it, the scan still picks it up
   }
+}
+
+/// Move with a couple of retries, then a copy+delete fallback.
+/// A freshly downloaded file often gets touched briefly by something else on the machine — a
+/// virus scanner, the search indexer, a music server watching the folder — and a rename that
+/// lands in that window fails outright. Giving up there strands the track in staging.
+Future<String> _move(File src, File dest) async {
+  for (var attempt = 0; attempt < 3; attempt++) {
+    try {
+      return (await src.rename(dest.path)).path;
+    } catch (_) {
+      if (attempt < 2) await Future.delayed(Duration(milliseconds: 250 * (attempt + 1)));
+    }
+  }
+  // Still no: copy instead, and only drop the original once the copy is safely in place.
+  await src.copy(dest.path);
+  try {
+    await src.delete();
+  } catch (_) {/* copy stands; the staging leftover gets cleaned up later */}
+  return dest.path;
 }
 
 /// Result of tidying a folder.
