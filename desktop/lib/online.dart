@@ -502,6 +502,17 @@ class DownloadManager extends ChangeNotifier {
   /// user's existing collection elsewhere under musicRoot is never touched or moved.
   String get _downloadsRoot => '$musicRoot${Platform.pathSeparator}DebridMusic Downloads';
 
+  /// A peer that never delivered leaves an empty staging folder behind; drop it so `_inkomend`
+  /// doesn't slowly fill with the name of every uploader we ever tried. Non-recursive on purpose:
+  /// a folder that still holds a partial file is left alone.
+  Future<SlskResult> _cleanStaging(Directory dir, Future<SlskResult> transfer) async {
+    final res = await transfer;
+    try {
+      await dir.delete();
+    } catch (_) {/* not empty (or already gone) — leave it */}
+    return res;
+  }
+
   /// The raw single-peer transfer over [session] (updates progress only; no status finalization).
   Future<SlskResult> _rawTransfer(
       SlskSession session, SoulseekFile file, DownloadJob job, void Function() onQueued) async {
@@ -512,7 +523,7 @@ class DownloadManager extends ChangeNotifier {
         '$_downloadsRoot${Platform.pathSeparator}_inkomend${Platform.pathSeparator}${_sanitize(file.username)}');
     await dir.create(recursive: true);
     final dest = File('${dir.path}${Platform.pathSeparator}${_sanitize(file.displayName)}');
-    return session.download(file, dest, (rec, tot) {
+    return _cleanStaging(dir, session.download(file, dest, (rec, tot) {
       if (job.status == 'waiting') {
         job.status = 'downloading'; // bytes are flowing — the wait is over
         job.queuePlace = 0;
@@ -531,7 +542,7 @@ class DownloadManager extends ChangeNotifier {
       job.detail = q.place > 0 ? 'wachten op ${file.username} · plaats ${q.place}' : 'wachten op ${file.username}';
       notifyListeners();
       onQueued();
-    });
+    }));
   }
 
   /// Add a torrent download. Non-blocking: a "preparing" job shows TorBox's fetch progress

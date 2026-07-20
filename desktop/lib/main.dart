@@ -2157,7 +2157,10 @@ class DownloadsView extends StatelessWidget {
                     style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
                 const SizedBox(width: 14),
                 if (active.isNotEmpty)
-                  Text('${dm.slskActive} bezig · ${dm.slskQueued} in wachtrij',
+                  // Counted from the jobs themselves: a download waiting in an uploader's queue has
+                  // handed its parallel slot back, so the scheduler's counters would read 0 here.
+                  Text('${active.where((j) => j.status == 'downloading' || j.status == 'preparing').length} bezig'
+                      ' · ${active.where((j) => j.status == 'waiting' || j.status == 'queued').length} wachtend',
                       style: const TextStyle(color: _muted, fontSize: 12.5)),
                 const Spacer(),
                 if (finished.isNotEmpty)
