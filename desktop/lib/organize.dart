@@ -140,34 +140,77 @@ int formatRank(String path) {
   return 1; // mp3 and friends
 }
 
+/// What happened to a file we tried to file away.
+enum Placement {
+  moved, // filed in the tidy tree
+  duplicate, // the same recording was already there and the better copy was kept
+  stuck, // couldn't read or move it — still at its original path
+}
+
+class PlaceOutcome {
+  final String path;
+  final Placement how;
+  const PlaceOutcome(this.path, this.how);
+}
+
 /// Move [src] into the tidy tree under [root]. Returns the final path (or the original on
-/// failure — never loses the file). If a file is already there, the better copy wins and the
-/// loser is left where it is for the caller to deal with.
-Future<String> placeFile(File src, String root, {RelKind? kind, TrackTags? tags}) async {
+/// failure — never loses the file). If the SAME RECORDING is already there, the better copy wins
+/// and the loser is dropped; a different recording that happens to tag identically (a live take,
+/// a remix whose version marker only lives in the filename) is kept alongside it.
+Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, TrackTags? tags}) async {
   final t = tags ?? readTags(src);
-  if (t == null) return src.path;
+  if (t == null) return PlaceOutcome(src.path, Placement.stuck);
   final base = src.uri.pathSegments.last;
   final ext = base.contains('.') ? base.substring(base.lastIndexOf('.')) : '';
   final rel = relativePathFor(t, kind: kind, ext: ext);
-  final dest = File('$root${Platform.pathSeparator}$rel');
-  if (dest.path == src.path) return src.path;
+  var dest = File('$root${Platform.pathSeparator}$rel');
+  if (dest.path == src.path) return PlaceOutcome(src.path, Placement.moved);
   try {
     await dest.parent.create(recursive: true);
     if (await dest.exists()) {
-      // Already have this track filed — keep the better copy, drop the other.
-      final keepNew = formatRank(src.path) > formatRank(dest.path) ||
-          (formatRank(src.path) == formatRank(dest.path) &&
-              await src.length() > await dest.length());
-      if (!keepNew) {
-        await src.delete().catchError((_) => src);
-        return dest.path;
+      if (_sameRecording(src, dest)) {
+        // Genuinely the same track — keep the better copy, drop the other.
+        final keepNew = formatRank(src.path) > formatRank(dest.path) ||
+            (formatRank(src.path) == formatRank(dest.path) && await src.length() > await dest.length());
+        if (!keepNew) {
+          await src.delete().catchError((_) => src);
+          return PlaceOutcome(dest.path, Placement.duplicate);
+        }
+        await dest.delete().catchError((_) => dest);
+      } else {
+        dest = _sidestep(dest); // different take — both are worth keeping, so make room
       }
-      await dest.delete().catchError((_) => dest);
     }
-    return await _move(src, dest);
+    return PlaceOutcome(await _move(src, dest), Placement.moved);
   } catch (_) {
-    return src.path; // cross-device or locked — leave it, the scan still picks it up
+    return PlaceOutcome(src.path, Placement.stuck); // cross-device or locked — the scan still finds it
   }
+}
+
+/// For callers that only care where the file ended up.
+Future<String> placeFile(File src, String root, {RelKind? kind, TrackTags? tags}) async =>
+    (await placeFileDetailed(src, root, kind: kind, tags: tags)).path;
+
+/// Two files that tag the same are only the same RECORDING if they also run about as long.
+/// A live version, a radio edit or an extended mix carries its difference in the duration even
+/// when the version marker never made it into the title tag — and the user wants those kept.
+bool _sameRecording(File a, File b) {
+  final da = readFlacTags(a)?.duration, db = readFlacTags(b)?.duration;
+  if (da == null || db == null) return true; // can't tell — fall back to the old dedup behaviour
+  return (da - db).abs() <= const Duration(seconds: 5);
+}
+
+/// `03 - D.A.N.C.E..flac` → `03 - D.A.N.C.E. (2).flac`, first free number.
+File _sidestep(File dest) {
+  final p = dest.path;
+  final dot = p.lastIndexOf('.');
+  final stem = dot > 0 ? p.substring(0, dot) : p;
+  final ext = dot > 0 ? p.substring(dot) : '';
+  for (var n = 2; n < 50; n++) {
+    final f = File('$stem ($n)$ext');
+    if (!f.existsSync()) return f;
+  }
+  return dest;
 }
 
 /// Move with a couple of retries, then a copy+delete fallback.

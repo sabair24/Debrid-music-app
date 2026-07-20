@@ -450,18 +450,22 @@ class DownloadManager extends ChangeNotifier {
     /// before the rescan picks it up, so the library never sees the loose landing-zone copy.
     Future<bool> succeed(SlskDone res) async {
       final staged = File(res.path);
-      var placed = staged.path;
+      var how = Placement.stuck;
       try {
-        placed = await placeFile(staged, _downloadsRoot);
+        how = (await placeFileDetailed(staged, _downloadsRoot)).how;
         // Non-recursive: only removes the per-peer staging folder once it's actually empty.
         await staged.parent.delete();
       } catch (_) {/* leave it where it landed — the scan still finds it */}
       job.progress = 1;
       job.status = 'done';
       job.queuePlace = 0;
-      // Unreadable tags mean we can't work out where the track belongs. It's downloaded either
-      // way, but say so rather than reporting a clean success it didn't have.
-      job.detail = placed == staged.path ? 'gedownload, maar tags onleesbaar — staat in _inkomend' : null;
+      // Say what actually happened. A plain "Klaar" on a track that turned out to be a duplicate
+      // (and was therefore discarded) reads as "added to your library" when nothing was added.
+      job.detail = switch (how) {
+        Placement.moved => null,
+        Placement.duplicate => 'had je al — beste versie behouden',
+        Placement.stuck => 'gedownload, maar tags onleesbaar — staat in _inkomend',
+      };
       notifyListeners();
       try {
         await onLibraryChanged();
