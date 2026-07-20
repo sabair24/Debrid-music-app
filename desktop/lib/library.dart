@@ -30,9 +30,11 @@ List<Map<String, dynamic>> _scanTags(String root) {
     if (e is! File || !_audioExt.contains(_ext(e.path))) continue;
     try {
       final m = readMetadata(e, getImage: false);
-      var addedMs = 0;
+      var addedMs = 0, sizeBytes = 0;
       try {
-        addedMs = e.statSync().modified.millisecondsSinceEpoch;
+        final st = e.statSync();
+        addedMs = st.modified.millisecondsSinceEpoch;
+        sizeBytes = st.size;
       } catch (_) {}
       out.add({
         'path': e.path,
@@ -45,6 +47,7 @@ List<Map<String, dynamic>> _scanTags(String root) {
         'year': (m.year != null && m.year!.year > 1000) ? m.year!.year : null,
         'genre': (m.genres.isNotEmpty) ? m.genres.first : null,
         'addedMs': addedMs,
+        'sizeBytes': sizeBytes,
       });
     } catch (_) {}
   }
@@ -221,6 +224,7 @@ class LibraryStore extends ChangeNotifier {
       year: t.year,
       genre: t.genre,
       addedMs: t.addedMs,
+      sizeBytes: t.sizeBytes,
     );
   }
 
@@ -244,31 +248,13 @@ class LibraryStore extends ChangeNotifier {
     }
     await _saveCorrections();
 
-    // Preserve already-loaded covers across the regroup. _buildAlbums() creates fresh
-    // Album objects, so without this every album's embedded/enriched cover is dropped
-    // (only the corrected album carries a correctedCover) and the whole grid goes blank
-    // until the next scan/enrich. Keyed by first-track path, which is stable per album.
-    final coversByPath = <String, List<Uint8List?>>{};
-    for (final a in albums) {
-      coversByPath[a.tracks.first.path] = [a.embeddedCover, a.enriched, a.correctedCover];
-    }
-
-    // Re-apply corrections to the in-memory tracks + regroup.
+    // Re-apply corrections to the in-memory tracks + regroup. _buildAlbums() preserves each
+    // album's covers across the rebuild, so the grid no longer blanks here.
     final corrected = tracks.map(_applyCorrection).toList();
     tracks
       ..clear()
       ..addAll(corrected);
     _buildAlbums();
-
-    // Restore the preserved covers onto the rebuilt albums.
-    for (final a in albums) {
-      final saved = coversByPath[a.tracks.first.path];
-      if (saved != null) {
-        a.embeddedCover ??= saved[0];
-        a.enriched ??= saved[1];
-        a.correctedCover ??= saved[2];
-      }
-    }
 
     // Find the regrouped album this correction produced, and attach the new cover.
     final newArtist = (artist?.trim().isNotEmpty ?? false) ? artist!.trim() : target.artist;
@@ -366,24 +352,44 @@ class LibraryStore extends ChangeNotifier {
         year: m['year'] as int?,
         genre: m['genre'] as String?,
         addedMs: (m['addedMs'] as int?) ?? 0,
+        sizeBytes: (m['sizeBytes'] as int?) ?? 0,
       );
 
+  String _albumKey(String artist, String album, String firstPath) =>
+      album.isEmpty ? 'single::$firstPath' : 'album::${normKey(artist)}|${normKey(album)}';
+
   void _buildAlbums() {
+    // Snapshot the covers of the CURRENT albums, keyed by the SAME group key used below (NOT by
+    // first-track path — that can change when the first track is deleted). Rebuilding makes fresh
+    // Album objects with null covers, so without this ANY caller (delete, correction, …) would
+    // blank the whole grid until the next scan/enrich. This is the fix for "deleting a track wipes
+    // all album covers".
+    final coversByKey = <String, List<Uint8List?>>{};
+    for (final a in albums) {
+      if (a.tracks.isEmpty) continue;
+      coversByKey[_albumKey(a.artist, a.isSingle ? '' : a.title, a.tracks.first.path)] =
+          [a.embeddedCover, a.enriched, a.correctedCover];
+    }
+
     final map = <String, List<Track>>{};
     for (final t in tracks) {
       // No album tag => its own single (never grouped under the root folder name).
       // Group on NORMALISED artist+album: "Backstreet's Back" with a curly ’ and with a
       // straight ' are the same album and must not show up twice.
-      final key = t.album.isEmpty
-          ? 'single::${t.path}'
-          : 'album::${normKey(t.artist)}|${normKey(t.album)}';
-      map.putIfAbsent(key, () => []).add(t);
+      map.putIfAbsent(_albumKey(t.artist, t.album, t.path), () => []).add(t);
     }
     albums = map.entries.map((e) {
       final single = e.key.startsWith('single::');
       final ts = single ? e.value : _dedupeTracks(e.value);
       ts.sort((a, b) => a.trackNo.compareTo(b.trackNo));
-      return Album(single ? ts.first.title : ts.first.album, ts.first.artist, ts, isSingle: single);
+      final al = Album(single ? ts.first.title : ts.first.album, ts.first.artist, ts, isSingle: single);
+      final saved = coversByKey[e.key];
+      if (saved != null) {
+        al.embeddedCover = saved[0];
+        al.enriched = saved[1];
+        al.correctedCover = saved[2];
+      }
+      return al;
     }).toList()
       ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
 

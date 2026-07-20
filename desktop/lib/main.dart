@@ -997,17 +997,7 @@ class _TrackRowState extends State<TrackRow> {
                     style: TextStyle(
                         fontWeight: FontWeight.w600, color: isCurrent ? _accent2 : _text)),
               ),
-              if (t.isFlac)
-                Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 8),
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF0F2521),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: const Color(0xFF24493F)),
-                  ),
-                  child: const Text('FLAC', style: TextStyle(color: _accent2, fontSize: 10.5)),
-                ),
+              _qualityBadge(_trackQuality(t)),
               Text(_fmt(t.duration), style: const TextStyle(color: _muted, fontSize: 13)),
               // Delete appears on hover so it can't be hit by accident.
               SizedBox(
@@ -1187,10 +1177,19 @@ class PlayerBar extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(t?.title ?? '—',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w600)),
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(t?.title ?? '—',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontWeight: FontWeight.w600)),
+                          ),
+                          // What quality am I actually hearing? (local files only — a streamed
+                          // source's real quality isn't known here.)
+                          if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
+                        ],
+                      ),
                       Text(
                           p.radioMode && p.radioStatus.isNotEmpty
                               ? p.radioStatus
@@ -1337,7 +1336,13 @@ class NowPlayingScreen extends StatelessWidget {
                 Text(t?.title ?? '—',
                     style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w800), textAlign: TextAlign.center),
                 const SizedBox(height: 6),
-                Text(t?.artist ?? '', style: const TextStyle(color: _muted, fontSize: 15)),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(t?.artist ?? '', style: const TextStyle(color: _muted, fontSize: 15)),
+                    if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
+                  ],
+                ),
                 const SizedBox(height: 26),
                 SizedBox(
                   width: 540,
@@ -1630,11 +1635,8 @@ class TracksView extends StatelessWidget {
                           ],
                         ),
                       ),
-                      if (t.isFlac)
-                        const Padding(
-                          padding: EdgeInsets.only(right: 12),
-                          child: Text('FLAC', style: TextStyle(color: _accent2, fontSize: 10.5, fontWeight: FontWeight.w600)),
-                        ),
+                      _qualityBadge(_trackQuality(t)),
+                      const SizedBox(width: 4),
                       Text(_fmt(t.duration), style: const TextStyle(color: _muted, fontSize: 12)),
                       const SizedBox(width: 10),
                       Icon(isCurrent && player.playing ? Icons.volume_up_rounded : Icons.play_arrow_rounded,
@@ -2247,6 +2249,16 @@ Widget _qualityBadge(Quality q) {
     child: Text(q.label, style: TextStyle(color: fg, fontSize: 10.5, fontWeight: FontWeight.w600)),
   );
 }
+
+/// Quality of a LOCAL library track (real bitrate from size÷duration, so a 16/44 FLAC and a
+/// 24-bit hi-res FLAC read differently).
+Quality _trackQuality(Track t) => qualityFromFile(
+      name: t.title,
+      ext: t.ext,
+      isFlac: t.isFlac,
+      durationSec: t.duration?.inSeconds,
+      size: t.sizeBytes,
+    );
 
 Quality _slskQuality(SoulseekFile f) => qualityFromFile(
       name: f.displayName,

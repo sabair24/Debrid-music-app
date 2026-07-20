@@ -16,6 +16,10 @@ class Track {
   /// File modified time (ms since epoch) — used for "recently added" sorting + the home screen.
   final int addedMs;
 
+  /// File size in bytes — with the duration this yields the effective bitrate, so we can show
+  /// whether a FLAC is CD-quality (16/44) or hi-res (24-bit).
+  final int sizeBytes;
+
   Track({
     required this.path,
     required this.title,
@@ -27,7 +31,14 @@ class Track {
     this.year,
     this.genre,
     this.addedMs = 0,
+    this.sizeBytes = 0,
   });
+
+  /// File extension (lowercase, no dot), e.g. "flac", "mp3".
+  String get ext {
+    final i = path.lastIndexOf('.');
+    return i < 0 ? '' : path.substring(i + 1).toLowerCase();
+  }
 }
 
 /// A group of tracks sharing an artist + album (or a single, when there's no album tag).
