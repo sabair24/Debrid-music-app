@@ -369,137 +369,61 @@ class SoulseekClient {
   void noteLoginRefused() => _blockedUntil = DateTime.now().add(const Duration(minutes: 30));
   void noteLoginOk() => _blockedUntil = null;
 
-  /// Search Soulseek covering all [queries] (the raw query + its "*"-variant) on ONE
-  /// short-lived connection with a SINGLE login — instead of one login per variant, which
-  /// (during heavy use) made Soulseek temporarily block the account for too many logins.
-  /// Short-lived on purpose: a persistent connection would fight the download connections
-  /// (Soulseek allows only one connection per username). [onPartial] streams merged hits.
-  Future<List<SoulseekFile>> searchMulti(String user, String pass, List<String> queries,
-      {void Function(List<SoulseekFile>)? onPartial}) async {
-    if (blocked) return const []; // backing off after a refused login — don't touch the server
-    final tickets = <int>{};
-    final byTicket = <int, String>{};
-    for (final q in queries) {
-      final t = _nextTicket();
-      tickets.add(t);
-      byTicket[t] = q;
-    }
-    final merged = <String, SoulseekFile>{}; // username|filename → file (dedup across variants)
-    // Results arrive in many small batches — a broad query brings thousands across hundreds of
-    // them. Sorting and re-rendering everything per batch is quadratic and froze the UI for
-    // ~30s, so coalesce: collect freely, publish at most a few times a second.
-    Timer? emit;
-    void publish() {
-      emit = null;
-      onPartial!(sortSoulseek(merged.values));
-    }
+  // ── Login budget ──────────────────────────────────────────────────────────
+  // The old guard only counted CONSECUTIVE FAILURES, which is blind to the situation that
+  // actually burns the account: a kick-war with the user's native client. There every login
+  // SUCCEEDS — the server kicks the other session, that one reconnects, kicks us, and round we go.
+  // The failure counter resets on each success, so it never fires, and the account gets blocked
+  // for too many logins. So count every login ATTEMPT in a rolling window instead.
+  final _loginTimes = <DateTime>[];
+  static const _loginsPerWindow = 4;
+  static const _loginWindow = Duration(minutes: 10);
+  DateTime? _lastLoginOk;
 
-    void addFiles(List<SoulseekFile> files) {
-      for (final f in files) {
-        merged['${f.username}|${f.filename}'] = f;
-      }
-      if (onPartial == null) return;
-      emit ??= Timer(const Duration(milliseconds: 300), publish);
-    }
-
-    // Accept results from peers that connect TO us (the firewalled ones we can't reach outbound).
-    final advertise = await ensureListening();
-    for (final t in tickets) {
-      _searchSinks[t] = addFiles;
-    }
-
-    final peerJobs = <Future<void>>[];
-    Socket? server;
-    try {
-      server = await Socket.connect(_host, _port, timeout: const Duration(seconds: 8));
-      final conn = _Conn(server);
-      final done = Completer<void>();
-      final deadline = DateTime.now().add(const Duration(seconds: 8));
-      final sub = conn.messages.listen((payload) {
-        final r = _R(payload);
-        final code = r.u32();
-        if (code == 1) {
-          if (r.u8() == 0) {
-            noteLoginRefused(); // back off — stop hammering a blocked account
-            if (!done.isCompleted) done.completeError('Soulseek-login geweigerd');
-            return;
-          }
-          noteLoginOk();
-          // Advertise our real listening port when we have one: peers we can't dial out to will
-          // then connect to US with their results (that's how the native client sees them all).
-          conn.send(_message(2, (_W()..u32(advertise)).bytes())); // SetWaitPort
-          for (final t in byTicket.keys) {
-            conn.send(_message(26, (_W()..u32(t)..str(byTicket[t]!)).bytes())); // FileSearch
-          }
-        } else if (code == 18) {
-          r.str(); // peer user
-          final type = r.str();
-          final ip = r.ip();
-          final port = r.u32();
-          final token = r.u32();
-          if (type == 'P' && ip != '0.0.0.0' && port > 0 && peerJobs.length < 100) {
-            peerJobs.add(_collectPeer(ip, port, token, tickets, addFiles));
-          }
-        }
-      }, onError: (_) {}, onDone: () { if (!done.isCompleted) done.complete(); });
-
-      conn.send(_message(1, (_W()..str(user)..str(pass)..u32(160)..str(_md5hex(pass))..u32(17)).bytes()));
-      final poll = Timer.periodic(const Duration(milliseconds: 300), (t) {
-        if (DateTime.now().isAfter(deadline) || merged.length >= 400) {
-          t.cancel();
-          if (!done.isCompleted) done.complete();
-        }
-      });
-      await done.future.timeout(const Duration(seconds: 12), onTimeout: () {});
-      poll.cancel();
-      await sub.cancel();
-      await Future.wait(peerJobs).timeout(const Duration(seconds: 3)).catchError((_) => <void>[]);
-    } catch (e) {
-      if (merged.isEmpty) rethrow;
-    } finally {
-      for (final t in tickets) {
-        _searchSinks.remove(t);
-      }
-      emit?.cancel(); // the return value below is the final, complete list
-      server?.destroy();
-    }
-    return sortSoulseek(merged.values);
+  bool get _budgetSpent {
+    final cut = DateTime.now().subtract(_loginWindow);
+    _loginTimes.removeWhere((t) => t.isBefore(cut));
+    return _loginTimes.length >= _loginsPerWindow;
   }
 
-  /// Log in only (no search) to confirm the credentials — for the status check.
-  Future<bool> verifyLogin(String user, String pass) async {
-    if (blocked) return false; // backing off after a refused login — don't touch the server
-    Socket? server;
-    try {
-      server = await Socket.connect(_host, _port, timeout: const Duration(seconds: 8));
-      final conn = _Conn(server);
-      conn.send(_message(1, (_W()..str(user)..str(pass)..u32(160)..str(_md5hex(pass))..u32(17)).bytes()));
-      final done = Completer<bool>();
-      final sub = conn.messages.listen((payload) {
-        final r = _R(payload);
-        if (r.u32() == 1 && !done.isCompleted) done.complete(r.u8() != 0);
-      }, onError: (_) {
-        if (!done.isCompleted) done.complete(false);
-      }, onDone: () {
-        if (!done.isCompleted) done.complete(false);
-      });
-      final ok = await done.future.timeout(const Duration(seconds: 12), onTimeout: () => false);
-      await sub.cancel();
-      if (ok) {
-        noteLoginOk();
-      } else {
-        noteLoginRefused();
-      }
-      return ok;
-    } catch (_) {
-      return false;
-    } finally {
-      server?.destroy();
+  /// True when we must not log in again right now — either the server refused us recently, or
+  /// we've simply logged in too often. [whyNotLogin] explains which, for the UI.
+  bool get mustNotLogin => blocked || _budgetSpent;
+
+  String? get whyNotLogin {
+    if (blocked) return 'Soulseek weigerde de login — de app wacht even voor het opnieuw probeert.';
+    if (_budgetSpent) {
+      return 'Te vaak opnieuw ingelogd. Draait de officiële Soulseek-app? Sluit die — jullie '
+          'kicken elkaar er dan om beurten uit. De app probeert het straks vanzelf opnieuw.';
+    }
+    return null;
+  }
+
+  void noteLoginAttempt() => _loginTimes.add(DateTime.now());
+
+  /// A connection that dies within a minute of logging in was almost certainly KICKED by another
+  /// client on the same account. Fighting back immediately is what creates the burst, so stand
+  /// down for a while and let the other client have it.
+  void noteConnectionLost() {
+    final ok = _lastLoginOk;
+    if (ok != null && DateTime.now().difference(ok) < const Duration(minutes: 1)) {
+      _blockedUntil = DateTime.now().add(const Duration(minutes: 5));
     }
   }
 
-  Future<void> _collectPeer(
-      String ip, int port, int token, Set<int> validTickets, void Function(List<SoulseekFile>) onBatch) async {
+  void noteLoggedIn() {
+    _lastLoginOk = DateTime.now();
+    noteLoginOk();
+  }
+
+
+  /// Dial a peer the server referred to us and read its search results.
+  ///
+  /// Results are routed by TICKET through [_searchSinks], the same table the inbound path uses, so
+  /// two searches running at once each get their own hits. Routing them to "the current search"
+  /// instead meant a second query silently threw away everything the first one was still
+  /// collecting — and the app starts searches in the background (album pages preload sources).
+  Future<void> _collectPeer(String ip, int port, int token) async {
     Socket? peer;
     try {
       peer = await Socket.connect(ip, port, timeout: const Duration(seconds: 5));
@@ -511,8 +435,9 @@ class SoulseekClient {
         count++;
         final code = _R(payload).u32();
         if (code == 9) {
-          final files = _parseResults(_zlib(Uint8List.sublistView(payload, 4)), validTickets);
-          if (files.isNotEmpty) onBatch(files);
+          final (ticket, files) = _parseAny(_zlib(Uint8List.sublistView(payload, 4)));
+          final sink = _searchSinks[ticket];
+          if (sink != null && files.isNotEmpty) sink(files);
           if (!done.isCompleted) done.complete();
         } else if (count >= 10 && !done.isCompleted) {
           done.complete();
@@ -523,12 +448,6 @@ class SoulseekClient {
     } catch (_) {} finally {
       peer?.destroy();
     }
-  }
-
-  /// Parse a peer's FileSearchResponse; returns its files if the ticket is one of ours.
-  List<SoulseekFile> _parseResults(Uint8List data, Set<int> validTickets) {
-    final (ticket, files) = _parseAny(data);
-    return validTickets.contains(ticket) ? files : const [];
   }
 
   /// Parse a FileSearchResponse and return its ticket + files (no filtering) — incoming
@@ -669,6 +588,66 @@ class _Box {
   _Box(this.v);
 }
 
+/// One in-flight search: collects hits from peers that we dial and from peers that dial us,
+/// publishes partial results at a sane rate, and finishes on a deadline.
+class _SearchRun {
+  final SoulseekClient client;
+  final void Function(List<SoulseekFile>)? onPartial;
+  final tickets = <int>{};
+  final merged = <String, SoulseekFile>{}; // username|filename → file
+  final _peerJobs = <Future<void>>[];
+  final _done = Completer<void>();
+  Timer? _emit;
+  Timer? _poll;
+  var _closed = false;
+
+  _SearchRun(this.client, this.onPartial);
+
+  void add(List<SoulseekFile> files) {
+    if (_closed) return;
+    for (final f in files) {
+      merged['${f.username}|${f.filename}'] = f;
+    }
+    if (onPartial == null) return;
+    // Coalesced: a broad query arrives in hundreds of batches and re-sorting per batch froze the UI.
+    _emit ??= Timer(const Duration(milliseconds: 300), () {
+      _emit = null;
+      if (!_closed) onPartial!(sortSoulseek(merged.values));
+    });
+  }
+
+  /// A peer the server told to contact us about a search — dial it and read its results.
+  /// Returns true if this run took the job, so the peer is dialled exactly once.
+  bool offerPeer(String ip, int port, int token) {
+    if (_closed || _peerJobs.length >= 100) return false;
+    _peerJobs.add(client._collectPeer(ip, port, token));
+    return true;
+  }
+
+  Future<void> settle() async {
+    final deadline = DateTime.now().add(const Duration(seconds: 8));
+    _poll = Timer.periodic(const Duration(milliseconds: 300), (t) {
+      if (DateTime.now().isAfter(deadline) || merged.length >= 400) {
+        t.cancel();
+        if (!_done.isCompleted) _done.complete();
+      }
+    });
+    await _done.future.timeout(const Duration(seconds: 12), onTimeout: () {});
+    _poll?.cancel();
+    await Future.wait(_peerJobs).timeout(const Duration(seconds: 3)).catchError((_) => <void>[]);
+  }
+
+  void close() {
+    _closed = true;
+    _emit?.cancel();
+    _poll?.cancel();
+    for (final t in tickets) {
+      client._searchSinks.remove(t);
+    }
+    if (!_done.isCompleted) _done.complete();
+  }
+}
+
 /// A reusable, logged-in Soulseek SERVER connection for a batch of downloads.
 ///
 /// Soulseek allows only ONE login per username and rate-limits/blocks repeated logins. The
@@ -698,8 +677,44 @@ class SlskSession {
   final Map<String, Completer<(String, int)>> _addrWaiters = {};
   final Map<String, void Function(String ip, int port, int token)> _fWaiters = {};
   final Map<String, Future<void>> _peerLocks = {}; // one transfer at a time per peer
+  final _searches = <_SearchRun>{}; // every search running on this connection right now
 
   bool get _alive => _conn != null;
+
+  /// Is the shared connection logged in? Brings it up if it isn't — but never opens a connection
+  /// of its own, so the status check costs nothing when we're already online.
+  Future<bool> alive() => _ensure();
+
+  /// Run a search over the SHARED login instead of opening a second server connection.
+  ///
+  /// Searching used to open its own server connection and log in per query — so
+  /// every query, and every broad-query retry, cost a login. That is the burst that repeatedly got
+  /// the account blocked; downloads were fixed long ago but searching was still doing it.
+  Future<List<SoulseekFile>> search(List<String> queries,
+      {void Function(List<SoulseekFile>)? onPartial}) async {
+    if (client.blocked) return const [];
+    if (!await _ensure()) return const [];
+    await client.ensureListening(); // so firewalled peers can deliver results to us directly
+
+    final run = _SearchRun(client, onPartial);
+    _searches.add(run);
+    try {
+      _conn!.send(_message(2, (_W()..u32(client.boundPort)).bytes())); // SetWaitPort
+      for (final q in queries) {
+        final t = client._nextTicket();
+        run.tickets.add(t);
+        client._searchSinks[t] = run.add;
+        _conn!.send(_message(26, (_W()..u32(t)..str(q)).bytes())); // FileSearch
+      }
+      await run.settle();
+    } catch (_) {
+      // whatever arrived before the failure is still worth returning
+    } finally {
+      run.close();
+      _searches.remove(run);
+    }
+    return sortSoulseek(run.merged.values);
+  }
 
   /// Connect + log in once; reuse on later calls. Reconnects only if the socket dropped.
   /// Two guards against a login burst tripping the block: (a) at most 2 CONSECUTIVE failed logins
@@ -714,7 +729,9 @@ class SlskSession {
 
   Future<bool> _login() async {
     if (_alive) return true;
-    if (client.blocked) return false; // global back-off after a refused login
+    // Covers both a refused login AND simply having logged in too often lately — the latter is
+    // what a kick-war looks like, and it is invisible to a consecutive-failure counter.
+    if (client.mustNotLogin) return false;
     if (_loginTries >= 2) return false;
     final now = DateTime.now();
     if (_lastLoginAttempt != null && now.difference(_lastLoginAttempt!) < const Duration(seconds: 10)) {
@@ -746,9 +763,19 @@ class SlskSession {
           final ip = r.ip();
           final port = r.u32();
           final tok = r.u32();
-          if (type == 'F' && ip != '0.0.0.0' && port > 0) _fWaiters[uname]?.call(ip, port, tok);
+          if (ip == '0.0.0.0' || port == 0) return;
+          if (type == 'F') {
+            _fWaiters[uname]?.call(ip, port, tok);
+          } else if (type == 'P' && _searches.isNotEmpty) {
+            // A peer answering one of OUR searches. Dialled ONCE; its results are routed by
+            // ticket, so whichever search asked for them gets them.
+            for (final s in _searches) {
+              if (s.offerPeer(ip, port, tok)) break;
+            }
+          }
         }
-      }, onError: (_) => _drop(), onDone: _drop);
+      }, onError: (_) => _lost(), onDone: _lost);
+      client.noteLoginAttempt();
       c.send(_message(1, (_W()..str(user)..str(pass)..u32(160)..str(_md5hex(pass))..u32(17)).bytes()));
       final ok = await login.future.timeout(const Duration(seconds: 12), onTimeout: () => false);
       if (!ok) {
@@ -756,7 +783,7 @@ class SlskSession {
         _drop();
         return false;
       }
-      client.noteLoginOk();
+      client.noteLoggedIn();
       c.send(_message(2, (_W()..u32(client.boundPort)).bytes())); // SetWaitPort (real port if listening)
       _conn = c;
       _loginTries = 0; // healthy login → reset the consecutive-failure counter
@@ -765,6 +792,14 @@ class SlskSession {
       _drop();
       return false;
     }
+  }
+
+  /// The connection died on us (as opposed to us closing it). If that happened right after a
+  /// successful login it's a kick from another client on this account — [noteConnectionLost]
+  /// makes us stand down instead of racing to log back in.
+  void _lost() {
+    if (_conn != null) client.noteConnectionLost();
+    _drop();
   }
 
   void _drop() {

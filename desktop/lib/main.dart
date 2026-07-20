@@ -4019,8 +4019,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
       ..rutrackerUser = _rtUser.text.trim()
       ..rutrackerPass = _rtPass.text
       ..rutrackerCookie = real.rutrackerCookie; // RuTracker validity depends on the live session
-    final checker = ConnectionChecker(
-        probe, TorBox(() => probe.torboxToken), SoulseekService(probe), RuTrackerService(probe));
+    // Soulseek deliberately uses the app's REAL service, not a probe copy: a probe would have its
+    // own client, so testing the connection would open a SECOND login on an account that allows
+    // one — kicking the live session and provoking a re-login. It also wouldn't see the app's
+    // back-off, so "Test" could keep hammering an account that is already blocked.
+    final checker = ConnectionChecker(probe, TorBox(() => probe.torboxToken),
+        context.read<SoulseekService>(), RuTrackerService(probe));
     setState(() {
       _testing = true;
       for (final k in ['torbox', 'discogs', 'soulseek', 'rutracker']) {

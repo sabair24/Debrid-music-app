@@ -229,24 +229,71 @@ class SoulseekService {
   bool get blocked => client.blocked;
   Duration? get blockedFor => client.blockedFor;
 
-  /// Confirm the Soulseek login works (used by the connection-status check).
-  Future<bool> verify() async {
-    if (!available) return false;
-    return client.verifyLogin(settings.soulseekUser, settings.soulseekPass);
+  // ── The one logged-in connection ──────────────────────────────────────────
+  // Soulseek allows a single login per account and blocks on a burst of them, so EVERYTHING that
+  // talks to the server — searching, downloading, the status check — shares this one session.
+  // Searching used to open its own connection and log in per query (twice, with the broad-query
+  // retry), which is what kept getting the account blocked.
+  SlskSession? _session;
+  Timer? _idle;
+  int _users = 0;
+
+  Future<T> withSession<T>(Future<T> Function(SlskSession) body) async {
+    _users++;
+    _idle?.cancel();
+    try {
+      client.listenPort = settings.soulseekPort; // so firewalled peers can reach us
+      final s = _session ??= client.newSession(settings.soulseekUser, settings.soulseekPass);
+      return await body(s);
+    } finally {
+      _users--;
+      if (_users == 0) _scheduleClose();
+    }
   }
 
-  /// [onPartial] streams merged results as they arrive. Both query variants share a SINGLE login
-  /// (searchMulti) instead of one login each.
+  /// Let go of the connection when nothing needs it, so the native client can log in again.
+  void _scheduleClose() {
+    _idle?.cancel();
+    _idle = Timer(const Duration(seconds: 120), () {
+      if (_users > 0) return;
+      _session?.close();
+      _session = null;
+    });
+  }
+
+  /// Shutdown only. Guarded on [_users]: closing a session that a search or a queued download is
+  /// still holding would leave that operation with an orphaned session which logs itself back in —
+  /// two live logins for an account that allows one.
+  void disposeSession() {
+    if (_users > 0) return;
+    _idle?.cancel();
+    _session?.close();
+    _session = null;
+  }
+
+  /// Confirm the Soulseek login works (used by the connection-status check).
+  /// Goes through the shared session — it never costs a login of its own.
+  Future<bool> verify() async {
+    if (!available) return false;
+    return withSession((s) => s.alive());
+  }
+
+  /// [onPartial] streams merged results as they arrive.
   ///
   /// Soulseek requires EVERY term to appear in a peer's path, so a long "Artist Title" query can
   /// come back completely empty while the artist alone has plenty (measured: "jaafar jackson got
   /// me singing" → 0 hits even after 30s, "jaafar jackson" → hits within 2s). So when a multi-word
   /// query finds nothing, retry once with just the first two words (usually the artist) rather
-  /// than telling the user there are no sources. Only on an empty result, so it costs an extra
-  /// login only in the rare case it actually helps.
+  /// than telling the user there are no sources. Both attempts run on the shared connection, so
+  /// the retry costs nothing beyond the query itself.
   Future<List<SoulseekFile>> search(String query, {void Function(List<SoulseekFile>)? onPartial}) async {
+    // An empty result because we couldn't log in is NOT "no sources" — retrying a broader query
+    // would just burn another login and still show the user the wrong answer.
+    final blocked = client.whyNotLogin;
+    if (blocked != null) throw blocked;
     final first = await _searchOnce(query, onPartial);
     if (first.isNotEmpty) return first;
+    if (client.whyNotLogin != null) throw client.whyNotLogin!;
     final words = query.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
     if (words.length < 3) return first;
     final broader = words.take(2).join(' ');
@@ -257,14 +304,11 @@ class SoulseekService {
     if (!available) return [];
     final q = query.trim();
     if (q.isEmpty) return [];
-    client.listenPort = settings.soulseekPort; // so firewalled peers can reach us with results
     // Soulseek quirk: the first character is often dropped — also try a "*"-prefixed variant.
     final variants = <String>{q};
     if (q.length > 2) variants.add('*${q.substring(1)}');
     try {
-      return await client.searchMulti(
-          settings.soulseekUser, settings.soulseekPass, variants.toList(),
-          onPartial: onPartial);
+      return await withSession((s) => s.search(variants.toList(), onPartial: onPartial));
     } catch (_) {
       return [];
     }
@@ -299,10 +343,7 @@ class DownloadManager extends ChangeNotifier {
   // queue. The session auto-closes ~2 min after the last download, freeing Soulseek's single
   // connection so the native client can be used again.
   static const _slskMaxParallel = 6;
-  SlskSession? _slskSession;
-  Timer? _slskIdle;
   int _slskActive = 0; // downloads holding a PARALLEL SLOT (a queued one gives its slot back)
-  int _slskUsers = 0; // downloads still using the SESSION, queued ones included
   final List<Completer<void>> _slskWaiting = [];
 
   /// Live count of Soulseek downloads running / waiting (for the UI).
@@ -319,8 +360,6 @@ class DownloadManager extends ChangeNotifier {
       await wait.future;
     }
     _slskActive++;
-    _slskUsers++;
-    _slskIdle?.cancel();
     var released = false;
     void release() {
       if (released) return;
@@ -330,34 +369,19 @@ class DownloadManager extends ChangeNotifier {
     }
 
     try {
-      // newSession() does NOT log in; the login happens lazily inside the session and is shared by
-      // concurrent callers, so N parallel downloads still cost exactly ONE login.
-      final s = _slskSession ??= soulseek.client
-          .newSession(soulseek.settings.soulseekUser, soulseek.settings.soulseekPass);
-      return await body(s, release);
+      // The session belongs to SoulseekService and is shared with searching, so N parallel
+      // downloads plus any search in flight still cost exactly ONE login. withSession also holds
+      // the connection open for as long as anyone needs it — including a download parked in an
+      // uploader's queue, whose retry would otherwise have to log in again.
+      return await soulseek.withSession((s) => body(s, release));
     } finally {
       release();
-      _slskUsers--;
-      // Judged on _slskUsers, NOT _slskActive: a download waiting in an uploader's queue has given
-      // its slot back but is still on this session. Closing it under them would drop the wait AND
-      // force a fresh login for the retry — the exact login burst that gets the account blocked.
-      if (_slskUsers == 0) _scheduleSlskClose();
     }
-  }
-
-  void _scheduleSlskClose() {
-    _slskIdle?.cancel();
-    _slskIdle = Timer(const Duration(seconds: 120), () {
-      if (_slskUsers > 0) return; // still busy — don't pull the connection out from under it
-      _slskSession?.close();
-      _slskSession = null;
-    });
   }
 
   @override
   void dispose() {
-    _slskIdle?.cancel();
-    _slskSession?.close();
+    soulseek.disposeSession();
     super.dispose();
   }
 
