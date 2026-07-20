@@ -450,15 +450,18 @@ class DownloadManager extends ChangeNotifier {
     /// before the rescan picks it up, so the library never sees the loose landing-zone copy.
     Future<bool> succeed(SlskDone res) async {
       final staged = File(res.path);
+      var placed = staged.path;
       try {
-        await placeFile(staged, _downloadsRoot);
+        placed = await placeFile(staged, _downloadsRoot);
         // Non-recursive: only removes the per-peer staging folder once it's actually empty.
         await staged.parent.delete();
       } catch (_) {/* leave it where it landed — the scan still finds it */}
       job.progress = 1;
       job.status = 'done';
       job.queuePlace = 0;
-      job.detail = null;
+      // Unreadable tags mean we can't work out where the track belongs. It's downloaded either
+      // way, but say so rather than reporting a clean success it didn't have.
+      job.detail = placed == staged.path ? 'gedownload, maar tags onleesbaar — staat in _inkomend' : null;
       notifyListeners();
       try {
         await onLibraryChanged();

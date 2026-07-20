@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 
+import 'flac_tags.dart';
+
 /// Where a downloaded release belongs in the folder tree.
 enum RelKind { album, single, compilation }
 
@@ -72,10 +74,10 @@ class TrackTags {
 
 /// Read the tags of a downloaded file (falls back to the filename for the title).
 TrackTags? readTags(File f) {
+  final base = f.uri.pathSegments.last;
+  final noExt = base.contains('.') ? base.substring(0, base.lastIndexOf('.')) : base;
   try {
     final m = readMetadata(f, getImage: false);
-    final base = f.uri.pathSegments.last;
-    final noExt = base.contains('.') ? base.substring(0, base.lastIndexOf('.')) : base;
     return TrackTags(
       title: (m.title?.trim().isNotEmpty ?? false) ? m.title!.trim() : noExt,
       artist: (m.artist?.trim().isNotEmpty ?? false) ? m.artist!.trim() : '',
@@ -83,7 +85,16 @@ TrackTags? readTags(File f) {
       trackNo: m.trackNumber ?? 0,
     );
   } catch (_) {
-    return null;
+    // The package rejects some perfectly playable files (a vinyl "A3" track number is enough).
+    // Falling back keeps the download out of the staging folder instead of losing it there.
+    final v = readFlacTags(f);
+    if (v == null) return null;
+    return TrackTags(
+      title: (v.title?.isNotEmpty ?? false) ? v.title! : noExt,
+      artist: v.artist ?? '',
+      album: v.album ?? '',
+      trackNo: v.trackNo,
+    );
   }
 }
 

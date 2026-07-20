@@ -4,6 +4,7 @@ import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'enrichment.dart';
+import 'flac_tags.dart';
 import 'models.dart';
 import 'organize.dart';
 import 'settings.dart';
@@ -28,14 +29,14 @@ List<Map<String, dynamic>> _scanTags(String root) {
   if (!dir.existsSync()) return out;
   for (final e in dir.listSync(recursive: true, followLinks: false)) {
     if (e is! File || !_audioExt.contains(_ext(e.path))) continue;
+    var addedMs = 0, sizeBytes = 0;
+    try {
+      final st = e.statSync();
+      addedMs = st.modified.millisecondsSinceEpoch;
+      sizeBytes = st.size;
+    } catch (_) {}
     try {
       final m = readMetadata(e, getImage: false);
-      var addedMs = 0, sizeBytes = 0;
-      try {
-        final st = e.statSync();
-        addedMs = st.modified.millisecondsSinceEpoch;
-        sizeBytes = st.size;
-      } catch (_) {}
       out.add({
         'path': e.path,
         'title': (m.title?.trim().isNotEmpty ?? false) ? m.title!.trim() : _baseName(e.path),
@@ -49,7 +50,25 @@ List<Map<String, dynamic>> _scanTags(String root) {
         'addedMs': addedMs,
         'sizeBytes': sizeBytes,
       });
-    } catch (_) {}
+    } catch (_) {
+      // The package throws on tags it can't parse (e.g. a vinyl "A3" track number) and the track
+      // would vanish from the library entirely. Read it ourselves rather than drop it.
+      final v = readFlacTags(e);
+      if (v == null) continue;
+      out.add({
+        'path': e.path,
+        'title': (v.title?.isNotEmpty ?? false) ? v.title! : _baseName(e.path),
+        'artist': (v.artist?.isNotEmpty ?? false) ? v.artist! : 'Onbekende artiest',
+        'album': v.album ?? '',
+        'trackNo': v.trackNo,
+        'durationMs': v.duration?.inMilliseconds ?? 0,
+        'isFlac': _ext(e.path) == '.flac',
+        'year': v.year,
+        'genre': v.genre,
+        'addedMs': addedMs,
+        'sizeBytes': sizeBytes,
+      });
+    }
   }
   return out;
 }
