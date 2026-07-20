@@ -162,7 +162,7 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, Tr
   if (t == null) return PlaceOutcome(src.path, Placement.stuck);
   final base = src.uri.pathSegments.last;
   final ext = base.contains('.') ? base.substring(base.lastIndexOf('.')) : '';
-  final rel = relativePathFor(t, kind: kind, ext: ext);
+  final rel = relativePathFor(_carryVersion(t, base), kind: kind, ext: ext);
   var dest = File('$root${Platform.pathSeparator}$rel');
   if (dest.path == src.path) return PlaceOutcome(src.path, Placement.moved);
   try {
@@ -191,14 +191,64 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, Tr
 Future<String> placeFile(File src, String root, {RelKind? kind, TrackTags? tags}) async =>
     (await placeFileDetailed(src, root, kind: kind, tags: tags)).path;
 
-/// Two files that tag the same are only the same RECORDING if they also run about as long.
-/// A live version, a radio edit or an extended mix carries its difference in the duration even
-/// when the version marker never made it into the title tag — and the user wants those kept.
+/// Carry a version marker from the source filename into the title, when the tags dropped it.
+///
+/// Uploaders write "(Live Version)" in the filename while the title tag stays plain, so filing a
+/// track purely by its tags throws that away — and then the live take and the studio take want the
+/// exact same destination. Keeping the marker in the name means they simply land side by side,
+/// it's obvious in Explorer which is which, and a second copy of that same live take still
+/// recognises its twin.
+TrackTags _carryVersion(TrackTags t, String filename) {
+  final title = t.title.toLowerCase();
+  final extra = versionMarkers(filename).where((m) => !title.contains(m)).toList()..sort();
+  if (extra.isEmpty) return t;
+  return TrackTags(
+    title: '${t.title} (${extra.join(') (')})',
+    artist: t.artist,
+    album: t.album,
+    trackNo: t.trackNo,
+  );
+}
+
+/// Words that mark a filename as a particular VERSION of a track.
+final _versionWordRe = RegExp(
+    r'\b(live|remix|rmx|edit|extended|radio|demo|instrumental|ac+ap+ell?a|acoustic|reprise|'
+    r'unplugged|version|mix|remaster(ed)?|alternate|alt take|session|karaoke|dub|bonus|'
+    r'single|club|original|mono|stereo)\b');
+final _bracketRe = RegExp(r'[(\[]([^)\]]{1,60})[)\]]');
+final _partRe = RegExp(r'\b(?:part|pt\.?)\s*(\d+)\b');
+
+/// The version markers a filename claims: `D.A.N.C.E. (Live Version).flac` → `{live version}`.
+/// Only bracketed segments that actually contain a version word count, so noise like `(2021)`,
+/// `(WWW)` or `[PMEDIA]` doesn't masquerade as a different take.
+Set<String> versionMarkers(String filename) {
+  final base = filename.toLowerCase().replaceAll(RegExp(r'\.[a-z0-9]{2,5}$'), '');
+  final out = <String>{};
+  for (final m in _bracketRe.allMatches(base)) {
+    final seg = m.group(1)!.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (_versionWordRe.hasMatch(seg)) out.add(seg);
+  }
+  final part = _partRe.firstMatch(base);
+  if (part != null) out.add('part ${part.group(1)}');
+  return out;
+}
+
+/// Are these two files the same RECORDING (as opposed to two takes of the same song)?
+///
+/// The FILENAME decides first, because that is where the difference usually survives: an uploader
+/// writes "(Live Version)" in the name while the title tag stays plain "D.A.N.C.E.". Two files
+/// claiming different versions are different recordings even if they happen to run equally long.
+/// Only when the names claim the same thing does the duration break the tie.
 bool _sameRecording(File a, File b) {
+  final ma = versionMarkers(a.uri.pathSegments.last);
+  final mb = versionMarkers(b.uri.pathSegments.last);
+  if (!_setEquals(ma, mb)) return false;
   final da = readFlacTags(a)?.duration, db = readFlacTags(b)?.duration;
   if (da == null || db == null) return true; // can't tell — fall back to the old dedup behaviour
   return (da - db).abs() <= const Duration(seconds: 5);
 }
+
+bool _setEquals(Set<String> a, Set<String> b) => a.length == b.length && a.every(b.contains);
 
 /// `03 - D.A.N.C.E..flac` → `03 - D.A.N.C.E. (2).flac`, first free number.
 File _sidestep(File dest) {

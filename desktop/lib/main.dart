@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'package:provider/provider.dart';
@@ -195,8 +196,86 @@ class _HomeShellState extends State<HomeShell> {
         searchKey(t.album).contains(qs);
   }
 
-  Widget _searchBar() => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 18, 24, 4),
+  /// Frosted pill that sits at the top of every screen. It really does blur what's behind it —
+  /// the ambient glow in [_contentArea] gives the glass something to pick up, so it reads as a
+  /// pane of glass rather than a flat rounded box.
+  Widget _glassPill({required Widget child}) => Padding(
+        padding: const EdgeInsets.fromLTRB(18, 14, 18, 6),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(8, 7, 10, 7),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(999),
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.white.withValues(alpha: .085),
+                    Colors.white.withValues(alpha: .028),
+                  ],
+                ),
+                border: Border.all(color: Colors.white.withValues(alpha: .10)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: .34),
+                    blurRadius: 26,
+                    offset: const Offset(0, 9),
+                  ),
+                ],
+              ),
+              child: child,
+            ),
+          ),
+        ),
+      );
+
+  /// The pill's contents on a screen without library search: where you are, and what's in there.
+  Widget _titlePill() => _glassPill(
+        child: Consumer<LibraryStore>(
+          builder: (_, lib, __) => Row(
+            children: [
+              const SizedBox(width: 8),
+              Icon(_viewIcon(_view), size: 17, color: Colors.white.withValues(alpha: .82)),
+              const SizedBox(width: 9),
+              Text(_viewLabel(_view),
+                  style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
+              const Spacer(),
+              Text(
+                lib.scanning
+                    ? 'Bibliotheek scannen… ${lib.scanned}'
+                    : '${lib.albums.length} albums · ${lib.tracks.length} nummers',
+                style: const TextStyle(color: _muted, fontSize: 12),
+              ),
+              const SizedBox(width: 10),
+            ],
+          ),
+        ),
+      );
+
+  IconData _viewIcon(int v) => switch (v) {
+        0 => Icons.album_rounded,
+        1 => Icons.people_alt_rounded,
+        2 => Icons.travel_explore_rounded,
+        3 => Icons.auto_awesome_rounded,
+        4 => Icons.music_note_rounded,
+        6 => Icons.download_rounded,
+        _ => Icons.home_rounded,
+      };
+
+  String _viewLabel(int v) => switch (v) {
+        0 => 'Albums',
+        1 => 'Artiesten',
+        2 => 'Online zoeken',
+        3 => 'Ontdek',
+        4 => 'Tracks',
+        6 => 'Mijn downloads',
+        _ => 'Start',
+      };
+
+  Widget _searchBar() => _glassPill(
         child: Row(
           children: [
             Expanded(
@@ -219,13 +298,12 @@ class _HomeShellState extends State<HomeShell> {
                             _searchCtl.clear();
                           }),
                         ),
-                  filled: true,
-                  fillColor: _panel,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 13, horizontal: 12),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(11), borderSide: const BorderSide(color: _line)),
-                  enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(11), borderSide: const BorderSide(color: _line)),
+                  // No box of its own: the pill IS the field's surface.
+                  filled: false,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 11, horizontal: 4),
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
                 ),
               ),
             ),
@@ -234,14 +312,16 @@ class _HomeShellState extends State<HomeShell> {
               final sel = _qFilter == f;
               return Padding(
                 padding: const EdgeInsets.only(left: 6),
+                // Translucent so the controls sit ON the glass instead of punching holes in it.
                 child: ChoiceChip(
                   label: Text(_qFilterLabel(f), style: const TextStyle(fontSize: 12)),
                   selected: sel,
                   onSelected: (_) => setState(() => _qFilter = f),
-                  backgroundColor: _panel,
+                  backgroundColor: Colors.white.withValues(alpha: .06),
                   selectedColor: _accent,
                   labelStyle: TextStyle(color: sel ? Colors.white : _muted),
-                  side: BorderSide(color: sel ? _accent : _line),
+                  side: BorderSide(color: sel ? _accent : Colors.white.withValues(alpha: .12)),
+                  shape: const StadiumBorder(),
                   showCheckmark: false,
                 ),
               );
@@ -258,11 +338,11 @@ class _HomeShellState extends State<HomeShell> {
                     .map((s) => PopupMenuItem(value: s, child: Text(s.label, style: const TextStyle(fontSize: 13))))
                     .toList(),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
-                    color: _panel,
-                    borderRadius: BorderRadius.circular(11),
-                    border: Border.all(color: _line),
+                    color: Colors.white.withValues(alpha: .06),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: Colors.white.withValues(alpha: .12)),
                   ),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     const Icon(Icons.sort_rounded, size: 16, color: _muted),
@@ -287,20 +367,46 @@ class _HomeShellState extends State<HomeShell> {
               children: [
                 _railView(),
                 Container(width: 1, color: _line),
-                Expanded(
-                  child: Column(
-                    children: [
-                      if (_searchable) _searchBar(),
-                      Expanded(child: _content()),
-                    ],
-                  ),
-                ),
+                Expanded(child: _contentArea()),
               ],
             ),
           ),
           const PlayerBar(),
         ],
       ),
+    );
+  }
+
+  /// Content, with the glass pill floating at the top and a soft accent glow behind it.
+  /// The glow is what the pill's blur has to work with — without something behind it, frosted
+  /// glass on a flat panel is indistinguishable from a plain rounded box.
+  Widget _contentArea() {
+    return Stack(
+      children: [
+        Positioned(
+          top: -160,
+          left: -40,
+          right: -40,
+          height: 340,
+          child: IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: Alignment.topCenter,
+                  radius: .9,
+                  colors: [_accent.withValues(alpha: .30), Colors.transparent],
+                ),
+              ),
+            ),
+          ),
+        ),
+        Column(
+          children: [
+            _searchable ? _searchBar() : _titlePill(),
+            Expanded(child: _content()),
+          ],
+        ),
+      ],
     );
   }
 
@@ -359,18 +465,16 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ),
           ),
+          // The library counts moved into the top pill; only the transient "fetching covers"
+          // note stays down here, so the rail isn't repeating what's already on screen.
           Consumer<LibraryStore>(
-            builder: (_, lib, __) => Padding(
-              padding: const EdgeInsets.all(8),
-              child: Text(
-                lib.scanning
-                    ? 'Bibliotheek scannen… ${lib.scanned}'
-                    : (lib.enriching
-                        ? 'Covers ophalen…'
-                        : '${lib.albums.length} albums · ${lib.tracks.length} nummers'),
-                style: const TextStyle(color: Color(0xFF5F6478), fontSize: 11.5),
-              ),
-            ),
+            builder: (_, lib, __) => lib.enriching && !lib.scanning
+                ? const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Text('Covers ophalen…',
+                        style: TextStyle(color: Color(0xFF5F6478), fontSize: 11.5)),
+                  )
+                : const SizedBox.shrink(),
           ),
         ],
       ),

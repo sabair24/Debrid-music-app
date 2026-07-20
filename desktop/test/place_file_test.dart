@@ -98,6 +98,34 @@ void main() {
     expect(out.how, Placement.duplicate);
   });
 
+  test('the filename outweighs the duration: a live take of equal length is still kept', () async {
+    // The real case: the studio cut runs 4:03 and the "(Live Version)" 4:02, so duration alone
+    // called them the same recording and the download was silently discarded.
+    final studio = await placeFileDetailed(staged('03 - D.A.N.C.E..flac', buildFlac(_tags, seconds: 243)), root.path);
+    final live = staged('08 - D.A.N.C.E. (Live Version).flac', buildFlac(_tags, seconds: 242));
+    final out = await placeFileDetailed(live, root.path);
+    expect(out.how, Placement.moved);
+    expect(File(studio.path).existsSync(), isTrue);
+    expect(File(out.path).existsSync(), isTrue);
+    // The marker is carried into the filed name, so it stays obvious which take this is.
+    expect(out.path, endsWith('03 - D.A.N.C.E. (live version).flac'));
+    expect(studio.path, endsWith('03 - D.A.N.C.E..flac'));
+  });
+
+  test('the same version marker on both sides still dedups', () async {
+    await placeFileDetailed(staged('a (Live Version).flac', buildFlac(_tags, seconds: 242)), root.path);
+    final out = await placeFileDetailed(staged('b (live version).flac', buildFlac(_tags, seconds: 242)), root.path);
+    expect(out.how, Placement.duplicate);
+  });
+
+  test('bracketed noise is not mistaken for a version', () {
+    expect(versionMarkers('01 - D.A.N.C.E. (2021) [PMEDIA] (WWW).flac'), isEmpty);
+    expect(versionMarkers('08 - D.A.N.C.E. (Live Version).flac'), {'live version'});
+    expect(versionMarkers('04 - D.A.N.C.E. (Alan Braxe & Fred Falke Remix).flac'),
+        {'alan braxe & fred falke remix'});
+    expect(versionMarkers('06 - D.A.N.C.E Part 2.flac'), {'part 2'});
+  });
+
   test('an unreadable file is reported as stuck and left where it is', () async {
     final f = staged('junk.flac', Uint8List.fromList(utf8.encode('not a flac')));
     final out = await placeFileDetailed(f, root.path);
