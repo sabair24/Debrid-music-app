@@ -82,6 +82,19 @@ class PlayerStore extends ChangeNotifier {
   bool get hasPrev => radioMode ? _radioIndex > 0 : _index > 0;
 
   PlayerStore() {
+    // Audio-only: stop libmpv from spinning up a video output. On Windows it otherwise creates a
+    // small always-on-top video window that shows as a grey box centred over the app during
+    // playback (and hides dialogs). `vid=no`/`vo=null` disable video entirely.
+    () async {
+      try {
+        final p = _player.platform;
+        if (p != null) {
+          await (p as dynamic).setProperty('vid', 'no');
+          await (p as dynamic).setProperty('vo', 'null');
+        }
+      } catch (_) {}
+    }();
+
     _player.stream.playing.listen((p) {
       playing = p;
       if (p) resumedPaused = false;
