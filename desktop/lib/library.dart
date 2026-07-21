@@ -29,6 +29,9 @@ List<Map<String, dynamic>> _scanTags(String root) {
   if (!dir.existsSync()) return out;
   for (final e in dir.listSync(recursive: true, followLinks: false)) {
     if (e is! File || !_audioExt.contains(_ext(e.path))) continue;
+    // Skip the download staging folder. Files in there are still arriving — a half-finished 2 MB
+    // WAV was showing up as its own album, 0:00 long, until the transfer completed.
+    if (e.path.contains('${Platform.pathSeparator}_inkomend${Platform.pathSeparator}')) continue;
     var addedMs = 0, sizeBytes = 0;
     try {
       final st = e.statSync();

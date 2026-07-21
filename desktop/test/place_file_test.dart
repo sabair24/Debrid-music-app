@@ -215,6 +215,27 @@ void main() {
     });
   });
 
+  test('tidying keeps a different RELEASE of the same song', () async {
+    // Regression: tidy deduped on artist+title across the whole tree, so the live take on
+    // "Live @ Mezzanine" and the studio take on "†" — identical tags apart from the album —
+    // collapsed to one and the live version was deleted.
+    final studio = staged('studio.flac', buildFlac(['TITLE=D.A.N.C.E.', 'ARTIST=Justice', 'ALBUM=Cross', 'TRACKNUMBER=3']));
+    await placeFileDetailed(studio, root.path);
+    final live = staged('live.flac',
+        buildFlac(['TITLE=D.A.N.C.E.', 'ARTIST=Justice', 'ALBUM=Live @ Mezzanine', 'TRACKNUMBER=4'], seconds: 300));
+    await placeFileDetailed(live, root.path);
+
+    await tidyDownloads(root.path);
+
+    final all = Directory('${root.path}${Platform.pathSeparator}Albums')
+        .listSync(recursive: true)
+        .whereType<File>()
+        .map((f) => f.path)
+        .toList();
+    expect(all.where((p) => p.contains('Cross')).length, 1, reason: 'studio release kept');
+    expect(all.where((p) => p.contains('Mezzanine')).length, 1, reason: 'live release kept');
+  });
+
   test('an unreadable file is reported as stuck and left where it is', () async {
     final f = staged('junk.flac', Uint8List.fromList(utf8.encode('not a flac')));
     final out = await placeFileDetailed(f, root.path);

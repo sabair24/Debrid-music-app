@@ -578,41 +578,22 @@ Future<TidyReport> tidyDownloads(String downloadsRoot) async {
     files.add(e);
   }
 
-  // Best copy per track identity first, so the winner is the one we keep.
-  final best = <String, File>{};
-  final losers = <File>[];
+  // File everything and let placeFileDetailed decide about duplicates. It compares only against
+  // what is already in the SAME album folder, which is the only place a real duplicate can be.
+  //
+  // This used to dedupe on artist+title across the whole tree, which quietly deleted different
+  // RELEASES of one song: the live take on "Live @ Mezzanine" and the studio take on "†" both tag
+  // as "Justice | D.A.N.C.E." — only the album differs — so the live version was thrown away.
   for (final f in files) {
-    final t = readTags(f);
-    if (t == null) {
-      report.skipped++;
-      continue;
-    }
-    final id = trackIdentity(t.artist, t.title);
-    final cur = best[id];
-    if (cur == null) {
-      best[id] = f;
-      continue;
-    }
-    final fWins = firstIsBetter(f, cur);
-    if (fWins) {
-      losers.add(cur);
-      best[id] = f;
-    } else {
-      losers.add(f);
-    }
-  }
-
-  for (final f in best.values) {
     final before = f.path;
-    final after = await placeFile(f, downloadsRoot);
-    if (after != before) report.moved++;
-  }
-  for (final f in losers) {
-    try {
-      await f.delete();
-      report.duplicates++;
-    } catch (_) {
-      report.skipped++;
+    final out = await placeFileDetailed(f, downloadsRoot);
+    switch (out.how) {
+      case Placement.moved:
+        if (out.path != before) report.moved++;
+      case Placement.duplicate:
+        report.duplicates++;
+      case Placement.stuck:
+        report.skipped++;
     }
   }
 
