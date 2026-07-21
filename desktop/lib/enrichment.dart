@@ -8,15 +8,25 @@ import 'settings.dart';
 
 /// A wide backdrop and the act's official wordmark — what turns an artist page into a banner.
 class ArtistArt {
-  final String? logo, backdrop;
-  final Uint8List? logoBytes, backdropBytes;
-  const ArtistArt({this.logo, this.backdrop, this.logoBytes, this.backdropBytes});
+  final String? logo, backdrop, thumb;
+  final Uint8List? logoBytes, backdropBytes, thumbBytes;
+  const ArtistArt({
+    this.logo,
+    this.backdrop,
+    this.thumb,
+    this.logoBytes,
+    this.backdropBytes,
+    this.thumbBytes,
+  });
 
-  bool get isEmpty => logo == null && backdrop == null;
+  bool get isEmpty => logo == null && backdrop == null && thumb == null;
 
-  Map<String, dynamic> toJson() => {'logo': logo, 'backdrop': backdrop};
-  factory ArtistArt.fromJson(Map<String, dynamic> j) =>
-      ArtistArt(logo: j['logo'] as String?, backdrop: j['backdrop'] as String?);
+  Map<String, dynamic> toJson() => {'logo': logo, 'backdrop': backdrop, 'thumb': thumb};
+  factory ArtistArt.fromJson(Map<String, dynamic> j) => ArtistArt(
+        logo: j['logo'] as String?,
+        backdrop: j['backdrop'] as String?,
+        thumb: j['thumb'] as String?,
+      );
 }
 
 /// What a release IS — the text and facts that make an album page read like a film page
@@ -187,6 +197,9 @@ class CoverEnricher {
           logo: s('strArtistLogo'),
           // Fanart is the wide, cinematic one; the wide thumb is the next best framing.
           backdrop: s('strArtistFanart') ?? s('strArtistWideThumb') ?? s('strArtistBanner'),
+          // A proper portrait. A wide backdrop cropped into a banner is a horizontal slice, and
+          // where the face lands in it is luck — this is what guarantees you actually see them.
+          thumb: s('strArtistThumb') ?? s('strArtistCutout'),
         );
         if (art.isEmpty) return null;
         await _artistArtDir.create(recursive: true);
@@ -198,7 +211,15 @@ class CoverEnricher {
     // Keep the bytes locally too: these render on every visit and shouldn't refetch each time.
     final logo = await _cachedArt(name, 'logo', art.logo);
     final backdrop = await _cachedArt(name, 'backdrop', art.backdrop);
-    return ArtistArt(logo: art.logo, backdrop: art.backdrop, logoBytes: logo, backdropBytes: backdrop);
+    final thumb = await _cachedArt(name, 'thumb', art.thumb);
+    return ArtistArt(
+      logo: art.logo,
+      backdrop: art.backdrop,
+      thumb: art.thumb,
+      logoBytes: logo,
+      backdropBytes: backdrop,
+      thumbBytes: thumb,
+    );
   }
 
   Directory get _artistArtDir => Directory(_dir('artistart'));

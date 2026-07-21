@@ -4809,11 +4809,12 @@ class _ArtistHeroState extends State<ArtistHero> {
   Widget build(BuildContext context) {
     final backdrop = _art?.backdropBytes;
     final logo = _art?.logoBytes;
+    final portrait = _art?.thumbBytes ?? widget.fallbackImage;
 
     return SizedBox(
-      // Tall enough to actually SHOW the artist: at 230 a wide fanart was cropped to a band across
-      // the middle — usually a torso, rarely a face.
-      height: 380,
+      // Room for a 190px portrait plus the wordmark and buttons beneath it. At 230 the backdrop
+      // was cropped to a band across the middle — usually a torso, rarely a face.
+      height: 300,
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -4845,27 +4846,50 @@ class _ArtistHeroState extends State<ArtistHero> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(28, 0, 28, 18),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.end,
-              crossAxisAlignment: CrossAxisAlignment.start,
+            padding: const EdgeInsets.fromLTRB(28, 0, 28, 22),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                if (logo != null)
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 88, maxWidth: 420),
-                    child: Image.memory(logo, fit: BoxFit.contain, alignment: Alignment.centerLeft,
-                        errorBuilder: (_, __, ___) => _plainName()),
-                  )
-                else
-                  _plainName(),
-                if (widget.subtitle != null) ...[
-                  const SizedBox(height: 8),
-                  Text(widget.subtitle!, style: const TextStyle(color: Color(0xFFC7CBDA), fontSize: 13.5)),
+                // The portrait is what makes this a page about a PERSON. A wide backdrop cropped
+                // to a banner shows a horizontal slice, and whether the face is in it is luck.
+                if (portrait != null) ...[
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.memory(portrait,
+                        width: 190,
+                        height: 190,
+                        fit: BoxFit.cover,
+                        alignment: const Alignment(0, -.25),
+                        errorBuilder: (_, __, ___) => const SizedBox()),
+                  ),
+                  const SizedBox(width: 22),
                 ],
-                if (widget.actions.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  Row(children: widget.actions),
-                ],
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (logo != null)
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxHeight: 96, maxWidth: 460),
+                          child: Image.memory(logo,
+                              fit: BoxFit.contain,
+                              alignment: Alignment.centerLeft,
+                              errorBuilder: (_, __, ___) => _plainName()),
+                        )
+                      else
+                        _plainName(),
+                      if (widget.subtitle != null) ...[
+                        const SizedBox(height: 8),
+                        Text(widget.subtitle!, style: const TextStyle(color: Color(0xFFC7CBDA), fontSize: 13.5)),
+                      ],
+                      if (widget.actions.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        Row(children: widget.actions),
+                      ],
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
