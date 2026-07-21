@@ -1,7 +1,8 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
@@ -4268,6 +4269,84 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
 }
 
 // ── Settings dialog ──────────────────────────────────────────────────────────
+/// Which build is this, and where is it running from?
+///
+/// Read from the RUNNING executable rather than a constant in the source: a hand-maintained
+/// number drifts the moment someone forgets to bump it, and the whole point here is to stop
+/// guessing. The install path is shown for the same reason — a second copy left behind
+/// elsewhere on disk looks identical until you can see which one you actually opened.
+class _AboutSection extends StatefulWidget {
+  const _AboutSection();
+
+  @override
+  State<_AboutSection> createState() => _AboutSectionState();
+}
+
+class _AboutSectionState extends State<_AboutSection> {
+  String _version = '…';
+  String _path = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    var version = '?';
+    try {
+      final info = await PackageInfo.fromPlatform();
+      version = info.buildNumber.isEmpty ? info.version : '${info.version}+${info.buildNumber}';
+    } catch (_) {/* fall through to the placeholder */}
+    if (!mounted) return;
+    setState(() {
+      _version = version;
+      _path = Platform.resolvedExecutable;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Info', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: _accent.withValues(alpha: .16),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: _accent.withValues(alpha: .35)),
+              ),
+              child: Text('DebridMusic $_version',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
+            ),
+            const SizedBox(width: 10),
+            IconButton(
+              icon: const Icon(Icons.copy_rounded, size: 15),
+              color: _muted,
+              tooltip: 'Versie kopiëren',
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: 'DebridMusic $_version'));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Versie gekopieerd'), duration: Duration(seconds: 2)),
+                );
+              },
+            ),
+          ],
+        ),
+        if (_path.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          SelectableText(_path, style: const TextStyle(color: _muted, fontSize: 11)),
+        ],
+      ],
+    );
+  }
+}
+
 class SettingsDialog extends StatefulWidget {
   const SettingsDialog({super.key});
   @override
@@ -4668,6 +4747,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               ),
                             ),
                     ),
+                    const SizedBox(height: 14),
+                    const Divider(color: _line, height: 1),
+                    const SizedBox(height: 12),
+                    const _AboutSection(),
                   ],
                 ),
               ),
