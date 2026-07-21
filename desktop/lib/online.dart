@@ -355,8 +355,10 @@ class DownloadManager extends ChangeNotifier {
   /// How many peers a sweep walks looking for "someone free right now". Lossless gets a much
   /// deeper sweep: settling for an MP3 while an untried FLAC was sitting at position 7 would
   /// break the one rule that matters here. A short probe timeout keeps that affordable.
-  static const _maxLosslessTries = 14;
-  static const _maxLossyTries = 6;
+  /// Each try is now a DIFFERENT peer (see [_sweepOrder]), so the budget buys real chances rather
+  /// than several files from the same collector.
+  static const _maxLosslessTries = 20;
+  static const _maxLossyTries = 8;
 
   /// Total time spent chasing a better copy after a playable one already landed.
   static const _upgradeBudget = Duration(minutes: 10);
@@ -561,9 +563,10 @@ class DownloadManager extends ChangeNotifier {
         List<SoulseekFile> pool, String label) async {
       final busy = <SoulseekFile>[];
       final cap = identical(pool, lossless) ? _maxLosslessTries : _maxLossyTries;
-      final n = pool.length < cap ? pool.length : cap;
+      final order = sweepOrderFor(pool);
+      final n = order.length < cap ? order.length : cap;
       for (var i = 0; i < n; i++) {
-        final f = pool[i];
+        final f = order[i];
         job.status = 'downloading';
         job.progress = 0;
         job.queuePlace = 0;
@@ -715,6 +718,32 @@ class DownloadManager extends ChangeNotifier {
     } catch (_) {/* nothing lost — you still have the copy that landed first */}
 
     if (job.status == 'upgrading') settle('beste vrije kwaliteit behouden');
+  }
+
+  /// The order to try peers in when hunting for one that can start RIGHT NOW.
+  ///
+  /// Two things the plain quality ranking got wrong, both visible on a popular track with a
+  /// hundred free sources while the download sat waiting:
+  ///
+  /// * ONE FILE PER PEER. Ranked purely on bitrate, the top of the list is the big hi-res rips —
+  ///   and those come from a handful of collectors who each offer several. Fourteen attempts then
+  ///   amounted to about five actual chances, while dozens of other peers were never asked.
+  /// * FREE SLOTS FIRST. A peer that says it has a slot open is the whole point of this pass.
+  ///   Quality still decides between two free peers, and the background upgrade goes after the
+  ///   hi-res copy afterwards — so nothing is given up, it just plays sooner.
+  static List<SoulseekFile> sweepOrderFor(List<SoulseekFile> pool) {
+    final bestPerPeer = <String, SoulseekFile>{};
+    for (final f in pool) {
+      final cur = bestPerPeer[f.username];
+      if (cur == null || _slskScore(f) > _slskScore(cur)) bestPerPeer[f.username] = f;
+    }
+    final out = bestPerPeer.values.toList();
+    out.sort((a, b) {
+      if (a.freeSlots != b.freeSlots) return a.freeSlots ? -1 : 1;
+      if (a.queueLength != b.queueLength) return a.queueLength.compareTo(b.queueLength);
+      return _slskScore(b) - _slskScore(a);
+    });
+    return out;
   }
 
   /// Lossless (or hi-res) — the tier that may serve as a fast stand-in.
