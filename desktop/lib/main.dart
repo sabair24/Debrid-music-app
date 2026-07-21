@@ -3118,7 +3118,9 @@ class DownloadsView extends StatelessWidget {
 
   static String statusLabel(DownloadJob j) => switch (j.status) {
         'done' => 'Klaar',
-        'failed' => 'Mislukt',
+        // A download the user stopped themselves didn't fail — saying "Mislukt" makes it look
+        // like something went wrong with it.
+        'failed' => j.cancelled ? 'Gestopt' : 'Mislukt',
         'waiting' => j.queuePlace > 0 ? 'Wacht op peer · plaats ${j.queuePlace}' : 'Wacht op peer',
         'queued' => 'In wachtrij',
         // Already on disk and playable; a better copy is still being chased.
@@ -4807,27 +4809,33 @@ class _ArtistHeroState extends State<ArtistHero> {
 
   @override
   Widget build(BuildContext context) {
-    final backdrop = _art?.backdropBytes;
     final logo = _art?.logoBytes;
     final portrait = _art?.thumbBytes ?? widget.fallbackImage;
+    final backdrop = _art?.backdropBytes ?? widget.fallbackImage;
 
     return SizedBox(
-      // Room for a 190px portrait plus the wordmark and buttons beneath it. At 230 the backdrop
-      // was cropped to a band across the middle — usually a torso, rarely a face.
-      height: 300,
+      // Room for a 270px portrait with the wordmark and buttons beside it. The backdrop is very
+      // wide, so every extra pixel of height is another band of it that isn't cropped away.
+      height: 400,
       child: Stack(
         fit: StackFit.expand,
         children: [
+          // Blurred on purpose. Every artist image any database has is 16:9 — fanart, widethumb,
+          // all of it — and a banner this wide can only show a quarter of one. Sharp, that quarter
+          // was a gamble: it framed Michael Jackson but gave Stromae a band of forehead, because his
+          // photo is a close-up that no crop can survive. So the backdrop is atmosphere drawn from
+          // the artist's own colours, and the portrait beside it is what you actually recognise.
           if (backdrop != null)
-            // Anchored high: band photos put faces in the upper half, and a centre crop cut them off.
-            Image.memory(backdrop,
-                fit: BoxFit.cover,
-                alignment: const Alignment(0, -.45),
-                errorBuilder: (_, __, ___) => const SizedBox())
-          else if (widget.fallbackImage != null)
             ImageFiltered(
-              imageFilter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
-              child: Image.memory(widget.fallbackImage!, fit: BoxFit.cover),
+              imageFilter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+              // Overscanned: a blur samples past the edges, and at 1.0 the sides faded out.
+              child: Transform.scale(
+                scale: 1.15,
+                child: Image.memory(backdrop,
+                    fit: BoxFit.cover,
+                    alignment: const Alignment(0, -.3),
+                    errorBuilder: (_, __, ___) => const SizedBox()),
+              ),
             ),
           // Dark enough at the bottom that the wordmark and buttons always read.
           DecoratedBox(
@@ -4836,12 +4844,12 @@ class _ArtistHeroState extends State<ArtistHero> {
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  Colors.black.withValues(alpha: .25),
                   Colors.black.withValues(alpha: .30),
-                  Colors.black.withValues(alpha: .80),
+                  Colors.black.withValues(alpha: .38),
+                  Colors.black.withValues(alpha: .82),
                   const Color(0xFF0B0D14),
                 ],
-                stops: const [0, .35, .78, 1],
+                stops: const [0, .40, .82, 1],
               ),
             ),
           ),
@@ -4853,16 +4861,23 @@ class _ArtistHeroState extends State<ArtistHero> {
                 // The portrait is what makes this a page about a PERSON. A wide backdrop cropped
                 // to a banner shows a horizontal slice, and whether the face is in it is luck.
                 if (portrait != null) ...[
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Image.memory(portrait,
-                        width: 190,
-                        height: 190,
-                        fit: BoxFit.cover,
-                        alignment: const Alignment(0, -.25),
-                        errorBuilder: (_, __, ___) => const SizedBox()),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(14),
+                      // Lifts it off a backdrop that is, by design, the same photo's colours.
+                      boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: .55), blurRadius: 28, offset: const Offset(0, 10))],
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: Image.memory(portrait,
+                          width: 270,
+                          height: 270,
+                          fit: BoxFit.cover,
+                          alignment: const Alignment(0, -.25),
+                          errorBuilder: (_, __, ___) => const SizedBox()),
+                    ),
                   ),
-                  const SizedBox(width: 22),
+                  const SizedBox(width: 26),
                 ],
                 Expanded(
                   child: Column(

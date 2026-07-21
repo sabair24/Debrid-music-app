@@ -21,12 +21,22 @@ class ArtistArt {
 
   bool get isEmpty => logo == null && backdrop == null && thumb == null;
 
-  Map<String, dynamic> toJson() => {'logo': logo, 'backdrop': backdrop, 'thumb': thumb};
-  factory ArtistArt.fromJson(Map<String, dynamic> j) => ArtistArt(
-        logo: j['logo'] as String?,
-        backdrop: j['backdrop'] as String?,
-        thumb: j['thumb'] as String?,
-      );
+  /// Bumped whenever a new field is added, so entries cached by an older build are refetched
+  /// instead of answering forever with a null they never had a chance to fill. Adding `thumb`
+  /// without this meant every artist you'd already opened kept showing the old fallback.
+  static const schema = 2;
+
+  Map<String, dynamic> toJson() => {'v': schema, 'logo': logo, 'backdrop': backdrop, 'thumb': thumb};
+
+  /// Null for an entry written by an older build — the caller refetches.
+  static ArtistArt? fromJson(Map<String, dynamic> j) {
+    if ((j['v'] as int?) != schema) return null;
+    return ArtistArt(
+      logo: j['logo'] as String?,
+      backdrop: j['backdrop'] as String?,
+      thumb: j['thumb'] as String?,
+    );
+  }
 }
 
 /// What a release IS — the text and facts that make an album page read like a film page
