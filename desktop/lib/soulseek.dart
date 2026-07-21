@@ -50,6 +50,21 @@ sealed class SlskResult {}
 class SlskDone extends SlskResult { final String path; SlskDone(this.path); }
 class SlskFail extends SlskResult { final String reason; SlskFail(this.reason); }
 
+/// Stopped on purpose — by the user, or because a competing attempt won the race.
+class SlskCancelled extends SlskResult {}
+
+/// A stop switch handed to a transfer. Racing several peers for the same track means the losers
+/// must be dropped the moment one delivers, and the user must be able to abandon a download that
+/// is going nowhere; both are the same mechanism.
+class SlskCancel {
+  final _done = Completer<void>();
+  bool get isCancelled => _done.isCompleted;
+  Future<void> get whenCancelled => _done.future;
+  void cancel() {
+    if (!_done.isCompleted) _done.complete();
+  }
+}
+
 /// The uploader has us in its queue — not a failure: the download should WAIT and retry,
 /// exactly like the native client's transfer list does.
 class SlskQueued extends SlskResult {
@@ -819,7 +834,7 @@ class SlskSession {
   Future<SlskResult> download(SoulseekFile file, File destFile, void Function(int, int) onProgress,
       {void Function(SlskQueued)? onStatus,
       bool waitInQueue = true,
-      Duration maxWait = const Duration(minutes: 30)}) async {
+      Duration maxWait = const Duration(minutes: 30), SlskCancel? cancel}) async {
     if (!await _ensure()) return SlskFail('Kan niet inloggen bij Soulseek');
     // One transfer per peer at a time. If another of our downloads already holds this peer, that
     // counts as busy: during the quick sweep we move straight on to the next source rather than
@@ -836,7 +851,7 @@ class SlskSession {
     }
     try {
       return await _transfer(file, destFile, onProgress,
-          onStatus: onStatus, waitInQueue: waitInQueue, maxWait: maxWait);
+          onStatus: onStatus, waitInQueue: waitInQueue, maxWait: maxWait, cancel: cancel);
     } finally {
       mine.complete();
       if (identical(_peerLocks[file.username], mine.future)) _peerLocks.remove(file.username);
@@ -870,11 +885,13 @@ class SlskSession {
   Future<SlskResult> _transfer(SoulseekFile file, File destFile, void Function(int, int) onProgress,
       {void Function(SlskQueued)? onStatus,
       bool waitInQueue = true,
-      Duration maxWait = const Duration(minutes: 30)}) async {
+      Duration maxWait = const Duration(minutes: 30), SlskCancel? cancel}) async {
+    if (cancel != null && cancel.isCancelled) return SlskCancelled();
     if (!await _ensure()) return SlskFail('Kan niet inloggen bij Soulseek');
     // The uploader opens the file connection TO us, so we must be listening before we ask for the
     // file — not only after a search happened to bind the port earlier in this process.
     await client.ensureListening();
+    if (cancel != null && cancel.isCancelled) return SlskCancelled();
     Socket? peer;
     _Inbound? viaServer;
     _Inbound? fileConn;
@@ -894,6 +911,12 @@ class SlskSession {
       final (ip, port) = peerAddr;
 
       final delivered = Completer<SlskResult>();
+      // Hooked up BEFORE the dialling: address lookup, connect and the firewall callback can hold
+      // things for half a minute, and a loser that ignores the winner's stop for that long would
+      // still take a queue slot at a peer we've already abandoned.
+      cancel?.whenCancelled.then((_) {
+        if (!delivered.isCompleted) delivered.complete(SlskCancelled());
+      });
       final dlToken = client._nextTicket();
       final fileSize = _Box(0);
       var fStarted = false;
@@ -954,6 +977,8 @@ class SlskSession {
         pmsgs = rev.$2;
         // No PeerInit here: the peer initiated, the handshake is already done.
       }
+      // Don't ask for a slot at a peer we've meanwhile given up on.
+      if (cancel != null && cancel.isCancelled) return SlskCancelled();
       psend(_message(43, (_W()..str(file.filename)).bytes())); // QueueUpload
       psend(_message(40, (_W()..u32(0)..u32(dlToken)..str(file.filename)).bytes())); // TransferRequest
       onProgress(0, 0);

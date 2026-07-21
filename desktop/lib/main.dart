@@ -3094,8 +3094,14 @@ String _slskKey(SoulseekFile f) => '${f.username}|${f.filename}';
 
 Future<void> _downloadSoulseek(BuildContext context, SoulseekFile f, List<SoulseekFile> all) async {
   try {
-    await context.read<DownloadManager>().enqueueSoulseekBest(_slskCandidates(all, f), key: _slskKey(f));
-    if (context.mounted) _srcToast(context, '“${f.displayName}” via Soulseek…');
+    // false means it was refused — this track is already downloading. Say so; a "started" message
+    // for something that never started is worse than no message.
+    final started =
+        await context.read<DownloadManager>().enqueueSoulseekBest(_slskCandidates(all, f), key: _slskKey(f));
+    if (context.mounted) {
+      _srcToast(context,
+          started ? '“${f.displayName}” via Soulseek…' : '“${f.displayName}” loopt al — zie Mijn downloads.');
+    }
   } catch (e) {
     if (context.mounted) _srcToast(context, 'Download mislukt: $e');
   }
@@ -3253,6 +3259,22 @@ class _DlRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 14),
+          // Stop what you no longer want — a slot freed here is a slot another download gets.
+          SizedBox(
+            width: 34,
+            child: job.busy && job.canCancel
+                ? Consumer<DownloadManager>(
+                    builder: (_, dm, __) => IconButton(
+                      icon: const Icon(Icons.close_rounded, size: 16),
+                      color: _muted,
+                      tooltip: 'Download stoppen',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: () => dm.cancelJob(job),
+                    ),
+                  )
+                : null,
+          ),
           SizedBox(
             width: 150,
             child: Text(DownloadsView.statusLabel(job),
@@ -5143,8 +5165,10 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       return;
     }
     try {
-      await dm.enqueueSoulseekBest(cands, key: 'alb:${widget.album.id}:$i');
-      if (mounted) _srcToast(context, '“${t.title}” via Soulseek…');
+      final started = await dm.enqueueSoulseekBest(cands, key: 'alb:${widget.album.id}:$i');
+      if (mounted) {
+        _srcToast(context, started ? '“${t.title}” via Soulseek…' : '“${t.title}” loopt al — zie Mijn downloads.');
+      }
     } catch (e) {
       if (mounted) _srcToast(context, 'Download mislukt: $e');
     }

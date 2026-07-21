@@ -439,7 +439,7 @@ File? _sameTrackOtherFormat(File dest) {
   final sep = Platform.pathSeparator;
   final parent = Directory(dest.path.substring(0, dest.path.lastIndexOf(sep)));
   final destName = dest.path.split(sep).last;
-  final wanted = _trackNameKey(destName);
+  final wanted = trackNameKey(destName);
   final destExt = _extOf(destName);
   if (wanted.isEmpty) return null;
   try {
@@ -448,7 +448,7 @@ File? _sameTrackOtherFormat(File dest) {
       final name = e.path.split(sep).last;
       final ext = _extOf(name);
       if (!_audioExts.contains(ext) || ext == destExt) continue;
-      if (_trackNameKey(name) == wanted) return e;
+      if (trackNameKey(name) == wanted) return e;
     }
   } catch (_) {/* folder not there yet */}
   return null;
@@ -466,7 +466,7 @@ String _extOf(String filename) {
 /// second run of digits there, which silently ate numbers belonging to the title: "10 - 99
 /// Problems" collapsed to "problems" and so matched an unrelated "05 - Problems" — and the
 /// caller deletes what it matches.
-String _trackNameKey(String filename) {
+String trackNameKey(String filename) {
   final dot = filename.lastIndexOf('.');
   var stem = dot > 0 ? filename.substring(0, dot) : filename;
   stem = stem.replaceFirst(RegExp(r'^\s*(?:\d{1,2}[-.])?\d{1,3}\s*[-._]\s*'), '');

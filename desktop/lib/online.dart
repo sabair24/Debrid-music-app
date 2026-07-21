@@ -322,6 +322,19 @@ class DownloadJob {
   String status; // queued | waiting | downloading | upgrading | done | failed | preparing
   String? detail; // failure reason, or "poging 2/5 · peer" while falling back
   int queuePlace = 0; // position in the uploader's queue while status == 'waiting' (0 = unknown)
+
+  /// Everything this job currently has in flight — several at once while racing peers. Stopping
+  /// the job means stopping all of them.
+  final List<SlskCancel> live = [];
+  bool cancelled = false;
+
+  /// Only a Soulseek job can actually be stopped mid-flight; a TorBox transfer has no such
+  /// handle, and offering a button that silently does nothing is worse than offering none.
+  bool canCancel = false;
+
+  /// Identity of the TRACK, not of one peer's copy. Clicking five sources of the same song must
+  /// not start five downloads of it.
+  String? trackKey;
   bool get busy =>
       status == 'queued' ||
       status == 'waiting' ||
@@ -359,6 +372,10 @@ class DownloadManager extends ChangeNotifier {
   /// than several files from the same collector.
   static const _maxLosslessTries = 20;
   static const _maxLossyTries = 8;
+
+  /// How many peers to ask at once while hunting for one that can start now. Peer connections,
+  /// not logins — the shared session is untouched, so this cannot repeat the login problem.
+  static const _probeWidth = 3;
 
   /// Total time spent chasing a better copy after a playable one already landed.
   static const _upgradeBudget = Duration(minutes: 10);
@@ -415,6 +432,20 @@ class DownloadManager extends ChangeNotifier {
       if (j.key == key) return j;
     }
     return null;
+  }
+
+  /// Stop a download the user no longer wants. Everything in flight for it is torn down; the
+  /// partial file is removed by the transfer itself.
+  void cancelJob(DownloadJob job) {
+    job.cancelled = true;
+    for (final c in job.live) {
+      c.cancel();
+    }
+    job.live.clear();
+    job.status = 'failed';
+    job.detail = 'geannuleerd';
+    job.queuePlace = 0;
+    notifyListeners();
   }
 
   /// Remove finished (done/failed) jobs from the list; keep anything still in progress.
@@ -496,10 +527,20 @@ class DownloadManager extends ChangeNotifier {
         return false;
       }
     }
+    // Nor if the same TRACK is already running from another source. Clicking five copies of one
+    // song used to start five downloads of it; whichever finished second was thrown away as a
+    // duplicate anyway, and the better copy is already chased automatically once one lands.
+    //
+    // The key carries the DURATION as well as the name: on name alone, "Intro" from one album
+    // blocked "Intro" from another, and refusing a download the user actually wanted is worse
+    // than allowing a duplicate.
+    final track = _trackIdOf(candidates.first);
+    if (track.isNotEmpty && jobs.any((j) => j.busy && j.trackKey == track)) return false;
     // Starts as 'queued': with parallel downloads a job can sit waiting for a slot, and showing a
     // spinning progress ring for it looked like a stuck download. _soulseekBest flips it to
     // 'downloading' once it actually starts.
-    final job = DownloadJob(candidates.first.displayName, key: key, status: 'queued');
+    final job = DownloadJob(candidates.first.displayName, key: key, status: 'queued')..trackKey = track
+      ..canCancel = true;
     jobs.insert(0, job);
     notifyListeners();
     // Runs on the shared session → reuses the one login (no new login per click).
@@ -540,13 +581,13 @@ class DownloadManager extends ChangeNotifier {
       return true;
     }
 
-    Future<SlskResult> attempt(SoulseekFile f, {required bool wait}) async {
+    Future<SlskResult> attempt(SoulseekFile f, {required bool wait, SlskCancel? cancel}) async {
       try {
         return await _rawTransfer(session, f, job, () {
           // Only reached when waiting: hand our parallel slot to the next download so one busy
           // peer can't stall the batch, while we keep our place in this uploader's queue.
           releaseSlot();
-        }, waitInQueue: wait);
+        }, waitInQueue: wait, cancel: cancel);
       } catch (_) {
         return SlskFail('Downloadfout'); // unexpected throw → a failed attempt, keep going
       }
@@ -565,22 +606,58 @@ class DownloadManager extends ChangeNotifier {
       final cap = identical(pool, lossless) ? _maxLosslessTries : _maxLossyTries;
       final order = sweepOrderFor(pool);
       final n = order.length < cap ? order.length : cap;
-      for (var i = 0; i < n; i++) {
-        final f = order[i];
+
+      // Ask several peers AT ONCE and keep whoever answers first. Most peers that advertise a free
+      // slot never deliver — measured on one track, eighteen in a row — and asking them one after
+      // another spent minutes on dead ends. These are peer connections over the ONE shared login,
+      // so racing costs no extra logins.
+      var i = 0;
+      while (i < n && !job.cancelled) {
+        final wave = <SoulseekFile>[];
+        while (wave.length < _probeWidth && i < n) {
+          wave.add(order[i++]);
+        }
         job.status = 'downloading';
         job.progress = 0;
         job.queuePlace = 0;
-        job.detail = '$label ${i + 1}/$n · ${f.username}';
+        job.detail = '$label ${i - wave.length + 1}-$i/$n · ${wave.map((f) => f.username).join(', ')}';
         notifyListeners();
-        final res = await attempt(f, wait: false);
-        // Return the winning FILE, not just the result: which copy we settled for is what decides
-        // whether a better one is still worth chasing.
-        if (res is SlskDone) return (got: res, from: f, busy: busy);
-        if (res is SlskQueued) {
-          busy.add(f);
-          job.detail = '${f.username} is bezet · volgende bron';
-        } else {
-          job.detail = (res as SlskFail).reason;
+
+        final cancels = {for (final f in wave) f: SlskCancel()};
+        job.live.addAll(cancels.values);
+        SlskDone? winner;
+        SoulseekFile? winnerFile;
+        final decided = Completer<void>();
+        final running = wave.map((f) async {
+          final res = await attempt(f, wait: false, cancel: cancels[f]);
+          job.live.remove(cancels[f]);
+          if (res is SlskDone) {
+            if (winner == null) {
+              winner = res;
+              winnerFile = f;
+              // The others are now redundant — drop them rather than let them finish into staging.
+              for (final e in cancels.entries) {
+                if (e.key != f) e.value.cancel();
+              }
+              if (!decided.isCompleted) decided.complete();
+            } else {
+              // Two peers finished within the same instant. The loser's file is complete but
+              // unwanted: bin it, or it sits in staging forever — the library scan skips that
+              // folder, so nothing would ever notice.
+              await _discardStaged(res.path);
+            }
+          } else if (res is SlskQueued) {
+            busy.add(f);
+          }
+        }).toList();
+
+        // Don't hold a finished download hostage to its slowest wave-mate: a dead peer can burn
+        // half a minute on lookup + connect + firewall callback. The losers tear down behind us.
+        await Future.any([Future.wait(running), decided.future]);
+        if (winner != null) {
+          // Return the winning FILE, not just the result: which copy we settled for is what
+          // decides whether a better one is still worth chasing.
+          return (got: winner, from: winnerFile, busy: busy);
         }
         notifyListeners();
       }
@@ -590,12 +667,19 @@ class DownloadManager extends ChangeNotifier {
     /// Wait in each peer's queue, best quality first.
     Future<(SlskDone, SoulseekFile)?> waitFor(List<SoulseekFile> pool) async {
       for (final f in pool) {
+        if (job.cancelled) return null;
         job.status = 'waiting';
         job.progress = 0;
         job.detail = 'wachten op ${f.username}';
         notifyListeners();
-        final res = await attempt(f, wait: true);
+        // Waiting is the state a user most wants to abandon — a 30-minute queue with the stop
+        // button right there — so this needs its own handle just as much as the sweep does.
+        final c = SlskCancel();
+        job.live.add(c);
+        final res = await attempt(f, wait: true, cancel: c);
+        job.live.remove(c);
         if (res is SlskDone) return (res, f);
+        if (res is SlskCancelled) return null;
         job.detail = res is SlskQueued ? '${f.username} bleef bezet' : (res as SlskFail).reason;
         notifyListeners();
       }
@@ -620,6 +704,8 @@ class DownloadManager extends ChangeNotifier {
     final waited = await waitFor(first.busy);
     if (waited != null) return finish(waited.$1, waited.$2);
 
+    if (job.cancelled) return false;
+
     // ── 3. Only now, lossy: free first, then waiting ─────────────────────────
     if (lossy.isNotEmpty) {
       job.detail = 'geen lossless beschikbaar — MP3 als laatste optie';
@@ -632,9 +718,31 @@ class DownloadManager extends ChangeNotifier {
 
     job.status = 'failed';
     job.queuePlace = 0;
-    if (first.busy.isNotEmpty) job.detail = 'alle uploaders bleven bezet — probeer later opnieuw';
+    // Don't rewrite the user's own stop as an uploader failure and invite them to retry.
+    if (!job.cancelled && first.busy.isNotEmpty) {
+      job.detail = 'alle uploaders bleven bezet — probeer later opnieuw';
+    }
     notifyListeners();
     return false;
+  }
+
+  /// Identity of a track across peers: the filename without its track number, plus the running
+  /// time rounded to five seconds. Two peers' copies of one song agree on both; two different
+  /// songs that merely share a title ("Intro") almost never do.
+  static String _trackIdOf(SoulseekFile f) {
+    final name = trackNameKey(f.displayName);
+    if (name.isEmpty) return '';
+    final secs = f.durationSec ?? 0;
+    return secs > 0 ? '$name|${(secs / 5).round()}' : name;
+  }
+
+  /// Bin a completed file we turned out not to want, and the staging folder it came in.
+  Future<void> _discardStaged(String path) async {
+    try {
+      final f = File(path);
+      await f.delete();
+      await f.parent.delete();
+    } catch (_) {/* already gone, or the folder still holds something */}
   }
 
   /// Queue a background hunt for a better copy of a track you can already play.
@@ -671,6 +779,7 @@ class DownloadManager extends ChangeNotifier {
     final shadow = DownloadJob(job.name);
 
     void settle(String detail) {
+      if (job.cancelled) return; // a stopped job must not be forced back to 'done'
       job.status = 'done';
       job.progress = 1;
       job.detail = detail;
@@ -680,6 +789,7 @@ class DownloadManager extends ChangeNotifier {
     try {
       await soulseek.withSession((session) async {
         for (final f in better) {
+          if (job.cancelled) return; // the user stopped this track; don't keep chasing it
           final left = deadline.difference(DateTime.now());
           if (left <= const Duration(seconds: 30)) return; // too little left to be worth trying
           job.status = 'upgrading';
@@ -688,11 +798,16 @@ class DownloadManager extends ChangeNotifier {
           notifyListeners();
 
           SlskResult res;
+          final c = SlskCancel();
+          job.live.add(c);
           try {
-            res = await _rawTransfer(session, f, shadow, () {}, waitInQueue: true, maxWait: left);
+            res = await _rawTransfer(session, f, shadow, () {}, waitInQueue: true, maxWait: left, cancel: c);
           } catch (_) {
             continue;
+          } finally {
+            job.live.remove(c);
           }
+          if (res is SlskCancelled) return;
           if (res is! SlskDone) continue;
 
           // placeFileDetailed drops the copy this supersedes — but only if it actually won.
@@ -780,7 +895,7 @@ class DownloadManager extends ChangeNotifier {
   /// The raw single-peer transfer over [session] (updates progress only; no status finalization).
   Future<SlskResult> _rawTransfer(
       SlskSession session, SoulseekFile file, DownloadJob job, void Function() onQueued,
-      {bool waitInQueue = true, Duration maxWait = const Duration(minutes: 30)}) async {
+      {bool waitInQueue = true, Duration maxWait = const Duration(minutes: 30), SlskCancel? cancel}) async {
     // Land in a staging folder; placeFile() moves it into Albums/Singles/Compilaties after.
     // Per-PEER subfolder: candidates for the same track share a display name, so a slow attempt
     // that is still winding down can never write into the file the next attempt just opened.
@@ -807,7 +922,7 @@ class DownloadManager extends ChangeNotifier {
       job.detail = q.place > 0 ? 'wachten op ${file.username} · plaats ${q.place}' : 'wachten op ${file.username}';
       notifyListeners();
       onQueued();
-    }, waitInQueue: waitInQueue, maxWait: maxWait));
+    }, waitInQueue: waitInQueue, maxWait: maxWait, cancel: cancel));
   }
 
   /// Add a torrent download. Non-blocking: a "preparing" job shows TorBox's fetch progress
