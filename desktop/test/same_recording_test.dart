@@ -3,66 +3,106 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// Which of a search's results count as "the same track from another peer".
 ///
-/// Get this wrong in the permissive direction and the download race — which ranks candidates by
-/// quality — happily fetches the biggest file among them, which may be a different recording
-/// altogether. That is not hypothetical: clicking "02 Aerodynamic.flac" (3:27, 25 MB) delivered
-/// "08 - One More Time + Aerodynamic.flac" (6:10, 268 MB), a medley of two songs.
+/// Get this wrong in the permissive direction and the download race — which fetches whichever
+/// candidate a peer sends first — delivers a different recording altogether. Twice, for real:
+/// clicking "02 Aerodynamic.flac" (3:27) first delivered a 6:10 medley of 268 MB, and after that
+/// was fixed on running time, "Aerodynamic Beats + Forget About the World" at 3:31 — four seconds
+/// from the real track, so no clock separates them.
+///
+/// Peers are given as FULL paths on purpose: the folders are the evidence that tells an artist
+/// name apart from another song's title.
 void main() {
-  albumPage();
-  test('a longer title containing the clicked one is NOT the same track', () {
-    // The exact pair that went wrong. Containment scores this 1.0: {aerodynamic} sits entirely
-    // inside {one, more, time, aerodynamic}. The running times are what give it away.
-    expect(
-      sameRecording('02 Aerodynamic.flac', 207, '08 - One More Time + Aerodynamic.flac', 370),
-      isFalse,
-    );
+  const clicked = r'@shared\Daft Punk\Discovery\02 - Aerodynamic.flac';
+
+  group('a different song is never the same track', () {
+    test('a medley that contains the title', () {
+      expect(
+        sameRecording(clicked, 207, r'@me\Daft Punk\Alive 2007\08 - One More Time + Aerodynamic.flac', 370),
+        isFalse,
+      );
+    });
+
+    test('another song that shares a word, at almost the same length', () {
+      // The one that got through the running-time check: 3:31 against 3:27.
+      expect(
+        sameRecording(
+            clicked, 207, r'@me\Daft Punk - Gabrielle\Alive 2007\09 - Aerodynamic Beats + Forget About the World.flac', 211),
+        isFalse,
+      );
+    });
+
+    test('a remix, however close the length', () {
+      // Aerodynamic is 3:27; the Slum Village remix of it is 3:35.
+      expect(sameRecording(clicked, 207, r'@me\Daft Punk\04 - Aerodynamic (Slum Village Remix).flac', 215), isFalse);
+      expect(sameRecording(clicked, 207, r'@me\Daft Punk\02 - Aerodynamic (Daft Punk Remix).flac', 210), isFalse);
+    });
+
+    test('an unrelated track', () {
+      expect(sameRecording(clicked, 207, r'@me\Daft Punk\Discovery\03 - Digital Love.flac', 301), isFalse);
+    });
   });
 
-  test('...and still not when neither peer states a running time', () {
-    expect(sameRecording('02 Aerodynamic.flac', null, '08 - One More Time + Aerodynamic.flac', null), isFalse);
+  group('the same track, named however a peer likes', () {
+    test('artist and album spelled out in the filename', () {
+      expect(sameRecording(clicked, 207, r'@me\music\Daft Punk - Discovery - 02 - Aerodynamic.flac', 209), isTrue);
+    });
+
+    test('bare title, no artist anywhere', () {
+      expect(sameRecording(clicked, 207, r'@me\Aerodynamic.flac', 208), isTrue);
+    });
+
+    test('a different track number, and a few seconds of rip difference', () {
+      expect(sameRecording(clicked, 207, r'@me\Daft Punk\Discovery\11 - Aerodynamic.flac', 214), isTrue);
+    });
+
+    test('the artist named only in the folder on one side', () {
+      expect(sameRecording(clicked, 207, r'@me\flac\Daft Punk - Aerodynamic.flac', 207), isTrue);
+    });
   });
 
-  test('the same track named differently by different peers still matches', () {
-    expect(sameRecording('02 Aerodynamic.flac', 207, 'Daft Punk - Aerodynamic.flac', 207), isTrue);
-    expect(sameRecording('02 Aerodynamic.flac', 207, '2. Aerodynamic.flac', 209), isTrue);
-    expect(sameRecording('02 Aerodynamic.flac', 207, '11 - Aerodynamic.flac', 205), isTrue);
+  group('rips that disagree by more than a rip should', () {
+    test('fifty seconds apart is a different recording', () {
+      expect(sameRecording(clicked, 207, r'@me\Daft Punk\Discovery\02 - Aerodynamic.flac', 260), isFalse);
+    });
   });
 
-  test('a track number prefix is not part of the title', () {
-    expect(sameRecording('01 - Everybody.flac', 240, 'Artist - Everybody.flac', 240), isTrue);
-  });
+  /// The album page matches a bare Deezer title against a peer's path. No second filename explains
+  /// the extra words there, so the artist's own name has to.
+  group('album page, matching a catalogue title', () {
+    test('a medley containing the title is not that track', () {
+      expect(
+        fileOffersTitle('Aerodynamic', 207, 'Daft Punk', r'@me\Alive 2007\08 - One More Time + Aerodynamic.flac', 370),
+        isFalse,
+      );
+    });
 
-  test('rips of one track differ by a few seconds, not by minutes', () {
-    // Gapless vs faded rips of the same song disagree slightly; a different song does not.
-    expect(sameRecording('Aerodynamic.flac', 207, 'Aerodynamic.flac', 214), isTrue);
-    expect(sameRecording('Aerodynamic.flac', 207, 'Aerodynamic.flac', 260), isFalse);
-  });
+    test('another song sharing a word is not that track', () {
+      expect(
+        fileOffersTitle(
+            'Aerodynamic', 207, 'Daft Punk', r'@me\Alive 2007\09 - Aerodynamic Beats + Forget About the World.flac', 211),
+        isFalse,
+      );
+    });
 
-  test('different songs never match, however they are named', () {
-    expect(sameRecording('02 Aerodynamic.flac', 207, '03 Digital Love.flac', 301), isFalse);
-    expect(sameRecording('Aerodynamic.flac', 207, 'Aerodynamic (Slum Village Remix).flac', 215), isFalse);
-  });
+    test('a remix is not that track', () {
+      expect(
+        fileOffersTitle('Aerodynamic', 207, 'Daft Punk', r'@me\04 - Aerodynamic (Slum Village Remix).flac', 215),
+        isFalse,
+      );
+    });
 
-  test('a remix is not the original even at a similar length', () {
-    expect(
-      sameRecording('02 - Aerodynamic.flac', 207, '02 - Aerodynamic (Daft Punk Remix).flac', 210),
-      isFalse,
-    );
-  });
-}
+    test('the artist and track number in the filename are not held against it', () {
+      expect(
+        fileOffersTitle('Aerodynamic', 207, 'Daft Punk', r'@me\Discovery\02 - Daft Punk - Aerodynamic.flac', 209),
+        isTrue,
+      );
+    });
 
-/// The album page matches a bare Deezer title against a peer's filename, which also carries the
-/// artist and a track number. Same two traps, so the same guards have to hold.
-void albumPage() {
-  test('a medley containing the title is not that track', () {
-    expect(fileOffersTitle('Aerodynamic', 207, '08 - One More Time + Aerodynamic.flac', 370), isFalse);
-  });
-
-  test('a remix of about the same length is not that track', () {
-    expect(fileOffersTitle('Aerodynamic', 207, 'Aerodynamic (Slum Village Remix).flac', 215), isFalse);
-  });
-
-  test('the artist and track number in the filename are not held against it', () {
-    expect(fileOffersTitle('Aerodynamic', 207, '02 - Daft Punk - Aerodynamic.flac', 209), isTrue);
+    test('album folders are not held against it either', () {
+      expect(
+        fileOffersTitle('Aerodynamic', 207, 'Daft Punk', r'@me\Daft Punk\Discovery\02 - Aerodynamic.flac', 207),
+        isTrue,
+      );
+    });
   });
 }

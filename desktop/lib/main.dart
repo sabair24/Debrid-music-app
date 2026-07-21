@@ -3034,9 +3034,8 @@ void _pickTorrentTracks(BuildContext context, SearchResult r) {
 /// Every peer in [all] offering the same track as [f] (including f itself), best-first.
 /// The rule itself lives in organize.dart, where it can be tested without a live peer.
 List<SoulseekFile> _slskCandidates(List<SoulseekFile> all, SoulseekFile f) {
-  final out = all
-      .where((o) => o.isAudio && sameRecording(f.displayName, f.durationSec, o.displayName, o.durationSec))
-      .toList();
+  final out =
+      all.where((o) => o.isAudio && sameRecording(f.filename, f.durationSec, o.filename, o.durationSec)).toList();
   return out.isEmpty ? [f] : out;
 }
 
@@ -5261,7 +5260,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// Deezer's running time is passed along because the title alone can't tell a track from a
   /// medley that contains it, nor from a remix of about the same length.
   List<SoulseekFile> _slskForTitle(CatalogTrack t) => _albumSlsk
-      .where((f) => f.isAudio && fileOffersTitle(t.title, t.durationSec, f.displayName, f.durationSec))
+      .where((f) => f.isAudio && fileOffersTitle(t.title, t.durationSec, widget.artistName, f.filename, f.durationSec))
       .toList();
 
   /// The copy of this track already in the library (null if we don't have it). Version markers

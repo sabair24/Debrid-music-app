@@ -636,38 +636,59 @@ double wordSim(Set<String> a, Set<String> b) {
   return inter / m;
 }
 
-/// Are two offered files the same recording, given how differently peers name things?
-///
-/// Containment alone is not enough, and it cost a real download: "Aerodynamic" scores a perfect
-/// 1.0 against "One More Time + Aerodynamic", because the shorter name sits entirely inside the
-/// longer one. Clicking a 3:27 track fetched a 6:10 medley of 268 MB instead. Running time settles
-/// it whenever both peers state one, which is nearly always; without it, the names must be roughly
-/// the same SIZE too, or a one-word title matches everything containing that word.
-bool sameRecording(String nameA, int? durA, String nameB, int? durB) {
-  final a = fileWords(nameA), b = fileWords(nameB);
-  if (wordSim(a, b) < 0.8) return false;
-  // Whatever one name says and the other doesn't. If that announces a different take — "remix",
-  // "live", "edit" — this is another recording however close the running times, and they can be
-  // very close: "Aerodynamic" is 3:27 and the Slum Village remix of it is 3:35.
-  if (a.difference(b).union(b.difference(a)).any(_versionWordRe.hasMatch)) return false;
-  final da = durA ?? 0, db = durB ?? 0;
-  if (da > 0 && db > 0) return (da - db).abs() <= 12;
-  final inter = a.intersection(b).length;
-  final big = a.length > b.length ? a.length : b.length;
-  return big > 0 && inter / big >= .5;
+/// The last segment of a peer's path — the filename as a human would read it.
+String baseName(String path) {
+  final cut = path.lastIndexOf(RegExp(r'[\\/]'));
+  return cut < 0 ? path : path.substring(cut + 1);
 }
 
-/// Does [filename] offer the track called [title]?
+/// Words one name has and the other doesn't, that the other file's FOLDERS don't account for.
 ///
-/// Unlike [sameRecording] this compares a bare title against a full filename, which also carries
-/// the artist and a track number — so the TITLE's words must be present in the filename, not the
-/// other way round. The same two traps apply: a medley whose name contains the title, and a remix
-/// that runs about as long as the original.
-bool fileOffersTitle(String title, int? titleDur, String filename, int? fileDur) {
-  final tw = fileWords(title), fw = fileWords(filename);
+/// Peers disagree about whether the artist and album belong in the filename, so "Aerodynamic.flac"
+/// and "Daft Punk - Discovery - 02 - Aerodynamic.flac" are the same track — but only because
+/// "daft", "punk" and "discovery" are right there in the first file's folders. Words that appear
+/// nowhere in the other file's path are a different song's title, not a naming habit.
+Set<String> _unexplained(Set<String> mine, Set<String> theirs, String theirPath) {
+  final context = fileWords(theirPath.replaceAll(RegExp(r'[\\/]'), ' '));
+  return mine.difference(theirs).where((w) => !context.contains(w)).toSet();
+}
+
+/// Are two offered files the same recording, given how differently peers name things?
+/// Both arguments are FULL peer paths — the folders are evidence, not noise.
+///
+/// Two real downloads went wrong here before this was tight enough. "Aerodynamic" scores a perfect
+/// 1.0 against "One More Time + Aerodynamic", because the shorter name sits entirely inside the
+/// longer one, and a 3:27 click fetched a 6:10 medley of 268 MB. Tightening on running time then
+/// let through "Aerodynamic Beats + Forget About the World", which is 3:31 — four seconds from the
+/// real track, so no clock can separate them. What separates them is that "beats", "forget" and
+/// "world" appear nowhere in the other file's folders, while "daft" and "punk" always do.
+bool sameRecording(String pathA, int? durA, String pathB, int? durB) {
+  final a = fileWords(baseName(pathA)), b = fileWords(baseName(pathB));
+  if (wordSim(a, b) < 0.8) return false;
+  // A word that announces a different take — "remix", "live", "edit" — settles it first, however
+  // close the running times, and they can be close: the Slum Village remix of Aerodynamic is 3:35
+  // against the original's 3:27.
+  if (a.difference(b).union(b.difference(a)).any(_versionWordRe.hasMatch)) return false;
+  if (_unexplained(b, a, pathA).isNotEmpty) return false;
+  if (_unexplained(a, b, pathB).isNotEmpty) return false;
+  final da = durA ?? 0, db = durB ?? 0;
+  if (da > 0 && db > 0) return (da - db).abs() <= 12;
+  return true;
+}
+
+/// Does [path] offer the track called [title] by [artist]?
+///
+/// Unlike [sameRecording] this compares a bare catalogue title against a peer's path, so there is
+/// no second filename to explain the extra words — the artist's own name does that job instead.
+bool fileOffersTitle(String title, int? titleDur, String artist, String path, int? fileDur) {
+  final tw = fileWords(title), fw = fileWords(baseName(path));
   if (tw.isEmpty || fw.isEmpty) return false;
   if (tw.intersection(fw).length / tw.length < 0.75) return false;
   if (tw.difference(fw).union(fw.difference(tw)).any(_versionWordRe.hasMatch)) return false;
+  // Anything the filename says beyond the title must be the artist, the album, or the folders it
+  // sits in — otherwise it is another song sharing a word with this one.
+  final known = fileWords('$artist ${path.replaceAll(RegExp(r'[\\/]'), ' ')}'.replaceAll(baseName(path), ''));
+  if (fw.difference(tw).any((w) => !known.contains(w))) return false;
   final a = titleDur ?? 0, b = fileDur ?? 0;
   if (a > 0 && b > 0) return (a - b).abs() <= 12;
   return true;
