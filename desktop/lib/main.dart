@@ -232,49 +232,6 @@ class _HomeShellState extends State<HomeShell> {
         ),
       );
 
-  /// The pill's contents on a screen without library search: where you are, and what's in there.
-  Widget _titlePill() => _glassPill(
-        child: Consumer<LibraryStore>(
-          builder: (_, lib, __) => Row(
-            children: [
-              const SizedBox(width: 8),
-              Icon(_viewIcon(_view), size: 17, color: Colors.white.withValues(alpha: .82)),
-              const SizedBox(width: 9),
-              Text(_viewLabel(_view),
-                  style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
-              const Spacer(),
-              Text(
-                lib.scanning
-                    ? 'Bibliotheek scannen… ${lib.scanned}'
-                    : '${lib.albums.length} albums · ${lib.tracks.length} nummers',
-                style: const TextStyle(color: _muted, fontSize: 12),
-              ),
-              const SizedBox(width: 10),
-            ],
-          ),
-        ),
-      );
-
-  IconData _viewIcon(int v) => switch (v) {
-        0 => Icons.album_rounded,
-        1 => Icons.people_alt_rounded,
-        2 => Icons.travel_explore_rounded,
-        3 => Icons.auto_awesome_rounded,
-        4 => Icons.music_note_rounded,
-        6 => Icons.download_rounded,
-        _ => Icons.home_rounded,
-      };
-
-  String _viewLabel(int v) => switch (v) {
-        0 => 'Albums',
-        1 => 'Artiesten',
-        2 => 'Online zoeken',
-        3 => 'Ontdek',
-        4 => 'Tracks',
-        6 => 'Mijn downloads',
-        _ => 'Start',
-      };
-
   Widget _searchBar() => _glassPill(
         child: Row(
           children: [
@@ -362,12 +319,12 @@ class _HomeShellState extends State<HomeShell> {
     return Scaffold(
       body: Column(
         children: [
+          _topBar(),
           Expanded(
-            child: Row(
+            child: Column(
               children: [
-                _railView(),
-                Container(width: 1, color: _line),
-                Expanded(child: _contentArea()),
+                if (_searchable) _searchBar(),
+                Expanded(child: _content()),
               ],
             ),
           ),
@@ -377,147 +334,78 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
-  /// Content, with the glass pill floating at the top and a soft accent glow behind it.
-  /// The glow is what the pill's blur has to work with — without something behind it, frosted
-  /// glass on a flat panel is indistinguishable from a plain rounded box.
-  Widget _contentArea() {
-    return Stack(
-      children: [
-        Positioned(
-          top: -160,
-          left: -40,
-          right: -40,
-          height: 340,
-          child: IgnorePointer(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  center: Alignment.topCenter,
-                  radius: .9,
-                  colors: [_accent.withValues(alpha: .30), Colors.transparent],
+  /// Brand, the navigation pill bar, and the library count — the old left rail, laid out
+  /// horizontally. The soft glow behind it is what the glass has to blur; on a flat panel
+  /// frosted glass is indistinguishable from a plain rounded box.
+  Widget _topBar() => SizedBox(
+        height: 64,
+        child: Stack(
+          children: [
+            Positioned(
+              left: 0,
+              right: 0,
+              top: -150,
+              height: 300,
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: RadialGradient(
+                      radius: .75,
+                      colors: [_accent.withValues(alpha: .34), Colors.transparent],
+                    ),
+                  ),
                 ),
               ),
             ),
-          ),
-        ),
-        Column(
-          children: [
-            _searchable ? _searchBar() : _titlePill(),
-            Expanded(child: _content()),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 11, 18, 8),
+              child: Row(
+                children: [
+                  Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      gradient: const LinearGradient(colors: [_accent, _accent2]),
+                    ),
+                    child: const Icon(Icons.music_note_rounded, size: 17, color: Colors.white),
+                  ),
+                  const SizedBox(width: 9),
+                  const Text('DebridMusic',
+                      style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5)),
+                  const Spacer(),
+                  Consumer<DownloadManager>(
+                    builder: (_, dm, __) => _NavPills(
+                      active: _view,
+                      onSelect: (i) => setState(() => _view = i),
+                      badge: dm.jobs.where((j) => j.busy).length,
+                    ),
+                  ),
+                  const Spacer(),
+                  Consumer<LibraryStore>(
+                    builder: (_, lib, __) => Text(
+                      lib.scanning
+                          ? 'Scannen… ${lib.scanned}'
+                          : (lib.enriching
+                              ? 'Covers ophalen…'
+                              : '${lib.albums.length} albums · ${lib.tracks.length} nummers'),
+                      style: const TextStyle(color: _muted, fontSize: 11.5),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  IconButton(
+                    icon: const Icon(Icons.settings_rounded, size: 19),
+                    color: _muted,
+                    tooltip: 'Instellingen',
+                    onPressed: () => showDialog(context: context, builder: (_) => const SettingsDialog()),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
-      ],
-    );
-  }
+      );
 
-  Widget _railView() {
-    return Container(
-      width: 210,
-      color: const Color(0xFF10121B),
-      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(6, 4, 6, 18),
-            child: Row(
-              children: [
-                Container(
-                  width: 30, height: 30,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(8),
-                    gradient: const LinearGradient(colors: [_accent, _accent2]),
-                  ),
-                  child: const Icon(Icons.music_note_rounded, size: 18, color: Colors.white),
-                ),
-                const SizedBox(width: 10),
-                const Text('DebridMusic', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-              ],
-            ),
-          ),
-          _navBtn(Icons.home_rounded, 'Start', 5),
-          _navBtn(Icons.album_rounded, 'Albums', 0),
-          _navBtn(Icons.music_note_rounded, 'Tracks', 4),
-          _navBtn(Icons.people_alt_rounded, 'Artiesten', 1),
-          _navBtn(Icons.travel_explore_rounded, 'Online zoeken', 2),
-          _navBtn(Icons.auto_awesome_rounded, 'Ontdek', 3),
-          Consumer<DownloadManager>(
-            builder: (_, dm, __) => _navBtn(Icons.download_rounded, 'Mijn downloads', 6,
-                badge: dm.jobs.where((j) => j.busy).length),
-          ),
-          const Spacer(),
-          Material(
-            color: Colors.transparent,
-            borderRadius: BorderRadius.circular(10),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(10),
-              onTap: () => showDialog(context: context, builder: (_) => const SettingsDialog()),
-              child: const Padding(
-                padding: EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-                child: Row(
-                  children: [
-                    Icon(Icons.settings_rounded, size: 18, color: _muted),
-                    SizedBox(width: 11),
-                    Text('Instellingen',
-                        style: TextStyle(color: _muted, fontWeight: FontWeight.w600)),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          // The library counts moved into the top pill; only the transient "fetching covers"
-          // note stays down here, so the rail isn't repeating what's already on screen.
-          Consumer<LibraryStore>(
-            builder: (_, lib, __) => lib.enriching && !lib.scanning
-                ? const Padding(
-                    padding: EdgeInsets.all(8),
-                    child: Text('Covers ophalen…',
-                        style: TextStyle(color: Color(0xFF5F6478), fontSize: 11.5)),
-                  )
-                : const SizedBox.shrink(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _navBtn(IconData icon, String label, int index, {int badge = 0}) {
-    final active = _view == index;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Material(
-        color: active ? _accent.withValues(alpha: .15) : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(10),
-          onTap: () => setState(() => _view = index),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-            child: Row(
-              children: [
-                Icon(icon, size: 18, color: active ? Colors.white : _muted),
-                const SizedBox(width: 11),
-                Expanded(
-                  child: Text(label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          color: active ? Colors.white : _muted, fontWeight: FontWeight.w600)),
-                ),
-                if (badge > 0)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                    decoration: BoxDecoration(color: _accent, borderRadius: BorderRadius.circular(9)),
-                    child: Text('$badge',
-                        style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, color: Colors.white)),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 
   Widget _content() {
     if (_view == 5) return const HomeStartView();
@@ -578,6 +466,161 @@ class _HomeShellState extends State<HomeShell> {
       };
 }
 
+// ── Top navigation ───────────────────────────────────────────────────────────
+/// The sections, as a row of labels inside one glass bar, with a pill that SLIDES to whichever
+/// section you're in.
+///
+/// Item widths are measured from the text rather than read back after layout, so the pill's
+/// geometry is known in the same frame it animates in — no first-frame jump, no post-frame
+/// measuring pass. That also means the label's weight must not change between states (only its
+/// colour does), or the pill would no longer match what it sits behind.
+class _NavPills extends StatefulWidget {
+  final int active;
+  final ValueChanged<int> onSelect;
+  final int badge; // downloads in progress, shown on "Mijn downloads"
+  const _NavPills({required this.active, required this.onSelect, required this.badge});
+
+  @override
+  State<_NavPills> createState() => _NavPillsState();
+}
+
+class _NavPillsState extends State<_NavPills> {
+  int? _hover;
+
+  static const _items = <(int, String)>[
+    (5, 'Start'),
+    (0, 'Albums'),
+    (4, 'Tracks'),
+    (1, 'Artiesten'),
+    (2, 'Online zoeken'),
+    (3, 'Ontdek'),
+    (6, 'Mijn downloads'),
+  ];
+  static const _style = TextStyle(fontSize: 13, fontWeight: FontWeight.w600);
+  static const _padH = 15.0;
+  static const _badgeW = 21.0;
+
+  double _width(int i) {
+    final tp = TextPainter(
+      text: TextSpan(text: _items[i].$2, style: _style),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final badge = _items[i].$1 == 6 && widget.badge > 0 ? _badgeW : 0.0;
+    return tp.width + _padH * 2 + badge;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final widths = [for (var i = 0; i < _items.length; i++) _width(i)];
+    final offsets = <double>[];
+    var total = 0.0;
+    for (final w in widths) {
+      offsets.add(total);
+      total += w;
+    }
+    final activeIdx = _items.indexWhere((e) => e.$1 == widget.active);
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(999),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+        child: Container(
+          padding: const EdgeInsets.all(5),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.white.withValues(alpha: .085),
+                Colors.white.withValues(alpha: .028),
+              ],
+            ),
+            border: Border.all(color: Colors.white.withValues(alpha: .10)),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withValues(alpha: .34), blurRadius: 26, offset: const Offset(0, 9)),
+            ],
+          ),
+          child: SizedBox(
+            height: 32,
+            width: total,
+            child: Stack(
+              children: [
+                if (activeIdx >= 0)
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeOutCubic,
+                    left: offsets[activeIdx],
+                    width: widths[activeIdx],
+                    top: 0,
+                    bottom: 0,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(999),
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.white.withValues(alpha: .17),
+                            Colors.white.withValues(alpha: .07),
+                          ],
+                        ),
+                        border: Border.all(color: Colors.white.withValues(alpha: .20)),
+                      ),
+                    ),
+                  ),
+                Row(
+                  children: [
+                    for (var i = 0; i < _items.length; i++)
+                      SizedBox(
+                        width: widths[i],
+                        child: MouseRegion(
+                          cursor: SystemMouseCursors.click,
+                          onEnter: (_) => setState(() => _hover = i),
+                          onExit: (_) => setState(() => _hover = _hover == i ? null : _hover),
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () => widget.onSelect(_items[i].$1),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  _items[i].$2,
+                                  style: _style.copyWith(
+                                    color: _items[i].$1 == widget.active
+                                        ? Colors.white
+                                        : (_hover == i ? Colors.white70 : _muted),
+                                  ),
+                                ),
+                                if (_items[i].$1 == 6 && widget.badge > 0) ...[
+                                  const SizedBox(width: 6),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                    decoration: BoxDecoration(
+                                      color: _accent,
+                                      borderRadius: BorderRadius.circular(9),
+                                    ),
+                                    child: Text('${widget.badge}',
+                                        style: const TextStyle(
+                                            fontSize: 10, fontWeight: FontWeight.w800, color: Colors.white)),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ── Albums grid ──────────────────────────────────────────────────────────────
 class AlbumsGrid extends StatelessWidget {
   final List<Album> albums;
@@ -634,15 +677,25 @@ class _AlbumCardState extends State<AlbumCard> {
       child: GestureDetector(
         onTap: () => Navigator.of(context)
             .push(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: a))),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          transform: _hover ? Matrix4.translationValues(0, -3, 0) : Matrix4.identity(),
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: _hover ? _panel2 : _panel,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: _line),
-          ),
+        // Grows on hover, like the TV app. 1.06 is deliberate: the grid's 20px gap is wider than
+        // the ~6px a card gains per side, so a raised card never collides with its neighbours
+        // (grid children paint in order, so an overlap would be drawn OVER the raised card).
+        child: AnimatedScale(
+          scale: _hover ? 1.06 : 1,
+          duration: const Duration(milliseconds: 170),
+          curve: Curves.easeOut,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 170),
+            curve: Curves.easeOut,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: _hover ? _panel2 : _panel,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: _hover ? Colors.white.withValues(alpha: .16) : _line),
+              boxShadow: _hover
+                  ? [BoxShadow(color: Colors.black.withValues(alpha: .45), blurRadius: 22, offset: const Offset(0, 10))]
+                  : const [],
+            ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -656,7 +709,8 @@ class _AlbumCardState extends State<AlbumCard> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: _muted, fontSize: 12)),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -1238,25 +1292,79 @@ class _ArtistsViewState extends State<ArtistsView> {
               final name = artists[i];
               final art = widget.lib.artistImages[name] ??
                   _source.firstWhere((a) => a.artist == name).cover;
-              return GestureDetector(
+              return _ArtistCard(
+                name: name,
+                image: art,
                 onTap: () => setState(() => _selected = name),
-                child: Column(
-                  children: [
-                    Expanded(
-                        child: LayoutBuilder(
-                            builder: (_, c) => cover(art, size: c.maxWidth, circle: true))),
-                    const SizedBox(height: 8),
-                    Text(name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                  ],
-                ),
               );
             }, childCount: artists.length),
           ),
         ),
       ],
+    );
+  }
+}
+
+/// An artist in the grid. Grows on hover like the album cards, so both grids behave the same.
+class _ArtistCard extends StatefulWidget {
+  final String name;
+  final Uint8List? image;
+  final VoidCallback onTap;
+  const _ArtistCard({required this.name, required this.image, required this.onTap});
+
+  @override
+  State<_ArtistCard> createState() => _ArtistCardState();
+}
+
+class _ArtistCardState extends State<_ArtistCard> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedScale(
+          scale: _hover ? 1.06 : 1,
+          duration: const Duration(milliseconds: 170),
+          curve: Curves.easeOut,
+          child: Column(
+            children: [
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (_, c) => AnimatedContainer(
+                    duration: const Duration(milliseconds: 170),
+                    curve: Curves.easeOut,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      boxShadow: _hover
+                          ? [
+                              BoxShadow(
+                                  color: Colors.black.withValues(alpha: .45),
+                                  blurRadius: 22,
+                                  offset: const Offset(0, 10))
+                            ]
+                          : const [],
+                    ),
+                    child: cover(widget.image, size: c.maxWidth, circle: true),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(widget.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: _hover ? Colors.white : null)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1905,7 +2013,9 @@ class _HomeStartViewState extends State<HomeStartView> {
             padding: const EdgeInsets.fromLTRB(28, 22, 28, 12),
             child: Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
           ),
-          SizedBox(height: 194, child: row),
+          // Taller than the tile itself: a horizontal ListView gives its children a TIGHT height
+          // and clips them, so without slack the hover growth would be sliced off top and bottom.
+          SizedBox(height: 204, child: row),
         ],
       );
 
@@ -1940,22 +2050,77 @@ class _HomeStartViewState extends State<HomeStartView> {
         itemBuilder: (_, i) => _card(_netCover(ts[i].cover, size: 140), ts[i].title, ts[i].artist, () => _playRec(ts[i])),
       );
 
-  Widget _card(Widget art, String title, String subtitle, VoidCallback onTap) => SizedBox(
-        width: 140,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              art,
-              const SizedBox(height: 8),
-              Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
-              Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 12)),
-            ],
+  Widget _card(Widget art, String title, String subtitle, VoidCallback onTap) =>
+      _HoverCard(art: art, title: title, subtitle: subtitle, onTap: onTap);
+}
+
+/// A tile in one of the home rows. Same hover growth as the album and artist grids, so the whole
+/// app responds the same way to the pointer.
+class _HoverCard extends StatefulWidget {
+  final Widget art;
+  final String title, subtitle;
+  final VoidCallback onTap;
+  const _HoverCard({required this.art, required this.title, required this.subtitle, required this.onTap});
+
+  @override
+  State<_HoverCard> createState() => _HoverCardState();
+}
+
+class _HoverCardState extends State<_HoverCard> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 140,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: AnimatedScale(
+            scale: _hover ? 1.06 : 1,
+            duration: const Duration(milliseconds: 170),
+            curve: Curves.easeOut,
+            // min + centred: the row hands out a tight height, and a Column that fills it would
+            // scale past the row's edges and get clipped.
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 170),
+                  curve: Curves.easeOut,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(10),
+                    boxShadow: _hover
+                        ? [
+                            BoxShadow(
+                                color: Colors.black.withValues(alpha: .45),
+                                blurRadius: 22,
+                                offset: const Offset(0, 10))
+                          ]
+                        : const [],
+                  ),
+                  child: widget.art,
+                ),
+                const SizedBox(height: 8),
+                Text(widget.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 13.5, color: _hover ? Colors.white : null)),
+                Text(widget.subtitle,
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 12)),
+              ],
+            ),
           ),
         ),
-      );
+      ),
+    );
+  }
 }
 
 class OntdekView extends StatefulWidget {
