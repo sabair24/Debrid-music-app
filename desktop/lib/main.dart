@@ -4101,13 +4101,14 @@ class _HeroCarouselState extends State<HeroCarousel> {
                 imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
                 child: Image.network(cover, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox()),
               ),
-            // Without this the blurred art is too busy to read white text on.
+            // Without this the blurred art is too busy to read white text on. Kept dark even at
+            // the far edge: a mostly-white sleeve blurs to near-white and washed the banner out.
             DecoratedBox(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.centerLeft,
                   end: Alignment.centerRight,
-                  colors: [Colors.black.withValues(alpha: .86), Colors.black.withValues(alpha: .45)],
+                  colors: [Colors.black.withValues(alpha: .88), Colors.black.withValues(alpha: .62)],
                 ),
               ),
             ),
@@ -4220,7 +4221,11 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 4, 24, 14),
-      child: Column(
+      // Capped: on a maximised window the blurb would otherwise run the full 1400px, and a line
+      // that long is genuinely hard to read back to the next line.
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 820),
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
@@ -4243,6 +4248,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
             BioText('${widget.artist} — ${widget.album}', text),
           ],
         ],
+        ),
       ),
     );
   }
