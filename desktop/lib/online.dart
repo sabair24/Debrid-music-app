@@ -319,10 +319,18 @@ class DownloadJob {
   final String name;
   final String? key; // stable id so a specific tile/track row can show THIS job's progress inline
   double progress;
-  String status; // queued | waiting | downloading | done | failed | preparing
+  String status; // queued | waiting | downloading | upgrading | done | failed | preparing
   String? detail; // failure reason, or "poging 2/5 · peer" while falling back
   int queuePlace = 0; // position in the uploader's queue while status == 'waiting' (0 = unknown)
-  bool get busy => status == 'queued' || status == 'waiting' || status == 'downloading' || status == 'preparing';
+  bool get busy =>
+      status == 'queued' ||
+      status == 'waiting' ||
+      status == 'downloading' ||
+      status == 'preparing' ||
+      status == 'upgrading';
+
+  /// The track is on disk and playable — even if something is still running for it.
+  bool get playable => status == 'done' || status == 'upgrading';
   DownloadJob(this.name, {this.key, this.status = 'downloading'}) : progress = 0;
 }
 
@@ -343,6 +351,20 @@ class DownloadManager extends ChangeNotifier {
   // queue. The session auto-closes ~2 min after the last download, freeing Soulseek's single
   // connection so the native client can be used again.
   static const _slskMaxParallel = 6;
+
+  /// How many peers a sweep walks looking for "someone free right now". Lossless gets a much
+  /// deeper sweep: settling for an MP3 while an untried FLAC was sitting at position 7 would
+  /// break the one rule that matters here. A short probe timeout keeps that affordable.
+  static const _maxLosslessTries = 14;
+  static const _maxLossyTries = 6;
+
+  /// Total time spent chasing a better copy after a playable one already landed.
+  static const _upgradeBudget = Duration(minutes: 10);
+
+  /// Upgrades run one at a time and take NO download slot, so they can never delay a track you
+  /// have nothing of yet. Queued rather than dropped, so a whole album still gets upgraded.
+  final List<Future<void> Function()> _upgradeQueue = [];
+  bool _upgradeRunning = false;
   int _slskActive = 0; // downloads holding a PARALLEL SLOT (a queued one gives its slot back)
   final List<Completer<void>> _slskWaiting = [];
 
@@ -468,7 +490,6 @@ class DownloadManager extends ChangeNotifier {
   Future<bool> _soulseekBest(
       List<SoulseekFile> candidates, DownloadJob job, SlskSession session, void Function() releaseSlot) async {
     final ranked = [...candidates]..sort(_rankSlsk);
-    final tries = ranked.length < 5 ? ranked.length : 5;
 
     /// Shared success path: file the track away tidily (Albums/Singles/Compilaties per artist)
     /// before the rescan picks it up, so the library never sees the loose landing-zone copy.
@@ -509,44 +530,187 @@ class DownloadManager extends ChangeNotifier {
       }
     }
 
-    // Pass 1 — find someone who is FREE RIGHT NOW. A peer that puts us in its queue is dropped
-    // immediately rather than waited on: a free peer beats a good place in a busy peer's line.
-    final busy = <SoulseekFile>[];
-    for (var i = 0; i < tries; i++) {
-      final f = ranked[i];
-      job.status = 'downloading';
-      job.progress = 0;
-      job.queuePlace = 0;
-      job.detail = tries > 1 ? 'poging ${i + 1}/$tries · ${f.username}' : f.username;
-      notifyListeners();
-      final res = await attempt(f, wait: false);
-      if (res is SlskDone) return succeed(res);
-      if (res is SlskQueued) {
-        busy.add(f); // worth waiting on later if nobody turns out to be free
-        job.detail = '${f.username} is bezet · volgende bron';
-      } else {
-        job.detail = (res as SlskFail).reason;
+    // Lossless first, always. An MP3 stays what it has always been here: an absolute last resort,
+    // never a shortcut — so a free MP3 does NOT beat waiting for a FLAC.
+    final lossless = ranked.where(isLossless).toList();
+    final lossy = ranked.where((f) => !isLossless(f)).toList();
+
+    /// Sweep for a peer that is FREE RIGHT NOW: anything that queues us is dropped immediately
+    /// and remembered, because a free peer beats a good place in a busy peer's line.
+    Future<({SlskDone? got, SoulseekFile? from, List<SoulseekFile> busy})> sweep(
+        List<SoulseekFile> pool, String label) async {
+      final busy = <SoulseekFile>[];
+      final cap = identical(pool, lossless) ? _maxLosslessTries : _maxLossyTries;
+      final n = pool.length < cap ? pool.length : cap;
+      for (var i = 0; i < n; i++) {
+        final f = pool[i];
+        job.status = 'downloading';
+        job.progress = 0;
+        job.queuePlace = 0;
+        job.detail = '$label ${i + 1}/$n · ${f.username}';
+        notifyListeners();
+        final res = await attempt(f, wait: false);
+        // Return the winning FILE, not just the result: which copy we settled for is what decides
+        // whether a better one is still worth chasing.
+        if (res is SlskDone) return (got: res, from: f, busy: busy);
+        if (res is SlskQueued) {
+          busy.add(f);
+          job.detail = '${f.username} is bezet · volgende bron';
+        } else {
+          job.detail = (res as SlskFail).reason;
+        }
+        notifyListeners();
       }
-      notifyListeners();
+      return (got: null, from: null, busy: busy);
     }
 
-    // Pass 2 — nobody was free, so now we do wait, best quality first.
-    for (final f in busy) {
-      job.status = 'waiting';
-      job.progress = 0;
-      job.detail = 'wachten op ${f.username}';
+    /// Wait in each peer's queue, best quality first.
+    Future<(SlskDone, SoulseekFile)?> waitFor(List<SoulseekFile> pool) async {
+      for (final f in pool) {
+        job.status = 'waiting';
+        job.progress = 0;
+        job.detail = 'wachten op ${f.username}';
+        notifyListeners();
+        final res = await attempt(f, wait: true);
+        if (res is SlskDone) return (res, f);
+        job.detail = res is SlskQueued ? '${f.username} bleef bezet' : (res as SlskFail).reason;
+        notifyListeners();
+      }
+      return null;
+    }
+
+    /// Finish, and if what we settled for is beaten by another candidate, chase that in the
+    /// background. Reached from EVERY success path — the copy most worth upgrading is the MP3
+    /// we only took because no lossless could be had.
+    Future<bool> finish(SlskDone res, SoulseekFile from) async {
+      final ok = await succeed(res);
+      final better = ranked.where((f) => clearlyBetter(f, from)).toList();
+      if (ok && better.isNotEmpty) _queueUpgrade(better, job);
+      return ok;
+    }
+
+    // ── 1. A lossless copy that can start NOW ────────────────────────────────
+    final first = await sweep(lossless, 'poging');
+    if (first.got != null) return finish(first.got!, first.from!);
+
+    // ── 2. No lossless was free — wait for one rather than settle for an MP3 ──
+    final waited = await waitFor(first.busy);
+    if (waited != null) return finish(waited.$1, waited.$2);
+
+    // ── 3. Only now, lossy: free first, then waiting ─────────────────────────
+    if (lossy.isNotEmpty) {
+      job.detail = 'geen lossless beschikbaar — MP3 als laatste optie';
       notifyListeners();
-      final res = await attempt(f, wait: true);
-      if (res is SlskDone) return succeed(res);
-      job.detail = res is SlskQueued ? '${f.username} bleef bezet' : (res as SlskFail).reason;
-      notifyListeners();
+      final second = await sweep(lossy, 'MP3-poging');
+      if (second.got != null) return finish(second.got!, second.from!);
+      final lossyWaited = await waitFor(second.busy);
+      if (lossyWaited != null) return finish(lossyWaited.$1, lossyWaited.$2);
     }
 
     job.status = 'failed';
     job.queuePlace = 0;
-    if (busy.isNotEmpty) job.detail = 'alle uploaders bleven bezet — probeer later opnieuw';
+    if (first.busy.isNotEmpty) job.detail = 'alle uploaders bleven bezet — probeer later opnieuw';
     notifyListeners();
     return false;
+  }
+
+  /// Queue a background hunt for a better copy of a track you can already play.
+  void _queueUpgrade(List<SoulseekFile> better, DownloadJob job) {
+    job.status = 'upgrading';
+    job.detail = 'speelbaar · betere kwaliteit zoeken';
+    notifyListeners();
+    _upgradeQueue.add(() => _chaseUpgrade(better, job));
+    unawaited(_drainUpgrades());
+  }
+
+  Future<void> _drainUpgrades() async {
+    if (_upgradeRunning) return;
+    _upgradeRunning = true;
+    try {
+      while (_upgradeQueue.isNotEmpty) {
+        await _upgradeQueue.removeAt(0)();
+      }
+    } finally {
+      _upgradeRunning = false;
+    }
+  }
+
+  /// Chase a BETTER copy of a track that already landed.
+  ///
+  /// Bounded on purpose: you HAVE the track, so this must never cost you anything. It holds the
+  /// shared session for its whole run — dipping out between peers would let the 120s idle close
+  /// fire and make the next attempt a fresh LOGIN, which is what gets the account blocked — and
+  /// deliberately takes no download slot, so a track you have nothing of never waits behind it.
+  Future<void> _chaseUpgrade(List<SoulseekFile> better, DownloadJob job) async {
+    final deadline = DateTime.now().add(_upgradeBudget);
+    // A shadow job absorbs the transfer's own status/progress writes: the visible job is already
+    // finished and must not flip back to "Bezig 34%" with a half-full bar.
+    final shadow = DownloadJob(job.name);
+
+    void settle(String detail) {
+      job.status = 'done';
+      job.progress = 1;
+      job.detail = detail;
+      notifyListeners();
+    }
+
+    try {
+      await soulseek.withSession((session) async {
+        for (final f in better) {
+          final left = deadline.difference(DateTime.now());
+          if (left <= const Duration(seconds: 30)) return; // too little left to be worth trying
+          job.status = 'upgrading';
+          job.progress = 1;
+          job.detail = 'speelbaar · wacht op ${f.username} voor betere kwaliteit';
+          notifyListeners();
+
+          SlskResult res;
+          try {
+            res = await _rawTransfer(session, f, shadow, () {}, waitInQueue: true, maxWait: left);
+          } catch (_) {
+            continue;
+          }
+          if (res is! SlskDone) continue;
+
+          // placeFileDetailed drops the copy this supersedes — but only if it actually won.
+          Placement how = Placement.stuck;
+          try {
+            final staged = File(res.path);
+            how = (await placeFileDetailed(staged, _downloadsRoot)).how;
+            await staged.parent.delete();
+          } catch (_) {/* the scan still finds it wherever it landed */}
+          if (how == Placement.duplicate) {
+            settle('had al de beste kwaliteit');
+            return;
+          }
+          settle(how == Placement.moved
+              ? 'kwaliteit verbeterd · ${f.username}'
+              : 'betere kopie opgehaald, maar tags onleesbaar');
+          try {
+            await onLibraryChanged();
+          } catch (_) {}
+          return;
+        }
+      });
+    } catch (_) {/* nothing lost — you still have the copy that landed first */}
+
+    if (job.status == 'upgrading') settle('beste vrije kwaliteit behouden');
+  }
+
+  /// Lossless (or hi-res) — the tier that may serve as a fast stand-in.
+  static bool isLossless(SoulseekFile f) => _slskScore(f) >= 2000000;
+
+  /// Worth interrupting nothing for: a real step up, not rip-to-rip noise.
+  ///
+  /// Two rips of the same CD differ by a few kbps as a matter of course, so a plain "higher
+  /// score" would start a chase after almost every download — and then swap a perfectly good
+  /// FLAC for an equally good one. Only a better TIER, or a clearly higher bitrate, counts.
+  static bool clearlyBetter(SoulseekFile candidate, SoulseekFile settled) {
+    final a = _slskScore(candidate), b = _slskScore(settled);
+    final tierA = a ~/ 1000000, tierB = b ~/ 1000000;
+    if (tierA != tierB) return tierA > tierB;
+    final kbpsA = a % 1000000, kbpsB = b % 1000000;
+    return kbpsB > 0 && kbpsA > kbpsB * 1.25;
   }
 
   /// Root of the app's own, tidily-organised download tree. Only ever writes inside here — the
@@ -567,7 +731,7 @@ class DownloadManager extends ChangeNotifier {
   /// The raw single-peer transfer over [session] (updates progress only; no status finalization).
   Future<SlskResult> _rawTransfer(
       SlskSession session, SoulseekFile file, DownloadJob job, void Function() onQueued,
-      {bool waitInQueue = true}) async {
+      {bool waitInQueue = true, Duration maxWait = const Duration(minutes: 30)}) async {
     // Land in a staging folder; placeFile() moves it into Albums/Singles/Compilaties after.
     // Per-PEER subfolder: candidates for the same track share a display name, so a slow attempt
     // that is still winding down can never write into the file the next attempt just opened.
@@ -594,7 +758,7 @@ class DownloadManager extends ChangeNotifier {
       job.detail = q.place > 0 ? 'wachten op ${file.username} · plaats ${q.place}' : 'wachten op ${file.username}';
       notifyListeners();
       onQueued();
-    }, waitInQueue: waitInQueue));
+    }, waitInQueue: waitInQueue, maxWait: maxWait));
   }
 
   /// Add a torrent download. Non-blocking: a "preparing" job shows TorBox's fetch progress

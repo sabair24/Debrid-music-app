@@ -2551,6 +2551,8 @@ class DownloadsView extends StatelessWidget {
         'failed' => 'Mislukt',
         'waiting' => j.queuePlace > 0 ? 'Wacht op peer · plaats ${j.queuePlace}' : 'Wacht op peer',
         'queued' => 'In wachtrij',
+        // Already on disk and playable; a better copy is still being chased.
+        'upgrading' => 'Speelbaar · upgrade',
         'preparing' => j.progress > 0 ? 'Voorbereiden ${(j.progress * 100).round()}%' : 'Voorbereiden',
         _ => 'Bezig ${(j.progress * 100).round()}%',
       };
@@ -2559,6 +2561,7 @@ class DownloadsView extends StatelessWidget {
         'done' => _accent2,
         'failed' => Colors.redAccent,
         'waiting' => const Color(0xFFE0B341),
+        'upgrading' => _accent2, // green: you can play it, this is a bonus not a problem
         _ => _accent,
       };
 
@@ -2567,6 +2570,7 @@ class DownloadsView extends StatelessWidget {
         'failed' => Icons.error_rounded,
         'waiting' => Icons.hourglass_top_rounded,
         'queued' => Icons.schedule_rounded,
+        'upgrading' => Icons.upgrade_rounded,
         _ => Icons.downloading_rounded,
       };
 
@@ -2644,6 +2648,8 @@ class _DlRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = DownloadsView.statusColor(job);
     final indeterminate = job.status == 'queued' || job.status == 'waiting';
+    // Playable already: show the bar full, whatever is still running for it is a bonus.
+    final filled = job.status == 'done' || job.status == 'upgrading';
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -2677,7 +2683,7 @@ class _DlRow extends StatelessWidget {
           SizedBox(
             width: 190,
             child: LinearProgressIndicator(
-              value: job.status == 'done' ? 1 : (indeterminate || job.progress <= 0 ? null : job.progress),
+              value: filled ? 1 : (indeterminate || job.progress <= 0 ? null : job.progress),
               backgroundColor: const Color(0xFF2A2F42),
               color: color,
             ),
@@ -2754,6 +2760,16 @@ Widget _downloadControl(BuildContext context,
               ),
               Text('$pct', style: const TextStyle(fontSize: 8.5, color: _muted, fontWeight: FontWeight.w700)),
             ]),
+          ),
+        );
+      }
+      if (status == 'upgrading') {
+        // Downloaded and playable — the arrow says a better copy is still being fetched.
+        return Tooltip(
+          message: job?.detail ?? 'Speelbaar · betere kwaliteit onderweg',
+          child: const Padding(
+            padding: EdgeInsets.all(9),
+            child: Icon(Icons.upgrade_rounded, color: _accent2, size: 20),
           ),
         );
       }

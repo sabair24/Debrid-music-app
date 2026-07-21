@@ -308,21 +308,37 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, Tr
   if (dest.path == src.path) return PlaceOutcome(src.path, Placement.moved);
   try {
     await dest.parent.create(recursive: true);
+
+    /// Does the incoming file beat [rival]? Better format first, then the bigger file.
+    Future<bool> newWins(File rival) async =>
+        formatRank(src.path) > formatRank(rival.path) ||
+        (formatRank(src.path) == formatRank(rival.path) && await src.length() > await rival.length());
+
+    final losers = <File>[];
     if (await dest.exists()) {
       if (_sameRecording(src, dest)) {
-        // Genuinely the same track — keep the better copy, drop the other.
-        final keepNew = formatRank(src.path) > formatRank(dest.path) ||
-            (formatRank(src.path) == formatRank(dest.path) && await src.length() > await dest.length());
-        if (!keepNew) {
+        if (!await newWins(dest)) {
           await src.delete().catchError((_) => src);
           return PlaceOutcome(dest.path, Placement.duplicate);
         }
-        await dest.delete().catchError((_) => dest);
+        losers.add(dest);
       } else {
         dest = _sidestep(dest); // different take — both are worth keeping, so make room
       }
+    } else {
+      // The destination name carries the SOURCE's extension, so upgrading an MP3 to FLAC lands on
+      // a DIFFERENT path — without this the two would sit side by side forever. Same track under
+      // another extension counts as the copy being replaced.
+      final rival = _sameTrackOtherFormat(dest);
+      if (rival != null && _sameRecording(src, rival)) {
+        if (!await newWins(rival)) {
+          await src.delete().catchError((_) => src);
+          return PlaceOutcome(rival.path, Placement.duplicate);
+        }
+        losers.add(rival);
+      }
     }
-    return PlaceOutcome(await _move(src, dest), Placement.moved);
+    return PlaceOutcome(await _install(src, dest, losers), Placement.moved);
   } catch (_) {
     return PlaceOutcome(src.path, Placement.stuck); // cross-device or locked — the scan still finds it
   }
@@ -391,6 +407,52 @@ bool _sameRecording(File a, File b) {
 
 bool _setEquals(Set<String> a, Set<String> b) => a.length == b.length && a.every(b.contains);
 
+const _audioExts = {'.flac', '.mp3', '.m4a', '.ogg', '.opus', '.wav', '.aac', '.alac', '.ape'};
+
+/// The same track already filed under a DIFFERENT extension, if there is one.
+///
+/// Matched on the name with its leading track number stripped, so "06 - Telephone.mp3" and
+/// "1-06 - Telephone.flac" still recognise each other — rips disagree about disc prefixes.
+/// Only ever matches ACROSS formats: within one format two files named alike are a two-disc set
+/// repeating a title, and deleting one of those would lose a track.
+File? _sameTrackOtherFormat(File dest) {
+  final sep = Platform.pathSeparator;
+  final parent = Directory(dest.path.substring(0, dest.path.lastIndexOf(sep)));
+  final destName = dest.path.split(sep).last;
+  final wanted = _trackNameKey(destName);
+  final destExt = _extOf(destName);
+  if (wanted.isEmpty) return null;
+  try {
+    for (final e in parent.listSync(followLinks: false)) {
+      if (e is! File || e.path == dest.path) continue;
+      final name = e.path.split(sep).last;
+      final ext = _extOf(name);
+      if (!_audioExts.contains(ext) || ext == destExt) continue;
+      if (_trackNameKey(name) == wanted) return e;
+    }
+  } catch (_) {/* folder not there yet */}
+  return null;
+}
+
+String _extOf(String filename) {
+  final dot = filename.lastIndexOf('.');
+  return dot < 0 ? '' : filename.substring(dot).toLowerCase();
+}
+
+/// A filename reduced to just the track: extension gone, a leading "06 - " / "1-06. " gone,
+/// then normalised. Empty when nothing but a number remains.
+///
+/// The track number is only stripped when a SEPARATOR follows it. An earlier version allowed a
+/// second run of digits there, which silently ate numbers belonging to the title: "10 - 99
+/// Problems" collapsed to "problems" and so matched an unrelated "05 - Problems" — and the
+/// caller deletes what it matches.
+String _trackNameKey(String filename) {
+  final dot = filename.lastIndexOf('.');
+  var stem = dot > 0 ? filename.substring(0, dot) : filename;
+  stem = stem.replaceFirst(RegExp(r'^\s*(?:\d{1,2}[-.])?\d{1,3}\s*[-._]\s*'), '');
+  return normKey(stem);
+}
+
 /// `03 - D.A.N.C.E..flac` → `03 - D.A.N.C.E. (2).flac`, first free number.
 File _sidestep(File dest) {
   final p = dest.path;
@@ -428,6 +490,27 @@ String _reuseExistingFolders(String root, String rel) {
     dir = '$dir$sep${parts[i]}';
   }
   return parts.join(sep);
+}
+
+/// Put [src] at [dest] and only then drop the copies it supersedes.
+///
+/// Order matters: deleting first and moving second means a failed move (locked file, disk full)
+/// leaves you with NEITHER — the copy you had is gone and the new one is stranded in staging.
+Future<String> _install(File src, File dest, List<File> losers) async {
+  if (losers.isEmpty) return _move(src, dest);
+  // Land beside the target first, so nothing is destroyed until the new file is really here.
+  final tmp = File('${dest.path}.incoming');
+  final landed = await _move(src, tmp);
+  for (final l in losers) {
+    try {
+      await l.delete();
+    } catch (_) {/* couldn't remove the old copy — the new one still lands */}
+  }
+  try {
+    return (await File(landed).rename(dest.path)).path;
+  } catch (_) {
+    return landed; // still on disk under .incoming; the scan picks it up
+  }
 }
 
 /// Move with a couple of retries, then a copy+delete fallback.

@@ -817,7 +817,9 @@ class SlskSession {
   /// different peers — replies are routed by username. Two downloads from the SAME peer are
   /// serialised (a peer grants one slot at a time, and it keeps routing unambiguous).
   Future<SlskResult> download(SoulseekFile file, File destFile, void Function(int, int) onProgress,
-      {void Function(SlskQueued)? onStatus, bool waitInQueue = true}) async {
+      {void Function(SlskQueued)? onStatus,
+      bool waitInQueue = true,
+      Duration maxWait = const Duration(minutes: 30)}) async {
     if (!await _ensure()) return SlskFail('Kan niet inloggen bij Soulseek');
     // One transfer per peer at a time. If another of our downloads already holds this peer, that
     // counts as busy: during the quick sweep we move straight on to the next source rather than
@@ -833,7 +835,8 @@ class SlskSession {
       } catch (_) {}
     }
     try {
-      return await _transfer(file, destFile, onProgress, onStatus: onStatus, waitInQueue: waitInQueue);
+      return await _transfer(file, destFile, onProgress,
+          onStatus: onStatus, waitInQueue: waitInQueue, maxWait: maxWait);
     } finally {
       mine.complete();
       if (identical(_peerLocks[file.username], mine.future)) _peerLocks.remove(file.username);
@@ -865,7 +868,9 @@ class SlskSession {
   /// [waitInQueue] false = a "queued" reply ends the attempt at once (so the caller can sweep the
   /// other peers first); true = hold the connection and wait for a slot, keeping our queue place.
   Future<SlskResult> _transfer(SoulseekFile file, File destFile, void Function(int, int) onProgress,
-      {void Function(SlskQueued)? onStatus, bool waitInQueue = true}) async {
+      {void Function(SlskQueued)? onStatus,
+      bool waitInQueue = true,
+      Duration maxWait = const Duration(minutes: 30)}) async {
     if (!await _ensure()) return SlskFail('Kan niet inloggen bij Soulseek');
     // The uploader opens the file connection TO us, so we must be listening before we ask for the
     // file — not only after a search happened to bind the port earlier in this process.
@@ -959,7 +964,10 @@ class SlskSession {
       var queued = false;
       var place = 0;
       Timer? poll;
-      final startTimer = Timer(const Duration(seconds: 20), () {
+      // How long to give a silent peer. A sweep looking for someone FREE can be impatient: a peer
+      // that hasn't answered in a few seconds isn't free anyway, and being patient here is what
+      // makes it too expensive to look past the first handful of candidates.
+      final startTimer = Timer(waitInQueue ? const Duration(seconds: 20) : const Duration(seconds: 7), () {
         if (fStarted || delivered.isCompleted || queued) return;
         delivered.complete(SlskFail(deny != null ? 'Geweigerd: $deny' : 'Geen reactie (slot bezet of offline)'));
       });
@@ -1013,9 +1021,10 @@ class SlskSession {
         if (!fStarted && !delivered.isCompleted && queued) delivered.complete(SlskQueued(place));
       });
 
-      // A queued transfer may legitimately take a long time; 30 min matches leaving the native
-      // client open. Past that we hand back SlskQueued so the manager retries rather than fails.
-      final result = await delivered.future.timeout(const Duration(seconds: 1800), onTimeout: () {
+      // A queued transfer may legitimately take a long time; the default 30 min matches leaving
+      // the native client open. A caller chasing a mere quality upgrade passes something much
+      // shorter. Past it we hand back SlskQueued so the manager retries rather than fails.
+      final result = await delivered.future.timeout(maxWait, onTimeout: () {
         // fStarted means bytes were already flowing, so this is a stalled transfer, not a wait.
         if (queued && !fStarted) return SlskQueued(place);
         if (deny != null) return SlskFail('Geweigerd: $deny');

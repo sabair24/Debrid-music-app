@@ -126,6 +126,95 @@ void main() {
     expect(versionMarkers('06 - D.A.N.C.E Part 2.flac'), {'part 2'});
   });
 
+  group('upgrading a track replaces the copy it supersedes', () {
+    // The destination name carries the source's extension, so a FLAC upgrade lands on a different
+    // path than the MP3 it replaces — without matching across formats both would stay forever.
+    File placeMp3(String name) {
+      final dir = Directory('${root.path}${Platform.pathSeparator}Albums${Platform.pathSeparator}Justice'
+          '${Platform.pathSeparator}Cross')
+        ..createSync(recursive: true);
+      final f = File('${dir.path}${Platform.pathSeparator}$name');
+      f.writeAsBytesSync(Uint8List(4000)); // small: the FLAC must win on format, not size
+      return f;
+    }
+
+    test('a better FLAC removes the MP3 already filed', () async {
+      final mp3 = placeMp3('03 - D.A.N.C.E..mp3');
+      final out = await placeFileDetailed(staged('x.flac', buildFlac(_tags)), root.path);
+      expect(out.how, Placement.moved);
+      expect(out.path, endsWith('.flac'));
+      expect(mp3.existsSync(), isFalse, reason: 'the superseded MP3 must be gone');
+      expect(File(out.path).existsSync(), isTrue);
+    });
+
+    test('a differing disc prefix still counts as the same track', () async {
+      final mp3 = placeMp3('1-03. D.A.N.C.E..mp3');
+      final out = await placeFileDetailed(staged('x.flac', buildFlac(_tags)), root.path);
+      expect(out.how, Placement.moved);
+      expect(mp3.existsSync(), isFalse);
+    });
+
+    test('a WORSE copy is dropped rather than replacing the good one', () async {
+      final flac = await placeFileDetailed(staged('good.flac', buildFlac(_tags)), root.path);
+      // An MP3 arriving afterwards must not evict the FLAC.
+      final dir = Directory(flac.path.substring(0, flac.path.lastIndexOf(Platform.pathSeparator)));
+      final mp3src = File('${root.path}${Platform.pathSeparator}_inkomend${Platform.pathSeparator}late.mp3');
+      mp3src.parent.createSync(recursive: true);
+      mp3src.writeAsBytesSync(Uint8List(9999999));
+      final out = await placeFileDetailed(mp3src, root.path, tags: readTags(File(flac.path)));
+      expect(out.how, Placement.duplicate);
+      expect(File(flac.path).existsSync(), isTrue, reason: 'the FLAC must survive');
+      expect(dir.listSync().whereType<File>().length, 1);
+    });
+
+    test('a different track in the same folder is left alone', () async {
+      final other = placeMp3('04 - Phantom.mp3');
+      await placeFileDetailed(staged('x.flac', buildFlac(_tags)), root.path);
+      expect(other.existsSync(), isTrue);
+    });
+
+    test('a number that belongs to the TITLE is not mistaken for a track number', () async {
+      // Regression: the prefix regex used to eat the title's leading digits, so
+      // "10 - 99 Problems.mp3" collapsed to "problems" and was deleted to make room for an
+      // unrelated "05 - Problems.flac".
+      final dir = Directory('${root.path}${Platform.pathSeparator}Albums${Platform.pathSeparator}Justice'
+          '${Platform.pathSeparator}Cross')
+        ..createSync(recursive: true);
+      final other = File('${dir.path}${Platform.pathSeparator}10 - 99 Problems.mp3')
+        ..writeAsBytesSync(Uint8List(4000));
+      final out = await placeFileDetailed(
+          staged('x.flac', buildFlac(['TITLE=Problems', 'ARTIST=Justice', 'ALBUM=Cross', 'TRACKNUMBER=5'])),
+          root.path);
+      expect(out.how, Placement.moved);
+      expect(other.existsSync(), isTrue, reason: '99 Problems is a different song and must survive');
+    });
+
+    test('two discs repeating a title in the SAME format are both kept', () async {
+      // A bonus disc often repeats a title. Same extension on both sides is never a cross-format
+      // upgrade, so neither may be removed when a third, different track is filed.
+      final disc1 = placeMp3('1-05 - D.A.N.C.E..mp3');
+      final disc2 = placeMp3('2-05 - D.A.N.C.E..mp3');
+      await placeFileDetailed(
+          staged('x.flac', buildFlac(['TITLE=Phantom', 'ARTIST=Justice', 'ALBUM=Cross', 'TRACKNUMBER=7'])),
+          root.path);
+      expect(disc1.existsSync(), isTrue);
+      expect(disc2.existsSync(), isTrue);
+    });
+
+    test('the superseded copy is only removed once the new one is in place', () async {
+      final mp3 = placeMp3('03 - D.A.N.C.E..mp3');
+      final out = await placeFileDetailed(staged('x.flac', buildFlac(_tags)), root.path);
+      expect(File(out.path).existsSync(), isTrue);
+      expect(mp3.existsSync(), isFalse);
+      // No leftover staging artefact from the two-step install.
+      expect(Directory(out.path.substring(0, out.path.lastIndexOf(Platform.pathSeparator)))
+          .listSync()
+          .where((e) => e.path.endsWith('.incoming'))
+          .isEmpty,
+          isTrue);
+    });
+  });
+
   test('an unreadable file is reported as stuck and left where it is', () async {
     final f = staged('junk.flac', Uint8List.fromList(utf8.encode('not a flac')));
     final out = await placeFileDetailed(f, root.path);
