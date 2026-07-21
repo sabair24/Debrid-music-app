@@ -375,7 +375,7 @@ class DownloadManager extends ChangeNotifier {
 
   /// How many peers to ask at once while hunting for one that can start now. Peer connections,
   /// not logins — the shared session is untouched, so this cannot repeat the login problem.
-  static const _probeWidth = 3;
+  static const _probeWidth = 4;
 
   /// Total time spent chasing a better copy after a playable one already landed.
   static const _upgradeBudget = Duration(minutes: 10);
@@ -607,59 +607,67 @@ class DownloadManager extends ChangeNotifier {
       final order = sweepOrderFor(pool);
       final n = order.length < cap ? order.length : cap;
 
-      // Ask several peers AT ONCE and keep whoever answers first. Most peers that advertise a free
-      // slot never deliver — measured on one track, eighteen in a row — and asking them one after
-      // another spent minutes on dead ends. These are peer connections over the ONE shared login,
-      // so racing costs no extra logins.
-      var i = 0;
-      while (i < n && !job.cancelled) {
-        final wave = <SoulseekFile>[];
-        while (wave.length < _probeWidth && i < n) {
-          wave.add(order[i++]);
-        }
-        job.status = 'downloading';
-        job.progress = 0;
-        job.queuePlace = 0;
-        job.detail = '$label ${i - wave.length + 1}-$i/$n · ${wave.map((f) => f.username).join(', ')}';
-        notifyListeners();
+      // Keep [_probeWidth] peers in flight CONTINUOUSLY: the moment one drops out, the next
+      // candidate takes its place. Fixed waves were the earlier version's flaw — a wave of three
+      // duds cost the full ~25s of lookup, connect and firewall callback before the next three
+      // were even asked, so seven rounds crawled through the list and it looked as though only
+      // the last peer ever mattered. These are peer connections over the ONE shared login, so
+      // running several costs no extra logins.
+      SlskDone? winner;
+      SoulseekFile? winnerFile;
+      final decided = Completer<void>();
+      final active = <String>{};
+      var cursor = 0;
 
-        final cancels = {for (final f in wave) f: SlskCancel()};
-        job.live.addAll(cancels.values);
-        SlskDone? winner;
-        SoulseekFile? winnerFile;
-        final decided = Completer<void>();
-        final running = wave.map((f) async {
-          final res = await attempt(f, wait: false, cancel: cancels[f]);
-          job.live.remove(cancels[f]);
+      Future<void> worker() async {
+        while (winner == null && !job.cancelled) {
+          final i = cursor++;
+          if (i >= n) return;
+          final f = order[i];
+          final c = SlskCancel();
+          job.live.add(c);
+          active.add(f.username);
+          job.status = 'downloading';
+          job.progress = 0;
+          job.queuePlace = 0;
+          job.detail = '$label ${i + 1}/$n · ${active.join(', ')}';
+          notifyListeners();
+
+          final res = await attempt(f, wait: false, cancel: c);
+          job.live.remove(c);
+          active.remove(f.username);
+
           if (res is SlskDone) {
             if (winner == null) {
               winner = res;
               winnerFile = f;
-              // The others are now redundant — drop them rather than let them finish into staging.
-              for (final e in cancels.entries) {
-                if (e.key != f) e.value.cancel();
+              // Everyone still dialling is now redundant — drop them rather than let them finish
+              // into staging. Anything BETTER than this stays on the list the upgrade chase runs
+              // through afterwards, so a higher-quality copy is parked, not thrown away.
+              for (final live in [...job.live]) {
+                live.cancel();
               }
               if (!decided.isCompleted) decided.complete();
             } else {
-              // Two peers finished within the same instant. The loser's file is complete but
-              // unwanted: bin it, or it sits in staging forever — the library scan skips that
-              // folder, so nothing would ever notice.
+              // Two peers finished in the same instant. The loser's file is complete but unwanted:
+              // bin it, or it sits in staging forever — the library scan skips that folder, so
+              // nothing would ever notice.
               await _discardStaged(res.path);
             }
-          } else if (res is SlskQueued) {
-            busy.add(f);
+            return;
           }
-        }).toList();
-
-        // Don't hold a finished download hostage to its slowest wave-mate: a dead peer can burn
-        // half a minute on lookup + connect + firewall callback. The losers tear down behind us.
-        await Future.any([Future.wait(running), decided.future]);
-        if (winner != null) {
-          // Return the winning FILE, not just the result: which copy we settled for is what
-          // decides whether a better one is still worth chasing.
-          return (got: winner, from: winnerFile, busy: busy);
+          if (res is SlskCancelled) return;
+          if (res is SlskQueued) busy.add(f);
         }
-        notifyListeners();
+      }
+
+      final workers = List.generate(_probeWidth, (_) => worker());
+      // Return the instant someone delivers; the losers tear down behind us.
+      await Future.any([Future.wait(workers), decided.future]);
+      if (winner != null) {
+        // Return the winning FILE, not just the result: which copy we settled for is what decides
+        // whether a better one is still worth chasing.
+        return (got: winner, from: winnerFile, busy: busy);
       }
       return (got: null, from: null, busy: busy);
     }
