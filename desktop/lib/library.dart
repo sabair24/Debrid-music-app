@@ -379,7 +379,7 @@ class LibraryStore extends ChangeNotifier {
       );
 
   String _albumKey(String artist, String album, String firstPath) =>
-      album.isEmpty ? 'single::$firstPath' : 'album::${normKey(artist)}|${normKey(album)}';
+      album.isEmpty ? 'single::$firstPath' : 'album::${artistKey(artist)}|${normKey(album)}';
 
   void _buildAlbums() {
     // Snapshot the covers of the CURRENT albums, keyed by the SAME group key used below (NOT by
@@ -394,6 +394,20 @@ class LibraryStore extends ChangeNotifier {
           [a.embeddedCover, a.enriched, a.correctedCover];
     }
 
+    // ONE spelling per artist. Tags disagree about capitalisation and accents ("Lady Gaga" vs
+    // "Lady GaGa", "Beyoncé" vs "Beyonce"), which used to put the same person in the artist list
+    // twice. Count every spelling across the whole library and show the best one everywhere.
+    final spellings = <String, Map<String, int>>{};
+    for (final t in tracks) {
+      spellings
+          .putIfAbsent(artistKey(t.artist), () => <String, int>{})
+          .update(t.artist, (n) => n + 1, ifAbsent: () => 1);
+    }
+    final canonical = {for (final e in spellings.entries) e.key: canonicalName(e.value)};
+    _canonicalArtists
+      ..clear()
+      ..addAll(canonical);
+
     final map = <String, List<Track>>{};
     for (final t in tracks) {
       // No album tag => its own single (never grouped under the root folder name).
@@ -405,7 +419,8 @@ class LibraryStore extends ChangeNotifier {
       final single = e.key.startsWith('single::');
       final ts = single ? e.value : _dedupeTracks(e.value);
       ts.sort((a, b) => a.trackNo.compareTo(b.trackNo));
-      final al = Album(single ? ts.first.title : ts.first.album, ts.first.artist, ts, isSingle: single);
+      final artist = canonical[artistKey(ts.first.artist)] ?? ts.first.artist;
+      final al = Album(single ? ts.first.title : ts.first.album, artist, ts, isSingle: single);
       final saved = coversByKey[e.key];
       if (saved != null) {
         al.embeddedCover = saved[0];
@@ -493,6 +508,13 @@ class LibraryStore extends ChangeNotifier {
       }
     }
   }
+
+  /// artistKey → the one spelling we show. A Track keeps whatever its tag says (replacing Track
+  /// objects would break the player's identity checks), so anything that DISPLAYS a track's
+  /// artist runs it through [displayArtist] to stay consistent with the artist list.
+  final Map<String, String> _canonicalArtists = {};
+
+  String displayArtist(String raw) => _canonicalArtists[artistKey(raw)] ?? raw;
 
   List<String> get artists {
     final set = <String>{};

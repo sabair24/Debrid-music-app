@@ -1856,7 +1856,9 @@ class TracksView extends StatelessWidget {
                                     fontSize: 14,
                                     fontWeight: FontWeight.w600,
                                     color: isCurrent ? _accent : _text)),
-                            Text(t.artist,
+                            // Through displayArtist: the track's own tag may spell the artist
+                            // differently from the name shown everywhere else.
+                            Text(lib.displayArtist(t.artist),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(fontSize: 12, color: _muted)),

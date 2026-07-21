@@ -11,13 +11,103 @@ enum RelKind { album, single, compilation }
 /// with a curly ’ vs a straight ') — which used to split ONE album into two. Normalise for
 /// COMPARISON only (never for display): unify quotes/dashes, drop punctuation, fold whitespace.
 String normKey(String s) {
-  final unified = s
+  final unified = _fold(s
       .toLowerCase()
       .replaceAll(RegExp(r'[‘’ʼ´`]'), "'")
       .replaceAll(RegExp(r'[“”]'), '"')
-      .replaceAll(RegExp(r'[‐-―−]'), '-');
+      .replaceAll(RegExp(r'[‐-―−]'), '-'));
   final stripped = unified.replaceAll(RegExp(r'[^a-z0-9]+'), ' ');
   return stripped.trim().replaceAll(RegExp(r'\s+'), ' ');
+}
+
+/// Accented letters folded to their plain form, so "Beyoncé" and "Beyonce" are one name.
+/// Without this the accent is stripped as punctuation ("beyonc") and the two never match.
+const _accents = <String, String>{
+  'a': 'àáâãäåāăą',
+  'e': 'èéêëēĕėęě',
+  'i': 'ìíîïĩīĭįı',
+  'o': 'òóôõöøōŏő',
+  'u': 'ùúûüũūŭůűų',
+  'c': 'çćĉċč',
+  'n': 'ñńņň',
+  'y': 'ýÿŷ',
+  'z': 'żźž',
+  's': 'šśŝş',
+  'd': 'ďđð',
+  'g': 'ğĝģ',
+  't': 'ťţ',
+  'r': 'ŕř',
+  'l': 'łľĺļ',
+  'ae': 'æ',
+  'oe': 'œ',
+  'ss': 'ß',
+};
+
+final Map<int, String> _foldMap = {
+  for (final e in _accents.entries)
+    for (final ch in e.value.runes) ch: e.key,
+};
+
+String _fold(String s) {
+  final b = StringBuffer();
+  for (final r in s.runes) {
+    final plain = _foldMap[r];
+    if (plain != null) {
+      b.write(plain);
+    } else {
+      b.writeCharCode(r);
+    }
+  }
+  return b.toString();
+}
+
+/// Comparison key for an ARTIST. On top of [normKey] it drops a leading "the", because "The
+/// Doors" and "Doors" are one act. Deliberately artist-only: for an ALBUM the leading word is
+/// part of the title ("The Wall" is not "Wall").
+String artistKey(String s) {
+  final k = normKey(s);
+  return k.startsWith('the ') ? k.substring(4) : k;
+}
+
+/// Given every spelling of one artist found in the library (spelling → how many tracks use it),
+/// pick the one to SHOW. Most-used wins; ties go to the tidiest capitalisation, so "Lady Gaga"
+/// beats "Lady GaGa" rather than the winner depending on alphabetical luck.
+String canonicalName(Map<String, int> spellings) {
+  final names = spellings.keys.toList();
+  if (names.length == 1) return names.first;
+  names.sort((a, b) {
+    final byCount = (spellings[b] ?? 0).compareTo(spellings[a] ?? 0);
+    if (byCount != 0) return byCount;
+    final byOdd = _oddCaps(a).compareTo(_oddCaps(b)); // fewer mid-word capitals first
+    if (byOdd != 0) return byOdd;
+    final byShape = _shapeScore(b).compareTo(_shapeScore(a)); // avoid ALL CAPS / all lowercase
+    if (byShape != 0) return byShape;
+    return a.compareTo(b); // last resort: stable
+  });
+  return names.first;
+}
+
+/// Capital letters that don't start a word — the mark of an odd spelling like "GaGa".
+int _oddCaps(String s) {
+  var odd = 0;
+  for (var i = 0; i < s.length; i++) {
+    final c = s[i];
+    final isUpper = c.toUpperCase() == c && c.toLowerCase() != c;
+    if (!isUpper) continue;
+    final prev = i == 0 ? ' ' : s[i - 1];
+    if (RegExp(r'[A-Za-zÀ-ÿ]').hasMatch(prev)) odd++;
+  }
+  return odd;
+}
+
+/// 2 = looks deliberately capitalised, 1 = all lowercase, 0 = ALL CAPS.
+int _shapeScore(String s) {
+  final letters = s.replaceAll(RegExp(r'[^A-Za-zÀ-ÿ]'), '');
+  if (letters.isEmpty) return 1;
+  final caps = letters.split('').where((c) => c.toUpperCase() == c && c.toLowerCase() != c).length;
+  if (caps == letters.length) return 0;
+  if (caps == 0) return 1;
+  return 2;
 }
 
 /// Even looser key, for SEARCH only: drop every non-alphanumeric character entirely (instead of
@@ -162,7 +252,7 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, Tr
   if (t == null) return PlaceOutcome(src.path, Placement.stuck);
   final base = src.uri.pathSegments.last;
   final ext = base.contains('.') ? base.substring(base.lastIndexOf('.')) : '';
-  final rel = relativePathFor(_carryVersion(t, base), kind: kind, ext: ext);
+  final rel = _reuseExistingFolders(root, relativePathFor(_carryVersion(t, base), kind: kind, ext: ext));
   var dest = File('$root${Platform.pathSeparator}$rel');
   if (dest.path == src.path) return PlaceOutcome(src.path, Placement.moved);
   try {
@@ -261,6 +351,32 @@ File _sidestep(File dest) {
     if (!f.existsSync()) return f;
   }
   return dest;
+}
+
+/// Rewrite the FOLDER parts of [rel] to match folders that already exist, when they differ only
+/// in spelling. A second spelling of an artist ("Beyoncé" after "Beyonce") would otherwise build
+/// a parallel tree next to the first, splitting one artist over two folders.
+/// The filename itself is left alone — two files are not the same file.
+String _reuseExistingFolders(String root, String rel) {
+  final sep = Platform.pathSeparator;
+  final parts = rel.split(sep);
+  var dir = root;
+  for (var i = 0; i < parts.length - 1; i++) {
+    final wanted = normKey(parts[i]);
+    if (wanted.isEmpty) continue;
+    try {
+      for (final e in Directory(dir).listSync(followLinks: false)) {
+        if (e is! Directory) continue;
+        final name = e.path.split(sep).last;
+        if (name != parts[i] && normKey(name) == wanted) {
+          parts[i] = name; // an existing folder means the same thing — use it
+          break;
+        }
+      }
+    } catch (_) {/* folder doesn't exist yet — nothing to reuse */}
+    dir = '$dir$sep${parts[i]}';
+  }
+  return parts.join(sep);
 }
 
 /// Move with a couple of retries, then a copy+delete fallback.
