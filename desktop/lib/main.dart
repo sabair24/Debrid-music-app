@@ -3940,15 +3940,28 @@ class BioText extends StatelessWidget {
           actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Sluiten'))],
         ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(text, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 13, height: 1.45)),
-          const Padding(
-            padding: EdgeInsets.only(top: 3),
-            child: Text('Lees meer', style: TextStyle(color: _accent, fontSize: 12.5, fontWeight: FontWeight.w600)),
+      // Capped where the long text actually lives, so artist bios and album blurbs both get it.
+      // Align is load-bearing: a list hands its children a TIGHT width and a bare ConstrainedBox
+      // cannot shrink below that — without it the cap silently does nothing.
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 820),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(text,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: _muted, fontSize: 13, height: 1.45)),
+              const Padding(
+                padding: EdgeInsets.only(top: 3),
+                child: Text('Lees meer',
+                    style: TextStyle(color: _accent, fontSize: 12.5, fontWeight: FontWeight.w600)),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -4327,7 +4340,13 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
       padding: const EdgeInsets.fromLTRB(24, 4, 24, 14),
       // Capped: on a maximised window the blurb would otherwise run the full 1400px, and a line
       // that long is genuinely hard to read back to the next line.
-      child: ConstrainedBox(
+      //
+      // Align first, and that is not decoration: a list hands its children a TIGHT width, and a
+      // bare ConstrainedBox cannot shrink below a tight constraint — the cap silently did nothing
+      // until this was added. Align loosens the constraint so the cap can take effect.
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 820),
         child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -4352,6 +4371,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
             BioText('${widget.artist} — ${widget.album}', text),
           ],
         ],
+        ),
         ),
       ),
     );
