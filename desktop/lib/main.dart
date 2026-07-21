@@ -3031,28 +3031,12 @@ void _pickTorrentTracks(BuildContext context, SearchResult r) {
   showDialog(context: context, builder: (_) => _TrackPickerDialog(r));
 }
 
-/// Significant words of a Soulseek filename (lowercased, no extension, no track numbers) —
-/// used to recognise the SAME track offered by different peers.
-Set<String> _slskWords(String displayName) {
-  final noExt = displayName.toLowerCase().replaceAll(RegExp(r'\.[a-z0-9]{2,4}$'), '');
-  final words = noExt.split(RegExp(r'[^a-z0-9]+')).where((w) => w.length > 1).toSet();
-  words.removeWhere((w) => RegExp(r'^\d{1,3}$').hasMatch(w)); // drop bare track numbers
-  return words;
-}
-
-/// Containment similarity of two word sets (0..1) — high when one filename's words are a
-/// near-subset of the other's, which tolerates "01 - Everybody" vs "Artist - Everybody".
-double _slskSim(Set<String> a, Set<String> b) {
-  if (a.isEmpty || b.isEmpty) return 0;
-  final inter = a.intersection(b).length;
-  final m = a.length < b.length ? a.length : b.length;
-  return inter / m;
-}
-
 /// Every peer in [all] offering the same track as [f] (including f itself), best-first.
+/// The rule itself lives in organize.dart, where it can be tested without a live peer.
 List<SoulseekFile> _slskCandidates(List<SoulseekFile> all, SoulseekFile f) {
-  final key = _slskWords(f.displayName);
-  final out = all.where((o) => o.isAudio && _slskSim(key, _slskWords(o.displayName)) >= 0.8).toList();
+  final out = all
+      .where((o) => o.isAudio && sameRecording(f.displayName, f.durationSec, o.displayName, o.durationSec))
+      .toList();
   return out.isEmpty ? [f] : out;
 }
 
@@ -4057,7 +4041,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                                   j.status == 'done'
                                       ? 'klaar'
                                       : (j.status == 'failed'
-                                          ? 'mislukt'
+                                          ? (j.cancelled ? 'gestopt' : 'mislukt')
                                           : (j.status == 'queued'
                                               ? 'wachtrij'
                                               : (j.status == 'preparing'
@@ -5273,17 +5257,12 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     }
   }
 
-  /// Pre-loaded Soulseek copies of one track, matched by title-word overlap (title words must be
-  /// (almost) all present in the filename). Empty if the album-wide search didn't cover it.
-  List<SoulseekFile> _slskForTitle(String title) {
-    final tw = _slskWords(title);
-    if (tw.isEmpty) return const [];
-    return _albumSlsk.where((f) {
-      if (!f.isAudio) return false;
-      final fw = _slskWords(f.displayName);
-      return fw.isNotEmpty && tw.intersection(fw).length / tw.length >= 0.75;
-    }).toList();
-  }
+  /// Pre-loaded Soulseek copies of one track. Empty if the album-wide search didn't cover it.
+  /// Deezer's running time is passed along because the title alone can't tell a track from a
+  /// medley that contains it, nor from a remix of about the same length.
+  List<SoulseekFile> _slskForTitle(CatalogTrack t) => _albumSlsk
+      .where((f) => f.isAudio && fileOffersTitle(t.title, t.durationSec, f.displayName, f.durationSec))
+      .toList();
 
   /// The copy of this track already in the library (null if we don't have it). Version markers
   /// are part of the identity, so a Live/Radio-Edit/compilation cut still counts as NOT owned.
@@ -5296,7 +5275,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       _srcToast(context, '“${t.title}” heb je al — niet opnieuw gedownload.');
       return;
     }
-    var cands = _slskForTitle(t.title);
+    var cands = _slskForTitle(t);
     if (cands.isEmpty) {
       // Not covered by the album-wide preload → ONE on-demand Soulseek search for just this track.
       if (mounted) _srcToast(context, 'Bron zoeken voor “${t.title}”…');
@@ -5382,7 +5361,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   Widget _trackRow(int i, CatalogTrack t) {
     final open = _expanded == i;
     final soulseekReady = context.read<SoulseekService>().available;
-    final srcCount = soulseekReady ? _slskForTitle(t.title).length : 0;
+    final srcCount = soulseekReady ? _slskForTitle(t).length : 0;
     return Column(
       children: [
         InkWell(

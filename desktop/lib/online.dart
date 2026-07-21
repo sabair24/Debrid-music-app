@@ -546,7 +546,9 @@ class DownloadManager extends ChangeNotifier {
     jobs.insert(0, job);
     notifyListeners();
     // Runs on the shared session → reuses the one login (no new login per click).
-    return _withSlsk((s, release) => _soulseekBest(candidates, job, s, release));
+    final ok = await _withSlsk((s, release) => _soulseekBest(candidates, job, s, release));
+    await _pruneStaging();
+    return ok;
   }
 
   /// Fallback loop: try up to 5 peers best-first; the first that delivers wins. All attempts
@@ -766,6 +768,21 @@ class DownloadManager extends ChangeNotifier {
     if (name.isEmpty) return '';
     final secs = f.durationSec ?? 0;
     return secs > 0 ? '$name|${(secs / 5).round()}' : name;
+  }
+
+  /// Drop the empty per-peer folders a race leaves behind. Each attempt tidies up after itself,
+  /// but with twenty running at once those deletes collide, and one leftover folder per peer ever
+  /// tried adds up. Only empty ones: a folder that still holds a file is somebody's download.
+  Future<void> _pruneStaging() async {
+    final root = Directory('$_downloadsRoot${Platform.pathSeparator}_inkomend');
+    try {
+      await for (final e in root.list()) {
+        if (e is! Directory) continue;
+        try {
+          await e.delete(); // non-recursive: throws if anything is in it
+        } catch (_) {/* not empty — leave it */}
+      }
+    } catch (_) {/* no staging folder yet */}
   }
 
   /// Bin a completed file we turned out not to want, and the staging folder it came in.

@@ -616,3 +616,59 @@ Future<void> _pruneEmptyDirs(Directory root) async {
     }
   } catch (_) {}
 }
+
+/// Significant words of a download filename (lowercased, no extension, no bare track numbers) —
+/// used to recognise the SAME track offered by different peers, who all name their files
+/// differently ("02 Aerodynamic.flac", "Daft Punk - Aerodynamic.flac", "2. Aerodynamic.flac").
+Set<String> fileWords(String displayName) {
+  final noExt = displayName.toLowerCase().replaceAll(RegExp(r'\.[a-z0-9]{2,4}$'), '');
+  final words = noExt.split(RegExp(r'[^a-z0-9]+')).where((w) => w.length > 1).toSet();
+  words.removeWhere((w) => RegExp(r'^\d{1,3}$').hasMatch(w)); // drop bare track numbers
+  return words;
+}
+
+/// Containment similarity of two word sets (0..1) — high when one filename's words are a
+/// near-subset of the other's, which tolerates "01 - Everybody" vs "Artist - Everybody".
+double wordSim(Set<String> a, Set<String> b) {
+  if (a.isEmpty || b.isEmpty) return 0;
+  final inter = a.intersection(b).length;
+  final m = a.length < b.length ? a.length : b.length;
+  return inter / m;
+}
+
+/// Are two offered files the same recording, given how differently peers name things?
+///
+/// Containment alone is not enough, and it cost a real download: "Aerodynamic" scores a perfect
+/// 1.0 against "One More Time + Aerodynamic", because the shorter name sits entirely inside the
+/// longer one. Clicking a 3:27 track fetched a 6:10 medley of 268 MB instead. Running time settles
+/// it whenever both peers state one, which is nearly always; without it, the names must be roughly
+/// the same SIZE too, or a one-word title matches everything containing that word.
+bool sameRecording(String nameA, int? durA, String nameB, int? durB) {
+  final a = fileWords(nameA), b = fileWords(nameB);
+  if (wordSim(a, b) < 0.8) return false;
+  // Whatever one name says and the other doesn't. If that announces a different take — "remix",
+  // "live", "edit" — this is another recording however close the running times, and they can be
+  // very close: "Aerodynamic" is 3:27 and the Slum Village remix of it is 3:35.
+  if (a.difference(b).union(b.difference(a)).any(_versionWordRe.hasMatch)) return false;
+  final da = durA ?? 0, db = durB ?? 0;
+  if (da > 0 && db > 0) return (da - db).abs() <= 12;
+  final inter = a.intersection(b).length;
+  final big = a.length > b.length ? a.length : b.length;
+  return big > 0 && inter / big >= .5;
+}
+
+/// Does [filename] offer the track called [title]?
+///
+/// Unlike [sameRecording] this compares a bare title against a full filename, which also carries
+/// the artist and a track number — so the TITLE's words must be present in the filename, not the
+/// other way round. The same two traps apply: a medley whose name contains the title, and a remix
+/// that runs about as long as the original.
+bool fileOffersTitle(String title, int? titleDur, String filename, int? fileDur) {
+  final tw = fileWords(title), fw = fileWords(filename);
+  if (tw.isEmpty || fw.isEmpty) return false;
+  if (tw.intersection(fw).length / tw.length < 0.75) return false;
+  if (tw.difference(fw).union(fw.difference(tw)).any(_versionWordRe.hasMatch)) return false;
+  final a = titleDur ?? 0, b = fileDur ?? 0;
+  if (a > 0 && b > 0) return (a - b).abs() <= 12;
+  return true;
+}
