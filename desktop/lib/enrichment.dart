@@ -6,6 +6,45 @@ import 'package:http/http.dart' as http;
 import 'models.dart';
 import 'settings.dart';
 
+/// What a release IS — the text and facts that make an album page read like a film page
+/// instead of a bare track list.
+class AlbumInfo {
+  final String? description, review, genre, style, label;
+  final int? year;
+  final double? score;
+  const AlbumInfo({this.description, this.review, this.year, this.genre, this.style, this.label, this.score});
+
+  bool get isEmpty =>
+      (description == null || description!.isEmpty) &&
+      (review == null || review!.isEmpty) &&
+      year == null &&
+      genre == null &&
+      label == null;
+
+  /// The blurb to show: the encyclopedic description first, a review only if that's all there is.
+  String? get text => (description != null && description!.isNotEmpty) ? description : review;
+
+  Map<String, dynamic> toJson() => {
+        'description': description,
+        'review': review,
+        'year': year,
+        'genre': genre,
+        'style': style,
+        'label': label,
+        'score': score,
+      };
+
+  factory AlbumInfo.fromJson(Map<String, dynamic> j) => AlbumInfo(
+        description: j['description'] as String?,
+        review: j['review'] as String?,
+        year: j['year'] as int?,
+        genre: j['genre'] as String?,
+        style: j['style'] as String?,
+        label: j['label'] as String?,
+        score: (j['score'] as num?)?.toDouble(),
+      );
+}
+
 /// Fetches missing album covers from Deezer → Discogs → MusicBrainz/CoverArtArchive
 /// and caches them on disk. Ported from the server's enrichment logic.
 class CoverEnricher {
@@ -101,6 +140,60 @@ class CoverEnricher {
       return null;
     }
   }
+
+  /// The sleeve notes for a release: what it is, when, on what label, how it was received —
+  /// the album equivalent of a film's synopsis panel.
+  Future<AlbumInfo?> albumInfo(String artist, String album, {bool fetch = true}) async {
+    final f = _albumInfoFile(artist, album);
+    if (await f.exists()) {
+      try {
+        final j = jsonDecode(await f.readAsString());
+        if (j is Map<String, dynamic>) return AlbumInfo.fromJson(j);
+      } catch (_) {/* corrupt cache entry — refetch */}
+    }
+    if (!fetch) return null;
+    if (_generic.contains(artist.trim().toLowerCase()) || album.trim().isEmpty) return null;
+    try {
+      final r = await http.get(
+        Uri.parse('https://theaudiodb.com/api/v1/json/2/searchalbum.php'
+            '?s=${Uri.encodeComponent(artist)}&a=${Uri.encodeComponent(album)}'),
+        headers: {'User-Agent': _ua},
+      ).timeout(const Duration(seconds: 8));
+      if (r.statusCode != 200) return null;
+      // Decode as UTF-8 ourselves: the endpoint doesn't always say so in its headers, and the
+      // descriptions are full of accented names.
+      final j = jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true));
+      final list = (j['album'] as List?) ?? const [];
+      if (list.isEmpty) return null;
+      final a = list.first as Map<String, dynamic>;
+
+      String? s(String k) {
+        final v = (a[k] as String?)?.trim();
+        return (v == null || v.isEmpty || v.toLowerCase() == 'null') ? null : v;
+      }
+
+      final info = AlbumInfo(
+        // Dutch when it exists (as the artist bios do), else the English default field.
+        description: s('strDescriptionNL') ?? s('strDescription'),
+        review: s('strReview'),
+        year: int.tryParse(s('intYearReleased') ?? ''),
+        genre: s('strGenre'),
+        style: s('strStyle'),
+        label: s('strLabel'),
+        score: double.tryParse(s('intScore') ?? ''),
+      );
+      if (info.isEmpty) return null;
+      await _albumInfoDir.create(recursive: true);
+      await f.writeAsString(jsonEncode(info.toJson()));
+      return info;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Directory get _albumInfoDir => Directory(_dir('albuminfo'));
+  File _albumInfoFile(String artist, String album) => File('${_albumInfoDir.path}${Platform.pathSeparator}'
+      '${_fnv('${artist.toLowerCase()}|${album.toLowerCase()}')}.json');
 
   Future<String?> cachedBio(String name) async {
     final f = _bioFile(name);

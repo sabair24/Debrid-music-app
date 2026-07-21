@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
@@ -806,6 +807,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                   ],
                 ),
                 SliverToBoxAdapter(child: _header(context)),
+                if (!album.isSingle)
+                  SliverToBoxAdapter(
+                    child: AlbumInfoPanel(artist: album.artist, album: album.title),
+                  ),
                 SliverList(
                   delegate: SliverChildBuilderDelegate(
                     (_, i) => TrackRow(
@@ -2133,6 +2138,10 @@ class _HomeStartViewState extends State<HomeStartView> {
     }
     final recent = [...lib.albums.where((a) => a.addedMs > 0)]..sort((a, b) => b.addedMs.compareTo(a.addedMs));
     final anyLoading = _chartsLoading || _seedsLoading || (!_seedsRequested && lib.scanning);
+    // New releases by artists you own lead the hero; the global chart fills in until those are
+    // loaded (or if you have no library yet), so the top of the page is never an empty band.
+    final hero = _releases.isNotEmpty ? _releases : _charts;
+
     return ListView(
       padding: const EdgeInsets.only(bottom: 32),
       children: [
@@ -2145,6 +2154,11 @@ class _HomeStartViewState extends State<HomeStartView> {
           child: Text('Ontdek nieuwe muziek en pak op waar je gebleven was',
               style: TextStyle(color: _muted, fontSize: 13.5)),
         ),
+        if (hero.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(28, 14, 28, 4),
+            child: HeroCarousel(hits: hero.take(7).toList()),
+          ),
         if (recent.isNotEmpty) _section('Recent toegevoegd', _localRow(recent.take(15).toList())),
         if (_forYou.isNotEmpty || _seedsLoading)
           _section('Aanbevolen voor jou',
@@ -3953,6 +3967,287 @@ class BioText extends StatelessWidget {
   }
 }
 
+/// The banner at the top of the start page: the newest releases, one at a time, large.
+///
+/// The cover doubles as the backdrop — blurred, darkened and bled to the edges — because an album
+/// has no separate wide artwork the way a film has a still. Auto-advances, but stops the moment
+/// the pointer is on it so it can't slide away mid-read.
+class HeroCarousel extends StatefulWidget {
+  final List<CatalogAlbumHit> hits;
+  const HeroCarousel({super.key, required this.hits});
+
+  @override
+  State<HeroCarousel> createState() => _HeroCarouselState();
+}
+
+class _HeroCarouselState extends State<HeroCarousel> {
+  final _page = PageController();
+  Timer? _timer;
+  int _index = 0;
+  bool _hover = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _restart();
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _page.dispose();
+    super.dispose();
+  }
+
+  void _restart() {
+    _timer?.cancel();
+    if (widget.hits.length < 2) return;
+    _timer = Timer.periodic(const Duration(seconds: 7), (_) {
+      if (!mounted || _hover || !_page.hasClients) return;
+      _page.animateToPage((_index + 1) % widget.hits.length,
+          duration: const Duration(milliseconds: 550), curve: Curves.easeInOutCubic);
+    });
+  }
+
+  void _go(int delta) {
+    if (!_page.hasClients) return;
+    final n = widget.hits.length;
+    _page.animateToPage((_index + delta + n) % n,
+        duration: const Duration(milliseconds: 380), curve: Curves.easeOutCubic);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: SizedBox(
+          height: 260,
+          child: Stack(
+            children: [
+              PageView.builder(
+                controller: _page,
+                itemCount: widget.hits.length,
+                onPageChanged: (i) => setState(() => _index = i),
+                itemBuilder: (_, i) => _slide(widget.hits[i]),
+              ),
+              if (widget.hits.length > 1) ...[
+                _arrow(Alignment.centerLeft, Icons.chevron_left_rounded, -1),
+                _arrow(Alignment.centerRight, Icons.chevron_right_rounded, 1),
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        for (var i = 0; i < widget.hits.length; i++)
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 260),
+                            margin: const EdgeInsets.symmetric(horizontal: 3),
+                            width: i == _index ? 18 : 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: i == _index ? Colors.white : Colors.white.withValues(alpha: .38),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _arrow(Alignment side, IconData icon, int delta) => Align(
+        alignment: side,
+        child: AnimatedOpacity(
+          opacity: _hover ? 1 : 0,
+          duration: const Duration(milliseconds: 180),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Material(
+              color: Colors.black.withValues(alpha: .45),
+              shape: const CircleBorder(),
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: () => _go(delta),
+                child: Padding(padding: const EdgeInsets.all(6), child: Icon(icon, size: 26, color: Colors.white)),
+              ),
+            ),
+          ),
+        ),
+      );
+
+  Widget _slide(CatalogAlbumHit hit) {
+    final cover = hit.album.cover;
+    return GestureDetector(
+      onTap: () => Navigator.of(context)
+          .push(MaterialPageRoute(builder: (_) => AlbumBrowsePage(hit.artist, hit.album))),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (cover != null)
+              ImageFiltered(
+                imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+                child: Image.network(cover, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox()),
+              ),
+            // Without this the blurred art is too busy to read white text on.
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  colors: [Colors.black.withValues(alpha: .86), Colors.black.withValues(alpha: .45)],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(28, 24, 28, 28),
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: SizedBox(
+                      width: 168,
+                      height: 168,
+                      child: cover == null
+                          ? Container(color: _panel2)
+                          : Image.network(cover, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(color: _panel2)),
+                    ),
+                  ),
+                  const SizedBox(width: 24),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('NIEUWE RELEASE',
+                            style: TextStyle(
+                                color: _accent2, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
+                        const SizedBox(height: 8),
+                        Text(hit.album.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 27, fontWeight: FontWeight.w800, height: 1.1)),
+                        const SizedBox(height: 6),
+                        Text(hit.artist,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 15, color: Color(0xFFC7CBDA))),
+                        if (hit.album.year != null) ...[
+                          const SizedBox(height: 2),
+                          Text('${hit.album.year}', style: const TextStyle(fontSize: 12.5, color: _muted)),
+                        ],
+                        const SizedBox(height: 14),
+                        FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                              backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
+                          onPressed: () => Navigator.of(context)
+                              .push(MaterialPageRoute(builder: (_) => AlbumBrowsePage(hit.artist, hit.album))),
+                          icon: const Icon(Icons.playlist_add_rounded, size: 18),
+                          label: const Text('Bekijken'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// What this release IS: the official blurb plus year, genre, label and rating — the album
+/// equivalent of a film's synopsis panel. Silent when nothing is known, so a page never shows
+/// an empty box.
+class AlbumInfoPanel extends StatefulWidget {
+  final String artist, album;
+  const AlbumInfoPanel({super.key, required this.artist, required this.album});
+
+  @override
+  State<AlbumInfoPanel> createState() => _AlbumInfoPanelState();
+}
+
+class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
+  AlbumInfo? _info;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(AlbumInfoPanel old) {
+    super.didUpdateWidget(old);
+    if (old.artist != widget.artist || old.album != widget.album) {
+      setState(() => _info = null);
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    final artist = widget.artist, album = widget.album;
+    final info = await CoverEnricher(context.read<AppSettings>()).albumInfo(artist, album);
+    if (!mounted || artist != widget.artist || album != widget.album) return;
+    setState(() => _info = info);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final info = _info;
+    if (info == null) return const SizedBox.shrink();
+    final facts = <String>[
+      if (info.year != null) '${info.year}',
+      if (info.genre != null) info.genre!,
+      if (info.style != null && info.style != info.genre) info.style!,
+      if (info.label != null) info.label!,
+    ];
+    final text = info.text;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 4, 24, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (info.score != null) ...[
+                const Icon(Icons.star_rounded, size: 16, color: Color(0xFFE0B341)),
+                const SizedBox(width: 4),
+                Text(info.score!.toStringAsFixed(1),
+                    style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
+                const SizedBox(width: 12),
+              ],
+              Flexible(
+                child: Text(facts.join('  ·  '),
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 12.5)),
+              ),
+            ],
+          ),
+          if (text != null && text.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            BioText('${widget.artist} — ${widget.album}', text),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 // ── Stremio-style online browse: artist → albums → tracks → sources ──────────
 class ArtistBrowsePage extends StatefulWidget {
   final CatalogArtist artist;
@@ -4209,6 +4504,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
               padding: const EdgeInsets.only(bottom: 8),
               child: SourcesView(query: '${widget.artistName} ${al.title}'),
             ),
+          AlbumInfoPanel(artist: widget.artistName, album: al.title),
           if (_busy)
             const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator(color: _accent)))
           else if (_tracks.isEmpty)
