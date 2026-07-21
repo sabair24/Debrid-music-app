@@ -1249,32 +1249,19 @@ class _ArtistsViewState extends State<ArtistsView> {
               label: const Text('Artiesten'),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
-            child: Row(
-              children: [
-                cover(img, size: 96, circle: true),
-                const SizedBox(width: 18),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(name, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
-                    const SizedBox(height: 4),
-                    Text('${albums.length} albums · $trackCount nummers',
-                        style: const TextStyle(color: _muted)),
-                    const SizedBox(height: 10),
-                    FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                          backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10)),
-                      onPressed: () => startRadio(context, name),
-                      icon: const Icon(Icons.radio_rounded, size: 18),
-                      label: const Text('Radio'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+          ArtistHero(
+            name: name,
+            subtitle: '${albums.length} albums · $trackCount nummers',
+            fallbackImage: img,
+            actions: [
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                    backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10)),
+                onPressed: () => startRadio(context, name),
+                icon: const Icon(Icons.radio_rounded, size: 18),
+                label: const Text('Radio'),
+              ),
+            ],
           ),
           if (widget.lib.artistBios[name] != null)
             Padding(
@@ -4171,6 +4158,123 @@ class _HeroCarouselState extends State<HeroCarousel> {
   }
 }
 
+/// A cinematic banner for an artist: wide backdrop, and the act's OWN wordmark rather than their
+/// name set in the app's typeface.
+///
+/// The wordmark is the point. There is no way to render text in an artist's official lettering —
+/// those fonts aren't distributed — but the logo itself is an image of exactly that lettering, so
+/// showing it is the real thing instead of an imitation. Falls back to plain text for the acts
+/// that have no logo (about one in four).
+class ArtistHero extends StatefulWidget {
+  final String name;
+  final String? subtitle;
+  final Uint8List? fallbackImage;
+  final List<Widget> actions;
+  const ArtistHero({
+    super.key,
+    required this.name,
+    this.subtitle,
+    this.fallbackImage,
+    this.actions = const [],
+  });
+
+  @override
+  State<ArtistHero> createState() => _ArtistHeroState();
+}
+
+class _ArtistHeroState extends State<ArtistHero> {
+  ArtistArt? _art;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(ArtistHero old) {
+    super.didUpdateWidget(old);
+    if (old.name != widget.name) {
+      setState(() => _art = null);
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    final name = widget.name;
+    final art = await CoverEnricher(context.read<AppSettings>()).artistArt(name);
+    if (!mounted || name != widget.name) return;
+    setState(() => _art = art);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final backdrop = _art?.backdropBytes;
+    final logo = _art?.logoBytes;
+
+    return SizedBox(
+      height: 230,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (backdrop != null)
+            Image.memory(backdrop, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox())
+          else if (widget.fallbackImage != null)
+            ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+              child: Image.memory(widget.fallbackImage!, fit: BoxFit.cover),
+            ),
+          // Dark enough at the bottom that the wordmark and buttons always read.
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.black.withValues(alpha: .35),
+                  Colors.black.withValues(alpha: .78),
+                  const Color(0xFF0B0D14),
+                ],
+                stops: const [0, .6, 1],
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(28, 0, 28, 18),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.end,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (logo != null)
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 88, maxWidth: 420),
+                    child: Image.memory(logo, fit: BoxFit.contain, alignment: Alignment.centerLeft,
+                        errorBuilder: (_, __, ___) => _plainName()),
+                  )
+                else
+                  _plainName(),
+                if (widget.subtitle != null) ...[
+                  const SizedBox(height: 8),
+                  Text(widget.subtitle!, style: const TextStyle(color: Color(0xFFC7CBDA), fontSize: 13.5)),
+                ],
+                if (widget.actions.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Row(children: widget.actions),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _plainName() => Text(widget.name,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w800, letterSpacing: -.5));
+}
+
 /// What this release IS: the official blurb plus year, genre, label and rating — the album
 /// equivalent of a film's synopsis panel. Silent when nothing is known, so a page never shows
 /// an empty box.
@@ -4298,27 +4402,20 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       body: CustomScrollView(
         slivers: [
           SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 20, 10),
-              child: Row(
-                children: [
-                  IconButton(icon: const Icon(Icons.arrow_back_rounded), onPressed: () => Navigator.pop(context)),
-                  const SizedBox(width: 4),
-                  _netCover(widget.artist.picture, size: 76, circle: true),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(widget.artist.name, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-                        const SizedBox(height: 2),
-                        Text(_busy ? 'Albums laden…' : '${_albums.length} albums',
-                            style: const TextStyle(color: _muted, fontSize: 13)),
-                      ],
-                    ),
+            child: Stack(
+              children: [
+                ArtistHero(
+                  name: widget.artist.name,
+                  subtitle: _busy ? 'Albums laden…' : '${_albums.length} albums',
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 8, 0, 0),
+                  child: IconButton(
+                    icon: const Icon(Icons.arrow_back_rounded),
+                    onPressed: () => Navigator.pop(context),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
           if (_bio != null)

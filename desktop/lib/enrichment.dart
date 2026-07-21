@@ -6,6 +6,19 @@ import 'package:http/http.dart' as http;
 import 'models.dart';
 import 'settings.dart';
 
+/// A wide backdrop and the act's official wordmark — what turns an artist page into a banner.
+class ArtistArt {
+  final String? logo, backdrop;
+  final Uint8List? logoBytes, backdropBytes;
+  const ArtistArt({this.logo, this.backdrop, this.logoBytes, this.backdropBytes});
+
+  bool get isEmpty => logo == null && backdrop == null;
+
+  Map<String, dynamic> toJson() => {'logo': logo, 'backdrop': backdrop};
+  factory ArtistArt.fromJson(Map<String, dynamic> j) =>
+      ArtistArt(logo: j['logo'] as String?, backdrop: j['backdrop'] as String?);
+}
+
 /// What a release IS — the text and facts that make an album page read like a film page
 /// instead of a bare track list.
 class AlbumInfo {
@@ -139,6 +152,71 @@ class CoverEnricher {
     } catch (_) {
       return null;
     }
+  }
+
+  /// The artwork set behind an artist page: a wide cinematic backdrop and the act's own
+  /// wordmark. The logo is the reason this exists — you can't render a name in an artist's
+  /// official typography from a font (nobody ships those), but the wordmark itself is a real
+  /// image and that IS the official lettering.
+  Future<ArtistArt?> artistArt(String name) async {
+    final meta = _artistArtFile(name);
+    ArtistArt? art;
+    if (await meta.exists()) {
+      try {
+        final j = jsonDecode(await meta.readAsString());
+        if (j is Map<String, dynamic>) art = ArtistArt.fromJson(j);
+      } catch (_) {/* corrupt entry — refetch */}
+    }
+    if (art == null) {
+      if (_generic.contains(name.trim().toLowerCase())) return null;
+      try {
+        final r = await http.get(
+          Uri.parse('https://theaudiodb.com/api/v1/json/2/search.php?s=${Uri.encodeComponent(name)}'),
+          headers: {'User-Agent': _ua},
+        ).timeout(const Duration(seconds: 8));
+        if (r.statusCode != 200) return null;
+        final list = (jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true))['artists'] as List?) ?? const [];
+        if (list.isEmpty) return null;
+        final a = list.first as Map<String, dynamic>;
+        String? s(String k) {
+          final v = (a[k] as String?)?.trim();
+          return (v == null || v.isEmpty) ? null : v;
+        }
+
+        art = ArtistArt(
+          logo: s('strArtistLogo'),
+          // Fanart is the wide, cinematic one; the wide thumb is the next best framing.
+          backdrop: s('strArtistFanart') ?? s('strArtistWideThumb') ?? s('strArtistBanner'),
+        );
+        if (art.isEmpty) return null;
+        await _artistArtDir.create(recursive: true);
+        await meta.writeAsString(jsonEncode(art.toJson()));
+      } catch (_) {
+        return null;
+      }
+    }
+    // Keep the bytes locally too: these render on every visit and shouldn't refetch each time.
+    final logo = await _cachedArt(name, 'logo', art.logo);
+    final backdrop = await _cachedArt(name, 'backdrop', art.backdrop);
+    return ArtistArt(logo: art.logo, backdrop: art.backdrop, logoBytes: logo, backdropBytes: backdrop);
+  }
+
+  Directory get _artistArtDir => Directory(_dir('artistart'));
+  File _artistArtFile(String name) =>
+      File('${_artistArtDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.json');
+
+  Future<Uint8List?> _cachedArt(String name, String kind, String? url) async {
+    if (url == null) return null;
+    final f = File('${_artistArtDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}_$kind.img');
+    if (await f.exists()) {
+      final b = await f.readAsBytes();
+      if (b.length > 100) return b;
+    }
+    final bytes = await _download(url);
+    if (bytes == null || bytes.length < 100) return null;
+    await _artistArtDir.create(recursive: true);
+    await f.writeAsBytes(bytes);
+    return bytes;
   }
 
   /// The sleeve notes for a release: what it is, when, on what label, how it was received —
