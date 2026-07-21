@@ -3418,6 +3418,18 @@ Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy,
           Text(
               'gepauzeerd — login geweigerd, wacht nog ${(context.read<SoulseekService>().blockedFor?.inMinutes ?? 0) + 1} min',
               style: TextStyle(color: Colors.orange.shade300, fontSize: 11.5)),
+          const SizedBox(width: 6),
+          // This wait is OUR guard, not Soulseek's. When the official client is logged in fine,
+          // the account clearly isn't blocked and the user should never be stuck behind it.
+          TextButton(
+            style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: const Size(0, 26)),
+            onPressed: () {
+              context.read<SoulseekService>().retryLoginNow();
+              _srcToast(context, 'Soulseek opnieuw proberen…');
+            },
+            child: const Text('nu opnieuw proberen', style: TextStyle(fontSize: 11.5)),
+          ),
         ],
         if (busy) ...const [
           SizedBox(width: 8),

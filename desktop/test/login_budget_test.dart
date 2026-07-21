@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 /// Soulseek allows one login per account and blocks it after a burst. This account has been
 /// blocked twice by this app, so these are the guards that must never quietly regress.
 void main() {
+  backoff();
   test('a burst of logins closes the door, even when every one of them SUCCEEDS', () {
     final c = SoulseekClient();
     // The kick-war case: our login succeeds, the native client is kicked, it reconnects and kicks
@@ -47,5 +48,48 @@ void main() {
     expect(c.blocked, isTrue);
     c.noteLoggedIn();
     expect(c.blocked, isFalse);
+  });
+}
+
+/// The back-off is OUR guard, not Soulseek's, so it has to be proportionate — and escapable when
+/// the user can see the account is fine (the official client logged in right beside it).
+void backoff() {
+  test('one refusal costs minutes, not half an hour', () {
+    final c = SoulseekClient();
+    c.noteLoginRefused();
+    expect(c.blocked, isTrue);
+    expect(c.blockedFor!.inMinutes, lessThan(3));
+  });
+
+  test('but a refusal that keeps repeating costs more each time', () {
+    final c = SoulseekClient();
+    c.noteLoginRefused();
+    final first = c.blockedFor!;
+    c.noteLoginRefused();
+    final second = c.blockedFor!;
+    c.noteLoginRefused();
+    expect(second, greaterThan(first));
+    expect(c.blockedFor!, greaterThan(second));
+  });
+
+  test('a successful login forgets the escalation', () {
+    final c = SoulseekClient();
+    c.noteLoginRefused();
+    c.noteLoginRefused();
+    c.noteLoginRefused();
+    c.noteLoggedIn();
+    c.noteLoginRefused();
+    expect(c.blockedFor!.inMinutes, lessThan(3)); // back to the first step
+  });
+
+  test('the user can clear the wait, budget included', () {
+    final c = SoulseekClient();
+    for (var i = 0; i < 6; i++) {
+      c.noteLoginAttempt();
+    }
+    c.noteLoginRefused();
+    expect(c.mustNotLogin, isTrue);
+    c.allowOneRetry();
+    expect(c.mustNotLogin, isFalse);
   });
 }

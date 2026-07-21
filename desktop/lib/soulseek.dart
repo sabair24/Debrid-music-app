@@ -381,8 +381,30 @@ class SoulseekClient {
   /// How much of the back-off is left (null when not backing off) — for the UI.
   Duration? get blockedFor => blocked ? _blockedUntil!.difference(DateTime.now()) : null;
 
-  void noteLoginRefused() => _blockedUntil = DateTime.now().add(const Duration(minutes: 30));
-  void noteLoginOk() => _blockedUntil = null;
+  /// Back-off after a refusal, growing only if it keeps happening. A flat half hour was far too
+  /// harsh for the common case: one refusal right after the app restarts, because the previous
+  /// session's socket is still registered server-side and the new login collides with it. That
+  /// clears itself in a minute or two, and punishing it for thirty was just wrong.
+  static const _backoff = [Duration(minutes: 2), Duration(minutes: 6), Duration(minutes: 15), Duration(minutes: 30)];
+  int _refusals = 0;
+
+  void noteLoginRefused() {
+    _blockedUntil = DateTime.now().add(_backoff[_refusals.clamp(0, _backoff.length - 1)]);
+    _refusals++;
+  }
+
+  void noteLoginOk() {
+    _blockedUntil = null;
+    _refusals = 0;
+  }
+
+  /// The user has looked and knows the account is fine — usually because the official client is
+  /// logged in right now. Our own back-off must never be the thing standing in their way, so let
+  /// one attempt straight through. If Soulseek refuses it, the wait comes back (longer).
+  void allowOneRetry() {
+    _blockedUntil = null;
+    _loginTimes.clear();
+  }
 
   // ── Login budget ──────────────────────────────────────────────────────────
   // The old guard only counted CONSECUTIVE FAILURES, which is blind to the situation that

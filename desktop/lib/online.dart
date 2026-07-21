@@ -229,6 +229,9 @@ class SoulseekService {
   bool get blocked => client.blocked;
   Duration? get blockedFor => client.blockedFor;
 
+  /// Drop our own back-off and let one login through — see [SlskClient.allowOneRetry].
+  void retryLoginNow() => client.allowOneRetry();
+
   // ── The one logged-in connection ──────────────────────────────────────────
   // Soulseek allows a single login per account and blocks on a burst of them, so EVERYTHING that
   // talks to the server — searching, downloading, the status check — shares this one session.
