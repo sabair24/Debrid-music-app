@@ -4340,7 +4340,10 @@ class _AboutSectionState extends State<_AboutSection> {
         ),
         if (_path.isNotEmpty) ...[
           const SizedBox(height: 6),
-          SelectableText(_path, style: const TextStyle(color: _muted, fontSize: 11)),
+          // Zero-width spaces after each separator: a path has no spaces, so Flutter would
+          // otherwise break it after the "C:" and the rest reads as if it started at \Users.
+          SelectableText(_path.replaceAll(r'\', '\\\u200B'),
+              style: const TextStyle(color: _muted, fontSize: 11, height: 1.35)),
         ],
       ],
     );
