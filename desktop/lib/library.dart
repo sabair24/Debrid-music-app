@@ -209,7 +209,7 @@ class LibraryStore extends ChangeNotifier {
     }
     await _saveHidden();
     tracks.removeWhere((t) => list.contains(t.path));
-    _buildAlbums();
+    rebuildAlbums();
     notifyListeners();
     return deleted;
   }
@@ -273,13 +273,13 @@ class LibraryStore extends ChangeNotifier {
     }
     await _saveCorrections();
 
-    // Re-apply corrections to the in-memory tracks + regroup. _buildAlbums() preserves each
+    // Re-apply corrections to the in-memory tracks + regroup. rebuildAlbums() preserves each
     // album's covers across the rebuild, so the grid no longer blanks here.
     final corrected = tracks.map(_applyCorrection).toList();
     tracks
       ..clear()
       ..addAll(corrected);
-    _buildAlbums();
+    rebuildAlbums();
 
     // Find the regrouped album this correction produced, and attach the new cover.
     final newArtist = (artist?.trim().isNotEmpty ?? false) ? artist!.trim() : target.artist;
@@ -339,7 +339,7 @@ class LibraryStore extends ChangeNotifier {
           .where((t) => !_hidden.contains(t.path)) // "removed from library only" stays removed
           .map(_applyCorrection));
     scanned = tracks.length;
-    _buildAlbums();
+    rebuildAlbums();
     scanning = false;
     notifyListeners();
 
@@ -380,20 +380,24 @@ class LibraryStore extends ChangeNotifier {
         sizeBytes: (m['sizeBytes'] as int?) ?? 0,
       );
 
-  String _albumKey(String artist, String album, String firstPath) =>
-      album.isEmpty ? 'single::$firstPath' : 'album::${artistKey(artist)}|${normKey(album)}';
+  /// Which album a TRACK belongs to. Derived from the track's own tags, never from an Album's
+  /// displayed artist: the two drifted apart once "Nunca feat. Pat Krimson" started displaying as
+  /// "Nunca", and the cover snapshot below — stored under one and looked up under the other —
+  /// silently dropped that album's covers on every regroup, including a hand-picked one.
+  /// Both the snapshot and the grouping go through here so they cannot diverge again.
+  String _groupKey(Track t) =>
+      t.album.isEmpty ? 'single::${t.path}' : 'album::${artistKey(t.artist)}|${normKey(t.album)}';
 
-  void _buildAlbums() {
-    // Snapshot the covers of the CURRENT albums, keyed by the SAME group key used below (NOT by
-    // first-track path — that can change when the first track is deleted). Rebuilding makes fresh
-    // Album objects with null covers, so without this ANY caller (delete, correction, …) would
-    // blank the whole grid until the next scan/enrich. This is the fix for "deleting a track wipes
-    // all album covers".
+  /// Regroup tracks into albums. Public so a test can reproduce the "edit one album, another
+  /// album loses its cover" regression without going through the on-disk correction path.
+  void rebuildAlbums() {
+    // Snapshot the covers of the CURRENT albums. Rebuilding makes fresh Album objects with null
+    // covers, so without this ANY caller (delete, correction, …) would blank the grid until the
+    // next scan/enrich. This is the fix for "deleting a track wipes all album covers".
     final coversByKey = <String, List<Uint8List?>>{};
     for (final a in albums) {
       if (a.tracks.isEmpty) continue;
-      coversByKey[_albumKey(a.artist, a.isSingle ? '' : a.title, a.tracks.first.path)] =
-          [a.embeddedCover, a.enriched, a.correctedCover];
+      coversByKey[_groupKey(a.tracks.first)] = [a.embeddedCover, a.enriched, a.correctedCover];
     }
 
     // ONE spelling per artist. Tags disagree about capitalisation and accents ("Lady Gaga" vs
@@ -418,7 +422,7 @@ class LibraryStore extends ChangeNotifier {
       // No album tag => its own single (never grouped under the root folder name).
       // Group on NORMALISED artist+album: "Backstreet's Back" with a curly ’ and with a
       // straight ' are the same album and must not show up twice.
-      map.putIfAbsent(_albumKey(t.artist, t.album, t.path), () => []).add(t);
+      map.putIfAbsent(_groupKey(t), () => []).add(t);
     }
     albums = map.entries.map((e) {
       final single = e.key.startsWith('single::');
