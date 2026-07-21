@@ -397,11 +397,14 @@ class LibraryStore extends ChangeNotifier {
     // ONE spelling per artist. Tags disagree about capitalisation and accents ("Lady Gaga" vs
     // "Lady GaGa", "Beyoncé" vs "Beyonce"), which used to put the same person in the artist list
     // twice. Count every spelling across the whole library and show the best one everywhere.
+    // The MAIN artist, not the full credit: "Lady Gaga feat. Beyoncé" is a Lady Gaga track and
+    // belongs on her album — Beyoncé is a guest, not a separate act in your artist list.
     final spellings = <String, Map<String, int>>{};
     for (final t in tracks) {
+      final main = splitFeatured(t.artist, t.title).main;
       spellings
-          .putIfAbsent(artistKey(t.artist), () => <String, int>{})
-          .update(t.artist, (n) => n + 1, ifAbsent: () => 1);
+          .putIfAbsent(artistKey(main), () => <String, int>{})
+          .update(main, (n) => n + 1, ifAbsent: () => 1);
     }
     final canonical = {for (final e in spellings.entries) e.key: canonicalName(e.value)};
     _canonicalArtists
@@ -419,7 +422,8 @@ class LibraryStore extends ChangeNotifier {
       final single = e.key.startsWith('single::');
       final ts = single ? e.value : _dedupeTracks(e.value);
       ts.sort((a, b) => a.trackNo.compareTo(b.trackNo));
-      final artist = canonical[artistKey(ts.first.artist)] ?? ts.first.artist;
+      final main = splitFeatured(ts.first.artist, ts.first.title).main;
+      final artist = canonical[artistKey(main)] ?? main;
       final al = Album(single ? ts.first.title : ts.first.album, artist, ts, isSingle: single);
       final saved = coversByKey[e.key];
       if (saved != null) {
@@ -514,7 +518,14 @@ class LibraryStore extends ChangeNotifier {
   /// artist runs it through [displayArtist] to stay consistent with the artist list.
   final Map<String, String> _canonicalArtists = {};
 
-  String displayArtist(String raw) => _canonicalArtists[artistKey(raw)] ?? raw;
+  String displayArtist(String raw) {
+    final main = splitFeatured(raw, '').main;
+    return _canonicalArtists[artistKey(main)] ?? main;
+  }
+
+  /// True if this name is an artist you actually own — decides whether tapping it can show a
+  /// local page or has to go to the online catalogue.
+  bool hasArtist(String name) => _canonicalArtists.containsKey(artistKey(name));
 
   List<String> get artists {
     final set = <String>{};

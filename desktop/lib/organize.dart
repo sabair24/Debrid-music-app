@@ -61,6 +61,57 @@ String _fold(String s) {
   return b.toString();
 }
 
+/// "feat." and friends, as they appear in an artist tag or a title.
+/// Deliberately NOT "&" or "and": "Simon & Garfunkel" and "Hall & Oates" are single acts, and
+/// splitting those would invent artists that don't exist.
+final _featRe = RegExp(
+  r'\s*[\(\[]?\s*\b(feat\.?|ft\.?|featuring|met|w/)\b\s*\.?\s*',
+  caseSensitive: false,
+);
+
+/// Inside the featured PART, these do separate names — "feat. Beyoncé & Kanye" is two people.
+final _featSplitRe = RegExp(r'\s*(?:,|&|\+|\band\b|\ben\b|\bx\b)\s*', caseSensitive: false);
+
+/// The main artist and everyone featured on the track.
+///
+/// A track credited "Lady Gaga feat. Beyoncé" belongs on Lady Gaga's album — so the MAIN artist
+/// is what the library groups and files by, and the featured names ride along for display.
+/// The credit hides in either field depending on the ripper: sometimes the artist tag carries it,
+/// sometimes the title does ("Telephone (feat. Beyoncé)").
+({String main, List<String> featured}) splitFeatured(String artist, String title) {
+  final featured = <String>[];
+  var main = artist.trim();
+
+  void harvest(String s) {
+    for (final part in s.split(_featRe).skip(1)) {
+      final cleaned = part.replaceAll(RegExp(r'[\)\]]\s*$'), '').trim();
+      for (final name in cleaned.split(_featSplitRe)) {
+        final n = name.trim();
+        if (n.isEmpty || n.length > 60) continue;
+        if (featured.any((f) => artistKey(f) == artistKey(n))) continue;
+        featured.add(n);
+      }
+    }
+  }
+
+  if (_featRe.hasMatch(main)) {
+    harvest(main);
+    main = main.split(_featRe).first.trim();
+  }
+  if (_featRe.hasMatch(title)) harvest(title);
+
+  // Never list the main artist as their own guest.
+  featured.removeWhere((f) => artistKey(f) == artistKey(main));
+  return (main: main.isEmpty ? artist.trim() : main, featured: featured);
+}
+
+/// The title without its "(feat. …)" tail — for display next to a separate featured-artist line.
+String titleWithoutFeat(String title) {
+  if (!_featRe.hasMatch(title)) return title;
+  final cut = title.split(_featRe).first.trim();
+  return cut.replaceAll(RegExp(r'[\(\[]\s*$'), '').trim();
+}
+
 /// Comparison key for an ARTIST. On top of [normKey] it drops a leading "the", because "The
 /// Doors" and "Doors" are one act. Deliberately artist-only: for an ALBUM the leading word is
 /// part of the title ("The Wall" is not "Wall").

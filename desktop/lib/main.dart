@@ -1165,11 +1165,25 @@ class _TrackRowState extends State<TrackRow> {
               ),
               const SizedBox(width: 14),
               Expanded(
-                child: Text(t.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontWeight: FontWeight.w600, color: isCurrent ? _accent2 : _text)),
+                child: Builder(builder: (context) {
+                  // Guests named in this track's own tags, shown under the title. No catalogue
+                  // lookup here — that would be one network call per row of every album.
+                  final guests = splitFeatured(t.artist, t.title).featured;
+                  final title = Text(titleWithoutFeat(t.title),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontWeight: FontWeight.w600, color: isCurrent ? _accent2 : _text));
+                  if (guests.isEmpty) return title;
+                  return Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      title,
+                      // Only the guests — the album already belongs to the main artist.
+                      ArtistNames(names: guests, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                    ],
+                  );
+                }),
               ),
               _qualityBadge(_trackQuality(t)),
               Text(_fmt(t.duration), style: const TextStyle(color: _muted, fontSize: 13)),
@@ -1369,6 +1383,133 @@ class _ArtistCardState extends State<_ArtistCard> {
   }
 }
 
+// ── Artist credits ───────────────────────────────────────────────────────────
+/// Open an artist's discography. Goes to the catalogue rather than your own shelf on purpose:
+/// a guest like Beyoncé usually isn't in your library at all, and even for an artist you do own
+/// the interesting thing here is their whole catalogue — that's what tapping a name promises.
+Future<void> openArtist(BuildContext context, String name) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final navigator = Navigator.of(context);
+  final hits = await CatalogService().searchArtists(name);
+  if (hits.isEmpty) {
+    messenger.showSnackBar(
+      SnackBar(content: Text('Geen artiestenpagina gevonden voor $name'), duration: const Duration(seconds: 2)),
+    );
+    return;
+  }
+  // Prefer an exact name match over the first (fuzzy) hit.
+  final artist = hits.firstWhere((a) => artistKey(a.name) == artistKey(name), orElse: () => hits.first);
+  navigator.push(MaterialPageRoute(builder: (_) => ArtistBrowsePage(artist)));
+}
+
+/// "Lady Gaga · Beyoncé" — every name tappable.
+///
+/// The guest credit lives wherever the ripper put it: the artist tag, the title, or — for the
+/// Lady Gaga file on this machine — nowhere at all. So when the tags name nobody and [lookup] is
+/// on, the catalogue is asked who else played on it.
+class ArtistLine extends StatefulWidget {
+  final String artist;
+  final String title;
+  final TextStyle style;
+  final bool lookup;
+  const ArtistLine({
+    super.key,
+    required this.artist,
+    required this.title,
+    required this.style,
+    this.lookup = false,
+  });
+
+  @override
+  State<ArtistLine> createState() => _ArtistLineState();
+}
+
+class _ArtistLineState extends State<ArtistLine> {
+  List<String> _extra = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  @override
+  void didUpdateWidget(ArtistLine old) {
+    super.didUpdateWidget(old);
+    if (old.artist != widget.artist || old.title != widget.title) {
+      setState(() => _extra = const []);
+      _fetch();
+    }
+  }
+
+  Future<void> _fetch() async {
+    if (!widget.lookup) return;
+    final local = splitFeatured(widget.artist, widget.title);
+    if (local.featured.isNotEmpty) return; // the tags already say who's on it
+    final artist = widget.artist, title = widget.title;
+    final names = await CatalogService().trackContributors(artist, titleWithoutFeat(title));
+    if (!mounted || artist != widget.artist || title != widget.title) return;
+    final guests = names.where((n) => artistKey(n) != artistKey(local.main)).toList();
+    if (guests.isNotEmpty) setState(() => _extra = guests);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final split = splitFeatured(widget.artist, widget.title);
+    final lib = context.watch<LibraryStore>();
+    return ArtistNames(
+      names: [lib.displayArtist(split.main), ...split.featured, ..._extra],
+      style: widget.style,
+    );
+  }
+}
+
+/// A row of artist names, each tappable. Takes the names as-is — the caller decides who's on it.
+class ArtistNames extends StatefulWidget {
+  final List<String> names;
+  final TextStyle style;
+  const ArtistNames({super.key, required this.names, required this.style});
+
+  @override
+  State<ArtistNames> createState() => _ArtistNamesState();
+}
+
+class _ArtistNamesState extends State<ArtistNames> {
+  String? _hover;
+
+  @override
+  Widget build(BuildContext context) {
+    final names = widget.names;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < names.length; i++) ...[
+          if (i > 0)
+            Text(' · ', style: widget.style.copyWith(color: widget.style.color?.withValues(alpha: .5))),
+          Flexible(
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              onEnter: (_) => setState(() => _hover = names[i]),
+              onExit: (_) => setState(() => _hover = _hover == names[i] ? null : _hover),
+              child: GestureDetector(
+                onTap: () => openArtist(context, names[i]),
+                child: Text(
+                  names[i],
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: _hover == names[i]
+                      ? widget.style.copyWith(color: Colors.white, decoration: TextDecoration.underline)
+                      : widget.style,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 // ── Now-playing bar ──────────────────────────────────────────────────────────
 class PlayerBar extends StatelessWidget {
   const PlayerBar({super.key});
@@ -1418,14 +1559,23 @@ class PlayerBar extends StatelessWidget {
                           if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
                         ],
                       ),
-                      Text(
-                          p.radioMode && p.radioStatus.isNotEmpty
-                              ? p.radioStatus
-                              : (t?.artist ?? 'Niets aan het spelen'),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              color: p.radioMode && p.radioStatus.isNotEmpty ? _accent2 : _muted, fontSize: 12.5)),
+                      if (p.radioMode && p.radioStatus.isNotEmpty)
+                        Text(p.radioStatus,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: _accent2, fontSize: 12.5))
+                      else if (t == null)
+                        const Text('Niets aan het spelen',
+                            style: TextStyle(color: _muted, fontSize: 12.5))
+                      else
+                        // Everyone on the track, each name tappable — a guest artist is exactly
+                        // who you want to look up while their verse is playing.
+                        ArtistLine(
+                          artist: t.artist,
+                          title: t.title,
+                          lookup: true,
+                          style: const TextStyle(color: _muted, fontSize: 12.5),
+                        ),
                     ],
                   ),
                 ),
@@ -1567,7 +1717,13 @@ class NowPlayingScreen extends StatelessWidget {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text(t?.artist ?? '', style: const TextStyle(color: _muted, fontSize: 15)),
+                    if (t != null)
+                      ArtistLine(
+                        artist: t.artist,
+                        title: t.title,
+                        lookup: true,
+                        style: const TextStyle(color: _muted, fontSize: 15),
+                      ),
                     if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
                   ],
                 ),

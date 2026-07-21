@@ -160,6 +160,46 @@ class CatalogService {
         .toList();
   }
 
+  /// Everyone credited on a track, main artist first.
+  ///
+  /// Needed because a rip's tags often name only the main artist: the file for Lady Gaga's
+  /// "Telephone" is tagged just "Lady Gaga" / "Telephone" with Beyoncé nowhere in it. Deezer's
+  /// search result doesn't carry contributors either, so this costs a second call for the track
+  /// itself. Cached per track — it never changes.
+  final Map<String, List<String>> _contributorCache = {};
+
+  Future<List<String>> trackContributors(String artist, String title) async {
+    final key = '${artist.toLowerCase()}|${title.toLowerCase()}';
+    final hit = _contributorCache[key];
+    if (hit != null) return hit;
+
+    String loose(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    final wantedTitle = loose(title);
+    final wantedArtist = loose(artist);
+
+    final j = await _get('$_base/search?q=${Uri.encodeComponent('$artist $title')}&limit=8');
+    final data = (j?['data'] as List?) ?? const [];
+    int? id;
+    for (final t in data) {
+      final tt = loose((t['title'] ?? '') as String);
+      final ta = loose((t['artist']?['name'] ?? '') as String);
+      // The catalogue's title may carry the credit our file lacks, so match on "starts with".
+      final titleOk = tt == wantedTitle || tt.startsWith(wantedTitle) || wantedTitle.startsWith(tt);
+      if (titleOk && (ta == wantedArtist || ta.startsWith(wantedArtist) || wantedArtist.startsWith(ta))) {
+        id = t['id'] as int?;
+        break;
+      }
+    }
+    if (id == null) return _contributorCache[key] = const [];
+
+    final t = await _get('$_base/track/$id');
+    final names = ((t?['contributors'] as List?) ?? const [])
+        .map((c) => ((c as Map)['name'] ?? '') as String)
+        .where((n) => n.trim().isNotEmpty)
+        .toList();
+    return _contributorCache[key] = names;
+  }
+
   Future<List<CatalogAlbum>> artistAlbums(int artistId) async {
     final j = await _get('$_base/artist/$artistId/albums?limit=100');
     final data = (j?['data'] as List?) ?? const [];
