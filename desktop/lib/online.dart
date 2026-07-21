@@ -446,18 +446,38 @@ class DownloadManager extends ChangeNotifier {
       size: f.size,
       isVbr: f.isVbr,
     );
-    final tier = switch (q.tier) {
-      QTier.hires => 3,
-      QTier.lossless => 2,
+    final stereo = switch (q.tier) {
+      QTier.hires => 4,
+      QTier.lossless => 3,
       QTier.lossy => 1,
       QTier.unknown => 0,
     };
-    var kbps = f.bitrate ?? 0;
-    if (kbps <= 0 && (f.durationSec ?? 0) > 0 && f.size > 0) {
-      kbps = (f.size * 8 / f.durationSec! / 1000).round();
-    }
-    return tier * 1000000 + kbps.clamp(0, 999999);
+    // A surround rip carries the most bits of all and would win every comparison on bitrate — but
+    // it gets downmixed on a stereo system and costs ten times the space (one measured track:
+    // 263 MB). It sits below every stereo lossless copy, and still above MP3: it IS lossless.
+    final tier = (stereo >= 3 && isMultichannel(f)) ? 2 : stereo;
+    return tier * 1000000 + effectiveKbps(f).clamp(0, 999999);
   }
+
+  /// Bitrate as actually delivered — the peer's own figure, else derived from size and duration.
+  static int effectiveKbps(SoulseekFile f) {
+    final stated = f.bitrate ?? 0;
+    if (stated > 0) return stated;
+    if ((f.durationSec ?? 0) > 0 && f.size > 0) return (f.size * 8 / f.durationSec! / 1000).round();
+    return 0;
+  }
+
+  static final _multichannelRe = RegExp(
+    r'(\b5[\._ ]1\b|\b7[\._ ]1\b|\b4[\._ ]0\b|surround|multi[\- ]?channel|quadraphonic|\bquad\b|atmos|\bdts\b|\bauro3d\b)',
+    caseSensitive: false,
+  );
+
+  /// A 5.1/surround rip rather than a stereo master.
+  ///
+  /// The release name is the reliable signal; the bitrate is the backstop for rips that don't say
+  /// so. 6500k is above what stereo 24/192 FLAC reaches (~5000k) and below 5.1 24/96 (~8000k).
+  static bool isMultichannel(SoulseekFile f) =>
+      _multichannelRe.hasMatch(f.filename) || effectiveKbps(f) > 6500;
 
   Future<void> enqueueSoulseek(SoulseekFile file) => enqueueSoulseekBest([file]);
 

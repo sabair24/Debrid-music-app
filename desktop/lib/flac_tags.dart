@@ -16,7 +16,24 @@ class FlacTags {
   final int trackNo;
   final int? year;
   final Duration? duration;
-  const FlacTags({this.title, this.artist, this.album, this.genre, this.trackNo = 0, this.year, this.duration});
+
+  /// 2 for a normal stereo track, 6 for a 5.1 surround rip. Worth knowing: a surround mix is
+  /// enormous and gets downmixed on a stereo system, so it must not beat a stereo master just
+  /// because it carries more bits.
+  final int channels;
+
+  const FlacTags({
+    this.title,
+    this.artist,
+    this.album,
+    this.genre,
+    this.trackNo = 0,
+    this.year,
+    this.duration,
+    this.channels = 0,
+  });
+
+  bool get multichannel => channels > 2;
 }
 
 /// Reads [f]'s FLAC tags, or null if it isn't FLAC / has no readable header.
@@ -28,6 +45,7 @@ FlacTags? readFlacTags(File f) {
 
     final fields = <String, String>{};
     Duration? duration;
+    var channels = 0;
     for (var block = 0; block < 64; block++) {
       final h = raf.readSync(4);
       if (h.length < 4) break;
@@ -43,6 +61,8 @@ FlacTags? readFlacTags(File f) {
         final sampleRate = (d[10] << 12) | (d[11] << 4) | (d[12] >> 4);
         final totalSamples =
             ((d[13] & 0x0F) << 32) | (d[14] << 24) | (d[15] << 16) | (d[16] << 8) | d[17];
+        // Byte 12 bits 3-1 hold (channels - 1), right after the 20-bit sample rate.
+        channels = ((d[12] >> 1) & 0x07) + 1;
         if (sampleRate > 0 && totalSamples > 0) {
           duration = Duration(milliseconds: (totalSamples * 1000 / sampleRate).round());
         }
@@ -67,6 +87,7 @@ FlacTags? readFlacTags(File f) {
       trackNo: _firstInt(v('tracknumber')), // "A3" → 3, "03/12" → 3, "" → 0
       year: _year(v('date') ?? v('year')),
       duration: duration,
+      channels: channels,
     );
   } catch (_) {
     return null;

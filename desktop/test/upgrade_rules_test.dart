@@ -53,4 +53,36 @@ void main() {
       expect(DownloadManager.clearlyBetter(f('a.flac', bitrate: 900), f('b.flac', bitrate: 900)), isFalse);
     });
   });
+
+  group('surround rips lose to stereo', () {
+    // Measured on a real download: Fleetwood Mac "Dreams" came back as a 6-channel 24/96 FLAC of
+    // 263 MB — highest bitrate of all candidates, but downmixed on a stereo system and ten times
+    // the size of the stereo master that was also on offer.
+    test('the release name gives it away', () {
+      expect(DownloadManager.isMultichannel(f('Rumours [5.1]\\02 - Dreams.flac')), isTrue);
+      expect(DownloadManager.isMultichannel(f('Dark Side (Surround Mix)\\01.flac')), isTrue);
+      expect(DownloadManager.isMultichannel(f('Album 7.1 Remix\\01.flac')), isTrue);
+    });
+
+    test('a plain stereo release is not flagged', () {
+      expect(DownloadManager.isMultichannel(f('Rumours\\02 - Dreams.flac', bitrate: 885)), isFalse);
+      // Stereo 24/192 is the highest a normal track reaches — it must stay under the threshold.
+      expect(DownloadManager.isMultichannel(f('HiRes\\01.flac', bitrate: 5000)), isFalse);
+    });
+
+    test('an unnamed rip is caught by its impossible bitrate', () {
+      expect(DownloadManager.isMultichannel(f('Album\\02 - Dreams.flac', bitrate: 8180)), isTrue);
+    });
+
+    test('stereo FLAC beats a 5.1 rip, and 5.1 still beats MP3', () {
+      final surround = f('Rumours [5.1]\\02 - Dreams.flac', bitrate: 8180);
+      final stereoCd = f('Rumours\\02 - Dreams.flac', bitrate: 885);
+      final mp3 = f('Rumours\\02 - Dreams.mp3', bitrate: 320);
+      expect(DownloadManager.clearlyBetter(stereoCd, surround), isTrue, reason: 'stereo wins');
+      expect(DownloadManager.clearlyBetter(surround, stereoCd), isFalse);
+      expect(DownloadManager.clearlyBetter(surround, mp3), isTrue, reason: '5.1 is still lossless');
+      // And it may still stand in rather than dropping to MP3.
+      expect(DownloadManager.isLossless(surround), isTrue);
+    });
+  });
 }

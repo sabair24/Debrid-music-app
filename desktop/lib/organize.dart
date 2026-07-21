@@ -281,6 +281,29 @@ int formatRank(String path) {
   return 1; // mp3 and friends
 }
 
+/// Which of two copies of the SAME track to keep. Format first, then stereo over surround, and
+/// only then size.
+///
+/// The stereo rule matters because a 5.1 rip is always the bigger file: on size alone it would
+/// evict a proper stereo master, both here and when tidying the downloads folder — the exact
+/// opposite of "best quality" on a stereo system.
+bool firstIsBetter(File a, File b) {
+  final ra = formatRank(a.path), rb = formatRank(b.path);
+  if (ra != rb) return ra > rb;
+  final ma = _isMultichannelFile(a), mb = _isMultichannelFile(b);
+  if (ma != mb) return mb; // the stereo one wins
+  return a.lengthSync() > b.lengthSync();
+}
+
+/// Surround by its own header, or by a release name that says so (covers non-FLAC too).
+bool _isMultichannelFile(File f) {
+  final tags = readFlacTags(f);
+  if (tags != null && tags.channels > 0) return tags.multichannel;
+  return RegExp(r'(\b5[\._ ]1\b|\b7[\._ ]1\b|surround|multi[\- ]?channel|quadraphonic|atmos)',
+          caseSensitive: false)
+      .hasMatch(f.path);
+}
+
 /// What happened to a file we tried to file away.
 enum Placement {
   moved, // filed in the tidy tree
@@ -309,15 +332,12 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, Tr
   try {
     await dest.parent.create(recursive: true);
 
-    /// Does the incoming file beat [rival]? Better format first, then the bigger file.
-    Future<bool> newWins(File rival) async =>
-        formatRank(src.path) > formatRank(rival.path) ||
-        (formatRank(src.path) == formatRank(rival.path) && await src.length() > await rival.length());
+    bool newWins(File rival) => firstIsBetter(src, rival);
 
     final losers = <File>[];
     if (await dest.exists()) {
       if (_sameRecording(src, dest)) {
-        if (!await newWins(dest)) {
+        if (!newWins(dest)) {
           await src.delete().catchError((_) => src);
           return PlaceOutcome(dest.path, Placement.duplicate);
         }
@@ -331,7 +351,7 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, Tr
       // another extension counts as the copy being replaced.
       final rival = _sameTrackOtherFormat(dest);
       if (rival != null && _sameRecording(src, rival)) {
-        if (!await newWins(rival)) {
+        if (!newWins(rival)) {
           await src.delete().catchError((_) => src);
           return PlaceOutcome(rival.path, Placement.duplicate);
         }
@@ -573,8 +593,7 @@ Future<TidyReport> tidyDownloads(String downloadsRoot) async {
       best[id] = f;
       continue;
     }
-    final fWins = formatRank(f.path) > formatRank(cur.path) ||
-        (formatRank(f.path) == formatRank(cur.path) && await f.length() > await cur.length());
+    final fWins = firstIsBetter(f, cur);
     if (fWins) {
       losers.add(cur);
       best[id] = f;

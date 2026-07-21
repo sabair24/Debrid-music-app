@@ -123,10 +123,9 @@ class LibraryStore extends ChangeNotifier {
         best[id] = t;
         continue;
       }
-      final better = formatRank(t.path) > formatRank(cur.path) ||
-          (formatRank(t.path) == formatRank(cur.path) &&
-              (t.duration?.inMilliseconds ?? 0) > (cur.duration?.inMilliseconds ?? 0));
-      if (better) best[id] = t;
+      // Same order as filing uses: format, then stereo over surround, then size — otherwise the
+      // album view would show the 5.1 rip while the folder keeps the stereo master.
+      if (firstIsBetter(File(t.path), File(cur.path))) best[id] = t;
     }
     return best.values.toList();
   }
