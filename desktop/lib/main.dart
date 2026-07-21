@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'catalog.dart';
+import 'credits.dart';
 import 'connectivity.dart';
 import 'enrichment.dart';
 import 'library.dart';
@@ -811,6 +812,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                   SliverToBoxAdapter(
                     child: AlbumInfoPanel(artist: album.artist, album: album.title),
                   ),
+                if (!album.isSingle)
+                  SliverToBoxAdapter(
+                    child: CreditsPanel(artist: album.artist, album: album.title),
+                  ),
                 SliverList(
                   delegate: SliverChildBuilderDelegate(
                     (_, i) => TrackRow(
@@ -1284,6 +1289,223 @@ class _ArtistsViewState extends State<ArtistsView> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Who made this record. Names are links wherever there is something behind them, which is the
+/// thread Roon pulls: from a record you like, to the producer, to everything else they touched.
+class CreditsPanel extends StatefulWidget {
+  final String artist, album;
+  const CreditsPanel({super.key, required this.artist, required this.album});
+
+  @override
+  State<CreditsPanel> createState() => _CreditsPanelState();
+}
+
+class _CreditsPanelState extends State<CreditsPanel> {
+  List<Credit> _credits = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(CreditsPanel old) {
+    super.didUpdateWidget(old);
+    if (old.artist != widget.artist || old.album != widget.album) {
+      setState(() => _credits = const []);
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    final artist = widget.artist, album = widget.album;
+    final c = await CreditsService(context.read<AppSettings>()).forAlbum(artist, album);
+    if (!mounted || artist != widget.artist || album != widget.album) return;
+    setState(() => _credits = c);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_credits.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 4, 24, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('CREDITS',
+              style: TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: .8)),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 10,
+            runSpacing: 8,
+            children: [
+              for (final c in _credits.take(14))
+                _CreditChip(credit: c),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CreditChip extends StatefulWidget {
+  final Credit credit;
+  const _CreditChip({required this.credit});
+
+  @override
+  State<_CreditChip> createState() => _CreditChipState();
+}
+
+class _CreditChipState extends State<_CreditChip> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: () => Navigator.of(context)
+            .push(MaterialPageRoute(builder: (_) => PersonPage(widget.credit.name, role: widget.credit.role))),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+          decoration: BoxDecoration(
+            color: _hover ? _panel2 : _panel,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: _hover ? Colors.white.withValues(alpha: .18) : _line),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(widget.credit.role,
+                  style: const TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 7),
+              Text(widget.credit.name,
+                  style: TextStyle(
+                      fontSize: 12.5, fontWeight: FontWeight.w600, color: _hover ? Colors.white : null)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// What one person made. Reached by tapping a credit; a name with nothing behind it says so
+/// plainly rather than showing an empty page.
+class PersonPage extends StatefulWidget {
+  final String name;
+  final String? role;
+  const PersonPage(this.name, {super.key, this.role});
+
+  @override
+  State<PersonPage> createState() => _PersonPageState();
+}
+
+class _PersonPageState extends State<PersonPage> {
+  List<CreditedWork> _works = const [];
+  bool _busy = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final w = await CreditsService(context.read<AppSettings>()).producedBy(widget.name);
+    if (!mounted) return;
+    setState(() {
+      _works = w;
+      _busy = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _bg,
+      body: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Stack(
+              children: [
+                ArtistHero(
+                  name: widget.name,
+                  subtitle: widget.role == null ? null : '${widget.role} · ${_works.length} producties',
+                  actions: [
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                          backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10)),
+                      onPressed: () => openArtist(context, widget.name),
+                      icon: const Icon(Icons.person_rounded, size: 18),
+                      label: const Text('Als artiest'),
+                    ),
+                  ],
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 8, 0, 0),
+                  child: IconButton(
+                    icon: const Icon(Icons.arrow_back_rounded),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (_busy)
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.all(40),
+                child: Center(child: CircularProgressIndicator(color: _accent)),
+              ),
+            )
+          else if (_works.isEmpty)
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(24, 24, 24, 0),
+                child: Text('Geen verdere producties gevonden voor deze naam.',
+                    style: TextStyle(color: _muted)),
+              ),
+            )
+          else ...[
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 18, 24, 10),
+                child: Text('Werkte mee aan  ${_works.length}',
+                    style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
+              ),
+            ),
+            SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (_, i) {
+                  final w = _works[i];
+                  return ListTile(
+                    title: Text(w.title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                    subtitle: w.year == null ? null : Text(w.year!, style: const TextStyle(color: _muted, fontSize: 12)),
+                    trailing: const Icon(Icons.search_rounded, size: 17, color: _muted),
+                    onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => Scaffold(
+                        backgroundColor: _bg,
+                        appBar: AppBar(backgroundColor: _bg, title: Text(w.title)),
+                        body: SingleChildScrollView(child: SourcesView(query: '${widget.name} ${w.title}')),
+                      ),
+                    )),
+                  );
+                },
+                childCount: _works.length,
+              ),
+            ),
+          ],
+          const SliverToBoxAdapter(child: SizedBox(height: 24)),
+        ],
+      ),
     );
   }
 }
@@ -4976,6 +5198,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
               child: SourcesView(query: '${widget.artistName} ${al.title}'),
             ),
           AlbumInfoPanel(artist: widget.artistName, album: al.title),
+          CreditsPanel(artist: widget.artistName, album: al.title),
           if (_busy)
             const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator(color: _accent)))
           else if (_tracks.isEmpty)
