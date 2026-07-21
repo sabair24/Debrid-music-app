@@ -595,9 +595,14 @@ class DownloadManager extends ChangeNotifier {
       }
     }
 
-    // Lossless first, always. An MP3 stays what it has always been here: an absolute last resort,
-    // never a shortcut — so a free MP3 does NOT beat waiting for a FLAC.
-    final lossless = ranked.where(isLossless).toList();
+    // Three pools, raced in this order. A race is won by whoever SENDS first, not by whoever is
+    // best, so quality has to be decided by which pool runs — not by sorting inside one. Racing
+    // surround alongside stereo did exactly what it sounds like: a free 5.1 rip beat every stereo
+    // peer, landed 103 MB, and the upgrade chase then fetched the 32 MB stereo copy anyway.
+    final stereo = ranked.where((f) => isLossless(f) && !isMultichannel(f)).toList();
+    final surround = ranked.where((f) => isLossless(f) && isMultichannel(f)).toList();
+    // An MP3 stays what it has always been here: an absolute last resort, never a shortcut — so a
+    // free MP3 does NOT beat waiting for a FLAC.
     final lossy = ranked.where((f) => !isLossless(f)).toList();
 
     /// Ask every candidate peer and let the FIRST ONE THAT ACTUALLY SENDS win.
@@ -613,7 +618,7 @@ class DownloadManager extends ChangeNotifier {
     /// and whoever comes up first takes it. All of them ride the ONE shared login — twenty peer
     /// sockets, zero extra logins.
     Future<(SlskDone, SoulseekFile)?> race(List<SoulseekFile> pool, String label) async {
-      final cap = identical(pool, lossless) ? _maxLosslessTries : _maxLossyTries;
+      final cap = identical(pool, lossy) ? _maxLossyTries : _maxLosslessTries;
       final order = sweepOrderFor(pool);
       final n = order.length < cap ? order.length : cap;
 
@@ -736,18 +741,27 @@ class DownloadManager extends ChangeNotifier {
       return ok;
     }
 
-    // ── 1. Race every lossless candidate; first peer to send wins ────────────
-    final first = await race(lossless, 'poging');
+    // ── 1. Stereo lossless: the thing you actually want ──────────────────────
+    final first = await race(stereo, 'poging');
     if (first != null) return finish(first.$1, first.$2);
 
     if (job.cancelled) return false;
 
-    // ── 2. Only now, lossy — an MP3 is a last resort, never a shortcut ───────
+    // ── 2. Surround — lossless, but it downmixes on a stereo system and costs ten times the space
+    if (surround.isNotEmpty) {
+      job.detail = 'alleen surround beschikbaar — 5.1 als tweede keus';
+      notifyListeners();
+      final second = await race(surround, '5.1-poging');
+      if (second != null) return finish(second.$1, second.$2);
+      if (job.cancelled) return false;
+    }
+
+    // ── 3. Only now, lossy — an MP3 is a last resort, never a shortcut ───────
     if (lossy.isNotEmpty) {
       job.detail = 'geen lossless beschikbaar — MP3 als laatste optie';
       notifyListeners();
-      final second = await race(lossy, 'MP3-poging');
-      if (second != null) return finish(second.$1, second.$2);
+      final third = await race(lossy, 'MP3-poging');
+      if (third != null) return finish(third.$1, third.$2);
     }
 
     job.status = 'failed';
