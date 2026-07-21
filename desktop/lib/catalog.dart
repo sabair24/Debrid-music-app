@@ -121,8 +121,38 @@ class CatalogService {
         .toList();
   }
 
+  /// Artists matching [q]. An EXACT name match outranks everything, and among equals the one with
+  /// the most listeners wins — searching "Michael Jackson" otherwise returns a namesake with a
+  /// single release ahead of the real one, and every page that follows is then about the wrong
+  /// person.
   Future<List<CatalogArtist>> searchArtists(String q) async {
     final j = await _get('$_base/search/artist?q=${Uri.encodeComponent(q)}&limit=25');
+    final data = (j?['data'] as List?) ?? const [];
+    String norm(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    final wanted = norm(q);
+    final scored = data
+        .where((a) => ((a['name'] ?? '') as String).isNotEmpty)
+        .map((a) => (
+              artist: CatalogArtist(
+                a['id'] as int,
+                (a['name'] ?? '') as String,
+                (a['picture_big'] ?? a['picture_medium']) as String?,
+                (a['nb_album'] ?? 0) as int,
+              ),
+              fans: (a['nb_fan'] as num?)?.toInt() ?? 0,
+            ))
+        .toList();
+    scored.sort((a, b) {
+      final ea = norm(a.artist.name) == wanted, eb = norm(b.artist.name) == wanted;
+      if (ea != eb) return ea ? -1 : 1;
+      return b.fans.compareTo(a.fans);
+    });
+    return scored.map((e) => e.artist).toList();
+  }
+
+  /// Artists this one sits next to — the starting point for "more like this".
+  Future<List<CatalogArtist>> relatedArtists(int artistId) async {
+    final j = await _get('$_base/artist/$artistId/related?limit=20');
     final data = (j?['data'] as List?) ?? const [];
     return data
         .map((a) => CatalogArtist(

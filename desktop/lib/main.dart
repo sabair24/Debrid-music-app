@@ -845,14 +845,21 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                 const SizedBox(height: 6),
                 Text(album.title, style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 6),
-                Text(
-                  [
-                    album.artist,
-                    if (album.year != null) '${album.year}',
-                    if (album.genre != null) album.genre!,
-                    '${album.tracks.length} nummers',
-                  ].join(' · '),
-                  style: const TextStyle(color: _muted),
+                // The artist is a link: from a record you're holding, the obvious next question is
+                // "what else did they make".
+                Row(
+                  children: [
+                    ArtistNames(names: [album.artist], style: const TextStyle(color: _muted)),
+                    Text(
+                      [
+                        '',
+                        if (album.year != null) '${album.year}',
+                        if (album.genre != null) album.genre!,
+                        '${album.tracks.length} nummers',
+                      ].join(' · '),
+                      style: const TextStyle(color: _muted),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 18),
                 Row(
@@ -1234,42 +1241,11 @@ class _ArtistsViewState extends State<ArtistsView> {
   @override
   Widget build(BuildContext context) {
     if (_selected != null) {
-      final name = _selected!;
-      final albums = _source.where((a) => a.artist == name).toList();
-      final trackCount = albums.fold<int>(0, (s, a) => s + a.tracks.length);
-      final img = widget.lib.artistImages[name];
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 0, 0),
-            child: TextButton.icon(
-              onPressed: () => setState(() => _selected = null),
-              icon: const Icon(Icons.arrow_back_rounded, size: 18),
-              label: const Text('Artiesten'),
-            ),
-          ),
-          ArtistHero(
-            name: name,
-            subtitle: '${albums.length} albums · $trackCount nummers',
-            fallbackImage: img,
-            actions: [
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                    backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10)),
-                onPressed: () => startRadio(context, name),
-                icon: const Icon(Icons.radio_rounded, size: 18),
-                label: const Text('Radio'),
-              ),
-            ],
-          ),
-          if (widget.lib.artistBios[name] != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
-              child: BioText(name, widget.lib.artistBios[name]!),
-            ),
-          Expanded(child: AlbumsGrid(albums: albums, title: 'Albums')),
-        ],
+      return ArtistDetailView(
+        name: _selected!,
+        libraryAlbums: _source.where((a) => a.artist == _selected!).toList(),
+        onBack: () => setState(() => _selected = null),
+        onArtist: (n) => setState(() => _selected = n),
       );
     }
     // Only artists that still have a matching album after the shell's search/filter.
@@ -1308,6 +1284,371 @@ class _ArtistsViewState extends State<ArtistsView> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Everything about one artist on a single page: what you own, their whole catalogue with the
+/// gaps visible, who they sound like, and who worked on the records.
+///
+/// The split is the point — "in mijn bibliotheek" answers "what can I play", "discografie"
+/// answers "what else is there", and a release you already own is marked as such so the gap in a
+/// collection is obvious at a glance.
+class ArtistDetailView extends StatefulWidget {
+  final String name;
+  final List<Album> libraryAlbums;
+  final VoidCallback onBack;
+  final void Function(String name)? onArtist;
+  const ArtistDetailView({
+    super.key,
+    required this.name,
+    required this.libraryAlbums,
+    required this.onBack,
+    this.onArtist,
+  });
+
+  @override
+  State<ArtistDetailView> createState() => _ArtistDetailViewState();
+}
+
+class _ArtistDetailViewState extends State<ArtistDetailView> {
+  final _catalog = CatalogService();
+  List<CatalogAlbum> _discography = [];
+  List<CatalogArtist> _related = [];
+  bool _busy = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(ArtistDetailView old) {
+    super.didUpdateWidget(old);
+    if (old.name != widget.name) {
+      setState(() {
+        _discography = [];
+        _related = [];
+        _busy = true;
+      });
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    final name = widget.name;
+    try {
+      final hits = await _catalog.searchArtists(name);
+      if (hits.isEmpty) {
+        if (mounted && name == widget.name) setState(() => _busy = false);
+        return;
+      }
+      final id = hits.first.id;
+      final albums = await _catalog.artistAlbums(id);
+      final related = await _catalog.relatedArtists(id);
+      if (!mounted || name != widget.name) return;
+      setState(() {
+        _discography = albums;
+        _related = related;
+        _busy = false;
+      });
+    } catch (_) {
+      if (mounted && name == widget.name) setState(() => _busy = false);
+    }
+  }
+
+  /// The library album matching a catalogue release, if you own it.
+  Album? _owned(CatalogAlbum a) {
+    final key = normKey(a.title);
+    for (final l in widget.libraryAlbums) {
+      if (normKey(l.title) == key) return l;
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    final trackCount = widget.libraryAlbums.fold<int>(0, (s, a) => s + a.tracks.length);
+    final bio = lib.artistBios[widget.name];
+
+    // Split the way a discography is actually read: the records first, the odds and ends after.
+    final main = _discography.where((a) => a.recordType == 'album').toList();
+    final rest = _discography.where((a) => a.recordType != 'album').toList();
+
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Stack(
+            children: [
+              ArtistHero(
+                name: widget.name,
+                subtitle: '${widget.libraryAlbums.length} albums · $trackCount nummers in je bibliotheek',
+                fallbackImage: lib.artistImages[widget.name],
+                actions: [
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                        backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10)),
+                    onPressed: () => startRadio(context, widget.name),
+                    icon: const Icon(Icons.radio_rounded, size: 18),
+                    label: const Text('Radio'),
+                  ),
+                ],
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 0, 0),
+                child: TextButton.icon(
+                  onPressed: widget.onBack,
+                  icon: const Icon(Icons.arrow_back_rounded, size: 18),
+                  label: const Text('Artiesten'),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (bio != null)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 4, 24, 14),
+              child: BioText(widget.name, bio),
+            ),
+          ),
+        _header('In mijn bibliotheek', '${widget.libraryAlbums.length}'),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+          sliver: SliverGrid(
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 190, mainAxisSpacing: 20, crossAxisSpacing: 20, childAspectRatio: .78),
+            delegate: SliverChildBuilderDelegate(
+              (_, i) => AlbumCard(album: widget.libraryAlbums[i]),
+              childCount: widget.libraryAlbums.length,
+            ),
+          ),
+        ),
+        if (_busy)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.all(28),
+              child: Center(child: CircularProgressIndicator(color: _accent, strokeWidth: 2.4)),
+            ),
+          ),
+        if (main.isNotEmpty) ...[
+          _header('Discografie', '${main.length} albums'),
+          _discoGrid(main),
+        ],
+        if (rest.isNotEmpty) ...[
+          _header('Singles & EP’s', '${rest.length}'),
+          _discoGrid(rest),
+        ],
+        if (_related.isNotEmpty) ...[
+          _header('Klinkt als', '${_related.length}'),
+          SliverToBoxAdapter(
+            child: SizedBox(
+              height: 176,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                itemCount: _related.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 14),
+                itemBuilder: (_, i) {
+                  final r = _related[i];
+                  return _RelatedArtistCard(
+                    artist: r,
+                    inLibrary: lib.hasArtist(r.name),
+                    onTap: () {
+                      // Someone you already own opens your own page; anyone else opens theirs.
+                      if (lib.hasArtist(r.name) && widget.onArtist != null) {
+                        widget.onArtist!(lib.displayArtist(r.name));
+                      } else {
+                        Navigator.of(context).push(MaterialPageRoute(builder: (_) => ArtistBrowsePage(r)));
+                      }
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
+        const SliverToBoxAdapter(child: SizedBox(height: 28)),
+      ],
+    );
+  }
+
+  Widget _header(String title, String badge) => SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 10),
+          child: Row(
+            children: [
+              Text(title, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
+              const SizedBox(width: 10),
+              Text(badge, style: const TextStyle(color: _muted, fontSize: 12.5)),
+            ],
+          ),
+        ),
+      );
+
+  Widget _discoGrid(List<CatalogAlbum> items) => SliverPadding(
+        padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+        sliver: SliverGrid(
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 190, mainAxisSpacing: 20, crossAxisSpacing: 20, childAspectRatio: .78),
+          delegate: SliverChildBuilderDelegate(
+            (_, i) {
+              final a = items[i];
+              final owned = _owned(a);
+              return _DiscoCard(
+                album: a,
+                artist: widget.name,
+                owned: owned,
+              );
+            },
+            childCount: items.length,
+          ),
+        ),
+      );
+}
+
+/// A release from the catalogue, marked with whether it's already on your shelf.
+class _DiscoCard extends StatefulWidget {
+  final CatalogAlbum album;
+  final String artist;
+  final Album? owned;
+  const _DiscoCard({required this.album, required this.artist, this.owned});
+
+  @override
+  State<_DiscoCard> createState() => _DiscoCardState();
+}
+
+class _DiscoCardState extends State<_DiscoCard> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final a = widget.album;
+    final have = widget.owned != null;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: () => Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => have
+              ? AlbumDetailPage(album: widget.owned!)
+              : AlbumBrowsePage(widget.artist, a),
+        )),
+        child: AnimatedScale(
+          scale: _hover ? 1.06 : 1,
+          duration: const Duration(milliseconds: 170),
+          curve: Curves.easeOut,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 170),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: _hover ? _panel2 : _panel,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: have ? _accent2.withValues(alpha: .45) : _line),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (_, c) => Stack(
+                      children: [
+                        _netCover(a.cover, size: c.maxWidth),
+                        if (have)
+                          Positioned(
+                            right: 6,
+                            top: 6,
+                            child: Container(
+                              padding: const EdgeInsets.all(3),
+                              decoration: const BoxDecoration(color: _accent2, shape: BoxShape.circle),
+                              child: const Icon(Icons.check_rounded, size: 13, color: Colors.black),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 9),
+                Text(a.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+                Text(
+                  have ? 'in je bibliotheek' : (a.year ?? ''),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: have ? _accent2 : _muted, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A "sounds like" artist, flagged when you already own something of theirs.
+class _RelatedArtistCard extends StatefulWidget {
+  final CatalogArtist artist;
+  final bool inLibrary;
+  final VoidCallback onTap;
+  const _RelatedArtistCard({required this.artist, required this.inLibrary, required this.onTap});
+
+  @override
+  State<_RelatedArtistCard> createState() => _RelatedArtistCardState();
+}
+
+class _RelatedArtistCardState extends State<_RelatedArtistCard> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 118,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: AnimatedScale(
+            scale: _hover ? 1.06 : 1,
+            duration: const Duration(milliseconds: 170),
+            curve: Curves.easeOut,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Stack(
+                  children: [
+                    _netCover(widget.artist.picture, size: 118, circle: true),
+                    if (widget.inLibrary)
+                      Positioned(
+                        right: 2,
+                        bottom: 2,
+                        child: Container(
+                          padding: const EdgeInsets.all(3),
+                          decoration: const BoxDecoration(color: _accent2, shape: BoxShape.circle),
+                          child: const Icon(Icons.check_rounded, size: 12, color: Colors.black),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(widget.artist.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 12.5, color: _hover ? Colors.white : null)),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -4226,12 +4567,18 @@ class _ArtistHeroState extends State<ArtistHero> {
     final logo = _art?.logoBytes;
 
     return SizedBox(
-      height: 230,
+      // Tall enough to actually SHOW the artist: at 230 a wide fanart was cropped to a band across
+      // the middle — usually a torso, rarely a face.
+      height: 380,
       child: Stack(
         fit: StackFit.expand,
         children: [
           if (backdrop != null)
-            Image.memory(backdrop, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox())
+            // Anchored high: band photos put faces in the upper half, and a centre crop cut them off.
+            Image.memory(backdrop,
+                fit: BoxFit.cover,
+                alignment: const Alignment(0, -.45),
+                errorBuilder: (_, __, ___) => const SizedBox())
           else if (widget.fallbackImage != null)
             ImageFiltered(
               imageFilter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
@@ -4244,11 +4591,12 @@ class _ArtistHeroState extends State<ArtistHero> {
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  Colors.black.withValues(alpha: .35),
-                  Colors.black.withValues(alpha: .78),
+                  Colors.black.withValues(alpha: .25),
+                  Colors.black.withValues(alpha: .30),
+                  Colors.black.withValues(alpha: .80),
                   const Color(0xFF0B0D14),
                 ],
-                stops: const [0, .6, 1],
+                stops: const [0, .35, .78, 1],
               ),
             ),
           ),
@@ -4656,6 +5004,16 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                     width: 26,
                     child: Text(t.position > 0 ? '${t.position}' : '${i + 1}',
                         style: const TextStyle(color: _muted, fontSize: 13))),
+                // Which tracks of this record you already have — the gap in the album, at a glance.
+                Builder(builder: (context) {
+                  final have = context.watch<LibraryStore>().ownedTrack(widget.artistName, t.title) != null;
+                  return SizedBox(
+                    width: 22,
+                    child: have
+                        ? const Icon(Icons.check_circle_rounded, size: 14, color: _accent2)
+                        : const SizedBox.shrink(),
+                  );
+                }),
                 Expanded(
                     child: Text(t.title,
                         maxLines: 1, overflow: TextOverflow.ellipsis,
