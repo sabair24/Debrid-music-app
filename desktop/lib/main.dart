@@ -1431,13 +1431,16 @@ class _PersonPageState extends State<PersonPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _bg,
-      body: CustomScrollView(
+      body: ArtistBackdrop(
+        name: widget.name,
+        child: CustomScrollView(
         slivers: [
           SliverToBoxAdapter(
             child: Stack(
               children: [
                 ArtistHero(
                   name: widget.name,
+                  ownBackdrop: false,
                   subtitle: widget.role == null ? null : '${widget.role} · ${_works.length} producties',
                   actions: [
                     FilledButton.icon(
@@ -1505,6 +1508,7 @@ class _PersonPageState extends State<PersonPage> {
           ],
           const SliverToBoxAdapter(child: SizedBox(height: 24)),
         ],
+        ),
       ),
     );
   }
@@ -1599,13 +1603,17 @@ class _ArtistDetailViewState extends State<ArtistDetailView> {
     final main = _discography.where((a) => a.recordType == 'album').toList();
     final rest = _discography.where((a) => a.recordType != 'album').toList();
 
-    return CustomScrollView(
+    return ArtistBackdrop(
+      name: widget.name,
+      fallbackImage: lib.artistImages[widget.name],
+      child: CustomScrollView(
       slivers: [
         SliverToBoxAdapter(
           child: Stack(
             children: [
               ArtistHero(
                 name: widget.name,
+                ownBackdrop: false,
                 subtitle: '${widget.libraryAlbums.length} albums · $trackCount nummers in je bibliotheek',
                 fallbackImage: lib.artistImages[widget.name],
                 actions: [
@@ -1694,6 +1702,7 @@ class _ArtistDetailViewState extends State<ArtistDetailView> {
         ],
         const SliverToBoxAdapter(child: SizedBox(height: 28)),
       ],
+      ),
     );
   }
 
@@ -4765,17 +4774,104 @@ class _HeroCarouselState extends State<HeroCarousel> {
 /// those fonts aren't distributed — but the logo itself is an image of exactly that lettering, so
 /// showing it is the real thing instead of an imitation. Falls back to plain text for the acts
 /// that have no logo (about one in four).
+/// The artist's own photo, blurred, standing behind a WHOLE page rather than behind a banner.
+///
+/// It does not scroll: the records and tracks move over a wash that stays put, so the page reads
+/// as one thing about one artist instead of a strip of atmosphere with a list bolted under it.
+/// The scrim is light at the top, where the portrait and wordmark are, and settles to near-solid
+/// below that — album titles and track rows have to stay readable over it.
+class ArtistBackdrop extends StatefulWidget {
+  final String name;
+  final Uint8List? fallbackImage;
+  final Widget child;
+  const ArtistBackdrop({super.key, required this.name, this.fallbackImage, required this.child});
+
+  @override
+  State<ArtistBackdrop> createState() => _ArtistBackdropState();
+}
+
+class _ArtistBackdropState extends State<ArtistBackdrop> {
+  ArtistArt? _art;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(ArtistBackdrop old) {
+    super.didUpdateWidget(old);
+    if (old.name != widget.name) {
+      setState(() => _art = null);
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    final name = widget.name;
+    final art = await CoverEnricher(context.read<AppSettings>()).artistArt(name);
+    if (!mounted || name != widget.name) return;
+    setState(() => _art = art);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final img = _art?.backdropBytes ?? _art?.thumbBytes ?? widget.fallbackImage;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (img != null)
+          ClipRect(
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 60, sigmaY: 60),
+              // Overscanned, or the blur samples past the image and the edges fade to nothing.
+              child: Transform.scale(
+                scale: 1.25,
+                child: Image.memory(img,
+                    fit: BoxFit.cover, alignment: Alignment.topCenter, errorBuilder: (_, __, ___) => const SizedBox()),
+              ),
+            ),
+          ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              // The hero fills roughly the top third, so the scrim stays light that far down and
+              // only closes in below it, where the records and tracks have to stay readable.
+              colors: [
+                Colors.black.withValues(alpha: .26),
+                Colors.black.withValues(alpha: .40),
+                const Color(0xFF0B0D14).withValues(alpha: .86),
+                const Color(0xFF0B0D14).withValues(alpha: .92),
+              ],
+              stops: const [0, .30, .58, 1],
+            ),
+          ),
+        ),
+        widget.child,
+      ],
+    );
+  }
+}
+
 class ArtistHero extends StatefulWidget {
   final String name;
   final String? subtitle;
   final Uint8List? fallbackImage;
   final List<Widget> actions;
+
+  /// False when an [ArtistBackdrop] is already washing the whole page — the hero then contributes
+  /// only the portrait and the wordmark, and doesn't paint a second, differently-cropped copy.
+  final bool ownBackdrop;
   const ArtistHero({
     super.key,
     required this.name,
     this.subtitle,
     this.fallbackImage,
     this.actions = const [],
+    this.ownBackdrop = true,
   });
 
   @override
@@ -4828,7 +4924,7 @@ class _ArtistHeroState extends State<ArtistHero> {
           // was a gamble: it framed Michael Jackson but gave Stromae a band of forehead, because his
           // photo is a close-up that no crop can survive. So the backdrop is atmosphere drawn from
           // the artist's own colours, and the portrait beside it is what you actually recognise.
-          if (backdrop != null)
+          if (backdrop != null && widget.ownBackdrop)
             ImageFiltered(
               imageFilter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
               // Overscanned: a blur samples past the edges, and at 1.0 the sides faded out.
@@ -4840,22 +4936,24 @@ class _ArtistHeroState extends State<ArtistHero> {
                     errorBuilder: (_, __, ___) => const SizedBox()),
               ),
             ),
-          // Dark enough at the bottom that the wordmark and buttons always read.
-          DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.black.withValues(alpha: .30),
-                  Colors.black.withValues(alpha: .38),
-                  Colors.black.withValues(alpha: .82),
-                  const Color(0xFF0B0D14),
-                ],
-                stops: const [0, .40, .82, 1],
+          // Dark enough at the bottom that the wordmark and buttons always read. Skipped when the
+          // page already carries the wash — a second gradient on top of it just muddies the top.
+          if (widget.ownBackdrop)
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: .30),
+                    Colors.black.withValues(alpha: .38),
+                    Colors.black.withValues(alpha: .82),
+                    const Color(0xFF0B0D14),
+                  ],
+                  stops: const [0, .40, .82, 1],
+                ),
               ),
             ),
-          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(28, 0, 28, 22),
             child: Row(
@@ -5054,13 +5152,16 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _bg,
-      body: CustomScrollView(
+      body: ArtistBackdrop(
+        name: widget.artist.name,
+        child: CustomScrollView(
         slivers: [
           SliverToBoxAdapter(
             child: Stack(
               children: [
                 ArtistHero(
                   name: widget.artist.name,
+                  ownBackdrop: false,
                   subtitle: _busy ? 'Albums laden…' : '${_albums.length} albums',
                 ),
                 Padding(
@@ -5093,6 +5194,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
               ),
             ),
         ],
+        ),
       ),
     );
   }
