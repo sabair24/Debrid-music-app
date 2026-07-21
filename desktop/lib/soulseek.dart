@@ -507,11 +507,16 @@ class SoulseekClient {
   // Single-file download now lives in [SlskSession.download] — it reuses ONE login per batch
   // instead of logging in per call (which burst-tripped Soulseek's login block). [_streamFile]
   // (the actual byte pump) stays here and is shared by the session.
-  Future<bool> _streamFile(String ip, int port, int ctpToken, int total, File destFile, void Function(int, int) onProgress) async {
+  Future<bool> _streamFile(String ip, int port, int ctpToken, int total, File destFile, void Function(int, int) onProgress,
+      {SlskCancel? cancel}) async {
     Socket? f;
     try {
       f = await Socket.connect(ip, port, timeout: const Duration(seconds: 8));
       final sock = f;
+      // This socket is opened deep inside the firewalled path and _transfer's own teardown never
+      // sees it, so cancelling used to stop us WAITING without stopping the peer SENDING: a loser
+      // in a race quietly downloaded the whole file into staging and left it there.
+      cancel?.whenCancelled.then((_) => sock.destroy());
       f.add(_initMessage(0, (_W()..u32(ctpToken)).bytes())); // PierceFirewall
       return await _pump(f, f.add, () => sock.destroy(), total, destFile, onProgress);
     } catch (_) {
@@ -567,7 +572,11 @@ class SoulseekClient {
         sink.add(data);
         received += data.length;
         if (total > 0 && received >= total) break;
-        if (received - lastEmit >= 1000000) {
+        // The FIRST bytes are reported immediately, then once per megabyte. That first report is
+        // what settles a race: it is the only evidence that this peer is actually sending, and
+        // waiting a megabyte for it meant every peer in the race downloaded a megabyte before one
+        // of them was picked.
+        if (lastEmit == 0 || received - lastEmit >= 1000000) {
           lastEmit = received;
           onProgress(received, total);
         }
@@ -842,13 +851,21 @@ class SlskSession {
     // every other download that happens to rank the same peer first.
     final prev = _peerLocks[file.username];
     if (prev != null && !waitInQueue) return SlskQueued(0);
+    if (prev != null) {
+      // Bounded and cancellable. Waiting on the holder with neither was a deadlock: on an album,
+      // every track races the same peers, so track 2 could sit here for the 30 minutes track 1
+      // spends in that peer's queue — deaf to the stop button, and blocking its whole race behind
+      // one peer. Giving up here just means "busy", which is what the caller already handles.
+      final got = await Future.any([
+        prev.then((_) => true).catchError((_) => true),
+        Future<bool>.delayed(const Duration(seconds: 15), () => false),
+        if (cancel != null) cancel.whenCancelled.then((_) => false),
+      ]);
+      if (!got) return cancel != null && cancel.isCancelled ? SlskCancelled() : SlskQueued(0);
+    }
+    // Claimed only once the wait is over, so a giving-up caller never leaves a lock behind.
     final mine = Completer<void>();
     _peerLocks[file.username] = mine.future;
-    if (prev != null) {
-      try {
-        await prev;
-      } catch (_) {}
-    }
     try {
       return await _transfer(file, destFile, onProgress,
           onStatus: onStatus, waitInQueue: waitInQueue, maxWait: maxWait, cancel: cancel);
@@ -948,7 +965,7 @@ class SlskSession {
       _fWaiters[file.username] = (fip, fport, ftok) async {
         if (fStarted || delivered.isCompleted) return;
         fStarted = true;
-        final ok = await client._streamFile(fip, fport, ftok, fileSize.v, destFile, onProgress);
+        final ok = await client._streamFile(fip, fport, ftok, fileSize.v, destFile, onProgress, cancel: cancel);
         if (!delivered.isCompleted) {
           delivered.complete(ok ? SlskDone(destFile.path) : SlskFail('Overdracht afgebroken'));
         }

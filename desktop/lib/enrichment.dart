@@ -151,6 +151,11 @@ class CoverEnricher {
     return b.length > 100 ? b : null;
   }
 
+  /// Deezer builds a picture URL from the MD5 of the image, so an artist with no photo gets the
+  /// MD5 of nothing — and serves a grey silhouette rather than a 404. Taking it at face value put
+  /// that silhouette in the hero AND blurred it across the whole banner; no picture looks better.
+  static const _noPhoto = 'd41d8cd98f00b204e9800998ecf8427e';
+
   /// Fetch + cache an artist photo from Deezer (keyless).
   Future<Uint8List?> fetchArtistImage(String name) async {
     if (_generic.contains(name.trim().toLowerCase())) return null;
@@ -162,7 +167,7 @@ class CoverEnricher {
       final data = (jsonDecode(r.body)['data'] as List?) ?? const [];
       if (data.isEmpty) return null;
       final url = (data.first['picture_xl'] ?? data.first['picture_big']) as String?;
-      if (url == null || url.isEmpty) return null;
+      if (url == null || url.isEmpty || url.contains(_noPhoto)) return null;
       final b = await _download(url);
       if (b != null) {
         await artistDir.create(recursive: true);

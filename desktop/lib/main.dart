@@ -4817,7 +4817,10 @@ class _ArtistHeroState extends State<ArtistHero> {
       // Room for a 270px portrait with the wordmark and buttons beside it. The backdrop is very
       // wide, so every extra pixel of height is another band of it that isn't cropped away.
       height: 400,
-      child: Stack(
+      // A blur paints outside its child's bounds, and the overscan pushes it further still — without
+      // this the wash ran on down the page and the biography underneath was hard to read.
+      child: ClipRect(
+        child: Stack(
         fit: StackFit.expand,
         children: [
           // Blurred on purpose. Every artist image any database has is 16:9 — fanart, widethumb,
@@ -4909,6 +4912,7 @@ class _ArtistHeroState extends State<ArtistHero> {
             ),
           ),
         ],
+        ),
       ),
     );
   }

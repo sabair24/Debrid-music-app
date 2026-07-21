@@ -373,9 +373,11 @@ class DownloadManager extends ChangeNotifier {
   static const _maxLosslessTries = 20;
   static const _maxLossyTries = 8;
 
-  /// How many peers to ask at once while hunting for one that can start now. Peer connections,
-  /// not logins — the shared session is untouched, so this cannot repeat the login problem.
-  static const _probeWidth = 4;
+  /// How fast the race opens new peer connections. Not a cap on how many run at once: a peer that
+  /// answers "you're in my queue" frees its slot immediately and keeps waiting in the background,
+  /// so within half a minute the whole shortlist is engaged. Peer connections, not logins — the
+  /// shared session is untouched, so this cannot repeat the login problem.
+  static const _probeWidth = 6;
 
   /// Total time spent chasing a better copy after a playable one already landed.
   static const _upgradeBudget = Duration(minutes: 10);
@@ -581,13 +583,11 @@ class DownloadManager extends ChangeNotifier {
       return true;
     }
 
-    Future<SlskResult> attempt(SoulseekFile f, {required bool wait, SlskCancel? cancel}) async {
+    Future<SlskResult> attempt(SoulseekFile f,
+        {required bool wait, SlskCancel? cancel, void Function()? onQueued, bool Function()? claim}) async {
       try {
-        return await _rawTransfer(session, f, job, () {
-          // Only reached when waiting: hand our parallel slot to the next download so one busy
-          // peer can't stall the batch, while we keep our place in this uploader's queue.
-          releaseSlot();
-        }, waitInQueue: wait, cancel: cancel);
+        return await _rawTransfer(session, f, job, () => onQueued?.call(),
+            waitInQueue: wait, cancel: cancel, claim: claim);
       } catch (_) {
         return SlskFail('Downloadfout'); // unexpected throw → a failed attempt, keep going
       }
@@ -598,98 +598,128 @@ class DownloadManager extends ChangeNotifier {
     final lossless = ranked.where(isLossless).toList();
     final lossy = ranked.where((f) => !isLossless(f)).toList();
 
-    /// Sweep for a peer that is FREE RIGHT NOW: anything that queues us is dropped immediately
-    /// and remembered, because a free peer beats a good place in a busy peer's line.
-    Future<({SlskDone? got, SoulseekFile? from, List<SoulseekFile> busy})> sweep(
-        List<SoulseekFile> pool, String label) async {
-      final busy = <SoulseekFile>[];
+    /// Ask every candidate peer and let the FIRST ONE THAT ACTUALLY SENDS win.
+    ///
+    /// This is what clicking twenty sources by hand in the native client does. The earlier version
+    /// only asked [_probeWidth] at a time and, worse, threw away any peer that answered "you're in
+    /// my queue" — those went on a list that was walked one at a time, minutes later. So a peer
+    /// that would have come up in ten seconds was dropped, the counter marched to 20/20, and it
+    /// looked as though only the last peer ever counted.
+    ///
+    /// Now a queue answer costs a peer nothing: it keeps waiting in the background while the
+    /// window moves on to the next one. Within half a minute every candidate is engaged at once
+    /// and whoever comes up first takes it. All of them ride the ONE shared login — twenty peer
+    /// sockets, zero extra logins.
+    Future<(SlskDone, SoulseekFile)?> race(List<SoulseekFile> pool, String label) async {
       final cap = identical(pool, lossless) ? _maxLosslessTries : _maxLossyTries;
       final order = sweepOrderFor(pool);
       final n = order.length < cap ? order.length : cap;
 
-      // Keep [_probeWidth] peers in flight CONTINUOUSLY: the moment one drops out, the next
-      // candidate takes its place. Fixed waves were the earlier version's flaw — a wave of three
-      // duds cost the full ~25s of lookup, connect and firewall callback before the next three
-      // were even asked, so seven rounds crawled through the list and it looked as though only
-      // the last peer ever mattered. These are peer connections over the ONE shared login, so
-      // running several costs no extra logins.
       SlskDone? winner;
       SoulseekFile? winnerFile;
+      SoulseekFile? leader; // the peer currently sending; owns the progress line
       final decided = Completer<void>();
-      final active = <String>{};
-      var cursor = 0;
+      final runners = <Future<void>>[];
+      var asked = 0, queued = 0, cursor = 0;
 
-      Future<void> worker() async {
-        while (winner == null && !job.cancelled) {
-          final i = cursor++;
-          if (i >= n) return;
-          final f = order[i];
-          final c = SlskCancel();
-          job.live.add(c);
-          active.add(f.username);
-          job.status = 'downloading';
-          job.progress = 0;
-          job.queuePlace = 0;
-          job.detail = '$label ${i + 1}/$n · ${active.join(', ')}';
-          notifyListeners();
+      void paint() {
+        // Never after a stop: cancelJob has already written the final word, and overwriting it
+        // left the job looking busy forever.
+        if (leader != null || winner != null || job.cancelled) return; // the sending peer owns the line
+        job.status = 'waiting';
+        job.progress = 0;
+        job.queuePlace = 0;
+        job.detail = '$label · $asked van $n gevraagd, $queued in de wachtrij';
+        notifyListeners();
+      }
 
-          final res = await attempt(f, wait: false, cancel: c);
-          job.live.remove(c);
-          active.remove(f.username);
-
-          if (res is SlskDone) {
-            if (winner == null) {
-              winner = res;
-              winnerFile = f;
-              // Everyone still dialling is now redundant — drop them rather than let them finish
-              // into staging. Anything BETTER than this stays on the list the upgrade chase runs
-              // through afterwards, so a higher-quality copy is parked, not thrown away.
-              for (final live in [...job.live]) {
-                live.cancel();
-              }
-              if (!decided.isCompleted) decided.complete();
-            } else {
-              // Two peers finished in the same instant. The loser's file is complete but unwanted:
-              // bin it, or it sits in staging forever — the library scan skips that folder, so
-              // nothing would ever notice.
-              await _discardStaged(res.path);
+      Future<void> run(SoulseekFile f, Completer<void> moveOn) async {
+        final c = SlskCancel();
+        job.live.add(c);
+        asked++;
+        paint();
+        // Counted once. A queued peer re-reports its position every 30 seconds, so counting each
+        // report had the line climbing to "137 in de wachtrij" out of twenty peers.
+        var inLine = false;
+        final res = await attempt(
+          f,
+          wait: true,
+          cancel: c,
+          // Queued is no longer a dead end — this peer stays in line while the window moves on.
+          onQueued: () {
+            if (!inLine) {
+              inLine = true;
+              queued++;
             }
-            return;
+            if (!moveOn.isCompleted) moveOn.complete();
+            paint();
+          },
+          claim: () {
+            if (leader == null) {
+              leader = f;
+              return true;
+            }
+            c.cancel(); // someone else is already sending — don't burn bandwidth alongside them
+            return false;
+          },
+        );
+        job.live.remove(c);
+        if (inLine) queued--; // this peer gave up its place; the line really is shorter
+        if (!moveOn.isCompleted) moveOn.complete();
+        if (res is SlskDone) {
+          if (winner == null) {
+            winner = res;
+            winnerFile = f;
+            // Now everything else is redundant. Anything BETTER than this copy is still on the
+            // list the upgrade chase walks afterwards, so quality is parked, not thrown away.
+            for (final live in [...job.live]) {
+              live.cancel();
+            }
+            if (!decided.isCompleted) decided.complete();
+          } else {
+            // Two finished in the same instant. The loser's file is complete but unwanted: bin it,
+            // or it sits in staging forever — the library scan skips that folder.
+            await _discardStaged(res.path);
           }
-          if (res is SlskCancelled) return;
-          if (res is SlskQueued) busy.add(f);
+          return;
+        }
+        // The peer that was sending died on us. Release the line so another runner can take over
+        // rather than leaving the job frozen on a name that stopped sending.
+        if (identical(leader, f)) {
+          leader = null;
+          paint();
         }
       }
 
-      final workers = List.generate(_probeWidth, (_) => worker());
-      // Return the instant someone delivers; the losers tear down behind us.
-      await Future.any([Future.wait(workers), decided.future]);
-      if (winner != null) {
-        // Return the winning FILE, not just the result: which copy we settled for is what decides
-        // whether a better one is still worth chasing.
-        return (got: winner, from: winnerFile, busy: busy);
+      /// Starts runners; each slot frees the moment its peer is merely queued, so the whole
+      /// shortlist ends up engaged instead of four at a time.
+      Future<void> feeder() async {
+        while (winner == null && !job.cancelled) {
+          final i = cursor++;
+          if (i >= n) return;
+          final moveOn = Completer<void>();
+          final r = run(order[i], moveOn);
+          runners.add(r);
+          await Future.any([r, moveOn.future]);
+        }
       }
-      return (got: null, from: null, busy: busy);
-    }
 
-    /// Wait in each peer's queue, best quality first.
-    Future<(SlskDone, SoulseekFile)?> waitFor(List<SoulseekFile> pool) async {
-      for (final f in pool) {
-        if (job.cancelled) return null;
-        job.status = 'waiting';
-        job.progress = 0;
-        job.detail = 'wachten op ${f.username}';
-        notifyListeners();
-        // Waiting is the state a user most wants to abandon — a 30-minute queue with the stop
-        // button right there — so this needs its own handle just as much as the sweep does.
-        final c = SlskCancel();
-        job.live.add(c);
-        final res = await attempt(f, wait: true, cancel: c);
-        job.live.remove(c);
-        if (res is SlskDone) return (res, f);
-        if (res is SlskCancelled) return null;
-        job.detail = res is SlskQueued ? '${f.username} bleef bezet' : (res as SlskFail).reason;
-        notifyListeners();
+      paint();
+      final feeders = List.generate(_probeWidth, (_) => feeder());
+      await Future.wait(feeders);
+      // Everyone has been asked and nobody is sending, so this job is now just holding places in
+      // other people's queues: hand the parallel slot to the next download. Releasing it on the
+      // FIRST queued peer (as the old sequential wait did) meant a twelve-track album could have
+      // every track racing twenty peers at once — the cap stopped capping anything.
+      if (winner == null) releaseSlot();
+      // Now sit on the ones still queued until one comes up.
+      if (winner == null && !job.cancelled && runners.isNotEmpty) {
+        await Future.any([Future.wait(runners), decided.future]);
+      }
+      if (winner != null) {
+        // Return the winning FILE too: which copy we settled for is what decides whether a better
+        // one is still worth chasing.
+        return (winner!, winnerFile!);
       }
       return null;
     }
@@ -704,31 +734,25 @@ class DownloadManager extends ChangeNotifier {
       return ok;
     }
 
-    // ── 1. A lossless copy that can start NOW ────────────────────────────────
-    final first = await sweep(lossless, 'poging');
-    if (first.got != null) return finish(first.got!, first.from!);
-
-    // ── 2. No lossless was free — wait for one rather than settle for an MP3 ──
-    final waited = await waitFor(first.busy);
-    if (waited != null) return finish(waited.$1, waited.$2);
+    // ── 1. Race every lossless candidate; first peer to send wins ────────────
+    final first = await race(lossless, 'poging');
+    if (first != null) return finish(first.$1, first.$2);
 
     if (job.cancelled) return false;
 
-    // ── 3. Only now, lossy: free first, then waiting ─────────────────────────
+    // ── 2. Only now, lossy — an MP3 is a last resort, never a shortcut ───────
     if (lossy.isNotEmpty) {
       job.detail = 'geen lossless beschikbaar — MP3 als laatste optie';
       notifyListeners();
-      final second = await sweep(lossy, 'MP3-poging');
-      if (second.got != null) return finish(second.got!, second.from!);
-      final lossyWaited = await waitFor(second.busy);
-      if (lossyWaited != null) return finish(lossyWaited.$1, lossyWaited.$2);
+      final second = await race(lossy, 'MP3-poging');
+      if (second != null) return finish(second.$1, second.$2);
     }
 
     job.status = 'failed';
     job.queuePlace = 0;
     // Don't rewrite the user's own stop as an uploader failure and invite them to retry.
-    if (!job.cancelled && first.busy.isNotEmpty) {
-      job.detail = 'alle uploaders bleven bezet — probeer later opnieuw';
+    if (!job.cancelled) {
+      job.detail = 'geen enkele bron leverde — probeer later opnieuw';
     }
     notifyListeners();
     return false;
@@ -892,18 +916,34 @@ class DownloadManager extends ChangeNotifier {
   /// A peer that never delivered leaves an empty staging folder behind; drop it so `_inkomend`
   /// doesn't slowly fill with the name of every uploader we ever tried. Non-recursive on purpose:
   /// a folder that still holds a partial file is left alone.
-  Future<SlskResult> _cleanStaging(Directory dir, Future<SlskResult> transfer) async {
+  Future<SlskResult> _cleanStaging(Directory dir, File dest, Future<SlskResult> transfer) async {
     final res = await transfer;
+    // A loser in a race can still have finished: a small file arrives inside one chunk, so the
+    // peer was told "no" only after the bytes were already on disk. Nothing downstream looks at a
+    // cancelled attempt, so without this the complete file sat in _inkomend forever — and kept the
+    // folder non-empty, so that never got cleaned up either.
+    if (res is! SlskDone) {
+      try {
+        await dest.delete();
+      } catch (_) {/* never created, or already gone */}
+    }
     try {
       await dir.delete();
-    } catch (_) {/* not empty (or already gone) — leave it */}
+    } catch (_) {/* another track of this album is still staging here — leave it */}
     return res;
   }
 
   /// The raw single-peer transfer over [session] (updates progress only; no status finalization).
+  /// [claim] turns this into one runner in a race: it fires the moment the peer's first bytes
+  /// arrive, and returns whether this attempt gets to own the job's progress line. A runner that
+  /// is told no cancels itself. Without it the attempt drives the UI on its own, as a lone
+  /// download does.
   Future<SlskResult> _rawTransfer(
       SlskSession session, SoulseekFile file, DownloadJob job, void Function() onQueued,
-      {bool waitInQueue = true, Duration maxWait = const Duration(minutes: 30), SlskCancel? cancel}) async {
+      {bool waitInQueue = true,
+      Duration maxWait = const Duration(minutes: 30),
+      SlskCancel? cancel,
+      bool Function()? claim}) async {
     // Land in a staging folder; placeFile() moves it into Albums/Singles/Compilaties after.
     // Per-PEER subfolder: candidates for the same track share a display name, so a slow attempt
     // that is still winding down can never write into the file the next attempt just opened.
@@ -911,11 +951,22 @@ class DownloadManager extends ChangeNotifier {
         '$_downloadsRoot${Platform.pathSeparator}_inkomend${Platform.pathSeparator}${_sanitize(file.username)}');
     await dir.create(recursive: true);
     final dest = File('${dir.path}${Platform.pathSeparator}${_sanitize(file.displayName)}');
-    return _cleanStaging(dir, session.download(file, dest, (rec, tot) {
-      if (job.status == 'waiting') {
+    var settled = claim == null; // no race → this attempt owns the UI from the start
+    var mine = claim == null;
+    return _cleanStaging(dir, dest, session.download(file, dest, (rec, tot) {
+      if (!settled && rec > 0) {
+        settled = true;
+        mine = claim!(); // first bytes decide the race; a runner told no stops itself
+      }
+      // A stop is final. Bytes already in flight arrive for a moment afterwards, and letting them
+      // write here turned "Gestopt" back into "Bezig 34%" — leaving the job permanently busy, which
+      // made the duplicate guard refuse that track for the rest of the session.
+      if (!mine || job.cancelled) return;
+      if (job.status != 'downloading') {
         job.status = 'downloading'; // bytes are flowing — the wait is over
         job.queuePlace = 0;
         job.detail = file.username;
+        notifyListeners(); // on its own: a peer that never sends a size has no progress to report
       }
       if (tot > 0) {
         final p = (rec / tot).clamp(0.0, 1.0);
@@ -925,10 +976,14 @@ class DownloadManager extends ChangeNotifier {
         }
       }
     }, onStatus: (q) {
-      job.status = 'waiting';
-      job.queuePlace = q.place;
-      job.detail = q.place > 0 ? 'wachten op ${file.username} · plaats ${q.place}' : 'wachten op ${file.username}';
-      notifyListeners();
+      // In a race the job line belongs to the race, which knows about all the runners; one of
+      // twenty peers announcing its queue position would just fight the other nineteen for it.
+      if (claim == null) {
+        job.status = 'waiting';
+        job.queuePlace = q.place;
+        job.detail = q.place > 0 ? 'wachten op ${file.username} · plaats ${q.place}' : 'wachten op ${file.username}';
+        notifyListeners();
+      }
       onQueued();
     }, waitInQueue: waitInQueue, maxWait: maxWait, cancel: cancel));
   }
