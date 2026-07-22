@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
+import 'organize.dart';
 import 'settings.dart';
 
 /// One image a release or an artist offers. Discogs doesn't say what a picture IS beyond
@@ -243,25 +244,77 @@ class DiscogsService {
 
   /// The master id for an album, or null. A master groups every pressing of one record, which is
   /// what makes "which edition do we describe?" a question we can answer at all.
-  Future<int?> masterId(String artist, String album) async {
+  Future<int?> masterId(String artist, String album) async => (await masterIds(artist, album)).firstOrNull;
+
+  /// Candidate masters, most album-like first.
+  Future<List<int>> masterIds(String artist, String album) async {
     final strict =
         await _get('https://api.discogs.com/database/search?type=master&artist=${_q(artist)}&release_title=${_q(album)}');
-    final id = _firstMaster(strict);
-    if (id != null) return id;
+    final ids = _masters(strict, artist, album);
+    if (ids.isNotEmpty) return ids;
     // Titles disagree about "(Deluxe Edition)", "- EP" and the like far more often than they
     // disagree about the words themselves, so fall back to a loose query.
-    return _firstMaster(await _get('https://api.discogs.com/database/search?type=master&q=${_q('$artist $album')}'));
+    return _masters(await _get("https://api.discogs.com/database/search?type=master&q=${_q("$artist $album")}"), artist, album);
   }
 
-  int? _firstMaster(Map<String, dynamic>? body) {
-    final results = body?['results'] as List<dynamic>?;
-    if (results == null || results.isEmpty) return null;
-    for (final r in results) {
+  /// Formats that mean "this master is not the album": a 7" promo of the title track carries the
+  /// same artist and title as the record it advertises. Searching for Michael Jackson's *Bad*
+  /// returns three masters called exactly that, and the first is a promo flexi-disc with three
+  /// pressings — taking it described the album as a Belgian promo single.
+  static final _notAnAlbum = RegExp(r'^(promo|sampler|single|ep|flexi-disc|unofficial release|dvd|blu-ray)$',
+      caseSensitive: false);
+
+  /// How well a search hit looks like the ALBUM we asked for. Discogs puts "Album" in the format
+  /// list of exactly the masters that are one, which makes this cheap and reliable — no extra
+  /// request, the answer is already in the search response.
+  static int albumScore(List<String> formats) {
+    var score = 0;
+    for (final f in formats) {
+      final t = f.trim();
+      if (t.toLowerCase() == 'album') score += 3;
+      if (_notAnAlbum.hasMatch(t)) score -= 4;
+    }
+    return score;
+  }
+
+  /// Does a search hit's title actually name the album we asked for?
+  ///
+  /// Hits come back as "Artist - Title", and searching for *Discovery* returned a Virgin two-disc
+  /// bundle scoring well on everything else — it was Human After All. Nothing else caught it,
+  /// because a bundle is genuinely an album and genuinely has plausibly many tracks.
+  static int titleScore(String hitTitle, String artist, String album) {
+    var t = hitTitle;
+    final dash = t.indexOf(' - ');
+    if (dash > 0 && normKey(t.substring(0, dash)) == normKey(artist)) t = t.substring(dash + 3);
+    // A slash (or a plus) joins two records into one product. That, not length, is what separates
+    // "Human After All / Discovery" from "Discovery (Deluxe Edition)" — the second is this record
+    // dressed up, the first is this record bundled with another.
+    final bundled = t.contains('/') || RegExp(r'\s\+\s').hasMatch(t);
+    final want = normKey(album), got = normKey(t);
+    if (want.isEmpty || got.isEmpty) return 0;
+    if (want == got) return 6;
+    if (bundled) return -6;
+    if (got.startsWith('$want ')) return 4; // (Deluxe Edition), (Remastered), [Bonus Tracks]…
+    if (got.contains(want)) return -2;
+    return -6;
+  }
+
+  /// Every plausible master for this album, best first.
+  List<int> _masters(Map<String, dynamic>? body, String artist, String album) {
+    final results = body?['results'] as List<dynamic>? ?? const [];
+    final scored = <(int, int)>[]; // (id, score)
+    for (var i = 0; i < results.length; i++) {
+      final r = results[i];
       if (r is! Map<String, dynamic>) continue;
       final id = (r['master_id'] as num?)?.toInt() ?? (r['id'] as num?)?.toInt();
-      if (id != null && id > 0) return id;
+      if (id == null || id <= 0) continue;
+      final formats = [for (final f in (r['format'] as List<dynamic>? ?? const [])) f.toString()];
+      final s = titleScore(r['title'] as String? ?? '', artist, album) * 10 + albumScore(formats);
+      // Discogs' own relevance order breaks ties: it is a better judge than anything here.
+      scored.add((id, s * 100 - i));
     }
-    return null;
+    scored.sort((a, b) => b.$2.compareTo(a.$2));
+    return [for (final s in scored) s.$1];
   }
 
   Future<List<DiscogsVersion>> _versions(int master) async {
@@ -288,6 +341,15 @@ class DiscogsService {
   /// asking about. Discogs is a collectors' database of physical media: of the 115 versions of
   /// *Discovery*, two are digital and one of those has no year. So a digital pressing only wins
   /// when it is actually documented, and an undocumented one steps aside for the CD.
+  /// Does a pressing with [got] tracks plausibly hold the album the library has [want] tracks of?
+  ///
+  /// Both directions matter, and only one of them was checked at first. Too few means a single or
+  /// a sampler filed under the album's master. Too many means a box set or a two-in-one: searching
+  /// for *Discovery* landed on a 30-track double CD that turned out to be Homework as well, and
+  /// searching for *Bad* on a 32-track anniversary edition. Bonus tracks are normal, a second album
+  /// is not.
+  static bool fitsTrackCount(int got, int want) => got >= want - 2 && got <= want * 1.5 + 3;
+
   static const _formatOrder = ['File', 'CD', 'Vinyl', 'CDr', 'Cassette'];
 
   static int _formatRank(String major) {
@@ -320,23 +382,24 @@ class DiscogsService {
   /// a single or a sampler that got filed under the same master, and describing the album with it
   /// would be worse than useless.
   Future<DiscogsEdition?> edition(String artist, String album, {int expectedTracks = 0}) async {
-    final master = await masterId(artist, album);
-    if (master == null) return null;
-    final ordered = orderByPreference(await _versions(master));
-    // Only ever fetch a handful in full: each one is a request out of sixty a minute.
-    for (final v in ordered.take(4)) {
-      final e = await release(v.id);
-      if (e == null) continue;
-      if (expectedTracks > 0 && e.tracklist.length < expectedTracks - 2) continue;
-      return e;
+    final masters = await masterIds(artist, album);
+    if (masters.isEmpty) return null;
+    DiscogsEdition? fallback;
+    for (final master in masters.take(3)) {
+      final ordered = orderByPreference(await _versions(master));
+      // Only ever fetch a handful in full: each one is a request out of sixty a minute.
+      for (final v in ordered.take(4)) {
+        final e = await release(v.id);
+        if (e == null) continue;
+        fallback ??= e;
+        if (expectedTracks > 0 && !fitsTrackCount(e.tracklist.length, expectedTracks)) continue;
+        return e;
+      }
+      if (expectedTracks == 0) break; // nothing to check against — the first master is the answer
     }
-    // Nothing matched the track count — describe it with the best pressing anyway rather than
-    // showing an empty page.
-    for (final v in ordered.take(2)) {
-      final e = await release(v.id);
-      if (e != null) return e;
-    }
-    return null;
+    // No pressing anywhere matched the track count. Better to describe it with the closest thing
+    // found than to leave the page empty.
+    return fallback;
   }
 
   /// One pressing in full: its images, its tracklist, and who made it.

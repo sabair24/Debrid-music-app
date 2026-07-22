@@ -18,6 +18,7 @@ DiscogsVersion v(String major, {int? year, String? label, String? catno, int id 
     );
 
 void main() {
+  masters();
   test('a documented digital release wins, as asked', () {
     final order = DiscogsService.orderByPreference([
       v('CD', year: 2001, label: 'Virgin', catno: 'CD1', id: 2),
@@ -87,5 +88,71 @@ void main() {
     ]);
     expect(order.first.major, 'CD');
     expect(order.length, 2);
+  });
+}
+
+/// Which MASTER the album page describes, before any edition is chosen at all.
+///
+/// Searching Discogs for "Michael Jackson — Bad" returns three masters with exactly that title:
+/// a promo flexi-disc, a promo 7" single, and the album. Taking the first hit described the album
+/// as a Belgian promo single with three pressings. Discogs puts "Album" in the format list of the
+/// masters that are one, so the answer is already in the search response.
+void masters() {
+  test('an album master beats a promo single of the same name', () {
+    expect(DiscogsService.albumScore(['Flexi-disc', '7"', '33 ⅓ RPM', 'Mixed', 'Promo']),
+        lessThan(DiscogsService.albumScore(['CD', 'Album', 'Stereo'])));
+    expect(DiscogsService.albumScore(['Vinyl', '7"', '45 RPM', 'Single', 'Promo', 'Stereo']),
+        lessThan(DiscogsService.albumScore(['CD', 'Album', 'Stereo'])));
+  });
+
+  test('a bootleg does not describe the record', () {
+    expect(DiscogsService.albumScore(['Vinyl', 'LP', 'Limited Edition', 'Unofficial Release']),
+        lessThan(DiscogsService.albumScore(['Vinyl', 'LP', 'Album'])));
+  });
+
+  test('a video release is not the album either', () {
+    expect(DiscogsService.albumScore(['Blu-ray', 'Stereo', 'Multichannel']),
+        lessThan(DiscogsService.albumScore(['CD', 'Album'])));
+  });
+
+  test('a remastered album reissue still counts as the album', () {
+    expect(DiscogsService.albumScore(['Vinyl', 'LP', 'Album', 'Record Store Day', 'Limited Edition', 'Remastered']),
+        greaterThan(0));
+  });
+
+  group('does this pressing hold the album we have?', () {
+    test('the exact count fits', () => expect(DiscogsService.fitsTrackCount(14, 14), isTrue));
+    test('a couple of bonus tracks fit', () => expect(DiscogsService.fitsTrackCount(16, 14), isTrue));
+    test('a deluxe edition still fits', () => expect(DiscogsService.fitsTrackCount(22, 14), isTrue));
+    test('a two-in-one does not', () {
+      // Searching for Discovery found a 30-track double CD that was Homework as well.
+      expect(DiscogsService.fitsTrackCount(30, 14), isFalse);
+      // And searching for Bad found a 32-track anniversary set.
+      expect(DiscogsService.fitsTrackCount(32, 11), isFalse);
+    });
+    test('a promo single does not', () => expect(DiscogsService.fitsTrackCount(2, 11), isFalse));
+    test('a pressing missing one track still fits — rips disagree about hidden tracks', () {
+      expect(DiscogsService.fitsTrackCount(13, 14), isTrue);
+    });
+  });
+
+  group('does this hit actually name the album?', () {
+    const a = 'Daft Punk', t = 'Discovery';
+    test('the exact record', () => expect(DiscogsService.titleScore('Daft Punk - Discovery', a, t), greaterThan(0)));
+    test('a deluxe edition of it', () {
+      expect(DiscogsService.titleScore('Daft Punk - Discovery (Deluxe Edition)', a, t), greaterThan(0));
+    });
+    test('a bundle with another album is NOT it', () {
+      // The one that got through everything else: a Virgin two-disc set that scored well on format
+      // and had plausibly many tracks, and was Human After All.
+      expect(DiscogsService.titleScore('Daft Punk - Human After All / Discovery', a, t), lessThan(0));
+      expect(DiscogsService.titleScore('Daft Punk - Discovery / Homework', a, t), lessThan(0));
+    });
+    test('a different record entirely is NOT it', () {
+      expect(DiscogsService.titleScore('Daft Punk - Homework', a, t), lessThan(0));
+    });
+    test('the artist prefix is not held against the title', () {
+      expect(DiscogsService.titleScore('Discovery', a, t), greaterThan(0));
+    });
   });
 }

@@ -53,4 +53,13 @@ void main() {
     expect(p, isNot(contains('[a=')), reason: 'markup must be stripped');
     expect(a.images, isNotEmpty);
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('Bad: the album master, not the promo single of the same name', () async {
+    final e = await d.edition('Michael Jackson', 'Bad', expectedTracks: 11);
+    expect(e, isNotNull);
+    print('  editie   : ${e!.format}  ${e.year}  ${e.label} ${e.catno} ${e.country}');
+    print('  tracks   : ${e.tracklist.length}');
+    expect(e.tracklist.length, greaterThanOrEqualTo(9),
+        reason: 'a promo 7 inch has two tracks; the album has eleven');
+  }, timeout: const Timeout(Duration(minutes: 3)));
 }
