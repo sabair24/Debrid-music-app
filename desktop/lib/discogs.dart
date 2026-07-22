@@ -399,12 +399,18 @@ class DiscogsService {
   /// fifteen-track pressing of it got rejected for being too long.
   static bool fitsTrackCount(int got, int want) => got >= want - 2 && got <= want * 1.5 + 3;
 
-  /// CD before digital, then vinyl. Digital came first at the start, and on the metadata it made no
-  /// difference — the year, the genres and the label all come from the master either way. What it
-  /// cost was the edition line: digital entries almost never carry a catalogue number or a country,
-  /// so Bad went from "cd · EPC 450290 2 · Switzerland" to "digitaal · 2012". The CD pressing is
-  /// simply the better-documented object, which is the whole reason to name an edition at all.
-  static const _formatOrder = ['CD', 'File', 'Vinyl', 'CDr', 'Cassette'];
+  /// CD first, digital LAST.
+  ///
+  /// Digital led at the start, as originally asked, and it was the wrong call twice over. It cost
+  /// the edition line — digital entries almost never carry a catalogue number or a country, so Bad
+  /// read "digitaal · 2012" instead of "cd · EPC 450290 2 · Switzerland". And it is where the
+  /// mismatches came from: a digital stub carries so little that there is nothing to check a match
+  /// against. A pressed disc is a documented physical object, which is exactly what makes it both
+  /// richer to read and safer to identify.
+  ///
+  /// Digital stays at the back rather than being dropped: an album that only ever existed as a
+  /// download would otherwise have no edition at all.
+  static const _formatOrder = ['CD', 'CDr', 'Vinyl', 'Cassette', 'File'];
 
   static int _formatRank(String major) {
     final i = _formatOrder.indexOf(major);

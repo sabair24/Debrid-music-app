@@ -29,8 +29,8 @@ void main() {
     // from the master either way — but digital entries carry no catalogue number and no country,
     // so the edition line lost everything that made it worth printing.
     expect(order.first.major, 'CD');
-    expect(order[1].major, 'File');
-    expect(order[2].major, 'Vinyl');
+    expect(order[1].major, 'Vinyl');
+    expect(order[2].major, 'File', reason: 'digital last: least documented, most mismatches');
   });
 
   test('a digital stub steps aside for a documented CD', () {
