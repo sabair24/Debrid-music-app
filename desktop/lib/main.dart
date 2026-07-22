@@ -10,6 +10,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'catalog.dart';
 import 'credits.dart';
+import 'discogs.dart';
 import 'connectivity.dart';
 import 'enrichment.dart';
 import 'library.dart';
@@ -850,7 +851,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                 SliverToBoxAdapter(child: _header(context)),
                 if (!album.isSingle)
                   SliverToBoxAdapter(
-                    child: AlbumInfoPanel(artist: album.artist, album: album.title),
+                    child: AlbumInfoPanel(
+                        artist: album.artist, album: album.title, trackCount: album.tracks.length),
                   ),
                 if (!album.isSingle)
                   SliverToBoxAdapter(
@@ -5061,7 +5063,11 @@ class _ArtistHeroState extends State<ArtistHero> {
 /// an empty box.
 class AlbumInfoPanel extends StatefulWidget {
   final String artist, album;
-  const AlbumInfoPanel({super.key, required this.artist, required this.album});
+
+  /// How many tracks the library holds for this album — used to reject a Discogs pressing that
+  /// is really a single or a sampler filed under the same master.
+  final int trackCount;
+  const AlbumInfoPanel({super.key, required this.artist, required this.album, this.trackCount = 0});
 
   @override
   State<AlbumInfoPanel> createState() => _AlbumInfoPanelState();
@@ -5069,6 +5075,7 @@ class AlbumInfoPanel extends StatefulWidget {
 
 class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
   AlbumInfo? _info;
+  DiscogsEdition? _edition;
 
   @override
   void initState() {
@@ -5080,29 +5087,64 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
   void didUpdateWidget(AlbumInfoPanel old) {
     super.didUpdateWidget(old);
     if (old.artist != widget.artist || old.album != widget.album) {
-      setState(() => _info = null);
+      setState(() {
+        _info = null;
+        _edition = null;
+      });
       _load();
     }
   }
 
   Future<void> _load() async {
     final artist = widget.artist, album = widget.album;
-    final info = await CoverEnricher(context.read<AppSettings>()).albumInfo(artist, album);
+    final settings = context.read<AppSettings>();
+    // The blurb comes from TheAudioDB, which is the only one of the two that writes one. Discogs
+    // knows what the record IS: which pressing, on whose label, under what catalogue number.
+    final info = await CoverEnricher(settings).albumInfo(artist, album);
     if (!mounted || artist != widget.artist || album != widget.album) return;
     setState(() => _info = info);
+    final ed = await DiscogsService(settings)
+        .edition(artist, album, expectedTracks: widget.trackCount)
+        .catchError((_) => null);
+    if (!mounted || artist != widget.artist || album != widget.album) return;
+    setState(() => _edition = ed);
   }
+
+  /// "CD" reads oddly next to a year; "File" reads as nothing at all.
+  static String _formatLabel(String f) => switch (f.toLowerCase()) {
+        'file' => 'digitaal',
+        'vinyl' => 'vinyl',
+        'cd' => 'cd',
+        'cdr' => 'cd-r',
+        'cassette' => 'cassette',
+        _ => f.toLowerCase(),
+      };
 
   @override
   Widget build(BuildContext context) {
     final info = _info;
-    if (info == null) return const SizedBox.shrink();
+    final ed = _edition;
+    if (info == null && ed == null) return const SizedBox.shrink();
+    // Discogs describes one specific pressing, so where the two disagree its year and label are
+    // the ones that belong to the record in front of you.
+    final genres = <String>{...ed?.genres ?? const [], ...ed?.styles ?? const []};
+    if (genres.isEmpty) {
+      if (info?.genre != null) genres.add(info!.genre!);
+      if (info?.style != null) genres.add(info!.style!);
+    }
     final facts = <String>[
-      if (info.year != null) '${info.year}',
-      if (info.genre != null) info.genre!,
-      if (info.style != null && info.style != info.genre) info.style!,
-      if (info.label != null) info.label!,
+      if ((ed?.year ?? info?.year) != null) '${ed?.year ?? info?.year}',
+      ...genres.take(4),
+      if ((ed?.label ?? info?.label) != null) (ed?.label ?? info?.label)!,
     ];
-    final text = info.text;
+    // The pressing itself, kept apart from the genre soup: this is the line that says WHICH copy
+    // of the record the page is describing.
+    final pressing = <String>[
+      if (ed != null && ed.format.isNotEmpty) _formatLabel(ed.format),
+      if (ed?.catno != null && ed!.catno!.isNotEmpty && ed.catno!.toLowerCase() != 'none') ed.catno!,
+      if (ed?.country != null && ed!.country!.isNotEmpty) ed.country!,
+    ];
+    final text = info?.text;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 4, 24, 14),
@@ -5121,10 +5163,10 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
         children: [
           Row(
             children: [
-              if (info.score != null) ...[
+              if (info?.score != null) ...[
                 const Icon(Icons.star_rounded, size: 16, color: Color(0xFFE0B341)),
                 const SizedBox(width: 4),
-                Text(info.score!.toStringAsFixed(1),
+                Text(info!.score!.toStringAsFixed(1),
                     style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
                 const SizedBox(width: 12),
               ],
@@ -5134,6 +5176,19 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
               ),
             ],
           ),
+          if (pressing.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Row(children: [
+              const Icon(Icons.album_outlined, size: 13, color: _muted),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Text('Uitgave: ${pressing.join(' · ')}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: _muted, fontSize: 12)),
+              ),
+            ]),
+          ],
           if (text != null && text.isNotEmpty) ...[
             const SizedBox(height: 8),
             BioText('${widget.artist} — ${widget.album}', text),
