@@ -896,6 +896,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             album: album.title,
             size: 200,
             fallback: album.cover,
+            chosen: album.correctedCover,
             trackCount: album.tracks.length,
             playing: _albumIsPlaying(context),
           ),
@@ -2329,7 +2330,18 @@ class NowPlayingScreen extends StatelessWidget {
                           BoxShadow(color: Colors.black.withValues(alpha: .5), blurRadius: 44, offset: const Offset(0, 22))
                         ],
                       ),
-                      child: cover(p.currentCover, size: 360, radius: 16),
+                      // Same sleeve-and-disc as the album page, at the size this screen deserves.
+                      // The album is taken from the track that is playing, so the disc that comes
+                      // out is the one this song is actually on.
+                      child: t == null
+                          ? cover(p.currentCover, size: 360, radius: 16)
+                          : AlbumArt(
+                              artist: t.artist,
+                              album: t.album,
+                              size: 360,
+                              fallback: p.currentCover,
+                              playing: p.playing,
+                            ),
                     ),
                   ),
                 ),
@@ -6123,6 +6135,10 @@ String _fmt(Duration? d) {
 class AlbumArt extends StatefulWidget {
   final String artist, album;
   final Uint8List? fallback;
+
+  /// A sleeve the user picked by hand. It outranks anything Discogs offers — an automatic source
+  /// correcting a deliberate choice is the app arguing with its owner.
+  final Uint8List? chosen;
   final double size;
   final int trackCount;
   final bool playing;
@@ -6132,6 +6148,7 @@ class AlbumArt extends StatefulWidget {
     required this.album,
     required this.size,
     this.fallback,
+    this.chosen,
     this.trackCount = 0,
     this.playing = false,
   });
@@ -6200,11 +6217,11 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     final s = widget.size;
-    final front = _art?.front ?? widget.fallback;
+    final front = widget.chosen ?? _art?.front ?? widget.fallback;
     final disc = _art?.disc;
-    // How far the disc peeks out at full slide. Less than half, so it still reads as sitting
-    // INSIDE the sleeve rather than beside it.
-    final travel = s * .42;
+    // How far the disc comes out. Started at .42 — enough to see it, not enough to enjoy it — so
+    // it now clears the sleeve by a good margin while the label still sits behind the card.
+    final travel = s * .62;
 
     final sleeve = ClipRRect(
       borderRadius: BorderRadius.circular(10),
