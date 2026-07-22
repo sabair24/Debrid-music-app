@@ -43,7 +43,35 @@ class SoulseekFile {
 
   bool get isFlac => ext == 'flac';
   bool get isAudio => const {'flac', 'mp3', 'm4a', 'ogg', 'opus', 'wav', 'aac', 'alac', 'ape'}.contains(ext);
-  Map<String, dynamic> toJson() => {'username': username, 'filename': filename, 'size': size};
+  /// Everything a download needs to be picked up again after a restart — including the quality
+  /// fields, since those are what decide which candidate the race prefers.
+  Map<String, dynamic> toJson() => {
+        'username': username,
+        'filename': filename,
+        'size': size,
+        'speed': speed,
+        'queueLength': queueLength,
+        'freeSlots': freeSlots,
+        'bitrate': bitrate,
+        'durationSec': durationSec,
+        'isVbr': isVbr,
+      };
+
+  static SoulseekFile? fromJson(Map<String, dynamic> j) {
+    final user = j['username'] as String?, name = j['filename'] as String?;
+    if (user == null || name == null) return null;
+    return SoulseekFile(
+      username: user,
+      filename: name,
+      size: (j['size'] as num?)?.toInt() ?? 0,
+      speed: (j['speed'] as num?)?.toInt() ?? 0,
+      queueLength: (j['queueLength'] as num?)?.toInt() ?? 0,
+      freeSlots: j['freeSlots'] as bool? ?? false,
+      bitrate: (j['bitrate'] as num?)?.toInt(),
+      durationSec: (j['durationSec'] as num?)?.toInt(),
+      isVbr: j['isVbr'] as bool? ?? false,
+    );
+  }
 }
 
 sealed class SlskResult {}

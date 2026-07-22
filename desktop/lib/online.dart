@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -338,6 +339,10 @@ class DownloadJob {
   /// Identity of the TRACK, not of one peer's copy. Clicking five sources of the same song must
   /// not start five downloads of it.
   String? trackKey;
+
+  /// Every peer copy this job may fall back on — kept so the job can be written down and picked
+  /// up again after a restart.
+  List<SoulseekFile> candidates = const [];
   bool get busy =>
       status == 'queued' ||
       status == 'waiting' ||
@@ -451,6 +456,8 @@ class DownloadManager extends ChangeNotifier {
     job.detail = 'geannuleerd';
     job.queuePlace = 0;
     notifyListeners();
+    // Off the list at once — a download the user stopped must not come back at the next start.
+    unawaited(_savePending());
   }
 
   /// Remove finished (done/failed) jobs from the list; keep anything still in progress.
@@ -545,13 +552,82 @@ class DownloadManager extends ChangeNotifier {
     // spinning progress ring for it looked like a stuck download. _soulseekBest flips it to
     // 'downloading' once it actually starts.
     final job = DownloadJob(candidates.first.displayName, key: key, status: 'queued')..trackKey = track
-      ..canCancel = true;
+      ..canCancel = true
+      ..candidates = candidates;
     jobs.insert(0, job);
     notifyListeners();
+    // Written down BEFORE it starts: the point is to survive the app not getting a chance to
+    // finish — a PC shut down mid-download is exactly the case this is for.
+    unawaited(_savePending());
     // Runs on the shared session → reuses the one login (no new login per click).
     final ok = await _withSlsk((s, release) => _soulseekBest(candidates, job, s, release));
     await _pruneStaging();
+    unawaited(_savePending());
     return ok;
+  }
+
+  // ── Surviving a restart ───────────────────────────────────────────────────
+  // A download interrupted by the app closing (or the PC shutting down) used to be simply gone:
+  // no record of it anywhere, and a half-written file left behind in staging.
+
+  String get _appDir =>
+      '${Platform.environment['APPDATA'] ?? Directory.current.path}${Platform.pathSeparator}DebridMusic';
+  File get _pendingFile => File('$_appDir${Platform.pathSeparator}pending_downloads.json');
+
+  Future<void> _savePending() async {
+    try {
+      final open = jobs.where((j) => j.busy && j.candidates.isNotEmpty).toList();
+      if (open.isEmpty) {
+        if (await _pendingFile.exists()) await _pendingFile.delete();
+        return;
+      }
+      await Directory(_appDir).create(recursive: true);
+      await _pendingFile.writeAsString(jsonEncode([
+        for (final j in open)
+          {
+            'name': j.name,
+            'key': j.key,
+            'candidates': [for (final c in j.candidates) c.toJson()],
+          }
+      ]));
+    } catch (_) {/* losing the note is not worth failing a download over */}
+  }
+
+  /// Pick up where we left off. Called once at startup, after the library is loaded.
+  ///
+  /// Restarted from scratch rather than continued byte-for-byte: the half-file in staging came
+  /// from one particular peer that may well be gone, and the race will find whoever is fastest
+  /// right now anyway. Staging is cleared first — nothing in there can be live at startup.
+  Future<int> resumePending() async {
+    List<dynamic> saved;
+    try {
+      if (!await _pendingFile.exists()) return 0;
+      saved = jsonDecode(await _pendingFile.readAsString()) as List<dynamic>;
+    } catch (_) {
+      return 0;
+    }
+    await _clearStaging();
+    var n = 0;
+    for (final e in saved) {
+      if (e is! Map<String, dynamic>) continue;
+      final cands = [
+        for (final c in (e['candidates'] as List<dynamic>? ?? const []))
+          if (c is Map<String, dynamic>) SoulseekFile.fromJson(c),
+      ].whereType<SoulseekFile>().toList();
+      if (cands.isEmpty) continue;
+      n++;
+      // Not awaited: they run in parallel under the usual slot cap, and startup mustn't block.
+      unawaited(enqueueSoulseekBest(cands, key: e['key'] as String?).catchError((_) => false));
+    }
+    return n;
+  }
+
+  /// Everything in staging at startup is a leftover from a session that ended mid-transfer.
+  Future<void> _clearStaging() async {
+    final root = Directory('$_downloadsRoot${Platform.pathSeparator}_inkomend');
+    try {
+      if (await root.exists()) await root.delete(recursive: true);
+    } catch (_) {/* in use, or already gone */}
   }
 
   /// Fallback loop: try up to 5 peers best-first; the first that delivers wins. All attempts

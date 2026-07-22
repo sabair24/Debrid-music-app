@@ -126,6 +126,11 @@ Future<void> main() async {
     await library.enrich(settings);
     // Reopen the last queue where you left off (paused) — covers are loaded by now.
     await player.restore(library.trackByPath);
+    // Downloads that were still running when the app (or the PC) went down. After the scan, so
+    // anything that did finish is already in the library and won't be fetched twice.
+    try {
+      await downloads.resumePending();
+    } catch (_) {}
     await library.enrichArtists(settings);
   }();
 }
