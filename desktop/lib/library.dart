@@ -265,7 +265,9 @@ class LibraryStore extends ChangeNotifier {
   }) async {
     for (final t in target.tracks) {
       final c = _corrections.putIfAbsent(t.path, () => {});
-      if (artist != null && artist.trim().isNotEmpty) c['artist'] = artist.trim();
+      // Discogs numbers artists who share a name and asterisks name variants; neither belongs in
+      // a library, let alone on the now-playing bar.
+      if (artist != null && artist.trim().isNotEmpty) c['artist'] = cleanArtistName(artist);
       if (albumTitle != null && albumTitle.trim().isNotEmpty && !target.isSingle) {
         c['album'] = albumTitle.trim();
       }

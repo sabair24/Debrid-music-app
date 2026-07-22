@@ -105,4 +105,29 @@ void main() {
       );
     });
   });
+
+  group('Discogs bookkeeping is not part of a name', () {
+    test('the disambiguation number goes', () {
+      // Discogs numbers artists who share a name. Taking the credit at face value put "Adele (3)"
+      // into the library, onto the now-playing bar, and into every Discogs search — where it
+      // matched nothing, and the loose fallback landed on a Quebec country album.
+      expect(cleanArtistName('Adele (3)'), 'Adele');
+      expect(cleanArtistName('Nirvana (2)'), 'Nirvana');
+    });
+    test('the variant asterisk goes', () {
+      expect(cleanArtistName("Kim 'Kay*"), "Kim 'Kay");
+    });
+    test('a number that is part of the name stays', () {
+      expect(cleanArtistName('Sum 41'), 'Sum 41');
+      expect(cleanArtistName('Blink-182'), 'Blink-182');
+      expect(cleanArtistName('2 Fabiola'), '2 Fabiola');
+    });
+    test('brackets that are part of the name stay', () {
+      expect(cleanArtistName('Front 242'), 'Front 242');
+      expect(cleanArtistName('!!! (Chk Chk Chk)'), '!!! (Chk Chk Chk)');
+    });
+    test('a name that is nothing but bookkeeping survives', () {
+      expect(cleanArtistName('(3)'), '(3)');
+    });
+  });
 }

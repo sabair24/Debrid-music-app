@@ -214,4 +214,19 @@ void masters() {
       expect(order.first.id, 22, reason: 'the original still beats the repress');
     });
   });
+
+  group('a short title is a wide trap', () {
+    test('Adele 30 is not a Quebec country album called 30 ans de succes', () {
+      // The whole page became theirs: cover, back cover, credits, catalogue number.
+      expect(DiscogsService.titleScore('Les Baraïche - 30 ans de succès', 'Adele', '30'), lessThan(0));
+    });
+    test('but an edition tag after a short title is still that record', () {
+      expect(DiscogsService.titleScore('Adele - 30 (Deluxe Edition)', 'Adele', '30'), greaterThan(0));
+      expect(DiscogsService.titleScore('Adele - 30 (Target Exclusive)', 'Adele', '30'), lessThan(0));
+    });
+    test('and a long title keeps working', () {
+      expect(DiscogsService.titleScore('Daft Punk - Discovery (Deluxe Edition)', 'Daft Punk', 'Discovery'),
+          greaterThan(0));
+    });
+  });
 }

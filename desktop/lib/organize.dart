@@ -693,3 +693,17 @@ bool fileOffersTitle(String title, int? titleDur, String artist, String path, in
   if (a > 0 && b > 0) return (a - b).abs() <= 12;
   return true;
 }
+
+/// A name with Discogs' bookkeeping stripped off.
+///
+/// Discogs has to keep artists apart who share a name, so it appends a number — "Adele (3)" — and
+/// marks a name variation with a trailing asterisk — "Kim 'Kay*". Neither is part of anyone's name.
+/// Taking a Discogs credit at face value put eighteen of those into the library, and "Adele (3)"
+/// ended up on the now-playing bar.
+String cleanArtistName(String name) {
+  var s = name.trim();
+  s = s.replaceAll(RegExp(r'\s*\(\d{1,3}\)$'), '');
+  s = s.replaceAll(RegExp(r'\*+$'), '');
+  final out = s.trim();
+  return out.isEmpty ? name.trim() : out;
+}

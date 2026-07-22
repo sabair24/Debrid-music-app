@@ -262,14 +262,17 @@ class DiscogsService {
   /// Candidate masters, most album-like first.
   Future<List<int>> masterIds(String artist, String album) async {
     final title = plainTitle(album);
+    // A Discogs disambiguation suffix in the library ("Adele (3)") finds nothing on Discogs, and
+    // the loose fallback then matched a Quebec country album called "30 ans de succès".
+    final who = cleanArtistName(artist);
     final strict =
-        await _get('https://api.discogs.com/database/search?type=master&artist=${_q(artist)}&release_title=${_q(title)}');
-    final ids = _masters(strict, artist, album);
+        await _get('https://api.discogs.com/database/search?type=master&artist=${_q(who)}&release_title=${_q(title)}');
+    final ids = _masters(strict, who, album);
     if (ids.isNotEmpty) return ids;
     // Titles disagree about "(Deluxe Edition)", "- EP" and the like far more often than they
     // disagree about the words themselves, so fall back to a loose query.
     return _masters(
-        await _get("https://api.discogs.com/database/search?type=master&q=${_q("$artist $title")}"), artist, album);
+        await _get("https://api.discogs.com/database/search?type=master&q=${_q("$who $title")}"), who, album);
   }
 
   /// Formats that mean "this master is not the album": a 7" promo of the title track carries the
@@ -305,6 +308,17 @@ class DiscogsService {
     return cut.isEmpty ? album.trim() : cut;
   }
 
+  /// Words that dress up a title without changing which record it names.
+  static final _editionWord = RegExp(
+      r'^(deluxe|super|edition|remaster|remastered|remaster\w*|anniversary|expanded|special|bonus|'
+      r'tracks?|track|disc|version|reissue|limited|collectors?|collector|the|and|ep|lp|mix|'
+      r'stereo|mono|explicit|clean|\d{4}|\d{1,2}(st|nd|rd|th))$');
+
+  static bool _onlyEditionWords(String tail) {
+    final words = tail.split(' ').where((w) => w.isNotEmpty);
+    return words.isNotEmpty && words.every(_editionWord.hasMatch);
+  }
+
   static int titleScore(String hitTitle, String artist, String album) {
     var t = hitTitle;
     final dash = t.indexOf(' - ');
@@ -317,7 +331,10 @@ class DiscogsService {
     if (want.isEmpty || got.isEmpty) return 0;
     if (want == got) return 6;
     if (bundled) return -6;
-    if (got.startsWith('$want ')) return 4; // (Deluxe Edition), (Remastered), [Bonus Tracks]…
+    // Anything after the title has to be an edition tag, not more title. Adele's *30* matched
+    // "30 ans de succès" by a Quebec country group, and the album page became theirs — cover,
+    // credits, catalogue number and all. A short title makes that trap wide open.
+    if (got.startsWith('$want ') && _onlyEditionWords(got.substring(want.length + 1))) return 4;
     if (got.contains(want)) return -2;
     return -6;
   }
