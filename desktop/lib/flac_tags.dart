@@ -14,6 +14,11 @@ import 'dart:io';
 class FlacTags {
   final String? title, artist, album, genre;
   final int trackNo;
+
+  /// How many tracks the release this file came from holds. The one tag that tells two EDITIONS
+  /// of an album apart: one folder of Backstreet Boys held tracks claiming 12, 16 and 13, which is
+  /// why it showed two track sixes and two track tens.
+  final int trackTotal;
   final int? year;
   final Duration? duration;
 
@@ -28,6 +33,7 @@ class FlacTags {
     this.album,
     this.genre,
     this.trackNo = 0,
+    this.trackTotal = 0,
     this.year,
     this.duration,
     this.channels = 0,
@@ -85,6 +91,10 @@ FlacTags? readFlacTags(File f) {
       album: v('album'),
       genre: v('genre'),
       trackNo: _firstInt(v('tracknumber')), // "A3" → 3, "03/12" → 3, "" → 0
+      // Either its own tag or the tail of "03/12" — rippers disagree about which they write.
+      trackTotal: _firstInt(v('tracktotal') ?? v('totaltracks')) != 0
+          ? _firstInt(v('tracktotal') ?? v('totaltracks'))
+          : _secondInt(v('tracknumber')),
       year: _year(v('date') ?? v('year')),
       duration: duration,
       channels: channels,
@@ -137,4 +147,12 @@ int? _year(String? s) {
   final m = RegExp(r'\d{4}').firstMatch(s);
   final y = m == null ? null : int.tryParse(m.group(0)!);
   return (y != null && y > 1000) ? y : null;
+}
+
+/// The number after the slash in "03/12" — the release's track count, where a ripper wrote it
+/// there instead of in its own tag.
+int _secondInt(String? s) {
+  if (s == null) return 0;
+  final i = s.indexOf('/');
+  return i < 0 ? 0 : _firstInt(s.substring(i + 1));
 }

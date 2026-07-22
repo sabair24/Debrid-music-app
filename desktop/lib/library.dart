@@ -50,6 +50,7 @@ List<Map<String, dynamic>> _scanTags(String root) {
           'artist': v.artist ?? 'Onbekende artiest',
           'album': v.album ?? '',
           'trackNo': v.trackNo,
+          'trackTotal': v.trackTotal,
           'durationMs': v.duration?.inMilliseconds ?? 0,
           'isFlac': true,
           'year': v.year,
@@ -68,6 +69,9 @@ List<Map<String, dynamic>> _scanTags(String root) {
         'artist': (m.artist?.trim().isNotEmpty ?? false) ? m.artist!.trim() : 'Onbekende artiest',
         'album': m.album?.trim() ?? '', // empty => single
         'trackNo': m.trackNumber ?? 0,
+        // The generic reader has no track-total, so a non-FLAC file simply doesn't take part in
+        // edition splitting — it stays with the plain album, which is where it was anyway.
+        'trackTotal': 0,
         'durationMs': m.duration?.inMilliseconds ?? 0,
         'isFlac': _ext(e.path) == '.flac',
         'year': (m.year != null && m.year!.year > 1000) ? m.year!.year : null,
@@ -244,6 +248,7 @@ class LibraryStore extends ChangeNotifier {
       artist: c['artist'] ?? t.artist,
       album: c.containsKey('album') ? c['album']! : t.album,
       trackNo: t.trackNo,
+      trackTotal: t.trackTotal,
       duration: t.duration,
       isFlac: t.isFlac,
       year: t.year,
@@ -374,6 +379,7 @@ class LibraryStore extends ChangeNotifier {
         artist: m['artist'] as String,
         album: m['album'] as String,
         trackNo: m['trackNo'] as int,
+        trackTotal: (m['trackTotal'] as int?) ?? 0,
         duration: (m['durationMs'] as int) > 0 ? Duration(milliseconds: m['durationMs'] as int) : null,
         isFlac: m['isFlac'] as bool,
         year: m['year'] as int?,
@@ -387,8 +393,21 @@ class LibraryStore extends ChangeNotifier {
   /// "Nunca", and the cover snapshot below — stored under one and looked up under the other —
   /// silently dropped that album's covers on every regroup, including a hand-picked one.
   /// Both the snapshot and the grouping go through here so they cannot diverge again.
-  String _groupKey(Track t) =>
-      t.album.isEmpty ? 'single::${t.path}' : 'album::${artistKey(t.artist)}|${normKey(t.album)}';
+  /// Which album a track belongs to.
+  ///
+  /// Artist and title alone merged two EDITIONS of one record: a single Backstreet Boys folder held
+  /// tracks claiming 12, 16 and 13 tracks total, so the page showed two number sixes, two number
+  /// tens, and "Quit Playing Games" twice. The track total is the one tag that separates them.
+  ///
+  /// Only when a track total is actually stated. Files without one — untagged rips, and everything
+  /// that isn't FLAC, since the generic reader doesn't report it — stay on the plain album key
+  /// exactly as before. Guessing which edition those belong to would scatter a library, and being
+  /// wrong there is worse than the merging this fixes.
+  String _groupKey(Track t) {
+    if (t.album.isEmpty) return 'single::${t.path}';
+    final base = 'album::${artistKey(t.artist)}|${normKey(t.album)}';
+    return t.trackTotal > 0 ? '$base|${t.trackTotal}' : base;
+  }
 
   /// Regroup tracks into albums. Public so a test can reproduce the "edit one album, another
   /// album loses its cover" regression without going through the on-disk correction path.

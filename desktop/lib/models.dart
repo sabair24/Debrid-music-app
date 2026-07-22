@@ -8,6 +8,10 @@ class Track {
   final String artist;
   final String album; // empty tag => treated as a single
   final int trackNo;
+
+  /// How many tracks the release this file came from holds — 0 when the ripper didn't say. It is
+  /// what separates two EDITIONS of one album, which otherwise merge and collide on track numbers.
+  final int trackTotal;
   final Duration? duration;
   final bool isFlac;
   final int? year;
@@ -26,6 +30,7 @@ class Track {
     required this.artist,
     required this.album,
     this.trackNo = 0,
+    this.trackTotal = 0,
     this.duration,
     this.isFlac = false,
     this.year,
