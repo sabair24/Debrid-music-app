@@ -35,10 +35,45 @@ const _muted = Color(0xFF9AA0B4);
 const _accent = Color(0xFF7C5CFF);
 const _accent2 = Color(0xFF00D4C8);
 
+/// A loopback port this app holds while it runs. Binding it is the lock; connecting to it is how
+/// a second copy says "you're already running, come to the front".
+const _instancePort = 47821;
+
+/// Claim the single-instance lock, or hand over to the copy that already holds it.
+///
+/// Two copies means two Soulseek logins on one account, and Soulseek allows exactly one: they kick
+/// each other in turn until the account is refused. That has happened here, so a second launch
+/// must never become a second login.
+Future<bool> _claimSingleInstance() async {
+  try {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, _instancePort);
+    server.listen((s) async {
+      s.destroy();
+      await windowManager.show();
+      await windowManager.focus();
+    });
+    return true;
+  } on SocketException {
+    try {
+      final s = await Socket.connect(InternetAddress.loopbackIPv4, _instancePort,
+          timeout: const Duration(seconds: 2));
+      s.destroy();
+      return false; // somebody answered — it really is us, already running
+    } catch (_) {
+      // The port belongs to something else entirely. Refusing to start over that would be worse
+      // than the duplicate we're guarding against.
+      return true;
+    }
+  }
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
   await windowManager.ensureInitialized();
+  if (!await _claimSingleInstance()) {
+    exit(0);
+  }
   await windowManager.waitUntilReadyToShow(
     const WindowOptions(
       size: Size(1240, 820),
