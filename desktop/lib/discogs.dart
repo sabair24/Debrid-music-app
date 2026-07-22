@@ -70,7 +70,14 @@ class DiscogsEdition {
   final int releaseId;
   final String format; // File / CD / Vinyl / Cassette …
   final String? label, catno, country, notes;
+
+  /// When THIS pressing appeared. Not the same thing as when the record did: the digital reissue
+  /// of Demon Days is from 2014, the album from 2005.
   final int? year;
+
+  /// When the RECORD came out, from the master. This is the year an album page should lead with —
+  /// leading with the pressing's year dated Demon Days to 2014 above a blurb saying 2005.
+  final int? albumYear;
   final List<String> genres, styles;
   final List<DiscogsTrack> tracklist;
   final List<DiscogsImage> images;
@@ -83,6 +90,7 @@ class DiscogsEdition {
     this.country,
     this.notes,
     this.year,
+    this.albumYear,
     this.genres = const [],
     this.styles = const [],
     this.tracklist = const [],
@@ -97,6 +105,7 @@ class DiscogsEdition {
         'country': country,
         'notes': notes,
         'year': year,
+        'albumYear': albumYear,
         'genres': genres,
         'styles': styles,
         'tracklist': [for (final t in tracklist) t.toJson()],
@@ -111,6 +120,7 @@ class DiscogsEdition {
         country: j['country'] as String?,
         notes: j['notes'] as String?,
         year: (j['year'] as num?)?.toInt(),
+        albumYear: (j['albumYear'] as num?)?.toInt(),
         genres: [for (final g in (j['genres'] as List<dynamic>? ?? const [])) g.toString()],
         styles: [for (final s in (j['styles'] as List<dynamic>? ?? const [])) s.toString()],
         tracklist: [
@@ -393,13 +403,14 @@ class DiscogsService {
       // it is the difference between describing Demon Days and describing whatever came first.
       final m = await _get('https://api.discogs.com/masters/$master');
       final masterTracks = (m?['tracklist'] as List<dynamic>?)?.length ?? 0;
+      final masterYear = (m?['year'] as num?)?.toInt();
       // The record has to be able to hold what the library has of it: owning eleven tracks rules
       // out a master that is a two-track promo, however well it scored on name and format.
       if (expectedTracks > 0 && masterTracks > 0 && masterTracks < expectedTracks - 2) continue;
       final ordered = orderByPreference(await _versions(master));
       // Only ever fetch a handful in full: each one is a request out of sixty a minute.
       for (final v in ordered.take(4)) {
-        final e = await release(v.id);
+        final e = await release(v.id, albumYear: masterYear);
         if (e == null) continue;
         fallback ??= e;
         if (masterTracks > 0 && !fitsTrackCount(e.tracklist.length, masterTracks)) continue;
@@ -412,7 +423,7 @@ class DiscogsService {
   }
 
   /// One pressing in full: its images, its tracklist, and who made it.
-  Future<DiscogsEdition?> release(int id) async {
+  Future<DiscogsEdition?> release(int id, {int? albumYear}) async {
     final b = await _get('https://api.discogs.com/releases/$id');
     if (b == null) return null;
     final formats = b['formats'] as List<dynamic>? ?? const [];
@@ -426,6 +437,7 @@ class DiscogsService {
       country: (b['country'] as String?)?.trim(),
       notes: (b['notes'] as String?)?.trim(),
       year: (b['year'] as num?)?.toInt(),
+      albumYear: albumYear,
       genres: [for (final g in (b['genres'] as List<dynamic>? ?? const [])) g.toString()],
       styles: [for (final s in (b['styles'] as List<dynamic>? ?? const [])) s.toString()],
       tracklist: [

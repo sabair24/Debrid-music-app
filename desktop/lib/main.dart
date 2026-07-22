@@ -5132,8 +5132,11 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
       if (info?.genre != null) genres.add(info!.genre!);
       if (info?.style != null) genres.add(info!.style!);
     }
+    // The RECORD's year leads, not the pressing's: Demon Days is a 2005 album, even when the copy
+    // being described is the 2014 digital reissue.
+    final year = ed?.albumYear ?? ed?.year ?? info?.year;
     final facts = <String>[
-      if ((ed?.year ?? info?.year) != null) '${ed?.year ?? info?.year}',
+      if (year != null) '$year',
       ...genres.take(4),
       if ((ed?.label ?? info?.label) != null) (ed?.label ?? info?.label)!,
     ];
@@ -5141,6 +5144,8 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     // of the record the page is describing.
     final pressing = <String>[
       if (ed != null && ed.format.isNotEmpty) _formatLabel(ed.format),
+      // Only when it differs from the album's own year — otherwise it just repeats the line above.
+      if (ed?.year != null && ed!.year != year) '${ed.year}',
       if (ed?.catno != null && ed!.catno!.isNotEmpty && ed.catno!.toLowerCase() != 'none') ed.catno!,
       if (ed?.country != null && ed!.country!.isNotEmpty) ed.country!,
     ];
