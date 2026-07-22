@@ -1065,6 +1065,15 @@ class _MetadataEditorState extends State<MetadataEditor> {
           coverBytes: _pickedCover,
           discogsRelease: _pickedRelease,
         );
+    // Says out loud what was pinned. The pin went missing twice while every line of the path read
+    // correctly, so this is no longer something to reason about — it is something to see.
+    if (mounted) {
+      _srcToast(
+          context,
+          _pickedRelease == null
+              ? "Aangepast — geen Discogs-uitgave vastgezet"
+              : "Aangepast — uitgave $_pickedRelease vastgezet");
+    }
     if (mounted) Navigator.of(context).pop(true);
   }
 
@@ -5268,7 +5277,10 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
               const Icon(Icons.album_outlined, size: 13, color: _muted),
               const SizedBox(width: 5),
               Flexible(
-                child: Text('Uitgave: ${pressing.join(' · ')}',
+                child: Text(
+                    // Named, so it is always plain whether the page is describing the release YOU
+                    // chose or the one the app picked for itself.
+                    '${widget.pinned != null ? "Jouw uitgave" : "Uitgave"}: ${pressing.join(' · ')}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: _muted, fontSize: 12)),
