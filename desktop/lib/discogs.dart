@@ -363,10 +363,10 @@ class DiscogsService {
     return out;
   }
 
-  /// Digital first, then CD, then vinyl — the order asked for, with the caveat that made it worth
-  /// asking about. Discogs is a collectors' database of physical media: of the 115 versions of
-  /// *Discovery*, two are digital and one of those has no year. So a digital pressing only wins
-  /// when it is actually documented, and an undocumented one steps aside for the CD.
+  /// Within a format, a documented pressing beats a stub. Discogs is a collectors' database of
+  /// physical media and anyone can add an entry: of the 115 versions of *Discovery*, two are
+  /// digital and one of those has no year, no label and no catalogue number. Describing a record
+  /// with an entry like that makes the page emptier, which is the opposite of the point.
   /// Does a pressing with [got] tracks hold the record the master says is [want] tracks long?
   ///
   /// Both directions matter, and only one was checked at first. Too few means a single or a sampler
@@ -379,7 +379,12 @@ class DiscogsService {
   /// fifteen-track pressing of it got rejected for being too long.
   static bool fitsTrackCount(int got, int want) => got >= want - 2 && got <= want * 1.5 + 3;
 
-  static const _formatOrder = ['File', 'CD', 'Vinyl', 'CDr', 'Cassette'];
+  /// CD before digital, then vinyl. Digital came first at the start, and on the metadata it made no
+  /// difference — the year, the genres and the label all come from the master either way. What it
+  /// cost was the edition line: digital entries almost never carry a catalogue number or a country,
+  /// so Bad went from "cd · EPC 450290 2 · Switzerland" to "digitaal · 2012". The CD pressing is
+  /// simply the better-documented object, which is the whole reason to name an edition at all.
+  static const _formatOrder = ['CD', 'File', 'Vinyl', 'CDr', 'Cassette'];
 
   static int _formatRank(String major) {
     final i = _formatOrder.indexOf(major);

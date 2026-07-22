@@ -19,14 +19,17 @@ DiscogsVersion v(String major, {int? year, String? label, String? catno, int id 
 
 void main() {
   masters();
-  test('a documented digital release wins, as asked', () {
+  test('a documented CD leads — it is the best-documented object', () {
     final order = DiscogsService.orderByPreference([
       v('CD', year: 2001, label: 'Virgin', catno: 'CD1', id: 2),
       v('File', year: 2001, label: 'Virgin', catno: 'DIG1', id: 3),
       v('Vinyl', year: 2001, label: 'Virgin', catno: 'LP1', id: 4),
     ]);
-    expect(order.first.major, 'File');
-    expect(order[1].major, 'CD');
+    // Digital led at first. It made no difference to the metadata — year, genres and label come
+    // from the master either way — but digital entries carry no catalogue number and no country,
+    // so the edition line lost everything that made it worth printing.
+    expect(order.first.major, 'CD');
+    expect(order[1].major, 'File');
     expect(order[2].major, 'Vinyl');
   });
 
