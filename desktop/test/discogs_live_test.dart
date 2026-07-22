@@ -70,4 +70,20 @@ void main() {
     print('  tracks   : ${e.tracklist.length}');
     expect(e.tracklist.length, greaterThanOrEqualTo(13), reason: 'Demon Days is fifteen tracks');
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('Thriller: a CD, not the hundredth vinyl pressing', () async {
+    final e = await d.edition('Michael Jackson', 'Thriller', expectedTracks: 9);
+    expect(e, isNotNull);
+    print('  editie   : ${e!.format}  ${e.year}  ${e.label} ${e.catno} ${e.country}');
+    print('  tracks   : ${e.tracklist.length}   albumjaar ${e.albumYear}');
+    expect(e.format.toLowerCase(), anyOf('file', 'cd'),
+        reason: 'Thriller has hundreds of pressings; the oldest hundred are all vinyl');
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('Rumours [5.1]: a rip tag does not hide the record', () async {
+    final e = await d.edition('Fleetwood Mac', 'Rumours [5.1]', expectedTracks: 1);
+    expect(e, isNotNull, reason: 'the folder is called [5.1]; the record is called Rumours');
+    print('  editie   : ${e!.format}  ${e.year}  ${e.label} ${e.catno}  albumjaar ${e.albumYear}');
+    expect(e.albumYear, 1977);
+  }, timeout: const Timeout(Duration(minutes: 3)));
 }

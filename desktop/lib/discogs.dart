@@ -258,13 +258,15 @@ class DiscogsService {
 
   /// Candidate masters, most album-like first.
   Future<List<int>> masterIds(String artist, String album) async {
+    final title = plainTitle(album);
     final strict =
-        await _get('https://api.discogs.com/database/search?type=master&artist=${_q(artist)}&release_title=${_q(album)}');
+        await _get('https://api.discogs.com/database/search?type=master&artist=${_q(artist)}&release_title=${_q(title)}');
     final ids = _masters(strict, artist, album);
     if (ids.isNotEmpty) return ids;
     // Titles disagree about "(Deluxe Edition)", "- EP" and the like far more often than they
     // disagree about the words themselves, so fall back to a loose query.
-    return _masters(await _get("https://api.discogs.com/database/search?type=master&q=${_q("$artist $album")}"), artist, album);
+    return _masters(
+        await _get("https://api.discogs.com/database/search?type=master&q=${_q("$artist $title")}"), artist, album);
   }
 
   /// Formats that mean "this master is not the album": a 7" promo of the title track carries the
@@ -292,6 +294,14 @@ class DiscogsService {
   /// Hits come back as "Artist - Title", and searching for *Discovery* returned a Virgin two-disc
   /// bundle scoring well on everything else — it was Human After All. Nothing else caught it,
   /// because a bundle is genuinely an album and genuinely has plausibly many tracks.
+  /// An album title with the tags a ripper hung on it stripped off. "Rumours [5.1]" is a folder
+  /// name, not a record: Discogs has never heard of it, so nothing matched and the page stayed
+  /// blank. What is left is what to search for and what to compare against.
+  static String plainTitle(String album) {
+    final cut = album.replaceAll(RegExp(r'\s*[\[(][^\])]*[\])]\s*$'), '').trim();
+    return cut.isEmpty ? album.trim() : cut;
+  }
+
   static int titleScore(String hitTitle, String artist, String album) {
     var t = hitTitle;
     final dash = t.indexOf(' - ');
@@ -300,7 +310,7 @@ class DiscogsService {
     // "Human After All / Discovery" from "Discovery (Deluxe Edition)" — the second is this record
     // dressed up, the first is this record bundled with another.
     final bundled = t.contains('/') || RegExp(r'\s\+\s').hasMatch(t);
-    final want = normKey(album), got = normKey(t);
+    final want = normKey(plainTitle(album)), got = normKey(t);
     if (want.isEmpty || got.isEmpty) return 0;
     if (want == got) return 6;
     if (bundled) return -6;
@@ -327,8 +337,14 @@ class DiscogsService {
     return [for (final s in scored) s.$1];
   }
 
-  Future<List<DiscogsVersion>> _versions(int master) async {
-    final body = await _get('https://api.discogs.com/masters/$master/versions?per_page=100&sort=released');
+  /// Pressings of one master, optionally of one format only.
+  ///
+  /// The format filter is not an optimisation, it is the only way to see a CD of a famous record.
+  /// Thriller has hundreds of pressings; asking for a hundred of them sorted by date returns the
+  /// 1982-84 vinyl and nothing else, which is how its page came to describe a Costa Rican LP.
+  Future<List<DiscogsVersion>> _versions(int master, {String? format}) async {
+    final f = format == null ? '' : '&format=${_q(format)}';
+    final body = await _get('https://api.discogs.com/masters/$master/versions?per_page=50&sort=released$f');
     final list = body?['versions'] as List<dynamic>? ?? const [];
     final out = <DiscogsVersion>[];
     for (final v in list) {
@@ -407,14 +423,20 @@ class DiscogsService {
       // The record has to be able to hold what the library has of it: owning eleven tracks rules
       // out a master that is a two-track promo, however well it scored on name and format.
       if (expectedTracks > 0 && masterTracks > 0 && masterTracks < expectedTracks - 2) continue;
-      final ordered = orderByPreference(await _versions(master));
-      // Only ever fetch a handful in full: each one is a request out of sixty a minute.
-      for (final v in ordered.take(4)) {
-        final e = await release(v.id, albumYear: masterYear);
-        if (e == null) continue;
-        fallback ??= e;
-        if (masterTracks > 0 && !fitsTrackCount(e.tracklist.length, masterTracks)) continue;
-        return e;
+      // Ask per format, in the order asked for, and stop at the first that delivers. This is what
+      // makes "digital, else CD, else vinyl" true for a record with hundreds of pressings.
+      for (final format in _formatOrder) {
+        final ordered = orderByPreference(await _versions(master, format: format));
+        if (ordered.isEmpty) continue;
+        // Only ever fetch a handful in full: each one is a request out of sixty a minute.
+        for (final v in ordered.take(3)) {
+          final e = await release(v.id, albumYear: masterYear);
+          if (e == null) continue;
+          fallback ??= e;
+          if (masterTracks > 0 && !fitsTrackCount(e.tracklist.length, masterTracks)) continue;
+          if (!v.isDocumented && format != _formatOrder.last) break; // undocumented → try the next format
+          return e;
+        }
       }
     }
     // No pressing anywhere matched the track count. Better to describe it with the closest thing

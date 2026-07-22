@@ -164,4 +164,23 @@ void masters() {
       expect(DiscogsService.fitsTrackCount(15, 4), isFalse, reason: 'this is why the library count is not the yardstick');
     });
   });
+
+  group('a folder name is not a record title', () {
+    test('a rip tag is stripped', () {
+      // "Rumours [5.1]" is what the surround rip is called on disk. Discogs has never heard of it,
+      // so nothing matched and the album page stayed blank.
+      expect(DiscogsService.plainTitle('Rumours [5.1]'), 'Rumours');
+      expect(DiscogsService.plainTitle('Discovery (Deluxe Edition)'), 'Discovery');
+      expect(DiscogsService.plainTitle('Rumours (Super Deluxe)'), 'Rumours');
+    });
+    test('a title that is nothing but brackets survives', () {
+      expect(DiscogsService.plainTitle('[untitled]'), '[untitled]');
+    });
+    test('brackets in the middle are left alone', () {
+      expect(DiscogsService.plainTitle('Sgt. Pepper (Reprise) Live'), 'Sgt. Pepper (Reprise) Live');
+    });
+    test('a stripped title matches the record it names', () {
+      expect(DiscogsService.titleScore('Fleetwood Mac - Rumours', 'Fleetwood Mac', 'Rumours [5.1]'), greaterThan(0));
+    });
+  });
 }
