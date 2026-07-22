@@ -391,9 +391,11 @@ class DiscogsService {
     return i < 0 ? _formatOrder.length : i;
   }
 
-  static List<DiscogsVersion> orderByPreference(List<DiscogsVersion> all) {
+  static List<DiscogsVersion> orderByPreference(List<DiscogsVersion> all, {int main = 0}) {
     final out = [...all.where((v) => v.id > 0)];
     out.sort((a, b) {
+      // The master's own main release, when it happens to be of this format, is the canonical copy.
+      if (main > 0 && (a.id == main) != (b.id == main)) return a.id == main ? -1 : 1;
       // Documented entries first WITHIN a format, but never across one: a documented CD must not
       // jump ahead of a documented digital release.
       final byDoc = (a.isDocumented ? 0 : 1).compareTo(b.isDocumented ? 0 : 1);
@@ -425,13 +427,17 @@ class DiscogsService {
       final m = await _get('https://api.discogs.com/masters/$master');
       final masterTracks = (m?['tracklist'] as List<dynamic>?)?.length ?? 0;
       final masterYear = (m?['year'] as num?)?.toInt();
+      // Discogs names one pressing per master as the main one. Among equally documented pressings
+      // of the same year that is a far better tiebreak than list order, which put Dangerous on a
+      // Taiwanese CD when a US one was sitting right beside it.
+      final main = (m?['main_release'] as num?)?.toInt() ?? 0;
       // The record has to be able to hold what the library has of it: owning eleven tracks rules
       // out a master that is a two-track promo, however well it scored on name and format.
       if (expectedTracks > 0 && masterTracks > 0 && masterTracks < expectedTracks - 2) continue;
       // Ask per format, in the order asked for, and stop at the first that delivers. This is what
       // makes "digital, else CD, else vinyl" true for a record with hundreds of pressings.
       for (final format in _formatOrder) {
-        final ordered = orderByPreference(await _versions(master, format: format));
+        final ordered = orderByPreference(await _versions(master, format: format), main: main);
         if (ordered.isEmpty) continue;
         // Only ever fetch a handful in full: each one is a request out of sixty a minute.
         for (final v in ordered.take(3)) {

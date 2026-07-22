@@ -186,4 +186,32 @@ void masters() {
       expect(DiscogsService.titleScore('Fleetwood Mac - Rumours', 'Fleetwood Mac', 'Rumours [5.1]'), greaterThan(0));
     });
   });
+
+  group('the canonical pressing', () {
+    test('the master\'s main release leads its format', () {
+      // Dangerous landed on a Taiwanese CD with a US one right beside it: equally documented,
+      // same year, so nothing but list order separated them. Discogs names one as the main release.
+      final order = DiscogsService.orderByPreference([
+        v('CD', year: 1991, label: 'Epic', catno: '465802.2', id: 11),
+        v('CD', year: 1991, label: 'Epic', catno: 'EK 45400', id: 22),
+      ], main: 22);
+      expect(order.first.id, 22);
+    });
+
+    test('but it does not drag in a stub', () {
+      final order = DiscogsService.orderByPreference([
+        v('CD', id: 22), // main release, but nobody filled it in
+        v('CD', year: 1991, label: 'Epic', catno: 'EK 45400', id: 11),
+      ], main: 22);
+      expect(order.first.id, 22, reason: 'Discogs picked it; an undocumented main release is still the canonical one');
+    });
+
+    test('with no main release given, nothing changes', () {
+      final order = DiscogsService.orderByPreference([
+        v('CD', year: 1995, label: 'Epic', catno: 'RE', id: 11),
+        v('CD', year: 1991, label: 'Epic', catno: 'OG', id: 22),
+      ]);
+      expect(order.first.id, 22, reason: 'the original still beats the repress');
+    });
+  });
 }
