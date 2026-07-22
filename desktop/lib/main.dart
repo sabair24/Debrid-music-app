@@ -1056,6 +1056,19 @@ class _MetadataEditorState extends State<MetadataEditor> {
 
   Future<void> _apply() async {
     setState(() => _applying = true);
+    // TEMP diagnostic: a blocking dialog, impossible to miss, showing the exact value that reaches
+    // this point. Reasoning has missed the fault four times; this makes it undeniable.
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Debug: pin'),
+        content: Text('picked.releaseId = ${_picked?.releaseId}\n'
+            'pickedRelease = $_pickedRelease\n'
+            'provider = $_provider  ·  results = ${_results.length}'),
+        actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('OK'))],
+      ),
+    );
     await context.read<LibraryStore>().applyCorrection(
           widget.album,
           context.read<AppSettings>(),
