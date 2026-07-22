@@ -183,6 +183,50 @@ class LibraryStore extends ChangeNotifier {
   /// one-way door — the user can always bring them back).
   int get hiddenCount => _hidden.length;
 
+  // ── Merged editions ───────────────────────────────────────────────────────
+  // Splitting is a guess made from tags; merging is the user telling us the guess was wrong.
+  // Their word is final and has to outlive a rescan, so it is written down like every other
+  // correction rather than held in memory.
+  final Set<String> _merged = {};
+  File get _mergedFile => File('$_appDir${Platform.pathSeparator}merged_albums.json');
+
+  Future<void> loadMerged() async {
+    try {
+      final f = _mergedFile;
+      if (!await f.exists()) return;
+      final j = jsonDecode(await f.readAsString()) as List<dynamic>;
+      _merged
+        ..clear()
+        ..addAll(j.map((e) => e.toString()));
+    } catch (_) {}
+  }
+
+  Future<void> _saveMerged() async {
+    try {
+      await Directory(_appDir).create(recursive: true);
+      await _mergedFile.writeAsString(jsonEncode(_merged.toList()));
+    } catch (_) {}
+  }
+
+  /// Put every edition of this record back together, and keep it that way.
+  Future<void> mergeEditions(Album a) async {
+    _merged.add('album::${artistKey(a.artist)}|${normKey(a.title)}');
+    await _saveMerged();
+    rebuildAlbums();
+    notifyListeners();
+  }
+
+  /// Undo that, and let the tags decide again.
+  Future<void> unmergeEditions(Album a) async {
+    _merged.remove('album::${artistKey(a.artist)}|${normKey(a.title)}');
+    await _saveMerged();
+    rebuildAlbums();
+    notifyListeners();
+  }
+
+  /// Has the user told us to keep this record together?
+  bool isMerged(Album a) => _merged.contains('album::${artistKey(a.artist)}|${normKey(a.title)}');
+
   /// Hand the library a cover found while an album page was open.
   ///
   /// The album page draws its own sleeve from Discogs, so a wrong embedded cover was corrected
@@ -427,6 +471,8 @@ class LibraryStore extends ChangeNotifier {
   String _groupKey(Track t) {
     if (t.album.isEmpty) return 'single::${t.path}';
     final base = 'album::${artistKey(t.artist)}|${normKey(t.album)}';
+    // The user's word beats the tags: a record they merged stays merged.
+    if (_merged.contains(base)) return base;
     return editionSplit(_byBase[base]) ? '$base|${t.trackTotal}' : base;
   }
 
@@ -508,6 +554,11 @@ class LibraryStore extends ChangeNotifier {
       final main = splitFeatured(ts.first.artist, ts.first.title).main;
       final artist = canonical[artistKey(main)] ?? main;
       final al = Album(single ? ts.first.title : ts.first.album, artist, ts, isSingle: single);
+      // Only where the title actually split — a lone album needs no edition label.
+      if (!single && editionSplit(_byBase['album::${artistKey(ts.first.artist)}|${normKey(ts.first.album)}'])) {
+        final n = ts.first.trackTotal;
+        al.edition = n > 0 ? '$n nummers' : 'zonder nummering';
+      }
       final saved = coversByKey[e.key];
       if (saved != null) {
         al.embeddedCover = saved[0];

@@ -96,4 +96,21 @@ void main() {
     ]);
     expect(albums.length, 2);
   });
+
+  test('split albums say which pressing they are', () {
+    // Six identical tiles are unusable however correct the split is — and you cannot choose which
+    // to merge if you cannot tell them apart.
+    final albums = group([
+      t('a.flac', total: 12, no: 6),
+      t('b.flac', total: 13, no: 6),
+      t('c.flac', no: 6),
+    ]);
+    expect(albums.length, 3);
+    expect(albums.map((a) => a.edition).toSet(), {'12 nummers', '13 nummers', 'zonder nummering'});
+  });
+
+  test('an album that did not split carries no edition label', () {
+    final albums = group([t('a.flac', total: 12, no: 1), t('b.flac', total: 12, no: 2)]);
+    expect(albums.single.edition, isNull);
+  });
 }

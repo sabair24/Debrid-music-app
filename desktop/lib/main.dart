@@ -121,6 +121,7 @@ Future<void> main() async {
   () async {
     await library.loadCorrections(); // apply manual fixes as tracks are built
     await library.loadHidden(); // keep "removed from library only" tracks out
+    await library.loadMerged(); // records the user told us to keep together
     try {
       await library.scan();
     } catch (_) {}
@@ -749,7 +750,10 @@ class _AlbumCardState extends State<AlbumCard> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
-              Text(a.artist,
+              Text(
+                  // Six identical "Backstreet Boys" tiles are unusable, however correct the split
+                  // is. Naming the pressing is what makes them tellable apart — and choosable.
+                  a.edition == null ? a.artist : '${a.artist} · ${a.edition}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: _muted, fontSize: 12)),
@@ -949,6 +953,28 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       icon: const Icon(Icons.radio_rounded, size: 20),
                       label: const Text('Radio'),
                     ),
+                    // Offered only where there is something to merge: the library holds more than
+                    // one pressing of this record, or the user already told us to keep them one.
+                    if (album.edition != null || context.watch<LibraryStore>().isMerged(album)) ...[
+                      const SizedBox(width: 10),
+                      Builder(builder: (context) {
+                        final merged = context.watch<LibraryStore>().isMerged(album);
+                        return FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _panel2,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                          ),
+                          onPressed: () {
+                            final lib = context.read<LibraryStore>();
+                            merged ? lib.unmergeEditions(album) : lib.mergeEditions(album);
+                            _srcToast(context, merged ? 'Uitgaves weer apart' : 'Uitgaves samengevoegd');
+                          },
+                          icon: Icon(merged ? Icons.call_split_rounded : Icons.merge_rounded, size: 20),
+                          label: Text(merged ? 'Uitgaves splitsen' : 'Uitgaves samenvoegen'),
+                        );
+                      }),
+                    ],
                   ],
                 ),
               ],

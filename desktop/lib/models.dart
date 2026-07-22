@@ -53,6 +53,11 @@ class Album {
   final List<Track> tracks;
   final bool isSingle;
 
+  /// Which pressing this is, when the library holds more than one of the same record and had to
+  /// split them. Without it the six Backstreet Boys tiles are indistinguishable, and you cannot
+  /// choose which to merge if you cannot tell them apart.
+  String? edition;
+
   /// Cover embedded in the audio file (read once per album).
   Uint8List? embeddedCover;
 
