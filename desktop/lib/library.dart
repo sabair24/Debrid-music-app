@@ -183,6 +183,27 @@ class LibraryStore extends ChangeNotifier {
   /// one-way door — the user can always bring them back).
   int get hiddenCount => _hidden.length;
 
+  /// Hand the library a cover found while an album page was open.
+  ///
+  /// The album page draws its own sleeve from Discogs, so a wrong embedded cover was corrected
+  /// there and nowhere else: opening the album showed the right art, going back to the grid
+  /// showed the old one. Now the correction reaches the library the moment it is found.
+  ///
+  /// Stored as the ENRICHED cover, never over one the user picked by hand.
+  void adoptAlbumCover(String artist, String album, Uint8List bytes) {
+    if (bytes.length < 500) return;
+    var changed = false;
+    for (final a in albums) {
+      if (a.tracks.isEmpty) continue;
+      if (artistKey(a.artist) != artistKey(artist) || normKey(a.title) != normKey(album)) continue;
+      if (a.correctedCover != null) continue;
+      if (identical(a.enriched, bytes)) continue;
+      a.enriched = bytes;
+      changed = true;
+    }
+    if (changed) notifyListeners();
+  }
+
   /// Un-hide everything: the files are still on disk, so a rescan restores them.
   Future<void> restoreHidden() async {
     _hidden.clear();

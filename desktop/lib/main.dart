@@ -6204,6 +6204,12 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
           .releaseArt(artist, album, expectedTracks: widget.trackCount);
       if (!mounted || artist != widget.artist || album != widget.album) return;
       setState(() => _art = art);
+      // Hand it to the library too. Without this the correction lived only on the open page: the
+      // album showed the right sleeve, and going back to the grid showed the wrong one again.
+      final front = art?.front;
+      if (front != null && mounted) {
+        context.read<LibraryStore>().adoptAlbumCover(artist, album, front);
+      }
     } catch (_) {/* no artwork is not an error worth showing */}
   }
 
