@@ -113,4 +113,14 @@ void main() {
     final albums = group([t('a.flac', total: 12, no: 1), t('b.flac', total: 12, no: 2)]);
     expect(albums.single.edition, isNull);
   });
+
+  test('pinnedRelease returns null on an album with no pin, and does not throw', () {
+    // Adele's 30 had fifteen live tracks pinned to one release and fifteen orphan corrections from
+    // a deleted Japanese edition, all empty. Reading the wrong list made the pin look empty. An
+    // album with no pin at all must simply answer null.
+    final lib = LibraryStore();
+    lib.tracks.addAll([t('live1.flac', total: 15, no: 1), t('live2.flac', total: 15, no: 2)]);
+    lib.rebuildAlbums();
+    expect(lib.pinnedRelease(lib.albums.single), isNull);
+  });
 }

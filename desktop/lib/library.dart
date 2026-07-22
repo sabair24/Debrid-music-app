@@ -302,11 +302,22 @@ class LibraryStore extends ChangeNotifier {
       if (!await f.exists()) return;
       final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
       _corrections.clear();
-      j.forEach((path, v) {
-        if (v is Map) {
-          _corrections[path] = v.map((k, val) => MapEntry(k.toString(), val.toString()));
+      var orphans = 0;
+      for (final e in j.entries) {
+        final path = e.key, v = e.value;
+        if (v is! Map) continue;
+        // Drop a correction whose file is gone. An album moved or re-ripped leaves its old
+        // corrections behind as orphans, and they cause real confusion: Adele's 30 had fifteen
+        // live pins under one folder and fifteen dead, empty ones under a deleted Japanese edition,
+        // and reading the wrong list made the pin look empty when it was not.
+        if (!File(path).existsSync()) {
+          orphans++;
+          continue;
         }
-      });
+        _corrections[path] = v.map((k, val) => MapEntry(k.toString(), val.toString()));
+      }
+      // Persist the cleanup, but only when there was something to clean — no pointless rewrite.
+      if (orphans > 0) await _saveCorrections();
     } catch (_) {}
   }
 
