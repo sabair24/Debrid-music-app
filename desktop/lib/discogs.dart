@@ -341,13 +341,16 @@ class DiscogsService {
   /// asking about. Discogs is a collectors' database of physical media: of the 115 versions of
   /// *Discovery*, two are digital and one of those has no year. So a digital pressing only wins
   /// when it is actually documented, and an undocumented one steps aside for the CD.
-  /// Does a pressing with [got] tracks plausibly hold the album the library has [want] tracks of?
+  /// Does a pressing with [got] tracks hold the record the master says is [want] tracks long?
   ///
-  /// Both directions matter, and only one of them was checked at first. Too few means a single or
-  /// a sampler filed under the album's master. Too many means a box set or a two-in-one: searching
-  /// for *Discovery* landed on a 30-track double CD that turned out to be Homework as well, and
-  /// searching for *Bad* on a 32-track anniversary edition. Bonus tracks are normal, a second album
-  /// is not.
+  /// Both directions matter, and only one was checked at first. Too few means a single or a sampler
+  /// filed under the album's master. Too many means a box set or a two-in-one: searching for
+  /// *Discovery* landed on a 30-track double CD that turned out to be Homework as well, and *Bad*
+  /// on a 32-track anniversary edition. Bonus tracks are normal, a second album is not.
+  ///
+  /// [want] is the MASTER's own tracklist, never the library's. Measuring against what is owned was
+  /// wrong in the ordinary case: four tracks of Demon Days are still Demon Days, and every real
+  /// fifteen-track pressing of it got rejected for being too long.
   static bool fitsTrackCount(int got, int want) => got >= want - 2 && got <= want * 1.5 + 3;
 
   static const _formatOrder = ['File', 'CD', 'Vinyl', 'CDr', 'Cassette'];
@@ -386,16 +389,22 @@ class DiscogsService {
     if (masters.isEmpty) return null;
     DiscogsEdition? fallback;
     for (final master in masters.take(3)) {
+      // The master's own tracklist is what a pressing is measured against. One extra request, and
+      // it is the difference between describing Demon Days and describing whatever came first.
+      final m = await _get('https://api.discogs.com/masters/$master');
+      final masterTracks = (m?['tracklist'] as List<dynamic>?)?.length ?? 0;
+      // The record has to be able to hold what the library has of it: owning eleven tracks rules
+      // out a master that is a two-track promo, however well it scored on name and format.
+      if (expectedTracks > 0 && masterTracks > 0 && masterTracks < expectedTracks - 2) continue;
       final ordered = orderByPreference(await _versions(master));
       // Only ever fetch a handful in full: each one is a request out of sixty a minute.
       for (final v in ordered.take(4)) {
         final e = await release(v.id);
         if (e == null) continue;
         fallback ??= e;
-        if (expectedTracks > 0 && !fitsTrackCount(e.tracklist.length, expectedTracks)) continue;
+        if (masterTracks > 0 && !fitsTrackCount(e.tracklist.length, masterTracks)) continue;
         return e;
       }
-      if (expectedTracks == 0) break; // nothing to check against — the first master is the answer
     }
     // No pressing anywhere matched the track count. Better to describe it with the closest thing
     // found than to leave the page empty.

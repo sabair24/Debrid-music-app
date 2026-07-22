@@ -62,4 +62,12 @@ void main() {
     expect(e.tracklist.length, greaterThanOrEqualTo(9),
         reason: 'a promo 7 inch has two tracks; the album has eleven');
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('Demon Days: four owned tracks still describe the whole record', () async {
+    final e = await d.edition('Gorillaz', 'Demon Days', expectedTracks: 4);
+    expect(e, isNotNull);
+    print('  editie   : ${e!.format}  ${e.year}  ${e.label} ${e.catno} ${e.country}');
+    print('  tracks   : ${e.tracklist.length}');
+    expect(e.tracklist.length, greaterThanOrEqualTo(13), reason: 'Demon Days is fifteen tracks');
+  }, timeout: const Timeout(Duration(minutes: 3)));
 }

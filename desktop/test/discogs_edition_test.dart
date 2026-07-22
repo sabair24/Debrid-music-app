@@ -155,4 +155,13 @@ void masters() {
       expect(DiscogsService.titleScore('Discovery', a, t), greaterThan(0));
     });
   });
+
+  group('owning only part of an album', () {
+    test('four tracks of a fifteen-track record still describe that record', () {
+      // Demon Days: the library held four tracks, and measuring pressings against THAT rejected
+      // every real fifteen-track one. The master's own length is the reference.
+      expect(DiscogsService.fitsTrackCount(15, 15), isTrue);
+      expect(DiscogsService.fitsTrackCount(15, 4), isFalse, reason: 'this is why the library count is not the yardstick');
+    });
+  });
 }
