@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+
+import 'artwork.dart';
 
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
@@ -583,4 +586,89 @@ class DiscogsArtist {
 
   /// The ones wide enough to sit behind a page.
   List<DiscogsImage> get backdrops => images.where((i) => i.isWide).toList();
+}
+
+/// The three scans an album page shows: the sleeve, its back, and the disc itself.
+class ReleaseArt {
+  final Uint8List? front, back, disc;
+  const ReleaseArt({this.front, this.back, this.disc});
+  bool get isEmpty => front == null && back == null && disc == null;
+}
+
+extension DiscogsArtwork on DiscogsService {
+  /// Fetch and identify the front, back and disc scans for an album, cached on disk.
+  ///
+  /// Only the first handful of scans are downloaded. Dangerous has 31 — a booklet page by page —
+  /// and the three that matter are always near the top, so pulling the lot would cost megabytes
+  /// to answer a question already settled.
+  Future<ReleaseArt?> releaseArt(String artist, String album, {int expectedTracks = 0}) async {
+    final key = sha1.convert(utf8.encode('art|$artist|$album')).toString();
+    final dir = Directory('$artDir${Platform.pathSeparator}$key');
+    final cached = await _readArt(dir);
+    if (cached != null) return cached;
+
+    final e = await edition(artist, album, expectedTracks: expectedTracks);
+    if (e == null || e.images.isEmpty) return null;
+    const look = 6;
+    final take = e.images.length < look ? e.images.length : look;
+    final datas = <Uint8List?>[];
+    for (var i = 0; i < take; i++) {
+      datas.add(await fetchImage(e.images[i].uri));
+    }
+    final roles = assignRoles(
+      [for (var i = 0; i < take; i++) e.images[i].primary],
+      [for (var i = 0; i < take; i++) e.images[i].height == 0 ? 1.0 : e.images[i].width / e.images[i].height],
+      datas,
+    );
+    Uint8List? at(int? i) => (i == null || i >= datas.length) ? null : datas[i];
+    final art = ReleaseArt(front: at(roles.front), back: at(roles.back), disc: at(roles.disc));
+    await _writeArt(dir, art);
+    return art;
+  }
+
+  String get artDir =>
+      '${Platform.environment['APPDATA'] ?? Directory.current.path}${Platform.pathSeparator}DebridMusic'
+      '${Platform.pathSeparator}releaseart';
+
+  Future<ReleaseArt?> _readArt(Directory dir) async {
+    try {
+      if (!await dir.exists()) return null;
+      Future<Uint8List?> one(String n) async {
+        final f = File('${dir.path}${Platform.pathSeparator}$n');
+        return await f.exists() ? await f.readAsBytes() : null;
+      }
+
+      return ReleaseArt(front: await one('front'), back: await one('back'), disc: await one('disc'));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _writeArt(Directory dir, ReleaseArt art) async {
+    try {
+      await dir.create(recursive: true);
+      Future<void> one(String n, Uint8List? b) async {
+        if (b != null) await File('${dir.path}${Platform.pathSeparator}$n').writeAsBytes(b);
+      }
+
+      await one('front', art.front);
+      await one('back', art.back);
+      await one('disc', art.disc);
+      // A marker, so a release that genuinely has only a front cover isn't refetched every visit.
+      await File('${dir.path}${Platform.pathSeparator}done').writeAsString('1');
+    } catch (_) {/* a cache that can't be written is not worth failing over */}
+  }
+
+  /// Discogs serves images from its own CDN and wants the same User-Agent as the API.
+  Future<Uint8List?> fetchImage(String url) async {
+    try {
+      final r = await http.get(Uri.parse(url), headers: {
+        'User-Agent': DiscogsService._ua,
+        'Authorization': 'Discogs token=${settings.discogsToken.trim()}',
+      }).timeout(const Duration(seconds: 20));
+      return r.statusCode == 200 && r.bodyBytes.length > 500 ? r.bodyBytes : null;
+    } catch (_) {
+      return null;
+    }
+  }
 }

@@ -875,6 +875,15 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     );
   }
 
+  /// Is the track playing right now one of THIS album's? The disc only turns for the record it
+  /// belongs to — every sleeve in the library spinning at once would be nonsense.
+  bool _albumIsPlaying(BuildContext context) {
+    final p = context.watch<PlayerStore>();
+    if (!p.playing) return false;
+    final now = p.current?.path;
+    return now != null && album.tracks.any((t) => t.path == now);
+  }
+
   Widget _header(BuildContext context) {
     final player = context.read<PlayerStore>();
     return Padding(
@@ -882,7 +891,14 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          cover(album.cover, size: 200),
+          AlbumArt(
+            artist: album.artist,
+            album: album.title,
+            size: 200,
+            fallback: album.cover,
+            trackCount: album.tracks.length,
+            playing: _albumIsPlaying(context),
+          ),
           const SizedBox(width: 24),
           Expanded(
             child: Column(
@@ -5076,6 +5092,7 @@ class AlbumInfoPanel extends StatefulWidget {
 class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
   AlbumInfo? _info;
   DiscogsEdition? _edition;
+  Uint8List? _back;
 
   @override
   void initState() {
@@ -5090,6 +5107,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
       setState(() {
         _info = null;
         _edition = null;
+        _back = null;
       });
       _load();
     }
@@ -5103,11 +5121,14 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     final info = await CoverEnricher(settings).albumInfo(artist, album);
     if (!mounted || artist != widget.artist || album != widget.album) return;
     setState(() => _info = info);
-    final ed = await DiscogsService(settings)
-        .edition(artist, album, expectedTracks: widget.trackCount)
-        .catchError((_) => null);
+    final discogs = DiscogsService(settings);
+    final ed = await discogs.edition(artist, album, expectedTracks: widget.trackCount).catchError((_) => null);
     if (!mounted || artist != widget.artist || album != widget.album) return;
     setState(() => _edition = ed);
+    // The scans come off the same cached edition, so this costs nothing beyond the images.
+    final art = await discogs.releaseArt(artist, album, expectedTracks: widget.trackCount).catchError((_) => null);
+    if (!mounted || artist != widget.artist || album != widget.album) return;
+    setState(() => _back = art?.back);
   }
 
   /// "CD" reads oddly next to a year; "File" reads as nothing at all.
@@ -5193,6 +5214,26 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
                     style: const TextStyle(color: _muted, fontSize: 12)),
               ),
             ]),
+          ],
+          // The back of the sleeve, next to the line describing the pressing it belongs to. Click
+          // to see it full size — the track list and the small print are the reason to look.
+          if (_back != null) ...[
+            const SizedBox(height: 10),
+            InkWell(
+              onTap: () => showDialog<void>(
+                context: context,
+                builder: (_) => Dialog(
+                  backgroundColor: Colors.transparent,
+                  insetPadding: const EdgeInsets.all(40),
+                  child: InteractiveViewer(child: Image.memory(_back!)),
+                ),
+              ),
+              borderRadius: BorderRadius.circular(6),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: Image.memory(_back!, height: 116, fit: BoxFit.contain),
+              ),
+            ),
           ],
           if (text != null && text.isNotEmpty) ...[
             const SizedBox(height: 8),
@@ -6072,4 +6113,134 @@ String _fmt(Duration? d) {
   final m = d.inMinutes;
   final s = d.inSeconds % 60;
   return '$m:${s.toString().padLeft(2, '0')}';
+}
+
+/// The album sleeve, with the disc sliding out from behind it while the record plays.
+///
+/// Both scans come from Discogs, which does not label them — see artwork.dart for how the disc is
+/// told apart from a back cover. When there is no disc scan the sleeve simply sits there, which is
+/// what every album looked like before.
+class AlbumArt extends StatefulWidget {
+  final String artist, album;
+  final Uint8List? fallback;
+  final double size;
+  final int trackCount;
+  final bool playing;
+  const AlbumArt({
+    super.key,
+    required this.artist,
+    required this.album,
+    required this.size,
+    this.fallback,
+    this.trackCount = 0,
+    this.playing = false,
+  });
+
+  @override
+  State<AlbumArt> createState() => _AlbumArtState();
+}
+
+class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
+  ReleaseArt? _art;
+  late final AnimationController _slide = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 750),
+    reverseDuration: const Duration(milliseconds: 450),
+  );
+  // Roughly a third of an RPM on screen — enough to read as turning, slow enough not to nag.
+  late final AnimationController _spin =
+      AnimationController(vsync: this, duration: const Duration(seconds: 9));
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(AlbumArt old) {
+    super.didUpdateWidget(old);
+    if (old.artist != widget.artist || old.album != widget.album) {
+      setState(() => _art = null);
+      _load();
+    }
+    if (old.playing != widget.playing) _sync();
+  }
+
+  void _sync() {
+    if (widget.playing) {
+      _slide.forward();
+      if (!_spin.isAnimating) _spin.repeat();
+    } else {
+      _slide.reverse();
+      // Left where it stopped rather than snapped back to zero: a record that stops turning
+      // stops where it is.
+      _spin.stop();
+    }
+  }
+
+  Future<void> _load() async {
+    final artist = widget.artist, album = widget.album;
+    try {
+      final art = await DiscogsService(context.read<AppSettings>())
+          .releaseArt(artist, album, expectedTracks: widget.trackCount);
+      if (!mounted || artist != widget.artist || album != widget.album) return;
+      setState(() => _art = art);
+    } catch (_) {/* no artwork is not an error worth showing */}
+  }
+
+  @override
+  void dispose() {
+    _slide.dispose();
+    _spin.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.size;
+    final front = _art?.front ?? widget.fallback;
+    final disc = _art?.disc;
+    // How far the disc peeks out at full slide. Less than half, so it still reads as sitting
+    // INSIDE the sleeve rather than beside it.
+    final travel = s * .42;
+
+    final sleeve = ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: front == null
+          ? Container(width: s, height: s, color: _panel2, child: const Icon(Icons.album, color: _muted))
+          : Image.memory(front, width: s, height: s, fit: BoxFit.cover),
+    );
+
+    if (disc == null) return sleeve;
+
+    return SizedBox(
+      width: s + travel,
+      height: s,
+      child: AnimatedBuilder(
+        animation: Listenable.merge([_slide, _spin]),
+        builder: (context, _) {
+          final t = Curves.easeOutCubic.transform(_slide.value);
+          return Stack(
+            clipBehavior: Clip.none,
+            children: [
+              // Behind the sleeve, and drawn first so it stays there.
+              Positioned(
+                left: t * travel,
+                top: s * .04,
+                child: Transform.rotate(
+                  angle: _spin.value * 6.283185,
+                  child: ClipOval(
+                    child: Image.memory(disc, width: s * .92, height: s * .92, fit: BoxFit.cover),
+                  ),
+                ),
+              ),
+              Positioned(left: 0, top: 0, child: sleeve),
+            ],
+          );
+        },
+      ),
+    );
+  }
 }
