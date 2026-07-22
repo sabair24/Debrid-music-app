@@ -1009,6 +1009,11 @@ class _MetadataEditorState extends State<MetadataEditor> {
   bool _applying = false;
   List<MetaResult> _results = const [];
   MetaResult? _picked;
+
+  /// The release id, held separately from [_picked]. Kept apart on purpose: the pin arrived empty
+  /// once and everything downstream then silently fell back to guessing, so this no longer depends
+  /// on the picked object still being the same instance at apply time.
+  int? _pickedRelease;
   Uint8List? _pickedCover;
 
   @override
@@ -1038,6 +1043,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
     final newTitle = widget.album.isSingle ? m.title : m.album;
     setState(() {
       _picked = m;
+      _pickedRelease = m.releaseId;
       _pickedCover = null;
       if (m.artist.isNotEmpty) _artist.text = m.artist;
       if (newTitle.isNotEmpty) _title.text = newTitle;
@@ -1057,7 +1063,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
           albumTitle: widget.album.isSingle ? null : _title.text,
           title: widget.album.isSingle ? _title.text : null,
           coverBytes: _pickedCover,
-          discogsRelease: _picked?.releaseId,
+          discogsRelease: _pickedRelease,
         );
     if (mounted) Navigator.of(context).pop(true);
   }
@@ -1171,7 +1177,11 @@ class _MetadataEditorState extends State<MetadataEditor> {
                                                 maxLines: 1,
                                                 overflow: TextOverflow.ellipsis,
                                                 style: const TextStyle(fontWeight: FontWeight.w600)),
-                                            Text(m.artist.isEmpty ? '—' : m.artist,
+                                            Text(
+                                                // The pressing, where the provider knows it. Five
+                                                // rows reading "30 — Adele" give nothing to choose
+                                                // between; a format and a catalogue number do.
+                                                m.detail ?? (m.artist.isEmpty ? '—' : m.artist),
                                                 maxLines: 1,
                                                 overflow: TextOverflow.ellipsis,
                                                 style: const TextStyle(color: _muted, fontSize: 12)),

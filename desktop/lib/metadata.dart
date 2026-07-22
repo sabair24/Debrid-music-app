@@ -15,8 +15,18 @@ class MetaResult {
   /// editor used to change only the name and the front cover — the app then went off and chose its
   /// own edition for everything else, so the back cover and the disc never followed.
   final int? releaseId;
-  const MetaResult(
-      {required this.title, required this.artist, required this.album, this.coverUrl, this.releaseId});
+
+  /// What this pressing IS, in one line: "CD · Europe · 19439937972 · 2021". Five results reading
+  /// "30 — Adele" and nothing else give you nothing to choose between.
+  final String? detail;
+  const MetaResult({
+    required this.title,
+    required this.artist,
+    required this.album,
+    this.coverUrl,
+    this.releaseId,
+    this.detail,
+  });
 }
 
 /// Searches Deezer / Discogs / MusicBrainz for correct metadata + cover art.
@@ -94,12 +104,22 @@ class MetadataSearch {
           album = ttl.substring(dash + 3).trim();
         }
         final cover = (e['cover_image'] ?? e['thumb']) as String?;
+        // Format first, because it is the thing worth choosing on: a CD carries a catalogue number
+        // and a country, a digital entry usually carries neither.
+        final formats = [for (final f in (e['format'] as List? ?? const [])) f.toString()];
+        final bits = <String>[
+          if (formats.isNotEmpty) formats.first,
+          if ((e['country'] as String?)?.isNotEmpty ?? false) e['country'] as String,
+          if ((e['catno'] as String?)?.isNotEmpty ?? false) e['catno'] as String,
+          if ((e['year'] as String?)?.isNotEmpty ?? false) e['year'] as String,
+        ];
         out.add(MetaResult(
           title: album,
           artist: artist,
           album: album,
           coverUrl: (cover != null && cover.isNotEmpty && !cover.contains('spacer')) ? cover : null,
           releaseId: (e['id'] as num?)?.toInt(),
+          detail: bits.isEmpty ? null : bits.join(' · '),
         ));
       }
       return out;
