@@ -227,6 +227,19 @@ class LibraryStore extends ChangeNotifier {
   /// Has the user told us to keep this record together?
   bool isMerged(Album a) => _merged.contains('album::${artistKey(a.artist)}|${normKey(a.title)}');
 
+  /// The exact Discogs release the user pinned to this album, if they pinned one.
+  ///
+  /// Their choice is the source for everything after it — edition, label, catalogue number, back
+  /// cover and disc — instead of the app going off and picking its own pressing, which is why a
+  /// correction changed the front cover and nothing else.
+  int? pinnedRelease(Album a) {
+    for (final t in a.tracks) {
+      final id = int.tryParse(_corrections[t.path]?['release'] ?? '');
+      if (id != null && id > 0) return id;
+    }
+    return null;
+  }
+
   /// Hand the library a cover found while an album page was open.
   ///
   /// The album page draws its own sleeve from Discogs, so a wrong embedded cover was corrected
@@ -332,6 +345,7 @@ class LibraryStore extends ChangeNotifier {
     String? albumTitle,
     String? title,
     Uint8List? coverBytes,
+    int? discogsRelease,
   }) async {
     for (final t in target.tracks) {
       final c = _corrections.putIfAbsent(t.path, () => {});
@@ -342,6 +356,10 @@ class LibraryStore extends ChangeNotifier {
         c['album'] = albumTitle.trim();
       }
       if (title != null && title.trim().isNotEmpty && target.isSingle) c['title'] = title.trim();
+      // The exact pressing the user pointed at. Everything else about this album — its edition
+      // line, its back cover, its disc — is read from this one release from now on, instead of
+      // whichever the app would have picked for itself.
+      if (discogsRelease != null && discogsRelease > 0) c['release'] = '$discogsRelease';
     }
     await _saveCorrections();
 

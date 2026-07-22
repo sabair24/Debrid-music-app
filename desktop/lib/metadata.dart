@@ -10,7 +10,13 @@ class MetaResult {
   final String artist;
   final String album;
   final String? coverUrl;
-  const MetaResult({required this.title, required this.artist, required this.album, this.coverUrl});
+
+  /// The Discogs release this candidate IS, when it came from Discogs. Picking a release in the
+  /// editor used to change only the name and the front cover — the app then went off and chose its
+  /// own edition for everything else, so the back cover and the disc never followed.
+  final int? releaseId;
+  const MetaResult(
+      {required this.title, required this.artist, required this.album, this.coverUrl, this.releaseId});
 }
 
 /// Searches Deezer / Discogs / MusicBrainz for correct metadata + cover art.
@@ -93,6 +99,7 @@ class MetadataSearch {
           artist: artist,
           album: album,
           coverUrl: (cover != null && cover.isNotEmpty && !cover.contains('spacer')) ? cover : null,
+          releaseId: (e['id'] as num?)?.toInt(),
         ));
       }
       return out;

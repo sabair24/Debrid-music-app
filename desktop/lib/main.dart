@@ -856,7 +856,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                 if (!album.isSingle)
                   SliverToBoxAdapter(
                     child: AlbumInfoPanel(
-                        artist: album.artist, album: album.title, trackCount: album.tracks.length),
+                        artist: album.artist,
+                        album: album.title,
+                        trackCount: album.tracks.length,
+                        pinned: context.watch<LibraryStore>().pinnedRelease(album)),
                   ),
                 if (!album.isSingle)
                   SliverToBoxAdapter(
@@ -901,6 +904,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             size: 200,
             fallback: album.cover,
             chosen: album.correctedCover,
+            pinned: context.watch<LibraryStore>().pinnedRelease(album),
             trackCount: album.tracks.length,
             playing: _albumIsPlaying(context),
           ),
@@ -1053,6 +1057,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
           albumTitle: widget.album.isSingle ? null : _title.text,
           title: widget.album.isSingle ? _title.text : null,
           coverBytes: _pickedCover,
+          discogsRelease: _picked?.releaseId,
         );
     if (mounted) Navigator.of(context).pop(true);
   }
@@ -5121,7 +5126,11 @@ class AlbumInfoPanel extends StatefulWidget {
   /// How many tracks the library holds for this album — used to reject a Discogs pressing that
   /// is really a single or a sampler filed under the same master.
   final int trackCount;
-  const AlbumInfoPanel({super.key, required this.artist, required this.album, this.trackCount = 0});
+
+  /// The Discogs release the user pinned to this album, if any.
+  final int? pinned;
+  const AlbumInfoPanel(
+      {super.key, required this.artist, required this.album, this.trackCount = 0, this.pinned});
 
   @override
   State<AlbumInfoPanel> createState() => _AlbumInfoPanelState();
@@ -5160,11 +5169,14 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     if (!mounted || artist != widget.artist || album != widget.album) return;
     setState(() => _info = info);
     final discogs = DiscogsService(settings);
-    final ed = await discogs.edition(artist, album, expectedTracks: widget.trackCount).catchError((_) => null);
+    final ed =
+        await discogs.edition(artist, album, expectedTracks: widget.trackCount, pinned: widget.pinned).catchError((_) => null);
     if (!mounted || artist != widget.artist || album != widget.album) return;
     setState(() => _edition = ed);
     // The scans come off the same cached edition, so this costs nothing beyond the images.
-    final art = await discogs.releaseArt(artist, album, expectedTracks: widget.trackCount).catchError((_) => null);
+    final art = await discogs
+        .releaseArt(artist, album, expectedTracks: widget.trackCount, pinned: widget.pinned)
+        .catchError((_) => null);
     if (!mounted || artist != widget.artist || album != widget.album) return;
     setState(() => _back = art?.back);
   }
@@ -6168,6 +6180,9 @@ class AlbumArt extends StatefulWidget {
   final double size;
   final int trackCount;
   final bool playing;
+
+  /// The Discogs release the user pinned, if any — see LibraryStore.pinnedRelease.
+  final int? pinned;
   const AlbumArt({
     super.key,
     required this.artist,
@@ -6177,6 +6192,7 @@ class AlbumArt extends StatefulWidget {
     this.chosen,
     this.trackCount = 0,
     this.playing = false,
+    this.pinned,
   });
 
   @override
@@ -6227,7 +6243,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     final artist = widget.artist, album = widget.album;
     try {
       final art = await DiscogsService(context.read<AppSettings>())
-          .releaseArt(artist, album, expectedTracks: widget.trackCount);
+          .releaseArt(artist, album, expectedTracks: widget.trackCount, pinned: widget.pinned);
       if (!mounted || artist != widget.artist || album != widget.album) return;
       setState(() => _art = art);
       // Hand it to the library too. Without this the correction lived only on the open page: the

@@ -443,7 +443,13 @@ class DiscogsService {
   /// [expectedTracks] is what the library says the album holds; a pressing with far fewer tracks is
   /// a single or a sampler that got filed under the same master, and describing the album with it
   /// would be worse than useless.
-  Future<DiscogsEdition?> edition(String artist, String album, {int expectedTracks = 0}) async {
+  Future<DiscogsEdition?> edition(String artist, String album, {int expectedTracks = 0, int? pinned}) async {
+    // A release the user pointed at is not a candidate to be weighed against the others — it is the
+    // answer. Everything the page shows is read from it.
+    if (pinned != null && pinned > 0) {
+      final picked = await release(pinned);
+      if (picked != null) return picked;
+    }
     final masters = await masterIds(artist, album);
     if (masters.isEmpty) return null;
     DiscogsEdition? fallback;
@@ -624,13 +630,16 @@ extension DiscogsArtwork on DiscogsService {
   /// Only the first handful of scans are downloaded. Dangerous has 31 — a booklet page by page —
   /// and the three that matter are always near the top, so pulling the lot would cost megabytes
   /// to answer a question already settled.
-  Future<ReleaseArt?> releaseArt(String artist, String album, {int expectedTracks = 0}) async {
-    final key = sha1.convert(utf8.encode('art|$artist|$album')).toString();
+  Future<ReleaseArt?> releaseArt(String artist, String album, {int expectedTracks = 0, int? pinned}) async {
+    // The pinned release is part of the cache key. Without it a new choice would keep answering
+    // with the scans fetched for the old one — which is half of why picking a release changed the
+    // front cover and left the back and the disc exactly as they were.
+    final key = sha1.convert(utf8.encode('art|$artist|$album|${pinned ?? 0}')).toString();
     final dir = Directory('$artDir${Platform.pathSeparator}$key');
     final cached = await _readArt(dir);
     if (cached != null) return cached;
 
-    final e = await edition(artist, album, expectedTracks: expectedTracks);
+    final e = await edition(artist, album, expectedTracks: expectedTracks, pinned: pinned);
     if (e == null || e.images.isEmpty) return null;
     const look = 6;
     final take = e.images.length < look ? e.images.length : look;
