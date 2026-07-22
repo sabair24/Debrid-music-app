@@ -606,6 +606,10 @@ class SoulseekClient {
       stall?.cancel();
       await sink.close();
       sink = null;
+      // With no expected size there is nothing to check against, and "any bytes at all" counted as
+      // a finished download: a connection that died 2.8 MB into a 20 MB track was filed into the
+      // library as the real thing. The caller now always passes the size the SEARCH stated, so
+      // this only stays blind when even that is unknown.
       final ok = received > 0 && (total == 0 || received >= total);
       if (ok) {
         onProgress(received, total > 0 ? total : received);
@@ -957,7 +961,10 @@ class SlskSession {
         if (!delivered.isCompleted) delivered.complete(SlskCancelled());
       });
       final dlToken = client._nextTicket();
-      final fileSize = _Box(0);
+      // Seeded from the search result. Uploaders don't always repeat the size in TransferRequest,
+      // and without it a truncated transfer looks complete — so we start from what the search told
+      // us and let the peer's own figure override it if it sends one.
+      final fileSize = _Box(file.size);
       var fStarted = false;
       String? deny;
 
@@ -1061,7 +1068,10 @@ class SlskSession {
         if (code == 41) {
           r.u32();
           if (r.boolean()) {
-            if (fileSize.v == 0) fileSize.v = r.u64();
+            // Always read it (the reader has to advance), and prefer it over the search's figure:
+            // this is the peer telling us what it is about to send.
+            final stated = r.u64();
+            if (stated > 0) fileSize.v = stated;
           } else {
             deny = r.str();
             if (deny!.toLowerCase().contains('queued')) noteQueued();
@@ -1070,7 +1080,10 @@ class SlskSession {
           r.u32();
           final tok = r.u32();
           r.str();
-          if (r.remaining >= 8 && fileSize.v == 0) fileSize.v = r.u64();
+          if (r.remaining >= 8) {
+            final stated = r.u64();
+            if (stated > 0) fileSize.v = stated;
+          }
           psend(_message(41, (_W()..u32(tok)..u8(1)).bytes())); // accept
         } else if (code == 44) {
           // PlaceInQueueResponse(filename, place)
