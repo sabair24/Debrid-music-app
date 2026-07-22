@@ -644,11 +644,39 @@ extension DiscogsArtwork on DiscogsService {
       datas,
     );
     Uint8List? at(int? i) => (i == null || i >= datas.length) ? null : datas[i];
-    final art = ReleaseArt(front: at(roles.front), back: at(roles.back), disc: at(roles.disc));
+    var disc = at(roles.disc);
+    // Not every pressing has its disc photographed, and a missing scan is a missing animation —
+    // for a record the library demonstrably holds. So borrow one from another pressing of the SAME
+    // master: it is the same disc art, just someone else's scanner.
+    disc ??= await _discFromAnotherPressing(artist, album, e.releaseId);
+    final art = ReleaseArt(front: at(roles.front), back: at(roles.back), disc: disc);
     await _writeArt(dir, art);
     return art;
   }
 
+
+  /// A disc scan from any other pressing of this record, or null.
+  ///
+  /// Bounded hard: two extra releases, three images each. The disc is nearly always among the
+  /// first few scans, and this runs on the sixty-a-minute budget shared with everything else.
+  Future<Uint8List?> _discFromAnotherPressing(String artist, String album, int skip) async {
+    try {
+      final masters = await masterIds(artist, album);
+      if (masters.isEmpty) return null;
+      final versions = DiscogsService.orderByPreference(await _versions(masters.first, format: 'CD'));
+      var tried = 0;
+      for (final v in versions) {
+        if (v.id == skip || tried >= 2) continue;
+        tried++;
+        final other = await release(v.id);
+        for (final img in (other?.images ?? const <DiscogsImage>[]).take(3)) {
+          final bytes = await fetchImage(img.uri);
+          if (bytes != null && looksLikeDisc(bytes)) return bytes;
+        }
+      }
+    } catch (_) {/* no disc is not an error, just no animation */}
+    return null;
+  }
   String get artDir =>
       '${Platform.environment['APPDATA'] ?? Directory.current.path}${Platform.pathSeparator}DebridMusic'
       '${Platform.pathSeparator}releaseart';
