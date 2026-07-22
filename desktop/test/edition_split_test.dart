@@ -34,16 +34,25 @@ List<Album> group(List<Track> tracks) {
 }
 
 void main() {
-  test('three editions of one title become three albums', () {
+  test('editions that do not collide are left as one album', () {
+    // Differing totals alone are usually just sloppy tagging. Splitting on them gave one artist six
+    // identical tiles — worse to look at than the merging it was meant to fix.
+    final albums = group([
+      t('a.flac', total: 12, no: 10),
+      t('b.flac', total: 16, no: 4),
+      t('c.flac', total: 13, no: 6),
+    ]);
+    expect(albums.length, 1);
+  });
+
+  test('three editions DO split once their track numbers collide', () {
     final albums = group([
       t('a.flac', total: 12, no: 10), // US 1997 Zomba
-      t('b.flac', total: 12, no: 2),
-      t('c.flac', total: 16, no: 4), // 16-track RCA
-      t('d.flac', total: 16, no: 5),
-      t('e.flac', total: 13, no: 6), // international Jive
+      t('b.flac', total: 12, no: 6),
+      t('c.flac', total: 16, no: 6), // 16-track RCA — collides on 6
+      t('d.flac', total: 13, no: 6), // international Jive — collides again
     ]);
     expect(albums.length, 3);
-    expect(albums.map((a) => a.tracks.length).toList()..sort(), [1, 2, 2]);
   });
 
   test('the clashing track numbers end up in different albums', () {

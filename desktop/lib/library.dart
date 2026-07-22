@@ -406,12 +406,47 @@ class LibraryStore extends ChangeNotifier {
   String _groupKey(Track t) {
     if (t.album.isEmpty) return 'single::${t.path}';
     final base = 'album::${artistKey(t.artist)}|${normKey(t.album)}';
-    return t.trackTotal > 0 ? '$base|${t.trackTotal}' : base;
+    return editionSplit(_byBase[base]) ? '$base|${t.trackTotal}' : base;
+  }
+
+  /// Tracks of one artist+album title, kept so [_groupKey] can ask whether that title needs
+  /// splitting before it answers for any single track.
+  final Map<String, List<Track>> _byBase = {};
+
+  /// Does this pile of tracks hold more than one EDITION of the record?
+  ///
+  /// Splitting on the stated track total alone was far too eager: every ripper writes its own, so
+  /// one artist came out with six identical "Backstreet Boys" tiles, three "Backstreet's Back" and
+  /// two "Black & Blue" — worse to look at than the merging it was meant to fix.
+  ///
+  /// So split only where merging actually breaks something: two tracks claiming the SAME number.
+  /// That is the symptom — two number tens, two number sixes, "Quit Playing Games" listed twice —
+  /// and where it doesn't happen, differing totals are just sloppy tagging and are left alone.
+  static bool editionSplit(List<Track>? group) {
+    if (group == null || group.length < 2) return false;
+    final seen = <int>{};
+    for (final t in group) {
+      if (t.trackNo > 0 && !seen.add(t.trackNo)) {
+        // A collision. Only worth splitting if the totals can actually separate them.
+        // Zero counts as its own edition here: an untagged rip that collides with a tagged one is
+        // demonstrably not from the same pressing, whatever it forgot to say.
+        return group.map((x) => x.trackTotal).toSet().length > 1;
+      }
+    }
+    return false;
   }
 
   /// Regroup tracks into albums. Public so a test can reproduce the "edit one album, another
   /// album loses its cover" regression without going through the on-disk correction path.
   void rebuildAlbums() {
+    // Which titles hold more than one edition has to be known BEFORE any track is keyed, including
+    // for the cover snapshot below — the two must never disagree about where an album lives.
+    _byBase.clear();
+    for (final t in tracks) {
+      if (t.album.isEmpty) continue;
+      _byBase.putIfAbsent('album::${artistKey(t.artist)}|${normKey(t.album)}', () => []).add(t);
+    }
+
     // Snapshot the covers of the CURRENT albums. Rebuilding makes fresh Album objects with null
     // covers, so without this ANY caller (delete, correction, …) would blank the grid until the
     // next scan/enrich. This is the fix for "deleting a track wipes all album covers".
