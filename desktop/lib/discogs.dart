@@ -882,3 +882,42 @@ extension DiscogsSearch on DiscogsService {
     return out;
   }
 }
+
+extension DiscogsStyles on DiscogsService {
+  /// Albums in a given style — the one search Deezer cannot do at all.
+  ///
+  /// Deezer knows a handful of genres; Discogs has thousands of styles and will filter on them
+  /// directly, which is what makes "more like this" mean something narrower than "more pop".
+  Future<List<CatalogAlbumHit>> searchByStyle(String style, {int max = 24}) async {
+    if (!available || style.trim().isEmpty) return const [];
+    final b = await _get('https://api.discogs.com/database/search'
+        '?type=master&style=${_q(style.trim())}&sort=have&sort_order=desc&per_page=${max * 2}');
+    final results = b?['results'] as List<dynamic>? ?? const [];
+    final out = <CatalogAlbumHit>[];
+    final seen = <String>{};
+    for (final r in results) {
+      if (r is! Map<String, dynamic>) continue;
+      final id = (r['master_id'] as num?)?.toInt() ?? (r['id'] as num?)?.toInt();
+      final title = (r['title'] as String?)?.trim() ?? '';
+      if (id == null || id <= 0 || title.isEmpty) continue;
+      var artist = '', album = title;
+      final dash = title.indexOf(' - ');
+      if (dash > 0) {
+        artist = cleanArtistName(title.substring(0, dash));
+        album = title.substring(dash + 3).trim();
+      }
+      if (artist.isEmpty) continue;
+      if (!seen.add('${artistKey(artist)}|${normKey(album)}')) continue;
+      final cover = (r['cover_image'] ?? r['thumb']) as String?;
+      final year = (r['year'] as String?)?.trim();
+      out.add(CatalogAlbumHit(
+        CatalogAlbum(-id, album,
+            (cover != null && cover.isNotEmpty && !cover.contains('spacer')) ? cover : null,
+            (year != null && year.length >= 4) ? year : null, 0, 'album'),
+        artist,
+      ));
+      if (out.length >= max) break;
+    }
+    return out;
+  }
+}

@@ -277,6 +277,59 @@ class LibraryStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ── Styles ────────────────────────────────────────────────────────────────
+  // A Discogs style is far finer than a genre: an album is not just "Electronic" but "House,
+  // Disco, Synth-pop". That is what makes browsing by feel possible instead of by category, so
+  // styles are remembered as albums are opened and the map fills in as the app gets used.
+  final Map<String, List<String>> _styles = {};
+  File get _stylesFile => File('$_appDir${Platform.pathSeparator}album_styles.json');
+
+  Future<void> loadStyles() async {
+    try {
+      final f = _stylesFile;
+      if (!await f.exists()) return;
+      final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      _styles.clear();
+      j.forEach((k, v) {
+        if (v is List) _styles[k] = [for (final x in v) x.toString()];
+      });
+    } catch (_) {}
+  }
+
+  String _styleKey(String artist, String album) => '${artistKey(artist)}|${normKey(album)}';
+
+  List<String> stylesOf(Album a) => _styles[_styleKey(a.artist, a.title)] ?? const [];
+
+  /// Remember what a record sounds like, found while its page was open.
+  Future<void> rememberStyles(String artist, String album, List<String> styles) async {
+    if (styles.isEmpty) return;
+    final k = _styleKey(artist, album);
+    if (_styles[k]?.join() == styles.join()) return;
+    _styles[k] = styles;
+    try {
+      await Directory(_appDir).create(recursive: true);
+      await _stylesFile.writeAsString(jsonEncode(_styles));
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  /// Every style seen so far, most common first — the vocabulary this library actually uses.
+  List<MapEntry<String, int>> styleTally() {
+    final n = <String, int>{};
+    for (final a in albums) {
+      for (final st in stylesOf(a)) {
+        n.update(st, (v) => v + 1, ifAbsent: () => 1);
+      }
+    }
+    final out = n.entries.toList();
+    out.sort((x, y) => y.value.compareTo(x.value));
+    return out;
+  }
+
+  /// The albums that share a style.
+  List<Album> albumsWithStyle(String style) =>
+      albums.where((a) => stylesOf(a).any((s) => s.toLowerCase() == style.toLowerCase())).toList();
+
   /// Hand the library a cover found while an album page was open.
   ///
   /// The album page draws its own sleeve from Discogs, so a wrong embedded cover was corrected

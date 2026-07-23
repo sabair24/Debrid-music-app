@@ -123,6 +123,7 @@ Future<void> main() async {
     await library.loadHidden(); // keep "removed from library only" tracks out
     await library.loadMerged(); // records the user told us to keep together
     await library.loadArtistArtChoice(); // portraits and backdrops the user picked
+    await library.loadStyles(); // what each record sounds like, for discovery
     try {
       await library.scan();
     } catch (_) {}
@@ -5336,6 +5337,11 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
         await discogs.edition(artist, album, expectedTracks: widget.trackCount, pinned: widget.pinned).catchError((_) => null);
     if (!mounted || artist != widget.artist || album != widget.album) return;
     setState(() => _edition = ed);
+    // Remember what this record sounds like. The map fills in as albums are opened, which is what
+    // makes browsing by style possible without sweeping the whole library up front.
+    if (ed != null && mounted) {
+      unawaited(context.read<LibraryStore>().rememberStyles(artist, album, [...ed.genres, ...ed.styles]));
+    }
     // The scans come off the same cached edition, so this costs nothing beyond the images.
     final art = await discogs
         .releaseArt(artist, album, expectedTracks: widget.trackCount, pinned: widget.pinned)
@@ -5410,8 +5416,23 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
                 const SizedBox(width: 12),
               ],
               Flexible(
-                child: Text(facts.join('  ·  '),
-                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 12.5)),
+                // Every style is a door. Clicking "Synth-pop" is the difference between a label on
+                // a page and a way into the rest of the music that sounds like this.
+                child: Wrap(spacing: 5, runSpacing: 2, children: [
+                  for (var i = 0; i < facts.length; i++) ...[
+                    if (i > 0) const Text('·', style: TextStyle(color: _muted, fontSize: 12.5)),
+                    if (genres.contains(facts[i]))
+                      InkWell(
+                        onTap: () => Navigator.of(context)
+                            .push(MaterialPageRoute(builder: (_) => StylePage(facts[i]))),
+                        borderRadius: BorderRadius.circular(4),
+                        child: Text(facts[i],
+                            style: const TextStyle(color: _accent2, fontSize: 12.5)),
+                      )
+                    else
+                      Text(facts[i], style: const TextStyle(color: _muted, fontSize: 12.5)),
+                  ],
+                ]),
               ),
             ],
           ),
@@ -7017,4 +7038,140 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
       ),
     );
   }
+}
+
+/// Everything that sounds like one thing — your own records first, then more of it.
+///
+/// A Discogs style is much finer than a genre: not "Electronic" but "Deep House", "Synth-pop",
+/// "Happy Hardcore". That granularity is what makes this browsing by feel rather than by category,
+/// which is the whole point of going deeper than Deezer's handful of genres.
+class StylePage extends StatefulWidget {
+  final String style;
+  const StylePage(this.style, {super.key});
+
+  @override
+  State<StylePage> createState() => _StylePageState();
+}
+
+class _StylePageState extends State<StylePage> {
+  List<CatalogAlbumHit>? _more;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      // Discogs can search by style directly, which is the one thing Deezer cannot do at all.
+      final hits = await DiscogsService(context.read<AppSettings>()).searchByStyle(widget.style);
+      if (mounted) setState(() => _more = hits);
+    } catch (_) {
+      if (mounted) setState(() => _more = const []);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    final mine = lib.albumsWithStyle(widget.style);
+    final have = {for (final a in mine) '${artistKey(a.artist)}|${normKey(a.title)}'};
+    // Anything already owned is not a discovery — it is the shelf it came from.
+    final more = [
+      for (final h in _more ?? const <CatalogAlbumHit>[])
+        if (!have.contains('${artistKey(h.artist)}|${normKey(h.album.title)}')) h
+    ];
+
+    return Scaffold(
+      backgroundColor: _bg,
+      body: CustomScrollView(slivers: [
+        SliverAppBar(
+          backgroundColor: _bg,
+          pinned: true,
+          leading: IconButton(
+              icon: const Icon(Icons.arrow_back_rounded), onPressed: () => Navigator.of(context).pop()),
+          title: Text(widget.style, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+        ),
+        if (mine.isNotEmpty) ...[
+          SliverToBoxAdapter(child: _sectionTitle('In mijn bibliotheek', '${mine.length}')),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 18),
+            sliver: SliverGrid(
+              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 175, mainAxisSpacing: 18, crossAxisSpacing: 18, childAspectRatio: .78),
+              delegate: SliverChildBuilderDelegate((_, i) => AlbumCard(album: mine[i]), childCount: mine.length),
+            ),
+          ),
+        ],
+        SliverToBoxAdapter(
+            child: _sectionTitle('Meer in deze stijl', _more == null ? '…' : '${more.length}')),
+        if (_more == null)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.all(40),
+              child: Center(child: CircularProgressIndicator(strokeWidth: 2, color: _accent)),
+            ),
+          )
+        else if (more.isEmpty)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(24, 0, 24, 24),
+              child: Text('Niets nieuws gevonden in deze stijl.', style: TextStyle(color: _muted)),
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 30),
+            sliver: SliverGrid(
+              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 175, mainAxisSpacing: 18, crossAxisSpacing: 18, childAspectRatio: .78),
+              delegate: SliverChildBuilderDelegate(
+                (_, i) => _OnlineAlbumCard(more[i]),
+                childCount: more.length,
+              ),
+            ),
+          ),
+      ]),
+    );
+  }
+
+  Widget _sectionTitle(String t, String badge) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 10, 24, 12),
+        child: Row(children: [
+          Text(t, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+          const SizedBox(width: 8),
+          Text(badge, style: const TextStyle(color: _muted, fontSize: 12.5)),
+        ]),
+      );
+}
+
+/// An album that isn't yours yet — tapping it opens the sources for it.
+class _OnlineAlbumCard extends StatelessWidget {
+  final CatalogAlbumHit hit;
+  const _OnlineAlbumCard(this.hit);
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => AlbumBrowsePage(hit.artist, hit.album))),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(
+            child: LayoutBuilder(
+              builder: (_, c) => ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: _netCover(hit.album.cover, size: c.maxWidth, radius: 8),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(hit.album.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+          Text([hit.artist, if (hit.album.year != null) hit.album.year!].join(' · '),
+              maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 12)),
+        ]),
+      );
 }
