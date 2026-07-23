@@ -343,6 +343,11 @@ class DownloadJob {
   /// Every peer copy this job may fall back on — kept so the job can be written down and picked
   /// up again after a restart.
   List<SoulseekFile> candidates = const [];
+
+  /// What this track IS, according to the official release the user was looking at — not according
+  /// to whichever peer happened to serve it. Soulseek delivers the audio; this decides the name,
+  /// the folder and the tags. Null for a download with no album context (a loose search hit).
+  TrackTags? authority;
   bool get busy =>
       status == 'queued' ||
       status == 'waiting' ||
@@ -529,7 +534,8 @@ class DownloadManager extends ChangeNotifier {
   /// Download one track, trying its candidate peers best-first until one succeeds.
   /// [candidates] are copies of the SAME track from different peers. [key] lets the UI show
   /// this job's live progress inline on the tile/track row that started it.
-  Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates, {String? key}) async {
+  Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,
+      {String? key, TrackTags? authority}) async {
     if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
     if (candidates.isEmpty) return false;
     // Don't start a duplicate if this exact key is already in progress.
@@ -553,6 +559,7 @@ class DownloadManager extends ChangeNotifier {
     // 'downloading' once it actually starts.
     final job = DownloadJob(candidates.first.displayName, key: key, status: 'queued')..trackKey = track
       ..canCancel = true
+      ..authority = authority
       ..candidates = candidates;
     jobs.insert(0, job);
     notifyListeners();
@@ -588,6 +595,7 @@ class DownloadManager extends ChangeNotifier {
             'name': j.name,
             'key': j.key,
             'candidates': [for (final c in j.candidates) c.toJson()],
+            if (j.authority != null) 'authority': j.authority!.toJson(),
           }
       ]));
     } catch (_) {/* losing the note is not worth failing a download over */}
@@ -617,7 +625,12 @@ class DownloadManager extends ChangeNotifier {
       if (cands.isEmpty) continue;
       n++;
       // Not awaited: they run in parallel under the usual slot cap, and startup mustn't block.
-      unawaited(enqueueSoulseekBest(cands, key: e['key'] as String?).catchError((_) => false));
+      // A row written before this existed simply has no authority and behaves as it always did.
+      final auth = e['authority'];
+      unawaited(enqueueSoulseekBest(cands,
+              key: e['key'] as String?,
+              authority: auth is Map<String, dynamic> ? TrackTags.fromJson(auth) : null)
+          .catchError((_) => false));
     }
     return n;
   }
@@ -643,7 +656,7 @@ class DownloadManager extends ChangeNotifier {
       final staged = File(res.path);
       var how = Placement.stuck;
       try {
-        how = (await placeFileDetailed(staged, _downloadsRoot)).how;
+        how = (await placeFileDetailed(staged, _downloadsRoot, tags: job.authority)).how;
         // Non-recursive: only removes the per-peer staging folder once it's actually empty.
         await staged.parent.delete();
       } catch (_) {/* leave it where it landed — the scan still finds it */}
@@ -956,7 +969,9 @@ class DownloadManager extends ChangeNotifier {
           Placement how = Placement.stuck;
           try {
             final staged = File(res.path);
-            how = (await placeFileDetailed(staged, _downloadsRoot)).how;
+            // The SAME authority as the first landing. Without it the sweep would quietly undo the
+            // numbering a quarter of an hour later, using whatever this new peer's tags happen to say.
+            how = (await placeFileDetailed(staged, _downloadsRoot, tags: job.authority)).how;
             await staged.parent.delete();
           } catch (_) {/* the scan still finds it wherever it landed */}
           if (how == Placement.duplicate) {
@@ -1134,12 +1149,18 @@ class DownloadManager extends ChangeNotifier {
   /// several peers) — so a track whose best peer is busy falls back to another peer instead of
   /// failing. Sequential AND single-login: the WHOLE album runs on ONE session (one login), so a
   /// 12-track album costs 1 login, not one per track/peer — the burst that tripped the block.
-  Future<int> enqueueSoulseekAlbum(List<List<SoulseekFile>> tracks) async {
+  /// [authorities] is parallel to [tracks]: what each one IS according to the official release,
+  /// or null where nothing on that release matched. A whole folder from one peer is still one
+  /// peer's idea of the record — its internal numbering is no more trustworthy than a single file's.
+  Future<int> enqueueSoulseekAlbum(List<List<SoulseekFile>> tracks,
+      {List<TrackTags?> authorities = const []}) async {
     if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
     final running = <Future<bool>>[];
-    for (final cands in tracks) {
+    for (var i = 0; i < tracks.length; i++) {
+      final cands = tracks[i];
       if (cands.isEmpty) continue;
-      final job = DownloadJob(cands.first.displayName, status: 'queued');
+      final job = DownloadJob(cands.first.displayName, status: 'queued')
+        ..authority = i < authorities.length ? authorities[i] : null;
       jobs.insert(0, job);
       // Start them ALL now — _withSlsk runs up to _slskMaxParallel at once on the ONE shared
       // login and queues the rest, so a whole album downloads in parallel like the native client.

@@ -995,27 +995,15 @@ extension LibraryRenumber on LibraryStore {
   /// input. An album whose tags say 1, 1, 2, ?, 4, 6, 6, 7 … cannot be lined up positionally
   /// either, so the title is the only thing both sides can be trusted to agree on.
   RenumberPlan planRenumber(Album album, List<ChoiceTrack> official) {
+    // A pool, so one official entry cannot claim two of our files: whichever matches it best takes
+    // it and the other is reported as unmatched rather than silently duplicating a number.
     final pool = [...official];
     final steps = <RenumberStep>[];
     for (final t in album.tracks) {
-      ChoiceTrack? best;
-      var bestScore = 0.0;
-      for (final o in pool) {
-        var score = wordSim(fileWords(t.title), fileWords(o.title));
-        if (normKey(t.title) == normKey(o.title)) score = 1;
-        // A running time within twelve seconds is strong corroboration; a wildly different one is
-        // reason to doubt a name that merely reads alike ("Get Down" vs "Get Down (LP Edit)").
-        final secs = t.duration?.inSeconds ?? 0;
-        if (secs > 0 && o.seconds != null && o.seconds! > 0) {
-          score += (secs - o.seconds!).abs() <= 12 ? .25 : -.25;
-        }
-        if (score > bestScore) {
-          bestScore = score;
-          best = o;
-        }
-      }
-      // Below this, the two are not the same song and guessing would renumber the record wrongly.
-      if (best == null || bestScore < .55) {
+      // The same matcher the album download uses — see matchOfficial in organize.dart. Two answers
+      // to "is this the same song?" would be one too many.
+      final best = matchOfficial(pool, t.title, t.duration?.inSeconds ?? 0);
+      if (best == null) {
         steps.add(RenumberStep(t, null, null));
         continue;
       }

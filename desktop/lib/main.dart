@@ -3303,12 +3303,14 @@ Future<void> _confirmDelete(BuildContext context, String what, List<String> path
 
 String _slskKey(SoulseekFile f) => '${f.username}|${f.filename}';
 
-Future<void> _downloadSoulseek(BuildContext context, SoulseekFile f, List<SoulseekFile> all) async {
+Future<void> _downloadSoulseek(BuildContext context, SoulseekFile f, List<SoulseekFile> all,
+    {TrackTags? authority}) async {
   try {
     // false means it was refused — this track is already downloading. Say so; a "started" message
     // for something that never started is worse than no message.
-    final started =
-        await context.read<DownloadManager>().enqueueSoulseekBest(_slskCandidates(all, f), key: _slskKey(f));
+    final started = await context
+        .read<DownloadManager>()
+        .enqueueSoulseekBest(_slskCandidates(all, f), key: _slskKey(f), authority: authority);
     if (context.mounted) {
       _srcToast(context,
           started ? '“${f.displayName}” via Soulseek…' : '“${f.displayName}” loopt al — zie Mijn downloads.');
@@ -3606,11 +3608,19 @@ List<SoulseekFile> _bestSoulseekFolder(List<SoulseekFile> files) {
 }
 
 Future<void> _downloadSoulseekAlbum(
-    BuildContext context, List<SoulseekFile> folder, List<SoulseekFile> all) async {
+    BuildContext context, List<SoulseekFile> folder, List<SoulseekFile> all,
+    {ReleaseAuthority? authority}) async {
   // Each folder track → its cross-peer candidates, so a busy peer for one track falls back
   // to another peer offering the same song instead of failing the whole album.
   final tracks = [for (final f in folder) _slskCandidates(all, f)];
-  final n = await context.read<DownloadManager>().enqueueSoulseekAlbum(tracks);
+  // Which official track each file actually is, decided by name and running time rather than by
+  // the number the uploader happened to type in front of it.
+  final authorities = [
+    for (final f in folder) authority?.match(f.displayName, f.durationSec ?? 0)
+  ];
+  final n = await context
+      .read<DownloadManager>()
+      .enqueueSoulseekAlbum(tracks, authorities: authorities);
   if (context.mounted) {
     _srcToast(context, '$n nummer(s) via Soulseek — volg de voortgang in de downloadlijst.');
   }
@@ -3618,7 +3628,8 @@ Future<void> _downloadSoulseekAlbum(
 
 /// Soulseek section header with a "Download album" action for the best complete folder.
 /// [all] is the full (unfiltered) result set — used to find fallback peers per track.
-Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy, List<SoulseekFile> all) {
+Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy, List<SoulseekFile> all,
+    {ReleaseAuthority? authority}) {
   final folder = _bestSoulseekFolder(slsk);
   return Padding(
     padding: const EdgeInsets.fromLTRB(24, 14, 18, 6),
@@ -3657,7 +3668,7 @@ Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy,
         const Spacer(),
         if (folder.length >= 2)
           TextButton.icon(
-            onPressed: () => _downloadSoulseekAlbum(context, folder, all),
+            onPressed: () => _downloadSoulseekAlbum(context, folder, all, authority: authority),
             icon: const Icon(Icons.library_add_rounded, size: 16),
             label: Text('Download album (${folder.length})'),
             style: TextButton.styleFrom(foregroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 8)),
@@ -3804,7 +3815,7 @@ Widget _torrentTile(BuildContext context, SearchResult r) {
   );
 }
 
-Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> all) {
+Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> all, {TrackTags? authority}) {
   final status = f.freeSlots ? 'vrij' : 'wachtrij ${f.queueLength}';
   final q = _slskQuality(f);
   return Container(
@@ -3829,7 +3840,9 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
           ),
         ),
         _qualityBadge(q),
-        _downloadControl(context, jobKey: _slskKey(f), onDownload: () => _downloadSoulseek(context, f, all)),
+        _downloadControl(context,
+            jobKey: _slskKey(f),
+            onDownload: () => _downloadSoulseek(context, f, all, authority: authority)),
       ],
     ),
   );
@@ -3864,7 +3877,17 @@ Widget _netCover(String? url, {double size = 160, double radius = 12, bool circl
 /// Combined torrent + Soulseek sources for one query — the "streams" list under a track/album.
 class SourcesView extends StatefulWidget {
   final String query;
-  const SourcesView({super.key, required this.query});
+
+  /// The official release this list of sources belongs to, when it was opened from an album page.
+  ///
+  /// Soulseek serves one song under a dozen names and each carries its own tags. Without this the
+  /// peer decides what track it is; with it, the record does and Soulseek only supplies the audio.
+  /// Null when the sources were opened from a loose search, where there is no release to appeal to.
+  final ReleaseAuthority? authority;
+
+  /// The one track these sources are for, when this list is under a track row.
+  final ChoiceTrack? track;
+  const SourcesView({super.key, required this.query, this.authority, this.track});
   @override
   State<SourcesView> createState() => _SourcesViewState();
 }
@@ -3918,7 +3941,7 @@ class _SourcesViewState extends State<SourcesView> {
               child: Text('Geen torrents gevonden.', style: TextStyle(color: _muted, fontSize: 12.5))),
         ...torrents.map((r) => _torrentTile(context, r)),
         if (ready)
-          _soulseekHeader(context, slsk, _sBusy, slsk)
+          _soulseekHeader(context, slsk, _sBusy, slsk, authority: widget.authority)
         else
           const Padding(
               padding: EdgeInsets.fromLTRB(24, 14, 24, 6),
@@ -3928,9 +3951,24 @@ class _SourcesViewState extends State<SourcesView> {
           const Padding(
               padding: EdgeInsets.fromLTRB(24, 2, 24, 6),
               child: Text('Geen Soulseek-bronnen.', style: TextStyle(color: _muted, fontSize: 12.5))),
-        ..._slskTiles(context, slsk),
+        // Whichever copy the user picks, the record decides what it is. That is the whole point:
+        // this same song is offered as "13 …", "19. …" and "…The Essential … - 01 - …".
+        ..._slskTiles(context, slsk, authority: _trackAuthority),
       ],
     );
+  }
+
+  /// What the track under this list IS, when it was opened from an album page.
+  TrackTags? get _trackAuthority {
+    final a = widget.authority, t = widget.track;
+    if (a == null || t == null) return null;
+    // The position IS the number: this tracklist came from the official release. Never indexOf on
+    // the track — ChoiceTrack has no equality, so it would miss every time and fall back to
+    // something that is not a track number at all.
+    final stated = int.tryParse(t.position) ?? 0;
+    if (stated > 0) return a.forTrack(t, stated);
+    final at = a.tracks.indexWhere((x) => normKey(x.title) == normKey(t.title));
+    return at < 0 ? null : a.forTrack(t, at + 1);
   }
 }
 
@@ -3940,10 +3978,10 @@ class _SourcesViewState extends State<SourcesView> {
 /// tile as its candidate pool, so downloading keeps every fallback peer.
 const _slskShown = 250;
 
-List<Widget> _slskTiles(BuildContext context, List<SoulseekFile> slsk) {
+List<Widget> _slskTiles(BuildContext context, List<SoulseekFile> slsk, {TrackTags? authority}) {
   final shown = slsk.length <= _slskShown ? slsk : slsk.sublist(0, _slskShown);
   return [
-    ...shown.map((f) => _soulseekTile(context, f, slsk)),
+    ...shown.map((f) => _soulseekTile(context, f, slsk, authority: authority)),
     if (slsk.length > _slskShown)
       Padding(
         padding: const EdgeInsets.fromLTRB(24, 10, 24, 16),
@@ -5974,6 +6012,38 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// are part of the identity, so a Live/Radio-Edit/compilation cut still counts as NOT owned.
   Track? _owned(CatalogTrack t) => context.read<LibraryStore>().ownedTrack(widget.artistName, t.title);
 
+  /// This album, as the official release the sources should be judged against.
+  ///
+  /// The tracklist here has already been through [_preferOfficialTracklist], so it is MusicBrainz's
+  /// or Discogs's idea of the record rather than a streaming catalogue's — and emphatically rather
+  /// than a Soulseek uploader's.
+  ReleaseAuthority get _release => ReleaseAuthority(
+        artist: widget.artistName,
+        album: widget.album.title,
+        albumArtist: widget.artistName,
+        year: int.tryParse(widget.album.year ?? ''),
+        tracks: [
+          for (final t in _tracks) ChoiceTrack('${t.position}', t.title, t.durationSec)
+        ],
+      );
+
+  /// What this track IS, from the page the user is looking at.
+  ///
+  /// This tracklist has already been through _preferOfficialTracklist, so its titles and order come
+  /// from MusicBrainz or Discogs rather than from a streaming catalogue — and certainly rather than
+  /// from whichever peer serves the file. Soulseek offers this same song as "13 Anywhere for You",
+  /// "19. Backstreet Boys - Anywhere For You" and "…The Essential Backstreet Boys - 01 - …";
+  /// downloading any of them must still produce track 2 of this album.
+  TrackTags _authorityFor(CatalogTrack t) => TrackTags(
+        title: t.title,
+        artist: widget.artistName,
+        album: widget.album.title,
+        albumArtist: widget.artistName,
+        trackNo: t.position,
+        trackTotal: _tracks.length,
+        year: int.tryParse(widget.album.year ?? ''),
+      );
+
   Future<void> _downloadTrack(CatalogTrack t, int i) async {
     final dm = context.read<DownloadManager>();
     final soulseek = context.read<SoulseekService>();
@@ -5995,7 +6065,8 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       return;
     }
     try {
-      final started = await dm.enqueueSoulseekBest(cands, key: 'alb:${widget.album.ref.keyPart}:$i');
+      final started = await dm.enqueueSoulseekBest(cands,
+          key: 'alb:${widget.album.ref.keyPart}:$i', authority: _authorityFor(t));
       if (mounted) {
         _srcToast(context, started ? '“${t.title}” via Soulseek…' : '“${t.title}” loopt al — zie Mijn downloads.');
       }
@@ -6049,7 +6120,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
           if (_expanded == _albumLevel)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
-              child: SourcesView(query: '${widget.artistName} ${al.title}'),
+              child: SourcesView(query: '${widget.artistName} ${al.title}', authority: _release),
             ),
           AlbumInfoPanel(artist: widget.artistName, album: al.title),
           CreditsPanel(artist: widget.artistName, album: al.title),
@@ -6131,7 +6202,10 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         if (open)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: SourcesView(query: '${widget.artistName} ${t.title}'),
+            child: SourcesView(
+                query: '${widget.artistName} ${t.title}',
+                authority: _release,
+                track: ChoiceTrack('${t.position}', t.title, t.durationSec)),
           ),
       ],
     );

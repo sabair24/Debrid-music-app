@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 
@@ -208,10 +209,137 @@ String safeSeg(String s) {
 }
 
 /// Tags we need to file a track away.
+///
+/// The extra three are optional because the only source that knows them is an official release —
+/// a peer's file has whatever its ripper felt like writing. When they ARE known this is the
+/// authority a download is filed and retagged by, instead of the peer's own idea of the record.
 class TrackTags {
   final String title, artist, album;
   final int trackNo;
-  const TrackTags({required this.title, required this.artist, required this.album, required this.trackNo});
+
+  /// Who the RECORD is by, which is not always who the track is by: a duet's ARTIST is both names,
+  /// its ALBUMARTIST is whose album it is. Without it a guest credit scatters an album in Roon.
+  final String? albumArtist;
+
+  /// How many tracks the release holds, and what year it came out.
+  final int trackTotal;
+  final int? year;
+
+  const TrackTags({
+    required this.title,
+    required this.artist,
+    required this.album,
+    required this.trackNo,
+    this.albumArtist,
+    this.trackTotal = 0,
+    this.year,
+  });
+
+  /// True when this came from an official release rather than from a downloaded file's own tags.
+  bool get isAuthoritative => trackTotal > 0 || year != null || albumArtist != null;
+
+  Map<String, dynamic> toJson() => {
+        'title': title,
+        'artist': artist,
+        'album': album,
+        'trackNo': trackNo,
+        if (albumArtist != null) 'albumArtist': albumArtist,
+        if (trackTotal > 0) 'trackTotal': trackTotal,
+        if (year != null) 'year': year,
+      };
+
+  static TrackTags? fromJson(Map<String, dynamic> j) {
+    final title = (j['title'] ?? '').toString();
+    if (title.isEmpty) return null;
+    return TrackTags(
+      title: title,
+      artist: (j['artist'] ?? '').toString(),
+      album: (j['album'] ?? '').toString(),
+      trackNo: (j['trackNo'] as num?)?.toInt() ?? 0,
+      albumArtist: j['albumArtist']?.toString(),
+      trackTotal: (j['trackTotal'] as num?)?.toInt() ?? 0,
+      year: (j['year'] as num?)?.toInt(),
+    );
+  }
+
+  /// The Vorbis comments this authority dictates. Only these; everything else in the file stays.
+  Map<String, String?> get vorbisFields => {
+        'TITLE': title,
+        'ARTIST': artist,
+        if ((albumArtist ?? '').isNotEmpty) 'ALBUMARTIST': albumArtist,
+        'ALBUM': album,
+        if (trackNo > 0) 'TRACKNUMBER': '$trackNo',
+        if (trackTotal > 0) 'TRACKTOTAL': '$trackTotal',
+        if (year != null) 'DATE': '$year',
+      };
+}
+
+/// An official release, used to decide what each downloaded file IS.
+///
+/// Soulseek serves one song under a dozen names — "13 Anywhere for You", "19. Backstreet Boys -
+/// Anywhere For You", "…The Essential Backstreet Boys - 01 - Anywhere for You" — and each carries
+/// its own tags to match. Rather than trusting any of them, the record itself says which track this
+/// is; the peer only supplies the audio.
+class ReleaseAuthority {
+  final String artist, album;
+  final String? albumArtist;
+  final int? year;
+
+  /// The official tracklist, in order.
+  final List<ChoiceTrack> tracks;
+
+  const ReleaseAuthority({
+    required this.artist,
+    required this.album,
+    required this.tracks,
+    this.albumArtist,
+    this.year,
+  });
+
+  TrackTags forTrack(ChoiceTrack t, int trackNo) => TrackTags(
+        title: t.title,
+        artist: artist,
+        album: album,
+        albumArtist: albumArtist ?? artist,
+        trackNo: trackNo,
+        trackTotal: tracks.length,
+        year: year,
+      );
+
+  /// Which official track a peer's file is, or null when nothing matches well enough.
+  ///
+  /// Matched on the NAME and the running time — never on the number in the filename, which is the
+  /// thing that is wrong. A file from a compilation says "01" for what is track 2 of this record.
+  TrackTags? match(String filename, int durationSec) {
+    final hit = matchOfficial(tracks, baseName(filename), durationSec);
+    if (hit == null) return null;
+    return forTrack(hit, tracks.indexOf(hit) + 1);
+  }
+}
+
+/// The official track that [name] (a filename or a title) and [durationSec] describe, or null.
+///
+/// Shared so the album download and the "take this numbering" dialog agree about what counts as
+/// the same song — two answers to that question would be one answer too many.
+ChoiceTrack? matchOfficial(List<ChoiceTrack> official, String name, int durationSec) {
+  ChoiceTrack? best;
+  var bestScore = 0.0;
+  final words = fileWords(name);
+  for (final o in official) {
+    var score = wordSim(words, fileWords(o.title));
+    if (normKey(name) == normKey(o.title)) score = 1;
+    // A running time within twelve seconds corroborates a name that merely reads alike; a wildly
+    // different one is reason to doubt it ("Get Down" against "Get Down (Extended Club Mix)").
+    if (durationSec > 0 && (o.seconds ?? 0) > 0) {
+      score += (durationSec - o.seconds!).abs() <= 12 ? .25 : -.25;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = o;
+    }
+  }
+  // Below this the two are not the same song, and guessing would misfile the record.
+  return bestScore < .55 ? null : best;
 }
 
 /// Read the tags of a downloaded file (falls back to the filename for the title).
@@ -327,7 +455,12 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, Tr
   if (t == null) return PlaceOutcome(src.path, Placement.stuck);
   final base = src.uri.pathSegments.last;
   final ext = base.contains('.') ? base.substring(base.lastIndexOf('.')) : '';
-  final rel = _reuseExistingFolders(root, relativePathFor(_carryVersion(t, base), kind: kind, ext: ext));
+  // A version marker lifted out of the peer's filename is useful when the filename is all we have,
+  // and noise when we already know which track of which release this is. The candidate was matched
+  // on title AND running time before it was ever downloaded, so a live take of a different length
+  // never gets this far — which is the job _carryVersion was doing here.
+  final named = t.isAuthoritative ? t : _carryVersion(t, base);
+  final rel = _reuseExistingFolders(root, relativePathFor(named, kind: kind, ext: ext));
   var dest = File('$root${Platform.pathSeparator}$rel');
   if (dest.path == src.path) return PlaceOutcome(src.path, Placement.moved);
   try {
@@ -359,9 +492,35 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, Tr
         losers.add(rival);
       }
     }
-    return PlaceOutcome(await _install(src, dest, losers), Placement.moved);
+    final landed = await _install(src, dest, losers);
+    // Soulseek delivered the audio; the record's identity comes from here. Without this the file
+    // sits under the right name in the right folder while its TAGS still say it is track 1 of
+    // "The Essential Backstreet Boys" — and the tags are what the library and Roon actually read.
+    await stampTags(File(landed), t);
+    return PlaceOutcome(landed, Placement.moved);
   } catch (_) {
     return PlaceOutcome(src.path, Placement.stuck); // cross-device or locked — the scan still finds it
+  }
+}
+
+/// Write an official release's identity into a landed file. No-op unless [t] is authoritative.
+///
+/// Only FLAC is rewritten. The tag writers for the other containers in this app's dependency drop
+/// every field they don't model — ReplayGain, MusicBrainz ids, anything hand-written — so for an
+/// MP3 the honest thing is to leave the file alone and let its correct filename and folder speak.
+///
+/// Runs in an isolate: parsing a stranger's file is exactly where a throw would otherwise leak the
+/// handle and leave the track unmovable for the rest of the session.
+Future<bool> stampTags(File f, TrackTags t) async {
+  if (!t.isAuthoritative) return false;
+  if (!f.path.toLowerCase().endsWith('.flac')) return false;
+  try {
+    final path = f.path;
+    final fields = t.vorbisFields;
+    return await Isolate.run(() => writeFlacFields(File(path), fields))
+        .timeout(const Duration(seconds: 30));
+  } catch (_) {
+    return false; // the file is still filed correctly; only its tags stayed as they were
   }
 }
 

@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'dart:convert';
 import 'dart:io';
 
@@ -106,6 +107,168 @@ FlacTags? readFlacTags(File f) {
       raf?.closeSync();
     } catch (_) {}
   }
+}
+
+/// Overwrite only [fields] in a FLAC's Vorbis comments, leaving everything else exactly as it was.
+///
+/// Returns true if the file was rewritten.
+///
+/// Written here rather than with `audio_metadata_reader`'s writer, which cannot be used on a real
+/// library: it emits ONLY the fields it models, so `ALBUMARTIST`, `TRACKTOTAL`, `REPLAYGAIN_*`,
+/// `MUSICBRAINZ_*` and anything hand-written vanish silently on save. It also zeroes the vendor
+/// string, writes `DATE` as `YYYY/MM/DD` where Vorbis wants ISO 8601, and reaches the file through
+/// `readAllMetadata` — the path this codebase already documents as throwing on values like a vinyl
+/// "A3" and LEAKING THE FILE HANDLE when it does, which would leave the track unmovable for the
+/// rest of the session.
+///
+/// This one is deliberately dumb: every metadata block other than VORBIS_COMMENT is copied byte for
+/// byte, the vendor string is preserved, and comments whose key isn't named in [fields] are carried
+/// over untouched and in their original order. Keys are matched case-insensitively because rippers
+/// disagree (`TrackNumber` vs `TRACKNUMBER`), and written back in the conventional upper case.
+///
+/// A key mapped to null is REMOVED — that is how a stale "03/12" TRACKNUMBER gets replaced by a
+/// clean number plus its own TRACKTOTAL.
+bool writeFlacFields(File f, Map<String, String?> fields) {
+  if (fields.isEmpty) return false;
+  RandomAccessFile? raf;
+  try {
+    raf = f.openSync();
+    final size = raf.lengthSync();
+    if (size < 8) return false;
+    if (String.fromCharCodes(raf.readSync(4)) != 'fLaC') return false;
+
+    // Walk the metadata blocks, keeping each one's type and raw body. Only the comment block is
+    // rebuilt; every other block is carried over exactly as it was found.
+    final types = <int>[];
+    final bodies = <List<int>>[];
+    var commentAt = -1;
+    var sawLast = false;
+    for (var block = 0; block < 64 && !sawLast; block++) {
+      final h = raf.readSync(4);
+      if (h.length < 4) return false;
+      sawLast = (h[0] & 0x80) != 0;
+      final len = (h[1] << 16) | (h[2] << 8) | h[3];
+      if (len < 0 || len > 64 * 1024 * 1024) return false;
+      final body = raf.readSync(len);
+      if (body.length < len) return false;
+      types.add(h[0] & 0x7F);
+      bodies.add(body);
+      if (types.last == 4 && commentAt < 0) commentAt = types.length - 1;
+    }
+    if (!sawLast) return false;
+
+    final rebuilt = _rewriteVorbis(commentAt >= 0 ? bodies[commentAt] : const <int>[], fields);
+    if (rebuilt == null) return false;
+    if (commentAt >= 0) {
+      bodies[commentAt] = rebuilt;
+    } else {
+      // No comment block at all. It goes straight after STREAMINFO, which must stay first.
+      types.insert(1, 4);
+      bodies.insert(1, rebuilt);
+    }
+
+    // Everything from here on is audio frames, and none of it is touched.
+    final audioStart = raf.positionSync();
+    final audio = raf.readSync(size - audioStart);
+    raf.closeSync();
+    raf = null;
+
+    final out = BytesBuilder();
+    out.add(const [0x66, 0x4C, 0x61, 0x43]); // "fLaC"
+    for (var i = 0; i < types.length; i++) {
+      final body = bodies[i];
+      out.add([
+        (i == types.length - 1 ? 0x80 : 0) | types[i],
+        (body.length >> 16) & 0xFF,
+        (body.length >> 8) & 0xFF,
+        body.length & 0xFF,
+      ]);
+      out.add(body);
+    }
+    return _finish(f, out.toBytes(), audio);
+  } catch (_) {
+    return false; // a file we can't rewrite safely is one we leave alone
+  } finally {
+    try {
+      raf?.closeSync();
+    } catch (_) {}
+  }
+}
+
+/// Write beside the original and rename over it, so an interruption can never leave half a file.
+bool _finish(File f, List<int> meta, List<int> audio) {
+  final tmp = File('${f.path}.tags');
+  try {
+    final sink = tmp.openSync(mode: FileMode.write);
+    try {
+      sink.writeFromSync(meta);
+      sink.writeFromSync(audio);
+      sink.flushSync();
+    } finally {
+      sink.closeSync();
+    }
+    tmp.renameSync(f.path);
+    return true;
+  } catch (_) {
+    try {
+      if (tmp.existsSync()) tmp.deleteSync();
+    } catch (_) {}
+    return false;
+  }
+}
+
+/// Rebuild a VORBIS_COMMENT body with [fields] applied and everything else preserved.
+List<int>? _rewriteVorbis(List<int> d, Map<String, String?> fields) {
+  final want = {for (final e in fields.entries) e.key.toLowerCase(): e.value};
+  final kept = <List<int>>[];
+  var vendor = const <int>[];
+  var i = 0;
+  int u32() {
+    final v = d[i] | (d[i + 1] << 8) | (d[i + 2] << 16) | (d[i + 3] << 24);
+    i += 4;
+    return v;
+  }
+
+  try {
+    if (d.length >= 4) {
+      final vendorLen = u32();
+      if (vendorLen < 0 || i + vendorLen > d.length) return null;
+      vendor = d.sublist(i, i + vendorLen);
+      i += vendorLen;
+      final count = d.length >= i + 4 ? u32() : 0;
+      for (var n = 0; n < count && i + 4 <= d.length; n++) {
+        final len = u32();
+        if (len < 0 || i + len > d.length) break;
+        final entry = d.sublist(i, i + len);
+        i += len;
+        final eq = entry.indexOf(0x3D); // '='
+        if (eq <= 0) continue;
+        final key = utf8.decode(entry.sublist(0, eq), allowMalformed: true).toLowerCase();
+        // Ours to replace — drop the old one; anything else rides along untouched.
+        if (want.containsKey(key)) continue;
+        kept.add(entry);
+      }
+    }
+  } catch (_) {
+    return null; // truncated block: better to leave the file alone than to rewrite it from a guess
+  }
+
+  for (final e in want.entries) {
+    final v = e.value;
+    if (v == null || v.isEmpty) continue;
+    kept.add(utf8.encode('${e.key.toUpperCase()}=$v'));
+  }
+
+  final out = BytesBuilder();
+  void u32le(int v) => out.add([v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF]);
+  u32le(vendor.length);
+  out.add(vendor);
+  u32le(kept.length);
+  for (final e in kept) {
+    u32le(e.length);
+    out.add(e);
+  }
+  return out.toBytes();
 }
 
 void _readVorbis(List<int> d, Map<String, String> out) {
