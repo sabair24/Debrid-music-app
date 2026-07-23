@@ -1,0 +1,6 @@
+tags:
+  live:
+    # Needs the real speakers powered on, and makes sound. Excluded from a normal run:
+    #   flutter test                          → skips these
+    #   flutter test test/lan_upnp_live_test.dart → runs them deliberately
+    skip: "needs the speakers on the network — run this file directly"

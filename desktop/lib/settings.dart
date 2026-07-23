@@ -25,6 +25,14 @@ class AppSettings extends ChangeNotifier {
   int tidalExpiry = 0; // epoch ms when the access token expires
   String tidalUserId = '';
   String tidalCountry = '';
+  // Sharing this library with the Mac, the iPad and the Shield. The token is generated once and
+  // then kept: it is what a paired device authenticates with, so regenerating it would silently
+  // unpair everything.
+  bool lanEnabled = true;
+  int lanPort = 47820;
+  String lanToken = '';
+  /// Where the music lives. Only the machine that owns the files sets this.
+  String musicRoot = '';
 
   static File file() {
     final base = Platform.environment['APPDATA'] ??
@@ -55,6 +63,10 @@ class AppSettings extends ChangeNotifier {
         tidalExpiry = (m['tidal_expiry'] ?? 0) as int;
         tidalUserId = (m['tidal_user_id'] ?? '') as String;
         tidalCountry = (m['tidal_country'] ?? '') as String;
+        lanEnabled = (m['lan_enabled'] ?? true) as bool;
+        lanPort = (m['lan_port'] ?? 47820) as int;
+        lanToken = (m['lan_token'] ?? '') as String;
+        musicRoot = (m['music_root'] ?? '') as String;
       }
     } catch (_) {}
     notifyListeners();
@@ -81,6 +93,10 @@ class AppSettings extends ChangeNotifier {
         'tidal_expiry': tidalExpiry,
         'tidal_user_id': tidalUserId,
         'tidal_country': tidalCountry,
+        'lan_enabled': lanEnabled,
+        'lan_port': lanPort,
+        'lan_token': lanToken,
+        'music_root': musicRoot,
       }));
     } catch (_) {}
     notifyListeners();

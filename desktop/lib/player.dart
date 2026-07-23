@@ -51,6 +51,18 @@ class PlayerStore extends ChangeNotifier {
   /// so the flat Tracks queue shows the right cover per song.
   Uint8List? Function(Track)? coverResolver;
 
+  /// Where we are, for the other devices. Set by main to the LAN sharing store, so pausing here
+  /// and carrying on from the iPad works in both directions. Called on the same throttle as the
+  /// local resume file — every few seconds, and always on pause or a track change.
+  void Function(Track track, Duration position, bool playing, List<Track> queue, int index)?
+      onProgress;
+
+  /// A track started playing — feeds the shared play counts and "recently played".
+  void Function(Track track)? onPlayed;
+
+  /// The queue as it will actually play, shuffle applied.
+  List<Track> get queueTracks => List.unmodifiable(_order);
+
   // Resume: persist the library queue + position so the app reopens where you left off.
   bool _resumable = false;
   bool _restoring = false; // block saves while restore() opens+seeks (position blips to 0)
@@ -251,6 +263,7 @@ class PlayerStore extends ChangeNotifier {
     if (coverResolver != null) currentCover = coverResolver!(t);
     await _player.open(Media(t.path), play: true);
     _saveProgress(force: true); // track changed → persist the new spot
+    onPlayed?.call(t);
     notifyListeners();
   }
 
@@ -331,6 +344,7 @@ class PlayerStore extends ChangeNotifier {
     _lastPosSave = now;
     final t = current;
     if (t == null) return;
+    onProgress?.call(t, position, playing, _order, _index);
     try {
       await Directory(_appDir).create(recursive: true);
       await _posFile.writeAsString(jsonEncode({
