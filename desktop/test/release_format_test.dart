@@ -142,13 +142,32 @@ void main() {
       expect(MbImage.from({'image': ''}), isNull);
     });
 
-    test('prefers the 500px thumbnail over the full scan', () {
+    test('a small copy for a row, a 1200 for the screen', () {
       final i = MbImage.from({
         'image': 'https://…/full.jpg',
-        'thumbnails': {'500': 'https://…/500.jpg', '250': 'https://…/250.jpg'},
+        'thumbnails': {
+          '1200': 'https://…/1200.jpg',
+          '500': 'https://…/500.jpg',
+          '250': 'https://…/250.jpg',
+        },
         'types': ['Front'],
-      });
-      expect(i!.thumb, endsWith('500.jpg'));
+      })!;
+      // A 58px row does not need more than a 250, and there can be seventy-five of them.
+      expect(i.thumb, endsWith('250.jpg'));
+      // What actually gets shown: 1200, not the 500 that looked soft full-screen — and not the
+      // upload, whose disc scans run to 3008px and 11.8 MB.
+      expect(i.full, endsWith('1200.jpg'));
+      expect(i.url, endsWith('full.jpg'));
+    });
+
+    test('with no 1200 rendering it falls back to the upload itself', () {
+      final i = MbImage.from({
+        'image': 'https://…/full.jpg',
+        'thumbnails': {'250': 'https://…/250.jpg'},
+        'types': ['Front'],
+      })!;
+      expect(i.full, endsWith('full.jpg'), reason: 'never show less than what exists');
+      expect(i.thumb, endsWith('250.jpg'));
     });
   });
 }

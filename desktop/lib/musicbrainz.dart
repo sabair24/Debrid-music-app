@@ -30,7 +30,18 @@ import 'release_format.dart';
 
 /// One image in the Cover Art Archive, with what the archive says it is.
 class MbImage {
+  /// The scan as it was uploaded, and a small copy for a list row.
   final String url, thumb;
+
+  /// The copy to actually SHOW: the archive's 1200px rendering, or the upload itself when there
+  /// isn't one.
+  ///
+  /// Not the 500px it used to take — that is visibly soft once a cover fills the now-playing
+  /// screen. And not blindly the original either. Measured on Escape: the front's original IS
+  /// 1200×1200 (171 KB, in fact smaller than the archive's own 1200 rendering), but the disc's
+  /// original is 3008×2980 and **11.8 MB** — seventy times the bytes of the 1200 copy, for detail
+  /// no window here can put on screen, cached per album.
+  final String full;
 
   /// `Front`, `Back`, `Medium`, `Booklet`, `Tray`, `Spine`, `Obi`, …
   final List<String> types;
@@ -38,7 +49,7 @@ class MbImage {
   /// The archive's own flags for the two that matter most; an image can be the front cover without
   /// carrying the `Front` type.
   final bool isFrontFlag, isBackFlag;
-  const MbImage(this.url, this.thumb, this.types, this.isFrontFlag, this.isBackFlag);
+  const MbImage(this.url, this.thumb, this.full, this.types, this.isFrontFlag, this.isBackFlag);
 
   bool get isFront => isFrontFlag || types.contains('Front');
   bool get isBack => isBackFlag || types.contains('Back');
@@ -49,11 +60,15 @@ class MbImage {
   static MbImage? from(Map<String, dynamic> j) {
     final url = (j['image'] ?? '').toString();
     if (url.isEmpty) return null;
-    final th = j['thumbnails'];
-    final thumb = th is Map ? ((th['500'] ?? th['large'] ?? th['250'] ?? url).toString()) : url;
+    final th = j['thumbnails'] is Map ? j['thumbnails'] as Map : const {};
+    // A 250 is all a 58px row needs, and there are up to seventy-five of them.
+    final thumb = (th['250'] ?? th['small'] ?? th['500'] ?? url).toString();
+    // Note "large" is only 500px in this archive, despite the name — so it is no use here.
+    final full = (th['1200'] ?? url).toString();
     return MbImage(
       url,
       thumb,
+      full,
       [for (final t in (j['types'] as List<dynamic>? ?? const [])) t.toString()],
       j['front'] == true,
       j['back'] == true,
@@ -615,9 +630,9 @@ class MusicBrainzService {
         // The archive states what each scan IS — Front, Back, Medium — so nothing here is inferred
         // from pixels. That matters: the Escape CD is a white disc on a white scanner bed, and no
         // brightness test can tell it from a blank booklet page. A stated fact can.
-        front ??= i.isFront ? ChoiceImage(i.url, i.thumb) : null;
-        back ??= i.isBack ? ChoiceImage(i.url, i.thumb) : null;
-        disc ??= i.isDisc ? ChoiceImage(i.url, i.thumb) : null;
+        front ??= i.isFront ? ChoiceImage(i.full, i.thumb) : null;
+        back ??= i.isBack ? ChoiceImage(i.full, i.thumb) : null;
+        disc ??= i.isDisc ? ChoiceImage(i.full, i.thumb) : null;
       }
       // A stub nobody has filled in: no format, no country, no catalogue number, no year AND no
       // scans. It would draw as a blank row offering nothing to choose on. The pinned pressing is

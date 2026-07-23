@@ -639,11 +639,13 @@ extension DiscogsArtwork on DiscogsService {
     // qualify. Leaving it out meant a library album and the same album opened from browse (which
     // knows no track count) shared one entry, and whichever ran first won permanently.
     //
-    // The v2 marks a schema change: entries written before the archive was consulted would
-    // otherwise keep answering forever, since nothing here expires.
+    // The version marks a schema change: nothing here expires, so without bumping it every album
+    // would keep serving the art it cached first. v2 was when the archive started being consulted;
+    // v3 is this — the scans are fetched at 1200px instead of 500, and the old soft copies have to
+    // be let go of rather than quietly kept forever.
     final key = sha1
         .convert(utf8.encode(
-            'art|v2|$artist|$album|$expectedTracks|${pinned ?? 0}|${pinnedMbid ?? ''}'))
+            'art|v3|$artist|$album|$expectedTracks|${pinned ?? 0}|${pinnedMbid ?? ''}'))
         .toString();
     final dir = Directory('$artDir${Platform.pathSeparator}$key');
     final cached = await _readArt(dir);
@@ -736,9 +738,9 @@ extension DiscogsArtwork on DiscogsService {
         // The front must come from the FIRST pressing that has one — that is the sleeve this
         // record is known by. Back and disc may be borrowed from later ones.
         for (final i in images) {
-          if (front == null && i.isFront) front = await mb.fetchImage(i.thumb);
-          if (back == null && i.isBack) back = await mb.fetchImage(i.thumb);
-          if (disc == null && i.isDisc) disc = await mb.fetchImage(i.thumb);
+          if (front == null && i.isFront) front = await mb.fetchImage(i.full);
+          if (back == null && i.isBack) back = await mb.fetchImage(i.full);
+          if (disc == null && i.isDisc) disc = await mb.fetchImage(i.full);
         }
       }
       if (front == null && back == null && disc == null) return null;
@@ -756,9 +758,9 @@ extension DiscogsArtwork on DiscogsService {
       if (images.isEmpty) return null;
       Uint8List? front, back, disc;
       for (final i in images) {
-        if (front == null && i.isFront) front = await mb.fetchImage(i.thumb);
-        if (back == null && i.isBack) back = await mb.fetchImage(i.thumb);
-        if (disc == null && i.isDisc) disc = await mb.fetchImage(i.thumb);
+        if (front == null && i.isFront) front = await mb.fetchImage(i.full);
+        if (back == null && i.isBack) back = await mb.fetchImage(i.full);
+        if (disc == null && i.isDisc) disc = await mb.fetchImage(i.full);
       }
       if (front == null && back == null && disc == null) return null;
       return ReleaseArt(front: front, back: back, disc: disc);
