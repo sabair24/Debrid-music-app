@@ -24,6 +24,12 @@ class Track {
   /// whether a FLAC is CD-quality (16/44) or hi-res (24-bit).
   final int sizeBytes;
 
+  /// Samples per second and bits per sample, straight from the file header (0 when unknown).
+  /// Beyond the hi-res badge these decide where a track can go: Sonos plays FLAC only up to
+  /// 48 kHz and silently SKIPS anything above, so the cast path has to know before it sends.
+  final int sampleRate;
+  final int bitsPerSample;
+
   Track({
     required this.path,
     required this.title,
@@ -37,7 +43,17 @@ class Track {
     this.genre,
     this.addedMs = 0,
     this.sizeBytes = 0,
+    this.sampleRate = 0,
+    this.bitsPerSample = 0,
   });
+
+  /// Effective bitrate in kbit/s, worked out from the size and the duration (a FLAC has no
+  /// single stated bitrate — it varies with the music).
+  int? get bitrateKbps {
+    final ms = duration?.inMilliseconds ?? 0;
+    if (ms <= 0 || sizeBytes <= 0) return null;
+    return (sizeBytes * 8 / ms).round();
+  }
 
   /// File extension (lowercase, no dot), e.g. "flac", "mp3".
   String get ext {
