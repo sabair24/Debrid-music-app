@@ -709,6 +709,10 @@ class AlbumsGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Only on the real library view (no search title), the app offers to tidy albums it found to be
+    // duplicates of one you already own. It never moves anything on its own — this just opens the
+    // dry-run.
+    final dupes = title == null ? context.watch<LibraryStore>().duplicates : const <RedundantAlbum>[];
     return CustomScrollView(
       slivers: [
         SliverPadding(
@@ -718,6 +722,43 @@ class AlbumsGrid extends StatelessWidget {
                 style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
           ),
         ),
+        if (dupes.isNotEmpty)
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+            sliver: SliverToBoxAdapter(
+              child: InkWell(
+                onTap: () async {
+                  final done = await showDialog<bool>(
+                      context: context, builder: (_) => RedundantCleanupDialog(found: dupes));
+                  if (done == true && context.mounted) {
+                    _srcToast(context, 'Bibliotheek opgeruimd');
+                  }
+                },
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                  decoration: BoxDecoration(
+                    color: _accent.withValues(alpha: .12),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: _accent.withValues(alpha: .4)),
+                  ),
+                  child: Row(children: [
+                    const Icon(Icons.auto_delete_outlined, size: 18, color: _accent),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        dupes.length == 1
+                            ? '1 album is een dubbele van een album dat je al hebt — opruimen?'
+                            : '${dupes.length} albums zijn dubbels van albums die je al hebt — opruimen?',
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right_rounded, color: _muted),
+                  ]),
+                ),
+              ),
+            ),
+          ),
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
           sliver: SliverGrid(
@@ -8107,6 +8148,124 @@ class _PickAlbumDialogState extends State<PickAlbumDialog> {
               child: TextButton(
                   onPressed: () => Navigator.of(context).pop(), child: const Text('Annuleren')),
             ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// Clean up albums that are wholly duplicates of one you already own — the dry-run before it acts.
+///
+/// The stale fragments and junk singles the library found on its own: a "Special Edition" holding
+/// three tracks that are all in the real album, an unknown-artist WAV that is really track two.
+/// Nothing moves until Opruimen — and even then the loser of each pair goes to _dubbel, never the
+/// bin, because the better copy is sometimes the one in the fragment.
+class RedundantCleanupDialog extends StatefulWidget {
+  final List<RedundantAlbum> found;
+  const RedundantCleanupDialog({super.key, required this.found});
+
+  @override
+  State<RedundantCleanupDialog> createState() => _RedundantCleanupDialogState();
+}
+
+class _RedundantCleanupDialogState extends State<RedundantCleanupDialog> {
+  bool _busy = false;
+
+  Future<void> _go() async {
+    setState(() => _busy = true);
+    final lib = context.read<LibraryStore>();
+    for (final r in widget.found) {
+      await lib.consolidate(r);
+    }
+    if (!mounted) return;
+    _srcToast(context, 'Dubbele albums opgeruimd');
+    Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final found = widget.found;
+    final totalTracks = found.fold<int>(0, (n, r) => n + r.pairs.length);
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: 760,
+        height: 640,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Dubbele albums opruimen',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text(
+              '${found.length} ${found.length == 1 ? 'album gaat' : 'albums gaan'} op in een album dat je al hebt · '
+              '$totalTracks ${totalTracks == 1 ? 'nummer' : 'nummers'}',
+              style: const TextStyle(color: _muted, fontSize: 12.5),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: ListView.builder(
+                itemCount: found.length,
+                itemBuilder: (_, i) {
+                  final r = found[i];
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(11),
+                    decoration:
+                        BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(9)),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('${r.source.title}  →  ${r.target.title}',
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+                      const SizedBox(height: 2),
+                      Text(
+                        r.upgrades > 0
+                            ? '${r.upgrades} van de ${r.pairs.length} ${r.upgrades == 1 ? 'is' : 'zijn'} beter en vervangt wat je hebt · de rest naar _dubbel'
+                            : 'alle ${r.pairs.length} zijn dubbel · naar _dubbel',
+                        style: const TextStyle(color: _muted, fontSize: 11.5),
+                      ),
+                      const SizedBox(height: 6),
+                      for (final p in r.pairs)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 3),
+                          child: Row(children: [
+                            Icon(p.dupWins ? Icons.upgrade_rounded : Icons.content_copy_rounded,
+                                size: 14, color: p.dupWins ? _accent : _accent2),
+                            const SizedBox(width: 7),
+                            Expanded(
+                              child: Text(
+                                p.dupWins
+                                    ? '${p.owned.trackNo}. ${p.owned.title} — betere kopie behouden, oude naar _dubbel'
+                                    : '${p.owned.trackNo}. ${p.owned.title} — dubbel naar _dubbel',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 11.5),
+                              ),
+                            ),
+                          ]),
+                        ),
+                    ]),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              TextButton(
+                  onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuleren')),
+              const SizedBox(width: 8),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: _accent),
+                onPressed: _busy ? null : _go,
+                child: _busy
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Text('Opruimen'),
+              ),
+            ]),
           ]),
         ),
       ),

@@ -403,9 +403,16 @@ String relativePathFor(TrackTags t, {RelKind? kind, required String ext}) {
 String trackIdentity(String artist, String title) => '${normKey(artist)}|${normKey(title)}';
 
 /// Rank of an audio format — higher wins when two copies of the same track exist.
+///
+/// FLAC/ALAC/APE sit ABOVE WAV even though all four are lossless. WAV is uncompressed, so it is
+/// always the bigger file and on size alone would evict a FLAC of the same audio — and it carries
+/// no tags this app can write (the tag writer is FLAC-only), so a WAV that wins lands untagged and
+/// scans as a nameless "Onbekende artiest" single. For a library headed to Roon a WAV is strictly
+/// worse than the identical FLAC, so it never beats one.
 int formatRank(String path) {
   final e = path.toLowerCase();
-  if (e.endsWith('.flac') || e.endsWith('.wav') || e.endsWith('.ape') || e.endsWith('.alac')) return 3;
+  if (e.endsWith('.flac') || e.endsWith('.ape') || e.endsWith('.alac')) return 4;
+  if (e.endsWith('.wav')) return 3; // lossless, but uncompressed and untaggable
   if (e.endsWith('.m4a') || e.endsWith('.aac') || e.endsWith('.ogg') || e.endsWith('.opus')) return 2;
   return 1; // mp3 and friends
 }

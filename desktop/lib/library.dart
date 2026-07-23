@@ -132,6 +132,20 @@ class LibraryStore extends ChangeNotifier {
   final Map<String, String> artistBios = {};
   String rootPath = r'D:\Flac music 2024';
 
+  /// Albums/singles found to be entirely duplicates of a real album you own — recomputed after each
+  /// full scan, so the library can offer to tidy them without the user going hunting. Empty until a
+  /// scan has run. See the [LibraryDuplicates] extension.
+  List<RedundantAlbum> duplicates = const [];
+
+  /// Recompute [duplicates]. In its own method so the extension can be reached from [scan].
+  void _recomputeDuplicates() {
+    try {
+      duplicates = redundantAlbums();
+    } catch (_) {
+      duplicates = const []; // never let duplicate-hunting break a scan
+    }
+  }
+
   // Fast lookups for the flat Tracks view (covers) and playback resume (path → track).
   final Map<String, Album> _albumByPath = {};
 
@@ -629,6 +643,9 @@ class LibraryStore extends ChangeNotifier {
     scanned = tracks.length;
     rebuildAlbums();
     scanning = false;
+    // Look for albums that are wholly duplicates of one you already own. Only after a full scan —
+    // it reads file sizes and headers, too heavy to redo on every regroup.
+    _recomputeDuplicates();
     notifyListeners();
 
     // Pass 2 — one embedded cover per album, off the UI thread. Guarded with a
@@ -1219,5 +1236,195 @@ extension LibraryMove on LibraryStore {
       await scan();
     }
     return landed.length;
+  }
+}
+
+/// One track of a redundant album, matched to the copy already owned in the real album.
+class DuplicatePair {
+  /// The redundant copy.
+  final Track dup;
+
+  /// The copy already in the proper studio album that [dup] duplicates.
+  final Track owned;
+
+  /// True when [dup] is the better copy and should take [owned]'s place.
+  final bool dupWins;
+  const DuplicatePair(this.dup, this.owned, this.dupWins);
+}
+
+/// An album or single whose every track is already owned in a fuller studio album.
+class RedundantAlbum {
+  /// The junk single or fragment album.
+  final Album source;
+
+  /// The real album it all duplicates.
+  final Album target;
+  final List<DuplicatePair> pairs;
+  const RedundantAlbum(this.source, this.target, this.pairs);
+
+  /// How many of the redundant copies are actually better and will replace what's owned.
+  int get upgrades => pairs.where((p) => p.dupWins).length;
+}
+
+/// The placeholder artist a file gets when its tags can't be read — see `_scanTags`.
+final String _unknownArtistKey = artistKey('Onbekende artiest');
+
+extension LibraryDuplicates on LibraryStore {
+  /// Albums and singles that are entirely duplicates of a real album you already own.
+  ///
+  /// The two shapes this catches, both stale cruft from before downloads carried their album's
+  /// identity: a fragment tagged like its own album ("Backstreet Boys (Special Edition)" holding
+  /// only 9, 10, 13), and a junk single whose tags were unreadable so it filed itself under
+  /// "Onbekende artiest" with the raw filename as its title.
+  ///
+  /// The safety is the ALL-of-it rule: a source is only redundant when EVERY one of its tracks is
+  /// already in ONE proper studio album. A real greatest-hits spans several studio albums, so it
+  /// can never be wholly contained in one and is never touched — which is what keeps a compilation
+  /// you actually wanted from being swept away.
+  List<RedundantAlbum> redundantAlbums() {
+    // The real records a duplicate can fold back into: studio albums (not compilations, not
+    // singles), with more than a token of tracks.
+    final targets = [
+      for (final a in albums)
+        if (!a.isSingle &&
+            a.tracks.length >= 2 &&
+            classifyRelease(album: a.title, artist: a.artist) == RelKind.album)
+          a
+    ];
+    if (targets.isEmpty) return const [];
+
+    // Match one redundant track to a copy in [target]. Null when nothing in the target is it.
+    //
+    // A fragment carries real tags, so its TITLE is the strongest signal — stronger than the
+    // filename, which the peer may have written as "09 - Every Time.flac". A junk single has no
+    // usable title (its title IS the raw filename), so for that the filename against the target's
+    // title is all there is, and fileOffersTitle reads the artist words in it correctly.
+    Track? ownedIn(Album target, Track x, {required bool junk}) {
+      final xDur = x.duration?.inSeconds ?? 0;
+      if (!junk && normKey(x.title).isNotEmpty) {
+        for (final y in target.tracks) {
+          if (normKey(x.title) != normKey(y.title)) continue;
+          final yDur = y.duration?.inSeconds ?? 0;
+          // A different VERSION of the same song runs a different length; a couple of seconds is
+          // just a different rip, so it is the same recording.
+          if (xDur == 0 || yDur == 0 || (xDur - yDur).abs() <= 12) return y;
+        }
+      }
+      for (final y in target.tracks) {
+        if (fileOffersTitle(y.title, y.duration?.inSeconds, y.artist, x.path, xDur)) return y;
+      }
+      return null;
+    }
+
+    final out = <RedundantAlbum>[];
+    for (final x in albums) {
+      // Never fold a real compilation away, and never fold an album into itself.
+      if (!x.isSingle && classifyRelease(album: x.title, artist: x.artist) == RelKind.compilation) {
+        continue;
+      }
+      // A single whose artist never got read — the WAV filed under "Onbekende artiest". Its tags
+      // are useless, so it is matched by filename against any album; anything with a real artist is
+      // matched the cheap way, only against albums by that same artist.
+      final junk = x.isSingle && (x.artist.trim().isEmpty || artistKey(x.artist) == _unknownArtistKey);
+
+      Album? best;
+      List<DuplicatePair>? bestPairs;
+      for (final y in targets) {
+        if (identical(x, y)) continue;
+        // The target has to be at least as big — the fragment folds into the fuller record, never
+        // the other way round. A single (one track) folds into any album that has it.
+        if (y.tracks.length < x.tracks.length) continue;
+        if (!junk && artistKey(x.artist) != artistKey(y.artist)) continue;
+
+        final pairs = <DuplicatePair>[];
+        var whole = true;
+        for (final t in x.tracks) {
+          final owned = ownedIn(y, t, junk: junk);
+          if (owned == null) {
+            whole = false;
+            break;
+          }
+          pairs.add(DuplicatePair(t, owned, firstIsBetter(File(t.path), File(owned.path))));
+        }
+        if (!whole) continue;
+        // Prefer the fullest target when several qualify, so a fragment lands in the real album.
+        if (best == null || y.tracks.length > best.tracks.length) {
+          best = y;
+          bestPairs = pairs;
+        }
+      }
+      if (best != null && bestPairs != null && bestPairs.isNotEmpty) {
+        out.add(RedundantAlbum(x, best, bestPairs));
+      }
+    }
+    return out;
+  }
+
+  /// Carry out a cleanup: keep the best copy of each track in [r.target], park the rest in _dubbel.
+  ///
+  /// The better copy wins even when it is the one in the fragment — here the Special Edition rips
+  /// are the higher bitrate. A winning copy from the fragment moves into the target folder under
+  /// its proper name and is retagged to the target's identity; the copy it beats goes to _dubbel.
+  Future<void> consolidate(RedundantAlbum r) async {
+    final sep = Platform.pathSeparator;
+    final targetDir = r.target.tracks.isEmpty ? null : File(r.target.tracks.first.path).parent.path;
+    if (targetDir == null) return;
+    final dubbel = '$targetDir$sep$dupeFolder';
+
+    Future<void> park(String from) async {
+      try {
+        final dest = File('$dubbel$sep${File(from).uri.pathSegments.last}');
+        if (await dest.exists()) return; // already a copy there — leave this one where it is
+        await dest.parent.create(recursive: true);
+        final at = await moveWithRetry(File(from), dest);
+        _reKeyCorrection(from, at);
+      } catch (_) {/* locked or across volumes — the scan still sorts it out */}
+    }
+
+    for (final p in r.pairs) {
+      if (!p.dupWins) {
+        // The owned copy is as good or better — the duplicate simply goes away.
+        await park(p.dup.path);
+        continue;
+      }
+      // The duplicate is better: it takes the owned copy's slot. Park the owned copy first, then
+      // move the winner onto its proper name and stamp it with the record's identity.
+      await park(p.owned.path);
+      final ext = () {
+        final n = File(p.dup.path).uri.pathSegments.last;
+        final i = n.lastIndexOf('.');
+        return i < 0 ? '' : n.substring(i);
+      }();
+      final name = safeSeg('${p.owned.trackNo.toString().padLeft(2, '0')} - ${p.owned.title}$ext');
+      final to = '$targetDir$sep$name';
+      try {
+        if (!await File(to).exists()) {
+          final at = await moveWithRetry(File(p.dup.path), File(to));
+          _reKeyCorrection(p.dup.path, at);
+          await stampTags(
+              File(at),
+              TrackTags(
+                title: p.owned.title,
+                artist: r.target.artist,
+                album: r.target.title,
+                albumArtist: r.target.artist,
+                trackNo: p.owned.trackNo,
+                trackTotal: r.target.tracks.length,
+                year: p.owned.year ?? r.target.year,
+              ));
+        }
+      } catch (_) {/* couldn't move — leave both; the next scan still shows one via dedup */}
+    }
+
+    await saveCorrectionsNow();
+    // The source folder is empty now (a single's parent may hold others — only remove if bare).
+    final srcDir = r.source.tracks.isEmpty ? null : File(r.source.tracks.first.path).parent.path;
+    if (srcDir != null && srcDir != targetDir) {
+      try {
+        final d = Directory(srcDir);
+        if (d.existsSync() && d.listSync().isEmpty) d.deleteSync();
+      } catch (_) {}
+    }
+    await scan();
   }
 }
