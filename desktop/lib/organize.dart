@@ -537,6 +537,12 @@ Future<String> _install(File src, File dest, List<File> losers) async {
 /// A freshly downloaded file often gets touched briefly by something else on the machine — a
 /// virus scanner, the search indexer, a music server watching the folder — and a rename that
 /// lands in that window fails outright. Giving up there strands the track in staging.
+///
+/// Public because merging an album moves files that have been sitting in the library for months,
+/// where that same window is if anything wider: the player may hold one open, and a plain rename
+/// that loses the race would leave half a record moved.
+Future<String> moveWithRetry(File src, File dest) => _move(src, dest);
+
 Future<String> _move(File src, File dest) async {
   for (var attempt = 0; attempt < 3; attempt++) {
     try {

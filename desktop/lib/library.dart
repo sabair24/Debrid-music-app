@@ -154,10 +154,26 @@ class LibraryStore extends ChangeNotifier {
   // Applied to scanned tracks so wrong tags are fixed without touching the files.
   final Map<String, Map<String, String>> _corrections = {};
 
+  /// Where this app keeps its own files. Overridable ONLY so a test can be given a scratch folder:
+  /// corrections.json is the user's hand-made metadata, and a test run that wrote its two fixtures
+  /// over the real one would destroy months of edits.
+  @visibleForTesting
+  String? configDirOverride;
+
   String get _appDir {
+    final o = configDirOverride;
+    if (o != null) return o;
     final base = Platform.environment['APPDATA'] ?? Directory.current.path;
     return '$base${Platform.pathSeparator}DebridMusic';
   }
+
+  /// What is recorded against a file, or null. For tests.
+  @visibleForTesting
+  Map<String, String>? correctionForTest(String path) => _corrections[path];
+
+  /// Record something against a file, as an earlier edit would have. For tests.
+  @visibleForTesting
+  void seedCorrectionForTest(String path, Map<String, String> c) => _correctionsFor(path).addAll(c);
 
   File get _correctionsFile => File('$_appDir${Platform.pathSeparator}corrections.json');
 
@@ -414,6 +430,20 @@ class LibraryStore extends ChangeNotifier {
   /// The correction map for a path, created on demand — so an extension can add to it.
   Map<String, String> _correctionsFor(String path) => _corrections.putIfAbsent(path, () => {});
 
+  /// Carry a file's corrections to where the file now is.
+  ///
+  /// Corrections are keyed by absolute path, so a move silently orphans them: the entry stays under
+  /// the old name, [_applyCorrection] looks under the new one and finds nothing, and
+  /// [loadCorrections] deletes it as a dead file at the next start. A track moved into another
+  /// album would end up with its FILE in the new folder and its GROUPING back in the old one —
+  /// worse than either half alone, and it would have taken the album's pinned release with it.
+  void _reKeyCorrection(String from, String to) {
+    if (from == to) return;
+    final old = _corrections.remove(from);
+    if (old == null || old.isEmpty) return;
+    _corrections.putIfAbsent(to, () => {}).addAll(old);
+  }
+
   /// Public save, for the move extension.
   Future<void> saveCorrectionsNow() => _saveCorrections();
 
@@ -604,6 +634,9 @@ class LibraryStore extends ChangeNotifier {
   /// Tracks of one artist+album title, kept so [_groupKey] can ask whether that title needs
   /// splitting before it answers for any single track.
   final Map<String, List<Track>> _byBase = {};
+
+  /// Every track filed under one artist+title, whatever edition it belongs to.
+  List<Track>? editionsOfRecord(String baseKey) => _byBase[baseKey];
 
   /// Does this pile of tracks hold more than one EDITION of the record?
   ///
@@ -804,9 +837,55 @@ class MovePlan {
   /// Where it would land, or null when the target album's folder can't be worked out — then the
   /// file stays put and only the grouping changes.
   final String? to;
-  const MovePlan(this.track, this.from, this.to);
+
+  /// What happens to this file, in one word, so the dialog can say it rather than imply it.
+  final MoveFate fate;
+  const MovePlan(this.track, this.from, this.to, [this.fate = MoveFate.moves]);
 
   bool get movesFile => to != null && to != from;
+
+  /// The filename, for a plan the user has to read a screenful of.
+  String get name => File(from).uri.pathSegments.last;
+}
+
+/// Where the superseded copy of a colliding track is parked.
+///
+/// Not deleted — the user asked to tidy the folder, not to lose a file. Still scanned, and still
+/// hidden from the tracklist by [LibraryStore._dedupeTracks], exactly as a duplicate is today.
+const dupeFolder = '_dubbel';
+
+/// What one track's file would do in a gather, and why.
+enum MoveFate {
+  /// Straight into the target folder under its own name.
+  moves,
+
+  /// The name is taken by a better copy, so this one is parked in [dupeFolder].
+  toDupes,
+
+  /// Already where it belongs, or there is nowhere to put it.
+  stays,
+}
+
+/// Everything a merge would do on disk, so it can be read before anything is touched.
+class MergePlan {
+  /// The folder the record is being gathered into.
+  final String? folder;
+  final List<MovePlan> items;
+  const MergePlan(this.folder, this.items);
+
+  int get moving => items.where((i) => i.fate == MoveFate.moves).length;
+  int get parking => items.where((i) => i.fate == MoveFate.toDupes).length;
+  int get staying => items.where((i) => i.fate == MoveFate.stays).length;
+
+  /// Nothing to do — every file is already in one folder.
+  bool get isNoop => moving == 0 && parking == 0;
+
+  /// "14 verhuizen · 3 naar _dubbel · 1 blijft staan"
+  String get summary => [
+        if (moving > 0) '$moving ${moving == 1 ? 'verhuist' : 'verhuizen'}',
+        if (parking > 0) '$parking naar $dupeFolder',
+        if (staying > 0) '$staying ${staying == 1 ? 'blijft' : 'blijven'} staan',
+      ].join(' · ');
 }
 
 extension LibraryMove on LibraryStore {
@@ -816,14 +895,132 @@ extension LibraryMove on LibraryStore {
   /// and a wrong guess scatters a library rather than tidying it.
   List<MovePlan> planMove(List<Track> tracks, Album target) {
     final anchor = target.tracks.isEmpty ? null : File(target.tracks.first.path).parent.path;
-    return [
-      for (final t in tracks)
-        MovePlan(
-          t,
-          t.path,
-          anchor == null ? null : '$anchor${Platform.pathSeparator}${File(t.path).uri.pathSegments.last}',
-        )
-    ];
+    return anchor == null
+        ? [for (final t in tracks) MovePlan(t, t.path, null, MoveFate.stays)]
+        : _gather(tracks, anchor).items;
+  }
+
+  /// Every track of this RECORD, across editions — which is what a merge is about.
+  ///
+  /// An Album is one edition; the tile beside it is another. Planning from `album.tracks` alone
+  /// would gather one half of a split record and leave the other exactly where it was.
+  List<Track> recordTracks(Album album) {
+    if (album.isSingle || album.tracks.isEmpty) return album.tracks;
+    final t = album.tracks.first;
+    return editionsOfRecord('album::${artistKey(t.artist)}|${normKey(t.album)}') ?? album.tracks;
+  }
+
+  /// Where the files of [album] would go if it were gathered into one folder. Nothing is touched.
+  MergePlan planMerge(Album album) {
+    final ts = recordTracks(album);
+    final folder = _homeFolder(ts, album.title);
+    if (folder == null) {
+      return MergePlan(null, [for (final t in ts) MovePlan(t, t.path, null, MoveFate.stays)]);
+    }
+    return _gather(ts, folder);
+  }
+
+  /// The folder this record already mostly lives in.
+  ///
+  /// Whichever holds the most of its tracks: that is the least traffic, and for a record split by
+  /// an edition it is the original rip rather than the one file Soulseek dropped somewhere else.
+  /// A tie goes to the folder whose name reads most like the album's — so a merge lands in
+  /// "Black & Blue" and not in whatever the downloader happened to call it.
+  String? _homeFolder(List<Track> tracks, String title) {
+    if (tracks.isEmpty) return null;
+    final n = <String, int>{};
+    for (final t in tracks) {
+      n.update(File(t.path).parent.path, (v) => v + 1, ifAbsent: () => 1);
+    }
+    final want = normKey(title);
+    final ranked = n.entries.toList()
+      ..sort((a, b) {
+        final byCount = b.value.compareTo(a.value);
+        if (byCount != 0) return byCount;
+        final an = normKey(a.key.split(Platform.pathSeparator).last);
+        final bn = normKey(b.key.split(Platform.pathSeparator).last);
+        final match = (bn == want ? 1 : 0) - (an == want ? 1 : 0);
+        return match != 0 ? match : a.key.compareTo(b.key);
+      });
+    return ranked.first.key;
+  }
+
+  /// Work out, without touching anything, where each of [tracks] would land in [folder].
+  MergePlan _gather(List<Track> tracks, String folder) {
+    final sep = Platform.pathSeparator;
+    // Names already spoken for in the target folder, and by which file. Seeded from the tracks that
+    // are already there so two arrivals can't both claim one name.
+    final taken = <String, String>{};
+    for (final t in tracks) {
+      final f = File(t.path);
+      if (f.parent.path == folder) taken[f.uri.pathSegments.last.toLowerCase()] = t.path;
+    }
+    try {
+      for (final e in Directory(folder).listSync(followLinks: false)) {
+        if (e is File) taken.putIfAbsent(e.uri.pathSegments.last.toLowerCase(), () => e.path);
+      }
+    } catch (_) {/* folder unreadable — treat it as empty and let the move itself fail loudly */}
+
+    final items = <MovePlan>[];
+    // Tracks already dealt with because a better copy took their name. Without this a tenant bumped
+    // before the loop reached it would be planned TWICE — once into _dubbel and once as staying —
+    // and a plan that lists a file twice is a plan nobody can check.
+    final bumped = <String>{};
+    for (final t in tracks) {
+      if (bumped.contains(t.path)) continue;
+      final src = File(t.path);
+      final name = src.uri.pathSegments.last;
+      if (src.parent.path == folder) {
+        items.add(MovePlan(t, t.path, null, MoveFate.stays));
+        continue;
+      }
+      final holder = taken[name.toLowerCase()];
+      if (holder == null) {
+        taken[name.toLowerCase()] = t.path;
+        items.add(MovePlan(t, t.path, '$folder$sep$name', MoveFate.moves));
+        continue;
+      }
+      // The name is taken. Whichever copy is worse goes to the duplicates folder — same rule the
+      // tracklist already uses to decide which of two copies you actually hear.
+      // Only OUR tracks can be bumped; a stranger's file in the folder is left alone and we step aside.
+      final tenant = tracks.where((x) => x.path == holder).firstOrNull;
+      if (tenant != null && firstIsBetter(src, File(holder))) {
+        final at = items.indexWhere((i) => i.track.path == holder);
+        final aside = MovePlan(tenant, holder, '$folder$sep$dupeFolder$sep$name', MoveFate.toDupes);
+        at >= 0 ? items[at] = aside : items.add(aside);
+        bumped.add(holder);
+        taken[name.toLowerCase()] = t.path;
+        items.add(MovePlan(t, t.path, '$folder$sep$name', MoveFate.moves));
+        continue;
+      }
+      items.add(MovePlan(t, t.path, '$folder$sep$dupeFolder$sep$name', MoveFate.toDupes));
+    }
+    return MergePlan(folder, items);
+  }
+
+  /// Carry out a plan. Returns, per source path, where that file actually ended up.
+  ///
+  /// Only files that really moved are in the map. Guessing afterwards from `File(to).exists()`
+  /// would be wrong in the one case that matters: a destination that was already occupied is
+  /// skipped, and the track's own file is then still at its old path — keying its correction to the
+  /// stranger's path would leave the track ungrouped.
+  ///
+  /// Never overwrites. The correction naming this track's album is re-keyed to where the file
+  /// landed — see [LibraryStore._reKeyCorrection] for what forgetting that used to cost.
+  Future<Map<String, String>> _apply(List<MovePlan> plan) async {
+    final landed = <String, String>{};
+    for (final p in plan) {
+      if (!p.movesFile) continue;
+      try {
+        final dest = File(p.to!);
+        if (await dest.exists()) continue;
+        await dest.parent.create(recursive: true);
+        final at = await moveWithRetry(File(p.from), dest);
+        _reKeyCorrection(p.from, at);
+        landed[p.from] = at;
+      } catch (_) {/* locked, or across volumes — the file stays put and stays in the library */}
+    }
+    return landed;
   }
 
   /// Move [tracks] into [target]: retag them into that album, and optionally carry the files along.
@@ -832,29 +1029,31 @@ extension LibraryMove on LibraryStore {
   /// be moved. A file that can't be moved — locked, or a name already taken — leaves the track
   /// grouped correctly and the file where it was, which is the safe half of the job.
   Future<int> moveTracksToAlbum(List<Track> tracks, Album target, AppSettings settings,
-      {bool moveFiles = true}) async {
-    var moved = 0;
-    if (moveFiles) {
-      for (final p in planMove(tracks, target)) {
-        if (!p.movesFile) continue;
-        try {
-          final dest = File(p.to!);
-          // Never overwrite: a same-named track already in the target album is a different copy,
-          // and silently replacing it would destroy the one thing this operation must not touch.
-          if (await dest.exists()) continue;
-          await dest.parent.create(recursive: true);
-          await File(p.from).rename(p.to!);
-          moved++;
-        } catch (_) {/* locked or across volumes — the retag below still regroups it */}
-      }
-    }
-    for (final t in tracks) {
-      final c = _correctionsFor(t.path);
+      {bool moveFiles = true, List<MovePlan>? plan}) async {
+    // The plan the user read, when there was one. Re-planning here would let the folder change
+    // between the screen they approved and the files that move.
+    final steps = plan ?? planMove(tracks, target);
+    final landed = moveFiles ? await _apply(steps) : const <String, String>{};
+    for (final p in steps) {
+      final c = _correctionsFor(landed[p.from] ?? p.from);
       c['artist'] = cleanArtistName(target.artist);
       c['album'] = target.title;
     }
     await saveCorrectionsNow();
     await scan();
-    return moved;
+    return landed.length;
+  }
+
+  /// Gather every edition of [album] into one folder, carrying out [planMerge].
+  ///
+  /// The tags already say these are one record — that is why they show as one album — so nothing is
+  /// retagged here. Only the files move.
+  Future<int> gatherAlbumFiles(Album album, {List<MovePlan>? plan}) async {
+    final landed = await _apply(plan ?? planMerge(album).items);
+    if (landed.isNotEmpty) {
+      await saveCorrectionsNow();
+      await scan();
+    }
+    return landed.length;
   }
 }

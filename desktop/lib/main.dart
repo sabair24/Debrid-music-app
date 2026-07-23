@@ -847,6 +847,20 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                           if (picked == true && mounted) _refresh();
                         },
                       ),
+                    if (!album.isSingle)
+                      IconButton(
+                        icon: const Icon(Icons.merge_rounded),
+                        tooltip: 'Een ander album hierin samenvoegen',
+                        onPressed: () async {
+                          final source = await showDialog<Album>(
+                              context: context, builder: (_) => PickAlbumDialog(exclude: album));
+                          if (source == null || !context.mounted) return;
+                          final done = await showDialog<bool>(
+                              context: context,
+                              builder: (_) => MergeAlbumsDialog(album: album, absorb: source));
+                          if (done == true && mounted) _refresh();
+                        },
+                      ),
                     IconButton(
                       icon: const Icon(Icons.edit_rounded),
                       tooltip: 'Metadata corrigeren',
@@ -982,9 +996,15 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
                           ),
                           onPressed: () {
-                            final lib = context.read<LibraryStore>();
-                            merged ? lib.unmergeEditions(album) : lib.mergeEditions(album);
-                            _srcToast(context, merged ? 'Uitgaves weer apart' : 'Uitgaves samengevoegd');
+                            if (merged) {
+                              // Splitting moves nothing, so it needs no plan.
+                              context.read<LibraryStore>().unmergeEditions(album);
+                              _srcToast(context, 'Uitgaves weer apart');
+                              return;
+                            }
+                            // Merging rewrites the folder tree. Show what it would do first.
+                            showDialog<bool>(
+                                context: context, builder: (_) => MergeAlbumsDialog(album: album));
                           },
                           icon: Icon(merged ? Icons.call_split_rounded : Icons.merge_rounded, size: 20),
                           label: Text(merged ? 'Uitgaves splitsen' : 'Uitgaves samenvoegen'),
@@ -7031,6 +7051,281 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
                     ? const SizedBox(
                         width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                     : const Text('Verplaatsen'),
+              ),
+            ]),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// Pick one album out of the library. Pops the chosen [Album], or null.
+class PickAlbumDialog extends StatefulWidget {
+  /// The album doing the asking — never offered as an answer to itself.
+  final Album exclude;
+  const PickAlbumDialog({super.key, required this.exclude});
+
+  @override
+  State<PickAlbumDialog> createState() => _PickAlbumDialogState();
+}
+
+class _PickAlbumDialogState extends State<PickAlbumDialog> {
+  final _query = TextEditingController();
+
+  @override
+  void dispose() {
+    _query.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    final q = normKey(_query.text);
+    final options = lib.albums
+        .where((a) => !a.isSingle && a != widget.exclude)
+        .where((a) => q.isEmpty || normKey('${a.artist} ${a.title}').contains(q))
+        .take(60)
+        .toList();
+
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: 620,
+        height: 560,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Welk album samenvoegen?',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text('Dit album gaat op in “${widget.exclude.title}”.',
+                style: const TextStyle(color: _muted, fontSize: 12.5)),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _query,
+              autofocus: true,
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(labelText: 'Zoek een album…', isDense: true),
+            ),
+            const SizedBox(height: 10),
+            Expanded(
+              child: ListView.builder(
+                itemCount: options.length,
+                itemBuilder: (_, i) {
+                  final a = options[i];
+                  return InkWell(
+                    onTap: () => Navigator.of(context).pop(a),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 5),
+                      padding: const EdgeInsets.all(7),
+                      decoration: BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(8)),
+                      child: Row(children: [
+                        cover(a.cover, size: 34, radius: 5),
+                        const SizedBox(width: 9),
+                        Expanded(
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text(a.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                            Text('${a.artist} · ${a.tracks.length} nummers',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: _muted, fontSize: 11.5)),
+                          ]),
+                        ),
+                      ]),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                  onPressed: () => Navigator.of(context).pop(), child: const Text('Annuleren')),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// Put a record back together — showing, file by file, what that does on disk before it does it.
+///
+/// Two ways in. With no [absorb] it gathers the editions of ONE record that are scattered over
+/// several folders. With [absorb] it swallows another album whole, the way Roon does.
+///
+/// The plan is the point. Merging used to change only the grouping, which left the folders exactly
+/// as jumbled as before; moving files without showing the plan first is the other way to get it
+/// wrong. So nothing moves until the list below has been read and confirmed.
+class MergeAlbumsDialog extends StatefulWidget {
+  final Album album;
+
+  /// The album being absorbed into [album], for a Roon-style merge of two different records.
+  final Album? absorb;
+  const MergeAlbumsDialog({super.key, required this.album, this.absorb});
+
+  @override
+  State<MergeAlbumsDialog> createState() => _MergeAlbumsDialogState();
+}
+
+class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
+  bool _moveFiles = true;
+  bool _busy = false;
+
+  /// Worked out ONCE, when the dialog opens. Re-planning on every rebuild would read the folder
+  /// again mid-run and could carry out something other than what was on screen when the user
+  /// pressed the button — and it walks the disk, which has no business happening per frame.
+  late final MergePlan _plan;
+
+  @override
+  void initState() {
+    super.initState();
+    final lib = context.read<LibraryStore>();
+    _plan = widget.absorb != null
+        ? MergePlan(
+            widget.album.tracks.isEmpty ? null : File(widget.album.tracks.first.path).parent.path,
+            lib.planMove(widget.absorb!.tracks, widget.album))
+        : lib.planMerge(widget.album);
+  }
+
+  Future<void> _go() async {
+    setState(() => _busy = true);
+    final lib = context.read<LibraryStore>();
+    final settings = context.read<AppSettings>();
+    int moved;
+    if (widget.absorb != null) {
+      moved = await lib.moveTracksToAlbum(widget.absorb!.tracks, widget.album, settings,
+          moveFiles: _moveFiles, plan: _plan.items);
+    } else {
+      // Regroup first: the tags are what decide, and the user's word beats them.
+      await lib.mergeEditions(widget.album);
+      moved = _moveFiles ? await lib.gatherAlbumFiles(widget.album, plan: _plan.items) : 0;
+    }
+    if (!mounted) return;
+    _srcToast(context,
+        moved > 0 ? 'Samengevoegd — $moved ${moved == 1 ? 'bestand' : 'bestanden'} verhuisd' : 'Samengevoegd');
+    Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final plan = _plan;
+    // Only what actually happens. A screen of "blijft staan" is noise between the user and the
+    // three lines they need to check.
+    final acts = plan.items.where((i) => i.fate != MoveFate.stays).toList();
+
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: 720,
+        height: 620,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(widget.absorb == null ? 'Uitgaves samenvoegen' : 'Albums samenvoegen',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text(
+              widget.absorb == null
+                  ? '${widget.album.artist} · ${widget.album.title}'
+                  : '${widget.absorb!.title} → ${widget.album.title}',
+              style: const TextStyle(color: _muted, fontSize: 12.5),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(11),
+              decoration: BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(9)),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(plan.isNoop ? 'Alles staat al in één map' : plan.summary,
+                    style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
+                if (plan.folder != null) ...[
+                  const SizedBox(height: 3),
+                  Text('Doelmap: ${plan.folder}',
+                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                ],
+                if (plan.parking > 0) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                      'Bij dezelfde bestandsnaam houdt de beste kopie de naam; de andere gaat naar '
+                      '$dupeFolder. Er wordt niets gewist.',
+                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                ],
+              ]),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: acts.isEmpty
+                  ? const Center(
+                      child: Text('Geen enkel bestand hoeft te verhuizen.',
+                          style: TextStyle(color: _muted, fontSize: 12.5)))
+                  : ListView.builder(
+                      itemCount: acts.length,
+                      itemBuilder: (_, i) {
+                        final p = acts[i];
+                        final dupe = p.fate == MoveFate.toDupes;
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 7),
+                          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Icon(dupe ? Icons.content_copy_rounded : Icons.arrow_forward_rounded,
+                                size: 15, color: dupe ? _accent2 : _accent),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child:
+                                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                Text(p.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 12.5)),
+                                Text(
+                                  // Where it comes from and where it lands, both readable.
+                                  '${File(p.from).parent.path}  →  '
+                                  '${dupe ? '$dupeFolder${Platform.pathSeparator}' : ''}${p.to == null ? '—' : File(p.to!).parent.path.split(Platform.pathSeparator).last}',
+                                  maxLines: 2,
+                                  style: TextStyle(
+                                      color: dupe ? _accent2.withValues(alpha: .85) : _muted,
+                                      fontSize: 10.5),
+                                ),
+                              ]),
+                            ),
+                          ]),
+                        );
+                      },
+                    ),
+            ),
+            CheckboxListTile(
+              value: _moveFiles,
+              onChanged: (v) => setState(() => _moveFiles = v ?? true),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text('Bestanden mee verplaatsen', style: TextStyle(fontSize: 13)),
+              subtitle: const Text('Uit: alleen de indeling verandert, de mappen blijven zoals ze zijn.',
+                  style: TextStyle(color: _muted, fontSize: 11.5)),
+            ),
+            const SizedBox(height: 4),
+            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              TextButton(
+                  onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuleren')),
+              const SizedBox(width: 8),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: _accent),
+                onPressed: _busy ? null : _go,
+                child: _busy
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Text('Samenvoegen'),
               ),
             ]),
           ]),
