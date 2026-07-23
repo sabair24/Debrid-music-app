@@ -58,6 +58,8 @@ List<Map<String, dynamic>> _scanTags(String root) {
           'genre': v.genre,
           'addedMs': addedMs,
           'sizeBytes': sizeBytes,
+          'sampleRate': v.sampleRate,
+          'bitsPerSample': v.bitsPerSample,
         });
         continue;
       }
@@ -79,11 +81,32 @@ List<Map<String, dynamic>> _scanTags(String root) {
         'genre': (m.genres.isNotEmpty) ? m.genres.first : null,
         'addedMs': addedMs,
         'sizeBytes': sizeBytes,
+        'sampleRate': m.sampleRate ?? 0,
+        // The generic reader doesn't report bit depth; only the FLAC path above can.
+        'bitsPerSample': 0,
       });
     } catch (_) {}
   }
   return out;
 }
+
+/// Run pass 1 on another isolate.
+///
+/// The `Isolate.run` closure is built HERE, at top level, and deliberately not inside
+/// [LibraryStore.scan]. A closure created inside an instance method carries its enclosing
+/// context with it, and that context reaches both `this` and the async method's own completer.
+/// Once a widget has attached a listener to the store, that context is unsendable: the send
+/// throws, the scan's catch swallows it, and the app comes up with an EMPTY LIBRARY while the
+/// music sits untouched on disk. Assigning `rootPath` to a local first is not enough to prevent
+/// it — only moving the closure out of the method is.
+///
+/// Covered by `test/library_isolate_test.dart`, which scans with a listener attached.
+Future<List<Map<String, dynamic>>> scanTagsInIsolate(String root) =>
+    Isolate.run(() => _scanTags(root));
+
+/// Pass 2 on another isolate — same reasoning as [scanTagsInIsolate].
+Future<Map<String, Uint8List>> readCoversInIsolate(List<String> paths) =>
+    Isolate.run(() => _readCovers(paths));
 
 /// Pass 2 (background isolate): read one embedded cover per album.
 Map<String, Uint8List> _readCovers(List<String> paths) {
@@ -499,6 +522,8 @@ class LibraryStore extends ChangeNotifier {
       genre: t.genre,
       addedMs: t.addedMs,
       sizeBytes: t.sizeBytes,
+      sampleRate: t.sampleRate,
+      bitsPerSample: t.bitsPerSample,
     );
   }
 
@@ -585,14 +610,12 @@ class LibraryStore extends ChangeNotifier {
     // new scan succeeds, so a rescan never blanks the UI — the app stays usable.
     List<Map<String, dynamic>> raw;
     try {
-      // Capture a plain String — NOT `this`. Referencing the instance field `rootPath`
-      // directly makes the isolate closure capture the whole LibraryStore, which fails
-      // to send once widgets have attached (non-sendable) listeners → the scan would
-      // silently return nothing and the library shows empty.
-      final root = rootPath;
-      raw = await Isolate.run(() => _scanTags(root)).timeout(const Duration(seconds: 120));
-    } catch (_) {
-      // Timed out or failed — keep whatever library we already have loaded.
+      raw = await scanTagsInIsolate(rootPath).timeout(const Duration(seconds: 120));
+    } catch (e) {
+      // Timed out or failed — keep whatever library we already have loaded. Reported rather
+      // than swallowed: this exact failure was silent for a long time, and a silent scan
+      // failure is indistinguishable from an empty music folder.
+      debugPrint('Library scan failed: $e');
       scanning = false;
       notifyListeners();
       return;
@@ -613,8 +636,7 @@ class LibraryStore extends ChangeNotifier {
     // startup (which would also block cover enrichment from ever running).
     final firstPaths = albums.map((a) => a.tracks.first.path).toList();
     try {
-      final covers =
-          await Isolate.run(() => _readCovers(firstPaths)).timeout(const Duration(seconds: 30));
+      final covers = await readCoversInIsolate(firstPaths).timeout(const Duration(seconds: 30));
       for (final a in albums) {
         final c = covers[a.tracks.first.path];
         if (c != null && c.isNotEmpty) a.embeddedCover = c;
@@ -644,6 +666,8 @@ class LibraryStore extends ChangeNotifier {
         genre: m['genre'] as String?,
         addedMs: (m['addedMs'] as int?) ?? 0,
         sizeBytes: (m['sizeBytes'] as int?) ?? 0,
+        sampleRate: (m['sampleRate'] as int?) ?? 0,
+        bitsPerSample: (m['bitsPerSample'] as int?) ?? 0,
       );
 
   /// Which album a TRACK belongs to. Derived from the track's own tags, never from an Album's

@@ -28,6 +28,12 @@ class FlacTags {
   /// because it carries more bits.
   final int channels;
 
+  /// Samples per second (44100, 96000, …) and bits per sample (16, 24). Together they say whether
+  /// a file is CD quality or hi-res — and whether a Sonos can play it at all, since Sonos stops
+  /// at 48 kHz and *skips* anything above instead of downsampling it.
+  final int sampleRate;
+  final int bitsPerSample;
+
   const FlacTags({
     this.title,
     this.artist,
@@ -38,6 +44,8 @@ class FlacTags {
     this.year,
     this.duration,
     this.channels = 0,
+    this.sampleRate = 0,
+    this.bitsPerSample = 0,
   });
 
   bool get multichannel => channels > 2;
@@ -53,6 +61,8 @@ FlacTags? readFlacTags(File f) {
     final fields = <String, String>{};
     Duration? duration;
     var channels = 0;
+    var sampleRate = 0;
+    var bitsPerSample = 0;
     for (var block = 0; block < 64; block++) {
       final h = raf.readSync(4);
       if (h.length < 4) break;
@@ -65,11 +75,14 @@ FlacTags? readFlacTags(File f) {
         final d = raf.readSync(len);
         // STREAMINFO bytes 10..17 pack: 20 bits sample rate, 3 channels, 5 bits-per-sample,
         // then 36 bits of total sample count.
-        final sampleRate = (d[10] << 12) | (d[11] << 4) | (d[12] >> 4);
+        sampleRate = (d[10] << 12) | (d[11] << 4) | (d[12] >> 4);
         final totalSamples =
             ((d[13] & 0x0F) << 32) | (d[14] << 24) | (d[15] << 16) | (d[16] << 8) | d[17];
         // Byte 12 bits 3-1 hold (channels - 1), right after the 20-bit sample rate.
         channels = ((d[12] >> 1) & 0x07) + 1;
+        // Then 5 bits of (bits-per-sample - 1), straddling the byte boundary: the low bit of
+        // byte 12 is its MSB, the top nibble of byte 13 the rest.
+        bitsPerSample = (((d[12] & 0x01) << 4) | (d[13] >> 4)) + 1;
         if (sampleRate > 0 && totalSamples > 0) {
           duration = Duration(milliseconds: (totalSamples * 1000 / sampleRate).round());
         }
@@ -99,6 +112,8 @@ FlacTags? readFlacTags(File f) {
       year: _year(v('date') ?? v('year')),
       duration: duration,
       channels: channels,
+      sampleRate: sampleRate,
+      bitsPerSample: bitsPerSample,
     );
   } catch (_) {
     return null;
