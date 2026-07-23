@@ -7600,15 +7600,22 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                     _source(c.isMb),
                     const SizedBox(width: 6),
                     // Until this pressing has been looked up we do not know whether it has a back
-                    // or a disc, and saying "–" would be a claim we have not earned.
+                    // or a disc, and saying "–" would be a claim we have not earned. While the
+                    // batch is still running it is genuinely on its way; once it has stopped, the
+                    // deeper rows simply were not opened, and the label has to say that rather
+                    // than promise a spinner that will never finish.
                     if (!c.detailed) ...[
-                      const SizedBox(
-                          width: 10,
-                          height: 10,
-                          child: CircularProgressIndicator(strokeWidth: 1.4, color: _muted)),
-                      const SizedBox(width: 6),
-                      const Text('scans nog ophalen…',
-                          style: TextStyle(color: _muted, fontSize: 10.5)),
+                      if (!_dgDone) ...[
+                        const SizedBox(
+                            width: 10,
+                            height: 10,
+                            child: CircularProgressIndicator(strokeWidth: 1.4, color: _muted)),
+                        const SizedBox(width: 6),
+                        const Text('scans nog ophalen…',
+                            style: TextStyle(color: _muted, fontSize: 10.5)),
+                      ] else
+                        const Text('scans niet opgehaald — kies om te zien',
+                            style: TextStyle(color: _muted, fontSize: 10.5)),
                     ] else ...[
                       _tag('achterkant', c.hasBack),
                       const SizedBox(width: 6),
