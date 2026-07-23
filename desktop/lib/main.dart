@@ -6023,9 +6023,19 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         albumArtist: widget.artistName,
         year: int.tryParse(widget.album.year ?? ''),
         tracks: [
-          for (final t in _tracks) ChoiceTrack('${t.position}', t.title, t.durationSec)
+          for (var i = 0; i < _tracks.length; i++)
+            ChoiceTrack('${_numberOf(_tracks[i], i)}', _tracks[i].title, _tracks[i].durationSec)
         ],
       );
+
+  /// This track's number on the record.
+  ///
+  /// Deezer's album endpoint does not return `track_position` at all — it only exists on the
+  /// per-track endpoint — so every position here is 0 and the numbers on screen are really just row
+  /// indexes. Taking `position` at face value filed a download as "We've Got It Goin' On.flac"
+  /// with no number in front of it. The list is in release order either way, so the index IS the
+  /// number whenever the catalogue declines to say.
+  int _numberOf(CatalogTrack t, int i) => t.position > 0 ? t.position : i + 1;
 
   /// What this track IS, from the page the user is looking at.
   ///
@@ -6034,12 +6044,12 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// from whichever peer serves the file. Soulseek offers this same song as "13 Anywhere for You",
   /// "19. Backstreet Boys - Anywhere For You" and "…The Essential Backstreet Boys - 01 - …";
   /// downloading any of them must still produce track 2 of this album.
-  TrackTags _authorityFor(CatalogTrack t) => TrackTags(
+  TrackTags _authorityFor(CatalogTrack t, int i) => TrackTags(
         title: t.title,
         artist: widget.artistName,
         album: widget.album.title,
         albumArtist: widget.artistName,
-        trackNo: t.position,
+        trackNo: _numberOf(t, i),
         trackTotal: _tracks.length,
         year: int.tryParse(widget.album.year ?? ''),
       );
@@ -6066,7 +6076,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     }
     try {
       final started = await dm.enqueueSoulseekBest(cands,
-          key: 'alb:${widget.album.ref.keyPart}:$i', authority: _authorityFor(t));
+          key: 'alb:${widget.album.ref.keyPart}:$i', authority: _authorityFor(t, i));
       if (mounted) {
         _srcToast(context, started ? '“${t.title}” via Soulseek…' : '“${t.title}” loopt al — zie Mijn downloads.');
       }
@@ -6150,7 +6160,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
               children: [
                 SizedBox(
                     width: 26,
-                    child: Text(t.position > 0 ? '${t.position}' : '${i + 1}',
+                    child: Text('${_numberOf(t, i)}',
                         style: const TextStyle(color: _muted, fontSize: 13))),
                 // Which tracks of this record you already have — the gap in the album, at a glance.
                 Builder(builder: (context) {
@@ -6205,7 +6215,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
             child: SourcesView(
                 query: '${widget.artistName} ${t.title}',
                 authority: _release,
-                track: ChoiceTrack('${t.position}', t.title, t.durationSec)),
+                track: ChoiceTrack('${_numberOf(t, i)}', t.title, t.durationSec)),
           ),
       ],
     );

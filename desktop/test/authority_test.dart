@@ -124,6 +124,26 @@ void main() {
       expect(old.isAuthoritative, isFalse, reason: 'and behaves exactly as it always did');
     });
 
+    test('a track number of zero produces no numbered filename — so it must never be zero', () {
+      // Deezer's ALBUM endpoint omits track_position entirely (it only exists per track), so every
+      // position read from it is 0. Passed straight through, a download landed as
+      // "We've Got It Goin' On.flac" with no number in front of it.
+      const noNumber = TrackTags(
+          title: 'We’ve Got It Goin’ On',
+          artist: 'Backstreet Boys',
+          album: 'Backstreet Boys',
+          trackNo: 0,
+          trackTotal: 13,
+          year: 1996);
+      expect(relativePathFor(noNumber, ext: '.flac'), isNot(contains(' - ')),
+          reason: 'this is the shape of the bug');
+      expect(noNumber.vorbisFields.containsKey('TRACKNUMBER'), isFalse);
+
+      final numbered = _release.forTrack(_official[0], 1);
+      expect(relativePathFor(numbered, ext: '.flac'), contains('01 - '));
+      expect(numbered.vorbisFields['TRACKNUMBER'], '1');
+    });
+
     test('names only the fields it is allowed to overwrite', () {
       final f = _release.forTrack(_official[1], 2).vorbisFields;
       expect(f.keys.toSet(),
