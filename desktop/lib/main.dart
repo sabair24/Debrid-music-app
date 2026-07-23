@@ -5987,6 +5987,10 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         if (ts.length == _tracks.length) {
           titles = [for (final t in ts) t.title];
           secs = [for (final t in ts) t.seconds ?? 0];
+          // When the RECORD came out, not when this pressing did — a 2009 reissue of a 1996 album
+          // is still a 1996 album. Kept because a download has to be stamped with it, and the
+          // search hit this page was opened from carries no date at all.
+          _officialYear = full?.albumYear ?? full?.year;
         }
       }
     } catch (_) {/* fall through to Discogs */}
@@ -5999,6 +6003,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         if (dg.length == _tracks.length) {
           titles = [for (final t in dg) t.title];
           secs = [for (final t in dg) t.seconds ?? 0];
+          _officialYear = e?.albumYear ?? e?.year;
         }
       } catch (_) {/* the Deezer list is a fine fallback */}
     }
@@ -6055,6 +6060,13 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// are part of the identity, so a Live/Radio-Edit/compilation cut still counts as NOT owned.
   Track? _owned(CatalogTrack t) => context.read<LibraryStore>().ownedTrack(widget.artistName, t.title);
 
+  /// What year the RECORD is from, according to whichever catalogue described it.
+  ///
+  /// Not from widget.album: a search hit carries no release date, so leaving it out meant DATE was
+  /// never written and each downloaded file kept whatever year its uploader had put in — one album
+  /// came out of three peers stamped 1996, 1998 and 1999.
+  int? _officialYear;
+
   /// This album, as the official release the sources should be judged against.
   ///
   /// The tracklist here has already been through [_preferOfficialTracklist], so it is MusicBrainz's
@@ -6064,7 +6076,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         artist: widget.artistName,
         album: widget.album.title,
         albumArtist: widget.artistName,
-        year: int.tryParse(widget.album.year ?? ''),
+        year: _officialYear ?? int.tryParse(widget.album.year ?? ''),
         tracks: [
           for (var i = 0; i < _tracks.length; i++)
             ChoiceTrack('${_numberOf(_tracks[i], i)}', _tracks[i].title, _tracks[i].durationSec)
@@ -6094,7 +6106,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         albumArtist: widget.artistName,
         trackNo: _numberOf(t, i),
         trackTotal: _tracks.length,
-        year: int.tryParse(widget.album.year ?? ''),
+        year: _officialYear ?? int.tryParse(widget.album.year ?? ''),
       );
 
   Future<void> _downloadTrack(CatalogTrack t, int i) async {
