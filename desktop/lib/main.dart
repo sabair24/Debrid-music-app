@@ -5581,6 +5581,39 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     } catch (_) {
       if (mounted) setState(() => _busy = false);
     }
+    await _preferDiscogsTracklist();
+  }
+
+  /// Replace Deezer's tracklist with the one from the pressing itself.
+  ///
+  /// Deezer catalogues the streaming edition, and it names tracks after whichever recording it
+  /// licensed: on *Off the Wall* it lists "Rock with You (Single Version)", while the record simply
+  /// has "Rock with You". Discogs describes an actual pressing, so its tracklist is the album's.
+  ///
+  /// Only swapped when the two agree about the SHAPE of the record — same number of tracks. A
+  /// different count means a different edition, and renaming your tracks from the wrong one would
+  /// be worse than leaving Deezer's names alone.
+  Future<void> _preferDiscogsTracklist() async {
+    if (_tracks.isEmpty || !mounted) return;
+    try {
+      final e = await DiscogsService(context.read<AppSettings>())
+          .edition(widget.artistName, widget.album.title, expectedTracks: _tracks.length);
+      final dg = e?.tracklist ?? const <DiscogsTrack>[];
+      if (!mounted || dg.length != _tracks.length) return;
+      setState(() {
+        _tracks = [
+          for (var i = 0; i < _tracks.length; i++)
+            CatalogTrack(
+              _tracks[i].id,
+              dg[i].title.isEmpty ? _tracks[i].title : dg[i].title,
+              _tracks[i].artist,
+              // Keep Deezer's running time when the pressing doesn't state one.
+              dg[i].seconds ?? _tracks[i].durationSec,
+              _tracks[i].position,
+            )
+        ];
+      });
+    } catch (_) {/* the Deezer list is a fine fallback */}
   }
 
   Future<void> _preloadSoulseek() async {
