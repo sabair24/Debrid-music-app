@@ -608,7 +608,7 @@ class MusicBrainzService {
     // different host on its own 250 ms lane, so asking for all of them is cheap. The tracklist is
     // now fetched only when something actually wants it — see [tracklistOf], which the
     // "take this numbering" action already calls on demand.
-    Future<void> take(MbRelease r) async {
+    Future<void> take(MbRelease r, {bool always = false}) async {
       if (out.length >= max || r.mbid.isEmpty || !seen.add(r.mbid)) return;
       ChoiceImage? front, back, disc;
       for (final i in await art(r.mbid)) {
@@ -619,6 +619,17 @@ class MusicBrainzService {
         back ??= i.isBack ? ChoiceImage(i.url, i.thumb) : null;
         disc ??= i.isDisc ? ChoiceImage(i.url, i.thumb) : null;
       }
+      // A stub nobody has filled in: no format, no country, no catalogue number, no year AND no
+      // scans. It would draw as a blank row offering nothing to choose on. The pinned pressing is
+      // shown regardless — the user's own choice is never hidden, however thin its entry.
+      final blank = r.format.isEmpty &&
+          (r.country ?? '').isEmpty &&
+          (r.catno ?? '').isEmpty &&
+          r.year == null &&
+          front == null &&
+          back == null &&
+          disc == null;
+      if (blank && !always) return;
       out.add(ReleaseChoice(
         source: EditionSource.musicbrainz,
         mbid: r.mbid,
@@ -638,7 +649,7 @@ class MusicBrainzService {
     // cut — their own choice missing from the list of choices is the one unacceptable outcome.
     if (pinnedMbid != null && pinnedMbid.isNotEmpty) {
       final p = await release(pinnedMbid);
-      if (p != null) await take(p);
+      if (p != null) await take(p, always: true);
     }
 
     final groups = await searchReleaseGroups(album, artist: artist);
