@@ -835,6 +835,16 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                   actions: [
+                    if (!album.isSingle)
+                      IconButton(
+                        icon: const Icon(Icons.photo_library_outlined),
+                        tooltip: 'Uitgave kiezen — met hoes, achterkant en cd',
+                        onPressed: () async {
+                          final picked = await showDialog<bool>(
+                              context: context, builder: (_) => ReleaseGallery(album));
+                          if (picked == true && mounted) _refresh();
+                        },
+                      ),
                     IconButton(
                       icon: const Icon(Icons.edit_rounded),
                       tooltip: 'Metadata corrigeren',
@@ -6336,4 +6346,172 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
       ),
     );
   }
+}
+
+/// Pick which pressing describes an album — showing, before you choose, what each one carries.
+///
+/// The metadata editor could already pin a release, but it listed them as bare names and said
+/// nothing about their artwork. Choosing blind meant finding out afterwards that a pressing had no
+/// disc scan, and the animation had nothing to spin.
+class ReleaseGallery extends StatefulWidget {
+  final Album album;
+  const ReleaseGallery(this.album, {super.key});
+
+  @override
+  State<ReleaseGallery> createState() => _ReleaseGalleryState();
+}
+
+class _ReleaseGalleryState extends State<ReleaseGallery> {
+  List<ReleaseChoice>? _choices;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final list = await DiscogsService(context.read<AppSettings>())
+          .releaseChoices(widget.album.artist, widget.album.title);
+      if (!mounted) return;
+      setState(() => _choices = list);
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Kon de uitgaves niet ophalen.');
+    }
+  }
+
+  Future<void> _choose(ReleaseChoice c) async {
+    final lib = context.read<LibraryStore>();
+    final settings = context.read<AppSettings>();
+    Uint8List? front;
+    if (c.front != null) {
+      front = await DiscogsService(settings).fetchImage(c.front!.uri);
+    }
+    if (!mounted) return;
+    await lib.applyCorrection(widget.album, settings, coverBytes: front, discogsRelease: c.releaseId);
+    if (mounted) Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pinned = context.watch<LibraryStore>().pinnedRelease(widget.album);
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: 820,
+        height: 660,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                const Text('Uitgave kiezen', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                const Spacer(),
+                IconButton(icon: const Icon(Icons.close_rounded), onPressed: () => Navigator.of(context).pop(false)),
+              ]),
+              Text('${widget.album.artist} — ${widget.album.title}',
+                  style: const TextStyle(color: _muted, fontSize: 12.5)),
+              const SizedBox(height: 14),
+              Expanded(child: _body(pinned)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _body(int? pinned) {
+    if (_error != null) return Center(child: Text(_error!, style: const TextStyle(color: _muted)));
+    final list = _choices;
+    if (list == null) {
+      return const Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          CircularProgressIndicator(strokeWidth: 2, color: _accent),
+          SizedBox(height: 14),
+          // Honest about the wait: this is several Discogs calls plus their images, and Discogs
+          // allows sixty a minute.
+          Text('Uitgaves en scans ophalen…', style: TextStyle(color: _muted, fontSize: 12.5)),
+        ]),
+      );
+    }
+    if (list.isEmpty) return const Center(child: Text('Geen uitgaves gevonden.', style: TextStyle(color: _muted)));
+    return ListView.separated(
+      itemCount: list.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      itemBuilder: (_, i) {
+        final c = list[i];
+        final isPinned = pinned == c.releaseId;
+        return InkWell(
+          onTap: () => _choose(c),
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: isPinned ? _accent.withValues(alpha: .16) : _panel2,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: isPinned ? _accent : Colors.transparent),
+            ),
+            child: Row(children: [
+              // The three scans side by side, so what you get is visible rather than described.
+              _thumb(c.front, 'hoes'),
+              const SizedBox(width: 8),
+              _thumb(c.back, 'achter'),
+              const SizedBox(width: 8),
+              _thumb(c.disc, 'cd'),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(c.line, maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+                  if ((c.label ?? '').isNotEmpty)
+                    Text(c.label!, maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: _muted, fontSize: 12)),
+                  const SizedBox(height: 6),
+                  Row(children: [
+                    _tag('achterkant', c.hasBack),
+                    const SizedBox(width: 6),
+                    _tag('cd-scan', c.hasDisc),
+                  ]),
+                ]),
+              ),
+              if (isPinned) const Icon(Icons.check_circle_rounded, color: _accent, size: 20),
+            ]),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _thumb(DiscogsImage? img, String label) => Column(children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: img == null
+              ? Container(
+                  width: 58,
+                  height: 58,
+                  color: Colors.white.withValues(alpha: .04),
+                  child: const Icon(Icons.close_rounded, size: 16, color: _muted))
+              : _netCover(img.thumb, size: 58, radius: 6),
+        ),
+        const SizedBox(height: 3),
+        Text(label, style: const TextStyle(color: _muted, fontSize: 10)),
+      ]);
+
+  /// Present or absent, stated rather than implied — the reason this dialog exists.
+  Widget _tag(String text, bool on) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: on ? _accent2.withValues(alpha: .16) : Colors.white.withValues(alpha: .05),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(on ? Icons.check_rounded : Icons.remove_rounded, size: 11, color: on ? _accent2 : _muted),
+          const SizedBox(width: 4),
+          Text(text, style: TextStyle(color: on ? _accent2 : _muted, fontSize: 10.5)),
+        ]),
+      );
 }

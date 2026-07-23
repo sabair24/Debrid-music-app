@@ -362,6 +362,9 @@ class DiscogsService {
   /// The format filter is not an optimisation, it is the only way to see a CD of a famous record.
   /// Thriller has hundreds of pressings; asking for a hundred of them sorted by date returns the
   /// 1982-84 vinyl and nothing else, which is how its page came to describe a Costa Rican LP.
+  /// Public wrapper, so the picker extension can list pressings per format.
+  Future<List<DiscogsVersion>> versionsOf(int master, {String? format}) => _versions(master, format: format);
+
   Future<List<DiscogsVersion>> _versions(int master, {String? format}) async {
     final f = format == null ? '' : '&format=${_q(format)}';
     final body = await _get('https://api.discogs.com/masters/$master/versions?per_page=50&sort=released$f');
@@ -730,5 +733,85 @@ extension DiscogsArtwork on DiscogsService {
     } catch (_) {
       return null;
     }
+  }
+}
+
+/// One pressing offered in the picker, with what it actually carries.
+///
+/// Knowing a release HAS a back cover and a disc before choosing it is the point: five rows reading
+/// "30 — Adele" are unchoosable, and picking blind means finding out afterwards that the disc
+/// animation has nothing to spin.
+class ReleaseChoice {
+  final int releaseId;
+  final String format;
+  final String? label, catno, country;
+  final int? year;
+  final DiscogsImage? front, back, disc;
+  const ReleaseChoice({
+    required this.releaseId,
+    required this.format,
+    this.label,
+    this.catno,
+    this.country,
+    this.year,
+    this.front,
+    this.back,
+    this.disc,
+  });
+
+  bool get hasBack => back != null;
+  bool get hasDisc => disc != null;
+
+  /// "CD · Europe · 19439937972 · 2021"
+  String get line => [
+        if (format.isNotEmpty) format,
+        if ((country ?? '').isNotEmpty) country!,
+        if ((catno ?? '').isNotEmpty && catno!.toLowerCase() != 'none') catno!,
+        if (year != null && year! > 0) '$year',
+      ].join(' · ');
+}
+
+extension DiscogsChoices on DiscogsService {
+  /// Every pressing worth offering, with its front, back and disc identified.
+  ///
+  /// Costs a request per release plus the images it has to look at, so it is capped and only ever
+  /// called while the picker is open.
+  Future<List<ReleaseChoice>> releaseChoices(String artist, String album, {int max = 8}) async {
+    final masters = await masterIds(artist, album);
+    if (masters.isEmpty) return const [];
+    final out = <ReleaseChoice>[];
+    for (final format in const ['CD', 'Vinyl', 'File']) {
+      final versions = DiscogsService.orderByPreference(await versionsOf(masters.first, format: format));
+      for (final v in versions) {
+        if (out.length >= max) return out;
+        final e = await release(v.id);
+        if (e == null) continue;
+        // Only the first few scans are examined: front, back and disc sit near the top, and reading
+        // a booklet page by page would cost megabytes to answer a settled question.
+        final look = e.images.length < 6 ? e.images.length : 6;
+        final datas = <Uint8List?>[];
+        for (var i = 0; i < look; i++) {
+          datas.add(await fetchImage(e.images[i].uri));
+        }
+        final roles = assignRoles(
+          [for (var i = 0; i < look; i++) e.images[i].primary],
+          [for (var i = 0; i < look; i++) e.images[i].height == 0 ? 1.0 : e.images[i].width / e.images[i].height],
+          datas,
+        );
+        DiscogsImage? at(int? i) => (i == null || i >= look) ? null : e.images[i];
+        out.add(ReleaseChoice(
+          releaseId: e.releaseId,
+          format: e.format,
+          label: e.label,
+          catno: e.catno,
+          country: e.country,
+          year: e.year,
+          front: at(roles.front),
+          back: at(roles.back),
+          disc: at(roles.disc),
+        ));
+      }
+    }
+    return out;
   }
 }
