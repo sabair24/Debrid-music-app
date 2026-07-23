@@ -2409,13 +2409,24 @@ class NowPlayingScreen extends StatelessWidget {
                       // out is the one this song is actually on.
                       child: t == null
                           ? cover(p.currentCover, size: 360, radius: 16)
-                          : AlbumArt(
-                              artist: t.artist,
-                              album: t.album,
-                              size: 360,
-                              fallback: p.currentCover,
-                              playing: p.playing,
-                            ),
+                          : Builder(builder: (context) {
+                              // Ask the library which album this track is on, rather than resolving
+                              // the record again from its artist and title. Without it this screen
+                              // did its own Discogs lookup and showed a different artist's album
+                              // that shared a title, while the album page had the right one pinned.
+                              final lib = context.watch<LibraryStore>();
+                              final al = lib.albumForPath(t.path);
+                              return AlbumArt(
+                                artist: al?.artist ?? t.artist,
+                                album: al?.title ?? t.album,
+                                size: 360,
+                                fallback: p.currentCover,
+                                chosen: al?.correctedCover,
+                                trackCount: al?.tracks.length ?? 0,
+                                pinned: al == null ? null : lib.pinnedRelease(al),
+                                playing: p.playing,
+                              );
+                            }),
                     ),
                   ),
                 ),
@@ -4948,6 +4959,7 @@ class _ArtistBackdropState extends State<ArtistBackdrop> {
   }
 
   Uint8List? _chosenBackdrop;
+  String? _loadedUrl;
 
   Future<void> _load() async {
     final name = widget.name;
@@ -4969,6 +4981,14 @@ class _ArtistBackdropState extends State<ArtistBackdrop> {
 
   @override
   Widget build(BuildContext context) {
+    // Same as the hero: a fresh pick has to show without leaving the page and coming back.
+    final chosen = context.watch<LibraryStore>().chosenArtistArt(widget.name, 'backdrop');
+    if (chosen != _loadedUrl) {
+      _loadedUrl = chosen;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _load();
+      });
+    }
     final img = _chosenBackdrop ?? _art?.backdropBytes ?? _art?.thumbBytes ?? widget.fallbackImage;
     return Stack(
       fit: StackFit.expand,
@@ -5048,6 +5068,24 @@ class _ArtistHeroState extends State<ArtistHero> {
     }
   }
 
+  /// The URLs this hero last fetched, so a fresh pick can be spotted while the page stays open.
+  String? _loadedPortraitUrl, _loadedBackdropUrl;
+
+  /// Re-fetch when the user picks a different photo. Without this the choice was saved and simply
+  /// not shown until you left the page and came back — a setting that appears to do nothing.
+  void _syncChoice() {
+    final lib = context.watch<LibraryStore>();
+    final p = lib.chosenArtistArt(widget.name, 'portrait');
+    final b = lib.chosenArtistArt(widget.name, 'backdrop');
+    if (p == _loadedPortraitUrl && b == _loadedBackdropUrl) return;
+    _loadedPortraitUrl = p;
+    _loadedBackdropUrl = b;
+    // After this frame: build must not kick off a setState of its own.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _load();
+    });
+  }
+
   Future<void> _load() async {
     final name = widget.name;
     final settings = context.read<AppSettings>();
@@ -5069,6 +5107,7 @@ class _ArtistHeroState extends State<ArtistHero> {
 
   @override
   Widget build(BuildContext context) {
+    _syncChoice();
     final logo = _art?.logoBytes;
     final portrait = _chosenPortrait ?? _art?.thumbBytes ?? widget.fallbackImage;
     final backdrop = _chosenBackdrop ?? _art?.backdropBytes ?? widget.fallbackImage;

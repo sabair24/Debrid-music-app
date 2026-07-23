@@ -141,6 +141,12 @@ class LibraryStore extends ChangeNotifier {
   /// The album cover for a track (covers live on the Album, not the Track).
   Uint8List? coverForTrack(Track t) => _albumByPath[t.path]?.cover;
 
+  /// The album a playing track belongs to. The now-playing screen needs the album, not just the
+  /// track: the pressing the user pinned and the cover they picked both live on it, and without
+  /// them that screen went off and resolved its own record — landing on a different artist's album
+  /// that happened to share a title.
+  Album? albumForPath(String path) => _albumByPath[path];
+
   /// Resolve a saved file path back to a library track (for resume).
   Track? trackByPath(String path) => _trackByPath[path];
 
