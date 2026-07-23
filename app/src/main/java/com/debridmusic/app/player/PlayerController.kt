@@ -193,6 +193,55 @@ class PlayerController @Inject constructor(
         }
     }
 
+    /**
+     * Play a list of stream URLs — what arrives when the Mac or the iPad sends a record here.
+     *
+     * A queue rather than [playRemoteUrl]'s single item: sending an album should play the album,
+     * not its first track and then silence.
+     */
+    fun playRemoteQueue(
+        urls: List<String>,
+        startIndex: Int = 0,
+        startMs: Long = 0,
+        title: String = "",
+        artist: String = "",
+        album: String = "",
+        artworkUri: String? = null,
+    ) {
+        if (urls.isEmpty()) return
+        val items = urls.map { url ->
+            MediaItem.Builder()
+                .setUri(url)
+                .setMediaId("remote:$url")
+                .setMediaMetadata(
+                    MediaMetadata.Builder()
+                        .setTitle(title.ifBlank { null })
+                        .setArtist(artist.ifBlank { null })
+                        .setAlbumTitle(album.ifBlank { null })
+                        .setArtworkUri(artworkUri?.let { android.net.Uri.parse(it) })
+                        .build()
+                )
+                .build()
+        }
+        currentQueue = urls.map { url ->
+            Track(
+                id = -1L, title = title, artistName = artist, albumTitle = album,
+                albumId = -1L, artistId = -1L, uri = url, durationMs = 0L,
+                trackNumber = 0, discNumber = 1, year = null, artworkUri = artworkUri,
+                genre = null, bitrate = null, sampleRate = null,
+                isLossless = url.contains("flac", ignoreCase = true),
+                fileSize = 0L, dateAdded = System.currentTimeMillis(),
+            )
+        }
+        val index = startIndex.coerceIn(0, items.lastIndex)
+        _currentTrack.value = currentQueue.getOrNull(index)
+        controller?.run {
+            setMediaItems(items, index, startMs)
+            prepare()
+            play()
+        }
+    }
+
     fun updatePosition() {
         controller?.let { ctrl ->
             val pos = ctrl.currentPosition
