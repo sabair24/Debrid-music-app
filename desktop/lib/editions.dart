@@ -47,6 +47,14 @@ class ReleaseChoice {
   /// only loads tracklists for the first few pressings, since each one costs a request.
   final List<ChoiceTrack> tracklist;
 
+  /// Whether this pressing's scans have actually been looked up.
+  ///
+  /// A whole master's pressings can be listed off one request, but knowing whether each has a back
+  /// or a disc costs a lookup apiece — so they arrive filled in a few at a time. Until then a row
+  /// must not claim it HAS no back: it only means nobody has asked yet, and saying otherwise is the
+  /// same lie that had this album reporting no CD scans at all.
+  final bool detailed;
+
   const ReleaseChoice({
     required this.source,
     this.releaseId = 0,
@@ -61,7 +69,26 @@ class ReleaseChoice {
     this.back,
     this.disc,
     this.tracklist = const [],
+    this.detailed = true,
   });
+
+  /// The same pressing with its scans filled in.
+  ReleaseChoice withArt({ChoiceImage? front, ChoiceImage? back, ChoiceImage? disc}) => ReleaseChoice(
+        source: source,
+        releaseId: releaseId,
+        mbid: mbid,
+        format: format,
+        label: label,
+        catno: catno,
+        country: country,
+        barcode: barcode,
+        year: year,
+        front: front ?? this.front,
+        back: back,
+        disc: disc,
+        tracklist: tracklist,
+        detailed: true,
+      );
 
   bool get hasBack => back != null;
   bool get hasDisc => disc != null;

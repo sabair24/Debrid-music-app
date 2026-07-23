@@ -147,7 +147,12 @@ class DiscogsVersion {
   final int id;
   final String format, major;
   final String? label, catno, country, released;
-  const DiscogsVersion(this.id, this.format, this.major, this.label, this.catno, this.country, this.released);
+
+  /// The front cover, already in the versions listing — so a whole master's worth of pressings can
+  /// be shown with their sleeves off ONE request, without a lookup each.
+  final String? thumb;
+  const DiscogsVersion(this.id, this.format, this.major, this.label, this.catno, this.country, this.released,
+      [this.thumb]);
 
   /// Is this entry actually filled in, or is it a stub someone added and never finished?
   ///
@@ -385,6 +390,7 @@ class DiscogsService {
         (v['catno'] as String?)?.trim(),
         (v['country'] as String?)?.trim(),
         (v['released'] as String?)?.trim(),
+        (v['thumb'] as String?)?.trim(),
       ));
     }
     return out;
@@ -831,81 +837,141 @@ extension DiscogsArtwork on DiscogsService {
 }
 
 extension DiscogsChoices on DiscogsService {
-  /// Every pressing worth offering, with its front, back, disc and tracklist.
+  /// Every pressing Discogs lists, offered at once, with the scans filled in as they are found.
+  ///
+  /// Escape has SEVENTY-FIVE pressings, and the picker used to show two dozen after half a minute
+  /// of waiting. The reason was the shape of the work: it fetched each release in full — one
+  /// request apiece, a second apart — before showing anything at all.
+  ///
+  /// But a master's versions listing already carries, in ONE request, everything a row needs to be
+  /// worth reading: format, label, catalogue number, country, year and the front cover. Measured on
+  /// Escape, all seventy-five come back in 655 ms. So the list is built from that and handed over
+  /// immediately, and the per-release lookups — the only way to learn whether a pressing has a back
+  /// or a disc, since Discogs never says what an image is — run afterwards, feeding [onPartial] as
+  /// each one lands. Rows arrive complete rather than the list arriving late.
   ///
   /// Walks SEVERAL masters, not just the best-scoring one. Discogs has twenty-two masters titled
   /// "Michael Jackson - Thriller", and the top-scoring one is a vinyl-only entry with two versions
   /// — so the gallery showed vinyl and swore there were no CDs, while the site plainly has them.
   ///
-  /// Cassette is never offered: nobody is choosing a tape scan to describe their FLACs.
-  ///
-  /// [pinned] is prepended unconditionally. Without that, the pressing the user already chose shows
-  /// up only if it happens to fall inside the four masters and six versions this walks — so their
-  /// own choice could be missing from the list of choices.
-  Future<List<ReleaseChoice>> releaseChoices(String artist, String album,
-      {int max = 24, int? pinned}) async {
-    final out = <ReleaseChoice>[];
+  /// [pinned] is prepended unconditionally: the pressing the user already chose must never be
+  /// missing from the list of choices.
+  Future<List<ReleaseChoice>> releaseChoices(
+    String artist,
+    String album, {
+    int max = 80,
+    int? pinned,
+    int enrich = 40,
+    void Function(List<ReleaseChoice>)? onPartial,
+  }) async {
+    final rows = <ReleaseChoice>[];
     final seen = <int>{};
 
-    Future<void> take(int id) async {
-      if (out.length >= max || !seen.add(id)) return;
-      final e = await release(id);
-      if (e == null) return;
-      // Detection runs on the THUMBNAILS. The sampler resizes to 128px regardless, so a 150px
-      // thumbnail answers the question exactly as well as the full scan — and at a few kilobytes
-      // instead of a megabyte apiece. That is what lets twice as many images be examined: the old
-      // limit of six existed to keep the download cost down, and it meant a disc sitting seventh in
-      // the list was never even looked at. Only the URLs are kept; nothing full-size is fetched here.
-      final look = e.images.length < 12 ? e.images.length : 12;
-      final datas = <Uint8List?>[];
-      for (var i = 0; i < look; i++) {
-        datas.add(await fetchImage(e.images[i].thumb));
-      }
-      final roles = assignRoles(
-        [for (var i = 0; i < look; i++) e.images[i].primary],
-        [
-          for (var i = 0; i < look; i++)
-            e.images[i].height == 0 ? 1.0 : e.images[i].width / e.images[i].height
-        ],
-        datas,
-      );
-      ChoiceImage? at(int? i) =>
-          (i == null || i >= look) ? null : ChoiceImage(e.images[i].uri, e.images[i].thumb);
-      out.add(ReleaseChoice(
+    void addVersion(DiscogsVersion v) {
+      if (rows.length >= max || v.id <= 0 || !seen.add(v.id)) return;
+      rows.add(ReleaseChoice(
         source: EditionSource.discogs,
-        releaseId: e.releaseId,
-        format: e.format,
-        label: e.label,
-        catno: e.catno,
-        country: e.country,
-        year: e.year,
-        front: at(roles.front),
-        back: at(roles.back),
-        disc: at(roles.disc),
-        // The release lookup already carried this; it used to be thrown away, and it is exactly
-        // what a user needs to correct a mistagged album's numbering.
-        tracklist: [
-          for (final t in e.tracklist)
-            if (t.title.isNotEmpty) ChoiceTrack(t.position, t.title, t.seconds)
-        ],
+        releaseId: v.id,
+        format: v.major.isEmpty ? v.format : v.major,
+        label: v.label,
+        catno: v.catno,
+        country: v.country,
+        year: v.year,
+        // The sleeve, straight from the listing — no lookup needed to show it.
+        front: (v.thumb ?? '').isEmpty ? null : ChoiceImage(v.thumb!, v.thumb!),
+        detailed: false,
       ));
     }
 
-    if (pinned != null && pinned > 0) await take(pinned);
-
+    // ── The list, off one request per master ────────────────────────────────
     final masters = await masterIds(artist, album);
-    // Format-major so CDs lead the list whichever master they come from.
-    for (final format in const ['CD', 'Vinyl', 'File']) {
-      for (final master in masters.take(4)) {
-        if (out.length >= max) return out;
-        final versions = DiscogsService.orderByPreference(await versionsOf(master, format: format));
-        for (final v in versions.take(6)) {
-          if (out.length >= max) return out;
-          await take(v.id);
-        }
+    for (final master in masters.take(3)) {
+      if (rows.length >= max) break;
+      // No format filter: one unfiltered call returns every pressing, where asking per format cost
+      // a request each and still capped what came back.
+      final all = DiscogsService.orderByPreference(await versionsOf(master));
+      for (final v in all) {
+        // A tape scan is not what anyone is choosing to describe their FLACs with.
+        if (v.major.toLowerCase().contains('cassette')) continue;
+        addVersion(v);
       }
     }
-    return out;
+    if (pinned != null && pinned > 0 && !seen.contains(pinned)) {
+      final e = await release(pinned);
+      if (e != null) {
+        rows.insert(
+            0,
+            ReleaseChoice(
+              source: EditionSource.discogs,
+              releaseId: e.releaseId,
+              format: e.format,
+              label: e.label,
+              catno: e.catno,
+              country: e.country,
+              year: e.year,
+              detailed: false,
+            ));
+        seen.add(pinned);
+      }
+    }
+    onPartial?.call([...rows]);
+    if (rows.isEmpty) return rows;
+
+    // ── Then the scans, a pressing at a time ────────────────────────────────
+    final take = rows.length < enrich ? rows.length : enrich;
+    for (var i = 0; i < take; i++) {
+      final filled = await _detail(rows[i]);
+      if (filled != null) {
+        rows[i] = filled;
+        onPartial?.call([...rows]);
+      }
+    }
+    return rows;
+  }
+
+  /// Look up one pressing's scans and work out which is the front, the back and the disc.
+  ///
+  /// Only images that could BE a disc are downloaded. Discogs gives every image's dimensions, so the
+  /// front (its one "primary") and the back (a rear inlay wraps the spine, so it is wider than tall)
+  /// are settled without fetching anything. That leaves the squarish secondaries, and it stops at
+  /// the first one that reads as a disc — typically one or two small thumbnails instead of twelve.
+  Future<ReleaseChoice?> _detail(ReleaseChoice row) async {
+    final e = await release(row.releaseId);
+    if (e == null) return null;
+    final imgs = e.images;
+    ChoiceImage of(DiscogsImage i) => ChoiceImage(i.uri, i.thumb);
+
+    DiscogsImage? front, back, disc;
+    for (final i in imgs) {
+      if (front == null && i.primary) front = i;
+    }
+    for (final i in imgs) {
+      if (identical(i, front)) continue;
+      if (back == null && i.isWide) back = i;
+    }
+    for (final i in imgs) {
+      if (identical(i, front) || identical(i, back)) continue;
+      if (i.isWide) continue; // a disc is round, so its scan is never wider than tall
+      final bytes = await fetchImage(i.thumb);
+      if (bytes != null && looksLikeDisc(bytes)) {
+        disc = i;
+        break;
+      }
+    }
+    // No inlay-shaped scan: fall back to the convention that the first spare secondary is the back.
+    if (back == null) {
+      for (final i in imgs) {
+        if (identical(i, front) || identical(i, disc)) continue;
+        back = i;
+        break;
+      }
+    }
+    front ??= imgs.isEmpty ? null : imgs.first;
+    return row.withArt(
+      front: front == null ? row.front : of(front),
+      back: back == null ? null : of(back),
+      disc: disc == null ? null : of(disc),
+    );
   }
 }
 

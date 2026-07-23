@@ -7370,15 +7370,22 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     // Discogs supplements: it has scans for pressings the archive has never seen. Its failures are
     // reported separately, because "Discogs is unreachable" and "this record has no pressings" are
     // very different things to be told.
-    try {
-      final dg = await DiscogsService(settings).releaseChoices(
-          widget.album.artist, widget.album.title, pinned: pinnedDg);
+    // Everything MusicBrainz found, kept aside so each progressive Discogs update can be merged
+    // against it without the two lists fighting over the same variable.
+    final fromMb = [...?_choices];
+    void merge(List<ReleaseChoice> dg) {
       if (!mounted) return;
-      final have = {for (final c in (_choices ?? const <ReleaseChoice>[])) c.dedupeKey};
-      setState(() {
-        _choices = [...?_choices, ...dg.where((c) => have.add(c.dedupeKey))];
-        _dgDone = true;
-      });
+      final have = {for (final c in fromMb) c.dedupeKey};
+      setState(() => _choices = [...fromMb, ...dg.where((c) => have.add(c.dedupeKey))]);
+    }
+
+    try {
+      // The rows appear as soon as the versions listing lands — one request for a whole master —
+      // and each pressing's scans fill in behind them. Waiting for all of it before showing
+      // anything is what limited this to a couple of dozen after half a minute.
+      await DiscogsService(settings).releaseChoices(widget.album.artist, widget.album.title,
+          pinned: pinnedDg, onPartial: merge);
+      if (mounted) setState(() => _dgDone = true);
     } catch (_) {
       if (mounted) setState(() { _dgDone = true; _dgFailed = true; });
     }
@@ -7592,9 +7599,21 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                     // it has to be visible rather than inferred from the row's shape.
                     _source(c.isMb),
                     const SizedBox(width: 6),
-                    _tag('achterkant', c.hasBack),
-                    const SizedBox(width: 6),
-                    _tag('cd-scan', c.hasDisc),
+                    // Until this pressing has been looked up we do not know whether it has a back
+                    // or a disc, and saying "–" would be a claim we have not earned.
+                    if (!c.detailed) ...[
+                      const SizedBox(
+                          width: 10,
+                          height: 10,
+                          child: CircularProgressIndicator(strokeWidth: 1.4, color: _muted)),
+                      const SizedBox(width: 6),
+                      const Text('scans nog ophalen…',
+                          style: TextStyle(color: _muted, fontSize: 10.5)),
+                    ] else ...[
+                      _tag('achterkant', c.hasBack),
+                      const SizedBox(width: 6),
+                      _tag('cd-scan', c.hasDisc),
+                    ],
                   ]),
                 ]),
               ),
