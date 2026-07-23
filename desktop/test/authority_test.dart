@@ -8,7 +8,7 @@ import 'package:debridmusic/flac_tags.dart';
 import 'package:debridmusic/organize.dart';
 
 /// A tiny but valid FLAC carrying the tags a Soulseek peer might have written.
-Uint8List _peerFlac(List<String> comments) {
+Uint8List _peerFlac(List<String> comments, {int pad = 2048}) {
   final out = BytesBuilder();
   out.add(ascii.encode('fLaC'));
   void block(int type, List<int> body, bool last) {
@@ -36,7 +36,7 @@ Uint8List _peerFlac(List<String> comments) {
     b.add(e);
   }
   block(4, b.toBytes(), true);
-  out.add(List.filled(2048, 0x11));
+  out.add(List.filled(pad, 0x11));
   return out.toBytes();
 }
 
@@ -182,6 +182,42 @@ void main() {
       // Nothing else was collateral damage.
       expect(utf8.decode(File(out.path).readAsBytesSync(), allowMalformed: true),
           contains('REPLAYGAIN_TRACK_GAIN'));
+    });
+
+    test('a better copy the sweep finds replaces the first, it never lands as a (2)', () async {
+      final root = Directory('${Directory.systemTemp.createTempSync('auth3').path}');
+      addTearDown(() {
+        try {
+          root.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final s1 = Directory('${root.path}${Platform.pathSeparator}_a')..createSync();
+      final s2 = Directory('${root.path}${Platform.pathSeparator}_b')..createSync();
+      // Two peers, two very different filenames, same song. The second is bigger — the upgrade.
+      final small = File('${s1.path}${Platform.pathSeparator}11. Backstreet Boys - Lets Have A Party.flac')
+        ..writeAsBytesSync(_peerFlac(['TITLE=Lets Have A Party', 'TRACKNUMBER=11'], pad: 1000));
+      final big = File('${s2.path}${Platform.pathSeparator}Party (BSB rip).flac')
+        ..writeAsBytesSync(_peerFlac(['TITLE=Party', 'TRACKNUMBER=1'], pad: 9000));
+
+      final auth = const ReleaseAuthority(
+        artist: 'Backstreet Boys',
+        album: 'Backstreet Boys',
+        albumArtist: 'Backstreet Boys',
+        year: 1996,
+        tracks: [ChoiceTrack('11', "Let's Have a Party", 230)],
+      ).forTrack(const ChoiceTrack('11', "Let's Have a Party", 230), 11);
+
+      final a = await placeFileDetailed(small, root.path, tags: auth);
+      final b = await placeFileDetailed(big, root.path, tags: auth);
+
+      expect(a.how, Placement.moved);
+      expect(b.how, Placement.moved, reason: 'the bigger copy wins and replaces');
+      // Exactly one file, no "(2)": the peer names differ wildly but the album says both are track 11.
+      final dir = Directory(File(a.path).parent.path);
+      final flacs = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.flac')).toList();
+      expect(flacs, hasLength(1), reason: 'one track, one file — got: ${flacs.map((f) => f.uri.pathSegments.last)}');
+      expect(flacs.single.path, endsWith("11 - Let's Have a Party.flac"));
+      expect(flacs.single.path, isNot(contains('(2)')));
     });
 
     test('without an authority the peer still decides, exactly as before', () async {

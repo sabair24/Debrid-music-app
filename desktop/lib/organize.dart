@@ -468,9 +468,15 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, Tr
 
     bool newWins(File rival) => firstIsBetter(src, rival);
 
+    // With an authority the destination path was built from the official tags, so it IS this
+    // track's identity — a file already there can only be the same song, a better copy the sweep
+    // found. Fuzzy-matching the peer's raw staging name against the clean filed name is what wrongly
+    // read the two as different takes and dropped the upgrade beside the original as a "(2)".
+    bool same(File a, File b) => t.isAuthoritative || _sameRecording(a, b);
+
     final losers = <File>[];
     if (await dest.exists()) {
-      if (_sameRecording(src, dest)) {
+      if (same(src, dest)) {
         if (!newWins(dest)) {
           await src.delete().catchError((_) => src);
           return PlaceOutcome(dest.path, Placement.duplicate);
@@ -484,7 +490,7 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, Tr
       // a DIFFERENT path — without this the two would sit side by side forever. Same track under
       // another extension counts as the copy being replaced.
       final rival = _sameTrackOtherFormat(dest);
-      if (rival != null && _sameRecording(src, rival)) {
+      if (rival != null && same(src, rival)) {
         if (!newWins(rival)) {
           await src.delete().catchError((_) => src);
           return PlaceOutcome(rival.path, Placement.duplicate);
