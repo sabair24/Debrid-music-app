@@ -1269,6 +1269,17 @@ class RedundantAlbum {
 /// The placeholder artist a file gets when its tags can't be read — see `_scanTags`.
 final String _unknownArtistKey = artistKey('Onbekende artiest');
 
+/// An album title that names a DISTINCT performance or version of a record, not the record itself.
+///
+/// A live "Gourmandises" is a different recording from the studio one, but the peer often tags the
+/// track just "Gourmandises" with no marker — only the album name ("Alizée en concert") says it is
+/// live. Folding it into the studio album on the strength of the title would quietly lose the live
+/// take. A live album, like a greatest-hits, is a release the user keeps, so it is never a source
+/// to clean away.
+final RegExp _distinctPerformanceRe = RegExp(
+    r'\b(live|concert|unplugged|acoustic|session|sessions|demo|demos|remix|remixes|'
+    r'instrumental|karaoke|a ?cappella|acapella|orchestral|symphon)\b');
+
 extension LibraryDuplicates on LibraryStore {
   /// Albums and singles that are entirely duplicates of a real album you already own.
   ///
@@ -1318,8 +1329,12 @@ extension LibraryDuplicates on LibraryStore {
 
     final out = <RedundantAlbum>[];
     for (final x in albums) {
-      // Never fold a real compilation away, and never fold an album into itself.
-      if (!x.isSingle && classifyRelease(album: x.title, artist: x.artist) == RelKind.compilation) {
+      // Never fold away a release the user keeps on purpose: a real compilation, or a distinct
+      // performance (a live album, a remix set, an unplugged session) whose tracks only look like
+      // the studio ones because the marker sits in the album name, not the track title.
+      if (!x.isSingle &&
+          (classifyRelease(album: x.title, artist: x.artist) == RelKind.compilation ||
+              _distinctPerformanceRe.hasMatch(normKey(x.title)))) {
         continue;
       }
       // A single whose artist never got read — the WAV filed under "Onbekende artiest". Its tags

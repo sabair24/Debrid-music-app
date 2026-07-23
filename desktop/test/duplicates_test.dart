@@ -126,6 +126,21 @@ void main() {
           reason: 'a compilation you chose must never be swept away');
     });
 
+    test('a live album is never folded into the studio record', () {
+      // Alizée: a live "Gourmandises" whose track tag lacks any (live) marker — only the album name
+      // says it is a concert. Folding it would silently lose the live take.
+      final ts = <Track>[
+        _mk(root, r'Albums\Alizee\Gourmandises', '09 - Gourmandises.flac',
+            artist: 'Alizée', album: 'Gourmandises', title: 'Gourmandises', no: 9, secs: 230, kb: 500),
+        _mk(root, r'Albums\Alizee\Alizée en concert', '07 - Gourmandises.flac',
+            artist: 'Alizée', album: 'Alizée en concert', title: 'Gourmandises', no: 7, secs: 232, kb: 300),
+      ];
+      lib.tracks.addAll(ts);
+      lib.rebuildAlbums();
+      expect(lib.redundantAlbums(), isEmpty,
+          reason: 'a live recording is a distinct release, kept like a compilation');
+    });
+
     test('a genuine, unique single is not touched', () {
       final ts = <Track>[
         ..._mainAlbum(),
