@@ -5169,7 +5169,11 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
   @override
   void didUpdateWidget(AlbumInfoPanel old) {
     super.didUpdateWidget(old);
-    if (old.artist != widget.artist || old.album != widget.album) {
+    // The PIN counts as a change too. Without it, picking a different release of the same record
+    // changed nothing here: the name stays "Adele – 30", so this saw no difference and never
+    // refetched. The front cover did change, because that comes down a different path entirely —
+    // which is exactly what it looked like from the outside.
+    if (old.artist != widget.artist || old.album != widget.album || old.pinned != widget.pinned) {
       setState(() {
         _info = null;
         _edition = null;
@@ -6242,7 +6246,9 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
   @override
   void didUpdateWidget(AlbumArt old) {
     super.didUpdateWidget(old);
-    if (old.artist != widget.artist || old.album != widget.album) {
+    // Same as the info panel: a new pin is a new set of scans, even when the album's name is
+    // unchanged. This is why the disc never followed the release you picked.
+    if (old.artist != widget.artist || old.album != widget.album || old.pinned != widget.pinned) {
       setState(() => _art = null);
       _load();
     }
