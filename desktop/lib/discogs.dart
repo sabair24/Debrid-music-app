@@ -8,6 +8,7 @@ import 'artwork.dart';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
+import 'catalog.dart';
 import 'organize.dart';
 import 'settings.dart';
 
@@ -827,6 +828,56 @@ extension DiscogsChoices on DiscogsService {
           ));
         }
       }
+    }
+    return out;
+  }
+}
+
+extension DiscogsSearch on DiscogsService {
+  /// Album hits from Discogs, as the browse list already understands them.
+  ///
+  /// Deezer catalogues what streams; Discogs catalogues what was pressed, which is where the
+  /// editions, the promos and the regional issues live. The id is the NEGATED release id so the
+  /// album page can tell where a hit came from — Deezer ids are positive, and asking Deezer about
+  /// a Discogs release would simply fail.
+  Future<List<CatalogAlbumHit>> searchAlbums(String query, {int max = 12}) async {
+    if (!available || query.trim().isEmpty) return const [];
+    final b = await _get('https://api.discogs.com/database/search'
+        '?type=release&q=${_q(query.trim())}&per_page=${max * 2}');
+    final results = b?['results'] as List<dynamic>? ?? const [];
+    final out = <CatalogAlbumHit>[];
+    final seen = <String>{};
+    for (final r in results) {
+      if (r is! Map<String, dynamic>) continue;
+      final id = (r['id'] as num?)?.toInt();
+      final title = (r['title'] as String?)?.trim() ?? '';
+      if (id == null || id <= 0 || title.isEmpty) continue;
+      // Hits read "Artist - Title"; without the split every card would repeat the artist.
+      var artist = '', album = title;
+      final dash = title.indexOf(' - ');
+      if (dash > 0) {
+        artist = cleanArtistName(title.substring(0, dash));
+        album = title.substring(dash + 3).trim();
+      }
+      // Cassettes and videos are not what anyone is looking for here.
+      final formats = [for (final f in (r['format'] as List<dynamic>? ?? const [])) f.toString().toLowerCase()];
+      if (formats.any((f) => f.contains('cassette') || f.contains('dvd') || f.contains('blu-ray'))) continue;
+      // One card per record, not one per pressing: twenty Thriller CDs is not twenty results.
+      if (!seen.add('${artistKey(artist)}|${normKey(album)}')) continue;
+      final cover = (r['cover_image'] ?? r['thumb']) as String?;
+      final year = (r['year'] as String?)?.trim();
+      out.add(CatalogAlbumHit(
+        CatalogAlbum(
+          -id,
+          album,
+          (cover != null && cover.isNotEmpty && !cover.contains('spacer')) ? cover : null,
+          (year != null && year.length >= 4) ? year : null,
+          0,
+          'album',
+        ),
+        artist,
+      ));
+      if (out.length >= max) break;
     }
     return out;
   }

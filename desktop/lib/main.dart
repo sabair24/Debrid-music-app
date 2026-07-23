@@ -4038,6 +4038,32 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     }
   }
 
+  /// Append what Discogs has that Deezer does not.
+  ///
+  /// Deezer catalogues what streams and is the faster, cleaner search, so it stays first and the
+  /// list is usable before Discogs answers at all. Discogs is where the editions, the promos and
+  /// the regional issues live — the versions Deezer has no entry for.
+  ///
+  /// Deduped on artist + title, so the same record never appears twice; a different EDITION of it
+  /// carries a different title and still comes through, which is the whole reason to add it.
+  Future<void> _addDiscogsAlbums(String q) async {
+    try {
+      final extra = await DiscogsService(context.read<AppSettings>()).searchAlbums(q);
+      if (!mounted || extra.isEmpty) return;
+      String key(CatalogAlbumHit h) => '${artistKey(h.artist)}|${normKey(h.album.title)}';
+      final seen = {for (final h in _albumHits) key(h)};
+      final add = [
+        for (final h in extra)
+          if (seen.add(key(h))) h
+      ];
+      if (add.isEmpty) return;
+      setState(() {
+        _albumHits = [..._albumHits, ...add];
+        _status = null;
+      });
+    } catch (_) {/* Deezer on its own is still a working search */}
+  }
+
   Future<void> _searchBrowse(String q) async {
     setState(() {
       _browseBusy = true;
@@ -4062,6 +4088,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             ? 'Niets gevonden.'
             : null;
       });
+      await _addDiscogsAlbums(q);
     } catch (e) {
       if (mounted) setState(() => _status = 'Zoeken mislukt: $e');
     } finally {
@@ -5575,6 +5602,12 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   }
 
   Future<void> _load() async {
+    // A negative id marks a hit that came from Discogs, where the release id IS the tracklist —
+    // asking Deezer about it would simply fail, and the page would sit empty.
+    if (widget.album.id < 0) {
+      await _loadDiscogsRelease(-widget.album.id);
+      return;
+    }
     try {
       final (_, tracks) = await _catalog.albumTracks(widget.album.id);
       if (mounted) setState(() { _tracks = tracks; _busy = false; });
@@ -5582,6 +5615,30 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       if (mounted) setState(() => _busy = false);
     }
     await _preferDiscogsTracklist();
+  }
+
+  Future<void> _loadDiscogsRelease(int releaseId) async {
+    try {
+      final e = await DiscogsService(context.read<AppSettings>()).release(releaseId);
+      if (!mounted) return;
+      setState(() {
+        _tracks = [
+          for (var i = 0; i < (e?.tracklist.length ?? 0); i++)
+            CatalogTrack(
+              // No Deezer id exists for these; the index is enough to key a row and to search
+              // Soulseek with, which is all this page does with it.
+              -(i + 1),
+              e!.tracklist[i].title,
+              widget.artistName,
+              e.tracklist[i].seconds ?? 0,
+              i + 1,
+            )
+        ];
+        _busy = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   /// Replace Deezer's tracklist with the one from the pressing itself.
