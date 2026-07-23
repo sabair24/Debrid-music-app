@@ -7351,14 +7351,13 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   Future<void> _load() async {
     final lib = context.read<LibraryStore>();
     final settings = context.read<AppSettings>();
-    final expected = widget.album.tracks.length;
     final pinnedMb = lib.pinnedMbid(widget.album);
     final pinnedDg = lib.pinnedRelease(widget.album);
 
     try {
-      final mb = await context.read<MusicBrainzService>().editionChoices(
-          widget.album.artist, widget.album.title,
-          expectedTracks: expected, pinnedMbid: pinnedMb);
+      final mb = await context
+          .read<MusicBrainzService>()
+          .editionChoices(widget.album.artist, widget.album.title, pinnedMbid: pinnedMb);
       if (!mounted) return;
       setState(() {
         _choices = mb;

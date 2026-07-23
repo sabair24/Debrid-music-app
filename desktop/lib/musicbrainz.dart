@@ -597,22 +597,27 @@ class MusicBrainzService {
   /// the browse can return a hundred pressings, so the rest are listed on what the browse already
   /// said and filled in when tapped. Without the cap the dialog would take two minutes.
   Future<List<ReleaseChoice>> editionChoices(String artist, String album,
-      {int max = 24, int detail = 8, int expectedTracks = 0, String? pinnedMbid}) async {
+      {int max = 40, String? pinnedMbid}) async {
     final out = <ReleaseChoice>[];
     final seen = <String>{};
 
-    Future<void> take(MbRelease r, {required bool deep}) async {
+    // EVERY offered pressing gets its scans looked up — a row saying "no cd-scan" has to mean the
+    // archive was asked and had none, never that we stopped looking. That used to be capped at the
+    // first eight rows because the tracklist was fetched in the same breath, and a tracklist costs a
+    // request on the 1-per-second webservice lane. The scans come from the Cover Art Archive, a
+    // different host on its own 250 ms lane, so asking for all of them is cheap. The tracklist is
+    // now fetched only when something actually wants it — see [tracklistOf], which the
+    // "take this numbering" action already calls on demand.
+    Future<void> take(MbRelease r) async {
       if (out.length >= max || r.mbid.isEmpty || !seen.add(r.mbid)) return;
       ChoiceImage? front, back, disc;
-      var tracks = const <ChoiceTrack>[];
-      if (deep) {
-        for (final i in await art(r.mbid)) {
-          // The archive states what each scan IS, so nothing here is inferred from pixels.
-          front ??= i.isFront ? ChoiceImage(i.url, i.thumb) : null;
-          back ??= i.isBack ? ChoiceImage(i.url, i.thumb) : null;
-          disc ??= i.isDisc ? ChoiceImage(i.url, i.thumb) : null;
-        }
-        tracks = await tracklistOf(r);
+      for (final i in await art(r.mbid)) {
+        // The archive states what each scan IS — Front, Back, Medium — so nothing here is inferred
+        // from pixels. That matters: the Escape CD is a white disc on a white scanner bed, and no
+        // brightness test can tell it from a blank booklet page. A stated fact can.
+        front ??= i.isFront ? ChoiceImage(i.url, i.thumb) : null;
+        back ??= i.isBack ? ChoiceImage(i.url, i.thumb) : null;
+        disc ??= i.isDisc ? ChoiceImage(i.url, i.thumb) : null;
       }
       out.add(ReleaseChoice(
         source: EditionSource.musicbrainz,
@@ -626,7 +631,6 @@ class MusicBrainzService {
         front: front,
         back: back,
         disc: disc,
-        tracklist: tracks,
       ));
     }
 
@@ -634,7 +638,7 @@ class MusicBrainzService {
     // cut — their own choice missing from the list of choices is the one unacceptable outcome.
     if (pinnedMbid != null && pinnedMbid.isNotEmpty) {
       final p = await release(pinnedMbid);
-      if (p != null) await take(p, deep: true);
+      if (p != null) await take(p);
     }
 
     final groups = await searchReleaseGroups(album, artist: artist);
@@ -648,10 +652,13 @@ class MusicBrainzService {
 
     for (final g in ranked.take(2)) {
       if (out.length >= max) break;
-      final editions = orderByPreference(await editionsOf(g.mbid), expectedTracks: expectedTracks);
-      for (final e in editions) {
+      // No track-count filter here, deliberately. Every release in a group IS this record, so a
+      // count that differs is a different PRESSING — the 16-track European edition of Escape, the
+      // 13-track American one — and those are precisely the choices worth offering. Filtering them
+      // is what hid the only pressing whose disc had been scanned.
+      for (final e in orderByPreference(await editionsOf(g.mbid))) {
         if (out.length >= max) break;
-        await take(e, deep: out.length < detail);
+        await take(e);
       }
     }
     return out;
