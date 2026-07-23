@@ -9,7 +9,9 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
 import 'catalog.dart';
+import 'musicbrainz.dart';
 import 'organize.dart';
+import 'release_format.dart';
 import 'settings.dart';
 
 /// One image a release or an artist offers. Discogs doesn't say what a picture IS beyond
@@ -403,23 +405,10 @@ class DiscogsService {
   /// fifteen-track pressing of it got rejected for being too long.
   static bool fitsTrackCount(int got, int want) => got >= want - 2 && got <= want * 1.5 + 3;
 
-  /// CD first, digital LAST.
-  ///
-  /// Digital led at the start, as originally asked, and it was the wrong call twice over. It cost
-  /// the edition line — digital entries almost never carry a catalogue number or a country, so Bad
-  /// read "digitaal · 2012" instead of "cd · EPC 450290 2 · Switzerland". And it is where the
-  /// mismatches came from: a digital stub carries so little that there is nothing to check a match
-  /// against. A pressed disc is a documented physical object, which is exactly what makes it both
-  /// richer to read and safer to identify.
-  ///
-  /// Digital stays at the back rather than being dropped: an album that only ever existed as a
-  /// download would otherwise have no edition at all.
-  static const _formatOrder = ['CD', 'CDr', 'Vinyl', 'Cassette', 'File'];
-
-  static int _formatRank(String major) {
-    final i = _formatOrder.indexOf(major);
-    return i < 0 ? _formatOrder.length : i;
-  }
+  /// CD first, digital last — the shared preference in [releaseFormatOrder]. It lives outside this
+  /// class because MusicBrainz ranks the same records by the same rule, and two copies of a rule
+  /// this hard-won would eventually disagree.
+  static int _formatRank(String major) => releaseFormatRank(major);
 
   static List<DiscogsVersion> orderByPreference(List<DiscogsVersion> all, {int main = 0}) {
     final out = [...all.where((v) => v.id > 0)];
@@ -472,7 +461,7 @@ class DiscogsService {
       if (expectedTracks > 0 && masterTracks > 0 && masterTracks < expectedTracks - 2) continue;
       // Ask per format, in the order asked for, and stop at the first that delivers. This is what
       // makes "digital, else CD, else vinyl" true for a record with hundreds of pressings.
-      for (final format in _formatOrder) {
+      for (final format in releaseFormatOrder) {
         final ordered = orderByPreference(await _versions(master, format: format), main: main);
         if (ordered.isEmpty) continue;
         // Only ever fetch a handful in full: each one is a request out of sixty a minute.
@@ -481,7 +470,7 @@ class DiscogsService {
           if (e == null) continue;
           fallback ??= e;
           if (masterTracks > 0 && !fitsTrackCount(e.tracklist.length, masterTracks)) continue;
-          if (!v.isDocumented && format != _formatOrder.last) break; // undocumented → try the next format
+          if (!v.isDocumented && format != releaseFormatOrder.last) break; // undocumented → try the next format
           return e;
         }
       }
@@ -634,14 +623,36 @@ extension DiscogsArtwork on DiscogsService {
   /// Only the first handful of scans are downloaded. Dangerous has 31 — a booklet page by page —
   /// and the three that matter are always near the top, so pulling the lot would cost megabytes
   /// to answer a question already settled.
-  Future<ReleaseArt?> releaseArt(String artist, String album, {int expectedTracks = 0, int? pinned}) async {
-    // The pinned release is part of the cache key. Without it a new choice would keep answering
-    // with the scans fetched for the old one — which is half of why picking a release changed the
-    // front cover and left the back and the disc exactly as they were.
-    final key = sha1.convert(utf8.encode('art|$artist|$album|${pinned ?? 0}')).toString();
+  Future<ReleaseArt?> releaseArt(String artist, String album,
+      {int expectedTracks = 0, int? pinned, String? pinnedMbid}) async {
+    // Both pins are part of the cache key. Without that a new choice would keep answering with the
+    // scans fetched for the old one — which is half of why picking a release changed the front
+    // cover and left the back and the disc exactly as they were.
+    final key =
+        sha1.convert(utf8.encode('art|$artist|$album|${pinned ?? 0}|${pinnedMbid ?? ''}')).toString();
     final dir = Directory('$artDir${Platform.pathSeparator}$key');
     final cached = await _readArt(dir);
     if (cached != null) return cached;
+
+    // A pinned MusicBrainz pressing is an exact answer: take its scans and no one else's.
+    if (pinnedMbid != null && pinnedMbid.isNotEmpty) {
+      final exact = await _artFromCaa(pinnedMbid);
+      if (exact != null) {
+        await _writeArt(dir, exact);
+        return exact;
+      }
+    }
+
+    // Otherwise the Cover Art Archive first — unless a Discogs release is pinned, because that is
+    // the user's own answer to "which pressing is this", and quietly describing it with someone
+    // else's scans is exactly the disregard that made pinning feel broken before.
+    if (pinned == null && (pinnedMbid == null || pinnedMbid.isEmpty)) {
+      final fromCaa = await _artFromMusicBrainz(artist, album, expectedTracks);
+      if (fromCaa != null && fromCaa.front != null) {
+        await _writeArt(dir, fromCaa);
+        return fromCaa;
+      }
+    }
 
     final e = await edition(artist, album, expectedTracks: expectedTracks, pinned: pinned);
     if (e == null || e.images.isEmpty) return null;
@@ -667,6 +678,62 @@ extension DiscogsArtwork on DiscogsService {
     return art;
   }
 
+
+  /// The three scans from the Cover Art Archive, which says outright what each image is.
+  ///
+  /// The whole reason to ask here first: `Front`, `Back` and `Medium` are stated, where the Discogs
+  /// path below has to infer them from shape and pixels. Nothing is guessed and nothing is
+  /// downloaded to find out.
+  ///
+  /// Walks a few pressings, not one. The Japanese CD of *30* carries twenty-one scans and the
+  /// British one carries none, so stopping at the best-ranked pressing would report "no back cover"
+  /// for a record that plainly has one. A borrowed disc scan is the same disc art either way.
+  Future<ReleaseArt?> _artFromMusicBrainz(String artist, String album, int expectedTracks) async {
+    try {
+      final mb = MusicBrainzService();
+      final hits = await mb.searchReleases(artist, DiscogsService.plainTitle(album),
+          expectedTracks: expectedTracks, max: 25);
+      if (hits.isEmpty) return null;
+      Uint8List? front, back, disc;
+      var looked = 0;
+      for (final r in hits) {
+        if (looked >= 4 || (front != null && back != null && disc != null)) break;
+        final images = await mb.art(r.mbid);
+        if (images.isEmpty) continue;
+        looked++;
+        // The front must come from the FIRST pressing that has one — that is the sleeve this
+        // record is known by. Back and disc may be borrowed from later ones.
+        for (final i in images) {
+          if (front == null && i.isFront) front = await mb.fetchImage(i.thumb);
+          if (back == null && i.isBack) back = await mb.fetchImage(i.thumb);
+          if (disc == null && i.isDisc) disc = await mb.fetchImage(i.thumb);
+        }
+      }
+      if (front == null && back == null && disc == null) return null;
+      return ReleaseArt(front: front, back: back, disc: disc);
+    } catch (_) {
+      return null; // no art from here is not an error — the Discogs path takes over
+    }
+  }
+
+  /// The scans of ONE pressing, because the user named it. No borrowing from anywhere else.
+  Future<ReleaseArt?> _artFromCaa(String mbid) async {
+    try {
+      final mb = MusicBrainzService();
+      final images = await mb.art(mbid);
+      if (images.isEmpty) return null;
+      Uint8List? front, back, disc;
+      for (final i in images) {
+        if (front == null && i.isFront) front = await mb.fetchImage(i.thumb);
+        if (back == null && i.isBack) back = await mb.fetchImage(i.thumb);
+        if (disc == null && i.isDisc) disc = await mb.fetchImage(i.thumb);
+      }
+      if (front == null && back == null && disc == null) return null;
+      return ReleaseArt(front: front, back: back, disc: disc);
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// A disc scan from any other pressing of this record, or null.
   ///

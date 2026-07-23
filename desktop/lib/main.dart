@@ -885,7 +885,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                         artist: album.artist,
                         album: album.title,
                         trackCount: album.tracks.length,
-                        pinned: context.watch<LibraryStore>().pinnedRelease(album)),
+                        pinned: context.watch<LibraryStore>().pinnedRelease(album),
+                        pinnedMbid: context.watch<LibraryStore>().pinnedMbid(album)),
                   ),
                 if (!album.isSingle)
                   SliverToBoxAdapter(
@@ -931,6 +932,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             fallback: album.cover,
             chosen: album.correctedCover,
             pinned: context.watch<LibraryStore>().pinnedRelease(album),
+            pinnedMbid: context.watch<LibraryStore>().pinnedMbid(album),
             trackCount: album.tracks.length,
             playing: _albumIsPlaying(context),
           ),
@@ -1046,6 +1048,9 @@ class _MetadataEditorState extends State<MetadataEditor> {
   /// once and everything downstream then silently fell back to guessing, so this no longer depends
   /// on the picked object still being the same instance at apply time.
   int? _pickedRelease;
+
+  /// The MusicBrainz pressing picked, when the answer came from there.
+  String? _pickedMbid;
   Uint8List? _pickedCover;
 
   @override
@@ -1076,6 +1081,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
     setState(() {
       _picked = m;
       _pickedRelease = m.releaseId;
+      _pickedMbid = m.mbid;
       _pickedCover = null;
       if (m.artist.isNotEmpty) _artist.text = m.artist;
       if (newTitle.isNotEmpty) _title.text = newTitle;
@@ -1096,15 +1102,18 @@ class _MetadataEditorState extends State<MetadataEditor> {
           title: widget.album.isSingle ? _title.text : null,
           coverBytes: _pickedCover,
           discogsRelease: _pickedRelease,
+          mbid: _pickedMbid,
         );
     // Says out loud what was pinned. The pin went missing twice while every line of the path read
     // correctly, so this is no longer something to reason about — it is something to see.
     if (mounted) {
       _srcToast(
           context,
-          _pickedRelease == null
-              ? "Aangepast — geen Discogs-uitgave vastgezet"
-              : "Aangepast — uitgave $_pickedRelease vastgezet");
+          _pickedMbid != null
+              ? 'Aangepast — MusicBrainz-uitgave vastgezet'
+              : _pickedRelease == null
+                  ? 'Aangepast — geen uitgave vastgezet'
+                  : 'Aangepast — uitgave $_pickedRelease vastgezet');
     }
     if (mounted) Navigator.of(context).pop(true);
   }
@@ -2470,6 +2479,7 @@ class NowPlayingScreen extends StatelessWidget {
                                 chosen: al?.correctedCover,
                                 trackCount: al?.tracks.length ?? 0,
                                 pinned: al == null ? null : lib.pinnedRelease(al),
+                                pinnedMbid: al == null ? null : lib.pinnedMbid(al),
                                 playing: p.playing,
                               );
                             }),
@@ -5309,8 +5319,16 @@ class AlbumInfoPanel extends StatefulWidget {
 
   /// The Discogs release the user pinned to this album, if any.
   final int? pinned;
+
+  /// Or the MusicBrainz one, when they pinned there instead.
+  final String? pinnedMbid;
   const AlbumInfoPanel(
-      {super.key, required this.artist, required this.album, this.trackCount = 0, this.pinned});
+      {super.key,
+      required this.artist,
+      required this.album,
+      this.trackCount = 0,
+      this.pinned,
+      this.pinnedMbid});
 
   @override
   State<AlbumInfoPanel> createState() => _AlbumInfoPanelState();
@@ -5334,7 +5352,10 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     // changed nothing here: the name stays "Adele – 30", so this saw no difference and never
     // refetched. The front cover did change, because that comes down a different path entirely —
     // which is exactly what it looked like from the outside.
-    if (old.artist != widget.artist || old.album != widget.album || old.pinned != widget.pinned) {
+    if (old.artist != widget.artist ||
+        old.album != widget.album ||
+        old.pinned != widget.pinned ||
+        old.pinnedMbid != widget.pinnedMbid) {
       setState(() {
         _info = null;
         _edition = null;
@@ -5364,7 +5385,8 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     }
     // The scans come off the same cached edition, so this costs nothing beyond the images.
     final art = await discogs
-        .releaseArt(artist, album, expectedTracks: widget.trackCount, pinned: widget.pinned)
+        .releaseArt(artist, album,
+            expectedTracks: widget.trackCount, pinned: widget.pinned, pinnedMbid: widget.pinnedMbid)
         .catchError((_) => null);
     if (!mounted || artist != widget.artist || album != widget.album) return;
     setState(() => _back = art?.back);
@@ -6453,6 +6475,9 @@ class AlbumArt extends StatefulWidget {
 
   /// The Discogs release the user pinned, if any — see LibraryStore.pinnedRelease.
   final int? pinned;
+
+  /// Or the MusicBrainz one — see LibraryStore.pinnedMbid.
+  final String? pinnedMbid;
   const AlbumArt({
     super.key,
     required this.artist,
@@ -6463,6 +6488,7 @@ class AlbumArt extends StatefulWidget {
     this.trackCount = 0,
     this.playing = false,
     this.pinned,
+    this.pinnedMbid,
   });
 
   @override
@@ -6492,7 +6518,10 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     super.didUpdateWidget(old);
     // Same as the info panel: a new pin is a new set of scans, even when the album's name is
     // unchanged. This is why the disc never followed the release you picked.
-    if (old.artist != widget.artist || old.album != widget.album || old.pinned != widget.pinned) {
+    if (old.artist != widget.artist ||
+        old.album != widget.album ||
+        old.pinned != widget.pinned ||
+        old.pinnedMbid != widget.pinnedMbid) {
       setState(() => _art = null);
       _load();
     }
@@ -6515,7 +6544,8 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     final artist = widget.artist, album = widget.album;
     try {
       final art = await DiscogsService(context.read<AppSettings>())
-          .releaseArt(artist, album, expectedTracks: widget.trackCount, pinned: widget.pinned);
+          .releaseArt(artist, album,
+            expectedTracks: widget.trackCount, pinned: widget.pinned, pinnedMbid: widget.pinnedMbid);
       if (!mounted || artist != widget.artist || album != widget.album) return;
       setState(() => _art = art);
       // Hand it to the library too. Without this the correction lived only on the open page: the
@@ -7287,9 +7317,11 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(fontSize: 12.5)),
                                 Text(
-                                  // Where it comes from and where it lands, both readable.
+                                  // Where it comes from, and the folder it lands in. The full
+                                  // target path is already in the header, so only the last part is
+                                  // repeated here — for a duplicate that is "_dubbel" itself.
                                   '${File(p.from).parent.path}  →  '
-                                  '${dupe ? '$dupeFolder${Platform.pathSeparator}' : ''}${p.to == null ? '—' : File(p.to!).parent.path.split(Platform.pathSeparator).last}',
+                                  '${p.to == null ? '—' : File(p.to!).parent.path.split(Platform.pathSeparator).last}',
                                   maxLines: 2,
                                   style: TextStyle(
                                       color: dupe ? _accent2.withValues(alpha: .85) : _muted,

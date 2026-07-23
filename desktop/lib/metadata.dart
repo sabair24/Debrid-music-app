@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import 'musicbrainz.dart';
 import 'settings.dart';
 
 /// One candidate release/track from a metadata provider — used by the manual
@@ -16,6 +17,11 @@ class MetaResult {
   /// own edition for everything else, so the back cover and the disc never followed.
   final int? releaseId;
 
+  /// The MusicBrainz release this candidate IS, when it came from there. Kept separately from
+  /// [releaseId] rather than replacing it: an MBID is a string and a Discogs id is a number, and
+  /// pins already written to disk as numbers have to keep working.
+  final String? mbid;
+
   /// What this pressing IS, in one line: "CD · Europe · 19439937972 · 2021". Five results reading
   /// "30 — Adele" and nothing else give you nothing to choose between.
   final String? detail;
@@ -25,6 +31,7 @@ class MetaResult {
     required this.album,
     this.coverUrl,
     this.releaseId,
+    this.mbid,
     this.detail,
   });
 }
@@ -128,30 +135,29 @@ class MetadataSearch {
     }
   }
 
+  /// Every pressing MusicBrainz knows, CD first, each saying what it is.
+  ///
+  /// This used to return bare titles: five rows reading "30 — Adele" with nothing to choose
+  /// between, and picking one changed the album's name and nothing else. The pressing is now
+  /// described the same way a Discogs row is, and its MBID travels with it so the choice can
+  /// actually be pinned.
   Future<List<MetaResult>> _musicbrainz(String query) async {
     try {
-      final r = await http.get(
-        Uri.parse('https://musicbrainz.org/ws/2/release/?query=${Uri.encodeComponent(query)}&fmt=json&limit=12'),
-        headers: {'User-Agent': _ua},
-      ).timeout(const Duration(seconds: 8));
-      if (r.statusCode != 200) return [];
-      final releases = (jsonDecode(r.body)['releases'] as List?) ?? const [];
-      final out = <MetaResult>[];
-      for (final e in releases) {
-        final id = e['id'] as String?;
-        final title = (e['title'] ?? '') as String;
-        final credit = (e['artist-credit'] as List?) ?? const [];
-        final artist = credit.isNotEmpty
-            ? ((credit.first['name'] ?? credit.first['artist']?['name'] ?? '') as String)
-            : '';
-        out.add(MetaResult(
-          title: title,
-          artist: artist,
-          album: title,
-          coverUrl: id != null ? 'https://coverartarchive.org/release/$id/front-500' : null,
-        ));
-      }
-      return out.where((m) => m.title.isNotEmpty).toList();
+      final hits = await MusicBrainzService().searchReleases('', query, max: 25);
+      return [
+        for (final r in hits)
+          if (r.title.isNotEmpty)
+            MetaResult(
+              title: r.title,
+              artist: r.artist,
+              album: r.title,
+              // The archive answers 404 for a pressing with no scans, which the image widget shows
+              // as an empty box — honest, and the row is still choosable on its edition line.
+              coverUrl: 'https://coverartarchive.org/release/${r.mbid}/front-500',
+              mbid: r.mbid,
+              detail: r.line.isEmpty ? null : r.line,
+            )
+      ];
     } catch (_) {
       return [];
     }

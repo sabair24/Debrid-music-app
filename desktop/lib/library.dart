@@ -262,6 +262,19 @@ class LibraryStore extends ChangeNotifier {
     return null;
   }
 
+  /// The MusicBrainz pressing the user pinned, if they pinned one there instead.
+  ///
+  /// Its own key rather than sharing [pinnedRelease]'s: an MBID is a string and a Discogs id is a
+  /// number, and every pin already written to disk is a number. One key for both would have made
+  /// those unreadable the first time this shipped.
+  String? pinnedMbid(Album a) {
+    for (final t in a.tracks) {
+      final id = _corrections[t.path]?['mbid'];
+      if (id != null && id.isNotEmpty) return id;
+    }
+    return null;
+  }
+
   // ── Chosen artist art ─────────────────────────────────────────────────────
   // Which portrait and which backdrop the user picked for an artist. Kept beside the other
   // corrections for the same reason: the choice has to outlive a rescan, and must never be quietly
@@ -483,6 +496,7 @@ class LibraryStore extends ChangeNotifier {
     String? title,
     Uint8List? coverBytes,
     int? discogsRelease,
+    String? mbid,
   }) async {
     for (final t in target.tracks) {
       final c = _corrections.putIfAbsent(t.path, () => {});
@@ -497,6 +511,14 @@ class LibraryStore extends ChangeNotifier {
       // line, its back cover, its disc — is read from this one release from now on, instead of
       // whichever the app would have picked for itself.
       if (discogsRelease != null && discogsRelease > 0) c['release'] = '$discogsRelease';
+      // Picking from a different source replaces the pin rather than layering on top of it: two
+      // pressings pinned at once is not a state anything downstream could read sensibly.
+      if (mbid != null && mbid.isNotEmpty) {
+        c['mbid'] = mbid;
+        c.remove('release');
+      } else if (discogsRelease != null && discogsRelease > 0) {
+        c.remove('mbid');
+      }
     }
     await _saveCorrections();
 
