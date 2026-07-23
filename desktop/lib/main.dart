@@ -7056,6 +7056,9 @@ class StylePage extends StatefulWidget {
 class _StylePageState extends State<StylePage> {
   List<CatalogAlbumHit>? _more;
 
+  /// False shows the records that define a style; true shows what sits behind them.
+  bool _deep = false;
+
   @override
   void initState() {
     super.initState();
@@ -7065,7 +7068,7 @@ class _StylePageState extends State<StylePage> {
   Future<void> _load() async {
     try {
       // Discogs can search by style directly, which is the one thing Deezer cannot do at all.
-      final hits = await DiscogsService(context.read<AppSettings>()).searchByStyle(widget.style);
+      final hits = await DiscogsService(context.read<AppSettings>()).searchByStyle(widget.style, deep: _deep);
       if (mounted) setState(() => _more = hits);
     } catch (_) {
       if (mounted) setState(() => _more = const []);
@@ -7105,7 +7108,45 @@ class _StylePageState extends State<StylePage> {
           ),
         ],
         SliverToBoxAdapter(
-            child: _sectionTitle('Meer in deze stijl', _more == null ? '…' : '${more.length}')),
+          child: Row(children: [
+            _sectionTitle('Meer in deze stijl', _more == null ? '…' : '${more.length}'),
+            const Spacer(),
+            // Two ways into a style: the records that define it, or everything behind them.
+            Padding(
+              padding: const EdgeInsets.only(right: 24),
+              child: Row(children: [
+                for (final d in const [false, true])
+                  Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    child: InkWell(
+                      onTap: _deep == d
+                          ? null
+                          : () {
+                              setState(() {
+                                _deep = d;
+                                _more = null;
+                              });
+                              _load();
+                            },
+                      borderRadius: BorderRadius.circular(999),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: _deep == d ? _accent : Colors.white.withValues(alpha: .06),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(d ? 'Minder bekend' : 'Bekend',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: _deep == d ? Colors.white : _muted,
+                                fontWeight: _deep == d ? FontWeight.w600 : FontWeight.w400)),
+                      ),
+                    ),
+                  ),
+              ]),
+            ),
+          ]),
+        ),
         if (_more == null)
           const SliverToBoxAdapter(
             child: Padding(

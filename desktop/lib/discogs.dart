@@ -888,10 +888,14 @@ extension DiscogsStyles on DiscogsService {
   ///
   /// Deezer knows a handful of genres; Discogs has thousands of styles and will filter on them
   /// directly, which is what makes "more like this" mean something narrower than "more pop".
-  Future<List<CatalogAlbumHit>> searchByStyle(String style, {int max = 24}) async {
+  /// [deep] trades the front of the list for further down it. Sorting by fewest owners would
+  /// surface unfinished entries rather than obscure records, so the well-known sort is kept and the
+  /// page is moved instead: the same quality of entry, just past the ones everybody knows.
+  Future<List<CatalogAlbumHit>> searchByStyle(String style, {int max = 24, bool deep = false}) async {
     if (!available || style.trim().isEmpty) return const [];
     final b = await _get('https://api.discogs.com/database/search'
-        '?type=master&style=${_q(style.trim())}&sort=have&sort_order=desc&per_page=${max * 2}');
+        '?type=master&style=${_q(style.trim())}&sort=have&sort_order=desc'
+        '&per_page=${max * 2}&page=${deep ? 4 : 1}');
     final results = b?['results'] as List<dynamic>? ?? const [];
     final out = <CatalogAlbumHit>[];
     final seen = <String>{};
