@@ -11,16 +11,19 @@ import 'package:window_manager/window_manager.dart';
 import 'catalog.dart';
 import 'credits.dart';
 import 'discogs.dart';
+import 'editions.dart';
 import 'connectivity.dart';
 import 'enrichment.dart';
 import 'library.dart';
 import 'metadata.dart';
 import 'models.dart';
+import 'musicbrainz.dart';
 import 'online.dart';
 import 'organize.dart';
 import 'player.dart';
 import 'quality.dart';
 import 'recommend.dart';
+import 'release_format.dart';
 import 'rutracker.dart';
 import 'settings.dart';
 import 'soulseek.dart';
@@ -95,6 +98,7 @@ Future<void> main() async {
   final online = OnlineService(settings);
   final soulseek = SoulseekService(settings);
   final tidal = TidalService(settings);
+  final musicbrainz = MusicBrainzService();
   final player = PlayerStore()
     ..resolver = online.resolveRadio
     ..coverResolver = library.coverForTrack;
@@ -109,6 +113,10 @@ Future<void> main() async {
         ChangeNotifierProvider<LibraryStore>.value(value: library),
         ChangeNotifierProvider<PlayerStore>.value(value: player),
         Provider<OnlineService>.value(value: online),
+        // One instance for the whole app. The 1100 ms spacing MusicBrainz asks for is held in
+        // INSTANCE fields, so two widgets each constructing their own would fire unspaced and
+        // earn a 503 — and an album page builds three of these panels side by side.
+        Provider<MusicBrainzService>.value(value: musicbrainz),
         Provider<SoulseekService>.value(value: soulseek),
         Provider<TidalService>.value(value: tidal),
         ChangeNotifierProvider<DownloadManager>.value(value: downloads),
@@ -4095,6 +4103,79 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     } catch (_) {/* Deezer on its own is still a working search */}
   }
 
+  /// Add what MusicBrainz knows: albums, tracks and artists.
+  ///
+  /// Runs AFTER Deezer, never inside its Future.wait — MusicBrainz spaces its requests 1100 ms
+  /// apart, and putting it in the same wait would hold the fast results hostage to the slow one.
+  ///
+  /// Every query is scoped to an artist first. MusicBrainz ranks on text alone with no popularity
+  /// signal at all: bare "thriller" returns Part Chimp and Swoop before Michael Jackson, and bare
+  /// "quit playing games" returns Mar.Ko before the Backstreet Boys. Scoped, both are exact.
+  Future<void> _addMusicBrainzHits(String q) async {
+    final mb = context.read<MusicBrainzService>();
+    try {
+      // "Artist - Album" first, then the whole query as an artist name, then whatever the Deezer
+      // pass already decided the artist was. Any of the three gives the scoping that makes this work.
+      var artist = '', rest = q.trim();
+      final dash = q.indexOf(' - ');
+      if (dash > 0) {
+        artist = q.substring(0, dash).trim();
+        rest = q.substring(dash + 3).trim();
+      } else if (_artists.isNotEmpty) {
+        artist = _artists.first.name;
+      }
+
+      final found = await mb.searchArtists(q, max: 8);
+      if (!mounted) return;
+      if (found.isNotEmpty) {
+        final have = {for (final a in _artists) artistKey(a.name)};
+        final add = [
+          for (final a in found)
+            if (have.add(artistKey(a.name)))
+              CatalogArtist(0, a.name, null, 0,
+                  origin: CatalogRef.musicbrainz(a.mbid), detail: a.line)
+        ];
+        if (add.isNotEmpty) setState(() => _artists = [..._artists, ...add]);
+        if (artist.isEmpty) artist = found.first.name;
+      }
+
+      // Records, not pressings — otherwise twenty CDs of one album are twenty cards.
+      final groups = await mb.searchReleaseGroups(rest, artist: artist);
+      if (!mounted) return;
+      if (groups.isNotEmpty) {
+        final have = {
+          for (final h in _albumHits) '${artistKey(h.artist)}|${normKey(h.album.title)}'
+        };
+        final add = <CatalogAlbumHit>[];
+        for (final g in groups) {
+          if (!have.add('${artistKey(g.artist)}|${normKey(g.title)}')) continue;
+          add.add(CatalogAlbumHit(
+            CatalogAlbum(0, g.title, null, g.firstDate, 0,
+                g.primaryType.toLowerCase().isEmpty ? 'album' : g.primaryType.toLowerCase(),
+                // A GROUP, not a release. Opening it resolves a pressing first — only a pressing
+                // has a tracklist, and handing a group id to the release endpoint loads nothing.
+                origin: CatalogRef.musicbrainzGroup(g.mbid)),
+            g.artist,
+          ));
+          if (add.length >= 12) break;
+        }
+        if (add.isNotEmpty) setState(() => _albumHits = [..._albumHits, ...add]);
+      }
+
+      final recs = await mb.searchRecordings(rest, artist: artist);
+      if (!mounted || recs.isEmpty) return;
+      // MusicBrainz returns one row per release a recording appears on, so a popular song comes
+      // back twenty-five times. Without this the track list is one title repeated.
+      final have = {for (final t in _trackHits) '${artistKey(t.artist)}|${normKey(t.title)}'};
+      final add = [
+        for (final r in recs)
+          if (have.add('${artistKey(r.artist)}|${normKey(r.title)}'))
+            CatalogTrackHit(r.title, r.artist, null)
+      ];
+      if (add.isNotEmpty) setState(() => _trackHits = [..._trackHits, ...add.take(12)]);
+    } catch (_) {/* Deezer and Discogs on their own are still a working search */}
+  }
+
   Future<void> _searchBrowse(String q) async {
     setState(() {
       _browseBusy = true;
@@ -4120,6 +4201,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             : null;
       });
       await _addDiscogsAlbums(q);
+      await _addMusicBrainzHits(q);
+      if (mounted && _artists.isEmpty && _albumHits.isEmpty && _trackHits.isEmpty) {
+        setState(() => _status = 'Niets gevonden.');
+      }
     } catch (e) {
       if (mounted) setState(() => _status = 'Zoeken mislukt: $e');
     } finally {
@@ -5548,7 +5633,26 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   }
 
   Future<void> _load() async {
+    final ref = widget.artist.ref;
     try {
+      // A MusicBrainz artist has no Deezer id, so asking Deezer for album id 0 returns nothing —
+      // and this page draws an empty grid with no empty state, so it looks like a working page for
+      // an artist with no records. It also has the better answer: MusicBrainz carries the regional
+      // oddities and the compilations a streaming catalogue has never listed.
+      if (ref.isMb) {
+        final groups = await context.read<MusicBrainzService>().discographyOf(ref.id);
+        if (!mounted) return;
+        setState(() {
+          _albums = [
+            for (final g in groups)
+              CatalogAlbum(0, g.title, null, g.firstDate, 0,
+                  g.primaryType.toLowerCase().isEmpty ? 'album' : g.primaryType.toLowerCase(),
+                  origin: CatalogRef.musicbrainzGroup(g.mbid))
+          ];
+          _busy = false;
+        });
+        return;
+      }
       final a = await _catalog.artistAlbums(widget.artist.id);
       if (mounted) setState(() { _albums = a; _busy = false; });
     } catch (_) {
@@ -5665,11 +5769,26 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   }
 
   Future<void> _load() async {
-    // A negative id marks a hit that came from Discogs, where the release id IS the tracklist —
-    // asking Deezer about it would simply fail, and the page would sit empty.
-    if (widget.album.id < 0) {
-      await _loadDiscogsRelease(-widget.album.id);
-      return;
+    // Where this album came from decides who can describe it. The sign of the id used to say, and
+    // it had run out of values — it also meant two different things at once, since a negative id
+    // was a Discogs RELEASE from search but a Discogs MASTER from a style page. Feeding a master
+    // to the release endpoint is why an album opened from a style page had no tracklist at all.
+    final ref = widget.album.ref;
+    switch (ref.source) {
+      case CatalogSource.musicbrainz:
+        await _loadMusicBrainzRelease(ref.id);
+        return;
+      case CatalogSource.musicbrainzGroup:
+        await _loadMusicBrainzGroup(ref.id);
+        return;
+      case CatalogSource.discogsRelease:
+        await _loadDiscogsRelease(ref.intId);
+        return;
+      case CatalogSource.discogsMaster:
+        await _loadDiscogsMaster(ref.intId);
+        return;
+      case CatalogSource.deezer:
+        break;
     }
     try {
       final (_, tracks) = await _catalog.albumTracks(widget.album.id);
@@ -5677,7 +5796,63 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     } catch (_) {
       if (mounted) setState(() => _busy = false);
     }
-    await _preferDiscogsTracklist();
+    await _preferOfficialTracklist();
+  }
+
+  /// A record, not a pressing — so resolve its best pressing first. Only a pressing has a
+  /// tracklist, and this is the single easiest way to ship a page that loads nothing.
+  Future<void> _loadMusicBrainzGroup(String groupMbid) async {
+    try {
+      final mb = context.read<MusicBrainzService>();
+      final editions = MusicBrainzService.orderByPreference(await mb.editionsOf(groupMbid));
+      if (editions.isEmpty) {
+        if (mounted) setState(() => _busy = false);
+        return;
+      }
+      await _loadMusicBrainzRelease(editions.first.mbid);
+    } catch (_) {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _loadMusicBrainzRelease(String mbid) async {
+    try {
+      final e = await context.read<MusicBrainzService>().release(mbid);
+      if (!mounted) return;
+      setState(() {
+        _tracks = [
+          for (var i = 0; i < (e?.tracks.length ?? 0); i++)
+            CatalogTrack(
+              // No Deezer id exists for these; the index keys the row and Soulseek is searched by
+              // name anyway, which is all this page does with it.
+              -(i + 1),
+              e!.tracks[i].title,
+              widget.artistName,
+              e.tracks[i].seconds ?? 0,
+              i + 1,
+            )
+        ];
+        _busy = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// A Discogs MASTER groups every pressing of a record and has no tracklist of its own; the style
+  /// page hands these out, and they were being read as releases.
+  Future<void> _loadDiscogsMaster(int masterId) async {
+    try {
+      final dg = DiscogsService(context.read<AppSettings>());
+      final versions = DiscogsService.orderByPreference(await dg.versionsOf(masterId));
+      if (versions.isEmpty) {
+        if (mounted) setState(() => _busy = false);
+        return;
+      }
+      await _loadDiscogsRelease(versions.first.id);
+    } catch (_) {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _loadDiscogsRelease(int releaseId) async {
@@ -5713,27 +5888,64 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// Only swapped when the two agree about the SHAPE of the record — same number of tracks. A
   /// different count means a different edition, and renaming your tracks from the wrong one would
   /// be worse than leaving Deezer's names alone.
-  Future<void> _preferDiscogsTracklist() async {
+  Future<void> _preferOfficialTracklist() async {
     if (_tracks.isEmpty || !mounted) return;
+    // MusicBrainz first, Discogs as the supplement. MusicBrainz needs no token, so for anyone who
+    // has not entered a Discogs one this stops being a guaranteed no-op.
+    var titles = <String>[], secs = <int>[];
+    // Both read before the first await: after one, this widget may be gone and its context with it.
+    final mb = context.read<MusicBrainzService>();
+    final settings = context.read<AppSettings>();
     try {
-      final e = await DiscogsService(context.read<AppSettings>())
-          .edition(widget.artistName, widget.album.title, expectedTracks: _tracks.length);
-      final dg = e?.tracklist ?? const <DiscogsTrack>[];
-      if (!mounted || dg.length != _tracks.length) return;
-      setState(() {
-        _tracks = [
-          for (var i = 0; i < _tracks.length; i++)
-            CatalogTrack(
-              _tracks[i].id,
-              dg[i].title.isEmpty ? _tracks[i].title : dg[i].title,
-              _tracks[i].artist,
-              // Keep Deezer's running time when the pressing doesn't state one.
-              dg[i].seconds ?? _tracks[i].durationSec,
-              _tracks[i].position,
-            )
-        ];
-      });
-    } catch (_) {/* the Deezer list is a fine fallback */}
+      final hits = await mb.searchReleases(
+          widget.artistName, DiscogsService.plainTitle(widget.album.title),
+          expectedTracks: _tracks.length);
+      if (hits.isNotEmpty) {
+        final full = await mb.release(hits.first.mbid);
+        final ts = full?.tracks ?? const <MbTrack>[];
+        if (ts.length == _tracks.length) {
+          titles = [for (final t in ts) t.title];
+          secs = [for (final t in ts) t.seconds ?? 0];
+        }
+      }
+    } catch (_) {/* fall through to Discogs */}
+
+    if (titles.isEmpty) {
+      try {
+        final e = await DiscogsService(settings)
+            .edition(widget.artistName, widget.album.title, expectedTracks: _tracks.length);
+        final dg = e?.tracklist ?? const <DiscogsTrack>[];
+        if (dg.length == _tracks.length) {
+          titles = [for (final t in dg) t.title];
+          secs = [for (final t in dg) t.seconds ?? 0];
+        }
+      } catch (_) {/* the Deezer list is a fine fallback */}
+    }
+    if (!mounted || titles.length != _tracks.length) return;
+
+    // Index-aligned, so a pressing that agrees on the COUNT but not the order would rename every
+    // track after the first difference. The running times are the check that they are the same
+    // record in the same order; a couple of disagreements is normal, wholesale is not.
+    var wrong = 0;
+    for (var i = 0; i < titles.length; i++) {
+      final a = _tracks[i].durationSec, b = secs[i];
+      if (a > 0 && b > 0 && (a - b).abs() > 15) wrong++;
+    }
+    if (wrong > titles.length / 3) return;
+
+    setState(() {
+      _tracks = [
+        for (var i = 0; i < _tracks.length; i++)
+          CatalogTrack(
+            _tracks[i].id,
+            titles[i].isEmpty ? _tracks[i].title : titles[i],
+            _tracks[i].artist,
+            // Keep Deezer's running time when the pressing doesn't state one.
+            secs[i] > 0 ? secs[i] : _tracks[i].durationSec,
+            _tracks[i].position,
+          )
+      ];
+    });
   }
 
   Future<void> _preloadSoulseek() async {
@@ -5783,7 +5995,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       return;
     }
     try {
-      final started = await dm.enqueueSoulseekBest(cands, key: 'alb:${widget.album.id}:$i');
+      final started = await dm.enqueueSoulseekBest(cands, key: 'alb:${widget.album.ref.keyPart}:$i');
       if (mounted) {
         _srcToast(context, started ? '“${t.title}” via Soulseek…' : '“${t.title}” loopt al — zie Mijn downloads.');
       }
@@ -5906,7 +6118,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                   )
                 else if (soulseekReady)
                   _downloadControl(context,
-                      jobKey: 'alb:${widget.album.id}:$i',
+                      jobKey: 'alb:${widget.album.ref.keyPart}:$i',
                       onDownload: () => _downloadTrack(t, i),
                       tooltip: 'Download via Soulseek'),
                 const SizedBox(width: 2),
@@ -6629,6 +6841,11 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   List<ReleaseChoice>? _choices;
   String? _error;
 
+  /// Which source has reported in. Discogs takes far longer, so the list is live before it lands
+  /// and the footer has to be able to say so.
+  bool _mbDone = false, _dgDone = false, _dgFailed = false;
+  bool _busy = false;
+
   /// Which formats to show. Everything Discogs has is fetched; this only narrows what is listed,
   /// so switching filters never costs another request.
   String _filter = 'Alles';
@@ -6639,32 +6856,118 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     _load();
   }
 
+  /// MusicBrainz first, Discogs appended — which is the order the user asked for and also the
+  /// order the two can deliver in. One release-group browse names every pressing at once, so the
+  /// dialog fills in about two seconds; Discogs needs a request per pressing and takes fifteen.
+  ///
+  /// So the list is shown as soon as MusicBrainz answers rather than waiting for both. A user
+  /// staring at a spinner while a source they did not ask about finishes is the thing to avoid.
   Future<void> _load() async {
+    final lib = context.read<LibraryStore>();
+    final settings = context.read<AppSettings>();
+    final expected = widget.album.tracks.length;
+    final pinnedMb = lib.pinnedMbid(widget.album);
+    final pinnedDg = lib.pinnedRelease(widget.album);
+
     try {
-      final list = await DiscogsService(context.read<AppSettings>())
-          .releaseChoices(widget.album.artist, widget.album.title);
+      final mb = await context.read<MusicBrainzService>().editionChoices(
+          widget.album.artist, widget.album.title,
+          expectedTracks: expected, pinnedMbid: pinnedMb);
       if (!mounted) return;
-      setState(() => _choices = list);
+      setState(() {
+        _choices = mb;
+        _mbDone = true;
+      });
     } catch (_) {
-      if (mounted) setState(() => _error = 'Kon de uitgaves niet ophalen.');
+      if (mounted) setState(() => _mbDone = true);
+    }
+
+    // Discogs supplements: it has scans for pressings the archive has never seen. Its failures are
+    // reported separately, because "Discogs is unreachable" and "this record has no pressings" are
+    // very different things to be told.
+    try {
+      final dg = await DiscogsService(settings).releaseChoices(
+          widget.album.artist, widget.album.title, pinned: pinnedDg);
+      if (!mounted) return;
+      final have = {for (final c in (_choices ?? const <ReleaseChoice>[])) c.dedupeKey};
+      setState(() {
+        _choices = [...?_choices, ...dg.where((c) => have.add(c.dedupeKey))];
+        _dgDone = true;
+      });
+    } catch (_) {
+      if (mounted) setState(() { _dgDone = true; _dgFailed = true; });
+    }
+    if (mounted && (_choices?.isEmpty ?? true)) {
+      setState(() => _error = _dgFailed
+          ? 'Geen uitgaves gevonden. Discogs was niet bereikbaar, dus de aanvulling ontbreekt.'
+          : 'Geen uitgaves gevonden.');
     }
   }
 
   Future<void> _choose(ReleaseChoice c) async {
+    if (_busy) return;
+    setState(() => _busy = true);
     final lib = context.read<LibraryStore>();
     final settings = context.read<AppSettings>();
-    Uint8List? front;
-    if (c.front != null) {
-      front = await DiscogsService(settings).fetchImage(c.front!.uri);
+    final mbSvc = context.read<MusicBrainzService>();
+    try {
+      Uint8List? front;
+      if (c.front != null) {
+        // Each catalogue serves its own images; Discogs wants its token on the request.
+        front = c.isMb
+            ? await mbSvc.fetchImage(c.front!.uri)
+            : await DiscogsService(settings).fetchImage(c.front!.uri);
+      }
+      if (!mounted) return;
+      await lib.applyCorrection(widget.album, settings,
+          coverBytes: front,
+          discogsRelease: c.isMb ? null : c.releaseId,
+          mbid: c.isMb ? c.mbid : null);
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (_) {
+      // The pin may already be on disk; saying nothing would leave the dialog dead and the button
+      // spinning, which is how a failure here used to present.
+      if (mounted) {
+        setState(() => _busy = false);
+        _srcToast(context, 'Kon deze uitgave niet toepassen.');
+      }
     }
+  }
+
+  /// Take this pressing's numbering for the library's own files.
+  ///
+  /// Separate from choosing it, because they are different decisions: one describes the record,
+  /// the other rewrites what the tracklist says. A user with correct tags wants only the first.
+  Future<void> _renumber(ReleaseChoice c) async {
+    final lib = context.read<LibraryStore>();
+    final mbSvc = context.read<MusicBrainzService>();
+    var list = c.tracklist;
+    if (list.isEmpty && c.isMb && c.mbid != null) {
+      // Only the first few pressings arrive with a tracklist; this one is being asked for by name.
+      final full = await mbSvc.release(c.mbid!);
+      if (full != null) list = await mbSvc.tracklistOf(full);
+    }
+    if (!mounted || list.isEmpty) {
+      if (mounted) _srcToast(context, 'Deze uitgave geeft geen nummering.');
+      return;
+    }
+    final plan = lib.planRenumber(widget.album, list);
     if (!mounted) return;
-    await lib.applyCorrection(widget.album, settings, coverBytes: front, discogsRelease: c.releaseId);
-    if (mounted) Navigator.of(context).pop(true);
+    final done = await showDialog<bool>(
+        context: context, builder: (_) => RenumberDialog(album: widget.album, plan: plan));
+    if (done == true && mounted) Navigator.of(context).pop(true);
   }
 
   @override
   Widget build(BuildContext context) {
-    final pinned = context.watch<LibraryStore>().pinnedRelease(widget.album);
+    final lib = context.watch<LibraryStore>();
+    // Both, because an album pinned to a MusicBrainz pressing marked no row at all before: the
+    // gallery only ever asked about the Discogs pin.
+    final pinnedKey = lib.pinnedMbid(widget.album) != null
+        ? 'mb:${lib.pinnedMbid(widget.album)}'
+        : (lib.pinnedRelease(widget.album) != null
+            ? 'dg:${lib.pinnedRelease(widget.album)}'
+            : null);
     return Dialog(
       backgroundColor: _panel,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -6708,7 +7011,28 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                   ),
               ]),
               const SizedBox(height: 12),
-              Expanded(child: _body(pinned)),
+              Expanded(child: _body(pinnedKey)),
+              // MusicBrainz answers in about two seconds and Discogs in fifteen, so the list is
+              // usable long before it is finished. Say which, rather than let a short list look
+              // like the whole answer.
+              if (_mbDone && !_dgDone)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Row(children: [
+                    SizedBox(
+                        width: 11,
+                        height: 11,
+                        child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
+                    SizedBox(width: 8),
+                    Text('Discogs vult nog aan…', style: TextStyle(color: _muted, fontSize: 11.5)),
+                  ]),
+                ),
+              if (_dgDone && _dgFailed)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text('Discogs was niet bereikbaar — dit zijn alleen de MusicBrainz-uitgaves.',
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
+                ),
             ],
           ),
         ),
@@ -6716,7 +7040,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     );
   }
 
-  Widget _body(int? pinned) {
+  Widget _body(String? pinnedKey) {
     if (_error != null) return Center(child: Text(_error!, style: const TextStyle(color: _muted)));
     final list = _choices;
     if (list == null) {
@@ -6732,13 +7056,16 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     }
     if (list.isEmpty) return const Center(child: Text('Geen uitgaves gevonden.', style: TextStyle(color: _muted)));
     // 'File' is what Discogs calls a digital release; nobody looking for one thinks of it that way.
+    // Through the shared bucketing, not substring matching: MusicBrainz says `12" Vinyl`,
+    // `Digital Media` and `Enhanced CD` where Discogs says `Vinyl` and `File`, and one rule has
+    // to cover both or the filters silently hide half the list.
     final shown = _filter == 'Alles'
         ? list
         : list.where((c) {
-            final f = c.format.toLowerCase();
-            if (_filter == 'CD') return f.contains('cd');
-            if (_filter == 'Vinyl') return f.contains('vinyl');
-            return f.contains('file') || f.contains('flac') || f.contains('mp3') || f.contains('aac');
+            final m = majorFormat(c.format);
+            if (_filter == 'CD') return m == 'CD' || m == 'CDr';
+            if (_filter == 'Vinyl') return m == 'Vinyl';
+            return m == 'File';
           }).toList();
     if (shown.isEmpty) {
       return const Center(child: Text('Geen uitgaves in dit formaat.', style: TextStyle(color: _muted)));
@@ -6748,7 +7075,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (_, i) {
         final c = shown[i];
-        final isPinned = pinned == c.releaseId;
+        final isPinned = pinnedKey != null && pinnedKey == c.key;
         return InkWell(
           onTap: () => _choose(c),
           borderRadius: BorderRadius.circular(10),
@@ -6776,11 +7103,21 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                         style: const TextStyle(color: _muted, fontSize: 12)),
                   const SizedBox(height: 6),
                   Row(children: [
+                    // Which catalogue this row came from. The user asked to choose the source, so
+                    // it has to be visible rather than inferred from the row's shape.
+                    _source(c.isMb),
+                    const SizedBox(width: 6),
                     _tag('achterkant', c.hasBack),
                     const SizedBox(width: 6),
                     _tag('cd-scan', c.hasDisc),
                   ]),
                 ]),
+              ),
+              IconButton(
+                icon: const Icon(Icons.format_list_numbered_rounded, size: 19),
+                tooltip: 'Nummering van deze uitgave overnemen',
+                constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                onPressed: () => _renumber(c),
               ),
               if (isPinned) const Icon(Icons.check_circle_rounded, color: _accent, size: 20),
             ]),
@@ -6790,7 +7127,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     );
   }
 
-  Widget _thumb(DiscogsImage? img, String label) => Column(children: [
+  Widget _thumb(ChoiceImage? img, String label) => Column(children: [
         ClipRRect(
           borderRadius: BorderRadius.circular(6),
           child: img == null
@@ -6804,6 +7141,19 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
         const SizedBox(height: 3),
         Text(label, style: const TextStyle(color: _muted, fontSize: 10)),
       ]);
+
+  /// Which catalogue found this pressing. The user asked to be able to choose the source, so the
+  /// source has to be readable on the row rather than inferred from what the row happens to carry.
+  Widget _source(bool isMb) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: (isMb ? _accent : _accent2).withValues(alpha: .18),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(isMb ? 'MusicBrainz' : 'Discogs',
+            style: TextStyle(
+                fontSize: 10.5, fontWeight: FontWeight.w600, color: isMb ? _accent : _accent2)),
+      );
 
   /// Present or absent, stated rather than implied — the reason this dialog exists.
   Widget _tag(String text, bool on) => Container(
@@ -7081,6 +7431,138 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
                     ? const SizedBox(
                         width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                     : const Text('Verplaatsen'),
+              ),
+            ]),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// Take an official pressing's numbering for a mistagged album — showing every change first.
+///
+/// Rippers get this wrong constantly: one album here arrived with two number sixes, two number
+/// tens and a track with no number at all, so its tracklist could not be read or played in order.
+/// The pressing knows; the tags do not. But rewriting what a user's library says about their own
+/// files is not something to do silently, so the whole list is shown and collisions are refused.
+class RenumberDialog extends StatefulWidget {
+  final Album album;
+  final RenumberPlan plan;
+  const RenumberDialog({super.key, required this.album, required this.plan});
+
+  @override
+  State<RenumberDialog> createState() => _RenumberDialogState();
+}
+
+class _RenumberDialogState extends State<RenumberDialog> {
+  bool _busy = false;
+
+  Future<void> _go() async {
+    setState(() => _busy = true);
+    await context.read<LibraryStore>().applyRenumber(widget.plan);
+    if (!mounted) return;
+    _srcToast(context, 'Nummering overgenomen');
+    Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final plan = widget.plan;
+    final blocked = plan.collides || plan.titleCollides;
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: 700,
+        height: 620,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Nummering overnemen',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text('${widget.album.artist} · ${widget.album.title}',
+                style: const TextStyle(color: _muted, fontSize: 12.5)),
+            const SizedBox(height: 14),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(11),
+              decoration: BoxDecoration(
+                color: blocked ? Colors.red.withValues(alpha: .12) : _panel2,
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(
+                  plan.collides
+                      ? 'Geweigerd: twee nummers zouden hetzelfde nummer krijgen.'
+                      : plan.titleCollides
+                          ? 'Geweigerd: twee nummers zouden dezelfde titel krijgen — dan verdwijnt er één uit de lijst.'
+                          : plan.changing.isEmpty
+                              ? 'De nummering klopt al.'
+                              : '${plan.changing.length} van de ${plan.steps.length} worden aangepast · ${plan.total} nummers',
+                  style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+                ),
+                if (plan.unmatched.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                      '${plan.unmatched.length} niet herkend op deze uitgave — die houden hun eigen tags.',
+                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                ],
+              ]),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: ListView.builder(
+                itemCount: plan.steps.length,
+                itemBuilder: (_, i) {
+                  final st = plan.steps[i];
+                  final was = st.track.trackNo > 0 ? '${st.track.trackNo}' : '—';
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(children: [
+                      SizedBox(
+                        width: 62,
+                        child: Text(st.unmatched ? '$was  ·' : '$was → ${st.newNo}',
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: st.changes ? FontWeight.w700 : FontWeight.w400,
+                                color: st.unmatched
+                                    ? _muted
+                                    : st.changes
+                                        ? _accent
+                                        : _muted)),
+                      ),
+                      Expanded(
+                        child: Text(
+                          st.official != null && st.official!.title != st.track.title
+                              ? '${st.track.title}  →  ${st.official!.title}'
+                              : st.track.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 12.5, color: st.unmatched ? _muted : Colors.white),
+                        ),
+                      ),
+                    ]),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              TextButton(
+                  onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuleren')),
+              const SizedBox(width: 8),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: _accent),
+                onPressed: (_busy || blocked || plan.changing.isEmpty) ? null : _go,
+                child: _busy
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Text('Overnemen'),
               ),
             ]),
           ]),

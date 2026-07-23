@@ -9,6 +9,7 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
 import 'catalog.dart';
+import 'editions.dart';
 import 'musicbrainz.dart';
 import 'organize.dart';
 import 'release_format.dart';
@@ -628,8 +629,16 @@ extension DiscogsArtwork on DiscogsService {
     // Both pins are part of the cache key. Without that a new choice would keep answering with the
     // scans fetched for the old one — which is half of why picking a release changed the front
     // cover and left the back and the disc exactly as they were.
-    final key =
-        sha1.convert(utf8.encode('art|$artist|$album|${pinned ?? 0}|${pinnedMbid ?? ''}')).toString();
+    // expectedTracks is in the key because it CHANGES the answer — it decides which pressings
+    // qualify. Leaving it out meant a library album and the same album opened from browse (which
+    // knows no track count) shared one entry, and whichever ran first won permanently.
+    //
+    // The v2 marks a schema change: entries written before the archive was consulted would
+    // otherwise keep answering forever, since nothing here expires.
+    final key = sha1
+        .convert(utf8.encode(
+            'art|v2|$artist|$album|$expectedTracks|${pinned ?? 0}|${pinnedMbid ?? ''}'))
+        .toString();
     final dir = Directory('$artDir${Platform.pathSeparator}$key');
     final cached = await _readArt(dir);
     if (cached != null) return cached;
@@ -646,16 +655,26 @@ extension DiscogsArtwork on DiscogsService {
     // Otherwise the Cover Art Archive first — unless a Discogs release is pinned, because that is
     // the user's own answer to "which pressing is this", and quietly describing it with someone
     // else's scans is exactly the disregard that made pinning feel broken before.
+    ReleaseArt? caa;
     if (pinned == null && (pinnedMbid == null || pinnedMbid.isEmpty)) {
-      final fromCaa = await _artFromMusicBrainz(artist, album, expectedTracks);
-      if (fromCaa != null && fromCaa.front != null) {
-        await _writeArt(dir, fromCaa);
-        return fromCaa;
+      caa = await _artFromMusicBrainz(artist, album, expectedTracks);
+      if (caa != null && caa.front != null && caa.back != null && caa.disc != null) {
+        await _writeArt(dir, caa);
+        return caa;
       }
+      // A partial answer is kept, not discarded. Requiring a front threw away a back cover and a
+      // disc scan that were already downloaded whenever the front was the one image missing.
     }
 
     final e = await edition(artist, album, expectedTracks: expectedTracks, pinned: pinned);
-    if (e == null || e.images.isEmpty) return null;
+    if (e == null || e.images.isEmpty) {
+      // Discogs has nothing to add, but the archive may still have given us something.
+      if (caa != null && !caa.isEmpty) {
+        await _writeArt(dir, caa);
+        return caa;
+      }
+      return null;
+    }
     const look = 6;
     final take = e.images.length < look ? e.images.length : look;
     final datas = <Uint8List?>[];
@@ -673,7 +692,14 @@ extension DiscogsArtwork on DiscogsService {
     // for a record the library demonstrably holds. So borrow one from another pressing of the SAME
     // master: it is the same disc art, just someone else's scanner.
     disc ??= await _discFromAnotherPressing(artist, album, e.releaseId);
-    final art = ReleaseArt(front: at(roles.front), back: at(roles.back), disc: disc);
+    // Whatever the archive already stated wins per role — it SAYS what an image is, where the
+    // roles above are inferred from shape and pixels. Discogs fills the gaps rather than replacing.
+    final art = ReleaseArt(
+      front: caa?.front ?? at(roles.front),
+      back: caa?.back ?? at(roles.back),
+      disc: caa?.disc ?? disc,
+    );
+    if (art.isEmpty) return null; // nothing found — don't cache a blank as the answer
     await _writeArt(dir, art);
     return art;
   }
@@ -804,58 +830,67 @@ extension DiscogsArtwork on DiscogsService {
   }
 }
 
-/// One pressing offered in the picker, with what it actually carries.
-///
-/// Knowing a release HAS a back cover and a disc before choosing it is the point: five rows reading
-/// "30 — Adele" are unchoosable, and picking blind means finding out afterwards that the disc
-/// animation has nothing to spin.
-class ReleaseChoice {
-  final int releaseId;
-  final String format;
-  final String? label, catno, country;
-  final int? year;
-  final DiscogsImage? front, back, disc;
-  const ReleaseChoice({
-    required this.releaseId,
-    required this.format,
-    this.label,
-    this.catno,
-    this.country,
-    this.year,
-    this.front,
-    this.back,
-    this.disc,
-  });
-
-  bool get hasBack => back != null;
-  bool get hasDisc => disc != null;
-
-  /// "CD · Europe · 19439937972 · 2021"
-  String get line => [
-        if (format.isNotEmpty) format,
-        if ((country ?? '').isNotEmpty) country!,
-        if ((catno ?? '').isNotEmpty && catno!.toLowerCase() != 'none') catno!,
-        if (year != null && year! > 0) '$year',
-      ].join(' · ');
-}
-
 extension DiscogsChoices on DiscogsService {
-  /// Every pressing worth offering, with its front, back and disc identified.
-  ///
-  /// Costs a request per release plus the images it has to look at, so it is capped and only ever
-  /// called while the picker is open.
-  /// Every pressing worth offering, with its front, back and disc identified.
+  /// Every pressing worth offering, with its front, back, disc and tracklist.
   ///
   /// Walks SEVERAL masters, not just the best-scoring one. Discogs has twenty-two masters titled
   /// "Michael Jackson - Thriller", and the top-scoring one is a vinyl-only entry with two versions
   /// — so the gallery showed vinyl and swore there were no CDs, while the site plainly has them.
   ///
   /// Cassette is never offered: nobody is choosing a tape scan to describe their FLACs.
-  Future<List<ReleaseChoice>> releaseChoices(String artist, String album, {int max = 24}) async {
-    final masters = await masterIds(artist, album);
-    if (masters.isEmpty) return const [];
+  ///
+  /// [pinned] is prepended unconditionally. Without that, the pressing the user already chose shows
+  /// up only if it happens to fall inside the four masters and six versions this walks — so their
+  /// own choice could be missing from the list of choices.
+  Future<List<ReleaseChoice>> releaseChoices(String artist, String album,
+      {int max = 24, int? pinned}) async {
     final out = <ReleaseChoice>[];
     final seen = <int>{};
+
+    Future<void> take(int id) async {
+      if (out.length >= max || !seen.add(id)) return;
+      final e = await release(id);
+      if (e == null) return;
+      // Only the first few scans are examined: front, back and disc sit near the top, and reading
+      // a booklet page by page would cost megabytes to answer a settled question.
+      final look = e.images.length < 6 ? e.images.length : 6;
+      final datas = <Uint8List?>[];
+      for (var i = 0; i < look; i++) {
+        datas.add(await fetchImage(e.images[i].uri));
+      }
+      final roles = assignRoles(
+        [for (var i = 0; i < look; i++) e.images[i].primary],
+        [
+          for (var i = 0; i < look; i++)
+            e.images[i].height == 0 ? 1.0 : e.images[i].width / e.images[i].height
+        ],
+        datas,
+      );
+      ChoiceImage? at(int? i) =>
+          (i == null || i >= look) ? null : ChoiceImage(e.images[i].uri, e.images[i].thumb);
+      out.add(ReleaseChoice(
+        source: EditionSource.discogs,
+        releaseId: e.releaseId,
+        format: e.format,
+        label: e.label,
+        catno: e.catno,
+        country: e.country,
+        year: e.year,
+        front: at(roles.front),
+        back: at(roles.back),
+        disc: at(roles.disc),
+        // The release lookup already carried this; it used to be thrown away, and it is exactly
+        // what a user needs to correct a mistagged album's numbering.
+        tracklist: [
+          for (final t in e.tracklist)
+            if (t.title.isNotEmpty) ChoiceTrack(t.position, t.title, t.seconds)
+        ],
+      ));
+    }
+
+    if (pinned != null && pinned > 0) await take(pinned);
+
+    final masters = await masterIds(artist, album);
     // Format-major so CDs lead the list whichever master they come from.
     for (final format in const ['CD', 'Vinyl', 'File']) {
       for (final master in masters.take(4)) {
@@ -863,36 +898,7 @@ extension DiscogsChoices on DiscogsService {
         final versions = DiscogsService.orderByPreference(await versionsOf(master, format: format));
         for (final v in versions.take(6)) {
           if (out.length >= max) return out;
-          if (!seen.add(v.id)) continue;
-          final e = await release(v.id);
-          if (e == null) continue;
-          // Only the first few scans are examined: front, back and disc sit near the top, and
-          // reading a booklet page by page would cost megabytes to answer a settled question.
-          final look = e.images.length < 6 ? e.images.length : 6;
-          final datas = <Uint8List?>[];
-          for (var i = 0; i < look; i++) {
-            datas.add(await fetchImage(e.images[i].uri));
-          }
-          final roles = assignRoles(
-            [for (var i = 0; i < look; i++) e.images[i].primary],
-            [
-              for (var i = 0; i < look; i++)
-                e.images[i].height == 0 ? 1.0 : e.images[i].width / e.images[i].height
-            ],
-            datas,
-          );
-          DiscogsImage? at(int? i) => (i == null || i >= look) ? null : e.images[i];
-          out.add(ReleaseChoice(
-            releaseId: e.releaseId,
-            format: e.format,
-            label: e.label,
-            catno: e.catno,
-            country: e.country,
-            year: e.year,
-            front: at(roles.front),
-            back: at(roles.back),
-            disc: at(roles.disc),
-          ));
+          await take(v.id);
         }
       }
     }
@@ -941,6 +947,7 @@ extension DiscogsSearch on DiscogsService {
           (year != null && year.length >= 4) ? year : null,
           0,
           'album',
+          origin: CatalogRef.discogsRelease(id),
         ),
         artist,
       ));

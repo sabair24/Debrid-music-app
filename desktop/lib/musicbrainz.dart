@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
+import 'editions.dart';
 import 'release_format.dart';
 
 /// MusicBrainz + the Cover Art Archive.
@@ -65,7 +66,11 @@ class MbTrack {
 
   /// Milliseconds, or null when this recording has no timing.
   final int? ms;
-  const MbTrack(this.position, this.title, this.ms);
+
+  /// 1-based. A double album numbers from 1 again on the second disc, so a position on its own
+  /// does not say where a track sits on the record.
+  final int disc;
+  const MbTrack(this.position, this.title, this.ms, {this.disc = 1});
 
   int? get seconds => ms == null ? null : (ms! / 1000).round();
 }
@@ -133,12 +138,16 @@ class MbRelease {
       final f = (m['format'] ?? '').toString();
       if (f.isNotEmpty) formats.add(f);
       count += ((m['track-count'] as num?) ?? 0).toInt();
+      // Which disc this is. MusicBrainz states it, and without carrying it the two discs of a
+      // double album both look like tracks 1..n of the same thing.
+      final disc = ((m['position'] as num?) ?? (media.indexOf(m) + 1)).toInt();
       for (final t in (m['tracks'] as List<dynamic>? ?? const [])) {
         if (t is! Map) continue;
         tracks.add(MbTrack(
           (t['number'] ?? '').toString(),
           (t['title'] ?? '').toString(),
           (t['length'] as num?)?.toInt(),
+          disc: disc < 1 ? 1 : disc,
         ));
       }
     }
@@ -183,6 +192,105 @@ class MbRelease {
           if (g is Map && g['name'] != null) g['name'].toString()
       ],
       albumYear: rgDate.length >= 4 ? int.tryParse(rgDate.substring(0, 4)) : null,
+    );
+  }
+}
+
+/// An act, as MusicBrainz knows them.
+class MbArtist {
+  final String mbid, name;
+  final String? type, country, disambiguation, begin, end;
+  const MbArtist(this.mbid, this.name,
+      {this.type, this.country, this.disambiguation, this.begin, this.end});
+
+  /// "Group · US · 1993–" — enough to tell two acts of the same name apart, which is the whole
+  /// reason MusicBrainz carries a disambiguation field at all.
+  String get line => [
+        if ((disambiguation ?? '').isNotEmpty) disambiguation!,
+        if ((type ?? '').isNotEmpty) type!,
+        if ((country ?? '').isNotEmpty) country!,
+        if ((begin ?? '').length >= 4) '${begin!.substring(0, 4)}–${(end ?? '').length >= 4 ? end!.substring(0, 4) : ''}',
+      ].join(' · ');
+
+  static MbArtist from(Map<String, dynamic> j) {
+    final span = j['life-span'];
+    return MbArtist(
+      (j['id'] ?? '').toString(),
+      (j['name'] ?? '').toString(),
+      type: (j['type'] as String?)?.trim(),
+      country: (j['country'] as String?)?.trim(),
+      disambiguation: (j['disambiguation'] as String?)?.trim().isEmpty ?? true
+          ? null
+          : (j['disambiguation'] as String).trim(),
+      begin: span is Map ? span['begin']?.toString() : null,
+      end: span is Map ? span['end']?.toString() : null,
+    );
+  }
+}
+
+/// A RECORD, as opposed to one of its pressings — the level a search result should be at, so
+/// twenty pressings of Thriller are one card and not twenty.
+class MbReleaseGroup {
+  final String mbid, title, artist, artistMbid;
+
+  /// Album / Single / EP / Broadcast / Other.
+  final String primaryType;
+  final List<String> secondaryTypes;
+  final String? firstDate;
+  const MbReleaseGroup(this.mbid, this.title, this.artist, this.artistMbid, this.primaryType,
+      {this.secondaryTypes = const [], this.firstDate});
+
+  int? get year => (firstDate ?? '').length >= 4 ? int.tryParse(firstDate!.substring(0, 4)) : null;
+
+  /// A live album, a soundtrack and a compilation all say "Album" as their primary type; the
+  /// secondary type is the only thing that separates them from a studio record.
+  bool get isCompilation => secondaryTypes.any((s) => s.toLowerCase() == 'compilation');
+
+  static MbReleaseGroup from(Map<String, dynamic> j) {
+    final credits = (j['artist-credit'] as List<dynamic>? ?? const []);
+    var artist = '', artistMbid = '';
+    if (credits.isNotEmpty && credits.first is Map) {
+      final c = credits.first as Map;
+      artist = (c['name'] ?? c['artist']?['name'] ?? '').toString();
+      artistMbid = (c['artist'] is Map ? c['artist']['id'] : null)?.toString() ?? '';
+    }
+    return MbReleaseGroup(
+      (j['id'] ?? '').toString(),
+      (j['title'] ?? '').toString(),
+      artist,
+      artistMbid,
+      (j['primary-type'] ?? '').toString(),
+      secondaryTypes: [
+        for (final s in (j['secondary-types'] as List<dynamic>? ?? const [])) s.toString()
+      ],
+      firstDate: (j['first-release-date'] as String?)?.trim(),
+    );
+  }
+}
+
+/// One recorded performance. Not a track: the same recording appears as a track on every release
+/// that carries it, which is why a search hit names the release it was found on.
+class MbRecording {
+  final String mbid, title, artist;
+  final int? ms;
+  final String? onRelease;
+  const MbRecording(this.mbid, this.title, this.artist, {this.ms, this.onRelease});
+
+  int get seconds => ms == null ? 0 : (ms! / 1000).round();
+
+  static MbRecording from(Map<String, dynamic> j) {
+    final credits = (j['artist-credit'] as List<dynamic>? ?? const []);
+    final artist = credits.isEmpty || credits.first is! Map
+        ? ''
+        : ((credits.first as Map)['name'] ?? (credits.first as Map)['artist']?['name'] ?? '')
+            .toString();
+    final rels = (j['releases'] as List<dynamic>? ?? const []);
+    return MbRecording(
+      (j['id'] ?? '').toString(),
+      (j['title'] ?? '').toString(),
+      artist,
+      ms: (j['length'] as num?)?.toInt(),
+      onRelease: rels.isEmpty || rels.first is! Map ? null : (rels.first as Map)['title']?.toString(),
     );
   }
 }
@@ -353,6 +461,115 @@ class MusicBrainzService {
     return out;
   }
 
+  // ── Searching ───────────────────────────────────────────────────────────────
+  //
+  // What MusicBrainz is and is not good at, measured rather than assumed.
+  //
+  // It has NO popularity signal whatsoever — its scoring is pure Lucene text matching. Searching
+  // "thriller" returns Part Chimp, Swoop and Eddie & the Hot Rods before Michael Jackson, and
+  // "quit playing games" returns Mar.Ko and The Baseballs before the Backstreet Boys. Used as a
+  // bare search box it would make finding a famous record HARDER, not easier.
+  //
+  // Its strength is the opposite shape: given an artist, it hands over everything. The complete
+  // 24-album Backstreet Boys discography comes back in 71 ms, including the regional oddities
+  // ("Very Best 2000", "Bubble Tea Jams 2000") that a streaming catalogue has never heard of.
+  //
+  // So queries are scoped by artist wherever an artist can be found. `artist:"Michael Jackson" AND
+  // releasegroup:"Thriller"` puts the right record first at score 100; the same query without the
+  // artist does not find it at all.
+
+  /// Artists matching a name. The one search MusicBrainz is unambiguously good at as-is.
+  Future<List<MbArtist>> searchArtists(String q, {int max = 12}) async {
+    if (q.trim().isEmpty) return const [];
+    final body = await _ws(
+        '$_root/artist/?query=${Uri.encodeQueryComponent(_lucene(q.trim()))}&fmt=json&limit=$max');
+    final list = body?['artists'] as List<dynamic>? ?? const [];
+    return [
+      for (final a in list)
+        if (a is Map<String, dynamic>) MbArtist.from(a)
+    ];
+  }
+
+  /// The single best artist match for a name, or null.
+  Future<MbArtist?> resolveArtist(String name) async {
+    final hits = await searchArtists(name, max: 5);
+    if (hits.isEmpty) return null;
+    // An exact name match beats a higher-scoring near-miss: searching "Backstreet" must not
+    // resolve to "Backstreet Girls" because it scored well on a shared word.
+    final want = name.trim().toLowerCase();
+    for (final a in hits) {
+      if (a.name.toLowerCase() == want) return a;
+    }
+    return hits.first;
+  }
+
+  /// Records — not pressings — matching a title, optionally scoped to an artist.
+  ///
+  /// A release group is the RECORD; the releases under it are its pressings. Searching groups is
+  /// what makes one card per album possible instead of one per pressing.
+  Future<List<MbReleaseGroup>> searchReleaseGroups(String album,
+      {String artist = '', int max = 25}) async {
+    if (album.trim().isEmpty) return const [];
+    final q = artist.trim().isEmpty
+        ? 'releasegroup:"${_lucene(album.trim())}"'
+        : 'artist:"${_lucene(artist.trim())}" AND releasegroup:"${_lucene(album.trim())}"';
+    final body =
+        await _ws('$_root/release-group/?query=${Uri.encodeQueryComponent(q)}&fmt=json&limit=$max');
+    final list = body?['release-groups'] as List<dynamic>? ?? const [];
+    return [
+      for (final g in list)
+        if (g is Map<String, dynamic>) MbReleaseGroup.from(g)
+    ];
+  }
+
+  /// Everything an artist released, by their id. Complete where a streaming catalogue is partial.
+  Future<List<MbReleaseGroup>> discographyOf(String artistMbid, {int max = 100}) async {
+    if (artistMbid.trim().isEmpty) return const [];
+    final body = await _ws(
+        '$_root/release-group?artist=${artistMbid.trim()}&fmt=json&limit=$max');
+    final list = body?['release-groups'] as List<dynamic>? ?? const [];
+    final out = [
+      for (final g in list)
+        if (g is Map<String, dynamic>) MbReleaseGroup.from(g)
+    ];
+    // Albums before singles and compilations, then newest first — the shape a discography reads in.
+    out.sort((a, b) {
+      final byKind = _kindRank(a.primaryType).compareTo(_kindRank(b.primaryType));
+      if (byKind != 0) return byKind;
+      return (b.firstDate ?? '').compareTo(a.firstDate ?? '');
+    });
+    return out;
+  }
+
+  static int _kindRank(String t) {
+    switch (t.toLowerCase()) {
+      case 'album':
+        return 0;
+      case 'ep':
+        return 1;
+      case 'single':
+        return 2;
+      default:
+        return 3;
+    }
+  }
+
+  /// Recordings matching a title, scoped to an artist where one is known.
+  Future<List<MbRecording>> searchRecordings(String title,
+      {String artist = '', int max = 25}) async {
+    if (title.trim().isEmpty) return const [];
+    final q = artist.trim().isEmpty
+        ? 'recording:"${_lucene(title.trim())}"'
+        : 'artist:"${_lucene(artist.trim())}" AND recording:"${_lucene(title.trim())}"';
+    final body =
+        await _ws('$_root/recording/?query=${Uri.encodeQueryComponent(q)}&fmt=json&limit=$max');
+    final list = body?['recordings'] as List<dynamic>? ?? const [];
+    return [
+      for (final r in list)
+        if (r is Map<String, dynamic>) MbRecording.from(r)
+    ];
+  }
+
   // ── Cover Art Archive ───────────────────────────────────────────────────────
 
   /// The scans for a pressing, each saying what it is. Empty when the archive has none — which is
@@ -368,6 +585,85 @@ class MusicBrainzService {
       if (img != null) out.add(img);
     }
     return out;
+  }
+
+  /// Every pressing of a record, as choices the picker can offer.
+  ///
+  /// One release-group search plus one browse names every pressing — where the Discogs path needs
+  /// a request per pressing before it can say anything at all. Measured on Adele's *30*: 289 ms
+  /// for all twelve, against roughly thirteen seconds.
+  ///
+  /// [detail] caps how many get their scans and tracklist fetched. Those cost a request each and
+  /// the browse can return a hundred pressings, so the rest are listed on what the browse already
+  /// said and filled in when tapped. Without the cap the dialog would take two minutes.
+  Future<List<ReleaseChoice>> editionChoices(String artist, String album,
+      {int max = 24, int detail = 8, int expectedTracks = 0, String? pinnedMbid}) async {
+    final out = <ReleaseChoice>[];
+    final seen = <String>{};
+
+    Future<void> take(MbRelease r, {required bool deep}) async {
+      if (out.length >= max || r.mbid.isEmpty || !seen.add(r.mbid)) return;
+      ChoiceImage? front, back, disc;
+      var tracks = const <ChoiceTrack>[];
+      if (deep) {
+        for (final i in await art(r.mbid)) {
+          // The archive states what each scan IS, so nothing here is inferred from pixels.
+          front ??= i.isFront ? ChoiceImage(i.url, i.thumb) : null;
+          back ??= i.isBack ? ChoiceImage(i.url, i.thumb) : null;
+          disc ??= i.isDisc ? ChoiceImage(i.url, i.thumb) : null;
+        }
+        tracks = await tracklistOf(r);
+      }
+      out.add(ReleaseChoice(
+        source: EditionSource.musicbrainz,
+        mbid: r.mbid,
+        format: r.format,
+        label: r.label,
+        catno: r.catno,
+        country: r.country,
+        barcode: r.barcode,
+        year: r.year,
+        front: front,
+        back: back,
+        disc: disc,
+        tracklist: tracks,
+      ));
+    }
+
+    // The pressing the user already chose is always offered, whether or not it would have made the
+    // cut — their own choice missing from the list of choices is the one unacceptable outcome.
+    if (pinnedMbid != null && pinnedMbid.isNotEmpty) {
+      final p = await release(pinnedMbid);
+      if (p != null) await take(p, deep: true);
+    }
+
+    final groups = await searchReleaseGroups(album, artist: artist);
+    if (groups.isEmpty) return out;
+    // A compilation carrying the album's name is not the album. Studio records first.
+    final ranked = [...groups]..sort((a, b) {
+        final byComp = (a.isCompilation ? 1 : 0).compareTo(b.isCompilation ? 1 : 0);
+        if (byComp != 0) return byComp;
+        return _kindRank(a.primaryType).compareTo(_kindRank(b.primaryType));
+      });
+
+    for (final g in ranked.take(2)) {
+      if (out.length >= max) break;
+      final editions = orderByPreference(await editionsOf(g.mbid), expectedTracks: expectedTracks);
+      for (final e in editions) {
+        if (out.length >= max) break;
+        await take(e, deep: out.length < detail);
+      }
+    }
+    return out;
+  }
+
+  /// The tracklist of a pressing, fetching it only if the caller does not already have it.
+  Future<List<ChoiceTrack>> tracklistOf(MbRelease r) async {
+    final full = r.tracks.isNotEmpty ? r : await release(r.mbid);
+    return [
+      for (final t in (full?.tracks ?? const <MbTrack>[]))
+        if (t.title.isNotEmpty) ChoiceTrack(t.position, t.title, t.seconds, disc: t.disc)
+    ];
   }
 
   Future<Uint8List?> fetchImage(String url) async {

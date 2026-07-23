@@ -1,0 +1,95 @@
+/// One pressing offered in the picker, whichever catalogue found it.
+///
+/// This lives in its own file rather than in discogs.dart or musicbrainz.dart because both have to
+/// be able to produce one, and discogs.dart already constructs a MusicBrainzService — so the
+/// dependency can only run one way without a cycle.
+///
+/// Knowing a pressing HAS a back cover, a disc scan and a tracklist BEFORE choosing it is the
+/// point: five rows reading "30 — Adele" are unchoosable, and picking blind means finding out
+/// afterwards that the disc animation has nothing to spin.
+library;
+
+enum EditionSource { musicbrainz, discogs }
+
+class ChoiceImage {
+  final String uri, thumb;
+  const ChoiceImage(this.uri, this.thumb);
+}
+
+/// One line of a pressing's tracklist, as the pressing itself states it.
+class ChoiceTrack {
+  /// Kept as TEXT. This is the authority the library's own tags are wrong about, and a pressing
+  /// does not always number in integers: a vinyl side is "A3" and a second disc is "1-04".
+  final String position;
+  final String title;
+  final int? seconds;
+
+  /// 1-based. A double album numbers from 1 on each disc, so the position alone is ambiguous.
+  final int disc;
+  const ChoiceTrack(this.position, this.title, this.seconds, {this.disc = 1});
+}
+
+class ReleaseChoice {
+  final EditionSource source;
+
+  /// The Discogs release id, or 0 for a MusicBrainz pressing.
+  final int releaseId;
+
+  /// The MusicBrainz release id, or null for a Discogs pressing.
+  final String? mbid;
+
+  final String format;
+  final String? label, catno, country, barcode;
+  final int? year;
+  final ChoiceImage? front, back, disc;
+
+  /// What this pressing says its tracks are. Empty when it has not been fetched yet — the picker
+  /// only loads tracklists for the first few pressings, since each one costs a request.
+  final List<ChoiceTrack> tracklist;
+
+  const ReleaseChoice({
+    required this.source,
+    this.releaseId = 0,
+    this.mbid,
+    this.format = '',
+    this.label,
+    this.catno,
+    this.country,
+    this.barcode,
+    this.year,
+    this.front,
+    this.back,
+    this.disc,
+    this.tracklist = const [],
+  });
+
+  bool get hasBack => back != null;
+  bool get hasDisc => disc != null;
+  bool get hasTracklist => tracklist.isNotEmpty;
+  bool get isMb => source == EditionSource.musicbrainz;
+
+  /// Identity across both catalogues, for marking the pinned row and for deduping.
+  String get key => isMb ? 'mb:$mbid' : 'dg:$releaseId';
+
+  /// "CD · Europe · 19439937972 · 2021"
+  String get line => [
+        if (format.isNotEmpty) format,
+        if ((country ?? '').isNotEmpty) country!,
+        if ((catno ?? '').isNotEmpty && catno!.toLowerCase() != 'none') catno!,
+        if (year != null && year! > 0) '$year',
+      ].join(' · ');
+
+  /// Two entries for the SAME physical pressing, found by two catalogues.
+  ///
+  /// A barcode is the one identifier both sides mean identically, so it wins outright when both
+  /// carry one. Otherwise fall back to what is left — format, country and catalogue number
+  /// together are specific enough that a false match is rarer than the duplicate row it prevents.
+  String get dedupeKey {
+    final b = (barcode ?? '').replaceAll(RegExp(r'\D'), '');
+    if (b.length >= 8) return 'bc:$b';
+    final c = (catno ?? '').toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    if (c.isNotEmpty) return 'cn:${(country ?? '').toLowerCase()}|$c';
+    // Nothing identifying at all — keep it, rather than collapsing every undocumented stub into one.
+    return key;
+  }
+}

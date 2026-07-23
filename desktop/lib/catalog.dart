@@ -4,12 +4,75 @@ import 'package:http/http.dart' as http;
 /// Deezer catalog (keyless) — powers the Stremio-style browse:
 /// search artist → their albums → an album's tracks. Sources (torrents/Soulseek)
 /// are then searched per track/album via the existing OnlineService/SoulseekService.
+/// Which catalogue an identity came from, and its id AT that catalogue.
+///
+/// This replaces the sign trick — positive meant Deezer, negative meant Discogs. That encoding
+/// had no third value left, and a MusicBrainz id is a 36-character string that no int can hold.
+/// A lossy encoding would land in the wrong arm of the dispatch AND in the download manager's
+/// dedupe, where a false match silently REFUSES a download the user asked for.
+///
+/// The sign trick also quietly meant two different things: a negative id was a Discogs release
+/// from search but a Discogs MASTER from the style page, and feeding a master id to the release
+/// endpoint is why an album opened from a style page came up with no tracklist.
+enum CatalogSource { deezer, discogsRelease, discogsMaster, musicbrainz, musicbrainzGroup }
+
+class CatalogRef {
+  final CatalogSource source;
+
+  /// A decimal integer for Deezer and Discogs, an MBID for MusicBrainz. One field, because the
+  /// only thing every catalogue agrees on is that an id is text.
+  final String id;
+  const CatalogRef(this.source, this.id);
+
+  factory CatalogRef.deezer(int id) => CatalogRef(CatalogSource.deezer, '$id');
+  factory CatalogRef.discogsRelease(int id) => CatalogRef(CatalogSource.discogsRelease, '$id');
+  factory CatalogRef.discogsMaster(int id) => CatalogRef(CatalogSource.discogsMaster, '$id');
+  factory CatalogRef.musicbrainz(String mbid) => CatalogRef(CatalogSource.musicbrainz, mbid);
+
+  /// A RECORD rather than one of its pressings. Search returns these; opening one resolves it to
+  /// an actual pressing first, because only a pressing has a tracklist.
+  factory CatalogRef.musicbrainzGroup(String mbid) =>
+      CatalogRef(CatalogSource.musicbrainzGroup, mbid);
+
+  int get intId => int.tryParse(id) ?? 0;
+  bool get isMb =>
+      source == CatalogSource.musicbrainz || source == CatalogSource.musicbrainzGroup;
+
+  /// What this identity contributes to a download key.
+  ///
+  /// Deezer and Discogs keep the OLD sign encoding byte for byte, so every download already
+  /// waiting in pending_downloads.json still matches its row after an update. Only the new source
+  /// gets a prefix, and "mb:…" can never equal a decimal integer, so nothing collides.
+  String get keyPart {
+    switch (source) {
+      case CatalogSource.deezer:
+        return id;
+      case CatalogSource.discogsRelease:
+      case CatalogSource.discogsMaster:
+        return '-$id';
+      case CatalogSource.musicbrainz:
+        return 'mb:$id';
+      case CatalogSource.musicbrainzGroup:
+        return 'mbg:$id';
+    }
+  }
+}
+
 class CatalogArtist {
   final int id;
   final String name;
   final String? picture;
   final int albumCount;
-  const CatalogArtist(this.id, this.name, this.picture, this.albumCount);
+
+  /// Where this artist came from. Null means Deezer, which is what an int id always meant.
+  final CatalogRef? origin;
+
+  /// "Group · US · 1993–", when the source knows. Two acts share a name more often than you would
+  /// think, and this is the only thing that tells them apart in a list.
+  final String? detail;
+  const CatalogArtist(this.id, this.name, this.picture, this.albumCount, {this.origin, this.detail});
+
+  CatalogRef get ref => origin ?? CatalogRef.deezer(id);
 }
 
 class CatalogAlbum {
@@ -19,7 +82,15 @@ class CatalogAlbum {
   final String? releaseDate;
   final int trackCount;
   final String recordType; // album | single | ep | compile
-  const CatalogAlbum(this.id, this.title, this.cover, this.releaseDate, this.trackCount, this.recordType);
+
+  /// Where this hit came from. Null on the legacy paths that still encode the source in the SIGN
+  /// of [id] — [ref] reads that encoding, so no existing call site had to change at once.
+  final CatalogRef? origin;
+
+  const CatalogAlbum(this.id, this.title, this.cover, this.releaseDate, this.trackCount,
+      this.recordType, {this.origin});
+
+  CatalogRef get ref => origin ?? (id < 0 ? CatalogRef.discogsRelease(-id) : CatalogRef.deezer(id));
 
   String? get year => (releaseDate != null && releaseDate!.length >= 4) ? releaseDate!.substring(0, 4) : null;
   bool get isSingle => recordType == 'single';

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
+import 'editions.dart';
 import 'enrichment.dart';
 import 'flac_tags.dart';
 import 'models.dart';
@@ -460,6 +461,19 @@ class LibraryStore extends ChangeNotifier {
   /// Public save, for the move extension.
   Future<void> saveCorrectionsNow() => _saveCorrections();
 
+  /// Re-apply every correction to the in-memory tracks and regroup.
+  ///
+  /// Public because the extensions in this file write corrections and then need the library to
+  /// reflect them; notifyListeners is protected, so an extension cannot do the last step itself.
+  void refreshFromCorrections() {
+    final corrected = tracks.map(_applyCorrection).toList();
+    tracks
+      ..clear()
+      ..addAll(corrected);
+    rebuildAlbums();
+    notifyListeners();
+  }
+
   Future<void> _saveCorrections() async {
     try {
       await Directory(_appDir).create(recursive: true);
@@ -475,8 +489,10 @@ class LibraryStore extends ChangeNotifier {
       title: c['title'] ?? t.title,
       artist: c['artist'] ?? t.artist,
       album: c.containsKey('album') ? c['album']! : t.album,
-      trackNo: t.trackNo,
-      trackTotal: t.trackTotal,
+      // A number taken from an official pressing. The tags are what these override: a ripper that
+      // wrote two number sixes and left a track blank is exactly the case this exists for.
+      trackNo: int.tryParse(c['trackNo'] ?? '') ?? t.trackNo,
+      trackTotal: int.tryParse(c['trackTotal'] ?? '') ?? t.trackTotal,
       duration: t.duration,
       isFlac: t.isFlac,
       year: t.year,
@@ -697,10 +713,18 @@ class LibraryStore extends ChangeNotifier {
     // Snapshot the covers of the CURRENT albums. Rebuilding makes fresh Album objects with null
     // covers, so without this ANY caller (delete, correction, …) would blank the grid until the
     // next scan/enrich. This is the fix for "deleting a track wipes all album covers".
-    final coversByKey = <String, List<Uint8List?>>{};
+    //
+    // Keyed by TRACK PATH, not by group key. The group key is exactly what a regroup changes, so
+    // keying on it lost the covers of any album that moved — and correcting a record's numbering
+    // moves it by definition: repairing the duplicate numbers is what makes editionSplit() stop
+    // splitting, which is the whole point and would have blanked the record it just fixed.
+    final coversByPath = <String, List<Uint8List?>>{};
     for (final a in albums) {
       if (a.tracks.isEmpty) continue;
-      coversByKey[_groupKey(a.tracks.first)] = [a.embeddedCover, a.enriched, a.correctedCover];
+      final snap = [a.embeddedCover, a.enriched, a.correctedCover];
+      for (final t in a.tracks) {
+        coversByPath[t.path] = snap;
+      }
     }
 
     // ONE spelling per artist. Tags disagree about capitalisation and accents ("Lady Gaga" vs
@@ -739,11 +763,15 @@ class LibraryStore extends ChangeNotifier {
         final n = ts.first.trackTotal;
         al.edition = n > 0 ? '$n nummers' : 'zonder nummering';
       }
-      final saved = coversByKey[e.key];
-      if (saved != null) {
+      // Any of this album's tracks will do — they all carried the same snapshot. Taking the first
+      // that still has one survives a track being deleted or moved out from under it.
+      for (final t in ts) {
+        final saved = coversByPath[t.path];
+        if (saved == null) continue;
         al.embeddedCover = saved[0];
         al.enriched = saved[1];
         al.correctedCover = saved[2];
+        break;
       }
       return al;
     }).toList()
@@ -851,6 +879,56 @@ class LibraryStore extends ChangeNotifier {
   }
 }
 
+/// What taking an official pressing's numbering would do to one track.
+class RenumberStep {
+  final Track track;
+
+  /// What the pressing says this track is. Null when nothing on the pressing matched it — then the
+  /// track keeps its tags, which is the only safe answer.
+  final ChoiceTrack? official;
+  final int? newNo;
+  const RenumberStep(this.track, this.official, this.newNo);
+
+  bool get changes => newNo != null && (newNo != track.trackNo || (official?.title ?? track.title) != track.title);
+  bool get unmatched => official == null;
+}
+
+/// Everything taking a pressing's numbering would do, so it can be read before it is done.
+class RenumberPlan {
+  final List<RenumberStep> steps;
+
+  /// The total the pressing states, written alongside so edition splitting stops seeing a record
+  /// whose tracks disagree about how long it is.
+  final int total;
+  const RenumberPlan(this.steps, this.total);
+
+  List<RenumberStep> get changing => steps.where((s) => s.changes).toList();
+  List<RenumberStep> get unmatched => steps.where((s) => s.unmatched).toList();
+
+  /// Two tracks landing on one number. Refused rather than applied: the numbering is being fixed
+  /// BECAUSE it collides, and swapping one collision for another helps nobody.
+  bool get collides {
+    final seen = <int>{};
+    for (final s in steps) {
+      final n = s.newNo;
+      if (n != null && !seen.add(n)) return true;
+    }
+    return false;
+  }
+
+  /// Two tracks ending up with one title. [LibraryStore._dedupeTracks] keys on artist+title, so
+  /// this would not look like a numbering mistake — it would look like a track disappearing.
+  bool get titleCollides {
+    final seen = <String>{};
+    for (final s in steps) {
+      if (!seen.add(normKey(s.official?.title ?? s.track.title))) return true;
+    }
+    return false;
+  }
+
+  bool get safe => !collides && !titleCollides && changing.isNotEmpty;
+}
+
 /// One file's part of a move, so the plan can be shown before anything is touched.
 class MovePlan {
   final Track track;
@@ -908,6 +986,58 @@ class MergePlan {
         if (parking > 0) '$parking naar $dupeFolder',
         if (staying > 0) '$staying ${staying == 1 ? 'blijft' : 'blijven'} staan',
       ].join(' · ');
+}
+
+extension LibraryRenumber on LibraryStore {
+  /// What taking [official] as this record's numbering would do. Nothing is written.
+  ///
+  /// Matched on TITLE and running time, never on the existing number — that number is the broken
+  /// input. An album whose tags say 1, 1, 2, ?, 4, 6, 6, 7 … cannot be lined up positionally
+  /// either, so the title is the only thing both sides can be trusted to agree on.
+  RenumberPlan planRenumber(Album album, List<ChoiceTrack> official) {
+    final pool = [...official];
+    final steps = <RenumberStep>[];
+    for (final t in album.tracks) {
+      ChoiceTrack? best;
+      var bestScore = 0.0;
+      for (final o in pool) {
+        var score = wordSim(fileWords(t.title), fileWords(o.title));
+        if (normKey(t.title) == normKey(o.title)) score = 1;
+        // A running time within twelve seconds is strong corroboration; a wildly different one is
+        // reason to doubt a name that merely reads alike ("Get Down" vs "Get Down (LP Edit)").
+        final secs = t.duration?.inSeconds ?? 0;
+        if (secs > 0 && o.seconds != null && o.seconds! > 0) {
+          score += (secs - o.seconds!).abs() <= 12 ? .25 : -.25;
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          best = o;
+        }
+      }
+      // Below this, the two are not the same song and guessing would renumber the record wrongly.
+      if (best == null || bestScore < .55) {
+        steps.add(RenumberStep(t, null, null));
+        continue;
+      }
+      pool.remove(best);
+      steps.add(RenumberStep(t, best, trackNoFromPosition(best.position, best.disc, official)));
+    }
+    return RenumberPlan(steps, official.length);
+  }
+
+  /// Write a plan. The user's edit wins over the tags from here on, and outlives a rescan.
+  Future<void> applyRenumber(RenumberPlan plan) async {
+    for (final s in plan.steps) {
+      if (s.newNo == null) continue;
+      final c = _correctionsFor(s.track.path);
+      c['trackNo'] = '${s.newNo}';
+      c['trackTotal'] = '${plan.total}';
+      final title = s.official?.title;
+      if (title != null && title.trim().isNotEmpty) c['title'] = title.trim();
+    }
+    await saveCorrectionsNow();
+    refreshFromCorrections();
+  }
 }
 
 extension LibraryMove on LibraryStore {

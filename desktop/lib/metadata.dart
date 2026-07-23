@@ -143,7 +143,30 @@ class MetadataSearch {
   /// actually be pinned.
   Future<List<MetaResult>> _musicbrainz(String query) async {
     try {
-      final hits = await MusicBrainzService().searchReleases('', query, max: 25);
+      final mb = MusicBrainzService();
+      // The query MUST be scoped to an artist. Unscoped, MusicBrainz matches the whole string as
+      // one phrase against the release title, so "Daft Punk Discovery" finds two SM64-soundfont
+      // parodies and nothing else — it has no popularity signal to rescue a bad match. Split on
+      // "Artist - Album" first, then fall back to resolving the leading words as an artist.
+      var artist = '', album = query.trim();
+      final dash = query.indexOf(' - ');
+      if (dash > 0) {
+        artist = query.substring(0, dash).trim();
+        album = query.substring(dash + 3).trim();
+      } else {
+        final words = query.trim().split(RegExp(r'\s+'));
+        // Try the longest leading run of words that names a real artist, shortest search first.
+        for (var take = words.length - 1; take >= 1; take--) {
+          final cand = words.take(take).join(' ');
+          final a = await mb.resolveArtist(cand);
+          if (a != null && a.name.toLowerCase() == cand.toLowerCase()) {
+            artist = a.name;
+            album = words.skip(take).join(' ');
+            break;
+          }
+        }
+      }
+      final hits = await mb.searchReleases(artist, album.isEmpty ? query.trim() : album, max: 25);
       return [
         for (final r in hits)
           if (r.title.isNotEmpty)

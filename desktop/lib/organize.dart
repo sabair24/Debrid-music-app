@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 
+import 'editions.dart';
 import 'flac_tags.dart';
 
 /// Where a downloaded release belongs in the folder tree.
@@ -626,6 +627,31 @@ Future<void> _pruneEmptyDirs(Directory root) async {
 /// Significant words of a download filename (lowercased, no extension, no bare track numbers) —
 /// used to recognise the SAME track offered by different peers, who all name their files
 /// differently ("02 Aerodynamic.flac", "Daft Punk - Aerodynamic.flac", "2. Aerodynamic.flac").
+/// The number a pressing's stated position means, counted across the whole record.
+///
+/// A pressing does not always number in integers, and the two exceptions both collide if you just
+/// read the first digit:
+///   - Vinyl numbers per SIDE — "A3" and "B3" are both "3", and taking that literally puts two
+///     tracks on number three and leaves the rest of the record unnumbered.
+///   - A double CD numbers per DISC — "1-04" and "2-04" are both "4".
+///
+/// So a position is resolved by its place in the pressing's own list. That is the one reading that
+/// is right for every format, including the plain integer case where it agrees with the number.
+int trackNoFromPosition(String position, int disc, List<ChoiceTrack> all) {
+  // "1-04": disc-qualified. Take the part after the dash as the within-disc number.
+  final dashed = RegExp(r'^(\d+)\s*[-.]\s*(\d+)$').firstMatch(position.trim());
+  final plain = dashed == null ? int.tryParse(position.trim()) : int.tryParse(dashed.group(2)!);
+
+  // Single medium and a plain integer: the pressing already says what we want.
+  if (plain != null && all.every((t) => t.disc == disc)) return plain;
+
+  // Anything else — a vinyl side, a second disc — is resolved by position in the whole list, which
+  // is the number a listener would count to.
+  final at = all.indexWhere((t) => t.position == position && t.disc == disc);
+  if (at >= 0) return at + 1;
+  return plain ?? 0;
+}
+
 Set<String> fileWords(String displayName) {
   final noExt = displayName.toLowerCase().replaceAll(RegExp(r'\.[a-z0-9]{2,4}$'), '');
   final words = noExt.split(RegExp(r'[^a-z0-9]+')).where((w) => w.length > 1).toSet();
