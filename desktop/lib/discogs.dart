@@ -776,40 +776,56 @@ extension DiscogsChoices on DiscogsService {
   ///
   /// Costs a request per release plus the images it has to look at, so it is capped and only ever
   /// called while the picker is open.
-  Future<List<ReleaseChoice>> releaseChoices(String artist, String album, {int max = 8}) async {
+  /// Every pressing worth offering, with its front, back and disc identified.
+  ///
+  /// Walks SEVERAL masters, not just the best-scoring one. Discogs has twenty-two masters titled
+  /// "Michael Jackson - Thriller", and the top-scoring one is a vinyl-only entry with two versions
+  /// — so the gallery showed vinyl and swore there were no CDs, while the site plainly has them.
+  ///
+  /// Cassette is never offered: nobody is choosing a tape scan to describe their FLACs.
+  Future<List<ReleaseChoice>> releaseChoices(String artist, String album, {int max = 24}) async {
     final masters = await masterIds(artist, album);
     if (masters.isEmpty) return const [];
     final out = <ReleaseChoice>[];
+    final seen = <int>{};
+    // Format-major so CDs lead the list whichever master they come from.
     for (final format in const ['CD', 'Vinyl', 'File']) {
-      final versions = DiscogsService.orderByPreference(await versionsOf(masters.first, format: format));
-      for (final v in versions) {
+      for (final master in masters.take(4)) {
         if (out.length >= max) return out;
-        final e = await release(v.id);
-        if (e == null) continue;
-        // Only the first few scans are examined: front, back and disc sit near the top, and reading
-        // a booklet page by page would cost megabytes to answer a settled question.
-        final look = e.images.length < 6 ? e.images.length : 6;
-        final datas = <Uint8List?>[];
-        for (var i = 0; i < look; i++) {
-          datas.add(await fetchImage(e.images[i].uri));
+        final versions = DiscogsService.orderByPreference(await versionsOf(master, format: format));
+        for (final v in versions.take(6)) {
+          if (out.length >= max) return out;
+          if (!seen.add(v.id)) continue;
+          final e = await release(v.id);
+          if (e == null) continue;
+          // Only the first few scans are examined: front, back and disc sit near the top, and
+          // reading a booklet page by page would cost megabytes to answer a settled question.
+          final look = e.images.length < 6 ? e.images.length : 6;
+          final datas = <Uint8List?>[];
+          for (var i = 0; i < look; i++) {
+            datas.add(await fetchImage(e.images[i].uri));
+          }
+          final roles = assignRoles(
+            [for (var i = 0; i < look; i++) e.images[i].primary],
+            [
+              for (var i = 0; i < look; i++)
+                e.images[i].height == 0 ? 1.0 : e.images[i].width / e.images[i].height
+            ],
+            datas,
+          );
+          DiscogsImage? at(int? i) => (i == null || i >= look) ? null : e.images[i];
+          out.add(ReleaseChoice(
+            releaseId: e.releaseId,
+            format: e.format,
+            label: e.label,
+            catno: e.catno,
+            country: e.country,
+            year: e.year,
+            front: at(roles.front),
+            back: at(roles.back),
+            disc: at(roles.disc),
+          ));
         }
-        final roles = assignRoles(
-          [for (var i = 0; i < look; i++) e.images[i].primary],
-          [for (var i = 0; i < look; i++) e.images[i].height == 0 ? 1.0 : e.images[i].width / e.images[i].height],
-          datas,
-        );
-        DiscogsImage? at(int? i) => (i == null || i >= look) ? null : e.images[i];
-        out.add(ReleaseChoice(
-          releaseId: e.releaseId,
-          format: e.format,
-          label: e.label,
-          catno: e.catno,
-          country: e.country,
-          year: e.year,
-          front: at(roles.front),
-          back: at(roles.back),
-          disc: at(roles.disc),
-        ));
       }
     }
     return out;

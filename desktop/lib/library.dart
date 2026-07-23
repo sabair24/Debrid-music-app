@@ -240,6 +240,37 @@ class LibraryStore extends ChangeNotifier {
     return null;
   }
 
+  // ── Chosen artist art ─────────────────────────────────────────────────────
+  // Which portrait and which backdrop the user picked for an artist. Kept beside the other
+  // corrections for the same reason: the choice has to outlive a rescan, and must never be quietly
+  // replaced by whatever an automatic source turns up next.
+  final Map<String, Map<String, String>> _artistArtChoice = {};
+  File get _artistArtChoiceFile => File('$_appDir${Platform.pathSeparator}artist_art_choice.json');
+
+  Future<void> loadArtistArtChoice() async {
+    try {
+      final f = _artistArtChoiceFile;
+      if (!await f.exists()) return;
+      final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      _artistArtChoice.clear();
+      j.forEach((k, v) {
+        if (v is Map) _artistArtChoice[k] = v.map((a, b) => MapEntry(a.toString(), b.toString()));
+      });
+    } catch (_) {}
+  }
+
+  /// The image URL the user picked for [kind] — 'portrait' or 'backdrop' — or null.
+  String? chosenArtistArt(String artist, String kind) => _artistArtChoice[artistKey(artist)]?[kind];
+
+  Future<void> setArtistArt(String artist, String kind, String url) async {
+    _artistArtChoice.putIfAbsent(artistKey(artist), () => {})[kind] = url;
+    try {
+      await Directory(_appDir).create(recursive: true);
+      await _artistArtChoiceFile.writeAsString(jsonEncode(_artistArtChoice));
+    } catch (_) {}
+    notifyListeners();
+  }
+
   /// Hand the library a cover found while an album page was open.
   ///
   /// The album page draws its own sleeve from Discogs, so a wrong embedded cover was corrected

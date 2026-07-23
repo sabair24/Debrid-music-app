@@ -122,6 +122,7 @@ Future<void> main() async {
     await library.loadCorrections(); // apply manual fixes as tracks are built
     await library.loadHidden(); // keep "removed from library only" tracks out
     await library.loadMerged(); // records the user told us to keep together
+    await library.loadArtistArtChoice(); // portraits and backdrops the user picked
     try {
       await library.scan();
     } catch (_) {}
@@ -1742,6 +1743,19 @@ class _ArtistDetailViewState extends State<ArtistDetailView> {
                     onPressed: () => startRadio(context, widget.name),
                     icon: const Icon(Icons.radio_rounded, size: 18),
                     label: const Text('Radio'),
+                  ),
+                  const SizedBox(width: 10),
+                  // The app guesses portrait-vs-backdrop from the shape of a picture; a guess is
+                  // exactly the thing worth being able to overrule.
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                        backgroundColor: _panel2,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+                    onPressed: () =>
+                        showDialog<void>(context: context, builder: (_) => ArtistArtGallery(widget.name)),
+                    icon: const Icon(Icons.photo_library_outlined, size: 18),
+                    label: const Text('Foto kiezen'),
                   ),
                 ],
               ),
@@ -4933,16 +4947,29 @@ class _ArtistBackdropState extends State<ArtistBackdrop> {
     }
   }
 
+  Uint8List? _chosenBackdrop;
+
   Future<void> _load() async {
     final name = widget.name;
-    final art = await CoverEnricher(context.read<AppSettings>()).artistArt(name);
+    final settings = context.read<AppSettings>();
+    final art = await CoverEnricher(settings).artistArt(name);
     if (!mounted || name != widget.name) return;
     setState(() => _art = art);
+    // A picture the user picked outranks anything the shape heuristic chose. Fetched here rather
+    // than stored as bytes, so the choice survives independently of any cache being cleared.
+    final lib = context.read<LibraryStore>();
+    for (final kind in const ['backdrop']) {
+      final url = lib.chosenArtistArt(name, kind);
+      if (url == null) continue;
+      final bytes = await CoverEnricher(settings).downloadImage(url);
+      if (!mounted || name != widget.name || bytes == null) continue;
+      if (kind == 'backdrop') setState(() => _chosenBackdrop = bytes);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final img = _art?.backdropBytes ?? _art?.thumbBytes ?? widget.fallbackImage;
+    final img = _chosenBackdrop ?? _art?.backdropBytes ?? _art?.thumbBytes ?? widget.fallbackImage;
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -5023,16 +5050,28 @@ class _ArtistHeroState extends State<ArtistHero> {
 
   Future<void> _load() async {
     final name = widget.name;
-    final art = await CoverEnricher(context.read<AppSettings>()).artistArt(name);
+    final settings = context.read<AppSettings>();
+    final art = await CoverEnricher(settings).artistArt(name);
     if (!mounted || name != widget.name) return;
     setState(() => _art = art);
+    // Same as the page backdrop: a picture the user picked outranks the shape heuristic.
+    final lib = context.read<LibraryStore>();
+    for (final kind in const ['portrait', 'backdrop']) {
+      final url = lib.chosenArtistArt(name, kind);
+      if (url == null) continue;
+      final bytes = await CoverEnricher(settings).downloadImage(url);
+      if (!mounted || name != widget.name || bytes == null) continue;
+      setState(() => kind == 'portrait' ? _chosenPortrait = bytes : _chosenBackdrop = bytes);
+    }
   }
+
+  Uint8List? _chosenPortrait, _chosenBackdrop;
 
   @override
   Widget build(BuildContext context) {
     final logo = _art?.logoBytes;
-    final portrait = _art?.thumbBytes ?? widget.fallbackImage;
-    final backdrop = _art?.backdropBytes ?? widget.fallbackImage;
+    final portrait = _chosenPortrait ?? _art?.thumbBytes ?? widget.fallbackImage;
+    final backdrop = _chosenBackdrop ?? _art?.backdropBytes ?? widget.fallbackImage;
 
     return SizedBox(
       // Room for a 270px portrait with the wordmark and buttons beside it. The backdrop is very
@@ -6365,6 +6404,10 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   List<ReleaseChoice>? _choices;
   String? _error;
 
+  /// Which formats to show. Everything Discogs has is fetched; this only narrows what is listed,
+  /// so switching filters never costs another request.
+  String _filter = 'Alles';
+
   @override
   void initState() {
     super.initState();
@@ -6416,6 +6459,30 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
               Text('${widget.album.artist} — ${widget.album.title}',
                   style: const TextStyle(color: _muted, fontSize: 12.5)),
               const SizedBox(height: 14),
+              // Filters over what was fetched, not another trip to Discogs.
+              Row(children: [
+                for (final f in const ['Alles', 'CD', 'Vinyl', 'Digitaal'])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: InkWell(
+                      onTap: () => setState(() => _filter = f),
+                      borderRadius: BorderRadius.circular(999),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: _filter == f ? _accent : Colors.white.withValues(alpha: .06),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(f,
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: _filter == f ? Colors.white : _muted,
+                                fontWeight: _filter == f ? FontWeight.w600 : FontWeight.w400)),
+                      ),
+                    ),
+                  ),
+              ]),
+              const SizedBox(height: 12),
               Expanded(child: _body(pinned)),
             ],
           ),
@@ -6439,11 +6506,23 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       );
     }
     if (list.isEmpty) return const Center(child: Text('Geen uitgaves gevonden.', style: TextStyle(color: _muted)));
+    // 'File' is what Discogs calls a digital release; nobody looking for one thinks of it that way.
+    final shown = _filter == 'Alles'
+        ? list
+        : list.where((c) {
+            final f = c.format.toLowerCase();
+            if (_filter == 'CD') return f.contains('cd');
+            if (_filter == 'Vinyl') return f.contains('vinyl');
+            return f.contains('file') || f.contains('flac') || f.contains('mp3') || f.contains('aac');
+          }).toList();
+    if (shown.isEmpty) {
+      return const Center(child: Text('Geen uitgaves in dit formaat.', style: TextStyle(color: _muted)));
+    }
     return ListView.separated(
-      itemCount: list.length,
+      itemCount: shown.length,
       separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (_, i) {
-        final c = list[i];
+        final c = shown[i];
         final isPinned = pinned == c.releaseId;
         return InkWell(
           onTap: () => _choose(c),
@@ -6514,4 +6593,130 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
           Text(text, style: TextStyle(color: on ? _accent2 : _muted, fontSize: 10.5)),
         ]),
       );
+}
+
+/// Choose an artist's portrait and the backdrop behind their page.
+///
+/// Discogs holds dozens of photos per act (twenty-nine for Daft Punk) and TheAudioDB adds its own
+/// fanart and thumbs, but neither labels what a picture is FOR. The app guesses by shape — squarish
+/// reads as a portrait, wide as a backdrop — and a guess is exactly the thing worth overruling.
+class ArtistArtGallery extends StatefulWidget {
+  final String artist;
+  const ArtistArtGallery(this.artist, {super.key});
+
+  @override
+  State<ArtistArtGallery> createState() => _ArtistArtGalleryState();
+}
+
+class _ArtistArtGalleryState extends State<ArtistArtGallery> {
+  List<DiscogsImage>? _images;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final settings = context.read<AppSettings>();
+    try {
+      final a = await DiscogsService(settings).artist(widget.artist);
+      final extra = <DiscogsImage>[];
+      // TheAudioDB's fanart is the widest thing either source has, and is usually the better
+      // backdrop; Discogs almost never has anything that shape.
+      final tadb = await CoverEnricher(settings).artistArt(widget.artist);
+      for (final url in [tadb?.backdrop, tadb?.thumb]) {
+        if (url != null && url.isNotEmpty) extra.add(DiscogsImage(url, url, 0, 0, false));
+      }
+      if (!mounted) return;
+      setState(() => _images = [...a?.images ?? const <DiscogsImage>[], ...extra]);
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Kon de foto\'s niet ophalen.');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    final portrait = lib.chosenArtistArt(widget.artist, 'portrait');
+    final backdrop = lib.chosenArtistArt(widget.artist, 'backdrop');
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: 860,
+        height: 680,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                const Text('Foto kiezen', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                const Spacer(),
+                IconButton(icon: const Icon(Icons.close_rounded), onPressed: () => Navigator.of(context).pop()),
+              ]),
+              Text(widget.artist, style: const TextStyle(color: _muted, fontSize: 12.5)),
+              const SizedBox(height: 4),
+              const Text('Klik een foto voor het portret · rechtsklik voor de achtergrond',
+                  style: TextStyle(color: _muted, fontSize: 11.5)),
+              const SizedBox(height: 14),
+              Expanded(child: _body(portrait, backdrop)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _body(String? portrait, String? backdrop) {
+    if (_error != null) return Center(child: Text(_error!, style: const TextStyle(color: _muted)));
+    final list = _images;
+    if (list == null) {
+      return const Center(child: CircularProgressIndicator(strokeWidth: 2, color: _accent));
+    }
+    if (list.isEmpty) return const Center(child: Text('Geen foto\'s gevonden.', style: TextStyle(color: _muted)));
+    return GridView.builder(
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 160, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: .82),
+      itemCount: list.length,
+      itemBuilder: (_, i) {
+        final img = list[i];
+        final isPortrait = portrait == img.uri;
+        final isBackdrop = backdrop == img.uri;
+        final lib = context.read<LibraryStore>();
+        return GestureDetector(
+          onTap: () => lib.setArtistArt(widget.artist, 'portrait', img.uri),
+          onSecondaryTap: () => lib.setArtistArt(widget.artist, 'backdrop', img.uri),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                  color: isPortrait
+                      ? _accent
+                      : isBackdrop
+                          ? _accent2
+                          : Colors.transparent,
+                  width: 2),
+            ),
+            child: Column(children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: _netCover(img.thumb, size: 150, radius: 6),
+                ),
+              ),
+              if (isPortrait || isBackdrop)
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Text(isPortrait ? 'portret' : 'achtergrond',
+                      style: TextStyle(fontSize: 10, color: isPortrait ? _accent : _accent2)),
+                ),
+            ]),
+          ),
+        );
+      },
+    );
+  }
 }
