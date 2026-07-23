@@ -65,6 +65,76 @@ class ServerRepository @Inject constructor(
 
     suspend fun fetchCatalog(): ServerCatalogDto = api().catalog()
 
+    suspend fun search(query: String): ServerSearchDto = api().search(query)
+
+    /**
+     * Trade the six digits shown on the PC for the access token, and remember the pairing.
+     *
+     * Builds its own Retrofit against [url] rather than going through [api]: at this point there
+     * is no token to authenticate with, and the configured server may still be a different one.
+     */
+    suspend fun pair(url: String, code: String, deviceName: String): Result<ServerPairResponse> =
+        runCatching {
+            val base = url.trim().trimEnd('/')
+            val plain = Retrofit.Builder()
+                .baseUrl("$base/")
+                .client(okHttpClient)
+                .addConverterFactory(GsonConverterFactory.create())
+                .build()
+                .create(ServerApi::class.java)
+            val response = plain.pair(ServerPairRequest(code.trim(), deviceName))
+            require(response.token.isNotBlank()) { "Server gaf geen toegangscode terug" }
+            settingsStore.setServerUrl(base)
+            settingsStore.setServerToken(response.token)
+            configure(base, response.token)
+            // Drop the cached client: it was built for the previous server, or without a token.
+            cachedApi = null
+            cachedFor = ""
+            response
+        }
+
+    // ── Shared state ─────────────────────────────────────────────────────────
+
+    suspend fun fetchState(since: Long? = null): ServerStateDto = api().state(since)
+
+    /** Push what happened on this device. Best-effort: a lost op is not worth an error dialog. */
+    suspend fun pushOps(deviceId: String, deviceName: String, ops: List<Map<String, Any?>>): Result<ServerOpsResponse> =
+        runCatching { api().pushOps(ServerOpsRequest(deviceId, deviceName, ops)) }
+
+    suspend fun reportPlayed(trackId: String, deviceId: String, deviceName: String) {
+        if (trackId.isBlank()) return
+        pushOps(
+            deviceId, deviceName,
+            listOf(mapOf("type" to "played", "trackId" to trackId, "at" to System.currentTimeMillis())),
+        )
+    }
+
+    suspend fun reportProgress(
+        trackId: String,
+        positionMs: Long,
+        playing: Boolean,
+        queue: List<String>,
+        index: Int,
+        deviceId: String,
+        deviceName: String,
+    ) {
+        if (trackId.isBlank()) return
+        pushOps(
+            deviceId, deviceName,
+            listOf(
+                mapOf(
+                    "type" to "progress",
+                    "trackId" to trackId,
+                    "positionMs" to positionMs,
+                    "queue" to queue,
+                    "index" to index,
+                    "playing" to playing,
+                    "at" to System.currentTimeMillis(),
+                )
+            ),
+        )
+    }
+
     suspend fun streamUrlFor(trackId: String): String {
         ensureConfigured()
         return "$baseUrl/stream/$trackId?token=$token"

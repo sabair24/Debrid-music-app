@@ -86,9 +86,9 @@ fun TvApp() {
             TvNavItem(
                 icon = Icons.Default.Settings,
                 label = "Instellingen",
-                selected = false,
+                selected = currentRoute == TvScreen.Settings.route,
                 expanded = drawerFocused,
-                onClick = { /* Settings are handled on the phone; TV shows read-only */ },
+                onClick = { navController.navigate(TvScreen.Settings.route) },
             )
         }
 

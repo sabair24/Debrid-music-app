@@ -14,6 +14,16 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- In-app updater: download and install a newer APK from GitHub Releases -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!--
+      "Play this on the Shield" from the Mac or iPad. The receiver runs as a foreground service so
+      it works with the app closed, and bringing the app forward from the background is only
+      allowed with SYSTEM_ALERT_WINDOW — without it Android drops the launch silently and a cast
+      appears to do nothing at all. Grant it once per device:
+        adb shell appops set com.debridmusic.app SYSTEM_ALERT_WINDOW allow
+      It survives `install -r` but resets on a fresh uninstall + reinstall.
+    -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!-- Write for download -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
@@ -82,6 +92,29 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_provider_paths" />
         </provider>
+
+        <!--
+          Receives "play this here" from the Mac and the iPad (port 8123). TV only — started from
+          TvMainActivity and after a reboot by BootReceiver.
+        -->
+        <service
+            android:name=".cast.CastReceiverService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Listens on the local network so other devices in the house can start playback on this TV." />
+        </service>
+
+        <receiver
+            android:name=".cast.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
 
         <!-- Media playback service -->
         <service

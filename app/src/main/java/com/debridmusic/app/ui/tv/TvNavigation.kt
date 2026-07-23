@@ -9,11 +9,13 @@ import androidx.navigation.navArgument
 import com.debridmusic.app.ui.tv.catalogue.TvCatalogueScreen
 import com.debridmusic.app.ui.tv.home.TvHomeScreen
 import com.debridmusic.app.ui.tv.player.TvNowPlayingScreen
+import com.debridmusic.app.ui.tv.settings.TvPairingScreen
 
 sealed class TvScreen(val route: String) {
     object Home : TvScreen("tv_home")
     object NowPlaying : TvScreen("tv_now_playing")
     object Catalogue : TvScreen("tv_catalogue")
+    object Settings : TvScreen("tv_settings")
     object AlbumDetail : TvScreen("tv_album/{albumId}") {
         fun createRoute(id: Long) = "tv_album/$id"
     }
@@ -35,6 +37,10 @@ fun TvNavHost(navController: NavHostController) {
 
         composable(TvScreen.NowPlaying.route) {
             TvNowPlayingScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(TvScreen.Settings.route) {
+            TvPairingScreen(onBack = { navController.popBackStack() })
         }
 
         composable(TvScreen.Catalogue.route) {

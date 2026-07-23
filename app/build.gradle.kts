@@ -82,6 +82,10 @@ android {
 
     buildFeatures { compose = true; buildConfig = true }
 
+    // android.util.Log is a stub on the JVM; without this every call throws "not mocked" and a
+    // plain protocol test can't run at all.
+    testOptions { unitTests.isReturnDefaultValues = true }
+
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
     }
@@ -154,4 +158,6 @@ dependencies {
 
     // Tidal official SDK (now on Kotlin 2.2). Auth first; player added after auth builds.
     implementation(libs.tidal.auth)
+
+    testImplementation(libs.junit)
 }
