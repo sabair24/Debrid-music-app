@@ -11,22 +11,32 @@ enum ArtKind { front, back, disc, other }
 
 /// Is this a scan of a disc?
 ///
-/// A disc scan has three things a sleeve scan doesn't: pale corners (the scanner bed or a white
-/// backdrop showing around the circle), a pale spot dead centre (the hole), and something much
-/// darker in between (the disc face). Michael Jackson's *Dangerous* CD is the case this was written
-/// against: black disc, gold print, white surround, white hole.
+/// It looks for the one thing only a disc has: **the hole**. Dead centre there is a punched circle
+/// of nothing, so it scans as a small patch of pure backing — flat, even, with no detail at all —
+/// and the printed face around it is plainly different.
 ///
-/// Deliberately conservative. Calling a back cover a disc would spin the wrong picture out from
-/// behind the sleeve, which looks broken; failing to spot a disc just means no animation.
+/// The earlier version tested brightness instead: pale surround, pale centre, and a much darker
+/// face between them. That worked on a black disc and failed on every light one. Measured on the
+/// real scans, Enrique's *Escape* CD is white on a white scanner bed — corners 250, centre 244,
+/// face 231 — while a blank booklet page from the very same release reads 198/201/186. The two
+/// shapes are indistinguishable by brightness, so no threshold could ever separate them.
+///
+/// The hole separates them cleanly. Sampled around a small circle at the centre, the spread of
+/// brightness is 0–1 for every disc measured and 8–23 for every sleeve, tray, obi and booklet page:
+/// paper and print always carry texture, a hole never does. The second test — that the hole differs
+/// from the face around it — rejects an image that is simply flat all over.
+///
+/// Deliberately conservative still. Calling a back cover a disc would spin the wrong picture out
+/// from behind the sleeve, which looks broken; failing to spot one only costs the animation.
 bool looksLikeDisc(Uint8List bytes) {
   final s = _sample(bytes);
   if (s == null) return false;
-  // A dark-sleeved back cover has dark corners; a disc scan's surround is nearly white.
-  if (s.corners < 190) return false;
-  // The centre hole is the same white as the surround, and close to it.
-  if (s.centre < 175 || (s.centre - s.corners).abs() > 60) return false;
-  // And there has to be a disc between them. Without this, a plain white inlay would qualify.
-  return s.corners - s.ring > 45;
+  // A hole has no detail. Print always does.
+  if (s.holeSpread > 4) return false;
+  // And it has to stand apart from the printed face, or this is just a flat image.
+  final apart = (s.hole - s.faceInner).abs();
+  final apartOuter = (s.hole - s.faceOuter).abs();
+  return (apart > apartOuter ? apart : apartOuter) > 25;
 }
 
 /// A back cover, as opposed to a front cover.
@@ -85,11 +95,16 @@ ArtKind guessKind(int index, bool primary, Uint8List? bytes) {
 }
 
 class _Sample {
-  final double corners, centre, ring;
-  const _Sample(this.corners, this.centre, this.ring);
+  /// Brightness at the very centre, and how much it varies around that little circle.
+  final double hole, holeSpread;
+
+  /// Brightness of the face at two radii — a CD's clear hub reaches further out on some pressings,
+  /// so one sample alone can land on backing rather than print.
+  final double faceInner, faceOuter;
+  const _Sample(this.hole, this.holeSpread, this.faceInner, this.faceOuter);
 }
 
-/// Average brightness at the corners, at the dead centre, and around a mid-radius ring.
+/// Brightness around three concentric circles: the hole, and the face at two radii.
 _Sample? _sample(Uint8List bytes) {
   img.Image? im;
   try {
@@ -98,37 +113,50 @@ _Sample? _sample(Uint8List bytes) {
     return null;
   }
   if (im == null || im.width < 32 || im.height < 32) return null;
-  // Small enough that this costs nothing, big enough that a 12%-radius hole is several pixels.
-  final t = img.copyResize(im, width: 64, height: 64);
+  // 128 wide so the hole — about an eighth of the radius on a CD — is still several pixels across.
+  const n = 128;
+  final t = img.copyResize(im, width: n, height: n);
 
-  double lum(int x, int y) {
-    final p = t.getPixel(x.clamp(0, 63), y.clamp(0, 63));
+  double lum(double x, double y) {
+    final p = t.getPixel(x.round().clamp(0, n - 1), y.round().clamp(0, n - 1));
     return .299 * p.r + .587 * p.g + .114 * p.b;
   }
 
-  double patch(int cx, int cy, int r) {
-    var sum = 0.0;
-    var n = 0;
-    for (var y = cy - r; y <= cy + r; y++) {
-      for (var x = cx - r; x <= cx + r; x++) {
-        sum += lum(x, y);
-        n++;
-      }
+  /// Mean and spread of brightness around a circle at [fraction] of the half-width.
+  (double, double) ring(double fraction) {
+    const steps = 36;
+    final r = fraction * n / 2;
+    final vals = <double>[];
+    for (var i = 0; i < steps; i++) {
+      final a = i * 6.2831853 / steps;
+      vals.add(lum(n / 2 + r * _cos(a), n / 2 + r * _sin(a)));
     }
-    return sum / n;
+    var mean = 0.0;
+    for (final v in vals) {
+      mean += v;
+    }
+    mean /= vals.length;
+    var varSum = 0.0;
+    for (final v in vals) {
+      varSum += (v - mean) * (v - mean);
+    }
+    return (mean, _sqrt(varSum / vals.length));
   }
 
-  final corners = (patch(3, 3, 2) + patch(60, 3, 2) + patch(3, 60, 2) + patch(60, 60, 2)) / 4;
-  final centre = patch(32, 32, 2);
-  // Eight points at 40% of the width from the middle — on the printed face of a disc, and well
-  // inside the frame of anything rectangular.
-  var ring = 0.0;
-  const r = 26;
-  for (var i = 0; i < 8; i++) {
-    final a = i * 3.14159 / 4;
-    ring += lum((32 + r * _cos(a)).round(), (32 + r * _sin(a)).round());
+  final (hole, spread) = ring(0.06); // inside the hole
+  final (inner, _) = ring(0.20); // hub / inner label
+  final (outer, _) = ring(0.45); // printed face
+  return _Sample(hole, spread, inner, outer);
+}
+
+/// Newton's method — this file deliberately avoids dragging in dart:math for a handful of calls.
+double _sqrt(double v) {
+  if (v <= 0) return 0;
+  var x = v;
+  for (var i = 0; i < 20; i++) {
+    x = (x + v / x) / 2;
   }
-  return _Sample(corners, centre, ring / 8);
+  return x;
 }
 
 // Tiny local trig so this file doesn't drag in dart:math for two calls.

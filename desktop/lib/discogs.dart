@@ -851,12 +851,15 @@ extension DiscogsChoices on DiscogsService {
       if (out.length >= max || !seen.add(id)) return;
       final e = await release(id);
       if (e == null) return;
-      // Only the first few scans are examined: front, back and disc sit near the top, and reading
-      // a booklet page by page would cost megabytes to answer a settled question.
-      final look = e.images.length < 6 ? e.images.length : 6;
+      // Detection runs on the THUMBNAILS. The sampler resizes to 128px regardless, so a 150px
+      // thumbnail answers the question exactly as well as the full scan — and at a few kilobytes
+      // instead of a megabyte apiece. That is what lets twice as many images be examined: the old
+      // limit of six existed to keep the download cost down, and it meant a disc sitting seventh in
+      // the list was never even looked at. Only the URLs are kept; nothing full-size is fetched here.
+      final look = e.images.length < 12 ? e.images.length : 12;
       final datas = <Uint8List?>[];
       for (var i = 0; i < look; i++) {
-        datas.add(await fetchImage(e.images[i].uri));
+        datas.add(await fetchImage(e.images[i].thumb));
       }
       final roles = assignRoles(
         [for (var i = 0; i < look; i++) e.images[i].primary],

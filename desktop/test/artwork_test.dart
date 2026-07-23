@@ -43,10 +43,34 @@ void main() {
     expect(looksLikeDisc(_png(_sleeve(245))), isFalse, reason: 'pale corners alone are not a disc');
   });
 
-  test('a picture disc — printed edge to edge, no white surround — is not claimed', () {
-    final im = _disc(surround: 30, face: 200);
-    expect(looksLikeDisc(_png(im)), isFalse,
-        reason: 'better to skip the animation than to spin the wrong picture');
+  test('a white disc on a white bed is a disc', () {
+    // Enrique's Escape: a white CD scanned on a white backdrop. The old rule wanted the face to be
+    // much darker than the surround and so never saw one of these — measured on the real scan it
+    // read 250 / 244 / 231, against 198 / 201 / 186 for a blank booklet page from the same release.
+    // Brightness cannot separate those. The hole can.
+    //
+    // Drawn the way a CD actually is: pale disc, printed label around the middle, clear hub, hole.
+    // Without the print it would be one flat shade throughout, which is not a disc but a blank
+    // square — and is rightly refused.
+    final im = img.Image(width: 300, height: 300);
+    img.fill(im, color: img.ColorRgb8(250, 250, 250)); // scanner bed
+    img.fillCircle(im, x: 150, y: 150, radius: 145, color: img.ColorRgb8(238, 238, 238)); // disc
+    img.fillCircle(im, x: 150, y: 150, radius: 80, color: img.ColorRgb8(120, 120, 120)); // print
+    img.fillCircle(im, x: 150, y: 150, radius: 34, color: img.ColorRgb8(248, 248, 248)); // hub
+    img.fillCircle(im, x: 150, y: 150, radius: 22, color: img.ColorRgb8(252, 252, 252)); // hole
+    expect(looksLikeDisc(_png(im)), isTrue);
+  });
+
+  test('a picture disc — printed to the edge, on a dark bed — is a disc too', () {
+    // Recognised by its hole rather than by a pale surround, so this no longer has to be given up
+    // on. It is a disc; spinning it is right.
+    expect(looksLikeDisc(_png(_disc(surround: 30, face: 200))), isTrue);
+  });
+
+  test('a flat image with no hole is never claimed', () {
+    // The thing the caution is really about: nothing round, nothing punched through the middle.
+    expect(looksLikeDisc(_png(_sleeve(250))), isFalse);
+    expect(looksLikeDisc(_png(_sleeve(20))), isFalse);
   });
 
   test('the primary image is the front, whatever it looks like', () {
