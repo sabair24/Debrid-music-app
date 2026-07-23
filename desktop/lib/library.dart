@@ -33,6 +33,10 @@ List<Map<String, dynamic>> _scanTags(String root) {
     // Skip the download staging folder. Files in there are still arriving — a half-finished 2 MB
     // WAV was showing up as its own album, 0:00 long, until the transfer completed.
     if (e.path.contains('${Platform.pathSeparator}_inkomend${Platform.pathSeparator}')) continue;
+    // Skip the parking folder for superseded copies. They are kept on disk as a safety net but are
+    // deliberately NOT part of the library — otherwise a parked junk WAV keeps scanning back in as
+    // its own single and the duplicate cleanup can never finish.
+    if (e.path.contains('${Platform.pathSeparator}$dupeFolder${Platform.pathSeparator}')) continue;
     var addedMs = 0, sizeBytes = 0;
     try {
       final st = e.statSync();
