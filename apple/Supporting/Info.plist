@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  The library lives on a PC at http://192.168.x.x — plain HTTP on the home network. App
+	  Transport Security blocks cleartext by default, so without this key every request fails
+	  and the app looks like it cannot find the PC at all. NSAllowsLocalNetworking permits it
+	  for local addresses ONLY; anything on the public internet stays required to use HTTPS.
+	-->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+
+	<!-- Bonjour discovery of the PC. Both keys are needed: the description is what iOS shows in
+	     the permission prompt, and the service list is what it will let us browse for. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Om je pc met je muziekbibliotheek op je eigen netwerk te vinden.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_debridmusic._tcp</string>
+	</array>
+
+	<!-- Keep playing with the screen locked or the app in the background — the ordinary way an
+	     album gets listened to. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+</dict>
+</plist>
