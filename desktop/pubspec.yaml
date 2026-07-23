@@ -46,7 +46,9 @@ dependencies:
   # UPnP device descriptions, for finding Sonos and the KEF on the network.
   xml: ^6.5.0
   # Bonjour/mDNS, so the Mac, iPad and Shield find this PC without anything being typed in.
-  nsd: ^5.0.1
+  # 5.0.1 raised its floor to Flutter 3.41; CI and this machine are both on 3.35.6, so pub could
+  # not resolve it at all. 5.0.0 is the same major version and the same API.
+  nsd: ^5.0.0
   # QR code in Settings — how a device gets paired without retyping a 32-character token.
   qr_flutter: ^4.1.0
   # Pixel access, to tell a scan of the disc apart from a scan of the back cover.
