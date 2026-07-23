@@ -1325,7 +1325,26 @@ class _TrackRowState extends State<TrackRow> {
               ),
               _qualityBadge(_trackQuality(t)),
               Text(_fmt(t.duration), style: const TextStyle(color: _muted, fontSize: 13)),
-              // Delete appears on hover so it can't be hit by accident.
+              // Both appear on hover, so neither can be hit by accident.
+              SizedBox(
+                width: 34,
+                child: _hover
+                    ? IconButton(
+                        icon: const Icon(Icons.drive_file_move_outline, size: 17),
+                        color: _muted,
+                        tooltip: 'Naar ander album verplaatsen',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        // The album comes from the library rather than a parameter: every caller
+                        // of this row would otherwise have to thread it through.
+                        onPressed: () {
+                          final from = context.read<LibraryStore>().albumForPath(t.path);
+                          if (from == null) return;
+                          showDialog<bool>(context: context, builder: (_) => MoveTrackDialog(track: t, from: from));
+                        },
+                      )
+                    : null,
+              ),
               SizedBox(
                 width: 34,
                 child: _hover
@@ -6756,6 +6775,150 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
           ),
         );
       },
+    );
+  }
+}
+
+/// Move a track into another album — showing, before anything is touched, what happens on disk.
+///
+/// The one operation here that rewrites the folder tree, so it states its plan first. A file that
+/// can't be moved still gets regrouped: the tags are what decide where a track lives, and leaving
+/// it correct-but-in-place beats refusing the whole thing.
+class MoveTrackDialog extends StatefulWidget {
+  final Track track;
+  final Album from;
+  const MoveTrackDialog({super.key, required this.track, required this.from});
+
+  @override
+  State<MoveTrackDialog> createState() => _MoveTrackDialogState();
+}
+
+class _MoveTrackDialogState extends State<MoveTrackDialog> {
+  final _query = TextEditingController();
+  Album? _target;
+  bool _moveFiles = true;
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _query.dispose();
+    super.dispose();
+  }
+
+  Future<void> _go() async {
+    final target = _target;
+    if (target == null) return;
+    setState(() => _busy = true);
+    final moved = await context
+        .read<LibraryStore>()
+        .moveTracksToAlbum([widget.track], target, context.read<AppSettings>(), moveFiles: _moveFiles);
+    if (!mounted) return;
+    _srcToast(context, moved > 0 ? 'Verplaatst — $moved bestand mee verhuisd' : 'Verplaatst — bestand bleef staan');
+    Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    final q = normKey(_query.text);
+    final options = lib.albums
+        .where((a) => !a.isSingle && a != widget.from)
+        .where((a) => q.isEmpty || normKey('${a.artist} ${a.title}').contains(q))
+        .take(40)
+        .toList();
+    final plan = _target == null ? const <MovePlan>[] : lib.planMove([widget.track], _target!);
+
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: 640,
+        height: 600,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Nummer verplaatsen', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text(widget.track.title, style: const TextStyle(color: _muted, fontSize: 12.5)),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _query,
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(labelText: 'Zoek een album…', isDense: true),
+            ),
+            const SizedBox(height: 10),
+            Expanded(
+              child: ListView.builder(
+                itemCount: options.length,
+                itemBuilder: (_, i) {
+                  final a = options[i];
+                  final sel = identical(_target, a);
+                  return InkWell(
+                    onTap: () => setState(() => _target = a),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 5),
+                      padding: const EdgeInsets.all(7),
+                      decoration: BoxDecoration(
+                        color: sel ? _accent.withValues(alpha: .18) : _panel2,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: sel ? _accent : Colors.transparent),
+                      ),
+                      child: Row(children: [
+                        cover(a.cover, size: 34, radius: 5),
+                        const SizedBox(width: 9),
+                        Expanded(
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text(a.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                            Text('${a.artist} · ${a.tracks.length} nummers',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: _muted, fontSize: 11.5)),
+                          ]),
+                        ),
+                      ]),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 10),
+            CheckboxListTile(
+              value: _moveFiles,
+              onChanged: (v) => setState(() => _moveFiles = v ?? true),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text('Bestand mee verplaatsen', style: TextStyle(fontSize: 13)),
+              subtitle: Text(
+                // The plan, in words, before the button is pressed.
+                plan.isEmpty
+                    ? 'Kies eerst een album.'
+                    : plan.first.movesFile
+                        ? 'Naar: ${File(plan.first.to!).parent.path}'
+                        : 'Doelmap onbekend — alleen de indeling verandert.',
+                style: const TextStyle(color: _muted, fontSize: 11.5),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuleren')),
+              const SizedBox(width: 8),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: _accent),
+                onPressed: (_target == null || _busy) ? null : _go,
+                child: _busy
+                    ? const SizedBox(
+                        width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Text('Verplaatsen'),
+              ),
+            ]),
+          ]),
+        ),
+      ),
     );
   }
 }

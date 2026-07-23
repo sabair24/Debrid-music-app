@@ -358,6 +358,12 @@ class LibraryStore extends ChangeNotifier {
     } catch (_) {}
   }
 
+  /// The correction map for a path, created on demand — so an extension can add to it.
+  Map<String, String> _correctionsFor(String path) => _corrections.putIfAbsent(path, () => {});
+
+  /// Public save, for the move extension.
+  Future<void> saveCorrectionsNow() => _saveCorrections();
+
   Future<void> _saveCorrections() async {
     try {
       await Directory(_appDir).create(recursive: true);
@@ -734,5 +740,68 @@ class LibraryStore extends ChangeNotifier {
     }
     final list = set.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     return list;
+  }
+}
+
+/// One file's part of a move, so the plan can be shown before anything is touched.
+class MovePlan {
+  final Track track;
+  final String from;
+
+  /// Where it would land, or null when the target album's folder can't be worked out — then the
+  /// file stays put and only the grouping changes.
+  final String? to;
+  const MovePlan(this.track, this.from, this.to);
+
+  bool get movesFile => to != null && to != from;
+}
+
+extension LibraryMove on LibraryStore {
+  /// What moving [tracks] into [target] would do on disk. Nothing is touched.
+  ///
+  /// Shown before the move because this is the one operation here that rewrites the folder tree,
+  /// and a wrong guess scatters a library rather than tidying it.
+  List<MovePlan> planMove(List<Track> tracks, Album target) {
+    final anchor = target.tracks.isEmpty ? null : File(target.tracks.first.path).parent.path;
+    return [
+      for (final t in tracks)
+        MovePlan(
+          t,
+          t.path,
+          anchor == null ? null : '$anchor${Platform.pathSeparator}${File(t.path).uri.pathSegments.last}',
+        )
+    ];
+  }
+
+  /// Move [tracks] into [target]: retag them into that album, and optionally carry the files along.
+  ///
+  /// The correction is what actually regroups them, so it is applied whether or not the file can
+  /// be moved. A file that can't be moved — locked, or a name already taken — leaves the track
+  /// grouped correctly and the file where it was, which is the safe half of the job.
+  Future<int> moveTracksToAlbum(List<Track> tracks, Album target, AppSettings settings,
+      {bool moveFiles = true}) async {
+    var moved = 0;
+    if (moveFiles) {
+      for (final p in planMove(tracks, target)) {
+        if (!p.movesFile) continue;
+        try {
+          final dest = File(p.to!);
+          // Never overwrite: a same-named track already in the target album is a different copy,
+          // and silently replacing it would destroy the one thing this operation must not touch.
+          if (await dest.exists()) continue;
+          await dest.parent.create(recursive: true);
+          await File(p.from).rename(p.to!);
+          moved++;
+        } catch (_) {/* locked or across volumes — the retag below still regroups it */}
+      }
+    }
+    for (final t in tracks) {
+      final c = _correctionsFor(t.path);
+      c['artist'] = cleanArtistName(target.artist);
+      c['album'] = target.title;
+    }
+    await saveCorrectionsNow();
+    await scan();
+    return moved;
   }
 }
