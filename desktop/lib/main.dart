@@ -1,19 +1,24 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show ImageFilter;
-import 'package:flutter/material.dart';
+// Flutter 3.36+ exports a RepeatMode of its own (for RepeatingAnimationBuilder), which collides
+// with the player's. Ours is the one this app means everywhere.
+import 'package:flutter/material.dart' hide RepeatMode;
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'package:provider/provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'booklet_view.dart';
 import 'catalog.dart';
 import 'credits.dart';
 import 'discogs.dart';
 import 'editions.dart';
 import 'connectivity.dart';
 import 'enrichment.dart';
+import 'lan/sharing.dart';
 import 'library.dart';
 import 'metadata.dart';
 import 'models.dart';
@@ -95,6 +100,9 @@ Future<void> main() async {
   final settings = AppSettings();
   await settings.load();
   final library = LibraryStore();
+  // Before anything reads it: the download manager captures the root by value, and the LAN
+  // server derives every track id from paths relative to it.
+  if (settings.musicRoot.trim().isNotEmpty) library.rootPath = settings.musicRoot.trim();
   final online = OnlineService(settings);
   final soulseek = SoulseekService(settings);
   final tidal = TidalService(settings);
@@ -106,6 +114,22 @@ Future<void> main() async {
     await library.scan();
     await library.enrich(settings);
   });
+
+  // Share this library with the Mac, the iPad and the Shield. Started before the scan finishes:
+  // a device probing /health then gets a real answer straight away, and the catalogue fills in
+  // by itself as the scan lands.
+  final sharing = LanSharing(library: library, settings: settings);
+  unawaited(sharing.applySettings());
+  // What plays here counts too: the position and the play count go into the same shared state
+  // the iPad and the Shield write to, so carrying on elsewhere works in both directions.
+  player.onProgress = (track, position, playing, queue, index) {
+    sharing.reportProgress(
+        track.path, position, playing, [for (final t in queue) t.path], index);
+  };
+  player.onPlayed = (track) {
+    sharing.reportPlayed(track.path);
+  };
+
   runApp(
     MultiProvider(
       providers: [
@@ -120,6 +144,7 @@ Future<void> main() async {
         Provider<SoulseekService>.value(value: soulseek),
         Provider<TidalService>.value(value: tidal),
         ChangeNotifierProvider<DownloadManager>.value(value: downloads),
+        ChangeNotifierProvider<LanSharing>.value(value: sharing),
       ],
       child: const DebridApp(),
     ),
@@ -845,6 +870,24 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                   actions: [
+                    if (!album.isSingle)
+                      IconButton(
+                        icon: const Icon(Icons.auto_stories_outlined),
+                        tooltip: 'Boekje doorbladeren',
+                        onPressed: () {
+                          // Read the pinned pressing here, not inside the route: a booklet is
+                          // only worth reading if it is the one that came with this record.
+                          final pinned = context.read<LibraryStore>().pinnedRelease(album);
+                          Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => BookletScreen(
+                              artist: album.artist,
+                              album: album.title,
+                              pinned: pinned,
+                              expectedTracks: album.tracks.length,
+                            ),
+                          ));
+                        },
+                      ),
                     if (!album.isSingle)
                       IconButton(
                         icon: const Icon(Icons.photo_library_outlined),
@@ -6220,6 +6263,284 @@ class _AboutSectionState extends State<_AboutSection> {
   }
 }
 
+/// Sharing this library with the Mac, the iPad and the Shield.
+///
+/// The address and the token are the whole pairing story, so they are shown plainly and can be
+/// copied — and offered as a QR code, because typing a 32-character token on a TV remote is not
+/// something anyone should be asked to do.
+class _SharingSection extends StatefulWidget {
+  const _SharingSection();
+
+  @override
+  State<_SharingSection> createState() => _SharingSectionState();
+}
+
+class _SharingSectionState extends State<_SharingSection> {
+  late final TextEditingController _root;
+  bool _showToken = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _root = TextEditingController(text: context.read<LibraryStore>().rootPath);
+  }
+
+  @override
+  void dispose() {
+    _root.dispose();
+    super.dispose();
+  }
+
+  void _copy(String value, String what) {
+    Clipboard.setData(ClipboardData(text: value));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('$what gekopieerd'), duration: const Duration(seconds: 2)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sharing = context.watch<LanSharing>();
+    final settings = context.read<AppSettings>();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text('Delen met andere apparaten',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+            ),
+            Switch(
+              value: settings.lanEnabled,
+              activeThumbColor: _accent,
+              onChanged: (on) async {
+                settings.lanEnabled = on;
+                await settings.save();
+                await sharing.applySettings();
+              },
+            ),
+          ],
+        ),
+        const Text(
+          'Zet dit aan en je Mac, iPad en Shield zien dezelfde bibliotheek — '
+          'inclusief je eigen covers en persingen.',
+          style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
+        ),
+        if (settings.lanEnabled) ...[
+          const SizedBox(height: 10),
+          if (sharing.error != null)
+            Text(sharing.error!, style: const TextStyle(color: Color(0xFFFF6B6B), fontSize: 12))
+          else if (!sharing.running)
+            const Text('Starten…', style: TextStyle(color: _muted, fontSize: 12))
+          else ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Adres', style: TextStyle(color: _muted, fontSize: 11.5)),
+                      for (final url in sharing.addresses)
+                        InkWell(
+                          onTap: () => _copy(url, 'Adres'),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(url,
+                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                                const SizedBox(width: 6),
+                                const Icon(Icons.copy_rounded, size: 13, color: _muted),
+                              ],
+                            ),
+                          ),
+                        ),
+                      const SizedBox(height: 8),
+                      const Text('Toegangscode', style: TextStyle(color: _muted, fontSize: 11.5)),
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              _showToken ? sharing.token : '•' * 16,
+                              style: const TextStyle(fontSize: 13, fontFamily: 'monospace'),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          IconButton(
+                            icon: Icon(_showToken ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                                size: 15),
+                            color: _muted,
+                            tooltip: _showToken ? 'Verbergen' : 'Tonen',
+                            onPressed: () => setState(() => _showToken = !_showToken),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.copy_rounded, size: 15),
+                            color: _muted,
+                            tooltip: 'Code kopiëren',
+                            onPressed: () => _copy(sharing.token, 'Toegangscode'),
+                          ),
+                        ],
+                      ),
+                      Text(
+                        sharing.discoverable
+                            ? 'Je apparaten vinden deze pc vanzelf.'
+                            : 'Automatisch vinden lukt niet — vul het adres hierboven met de hand in.',
+                        style: const TextStyle(color: _muted, fontSize: 11, height: 1.35),
+                      ),
+                    ],
+                  ),
+                ),
+                if (sharing.pairingCode != null) ...[
+                  const SizedBox(width: 14),
+                  // White backing on purpose: a QR on a dark panel is unreadable to most scanners.
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: QrImageView(
+                      data: sharing.pairingCode!,
+                      size: 96,
+                      padding: EdgeInsets.zero,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 10),
+            // Pairing by six digits, because the alternative is typing 32 hex characters on a
+            // TV remote with an on-screen keyboard.
+            if (sharing.pairingCodeDigits != null)
+              Row(
+                children: [
+                  for (final digit in sharing.pairingCodeDigits!.split(''))
+                    Container(
+                      margin: const EdgeInsets.only(right: 6),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                      decoration: BoxDecoration(
+                        color: _accent.withValues(alpha: .16),
+                        borderRadius: BorderRadius.circular(7),
+                        border: Border.all(color: _accent.withValues(alpha: .35)),
+                      ),
+                      child: Text(digit,
+                          style: const TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w700, color: Colors.white)),
+                    ),
+                  const SizedBox(width: 6),
+                  TextButton(
+                    onPressed: sharing.stopPairing,
+                    style: TextButton.styleFrom(
+                        foregroundColor: _muted, textStyle: const TextStyle(fontSize: 12)),
+                    child: const Text('Klaar'),
+                  ),
+                ],
+              )
+            else
+              Row(
+                children: [
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                        backgroundColor: _accent, textStyle: const TextStyle(fontSize: 12.5)),
+                    onPressed: sharing.startPairing,
+                    icon: const Icon(Icons.add_link_rounded, size: 16),
+                    label: const Text('Apparaat koppelen'),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton.icon(
+                    onPressed: () async {
+                      final ok = await _confirmRotate();
+                      if (ok) await sharing.rotateToken();
+                    },
+                    icon: const Icon(Icons.autorenew_rounded, size: 15),
+                    label: const Text('Nieuwe toegangscode'),
+                    style: TextButton.styleFrom(
+                        foregroundColor: _muted, textStyle: const TextStyle(fontSize: 12)),
+                  ),
+                ],
+              ),
+            if (sharing.pairingCodeDigits != null)
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text('Typ deze zes cijfers op je Shield of iPad. Vijf minuten geldig.',
+                    style: TextStyle(color: _muted, fontSize: 11, height: 1.35)),
+              ),
+          ],
+        ],
+        const SizedBox(height: 12),
+        const Text('Muziekmap', style: TextStyle(color: _muted, fontSize: 12.5)),
+        const SizedBox(height: 5),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _root,
+                style: const TextStyle(fontSize: 13),
+                decoration: InputDecoration(
+                  isDense: true,
+                  filled: true,
+                  fillColor: const Color(0xFF14161F),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(9),
+                      borderSide: const BorderSide(color: _line)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(9),
+                      borderSide: const BorderSide(color: _line)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(9),
+                      borderSide: const BorderSide(color: _accent)),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            TextButton(
+              onPressed: () async {
+                final path = _root.text.trim();
+                if (path.isEmpty) return;
+                final lib = context.read<LibraryStore>();
+                settings.musicRoot = path;
+                await settings.save();
+                lib.rootPath = path;
+                await lib.scan();
+              },
+              style: TextButton.styleFrom(foregroundColor: _accent),
+              child: const Text('Opnieuw scannen'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<bool> _confirmRotate() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: _panel,
+        title: const Text('Nieuwe toegangscode?',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        content: const Text(
+          'Je Mac, iPad en Shield verliezen de verbinding en moeten opnieuw gekoppeld worden.',
+          style: TextStyle(fontSize: 13, height: 1.4),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Annuleren')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _accent),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Vervangen'),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
+  }
+}
+
 class SettingsDialog extends StatefulWidget {
   const SettingsDialog({super.key});
   @override
@@ -6620,6 +6941,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               ),
                             ),
                     ),
+                    const SizedBox(height: 14),
+                    const Divider(color: _line, height: 1),
+                    const SizedBox(height: 12),
+                    const _SharingSection(),
                     const SizedBox(height: 14),
                     const Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
