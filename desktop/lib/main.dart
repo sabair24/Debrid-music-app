@@ -1327,14 +1327,17 @@ class _TrackRowState extends State<TrackRow> {
               Text(_fmt(t.duration), style: const TextStyle(color: _muted, fontSize: 13)),
               // Both appear on hover, so neither can be hit by accident.
               SizedBox(
-                width: 34,
+                width: 36,
                 child: _hover
                     ? IconButton(
                         icon: const Icon(Icons.drive_file_move_outline, size: 17),
                         color: _muted,
                         tooltip: 'Naar ander album verplaatsen',
+                        // A bare icon with no padding is a hit area the size of the glyph — hard to
+                        // land on with a mouse, and the row underneath swallows every near miss and
+                        // starts playing instead. Give it something to aim at.
                         padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
+                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                         // The album comes from the library rather than a parameter: every caller
                         // of this row would otherwise have to thread it through.
                         onPressed: () {
@@ -1346,14 +1349,17 @@ class _TrackRowState extends State<TrackRow> {
                     : null,
               ),
               SizedBox(
-                width: 34,
+                width: 36,
                 child: _hover
                     ? IconButton(
                         icon: const Icon(Icons.delete_outline_rounded, size: 17),
                         color: _muted,
                         tooltip: 'Nummer verwijderen',
+                        // A bare icon with no padding is a hit area the size of the glyph — hard to
+                        // land on with a mouse, and the row underneath swallows every near miss and
+                        // starts playing instead. Give it something to aim at.
                         padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
+                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                         onPressed: () => _confirmDelete(context, '“${t.title}”', [t.path]),
                       )
                     : null,
