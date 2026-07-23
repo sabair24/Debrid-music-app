@@ -1,0 +1,269 @@
+name: DebridMusic Apple Build
+
+# The Mac and iPad app (in apple/). Same shape as windows_build.yml:
+#   • tag apple-v*      → signed build, iPad to TestFlight, Mac on the GitHub Release
+#   • workflow_dispatch → manual run; tick "testflight" to push a build to TestFlight
+#
+# Deliberately NOT triggered by ordinary pushes. A `paths:` filter alongside `tags:` is ANDed by
+# GitHub, so a release tag would be skipped whenever that commit happened to touch nothing under
+# apple/ — and running a macOS job on every push is expensive on a private repository. Use the
+# manual run for a check between releases.
+#
+# The steps that need no secrets always run, so a manual run is useful before any signing is set
+# up at all. Signing and distribution only run when the App Store Connect key is configured —
+# see the note further down.
+on:
+  push:
+    tags:
+      - 'apple-v*'
+  workflow_dispatch:
+    inputs:
+      testflight:
+        description: 'Upload the iPad build to TestFlight'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  PROJECT: apple/DebridMusic.xcodeproj
+  SCHEME: DebridMusic
+  BUNDLE_ID: com.debridmusic.app
+  TEAM_ID: DR8YNUC2S7
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Xcode 16 or newer is not optional: the project uses objectVersion 77 and a synchronised
+      # file group, and DebridMusicKit is a Swift 6 package using the Testing framework. An older
+      # Xcode fails to even open the project, with an error that does not say why.
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Versions
+        run: |
+          xcodebuild -version
+          swift --version
+
+      # ── Always: the parts that need no signing ───────────────────────────
+
+      - name: Test DebridMusicKit
+        working-directory: apple/DebridMusicKit
+        run: swift test
+
+      - name: Build for the iPad (simulator, unsigned)
+        run: |
+          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build
+
+      - name: Build for the Mac (unsigned)
+        run: |
+          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath .build \
+            CODE_SIGNING_ALLOWED=NO build
+
+      - name: Package the unsigned Mac app
+        run: |
+          mkdir -p out
+          # ditto, not zip: it keeps the bundle's symlinks and resource forks intact, which a
+          # plain zip quietly flattens into an app that will not launch.
+          ditto -c -k --sequesterRsrc --keepParent \
+            ".build/Build/Products/Release/DebridMusic.app" \
+            "out/DebridMusic-macOS-unsigned.zip"
+
+      - name: Upload the unsigned Mac app
+        uses: actions/upload-artifact@v4
+        with:
+          name: DebridMusic-macOS-unsigned
+          path: out/DebridMusic-macOS-unsigned.zip
+          retention-days: 30
+
+      # ── From here: signing and distribution ──────────────────────────────
+      #
+      # Needs three repository secrets, all from App Store Connect → Users and Access → Keys:
+      #   APPLE_API_KEY_ID       e.g. 8YA44LXG8T
+      #   APPLE_API_ISSUER_ID    e.g. ce9a48ce-1bfd-43ca-9eb1-5bfaf726c589
+      #   APPLE_API_PRIVATE_KEY  the whole contents of AuthKey_XXXXXXXX.p8
+      #
+      # No certificate or provisioning profile secrets: with the API key,
+      # -allowProvisioningUpdates lets Xcode create and fetch what it needs itself, which avoids
+      # keeping a .p12 and its password in the repository.
+      #
+      # An app record for com.debridmusic.app must also exist in App Store Connect. Uploading to
+      # a bundle id that has no record fails at the very last step, after a full archive.
+
+      - name: Distribution ready?
+        id: gate
+        env:
+          KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        run: |
+          if [ -n "$KEY_ID" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No App Store Connect key configured — built and tested only. Add APPLE_API_KEY_ID, APPLE_API_ISSUER_ID and APPLE_API_PRIVATE_KEY to sign and publish."
+          fi
+
+      - name: Write the App Store Connect key
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        run: |
+          mkdir -p ~/private_keys
+          printf '%s' "$PRIVATE_KEY" > ~/private_keys/AuthKey_${KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${KEY_ID}.p8
+
+      - name: Determine version
+        id: version
+        run: |
+          VERSION=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -showBuildSettings 2>/dev/null \
+            | awk '/ MARKETING_VERSION = / {print $3; exit}')
+          [ -n "$VERSION" ] || VERSION="0.1.0"
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          # The build number is the run number: it only ever goes up, which is all App Store
+          # Connect asks, and nothing in the repository has to be bumped by hand.
+          echo "BUILD=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "Version $VERSION build ${{ github.run_number }}"
+
+      # ── iPad → TestFlight ────────────────────────────────────────────────
+
+      - name: Archive for iOS
+        if: steps.gate.outputs.ready == 'true' && (startsWith(github.ref, 'refs/tags/apple-v') || inputs.testflight)
+        env:
+          KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/DebridMusic-iOS.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${KEY_ID}.p8 \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            MARKETING_VERSION="${{ steps.version.outputs.VERSION }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.BUILD }}" \
+            archive
+
+      - name: Export and upload to TestFlight
+        if: steps.gate.outputs.ready == 'true' && (startsWith(github.ref, 'refs/tags/apple-v') || inputs.testflight)
+        env:
+          KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions-iOS.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>destination</key><string>upload</string>
+          </dict>
+          </plist>
+          PLIST
+          # destination=upload hands it to App Store Connect directly, so there is no separate
+          # altool step and no .ipa left lying around.
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/DebridMusic-iOS.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions-iOS.plist" \
+            -exportPath "$RUNNER_TEMP/export-ios" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${KEY_ID}.p8 \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID"
+          echo "::notice::Uploaded to TestFlight. It appears after Apple's processing, usually 5-15 minutes."
+
+      # ── Mac → signed, notarised, on the release ──────────────────────────
+
+      - name: Archive and notarise the Mac app
+        if: steps.gate.outputs.ready == 'true' && startsWith(github.ref, 'refs/tags/apple-v')
+        env:
+          KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -archivePath "$RUNNER_TEMP/DebridMusic-macOS.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${KEY_ID}.p8 \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            MARKETING_VERSION="${{ steps.version.outputs.VERSION }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.BUILD }}" \
+            archive
+
+          cat > "$RUNNER_TEMP/ExportOptions-macOS.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>developer-id</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/DebridMusic-macOS.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions-macOS.plist" \
+            -exportPath "$RUNNER_TEMP/export-mac" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${KEY_ID}.p8 \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID"
+
+          mkdir -p out
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$RUNNER_TEMP/export-mac/DebridMusic.app" \
+            "out/DebridMusic-macOS-${{ steps.version.outputs.VERSION }}.zip"
+
+          # Notarising matters even for your own Mac: without it Gatekeeper refuses a
+          # downloaded app and the only way in is right-click → Open, every time.
+          xcrun notarytool submit "out/DebridMusic-macOS-${{ steps.version.outputs.VERSION }}.zip" \
+            --key ~/private_keys/AuthKey_${KEY_ID}.p8 \
+            --key-id "$KEY_ID" \
+            --issuer "$ISSUER_ID" \
+            --wait
+
+          # Staple the ticket to the .app and re-zip, so it opens without a network check.
+          xcrun stapler staple "$RUNNER_TEMP/export-mac/DebridMusic.app"
+          rm "out/DebridMusic-macOS-${{ steps.version.outputs.VERSION }}.zip"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$RUNNER_TEMP/export-mac/DebridMusic.app" \
+            "out/DebridMusic-macOS-${{ steps.version.outputs.VERSION }}.zip"
+
+      - name: GitHub Release (on an apple-v tag)
+        if: steps.gate.outputs.ready == 'true' && startsWith(github.ref, 'refs/tags/apple-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/DebridMusic-macOS-*.zip
+          name: DebridMusic ${{ steps.version.outputs.VERSION }} (Mac en iPad)
+          body: |
+            ## DebridMusic v${{ steps.version.outputs.VERSION }} — Mac en iPad
+
+            **Mac** — download de zip hieronder, pak uit en sleep naar Programma's.
+            Ondertekend en genotariseerd, dus hij opent gewoon.
+
+            **iPad** — via TestFlight. Verschijnt daar na Apple's verwerking,
+            meestal binnen 5-15 minuten.
+
+            Beide koppelen met je pc via Instellingen → Apparaat koppelen.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
