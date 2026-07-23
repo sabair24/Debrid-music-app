@@ -885,6 +885,23 @@ bool fileOffersTitle(String title, int? titleDur, String artist, String path, in
   return true;
 }
 
+/// A Soulseek search query for one track — broad enough to be found, so the precise matching can
+/// be left to [fileOffersTitle] afterwards.
+///
+/// Soulseek matches folded tokens and does badly with apostrophes and bracketed asides: a query
+/// for `Get Down (You're the One for Me)` returns far fewer peers than `get down` does, and can
+/// return none while live copies plainly exist — a peer that names the file `You're` tokenises to
+/// `you re`, which the term `youre` never matches. So the brackets and punctuation come off here,
+/// the strong words stay, and the full title still decides which results are really this song.
+String soulseekQuery(String artist, String title) {
+  List<String> tok(String s) =>
+      s.toLowerCase().split(RegExp(r'[^a-z0-9]+')).where((w) => w.length > 1).toList();
+  // Drop "(You're the One for Me)"-style asides; they hurt the search and are recovered by the
+  // title filter. If a title is ALL aside — "(Everything I Do)" — keep it rather than search blank.
+  final body = tok(title.replaceAll(RegExp(r'[(\[{][^)\]}]*[)\]}]'), ' '));
+  return [...tok(artist), ...(body.isEmpty ? tok(title) : body)].join(' ');
+}
+
 /// A name with Discogs' bookkeeping stripped off.
 ///
 /// Discogs has to keep artists apart who share a name, so it appends a number — "Adele (3)" — and

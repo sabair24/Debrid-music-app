@@ -6109,6 +6109,32 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         year: _officialYear ?? int.tryParse(widget.album.year ?? ''),
       );
 
+  /// Every peer copy of this track worth trying — the preload's, plus a fresh targeted search.
+  ///
+  /// The album-wide preload often lists a track's copies only from peers that are now offline, so
+  /// a download built on it alone can report "no source" while a live copy plainly exists. A search
+  /// aimed at this one track finds those live peers. Both sets are filtered to this exact title and
+  /// running time, so the pool can never fill with a different song from the same user — which is
+  /// what happened when the old path took every audio result the search returned and, after the
+  /// query broadened to just the artist, would have downloaded the wrong song under this one's tags.
+  Future<List<SoulseekFile>> _slskCandidatesForTrack(CatalogTrack t) async {
+    final soulseek = context.read<SoulseekService>();
+    final pool = <String, SoulseekFile>{
+      for (final f in _slskForTitle(t)) '${f.username}|${f.filename}': f
+    };
+    try {
+      final r = await soulseek.search(soulseekQuery(widget.artistName, t.title));
+      for (final f in r) {
+        if (!f.isAudio) continue;
+        if (!fileOffersTitle(t.title, t.durationSec, widget.artistName, f.filename, f.durationSec)) {
+          continue;
+        }
+        pool.putIfAbsent('${f.username}|${f.filename}', () => f);
+      }
+    } catch (_) {/* the preload's copies are still worth a try on their own */}
+    return pool.values.toList();
+  }
+
   Future<void> _downloadTrack(CatalogTrack t, int i) async {
     final dm = context.read<DownloadManager>();
     final soulseek = context.read<SoulseekService>();
@@ -6116,17 +6142,15 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       _srcToast(context, '“${t.title}” heb je al — niet opnieuw gedownload.');
       return;
     }
-    var cands = _slskForTitle(t);
-    if (cands.isEmpty) {
-      // Not covered by the album-wide preload → ONE on-demand Soulseek search for just this track.
-      if (mounted) _srcToast(context, 'Bron zoeken voor “${t.title}”…');
-      try {
-        final r = await soulseek.search('${widget.artistName} ${t.title}');
-        cands = r.where((f) => f.isAudio).toList();
-      } catch (_) {}
+    if (!soulseek.available) {
+      _srcToast(context, 'Stel je Soulseek-login in (Instellingen).');
+      return;
     }
+    if (mounted) _srcToast(context, 'Bron zoeken voor “${t.title}”…');
+    final cands = await _slskCandidatesForTrack(t);
+    if (!mounted) return;
     if (cands.isEmpty) {
-      if (mounted) _srcToast(context, 'Geen Soulseek-bron gevonden voor “${t.title}”.');
+      _srcToast(context, 'Geen Soulseek-bron gevonden voor “${t.title}”.');
       return;
     }
     try {
