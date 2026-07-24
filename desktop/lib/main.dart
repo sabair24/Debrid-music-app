@@ -1282,12 +1282,44 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     return pool.values.toList();
   }
 
-  Future<void> _downloadMissing(AlbumSlot s, {String? jobKey}) async {
+  /// The copy of this slot we already hold somewhere ELSE in the library.
+  ///
+  /// The tracklist is matched against this album's own files only, so a copy filed under a
+  /// composite artist — or a loose rip with no album tag at all — reads as a gap on this page. It
+  /// is not one, and fetching it again is exactly what happened: the radio edit came down a second
+  /// time, byte for byte identical to a file already on disk.
+  Track? _ownedElsewhere(AlbumSlot s) => context.read<LibraryStore>().recordingElsewhere(
+        album.artist,
+        s.title,
+        seconds: s.official?.seconds,
+        exclude: album.tracks.map((t) => t.path).toSet(),
+      );
+
+  /// Where a track lives, in the fewest words that still place it: its album, or else its folder.
+  String _whereIs(Track t) {
+    final a = context.read<LibraryStore>().albumForPath(t.path);
+    if (a != null) return '“${a.title}”';
+    final parts = t.path.split(RegExp(r'[\\/]'));
+    return parts.length > 1 ? 'map “${parts[parts.length - 2]}”' : 'je bibliotheek';
+  }
+
+  Future<void> _downloadMissing(AlbumSlot s, {String? jobKey, bool force = false}) async {
     final dm = context.read<DownloadManager>();
     final soulseek = context.read<SoulseekService>();
     if (!soulseek.available) {
       _srcToast(context, 'Stel je Soulseek-login in (Instellingen).');
       return;
+    }
+    if (!force) {
+      final have = _ownedElsewhere(s);
+      if (have != null) {
+        _srcToastAction(
+            context,
+            '“${s.title}” heb je al — staat onder ${_whereIs(have)}.',
+            'Toch downloaden',
+            () => _downloadMissing(s, jobKey: jobKey, force: true));
+        return;
+      }
     }
     _srcToast(context, 'Bron zoeken voor “${s.title}”…');
     final cands = await _candidatesFor(s);
@@ -1335,10 +1367,25 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       _srcToast(context, 'Stel je Soulseek-login in (Instellingen).');
       return;
     }
-    _srcToast(context, 'Bronnen zoeken voor ${missing.length} ontbrekende nummers…');
+    // A copy already on disk is not a gap. Counted rather than quietly dropped: "12 gestart" when
+    // you asked for 13 has to be able to say where the thirteenth went.
+    final wanted = <AlbumSlot>[];
+    var already = 0;
+    for (final s in missing) {
+      if (_ownedElsewhere(s) != null) {
+        already++;
+      } else {
+        wanted.add(s);
+      }
+    }
+    if (wanted.isEmpty) {
+      _srcToast(context, 'Je hebt ze alle $already al — elders in je bibliotheek.');
+      return;
+    }
+    _srcToast(context, 'Bronnen zoeken voor ${wanted.length} ontbrekende nummers…');
     final running = <Future<bool>>[];
     var none = 0;
-    for (final s in missing) {
+    for (final s in wanted) {
       final cands = await _candidatesFor(s);
       if (!mounted) return;
       if (cands.isEmpty) {
@@ -1355,7 +1402,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         context,
         started == 0
             ? 'Geen bronnen gevonden voor de ontbrekende nummers.'
-            : '$started gestart${none > 0 ? ' · $none zonder bron' : ''} — zie Mijn downloads.');
+            : '$started gestart${none > 0 ? ' · $none zonder bron' : ''}'
+                '${already > 0 ? ' · $already had je al' : ''} — zie Mijn downloads.');
     await Future.wait(running);
   }
 
@@ -2197,8 +2245,8 @@ class _TrackRowState extends State<TrackRow> {
                         // The album comes from the library rather than a parameter: every caller
                         // of this row would otherwise have to thread it through.
                         onPressed: () {
+                          // No source album is not a reason to do nothing — see MoveTrackDialog.from.
                           final from = context.read<LibraryStore>().albumForPath(t.path);
-                          if (from == null) return;
                           showDialog<bool>(context: context, builder: (_) => MoveTrackDialog(track: t, from: from));
                         },
                       )
@@ -3639,6 +3687,20 @@ String _fmtBytes(int b) => b >= 1000000000
 // Shared source-result rendering + actions (used by direct search AND browse sources).
 void _srcToast(BuildContext context, String m) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), duration: const Duration(seconds: 2)));
+}
+
+/// A toast that offers a way out, for where the app REFUSES what was asked.
+///
+/// Every refusal here rests on a guess about what you already own, and that guess can be wrong —
+/// two different takes can run equally long. A refusal you cannot overrule turns into a button that
+/// silently does nothing, which is worse than the duplicate it was avoiding. Longer on screen than
+/// a plain toast, because it asks something of the reader.
+void _srcToastAction(BuildContext context, String m, String label, VoidCallback onTap) {
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+    content: Text(m),
+    duration: const Duration(seconds: 8),
+    action: SnackBarAction(label: label, onPressed: onTap),
+  ));
 }
 
 // ── Radio / Smart Shuffle ────────────────────────────────────────────────────
@@ -8887,8 +8949,13 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
 /// it correct-but-in-place beats refusing the whole thing.
 class MoveTrackDialog extends StatefulWidget {
   final Track track;
-  final Album from;
-  const MoveTrackDialog({super.key, required this.track, required this.from});
+
+  /// The album the track is leaving, when it has one. Null for a track that no album page shows:
+  /// a rip with no album tag sits in its own single, and a copy that lost a title collision is on
+  /// no page at all. Those are precisely the tracks that need moving, so the dialog must open
+  /// without a source — it only ever used this to keep the current album out of the target list.
+  final Album? from;
+  const MoveTrackDialog({super.key, required this.track, this.from});
 
   @override
   State<MoveTrackDialog> createState() => _MoveTrackDialogState();

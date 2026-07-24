@@ -598,8 +598,17 @@ bool _sameRecording(File a, File b) {
   if (!_setEquals(ma, mb)) return false;
   final da = readFlacTags(a)?.duration, db = readFlacTags(b)?.duration;
   if (da == null || db == null) return true; // can't tell — fall back to the old dedup behaviour
-  return (da - db).abs() <= const Duration(seconds: 5);
+  return (da - db).abs() <= const Duration(seconds: sameRecordingSlack);
 }
+
+/// How far two files of one title may drift and still be one recording.
+///
+/// Tighter than the [matchAlbumTracks] tolerance on purpose: that one compares a file against a
+/// catalogue entry that may describe a different pressing, while this compares two files a user
+/// actually holds. Rips of one master differ by a second or two; a radio edit and the album cut
+/// differ by far more, and collapsing those loses music. Shared so the library and the filer
+/// cannot answer the same question differently.
+const sameRecordingSlack = 5;
 
 bool _setEquals(Set<String> a, Set<String> b) => a.length == b.length && a.every(b.contains);
 

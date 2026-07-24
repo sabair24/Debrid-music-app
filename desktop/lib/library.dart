@@ -171,23 +171,92 @@ class LibraryStore extends ChangeNotifier {
   /// The track we already own that matches this artist+title (null if we don't have it).
   Track? ownedTrack(String artist, String title) => _owned[trackIdentity(artist, title)];
 
-  /// Keep one copy per track within an album — the best format, then the longest/biggest — so a
-  /// second download of the same song doesn't show up twice in the tracklist.
+  /// A copy of this recording ANYWHERE in the library, whatever album it happens to be filed under.
+  ///
+  /// [ownedTrack] answers a narrower question and missed exactly the case that mattered. It keys on
+  /// artist and title exactly, so a rip whose ARTIST tag reads "Daniel Bedingfield, D'N'D
+  /// Productions" and whose version is written with a dash instead of brackets never matched the
+  /// catalogue's "Daniel Bedingfield" / "(D'n'D radio edit)" — and the album page fetched a second,
+  /// byte-identical copy of a file already on disk.
+  ///
+  /// Normalising the whole title is what closes that gap: [normKey] drops brackets and dashes
+  /// alike, so both spellings land on one key without [versionMarkers] having to be widened — that
+  /// would change what counts as a variant for the pressing picker and the tracklist matcher too.
+  ///
+  /// The tolerance is the tight one on purpose. A download wrongly refused is worse than a
+  /// duplicate, so a running time that disagrees means "not this recording, fetch it".
+  ///
+  /// [exclude] holds the paths already on the page — a file cannot be elsewhere than where it is.
+  Track? recordingElsewhere(String artist, String title,
+      {int? seconds, Set<String> exclude = const {}}) {
+    final wantTitle = normKey(title);
+    if (wantTitle.isEmpty) return null;
+    final wantArtist = artistKey(splitFeatured(artist, title).main);
+    for (final t in tracks) {
+      if (exclude.contains(t.path) || normKey(t.title) != wantTitle) continue;
+      if (!_artistCovers(artistKey(splitFeatured(t.artist, t.title).main), wantArtist)) continue;
+      final secs = t.duration?.inSeconds ?? 0;
+      if (seconds != null &&
+          seconds > 0 &&
+          secs > 0 &&
+          (secs - seconds).abs() > sameRecordingSlack) {
+        continue;
+      }
+      return t;
+    }
+    return null;
+  }
+
+  /// Is [mine] the artist [want], allowing for extra names credited alongside?
+  ///
+  /// Whole words only: a file credited to "Daniel Bedingfield, D'N'D Productions" is still that
+  /// artist's, but "Amy Winehouse" must not be answered by a file credited to "Amy".
+  static bool _artistCovers(String mine, String want) =>
+      mine == want || (want.isNotEmpty && ' $mine '.contains(' $want '));
+
+  /// Keep one copy per RECORDING within an album — the best format, then the longest/biggest — so
+  /// a second download of the same song doesn't show up twice in the tracklist.
+  ///
+  /// Artist and title alone were not enough, and the damage was invisible. A correction that
+  /// retitled "Gotta Get Thru This (D'N'D Full Length Version)" to the plain album title gave it
+  /// the same identity as the 2:45 album cut sitting beside it; the bigger file won, and the other
+  /// vanished from its own album while still counting in the header and still playing from the
+  /// Tracks list. [RenumberPlan.titleCollides] refuses to create exactly this situation — the
+  /// hand-written correction path had no such guard.
+  ///
+  /// So the rule is the one [_sameRecording] already applies when filing: the same version, and a
+  /// running time that agrees. Asked here of the tags the scan already read, not by reopening both
+  /// files — this runs for every track of every album on every regroup.
   List<Track> _dedupeTracks(List<Track> ts) {
-    final best = <String, Track>{};
+    final byId = <String, List<Track>>{};
     for (final t in ts) {
-      final id = trackIdentity(t.artist, t.title);
-      final cur = best[id];
-      if (cur == null) {
-        best[id] = t;
+      final takes = byId.putIfAbsent(trackIdentity(t.artist, t.title), () => []);
+      final i = takes.indexWhere((other) => _sameTake(other, t));
+      if (i < 0) {
+        takes.add(t); // a different take of the same title keeps its own row
         continue;
       }
       // Same order as filing uses: format, then stereo over surround, then size — otherwise the
       // album view would show the 5.1 rip while the folder keeps the stereo master.
-      if (firstIsBetter(File(t.path), File(cur.path))) best[id] = t;
+      if (firstIsBetter(File(t.path), File(takes[i].path))) takes[i] = t;
     }
-    return best.values.toList();
+    return [for (final takes in byId.values) ...takes];
   }
+
+  /// Two files of one title that are the same RECORDING, decided on what the scan already read.
+  ///
+  /// The filename decides first, for the reason [_sameRecording] gives: an uploader writes
+  /// "(Full Length Version)" in the name while the title tag stays plain. Only when both claim the
+  /// same thing does the running time break the tie, and a file that never reported one is not
+  /// held against itself.
+  static bool _sameTake(Track a, Track b) {
+    final ma = versionMarkers(_fileName(a.path)), mb = versionMarkers(_fileName(b.path));
+    if (ma.length != mb.length || !ma.every(mb.contains)) return false;
+    final sa = a.duration?.inSeconds ?? 0, sb = b.duration?.inSeconds ?? 0;
+    return sa <= 0 || sb <= 0 || (sa - sb).abs() <= sameRecordingSlack;
+  }
+
+  static String _fileName(String path) => path.split(RegExp(r'[\\/]')).last;
   final Map<String, Track> _trackByPath = {};
 
   /// The album cover for a track (covers live on the Album, not the Track).
