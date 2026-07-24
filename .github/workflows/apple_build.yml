@@ -58,8 +58,14 @@ jobs:
       - name: Determine version
         id: version
         run: |
-          VERSION=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -showBuildSettings 2>/dev/null \
-            | awk '/ MARKETING_VERSION = / {print $3; exit}')
+          # On a tag, the tag IS the version — otherwise apple-v1.0.2 would ship a release
+          # titled "1.0" and a third TestFlight build also called 1.0, with nothing to tell them
+          # apart. Off a tag, fall back to what the project says.
+          case "$GITHUB_REF" in
+            refs/tags/apple-v*) VERSION="${GITHUB_REF#refs/tags/apple-v}" ;;
+            *) VERSION=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -showBuildSettings 2>/dev/null \
+                 | awk '/ MARKETING_VERSION = / {print $3; exit}') ;;
+          esac
           [ -n "$VERSION" ] || VERSION="0.1.0"
           echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
           # The build number is the run number: it only ever goes up, which is all App Store
