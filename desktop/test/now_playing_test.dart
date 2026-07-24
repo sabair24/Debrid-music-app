@@ -1,0 +1,158 @@
+/// The lockscreen side of playback. libmpv cannot load in a test, so this drives the handler
+/// through [NowPlayingSource] — the surface [PlayerStore] implements, checked by the compiler.
+library;
+
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import 'package:audio_service/audio_service.dart';
+import 'package:debridmusic/models.dart';
+import 'package:debridmusic/now_playing.dart';
+import 'package:debridmusic/paths.dart';
+import 'package:debridmusic/player.dart';
+
+class FakePlayer extends ChangeNotifier implements NowPlayingSource {
+  @override
+  Track? current;
+  @override
+  bool playing = false;
+  @override
+  Duration position = Duration.zero;
+  @override
+  Duration duration = const Duration(seconds: 200);
+  @override
+  Uint8List? currentCover;
+
+  int nexts = 0, prevs = 0, toggles = 0;
+  Duration? sought;
+
+  @override
+  void playPause() {
+    toggles++;
+    playing = !playing;
+  }
+
+  @override
+  Future<void> next() async => nexts++;
+
+  @override
+  Future<void> prev() async => prevs++;
+
+  @override
+  void seek(Duration d) => sought = d;
+
+  void tick() => notifyListeners();
+}
+
+Track _track(String path, {String title = 'Mysterons'}) => Track(
+      path: path,
+      title: title,
+      artist: 'Portishead',
+      album: 'Dummy',
+      duration: const Duration(seconds: 305),
+    );
+
+void main() {
+  late Directory scratch;
+
+  setUp(() {
+    scratch = Directory.systemTemp.createTempSync('dm_np_');
+    setAppDirForTest(scratch.path);
+  });
+
+  tearDown(() => scratch.deleteSync(recursive: true));
+
+  test('what is playing reaches the system', () async {
+    final player = FakePlayer()..current = _track('/muziek/01.flac');
+    final handler = NowPlayingHandler(player, null);
+
+    final item = await _item(handler, '/muziek/01.flac');
+    expect(item?.title, 'Mysterons');
+    expect(item?.artist, 'Portishead');
+    expect(item?.album, 'Dummy');
+    expect(item?.duration, const Duration(seconds: 305));
+  });
+
+  test('a play while already playing does not pause the music', () async {
+    // What a reconnecting headset sends. The store has one toggle, so an unguarded play() here
+    // would stop the music instead of doing nothing.
+    final player = FakePlayer()
+      ..current = _track('/muziek/01.flac')
+      ..playing = true;
+    final handler = NowPlayingHandler(player, null);
+
+    await handler.play();
+    expect(player.playing, isTrue);
+    expect(player.toggles, 0);
+
+    await handler.pause();
+    expect(player.playing, isFalse);
+
+    await handler.pause();
+    expect(player.playing, isFalse, reason: 'twee keer pauze is nog steeds pauze');
+  });
+
+  test('the buttons reach the player', () async {
+    final player = FakePlayer()..current = _track('/muziek/01.flac');
+    final handler = NowPlayingHandler(player, null);
+
+    await handler.skipToNext();
+    await handler.skipToPrevious();
+    await handler.seek(const Duration(seconds: 42));
+
+    expect(player.nexts, 1);
+    expect(player.prevs, 1);
+    expect(player.sought, const Duration(seconds: 42));
+  });
+
+  test('a cover is written once, and named after itself', () async {
+    final art = Uint8List.fromList(List.generate(2048, (i) => (i * 11) % 256));
+    final player = FakePlayer()..current = _track('/muziek/01.flac');
+    final handler = NowPlayingHandler(player, (_) => art);
+
+    final first = (await _item(handler, '/muziek/01.flac'))?.artUri;
+    expect(first, isNotNull);
+    expect(File(first!.toFilePath()).existsSync(), isTrue);
+
+    // The same album again — same bytes, so the same file and nothing rewritten. Otherwise this
+    // folder grows by a cover for every track you play.
+    player.current = _track('/muziek/02.flac', title: 'Sour Times');
+    player.tick();
+    final second = (await _item(handler, '/muziek/02.flac'))?.artUri;
+    expect(second, first);
+    expect(Directory('${scratch.path}/nowplaying').listSync().length, 1);
+  });
+
+  test('a track with no cover still shows its title', () async {
+    final player = FakePlayer()..current = _track('/muziek/01.flac');
+    final handler = NowPlayingHandler(player, (_) => null);
+    final item = await _item(handler, '/muziek/01.flac');
+    expect(item?.title, 'Mysterons');
+    expect(item?.artUri, isNull);
+  });
+
+  test('nothing playing publishes nothing', () async {
+    final player = FakePlayer()..current = _track('/muziek/01.flac');
+    final handler = NowPlayingHandler(player, null);
+    await _item(handler, '/muziek/01.flac');
+
+    player
+      ..current = null
+      ..tick();
+    expect(handler.mediaItem.valueOrNull, isNull);
+  });
+}
+
+/// The handler publishes asynchronously — the artwork has to be written to disk first — so wait
+/// for the item that belongs to [path] rather than reading whatever is there this microtask.
+Future<MediaItem?> _item(NowPlayingHandler handler, String path) async {
+  for (var i = 0; i < 100; i++) {
+    final item = handler.mediaItem.valueOrNull;
+    if (item?.id == path) return item;
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
+  return handler.mediaItem.valueOrNull;
+}

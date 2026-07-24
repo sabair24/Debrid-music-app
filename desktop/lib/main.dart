@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 // Flutter 3.36+ exports a RepeatMode of its own (for RepeatingAnimationBuilder), which collides
 // with the player's. Ours is the one this app means everywhere.
@@ -21,6 +22,7 @@ import 'enrichment.dart';
 import 'lan/sharing.dart';
 import 'lan/client_mode.dart';
 import 'lan/client_session.dart';
+import 'now_playing.dart';
 import 'pairing_screen.dart';
 import 'library.dart';
 import 'metadata.dart';
@@ -52,6 +54,10 @@ const _accent2 = Color(0xFF00D4C8);
 /// have neither. Everything below that touches window_manager or the instance lock asks this
 /// first — on a phone or tablet those calls do not merely do nothing, they throw.
 bool get _isDesktop => Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+
+/// True where a finger is the pointer. Hover states are harmless there (they simply never fire),
+/// but sizes are not: a control comfortable under a mouse is one you miss with a thumb.
+bool get _isTouch => Platform.isIOS || Platform.isAndroid;
 
 /// A loopback port this app holds while it runs. Binding it is the lock; connecting to it is how
 /// a second copy says "you're already running, come to the front".
@@ -128,6 +134,9 @@ Future<void> main() async {
   final player = PlayerStore()
     ..resolver = online.resolveRadio
     ..coverResolver = library.coverForTrack;
+  // The lockscreen, Control Center and the media keys. Not awaited on the critical path — the
+  // window should not wait on a system service to come up.
+  unawaited(initNowPlaying(player, cover: library.coverForTrack));
   final downloads = DownloadManager(online, soulseek, library.rootPath, () async {
     await library.scan();
     await library.enrich(settings);
@@ -504,17 +513,24 @@ class _HomeShellState extends State<HomeShell> {
   /// With the system frame gone this is the only thing left to grab, so dragging it moves the
   /// window and double-clicking it maximises — the two gestures anyone expects of a title bar. The
   /// controls sitting on it keep working: DragToMoveArea only claims what no child handled.
-  Widget _topBar() => DragToMoveArea(
-        child: GestureDetector(
-          behavior: HitTestBehavior.translucent,
-          onDoubleTap: () async =>
-              await windowManager.isMaximized() ? windowManager.unmaximize() : windowManager.maximize(),
-          child: _topBarBody(),
-        ),
-      );
+  /// On an iPad there is no window to drag and no `window_manager` behind these calls — the bar is
+  /// just a bar there.
+  Widget _topBar() => _isDesktop
+      ? DragToMoveArea(
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onDoubleTap: () async => await windowManager.isMaximized()
+                ? windowManager.unmaximize()
+                : windowManager.maximize(),
+            child: _topBarBody(),
+          ),
+        )
+      : _topBarBody();
 
   Widget _topBarBody() => SizedBox(
-        height: 64,
+        // The glow keeps running behind the status bar; only the contents move down, so the top of
+        // the screen still looks like one piece rather than a black strip above the app.
+        height: 64 + (_isTouch ? MediaQuery.viewPaddingOf(context).top : 0),
         child: Stack(
           children: [
             Positioned(
@@ -534,50 +550,80 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(18, 11, 18, 8),
-              child: Row(
-                children: [
-                  Container(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(8),
-                      gradient: const LinearGradient(colors: [_accent, _accent2]),
-                    ),
-                    child: const Icon(Icons.music_note_rounded, size: 17, color: Colors.white),
-                  ),
-                  const SizedBox(width: 9),
-                  const Text('DebridMusic',
-                      style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5)),
-                  const Spacer(),
-                  Consumer<DownloadManager>(
-                    builder: (_, dm, __) => _NavPills(
-                      active: _view,
-                      onSelect: (i) => setState(() => _view = i),
-                      badge: dm.jobs.where((j) => j.busy).length,
-                    ),
-                  ),
-                  const Spacer(),
-                  Consumer<LibraryStore>(
-                    builder: (_, lib, __) => Text(
-                      lib.scanning
-                          ? 'Scannen… ${lib.scanned}'
-                          : (lib.enriching
-                              ? 'Covers ophalen…'
-                              : '${lib.albums.length} albums · ${lib.tracks.length} nummers'),
-                      style: const TextStyle(color: _muted, fontSize: 11.5),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  IconButton(
-                    icon: const Icon(Icons.settings_rounded, size: 19),
-                    color: _muted,
-                    tooltip: 'Instellingen',
-                    onPressed: () => showDialog(context: context, builder: (_) => const SettingsDialog()),
-                  ),
-                  const SizedBox(width: 4),
-                  const _WindowButtons(),
-                ],
+              padding: EdgeInsets.fromLTRB(
+                  18, 11 + (_isTouch ? MediaQuery.viewPaddingOf(context).top : 0), 18, 8),
+              // The bar was built for a 1240-point window. An iPad in portrait is 834, and there
+              // it would simply overflow. Rather than a second navigation for touch — which is
+              // exactly the divergence this whole change is removing — the same bar drops what is
+              // decoration (the wordmark, the counts) and lets the sections scroll.
+              child: LayoutBuilder(
+                builder: (context, box) {
+                  final compact = box.maxWidth < 1040;
+                  return Row(
+                    children: [
+                      Container(
+                        width: 28,
+                        height: 28,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          gradient: const LinearGradient(colors: [_accent, _accent2]),
+                        ),
+                        child: const Icon(Icons.music_note_rounded, size: 17, color: Colors.white),
+                      ),
+                      if (!compact) ...[
+                        const SizedBox(width: 9),
+                        const Text('DebridMusic',
+                            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5)),
+                      ],
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Center(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            // Every section stays reachable when they no longer fit side by side.
+                            // A menu would hide them; scrolling keeps them where they were.
+                            child: Consumer<DownloadManager>(
+                              builder: (_, dm, __) => _NavPills(
+                                active: _view,
+                                onSelect: (i) => setState(() => _view = i),
+                                badge: dm.jobs.where((j) => j.busy).length,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      if (!compact)
+                        Consumer<LibraryStore>(
+                          builder: (_, lib, __) => Text(
+                            lib.scanning
+                                ? 'Scannen… ${lib.scanned}'
+                                : (lib.enriching
+                                    ? 'Covers ophalen…'
+                                    : '${lib.albums.length} albums · ${lib.tracks.length} nummers'),
+                            style: const TextStyle(color: _muted, fontSize: 11.5),
+                          ),
+                        ),
+                      if (!compact) const SizedBox(width: 12),
+                      IconButton(
+                        icon: const Icon(Icons.settings_rounded, size: 19),
+                        color: _muted,
+                        tooltip: 'Instellingen',
+                        // 44 points on a touch screen — the smallest thing Apple expects a finger
+                        // to hit, and a 19-point icon with default padding is under it.
+                        constraints: _isTouch ? const BoxConstraints.tightFor(width: 44, height: 44) : null,
+                        onPressed: () =>
+                            showDialog(context: context, builder: (_) => const SettingsDialog()),
+                      ),
+                      // Only where there is a window to close: on the iPad these would be three
+                      // buttons wired to a plugin that does not exist there.
+                      if (_isDesktop) ...[
+                        const SizedBox(width: 4),
+                        const _WindowButtons(),
+                      ],
+                    ],
+                  );
+                },
               ),
             ),
           ],
@@ -597,9 +643,17 @@ class _HomeShellState extends State<HomeShell> {
           return const Center(child: CircularProgressIndicator());
         }
         if (lib.albums.isEmpty) {
-          return const Center(
-              child: Text('Geen muziek gevonden in D:\\Flac music 2024',
-                  style: TextStyle(color: _muted)));
+          // On a Mac or an iPad there is no folder to point at — the library comes from the PC,
+          // and naming a drive letter there sends you looking in the wrong place entirely.
+          return Center(
+            child: Text(
+              lib.isRemote
+                  ? 'Nog niets van je pc ontvangen. Staat DebridMusic daar open?'
+                  : 'Geen muziek gevonden in ${lib.rootPath}',
+              style: const TextStyle(color: _muted),
+              textAlign: TextAlign.center,
+            ),
+          );
         }
         // An album stays in view when any of its tracks matches (so searching an artist or a
         // single song still surfaces the album it lives on).
@@ -675,8 +729,12 @@ class _NavPillsState extends State<_NavPills> {
     (6, 'Mijn downloads'),
   ];
   static const _style = TextStyle(fontSize: 13, fontWeight: FontWeight.w600);
-  static const _padH = 15.0;
+  static final _padH = _isTouch ? 20.0 : 15.0;
   static const _badgeW = 21.0;
+
+  /// 44 points under a finger, 32 under a mouse. The pill that slides behind the active section
+  /// is measured from these, so both have to come from the same place.
+  static final _height = _isTouch ? 44.0 : 32.0;
 
   double _width(int i) {
     final tp = TextPainter(
@@ -720,7 +778,7 @@ class _NavPillsState extends State<_NavPills> {
             ],
           ),
           child: SizedBox(
-            height: 32,
+            height: _height,
             width: total,
             child: Stack(
               children: [
@@ -2544,17 +2602,25 @@ class PlayerBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = context.watch<PlayerStore>();
     final t = p.current;
+    // Under the home indicator on an iPad: the bar's colour runs to the bottom edge, its contents
+    // stop above the bar the system draws over everything.
+    final bottomInset = _isTouch ? MediaQuery.viewPaddingOf(context).bottom : 0.0;
+    // 280 a side in a desktop window, which is what centres the transport controls. Two of those
+    // plus the controls do not fit on an iPad in portrait — 596 of 834 points gone before the
+    // buttons start — so they give way instead of overflowing.
+    final width = MediaQuery.sizeOf(context).width;
+    final side = math.min(280.0, math.max(96.0, (width - 336) / 2));
     return Container(
-      height: 84,
+      height: 84 + bottomInset,
       decoration: const BoxDecoration(
         color: Color(0xFF12141D),
         border: Border(top: BorderSide(color: _line)),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 18),
+      padding: EdgeInsets.fromLTRB(18, 0, 18, bottomInset),
       child: Row(
         children: [
           SizedBox(
-            width: 280,
+            width: side,
             child: Row(
               children: [
                 GestureDetector(
@@ -2678,7 +2744,8 @@ class PlayerBar extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(width: 280),
+          // The mirror of the leading block: it is what keeps the transport in the middle.
+          SizedBox(width: side),
         ],
       ),
     );

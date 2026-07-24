@@ -20,8 +20,23 @@ class RadioItem {
   bool get isLocal => local != null;
 }
 
+/// The little of the player that the lockscreen needs. Named here, next to the thing that
+/// implements it, so the compiler checks the two agree — and so what publishes to Control Center
+/// can be exercised without libmpv, which cannot load in a test at all.
+abstract interface class NowPlayingSource implements Listenable {
+  Track? get current;
+  bool get playing;
+  Duration get position;
+  Duration get duration;
+  Uint8List? get currentCover;
+  void playPause();
+  Future<void> next();
+  Future<void> prev();
+  void seek(Duration d);
+}
+
 /// Native (libmpv) player with a queue, shuffle, repeat and a Radio mode.
-class PlayerStore extends ChangeNotifier {
+class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   final Player _player = Player();
   List<Track> _original = [];
   List<Track> _order = [];
@@ -40,12 +55,16 @@ class PlayerStore extends ChangeNotifier {
   List<RadioItem> get radioQueue => _radio;
   int get radioIndex => _radioIndex;
 
+  @override
   Uint8List? currentCover;
   bool shuffle = false;
   RepeatMode repeat = RepeatMode.off;
 
+  @override
   bool playing = false;
+  @override
   Duration position = Duration.zero;
+  @override
   Duration duration = Duration.zero;
 
   /// Resolves an album cover for a track (set by main to LibraryStore.coverForTrack)
@@ -83,6 +102,7 @@ class PlayerStore extends ChangeNotifier {
   File get _queueFile => File('$_appDir${Platform.pathSeparator}resume_queue.json');
   File get _posFile => File('$_appDir${Platform.pathSeparator}resume_pos.json');
 
+  @override
   Track? get current {
     if (radioMode) {
       if (_radioIndex >= 0 && _radioIndex < _radio.length) {
@@ -273,8 +293,10 @@ class PlayerStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  @override
   void playPause() => _player.playOrPause();
 
+  @override
   Future<void> next() async {
     if (radioMode) {
       if (_radioIndex < _radio.length - 1) {
@@ -292,6 +314,7 @@ class PlayerStore extends ChangeNotifier {
     }
   }
 
+  @override
   Future<void> prev() async {
     if (position > const Duration(seconds: 3)) {
       await _player.seek(Duration.zero);
@@ -316,6 +339,7 @@ class PlayerStore extends ChangeNotifier {
     }
   }
 
+  @override
   void seek(Duration d) => _player.seek(d);
   void setVolume(double v) => _player.setVolume(v);
 

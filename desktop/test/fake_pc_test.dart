@@ -69,8 +69,8 @@ void main() {
     expect(await server.start(), isNull);
     // ignore: avoid_print
     print('FAKE PC op http://127.0.0.1:${server.boundPort} — token nep-pc-sleutel');
-    await Future<void>.delayed(const Duration(minutes: 8));
+    await Future<void>.delayed(const Duration(minutes: 25));
     await server.dispose();
     root.deleteSync(recursive: true);
-  }, timeout: const Timeout(Duration(minutes: 10)), skip: Platform.environment['FAKE_PC'] != '1');
+  }, timeout: const Timeout(Duration(minutes: 30)), skip: Platform.environment['FAKE_PC'] != '1');
 }
