@@ -32,7 +32,6 @@ permissions:
 
 env:
   TEAM_ID: DR8YNUC2S7
-  BUNDLE_ID: com.debridmedia.music
 
 defaults:
   run:
@@ -181,6 +180,12 @@ jobs:
       # through. The Flutter build above has already produced App.framework and the assets, so this
       # only archives what is there.
       #
+      # Nothing sets PRODUCT_BUNDLE_IDENTIFIER here, on purpose. A build setting given on the
+      # xcodebuild command line applies to EVERY target in the build, so passing the app's id also
+      # stamped it on Mpv.framework, Avcodec.framework and the rest — and the upload was rejected
+      # for "more than one bundle with the CFBundleIdentifier value com.debridmedia.music". The
+      # project already carries the right id in both configurations.
+      #
       # FLUTTER_BUILD_NAME/NUMBER, not MARKETING_VERSION/CURRENT_PROJECT_VERSION: Info.plist reads
       # $(FLUTTER_BUILD_NAME) and $(FLUTTER_BUILD_NUMBER), so the Xcode-native names are accepted
       # on the command line and then quietly ignored — TestFlight would keep seeing the version
@@ -200,7 +205,6 @@ jobs:
             -authenticationKeyID "$KEY_ID" \
             -authenticationKeyIssuerID "$ISSUER_ID" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
-            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             FLUTTER_BUILD_NAME="${{ steps.version.outputs.VERSION }}" \
             FLUTTER_BUILD_NUMBER="${{ steps.version.outputs.BUILD }}" \
             archive
