@@ -84,14 +84,18 @@ Future<void> main() async {
     exit(0);
   }
   await windowManager.waitUntilReadyToShow(
+    // No system title bar: the app draws its own close/minimise/resize buttons into the top bar, so
+    // the whole window is the app rather than the app inside a Windows frame. The size below is
+    // only what it restores DOWN to — it opens filling the screen.
     const WindowOptions(
       size: Size(1240, 820),
       minimumSize: Size(940, 640),
       center: true,
       title: 'DebridMusic',
-      titleBarStyle: TitleBarStyle.normal,
+      titleBarStyle: TitleBarStyle.hidden,
     ),
     () async {
+      await windowManager.maximize();
       await windowManager.show();
       await windowManager.focus();
     },
@@ -417,7 +421,21 @@ class _HomeShellState extends State<HomeShell> {
   /// Brand, the navigation pill bar, and the library count — the old left rail, laid out
   /// horizontally. The soft glow behind it is what the glass has to blur; on a flat panel
   /// frosted glass is indistinguishable from a plain rounded box.
-  Widget _topBar() => SizedBox(
+  /// The top bar doubles as the window's title bar.
+  ///
+  /// With the system frame gone this is the only thing left to grab, so dragging it moves the
+  /// window and double-clicking it maximises — the two gestures anyone expects of a title bar. The
+  /// controls sitting on it keep working: DragToMoveArea only claims what no child handled.
+  Widget _topBar() => DragToMoveArea(
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onDoubleTap: () async =>
+              await windowManager.isMaximized() ? windowManager.unmaximize() : windowManager.maximize(),
+          child: _topBarBody(),
+        ),
+      );
+
+  Widget _topBarBody() => SizedBox(
         height: 64,
         child: Stack(
           children: [
@@ -479,6 +497,8 @@ class _HomeShellState extends State<HomeShell> {
                     tooltip: 'Instellingen',
                     onPressed: () => showDialog(context: context, builder: (_) => const SettingsDialog()),
                   ),
+                  const SizedBox(width: 4),
+                  const _WindowButtons(),
                 ],
               ),
             ),
@@ -2233,18 +2253,102 @@ class _ArtistCardState extends State<_ArtistCard> {
 /// a guest like Beyoncé usually isn't in your library at all, and even for an artist you do own
 /// the interesting thing here is their whole catalogue — that's what tapping a name promises.
 Future<void> openArtist(BuildContext context, String name) async {
-  final messenger = ScaffoldMessenger.of(context);
   final navigator = Navigator.of(context);
-  final hits = await CatalogService().searchArtists(name);
-  if (hits.isEmpty) {
-    messenger.showSnackBar(
-      SnackBar(content: Text('Geen artiestenpagina gevonden voor $name'), duration: const Duration(seconds: 2)),
-    );
-    return;
+  final mb = context.read<MusicBrainzService>();
+
+  CatalogArtist? artist;
+  try {
+    final hits = await CatalogService().searchArtists(name);
+    // Prefer an exact name match over the first (fuzzy) hit.
+    if (hits.isNotEmpty) {
+      artist = hits.firstWhere((a) => artistKey(a.name) == artistKey(name), orElse: () => hits.first);
+    }
+  } catch (_) {/* fall through to MusicBrainz */}
+
+  // Deezer catalogues what streams, so it has never heard of plenty of acts a real library holds.
+  // MusicBrainz usually has them, and its discography is the fuller one anyway.
+  if (artist == null) {
+    try {
+      final a = await mb.resolveArtist(name);
+      if (a != null) {
+        artist = CatalogArtist(0, a.name, null, 0,
+            origin: CatalogRef.musicbrainz(a.mbid), detail: a.line);
+      }
+    } catch (_) {}
   }
-  // Prefer an exact name match over the first (fuzzy) hit.
-  final artist = hits.firstWhere((a) => artistKey(a.name) == artistKey(name), orElse: () => hits.first);
-  navigator.push(MaterialPageRoute(builder: (_) => ArtistBrowsePage(artist)));
+
+  // Still nothing: open the page regardless. It can show no discography, but it CAN show the
+  // records of theirs you already own — and refusing to open at all showed you neither.
+  artist ??= CatalogArtist(0, name, null, 0);
+  navigator.push(MaterialPageRoute(builder: (_) => ArtistBrowsePage(artist!)));
+}
+
+/// Minimise, maximise/restore and close, drawn by the app.
+///
+/// The system title bar is switched off so the window is all app, which means these three have to
+/// exist here — without them a maximised window could not be shrunk or closed at all.
+class _WindowButtons extends StatefulWidget {
+  const _WindowButtons();
+  @override
+  State<_WindowButtons> createState() => _WindowButtonsState();
+}
+
+class _WindowButtonsState extends State<_WindowButtons> with WindowListener {
+  bool _maximized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    windowManager.addListener(this);
+    windowManager.isMaximized().then((v) {
+      if (mounted) setState(() => _maximized = v);
+    });
+  }
+
+  @override
+  void dispose() {
+    windowManager.removeListener(this);
+    super.dispose();
+  }
+
+  // The window can also be maximised by dragging it to the top edge or by a keyboard shortcut, so
+  // the icon follows the window rather than only the button that was pressed.
+  @override
+  void onWindowMaximize() => mounted ? setState(() => _maximized = true) : null;
+  @override
+  void onWindowUnmaximize() => mounted ? setState(() => _maximized = false) : null;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _btn(Icons.remove_rounded, 'Minimaliseren', () => windowManager.minimize()),
+          _btn(
+            _maximized ? Icons.filter_none_rounded : Icons.crop_square_rounded,
+            _maximized ? 'Verkleinen' : 'Maximaliseren',
+            () async => _maximized ? windowManager.unmaximize() : windowManager.maximize(),
+            size: _maximized ? 13 : 15,
+          ),
+          _btn(Icons.close_rounded, 'Sluiten', () => windowManager.close(), danger: true),
+        ],
+      );
+
+  Widget _btn(IconData icon, String tip, VoidCallback onTap, {double size = 17, bool danger = false}) =>
+      Tooltip(
+        message: tip,
+        waitDuration: const Duration(milliseconds: 600),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(7),
+          // Red on hover for close, the one that loses work if hit by accident.
+          hoverColor: danger ? const Color(0xFFE81123) : Colors.white.withValues(alpha: .10),
+          child: SizedBox(
+            width: 38,
+            height: 30,
+            child: Icon(icon, size: size, color: _muted),
+          ),
+        ),
+      );
 }
 
 /// "Lady Gaga · Beyoncé" — every name tappable.
@@ -5791,6 +5895,15 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
 
   @override
   Widget build(BuildContext context) {
+    // The records of this artist you actually hold. Matched on the normalised artist name, the same
+    // key the library groups by, so a stray capital or accent doesn't hide your own albums.
+    final lib = context.watch<LibraryStore>();
+    final mine = lib.albums
+        .where((a) => artistKey(a.artist) == artistKey(widget.artist.name))
+        .toList()
+      ..sort((a, b) => (b.year ?? 0).compareTo(a.year ?? 0));
+    final owned = {for (final a in mine) normKey(a.title)};
+
     return Scaffold(
       backgroundColor: _bg,
       body: ArtistBackdrop(
@@ -5803,7 +5916,12 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                 ArtistHero(
                   name: widget.artist.name,
                   ownBackdrop: false,
-                  subtitle: _busy ? 'Albums laden…' : '${_albums.length} albums',
+                  subtitle: _busy
+                      ? 'Albums laden…'
+                      : [
+                          if (mine.isNotEmpty) '${mine.length} in je bibliotheek',
+                          '${_albums.length} albums',
+                        ].join(' · '),
                 ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(10, 8, 0, 0),
@@ -5822,25 +5940,46 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                 child: BioText(widget.artist.name, _bio!),
               ),
             ),
-          if (_busy)
-            const SliverToBoxAdapter(
-                child: Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator(color: _accent))))
-          else
+          // What you already own by this artist, first. Reaching an artist from an album used to
+          // show only the online discography, so the records sitting on your own disk were the one
+          // thing this page would not tell you about.
+          if (mine.isNotEmpty) ...[
+            SliverToBoxAdapter(child: _sectionTitle('In mijn bibliotheek', '${mine.length}')),
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(20, 6, 20, 40),
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 18),
               sliver: SliverGrid(
                 gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                     maxCrossAxisExtent: 180, mainAxisSpacing: 14, crossAxisSpacing: 14, childAspectRatio: .74),
-                delegate: SliverChildBuilderDelegate((_, i) => _albumCard(_albums[i]), childCount: _albums.length),
+                delegate:
+                    SliverChildBuilderDelegate((_, i) => AlbumCard(album: mine[i]), childCount: mine.length),
               ),
             ),
+          ],
+          if (_busy)
+            const SliverToBoxAdapter(
+                child: Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator(color: _accent))))
+          else ...[
+            SliverToBoxAdapter(
+                child: _sectionTitle(
+                    mine.isEmpty ? 'Discografie' : 'Volledige discografie', '${_albums.length}')),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: 180, mainAxisSpacing: 14, crossAxisSpacing: 14, childAspectRatio: .74),
+                delegate: SliverChildBuilderDelegate(
+                    (_, i) => _albumCard(_albums[i], owned.contains(normKey(_albums[i].title))),
+                    childCount: _albums.length),
+              ),
+            ),
+          ],
         ],
         ),
       ),
     );
   }
 
-  Widget _albumCard(CatalogAlbum al) {
+  Widget _albumCard(CatalogAlbum al, [bool owned = false]) {
     final sub = [
       if (al.year != null) al.year!,
       if (al.isSingle) 'Single' else if (al.trackCount > 0) '${al.trackCount} nummers',
@@ -5852,7 +5991,28 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(child: LayoutBuilder(builder: (_, c) => _netCover(al.cover, size: c.maxWidth))),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (_, c) => Stack(children: [
+                _netCover(al.cover, size: c.maxWidth),
+                // Which of the discography you already hold — so the gap in the collection is the
+                // thing you can see, rather than something to work out by comparing two lists.
+                if (owned)
+                  Positioned(
+                    right: 5,
+                    top: 5,
+                    child: Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: BoxDecoration(
+                        color: _bg.withValues(alpha: .72),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.check_circle_rounded, size: 15, color: _accent2),
+                    ),
+                  ),
+              ]),
+            ),
+          ),
           const SizedBox(height: 6),
           Text(al.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
           Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 11)),
@@ -5860,6 +6020,15 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       ),
     );
   }
+
+  Widget _sectionTitle(String title, String count) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 10, 24, 10),
+        child: Row(children: [
+          Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+          const SizedBox(width: 8),
+          Text(count, style: const TextStyle(color: _muted, fontSize: 13)),
+        ]),
+      );
 }
 
 class AlbumBrowsePage extends StatefulWidget {
