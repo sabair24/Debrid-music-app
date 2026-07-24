@@ -1065,6 +1065,14 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   /// than presenting a near miss as the record.
   bool _officialBestFit = true;
 
+  /// The pressing the tracklist above is read from.
+  ///
+  /// Handed to AlbumArt so the sleeve comes from that same pressing. Without it the art ran its own
+  /// search keyed on how many FILES are here, and three files of a sixteen-track album filtered out
+  /// every pressing bigger than seven — so the page could only ever find the single's cover, while
+  /// the tile on the home screen showed the album's. Two surfaces, two answers, one record.
+  String? _officialMbid;
+
   /// Which album the tracklist above belongs to, so a merge or a re-pick refetches and a rescan
   /// (which hands this page a NEW Album object for the same record) does not.
   String _officialFor = '';
@@ -1116,6 +1124,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     var from = '';
     var bonus = const <BonusTrack>[];
     var bestFit = true;
+    String? mbid;
     int? year;
     try {
       MbRelease? rel;
@@ -1123,14 +1132,28 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       if (rel == null) {
         final groups = await mb.searchReleaseGroups(DiscogsService.plainTitle(a.title),
             artist: a.artist);
-        // A live album, a soundtrack and a greatest-hits all say "Album"; the studio record is the
-        // one this page is about.
-        final g = groups.where((x) => !x.isCompilation).firstOrNull ?? groups.firstOrNull;
+        // Not merely "not a compilation": a SINGLE of the same name is a different record, and
+        // picking it described a sixteen-track album with a two-track sleeve.
+        final g = MusicBrainzService.pickReleaseGroup(groups, single: a.isSingle);
         if (g != null) {
           // One request for every pressing of the record, already in preference order.
           final all = await mb.editionsOf(g.mbid);
           final owned = albumTrackCount(a.tracks);
-          final shortlist = shortlistPressings([for (final r in all) r.trackCount], owned);
+          final counts = [for (final r in all) r.trackCount];
+          // The three smallest that fit, PLUS the fullest pressing of the record.
+          //
+          // Smallest-that-fits alone is not enough. Owning three tracks of Gotta Get Thru This
+          // shortlists three twelve-track pressings, and the acoustic version you hold is only on
+          // the sixteen — so the pressing that actually describes what you have never gets looked
+          // at. The fullest one is fetched anyway for the bonus list, so scoring it costs nothing.
+          final fullest = counts.isEmpty
+              ? -1
+              : counts.indexed.reduce((x, y) => y.$2 > x.$2 ? y : x).$1;
+          final shortlist = <int>{
+            ...shortlistPressings(counts, owned),
+            if (fullest >= 0) fullest,
+          }.toList();
+
           final tried = <MbRelease>[];
           final lists = <List<ChoiceTrack>>[];
           final scored = <AlbumCompleteness>[];
@@ -1146,23 +1169,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             rel = tried[pick];
             out = lists[pick];
             bestFit = scored[pick].namesEverything;
-
-            // Bonuses come from the FULLEST pressing of the record, never from the shortlist: that
-            // is deliberately the smallest ones that fit, so for a complete album it is three
-            // copies of the same eleven tracks and holds nothing extra at all.
-            final fullest = all.indexed
-                .reduce((a, b) => b.$2.trackCount > a.$2.trackCount ? b : a);
-            var extra = <ChoiceTrack>[];
-            if (fullest.$2.mbid == rel.mbid) {
-              extra = const [];
-            } else {
-              final seen = tried.indexWhere((r) => r.mbid == fullest.$2.mbid);
-              extra = seen >= 0 ? lists[seen] : await mb.tracklistOf(fullest.$2);
-            }
+            // Everything fetched that is not the chosen pressing is where the extras come from.
             bonus = bonusTracks(out, a.tracks, a.artist, [
-              if (extra.isNotEmpty) (fullest.$2.line, extra),
               for (var i = 0; i < tried.length; i++)
-                if (i != pick && tried[i].mbid != fullest.$2.mbid) (tried[i].line, lists[i])
+                if (i != pick) (tried[i].line, lists[i])
             ]);
           }
         }
@@ -1170,7 +1180,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       if (rel != null) {
         if (out.isEmpty) out = await mb.tracklistOf(rel);
         year = rel.albumYear ?? rel.year;
-        if (out.isNotEmpty) from = 'MusicBrainz';
+        if (out.isNotEmpty) {
+          from = 'MusicBrainz';
+          mbid = rel.mbid; // so the sleeve comes from this pressing, not from a second guess
+        }
       }
     } catch (_) {/* Discogs gets its turn below */}
     if (out.isEmpty) {
@@ -1193,6 +1206,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       _officialYear = year;
       _officialBonus = bonus;
       _officialBestFit = bestFit;
+      _officialMbid = mbid;
       _officialBusy = false;
     });
   }
@@ -1688,8 +1702,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             fallback: album.cover,
             chosen: album.correctedCover,
             pinned: context.watch<LibraryStore>().pinnedRelease(album),
-            pinnedMbid: context.watch<LibraryStore>().pinnedMbid(album),
-            trackCount: album.tracks.length,
+            // Your own choice still wins; otherwise the pressing this page is describing. Without
+            // that the art searched on its own and was steered by the FILE count — three files of a
+            // sixteen-track album ruled out every pressing over seven, so it found the single.
+            pinnedMbid: context.watch<LibraryStore>().pinnedMbid(album) ?? _officialMbid,
+            trackCount: _official.isNotEmpty ? _official.length : album.tracks.length,
             playing: _albumIsPlaying(context),
           ),
           const SizedBox(width: 24),

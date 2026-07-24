@@ -170,4 +170,55 @@ void main() {
       expect(i.thumb, endsWith('250.jpg'));
     });
   });
+
+  group('pickReleaseGroup', () {
+    MbReleaseGroup g(String type, {List<String> secondary = const [], String title = 'X'}) =>
+        MbReleaseGroup('$type-${secondary.join()}', title, 'Daniel Bedingfield', 'a', type,
+            secondaryTypes: secondary);
+
+    test('a single of the same name is not the album', () {
+      // The real case. MusicBrainz has two "Gotta Get Thru This" groups: a Single from 2001 that is
+      // eight versions of one song, and the Album from 2002 the song is track 3 of. The single came
+      // back first, so a sixteen-track record was described by a two-track sleeve — and the album's
+      // own cover could not be found either, because the art searched on the same wrong record.
+      final groups = [g('Single'), g('Album')];
+      expect(MusicBrainzService.pickReleaseGroup(groups, single: false)?.primaryType, 'Album');
+    });
+
+    test('and an album of the same name is not the single', () {
+      final groups = [g('Album'), g('Single')];
+      expect(MusicBrainzService.pickReleaseGroup(groups, single: true)?.primaryType, 'Single');
+    });
+
+    test('a compilation never describes a record, whatever type it claims', () {
+      // isCompilation reads the SECONDARY types, which is exactly why it could not catch a Single —
+      // that is a PRIMARY one. Both sieves are needed, and this one still comes first.
+      final groups = [
+        g('Album', secondary: ['Compilation']),
+        g('Album'),
+      ];
+      expect(MusicBrainzService.pickReleaseGroup(groups, single: false)?.isCompilation, isFalse);
+    });
+
+    test('the type is a preference, not a demand', () {
+      // Only a single exists for a record filed as an album: describing it with that beats
+      // describing it with nothing.
+      expect(MusicBrainzService.pickReleaseGroup([g('Single')], single: false)?.primaryType,
+          'Single');
+    });
+
+    test('and even a compilation beats no tracklist at all', () {
+      final only = [g('Album', secondary: ['Compilation'])];
+      expect(MusicBrainzService.pickReleaseGroup(only, single: false), isNotNull);
+    });
+
+    test('nothing in, nothing out', () {
+      expect(MusicBrainzService.pickReleaseGroup(const [], single: false), isNull);
+    });
+
+    test('an EP is not silently promoted to the album', () {
+      final groups = [g('EP'), g('Album')];
+      expect(MusicBrainzService.pickReleaseGroup(groups, single: false)?.primaryType, 'Album');
+    });
+  });
 }

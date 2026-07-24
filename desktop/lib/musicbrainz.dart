@@ -449,6 +449,28 @@ class MusicBrainzService {
   /// [expectedTracks] drops the pressings that are a different record: a single or a sampler filed
   /// under the same release group, or a box set that carries two albums. Both directions matter —
   /// checking only for "too few" let *Discovery* land on a double CD that was also Homework.
+  /// Which release group describes this record — the album, or the single of the same name?
+  ///
+  /// They exist side by side more often than you would think. Daniel Bedingfield has two groups
+  /// called "Gotta Get Thru This": a Single from 2001 that is eight versions of one song, and the
+  /// Album from 2002 that the song is track 3 of. Taking the first group that is not a compilation
+  /// picked the single, so a sixteen-track record was described by a two-track sleeve — and the
+  /// album's own cover could not be found either.
+  ///
+  /// [isCompilation] cannot answer this: it reads the SECONDARY types, and Single is a PRIMARY one.
+  ///
+  /// Asked from what the library already decided — a record filed as an album wants an Album group,
+  /// a loose track wants a Single. Falls back rather than refusing: a record described by the wrong
+  /// kind of group is still more use than a record with no tracklist at all.
+  static MbReleaseGroup? pickReleaseGroup(List<MbReleaseGroup> groups, {required bool single}) {
+    if (groups.isEmpty) return null;
+    final want = single ? 'single' : 'album';
+    final studio = groups.where((g) => !g.isCompilation);
+    return studio.where((g) => g.primaryType.toLowerCase() == want).firstOrNull ??
+        studio.firstOrNull ??
+        groups.first;
+  }
+
   static List<MbRelease> orderByPreference(List<MbRelease> all, {int expectedTracks = 0}) {
     final out = [
       for (final r in all)

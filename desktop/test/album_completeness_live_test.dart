@@ -96,6 +96,35 @@ void main() {
     expect(scored[pick].complete, isTrue, reason: 'deze plaat is compleet — er ontbreekt niets');
   }, timeout: const Timeout(Duration(minutes: 3)));
 
+  test('a same-named single does not get to describe the album', () async {
+    // Daniel Bedingfield has two "Gotta Get Thru This" release groups: a Single from 2001 that is
+    // eight versions of one song, and the Album from 2002 the song is track 3 of. MusicBrainz
+    // returns the single first, and taking it left the album page showing two tracks — with the
+    // acoustic version filed as "not on this pressing" and the single's sleeve on the cover.
+    final mb = MusicBrainzService();
+    final groups =
+        await mb.searchReleaseGroups('Gotta Get Thru This', artist: 'Daniel Bedingfield');
+    expect(groups.map((g) => g.primaryType), contains('Single'),
+        reason: 'zonder de single erbij bewijst deze test niets');
+
+    final g = MusicBrainzService.pickReleaseGroup(groups, single: false);
+    expect(g?.primaryType, 'Album');
+
+    final all = await mb.editionsOf(g!.mbid);
+    final biggest = all.reduce((a, b) => b.trackCount > a.trackCount ? b : a);
+    expect(biggest.trackCount, greaterThanOrEqualTo(12),
+        reason: 'kreeg een persing van ${biggest.trackCount} — dat is de single, niet de plaat');
+
+    final titles = (await mb.tracklistOf(biggest)).map((t) => t.title.toLowerCase()).toList();
+    // The acoustic version is the discriminator: it is on the album and on no pressing of the
+    // single. Which spelling track 3 carries varies per pressing, so that is not asserted.
+    expect(titles.any((t) => t.contains('acoustic')), isTrue);
+    expect(titles.any((t) => t.contains('gotta get thru this')), isTrue);
+    expect(titles.any((t) => t.contains('if you’re not the one') || t.contains("if you're not the one")),
+        isTrue,
+        reason: 'een echt album heeft ook de ándere nummers — de single heeft die niet');
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
   test('and a record we hold in full reports nothing missing', () async {
     final mb = MusicBrainzService();
     final official = await _official(mb, 'Enrique Iglesias', 'Escape');
