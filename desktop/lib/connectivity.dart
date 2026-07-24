@@ -49,7 +49,21 @@ class ConnectionChecker {
         final name = (jsonDecode(r.body)['username'] ?? '') as String;
         return ConnResult(ConnState.ok, name.isNotEmpty ? 'Ingelogd als $name' : 'Geldige token');
       }
-      return const ConnResult(ConnState.fail, 'Ongeldige token');
+      // Not all of these are a bad token, and calling them one sends you off checking something
+      // that was never wrong. 429 in particular happens right after a busy session and clears by
+      // itself; "ongeldig" would have you generating a new token for nothing.
+      return ConnResult(
+        ConnState.fail,
+        switch (r.statusCode) {
+          401 => 'Token geweigerd. Discogs wil een PERSONAL ACCESS TOKEN — niet de Consumer Key '
+              'of Secret. Instellingen → Developers → Generate new token.',
+          403 => 'Discogs weigert de toegang (403). Meestal het verkeerde soort sleutel: het moet '
+              'een personal access token zijn.',
+          429 => 'Even te veel verzoeken (429). Je token is in orde; wacht een minuut.',
+          >= 500 => 'Discogs zelf heeft een storing (${r.statusCode}). Later opnieuw proberen.',
+          _ => 'Discogs antwoordde met ${r.statusCode}.',
+        },
+      );
     } catch (_) {
       return const ConnResult(ConnState.fail, 'Geen verbinding');
     }
