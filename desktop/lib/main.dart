@@ -13,6 +13,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'booklet_view.dart';
 import 'catalog.dart';
+import 'completeness.dart';
 import 'credits.dart';
 import 'discogs.dart';
 import 'editions.dart';
@@ -887,6 +888,202 @@ class AlbumDetailPage extends StatefulWidget {
 class _AlbumDetailPageState extends State<AlbumDetailPage> {
   late Album album = widget.album;
 
+  /// The record as its label pressed it, so the page can show what is MISSING and not only what
+  /// happens to be on disk. Empty until it lands — and empty is harmless: the tracklist then
+  /// renders exactly what it always did.
+  List<ChoiceTrack> _official = const [];
+  String _officialFrom = '';
+  int? _officialYear;
+  bool _officialBusy = false;
+
+  /// Which album the tracklist above belongs to, so a merge or a re-pick refetches and a rescan
+  /// (which hands this page a NEW Album object for the same record) does not.
+  String _officialFor = '';
+
+  bool _showMissing = true;
+
+  /// One album-wide Soulseek search, kept for the whole visit. Fifteen missing tracks is fifteen
+  /// searches otherwise, on a login that allows exactly one session.
+  List<SoulseekFile> _albumSlsk = const [];
+  bool _slskLoaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // After the first frame: this reads providers, and initState runs before the element is
+    // fully mounted in the tree.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadOfficial());
+  }
+
+  String get _albumKey => '${artistKey(album.artist)}|${normKey(album.title)}';
+
+  /// The official tracklist, MusicBrainz first and Discogs behind it.
+  ///
+  /// Deliberately WITHOUT expectedTracks: this page exists because the library holds fewer tracks
+  /// than the record has, and filtering pressings by what is already on disk would rule out the
+  /// very release that names what is missing. A pinned pressing wins outright — if you picked an
+  /// edition in the gallery, that edition is the answer, not a candidate.
+  Future<void> _loadOfficial() async {
+    if (!mounted || album.isSingle) return;
+    final a = album;
+    final want = _albumKey;
+    final lib = context.read<LibraryStore>();
+    final mb = context.read<MusicBrainzService>();
+    final settings = context.read<AppSettings>();
+    final pinnedMbid = lib.pinnedMbid(a);
+    final pinned = lib.pinnedRelease(a);
+    setState(() {
+      _officialBusy = true;
+      _officialFor = want;
+    });
+
+    var out = const <ChoiceTrack>[];
+    var from = '';
+    int? year;
+    try {
+      MbRelease? rel;
+      if (pinnedMbid != null && pinnedMbid.isNotEmpty) rel = await mb.release(pinnedMbid);
+      if (rel == null) {
+        final hits = await mb.searchReleases(a.artist, DiscogsService.plainTitle(a.title));
+        if (hits.isNotEmpty) rel = await mb.release(hits.first.mbid);
+      }
+      if (rel != null) {
+        out = await mb.tracklistOf(rel);
+        year = rel.albumYear ?? rel.year;
+        if (out.isNotEmpty) from = 'MusicBrainz';
+      }
+    } catch (_) {/* Discogs gets its turn below */}
+    if (out.isEmpty) {
+      try {
+        final e = await DiscogsService(settings).edition(a.artist, a.title, pinned: pinned);
+        if (e != null && e.tracklist.isNotEmpty) {
+          out = [for (final t in e.tracklist) ChoiceTrack(t.position, t.title, t.seconds)];
+          year = e.albumYear ?? e.year;
+          from = 'Discogs';
+        }
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    setState(() {
+      _official = out;
+      _officialFrom = from;
+      _officialYear = year;
+      _officialBusy = false;
+    });
+  }
+
+  // ── Filling the gaps ──────────────────────────────────────────────────────
+
+  /// Stable per-track key so the download button can become that download's progress ring, and
+  /// stay bound to it across rebuilds. Keyed on the record, not on this page's object identity.
+  String _jobKey(int i) => 'own:$_albumKey:$i';
+
+  /// What this track IS, regardless of what the peer called it. The same rule as the browse page:
+  /// Soulseek supplies audio, the app supplies the numbering, the title, the album and the year.
+  TrackTags _authorityFor(AlbumSlot s) => TrackTags(
+        title: s.title,
+        artist: album.artist,
+        albumArtist: album.artist,
+        album: album.title,
+        trackNo: s.number,
+        trackTotal: _official.length,
+        year: _officialYear ?? album.year,
+      );
+
+  Future<List<SoulseekFile>> _albumWide() async {
+    if (_slskLoaded) return _albumSlsk;
+    final soulseek = context.read<SoulseekService>();
+    try {
+      final r = await soulseek.search('${album.artist} ${album.title}');
+      if (mounted) setState(() { _albumSlsk = r; _slskLoaded = true; });
+      return r;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Copies of one missing track: the album-wide search first, then a search aimed at this title.
+  /// Both filtered to this exact title and running time, so the pool can never fill with a
+  /// different song by the same artist.
+  Future<List<SoulseekFile>> _candidatesFor(AlbumSlot s) async {
+    final soulseek = context.read<SoulseekService>();
+    bool fits(SoulseekFile f) =>
+        f.isAudio && fileOffersTitle(s.title, s.seconds, album.artist, f.filename, f.durationSec);
+    final pool = <String, SoulseekFile>{
+      for (final f in (await _albumWide()).where(fits)) '${f.username}|${f.filename}': f
+    };
+    if (pool.isEmpty) {
+      try {
+        for (final f in await soulseek.search(soulseekQuery(album.artist, s.title))) {
+          if (fits(f)) pool.putIfAbsent('${f.username}|${f.filename}', () => f);
+        }
+      } catch (_) {}
+    }
+    return pool.values.toList();
+  }
+
+  Future<void> _downloadMissing(AlbumSlot s) async {
+    final dm = context.read<DownloadManager>();
+    final soulseek = context.read<SoulseekService>();
+    if (!soulseek.available) {
+      _srcToast(context, 'Stel je Soulseek-login in (Instellingen).');
+      return;
+    }
+    _srcToast(context, 'Bron zoeken voor “${s.title}”…');
+    final cands = await _candidatesFor(s);
+    if (!mounted) return;
+    if (cands.isEmpty) {
+      _srcToast(context, 'Geen Soulseek-bron gevonden voor “${s.title}”.');
+      return;
+    }
+    try {
+      final started = await dm.enqueueSoulseekBest(cands,
+          key: _jobKey(s.index), authority: _authorityFor(s));
+      if (mounted) {
+        _srcToast(context,
+            started ? '“${s.title}” via Soulseek…' : '“${s.title}” loopt al — zie Mijn downloads.');
+      }
+    } catch (e) {
+      if (mounted) _srcToast(context, 'Download mislukt: $e');
+    }
+  }
+
+  /// Every missing track at once.
+  ///
+  /// The enqueues are NOT awaited in the loop: enqueueSoulseekBest runs the transfer before it
+  /// returns, so awaiting each would download them strictly one after another. Fired instead as
+  /// they are found — the manager already caps how many run at once on the shared login.
+  Future<void> _downloadAllMissing(List<AlbumSlot> missing) async {
+    final dm = context.read<DownloadManager>();
+    final soulseek = context.read<SoulseekService>();
+    if (!soulseek.available) {
+      _srcToast(context, 'Stel je Soulseek-login in (Instellingen).');
+      return;
+    }
+    _srcToast(context, 'Bronnen zoeken voor ${missing.length} ontbrekende nummers…');
+    final running = <Future<bool>>[];
+    var none = 0;
+    for (final s in missing) {
+      final cands = await _candidatesFor(s);
+      if (!mounted) return;
+      if (cands.isEmpty) {
+        none++;
+        continue;
+      }
+      running.add(dm
+          .enqueueSoulseekBest(cands, key: _jobKey(s.index), authority: _authorityFor(s))
+          .catchError((_) => false));
+    }
+    if (!mounted) return;
+    final started = running.length;
+    _srcToast(
+        context,
+        started == 0
+            ? 'Geen bronnen gevonden voor de ontbrekende nummers.'
+            : '$started gestart${none > 0 ? ' · $none zonder bron' : ''} — zie Mijn downloads.');
+    await Future.wait(running);
+  }
+
   // A correction rebuilds the album list into new objects; re-point at the regrouped
   // album (matched by track path) so this page shows the fixed title/artist/cover.
   void _refresh() {
@@ -894,6 +1091,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     for (final a in context.read<LibraryStore>().albums) {
       if (a.tracks.any((t) => paths.contains(t.path))) {
         setState(() => album = a);
+        // A merge, a correction or a newly picked pressing can all mean a different record — and
+        // the pinned edition is exactly what the tracklist is read from.
+        if (_albumKey != _officialFor || _official.isEmpty) _loadOfficial();
         return;
       }
     }
@@ -931,6 +1131,15 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         if (mounted) Navigator.of(context).maybePop();
       });
     }
+    // The record laid next to the files. Recomputed per build on purpose: a download that lands
+    // triggers a rescan, `album` above is re-pointed at the new grouping, and the track it filled
+    // in flips from missing to owned without this page having to be told.
+    final comp = _official.isEmpty
+        ? null
+        : matchAlbumTracks(_official, album.tracks, album.artist, source: _officialFrom);
+    final rows = comp == null
+        ? null
+        : (_showMissing ? comp.slots : [for (final s in comp.slots) if (!s.missing) s]);
     return Scaffold(
       body: Column(
         children: [
@@ -1018,11 +1227,43 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                   SliverToBoxAdapter(
                     child: CreditsPanel(artist: album.artist, album: album.title),
                   ),
+                if (_officialBusy && _official.isEmpty && !album.isSingle)
+                  const SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(22, 4, 20, 10),
+                      child: Row(children: [
+                        SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
+                        SizedBox(width: 10),
+                        Text('Officiële tracklijst ophalen…',
+                            style: TextStyle(color: _muted, fontSize: 12)),
+                      ]),
+                    ),
+                  ),
+                if (comp != null && !comp.complete)
+                  SliverToBoxAdapter(child: _completenessBar(comp)),
                 SliverList(
                   delegate: SliverChildBuilderDelegate(
-                    (_, i) => TrackRow(
-                        track: album.tracks[i], index: i, queue: album.tracks, albumCover: album.cover),
-                    childCount: album.tracks.length,
+                    (_, i) {
+                      if (rows == null) {
+                        return TrackRow(
+                            track: album.tracks[i],
+                            index: i,
+                            queue: album.tracks,
+                            albumCover: album.cover);
+                      }
+                      final s = rows[i];
+                      final t = s.track;
+                      if (t == null) return MissingTrackRow(slot: s, jobKey: _jobKey(s.index), onDownload: () => _downloadMissing(s));
+                      // The queue is what's playable, so the index has to be this track's place in
+                      // the FILES — the row's place in the release would play the wrong song.
+                      return TrackRow(
+                          track: t,
+                          index: album.tracks.indexOf(t),
+                          queue: album.tracks,
+                          albumCover: album.cover,
+                          number: s.official == null ? null : s.number);
+                    },
+                    childCount: rows?.length ?? album.tracks.length,
                   ),
                 ),
                 const SliverToBoxAdapter(child: SizedBox(height: 24)),
@@ -1030,6 +1271,55 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             ),
           ),
           const PlayerBar(),
+        ],
+      ),
+    );
+  }
+
+  /// "12 van 16 nummers · 4 ontbreken", and the way to fill them in.
+  ///
+  /// Only ever shown when something IS missing: a record you hold complete says so by having no
+  /// bar at all, which is quieter than a badge on every album page in the library.
+  Widget _completenessBar(AlbumCompleteness c) {
+    final missing = c.missing;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: _panel,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _line),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.playlist_add_check_rounded, size: 18, color: _accent2),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${c.have} van ${c.total} nummers · ${missing.length} ontbreken',
+                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                Text('Volgens ${c.source.isEmpty ? 'de officiële uitgave' : c.source}',
+                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: () => setState(() => _showMissing = !_showMissing),
+            child: Text(_showMissing ? 'Verberg ontbrekende' : 'Toon ontbrekende',
+                style: const TextStyle(fontSize: 12)),
+          ),
+          const SizedBox(width: 6),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+                backgroundColor: _accent,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10)),
+            onPressed: () => _downloadAllMissing(missing),
+            icon: const Icon(Icons.download_rounded, size: 17),
+            label: const Text('Ontbrekende downloaden'),
+          ),
         ],
       ),
     );
@@ -1417,8 +1707,17 @@ class TrackRow extends StatefulWidget {
   final int index;
   final List<Track> queue;
   final Uint8List? albumCover;
+
+  /// The number the RELEASE gives this track, when the page knows it. Overrides the file's own
+  /// tag, which is whatever the peer that uploaded it typed.
+  final int? number;
   const TrackRow(
-      {super.key, required this.track, required this.index, required this.queue, this.albumCover});
+      {super.key,
+      required this.track,
+      required this.index,
+      required this.queue,
+      this.albumCover,
+      this.number});
   @override
   State<TrackRow> createState() => _TrackRowState();
 }
@@ -1453,7 +1752,7 @@ class _TrackRowState extends State<TrackRow> {
                 width: 28,
                 child: _hover
                     ? const Icon(Icons.play_arrow_rounded, size: 18, color: _accent)
-                    : Text('${t.trackNo > 0 ? t.trackNo : widget.index + 1}',
+                    : Text('${widget.number ?? (t.trackNo > 0 ? t.trackNo : widget.index + 1)}',
                         textAlign: TextAlign.right,
                         style: const TextStyle(color: _muted, fontSize: 13)),
               ),
@@ -1522,6 +1821,87 @@ class _TrackRowState extends State<TrackRow> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A track the record has and the library hasn't.
+///
+/// Deliberately built like [TrackRow] and dimmed rather than hidden: the album is the record, and
+/// a gap in it is something to see and act on, not something to leave out of the list.
+class MissingTrackRow extends StatefulWidget {
+  final AlbumSlot slot;
+  final String jobKey;
+  final VoidCallback onDownload;
+  const MissingTrackRow(
+      {super.key, required this.slot, required this.jobKey, required this.onDownload});
+  @override
+  State<MissingTrackRow> createState() => _MissingTrackRowState();
+}
+
+class _MissingTrackRowState extends State<MissingTrackRow> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.slot;
+    final dim = _muted.withValues(alpha: .75);
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+        decoration: BoxDecoration(
+          color: _hover ? _panel.withValues(alpha: .6) : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 28,
+              child: Text('${s.number}',
+                  textAlign: TextAlign.right, style: TextStyle(color: dim, fontSize: 13)),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Text(s.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: dim, fontWeight: FontWeight.w500)),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: _line),
+                    ),
+                    child: Text('niet in bibliotheek',
+                        style: TextStyle(color: dim, fontSize: 10.5, letterSpacing: .2)),
+                  ),
+                ],
+              ),
+            ),
+            if (s.seconds != null && s.seconds! > 0)
+              Text(_fmt(Duration(seconds: s.seconds!)), style: TextStyle(color: dim, fontSize: 13)),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 72,
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: _downloadControl(context,
+                    jobKey: widget.jobKey,
+                    onDownload: widget.onDownload,
+                    tooltip: 'Dit nummer downloaden via Soulseek'),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -2427,6 +2807,17 @@ class _ArtistLineState extends State<ArtistLine> {
   }
 }
 
+/// The artist line of a track row, tappable.
+///
+/// Every track list in the app used to print the artist as plain text, so the one place a record's
+/// artist was reachable from was an album page. Wherever a name is shown it is now the way to that
+/// artist — and a "A feat. B" tag becomes two names, because a guest is an artist too.
+Widget _artistLine(({String main, List<String> featured}) who, TextStyle style) {
+  final names = [if (who.main.trim().isNotEmpty) who.main.trim(), ...who.featured];
+  if (names.isEmpty) return const SizedBox.shrink();
+  return ArtistNames(names: names, style: style);
+}
+
 /// A row of artist names, each tappable. Takes the names as-is — the caller decides who's on it.
 class ArtistNames extends StatefulWidget {
   final List<String> names;
@@ -2999,11 +3390,10 @@ class TracksView extends StatelessWidget {
                                     fontWeight: FontWeight.w600,
                                     color: isCurrent ? _accent : _text)),
                             // Through displayArtist: the track's own tag may spell the artist
-                            // differently from the name shown everywhere else.
-                            Text(lib.displayArtist(t.artist),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 12, color: _muted)),
+                            // differently from the name shown everywhere else. Split so a guest
+                            // is their own name here, not part of one long unclickable string.
+                            _artistLine(splitFeatured(lib.displayArtist(t.artist), t.title),
+                                const TextStyle(fontSize: 12, color: _muted)),
                           ],
                         ),
                       ),
@@ -3406,7 +3796,8 @@ class _OntdekViewState extends State<OntdekView> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
-                    Text(t.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 12)),
+                    _artistLine(splitFeatured(t.artist, t.title),
+                        const TextStyle(color: _muted, fontSize: 12)),
                   ],
                 ),
               ),
@@ -4719,7 +5110,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                     children: [
                       Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
                       if (t.artist.isNotEmpty)
-                        Text(t.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 12)),
+                        _artistLine(splitFeatured(t.artist, t.title),
+                            const TextStyle(color: _muted, fontSize: 12)),
                     ],
                   ),
                 ),
@@ -4873,10 +5265,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
-                      Text(t.artist,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 12, color: _muted)),
+                      _artistLine(splitFeatured(t.artist, t.title),
+                          const TextStyle(fontSize: 12, color: _muted)),
                     ],
                   ),
                 ),
