@@ -6,6 +6,9 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../library.dart';
+import '../online.dart';
+import '../soulseek.dart';
+import '../torbox.dart';
 import 'cast_manager.dart';
 import 'catalog.dart';
 import 'dtos.dart';
@@ -33,12 +36,24 @@ class LanServer {
     required this.pairing,
     this.port = kLanPort,
     this.version = '',
+    this.online,
+    this.soulseek,
+    this.downloads,
   }) : catalog = LanCatalog(library) {
     cast = CastManager(catalog: catalog, token: token, port: port);
   }
 
   final LibraryStore library;
   final LanCatalog catalog;
+
+  /// Searching and downloading, done HERE on behalf of a Mac or an iPad.
+  ///
+  /// Nullable because the server is also constructed in tests that care only about the library,
+  /// and because a PC with no TorBox key still shares its music perfectly well. The routes answer
+  /// 503 rather than crashing when they are absent — a client can then say so.
+  final OnlineService? online;
+  final SoulseekService? soulseek;
+  final DownloadManager? downloads;
   final LanStateStore state;
   final PairingStore pairing;
 
@@ -165,6 +180,22 @@ class LanServer {
         return _castPlay(req);
       case '/api/cast/control':
         return _castControl(req);
+      case '/api/online/search':
+        return _onlineSearch(req);
+      case '/api/online/tracklist':
+        return _onlineTracklist(req);
+      case '/api/online/download':
+        return _onlineDownload(req);
+      case '/api/soulseek/search':
+        return _soulseekSearch(req);
+      case '/api/soulseek/download':
+        return _soulseekDownload(req);
+      case '/api/jobs':
+        return _json(res, {'jobs': jobsSnapshot()});
+      case '/api/jobs/cancel':
+        return _jobCancel(req);
+      case '/api/jobs/clear':
+        return _jobsClear(req);
     }
 
     if (path.startsWith('/stream/')) return _stream(req);
@@ -407,6 +438,151 @@ class LanServer {
     await res.close();
   }
 
+  // ── Searching and downloading, on behalf of another device ─────────────────
+  //
+  // The Mac and the iPad have no TorBox key, no Soulseek login and, on an iPad, nowhere to put a
+  // music library anyway. So they ask this PC to do it: the search runs here, the download lands
+  // here, and the finished album comes back to everyone through the catalogue that already syncs.
+  // That also means one set of credentials, on the machine that already had them.
+
+  /// What the job list looks like to another device. Only the fields a progress row shows — the
+  /// live peer sockets and the fallback candidates are this machine's business.
+  List<Map<String, dynamic>> jobsSnapshot() => [
+        for (final j in downloads?.jobs ?? const <DownloadJob>[])
+          {
+            'name': j.name,
+            'key': j.key,
+            'progress': j.progress,
+            'status': j.status,
+            'detail': j.detail,
+            'queuePlace': j.queuePlace,
+            'canCancel': j.canCancel,
+            'trackKey': j.trackKey,
+          },
+      ];
+
+  Future<Map<String, dynamic>?> _jsonBody(HttpRequest req) async {
+    if (req.method != 'POST') {
+      req.response.statusCode = HttpStatus.methodNotAllowed;
+      await req.response.close();
+      return null;
+    }
+    final text = await utf8.decoder.bind(req).join();
+    final decoded = jsonDecode(text.isEmpty ? '{}' : text);
+    return decoded is Map ? decoded.cast<String, dynamic>() : <String, dynamic>{};
+  }
+
+  /// 503 with a sentence a person can read, not a bare status code: on the iPad this is the
+  /// difference between "the pc can't do that" and a spinner that never stops.
+  Future<void> _unavailable(HttpRequest req, String why) =>
+      _json(req.response, {'error': why}, status: HttpStatus.serviceUnavailable);
+
+  Future<void> _onlineSearch(HttpRequest req) async {
+    final service = online;
+    if (service == null) return _unavailable(req, 'Deze pc kan niet online zoeken.');
+    final q = req.uri.queryParameters['q'] ?? '';
+    if (q.trim().isEmpty) return _json(req.response, {'results': []});
+    try {
+      final results = await service.search(q);
+      return _json(req.response, {'results': [for (final r in results) r.toJson()]});
+    } catch (e) {
+      return _unavailable(req, 'Zoeken mislukte op de pc: $e');
+    }
+  }
+
+  Future<void> _onlineTracklist(HttpRequest req) async {
+    final service = online;
+    if (service == null) return _unavailable(req, 'Deze pc kan niet online zoeken.');
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    try {
+      final (torrent, files) = await service.tracklist(SearchResult.fromJson(body));
+      return _json(req.response, {
+        'torrentId': torrent.id,
+        'files': [
+          for (final f in files)
+            {'id': f.id, 'name': f.name, 'shortName': f.shortName, 'size': f.size, 'mimeType': f.mimeType},
+        ],
+      });
+    } catch (e) {
+      return _unavailable(req, 'De tracklijst ophalen mislukte: $e');
+    }
+  }
+
+  Future<void> _onlineDownload(HttpRequest req) async {
+    final manager = downloads;
+    if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final fileId = (body['fileId'] as num?)?.toInt();
+    // Deliberately not awaited: enqueue starts the work and returns, and the client watches
+    // /api/jobs. Holding the request open for a download would time out long before it finished.
+    manager.enqueue(SearchResult.fromJson(body), fileId: fileId);
+    return _json(req.response, {'ok': true});
+  }
+
+  Future<void> _soulseekSearch(HttpRequest req) async {
+    final service = soulseek;
+    if (service == null || !service.available) {
+      return _unavailable(req, 'Op deze pc is Soulseek niet ingesteld.');
+    }
+    final q = req.uri.queryParameters['q'] ?? '';
+    if (q.trim().isEmpty) return _json(req.response, {'files': []});
+    try {
+      final files = await service.search(q);
+      return _json(req.response, {'files': [for (final f in files) f.toJson()]});
+    } catch (e) {
+      return _unavailable(req, 'Soulseek zoeken mislukte: $e');
+    }
+  }
+
+  Future<void> _soulseekDownload(HttpRequest req) async {
+    final manager = downloads;
+    if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final candidates = <SoulseekFile>[];
+    for (final c in (body['candidates'] as List? ?? const [])) {
+      if (c is! Map<String, dynamic>) continue;
+      final f = SoulseekFile.fromJson(c);
+      if (f != null) candidates.add(f);
+    }
+    if (candidates.isEmpty) return _json(req.response, {'ok': false, 'reason': 'geen kandidaten'});
+    try {
+      final started = await manager.enqueueSoulseekBest(candidates, key: body['key'] as String?);
+      return _json(req.response, {'ok': started});
+    } catch (e) {
+      return _unavailable(req, '$e');
+    }
+  }
+
+  Future<void> _jobCancel(HttpRequest req) async {
+    final manager = downloads;
+    if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final key = body['key'] as String?;
+    final name = body['name'] as String?;
+    // By key when there is one, otherwise by name: a loose search hit has no track identity, and
+    // its row still needs a stop button that works.
+    final job = key != null
+        ? manager.jobByKey(key)
+        : manager.jobs.cast<DownloadJob?>().firstWhere((j) => j?.name == name, orElse: () => null);
+    if (job != null) manager.cancelJob(job);
+    return _json(req.response, {'ok': job != null});
+  }
+
+  Future<void> _jobsClear(HttpRequest req) async {
+    final manager = downloads;
+    if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
+    if (req.method != 'POST') {
+      req.response.statusCode = HttpStatus.methodNotAllowed;
+      return req.response.close();
+    }
+    manager.clearFinished();
+    return _json(req.response, {'ok': true});
+  }
+
   Future<void> _art(HttpRequest req) async {
     final ref = Uri.decodeComponent(req.uri.pathSegments.last);
     final bytes = catalog.artwork(ref);
@@ -426,9 +602,13 @@ class LanServer {
     return res.close();
   }
 
-  Future<void> _json(HttpResponse res, Object body) async {
+  /// [status] is a parameter and not always 200 because it used to be hardcoded here, which
+  /// quietly turned every error body into a successful empty answer: a client asking a PC that
+  /// cannot search got `{"error": "..."}` with a 200, read no results in it, and showed "niets
+  /// gevonden" instead of the reason.
+  Future<void> _json(HttpResponse res, Object body, {int status = HttpStatus.ok}) async {
     final bytes = utf8.encode(jsonEncode(body));
-    res.statusCode = HttpStatus.ok;
+    res.statusCode = status;
     res.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
     res.headers.contentLength = bytes.length;
     res.add(bytes);

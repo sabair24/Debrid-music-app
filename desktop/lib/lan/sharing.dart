@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../library.dart';
+import '../online.dart';
 import '../settings.dart';
 import 'discovery.dart';
 import 'ids.dart';
@@ -16,11 +17,22 @@ import 'state_store.dart';
 /// Separate from [LanServer] so the UI has one thing to listen to: whether sharing is on, which
 /// address to type into the other device, and what went wrong if it didn't start.
 class LanSharing extends ChangeNotifier {
-  LanSharing({required this.library, required this.settings})
-      : state = LanStateStore(File('${_appDir()}${Platform.pathSeparator}state.json'));
+  LanSharing({
+    required this.library,
+    required this.settings,
+    this.online,
+    this.soulseek,
+    this.downloads,
+  }) : state = LanStateStore(File('${_appDir()}${Platform.pathSeparator}state.json'));
 
   final LibraryStore library;
   final AppSettings settings;
+
+  /// Handed straight to the server so a Mac or an iPad can have this PC search and download for
+  /// it. Null in a test, and on a PC where those were never set up — the routes say so.
+  final OnlineService? online;
+  final SoulseekService? soulseek;
+  final DownloadManager? downloads;
 
   /// Playlists, favourites, play position and counts — shared with every device. Lives here
   /// rather than in the server so switching sharing off doesn't drop what the PC itself knows.
@@ -93,6 +105,9 @@ class LanSharing extends ChangeNotifier {
       pairing: pairing,
       port: settings.lanPort,
       version: version,
+      online: online,
+      soulseek: soulseek,
+      downloads: downloads,
     );
     _error = await server.start();
     _server = _error == null ? server : null;

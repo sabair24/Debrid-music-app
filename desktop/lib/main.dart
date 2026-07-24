@@ -22,6 +22,7 @@ import 'enrichment.dart';
 import 'lan/sharing.dart';
 import 'lan/client_mode.dart';
 import 'lan/client_session.dart';
+import 'lan/remote_services.dart';
 import 'now_playing.dart';
 import 'pairing_screen.dart';
 import 'library.dart';
@@ -127,24 +128,11 @@ Future<void> main() async {
   // Before anything reads it: the download manager captures the root by value, and the LAN
   // server derives every track id from paths relative to it.
   if (settings.musicRoot.trim().isNotEmpty) library.rootPath = settings.musicRoot.trim();
-  final online = OnlineService(settings);
-  final soulseek = SoulseekService(settings);
-  final tidal = TidalService(settings);
-  final musicbrainz = MusicBrainzService();
-  final player = PlayerStore()
-    ..resolver = online.resolveRadio
-    ..coverResolver = library.coverForTrack;
-  // The lockscreen, Control Center and the media keys. Not awaited on the critical path — the
-  // window should not wait on a system service to come up.
-  unawaited(initNowPlaying(player, cover: library.coverForTrack));
-  final downloads = DownloadManager(online, soulseek, library.rootPath, () async {
-    await library.scan();
-    await library.enrich(settings);
-  });
-
   // Which of the two this is: the machine that holds the music, or one reading it. Decided once,
   // here, and everything below branches on the answer rather than on the platform.
   final mode = await resolveMode(settings);
+
+  late final PlayerStore player;
   final session = ClientSession(
     library: library,
     settings: settings,
@@ -153,10 +141,53 @@ Future<void> main() async {
     endpoint: mode.endpoint,
   );
 
+  // Searching and downloading. On a Mac or an iPad these are the same classes as far as every
+  // screen is concerned — subclasses that hand the work to the PC, which has the TorBox key, the
+  // Soulseek login and somewhere to put the files. The endpoint is read at call time, so pairing
+  // for the first time makes these start working without anything being rebuilt.
+  final tidal = TidalService(settings);
+  final musicbrainz = MusicBrainzService();
+  final OnlineService online = mode.owner
+      ? OnlineService(settings)
+      : RemoteOnlineService(settings, () => session.endpoint);
+  final SoulseekService soulseek = mode.owner
+      ? SoulseekService(settings)
+      : RemoteSoulseekService(settings, () => session.endpoint);
+
+  player = PlayerStore()
+    ..resolver = online.resolveRadio
+    ..coverResolver = library.coverForTrack;
+  // The lockscreen, Control Center and the media keys. Not awaited on the critical path — the
+  // window should not wait on a system service to come up.
+  unawaited(initNowPlaying(player, cover: library.coverForTrack));
+
+  // What "the library changed" means differs: the PC rescans its disk, a client asks the PC for
+  // the catalogue again — which is how a download started from the iPad shows up there.
+  Future<void> onLibraryChanged() async {
+    if (mode.owner) {
+      await library.scan();
+      await library.enrich(settings);
+    } else {
+      await session.refreshNow();
+    }
+  }
+
+  final DownloadManager downloads = mode.owner
+      ? DownloadManager(online, soulseek, library.rootPath, onLibraryChanged)
+      : RemoteDownloadManager(
+          online, soulseek, library.rootPath, onLibraryChanged, () => session.endpoint);
+
   // Share this library with the Mac, the iPad and the Shield. Started before the scan finishes:
   // a device probing /health then gets a real answer straight away, and the catalogue fills in
   // by itself as the scan lands.
-  final sharing = LanSharing(library: library, settings: settings);
+  final sharing = LanSharing(
+    library: library,
+    settings: settings,
+    // So a Mac or an iPad can have this PC search and download on its behalf.
+    online: mode.owner ? online : null,
+    soulseek: mode.owner ? soulseek : null,
+    downloads: mode.owner ? downloads : null,
+  );
   if (mode.owner) {
     unawaited(sharing.applySettings());
     // What plays here counts too: the position and the play count go into the same shared state
@@ -210,9 +241,18 @@ Future<void> main() async {
   // A device that does not hold the music has nothing to scan: its library comes from the PC,
   // where the corrections, the pinned pressings and the chosen covers have already been applied.
   if (!mode.owner) {
+    if (downloads is RemoteDownloadManager) {
+      // Pairing for the first time goes through the pairing screen, not through the branch below,
+      // so the watch is hung off the session rather than started once here.
+      session.addListener(() {
+        if (session.ready) downloads.startWatching();
+      });
+    }
     () async {
       final endpoint = mode.endpoint;
       if (endpoint != null) await session.connect(endpoint, remember: false);
+      // Whatever the PC is downloading shows up in "Mijn downloads" here too, progress and all.
+      if (downloads is RemoteDownloadManager) downloads.startWatching();
       // The queue is restored either way — the paths in it are stream URLs, and they resolve
       // against whatever library has just landed.
       await player.restore(library.trackByPath);

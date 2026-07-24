@@ -27,6 +27,20 @@ class SearchResult {
         'name': name, 'size': size, 'seeders': seeders, 'leechers': leechers,
         'magnet': magnet, 'hash': hash, 'source': source, 'cached': cached,
       };
+
+  /// The way back in, for a Mac or an iPad reading results the PC found. Beside [toJson] on
+  /// purpose: a field added to one and forgotten in the other is a result that silently loses
+  /// its magnet.
+  factory SearchResult.fromJson(Map<String, dynamic> j) => SearchResult(
+        name: (j['name'] ?? '') as String,
+        size: (j['size'] as num?)?.toInt() ?? 0,
+        seeders: (j['seeders'] as num?)?.toInt() ?? 0,
+        leechers: (j['leechers'] as num?)?.toInt() ?? 0,
+        magnet: (j['magnet'] ?? '') as String,
+        hash: (j['hash'] ?? '') as String,
+        source: (j['source'] ?? '') as String,
+        cached: j['cached'] == true,
+      );
 }
 
 class TbFile {
