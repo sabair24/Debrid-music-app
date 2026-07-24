@@ -1328,6 +1328,11 @@ class _MetadataEditorState extends State<MetadataEditor> {
       TextEditingController(text: '${widget.album.artist} ${widget.album.title}'.trim());
   String _provider = 'Deezer';
   bool _searching = false;
+
+  /// What went wrong last time, if anything. Without this a failed lookup left the spinner turning
+  /// for ever — the await below had no catch, so `_searching` was never set back and the dialog
+  /// looked frozen rather than broken.
+  String? _searchError;
   bool _applying = false;
   List<MetaResult> _results = const [];
   MetaResult? _picked;
@@ -1353,14 +1358,29 @@ class _MetadataEditorState extends State<MetadataEditor> {
     FocusScope.of(context).unfocus();
     setState(() {
       _searching = true;
+      _searchError = null;
       _results = const [];
     });
-    final res = await MetadataSearch(context.read<AppSettings>())
-        .search(_provider, _query.text, track: widget.album.isSingle);
+    var res = const <MetaResult>[];
+    String? failure;
+    try {
+      // The timeout is the point as much as the catch: a provider that accepts the connection and
+      // then says nothing would otherwise hold this dialog open indefinitely.
+      res = await MetadataSearch(context.read<AppSettings>())
+          .search(_provider, _query.text, track: widget.album.isSingle)
+          .timeout(const Duration(seconds: 30));
+    } on TimeoutException {
+      failure = '$_provider antwoordde niet op tijd. Probeer het opnieuw of kies een andere bron.';
+    } catch (e) {
+      failure = _provider == 'Discogs'
+          ? 'Discogs gaf een fout: $e\nStaat je Discogs-token in Instellingen?'
+          : '$_provider gaf een fout: $e';
+    }
     if (!mounted) return;
     setState(() {
       _results = res;
       _searching = false;
+      _searchError = failure;
     });
   }
 
@@ -1485,9 +1505,17 @@ class _MetadataEditorState extends State<MetadataEditor> {
                 child: _searching
                     ? const Center(child: CircularProgressIndicator(color: _accent))
                     : _results.isEmpty
-                        ? const Center(
-                            child: Text('Zoek hierboven een correcte versie.',
-                                style: TextStyle(color: _muted)))
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 24),
+                              child: Text(
+                                _searchError ?? 'Zoek hierboven een correcte versie.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    color: _searchError == null ? _muted : Colors.orangeAccent,
+                                    height: 1.4),
+                              ),
+                            ))
                         : ListView.builder(
                             itemCount: _results.length,
                             itemBuilder: (_, i) {
