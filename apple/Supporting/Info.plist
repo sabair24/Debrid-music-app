@@ -30,6 +30,14 @@
 		<string>audio</string>
 	</array>
 
+	<!--
+	  Named explicitly. Xcode injects this when it generates the whole Info.plist, but this
+	  target ships its own file, and then the key is simply absent — which App Store validation
+	  rejects with "Missing Info.plist value", after a full archive and upload.
+	-->
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
+
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>ITSAppUsesNonExemptEncryption</key>
