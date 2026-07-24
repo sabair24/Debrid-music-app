@@ -128,6 +128,38 @@ void main() {
     });
   });
 
+  group('pickPressing', () {
+    test('never a pressing smaller than what is already on disk', () {
+      // The Backstreet Boys case: MusicBrainz ranked a 10-track pressing first, the library holds
+      // 13, and three tracks the user owns were filed as "not on this release" — with no bar to
+      // say so, because by that pressing nothing was missing.
+      expect(pickPressing([10, 13, 16], 13), 1);
+    });
+
+    test('the ranking is otherwise obeyed — the first that fits wins, not the biggest', () {
+      expect(pickPressing([13, 16, 42], 13), 0);
+    });
+
+    test('a bigger pressing is exactly what this page is for', () {
+      // Owning one track of sixteen must still resolve the sixteen-track record. Asking the search
+      // for expectedTracks would have thrown it away for being too big.
+      expect(pickPressing([16, 1], 1), 0);
+    });
+
+    test('an unstated track count is passed over rather than gambled on', () {
+      expect(pickPressing([0, 0, 13], 13), 2);
+    });
+
+    test('but a described record beats no record when nothing qualifies', () {
+      expect(pickPressing([10, 11], 13), 0);
+      expect(pickPressing([0, 0], 13), 0);
+    });
+
+    test('no pressings, no answer', () {
+      expect(pickPressing(const [], 13), -1);
+    });
+  });
+
   group('AlbumSlot.number', () {
     test('the release decides; the file only fills in when it does not', () {
       expect(AlbumSlot(index: 3, official: _o(4, 'CUFF IT', 225), track: _t('CUFF IT', 225, no: 20)).number, 4);

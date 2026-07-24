@@ -47,6 +47,27 @@ void main() {
         reason: 'CUFF IT is track 4 on the record');
   }, timeout: const Timeout(Duration(minutes: 3)));
 
+  test('a record held in full is described by a pressing that can hold it', () async {
+    // Ranked first for this album is a ten-track pressing, while the library holds thirteen. Taken
+    // at face value it reported nothing missing AND filed three tracks the user owns as not being
+    // on the record — the album page showed "2" sitting between 10 and 11, with no 12.
+    final mb = MusicBrainzService();
+    final hits = await mb.searchReleases('Backstreet Boys', 'Backstreet Boys');
+    expect(hits, isNotEmpty);
+
+    final i = pickPressing([for (final h in hits) h.trackCount], 13);
+    expect(i, greaterThanOrEqualTo(0));
+    expect(hits[i].trackCount, greaterThanOrEqualTo(13),
+        reason: 'picked a ${hits[i].trackCount}-track pressing for a 13-track album');
+
+    final full = await mb.release(hits[i].mbid);
+    final official = await mb.tracklistOf(full!);
+    expect(official.length, greaterThanOrEqualTo(13));
+    // And the positions run 1..n, which is what the rows are numbered by.
+    expect(official.take(13).map((t) => int.tryParse(t.position)).toList(),
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
   test('and a record we hold in full reports nothing missing', () async {
     final mb = MusicBrainzService();
     final official = await _official(mb, 'Enrique Iglesias', 'Escape');
