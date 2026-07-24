@@ -1,12 +1,16 @@
 name: DebridMusic Apple Build
 
-# The Mac and iPad app (in apple/). Same shape as windows_build.yml:
+# The Mac and iPad app — the SAME Flutter app as Windows, in desktop/.
+#
 #   • tag apple-v*      → iPad to TestFlight, Mac app on the GitHub Release
 #   • workflow_dispatch → manual run; tick "testflight" to push a build to TestFlight
 #
+# This replaced a workflow that built a separate SwiftUI app. There is one codebase now, so the
+# Mac and the iPad get every feature Windows has by construction rather than by being kept in step.
+#
 # Deliberately NOT triggered by ordinary pushes. A `paths:` filter alongside `tags:` is ANDed by
 # GitHub, so a release tag would be skipped whenever that commit happened to touch nothing under
-# apple/ — and running a macOS job on every push is expensive on a private repository. Use the
+# desktop/ — and running a macOS job on every push is expensive on a private repository. Use the
 # manual run for a check between releases.
 #
 # The steps that need no secrets always run, so a manual run is useful before any signing is set
@@ -27,44 +31,49 @@ permissions:
   contents: write
 
 env:
-  PROJECT: apple/DebridMusic.xcodeproj
-  SCHEME: DebridMusic
   TEAM_ID: DR8YNUC2S7
+  BUNDLE_ID: com.debridmedia.music
+
+defaults:
+  run:
+    working-directory: desktop
 
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Xcode 16 or newer is not optional: the project uses objectVersion 77 and a synchronised
-      # file group, and DebridMusicKit is a Swift 6 package using the Testing framework. An older
-      # Xcode fails to even open the project, with an error that does not say why.
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
 
-      - name: Versions
-        run: |
-          xcodebuild -version
-          swift --version
+      # Newer than windows_build.yml's 3.35.6, and on purpose: pubspec.lock pins
+      # url_launcher_ios 6.4.1, which requires Flutter 3.38 or later. Pinned rather than "stable"
+      # so a release built next month is built by the same toolchain as one built today.
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.9'
+          channel: 'stable'
+          cache: true
 
-      # ── Always: the parts that need no signing ───────────────────────────
+      - name: flutter pub get
+        run: flutter pub get
 
       - name: Determine version
         id: version
         run: |
-          # On a tag, the tag IS the version — otherwise apple-v1.0.2 would ship a release
-          # titled "1.0" and a third TestFlight build also called 1.0, with nothing to tell them
-          # apart. Off a tag, fall back to what the project says.
+          # On a tag, the tag IS the version — otherwise apple-v1.0.2 would ship a release titled
+          # with whatever pubspec happens to say, and a third TestFlight build with the same
+          # number as the last two.
           case "$GITHUB_REF" in
             refs/tags/apple-v*) VERSION="${GITHUB_REF#refs/tags/apple-v}" ;;
-            *) VERSION=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -showBuildSettings 2>/dev/null \
-                 | awk '/ MARKETING_VERSION = / {print $3; exit}') ;;
+            *) VERSION=$(sed -n 's/^version: *\([0-9][0-9.]*\).*/\1/p' pubspec.yaml) ;;
           esac
           [ -n "$VERSION" ] || VERSION="0.1.0"
           echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
@@ -73,23 +82,36 @@ jobs:
           echo "BUILD=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
           echo "Version $VERSION build ${{ github.run_number }}"
 
+      # ── Always: the parts that need no signing ───────────────────────────
 
-      - name: Test DebridMusicKit
-        working-directory: apple/DebridMusicKit
-        run: swift test
+      - name: Analyze
+        # --no-fatal-infos: two style infos in discogs.dart predate this workflow and are nobody's
+        # emergency. Warnings and errors still stop the build.
+        run: flutter analyze --no-fatal-infos lib/
 
-      - name: Build for the iPad (simulator, unsigned)
+      - name: Test
+        # Named files rather than the whole suite: five tests in this repository scan
+        # D:\Flac music 2024 or call out to the network, and would fail here for reasons that have
+        # nothing to do with the build. These are the ones that cover what this workflow ships.
         run: |
-          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Debug \
-            -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO build
+          flutter test \
+            test/lan_client_test.dart test/client_session_test.dart test/now_playing_test.dart \
+            test/lan_server_test.dart test/lan_state_test.dart test/lan_pairing_test.dart \
+            test/edition_split_test.dart test/artist_name_test.dart test/album_cover_key_test.dart \
+            test/flac_tags_test.dart test/featured_test.dart
+
+      - name: Build for the iPad (unsigned)
+        # Proves the iOS build compiles even with no App Store Connect key configured.
+        run: |
+          flutter build ios --release --no-codesign \
+            --build-name=${{ steps.version.outputs.VERSION }} \
+            --build-number=${{ steps.version.outputs.BUILD }}
 
       - name: Build for the Mac (unsigned)
         run: |
-          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
-            -destination 'generic/platform=macOS' \
-            -derivedDataPath .build \
-            CODE_SIGNING_ALLOWED=NO build
+          flutter build macos --release \
+            --build-name=${{ steps.version.outputs.VERSION }} \
+            --build-number=${{ steps.version.outputs.BUILD }}
 
       - name: Package the Mac app
         run: |
@@ -97,30 +119,32 @@ jobs:
           # ditto, not zip: it keeps the bundle's symlinks and resource forks intact, which a
           # plain zip quietly flattens into an app that will not launch.
           ditto -c -k --sequesterRsrc --keepParent \
-            ".build/Build/Products/Release/DebridMusic.app" \
+            "build/macos/Build/Products/Release/DebridMusic.app" \
             "out/DebridMusic-macOS-${{ steps.version.outputs.VERSION }}.zip"
 
       - name: Upload the Mac app
         uses: actions/upload-artifact@v4
         with:
           name: DebridMusic-macOS-${{ steps.version.outputs.VERSION }}
-          path: out/DebridMusic-macOS-*.zip
+          path: desktop/out/DebridMusic-macOS-*.zip
           retention-days: 30
 
       # ── From here: signing and distribution ──────────────────────────────
       #
       # Needs three repository secrets, all from App Store Connect → Users and Access → Keys:
-      #   APPLE_API_KEY_ID       e.g. 8YA44LXG8T
+      #   APPLE_API_KEY_ID       e.g. 5LP53KLDC3
       #   APPLE_API_ISSUER_ID    e.g. ce9a48ce-1bfd-43ca-9eb1-5bfaf726c589
       #   APPLE_API_PRIVATE_KEY  the whole contents of AuthKey_XXXXXXXX.p8
       #
-      # No certificate or provisioning profile secrets: with the API key,
-      # -allowProvisioningUpdates lets Xcode create and fetch what it needs itself, which avoids
-      # keeping a .p12 and its password in the repository.
+      # The key must have Admin access: an App Manager key cannot create the certificates that
+      # -allowProvisioningUpdates needs, and fails with an error that does not say so.
       #
-      # An app record must also exist in App Store Connect for the bundle id the project
-      # builds (com.debridmedia.music). Uploading to a bundle id with no record fails at the very
-      # last step, after a full archive.
+      # No certificate or provisioning profile secrets: with the API key, -allowProvisioningUpdates
+      # lets Xcode create and fetch what it needs itself, which avoids keeping a .p12 and its
+      # password in the repository.
+      #
+      # The app record in App Store Connect is com.debridmedia.music — the same one the SwiftUI
+      # app used, so TestFlight carries on from where it was rather than starting over.
 
       - name: Distribution ready?
         id: gate
@@ -151,6 +175,16 @@ jobs:
             || { echo "::error::APPLE_API_PRIVATE_KEY is not a readable private key"; exit 1; }
 
       # ── iPad → TestFlight ────────────────────────────────────────────────
+      #
+      # xcodebuild rather than `flutter build ipa`: the archive needs -allowProvisioningUpdates and
+      # the three -authenticationKey* arguments, and flutter's own command passes none of them
+      # through. The Flutter build above has already produced App.framework and the assets, so this
+      # only archives what is there.
+      #
+      # FLUTTER_BUILD_NAME/NUMBER, not MARKETING_VERSION/CURRENT_PROJECT_VERSION: Info.plist reads
+      # $(FLUTTER_BUILD_NAME) and $(FLUTTER_BUILD_NUMBER), so the Xcode-native names are accepted
+      # on the command line and then quietly ignored — TestFlight would keep seeing the version
+      # from pubspec.yaml no matter what tag you pushed.
 
       - name: Archive for iOS
         if: steps.gate.outputs.ready == 'true' && (startsWith(github.ref, 'refs/tags/apple-v') || inputs.testflight)
@@ -158,7 +192,7 @@ jobs:
           KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
-          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
+          xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/DebridMusic-iOS.xcarchive" \
             -allowProvisioningUpdates \
@@ -166,8 +200,9 @@ jobs:
             -authenticationKeyID "$KEY_ID" \
             -authenticationKeyIssuerID "$ISSUER_ID" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
-            MARKETING_VERSION="${{ steps.version.outputs.VERSION }}" \
-            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.BUILD }}" \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+            FLUTTER_BUILD_NAME="${{ steps.version.outputs.VERSION }}" \
+            FLUTTER_BUILD_NUMBER="${{ steps.version.outputs.BUILD }}" \
             archive
 
       - name: Export and upload to TestFlight
@@ -212,10 +247,13 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/apple-v')
         uses: softprops/action-gh-release@v2
         with:
-          files: out/DebridMusic-macOS-*.zip
+          files: desktop/out/DebridMusic-macOS-*.zip
           name: DebridMusic ${{ steps.version.outputs.VERSION }} (Mac en iPad)
           body: |
             ## DebridMusic v${{ steps.version.outputs.VERSION }} — Mac en iPad
+
+            Dezelfde app als op Windows. Zelfde schermen, zelfde functies —
+            het is letterlijk dezelfde code.
 
             **Mac** — download de zip hieronder, pak uit en sleep naar Programma's.
             De eerste keer: **rechtsklik → Open** en bevestig. Daarna start hij
@@ -224,7 +262,9 @@ jobs:
             **iPad** — via TestFlight. Verschijnt daar na Apple's verwerking,
             meestal binnen 5-15 minuten.
 
-            Beide koppelen met je pc via Instellingen → Apparaat koppelen.
+            Beide koppelen met je pc: open DebridMusic op de pc, ga naar
+            **Instellingen → Apparaat koppelen** en typ de zes cijfers over.
+            Je bibliotheek, je covers en je bewerkingen komen daarna vanzelf mee.
           draft: false
           prerelease: false
         env:
