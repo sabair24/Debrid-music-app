@@ -1715,6 +1715,19 @@ class _MetadataEditorState extends State<MetadataEditor> {
 
   Future<void> _apply() async {
     setState(() => _applying = true);
+    try {
+      await _applyInner();
+    } catch (e) {
+      // Same trap as _search had: without this the button spins for ever and the dialog looks
+      // frozen, while what actually happened — the PC refused it, the network dropped — is thrown
+      // away. On a Mac or an iPad this is the whole write path, so it must say what went wrong.
+      if (!mounted) return;
+      setState(() => _applying = false);
+      _srcToast(context, 'Aanpassen mislukte: $e');
+    }
+  }
+
+  Future<void> _applyInner() async {
     await context.read<LibraryStore>().applyCorrection(
           widget.album,
           context.read<AppSettings>(),

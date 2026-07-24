@@ -81,6 +81,7 @@ void main() {
       online: online,
       soulseek: soulseek,
       downloads: downloads,
+      settings: settings,
     );
     expect(await server.start(), isNull);
     // ignore: avoid_print
