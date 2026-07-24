@@ -1159,7 +1159,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
               final seen = tried.indexWhere((r) => r.mbid == fullest.$2.mbid);
               extra = seen >= 0 ? lists[seen] : await mb.tracklistOf(fullest.$2);
             }
-            bonus = bonusTracks(out, a.tracks, [
+            bonus = bonusTracks(out, a.tracks, a.artist, [
               if (extra.isNotEmpty) (fullest.$2.line, extra),
               for (var i = 0; i < tried.length; i++)
                 if (i != pick && tried[i].mbid != fullest.$2.mbid) (tried[i].line, lists[i])

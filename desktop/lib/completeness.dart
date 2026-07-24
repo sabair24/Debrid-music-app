@@ -296,18 +296,23 @@ class BonusTrack {
 List<BonusTrack> bonusTracks(
   List<ChoiceTrack> mine,
   List<Track> onDisk,
+  String artist,
   List<(String, List<ChoiceTrack>)> others,
 ) {
   final out = <BonusTrack>[];
-  bool known(ChoiceTrack t) =>
-      mine.any((m) => sameTitle(m.title, t.title, secondsA: m.seconds, secondsB: t.seconds)) ||
-      onDisk.any((d) =>
-          sameTitle(d.title, t.title, secondsA: d.duration?.inSeconds, secondsB: t.seconds)) ||
-      out.any((b) => sameTitle(b.track.title, t.title, secondsA: b.track.seconds, secondsB: t.seconds));
-
   for (final (edition, tracks) in others) {
-    for (final t in tracks) {
-      if (t.title.trim().isEmpty || known(t)) continue;
+    // "Do I have this?" is asked by running the pressing through the ordinary matcher, so a bonus
+    // is judged by exactly the same three passes as the tracklist above it. Titles alone were not
+    // enough: the radio edit carries its marker in the FILENAME and not in the tag, so on titles
+    // it read as a track the user didn't have — and was offered back to them.
+    final c = matchAlbumTracks(tracks, onDisk, artist);
+    for (final s in c.slots) {
+      if (s.index < 0 || !s.missing) continue;
+      final t = s.official!;
+      if (t.title.trim().isEmpty) continue;
+      bool same(ChoiceTrack o) =>
+          sameTitle(o.title, t.title, secondsA: o.seconds, secondsB: t.seconds);
+      if (mine.any(same) || out.any((b) => same(b.track))) continue;
       out.add(BonusTrack(t, edition));
     }
   }
