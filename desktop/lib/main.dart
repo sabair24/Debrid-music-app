@@ -19,6 +19,9 @@ import 'editions.dart';
 import 'connectivity.dart';
 import 'enrichment.dart';
 import 'lan/sharing.dart';
+import 'lan/client_mode.dart';
+import 'lan/client_session.dart';
+import 'pairing_screen.dart';
 import 'library.dart';
 import 'metadata.dart';
 import 'models.dart';
@@ -130,20 +133,33 @@ Future<void> main() async {
     await library.enrich(settings);
   });
 
+  // Which of the two this is: the machine that holds the music, or one reading it. Decided once,
+  // here, and everything below branches on the answer rather than on the platform.
+  final mode = await resolveMode(settings);
+  final session = ClientSession(
+    library: library,
+    settings: settings,
+    owner: mode.owner,
+    applyMediaResolver: (resolver) => player.mediaResolver = resolver,
+    endpoint: mode.endpoint,
+  );
+
   // Share this library with the Mac, the iPad and the Shield. Started before the scan finishes:
   // a device probing /health then gets a real answer straight away, and the catalogue fills in
   // by itself as the scan lands.
   final sharing = LanSharing(library: library, settings: settings);
-  unawaited(sharing.applySettings());
-  // What plays here counts too: the position and the play count go into the same shared state
-  // the iPad and the Shield write to, so carrying on elsewhere works in both directions.
-  player.onProgress = (track, position, playing, queue, index) {
-    sharing.reportProgress(
-        track.path, position, playing, [for (final t in queue) t.path], index);
-  };
-  player.onPlayed = (track) {
-    sharing.reportPlayed(track.path);
-  };
+  if (mode.owner) {
+    unawaited(sharing.applySettings());
+    // What plays here counts too: the position and the play count go into the same shared state
+    // the iPad and the Shield write to, so carrying on elsewhere works in both directions.
+    player.onProgress = (track, position, playing, queue, index) {
+      sharing.reportProgress(
+          track.path, position, playing, [for (final t in queue) t.path], index);
+    };
+    player.onPlayed = (track) {
+      sharing.reportPlayed(track.path);
+    };
+  }
 
   runApp(
     MultiProvider(
@@ -160,6 +176,7 @@ Future<void> main() async {
         Provider<TidalService>.value(value: tidal),
         ChangeNotifierProvider<DownloadManager>.value(value: downloads),
         ChangeNotifierProvider<LanSharing>.value(value: sharing),
+        ChangeNotifierProvider<ClientSession>.value(value: session),
       ],
       child: const DebridApp(),
     ),
@@ -179,6 +196,19 @@ Future<void> main() async {
         await Future.delayed(const Duration(milliseconds: 100));
       }
     });
+  }
+
+  // A device that does not hold the music has nothing to scan: its library comes from the PC,
+  // where the corrections, the pinned pressings and the chosen covers have already been applied.
+  if (!mode.owner) {
+    () async {
+      final endpoint = mode.endpoint;
+      if (endpoint != null) await session.connect(endpoint, remember: false);
+      // The queue is restored either way — the paths in it are stream URLs, and they resolve
+      // against whatever library has just landed.
+      await player.restore(library.trackByPath);
+    }();
+    return;
   }
 
   // Scan, then fill in missing covers + artist photos (cache-first, then web).
@@ -222,8 +252,28 @@ class DebridApp extends StatelessWidget {
         ),
         fontFamily: 'Segoe UI',
       ),
-      home: const HomeShell(),
+      // On a Mac or an iPad that has never met the PC there is no library to show yet, so the
+      // pairing screen comes first. Everywhere else — and from the moment it is paired — this is
+      // the same app it has always been.
+      home: Consumer<ClientSession>(
+        builder: (context, session, _) => session.ready
+            ? const HomeShell()
+            : PairingScreen(
+                deviceName: _thisDeviceName(),
+                onPaired: session.connect,
+              ),
+      ),
     );
+  }
+}
+
+/// What the PC lists this device as. Its own name, because "iPad" is what you look for in a list
+/// of paired devices — not a serial number.
+String _thisDeviceName() {
+  try {
+    return Platform.localHostname;
+  } catch (_) {
+    return Platform.isIOS ? 'iPad' : 'Mac';
   }
 }
 
@@ -6656,10 +6706,92 @@ class _SharingSectionState extends State<_SharingSection> {
     );
   }
 
+  /// What this panel says on a device that reads someone else's library: which PC, whether it is
+  /// answering, and the way back out.
+  Widget _connectedPanel(ClientSession session) {
+    final endpoint = session.endpoint;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Verbonden met je pc',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(12)),
+          child: Row(children: [
+            Icon(Icons.computer_rounded,
+                color: session.lastError == null ? _accent2 : Colors.orangeAccent, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(session.serverName,
+                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+                Text(
+                  // Deliberately verbatim: a port is a number you type, not one to be shown as
+                  // "47.820" by whatever the device's locale thinks a thousands separator is.
+                  endpoint == null
+                      ? ''
+                      : '${endpoint.baseUrl.host}:${endpoint.baseUrl.port} · '
+                          '${session.library.tracks.length} nummers',
+                  style: const TextStyle(color: _muted, fontSize: 12),
+                ),
+              ]),
+            ),
+            TextButton(
+              onPressed: () => session.refreshNow(),
+              child: const Text('Ververs', style: TextStyle(color: _muted)),
+            ),
+          ]),
+        ),
+        if (session.lastError != null) ...[
+          const SizedBox(height: 10),
+          Text(session.lastError!,
+              style: const TextStyle(color: Colors.orangeAccent, fontSize: 12)),
+        ],
+        const SizedBox(height: 14),
+        Text(
+          'Je bibliotheek, je covers en je bewerkingen komen van je pc. Aanpassen doe je daar; '
+          'hier zie je het resultaat vanzelf terug.',
+          style: TextStyle(color: _muted.withValues(alpha: .85), fontSize: 12, height: 1.45),
+        ),
+        const SizedBox(height: 14),
+        OutlinedButton.icon(
+          onPressed: () async {
+            final yes = await showDialog<bool>(
+              context: context,
+              builder: (c) => AlertDialog(
+                backgroundColor: _panel,
+                title: const Text('Koppeling verbreken?'),
+                content: const Text(
+                    'Dit apparaat vergeet je pc. Je muziek blijft gewoon op de pc staan.'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(c, false), child: const Text('Annuleer')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(c, true), child: const Text('Verbreken')),
+                ],
+              ),
+            );
+            if (yes == true) await session.unpair();
+          },
+          icon: const Icon(Icons.link_off_rounded, size: 18),
+          label: const Text('Koppeling verbreken'),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final sharing = context.watch<LanSharing>();
     final settings = context.read<AppSettings>();
+    final session = context.watch<ClientSession>();
+
+    // On a Mac or an iPad this panel is the other way round: this device does not share a library,
+    // it reads one. Offering a server switch here would let you turn on a server with nothing
+    // behind it.
+    if (!session.owner) return _connectedPanel(session);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
