@@ -39,15 +39,20 @@ class DiscogsImage {
     );
   }
 
-  Map<String, dynamic> toJson() =>
-      {'uri': uri, 'thumb': thumb, 'width': width, 'height': height, 'primary': primary};
+  Map<String, dynamic> toJson() => {
+    'uri': uri,
+    'thumb': thumb,
+    'width': width,
+    'height': height,
+    'primary': primary,
+  };
   static DiscogsImage fromJson(Map<String, dynamic> j) => DiscogsImage(
-        j['uri'] as String? ?? '',
-        j['thumb'] as String? ?? '',
-        (j['width'] as num?)?.toInt() ?? 0,
-        (j['height'] as num?)?.toInt() ?? 0,
-        j['primary'] as bool? ?? false,
-      );
+    j['uri'] as String? ?? '',
+    j['thumb'] as String? ?? '',
+    (j['width'] as num?)?.toInt() ?? 0,
+    (j['height'] as num?)?.toInt() ?? 0,
+    j['primary'] as bool? ?? false,
+  );
 }
 
 class DiscogsTrack {
@@ -62,14 +67,18 @@ class DiscogsTrack {
     return p.fold<int>(0, (a, n) => a * 60 + n!);
   }
 
-  Map<String, dynamic> toJson() =>
-      {'position': position, 'title': title, 'duration': duration, 'artists': artists};
+  Map<String, dynamic> toJson() => {
+    'position': position,
+    'title': title,
+    'duration': duration,
+    'artists': artists,
+  };
   static DiscogsTrack fromJson(Map<String, dynamic> j) => DiscogsTrack(
-        j['position'] as String? ?? '',
-        j['title'] as String? ?? '',
-        j['duration'] as String? ?? '',
-        [for (final a in (j['artists'] as List<dynamic>? ?? const [])) a.toString()],
-      );
+    j['position'] as String? ?? '',
+    j['title'] as String? ?? '',
+    j['duration'] as String? ?? '',
+    [for (final a in (j['artists'] as List<dynamic>? ?? const [])) a.toString()],
+  );
 }
 
 /// One pressing of an album, with everything the library page shows about it.
@@ -77,6 +86,13 @@ class DiscogsEdition {
   final int releaseId;
   final String format; // File / CD / Vinyl / Cassette …
   final String? label, catno, country, notes;
+
+  /// The barcode printed on the case, from Discogs' identifiers.
+  ///
+  /// Worth carrying because it names the physical product rather than a database row: it is
+  /// the one field that matches this exact pressing against another catalogue without
+  /// guessing. booklet.dart uses it to find the same record in MusicBrainz.
+  final String? barcode;
 
   /// When THIS pressing appeared. Not the same thing as when the record did: the digital reissue
   /// of Demon Days is from 2014, the album from 2005.
@@ -96,6 +112,7 @@ class DiscogsEdition {
     this.catno,
     this.country,
     this.notes,
+    this.barcode,
     this.year,
     this.albumYear,
     this.genres = const [],
@@ -105,40 +122,42 @@ class DiscogsEdition {
   });
 
   Map<String, dynamic> toJson() => {
-        'releaseId': releaseId,
-        'format': format,
-        'label': label,
-        'catno': catno,
-        'country': country,
-        'notes': notes,
-        'year': year,
-        'albumYear': albumYear,
-        'genres': genres,
-        'styles': styles,
-        'tracklist': [for (final t in tracklist) t.toJson()],
-        'images': [for (final i in images) i.toJson()],
-      };
+    'releaseId': releaseId,
+    'format': format,
+    'label': label,
+    'catno': catno,
+    'country': country,
+    'barcode': barcode,
+    'notes': notes,
+    'year': year,
+    'albumYear': albumYear,
+    'genres': genres,
+    'styles': styles,
+    'tracklist': [for (final t in tracklist) t.toJson()],
+    'images': [for (final i in images) i.toJson()],
+  };
 
   static DiscogsEdition fromJson(Map<String, dynamic> j) => DiscogsEdition(
-        releaseId: (j['releaseId'] as num?)?.toInt() ?? 0,
-        format: j['format'] as String? ?? '',
-        label: j['label'] as String?,
-        catno: j['catno'] as String?,
-        country: j['country'] as String?,
-        notes: j['notes'] as String?,
-        year: (j['year'] as num?)?.toInt(),
-        albumYear: (j['albumYear'] as num?)?.toInt(),
-        genres: [for (final g in (j['genres'] as List<dynamic>? ?? const [])) g.toString()],
-        styles: [for (final s in (j['styles'] as List<dynamic>? ?? const [])) s.toString()],
-        tracklist: [
-          for (final t in (j['tracklist'] as List<dynamic>? ?? const []))
-            if (t is Map<String, dynamic>) DiscogsTrack.fromJson(t)
-        ],
-        images: [
-          for (final i in (j['images'] as List<dynamic>? ?? const []))
-            if (i is Map<String, dynamic>) DiscogsImage.fromJson(i)
-        ],
-      );
+    releaseId: (j['releaseId'] as num?)?.toInt() ?? 0,
+    format: j['format'] as String? ?? '',
+    label: j['label'] as String?,
+    catno: j['catno'] as String?,
+    country: j['country'] as String?,
+    notes: j['notes'] as String?,
+    barcode: j['barcode'] as String?,
+    year: (j['year'] as num?)?.toInt(),
+    albumYear: (j['albumYear'] as num?)?.toInt(),
+    genres: [for (final g in (j['genres'] as List<dynamic>? ?? const [])) g.toString()],
+    styles: [for (final s in (j['styles'] as List<dynamic>? ?? const [])) s.toString()],
+    tracklist: [
+      for (final t in (j['tracklist'] as List<dynamic>? ?? const []))
+        if (t is Map<String, dynamic>) DiscogsTrack.fromJson(t),
+    ],
+    images: [
+      for (final i in (j['images'] as List<dynamic>? ?? const []))
+        if (i is Map<String, dynamic>) DiscogsImage.fromJson(i),
+    ],
+  );
 }
 
 /// A version as it appears in a master's version list — cheap to get, one line each, and enough
@@ -151,8 +170,16 @@ class DiscogsVersion {
   /// The front cover, already in the versions listing — so a whole master's worth of pressings can
   /// be shown with their sleeves off ONE request, without a lookup each.
   final String? thumb;
-  const DiscogsVersion(this.id, this.format, this.major, this.label, this.catno, this.country, this.released,
-      [this.thumb]);
+  const DiscogsVersion(
+    this.id,
+    this.format,
+    this.major,
+    this.label,
+    this.catno,
+    this.country,
+    this.released, [
+    this.thumb,
+  ]);
 
   /// Is this entry actually filled in, or is it a stub someone added and never finished?
   ///
@@ -208,10 +235,15 @@ class DiscogsService {
         final gap = _remaining < 12 ? _minGap * 3 : _minGap;
         if (since < gap) await Future<void>.delayed(gap - since);
         _lastCall = DateTime.now();
-        final r = await http.get(Uri.parse(url), headers: {
-          'User-Agent': _ua,
-          'Authorization': 'Discogs token=${settings.discogsToken.trim()}',
-        }).timeout(const Duration(seconds: 12));
+        final r = await http
+            .get(
+              Uri.parse(url),
+              headers: {
+                'User-Agent': _ua,
+                'Authorization': 'Discogs token=${settings.discogsToken.trim()}',
+              },
+            )
+            .timeout(const Duration(seconds: 12));
         final left = int.tryParse(r.headers['x-discogs-ratelimit-remaining'] ?? '');
         if (left != null) _remaining = left;
         if (r.statusCode != 200) {
@@ -257,7 +289,9 @@ class DiscogsService {
     try {
       await Directory(_dir).create(recursive: true);
       await _cacheFile(url).writeAsString(jsonEncode(body));
-    } catch (_) {/* a cache that can't be written is not a reason to fail the call */}
+    } catch (_) {
+      /* a cache that can't be written is not a reason to fail the call */
+    }
   }
 
   String _q(String s) => Uri.encodeQueryComponent(s);
@@ -266,7 +300,8 @@ class DiscogsService {
 
   /// The master id for an album, or null. A master groups every pressing of one record, which is
   /// what makes "which edition do we describe?" a question we can answer at all.
-  Future<int?> masterId(String artist, String album) async => (await masterIds(artist, album)).firstOrNull;
+  Future<int?> masterId(String artist, String album) async =>
+      (await masterIds(artist, album)).firstOrNull;
 
   /// Candidate masters, most album-like first.
   Future<List<int>> masterIds(String artist, String album) async {
@@ -274,22 +309,28 @@ class DiscogsService {
     // A Discogs disambiguation suffix in the library ("Adele (3)") finds nothing on Discogs, and
     // the loose fallback then matched a Quebec country album called "30 ans de succès".
     final who = cleanArtistName(artist);
-    final strict =
-        await _get('https://api.discogs.com/database/search?type=master&artist=${_q(who)}&release_title=${_q(title)}');
+    final strict = await _get(
+      'https://api.discogs.com/database/search?type=master&artist=${_q(who)}&release_title=${_q(title)}',
+    );
     final ids = _masters(strict, who, album);
     if (ids.isNotEmpty) return ids;
     // Titles disagree about "(Deluxe Edition)", "- EP" and the like far more often than they
     // disagree about the words themselves, so fall back to a loose query.
     return _masters(
-        await _get("https://api.discogs.com/database/search?type=master&q=${_q("$who $title")}"), who, album);
+      await _get("https://api.discogs.com/database/search?type=master&q=${_q("$who $title")}"),
+      who,
+      album,
+    );
   }
 
   /// Formats that mean "this master is not the album": a 7" promo of the title track carries the
   /// same artist and title as the record it advertises. Searching for Michael Jackson's *Bad*
   /// returns three masters called exactly that, and the first is a promo flexi-disc with three
   /// pressings — taking it described the album as a Belgian promo single.
-  static final _notAnAlbum = RegExp(r'^(promo|sampler|single|ep|flexi-disc|unofficial release|dvd|blu-ray)$',
-      caseSensitive: false);
+  static final _notAnAlbum = RegExp(
+    r'^(promo|sampler|single|ep|flexi-disc|unofficial release|dvd|blu-ray)$',
+    caseSensitive: false,
+  );
 
   /// How well a search hit looks like the ALBUM we asked for. Discogs puts "Album" in the format
   /// list of exactly the masters that are one, which makes this cheap and reliable — no extra
@@ -319,9 +360,10 @@ class DiscogsService {
 
   /// Words that dress up a title without changing which record it names.
   static final _editionWord = RegExp(
-      r'^(deluxe|super|edition|remaster|remastered|remaster\w*|anniversary|expanded|special|bonus|'
-      r'tracks?|track|disc|version|reissue|limited|collectors?|collector|the|and|ep|lp|mix|'
-      r'stereo|mono|explicit|clean|\d{4}|\d{1,2}(st|nd|rd|th))$');
+    r'^(deluxe|super|edition|remaster|remastered|remaster\w*|anniversary|expanded|special|bonus|'
+    r'tracks?|track|disc|version|reissue|limited|collectors?|collector|the|and|ep|lp|mix|'
+    r'stereo|mono|explicit|clean|\d{4}|\d{1,2}(st|nd|rd|th))$',
+  );
 
   static bool _onlyEditionWords(String tail) {
     final words = tail.split(' ').where((w) => w.isNotEmpty);
@@ -372,26 +414,33 @@ class DiscogsService {
   /// Thriller has hundreds of pressings; asking for a hundred of them sorted by date returns the
   /// 1982-84 vinyl and nothing else, which is how its page came to describe a Costa Rican LP.
   /// Public wrapper, so the picker extension can list pressings per format.
-  Future<List<DiscogsVersion>> versionsOf(int master, {String? format}) => _versions(master, format: format);
+  Future<List<DiscogsVersion>> versionsOf(int master, {String? format}) =>
+      _versions(master, format: format);
 
   Future<List<DiscogsVersion>> _versions(int master, {String? format}) async {
     final f = format == null ? '' : '&format=${_q(format)}';
-    final body = await _get('https://api.discogs.com/masters/$master/versions?per_page=50&sort=released$f');
+    final body = await _get(
+      'https://api.discogs.com/masters/$master/versions?per_page=50&sort=released$f',
+    );
     final list = body?['versions'] as List<dynamic>? ?? const [];
     final out = <DiscogsVersion>[];
     for (final v in list) {
       if (v is! Map<String, dynamic>) continue;
-      final majors = [for (final m in (v['major_formats'] as List<dynamic>? ?? const [])) m.toString()];
-      out.add(DiscogsVersion(
-        (v['id'] as num?)?.toInt() ?? 0,
-        v['format'] as String? ?? '',
-        majors.isEmpty ? '' : majors.first,
-        (v['label'] as String?)?.trim(),
-        (v['catno'] as String?)?.trim(),
-        (v['country'] as String?)?.trim(),
-        (v['released'] as String?)?.trim(),
-        (v['thumb'] as String?)?.trim(),
-      ));
+      final majors = [
+        for (final m in (v['major_formats'] as List<dynamic>? ?? const [])) m.toString(),
+      ];
+      out.add(
+        DiscogsVersion(
+          (v['id'] as num?)?.toInt() ?? 0,
+          v['format'] as String? ?? '',
+          majors.isEmpty ? '' : majors.first,
+          (v['label'] as String?)?.trim(),
+          (v['catno'] as String?)?.trim(),
+          (v['country'] as String?)?.trim(),
+          (v['released'] as String?)?.trim(),
+          (v['thumb'] as String?)?.trim(),
+        ),
+      );
     }
     return out;
   }
@@ -443,7 +492,12 @@ class DiscogsService {
   /// [expectedTracks] is what the library says the album holds; a pressing with far fewer tracks is
   /// a single or a sampler that got filed under the same master, and describing the album with it
   /// would be worse than useless.
-  Future<DiscogsEdition?> edition(String artist, String album, {int expectedTracks = 0, int? pinned}) async {
+  Future<DiscogsEdition?> edition(
+    String artist,
+    String album, {
+    int expectedTracks = 0,
+    int? pinned,
+  }) async {
     // A release the user pointed at is not a candidate to be weighed against the others — it is the
     // answer. Everything the page shows is read from it.
     if (pinned != null && pinned > 0) {
@@ -477,7 +531,8 @@ class DiscogsService {
           if (e == null) continue;
           fallback ??= e;
           if (masterTracks > 0 && !fitsTrackCount(e.tracklist.length, masterTracks)) continue;
-          if (!v.isDocumented && format != releaseFormatOrder.last) break; // undocumented → try the next format
+          if (!v.isDocumented && format != releaseFormatOrder.last)
+            break; // undocumented → try the next format
           return e;
         }
       }
@@ -496,11 +551,24 @@ class DiscogsService {
     final first = labels.isEmpty ? null : labels.first as Map<String, dynamic>?;
     return DiscogsEdition(
       releaseId: id,
-      format: formats.isEmpty ? '' : ((formats.first as Map<String, dynamic>)['name'] as String? ?? ''),
+      format: formats.isEmpty
+          ? ''
+          : ((formats.first as Map<String, dynamic>)['name'] as String? ?? ''),
       label: (first?['name'] as String?)?.trim(),
       catno: (first?['catno'] as String?)?.trim(),
       country: (b['country'] as String?)?.trim(),
       notes: (b['notes'] as String?)?.trim(),
+      // Discogs lists the barcode among free-form identifiers, often with spaces or a
+      // "scanned"/"text" qualifier. Keep the digits only, so it can be matched elsewhere.
+      barcode: () {
+        for (final i in (b['identifiers'] as List<dynamic>? ?? const [])) {
+          if (i is! Map<String, dynamic>) continue;
+          if ((i['type'] as String?)?.toLowerCase() != 'barcode') continue;
+          final digits = (i['value'] as String? ?? '').replaceAll(RegExp(r'[^0-9]'), '');
+          if (digits.length >= 8) return digits;
+        }
+        return null;
+      }(),
       year: (b['year'] as num?)?.toInt(),
       albumYear: albumYear,
       genres: [for (final g in (b['genres'] as List<dynamic>? ?? const [])) g.toString()],
@@ -514,13 +582,13 @@ class DiscogsService {
               t['duration'] as String? ?? '',
               [
                 for (final a in (t['artists'] as List<dynamic>? ?? const []))
-                  if (a is Map<String, dynamic>) (a['name'] as String? ?? '')
+                  if (a is Map<String, dynamic>) (a['name'] as String? ?? ''),
               ]..removeWhere((s) => s.isEmpty),
-            )
+            ),
       ],
       images: [
         for (final i in (b['images'] as List<dynamic>? ?? const []))
-          if (i is Map<String, dynamic>) DiscogsImage.from(i)
+          if (i is Map<String, dynamic>) DiscogsImage.from(i),
       ].whereType<DiscogsImage>().toList(),
     );
   }
@@ -571,15 +639,15 @@ class DiscogsService {
       profile: _plain((b['profile'] as String?)?.trim() ?? ''),
       members: [
         for (final m in (b['members'] as List<dynamic>? ?? const []))
-          if (m is Map<String, dynamic> && (m['name'] as String?) != null) m['name'] as String
+          if (m is Map<String, dynamic> && (m['name'] as String?) != null) m['name'] as String,
       ],
       aliases: [
         for (final a in (b['aliases'] as List<dynamic>? ?? const []))
-          if (a is Map<String, dynamic> && (a['name'] as String?) != null) a['name'] as String
+          if (a is Map<String, dynamic> && (a['name'] as String?) != null) a['name'] as String,
       ],
       images: [
         for (final i in (b['images'] as List<dynamic>? ?? const []))
-          if (i is Map<String, dynamic>) DiscogsImage.from(i)
+          if (i is Map<String, dynamic>) DiscogsImage.from(i),
       ].whereType<DiscogsImage>().toList(),
     );
   }
@@ -611,7 +679,8 @@ class DiscogsArtist {
   /// The photos that could serve as a portrait, best first — squarish ones, primary before the
   /// rest. Discogs doesn't label them, so this is a shape heuristic, not a promise.
   List<DiscogsImage> get portraits =>
-      [...images.where((i) => !i.isWide)]..sort((a, b) => (b.primary ? 1 : 0).compareTo(a.primary ? 1 : 0));
+      [...images.where((i) => !i.isWide)]
+        ..sort((a, b) => (b.primary ? 1 : 0).compareTo(a.primary ? 1 : 0));
 
   /// The ones wide enough to sit behind a page.
   List<DiscogsImage> get backdrops => images.where((i) => i.isWide).toList();
@@ -630,8 +699,13 @@ extension DiscogsArtwork on DiscogsService {
   /// Only the first handful of scans are downloaded. Dangerous has 31 — a booklet page by page —
   /// and the three that matter are always near the top, so pulling the lot would cost megabytes
   /// to answer a question already settled.
-  Future<ReleaseArt?> releaseArt(String artist, String album,
-      {int expectedTracks = 0, int? pinned, String? pinnedMbid}) async {
+  Future<ReleaseArt?> releaseArt(
+    String artist,
+    String album, {
+    int expectedTracks = 0,
+    int? pinned,
+    String? pinnedMbid,
+  }) async {
     // Both pins are part of the cache key. Without that a new choice would keep answering with the
     // scans fetched for the old one — which is half of why picking a release changed the front
     // cover and left the back and the disc exactly as they were.
@@ -644,8 +718,9 @@ extension DiscogsArtwork on DiscogsService {
     // v3 is this — the scans are fetched at 1200px instead of 500, and the old soft copies have to
     // be let go of rather than quietly kept forever.
     final key = sha1
-        .convert(utf8.encode(
-            'art|v3|$artist|$album|$expectedTracks|${pinned ?? 0}|${pinnedMbid ?? ''}'))
+        .convert(
+          utf8.encode('art|v3|$artist|$album|$expectedTracks|${pinned ?? 0}|${pinnedMbid ?? ''}'),
+        )
         .toString();
     final dir = Directory('$artDir${Platform.pathSeparator}$key');
     final cached = await _readArt(dir);
@@ -691,7 +766,10 @@ extension DiscogsArtwork on DiscogsService {
     }
     final roles = assignRoles(
       [for (var i = 0; i < take; i++) e.images[i].primary],
-      [for (var i = 0; i < take; i++) e.images[i].height == 0 ? 1.0 : e.images[i].width / e.images[i].height],
+      [
+        for (var i = 0; i < take; i++)
+          e.images[i].height == 0 ? 1.0 : e.images[i].width / e.images[i].height,
+      ],
       datas,
     );
     Uint8List? at(int? i) => (i == null || i >= datas.length) ? null : datas[i];
@@ -712,7 +790,6 @@ extension DiscogsArtwork on DiscogsService {
     return art;
   }
 
-
   /// The three scans from the Cover Art Archive, which says outright what each image is.
   ///
   /// The whole reason to ask here first: `Front`, `Back` and `Medium` are stated, where the Discogs
@@ -725,8 +802,12 @@ extension DiscogsArtwork on DiscogsService {
   Future<ReleaseArt?> _artFromMusicBrainz(String artist, String album, int expectedTracks) async {
     try {
       final mb = MusicBrainzService();
-      final hits = await mb.searchReleases(artist, DiscogsService.plainTitle(album),
-          expectedTracks: expectedTracks, max: 25);
+      final hits = await mb.searchReleases(
+        artist,
+        DiscogsService.plainTitle(album),
+        expectedTracks: expectedTracks,
+        max: 25,
+      );
       if (hits.isEmpty) return null;
       Uint8List? front, back, disc;
       var looked = 0;
@@ -777,7 +858,9 @@ extension DiscogsArtwork on DiscogsService {
     try {
       final masters = await masterIds(artist, album);
       if (masters.isEmpty) return null;
-      final versions = DiscogsService.orderByPreference(await _versions(masters.first, format: 'CD'));
+      final versions = DiscogsService.orderByPreference(
+        await _versions(masters.first, format: 'CD'),
+      );
       var tried = 0;
       for (final v in versions) {
         if (v.id == skip || tried >= 2) continue;
@@ -788,9 +871,12 @@ extension DiscogsArtwork on DiscogsService {
           if (bytes != null && looksLikeDisc(bytes)) return bytes;
         }
       }
-    } catch (_) {/* no disc is not an error, just no animation */}
+    } catch (_) {
+      /* no disc is not an error, just no animation */
+    }
     return null;
   }
+
   String get artDir =>
       '${Platform.environment['APPDATA'] ?? Directory.current.path}${Platform.pathSeparator}DebridMusic'
       '${Platform.pathSeparator}releaseart';
@@ -803,7 +889,11 @@ extension DiscogsArtwork on DiscogsService {
         return await f.exists() ? await f.readAsBytes() : null;
       }
 
-      return ReleaseArt(front: await one('front'), back: await one('back'), disc: await one('disc'));
+      return ReleaseArt(
+        front: await one('front'),
+        back: await one('back'),
+        disc: await one('disc'),
+      );
     } catch (_) {
       return null;
     }
@@ -821,16 +911,23 @@ extension DiscogsArtwork on DiscogsService {
       await one('disc', art.disc);
       // A marker, so a release that genuinely has only a front cover isn't refetched every visit.
       await File('${dir.path}${Platform.pathSeparator}done').writeAsString('1');
-    } catch (_) {/* a cache that can't be written is not worth failing over */}
+    } catch (_) {
+      /* a cache that can't be written is not worth failing over */
+    }
   }
 
   /// Discogs serves images from its own CDN and wants the same User-Agent as the API.
   Future<Uint8List?> fetchImage(String url) async {
     try {
-      final r = await http.get(Uri.parse(url), headers: {
-        'User-Agent': DiscogsService._ua,
-        'Authorization': 'Discogs token=${settings.discogsToken.trim()}',
-      }).timeout(const Duration(seconds: 20));
+      final r = await http
+          .get(
+            Uri.parse(url),
+            headers: {
+              'User-Agent': DiscogsService._ua,
+              'Authorization': 'Discogs token=${settings.discogsToken.trim()}',
+            },
+          )
+          .timeout(const Duration(seconds: 20));
       return r.statusCode == 200 && r.bodyBytes.length > 500 ? r.bodyBytes : null;
     } catch (_) {
       return null;
@@ -871,18 +968,20 @@ extension DiscogsChoices on DiscogsService {
 
     void addVersion(DiscogsVersion v) {
       if (rows.length >= max || v.id <= 0 || !seen.add(v.id)) return;
-      rows.add(ReleaseChoice(
-        source: EditionSource.discogs,
-        releaseId: v.id,
-        format: v.major.isEmpty ? v.format : v.major,
-        label: v.label,
-        catno: v.catno,
-        country: v.country,
-        year: v.year,
-        // The sleeve, straight from the listing — no lookup needed to show it.
-        front: (v.thumb ?? '').isEmpty ? null : ChoiceImage(v.thumb!, v.thumb!),
-        detailed: false,
-      ));
+      rows.add(
+        ReleaseChoice(
+          source: EditionSource.discogs,
+          releaseId: v.id,
+          format: v.major.isEmpty ? v.format : v.major,
+          label: v.label,
+          catno: v.catno,
+          country: v.country,
+          year: v.year,
+          // The sleeve, straight from the listing — no lookup needed to show it.
+          front: (v.thumb ?? '').isEmpty ? null : ChoiceImage(v.thumb!, v.thumb!),
+          detailed: false,
+        ),
+      );
     }
 
     // ── The list, off one request per master ────────────────────────────────
@@ -902,17 +1001,18 @@ extension DiscogsChoices on DiscogsService {
       final e = await release(pinned);
       if (e != null) {
         rows.insert(
-            0,
-            ReleaseChoice(
-              source: EditionSource.discogs,
-              releaseId: e.releaseId,
-              format: e.format,
-              label: e.label,
-              catno: e.catno,
-              country: e.country,
-              year: e.year,
-              detailed: false,
-            ));
+          0,
+          ReleaseChoice(
+            source: EditionSource.discogs,
+            releaseId: e.releaseId,
+            format: e.format,
+            label: e.label,
+            catno: e.catno,
+            country: e.country,
+            year: e.year,
+            detailed: false,
+          ),
+        );
         seen.add(pinned);
       }
     }
@@ -986,8 +1086,10 @@ extension DiscogsSearch on DiscogsService {
   /// a Discogs release would simply fail.
   Future<List<CatalogAlbumHit>> searchAlbums(String query, {int max = 12}) async {
     if (!available || query.trim().isEmpty) return const [];
-    final b = await _get('https://api.discogs.com/database/search'
-        '?type=release&q=${_q(query.trim())}&per_page=${max * 2}');
+    final b = await _get(
+      'https://api.discogs.com/database/search'
+      '?type=release&q=${_q(query.trim())}&per_page=${max * 2}',
+    );
     final results = b?['results'] as List<dynamic>? ?? const [];
     final out = <CatalogAlbumHit>[];
     final seen = <String>{};
@@ -1004,24 +1106,29 @@ extension DiscogsSearch on DiscogsService {
         album = title.substring(dash + 3).trim();
       }
       // Cassettes and videos are not what anyone is looking for here.
-      final formats = [for (final f in (r['format'] as List<dynamic>? ?? const [])) f.toString().toLowerCase()];
-      if (formats.any((f) => f.contains('cassette') || f.contains('dvd') || f.contains('blu-ray'))) continue;
+      final formats = [
+        for (final f in (r['format'] as List<dynamic>? ?? const [])) f.toString().toLowerCase(),
+      ];
+      if (formats.any((f) => f.contains('cassette') || f.contains('dvd') || f.contains('blu-ray')))
+        continue;
       // One card per record, not one per pressing: twenty Thriller CDs is not twenty results.
       if (!seen.add('${artistKey(artist)}|${normKey(album)}')) continue;
       final cover = (r['cover_image'] ?? r['thumb']) as String?;
       final year = (r['year'] as String?)?.trim();
-      out.add(CatalogAlbumHit(
-        CatalogAlbum(
-          -id,
-          album,
-          (cover != null && cover.isNotEmpty && !cover.contains('spacer')) ? cover : null,
-          (year != null && year.length >= 4) ? year : null,
-          0,
-          'album',
-          origin: CatalogRef.discogsRelease(id),
+      out.add(
+        CatalogAlbumHit(
+          CatalogAlbum(
+            -id,
+            album,
+            (cover != null && cover.isNotEmpty && !cover.contains('spacer')) ? cover : null,
+            (year != null && year.length >= 4) ? year : null,
+            0,
+            'album',
+            origin: CatalogRef.discogsRelease(id),
+          ),
+          artist,
         ),
-        artist,
-      ));
+      );
       if (out.length >= max) break;
     }
     return out;
@@ -1036,11 +1143,17 @@ extension DiscogsStyles on DiscogsService {
   /// [deep] trades the front of the list for further down it. Sorting by fewest owners would
   /// surface unfinished entries rather than obscure records, so the well-known sort is kept and the
   /// page is moved instead: the same quality of entry, just past the ones everybody knows.
-  Future<List<CatalogAlbumHit>> searchByStyle(String style, {int max = 24, bool deep = false}) async {
+  Future<List<CatalogAlbumHit>> searchByStyle(
+    String style, {
+    int max = 24,
+    bool deep = false,
+  }) async {
     if (!available || style.trim().isEmpty) return const [];
-    final b = await _get('https://api.discogs.com/database/search'
-        '?type=master&style=${_q(style.trim())}&sort=have&sort_order=desc'
-        '&per_page=${max * 2}&page=${deep ? 4 : 1}');
+    final b = await _get(
+      'https://api.discogs.com/database/search'
+      '?type=master&style=${_q(style.trim())}&sort=have&sort_order=desc'
+      '&per_page=${max * 2}&page=${deep ? 4 : 1}',
+    );
     final results = b?['results'] as List<dynamic>? ?? const [];
     final out = <CatalogAlbumHit>[];
     final seen = <String>{};
@@ -1059,12 +1172,19 @@ extension DiscogsStyles on DiscogsService {
       if (!seen.add('${artistKey(artist)}|${normKey(album)}')) continue;
       final cover = (r['cover_image'] ?? r['thumb']) as String?;
       final year = (r['year'] as String?)?.trim();
-      out.add(CatalogAlbumHit(
-        CatalogAlbum(-id, album,
+      out.add(
+        CatalogAlbumHit(
+          CatalogAlbum(
+            -id,
+            album,
             (cover != null && cover.isNotEmpty && !cover.contains('spacer')) ? cover : null,
-            (year != null && year.length >= 4) ? year : null, 0, 'album'),
-        artist,
-      ));
+            (year != null && year.length >= 4) ? year : null,
+            0,
+            'album',
+          ),
+          artist,
+        ),
+      );
       if (out.length >= max) break;
     }
     return out;

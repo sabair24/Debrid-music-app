@@ -101,6 +101,73 @@ void main() {
     });
   });
 
+  group('archives', () {
+    Uint8List png(int w, int h) {
+      final i = img.Image(width: w, height: h);
+      img.fill(i, color: img.ColorRgb8(200, 0, 0));
+      return Uint8List.fromList(img.encodePng(i));
+    }
+
+    test('dimensions come out of the file header, for both formats', () {
+      final im = img.Image(width: 1200, height: 602);
+      img.fill(im, color: img.ColorRgb8(10, 20, 30));
+      expect(imageSize(Uint8List.fromList(img.encodePng(im))), (w: 1200, h: 602));
+      expect(imageSize(Uint8List.fromList(img.encodeJpg(im))), (w: 1200, h: 602));
+      expect(imageSize(Uint8List.fromList([1, 2, 3, 4])), isNull, reason: 'not an image');
+    });
+
+    test('a thumbnail settles whether a scan is a spread', () async {
+      final sized = await sizedFromThumbnails(
+        const [
+          BookletSheet(uri: 'a', thumbUri: 'sheet', width: 0, height: 0, kind: SheetKind.booklet),
+          BookletSheet(uri: 'b', thumbUri: 'page', width: 0, height: 0, kind: SheetKind.front),
+          BookletSheet(uri: 'c', thumbUri: 'gone', width: 0, height: 0, kind: SheetKind.other),
+        ],
+        get: (u) async => switch (u) {
+          'sheet' => png(250, 125), // 2.00:1 — the booklet held open
+          'page' => png(250, 249), // a single page
+          _ => null, // thumbnail unavailable
+        },
+      );
+      expect(sized[0].spread, isTrue);
+      expect(sized[1].spread, isFalse);
+      expect(sized[2].spread, isFalse, reason: 'unmeasured must not pass for a spread');
+      expect(sized[0].kind, SheetKind.booklet, reason: 'measuring must not lose the label');
+    });
+
+    test('the archive with facing pages wins; a tie goes to the sharper one', () {
+      // Bad as the two archives really hold it: Discogs a page at a time, CAA opened flat.
+      expect(
+        preferCoverArtArchive(caaSheets: 11, caaSpreads: 8, discogsSheets: 9, discogsSpreads: 0),
+        isTrue,
+      );
+      // Nothing turns either way → stay on the pressing the user pinned.
+      expect(
+        preferCoverArtArchive(caaSheets: 4, caaSpreads: 0, discogsSheets: 9, discogsSpreads: 0),
+        isFalse,
+      );
+      // Same pages, twice the resolution.
+      expect(
+        preferCoverArtArchive(caaSheets: 11, caaSpreads: 8, discogsSheets: 11, discogsSpreads: 8),
+        isTrue,
+      );
+      // Discogs happens to have more of the booklet photographed open.
+      expect(
+        preferCoverArtArchive(caaSheets: 11, caaSpreads: 2, discogsSheets: 9, discogsSpreads: 5),
+        isFalse,
+      );
+      expect(
+        preferCoverArtArchive(caaSheets: 0, caaSpreads: 0, discogsSheets: 9, discogsSpreads: 0),
+        isFalse,
+      );
+      // No Discogs at all — no token, or no pressing matched.
+      expect(
+        preferCoverArtArchive(caaSheets: 5, caaSpreads: 0, discogsSheets: 0, discogsSpreads: 0),
+        isTrue,
+      );
+    });
+  });
+
   group('rendering', () {
     late Directory dir;
 
