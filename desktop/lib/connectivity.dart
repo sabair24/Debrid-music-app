@@ -37,21 +37,36 @@ class ConnectionChecker {
   Future<ConnResult> discogsCheck() async {
     final tok = settings.discogsToken.trim();
     if (tok.isEmpty) return const ConnResult(ConnState.absent, 'Geen token ingevuld');
+    const ua = 'DebridMusic/0.1 ( https://github.com/sabair24/Debrid-music-app )';
+    final headers = {'Authorization': 'Discogs token=$tok', 'User-Agent': ua};
+
+    // Checked against the endpoint the app ACTUALLY uses, not /oauth/identity.
+    //
+    // Identity is the obvious thing to test and the wrong one: it is a different service, and when
+    // it was down with a 502 this check called a perfectly good token invalid while searching and
+    // fetching releases both worked fine. A test that fails for something the app never does is
+    // worse than no test — it sends you off replacing a key that was never the problem.
     try {
-      final r = await http.get(
-        Uri.parse('https://api.discogs.com/oauth/identity'),
-        headers: {
-          'Authorization': 'Discogs token=$tok',
-          'User-Agent': 'DebridMusic/0.1 ( https://github.com/sabair24/Debrid-music-app )',
-        },
-      ).timeout(const Duration(seconds: 12));
+      final r = await http
+          .get(
+            Uri.parse('https://api.discogs.com/database/search?q=a&type=release&per_page=1'),
+            headers: headers,
+          )
+          .timeout(const Duration(seconds: 12));
       if (r.statusCode == 200) {
-        final name = (jsonDecode(r.body)['username'] ?? '') as String;
-        return ConnResult(ConnState.ok, name.isNotEmpty ? 'Ingelogd als $name' : 'Geldige token');
+        // The username is a nicety on top. If identity is having a bad day, say so plainly rather
+        // than let it downgrade a working token.
+        try {
+          final id = await http
+              .get(Uri.parse('https://api.discogs.com/oauth/identity'), headers: headers)
+              .timeout(const Duration(seconds: 8));
+          if (id.statusCode == 200) {
+            final name = (jsonDecode(id.body)['username'] ?? '') as String;
+            if (name.isNotEmpty) return ConnResult(ConnState.ok, 'Ingelogd als $name');
+          }
+        } catch (_) {/* the token works; the name is decoration */}
+        return const ConnResult(ConnState.ok, 'Token werkt');
       }
-      // Not all of these are a bad token, and calling them one sends you off checking something
-      // that was never wrong. 429 in particular happens right after a busy session and clears by
-      // itself; "ongeldig" would have you generating a new token for nothing.
       return ConnResult(
         ConnState.fail,
         switch (r.statusCode) {
@@ -60,7 +75,8 @@ class ConnectionChecker {
           403 => 'Discogs weigert de toegang (403). Meestal het verkeerde soort sleutel: het moet '
               'een personal access token zijn.',
           429 => 'Even te veel verzoeken (429). Je token is in orde; wacht een minuut.',
-          >= 500 => 'Discogs zelf heeft een storing (${r.statusCode}). Later opnieuw proberen.',
+          >= 500 => 'Discogs zelf heeft een storing (${r.statusCode}). Je token is hier niet de '
+              'oorzaak; later opnieuw proberen.',
           _ => 'Discogs antwoordde met ${r.statusCode}.',
         },
       );
