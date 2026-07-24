@@ -108,6 +108,7 @@ class LanSharing extends ChangeNotifier {
       online: online,
       soulseek: soulseek,
       downloads: downloads,
+      settings: settings,
     );
     _error = await server.start();
     _server = _error == null ? server : null;

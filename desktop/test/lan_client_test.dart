@@ -15,6 +15,9 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import 'package:debridmusic/lan/catalog.dart';
+import 'package:debridmusic/lan/pairing.dart';
+import 'package:debridmusic/lan/server.dart';
+import 'package:debridmusic/lan/state_store.dart';
 import 'package:debridmusic/lan/client.dart';
 import 'package:debridmusic/library.dart';
 import 'package:debridmusic/models.dart';
@@ -91,13 +94,15 @@ Track _t(
 }
 
 /// A client bound to a MockClient that answers out of [pc]'s real catalogue.
-({LibraryStore library, RemoteClient client, List<String> requests}) _client(
+({LibraryStore library, RemoteClient client, List<String> requests, List<Map<String, dynamic>> edits}) _client(
   LibraryStore pc, {
   Map<String, Uint8List> art = const {},
   int catalogStatus = 200,
+  int editStatus = 200,
 }) {
   final catalog = LanCatalog(pc);
   final requests = <String>[];
+  final edits = <Map<String, dynamic>>[];
   final base = Uri.parse('http://192.168.0.216:47820');
 
   final mock = MockClient((req) async {
@@ -109,6 +114,13 @@ Track _t(
         return http.Response('', 304, headers: {'etag': snap.etag});
       }
       return http.Response.bytes(snap.json, 200, headers: {'etag': snap.etag});
+    }
+    if (req.url.path == '/api/corrections') {
+      edits.add(jsonDecode(req.body) as Map<String, dynamic>);
+      if (editStatus != 200) {
+        return http.Response(jsonEncode({'error': 'de pc wilde niet'}), editStatus);
+      }
+      return http.Response(jsonEncode({'ok': true}), 200);
     }
     if (req.url.path.startsWith('/art/')) {
       final ref = req.url.pathSegments.last;
@@ -124,7 +136,7 @@ Track _t(
     client: mock,
   );
   final library = LibraryStore()..remote = client;
-  return (library: library, client: client, requests: requests);
+  return (library: library, client: client, requests: requests, edits: edits);
 }
 
 /// What a person actually sees of an album, in a form two libraries can be compared on.
@@ -280,39 +292,52 @@ void main() {
   });
 
   group('a device that does not hold the files', () {
-    test('editing refuses, and says where to go', () async {
+    test('an edit becomes a request to the PC, naming the album by id', () async {
       final pc = _pc();
       final c = _client(pc.library);
       await c.library.loadRemote();
-      final album = c.library.albums.first;
+      final album = c.library.albums.firstWhere((a) => a.title == 'Dummy');
+      final id = c.library.remoteAlbumId(album);
 
-      expect(c.library.canEdit, isFalse);
-      expect(
-        () => c.library.applyCorrection(album, AppSettings(), artist: 'Iets anders'),
-        throwsA(isA<RemoteWriteException>()),
-      );
-      expect(() => c.library.mergeEditions(album), throwsA(isA<RemoteWriteException>()));
-      expect(
-        () => c.library.removeTracks([album.tracks.first.path], fromDisk: false),
-        throwsA(isA<RemoteWriteException>()),
-      );
+      expect(c.library.canEdit, isTrue);
+      await c.library.applyCorrection(album, AppSettings(), artist: 'Iets anders');
+      await c.library.mergeEditions(c.library.albums.firstWhere((a) => a.title == 'Dummy'));
+
+      expect(c.edits.map((e) => e['op']), ['correction', 'merge']);
+      // By id, not by title: the library can hold two pressings of one record, and a title would
+      // be ambiguous exactly where it matters most.
+      expect(c.edits.first['albumId'], id);
+      expect(c.edits.first['artist'], 'Iets anders');
     });
 
-    test('a refused edit changes nothing at all', () async {
-      final pc = _pc(twoPressings: true);
+    test('removing a track sends the id the PC issued', () async {
+      final pc = _pc();
       final c = _client(pc.library);
+      await c.library.loadRemote();
+      final track = c.library.tracks.firstWhere((t) => t.title == 'Sour Times');
+
+      await c.library.removeTracks([track.path], fromDisk: false);
+
+      final ids = (c.edits.single['trackIds'] as List).cast<String>();
+      expect(ids.single, isNotEmpty);
+      // The path is a stream URL; the id has to be recovered from it, extension and all.
+      expect(track.path, contains(ids.single));
+      expect(c.edits.single['fromDisk'], isFalse);
+    });
+
+    test('an edit the PC refuses changes nothing here', () async {
+      final pc = _pc(twoPressings: true);
+      final c = _client(pc.library, editStatus: 500);
       await c.library.loadRemote();
       final before = _shape(c.library);
 
-      // The danger is not the failure, it is a HALF success: these all end in rebuildAlbums(),
-      // which regroups from tags and would throw away the pressings the PC sent.
-      try {
-        await c.library.mergeEditions(
-          c.library.albums.firstWhere((a) => a.title == 'Millennium'),
-        );
-      } on RemoteWriteException {
-        // expected
-      }
+      // The danger is not the failure, it is a HALF success: a local edit would end in
+      // rebuildAlbums(), which regroups from tags and would throw away the pressings the PC sent.
+      // Nothing is applied here at all — the PC's answer is the only truth.
+      await expectLater(
+        c.library.mergeEditions(c.library.albums.firstWhere((a) => a.title == 'Millennium')),
+        throwsA(isA<RemoteException>()),
+      );
       expect(_shape(c.library), before);
     });
 
@@ -406,6 +431,8 @@ void main() {
     });
   });
 
+  group('editing from a device without the files', _editingTests);
+
   group('typing an address', () {
     test('what a person types reaches the PC', () {
       expect(RemoteEndpoint.parseHost('192.168.0.216').toString(),
@@ -428,5 +455,122 @@ void main() {
       expect(back!.name, 'pc-van-saber');
       expect(RemoteEndpoint.fromJson({'baseUrl': 'http://pc', 'token': ''}), isNull);
     });
+  });
+}
+
+/// Editing from a device that holds none of the files.
+///
+/// Over a real socket against a real [LanServer], because the promise is round-trip: the change
+/// lands in the PC's own library and comes back through the catalogue everyone reads — not into
+/// some local copy that quietly drifts.
+void _editingTests() {
+  late Directory scratch;
+  late Directory pcRoot;
+  late LibraryStore pcLibrary;
+  late LanServer server;
+  late LibraryStore mac;
+
+  setUp(() async {
+    scratch = Directory.systemTemp.createTempSync('dm_edit_');
+    setAppDirForTest(scratch.path);
+
+    pcRoot = Directory.systemTemp.createTempSync('dm_editpc_');
+    final dir = Directory('${pcRoot.path}/Portishead/Dummy')..createSync(recursive: true);
+    File('${dir.path}/01.flac').writeAsBytesSync(List<int>.generate(2048, (i) => i % 256));
+    File('${dir.path}/02.flac').writeAsBytesSync(List<int>.generate(1024, (i) => i % 256));
+    pcLibrary = LibraryStore()
+      ..rootPath = pcRoot.path
+      ..configDirOverride = pcRoot.path;
+    pcLibrary.tracks.addAll([
+      _t('${dir.path}/01.flac', 'Mysterons', 'Portishead', 'Dummy', no: 1, total: 2),
+      _t('${dir.path}/02.flac', 'Sour Times', 'Portishead', 'Dummy', no: 2, total: 2),
+    ]);
+    pcLibrary.rebuildAlbums();
+
+    server = LanServer(
+      library: pcLibrary,
+      token: 'sleutel',
+      state: LanStateStore(File('${pcRoot.path}/state.json')),
+      pairing: PairingStore(),
+      port: 0,
+      settings: AppSettings(),
+    );
+    expect(await server.start(), isNull);
+
+    mac = LibraryStore()
+      ..remote = RemoteClient(RemoteEndpoint(
+          baseUrl: Uri.parse('http://127.0.0.1:${server.boundPort}'), token: 'sleutel'));
+    await mac.loadRemote();
+  });
+
+  tearDown(() async {
+    await server.dispose();
+    pcRoot.deleteSync(recursive: true);
+    scratch.deleteSync(recursive: true);
+  });
+
+  test('a correction typed on the Mac lands on the PC and comes back', () async {
+    final album = mac.albums.firstWhere((a) => a.title == 'Dummy');
+    await mac.applyCorrection(album, AppSettings(), artist: 'Portishead (UK)');
+
+    // On the PC, where the file is.
+    expect(pcLibrary.albums.map((a) => a.artist), contains('Portishead (UK)'));
+    // And back on the Mac, through the catalogue rather than by editing a local copy.
+    expect(mac.albums.map((a) => a.artist), contains('Portishead (UK)'));
+  });
+
+  test('a cover chosen on the Mac is the cover the PC serves', () async {
+    final art = Uint8List.fromList(List.generate(900, (i) => (i * 5) % 256));
+    final album = mac.albums.firstWhere((a) => a.title == 'Dummy');
+    await mac.applyCorrection(album, AppSettings(), coverBytes: art);
+
+    expect(pcLibrary.albums.firstWhere((a) => a.title == 'Dummy').cover, art);
+  });
+
+  test('a pinned pressing reaches the PC', () async {
+    final album = mac.albums.firstWhere((a) => a.title == 'Dummy');
+    await mac.applyCorrection(album, AppSettings(), discogsRelease: 123456);
+    expect(pcLibrary.correctionForTest('${pcRoot.path}/Portishead/Dummy/01.flac')?['release'],
+        '123456');
+  });
+
+  test('merging and splitting editions travel too', () async {
+    final album = mac.albums.firstWhere((a) => a.title == 'Dummy');
+    await mac.mergeEditions(album);
+    expect(pcLibrary.isMerged(pcLibrary.albums.firstWhere((a) => a.title == 'Dummy')), isTrue);
+
+    await mac.unmergeEditions(mac.albums.firstWhere((a) => a.title == 'Dummy'));
+    expect(pcLibrary.isMerged(pcLibrary.albums.firstWhere((a) => a.title == 'Dummy')), isFalse);
+  });
+
+  test('removing a track removes it on the PC, and the file stays put', () async {
+    final track = mac.tracks.firstWhere((t) => t.title == 'Sour Times');
+    await mac.removeTracks([track.path], fromDisk: false);
+
+    expect(pcLibrary.tracks.map((t) => t.title), isNot(contains('Sour Times')));
+    expect(mac.tracks.map((t) => t.title), isNot(contains('Sour Times')));
+    // "Uit bibliotheek" is not "van schijf" — the file is still there.
+    expect(File('${pcRoot.path}/Portishead/Dummy/02.flac').existsSync(), isTrue);
+  });
+
+  test('an album the PC no longer has says so, rather than editing the wrong one', () async {
+    final album = mac.albums.firstWhere((a) => a.title == 'Dummy');
+    // The PC moves on: this record is gone by the time the Mac's edit arrives.
+    pcLibrary.tracks.clear();
+    pcLibrary.rebuildAlbums();
+    pcLibrary.notifyListeners();
+
+    await expectLater(
+      mac.applyCorrection(album, AppSettings(), artist: 'Iets'),
+      throwsA(isA<RemoteException>().having((e) => e.message, 'message', contains('niet (meer)'))),
+    );
+  });
+
+  test('moving files is still the PC\'s alone, and says so', () async {
+    final album = mac.albums.firstWhere((a) => a.title == 'Dummy');
+    expect(
+      () => mac.moveTracksToAlbum(mac.tracks.take(1).toList(), album, AppSettings()),
+      throwsA(isA<RemoteWriteException>()),
+    );
   });
 }

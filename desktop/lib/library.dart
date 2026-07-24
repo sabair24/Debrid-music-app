@@ -286,7 +286,7 @@ class LibraryStore extends ChangeNotifier {
 
   /// Put every edition of this record back together, and keep it that way.
   Future<void> mergeEditions(Album a) async {
-    _requireOwner('Persingen samenvoegen');
+    if (isRemote) return _editOnPc({'op': 'merge', 'albumId': remoteAlbumId(a)});
     _merged.add('album::${artistKey(a.artist)}|${normKey(a.title)}');
     await _saveMerged();
     rebuildAlbums();
@@ -295,7 +295,7 @@ class LibraryStore extends ChangeNotifier {
 
   /// Undo that, and let the tags decide again.
   Future<void> unmergeEditions(Album a) async {
-    _requireOwner('Persingen splitsen');
+    if (isRemote) return _editOnPc({'op': 'unmerge', 'albumId': remoteAlbumId(a)});
     _merged.remove('album::${artistKey(a.artist)}|${normKey(a.title)}');
     await _saveMerged();
     rebuildAlbums();
@@ -447,7 +447,15 @@ class LibraryStore extends ChangeNotifier {
   /// otherwise they're only excluded from the library and stay on disk.
   /// Returns how many files were actually deleted from disk.
   Future<int> removeTracks(Iterable<String> paths, {required bool fromDisk}) async {
-    _requireOwner('Nummers verwijderen');
+    if (isRemote) {
+      final ids = [
+        for (final p in paths)
+          if (_remoteTrackId(p) case final id?) id,
+      ];
+      await _editOnPc({'op': 'removeTracks', 'trackIds': ids, 'fromDisk': fromDisk});
+      // What the PC deleted from disk is its count to give; the caller only shows it.
+      return fromDisk ? ids.length : 0;
+    }
     final list = paths.toList();
     var deleted = 0;
     if (fromDisk) {
@@ -572,7 +580,18 @@ class LibraryStore extends ChangeNotifier {
     int? discogsRelease,
     String? mbid,
   }) async {
-    _requireOwner('Metadata aanpassen');
+    if (isRemote) {
+      return _editOnPc({
+        'op': 'correction',
+        'albumId': remoteAlbumId(target),
+        'artist': artist,
+        'albumTitle': albumTitle,
+        'title': title,
+        if (coverBytes != null && coverBytes.isNotEmpty) 'cover': base64Encode(coverBytes),
+        'discogsRelease': discogsRelease,
+        'mbid': mbid,
+      });
+    }
     for (final t in target.tracks) {
       final c = _corrections.putIfAbsent(t.path, () => {});
       // Discogs numbers artists who share a name and asterisks name variants; neither belongs in
@@ -820,23 +839,49 @@ class LibraryStore extends ChangeNotifier {
   /// The PC's id for an album we are showing, or null on the machine that owns the music.
   String? remoteAlbumId(Album a) => _remoteAlbums[a]?.id;
 
-  /// False on a Mac or an iPad: editing metadata, merging pressings and removing tracks all still
-  /// happen on the machine that holds the files. The screens that offer those ask this first, and
-  /// [_requireOwner] is the backstop underneath them.
-  bool get canEdit => !isRemote;
+  /// True everywhere now: a Mac and an iPad edit by asking the PC to, and the result comes back
+  /// through the catalogue. Kept as a name rather than inlined, because moving files is still the
+  /// PC's alone and this is where that line would move if it ever changes.
+  bool get canEdit => true;
 
-  /// Refuse a write that would only be true locally.
+  /// Refuse a write that has nowhere to go.
   ///
-  /// Not a silent no-op: every one of these mutates state that [rebuildAlbums] then regroups FROM
-  /// TAGS, which in client mode would throw away the grouping the PC sent — the pinned pressings
-  /// and merged editions included. Failing loudly here is much better than a library that quietly
-  /// stops matching the one on the PC.
+  /// Most edits now travel to the PC instead — see [_editOnPc]. This is what is left for the ones
+  /// that do not, and it is deliberately loud: every write ends in [rebuildAlbums], which regroups
+  /// FROM TAGS, so a half-applied edit here would throw away the grouping the PC sent, pinned
+  /// pressings and merged editions included.
   void _requireOwner(String what) {
     if (!isRemote) return;
     throw RemoteWriteException(
       '$what kan alleen op de pc waar de muziek staat. '
       'Deze app toont die bibliotheek; wijzigingen komen daarna vanzelf hier terug.',
     );
+  }
+
+  /// Hand an edit to the PC and take its answer as the truth.
+  ///
+  /// Nothing is changed locally first. The PC applies it to the library everyone reads, the
+  /// catalogue fingerprint moves, and [loadRemote] brings back the result — including whatever the
+  /// PC decided that we did not, like a regroup that follows from a corrected track count. Editing
+  /// optimistically here would mean guessing at that, and being wrong in exactly the cases the
+  /// user is trying to fix.
+  Future<void> _editOnPc(Map<String, dynamic> operation) async {
+    final client = _remote;
+    if (client == null) return;
+    await client.edit(operation);
+    // Straight away rather than on the next poll: the screen that asked is still open, and a
+    // correction that takes fifteen seconds to appear reads as one that did not work.
+    _catalogEtag = null;
+    await loadRemote(quiet: true);
+  }
+
+  /// The PC's id for a track we are showing. Its path is the stream URL, and the id is in it.
+  String? _remoteTrackId(String path) {
+    final segments = Uri.tryParse(path)?.pathSegments ?? const [];
+    if (segments.length < 2 || segments[segments.length - 2] != 'stream') return null;
+    final last = segments.last;
+    final dot = last.lastIndexOf('.');
+    return dot < 0 ? last : last.substring(0, dot);
   }
 
   /// A track as the PC describes it. [Track.path] becomes the stream URL WITHOUT the token: it is

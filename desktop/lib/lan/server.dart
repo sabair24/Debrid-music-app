@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 
 import '../library.dart';
 import '../online.dart';
+import '../settings.dart';
 import '../soulseek.dart';
 import '../torbox.dart';
 import 'cast_manager.dart';
@@ -39,6 +40,7 @@ class LanServer {
     this.online,
     this.soulseek,
     this.downloads,
+    this.settings,
   }) : catalog = LanCatalog(library) {
     cast = CastManager(catalog: catalog, token: token, port: port);
   }
@@ -54,6 +56,10 @@ class LanServer {
   final OnlineService? online;
   final SoulseekService? soulseek;
   final DownloadManager? downloads;
+
+  /// Needed by [LibraryStore.applyCorrection] — a hand-picked cover is written into the cover
+  /// cache, and that lives where the settings say.
+  final AppSettings? settings;
   final LanStateStore state;
   final PairingStore pairing;
 
@@ -196,6 +202,8 @@ class LanServer {
         return _jobCancel(req);
       case '/api/jobs/clear':
         return _jobsClear(req);
+      case '/api/corrections':
+        return _corrections(req);
     }
 
     if (path.startsWith('/stream/')) return _stream(req);
@@ -580,6 +588,63 @@ class LanServer {
       return req.response.close();
     }
     manager.clearFinished();
+    return _json(req.response, {'ok': true});
+  }
+
+  /// Metadata edited on another device, applied HERE.
+  ///
+  /// The album is named by the id this PC issued, so there is no guessing about which "Millennium"
+  /// was meant when the library holds two pressings of it. The change lands in the same
+  /// [LibraryStore] the PC itself edits, which means it reaches every device the ordinary way:
+  /// the catalogue fingerprint changes and the next poll picks it up.
+  Future<void> _corrections(HttpRequest req) async {
+    final config = settings;
+    if (config == null) return _unavailable(req, 'Deze pc kan geen wijzigingen aannemen.');
+    final body = await _jsonBody(req);
+    if (body == null) return;
+
+    final op = (body['op'] ?? '') as String;
+    final album = body['albumId'] is String ? catalog.album(body['albumId'] as String) : null;
+    if (op != 'removeTracks' && album == null) {
+      // The client is looking at a catalogue this PC has moved on from — say so, rather than
+      // silently editing the wrong record.
+      return _json(req.response, {'error': 'Dat album staat hier niet (meer).'},
+          status: HttpStatus.notFound);
+    }
+
+    try {
+      switch (op) {
+        case 'correction':
+          final coverB64 = body['cover'] as String?;
+          await library.applyCorrection(
+            album!,
+            config,
+            artist: body['artist'] as String?,
+            albumTitle: body['albumTitle'] as String?,
+            title: body['title'] as String?,
+            coverBytes: coverB64 == null || coverB64.isEmpty ? null : base64Decode(coverB64),
+            discogsRelease: (body['discogsRelease'] as num?)?.toInt(),
+            mbid: body['mbid'] as String?,
+          );
+        case 'merge':
+          await library.mergeEditions(album!);
+        case 'unmerge':
+          await library.unmergeEditions(album!);
+        case 'removeTracks':
+          final paths = <String>[];
+          for (final id in (body['trackIds'] as List? ?? const [])) {
+            final t = id is String ? catalog.track(id) : null;
+            if (t != null) paths.add(t.path);
+          }
+          if (paths.isEmpty) return _json(req.response, {'ok': false, 'reason': 'niets gevonden'});
+          await library.removeTracks(paths, fromDisk: body['fromDisk'] == true);
+        default:
+          return _json(req.response, {'error': 'Onbekende bewerking: $op'},
+              status: HttpStatus.badRequest);
+      }
+    } catch (e) {
+      return _unavailable(req, 'De pc kon dat niet toepassen: $e');
+    }
     return _json(req.response, {'ok': true});
   }
 

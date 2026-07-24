@@ -170,6 +170,30 @@ class RemoteClient {
     }
   }
 
+  /// Ask the PC to change something about the library.
+  ///
+  /// The album is named by the id the PC issued, not by its title: the library can hold two
+  /// pressings of one record, and a title would be ambiguous exactly where it matters most.
+  Future<void> edit(Map<String, dynamic> operation) async {
+    final http.Response res;
+    try {
+      res = await _http
+          .post(_api('/api/corrections'),
+              headers: {..._headers, 'Content-Type': 'application/json'},
+              body: jsonEncode(operation))
+          .timeout(timeout);
+    } catch (e) {
+      throw RemoteException('Kon de pc niet bereiken: $e');
+    }
+    if (res.statusCode == 200) return;
+    final decoded = res.body.isEmpty ? null : jsonDecode(utf8.decode(res.bodyBytes));
+    throw RemoteException(
+      (decoded is Map ? decoded['error'] as String? : null) ??
+          'De pc weigerde de wijziging (${res.statusCode}).',
+      statusCode: res.statusCode,
+    );
+  }
+
   Future<http.Response> _get(String path, {String? etag, Map<String, String>? query}) async {
     final http.Response res;
     try {
