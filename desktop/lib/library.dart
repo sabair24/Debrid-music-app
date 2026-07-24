@@ -9,6 +9,7 @@ import 'flac_tags.dart';
 import 'models.dart';
 import 'organize.dart';
 import 'settings.dart';
+import 'paths.dart';
 
 const _audioExt = {'.flac', '.mp3', '.m4a', '.wav', '.ogg', '.opus', '.aac', '.wma', '.alac'};
 
@@ -205,8 +206,7 @@ class LibraryStore extends ChangeNotifier {
   String get _appDir {
     final o = configDirOverride;
     if (o != null) return o;
-    final base = Platform.environment['APPDATA'] ?? Directory.current.path;
-    return '$base${Platform.pathSeparator}DebridMusic';
+    return appDir;
   }
 
   /// What is recorded against a file, or null. For tests.

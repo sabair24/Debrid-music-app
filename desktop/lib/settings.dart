@@ -1,9 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'paths.dart';
 
-/// Local, on-device settings (API tokens / logins). Stored as JSON in
-/// %APPDATA%\DebridMusic\settings.json — never committed to the repo.
+/// Local, on-device settings (API tokens / logins). Stored as settings.json in the app's own
+/// folder (see paths.dart) — never committed to the repo.
 class AppSettings extends ChangeNotifier {
   String discogsToken = '';
   String torboxToken = '';
@@ -35,11 +36,7 @@ class AppSettings extends ChangeNotifier {
   String musicRoot = '';
 
   static File file() {
-    final base = Platform.environment['APPDATA'] ??
-        Platform.environment['HOME'] ??
-        Directory.current.path;
-    final sep = Platform.pathSeparator;
-    return File('$base${sep}DebridMusic${sep}settings.json');
+    return appFile('settings.json');
   }
 
   Future<void> load() async {

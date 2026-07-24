@@ -22,6 +22,7 @@ import 'lan/sharing.dart';
 import 'library.dart';
 import 'metadata.dart';
 import 'models.dart';
+import 'paths.dart';
 import 'musicbrainz.dart';
 import 'online.dart';
 import 'organize.dart';
@@ -44,6 +45,11 @@ const _muted = Color(0xFF9AA0B4);
 const _accent = Color(0xFF7C5CFF);
 const _accent2 = Color(0xFF00D4C8);
 
+/// Windows and macOS have windows to manage and one app instance per machine; iOS and Android
+/// have neither. Everything below that touches window_manager or the instance lock asks this
+/// first — on a phone or tablet those calls do not merely do nothing, they throw.
+bool get _isDesktop => Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+
 /// A loopback port this app holds while it runs. Binding it is the lock; connecting to it is how
 /// a second copy says "you're already running, come to the front".
 const _instancePort = 47821;
@@ -54,6 +60,7 @@ const _instancePort = 47821;
 /// each other in turn until the account is refused. That has happened here, so a second launch
 /// must never become a second login.
 Future<bool> _claimSingleInstance() async {
+  if (!_isDesktop) return true; // one app per device already
   try {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, _instancePort);
     server.listen((s) async {
@@ -79,26 +86,31 @@ Future<bool> _claimSingleInstance() async {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
-  await windowManager.ensureInitialized();
+  // Before anything reads a setting or a cache: on iOS the app's own folder cannot be worked out
+  // from the environment, it has to be asked for.
+  await initAppPaths();
+  if (_isDesktop) await windowManager.ensureInitialized();
   if (!await _claimSingleInstance()) {
     exit(0);
   }
-  await windowManager.waitUntilReadyToShow(
-    // No system title bar: the app draws its own close/minimise/resize buttons into the top bar, so
-    // the whole window is the app rather than the app inside a Windows frame. The size below is
-    // only what it restores DOWN to — it opens filling the screen.
-    const WindowOptions(
-      size: Size(1240, 820),
-      minimumSize: Size(940, 640),
-      center: true,
-      title: 'DebridMusic',
-      titleBarStyle: TitleBarStyle.hidden,
-    ),
-    () async {
-      await windowManager.show();
-      await windowManager.focus();
-    },
-  );
+  if (_isDesktop) {
+    // No system title bar: the app draws its own close/minimise/resize buttons into the top bar,
+    // so the whole window is the app rather than the app inside a Windows frame. The size below
+    // is only what it restores DOWN to — it opens filling the screen.
+    await windowManager.waitUntilReadyToShow(
+      const WindowOptions(
+        size: Size(1240, 820),
+        minimumSize: Size(940, 640),
+        center: true,
+        title: 'DebridMusic',
+        titleBarStyle: TitleBarStyle.hidden,
+      ),
+      () async {
+        await windowManager.show();
+        await windowManager.focus();
+      },
+    );
+  }
 
   final settings = AppSettings();
   await settings.load();
@@ -159,13 +171,15 @@ Future<void> main() async {
   // restore size while the window is still being realised, and the app opens in a small frame.
   // Both orderings were tried and both did. So ask after the first frame, and check the answer
   // instead of assuming it: read isMaximized back and retry for about half a second.
-  WidgetsBinding.instance.addPostFrameCallback((_) async {
-    for (var i = 0; i < 6; i++) {
-      if (await windowManager.isMaximized()) break;
-      await windowManager.maximize();
-      await Future.delayed(const Duration(milliseconds: 100));
-    }
-  });
+  if (_isDesktop) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      for (var i = 0; i < 6; i++) {
+        if (await windowManager.isMaximized()) break;
+        await windowManager.maximize();
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
+    });
+  }
 
   // Scan, then fill in missing covers + artist photos (cache-first, then web).
   // Wrapped so a scan hiccup can never prevent enrichment from running.

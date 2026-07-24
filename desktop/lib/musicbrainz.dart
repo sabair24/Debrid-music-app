@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 import 'editions.dart';
 import 'release_format.dart';
+import 'paths.dart';
 
 /// MusicBrainz + the Cover Art Archive.
 ///
@@ -372,9 +373,7 @@ class MusicBrainzService {
   // ── Cache ───────────────────────────────────────────────────────────────────
   // The data barely changes and the request budget is the scarce thing, so everything fetched is
   // kept. Once a library has been browsed it can be browsed again offline.
-  String get _dir =>
-      '${Platform.environment['APPDATA'] ?? Directory.current.path}${Platform.pathSeparator}DebridMusic'
-      '${Platform.pathSeparator}musicbrainz';
+  String get _dir => '$appDir${Platform.pathSeparator}musicbrainz';
 
   File _cacheFile(String url) =>
       File('$_dir${Platform.pathSeparator}${sha1.convert(utf8.encode(url))}.json');

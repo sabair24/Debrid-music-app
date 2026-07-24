@@ -11,6 +11,7 @@ import 'search.dart';
 import 'settings.dart';
 import 'soulseek.dart';
 import 'torbox.dart';
+import 'paths.dart';
 
 /// TorBox search + resolve + download, ported from the server's OnlineService.
 class OnlineService {
@@ -577,8 +578,7 @@ class DownloadManager extends ChangeNotifier {
   // A download interrupted by the app closing (or the PC shutting down) used to be simply gone:
   // no record of it anywhere, and a half-written file left behind in staging.
 
-  String get _appDir =>
-      '${Platform.environment['APPDATA'] ?? Directory.current.path}${Platform.pathSeparator}DebridMusic';
+  String get _appDir => appDir;
   File get _pendingFile => File('$_appDir${Platform.pathSeparator}pending_downloads.json');
 
   Future<void> _savePending() async {

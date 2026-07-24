@@ -14,6 +14,7 @@ import 'musicbrainz.dart';
 import 'organize.dart';
 import 'release_format.dart';
 import 'settings.dart';
+import 'paths.dart';
 
 /// One image a release or an artist offers. Discogs doesn't say what a picture IS beyond
 /// primary/secondary — a release's secondaries are the back, the disc and the booklet, an artist's
@@ -267,9 +268,7 @@ class DiscogsService {
   // ── Cache ─────────────────────────────────────────────────────────────────
   // Discogs data barely changes and the rate limit is the scarce resource, so anything fetched is
   // kept. The whole library can then be browsed offline once it has been enriched.
-  String get _dir =>
-      '${Platform.environment['APPDATA'] ?? Directory.current.path}${Platform.pathSeparator}DebridMusic'
-      '${Platform.pathSeparator}discogs';
+  String get _dir => '$appDir${Platform.pathSeparator}discogs';
 
   File _cacheFile(String url) =>
       File('$_dir${Platform.pathSeparator}${sha1.convert(utf8.encode(url))}.json');
@@ -877,9 +876,7 @@ extension DiscogsArtwork on DiscogsService {
     return null;
   }
 
-  String get artDir =>
-      '${Platform.environment['APPDATA'] ?? Directory.current.path}${Platform.pathSeparator}DebridMusic'
-      '${Platform.pathSeparator}releaseart';
+  String get artDir => '$appDir${Platform.pathSeparator}releaseart';
 
   Future<ReleaseArt?> _readArt(Directory dir) async {
     try {

@@ -4,8 +4,10 @@ import 'dart:io';
 import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 
 import 'settings.dart';
+import 'paths.dart';
 
 /// A TIDAL catalog track — used only as metadata to drive the torrent/Soulseek
 /// source search (TIDAL itself can't be streamed by a third-party native app).
@@ -42,10 +44,7 @@ class TidalService {
 
   String _b64url(List<int> bytes) => base64Url.encode(bytes).replaceAll('=', '');
 
-  static String _dataDir() {
-    final base = Platform.environment['APPDATA'] ?? Directory.current.path;
-    return '$base${Platform.pathSeparator}DebridMusic';
-  }
+  static String _dataDir() => appDir;
 
   File _callbackFile() => File('${_dataDir()}${Platform.pathSeparator}tidal_cb.txt');
 
@@ -123,13 +122,15 @@ class TidalService {
     await _fetchProfile();
   }
 
+  /// Open the Tidal sign-in page in the user's browser.
+  ///
+  /// url_launcher rather than spawning rundll32: the Windows-only commands did nothing on a Mac,
+  /// and on iOS there is no process to spawn at all — the OAuth flow would simply hang with no
+  /// page ever appearing.
   Future<void> _openBrowser(String url) async {
-    try {
-      await Process.start('rundll32', ['url.dll,FileProtocolHandler', url]);
-    } catch (_) {
-      try {
-        await Process.start('cmd', ['/c', 'start', '', url]);
-      } catch (_) {}
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
   }
 

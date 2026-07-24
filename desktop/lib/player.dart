@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'models.dart';
+import 'paths.dart';
 
 enum RepeatMode { off, all, one }
 
@@ -69,10 +70,7 @@ class PlayerStore extends ChangeNotifier {
   DateTime _lastPosSave = DateTime.fromMillisecondsSinceEpoch(0);
   bool resumedPaused = false; // true right after a startup restore (awaiting the user's play)
 
-  String get _appDir {
-    final base = Platform.environment['APPDATA'] ?? Directory.current.path;
-    return '$base${Platform.pathSeparator}DebridMusic';
-  }
+  String get _appDir => appDir;
 
   File get _queueFile => File('$_appDir${Platform.pathSeparator}resume_queue.json');
   File get _posFile => File('$_appDir${Platform.pathSeparator}resume_pos.json');

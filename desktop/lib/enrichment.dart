@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import 'models.dart';
 import 'settings.dart';
+import 'paths.dart';
 
 /// A wide backdrop and the act's official wordmark — what turns an artist page into a banner.
 class ArtistArt {
@@ -93,9 +94,7 @@ class CoverEnricher {
   static const _generic = {'various', 'various artists', 'va', 'onbekende artiest', 'unknown artist', 'unknown', ''};
 
   static String _dir(String name) {
-    final base = Platform.environment['APPDATA'] ?? Directory.current.path;
-    final sep = Platform.pathSeparator;
-    return '$base${sep}DebridMusic$sep$name';
+    return '$appDir${Platform.pathSeparator}$name';
   }
 
   Directory get cacheDir => Directory(_dir('covers'));

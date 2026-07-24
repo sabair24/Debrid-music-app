@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'artwork.dart';
 import 'discogs.dart';
 import 'musicbrainz.dart';
+import 'paths.dart';
 
 /// The booklet that came in the jewel case, page by page.
 ///
@@ -350,9 +351,7 @@ Future<Uint8List?> _plainGet(String url) async {
 }
 
 extension DiscogsBooklet on DiscogsService {
-  String get bookletDir =>
-      '${Platform.environment['APPDATA'] ?? Directory.current.path}${Platform.pathSeparator}DebridMusic'
-      '${Platform.pathSeparator}booklets';
+  String get bookletDir => '$appDir${Platform.pathSeparator}booklets';
 
   /// Every scan of a pressing, with the thumbnails already on disk.
   ///
