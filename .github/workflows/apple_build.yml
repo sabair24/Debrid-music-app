@@ -1,7 +1,7 @@
 name: DebridMusic Apple Build
 
 # The Mac and iPad app (in apple/). Same shape as windows_build.yml:
-#   • tag apple-v*      → signed build, iPad to TestFlight, Mac on the GitHub Release
+#   • tag apple-v*      → iPad to TestFlight, Mac app on the GitHub Release
 #   • workflow_dispatch → manual run; tick "testflight" to push a build to TestFlight
 #
 # Deliberately NOT triggered by ordinary pushes. A `paths:` filter alongside `tags:` is ANDed by
@@ -55,6 +55,19 @@ jobs:
 
       # ── Always: the parts that need no signing ───────────────────────────
 
+      - name: Determine version
+        id: version
+        run: |
+          VERSION=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -showBuildSettings 2>/dev/null \
+            | awk '/ MARKETING_VERSION = / {print $3; exit}')
+          [ -n "$VERSION" ] || VERSION="0.1.0"
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          # The build number is the run number: it only ever goes up, which is all App Store
+          # Connect asks, and nothing in the repository has to be bumped by hand.
+          echo "BUILD=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "Version $VERSION build ${{ github.run_number }}"
+
+
       - name: Test DebridMusicKit
         working-directory: apple/DebridMusicKit
         run: swift test
@@ -72,20 +85,20 @@ jobs:
             -derivedDataPath .build \
             CODE_SIGNING_ALLOWED=NO build
 
-      - name: Package the unsigned Mac app
+      - name: Package the Mac app
         run: |
           mkdir -p out
           # ditto, not zip: it keeps the bundle's symlinks and resource forks intact, which a
           # plain zip quietly flattens into an app that will not launch.
           ditto -c -k --sequesterRsrc --keepParent \
             ".build/Build/Products/Release/DebridMusic.app" \
-            "out/DebridMusic-macOS-unsigned.zip"
+            "out/DebridMusic-macOS-${{ steps.version.outputs.VERSION }}.zip"
 
-      - name: Upload the unsigned Mac app
+      - name: Upload the Mac app
         uses: actions/upload-artifact@v4
         with:
-          name: DebridMusic-macOS-unsigned
-          path: out/DebridMusic-macOS-unsigned.zip
+          name: DebridMusic-macOS-${{ steps.version.outputs.VERSION }}
+          path: out/DebridMusic-macOS-*.zip
           retention-days: 30
 
       # ── From here: signing and distribution ──────────────────────────────
@@ -130,18 +143,6 @@ jobs:
           # Fail here, where the cause is obvious, rather than three steps later inside xcodebuild.
           openssl pkey -in ~/private_keys/AuthKey_${KEY_ID}.p8 -noout \
             || { echo "::error::APPLE_API_PRIVATE_KEY is not a readable private key"; exit 1; }
-
-      - name: Determine version
-        id: version
-        run: |
-          VERSION=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -showBuildSettings 2>/dev/null \
-            | awk '/ MARKETING_VERSION = / {print $3; exit}')
-          [ -n "$VERSION" ] || VERSION="0.1.0"
-          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
-          # The build number is the run number: it only ever goes up, which is all App Store
-          # Connect asks, and nothing in the repository has to be bumped by hand.
-          echo "BUILD=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-          echo "Version $VERSION build ${{ github.run_number }}"
 
       # ── iPad → TestFlight ────────────────────────────────────────────────
 
@@ -193,68 +194,16 @@ jobs:
             -authenticationKeyIssuerID "$ISSUER_ID"
           echo "::notice::Uploaded to TestFlight. It appears after Apple's processing, usually 5-15 minutes."
 
-      # ── Mac → signed, notarised, on the release ──────────────────────────
-
-      - name: Archive and notarise the Mac app
-        if: steps.gate.outputs.ready == 'true' && startsWith(github.ref, 'refs/tags/apple-v')
-        env:
-          KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
-        run: |
-          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
-            -destination 'generic/platform=macOS' \
-            -archivePath "$RUNNER_TEMP/DebridMusic-macOS.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath ~/private_keys/AuthKey_${KEY_ID}.p8 \
-            -authenticationKeyID "$KEY_ID" \
-            -authenticationKeyIssuerID "$ISSUER_ID" \
-            DEVELOPMENT_TEAM="$TEAM_ID" \
-            MARKETING_VERSION="${{ steps.version.outputs.VERSION }}" \
-            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.BUILD }}" \
-            archive
-
-          cat > "$RUNNER_TEMP/ExportOptions-macOS.plist" <<PLIST
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key><string>developer-id</string>
-            <key>teamID</key><string>${TEAM_ID}</string>
-            <key>signingStyle</key><string>automatic</string>
-          </dict>
-          </plist>
-          PLIST
-          xcodebuild -exportArchive \
-            -archivePath "$RUNNER_TEMP/DebridMusic-macOS.xcarchive" \
-            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions-macOS.plist" \
-            -exportPath "$RUNNER_TEMP/export-mac" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath ~/private_keys/AuthKey_${KEY_ID}.p8 \
-            -authenticationKeyID "$KEY_ID" \
-            -authenticationKeyIssuerID "$ISSUER_ID"
-
-          mkdir -p out
-          ditto -c -k --sequesterRsrc --keepParent \
-            "$RUNNER_TEMP/export-mac/DebridMusic.app" \
-            "out/DebridMusic-macOS-${{ steps.version.outputs.VERSION }}.zip"
-
-          # Notarising matters even for your own Mac: without it Gatekeeper refuses a
-          # downloaded app and the only way in is right-click → Open, every time.
-          xcrun notarytool submit "out/DebridMusic-macOS-${{ steps.version.outputs.VERSION }}.zip" \
-            --key ~/private_keys/AuthKey_${KEY_ID}.p8 \
-            --key-id "$KEY_ID" \
-            --issuer "$ISSUER_ID" \
-            --wait
-
-          # Staple the ticket to the .app and re-zip, so it opens without a network check.
-          xcrun stapler staple "$RUNNER_TEMP/export-mac/DebridMusic.app"
-          rm "out/DebridMusic-macOS-${{ steps.version.outputs.VERSION }}.zip"
-          ditto -c -k --sequesterRsrc --keepParent \
-            "$RUNNER_TEMP/export-mac/DebridMusic.app" \
-            "out/DebridMusic-macOS-${{ steps.version.outputs.VERSION }}.zip"
+      # The Mac app is NOT signed for distribution, on purpose.
+      #
+      # Notarising needs the Developer ID private key on the runner, and Apple's cloud signing
+      # deliberately does not cover Developer ID — those certificates are limited and tied to the
+      # account holder. The only way is to export the key into a repository secret, and for one
+      # app on one Mac that is not worth putting private key material at a third party. The cost
+      # is a right-click → Open the first time; the release notes say so.
 
       - name: GitHub Release (on an apple-v tag)
-        if: steps.gate.outputs.ready == 'true' && startsWith(github.ref, 'refs/tags/apple-v')
+        if: startsWith(github.ref, 'refs/tags/apple-v')
         uses: softprops/action-gh-release@v2
         with:
           files: out/DebridMusic-macOS-*.zip
@@ -263,7 +212,8 @@ jobs:
             ## DebridMusic v${{ steps.version.outputs.VERSION }} — Mac en iPad
 
             **Mac** — download de zip hieronder, pak uit en sleep naar Programma's.
-            Ondertekend en genotariseerd, dus hij opent gewoon.
+            De eerste keer: **rechtsklik → Open** en bevestig. Daarna start hij
+            gewoon. Dat is nodig omdat de app niet bij Apple is genotariseerd.
 
             **iPad** — via TestFlight. Verschijnt daar na Apple's verwerking,
             meestal binnen 5-15 minuten.
