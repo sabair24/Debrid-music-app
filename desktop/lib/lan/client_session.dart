@@ -63,6 +63,16 @@ class ClientSession extends ChangeNotifier {
     applyMediaResolver(client.authorized);
     notifyListeners();
 
+    // The keys the PC is willing to share, so this device can look a record up itself instead of
+    // asking the PC for every lookup. Applied in memory and deliberately NOT saved: it is fetched
+    // fresh on every connect, so nothing is written to this device's disk, changing a token on the
+    // PC reaches here by itself, and unpairing takes it with it.
+    final shared = await client.config();
+    final discogs = shared['discogsToken'] ?? '';
+    final lastfm = shared['lastfmKey'] ?? '';
+    if (discogs.isNotEmpty) settings.discogsToken = discogs;
+    if (lastfm.isNotEmpty) settings.lastfmKey = lastfm;
+
     loading = true;
     notifyListeners();
     await _refresh(first: true);
@@ -79,6 +89,10 @@ class ClientSession extends ChangeNotifier {
     _poll?.cancel();
     _poll = null;
     await forgetPairedServer();
+    // Nothing was written to disk, so forgetting is enough — but clear it anyway so the app is not
+    // still holding the PC's key after you told it to forget the PC.
+    settings.discogsToken = '';
+    settings.lastfmKey = '';
     library.remote = null;
     applyMediaResolver((p) => p);
     _endpoint = null;

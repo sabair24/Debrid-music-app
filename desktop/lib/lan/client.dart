@@ -170,6 +170,23 @@ class RemoteClient {
     }
   }
 
+  /// The read-only keys the PC is willing to share, so this device can look things up itself.
+  /// Empty rather than throwing when the PC has none: that is a PC without a Discogs token, which
+  /// is a perfectly ordinary thing to be.
+  Future<Map<String, String>> config() async {
+    try {
+      final res = await _get('/api/config');
+      final j = jsonDecode(utf8.decode(res.bodyBytes));
+      if (j is! Map) return const {};
+      return {
+        for (final e in j.entries)
+          if (e.value is String) '${e.key}': e.value as String,
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
   /// Ask the PC to change something about the library.
   ///
   /// The album is named by the id the PC issued, not by its title: the library can hold two

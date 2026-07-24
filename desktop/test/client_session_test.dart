@@ -93,6 +93,11 @@ void main() {
       pairing: pairing,
       port: 0, // the OS picks one, so a test never collides with the real app
       version: '1.2.3',
+      settings: AppSettings()
+        ..discogsToken = 'discogs-leestoken'
+        ..lastfmKey = 'lastfm-sleutel'
+        ..soulseekPass = 'geheim-wachtwoord'
+        ..rutrackerPass = 'ook-geheim',
     );
     expect(await server.start(), isNull);
     base = Uri.parse('http://127.0.0.1:${server.boundPort}');
@@ -176,6 +181,36 @@ void main() {
     expect(session.ready, isFalse);
     expect(library.isRemote, isFalse);
     expect((await resolveMode(settings)).needsPairing, isTrue);
+    session.dispose();
+  });
+
+  test('the PC shares its read-only keys, and only those', () async {
+    final settings = AppSettings();
+    final library = LibraryStore();
+    final session = ClientSession(
+      library: library,
+      settings: settings,
+      owner: false,
+      applyMediaResolver: (_) {},
+    );
+    expect(settings.discogsToken, isEmpty);
+
+    await session.connect(
+        await RemoteClient.pair(base, pairing.start(), deviceName: 'iPad'));
+
+    // Looking a record up is something this device can now do for itself, without a hop through
+    // the PC for every request.
+    expect(settings.discogsToken, 'discogs-leestoken');
+    expect(settings.lastfmKey, 'lastfm-sleutel');
+    // Passwords are NOT shared. These sign into accounts, and the calls that need them run on the
+    // PC anyway — there is no reason for them to be on an iPad.
+    expect(settings.soulseekPass, isEmpty);
+    expect(settings.rutrackerPass, isEmpty);
+
+    // Unpairing takes them with it.
+    await session.unpair();
+    expect(settings.discogsToken, isEmpty);
+    expect(settings.lastfmKey, isEmpty);
     session.dispose();
   });
 

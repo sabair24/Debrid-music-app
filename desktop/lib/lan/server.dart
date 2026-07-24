@@ -203,6 +203,8 @@ class LanServer {
         return _jobCancel(req);
       case '/api/jobs/clear':
         return _jobsClear(req);
+      case '/api/config':
+        return _config(req);
       case '/api/corrections':
         return _corrections(req);
       case '/api/move/plan':
@@ -602,6 +604,23 @@ class LanServer {
   /// was meant when the library holds two pressings of it. The change lands in the same
   /// [LibraryStore] the PC itself edits, which means it reaches every device the ordinary way:
   /// the catalogue fingerprint changes and the next poll picks it up.
+  /// The read-only API keys a paired device needs to look things up for itself.
+  ///
+  /// Only these two, and that is the whole rule: a Discogs token and a Last.fm key read public
+  /// databases and are revoked in one click. Passwords are NOT here — the Soulseek and RuTracker
+  /// logins sign into accounts, and the calls that need them already run on this machine anyway.
+  ///
+  /// Sent on every connect rather than once at pairing, so changing a token here reaches the
+  /// devices by itself instead of leaving them on a key that stopped working.
+  Future<void> _config(HttpRequest req) async {
+    final config = settings;
+    if (config == null) return _json(req.response, const {});
+    return _json(req.response, {
+      'discogsToken': config.discogsToken,
+      'lastfmKey': config.lastfmKey,
+    });
+  }
+
   Future<void> _corrections(HttpRequest req) async {
     final config = settings;
     if (config == null) return _unavailable(req, 'Deze pc kan geen wijzigingen aannemen.');
