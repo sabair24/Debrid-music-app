@@ -122,8 +122,14 @@ jobs:
           KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
         run: |
           mkdir -p ~/private_keys
-          printf '%s' "$PRIVATE_KEY" > ~/private_keys/AuthKey_${KEY_ID}.p8
+          # '%s\n', not '%s': the .p8 Apple hands you has no trailing newline, and some PEM
+          # readers refuse a key that does not end in one — reporting an invalid key rather than
+          # a missing line ending. An extra blank line after END PRIVATE KEY is harmless.
+          printf '%s\n' "$PRIVATE_KEY" > ~/private_keys/AuthKey_${KEY_ID}.p8
           chmod 600 ~/private_keys/AuthKey_${KEY_ID}.p8
+          # Fail here, where the cause is obvious, rather than three steps later inside xcodebuild.
+          openssl pkey -in ~/private_keys/AuthKey_${KEY_ID}.p8 -noout \
+            || { echo "::error::APPLE_API_PRIVATE_KEY is not a readable private key"; exit 1; }
 
       - name: Determine version
         id: version
