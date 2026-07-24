@@ -337,6 +337,21 @@ void main() {
       expect(c.slots.map((s) => s.disc), [1, 1, 2, 2]);
     });
 
+    test('a file the pressing does not name carries no number', () {
+      // Gotta Get Thru This: two files the chosen pressing doesn't list, both hand-corrected by the
+      // user to track 3 and track 13. Shown with their own numbers they put a second "3" below
+      // track 13 and read as two duplicates — the app looking confused about a record it had right.
+      final c = matchAlbumTracks(
+        [_o(1, 'Blown It Again', 200)],
+        [_t('Gotta Get Thru This', 281, no: 3), _t('Gotta Get Thru This (acoustic version)', 165, no: 13)],
+        'Daniel Bedingfield',
+      );
+      final extras = c.slots.where((s) => s.index < 0);
+      expect(extras, hasLength(2));
+      expect(extras.map((s) => s.label), ['', ''], reason: 'geen geleend nummer');
+      expect(c.slots.first.label, '1', reason: 'de plaat zelf houdt haar nummering');
+    });
+
     test('a single disc shows a bare number', () {
       final c = matchAlbumTracks([_o(4, 'CUFF IT', 225)], const [], 'Beyoncé');
       expect(c.slots.single.label, '4');

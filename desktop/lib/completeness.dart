@@ -37,7 +37,12 @@ class AlbumSlot {
   }
 
   /// The number to SHOW. "4" on a single disc, "2-1" on a double — what the sleeve says.
+  ///
+  /// Blank for a file the pressing doesn't name. It has no place in this run, and borrowing the
+  /// number from its own tag put a second "3" underneath track 13 — which reads as the app being
+  /// confused rather than as the file simply not being on this record.
   String get label {
+    if (index < 0) return '';
     if (!multiDisc) return '$number';
     final pos = (official?.position ?? '').trim();
     return '$disc-${pos.isEmpty ? '${index + 1}' : pos}';

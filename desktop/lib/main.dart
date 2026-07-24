@@ -1539,7 +1539,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                               index: album.tracks.indexOf(t),
                               queue: album.tracks,
                               albumCover: album.cover,
-                              label: s.official == null ? null : s.label);
+                              // An extra shows no number at all — not even its own tag's. See
+                              // AlbumSlot.label.
+                              label: s.index < 0 ? '' : s.label);
 
                       // A double album says which disc you are looking at, and files the pressing
                       // doesn't name say so — left unlabelled the latter read as part of the record,
