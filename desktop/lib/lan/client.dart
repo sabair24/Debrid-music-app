@@ -194,6 +194,28 @@ class RemoteClient {
     );
   }
 
+  /// Ask the PC a question whose answer is a JSON object. Same shape as [edit], but the body
+  /// matters — a move plan is the whole point of the call.
+  Future<Map<String, dynamic>> ask(String path, Map<String, dynamic> body) async {
+    final http.Response res;
+    try {
+      res = await _http
+          .post(_api(path),
+              headers: {..._headers, 'Content-Type': 'application/json'},
+              body: jsonEncode(body))
+          .timeout(timeout);
+    } catch (e) {
+      throw RemoteException('Kon de pc niet bereiken: $e');
+    }
+    final decoded = res.body.isEmpty ? null : jsonDecode(utf8.decode(res.bodyBytes));
+    final map = decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+    if (res.statusCode == 200) return map;
+    throw RemoteException(
+      (map['error'] as String?) ?? 'De pc antwoordde met ${res.statusCode}.',
+      statusCode: res.statusCode,
+    );
+  }
+
   Future<http.Response> _get(String path, {String? etag, Map<String, String>? query}) async {
     final http.Response res;
     try {

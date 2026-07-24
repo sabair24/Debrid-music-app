@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../library.dart';
+import '../models.dart';
 import '../online.dart';
 import '../settings.dart';
 import '../soulseek.dart';
@@ -204,6 +205,10 @@ class LanServer {
         return _jobsClear(req);
       case '/api/corrections':
         return _corrections(req);
+      case '/api/move/plan':
+        return _movePlan(req);
+      case '/api/move/apply':
+        return _moveApply(req);
     }
 
     if (path.startsWith('/stream/')) return _stream(req);
@@ -646,6 +651,92 @@ class LanServer {
       return _unavailable(req, 'De pc kon dat niet toepassen: $e');
     }
     return _json(req.response, {'ok': true});
+  }
+
+  /// What moving these tracks would do on disk — worked out HERE, where the files are.
+  ///
+  /// Its own call before anything is applied, because the dialog on the other device exists to say
+  /// what will happen to which file. A client cannot work that out: it has no folders, no idea
+  /// which copy is better, and no way to know that a name is already taken.
+  Future<void> _movePlan(HttpRequest req) async {
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final target = body['albumId'] is String ? catalog.album(body['albumId'] as String) : null;
+    if (target == null) {
+      return _json(req.response, {'error': 'Dat album staat hier niet (meer).'},
+          status: HttpStatus.notFound);
+    }
+    final tracks = _tracksFor(body['trackIds']);
+    if (tracks.isEmpty) return _json(req.response, {'items': []});
+    final plan = library.planMove(tracks, target);
+    // Built once and turned round: the plan is keyed by track, the client speaks in ids, and doing
+    // this lookup per item would walk the whole library for every file being moved.
+    final idByPath = {for (final e in catalog.snapshot().trackById.entries) e.value.path: e.key};
+    return _json(req.response, {
+      'folder': target.tracks.isEmpty ? null : File(target.tracks.first.path).parent.path,
+      'items': [
+        for (final p in plan)
+          {
+            'trackId': idByPath[p.track.path],
+            'from': p.from,
+            'to': p.to,
+            'fate': p.fate.name,
+          },
+      ],
+    });
+  }
+
+  /// Apply the plan the user actually read.
+  ///
+  /// The approved `to` and `fate` come back with the request rather than being worked out again:
+  /// re-planning here would let the folder change between the screen someone agreed to and the
+  /// files that move.
+  Future<void> _moveApply(HttpRequest req) async {
+    final config = settings;
+    if (config == null) return _unavailable(req, 'Deze pc kan geen wijzigingen aannemen.');
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final target = body['albumId'] is String ? catalog.album(body['albumId'] as String) : null;
+    if (target == null) {
+      return _json(req.response, {'error': 'Dat album staat hier niet (meer).'},
+          status: HttpStatus.notFound);
+    }
+
+    final byId = catalog.snapshot().trackById;
+    final approved = <MovePlan>[];
+    for (final item in (body['plan'] as List? ?? const [])) {
+      if (item is! Map<String, dynamic>) continue;
+      final track = byId[item['trackId'] as String? ?? ''];
+      if (track == null) continue;
+      approved.add(MovePlan(
+        track,
+        track.path,
+        item['to'] as String?,
+        MoveFate.values.firstWhere((f) => f.name == item['fate'], orElse: () => MoveFate.moves),
+      ));
+    }
+    final tracks = approved.isNotEmpty
+        ? [for (final p in approved) p.track]
+        : _tracksFor(body['trackIds']);
+    if (tracks.isEmpty) return _json(req.response, {'moved': 0});
+
+    try {
+      final moved = await library.moveTracksToAlbum(tracks, target, config,
+          moveFiles: body['moveFiles'] != false,
+          plan: approved.isEmpty ? null : approved);
+      return _json(req.response, {'moved': moved});
+    } catch (e) {
+      return _unavailable(req, 'De pc kon dat niet verplaatsen: $e');
+    }
+  }
+
+  List<Track> _tracksFor(Object? ids) {
+    final out = <Track>[];
+    for (final id in (ids as List? ?? const [])) {
+      final t = id is String ? catalog.track(id) : null;
+      if (t != null) out.add(t);
+    }
+    return out;
   }
 
   Future<void> _art(HttpRequest req) async {

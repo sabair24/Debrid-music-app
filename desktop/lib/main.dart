@@ -8263,6 +8263,31 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
   bool _moveFiles = true;
   bool _busy = false;
 
+  /// What the chosen target would do on disk. Fetched rather than computed: on a Mac or an iPad
+  /// the PC is the only one that knows the folders, so this arrives a moment after the target is
+  /// picked instead of being there in the same frame.
+  List<MovePlan> _plan = const [];
+  bool _planning = false;
+
+  Future<void> _pick(Album album) async {
+    setState(() {
+      _target = album;
+      _plan = const [];
+      _planning = true;
+    });
+    try {
+      final result = await context.read<LibraryStore>().planMoveAsync([widget.track], album);
+      if (!mounted || _target != album) return; // a different album was picked meanwhile
+      setState(() {
+        _plan = result.items;
+        _planning = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _planning = false);
+    }
+  }
+
   @override
   void dispose() {
     _query.dispose();
@@ -8275,7 +8300,8 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
     setState(() => _busy = true);
     final moved = await context
         .read<LibraryStore>()
-        .moveTracksToAlbum([widget.track], target, context.read<AppSettings>(), moveFiles: _moveFiles);
+        .moveTracksToAlbum([widget.track], target, context.read<AppSettings>(),
+            moveFiles: _moveFiles, plan: _plan);
     if (!mounted) return;
     _srcToast(context, moved > 0 ? 'Verplaatst — $moved bestand mee verhuisd' : 'Verplaatst — bestand bleef staan');
     Navigator.of(context).pop(true);
@@ -8290,7 +8316,7 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
         .where((a) => q.isEmpty || normKey('${a.artist} ${a.title}').contains(q))
         .take(40)
         .toList();
-    final plan = _target == null ? const <MovePlan>[] : lib.planMove([widget.track], _target!);
+    final plan = _plan;
 
     return Dialog(
       backgroundColor: _panel,
@@ -8318,7 +8344,7 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
                   final a = options[i];
                   final sel = identical(_target, a);
                   return InkWell(
-                    onTap: () => setState(() => _target = a),
+                    onTap: () => _pick(a),
                     borderRadius: BorderRadius.circular(8),
                     child: Container(
                       margin: const EdgeInsets.only(bottom: 5),
@@ -8373,7 +8399,7 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
               const SizedBox(width: 8),
               FilledButton(
                 style: FilledButton.styleFrom(backgroundColor: _accent),
-                onPressed: (_target == null || _busy) ? null : _go,
+                onPressed: (_target == null || _busy || _planning) ? null : _go,
                 child: _busy
                     ? const SizedBox(
                         width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
@@ -8760,17 +8786,32 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
   /// Worked out ONCE, when the dialog opens. Re-planning on every rebuild would read the folder
   /// again mid-run and could carry out something other than what was on screen when the user
   /// pressed the button — and it walks the disk, which has no business happening per frame.
-  late final MergePlan _plan;
+  MergePlan _plan = const MergePlan(null, []);
+
+  /// True while the PC is working out where the files would land. The confirm button waits for it:
+  /// this dialog exists to say what will happen, and agreeing to a blank plan agrees to nothing.
+  bool _planning = false;
 
   @override
   void initState() {
     super.initState();
     final lib = context.read<LibraryStore>();
-    _plan = widget.absorb != null
-        ? MergePlan(
-            widget.album.tracks.isEmpty ? null : File(widget.album.tracks.first.path).parent.path,
-            lib.planMove(widget.absorb!.tracks, widget.album))
-        : lib.planMerge(widget.album);
+    // Absorbing another record means moving its files, and only the machine holding them can say
+    // where they would land — so that plan is awaited. Merging editions of one record touches no
+    // files and stays immediate.
+    _plan = widget.absorb != null ? const MergePlan(null, []) : lib.planMerge(widget.album);
+    if (widget.absorb != null) {
+      _planning = true;
+      lib.planMoveAsync(widget.absorb!.tracks, widget.album).then((result) {
+        if (!mounted) return;
+        setState(() {
+          _plan = MergePlan(result.folder, result.items);
+          _planning = false;
+        });
+      }).catchError((Object _) {
+        if (mounted) setState(() => _planning = false);
+      });
+    }
   }
 
   Future<void> _go() async {
@@ -8898,7 +8939,7 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
               const SizedBox(width: 8),
               FilledButton(
                 style: FilledButton.styleFrom(backgroundColor: _accent),
-                onPressed: _busy ? null : _go,
+                onPressed: (_busy || _planning) ? null : _go,
                 child: _busy
                     ? const SizedBox(
                         width: 16,

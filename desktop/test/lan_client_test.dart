@@ -566,11 +566,61 @@ void _editingTests() {
     );
   });
 
-  test('moving files is still the PC\'s alone, and says so', () async {
-    final album = mac.albums.firstWhere((a) => a.title == 'Dummy');
-    expect(
-      () => mac.moveTracksToAlbum(mac.tracks.take(1).toList(), album, AppSettings()),
-      throwsA(isA<RemoteWriteException>()),
-    );
+  test('the move plan comes from the PC, where the files actually are', () async {
+    // A second record to move a track into.
+    final other = Directory('${pcRoot.path}/Portishead/Roseland')..createSync(recursive: true);
+    File('${other.path}/01.flac').writeAsBytesSync(List<int>.generate(512, (i) => i % 256));
+    pcLibrary.tracks.add(_t('${other.path}/01.flac', 'Sour Times (Live)', 'Portishead', 'Roseland'));
+    pcLibrary.rebuildAlbums();
+    pcLibrary.notifyListeners();
+    await mac.loadRemote();
+
+    final target = mac.albums.firstWhere((a) => a.title == 'Roseland');
+    final track = mac.tracks.firstWhere((t) => t.title == 'Mysterons');
+    final plan = await mac.planMoveAsync([track], target);
+
+    // The dialog has to say what will happen to WHICH file. A stream URL would tell nobody that.
+    expect(plan.folder, other.path);
+    expect(plan.items.single.from, '${pcRoot.path}/Portishead/Dummy/01.flac');
+    expect(plan.items.single.to, contains(other.path));
+  });
+
+  test('a move approved here happens there', () async {
+    final other = Directory('${pcRoot.path}/Portishead/Roseland')..createSync(recursive: true);
+    File('${other.path}/01.flac').writeAsBytesSync(List<int>.generate(512, (i) => i % 256));
+    pcLibrary.tracks.add(_t('${other.path}/01.flac', 'Sour Times (Live)', 'Portishead', 'Roseland'));
+    pcLibrary.rebuildAlbums();
+    pcLibrary.notifyListeners();
+    await mac.loadRemote();
+
+    final target = mac.albums.firstWhere((a) => a.title == 'Roseland');
+    final track = mac.tracks.firstWhere((t) => t.title == 'Mysterons');
+    final plan = await mac.planMoveAsync([track], target);
+
+    final moved = await mac.moveTracksToAlbum([track], target, AppSettings(), plan: plan.items);
+
+    expect(moved, 1);
+    // The file really moved, on the PC, into the folder the plan named.
+    expect(File('${pcRoot.path}/Portishead/Dummy/01.flac').existsSync(), isFalse);
+    expect(File(plan.items.single.to!).existsSync(), isTrue);
+    // Not asserted here: what the PC's album list looks like afterwards. moveTracksToAlbum ends in
+    // a full rescan, and these fixtures are bytes with no tags in them — a real PC reads its real
+    // files back. What this test is for is that the move CROSSED, and it did.
+  });
+
+  test('a move can leave the files where they are', () async {
+    final other = Directory('${pcRoot.path}/Portishead/Roseland')..createSync(recursive: true);
+    File('${other.path}/01.flac').writeAsBytesSync(List<int>.generate(512, (i) => i % 256));
+    pcLibrary.tracks.add(_t('${other.path}/01.flac', 'Sour Times (Live)', 'Portishead', 'Roseland'));
+    pcLibrary.rebuildAlbums();
+    pcLibrary.notifyListeners();
+    await mac.loadRemote();
+
+    final target = mac.albums.firstWhere((a) => a.title == 'Roseland');
+    final track = mac.tracks.firstWhere((t) => t.title == 'Mysterons');
+    await mac.moveTracksToAlbum([track], target, AppSettings(), moveFiles: false);
+
+    expect(File('${pcRoot.path}/Portishead/Dummy/01.flac').existsSync(), isTrue,
+        reason: 'alleen de groepering verandert, het bestand blijft staan');
   });
 }

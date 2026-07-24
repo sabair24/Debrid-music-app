@@ -13,16 +13,6 @@ import 'organize.dart';
 import 'settings.dart';
 import 'paths.dart';
 
-/// Thrown when a write is attempted on a device that does not hold the music. Carries the text to
-/// put in front of the user — there is nothing technical to add, and the person holding the iPad
-/// needs to know where to go, not what failed.
-class RemoteWriteException implements Exception {
-  final String message;
-  const RemoteWriteException(this.message);
-  @override
-  String toString() => message;
-}
-
 const _audioExt = {'.flac', '.mp3', '.m4a', '.wav', '.ogg', '.opus', '.aac', '.wma', '.alac'};
 
 String _ext(String p) {
@@ -844,20 +834,6 @@ class LibraryStore extends ChangeNotifier {
   /// PC's alone and this is where that line would move if it ever changes.
   bool get canEdit => true;
 
-  /// Refuse a write that has nowhere to go.
-  ///
-  /// Most edits now travel to the PC instead — see [_editOnPc]. This is what is left for the ones
-  /// that do not, and it is deliberately loud: every write ends in [rebuildAlbums], which regroups
-  /// FROM TAGS, so a half-applied edit here would throw away the grouping the PC sent, pinned
-  /// pressings and merged editions included.
-  void _requireOwner(String what) {
-    if (!isRemote) return;
-    throw RemoteWriteException(
-      '$what kan alleen op de pc waar de muziek staat. '
-      'Deze app toont die bibliotheek; wijzigingen komen daarna vanzelf hier terug.',
-    );
-  }
-
   /// Hand an edit to the PC and take its answer as the truth.
   ///
   /// Nothing is changed locally first. The PC applies it to the library everyone reads, the
@@ -1358,6 +1334,43 @@ extension LibraryMove on LibraryStore {
   ///
   /// Shown before the move because this is the one operation here that rewrites the folder tree,
   /// and a wrong guess scatters a library rather than tidying it.
+  /// What moving these tracks would do — the version a screen can await.
+  ///
+  /// On the machine with the files this is [planMove] with a Future round it. On a Mac or an iPad
+  /// the PC works it out, because nothing here knows the folders, which copy is better, or that a
+  /// name is already taken. Either way the dialog gets a real answer before anyone agrees to
+  /// anything, which is what that dialog is for.
+  Future<({String? folder, List<MovePlan> items})> planMoveAsync(
+      List<Track> tracks, Album target) async {
+    final client = _remote;
+    if (client == null) {
+      return (
+        folder: target.tracks.isEmpty ? null : File(target.tracks.first.path).parent.path,
+        items: planMove(tracks, target),
+      );
+    }
+    final byId = {for (final t in tracks) _remoteTrackId(t.path): t};
+    final res = await client.ask('/api/move/plan', {
+      'albumId': remoteAlbumId(target),
+      'trackIds': [for (final t in tracks) _remoteTrackId(t.path)],
+    });
+    final items = <MovePlan>[];
+    for (final item in (res['items'] as List? ?? const [])) {
+      if (item is! Map<String, dynamic>) continue;
+      final track = byId[item['trackId'] as String?];
+      if (track == null) continue;
+      items.add(MovePlan(
+        track,
+        // The PC's real path, which is what the dialog should show — a stream URL would tell
+        // nobody where the file is now.
+        (item['from'] as String?) ?? track.path,
+        item['to'] as String?,
+        MoveFate.values.firstWhere((f) => f.name == item['fate'], orElse: () => MoveFate.moves),
+      ));
+    }
+    return (folder: res['folder'] as String?, items: items);
+  }
+
   List<MovePlan> planMove(List<Track> tracks, Album target) {
     final anchor = target.tracks.isEmpty ? null : File(target.tracks.first.path).parent.path;
     return anchor == null
@@ -1495,7 +1508,24 @@ extension LibraryMove on LibraryStore {
   /// grouped correctly and the file where it was, which is the safe half of the job.
   Future<int> moveTracksToAlbum(List<Track> tracks, Album target, AppSettings settings,
       {bool moveFiles = true, List<MovePlan>? plan}) async {
-    _requireOwner('Nummers verplaatsen');
+    if (isRemote) {
+      final client = _remote!;
+      final res = await client.ask('/api/move/apply', {
+        'albumId': remoteAlbumId(target),
+        'trackIds': [for (final t in tracks) _remoteTrackId(t.path)],
+        'moveFiles': moveFiles,
+        // The plan the user READ goes back with it. Letting the PC work it out again would let the
+        // folder change between the screen they agreed to and the files that move.
+        if (plan != null)
+          'plan': [
+            for (final p in plan)
+              {'trackId': _remoteTrackId(p.track.path), 'to': p.to, 'fate': p.fate.name},
+          ],
+      });
+      _catalogEtag = null;
+      await loadRemote(quiet: true);
+      return (res['moved'] as num?)?.toInt() ?? 0;
+    }
     // The plan the user read, when there was one. Re-planning here would let the folder change
     // between the screen they approved and the files that move.
     final steps = plan ?? planMove(tracks, target);
