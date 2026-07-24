@@ -263,7 +263,8 @@ void main() {
       final mine = [_o(1, 'Everybody', 225), _o(2, 'As Long as You Love Me', 213)];
       final us = [_o(1, 'Everybody', 225), _o(4, 'Missing You', 265)];
       final my2 = [_o(1, 'Christmas Time', 257)];
-      final out = bonusTracks(mine, [('CD · US · 1997', us), ('CD · MY · 1997', my2)]);
+      final out = bonusTracks(
+          mine, const [], [('CD · US · 1997', us), ('CD · MY · 1997', my2)]);
       expect(out.map((b) => b.track.title), ['Missing You', 'Christmas Time']);
       expect(out.first.edition, 'CD · US · 1997');
     });
@@ -271,15 +272,44 @@ void main() {
     test('a title you already have is never a bonus, however it is spelt', () {
       final mine = [_o(1, '10,000 Promises', 240)];
       final other = [_o(1, '10.000 Promises', 240), _o(2, 'Like a Child', 269)];
-      final out = bonusTracks(mine, [('CD · JP', other)]);
+      final out = bonusTracks(mine, const [], [('CD · JP', other)]);
       expect(out.map((b) => b.track.title), ['Like a Child']);
+    });
+
+    test('nor when only YOUR PRESSING spells it differently', () {
+      // The real one: the chosen pressing says "If You Want It to Be Good Girl", another says
+      // "If You Want to Be a Good Girl". Compared as text they are two songs, and the page offered
+      // the user a bonus they were already looking at as track 10.
+      final mine = [_o(10, 'If You Want It to Be Good Girl (Get Yourself a Bad Boy)', 290)];
+      final other = [_o(10, 'If You Want to Be a Good Girl (Get Yourself a Bad Boy)', 290)];
+      expect(bonusTracks(mine, const [], [('Digital Media · XW', other)]), isEmpty);
+    });
+
+    test('nor when it is on disk but not on your pressing', () {
+      // The radio edit: your pressing doesn't list it, but it is sitting in the folder. Offering
+      // it back as a bonus is offering the user their own file.
+      final mine = [_o(1, "Everybody (Backstreet's Back)", 227)];
+      final onDisk = [
+        _t("Everybody (Backstreet's Back)", 227),
+        _t("Everybody (Backstreet's Back) (Radio Edit)", 225),
+      ];
+      final other = [_o(1, "Everybody (Backstreet's Back) (radio edit)", 225)];
+      expect(bonusTracks(mine, onDisk, [('Digital Media · XW', other)]), isEmpty);
+    });
+
+    test('a genuine extra survives both checks', () {
+      final mine = [_o(1, 'Everybody', 227)];
+      final onDisk = [_t('Everybody', 227)];
+      final other = [_o(1, 'Everybody', 227), _o(4, 'Missing You', 265)];
+      final out = bonusTracks(mine, onDisk, [('CD · US · 1997', other)]);
+      expect(out.map((b) => b.track.title), ['Missing You']);
     });
 
     test('the same extra on two pressings is listed once, credited to the first', () {
       final mine = [_o(1, 'Everybody', 225)];
       final a = [_o(2, 'Missing You', 265)];
       final b = [_o(2, 'Missing You', 265)];
-      final out = bonusTracks(mine, [('CD · US', a), ('CD · AU', b)]);
+      final out = bonusTracks(mine, const [], [('CD · US', a), ('CD · AU', b)]);
       expect(out, hasLength(1));
       expect(out.single.edition, 'CD · US');
     });

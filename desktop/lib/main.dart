@@ -1146,10 +1146,23 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             rel = tried[pick];
             out = lists[pick];
             bestFit = scored[pick].namesEverything;
-            // What the OTHER pressings of this record have that yours doesn't.
-            bonus = bonusTracks(out, [
+
+            // Bonuses come from the FULLEST pressing of the record, never from the shortlist: that
+            // is deliberately the smallest ones that fit, so for a complete album it is three
+            // copies of the same eleven tracks and holds nothing extra at all.
+            final fullest = all.indexed
+                .reduce((a, b) => b.$2.trackCount > a.$2.trackCount ? b : a);
+            var extra = <ChoiceTrack>[];
+            if (fullest.$2.mbid == rel.mbid) {
+              extra = const [];
+            } else {
+              final seen = tried.indexWhere((r) => r.mbid == fullest.$2.mbid);
+              extra = seen >= 0 ? lists[seen] : await mb.tracklistOf(fullest.$2);
+            }
+            bonus = bonusTracks(out, a.tracks, [
+              if (extra.isNotEmpty) (fullest.$2.line, extra),
               for (var i = 0; i < tried.length; i++)
-                if (i != pick) (tried[i].line, lists[i])
+                if (i != pick && tried[i].mbid != fullest.$2.mbid) (tried[i].line, lists[i])
             ]);
           }
         }
@@ -1289,7 +1302,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   Future<void> _downloadBonus(int i) async {
     final b = _officialBonus[i];
     await _downloadMissing(
-      AlbumSlot(index: _official.length + i, official: b.track),
+      AlbumSlot(
+          index: _official.length + i,
+          official: ChoiceTrack('', b.track.title, b.track.seconds)),
       jobKey: 'bonus:$_albumKey:$i',
     );
   }
@@ -1581,8 +1596,12 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
               MissingTrackRow(
                 // Numbered after your own tracks: a bonus must never claim a number the record
                 // already uses, or the library reads the two as separate pressings.
+                // Blank position on purpose: the source pressing's own number would read as a
+                // second "10" beside your track 10. The number shown is the one it would get.
                 slot: AlbumSlot(
-                    index: _official.length + i, official: _officialBonus[i].track),
+                    index: _official.length + i,
+                    official: ChoiceTrack(
+                        '', _officialBonus[i].track.title, _officialBonus[i].track.seconds)),
                 jobKey: 'bonus:$_albumKey:$i',
                 note: _officialBonus[i].edition,
                 onDownload: () => _downloadBonus(i),

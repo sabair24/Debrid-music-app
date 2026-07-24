@@ -153,15 +153,12 @@ AlbumCompleteness matchAlbumTracks(
     if (owned.containsKey(i)) continue;
     final o = official[i];
     final ow = _words(o.title);
-    if (ow.isEmpty) continue;
     for (final t in tracks) {
       if (claimed.contains(t.path)) continue;
-      if (!durationsAgree(o.seconds, t.duration?.inSeconds)) continue;
-      if (!_sameMarkers(versionMarkers(o.title), versionMarkers(t.title))) continue;
-      final tw = _words(t.title);
-      if (tw.isEmpty) continue;
-      final shared = ow.intersection(tw).length;
-      if (shared / (ow.length > tw.length ? ow.length : tw.length) < .8) continue;
+      if (!sameTitle(o.title, t.title,
+          secondsA: o.seconds, secondsB: t.duration?.inSeconds)) {
+        continue;
+      }
       owned[i] = t;
       claimed.add(t.path);
       break;
@@ -188,6 +185,31 @@ Set<String> _words(String s) => normKey(s).split(' ').where((w) => w.isNotEmpty)
 /// Do both titles carry the same version markers? "(radio edit)" on one side and nothing on the
 /// other means two different recordings, however alike the words are.
 bool _sameMarkers(Set<String> a, Set<String> b) => a.length == b.length && a.containsAll(b);
+
+/// Are these two titles the same song, allowing for how differently catalogues spell them?
+///
+/// MusicBrainz writes "If You Want It to Be Good Girl" where the ripper — and another pressing of
+/// the same record — writes "If You Want to Be a Good Girl". Judged on exact text those are two
+/// songs, which made a complete album look incomplete and then offered the user a track they
+/// already owned as a bonus.
+///
+/// Narrow on purpose: four fifths of the words shared, running times that agree where both are
+/// known, and the SAME version markers on both sides — so a "(radio edit)" is never the album cut,
+/// however alike the words.
+bool sameTitle(String a, String b, {int? secondsA, int? secondsB}) {
+  final aw = _words(a), bw = _words(b);
+  if (aw.isEmpty || bw.isEmpty) return false;
+  if (secondsA != null &&
+      secondsB != null &&
+      secondsA > 0 &&
+      secondsB > 0 &&
+      (secondsA - secondsB).abs() > _slack) {
+    return false;
+  }
+  if (!_sameMarkers(versionMarkers(a), versionMarkers(b))) return false;
+  final shared = aw.intersection(bw).length;
+  return shared / (aw.length > bw.length ? aw.length : bw.length) >= .8;
+}
 
 /// Which pressings are worth fetching a tracklist for, cheaply, from their track counts alone.
 ///
@@ -260,21 +282,32 @@ class BonusTrack {
   const BonusTrack(this.track, this.edition);
 }
 
-/// What the other pressings of this record have that yours doesn't.
+/// What the other pressings of this record have that you don't.
 ///
 /// Backstreet's Back is eleven tracks in Britain and thirteen in America, plus a Malaysian second
 /// disc with a Christmas song on it. None of that is missing from your record — it was never on
 /// it — but it is the rest of the record, and worth being able to see and fetch.
 ///
-/// Compared on normalised titles, so a pressing that spells "10,000 Promises" with a full stop
-/// doesn't read as a different song. First pressing to name a title gets the credit.
-List<BonusTrack> bonusTracks(List<ChoiceTrack> mine, List<(String, List<ChoiceTrack>)> others) {
-  final have = {for (final t in mine) normKey(t.title)}..remove('');
+/// Two things disqualify a track, and BOTH are needed. It must not be on your pressing, and it
+/// must not be on your disk: the first pass alone offered the user back the radio edit they
+/// already owned, because their pressing doesn't list it. Both comparisons go through [sameTitle],
+/// so a pressing that spells a title its own way doesn't produce a phantom bonus — that is exactly
+/// how "If You Want to Be a Good Girl" ended up offered to someone who had it as track 10.
+List<BonusTrack> bonusTracks(
+  List<ChoiceTrack> mine,
+  List<Track> onDisk,
+  List<(String, List<ChoiceTrack>)> others,
+) {
   final out = <BonusTrack>[];
+  bool known(ChoiceTrack t) =>
+      mine.any((m) => sameTitle(m.title, t.title, secondsA: m.seconds, secondsB: t.seconds)) ||
+      onDisk.any((d) =>
+          sameTitle(d.title, t.title, secondsA: d.duration?.inSeconds, secondsB: t.seconds)) ||
+      out.any((b) => sameTitle(b.track.title, t.title, secondsA: b.track.seconds, secondsB: t.seconds));
+
   for (final (edition, tracks) in others) {
     for (final t in tracks) {
-      final k = normKey(t.title);
-      if (k.isEmpty || !have.add(k)) continue;
+      if (t.title.trim().isEmpty || known(t)) continue;
       out.add(BonusTrack(t, edition));
     }
   }
