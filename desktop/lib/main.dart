@@ -1151,9 +1151,30 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         albumArtist: album.artist,
         album: album.title,
         trackNo: s.number,
-        trackTotal: _official.length,
+        trackTotal: _stampTotal,
         year: _officialYear ?? album.year,
       );
+
+  /// How many tracks to WRITE into a downloaded file — what the album already says, not what the
+  /// pressing says.
+  ///
+  /// TRACKTOTAL is the tag the library separates editions on. Stamping a download with the official
+  /// pressing's total while the tracks around it carry another one does not fill a gap in the
+  /// record, it adds another opinion to it: Backstreet's Back held files claiming 0, 11 and 12, and
+  /// a download stamped 16 made that a fourth. Only a record whose files say nothing at all takes
+  /// the pressing's number.
+  int get _stampTotal {
+    final counts = <int, int>{};
+    for (final t in album.tracks) {
+      if (t.trackTotal > 0) counts[t.trackTotal] = (counts[t.trackTotal] ?? 0) + 1;
+    }
+    if (counts.isEmpty) return _official.length;
+    var best = counts.entries.first;
+    for (final e in counts.entries) {
+      if (e.value > best.value) best = e;
+    }
+    return best.key;
+  }
 
   Future<List<SoulseekFile>> _albumWide() async {
     if (_slskLoaded) return _albumSlsk;

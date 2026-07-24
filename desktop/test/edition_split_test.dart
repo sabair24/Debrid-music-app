@@ -114,6 +114,49 @@ void main() {
     expect(albums.single.edition, isNull);
   });
 
+  test('a radio edit beside the album cut is not a second pressing', () {
+    // What filling a gap did to a good album. The folder held only the RADIO EDIT of track 1, so
+    // the missing-track list correctly offered the album version and fetched it — and the album now
+    // had two number ones. That collision, over files claiming 0, 11, 12 and 16 tracks, turned one
+    // Backstreet's Back tile into four. Completing a record must never break it.
+    Track v(String file, String title, int no, int total) => Track(
+          path: r"D:\Flac music 2024\Albums\Backstreet Boys\Backstreet's Back\" '$file',
+          title: title,
+          artist: 'Backstreet Boys',
+          album: "Backstreet's Back",
+          trackNo: no,
+          trackTotal: total,
+          isFlac: true,
+        );
+    final albums = group([
+      v("01 - Everybody (Backstreet's Back) (Radio Edit).flac", "Everybody (Backstreet's Back) (Radio Edit)", 1, 0),
+      v("01 - Everybody (Backstreet's Back).flac", "Everybody (Backstreet's Back)", 1, 16),
+      v('02 - As Long as You Love Me.flac', 'As Long as You Love Me', 2, 11),
+      v("04 - That's the Way I Like It.flac", "That's the Way I Like It", 4, 12),
+    ]);
+    expect(albums.length, 1, reason: 'vier tegels voor één map met twaalf bestanden');
+    expect(albums.single.tracks.length, 4);
+  });
+
+  test('the marker counts even when the tag forgot it, but a folder name never does', () {
+    // Read from the title and the filename only. Taking the whole path would mark every track under
+    // "… (Deluxe Edition)" as a variant and the split would never fire for that album again.
+    Track at(String path, String title, int total) => Track(
+          path: path, title: title, artist: 'X', album: 'Album', trackNo: 6, trackTotal: total, isFlac: true);
+
+    final tagForgot = group([
+      at(r'D:\M\X\Album\06 - Song (Live).flac', 'Song', 0),
+      at(r'D:\M\X\Album\06 - Lied.flac', 'Lied', 16),
+    ]);
+    expect(tagForgot.length, 1, reason: 'de bestandsnaam zegt het wel');
+
+    final deluxeFolder = group([
+      at(r'D:\M\X\Album (Deluxe Edition)\06 - Song.flac', 'Song', 12),
+      at(r'D:\M\X\Album (Deluxe Edition)\06 - Lied.flac', 'Lied', 16),
+    ]);
+    expect(deluxeFolder.length, 2, reason: 'een mapnaam mag de splitsing niet uitschakelen');
+  });
+
   test('pinnedRelease returns null on an album with no pin, and does not throw', () {
     // Adele's 30 had fifteen live tracks pinned to one release and fifteen orphan corrections from
     // a deleted Japanese edition, all empty. Reading the wrong list made the pin look empty. An
