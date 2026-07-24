@@ -115,3 +115,22 @@ AlbumCompleteness matchAlbumTracks(
 
 /// Seconds two timings may differ and still be the same recording. Matches [fileOffersTitle].
 const _slack = 12;
+
+/// Which of a record's pressings should describe it, given how much of it is already on disk.
+///
+/// Takes the track counts in preference order and returns the index of the first pressing that can
+/// HOLD what the library already has. Never a smaller one: a ten-track pressing of the thirteen
+/// tracks you own reports nothing missing at all, and quietly files three of your own tracks as not
+/// being on the record — which is what the Backstreet Boys album did, showing "2" between 10 and 11.
+///
+/// This is deliberately NOT the same as asking the search for expectedTracks. That drops pressings
+/// BIGGER than the library too, and owning one track of sixteen is the case this page exists for.
+///
+/// A pressing whose count is unknown (0) is passed over rather than gambled on, and index 0 is the
+/// answer when nothing qualifies — a described record beats no record.
+int pickPressing(List<int> trackCounts, int owned) {
+  for (var i = 0; i < trackCounts.length; i++) {
+    if (trackCounts[i] >= owned && trackCounts[i] > 0) return i;
+  }
+  return trackCounts.isEmpty ? -1 : 0;
+}

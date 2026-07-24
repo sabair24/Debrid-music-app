@@ -1107,7 +1107,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       if (pinnedMbid != null && pinnedMbid.isNotEmpty) rel = await mb.release(pinnedMbid);
       if (rel == null) {
         final hits = await mb.searchReleases(a.artist, DiscogsService.plainTitle(a.title));
-        if (hits.isNotEmpty) rel = await mb.release(hits.first.mbid);
+        final i = pickPressing([for (final h in hits) h.trackCount], a.tracks.length);
+        if (i >= 0) rel = await mb.release(hits[i].mbid);
       }
       if (rel != null) {
         out = await mb.tracklistOf(rel);
@@ -1117,7 +1118,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     } catch (_) {/* Discogs gets its turn below */}
     if (out.isEmpty) {
       try {
-        final e = await DiscogsService(settings).edition(a.artist, a.title, pinned: pinned);
+        // Here expectedTracks IS safe to pass: Discogs only uses it to drop masters too SMALL to
+        // hold the library, never ones bigger.
+        final e = await DiscogsService(settings)
+            .edition(a.artist, a.title, expectedTracks: a.tracks.length, pinned: pinned);
         if (e != null && e.tracklist.isNotEmpty) {
           out = [for (final t in e.tracklist) ChoiceTrack(t.position, t.title, t.seconds)];
           year = e.albumYear ?? e.year;
@@ -1415,15 +1419,34 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       }
                       final s = rows[i];
                       final t = s.track;
-                      if (t == null) return MissingTrackRow(slot: s, jobKey: _jobKey(s.index), onDownload: () => _downloadMissing(s));
+                      if (t == null) {
+                        return MissingTrackRow(
+                            slot: s, jobKey: _jobKey(s.index), onDownload: () => _downloadMissing(s));
+                      }
                       // The queue is what's playable, so the index has to be this track's place in
                       // the FILES — the row's place in the release would play the wrong song.
-                      return TrackRow(
+                      final row = TrackRow(
                           track: t,
                           index: album.tracks.indexOf(t),
                           queue: album.tracks,
                           albumCover: album.cover,
                           number: s.official == null ? null : s.number);
+                      // Files the pressing doesn't name follow the record, and say so. Left
+                      // unlabelled they read as part of it, carrying their own tag's number into
+                      // the middle of the official run.
+                      if (s.index != -1 || i == 0 || rows[i - 1].index == -1) return row;
+                      return Column(children: [
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(34, 14, 20, 6),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text('Niet op deze uitgave',
+                                style: TextStyle(
+                                    color: _muted, fontSize: 11, letterSpacing: .4)),
+                          ),
+                        ),
+                        row,
+                      ]);
                     },
                     childCount: rows?.length ?? album.tracks.length,
                   ),
