@@ -29,7 +29,6 @@ permissions:
 env:
   PROJECT: apple/DebridMusic.xcodeproj
   SCHEME: DebridMusic
-  BUNDLE_ID: com.debridmusic.app
   TEAM_ID: DR8YNUC2S7
 
 jobs:
@@ -100,8 +99,9 @@ jobs:
       # -allowProvisioningUpdates lets Xcode create and fetch what it needs itself, which avoids
       # keeping a .p12 and its password in the repository.
       #
-      # An app record for com.debridmusic.app must also exist in App Store Connect. Uploading to
-      # a bundle id that has no record fails at the very last step, after a full archive.
+      # An app record must also exist in App Store Connect for the bundle id the project
+      # builds (com.debridmedia.music). Uploading to a bundle id with no record fails at the very
+      # last step, after a full archive.
 
       - name: Distribution ready?
         id: gate
