@@ -72,6 +72,13 @@ class AlbumDto {
   /// Newest file time among its tracks — lets a client sort "recently added" without the tracks.
   final int addedMs;
 
+  /// The exact pressing the user pinned, if they pinned one. Carried because the sleeve looks up
+  /// its disc scan by release: without it a Mac or an iPad falls back to searching by artist and
+  /// title, which gets the wrong pressing for exactly the records someone pinned one BECAUSE the
+  /// automatic guess was wrong.
+  final int? discogsRelease;
+  final String? mbid;
+
   const AlbumDto({
     required this.id,
     required this.artistId,
@@ -83,6 +90,8 @@ class AlbumDto {
     this.edition,
     this.isSingle = false,
     this.addedMs = 0,
+    this.discogsRelease,
+    this.mbid,
   });
 
   factory AlbumDto.fromJson(Map<String, dynamic> j) => AlbumDto(
@@ -96,6 +105,8 @@ class AlbumDto {
         edition: j['edition'] as String?,
         isSingle: j['isSingle'] == true,
         addedMs: _int(j['addedMs']),
+        discogsRelease: _intOrNull(j['discogsRelease']),
+        mbid: j['mbid'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -109,6 +120,8 @@ class AlbumDto {
         'edition': edition,
         'isSingle': isSingle,
         'addedMs': addedMs,
+        'discogsRelease': discogsRelease,
+        'mbid': mbid,
       };
 }
 

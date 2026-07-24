@@ -519,6 +519,29 @@ void _editingTests() {
     expect(mac.albums.map((a) => a.artist), contains('Portishead (UK)'));
   });
 
+  test('the pressing you pinned travels, so the Mac finds the same disc', () async {
+    // The sleeve looks its disc scan up by RELEASE. Without this the Mac searches by artist and
+    // title and lands on a different pressing — wrong for exactly the records that were pinned
+    // because the automatic guess was wrong. A pin also changes not a single track, so the
+    // catalogue fingerprint has to notice it or no device would ever hear about it.
+    await mac.applyCorrection(
+        mac.albums.firstWhere((a) => a.title == 'Dummy'), AppSettings(), discogsRelease: 987654);
+    expect(mac.pinnedRelease(mac.albums.firstWhere((a) => a.title == 'Dummy')), 987654);
+  });
+
+  test('a MusicBrainz pin travels too, and clears the Discogs one', () async {
+    await mac.applyCorrection(
+        mac.albums.firstWhere((a) => a.title == 'Dummy'), AppSettings(), discogsRelease: 987654);
+    // The two are alternative authorities: exactly one wins, and the PC decides which. The client
+    // has to end up agreeing with it rather than keeping a stale release alongside.
+    await mac.applyCorrection(
+        mac.albums.firstWhere((a) => a.title == 'Dummy'), AppSettings(), mbid: 'abc-123');
+
+    final after = mac.albums.firstWhere((a) => a.title == 'Dummy');
+    expect(mac.pinnedMbid(after), 'abc-123');
+    expect(mac.pinnedRelease(after), isNull);
+  });
+
   test('a cover chosen on the Mac is the cover the PC serves', () async {
     final art = Uint8List.fromList(List.generate(900, (i) => (i * 5) % 256));
     final album = mac.albums.firstWhere((a) => a.title == 'Dummy');

@@ -301,6 +301,10 @@ class LibraryStore extends ChangeNotifier {
   /// cover and disc — instead of the app going off and picking its own pressing, which is why a
   /// correction changed the front cover and nothing else.
   int? pinnedRelease(Album a) {
+    // In client mode the corrections live on the PC and never reach here — the pin comes down with
+    // the catalogue instead. Without this the sleeve looks up its disc by artist and title, which
+    // finds the wrong pressing for exactly the records that were pinned because it did.
+    if (isRemote) return _remoteAlbums[a]?.release;
     for (final t in a.tracks) {
       final id = int.tryParse(_corrections[t.path]?['release'] ?? '');
       if (id != null && id > 0) return id;
@@ -314,6 +318,7 @@ class LibraryStore extends ChangeNotifier {
   /// number, and every pin already written to disk is a number. One key for both would have made
   /// those unreadable the first time this shipped.
   String? pinnedMbid(Album a) {
+    if (isRemote) return _remoteAlbums[a]?.mbid;
     for (final t in a.tracks) {
       final id = _corrections[t.path]?['mbid'];
       if (id != null && id.isNotEmpty) return id;
@@ -813,7 +818,12 @@ class LibraryStore extends ChangeNotifier {
         al.correctedCover = saved[2];
         break;
       }
-      _remoteAlbums[al] = (id: dto.id, artRef: dto.artworkRef ?? dto.id);
+      _remoteAlbums[al] = (
+        id: dto.id,
+        artRef: dto.artworkRef ?? dto.id,
+        release: dto.discogsRelease,
+        mbid: dto.mbid,
+      );
       built.add(al);
     }
     albums = built..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
@@ -824,7 +834,7 @@ class LibraryStore extends ChangeNotifier {
   /// What the PC calls each album we are showing: its id (for a write, in phase C) and the
   /// reference to ask `/art/` for. Keyed by object identity — [Album] has no value equality, and a
   /// refreshed catalogue makes new ones, so this is cleared and refilled with them.
-  final Map<Album, ({String id, String artRef})> _remoteAlbums = {};
+  final Map<Album, ({String id, String artRef, int? release, String? mbid})> _remoteAlbums = {};
 
   /// The PC's id for an album we are showing, or null on the machine that owns the music.
   String? remoteAlbumId(Album a) => _remoteAlbums[a]?.id;

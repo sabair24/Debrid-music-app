@@ -136,6 +136,8 @@ class LanCatalog {
         edition: album.edition,
         isSingle: album.isSingle,
         addedMs: album.addedMs,
+        discogsRelease: library.pinnedRelease(album),
+        mbid: library.pinnedMbid(album),
       ));
 
       for (final t in album.tracks) {
@@ -199,7 +201,15 @@ class LanCatalog {
       fingerprint..add(a.id)..add(a.name)..add('${a.albumCount}');
     }
     for (final a in albums) {
-      fingerprint..add(a.id)..add(a.title)..add('${a.trackCount}')..add(a.edition ?? '');
+      fingerprint
+        ..add(a.id)
+        ..add(a.title)
+        ..add('${a.trackCount}')
+        ..add(a.edition ?? '')
+        // Pinning a pressing changes not a single track, so without this the ETag would not move
+        // and no device would ever hear about it.
+        ..add('${a.discogsRelease ?? ''}')
+        ..add(a.mbid ?? '');
     }
     for (final t in tracks) {
       fingerprint..add(t.id)..add(t.title)..add('${t.trackNo}')..add('${t.sizeBytes}');
