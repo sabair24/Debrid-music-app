@@ -602,14 +602,13 @@ class _HomeShellState extends State<HomeShell> {
                   final compact = box.maxWidth < 1040;
                   return Row(
                     children: [
-                      Container(
-                        width: 28,
-                        height: 28,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
-                          gradient: const LinearGradient(colors: [_accent, _accent2]),
-                        ),
-                        child: const Icon(Icons.music_note_rounded, size: 17, color: Colors.white),
+                      // The app's real icon, not an impression of it. This used to be a gradient
+                      // square with a music note drawn to look like the old mark, so when the
+                      // icon was redrawn everywhere else the top bar kept showing the old one.
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.asset('assets/icon/app_icon.png',
+                            width: 28, height: 28, filterQuality: FilterQuality.medium),
                       ),
                       if (!compact) ...[
                         const SizedBox(width: 9),
