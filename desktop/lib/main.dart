@@ -95,9 +95,11 @@ Future<void> main() async {
       titleBarStyle: TitleBarStyle.hidden,
     ),
     () async {
-      await windowManager.maximize();
+      // Maximise AFTER showing. Asked for before the window exists on screen, Windows keeps the
+      // restore size and the app opens in a small frame — which is what it did.
       await windowManager.show();
       await windowManager.focus();
+      await windowManager.maximize();
     },
   );
 
