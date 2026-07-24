@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
+import 'completeness.dart';
 import 'editions.dart';
 import 'enrichment.dart';
 import 'flac_tags.dart';
@@ -1015,14 +1016,6 @@ class LibraryStore extends ChangeNotifier {
   /// So split only where merging actually breaks something: two tracks claiming the SAME number.
   /// That is the symptom — two number tens, two number sixes, "Quit Playing Games" listed twice —
   /// and where it doesn't happen, differing totals are just sloppy tagging and are left alone.
-  /// Is this track a marked variant — a radio edit, a live take, a remix?
-  ///
-  /// Read from the title and the FILENAME only, never the folders: an album that happens to live
-  /// under "… (Deluxe Edition)" would otherwise mark every one of its tracks as a variant.
-  static bool _isVariant(Track t) =>
-      versionMarkers(t.title).isNotEmpty ||
-      versionMarkers(t.path.split(RegExp(r'[\\/]')).last).isNotEmpty;
-
   static bool editionSplit(List<Track>? group) {
     if (group == null || group.length < 2) return false;
     final seen = <int>{};
@@ -1031,7 +1024,7 @@ class LibraryStore extends ChangeNotifier {
       // pressings of it. Downloading the album version of a track you only had an edit of is
       // exactly what the missing-track list is for, and doing so used to shatter the album: a
       // second "01 Everybody" turned one Backstreet's Back tile into four.
-      if (_isVariant(t)) continue;
+      if (isVariant(t)) continue;
       if (t.trackNo > 0 && !seen.add(t.trackNo)) {
         // A collision. Only worth splitting if the totals can actually separate them.
         // Zero counts as its own edition here: an untagged rip that collides with a tagged one is

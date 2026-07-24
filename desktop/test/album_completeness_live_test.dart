@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:debridmusic/completeness.dart';
 import 'package:debridmusic/discogs.dart';
+import 'package:debridmusic/editions.dart';
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/musicbrainz.dart';
 
@@ -47,25 +48,52 @@ void main() {
         reason: 'CUFF IT is track 4 on the record');
   }, timeout: const Timeout(Duration(minutes: 3)));
 
-  test('a record held in full is described by a pressing that can hold it', () async {
-    // Ranked first for this album is a ten-track pressing, while the library holds thirteen. Taken
-    // at face value it reported nothing missing AND filed three tracks the user owns as not being
-    // on the record — the album page showed "2" sitting between 10 and 11, with no 12.
+  test("the eleven tracks of Backstreet's Back resolve to an eleven-track pressing", () async {
+    // The record has ten pressings, 11 to 16 tracks, including a Malaysian double CD. Choosing the
+    // first one big enough picked that double CD and reported five gaps — a Christmas song among
+    // them — for a record the user holds complete. Containment, not size, is the question.
     final mb = MusicBrainzService();
-    final hits = await mb.searchReleases('Backstreet Boys', 'Backstreet Boys');
-    expect(hits, isNotEmpty);
+    final groups = await mb.searchReleaseGroups("Backstreet's Back", artist: 'Backstreet Boys');
+    final g = groups.where((x) => !x.isCompilation).firstOrNull ?? groups.first;
+    final all = await mb.editionsOf(g.mbid);
+    expect(all.length, greaterThan(3), reason: 'de release-group hoort alle persingen te geven');
 
-    final i = pickPressing([for (final h in hits) h.trackCount], 13);
-    expect(i, greaterThanOrEqualTo(0));
-    expect(hits[i].trackCount, greaterThanOrEqualTo(13),
-        reason: 'picked a ${hits[i].trackCount}-track pressing for a 13-track album');
+    // The eleven album tracks as they sit on disk, in the library's own spelling.
+    const titles = [
+      "Everybody (Backstreet's Back)", 'As Long as You Love Me', 'All I Have to Give',
+      "That's the Way I Like It", '10.000 Promises', 'Like a Child',
+      "Hey Mr. DJ (Keep Playin' This Song)", 'Set Adrift on Memory Bliss',
+      "That's What She Said", 'If You Want to Be a Good Girl (Get Yourself a Bad Boy)',
+      "If I Don't Have You",
+    ];
+    // No durations: a real library has the pressing's own timings, and inventing one figure for
+    // every track would make the ±12s rule reject titles that do match. This test is about which
+    // pressing the titles pick.
+    final mine = [
+      for (final t in titles)
+        Track(
+            path: r"D:\Flac music 2024\Albums\Backstreet Boys\Backstreet's Back\" '$t.flac',
+            title: t,
+            artist: 'Backstreet Boys',
+            album: "Backstreet's Back")
+    ];
 
-    final full = await mb.release(hits[i].mbid);
-    final official = await mb.tracklistOf(full!);
-    expect(official.length, greaterThanOrEqualTo(13));
-    // And the positions run 1..n, which is what the rows are numbered by.
-    expect(official.take(13).map((t) => int.tryParse(t.position)).toList(),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    final shortlist = shortlistPressings([for (final r in all) r.trackCount], mine.length);
+    final lists = <List<ChoiceTrack>>[];
+    final scored = <AlbumCompleteness>[];
+    for (final i in shortlist) {
+      final list = await mb.tracklistOf(all[i]);
+      if (list.isEmpty) continue;
+      lists.add(list);
+      scored.add(matchAlbumTracks(list, mine, 'Backstreet Boys'));
+    }
+    final pick = pickPressing(scored);
+    expect(pick, greaterThanOrEqualTo(0));
+
+    expect(lists[pick], hasLength(11),
+        reason: 'koos een ${lists[pick].length}-nummer persing voor een plaat van 11');
+    expect(scored[pick].namesEverything, isTrue);
+    expect(scored[pick].complete, isTrue, reason: 'deze plaat is compleet — er ontbreekt niets');
   }, timeout: const Timeout(Duration(minutes: 3)));
 
   test('and a record we hold in full reports nothing missing', () async {

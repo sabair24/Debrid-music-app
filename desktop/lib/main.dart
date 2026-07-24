@@ -1057,6 +1057,14 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   int? _officialYear;
   bool _officialBusy = false;
 
+  /// What the OTHER pressings of this record hold that yours doesn't — not missing, just elsewhere.
+  List<BonusTrack> _officialBonus = const [];
+  bool _showBonus = false;
+
+  /// Did the chosen pressing name every track on disk? When it didn't, the page says so rather
+  /// than presenting a near miss as the record.
+  bool _officialBestFit = true;
+
   /// Which album the tracklist above belongs to, so a merge or a re-pick refetches and a rescan
   /// (which hands this page a NEW Album object for the same record) does not.
   String _officialFor = '';
@@ -1078,12 +1086,18 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
   String get _albumKey => '${artistKey(album.artist)}|${normKey(album.title)}';
 
-  /// The official tracklist, MusicBrainz first and Discogs behind it.
+  /// The official tracklist: which pressing of this record you actually own.
   ///
-  /// Deliberately WITHOUT expectedTracks: this page exists because the library holds fewer tracks
-  /// than the record has, and filtering pressings by what is already on disk would rule out the
-  /// very release that names what is missing. A pinned pressing wins outright — if you picked an
-  /// edition in the gallery, that edition is the answer, not a candidate.
+  /// Chosen by CONTAINMENT, not by size. Asking for the first pressing big enough to hold the
+  /// library picked a Malaysian double CD for an eleven-track album and then reported five gaps,
+  /// one of them a Christmas song. The pressing that names every track on disk and adds fewest of
+  /// its own is the record; see pickPressing().
+  ///
+  /// Candidates come from the RELEASE GROUP, not a free-text release search, so every one of them
+  /// is a pressing of this same record and a same-named single can never win.
+  ///
+  /// A pinned pressing wins outright — if you picked an edition in the gallery, that edition is
+  /// the answer, not a candidate.
   Future<void> _loadOfficial() async {
     if (!mounted || album.isSingle) return;
     final a = album;
@@ -1100,17 +1114,48 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
     var out = const <ChoiceTrack>[];
     var from = '';
+    var bonus = const <BonusTrack>[];
+    var bestFit = true;
     int? year;
     try {
       MbRelease? rel;
       if (pinnedMbid != null && pinnedMbid.isNotEmpty) rel = await mb.release(pinnedMbid);
       if (rel == null) {
-        final hits = await mb.searchReleases(a.artist, DiscogsService.plainTitle(a.title));
-        final i = pickPressing([for (final h in hits) h.trackCount], a.tracks.length);
-        if (i >= 0) rel = await mb.release(hits[i].mbid);
+        final groups = await mb.searchReleaseGroups(DiscogsService.plainTitle(a.title),
+            artist: a.artist);
+        // A live album, a soundtrack and a greatest-hits all say "Album"; the studio record is the
+        // one this page is about.
+        final g = groups.where((x) => !x.isCompilation).firstOrNull ?? groups.firstOrNull;
+        if (g != null) {
+          // One request for every pressing of the record, already in preference order.
+          final all = await mb.editionsOf(g.mbid);
+          final owned = albumTrackCount(a.tracks);
+          final shortlist = shortlistPressings([for (final r in all) r.trackCount], owned);
+          final tried = <MbRelease>[];
+          final lists = <List<ChoiceTrack>>[];
+          final scored = <AlbumCompleteness>[];
+          for (final i in shortlist) {
+            final list = await mb.tracklistOf(all[i]);
+            if (list.isEmpty) continue;
+            tried.add(all[i]);
+            lists.add(list);
+            scored.add(matchAlbumTracks(list, a.tracks, a.artist));
+          }
+          final pick = pickPressing(scored);
+          if (pick >= 0) {
+            rel = tried[pick];
+            out = lists[pick];
+            bestFit = scored[pick].namesEverything;
+            // What the OTHER pressings of this record have that yours doesn't.
+            bonus = bonusTracks(out, [
+              for (var i = 0; i < tried.length; i++)
+                if (i != pick) (tried[i].line, lists[i])
+            ]);
+          }
+        }
       }
       if (rel != null) {
-        out = await mb.tracklistOf(rel);
+        if (out.isEmpty) out = await mb.tracklistOf(rel);
         year = rel.albumYear ?? rel.year;
         if (out.isNotEmpty) from = 'MusicBrainz';
       }
@@ -1120,7 +1165,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         // Here expectedTracks IS safe to pass: Discogs only uses it to drop masters too SMALL to
         // hold the library, never ones bigger.
         final e = await DiscogsService(settings)
-            .edition(a.artist, a.title, expectedTracks: a.tracks.length, pinned: pinned);
+            .edition(a.artist, a.title, expectedTracks: albumTrackCount(a.tracks), pinned: pinned);
         if (e != null && e.tracklist.isNotEmpty) {
           out = [for (final t in e.tracklist) ChoiceTrack(t.position, t.title, t.seconds)];
           year = e.albumYear ?? e.year;
@@ -1133,6 +1178,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       _official = out;
       _officialFrom = from;
       _officialYear = year;
+      _officialBonus = bonus;
+      _officialBestFit = bestFit;
       _officialBusy = false;
     });
   }
@@ -1208,7 +1255,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     return pool.values.toList();
   }
 
-  Future<void> _downloadMissing(AlbumSlot s) async {
+  Future<void> _downloadMissing(AlbumSlot s, {String? jobKey}) async {
     final dm = context.read<DownloadManager>();
     final soulseek = context.read<SoulseekService>();
     if (!soulseek.available) {
@@ -1224,7 +1271,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     }
     try {
       final started = await dm.enqueueSoulseekBest(cands,
-          key: _jobKey(s.index), authority: _authorityFor(s));
+          key: jobKey ?? _jobKey(s.index), authority: _authorityFor(s));
       if (mounted) {
         _srcToast(context,
             started ? '“${s.title}” via Soulseek…' : '“${s.title}” loopt al — zie Mijn downloads.');
@@ -1232,6 +1279,19 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     } catch (e) {
       if (mounted) _srcToast(context, 'Download mislukt: $e');
     }
+  }
+
+  /// A track from another pressing of this record.
+  ///
+  /// Numbered AFTER your own tracks and stamped with your album's own trackTotal, so it joins the
+  /// record instead of splitting it: a bonus that claimed an existing number, or brought its own
+  /// pressing's total, is exactly what turned one Backstreet's Back tile into four.
+  Future<void> _downloadBonus(int i) async {
+    final b = _officialBonus[i];
+    await _downloadMissing(
+      AlbumSlot(index: _official.length + i, official: b.track),
+      jobKey: 'bonus:$_albumKey:$i',
+    );
   }
 
   /// Every missing track at once.
@@ -1438,44 +1498,95 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                             albumCover: album.cover);
                       }
                       final s = rows[i];
+                      final prev = i == 0 ? null : rows[i - 1];
                       final t = s.track;
-                      if (t == null) {
-                        return MissingTrackRow(
-                            slot: s, jobKey: _jobKey(s.index), onDownload: () => _downloadMissing(s));
+                      final row = t == null
+                          ? MissingTrackRow(
+                              slot: s, jobKey: _jobKey(s.index), onDownload: () => _downloadMissing(s))
+                          // The queue is what's playable, so the index has to be this track's place
+                          // in the FILES — its place in the release would play the wrong song.
+                          : TrackRow(
+                              track: t,
+                              index: album.tracks.indexOf(t),
+                              queue: album.tracks,
+                              albumCover: album.cover,
+                              label: s.official == null ? null : s.label);
+
+                      // A double album says which disc you are looking at, and files the pressing
+                      // doesn't name say so — left unlabelled the latter read as part of the record,
+                      // carrying their own tag's number into the middle of the official run.
+                      String? heading;
+                      if (s.index == -1 && (prev == null || prev.index != -1)) {
+                        heading = 'Niet op deze uitgave';
+                      } else if (s.index >= 0 && s.multiDisc && s.disc != (prev?.disc ?? 0)) {
+                        heading = 'Schijf ${s.disc}';
                       }
-                      // The queue is what's playable, so the index has to be this track's place in
-                      // the FILES — the row's place in the release would play the wrong song.
-                      final row = TrackRow(
-                          track: t,
-                          index: album.tracks.indexOf(t),
-                          queue: album.tracks,
-                          albumCover: album.cover,
-                          number: s.official == null ? null : s.number);
-                      // Files the pressing doesn't name follow the record, and say so. Left
-                      // unlabelled they read as part of it, carrying their own tag's number into
-                      // the middle of the official run.
-                      if (s.index != -1 || i == 0 || rows[i - 1].index == -1) return row;
-                      return Column(children: [
-                        const Padding(
-                          padding: EdgeInsets.fromLTRB(34, 14, 20, 6),
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: Text('Niet op deze uitgave',
-                                style: TextStyle(
-                                    color: _muted, fontSize: 11, letterSpacing: .4)),
-                          ),
-                        ),
-                        row,
-                      ]);
+                      if (heading == null) return row;
+                      return Column(children: [_listLabel(heading), row]);
                     },
                     childCount: rows?.length ?? album.tracks.length,
                   ),
                 ),
+                if (_officialBonus.isNotEmpty) SliverToBoxAdapter(child: _bonusSection()),
                 const SliverToBoxAdapter(child: SizedBox(height: 24)),
               ],
             ),
           ),
           const PlayerBar(),
+        ],
+      ),
+    );
+  }
+
+  /// A quiet divider inside the tracklist — a disc number, or where the record stops.
+  Widget _listLabel(String text) => Padding(
+        padding: const EdgeInsets.fromLTRB(34, 14, 20, 6),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Text(text,
+              style: const TextStyle(color: _muted, fontSize: 11, letterSpacing: .4)),
+        ),
+      );
+
+  /// What the OTHER pressings of this record hold.
+  ///
+  /// Not missing — never on your record. Backstreet's Back is eleven tracks in Britain and
+  /// thirteen in America, and there is a Malaysian second disc with a Christmas song on it. Folded
+  /// shut by default, so a record you hold complete still looks complete.
+  Widget _bonusSection() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => setState(() => _showBonus = !_showBonus),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: Row(children: [
+                Icon(_showBonus ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                    size: 18, color: _muted),
+                const SizedBox(width: 8),
+                Text('Op andere uitgaves · ${_officialBonus.length}',
+                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                const SizedBox(width: 8),
+                const Text('niet op jouw persing, wel op deze plaat',
+                    style: TextStyle(color: _muted, fontSize: 11.5)),
+              ]),
+            ),
+          ),
+          if (_showBonus)
+            for (var i = 0; i < _officialBonus.length; i++)
+              MissingTrackRow(
+                // Numbered after your own tracks: a bonus must never claim a number the record
+                // already uses, or the library reads the two as separate pressings.
+                slot: AlbumSlot(
+                    index: _official.length + i, official: _officialBonus[i].track),
+                jobKey: 'bonus:$_albumKey:$i',
+                note: _officialBonus[i].edition,
+                onDownload: () => _downloadBonus(i),
+              ),
         ],
       ),
     );
@@ -1505,7 +1616,12 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
               children: [
                 Text('${c.have} van ${c.total} nummers · ${missing.length} ontbreken',
                     style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                Text('Volgens ${c.source.isEmpty ? 'de officiële uitgave' : c.source}',
+                Text(
+                    _officialBestFit
+                        ? 'Volgens ${c.source.isEmpty ? 'de officiële uitgave' : c.source}'
+                        // No pressing named everything on disk, so this is the closest one rather
+                        // than the record. Say so instead of presenting a near miss as fact.
+                        : 'Volgens de best passende uitgave — niet al je nummers staan erop',
                     style: const TextStyle(color: _muted, fontSize: 11.5)),
               ],
             ),
@@ -1955,15 +2071,16 @@ class TrackRow extends StatefulWidget {
   final Uint8List? albumCover;
 
   /// The number the RELEASE gives this track, when the page knows it. Overrides the file's own
-  /// tag, which is whatever the peer that uploaded it typed.
-  final int? number;
+  /// tag, which is whatever the peer that uploaded it typed. A string, because a double album
+  /// numbers from 1 on each disc and reads "2-1".
+  final String? label;
   const TrackRow(
       {super.key,
       required this.track,
       required this.index,
       required this.queue,
       this.albumCover,
-      this.number});
+      this.label});
   @override
   State<TrackRow> createState() => _TrackRowState();
 }
@@ -1998,7 +2115,7 @@ class _TrackRowState extends State<TrackRow> {
                 width: 28,
                 child: _hover
                     ? const Icon(Icons.play_arrow_rounded, size: 18, color: _accent)
-                    : Text('${widget.number ?? (t.trackNo > 0 ? t.trackNo : widget.index + 1)}',
+                    : Text(widget.label ?? '${t.trackNo > 0 ? t.trackNo : widget.index + 1}',
                         textAlign: TextAlign.right,
                         style: const TextStyle(color: _muted, fontSize: 13)),
               ),
@@ -2081,8 +2198,16 @@ class MissingTrackRow extends StatefulWidget {
   final AlbumSlot slot;
   final String jobKey;
   final VoidCallback onDownload;
+
+  /// What the chip says instead of "niet in bibliotheek" — for a track that is on another
+  /// pressing, which pressing that is.
+  final String? note;
   const MissingTrackRow(
-      {super.key, required this.slot, required this.jobKey, required this.onDownload});
+      {super.key,
+      required this.slot,
+      required this.jobKey,
+      required this.onDownload,
+      this.note});
   @override
   State<MissingTrackRow> createState() => _MissingTrackRowState();
 }
@@ -2108,7 +2233,7 @@ class _MissingTrackRowState extends State<MissingTrackRow> {
           children: [
             SizedBox(
               width: 28,
-              child: Text('${s.number}',
+              child: Text(s.label,
                   textAlign: TextAlign.right, style: TextStyle(color: dim, fontSize: 13)),
             ),
             const SizedBox(width: 14),
@@ -2128,7 +2253,7 @@ class _MissingTrackRowState extends State<MissingTrackRow> {
                       borderRadius: BorderRadius.circular(4),
                       border: Border.all(color: _line),
                     ),
-                    child: Text('niet in bibliotheek',
+                    child: Text(widget.note ?? 'niet in bibliotheek',
                         style: TextStyle(color: dim, fontSize: 10.5, letterSpacing: .2)),
                   ),
                 ],
