@@ -5,6 +5,3 @@ installer/
 data/
 *.log
 config.properties
-
-# icon preview artifact (regenerate with build-res/IconGen.java)
-build-res/icon-512.png

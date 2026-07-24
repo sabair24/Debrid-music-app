@@ -24,6 +24,7 @@ if (-not (Test-Path $jpackage)) { throw "jpackage not found at $jpackage (set JA
 $dist = Join-Path $here 'dist'
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
 
+# Committed artwork, not a build output -- see build-res\README.md before changing.
 $iconArg = @()
 $icon = Join-Path $here 'build-res\icon.ico'
 if (Test-Path $icon) { $iconArg = @('--icon', $icon) }
