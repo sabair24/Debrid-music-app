@@ -644,10 +644,9 @@ class MusicBrainzService {
     // different host on its own 250 ms lane, so asking for all of them is cheap. The tracklist is
     // now fetched only when something actually wants it — see [tracklistOf], which the
     // "take this numbering" action already calls on demand.
-    Future<void> take(MbRelease r, {bool always = false}) async {
-      if (out.length >= max || r.mbid.isEmpty || !seen.add(r.mbid)) return;
+    ReleaseChoice? rowFor(MbRelease r, List<MbImage> images, {bool always = false}) {
       ChoiceImage? front, back, disc;
-      for (final i in await art(r.mbid)) {
+      for (final i in images) {
         // The archive states what each scan IS — Front, Back, Medium — so nothing here is inferred
         // from pixels. That matters: the Escape CD is a white disc on a white scanner bed, and no
         // brightness test can tell it from a blank booklet page. A stated fact can.
@@ -665,8 +664,8 @@ class MusicBrainzService {
           front == null &&
           back == null &&
           disc == null;
-      if (blank && !always) return;
-      out.add(ReleaseChoice(
+      if (blank && !always) return null;
+      return ReleaseChoice(
         source: EditionSource.musicbrainz,
         mbid: r.mbid,
         format: r.format,
@@ -678,14 +677,22 @@ class MusicBrainzService {
         front: front,
         back: back,
         disc: disc,
-      ));
+      );
+    }
+
+    // Every pressing worth offering, in the order it should be shown, before a single scan is
+    // fetched. Naming them costs nothing beyond the browse that already ran.
+    final candidates = <(MbRelease, bool)>[];
+    void offer(MbRelease r, {bool always = false}) {
+      if (r.mbid.isEmpty || !seen.add(r.mbid)) return;
+      candidates.add((r, always));
     }
 
     // The pressing the user already chose is always offered, whether or not it would have made the
     // cut — their own choice missing from the list of choices is the one unacceptable outcome.
     if (pinnedMbid != null && pinnedMbid.isNotEmpty) {
       final p = await release(pinnedMbid);
-      if (p != null) await take(p, always: true);
+      if (p != null) offer(p, always: true);
     }
 
     final groups = await searchReleaseGroups(album, artist: artist);
@@ -698,14 +705,32 @@ class MusicBrainzService {
       });
 
     for (final g in ranked.take(2)) {
-      if (out.length >= max) break;
+      if (candidates.length >= max) break;
       // No track-count filter here, deliberately. Every release in a group IS this record, so a
       // count that differs is a different PRESSING — the 16-track European edition of Escape, the
       // 13-track American one — and those are precisely the choices worth offering. Filtering them
       // is what hid the only pressing whose disc had been scanned.
       for (final e in orderByPreference(await editionsOf(g.mbid))) {
-        if (out.length >= max) break;
-        await take(e);
+        if (candidates.length >= max) break;
+        offer(e);
+      }
+    }
+
+    // The scans, asked for together rather than one after another. Each is a separate GET to
+    // archive.org and they were being awaited in turn — forty pressings meant forty times the
+    // 250 ms lane gap, ten seconds of waiting for work that overlaps. The lane still spaces the
+    // requests out; we simply stop standing in the queue for each one.
+    //
+    // In batches, so the row cap still means what it meant: a pressing the archive knows nothing
+    // about is dropped, and the next candidate takes its place instead of leaving a short list.
+    var i = 0;
+    while (i < candidates.length && out.length < max) {
+      final batch = candidates.skip(i).take(max - out.length).toList();
+      i += batch.length;
+      final scans = await Future.wait([for (final c in batch) art(c.$1.mbid)]);
+      for (var k = 0; k < batch.length; k++) {
+        final row = rowFor(batch[k].$1, scans[k], always: batch[k].$2);
+        if (row != null) out.add(row);
       }
     }
     return out;

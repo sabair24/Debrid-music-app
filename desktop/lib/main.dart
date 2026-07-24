@@ -5,6 +5,7 @@ import 'dart:ui' show ImageFilter;
 // Flutter 3.36+ exports a RepeatMode of its own (for RepeatingAnimationBuilder), which collides
 // with the player's. Ours is the one this app means everywhere.
 import 'package:flutter/material.dart' hide RepeatMode;
+import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
@@ -158,6 +159,11 @@ Future<void> main() async {
   player = PlayerStore()
     ..resolver = online.resolveRadio
     ..coverResolver = library.coverForTrack;
+  // A cover corrected while the record plays has to reach the player too. Every path that changes
+  // one — the release gallery, the metadata editor, an enrich — ends in notifyListeners(), so this
+  // one wire covers all of them. Without it the bar and the tap-to-zoom kept serving the bytes
+  // captured when the track opened, while the album page showed the new sleeve.
+  library.addListener(() => player.refreshCover());
   // The lockscreen, Control Center and the media keys. Not awaited on the critical path — the
   // window should not wait on a system service to come up.
   unawaited(initNowPlaying(player, cover: library.coverForTrack));
@@ -268,6 +274,7 @@ Future<void> main() async {
     await library.loadHidden(); // keep "removed from library only" tracks out
     await library.loadMerged(); // records the user told us to keep together
     await library.loadArtistArtChoice(); // portraits and backdrops the user picked
+    await library.loadAlbumArtRoles(); // which scan is the sleeve, the back, the disc
     await library.loadStyles(); // what each record sounds like, for discovery
     try {
       await library.scan();
@@ -1544,7 +1551,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                         album: album.title,
                         trackCount: album.tracks.length,
                         pinned: context.watch<LibraryStore>().pinnedRelease(album),
-                        pinnedMbid: context.watch<LibraryStore>().pinnedMbid(album)),
+                        pinnedMbid: context.watch<LibraryStore>().pinnedMbid(album),
+                        roles:
+                            context.watch<LibraryStore>().albumArtRoles(album.artist, album.title)),
                   ),
                 if (!album.isSingle)
                   SliverToBoxAdapter(
@@ -1758,6 +1767,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             pinnedMbid: context.watch<LibraryStore>().pinnedMbid(album) ?? _officialMbid,
             trackCount: _official.isNotEmpty ? _official.length : album.tracks.length,
             playing: _albumIsPlaying(context),
+            roles: context.watch<LibraryStore>().albumArtRoles(album.artist, album.title),
           ),
           const SizedBox(width: 24),
           Expanded(
@@ -3484,8 +3494,21 @@ class PlayerBar extends StatelessWidget {
 }
 
 // ── Now playing (full screen, enlargeable art) ───────────────────────────────
-class NowPlayingScreen extends StatelessWidget {
+class NowPlayingScreen extends StatefulWidget {
   const NowPlayingScreen({super.key});
+
+  @override
+  State<NowPlayingScreen> createState() => _NowPlayingScreenState();
+}
+
+class _NowPlayingScreenState extends State<NowPlayingScreen> {
+  /// The sleeve the AlbumArt below settled on, so enlarging it shows THAT image.
+  ///
+  /// The zoom used to open the player's own cover, which is captured when a track starts and knows
+  /// nothing about the pressing this screen resolved — so clicking the art you were looking at
+  /// produced a different, older one.
+  Uint8List? _shown;
+
   @override
   Widget build(BuildContext context) {
     final p = context.watch<PlayerStore>();
@@ -3514,11 +3537,16 @@ class NowPlayingScreen extends StatelessWidget {
                 ),
                 const Spacer(),
                 GestureDetector(
-                  onTap: p.currentCover == null
+                  // What the sleeve is actually drawing wins; the player's snapshot is only the
+                  // fallback for a track whose art has not resolved yet.
+                  onTap: (_shown ?? p.currentCover) == null
                       ? null
-                      : () => showDialog(context: context, builder: (_) => _ZoomView(p.currentCover!)),
+                      : () => showDialog(
+                          context: context, builder: (_) => _ZoomView((_shown ?? p.currentCover)!)),
                   child: MouseRegion(
-                    cursor: p.currentCover == null ? MouseCursor.defer : SystemMouseCursors.zoomIn,
+                    cursor: (_shown ?? p.currentCover) == null
+                        ? MouseCursor.defer
+                        : SystemMouseCursors.zoomIn,
                     child: Container(
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(16),
@@ -3547,7 +3575,15 @@ class NowPlayingScreen extends StatelessWidget {
                                 trackCount: al?.tracks.length ?? 0,
                                 pinned: al == null ? null : lib.pinnedRelease(al),
                                 pinnedMbid: al == null ? null : lib.pinnedMbid(al),
+                                roles: al == null
+                                    ? const {}
+                                    : lib.albumArtRoles(al.artist, al.title),
                                 playing: p.playing,
+                                onFront: (f) {
+                                  if (mounted && !identical(f, _shown)) {
+                                    setState(() => _shown = f);
+                                  }
+                                },
                               );
                             }),
                     ),
@@ -6517,13 +6553,17 @@ class AlbumInfoPanel extends StatefulWidget {
 
   /// Or the MusicBrainz one, when they pinned there instead.
   final String? pinnedMbid;
+
+  /// Images the user assigned by hand — the back cover shown here is one of them.
+  final Map<String, String> roles;
   const AlbumInfoPanel(
       {super.key,
       required this.artist,
       required this.album,
       this.trackCount = 0,
       this.pinned,
-      this.pinnedMbid});
+      this.pinnedMbid,
+      this.roles = const {}});
 
   @override
   State<AlbumInfoPanel> createState() => _AlbumInfoPanelState();
@@ -6550,29 +6590,32 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     if (old.artist != widget.artist ||
         old.album != widget.album ||
         old.pinned != widget.pinned ||
-        old.pinnedMbid != widget.pinnedMbid) {
-      setState(() {
-        _info = null;
-        _edition = null;
-        _back = null;
-      });
+        old.pinnedMbid != widget.pinnedMbid ||
+        !mapEquals(old.roles, widget.roles)) {
+      // Not cleared first: the year, label and catalogue number of the pressing you just left are
+      // a better thing to look at for one network round trip than an empty panel that collapses
+      // the page and pushes the tracklist up under your cursor.
       _load();
     }
   }
 
+  /// Which load is current — see the same field on [_AlbumArtState].
+  int _gen = 0;
+
   Future<void> _load() async {
     final artist = widget.artist, album = widget.album;
+    final mine = ++_gen;
     final settings = context.read<AppSettings>();
     // The blurb comes from TheAudioDB, which is the only one of the two that writes one. Discogs
     // knows what the record IS: which pressing, on whose label, under what catalogue number.
     final info = await CoverEnricher(settings).albumInfo(artist, album);
-    if (!mounted || artist != widget.artist || album != widget.album) return;
-    setState(() => _info = info);
+    if (!mounted || mine != _gen || artist != widget.artist || album != widget.album) return;
+    if (info != null) setState(() => _info = info);
     final discogs = DiscogsService(settings);
     final ed =
         await discogs.edition(artist, album, expectedTracks: widget.trackCount, pinned: widget.pinned).catchError((_) => null);
-    if (!mounted || artist != widget.artist || album != widget.album) return;
-    setState(() => _edition = ed);
+    if (!mounted || mine != _gen || artist != widget.artist || album != widget.album) return;
+    if (ed != null) setState(() => _edition = ed);
     // Remember what this record sounds like. The map fills in as albums are opened, which is what
     // makes browsing by style possible without sweeping the whole library up front.
     if (ed != null && mounted) {
@@ -6581,10 +6624,13 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     // The scans come off the same cached edition, so this costs nothing beyond the images.
     final art = await discogs
         .releaseArt(artist, album,
-            expectedTracks: widget.trackCount, pinned: widget.pinned, pinnedMbid: widget.pinnedMbid)
+            expectedTracks: widget.trackCount,
+            pinned: widget.pinned,
+            pinnedMbid: widget.pinnedMbid,
+            roles: widget.roles)
         .catchError((_) => null);
-    if (!mounted || artist != widget.artist || album != widget.album) return;
-    setState(() => _back = art?.back);
+    if (!mounted || mine != _gen || artist != widget.artist || album != widget.album) return;
+    if (art?.back != null) setState(() => _back = art!.back);
   }
 
   /// "CD" reads oddly next to a year; "File" reads as nothing at all.
@@ -8311,6 +8357,15 @@ class AlbumArt extends StatefulWidget {
 
   /// Or the MusicBrainz one — see LibraryStore.pinnedMbid.
   final String? pinnedMbid;
+
+  /// The sleeve this widget ended up drawing, handed back as it resolves.
+  ///
+  /// For the screens that show the art AND let you open it: the enlarged view has to be the same
+  /// image as the thumbnail, and only this widget knows which pressing's scan won.
+  final ValueChanged<Uint8List?>? onFront;
+
+  /// Images the user assigned by hand — see LibraryStore.albumArtRoles. They outrank every guess.
+  final Map<String, String> roles;
   const AlbumArt({
     super.key,
     required this.artist,
@@ -8322,6 +8377,8 @@ class AlbumArt extends StatefulWidget {
     this.playing = false,
     this.pinned,
     this.pinnedMbid,
+    this.onFront,
+    this.roles = const {},
   });
 
   @override
@@ -8354,8 +8411,11 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     if (old.artist != widget.artist ||
         old.album != widget.album ||
         old.pinned != widget.pinned ||
-        old.pinnedMbid != widget.pinnedMbid) {
-      setState(() => _art = null);
+        old.pinnedMbid != widget.pinnedMbid ||
+        !mapEquals(old.roles, widget.roles)) {
+      // The old scans stay up until the new ones arrive. Clearing here left a gap the length of a
+      // network round trip, in which the disc vanished and the sleeve fell back to the file's own
+      // cover — which read as the app losing the choice that was just made.
       _load();
     }
     if (old.playing != widget.playing) _sync();
@@ -8373,20 +8433,30 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     }
   }
 
+  /// Which load is the current one. A pin can be changed twice before the first fetch returns, and
+  /// without this the slower answer would land last and win — showing scans nobody asked for.
+  int _gen = 0;
+
   Future<void> _load() async {
     final artist = widget.artist, album = widget.album;
+    final mine = ++_gen;
     try {
-      final art = await DiscogsService(context.read<AppSettings>())
-          .releaseArt(artist, album,
-            expectedTracks: widget.trackCount, pinned: widget.pinned, pinnedMbid: widget.pinnedMbid);
-      if (!mounted || artist != widget.artist || album != widget.album) return;
-      setState(() => _art = art);
+      final art = await DiscogsService(context.read<AppSettings>()).releaseArt(artist, album,
+          expectedTracks: widget.trackCount,
+          pinned: widget.pinned,
+          pinnedMbid: widget.pinnedMbid,
+          roles: widget.roles);
+      if (!mounted || mine != _gen || artist != widget.artist || album != widget.album) return;
+      // Nothing found leaves what is on screen alone: an empty answer is not a better answer than
+      // the sleeve already showing.
+      if (art != null) setState(() => _art = art);
       // Hand it to the library too. Without this the correction lived only on the open page: the
       // album showed the right sleeve, and going back to the grid showed the wrong one again.
       final front = art?.front;
       if (front != null && mounted) {
         context.read<LibraryStore>().adoptAlbumCover(artist, album, front);
       }
+      widget.onFront?.call(widget.chosen ?? front ?? widget.fallback);
     } catch (_) {/* no artwork is not an error worth showing */}
   }
 
@@ -8515,9 +8585,8 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     }
 
     try {
-      // The rows appear as soon as the versions listing lands — one request for a whole master —
-      // and each pressing's scans fill in behind them. Waiting for all of it before showing
-      // anything is what limited this to a couple of dozen after half a minute.
+      // The rows appear as soon as the versions listing lands — one request for a whole master.
+      // Their scans are fetched per row, as each is scrolled into view: see _wantDetail.
       await DiscogsService(settings).releaseChoices(widget.album.artist, widget.album.title,
           pinned: pinnedDg, onPartial: merge);
       if (mounted) setState(() => _dgDone = true);
@@ -8529,6 +8598,35 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
           ? 'Geen uitgaves gevonden. Discogs was niet bereikbaar, dus de aanvulling ontbreekt.'
           : 'Geen uitgaves gevonden.');
     }
+  }
+
+  /// Discogs pressings whose scans have been asked for, so scrolling past a row twice doesn't ask
+  /// twice. Holds ids, not rows: the list is rebuilt as answers merge in.
+  final _asked = <int>{};
+
+  /// This row is on screen, so now it is worth knowing what it holds.
+  ///
+  /// Called from the builder, which Flutter only runs for visible rows — that is the whole saving.
+  /// Deferred by a frame because a builder must not setState while it is building.
+  void _wantDetail(ReleaseChoice c) {
+    if (c.isMb || c.detailed || c.releaseId <= 0 || !_asked.add(c.releaseId)) return;
+    final settings = context.read<AppSettings>();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final filled = await DiscogsService(settings).detailOf(c).catchError((_) => null);
+      if (!mounted || filled == null) return;
+      final list = _choices;
+      if (list == null) return;
+      final i = list.indexWhere((x) => x.key == c.key);
+      if (i < 0) return;
+      setState(() => _choices = [...list]..[i] = filled);
+    });
+  }
+
+  /// Open the assign panel for one pressing, fetching its scans first if that hasn't happened.
+  Future<void> _assign(ReleaseChoice c) async {
+    if (!mounted) return;
+    await showDialog<void>(
+        context: context, builder: (_) => AssignScansDialog(album: widget.album, choice: c));
   }
 
   Future<void> _choose(ReleaseChoice c) async {
@@ -8702,6 +8800,8 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (_, i) {
         final c = shown[i];
+        // Only rows that are actually built get looked up — that is what makes this cheap.
+        _wantDetail(c);
         final isPinned = pinnedKey != null && pinnedKey == c.key;
         return InkWell(
           onTap: () => _choose(c),
@@ -8715,11 +8815,14 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
             ),
             child: Row(children: [
               // The three scans side by side, so what you get is visible rather than described.
-              _thumb(c.front, 'hoes'),
+              // Clicking one opens every scan this pressing has, to say which is which — the roles
+              // below are inferred, and inference on a catalogue that never labels its images gets
+              // the back and the disc the wrong way round often enough to need an answer.
+              _thumb(c.front, 'hoes', onTap: () => _assign(c)),
               const SizedBox(width: 8),
-              _thumb(c.back, 'achter'),
+              _thumb(c.back, 'achter', onTap: () => _assign(c)),
               const SizedBox(width: 8),
-              _thumb(c.disc, 'cd'),
+              _thumb(c.disc, 'cd', onTap: () => _assign(c)),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -8735,22 +8838,16 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                     _source(c.isMb),
                     const SizedBox(width: 6),
                     // Until this pressing has been looked up we do not know whether it has a back
-                    // or a disc, and saying "–" would be a claim we have not earned. While the
-                    // batch is still running it is genuinely on its way; once it has stopped, the
-                    // deeper rows simply were not opened, and the label has to say that rather
-                    // than promise a spinner that will never finish.
+                    // or a disc, and saying "–" would be a claim we have not earned. A row you can
+                    // see is always on its way now — being visible is what starts the lookup — so
+                    // the spinner is always honest here.
                     if (!c.detailed) ...[
-                      if (!_dgDone) ...[
-                        const SizedBox(
-                            width: 10,
-                            height: 10,
-                            child: CircularProgressIndicator(strokeWidth: 1.4, color: _muted)),
-                        const SizedBox(width: 6),
-                        const Text('scans nog ophalen…',
-                            style: TextStyle(color: _muted, fontSize: 10.5)),
-                      ] else
-                        const Text('scans niet opgehaald — kies om te zien',
-                            style: TextStyle(color: _muted, fontSize: 10.5)),
+                      const SizedBox(
+                          width: 10,
+                          height: 10,
+                          child: CircularProgressIndicator(strokeWidth: 1.4, color: _muted)),
+                      const SizedBox(width: 6),
+                      const Text('scans ophalen…', style: TextStyle(color: _muted, fontSize: 10.5)),
                     ] else ...[
                       _tag('achterkant', c.hasBack),
                       const SizedBox(width: 6),
@@ -8773,20 +8870,28 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     );
   }
 
-  Widget _thumb(ChoiceImage? img, String label) => Column(children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: img == null
-              ? Container(
-                  width: 58,
-                  height: 58,
-                  color: Colors.white.withValues(alpha: .04),
-                  child: const Icon(Icons.close_rounded, size: 16, color: _muted))
-              : _netCover(img.thumb, size: 58, radius: 6),
+  Widget _thumb(ChoiceImage? img, String label, {VoidCallback? onTap}) => InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        // The whole point is to correct a wrong one, so an empty slot has to be clickable too.
+        child: Tooltip(
+          message: 'Klik om te zeggen welke scan dit is',
+          child: Column(children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: img == null
+                  ? Container(
+                      width: 58,
+                      height: 58,
+                      color: Colors.white.withValues(alpha: .04),
+                      child: const Icon(Icons.close_rounded, size: 16, color: _muted))
+                  : _netCover(img.thumb, size: 58, radius: 6),
+            ),
+            const SizedBox(height: 3),
+            Text(label, style: const TextStyle(color: _muted, fontSize: 10)),
+          ]),
         ),
-        const SizedBox(height: 3),
-        Text(label, style: const TextStyle(color: _muted, fontSize: 10)),
-      ]);
+      );
 
   /// Which catalogue found this pressing. The user asked to be able to choose the source, so the
   /// source has to be readable on the row rather than inferred from what the row happens to carry.
@@ -8813,6 +8918,161 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
           const SizedBox(width: 4),
           Text(text, style: TextStyle(color: on ? _accent2 : _muted, fontSize: 10.5)),
         ]),
+      );
+}
+
+/// Say which scan is the sleeve, which is the back, and which is the disc.
+///
+/// Discogs marks one image "primary" and calls the rest "secondary" — it never states what a
+/// picture SHOWS. So the app infers: primary is the front, wider-than-tall is the rear inlay, and a
+/// punched hole in the middle means a disc. Measured on Random Access Memories, eight of its
+/// fourteen scans are wider than tall, so the back-cover rule picks whichever booklet spread comes
+/// first. This is where you say otherwise, and your answer outranks every guess afterwards.
+class AssignScansDialog extends StatefulWidget {
+  final Album album;
+  final ReleaseChoice choice;
+  const AssignScansDialog({super.key, required this.album, required this.choice});
+
+  @override
+  State<AssignScansDialog> createState() => _AssignScansDialogState();
+}
+
+class _AssignScansDialogState extends State<AssignScansDialog> {
+  List<ChoiceImage>? _images;
+  String? _error;
+
+  static const _roles = [('front', 'hoes'), ('back', 'achter'), ('disc', 'cd')];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    // Both read before the first await: after it this State may be gone, and reaching back into
+    // context then is exactly what use_build_context_synchronously is warning about.
+    final mb = context.read<MusicBrainzService>();
+    final settings = context.read<AppSettings>();
+    try {
+      final c = widget.choice;
+      final list = c.isMb
+          ? [for (final i in await mb.art(c.mbid ?? '')) ChoiceImage(i.full, i.thumb)]
+          : await DiscogsService(settings).allImages(c.releaseId);
+      if (!mounted) return;
+      setState(() {
+        _images = list;
+        if (list.isEmpty) _error = 'Deze uitgave heeft geen scans.';
+      });
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Kon de scans niet ophalen.');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    final roles = lib.albumArtRoles(widget.album.artist, widget.album.title);
+    final images = _images;
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: 760,
+        height: 620,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                const Text('Scans toewijzen',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                const Spacer(),
+                IconButton(
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: () => Navigator.of(context).pop()),
+              ]),
+              const Text('Klik onder een scan om te zeggen wat het is. Jouw keuze wint van wat de app zelf denkt.',
+                  style: TextStyle(color: _muted, fontSize: 12.5)),
+              const SizedBox(height: 14),
+              Expanded(
+                child: _error != null
+                    ? Center(child: Text(_error!, style: const TextStyle(color: _muted)))
+                    : images == null
+                        ? const Center(child: CircularProgressIndicator())
+                        : GridView.builder(
+                            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                                maxCrossAxisExtent: 170,
+                                mainAxisSpacing: 14,
+                                crossAxisSpacing: 14,
+                                childAspectRatio: .78),
+                            itemCount: images.length,
+                            itemBuilder: (_, i) {
+                              final img = images[i];
+                              return Column(children: [
+                                Expanded(child: _netCover(img.thumb, size: 150, radius: 8)),
+                                const SizedBox(height: 6),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    for (final (role, label) in _roles)
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                                        child: _roleChip(
+                                          label,
+                                          on: roles[role] == img.uri,
+                                          onTap: () => lib.setAlbumArtRole(
+                                              widget.album.artist,
+                                              widget.album.title,
+                                              role,
+                                              // Clicking the role it already has clears it, so a
+                                              // wrong assignment can be undone without a reset.
+                                              roles[role] == img.uri ? '' : img.uri),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ]);
+                            },
+                          ),
+              ),
+              if (roles.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: TextButton(
+                    onPressed: () async {
+                      for (final (role, _) in _roles) {
+                        await lib.setAlbumArtRole(
+                            widget.album.artist, widget.album.title, role, '');
+                      }
+                    },
+                    child: const Text('Alles weer laten raden',
+                        style: TextStyle(color: _muted, fontSize: 12)),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _roleChip(String text, {required bool on, required VoidCallback onTap}) => InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          decoration: BoxDecoration(
+            color: on ? _accent : Colors.white.withValues(alpha: .06),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Text(text,
+              style: TextStyle(
+                  fontSize: 10.5,
+                  color: on ? Colors.white : _muted,
+                  fontWeight: on ? FontWeight.w600 : FontWeight.w400)),
+        ),
       );
 }
 

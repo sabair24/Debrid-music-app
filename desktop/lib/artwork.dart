@@ -33,18 +33,34 @@ bool looksLikeDisc(Uint8List bytes) {
   if (s == null) return false;
   // A hole has no detail. Print always does.
   if (s.holeSpread > 4) return false;
+  // A disc is round: its four corners are all the same backing. A rectangular scan runs artwork
+  // into them, and a booklet page with a pale middle used to pass the two tests above on that
+  // alone. Generous — a scanner lid vignettes, and a shadow down one side is still backing.
+  if (s.cornerSpread > 45) return false;
   // And it has to stand apart from the printed face, or this is just a flat image.
   final apart = (s.hole - s.faceInner).abs();
   final apartOuter = (s.hole - s.faceOuter).abs();
   return (apart > apartOuter ? apart : apartOuter) > 25;
 }
 
+/// Is this shape a plausible rear inlay, given the sleeve it belongs to?
+///
+/// Wider than tall, because a CD's rear inlay wraps around the spine of the jewel case. But not
+/// ANY width: two booklet pages photographed side by side come out near double, and that is a
+/// spread, not a back cover. Measured on Random Access Memories (Discogs release 28622347): the
+/// sleeve is 1.33, the inlay 1.30, and four of the fourteen scans sit at about 2.0.
+///
+/// The upper bound is the only thing being added here. Ordering still decides between the
+/// candidates that pass, because on real releases the back cover is listed early and no measurement
+/// separates it from a single booklet page of the same shape. That is what the picker is for.
+bool _couldBeInlay(double ratio, double sleeve) => ratio > 1.1 && ratio <= sleeve * 1.5;
+
 /// A back cover, as opposed to a front cover.
 ///
 /// There is no reliable pixel-level tell — plenty of back covers are as busy as the front. What
-/// there IS: Discogs marks exactly one image primary, and for a CD release the first secondary is
-/// the back of the sleeve far more often than not. So this is an ordering convention, not a
-/// measurement, and the picker exists because conventions are wrong sometimes.
+/// there IS: Discogs marks exactly one image primary, and the rear inlay is shaped almost like the
+/// sleeve. So this is a measurement of shape, not a certainty, and the picker exists because
+/// measurements are wrong sometimes.
 ArtKind guessKind(int index, bool primary, Uint8List? bytes) {
   if (primary) return ArtKind.front;
   if (bytes != null && looksLikeDisc(bytes)) return ArtKind.disc;
@@ -72,6 +88,8 @@ ArtKind guessKind(int index, bool primary, Uint8List? bytes) {
   for (var i = 0; i < primary.length; i++) {
     if (front == null && primary[i]) front = i;
   }
+  // The sleeve's own shape, which is what a rear inlay is measured against.
+  final sleeve = (front != null && front < ratios.length) ? ratios[front] : 1.0;
   for (var i = 0; i < primary.length; i++) {
     if (i == front) continue;
     final d = datas.length > i ? datas[i] : null;
@@ -79,7 +97,7 @@ ArtKind guessKind(int index, bool primary, Uint8List? bytes) {
       disc = i;
       continue;
     }
-    if (back == null && ratios.length > i && ratios[i] > 1.1) back = i;
+    if (back == null && ratios.length > i && _couldBeInlay(ratios[i], sleeve)) back = i;
   }
   // No inlay-shaped scan: fall back to the convention, skipping anything already spoken for.
   if (back == null) {
@@ -101,7 +119,12 @@ class _Sample {
   /// Brightness of the face at two radii — a CD's clear hub reaches further out on some pressings,
   /// so one sample alone can land on backing rather than print.
   final double faceInner, faceOuter;
-  const _Sample(this.hole, this.holeSpread, this.faceInner, this.faceOuter);
+
+  /// How much the four corners differ from each other. Around a round disc they are all the same
+  /// backing; on a rectangular scan they are four different bits of artwork.
+  final double cornerSpread;
+  const _Sample(
+      this.hole, this.holeSpread, this.faceInner, this.faceOuter, this.cornerSpread);
 }
 
 /// Brightness around three concentric circles: the hole, and the face at two radii.
@@ -146,7 +169,22 @@ _Sample? _sample(Uint8List bytes) {
   final (hole, spread) = ring(0.06); // inside the hole
   final (inner, _) = ring(0.20); // hub / inner label
   final (outer, _) = ring(0.45); // printed face
-  return _Sample(hole, spread, inner, outer);
+
+  // The four corners. A disc is round, so whatever is behind it shows in all four the same —
+  // scanner lid, white backdrop, black cloth. A rectangular scan carries printed artwork right into
+  // its corners, and those rarely agree.
+  const m = 6.0, far = n - 6.0;
+  final corners = [lum(m, m), lum(far, m), lum(m, far), lum(far, far)];
+  var cMean = 0.0;
+  for (final v in corners) {
+    cMean += v;
+  }
+  cMean /= corners.length;
+  var cVar = 0.0;
+  for (final v in corners) {
+    cVar += (v - cMean) * (v - cMean);
+  }
+  return _Sample(hole, spread, inner, outer, _sqrt(cVar / corners.length));
 }
 
 /// Newton's method — this file deliberately avoids dragging in dart:math for a handful of calls.

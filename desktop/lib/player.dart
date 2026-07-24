@@ -283,6 +283,24 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     }
   }
 
+  /// Ask again what the playing track's cover is.
+  ///
+  /// [currentCover] is otherwise a snapshot taken when a track opens, so correcting a sleeve while
+  /// it plays left this holding the old bytes — and they are what the mini bar, the backdrop and
+  /// the tap-to-zoom all read. The album page showed the new sleeve, the zoom showed the old one,
+  /// on the same screen.
+  ///
+  /// A resolver that answers null is not an answer: the album is mid-regroup and the cover it will
+  /// have is not known yet. Keeping what we have beats blanking the bar.
+  void refreshCover() {
+    final t = current;
+    if (t == null || coverResolver == null) return;
+    final fresh = coverResolver!(t);
+    if (fresh == null || identical(fresh, currentCover)) return;
+    currentCover = fresh;
+    notifyListeners();
+  }
+
   Future<void> _openCurrent() async {
     final t = current;
     if (t == null) return;

@@ -406,6 +406,58 @@ class LibraryStore extends ChangeNotifier {
     return null;
   }
 
+  // ── Which scan is which ───────────────────────────────────────────────────
+  // Discogs says only "primary" or "secondary", never what an image SHOWS, so the app works the
+  // roles out from shape and pixels — and gets them wrong often enough to be worth a way out.
+  // Measured on Random Access Memories: eight of its fourteen scans are wider than tall, and the
+  // rule for a rear inlay is "wider than tall", so a booklet spread was being shown as the back.
+  //
+  // This is where the user's own answer lives. Same shape as the artist art below, and for the
+  // same reason: a hand-made choice must outlive a rescan and must never be quietly overruled.
+  final Map<String, Map<String, String>> _albumArtRoles = {};
+  File get _albumArtRolesFile => File('$_appDir${Platform.pathSeparator}album_art_roles.json');
+
+  Future<void> loadAlbumArtRoles() async {
+    try {
+      final f = _albumArtRolesFile;
+      if (!await f.exists()) return;
+      final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      _albumArtRoles.clear();
+      j.forEach((k, v) {
+        if (v is Map) _albumArtRoles[k] = v.map((a, b) => MapEntry(a.toString(), b.toString()));
+      });
+    } catch (_) {}
+  }
+
+  static String albumArtKey(String artist, String album) =>
+      '${artistKey(artist)}|${normKey(album)}';
+
+  /// The images the user assigned for this record: 'front', 'back' and/or 'disc' → image URL.
+  ///
+  /// Empty when they never said — which is the normal case, and means the guesses stand.
+  Map<String, String> albumArtRoles(String artist, String album) =>
+      _albumArtRoles[albumArtKey(artist, album)] ?? const {};
+
+  /// Say what an image IS. [url] empty clears that role and lets the app guess again.
+  Future<void> setAlbumArtRole(String artist, String album, String role, String url) async {
+    final k = albumArtKey(artist, album);
+    final m = _albumArtRoles.putIfAbsent(k, () => {});
+    if (url.isEmpty) {
+      m.remove(role);
+      if (m.isEmpty) _albumArtRoles.remove(k);
+    } else {
+      // One image cannot be two things. Assigning it to a second role takes it off the first,
+      // rather than leaving the same scan claiming to be both the back and the disc.
+      m.removeWhere((_, v) => v == url);
+      m[role] = url;
+    }
+    try {
+      await Directory(_appDir).create(recursive: true);
+      await _albumArtRolesFile.writeAsString(jsonEncode(_albumArtRoles));
+    } catch (_) {}
+    notifyListeners();
+  }
+
   // ── Chosen artist art ─────────────────────────────────────────────────────
   // Which portrait and which backdrop the user picked for an artist. Kept beside the other
   // corrections for the same reason: the choice has to outlive a rescan, and must never be quietly

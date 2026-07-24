@@ -139,5 +139,43 @@ void main() {
       final r = assignRoles([false, false], [1.0, 1.2], <Uint8List?>[_png(_sleeve(60)), _png(_sleeve(15))]);
       expect(r.front, 0);
     });
+
+    test('a booklet spread listed before the inlay is not taken for the back', () {
+      // Random Access Memories, Discogs release 28622347: fourteen scans, eight of them wider than
+      // tall — the sleeve at 1.33, the inlay at 1.30, and four spreads at about 2.0. "Wider than
+      // tall" alone would take whichever came first, so a spread ahead of the inlay would win.
+      final r = assignRoles(
+        [true, false, false],
+        [600 / 450, 600 / 294, 600 / 462], // sleeve, spread, inlay
+        <Uint8List?>[_png(_sleeve(60)), _png(_sleeve(120)), _png(_sleeve(15))],
+      );
+      expect(r.front, 0);
+      expect(r.back, 2, reason: 'the 2.04 spread is not a rear inlay; the 1.30 one is');
+    });
+
+    test('a rear inlay wider than the sleeve is still the back', () {
+      // Dangerous the other way round: the inlay IS the notably wider scan, and must stay chosen.
+      final r = assignRoles(
+        [true, false],
+        [600 / 593, 600 / 474],
+        <Uint8List?>[_png(_sleeve(60)), _png(_sleeve(15))],
+      );
+      expect(r.back, 1);
+    });
+  });
+
+  group('the corners of a disc scan', () {
+    test('a disc photographed on a two-tone backdrop is not mistaken for one', () {
+      // Half the bed light, half dark: the hole test alone passes this, because the middle really
+      // is a flat pale patch. A round disc shows the SAME backing in all four corners.
+      final im = _disc();
+      img.fillRect(im, x1: 0, y1: 0, x2: 299, y2: 60, color: img.ColorRgb8(10, 10, 10));
+      expect(looksLikeDisc(_png(im)), isFalse,
+          reason: 'corners that disagree this much are not backing around a round disc');
+    });
+
+    test('an evenly lit disc still reads as one', () {
+      expect(looksLikeDisc(_png(_disc())), isTrue);
+    });
   });
 }

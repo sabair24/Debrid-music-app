@@ -13,7 +13,8 @@ import 'package:debridmusic/settings.dart';
 ///
 /// The picker used to show two dozen of them and take half a minute doing it, because it fetched
 /// every release in full before showing anything. These pin the shape that fixed it: the list lands
-/// off one request per master, and the scans fill in behind it.
+/// off one request per master, carrying enough to be worth reading, and a pressing's scans are
+/// fetched only when something asks for that one — the picker does so as a row scrolls into view.
 void main() {
   setUpAll(() => HttpOverrides.global = null);
 
@@ -23,7 +24,7 @@ void main() {
     return s;
   }
 
-  test('the whole versions list arrives fast, then the scans fill in', () async {
+  test('the whole versions list arrives fast, and no scan is fetched up front', () async {
     final settings = await loadSettings();
     if (settings.discogsToken.trim().isEmpty) {
       markTestSkipped('no Discogs token configured');
@@ -33,18 +34,17 @@ void main() {
     final clock = Stopwatch()..start();
     int? firstRowsMs;
     var firstBatch = 0;
-    var updates = 0;
 
-    final all = await DiscogsService(settings).releaseChoices(
+    final svc = DiscogsService(settings);
+    final all = await svc.releaseChoices(
       'Enrique',
       'Escape',
-      enrich: 6, // keep the test short; the shape is what matters, not the depth
       onPartial: (rows) {
-        updates++;
         firstRowsMs ??= clock.elapsedMilliseconds;
         if (firstBatch == 0) firstBatch = rows.length;
       },
     );
+    final listMs = clock.elapsedMilliseconds;
 
     // The listing is one request per master, so the rows have to be there almost immediately —
     // not after a per-release lookup apiece.
@@ -54,9 +54,10 @@ void main() {
     expect(firstBatch, greaterThan(30),
         reason: 'only $firstBatch pressings in the first batch — Discogs lists 75');
 
-    // And they keep arriving with their scans filled in.
-    expect(updates, greaterThan(1), reason: 'the scans should stream in, not land all at once');
-    expect(all.where((c) => c.detailed).length, greaterThanOrEqualTo(1));
+    // The whole call is now the listing and nothing else. Enriching forty pressings here, one
+    // request apiece on a 60-a-minute lane, is exactly what this stopped doing.
+    expect(listMs, lessThan(15000),
+        reason: 'releaseChoices took ${listMs}ms — it should not be fetching scans at all');
 
     // Every row is worth reading straight away: format and a sleeve, from the listing alone.
     expect(all.take(20).where((c) => c.front != null).length, greaterThan(10));
@@ -67,9 +68,14 @@ void main() {
       expect(c.hasBack, isFalse);
       expect(c.hasDisc, isFalse);
     }
+
+    // And asking for ONE fills that one in — what the picker does per visible row.
+    final one = await svc.detailOf(all.first);
+    expect(one, isNotNull);
+    expect(one!.detailed, isTrue);
     // ignore: avoid_print
-    print('eerste rijen na ${firstRowsMs}ms: $firstBatch pressingen, ${all.length} totaal, '
-        '${all.where((c) => c.detailed).length} met scans, ${updates} updates');
+    print('lijst na ${listMs}ms: $firstBatch pressingen, ${all.length} totaal; '
+        'één detail erbij: back=${one.hasBack} disc=${one.hasDisc}');
   }, timeout: const Timeout(Duration(minutes: 4)));
 
   test('a cassette is never offered', () async {
@@ -78,8 +84,7 @@ void main() {
       markTestSkipped('no Discogs token configured');
       return;
     }
-    final all = await DiscogsService(settings)
-        .releaseChoices('Enrique', 'Escape', enrich: 0);
+    final all = await DiscogsService(settings).releaseChoices('Enrique', 'Escape');
     expect(all.any((c) => c.format.toLowerCase().contains('cassette')), isFalse);
   }, timeout: const Timeout(Duration(minutes: 3)));
 }

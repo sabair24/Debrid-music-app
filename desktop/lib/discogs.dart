@@ -704,6 +704,7 @@ extension DiscogsArtwork on DiscogsService {
     int expectedTracks = 0,
     int? pinned,
     String? pinnedMbid,
+    Map<String, String> roles = const {},
   }) async {
     // Both pins are part of the cache key. Without that a new choice would keep answering with the
     // scans fetched for the old one — which is half of why picking a release changed the front
@@ -712,25 +713,55 @@ extension DiscogsArtwork on DiscogsService {
     // qualify. Leaving it out meant a library album and the same album opened from browse (which
     // knows no track count) shared one entry, and whichever ran first won permanently.
     //
+    // A hand-assigned role belongs in the key for the same reason a pin does: change what the back
+    // cover IS and the entry cached under the old answer must not keep being served.
+    //
     // The version marks a schema change: nothing here expires, so without bumping it every album
     // would keep serving the art it cached first. v2 was when the archive started being consulted;
-    // v3 is this — the scans are fetched at 1200px instead of 500, and the old soft copies have to
-    // be let go of rather than quietly kept forever.
+    // v3 was the move to 1200px scans; v4 is roles becoming part of the question.
+    final roleKey = (roles.entries.map((e) => '${e.key}=${e.value}').toList()..sort()).join(',');
     final key = sha1
         .convert(
-          utf8.encode('art|v3|$artist|$album|$expectedTracks|${pinned ?? 0}|${pinnedMbid ?? ''}'),
+          utf8.encode(
+              'art|v4|$artist|$album|$expectedTracks|${pinned ?? 0}|${pinnedMbid ?? ''}|$roleKey'),
         )
         .toString();
     final dir = Directory('$artDir${Platform.pathSeparator}$key');
     final cached = await _readArt(dir);
     if (cached != null) return cached;
 
+    // What the user SAID an image is outranks everything below — the archive's own labels included.
+    // Fetched first and kept aside; the automatic answers fill only the roles left unassigned.
+    Uint8List? saidFront, saidBack, saidDisc;
+    if (roles.isNotEmpty) {
+      final wanted = ['front', 'back', 'disc'];
+      final got = await Future.wait(
+          [for (final r in wanted) (roles[r] ?? '').isEmpty ? Future.value(null) : fetchImage(roles[r]!)]);
+      saidFront = got[0];
+      saidBack = got[1];
+      saidDisc = got[2];
+      // Every role answered by hand: nothing left to look up.
+      if (saidFront != null && saidBack != null && saidDisc != null) {
+        final art = ReleaseArt(front: saidFront, back: saidBack, disc: saidDisc);
+        await _writeArt(dir, art);
+        return art;
+      }
+    }
+
+    // Anything found below fills only the roles the user did NOT assign.
+    ReleaseArt said(ReleaseArt found) => ReleaseArt(
+          front: saidFront ?? found.front,
+          back: saidBack ?? found.back,
+          disc: saidDisc ?? found.disc,
+        );
+
     // A pinned MusicBrainz pressing is an exact answer: take its scans and no one else's.
     if (pinnedMbid != null && pinnedMbid.isNotEmpty) {
       final exact = await _artFromCaa(pinnedMbid);
       if (exact != null) {
-        await _writeArt(dir, exact);
-        return exact;
+        final art = said(exact);
+        await _writeArt(dir, art);
+        return art;
       }
     }
 
@@ -741,8 +772,9 @@ extension DiscogsArtwork on DiscogsService {
     if (pinned == null && (pinnedMbid == null || pinnedMbid.isEmpty)) {
       caa = await _artFromMusicBrainz(artist, album, expectedTracks);
       if (caa != null && caa.front != null && caa.back != null && caa.disc != null) {
-        await _writeArt(dir, caa);
-        return caa;
+        final art = said(caa);
+        await _writeArt(dir, art);
+        return art;
       }
       // A partial answer is kept, not discarded. Requiring a front threw away a back cover and a
       // disc scan that were already downloaded whenever the front was the one image missing.
@@ -751,19 +783,19 @@ extension DiscogsArtwork on DiscogsService {
     final e = await edition(artist, album, expectedTracks: expectedTracks, pinned: pinned);
     if (e == null || e.images.isEmpty) {
       // Discogs has nothing to add, but the archive may still have given us something.
-      if (caa != null && !caa.isEmpty) {
-        await _writeArt(dir, caa);
-        return caa;
+      final art = said(caa ?? const ReleaseArt());
+      if (!art.isEmpty) {
+        await _writeArt(dir, art);
+        return art;
       }
       return null;
     }
     const look = 6;
     final take = e.images.length < look ? e.images.length : look;
-    final datas = <Uint8List?>[];
-    for (var i = 0; i < take; i++) {
-      datas.add(await fetchImage(e.images[i].uri));
-    }
-    final roles = assignRoles(
+    // Together, not one after another. These are plain image GETs to Discogs' CDN and do NOT go
+    // through the rate-limited _get above, so waiting for each in turn bought nothing but delay.
+    final datas = await Future.wait([for (var i = 0; i < take; i++) fetchImage(e.images[i].uri)]);
+    final guessed = assignRoles(
       [for (var i = 0; i < take; i++) e.images[i].primary],
       [
         for (var i = 0; i < take; i++)
@@ -772,18 +804,18 @@ extension DiscogsArtwork on DiscogsService {
       datas,
     );
     Uint8List? at(int? i) => (i == null || i >= datas.length) ? null : datas[i];
-    var disc = at(roles.disc);
+    var disc = at(guessed.disc);
     // Not every pressing has its disc photographed, and a missing scan is a missing animation —
     // for a record the library demonstrably holds. So borrow one from another pressing of the SAME
     // master: it is the same disc art, just someone else's scanner.
     disc ??= await _discFromAnotherPressing(artist, album, e.releaseId);
-    // Whatever the archive already stated wins per role — it SAYS what an image is, where the
-    // roles above are inferred from shape and pixels. Discogs fills the gaps rather than replacing.
-    final art = ReleaseArt(
-      front: caa?.front ?? at(roles.front),
-      back: caa?.back ?? at(roles.back),
+    // Order of authority: what the user assigned, then what the archive STATES an image is, then
+    // what was inferred here from shape and pixels. Each only fills what the one above left open.
+    final art = said(ReleaseArt(
+      front: caa?.front ?? at(guessed.front),
+      back: caa?.back ?? at(guessed.back),
       disc: caa?.disc ?? disc,
-    );
+    ));
     if (art.isEmpty) return null; // nothing found — don't cache a blank as the answer
     await _writeArt(dir, art);
     return art;
@@ -942,9 +974,12 @@ extension DiscogsChoices on DiscogsService {
   /// But a master's versions listing already carries, in ONE request, everything a row needs to be
   /// worth reading: format, label, catalogue number, country, year and the front cover. Measured on
   /// Escape, all seventy-five come back in 655 ms. So the list is built from that and handed over
-  /// immediately, and the per-release lookups — the only way to learn whether a pressing has a back
-  /// or a disc, since Discogs never says what an image is — run afterwards, feeding [onPartial] as
-  /// each one lands. Rows arrive complete rather than the list arriving late.
+  /// immediately.
+  ///
+  /// The per-release lookups — the only way to learn whether a pressing has a back or a disc, since
+  /// Discogs never says what an image is — are NOT done here. Running them for forty rows up front,
+  /// a request apiece on a lane that allows sixty a minute, spent most of a minute on rows the user
+  /// never scrolled to. They belong to whoever puts a row on screen: see [DiscogsService.detailOf].
   ///
   /// Walks SEVERAL masters, not just the best-scoring one. Discogs has twenty-two masters titled
   /// "Michael Jackson - Thriller", and the top-scoring one is a vinyl-only entry with two versions
@@ -957,7 +992,6 @@ extension DiscogsChoices on DiscogsService {
     String album, {
     int max = 80,
     int? pinned,
-    int enrich = 40,
     void Function(List<ReleaseChoice>)? onPartial,
   }) async {
     final rows = <ReleaseChoice>[];
@@ -1014,19 +1048,27 @@ extension DiscogsChoices on DiscogsService {
       }
     }
     onPartial?.call([...rows]);
-    if (rows.isEmpty) return rows;
-
-    // ── Then the scans, a pressing at a time ────────────────────────────────
-    final take = rows.length < enrich ? rows.length : enrich;
-    for (var i = 0; i < take; i++) {
-      final filled = await _detail(rows[i]);
-      if (filled != null) {
-        rows[i] = filled;
-        onPartial?.call([...rows]);
-      }
-    }
     return rows;
   }
+
+  /// EVERY scan of one pressing, unlabelled and in the order Discogs lists them.
+  ///
+  /// The picker shows three; a release can carry thirty. When the roles come out wrong — and on a
+  /// catalogue that never says what an image shows, they sometimes will — the user needs to see the
+  /// rest to point at the right one.
+  Future<List<ChoiceImage>> allImages(int releaseId) async {
+    final e = await release(releaseId);
+    return [for (final i in e?.images ?? const <DiscogsImage>[]) ChoiceImage(i.uri, i.thumb)];
+  }
+
+  /// One pressing's scans, worked out and labelled. Public so the picker can ask for a row as it
+  /// scrolls into view.
+  ///
+  /// This used to run for the first forty rows the moment the dialog opened, one after another, at
+  /// a request each on a lane that allows sixty a minute — the better part of a minute of work for
+  /// rows nobody had looked at yet. The listing already carries a sleeve for every row, so the list
+  /// is usable immediately and this fills in what you actually put on screen.
+  Future<ReleaseChoice?> detailOf(ReleaseChoice row) => _detail(row);
 
   /// Look up one pressing's scans and work out which is the front, the back and the disc.
   ///
@@ -1048,12 +1090,19 @@ extension DiscogsChoices on DiscogsService {
       if (identical(i, front)) continue;
       if (back == null && i.isWide) back = i;
     }
-    for (final i in imgs) {
-      if (identical(i, front) || identical(i, back)) continue;
-      if (i.isWide) continue; // a disc is round, so its scan is never wider than tall
-      final bytes = await fetchImage(i.thumb);
+    // The disc candidates, tested together. Still "the first one that reads as a disc wins" — the
+    // order below decides, not whichever download happens to finish first — but the thumbnails are
+    // 150px and off the rate-limited path, so fetching a handful at once costs less than waiting
+    // for each in turn. Capped, because a release can carry thirty scans.
+    final maybeDisc = [
+      for (final i in imgs)
+        if (!identical(i, front) && !identical(i, back) && !i.isWide) i
+    ].take(6).toList();
+    final discBytes = await Future.wait([for (final i in maybeDisc) fetchImage(i.thumb)]);
+    for (var k = 0; k < maybeDisc.length; k++) {
+      final bytes = discBytes[k];
       if (bytes != null && looksLikeDisc(bytes)) {
-        disc = i;
+        disc = maybeDisc[k];
         break;
       }
     }
