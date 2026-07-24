@@ -52,6 +52,14 @@ class PlayerStore extends ChangeNotifier {
   /// so the flat Tracks queue shows the right cover per song.
   Uint8List? Function(Track)? coverResolver;
 
+  /// Last step before a path is handed to libmpv. Identity on the machine that owns the music; on
+  /// a Mac or an iPad it turns a library path into a stream URL carrying the pairing token.
+  ///
+  /// It happens HERE, and not in the stored path, because the path is the identity key for
+  /// favourites, playlists and resume: baking a token into it would break all three the moment you
+  /// paired again, and would write the key for your library into a plain file on disk.
+  String Function(String path) mediaResolver = (p) => p;
+
   /// Where we are, for the other devices. Set by main to the LAN sharing store, so pausing here
   /// and carrying on from the iPad works in both directions. Called on the same throttle as the
   /// local resume file — every few seconds, and always on pause or a track change.
@@ -201,7 +209,7 @@ class PlayerStore extends ChangeNotifier {
         radioStatus = '';
         currentCover = it.isLocal ? coverResolver?.call(it.local!) : null;
         notifyListeners();
-        await _player.open(Media(path), play: true);
+        await _player.open(Media(mediaResolver(path)), play: true);
         if (gen != _radioGen) return; // superseded while opening
         _prefetchNext();
         _maybeExtend();
@@ -259,7 +267,7 @@ class PlayerStore extends ChangeNotifier {
     final t = current;
     if (t == null) return;
     if (coverResolver != null) currentCover = coverResolver!(t);
-    await _player.open(Media(t.path), play: true);
+    await _player.open(Media(mediaResolver(t.path)), play: true);
     _saveProgress(force: true); // track changed → persist the new spot
     onPlayed?.call(t);
     notifyListeners();
@@ -381,7 +389,7 @@ class PlayerStore extends ChangeNotifier {
       final t = current;
       if (t == null) return;
       currentCover = coverResolver?.call(t);
-      await _player.open(Media(t.path), play: false); // reopen PAUSED
+      await _player.open(Media(mediaResolver(t.path)), play: false); // reopen PAUSED
       if (posMs > 0) {
         // The seek only sticks once libmpv has loaded the file (duration known);
         // seeking too early is silently dropped → playback would restart at 0.

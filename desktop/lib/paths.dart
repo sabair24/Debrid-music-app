@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// Where this app keeps everything that is not music: settings, corrections, cover cache,
@@ -37,6 +38,13 @@ Future<void> initAppPaths() async {
 
 /// The folder to write to. Safe to read before [initAppPaths] has finished.
 String get appDir => _resolved ??= _fallback();
+
+/// Point everything at a scratch folder for the duration of a test.
+///
+/// Without this a test run writes into the REAL cover cache and the real corrections file — the
+/// user's hand-made metadata — because [_fallback] resolves to the same place the app uses.
+@visibleForTesting
+void setAppDirForTest(String path) => _resolved = path;
 
 /// A file inside it.
 File appFile(String name) => File('$appDir${Platform.pathSeparator}$name');

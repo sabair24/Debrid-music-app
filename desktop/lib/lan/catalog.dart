@@ -150,6 +150,7 @@ class LanCatalog {
           artistName: t.artist,
           albumTitle: album.title,
           trackNo: t.trackNo,
+          trackTotal: t.trackTotal,
           durationMs: t.duration?.inMilliseconds ?? 0,
           bitrate: t.bitrateKbps,
           sampleRate: t.sampleRate > 0 ? t.sampleRate : null,

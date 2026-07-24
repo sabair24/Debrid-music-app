@@ -6,10 +6,22 @@ import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'editions.dart';
 import 'enrichment.dart';
 import 'flac_tags.dart';
+import 'lan/client.dart';
+import 'lan/dtos.dart';
 import 'models.dart';
 import 'organize.dart';
 import 'settings.dart';
 import 'paths.dart';
+
+/// Thrown when a write is attempted on a device that does not hold the music. Carries the text to
+/// put in front of the user — there is nothing technical to add, and the person holding the iPad
+/// needs to know where to go, not what failed.
+class RemoteWriteException implements Exception {
+  final String message;
+  const RemoteWriteException(this.message);
+  @override
+  String toString() => message;
+}
 
 const _audioExt = {'.flac', '.mp3', '.m4a', '.wav', '.ogg', '.opus', '.aac', '.wma', '.alac'};
 
@@ -274,6 +286,7 @@ class LibraryStore extends ChangeNotifier {
 
   /// Put every edition of this record back together, and keep it that way.
   Future<void> mergeEditions(Album a) async {
+    _requireOwner('Persingen samenvoegen');
     _merged.add('album::${artistKey(a.artist)}|${normKey(a.title)}');
     await _saveMerged();
     rebuildAlbums();
@@ -282,6 +295,7 @@ class LibraryStore extends ChangeNotifier {
 
   /// Undo that, and let the tags decide again.
   Future<void> unmergeEditions(Album a) async {
+    _requireOwner('Persingen splitsen');
     _merged.remove('album::${artistKey(a.artist)}|${normKey(a.title)}');
     await _saveMerged();
     rebuildAlbums();
@@ -433,6 +447,7 @@ class LibraryStore extends ChangeNotifier {
   /// otherwise they're only excluded from the library and stay on disk.
   /// Returns how many files were actually deleted from disk.
   Future<int> removeTracks(Iterable<String> paths, {required bool fromDisk}) async {
+    _requireOwner('Nummers verwijderen');
     final list = paths.toList();
     var deleted = 0;
     if (fromDisk) {
@@ -557,6 +572,7 @@ class LibraryStore extends ChangeNotifier {
     int? discogsRelease,
     String? mbid,
   }) async {
+    _requireOwner('Metadata aanpassen');
     for (final t in target.tracks) {
       final c = _corrections.putIfAbsent(t.path, () => {});
       // Discogs numbers artists who share a name and asterisks name variants; neither belongs in
@@ -674,6 +690,212 @@ class LibraryStore extends ChangeNotifier {
     }
   }
 
+  // ── Client mode: the library comes from a paired PC ────────────────────────
+  //
+  // The dividing line in this app is not Windows versus Apple, it is "does this device hold the
+  // music?". A Mac and an iPad do not, so instead of walking a folder they read /api/catalog from
+  // the Windows PC. Everything above this line — every screen, every sort, every cover — is
+  // unchanged, because what lands in [tracks] and [albums] is the same shape either way.
+
+  RemoteClient? _remote;
+
+  /// The paired PC, or null on the machine that owns the music.
+  RemoteClient? get remote => _remote;
+
+  /// True when this app is reading someone else's library. Screens that WRITE check this.
+  bool get isRemote => _remote != null;
+
+  /// The catalogue's ETag from last time, so a poll that finds nothing changed costs one 304
+  /// instead of re-sending twelve thousand tracks.
+  String? _catalogEtag;
+
+  set remote(RemoteClient? client) {
+    _remote = client;
+    _catalogEtag = null;
+  }
+
+  /// Fill the library from the paired PC. The counterpart of [scan].
+  ///
+  /// Returns true when something actually changed, so a caller polling this can skip the work that
+  /// follows a real update.
+  ///
+  /// The album grouping is ADOPTED from the PC, not recomputed here. That is the whole point: the
+  /// PC has already split editions, applied the corrections you typed and honoured the pressings
+  /// you pinned, and re-deriving any of that from tags would be a second implementation that
+  /// drifts. Whatever you see on the PC is what lands here, including next year's grouping rule.
+  Future<bool> loadRemote({bool quiet = false}) async {
+    final client = _remote;
+    if (client == null) return false;
+    if (scanning) {
+      _rescanQueued = true;
+      return false;
+    }
+    scanning = !quiet;
+    if (!quiet) notifyListeners();
+
+    CatalogResponse res;
+    try {
+      res = await client.catalog(etag: _catalogEtag);
+    } catch (e) {
+      // Keep the library we already have. A Mac that loses the PC mid-song should keep showing the
+      // record it is playing, not blank the screen — the same reasoning as a failed disk scan.
+      debugPrint('Remote catalog failed: $e');
+      scanning = false;
+      notifyListeners();
+      return false;
+    }
+    _catalogEtag = res.etag;
+    final catalog = res.catalog;
+    if (catalog == null) {
+      scanning = false;
+      if (!quiet) notifyListeners();
+      return false;
+    }
+
+    _adoptCatalog(catalog, client);
+    scanned = tracks.length;
+    scanning = false;
+    notifyListeners();
+
+    if (_rescanQueued) {
+      _rescanQueued = false;
+      await loadRemote(quiet: quiet);
+    }
+    return true;
+  }
+
+  /// Turn what the PC sent into the very same [Track] and [Album] objects a disk scan produces.
+  void _adoptCatalog(CatalogDto catalog, RemoteClient client) {
+    // Covers, keyed by track path exactly as [rebuildAlbums] does — a refreshed catalogue makes
+    // fresh Album objects, and without this the grid blanks on every poll and then refetches every
+    // cover over the network.
+    final coversByPath = <String, List<Uint8List?>>{};
+    for (final a in albums) {
+      final snap = [a.embeddedCover, a.enriched, a.correctedCover];
+      for (final t in a.tracks) {
+        coversByPath[t.path] = snap;
+      }
+    }
+
+    final byAlbum = <String, List<Track>>{};
+    tracks.clear();
+    for (final dto in catalog.tracks) {
+      final t = _trackFromDto(dto, client);
+      tracks.add(t);
+      byAlbum.putIfAbsent(dto.albumId, () => []).add(t);
+    }
+
+    _rebuildCanonicalArtists();
+
+    final built = <Album>[];
+    _remoteAlbums.clear();
+    for (final dto in catalog.albums) {
+      final ts = byAlbum[dto.id];
+      // An album whose every track was filtered out (hidden on the PC) is not an album.
+      if (ts == null || ts.isEmpty) continue;
+      ts.sort((a, b) => a.trackNo.compareTo(b.trackNo));
+      final al = Album(dto.title, dto.artistName, ts, isSingle: dto.isSingle)
+        ..edition = dto.edition;
+      for (final t in ts) {
+        final saved = coversByPath[t.path];
+        if (saved == null) continue;
+        al.embeddedCover = saved[0];
+        al.enriched = saved[1];
+        al.correctedCover = saved[2];
+        break;
+      }
+      _remoteAlbums[al] = (id: dto.id, artRef: dto.artworkRef ?? dto.id);
+      built.add(al);
+    }
+    albums = built..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+
+    _rebuildTrackIndexes();
+  }
+
+  /// What the PC calls each album we are showing: its id (for a write, in phase C) and the
+  /// reference to ask `/art/` for. Keyed by object identity — [Album] has no value equality, and a
+  /// refreshed catalogue makes new ones, so this is cleared and refilled with them.
+  final Map<Album, ({String id, String artRef})> _remoteAlbums = {};
+
+  /// The PC's id for an album we are showing, or null on the machine that owns the music.
+  String? remoteAlbumId(Album a) => _remoteAlbums[a]?.id;
+
+  /// False on a Mac or an iPad: editing metadata, merging pressings and removing tracks all still
+  /// happen on the machine that holds the files. The screens that offer those ask this first, and
+  /// [_requireOwner] is the backstop underneath them.
+  bool get canEdit => !isRemote;
+
+  /// Refuse a write that would only be true locally.
+  ///
+  /// Not a silent no-op: every one of these mutates state that [rebuildAlbums] then regroups FROM
+  /// TAGS, which in client mode would throw away the grouping the PC sent — the pinned pressings
+  /// and merged editions included. Failing loudly here is much better than a library that quietly
+  /// stops matching the one on the PC.
+  void _requireOwner(String what) {
+    if (!isRemote) return;
+    throw RemoteWriteException(
+      '$what kan alleen op de pc waar de muziek staat. '
+      'Deze app toont die bibliotheek; wijzigingen komen daarna vanzelf hier terug.',
+    );
+  }
+
+  /// A track as the PC describes it. [Track.path] becomes the stream URL WITHOUT the token: it is
+  /// the identity key for favourites, playlists and resume, and those must survive re-pairing —
+  /// the token is added at the moment of playback instead. The extension is kept because that is
+  /// how a player types the stream.
+  Track _trackFromDto(TrackDto d, RemoteClient client) => Track(
+        path: client.endpoint.baseUrl.replace(path: d.streamPath).toString(),
+        title: d.title,
+        artist: d.artistName,
+        album: d.albumTitle,
+        trackNo: d.trackNo,
+        trackTotal: d.trackTotal,
+        duration: d.durationMs > 0 ? Duration(milliseconds: d.durationMs) : null,
+        isFlac: d.ext == 'flac',
+        year: d.year,
+        genre: d.genre,
+        addedMs: d.addedMs,
+        sizeBytes: d.sizeBytes,
+        sampleRate: d.sampleRate ?? 0,
+        bitsPerSample: d.bitsPerSample ?? 0,
+      );
+
+  /// Covers, over the network, after the grid is already on screen.
+  ///
+  /// The disk cache is [CoverEnricher]'s own, keyed by artist+title rather than by path, so a Mac
+  /// that has seen a record once shows its cover instantly on the next start — and pays for the
+  /// fetch only the first time. Deliberately not part of [loadRemote]: the library should appear
+  /// immediately, with the covers filling in behind it, rather than the screen staying empty until
+  /// the last one has arrived.
+  Future<void> loadRemoteCovers(AppSettings settings) async {
+    final client = _remote;
+    if (client == null) return;
+    final enricher = CoverEnricher(settings);
+    enriching = true;
+    notifyListeners();
+    var since = 0;
+    for (final album in albums) {
+      if (album.cover != null) continue;
+      final cached = await enricher.cached(album);
+      if (cached != null) {
+        album.enriched = cached;
+        if (++since >= 24) {
+          since = 0;
+          notifyListeners();
+        }
+        continue;
+      }
+      final ref = _remoteAlbums[album]?.artRef;
+      final bytes = ref == null ? null : await client.art(ref);
+      if (bytes == null || bytes.isEmpty) continue;
+      album.embeddedCover = bytes;
+      await enricher.putCached(album, bytes);
+      notifyListeners();
+    }
+    enriching = false;
+    notifyListeners();
+  }
+
   Track _trackFromMap(Map<String, dynamic> m) => Track(
         path: m['path'] as String,
         title: m['title'] as String,
@@ -772,22 +994,7 @@ class LibraryStore extends ChangeNotifier {
       }
     }
 
-    // ONE spelling per artist. Tags disagree about capitalisation and accents ("Lady Gaga" vs
-    // "Lady GaGa", "Beyoncé" vs "Beyonce"), which used to put the same person in the artist list
-    // twice. Count every spelling across the whole library and show the best one everywhere.
-    // The MAIN artist, not the full credit: "Lady Gaga feat. Beyoncé" is a Lady Gaga track and
-    // belongs on her album — Beyoncé is a guest, not a separate act in your artist list.
-    final spellings = <String, Map<String, int>>{};
-    for (final t in tracks) {
-      final main = splitFeatured(t.artist, t.title).main;
-      spellings
-          .putIfAbsent(artistKey(main), () => <String, int>{})
-          .update(main, (n) => n + 1, ifAbsent: () => 1);
-    }
-    final canonical = {for (final e in spellings.entries) e.key: canonicalName(e.value)};
-    _canonicalArtists
-      ..clear()
-      ..addAll(canonical);
+    final canonical = _rebuildCanonicalArtists();
 
     final map = <String, List<Track>>{};
     for (final t in tracks) {
@@ -822,13 +1029,41 @@ class LibraryStore extends ChangeNotifier {
     }).toList()
       ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
 
-    // Rebuild the "do I already own this?" index used to skip duplicate downloads.
+    _rebuildTrackIndexes();
+  }
+
+  /// ONE spelling per artist. Tags disagree about capitalisation and accents ("Lady Gaga" vs
+  /// "Lady GaGa", "Beyoncé" vs "Beyonce"), which used to put the same person in the artist list
+  /// twice. Count every spelling across the whole library and show the best one everywhere.
+  /// The MAIN artist, not the full credit: "Lady Gaga feat. Beyoncé" is a Lady Gaga track and
+  /// belongs on her album — Beyoncé is a guest, not a separate act in your artist list.
+  ///
+  /// Shared with client mode ([loadRemote]) rather than repeated there: it decides what the artist
+  /// list is called, and two copies of that rule would eventually disagree about one artist and be
+  /// very hard to see.
+  Map<String, String> _rebuildCanonicalArtists() {
+    final spellings = <String, Map<String, int>>{};
+    for (final t in tracks) {
+      final main = splitFeatured(t.artist, t.title).main;
+      spellings
+          .putIfAbsent(artistKey(main), () => <String, int>{})
+          .update(main, (n) => n + 1, ifAbsent: () => 1);
+    }
+    final canonical = {for (final e in spellings.entries) e.key: canonicalName(e.value)};
+    _canonicalArtists
+      ..clear()
+      ..addAll(canonical);
+    return canonical;
+  }
+
+  /// The lookups every screen reads: "do I already own this?" (skips duplicate downloads), and
+  /// path → album/track (cover per track, and resuming where you left off). Also shared with
+  /// client mode, where the paths are stream URLs instead of files.
+  void _rebuildTrackIndexes() {
     _owned.clear();
     for (final t in tracks) {
       _owned.putIfAbsent(trackIdentity(t.artist, t.title), () => t);
     }
-
-    // Rebuild the flat-track lookups (cover-per-track + path→track for resume).
     _albumByPath.clear();
     _trackByPath.clear();
     for (final a in albums) {
@@ -1215,6 +1450,7 @@ extension LibraryMove on LibraryStore {
   /// grouped correctly and the file where it was, which is the safe half of the job.
   Future<int> moveTracksToAlbum(List<Track> tracks, Album target, AppSettings settings,
       {bool moveFiles = true, List<MovePlan>? plan}) async {
+    _requireOwner('Nummers verplaatsen');
     // The plan the user read, when there was one. Re-planning here would let the folder change
     // between the screen they approved and the files that move.
     final steps = plan ?? planMove(tracks, target);

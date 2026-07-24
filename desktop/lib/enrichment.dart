@@ -136,6 +136,19 @@ class CoverEnricher {
   File _artistFile(String name) => File('${artistDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.jpg');
   File _bioFile(String name) => File('${bioDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.txt');
 
+  /// Put bytes in the cover cache that did not come from the web enricher — on a Mac or an iPad
+  /// the covers arrive from the paired PC, and caching them there means the second start shows the
+  /// grid instantly instead of refetching every one over wifi.
+  Future<void> putCached(Album a, Uint8List bytes) async {
+    if (bytes.length <= 100) return;
+    try {
+      await cacheDir.create(recursive: true);
+      await _cacheFile(a).writeAsBytes(bytes);
+    } catch (_) {
+      // A full disk must not cost you the cover you are looking at.
+    }
+  }
+
   Future<Uint8List?> cached(Album a) async {
     final f = _cacheFile(a);
     if (!await f.exists()) return null;

@@ -6,9 +6,26 @@
 /// its library (`MusicRepository.syncServerLibrary`), so speaking the same JSON means the phone
 /// and the Shield work against this server without being rewritten.
 ///
-/// Fields added here that Kotlin doesn't have (`edition`, `isSingle`, `bitsPerSample`, `ext`) are
-/// safe: both clients ignore unknown keys.
+/// Fields added here that Kotlin doesn't have (`edition`, `isSingle`, `bitsPerSample`, `ext`,
+/// `trackTotal`) are safe: both clients ignore unknown keys.
+///
+/// The `fromJson` side is used by this same app running as a CLIENT — on the Mac and the iPad it
+/// fills its [LibraryStore] from `/api/catalog` instead of from disk. Encoder and decoder sitting
+/// in one file is the point: a field added to the wire cannot be forgotten on the way back in.
 library;
+
+/// JSON numbers arrive as int, but a hand-written fixture or another client may send a double or
+/// a string. Coercing here keeps every call site free of the question.
+int _int(Object? v, [int fallback = 0]) => switch (v) {
+      final int i => i,
+      final num n => n.toInt(),
+      final String s => int.tryParse(s) ?? fallback,
+      _ => fallback,
+    };
+
+int? _intOrNull(Object? v) => v == null ? null : _int(v);
+
+String _str(Object? v, [String fallback = '']) => v is String ? v : fallback;
 
 class ArtistDto {
   final String id;
@@ -22,6 +39,13 @@ class ArtistDto {
     this.artworkRef,
     this.albumCount = 0,
   });
+
+  factory ArtistDto.fromJson(Map<String, dynamic> j) => ArtistDto(
+        id: _str(j['id']),
+        name: _str(j['name']),
+        artworkRef: j['artworkRef'] as String?,
+        albumCount: _int(j['albumCount']),
+      );
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -61,6 +85,19 @@ class AlbumDto {
     this.addedMs = 0,
   });
 
+  factory AlbumDto.fromJson(Map<String, dynamic> j) => AlbumDto(
+        id: _str(j['id']),
+        artistId: _str(j['artistId']),
+        artistName: _str(j['artistName']),
+        title: _str(j['title']),
+        year: _intOrNull(j['year']),
+        artworkRef: j['artworkRef'] as String?,
+        trackCount: _int(j['trackCount']),
+        edition: j['edition'] as String?,
+        isSingle: j['isSingle'] == true,
+        addedMs: _int(j['addedMs']),
+      );
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'artistId': artistId,
@@ -83,6 +120,11 @@ class TrackDto {
   final String artistName;
   final String albumTitle;
   final int trackNo;
+
+  /// How many tracks the pressing has, as the file's own tag says it. Carried because the track
+  /// list shows "3 / 12", and because it is what names an edition ("12 nummers") when the library
+  /// holds more than one pressing of a record.
+  final int trackTotal;
   final int discNo;
   final int durationMs;
   final int? bitrate;
@@ -108,6 +150,7 @@ class TrackDto {
     required this.streamPath,
     required this.ext,
     this.trackNo = 0,
+    this.trackTotal = 0,
     this.discNo = 1,
     this.durationMs = 0,
     this.bitrate,
@@ -127,6 +170,31 @@ class TrackDto {
   /// this to decide whether a Sonos target needs a converted stream.
   bool get needsSonosDownsample => (sampleRate ?? 0) > 48000;
 
+  factory TrackDto.fromJson(Map<String, dynamic> j) => TrackDto(
+        id: _str(j['id']),
+        albumId: _str(j['albumId']),
+        artistId: _str(j['artistId']),
+        title: _str(j['title']),
+        artistName: _str(j['artistName']),
+        albumTitle: _str(j['albumTitle']),
+        streamPath: _str(j['streamPath']),
+        ext: _str(j['ext']),
+        trackNo: _int(j['trackNo']),
+        trackTotal: _int(j['trackTotal']),
+        discNo: _int(j['discNo'], 1),
+        durationMs: _int(j['durationMs']),
+        bitrate: _intOrNull(j['bitrate']),
+        sampleRate: _intOrNull(j['sampleRate']),
+        bitsPerSample: _intOrNull(j['bitsPerSample']),
+        lossless: j['lossless'] == true,
+        sizeBytes: _int(j['sizeBytes']),
+        year: _intOrNull(j['year']),
+        genre: j['genre'] as String?,
+        mime: j['mime'] as String?,
+        artworkRef: j['artworkRef'] as String?,
+        addedMs: _int(j['addedMs']),
+      );
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'albumId': albumId,
@@ -135,6 +203,7 @@ class TrackDto {
         'artistName': artistName,
         'albumTitle': albumTitle,
         'trackNo': trackNo,
+        'trackTotal': trackTotal,
         'discNo': discNo,
         'durationMs': durationMs,
         'bitrate': bitrate,
@@ -165,12 +234,29 @@ class CatalogDto {
     this.generatedAt = 0,
   });
 
+  factory CatalogDto.fromJson(Map<String, dynamic> j) => CatalogDto(
+        artists: _list(j['artists'], ArtistDto.fromJson),
+        albums: _list(j['albums'], AlbumDto.fromJson),
+        tracks: _list(j['tracks'], TrackDto.fromJson),
+        generatedAt: _int(j['generatedAt']),
+      );
+
   Map<String, dynamic> toJson() => {
         'artists': [for (final a in artists) a.toJson()],
         'albums': [for (final a in albums) a.toJson()],
         'tracks': [for (final t in tracks) t.toJson()],
         'generatedAt': generatedAt,
       };
+}
+
+/// Decode a JSON array, skipping anything that isn't an object. A single malformed entry must not
+/// cost the whole library — on a client that means an empty screen, with no way to tell why.
+List<T> _list<T>(Object? v, T Function(Map<String, dynamic>) from) {
+  if (v is! List) return const [];
+  return [
+    for (final e in v)
+      if (e is Map<String, dynamic>) from(e),
+  ];
 }
 
 class SearchResultDto {
