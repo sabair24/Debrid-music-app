@@ -1,6 +1,38 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import 'organize.dart' show artistKey;
+
+/// Which of Deezer's artist hits is the artist actually meant.
+///
+/// Deezer's artist search is not ranked by popularity, and the difference is not subtle: searching
+/// "Adele" puts "Adele & The Chandeliers" (41 fans) first and the real Adele (15,429,227) fifth;
+/// "Michael Jackson" leads with an 86-fan account. Taking row one — which is what asking for
+/// limit=1 did — built the entire radio around a namesake with no catalogue, so /radio answered
+/// "no data" and the Radio button came back empty.
+///
+/// The rule: the name has to be the name that was asked for, and among those, the one people
+/// actually listen to. Fan count is the only popularity signal Deezer gives without a key, and it
+/// separates fifteen million from forty-one without ambiguity. An exact name always outranks fans,
+/// so "Enrique Iglesias & Ana Mena" can never win the query "Enrique Iglesias" — a collaboration
+/// is a different act, however popular.
+///
+/// Names are compared through [artistKey], so "Beyonce" finds "Beyoncé".
+int? pickArtist(List<dynamic> hits, String wanted) {
+  final want = artistKey(wanted);
+  final rows = [for (final h in hits) if (h is Map && h['id'] != null) h];
+  if (rows.isEmpty) return null;
+  rows.sort((a, b) {
+    final ea = artistKey('${a['name'] ?? ''}') == want;
+    final eb = artistKey('${b['name'] ?? ''}') == want;
+    if (ea != eb) return ea ? -1 : 1;
+    final fa = (a['nb_fan'] as num?)?.toInt() ?? 0;
+    final fb = (b['nb_fan'] as num?)?.toInt() ?? 0;
+    return fb.compareTo(fa);
+  });
+  return (rows.first['id'] as num?)?.toInt();
+}
+
 /// A recommended track (metadata only) — resolved to a playable source on demand.
 class RecTrack {
   final String artist;
@@ -27,9 +59,8 @@ class RecommendService {
   }
 
   Future<int?> _artistId(String name) async {
-    final j = await _get('$_base/search/artist?q=${Uri.encodeComponent(name)}&limit=1');
-    final data = (j?['data'] as List?) ?? const [];
-    return data.isEmpty ? null : (data.first['id'] as int?);
+    final j = await _get('$_base/search/artist?q=${Uri.encodeComponent(name)}&limit=10');
+    return pickArtist((j?['data'] as List?) ?? const [], name);
   }
 
   List<RecTrack> _tracks(Map<String, dynamic>? j) {
