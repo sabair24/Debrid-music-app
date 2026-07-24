@@ -138,6 +138,8 @@ class LanCatalog {
         addedMs: album.addedMs,
         discogsRelease: library.pinnedRelease(album),
         mbid: library.pinnedMbid(album),
+        merged: library.isMerged(album),
+        styles: library.stylesOf(album),
       ));
 
       for (final t in album.tracks) {
@@ -180,6 +182,10 @@ class LanCatalog {
           name: a.name,
           artworkRef: a.artworkRef,
           albumCount: albumCounts[a.id] ?? 0,
+          artChoice: {
+            for (final kind in const ['portrait', 'backdrop', 'logo'])
+              if (library.chosenArtistArt(a.name, kind) case final url?) kind: url,
+          },
         )
     ]..sort((x, y) => x.name.toLowerCase().compareTo(y.name.toLowerCase()));
 
@@ -198,7 +204,12 @@ class LanCatalog {
     // megabytes and encoding it twice to get a hash would be the most expensive thing here.
     final fingerprint = _Fnv();
     for (final a in artistList) {
-      fingerprint..add(a.id)..add(a.name)..add('${a.albumCount}');
+      fingerprint
+        ..add(a.id)
+        ..add(a.name)
+        ..add('${a.albumCount}')
+        // A picked portrait is not a track change either.
+        ..add(a.artChoice.entries.map((e) => '${e.key}=${e.value}').join(','));
     }
     for (final a in albums) {
       fingerprint
@@ -209,7 +220,10 @@ class LanCatalog {
         // Pinning a pressing changes not a single track, so without this the ETag would not move
         // and no device would ever hear about it.
         ..add('${a.discogsRelease ?? ''}')
-        ..add(a.mbid ?? '');
+        ..add(a.mbid ?? '')
+        // Merging, and what a record sounds like, change no track either.
+        ..add(a.merged ? 'm' : '')
+        ..add(a.styles.join(','));
     }
     for (final t in tracks) {
       fingerprint..add(t.id)..add(t.title)..add('${t.trackNo}')..add('${t.sizeBytes}');

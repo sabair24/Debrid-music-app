@@ -551,6 +551,43 @@ void _editingTests() {
     expect(mac.pinnedRelease(after), isNull);
   });
 
+  test('what the PC knows that the tags do not, comes down with the catalogue', () async {
+    // Three things that live only in the PC's own files and change not a single track: whether a
+    // record was told to keep its pressings together, what it sounds like, and which portrait was
+    // picked for the artist. Each one was missing on a client, and each one made a screen there
+    // quietly wrong rather than obviously broken.
+    final onPc = pcLibrary.albums.firstWhere((a) => a.title == 'Dummy');
+    await pcLibrary.mergeEditions(onPc);
+    await pcLibrary.rememberStyles('Portishead', 'Dummy', ['Trip Hop', 'Downtempo']);
+    await pcLibrary.setArtistArt('Portishead', 'portrait', 'https://example.test/p.jpg');
+    pcLibrary.notifyListeners();
+
+    await mac.loadRemote();
+    final onMac = mac.albums.firstWhere((a) => a.title == 'Dummy');
+
+    // The merge control read false here and offered to merge a record that already was.
+    expect(mac.isMerged(onMac), isTrue);
+    // Ontdek is fed by these, and was simply empty.
+    expect(mac.stylesOf(onMac), ['Trip Hop', 'Downtempo']);
+    // The picture you chose, instead of the app going off and finding its own.
+    expect(mac.chosenArtistArt('Portishead', 'portrait'), 'https://example.test/p.jpg');
+    expect(mac.chosenArtistArt('Portishead', 'backdrop'), isNull);
+  });
+
+  test('unmerging on the PC reaches the Mac as well', () async {
+    final onPc = pcLibrary.albums.firstWhere((a) => a.title == 'Dummy');
+    await pcLibrary.mergeEditions(onPc);
+    pcLibrary.notifyListeners();
+    await mac.loadRemote();
+    expect(mac.isMerged(mac.albums.firstWhere((a) => a.title == 'Dummy')), isTrue);
+
+    // The fingerprint has to move for this too, or the client keeps answering "merged" for ever.
+    await pcLibrary.unmergeEditions(pcLibrary.albums.firstWhere((a) => a.title == 'Dummy'));
+    pcLibrary.notifyListeners();
+    await mac.loadRemote();
+    expect(mac.isMerged(mac.albums.firstWhere((a) => a.title == 'Dummy')), isFalse);
+  });
+
   test('a cover chosen on the Mac is the cover the PC serves', () async {
     final art = Uint8List.fromList(List.generate(900, (i) => (i * 5) % 256));
     final album = mac.albums.firstWhere((a) => a.title == 'Dummy');

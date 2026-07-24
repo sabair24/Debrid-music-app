@@ -299,7 +299,11 @@ class LibraryStore extends ChangeNotifier {
   }
 
   /// Has the user told us to keep this record together?
-  bool isMerged(Album a) => _merged.contains('album::${artistKey(a.artist)}|${normKey(a.title)}');
+  bool isMerged(Album a) => isRemote
+      // The merged set lives on the PC, so on a client the answer comes down with the catalogue.
+      // Without this the control offers to merge a record that already is.
+      ? (_remoteAlbums[a]?.merged ?? false)
+      : _merged.contains('album::${artistKey(a.artist)}|${normKey(a.title)}');
 
   /// The exact Discogs release the user pinned to this album, if they pinned one.
   ///
@@ -352,7 +356,13 @@ class LibraryStore extends ChangeNotifier {
   }
 
   /// The image URL the user picked for [kind] — 'portrait' or 'backdrop' — or null.
-  String? chosenArtistArt(String artist, String kind) => _artistArtChoice[artistKey(artist)]?[kind];
+  String? chosenArtistArt(String artist, String kind) {
+    // A statement body rather than an arrow: `cond ? a?[k] : b` makes the parser read that second
+    // `?` as another conditional, and no amount of bracketing round the map reads well enough to
+    // be worth it.
+    final choice = isRemote ? _remoteArtistArt[artistKey(artist)] : _artistArtChoice[artistKey(artist)];
+    return choice?[kind];
+  }
 
   Future<void> setArtistArt(String artist, String kind, String url) async {
     _artistArtChoice.putIfAbsent(artistKey(artist), () => {})[kind] = url;
@@ -384,7 +394,8 @@ class LibraryStore extends ChangeNotifier {
 
   String _styleKey(String artist, String album) => '${artistKey(artist)}|${normKey(album)}';
 
-  List<String> stylesOf(Album a) => _styles[_styleKey(a.artist, a.title)] ?? const [];
+  List<String> stylesOf(Album a) =>
+      isRemote ? (_remoteAlbums[a]?.styles ?? const []) : (_styles[_styleKey(a.artist, a.title)] ?? const []);
 
   /// Remember what a record sounds like, found while its page was open.
   Future<void> rememberStyles(String artist, String album, List<String> styles) async {
@@ -829,10 +840,19 @@ class LibraryStore extends ChangeNotifier {
         artRef: dto.artworkRef ?? dto.id,
         release: dto.discogsRelease,
         mbid: dto.mbid,
+        merged: dto.merged,
+        styles: dto.styles,
       );
       built.add(al);
     }
     albums = built..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+
+    _remoteArtistArt
+      ..clear()
+      ..addEntries([
+        for (final a in catalog.artists)
+          if (a.artChoice.isNotEmpty) MapEntry(artistKey(a.name), a.artChoice),
+      ]);
 
     _rebuildTrackIndexes();
   }
@@ -840,7 +860,13 @@ class LibraryStore extends ChangeNotifier {
   /// What the PC calls each album we are showing: its id (for a write, in phase C) and the
   /// reference to ask `/art/` for. Keyed by object identity — [Album] has no value equality, and a
   /// refreshed catalogue makes new ones, so this is cleared and refilled with them.
-  final Map<Album, ({String id, String artRef, int? release, String? mbid})> _remoteAlbums = {};
+  final Map<Album,
+          ({String id, String artRef, int? release, String? mbid, bool merged, List<String> styles})>
+      _remoteAlbums = {};
+
+  /// Portraits and backdrops the user picked, by artist key — the same key [chosenArtistArt] uses,
+  /// so the lookup is unchanged.
+  final Map<String, Map<String, String>> _remoteArtistArt = {};
 
   /// The PC's id for an album we are showing, or null on the machine that owns the music.
   String? remoteAlbumId(Album a) => _remoteAlbums[a]?.id;

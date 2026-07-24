@@ -33,11 +33,17 @@ class ArtistDto {
   final String? artworkRef;
   final int albumCount;
 
+  /// Portraits and backdrops the user picked by hand, by kind ("portrait", "backdrop", "logo").
+  /// Carried so a Mac and an iPad show the picture that was chosen rather than going off and
+  /// finding their own — which is the app arguing with its owner.
+  final Map<String, String> artChoice;
+
   const ArtistDto({
     required this.id,
     required this.name,
     this.artworkRef,
     this.albumCount = 0,
+    this.artChoice = const {},
   });
 
   factory ArtistDto.fromJson(Map<String, dynamic> j) => ArtistDto(
@@ -45,6 +51,10 @@ class ArtistDto {
         name: _str(j['name']),
         artworkRef: j['artworkRef'] as String?,
         albumCount: _int(j['albumCount']),
+        artChoice: {
+          for (final e in (j['artChoice'] as Map? ?? const {}).entries)
+            if (e.value is String) '${e.key}': e.value as String,
+        },
       );
 
   Map<String, dynamic> toJson() => {
@@ -52,6 +62,7 @@ class ArtistDto {
         'name': name,
         'artworkRef': artworkRef,
         'albumCount': albumCount,
+        'artChoice': artChoice,
       };
 }
 
@@ -79,6 +90,14 @@ class AlbumDto {
   final int? discogsRelease;
   final String? mbid;
 
+  /// Told to keep its pressings together. The merge/unmerge control reads this, and without it a
+  /// client shows the wrong state — offering to merge a record that already is.
+  final bool merged;
+
+  /// What this record sounds like, as Discogs describes it. Feeds the Ontdek screen, which is
+  /// simply empty on a device that has none.
+  final List<String> styles;
+
   const AlbumDto({
     required this.id,
     required this.artistId,
@@ -92,6 +111,8 @@ class AlbumDto {
     this.addedMs = 0,
     this.discogsRelease,
     this.mbid,
+    this.merged = false,
+    this.styles = const [],
   });
 
   factory AlbumDto.fromJson(Map<String, dynamic> j) => AlbumDto(
@@ -107,6 +128,11 @@ class AlbumDto {
         addedMs: _int(j['addedMs']),
         discogsRelease: _intOrNull(j['discogsRelease']),
         mbid: j['mbid'] as String?,
+        merged: j['merged'] == true,
+        styles: [
+          for (final v in (j['styles'] as List? ?? const []))
+            if (v is String) v,
+        ],
       );
 
   Map<String, dynamic> toJson() => {
@@ -122,6 +148,8 @@ class AlbumDto {
         'addedMs': addedMs,
         'discogsRelease': discogsRelease,
         'mbid': mbid,
+        'merged': merged,
+        'styles': styles,
       };
 }
 
