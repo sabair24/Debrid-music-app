@@ -505,8 +505,17 @@ void _editingTests() {
 
   tearDown(() async {
     await server.dispose();
-    pcRoot.deleteSync(recursive: true);
-    scratch.deleteSync(recursive: true);
+    // Both, even if the first one throws — otherwise a failure here leaves the second temp folder
+    // behind on every run. A failure is still a failure: it is rethrown once both are attempted.
+    Object? failure;
+    for (final d in [pcRoot, scratch]) {
+      try {
+        d.deleteSync(recursive: true);
+      } catch (e) {
+        failure ??= e;
+      }
+    }
+    if (failure != null) throw failure;
   });
 
   test('a correction typed on the Mac lands on the PC and comes back', () async {

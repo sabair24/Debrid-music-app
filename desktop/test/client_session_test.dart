@@ -172,15 +172,29 @@ void main() {
     expect(library.isRemote, isTrue);
 
     // The next start: no pairing screen, straight into the library.
-    final again = await resolveMode(settings);
-    expect(again.owner, isFalse);
-    expect(again.needsPairing, isFalse);
-    expect(again.endpoint?.token, endpoint.token);
+    //
+    // Asked of the pairing store itself, because that is what "comes back paired" means. Going
+    // through resolveMode() would be asking the wrong question on Windows: ownsTheMusic() answers
+    // yes there whatever is on disk, deliberately, so a PC whose drive has not spun up cannot
+    // become a client of itself — see client_mode.dart. The two mode tests below guard for it too.
+    final remembered = await loadPairedServer();
+    expect(remembered?.token, endpoint.token);
+    expect(remembered?.baseUrl, endpoint.baseUrl);
+    if (!Platform.isWindows) {
+      final again = await resolveMode(settings);
+      expect(again.owner, isFalse);
+      expect(again.needsPairing, isFalse);
+      expect(again.endpoint?.token, endpoint.token);
+    }
 
     await session.unpair();
     expect(session.ready, isFalse);
     expect(library.isRemote, isFalse);
-    expect((await resolveMode(settings)).needsPairing, isTrue);
+    // Unpairing really deletes it, rather than merely being ignored at startup.
+    expect(await loadPairedServer(), isNull);
+    if (!Platform.isWindows) {
+      expect((await resolveMode(settings)).needsPairing, isTrue);
+    }
     session.dispose();
   });
 

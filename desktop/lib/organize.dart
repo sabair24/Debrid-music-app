@@ -363,6 +363,9 @@ TrackTags? readTags(File f) {
       );
     }
   }
+  // A staged download the package cannot parse would otherwise lock itself into the staging
+  // folder: the handle it keeps on the refusal makes the file un-renameable for good.
+  if (!tagParserWouldClaim(f)) return null;
   try {
     final m = readMetadata(f, getImage: false);
     return TrackTags(

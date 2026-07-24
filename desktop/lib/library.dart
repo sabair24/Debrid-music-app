@@ -71,6 +71,9 @@ List<Map<String, dynamic>> _scanTags(String root) {
         continue;
       }
     }
+    // Never hand the package a file it is going to refuse: it opens before it decides, and the
+    // refusal keeps the handle. See tagParserWouldClaim().
+    if (!tagParserWouldClaim(e)) continue;
     try {
       final m = readMetadata(e, getImage: false);
       out.add({
@@ -119,6 +122,9 @@ Future<Map<String, Uint8List>> readCoversInIsolate(List<String> paths) =>
 Map<String, Uint8List> _readCovers(List<String> paths) {
   final out = <String, Uint8List>{};
   for (final p in paths) {
+    // Same guard as pass 1. This pass has no FLAC fast path in front of it, so it is the one that
+    // would lock a perfectly good album the day its track number reads "A3".
+    if (!tagParserWouldClaim(File(p))) continue;
     try {
       final m = readMetadata(File(p), getImage: true);
       if (m.pictures.isNotEmpty) out[p] = m.pictures.first.bytes;

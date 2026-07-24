@@ -2,6 +2,8 @@ import 'dart:typed_data';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:audio_metadata_reader/audio_metadata_reader.dart';
+
 /// A tolerant FLAC tag reader, used when the metadata package refuses a file.
 ///
 /// Why this exists: `audio_metadata_reader` runs `int.parse` on TRACKNUMBER, so a vinyl-style
@@ -49,6 +51,48 @@ class FlacTags {
   });
 
   bool get multichannel => channels > 2;
+}
+
+/// Would `audio_metadata_reader` claim [f]? Asked without letting it near the file.
+///
+/// [readMetadata] opens the file BEFORE it decides and closes it only once a parser has finished
+/// successfully. When nothing recognises the bytes it throws with the handle still open — its
+/// parser.dart opens at the top and has no `finally`. On Windows that one handle makes the file,
+/// and every folder above it, impossible to rename or delete for the rest of the session: a move
+/// then fails all its retries, falls back to copy, fails to delete the original, and silently
+/// leaves a duplicate behind. There is no way to close that handle from out here, so the only cure
+/// is not to open it.
+///
+/// These are the package's OWN checks, in its own order, run against a reader we close ourselves —
+/// so this cannot drift away from what [readMetadata] will actually accept. RIFF alone is spelled
+/// out by hand: the package exports RiffWriter but not RiffParser, and "RIFF" in the first four
+/// bytes is the whole of its test.
+///
+/// Errs towards yes. A false yes costs exactly one leaked handle, which is what happens today
+/// anyway; a false no would drop a real track out of the library without a word.
+bool tagParserWouldClaim(File f) {
+  RandomAccessFile? raf;
+  try {
+    raf = f.openSync();
+    // Every check below reads at least the first twelve bytes (AIFF looks at offset 8).
+    if (raf.lengthSync() < 12) return false;
+    if (ApeParser.canUserParser(raf)) return true;
+    if (MP3Parser.canUserParser(raf)) return true;
+    if (FlacParser.canUserParser(raf)) return true;
+    if (MP4Parser.canUserParser(raf)) return true;
+    if (OGGParser.canUserParser(raf)) return true;
+    if (AiffParser.canUserParser(raf)) return true;
+    raf.setPositionSync(0);
+    return String.fromCharCodes(raf.readSync(4)) == 'RIFF';
+  } catch (_) {
+    // A file we cannot even open is not one the package could have read either.
+    return false;
+  } finally {
+    // Without this, the guard becomes the bug it exists to prevent.
+    try {
+      raf?.closeSync();
+    } catch (_) {}
+  }
 }
 
 /// Reads [f]'s FLAC tags, or null if it isn't FLAC / has no readable header.
