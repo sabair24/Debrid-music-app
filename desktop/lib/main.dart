@@ -95,11 +95,8 @@ Future<void> main() async {
       titleBarStyle: TitleBarStyle.hidden,
     ),
     () async {
-      // Maximise AFTER showing. Asked for before the window exists on screen, Windows keeps the
-      // restore size and the app opens in a small frame — which is what it did.
       await windowManager.show();
       await windowManager.focus();
-      await windowManager.maximize();
     },
   );
 
@@ -155,6 +152,21 @@ Future<void> main() async {
       child: const DebridApp(),
     ),
   );
+
+  // Fill the screen, once there is a frame to fill it with.
+  //
+  // Asked for inside waitUntilReadyToShow — before OR after show() — Windows quietly keeps the
+  // restore size while the window is still being realised, and the app opens in a small frame.
+  // Both orderings were tried and both did. So ask after the first frame, and check the answer
+  // instead of assuming it: read isMaximized back and retry for about half a second.
+  WidgetsBinding.instance.addPostFrameCallback((_) async {
+    for (var i = 0; i < 6; i++) {
+      if (await windowManager.isMaximized()) break;
+      await windowManager.maximize();
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+  });
+
   // Scan, then fill in missing covers + artist photos (cache-first, then web).
   // Wrapped so a scan hiccup can never prevent enrichment from running.
   () async {
