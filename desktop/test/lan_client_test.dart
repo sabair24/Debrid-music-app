@@ -16,6 +16,10 @@ import 'package:http/testing.dart';
 
 import 'package:debridmusic/lan/catalog.dart';
 import 'package:debridmusic/lan/pairing.dart';
+import 'package:debridmusic/lan/remote_services.dart';
+import 'package:debridmusic/online.dart';
+import 'package:debridmusic/organize.dart';
+import 'package:debridmusic/soulseek.dart';
 import 'package:debridmusic/lan/server.dart';
 import 'package:debridmusic/lan/state_store.dart';
 import 'package:debridmusic/lan/client.dart';
@@ -692,4 +696,142 @@ void _editingTests() {
     expect(File('${pcRoot.path}/Portishead/Dummy/01.flac').existsSync(), isTrue,
         reason: 'alleen de groepering verandert, het bestand blijft staan');
   });
+
+  _downloadTests();
+}
+
+/// Downloading from a device that holds no files, and the identity that has to travel with it.
+///
+/// Soulseek supplies audio and nothing else — the numbering, the album, the year and above all the
+/// track TOTAL come from whoever asked for the download. On Windows that has been true for a while.
+/// Over the LAN it was not: the client took an authority and dropped it, and the PC never asked for
+/// one, so a download started on a Mac was filed under the uploader's tags. A wrong track number
+/// collides with one the album already uses, and a collision is what the library reads as two
+/// pressings — which is how a single album becomes four tiles.
+///
+/// Nothing covered this. That is why it went unnoticed, so it is covered now.
+void _downloadTests() {
+  late Directory pcRoot;
+  late LanServer server;
+  late _RecordingDownloads pc;
+  late RemoteDownloadManager mac;
+
+  setUp(() async {
+    pcRoot = Directory.systemTemp.createTempSync('dm_dl_');
+    final settings = AppSettings();
+    final soulseek = SoulseekService(settings);
+    pc = _RecordingDownloads(OnlineService(settings), soulseek, pcRoot.path, () async {});
+    server = LanServer(
+      library: LibraryStore()..rootPath = pcRoot.path,
+      token: 'sleutel',
+      state: LanStateStore(File('${pcRoot.path}/state.json')),
+      pairing: PairingStore(),
+      port: 0,
+      settings: settings,
+      downloads: pc,
+    );
+    expect(await server.start(), isNull);
+
+    final endpoint = RemoteEndpoint(
+        baseUrl: Uri.parse('http://127.0.0.1:${server.boundPort}'), token: 'sleutel');
+    mac = RemoteDownloadManager(
+        OnlineService(settings), soulseek, pcRoot.path, () async {}, () => endpoint);
+  });
+
+  tearDown(() async {
+    mac.dispose();
+    await server.dispose();
+    try {
+      pcRoot.deleteSync(recursive: true);
+    } catch (_) {}
+  });
+
+  SoulseekFile file(String name) =>
+      SoulseekFile(username: 'peer', filename: r'peer\music\' '$name', size: 4096);
+
+  const authority = TrackTags(
+    title: 'Missing You',
+    artist: 'Backstreet Boys',
+    album: "Backstreet's Back",
+    albumArtist: 'Backstreet Boys',
+    trackNo: 12,
+    trackTotal: 13,
+    year: 1997,
+  );
+
+  test('the numbering crosses the wire with the download', () async {
+    expect(await mac.enqueueSoulseekBest([file('missing you.flac')],
+            key: 'own:x:11', authority: authority),
+        isTrue);
+
+    final got = pc.lastAuthority;
+    expect(got, isNotNull, reason: 'de pc kreeg geen autoriteit — dan tagt de uploader het bestand');
+    expect(got!.title, 'Missing You');
+    expect(got.artist, 'Backstreet Boys');
+    expect(got.album, "Backstreet's Back");
+    expect(got.albumArtist, 'Backstreet Boys');
+    expect(got.trackNo, 12);
+    expect(got.trackTotal, 13, reason: 'het totaal is de tag waar uitgaves op splitsen');
+    expect(got.year, 1997);
+    expect(pc.lastKey, 'own:x:11');
+  });
+
+  test('and arrives still authoritative — the property that steers where it lands', () async {
+    await mac.enqueueSoulseekBest([file('a.flac')], authority: authority);
+    // isAuthoritative is derived from trackTotal/year/albumArtist, so losing any of the three in
+    // transit silently re-enables the fuzzy comparison placeFileDetailed skips for a known track.
+    expect(pc.lastAuthority!.isAuthoritative, isTrue);
+  });
+
+  test('a client that sends none still downloads, exactly as before', () async {
+    expect(await mac.enqueueSoulseekBest([file('b.flac')], key: 'k'), isTrue);
+    expect(pc.calls, 1);
+    expect(pc.lastAuthority, isNull);
+  });
+
+  test('a whole album is downloaded BY THE PC, with every track named', () async {
+    // Soulseek allows one login per account. Run locally this would open a second session on the
+    // Mac and fight the PC for it.
+    final started = await mac.enqueueSoulseekAlbum(
+      [
+        [file('01.flac')],
+        [file('02.flac')],
+      ],
+      authorities: [authority, null],
+    );
+
+    expect(started, 2);
+    expect(pc.albumTracks, hasLength(2));
+    expect(pc.albumTracks!.first.single.filename, endsWith('01.flac'));
+    expect(pc.albumAuthorities!.first?.trackNo, 12, reason: 'op de juiste index');
+    expect(pc.albumAuthorities!.last, isNull, reason: 'en een gat blijft een gat');
+  });
+}
+
+/// A PC that writes down what it was asked to do instead of doing it.
+class _RecordingDownloads extends DownloadManager {
+  _RecordingDownloads(super.online, super.soulseek, super.musicRoot, super.onLibraryChanged);
+
+  int calls = 0;
+  String? lastKey;
+  TrackTags? lastAuthority;
+  List<List<SoulseekFile>>? albumTracks;
+  List<TrackTags?>? albumAuthorities;
+
+  @override
+  Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,
+      {String? key, TrackTags? authority}) async {
+    calls++;
+    lastKey = key;
+    lastAuthority = authority;
+    return true;
+  }
+
+  @override
+  Future<int> enqueueSoulseekAlbum(List<List<SoulseekFile>> tracks,
+      {List<TrackTags?> authorities = const []}) async {
+    albumTracks = tracks;
+    albumAuthorities = authorities;
+    return tracks.length;
+  }
 }

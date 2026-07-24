@@ -152,7 +152,6 @@ AlbumCompleteness matchAlbumTracks(
   for (var i = 0; i < official.length; i++) {
     if (owned.containsKey(i)) continue;
     final o = official[i];
-    final ow = _words(o.title);
     for (final t in tracks) {
       if (claimed.contains(t.path)) continue;
       if (!sameTitle(o.title, t.title,

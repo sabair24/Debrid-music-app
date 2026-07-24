@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import '../library.dart';
 import '../models.dart';
 import '../online.dart';
+import '../organize.dart';
 import '../settings.dart';
 import '../soulseek.dart';
 import '../torbox.dart';
@@ -197,6 +198,8 @@ class LanServer {
         return _soulseekSearch(req);
       case '/api/soulseek/download':
         return _soulseekDownload(req);
+      case '/api/soulseek/download-album':
+        return _soulseekDownloadAlbum(req);
       case '/api/jobs':
         return _json(res, {'jobs': jobsSnapshot()});
       case '/api/jobs/cancel':
@@ -551,6 +554,16 @@ class LanServer {
     }
   }
 
+  /// What the device says this track IS, when it says anything.
+  ///
+  /// Optional on purpose: a client from before this existed sends no authority, and must keep
+  /// working exactly as it did. Soulseek supplies the audio; whoever asked for it supplies the
+  /// identity — and if nobody does, placeFileDetailed falls back to the peer's own tags as before.
+  static TrackTags? _authorityOf(Map<String, dynamic> body) {
+    final a = body['authority'];
+    return a is Map<String, dynamic> ? TrackTags.fromJson(a) : null;
+  }
+
   Future<void> _soulseekDownload(HttpRequest req) async {
     final manager = downloads;
     if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
@@ -564,8 +577,46 @@ class LanServer {
     }
     if (candidates.isEmpty) return _json(req.response, {'ok': false, 'reason': 'geen kandidaten'});
     try {
-      final started = await manager.enqueueSoulseekBest(candidates, key: body['key'] as String?);
+      final started = await manager.enqueueSoulseekBest(candidates,
+          key: body['key'] as String?, authority: _authorityOf(body));
       return _json(req.response, {'ok': started});
+    } catch (e) {
+      return _unavailable(req, '$e');
+    }
+  }
+
+  /// A whole album at once, asked for by a paired device.
+  ///
+  /// `tracks` is one list of candidate copies per track, `authorities` runs alongside it by index —
+  /// the same shape the local call takes, so the PC does here exactly what it does for itself.
+  Future<void> _soulseekDownloadAlbum(HttpRequest req) async {
+    final manager = downloads;
+    if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final tracks = <List<SoulseekFile>>[];
+    for (final t in (body['tracks'] as List? ?? const [])) {
+      if (t is! List) continue;
+      final files = <SoulseekFile>[];
+      for (final c in t) {
+        if (c is! Map<String, dynamic>) continue;
+        final f = SoulseekFile.fromJson(c);
+        if (f != null) files.add(f);
+      }
+      tracks.add(files);
+    }
+    if (tracks.isEmpty) return _json(req.response, {'started': 0, 'reason': 'geen kandidaten'});
+    final wire = body['authorities'] as List? ?? const [];
+    final authorities = <TrackTags?>[
+      for (var i = 0; i < tracks.length; i++)
+        if (i < wire.length && wire[i] is Map<String, dynamic>)
+          TrackTags.fromJson(wire[i] as Map<String, dynamic>)
+        else
+          null
+    ];
+    try {
+      final started = await manager.enqueueSoulseekAlbum(tracks, authorities: authorities);
+      return _json(req.response, {'started': started});
     } catch (e) {
       return _unavailable(req, '$e');
     }

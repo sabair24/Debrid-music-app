@@ -258,9 +258,41 @@ class RemoteDownloadManager extends DownloadManager {
       final res = await _rpc.post('/api/soulseek/download', {
         'candidates': [for (final c in candidates) c.toJson()],
         'key': key,
+        // Without this the PC files the download under the UPLOADER's tags: their track number,
+        // their idea of how many tracks the record has, their year. A wrong number collides with
+        // one the album already uses, and a collision is what the library reads as two pressings —
+        // which is how a single album ends up as four tiles.
+        if (authority != null) 'authority': authority.toJson(),
       });
       await refresh();
       return res['ok'] == true;
+    } catch (e) {
+      lastError = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  /// A whole album, downloaded BY THE PC.
+  ///
+  /// Without this override the base class runs here, on the Mac — and Soulseek allows exactly one
+  /// login per account, so the client would either fail outright or fight the PC for the session.
+  /// The two lists travel index-aligned, the same shape the local call takes.
+  @override
+  Future<int> enqueueSoulseekAlbum(List<List<SoulseekFile>> tracks,
+      {List<TrackTags?> authorities = const []}) async {
+    try {
+      final res = await _rpc.post('/api/soulseek/download-album', {
+        'tracks': [
+          for (final t in tracks) [for (final f in t) f.toJson()]
+        ],
+        'authorities': [
+          for (var i = 0; i < tracks.length; i++)
+            i < authorities.length ? authorities[i]?.toJson() : null
+        ],
+      });
+      await refresh();
+      return (res['started'] as num?)?.toInt() ?? 0;
     } catch (e) {
       lastError = e.toString();
       notifyListeners();
