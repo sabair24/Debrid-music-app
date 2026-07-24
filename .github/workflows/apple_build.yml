@@ -173,6 +173,53 @@ jobs:
           openssl pkey -in ~/private_keys/AuthKey_${KEY_ID}.p8 -noout \
             || { echo "::error::APPLE_API_PRIVATE_KEY is not a readable private key"; exit 1; }
 
+      # ── The signing certificate ──────────────────────────────────────────
+      #
+      # Imported from a secret rather than left to -allowProvisioningUpdates, and this is not a
+      # preference: a runner is a fresh machine with an empty keychain, so Xcode minted a NEW
+      # distribution certificate on every single run. Apple caps how many an account may have, and
+      # after three releases the build failed with "your account has reached the maximum number of
+      # certificates" — with the private keys of all of them already thrown away with the runners.
+      #
+      # Two more secrets, both made from ONE certificate that lives in your own keychain:
+      #   APPLE_DIST_CERT_P12       base64 of the exported .p12
+      #   APPLE_DIST_CERT_PASSWORD  the password set when exporting it
+      #
+      # Profiles are still fetched by -allowProvisioningUpdates below. Those are not capped; the
+      # certificate was the scarce thing.
+      - name: Import the signing certificate
+        if: steps.gate.outputs.ready == 'true' && (startsWith(github.ref, 'refs/tags/apple-v') || inputs.testflight)
+        env:
+          CERT_P12: ${{ secrets.APPLE_DIST_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_DIST_CERT_PASSWORD }}
+        run: |
+          if [ -z "$CERT_P12" ]; then
+            echo "::error::APPLE_DIST_CERT_P12 is not set. Without it Xcode creates a new certificate every run and the account fills up."
+            exit 1
+          fi
+          # A throwaway keychain, not the login one: the runner is discarded anyway, and this keeps
+          # the certificate out of anything the rest of the job might touch.
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+          # Without this codesign stops to ask for permission, and a CI machine has nobody to ask.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          # Search list, not replace: the system roots have to stay reachable or nothing verifies.
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN"
+
+          echo "Identiteiten in de keychain:"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
       # ── iPad → TestFlight ────────────────────────────────────────────────
       #
       # xcodebuild rather than `flutter build ipa`: the archive needs -allowProvisioningUpdates and
@@ -273,3 +320,11 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The runner is thrown away regardless, but leaving a signing certificate unlocked in a
+      # default keychain for the rest of the job is not a habit worth having.
+      - name: Remove the signing keychain
+        if: always()
+        run: |
+          security default-keychain -s login.keychain-db 2>/dev/null || true
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
