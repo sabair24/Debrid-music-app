@@ -3756,6 +3756,19 @@ class _ArtistNamesState extends State<ArtistNames> {
   }
 }
 
+/// Move the playhead by [seconds], clamped to the track.
+///
+/// Clamped rather than left to the player: seeking past the end restarts the queue on some
+/// backends and stalls on others, and neither is what "ten seconds forward" means.
+void _nudge(PlayerStore p, int seconds) {
+  final total = p.duration;
+  if (total.inMilliseconds <= 0) return;
+  var target = p.position + Duration(seconds: seconds);
+  if (target < Duration.zero) target = Duration.zero;
+  if (target > total) target = total;
+  p.seek(target);
+}
+
 // ── Now-playing bar ──────────────────────────────────────────────────────────
 class PlayerBar extends StatelessWidget {
   const PlayerBar({super.key});
@@ -3856,6 +3869,23 @@ class PlayerBar extends StatelessWidget {
                       color: _muted,
                       onPressed: p.hasPrev || p.position > const Duration(seconds: 3) ? p.prev : null,
                     ),
+                    // Seeking, for a remote.
+                    //
+                    // The progress bar below is a Slider, and a Slider binds all FOUR arrows to
+                    // changing its value — so the highlight goes in and cannot come out. It is
+                    // therefore skipped on a television, which left no way to seek at all. Two
+                    // buttons are the honest answer: they are reachable, they say what they do,
+                    // and they cost a mouse nothing because they are not built for it.
+                    // No TvLabelled here: the bar is 84 points tall and a caption under the icon
+                    // overflowed it by three pixels. These two glyphs carry a "10" on their face,
+                    // which is the label.
+                    if (isTv)
+                      IconButton(
+                        icon: const Icon(Icons.replay_10_rounded, size: 22),
+                        color: _muted,
+                        tooltip: '10 seconden terug',
+                        onPressed: t == null ? null : () => _nudge(p, -10),
+                      ),
                     const SizedBox(width: 2),
                     Container(
                       decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
@@ -3867,6 +3897,13 @@ class PlayerBar extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 2),
+                    if (isTv)
+                      IconButton(
+                        icon: const Icon(Icons.forward_10_rounded, size: 22),
+                        color: _muted,
+                        tooltip: '10 seconden vooruit',
+                        onPressed: t == null ? null : () => _nudge(p, 10),
+                      ),
                     IconButton(
                       icon: const Icon(Icons.skip_next_rounded),
                       color: _muted,
