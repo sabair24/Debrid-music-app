@@ -26,6 +26,19 @@ data class AuthResponse(
     @SerializedName("expiresIn") val expiresIn: String = "3600",
 )
 
+/**
+ * What Firebase sends back on a refusal. The reason lives in `error.message` as a shouty constant
+ * — `INVALID_LOGIN_CREDENTIALS` and the like — and without reading it there is nothing left to tell
+ * someone except the status code, which explains nothing.
+ */
+data class AuthError(
+    @SerializedName("error") val error: AuthErrorBody? = null,
+)
+
+data class AuthErrorBody(
+    @SerializedName("message") val message: String = "",
+)
+
 data class RefreshResponse(
     @SerializedName("id_token") val idToken: String = "",
     @SerializedName("refresh_token") val refreshToken: String = "",

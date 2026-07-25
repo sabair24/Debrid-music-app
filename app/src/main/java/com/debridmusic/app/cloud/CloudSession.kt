@@ -2,11 +2,47 @@ package com.debridmusic.app.cloud
 
 import android.os.Build
 import com.debridmusic.app.data.local.SettingsStore
+import com.google.gson.Gson
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import retrofit2.HttpException
+import java.io.IOException
 import java.security.SecureRandom
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/**
+ * Carries the sentence to put in front of the user, with Firebase's own code kept alongside for the
+ * log. Mirrors `CloudAuthException` in the Flutter app so the two say the same thing in the same
+ * words on the same failure.
+ */
+class CloudAuthException(
+    message: String,
+    val code: String = "",
+    cause: Throwable? = null,
+) : Exception(message, cause)
+
+/**
+ * Firebase deliberately blurs "no such account" and "wrong password" into one code so an attacker
+ * cannot use the login form to discover which addresses exist. Say the same thing for both rather
+ * than leaking the difference back in the translation.
+ */
+private fun dutch(code: String, status: Int): String = when (code.substringBefore(" : ")) {
+    "EMAIL_NOT_FOUND", "INVALID_PASSWORD", "INVALID_LOGIN_CREDENTIALS" ->
+        "E-mailadres of wachtwoord klopt niet."
+    "EMAIL_EXISTS" -> "Er bestaat al een account met dit e-mailadres."
+    "WEAK_PASSWORD" -> "Kies een wachtwoord van minstens zes tekens."
+    "INVALID_EMAIL" -> "Dat is geen geldig e-mailadres."
+    "USER_DISABLED" -> "Dit account is uitgeschakeld."
+    "TOO_MANY_ATTEMPTS_TRY_LATER" ->
+        "Te veel pogingen. Probeer het over een paar minuten opnieuw."
+    "TOKEN_EXPIRED", "USER_NOT_FOUND", "INVALID_REFRESH_TOKEN" ->
+        "Je sessie is verlopen. Log opnieuw in."
+    "OPERATION_NOT_ALLOWED" ->
+        "Inloggen met e-mail staat uit in dit Firebase-project. " +
+            "Zet het aan onder Authentication → Sign-in method."
+    else -> "Firebase antwoordde met $status" + if (code.isBlank()) "." else " ($code)."
+}
 
 /**
  * Signing in, and getting this device its own key to the PC.
@@ -41,13 +77,33 @@ class CloudSession @Inject constructor(
     }
 
     suspend fun signIn(email: String, password: String) {
-        val res = authApi.signIn(CloudConfig.API_KEY, AuthRequest(email.trim(), password))
+        val res = explained { authApi.signIn(CloudConfig.API_KEY, AuthRequest(email.trim(), password)) }
         adopt(res.idToken, res.refreshToken, res.localId, res.expiresIn)
     }
 
     suspend fun register(email: String, password: String) {
-        val res = authApi.signUp(CloudConfig.API_KEY, AuthRequest(email.trim(), password))
+        val res = explained { authApi.signUp(CloudConfig.API_KEY, AuthRequest(email.trim(), password)) }
         adopt(res.idToken, res.refreshToken, res.localId, res.expiresIn)
+    }
+
+    /**
+     * Run an Identity Toolkit call and turn a refusal into a sentence.
+     *
+     * Retrofit's own message for a rejected sign-in is "HTTP 400", which is true and useless: it
+     * looks the same whether you mistyped your password, the account does not exist, or e-mail
+     * sign-in is switched off in the Firebase console. The reason is in the body, so read it.
+     */
+    private suspend fun <T> explained(call: suspend () -> T): T = try {
+        call()
+    } catch (e: HttpException) {
+        val body = runCatching { e.response()?.errorBody()?.string() }.getOrNull().orEmpty()
+        val code = runCatching { Gson().fromJson(body, AuthError::class.java) }
+            .getOrNull()?.error?.message.orEmpty()
+        throw CloudAuthException(dutch(code, e.code()), code)
+    } catch (e: IOException) {
+        // No internet, or DNS is down. Distinct from a refusal on purpose: the answer is to check
+        // the network, not the password.
+        throw CloudAuthException("Geen verbinding met Firebase. Controleer je netwerk.", "NETWORK", e)
     }
 
     suspend fun signOut() {

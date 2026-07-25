@@ -3,6 +3,7 @@ package com.debridmusic.app.ui.tv.settings
 import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.debridmusic.app.cloud.CloudAuthException
 import com.debridmusic.app.cloud.CloudConnect
 import com.debridmusic.app.cloud.CloudSession
 import com.debridmusic.app.data.local.SettingsStore
@@ -95,12 +96,15 @@ class TvPairingViewModel @Inject constructor(
                 else cloudSession.signIn(s.email, s.password)
             }
             if (result.isFailure) {
-                _state.update {
-                    it.copy(
-                        signingIn = false,
-                        signInMessage = "Inloggen mislukte: ${result.exceptionOrNull()?.message ?: "onbekende fout"}",
-                    )
+                val cause = result.exceptionOrNull()
+                // A CloudAuthException already reads as a sentence; prefixing it would produce
+                // "Inloggen mislukte: E-mailadres of wachtwoord klopt niet." Anything else is a
+                // technical message that needs the prefix to make sense at all.
+                val text = when {
+                    cause is CloudAuthException -> cause.message.orEmpty()
+                    else -> "Inloggen mislukte: ${cause?.message ?: "onbekende fout"}"
                 }
+                _state.update { it.copy(signingIn = false, signInMessage = text) }
                 return@launch
             }
             _state.update { it.copy(signedIn = true, password = "") }
