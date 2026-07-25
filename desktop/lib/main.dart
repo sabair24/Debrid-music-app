@@ -557,9 +557,25 @@ class _HomeShellState extends State<HomeShell> {
   QFilter _qFilter = QFilter.all;
   AlbumSort _sort = AlbumSort.titel;
 
+  /// A layer inside the current section that BACK must close before the section itself.
+  ///
+  /// Null when there is none. Held here rather than solved with a second PopScope inside the
+  /// section: both would be registered on the same route and BOTH fire on one press of BACK.
+  VoidCallback? _popInner;
+
+  void _setInnerLayer(VoidCallback? pop) {
+    if (_popInner == pop) return;
+    // During the child's build, so not inside setState — the flag only feeds canPop, which is
+    // read on the next frame anyway.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => _popInner = pop);
+    });
+  }
+
   @override
   void dispose() {
     _searchCtl.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
@@ -723,9 +739,17 @@ class _HomeShellState extends State<HomeShell> {
     // canPop stays true on Start, so a second BACK still leaves. An app you cannot get out of is
     // the other half of this mistake.
     return PopScope(
-      canPop: _view == 5,
+      canPop: _view == 5 && _popInner == null,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
+        // The innermost layer first. A section can have one of its own — the artist page is a
+        // swapped-in body, not a route — and it has to close before the section does, or BACK
+        // from an artist lands on Start and loses your place in the list.
+        final inner = _popInner;
+        if (inner != null) {
+          inner();
+          return;
+        }
         setState(() => _view = 5);
       },
       child: Scaffold(
@@ -915,7 +939,7 @@ class _HomeShellState extends State<HomeShell> {
         }
         return _view == 0
             ? AlbumsGrid(albums: _sortAlbums(albums), title: _q.isEmpty ? null : '${albums.length} resultaten')
-            : ArtistsView(lib: lib, albums: albums);
+            : ArtistsView(lib: lib, albums: albums, onInnerLayer: _setInnerLayer);
       },
     );
   }
@@ -2683,7 +2707,16 @@ class ArtistsView extends StatefulWidget {
 
   /// Albums already narrowed by the shell's search/filter (defaults to the whole library).
   final List<Album>? albums;
-  const ArtistsView({super.key, required this.lib, this.albums});
+
+  /// How this view tells the shell it has a layer of its own to close.
+  ///
+  /// Handed up rather than handled here with a second PopScope. Both would be registered on the
+  /// SAME route — this view is a swapped-in body, not a route — so one press of BACK fires both:
+  /// the shell would jump to Start while this cleared its selection, and you would lose your place
+  /// in the artist list. Measured on the Shield, not guessed.
+  final void Function(VoidCallback?)? onInnerLayer;
+
+  const ArtistsView({super.key, required this.lib, this.albums, this.onInnerLayer});
   @override
   State<ArtistsView> createState() => _ArtistsViewState();
 }
@@ -2693,25 +2726,27 @@ class _ArtistsViewState extends State<ArtistsView> {
 
   List<Album> get _source => widget.albums ?? widget.lib.albums;
 
+  /// Select an artist, or go back to the grid, and tell the shell either way.
+  void _select(String? name) {
+    setState(() => _selected = name);
+    widget.onInnerLayer?.call(name == null ? null : () => _select(null));
+  }
+
+  @override
+  void dispose() {
+    // The shell must not keep a callback into a view that is gone.
+    widget.onInnerLayer?.call(null);
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_selected != null) {
-      // The artist page is a swapped-in body, not a route, so BACK would skip past it to the
-      // shell's own handler and land you on Start — losing the artist grid you were in. This
-      // nests inside the shell's PopScope and the inner one wins, which gives the sequence a
-      // remote expects: artist → grid → Start → out.
-      return PopScope(
-        canPop: false,
-        onPopInvokedWithResult: (didPop, _) {
-          if (didPop) return;
-          setState(() => _selected = null);
-        },
-        child: ArtistDetailView(
-          name: _selected!,
-          libraryAlbums: _source.where((a) => a.artist == _selected!).toList(),
-          onBack: () => setState(() => _selected = null),
-          onArtist: (n) => setState(() => _selected = n),
-        ),
+      return ArtistDetailView(
+        name: _selected!,
+        libraryAlbums: _source.where((a) => a.artist == _selected!).toList(),
+        onBack: () => _select(null),
+        onArtist: _select,
       );
     }
     // Only artists that still have a matching album after the shell's search/filter.
@@ -2744,7 +2779,7 @@ class _ArtistsViewState extends State<ArtistsView> {
               return _ArtistCard(
                 name: name,
                 image: art,
-                onTap: () => setState(() => _selected = name),
+                onTap: () => _select(name),
               );
             }, childCount: artists.length),
           ),
@@ -5798,6 +5833,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   @override
   void dispose() {
     _c.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
@@ -6562,10 +6598,17 @@ class _HeroCarouselState extends State<HeroCarousel> {
     final cover = hit.album.cover;
     // The whole banner is clickable AND carries a "Bekijken" button that does the same thing. For a
     // mouse that is a convenience; for a remote it is two stops with one outcome, and a ring drawn
-    // around 260 points of artwork. On a television only the button takes the highlight.
-    return _maybeFocusable(Pressable(
-      onPressed: () => Navigator.of(context)
-          .push(MaterialPageRoute(builder: (_) => AlbumBrowsePage(hit.artist, hit.album))),
+    // around 260 points of artwork.
+    //
+    // So on a television the banner is not pressable and the button is. NOT ExcludeFocus, which was
+    // the first attempt and was simply wrong: it excludes the whole subtree, so it took the
+    // "Bekijken" button out of the highlight's path as well and left the entire carousel
+    // unreachable — the opposite of what the comment claimed.
+    return Pressable(
+      onPressed: isTv
+          ? null
+          : () => Navigator.of(context)
+              .push(MaterialPageRoute(builder: (_) => AlbumBrowsePage(hit.artist, hit.album))),
       borderRadius: BorderRadius.circular(12),
       scaleOnFocus: false,
       child: MouseRegion(
@@ -6644,7 +6687,7 @@ class _HeroCarouselState extends State<HeroCarousel> {
           ],
         ),
       ),
-    ));
+    );
   }
 }
 
@@ -8489,7 +8532,10 @@ class _SharingSectionState extends State<_SharingSection> {
           style: TextStyle(fontSize: 13, height: 1.4),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Annuleren')),
+          TextButton(
+              autofocus: isTv,
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Annuleren')),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: _accent),
             onPressed: () => Navigator.pop(context, true),
@@ -9812,11 +9858,15 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
         final lib = context.read<LibraryStore>();
         return Pressable(
           onPressed: () => lib.setArtistArt(widget.artist, 'portrait', img.uri),
-          // Right-click sets the backdrop, and a remote has no right button — so holding OK now
-          // does the same thing. Both, not one instead of the other: choosing a backdrop was
-          // something you simply could not do from the sofa, and nothing on screen said why.
+          // Right-click sets the backdrop, and a remote has no right button — so on a television
+          // holding OK does the same thing. Both, not one instead of the other: choosing a backdrop
+          // was something you simply could not do from the sofa, and nothing on screen said why.
+          //
+          // Gated, because on a phone or an iPad a long press on a photo is not "set as backdrop"
+          // to anybody, and it would fire where a drag or a context menu was meant.
           onSecondaryTap: () => lib.setArtistArt(widget.artist, 'backdrop', img.uri),
-          onLongPress: () => lib.setArtistArt(widget.artist, 'backdrop', img.uri),
+          onLongPress:
+              isTv ? () => lib.setArtistArt(widget.artist, 'backdrop', img.uri) : null,
           borderRadius: BorderRadius.circular(10),
           child: Container(
             decoration: BoxDecoration(
@@ -10007,7 +10057,10 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
             ),
             const SizedBox(height: 6),
             Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-              TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuleren')),
+              TextButton(
+                  autofocus: isTv,
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Annuleren')),
               const SizedBox(width: 8),
               FilledButton(
                 style: FilledButton.styleFrom(backgroundColor: _accent),
@@ -10137,6 +10190,7 @@ class _RenumberDialogState extends State<RenumberDialog> {
             const SizedBox(height: 8),
             Row(mainAxisAlignment: MainAxisAlignment.end, children: [
               TextButton(
+                  autofocus: isTv,
                   onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuleren')),
               const SizedBox(width: 8),
               FilledButton(
@@ -10245,6 +10299,7 @@ class _PickAlbumDialogState extends State<PickAlbumDialog> {
             Align(
               alignment: Alignment.centerRight,
               child: TextButton(
+                  autofocus: isTv,
                   onPressed: () => Navigator.of(context).pop(), child: const Text('Annuleren')),
             ),
           ]),
@@ -10352,6 +10407,7 @@ class _RedundantCleanupDialogState extends State<RedundantCleanupDialog> {
             const SizedBox(height: 8),
             Row(mainAxisAlignment: MainAxisAlignment.end, children: [
               TextButton(
+                  autofocus: isTv,
                   onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuleren')),
               const SizedBox(width: 8),
               FilledButton(
@@ -10547,6 +10603,7 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
             const SizedBox(height: 4),
             Row(mainAxisAlignment: MainAxisAlignment.end, children: [
               TextButton(
+                  autofocus: isTv,
                   onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuleren')),
               const SizedBox(width: 8),
               FilledButton(

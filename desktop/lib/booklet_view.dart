@@ -3,6 +3,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import 'tv.dart';
 import 'package:provider/provider.dart';
 
 import 'booklet.dart';
@@ -322,7 +324,10 @@ class _BookletViewState extends State<BookletView> with TickerProviderStateMixin
       // the layered thing on a keyboard; this gives the same behaviour to the button a remote user
       // actually reaches for.
       body: PopScope(
-        canPop: _zoom == null && !_grid,
+        // Only on a television. Elsewhere BACK is a keyboard's Escape (already handled below) or
+        // an iPad's swipe-back gesture, and a PopScope that refuses to pop turns that gesture into
+        // a dead end on a platform that never needed this.
+        canPop: !isTv || (_zoom == null && !_grid),
         onPopInvokedWithResult: (didPop, _) {
           if (didPop) return;
           setState(() {
