@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 
 import 'cloud/cloud_session.dart';
 import 'lan/client.dart';
+import 'tv.dart';
 
 const _bg = Color(0xFF0C0D12);
 const _panel2 = Color(0xFF1F2331);
@@ -43,6 +44,8 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _email = TextEditingController();
   final _password = TextEditingController();
+  final _emailFocus = FocusNode(skipTraversal: isTv, debugLabel: 'login e-mail');
+  final _passwordFocus = FocusNode(skipTraversal: isTv, debugLabel: 'login wachtwoord');
 
   bool _busy = false;
   bool _register = false;
@@ -56,6 +59,8 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     _email.dispose();
     _password.dispose();
+    _emailFocus.dispose();
+    _passwordFocus.dispose();
     super.dispose();
   }
 
@@ -172,27 +177,56 @@ class _LoginScreenState extends State<LoginScreen> {
                     style: TextStyle(color: _muted, fontSize: 14, height: 1.45),
                   ),
                   const SizedBox(height: 26),
-                  TextField(
-                    controller: _email,
-                    enabled: !_busy,
-                    autocorrect: false,
-                    keyboardType: TextInputType.emailAddress,
-                    textInputAction: TextInputAction.next,
-                    style: const TextStyle(color: _text),
-                    decoration: _field('E-mailadres'),
+                  // Reachable, but skipped when arrowing: focus opens the leanback keyboard, and
+                  // the keyboard then swallows every arrow press. OK on the field is what opens
+                  // it, which is the same bargain the library search makes.
+                  MaybePressable(
+                    enabled: isTv,
+                    onPressed: _emailFocus.requestFocus,
+                    borderRadius: BorderRadius.circular(12),
+                    child: TextField(
+                      controller: _email,
+                      focusNode: _emailFocus,
+                      enabled: !_busy,
+                      autocorrect: false,
+                      keyboardType: TextInputType.emailAddress,
+                      textInputAction: TextInputAction.next,
+                      style: const TextStyle(color: _text),
+                      decoration: _field('E-mailadres'),
+                    ),
                   ),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: _password,
-                    enabled: !_busy,
-                    obscureText: true,
-                    style: const TextStyle(color: _text),
-                    decoration: _field('Wachtwoord'),
-                    onSubmitted: (_) => _busy ? null : _submit(),
+                  MaybePressable(
+                    enabled: isTv,
+                    onPressed: _passwordFocus.requestFocus,
+                    borderRadius: BorderRadius.circular(12),
+                    child: TextField(
+                      controller: _password,
+                      focusNode: _passwordFocus,
+                      enabled: !_busy,
+                      obscureText: true,
+                      style: const TextStyle(color: _text),
+                      decoration: _field('Wachtwoord'),
+                      onSubmitted: (_) => _busy ? null : _submit(),
+                    ),
                   ),
                   const SizedBox(height: 16),
                   FilledButton(
-                    onPressed: _busy ? null : _submit,
+                    // Guarded rather than disabled, and that matters most on a television.
+                    //
+                    // While _busy, both fields and both links below are disabled too. A disabled
+                    // Material widget leaves the traversal order, so with onPressed:null this
+                    // screen held NOT ONE focusable widget — and awaitAccess waits up to a minute
+                    // on a PC that may be switched off. A remote pointing at a screen with nothing
+                    // to focus is a frozen app, whatever the spinner says.
+                    onPressed: () {
+                      if (_busy) return;
+                      _submit();
+                    },
+                    // Where the highlight starts on a TV: on the button, not in a text field —
+                    // a focused field raises the on-screen keyboard over everything before you
+                    // have read a word of the screen.
+                    autofocus: isTv,
                     style: FilledButton.styleFrom(
                       backgroundColor: _accent,
                       padding: const EdgeInsets.symmetric(vertical: 16),

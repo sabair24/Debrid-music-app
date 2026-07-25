@@ -127,6 +127,33 @@ class _PressableState extends State<Pressable> {
     if (action != null) action();
   }
 
+  /// Put the thing that just took the highlight in the middle of the list, not against its edge.
+  ///
+  /// Flutter's own focus scrolling brings an item just far enough to be technically visible, which
+  /// leaves it flush against the top or bottom of the viewport. In this app the top of a scroll
+  /// area sits under the search bar and the bottom under the player bar, so "just visible" means
+  /// half-hidden — with the ring and its glow clipped, which is exactly the part that answers
+  /// "where am I".
+  ///
+  /// Here rather than at forty call sites, and only on a television: with a mouse the pointer is
+  /// already the answer, and a list that scrolls itself under the cursor would be maddening.
+  void _bringIntoView() {
+    if (!isTv) return;
+    final scrollable = Scrollable.maybeOf(context);
+    if (scrollable == null) return;
+    // After the frame: the highlight often arrives during a build, and asking a scrollable to move
+    // mid-layout throws.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Scrollable.ensureVisible(
+        context,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final enabled = widget.onPressed != null || widget.onLongPress != null;
@@ -153,6 +180,7 @@ class _PressableState extends State<Pressable> {
         if (v == _focused) return;
         setState(() => _focused = v);
         widget.onFocusChange?.call(v);
+        if (v) _bringIntoView();
       },
       onShowHoverHighlight: (v) => v == _hovered ? null : setState(() => _hovered = v),
       shortcuts: _activateShortcuts,
