@@ -1207,6 +1207,9 @@ class _OfflineSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Nothing to manage on a television, because nothing can be put there — see the button on the
+    // album page. Kept as a guard rather than assumed: a Shield that carries copies from an older
+    // build should still be able to get rid of them.
     final offline = context.watch<OfflineStore>();
     final tracks = offline.tracks;
     final jobs = offline.jobs;
@@ -2351,10 +2354,12 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       label: const Text('Afspelen'),
                     ),
                     const SizedBox(width: 10),
-                    // Only where the music lives somewhere else. On the PC the files ARE the
-                    // library; offering to copy them onto the machine they are already on would be
-                    // nonsense.
-                    if (context.watch<LibraryStore>().isRemote) ...[
+                    // Only where the music lives somewhere else AND where carrying a copy makes
+                    // sense. On the PC the files ARE the library. And a television is bolted to the
+                    // wall next to the machine it streams from, on mains power, with a few gigabytes
+                    // of storage it needs for apps — filling that with lossless copies of records
+                    // it can already play is all cost and no benefit.
+                    if (context.watch<LibraryStore>().isRemote && !isTv) ...[
                       _OfflineAlbumButton(album: album),
                       const SizedBox(width: 10),
                     ],
