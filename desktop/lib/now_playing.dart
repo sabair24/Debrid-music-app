@@ -4,8 +4,8 @@
 /// to [PlayerStore]. It is the one thing the SwiftUI app got for free from AVFoundation, and the
 /// price of having a single codebase — so it is written once, here, rather than lived without.
 ///
-/// Only where a system asks for it: iOS and macOS. On Windows the app has its own window with its
-/// own buttons, and `audio_service` has nothing to talk to there.
+/// Only where a system asks for it: iOS, macOS and Android. On Windows the app has its own window
+/// with its own buttons, and `audio_service` has nothing to talk to there.
 library;
 
 import 'dart:async';
@@ -19,7 +19,7 @@ import 'models.dart';
 import 'paths.dart';
 import 'player.dart';
 
-bool get _wantsSystemControls => Platform.isIOS || Platform.isMacOS;
+bool get _wantsSystemControls => Platform.isIOS || Platform.isMacOS || Platform.isAndroid;
 
 /// Start publishing. Safe to call anywhere: it does nothing where there is nothing to publish to,
 /// and a failure to register is never a reason for the app not to start.
@@ -29,7 +29,10 @@ Future<void> initNowPlaying(NowPlayingSource player, {Uint8List? Function(Track)
     await AudioService.init(
       builder: () => NowPlayingHandler(player, cover),
       config: const AudioServiceConfig(
-        androidNotificationChannelId: 'com.debridmedia.music.playback',
+        // debridmusic, not debridmedia — this named a different app entirely. Harmless while
+        // Android was switched off; the moment it is on, this string is the notification channel
+        // the user sees in Android's own settings.
+        androidNotificationChannelId: 'com.debridmusic.app.playback',
         androidNotificationChannelName: 'Afspelen',
         androidNotificationOngoing: true,
       ),

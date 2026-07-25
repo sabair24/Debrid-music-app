@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What a TV launcher shows for this app.
+
+  A banner is landscape (320x180 at xhdpi), not square. Pointing android:banner at the launcher
+  icon — which is what a square mipmap is — makes Android stretch a circle into an oval on the
+  home row. So: the app's own background gradient, with the same vector foreground centred on it.
+
+  Built from the same two vectors as the launcher icon, so the icon stays maintained in one place.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/ic_launcher_background"/>
+    <item
+        android:gravity="center"
+        android:width="120dp"
+        android:height="120dp"
+        android:drawable="@drawable/ic_launcher_foreground"/>
+</layer-list>
