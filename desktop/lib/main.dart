@@ -2514,7 +2514,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     // Sized from what there actually is rather than from a number chosen for a desktop window, and
     // divided by 1.62 so the disc has somewhere to go instead of sliding off the screen.
     final available = MediaQuery.sizeOf(context).width - pad * 2;
-    final artSize = narrow ? (available / 1.62).clamp(120.0, 240.0) : 200.0;
+    // Divided by what the disc ACTUALLY reserves, not by a number copied here. When the travel was
+    // cut to .30 in portrait this still said 1.62, so the sleeve was sized for a stride the disc no
+    // longer takes and left a band of empty screen beside it.
+    final artSize =
+        narrow ? (available / (1 + discTravelFactor(context))).clamp(120.0, 260.0) : 200.0;
 
     final art = AlbumArt(
             artist: album.artist,
@@ -5738,18 +5742,22 @@ class DownloadsView extends StatelessWidget {
             // things that both live under "downloads": one is music arriving into your library,
             // the other is a copy of your library travelling with you.
             const _OfflineSection(),
-            Row(
+            // Title, a running count and a clear button. Side by side that is wider than a phone —
+            // the count ran under the button and "Wis afgeronde" hung off the right edge. Wrapped,
+            // so it stays one line where there is room and folds where there is not.
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 14,
+              runSpacing: 4,
               children: [
                 const Text('Mijn downloads',
                     style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
-                const SizedBox(width: 14),
                 if (active.isNotEmpty)
                   // Counted from the jobs themselves: a download waiting in an uploader's queue has
                   // handed its parallel slot back, so the scheduler's counters would read 0 here.
                   Text('${active.where((j) => j.status == 'downloading' || j.status == 'preparing').length} bezig'
                       ' · ${active.where((j) => j.status == 'waiting' || j.status == 'queued').length} wachtend',
                       style: const TextStyle(color: _muted, fontSize: 12.5)),
-                const Spacer(),
                 if (finished.isNotEmpty)
                   TextButton.icon(
                     onPressed: dm.clearFinished,
@@ -5861,7 +5869,10 @@ class _DlRow extends StatelessWidget {
                 : null,
           ),
           SizedBox(
-            width: 150,
+            // 150 fixed was the last straw on a phone: a title, a bar, a cancel button and this all
+            // side by side ran off the right edge and "Speelbaar · upgrade" was cut mid-word. Half
+            // that on a narrow screen, and the label ellipsises rather than the row overflowing.
+            width: isCompact(context) ? 74 : 150,
             child: Text(DownloadsView.statusLabel(job),
                 textAlign: TextAlign.right,
                 maxLines: 1,
@@ -7781,15 +7792,19 @@ class _ArtistHeroState extends State<ArtistHero> {
                 ),
               ),
             ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(28, 0, 28, 22),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                // The portrait is what makes this a page about a PERSON. A wide backdrop cropped
-                // to a banner shows a horizontal slice, and whether the face is in it is luck.
-                if (portrait != null) ...[
-                  DecoratedBox(
+          Builder(builder: (context) {
+            final narrow = isCompact(context);
+            final pad = narrow ? 18.0 : 28.0;
+            // 270 points of portrait plus a 26 gap leaves about ninety of a phone's 411 for the
+            // column beside it, and "61 albums" came out one word per line. Stacked there, and the
+            // portrait sized from the width that exists.
+            final portraitSize = narrow
+                ? (MediaQuery.sizeOf(context).width - pad * 2).clamp(120.0, 220.0)
+                : 270.0;
+
+            final photo = portrait == null
+                ? null
+                : DecoratedBox(
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(14),
                       // Lifts it off a backdrop that is, by design, the same photo's colours.
@@ -7798,17 +7813,15 @@ class _ArtistHeroState extends State<ArtistHero> {
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(14),
                       child: Image.memory(portrait,
-                          width: 270,
-                          height: 270,
+                          width: portraitSize,
+                          height: portraitSize,
                           fit: BoxFit.cover,
                           alignment: const Alignment(0, -.25),
                           errorBuilder: (_, __, ___) => const SizedBox()),
                     ),
-                  ),
-                  const SizedBox(width: 26),
-                ],
-                Expanded(
-                  child: Column(
+                  );
+
+            final details = Column(
                     mainAxisAlignment: MainAxisAlignment.end,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -7831,11 +7844,30 @@ class _ArtistHeroState extends State<ArtistHero> {
                         Row(children: widget.actions),
                       ],
                     ],
-                  ),
-                ),
-              ],
-            ),
-          ),
+                  );
+
+            return Padding(
+              padding: EdgeInsets.fromLTRB(pad, 0, pad, 22),
+              child: narrow
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (photo != null) ...[photo, const SizedBox(height: 14)],
+                        details,
+                      ],
+                    )
+                  : Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        // The portrait is what makes this a page about a PERSON. A wide backdrop
+                        // cropped to a banner shows a horizontal slice, and whether the face is in
+                        // it is luck.
+                        if (photo != null) ...[photo, const SizedBox(width: 26)],
+                        Expanded(child: details),
+                      ],
+                    ),
+            );
+          }),
         ],
         ),
       ),
