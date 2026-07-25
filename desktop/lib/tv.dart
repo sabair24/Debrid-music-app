@@ -76,6 +76,13 @@ void setTvModeForTest(bool value) => _isTv = value;
 /// narrow layout actually works.
 bool isCompact(BuildContext context) => MediaQuery.sizeOf(context).width < 600;
 
+/// How far the disc slides out from behind the sleeve, as a fraction of the sleeve's width.
+///
+/// This is reserved WIDTH: [AlbumArt] lays out `size * (1 + factor)`, so on a phone in portrait
+/// every percent of it comes off the sleeve and off whatever shares the row. Sideways, and on a
+/// television, there is width to spare and the disc gets its full stride.
+double discTravelFactor(BuildContext context) => isCompact(context) ? .30 : .62;
+
 /// The width a dialog may actually take.
 ///
 /// Every dialog in this app asked for a fixed width between 460 and 860 points, chosen when the

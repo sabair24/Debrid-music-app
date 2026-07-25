@@ -573,6 +573,83 @@ class _HomeShellState extends State<HomeShell> {
   QFilter _qFilter = QFilter.all;
   AlbumSort _sort = AlbumSort.titel;
 
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  /// The sections, listed rather than squeezed into a strip.
+  ///
+  /// Same seven entries and the same [_NavPills] source of truth, so a section added there appears
+  /// here without anything else being touched.
+  Widget _sectionsDrawer(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    final badge = context.watch<DownloadManager>().jobs.where((j) => j.busy).length;
+    return Drawer(
+      backgroundColor: _panel,
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 6),
+              child: Row(children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.asset('assets/icon/app_icon.png', width: 30, height: 30),
+                ),
+                const SizedBox(width: 10),
+                const Text('DebridMusic',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+              ]),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+              child: Text('${lib.albums.length} albums · ${lib.tracks.length} nummers',
+                  style: const TextStyle(color: _muted, fontSize: 12.5)),
+            ),
+            const Divider(color: _line, height: 1),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                children: [
+                  for (final (id, label) in NavSections.items)
+                    ListTile(
+                      selected: _view == id,
+                      selectedTileColor: _accent.withValues(alpha: .16),
+                      selectedColor: Colors.white,
+                      title: Text(label),
+                      trailing: id == 6 && badge > 0
+                          ? Container(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                              decoration: BoxDecoration(
+                                  color: _accent, borderRadius: BorderRadius.circular(9)),
+                              child: Text('$badge',
+                                  style: const TextStyle(
+                                      fontSize: 11, fontWeight: FontWeight.w800)),
+                            )
+                          : null,
+                      onTap: () {
+                        setState(() => _view = id);
+                        Navigator.pop(context);
+                      },
+                    ),
+                ],
+              ),
+            ),
+            const Divider(color: _line, height: 1),
+            ListTile(
+              leading: const Icon(Icons.settings_rounded, size: 20),
+              title: const Text('Instellingen'),
+              onTap: () {
+                Navigator.pop(context);
+                showDialog(context: context, builder: (_) => const SettingsDialog());
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// A layer inside the current section that BACK must close before the section itself.
   ///
   /// Null when there is none. Held here rather than solved with a second PopScope inside the
@@ -807,6 +884,15 @@ class _HomeShellState extends State<HomeShell> {
         setState(() => _view = 5);
       },
       child: Scaffold(
+        key: _scaffoldKey,
+        // A phone gets the sections in a drawer instead of a strip of pills across the top.
+        //
+        // Seven pills do not fit across 411 points: four of them sat off-screen behind a scroll
+        // with nothing to show it was scrollable, so half the app was effectively hidden. A drawer
+        // shows all seven at once, says which one you are on, and gives the content back its full
+        // width. Only on a phone — a television has 960 points and a desktop has more, and the
+        // strip is the better thing there.
+        drawer: isCompact(context) ? _sectionsDrawer(context) : null,
         // Televisions overscan: a strip around the edge of the picture falls off the screen, and
         // how much differs per set. The margin goes on the CONTENTS of the bars rather than around
         // the whole app, so the top bar's glass and the player bar's surface still reach the panel
@@ -844,7 +930,9 @@ class _HomeShellState extends State<HomeShell> {
   /// controls sitting on it keep working: DragToMoveArea only claims what no child handled.
   /// On an iPad there is no window to drag and no `window_manager` behind these calls — the bar is
   /// just a bar there.
-  Widget _topBar() => _isDesktop
+  Widget _topBar() => isCompact(context)
+      ? _compactTopBar()
+      : _isDesktop
       ? DragToMoveArea(
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
@@ -855,6 +943,52 @@ class _HomeShellState extends State<HomeShell> {
           ),
         )
       : _topBarBody();
+
+  /// The section name and a way into the drawer — what a phone gets instead of the pill strip.
+  Widget _compactTopBar() {
+    final label = NavSections.items.firstWhere((e) => e.$1 == _view, orElse: () => (5, 'Start')).$2;
+    final badge = context.watch<DownloadManager>().jobs.where((j) => j.busy).length;
+    return SizedBox(
+      height: 56 + MediaQuery.viewPaddingOf(context).top,
+      child: Padding(
+        padding: EdgeInsets.only(top: MediaQuery.viewPaddingOf(context).top, left: 4, right: 8),
+        child: Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.menu_rounded),
+              tooltip: 'Secties',
+              onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+            ),
+            Expanded(
+              child: Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
+            ),
+            // The one badge worth carrying out of the drawer: a download running while you are
+            // somewhere else is the thing you would otherwise have to go looking for.
+            if (badge > 0)
+              Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration:
+                      BoxDecoration(color: _accent, borderRadius: BorderRadius.circular(10)),
+                  child: Text('$badge',
+                      style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800)),
+                ),
+              ),
+            IconButton(
+              icon: const Icon(Icons.settings_rounded, size: 22),
+              tooltip: 'Instellingen',
+              onPressed: () =>
+                  showDialog(context: context, builder: (_) => const SettingsDialog()),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _topBarBody() => SizedBox(
         // The glow keeps running behind the status bar; only the contents move down, so the top of
@@ -1084,10 +1218,14 @@ class _NavPills extends StatefulWidget {
   State<_NavPills> createState() => _NavPillsState();
 }
 
-class _NavPillsState extends State<_NavPills> {
-  int? _hover;
+/// The seven sections, in one place.
+///
+/// A phone lists them in a drawer and everything wider lays them out as pills; both read from here
+/// so a section cannot exist in one and not the other.
+class NavSections {
+  const NavSections._();
 
-  static const _items = <(int, String)>[
+  static const items = <(int, String)>[
     (5, 'Start'),
     (0, 'Albums'),
     (4, 'Tracks'),
@@ -1096,6 +1234,12 @@ class _NavPillsState extends State<_NavPills> {
     (3, 'Ontdek'),
     (6, 'Mijn downloads'),
   ];
+}
+
+class _NavPillsState extends State<_NavPills> {
+  int? _hover;
+
+  static const _items = NavSections.items;
   static const _style = TextStyle(fontSize: 13, fontWeight: FontWeight.w600);
   static final _padH = _isTouch ? 20.0 : 15.0;
   static const _badgeW = 21.0;
@@ -4424,8 +4568,15 @@ Widget _compactBar(BuildContext context, PlayerStore p, Track? t, double bottomI
 /// the width alone pushes the title and the transport controls off the bottom.
 double _sleeve(BuildContext context) {
   final size = MediaQuery.sizeOf(context);
-  final byWidth = (size.width - 40) / 1.62;
-  final byHeight = size.height * 0.42;
+  final narrow = isCompact(context);
+  // The sleeve plus the room the disc needs to slide into — less of that room in portrait, so the
+  // sleeve is not paying for a stride nobody has space for.
+  final byWidth = (size.width - 40) / (1 + discTravelFactor(context));
+  // And a firm ceiling on height in portrait. Below the sleeve sit the title, the seek bar and the
+  // five transport buttons, and those are the reason the screen exists: a sleeve sized from width
+  // alone pushes them under the fold on a tall, narrow screen. Sideways the height is the binding
+  // constraint anyway, so the looser factor there costs nothing.
+  final byHeight = size.height * (narrow ? 0.34 : 0.46);
   final smaller = byWidth < byHeight ? byWidth : byHeight;
   return smaller.clamp(140.0, 360.0);
 }
@@ -9765,7 +9916,12 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     final disc = _art?.disc;
     // How far the disc comes out. Started at .42 — enough to see it, not enough to enjoy it — so
     // it now clears the sleeve by a good margin while the label still sits behind the card.
-    final travel = s * .62;
+    //
+    // Less of it in portrait on a phone. The travel is reserved WIDTH, so on 411 points every
+    // percent of it is taken off the sleeve and off whatever sits beside it — and on the player
+    // screen that is the row of transport buttons, which has to be there. Sideways and on the TV
+    // there is width to spare, so the disc gets its full stride.
+    final travel = s * discTravelFactor(context);
 
     final sleeve = ClipRRect(
       borderRadius: BorderRadius.circular(10),
