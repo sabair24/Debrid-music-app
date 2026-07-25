@@ -63,7 +63,11 @@ jobs:
         shell: pwsh
         run: |
           flutter config --enable-windows-desktop
-          flutter build windows --release
+          # --build-name, or the version INSIDE the app still comes from pubspec while the filename
+          # comes from the tag. That is the same disagreement the step above fixes, one layer down:
+          # win-v1.4.0 installed an app whose Settings screen read 1.3.0, so there was no way to
+          # tell from the running app which build you had.
+          flutter build windows --release --build-name=${{ steps.version.outputs.VERSION }}
 
       - name: Verify build output
         shell: pwsh
