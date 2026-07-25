@@ -18,15 +18,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Offset the raw Actions run number by a fixed base. Earlier sideloaded
-      # installs carry build numbers (e.g. 100) that are higher than the current
-      # run_number (~55), so without this the in-app updater would never see a CI
-      # build as "newer". GitHub Actions expressions have no arithmetic, so we
-      # compute it in the shell and export it for the later steps. The SAME value
-      # feeds both the app's BuildConfig and the release tag, keeping the updater's
-      # tag-vs-BuildConfig comparison consistent.
+      # The build number is also the versionCode, and Android refuses to install a versionCode
+      # lower than the one already on the device. The Kotlin app's own pipeline reached 10281 on
+      # this same counter, so the offset must stay well above that or every phone and Shield that
+      # has the old app would reject the update as a downgrade.
       - name: Compute build number
-        run: echo "BUILD_NUMBER=$(( ${{ github.run_number }} + 10000 ))" >> "$GITHUB_ENV"
+        run: echo "BUILD_NUMBER=$(( ${{ github.run_number }} + 10300 ))" >> "$GITHUB_ENV"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -37,49 +34,48 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK platform 35
-        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Cache Gradle
-        uses: actions/cache@v4
+      # Pinned to the same version this app is developed against. url_launcher_ios needs 3.38+,
+      # and a floating "stable" would move under us.
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+          flutter-version: '3.41.9'
+          channel: stable
+          cache: true
 
-      - name: Make gradlew executable
-        run: chmod +x gradlew
+      - name: Fetch dependencies
+        working-directory: desktop
+        run: flutter pub get
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
-
-      - name: Rename APK with version info
+      # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
+      # the app you actually use while the TV work is in progress — shipping that would install a
+      # second icon rather than update the first. It is also 103MB against release's 40.
+      #
+      # arm64 only: media_kit ships libmpv as a native library per architecture, and both the Shield
+      # and any current phone are arm64. Carrying four triples the APK for nothing.
+      - name: Build release APK
+        working-directory: desktop
         run: |
-          VERSION=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          BUILD=${BUILD_NUMBER}
-          BRANCH=$(echo "${GITHUB_REF_NAME}" | sed 's|/|-|g')
-          mv app/build/outputs/apk/debug/app-debug.apk \
-             app/build/outputs/apk/debug/DebridMusic-v${VERSION}-build${BUILD}-debug.apk
-          echo "APK_NAME=DebridMusic-v${VERSION}-build${BUILD}-debug.apk" >> $GITHUB_ENV
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          VERSION=$(grep -m1 '^version:' pubspec.yaml | sed 's/version: *//' | cut -d+ -f1)
+          flutter build apk --release \
+            --target-platform android-arm64 \
+            --build-name "${VERSION}" \
+            --build-number "${BUILD_NUMBER}"
+          mv build/app/outputs/flutter-apk/app-release.apk \
+             "build/app/outputs/flutter-apk/DebridMusic-v${VERSION}-build${BUILD_NUMBER}.apk"
+          echo "APK_NAME=DebridMusic-v${VERSION}-build${BUILD_NUMBER}.apk" >> "$GITHUB_ENV"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: debrid-music-debug-build${{ env.BUILD_NUMBER }}
-          path: app/build/outputs/apk/debug/${{ env.APK_NAME }}
+          name: debrid-music-build${{ env.BUILD_NUMBER }}
+          path: desktop/build/app/outputs/flutter-apk/${{ env.APK_NAME }}
           retention-days: 30
 
       # Publishes only the built APK to a SEPARATE PUBLIC repo so the in-app
       # updater can read releases and download the APK without authentication,
       # while this source repo stays private.
-      # One-time setup required (see repo README / setup notes):
-      #   1. Create a public repo: sabair24/Debrid-music-app-releases
-      #   2. Create a Personal Access Token with "contents: write" on it
-      #   3. Add it here as the secret RELEASES_TOKEN
       - name: Publish APK to public releases repo
         if: github.ref == 'refs/heads/main' && env.RELEASES_TOKEN != ''
         env:
@@ -89,18 +85,19 @@ jobs:
           repository: sabair24/Debrid-music-app-releases
           token: ${{ secrets.RELEASES_TOKEN }}
           tag_name: v${{ env.VERSION }}-build${{ env.BUILD_NUMBER }}
-          name: "Debrid Music v${{ env.VERSION }} (build ${{ env.BUILD_NUMBER }})"
+          name: "DebridMusic v${{ env.VERSION }} (build ${{ env.BUILD_NUMBER }})"
           body: |
-            ## Debrid Music v${{ env.VERSION }} (build ${{ env.BUILD_NUMBER }})
+            ## DebridMusic v${{ env.VERSION }} (build ${{ env.BUILD_NUMBER }})
 
-            Android music app — TorBox debrid + Soulseek P2P.
+            Dezelfde app als op je pc, Mac en iPad — één codebase, ook op Android en Android TV.
 
-            ### Install
-            Download the APK below and sideload on your Android device or TV.
-            From a build with the in-app updater installed, future updates are
-            one tap inside the app (Settings → App-updates).
+            ### Installeren
+            Download de APK hieronder en installeer hem op je telefoon of je Shield. Hij vervangt
+            de app die er staat; daarna één keer opnieuw inloggen met je account.
 
-            > You may need to enable "Install from unknown sources" on your device.
+            > Mogelijk moet je "Installeren uit onbekende bronnen" aanzetten.
+
+            Alleen arm64.
           draft: false
           prerelease: false
-          files: app/build/outputs/apk/debug/${{ env.APK_NAME }}
+          files: desktop/build/app/outputs/flutter-apk/${{ env.APK_NAME }}
