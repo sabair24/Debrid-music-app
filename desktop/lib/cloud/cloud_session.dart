@@ -92,6 +92,10 @@ class CloudSession extends ChangeNotifier {
   String get uid => user?.uid ?? '';
   bool get isSignedIn => user != null;
 
+  /// A Firestore client with a token that is good right now, or null when not signed in.
+  /// Public so the download queue can be built on the same session rather than a second one.
+  Future<Firestore?> db() => _db();
+
   Future<Firestore?> _db() async {
     final u = await _fresh();
     return u == null

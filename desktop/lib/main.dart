@@ -24,6 +24,8 @@ import 'enrichment.dart';
 import 'lan/sharing.dart';
 import 'lan/tokens.dart';
 import 'cloud/cloud_session.dart';
+import 'cloud/queue_store.dart';
+import 'cloud/queue_worker.dart';
 import 'cloud/device_identity.dart';
 import 'lan/client_mode.dart';
 import 'lan/client_session.dart';
@@ -205,7 +207,7 @@ Future<void> main() async {
   final cloud = CloudSession();
   unawaited(cloud.restore().then((_) async {
     if (!mode.owner) return;
-    await publishAsOwner(cloud, settings, sharing, library);
+    await publishAsOwner(cloud, settings, sharing, library, downloads);
   }));
 
   // Which build is answering. /health reported an empty version since the field was added — it was
@@ -278,6 +280,23 @@ Future<void> main() async {
       session.addListener(() {
         if (session.ready) downloads.startWatching();
       });
+      // Where a download goes when the PC does not answer: into the queue, for the PC to pick up
+      // when it comes back. Re-read whenever the sign-in changes, so signing out takes the queue
+      // with it rather than writing to an account nobody is using.
+      final manager = downloads;
+      manager.requestedBy = deviceName();
+      void refreshQueue() {
+        unawaited(cloud.db().then((db) {
+          manager.queue = db == null ? null : FirestoreQueue(db: db, uid: cloud.uid);
+        }).catchError((Object _) {
+          // No queue is a worse experience than a queue, but not worth failing a start over: an
+          // unreachable PC then simply reports the failure it always did.
+          manager.queue = null;
+        }));
+      }
+
+      cloud.addListener(refreshQueue);
+      refreshQueue();
     }
     () async {
       final endpoint = mode.endpoint;
@@ -378,8 +397,8 @@ class DebridApp extends StatelessWidget {
 /// one, signing in on the PC appeared to do nothing at all until the app was restarted — and the
 /// PC has to be published before any Mac or iPad can find it, so that is the very first thing a
 /// new account does.
-Future<void> publishAsOwner(
-    CloudSession cloud, AppSettings settings, LanSharing sharing, LibraryStore library) async {
+Future<void> publishAsOwner(CloudSession cloud, AppSettings settings, LanSharing sharing,
+    LibraryStore library, DownloadManager downloads) async {
   if (!cloud.isSignedIn) return;
   if (settings.serverId.isEmpty) {
     settings.serverId = generateDeviceToken().substring(0, 16);
@@ -393,7 +412,27 @@ Future<void> publishAsOwner(
     grants: sharing.grants,
     trackCount: () => library.tracks.length,
   );
+
+  // Work through anything chosen on another device while this PC was off. It replays the very
+  // request that device would have sent, into the same DownloadManager — so a queued download
+  // lands exactly like a live one, authority tags and all. Started here rather than in main() for
+  // the same reason as the rest of this function: signing in from Settings has to start it too.
+  final db = await cloud.db();
+  final server = sharing.server;
+  if (db != null && server != null) {
+    _worker?.stop();
+    _worker = QueueWorker(
+      backend: FirestoreQueue(db: db, uid: cloud.uid),
+      server: server,
+      downloads: downloads,
+      workerId: settings.serverId,
+    )..start();
+  }
 }
+
+/// The one worker for this process. Held so signing in twice does not leave two of them racing
+/// each other for the same items.
+QueueWorker? _worker;
 
 /// What the PC lists this device as. Its own name, because "iPad" is what you look for in a list
 /// of paired devices — not a serial number.
@@ -7656,7 +7695,7 @@ class _SharingSectionState extends State<_SharingSection> {
       }
       if (!mounted) return;
       await publishAsOwner(cloud, context.read<AppSettings>(), context.read<LanSharing>(),
-          context.read<LibraryStore>());
+          context.read<LibraryStore>(), context.read<DownloadManager>());
       if (!mounted) return;
       // Not kept in memory a moment longer than the request needs them.
       _email.clear();

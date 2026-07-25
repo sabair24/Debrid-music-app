@@ -17,6 +17,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../cloud/queue.dart';
 import '../online.dart';
 import '../organize.dart';
 import '../soulseek.dart';
@@ -196,6 +197,37 @@ class RemoteDownloadManager extends DownloadManager {
   /// The last thing the PC said went wrong, for a screen that wants to show it.
   String? lastError;
 
+  /// Where a request goes when the PC does not answer. Null when this device is not signed in, and
+  /// then an unreachable PC is simply a failure, exactly as before.
+  QueueBackend? queue;
+
+  /// Name of this device, written into the queue item so the PC's list can say who asked.
+  String requestedBy = '';
+
+  /// Put a request in the queue instead of failing. Returns false when there is no queue to put it
+  /// in, so the caller can report the original problem rather than a silent success.
+  Future<bool> _enqueueForLater(String kind, String title, Map<String, dynamic> payload) async {
+    final q = queue;
+    if (q == null) return false;
+    try {
+      await q.put(QueueItem(
+        id: newQueueId(),
+        kind: kind,
+        title: title,
+        payload: payload,
+        requestedBy: requestedBy,
+        requestedAt: DateTime.now().toUtc(),
+      ));
+      lastError = null;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      lastError = 'Kon niet in de wachtrij zetten: $e';
+      notifyListeners();
+      return false;
+    }
+  }
+
   /// Poll while anything is running, and slowly when nothing is. A download that takes twenty
   /// minutes should not cost twenty minutes of two-second requests once it is done.
   void startWatching() {
@@ -241,10 +273,14 @@ class RemoteDownloadManager extends DownloadManager {
   @override
   void enqueue(SearchResult result, {int? fileId}) {
     unawaited(() async {
+      final payload = {...result.toJson(), 'fileId': fileId};
       try {
-        await _rpc.post('/api/online/download', {...result.toJson(), 'fileId': fileId});
+        await _rpc.post('/api/online/download', payload);
         await refresh();
       } catch (e) {
+        // The PC is off or unreachable: keep the request rather than losing it. It runs by itself
+        // the moment the PC comes back — which is the whole point of asking from an iPad.
+        if (await _enqueueForLater(QueueKind.torrent, result.name, payload)) return;
         lastError = e.toString();
         notifyListeners();
       }
@@ -254,19 +290,24 @@ class RemoteDownloadManager extends DownloadManager {
   @override
   Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,
       {String? key, TrackTags? authority}) async {
-    try {
-      final res = await _rpc.post('/api/soulseek/download', {
-        'candidates': [for (final c in candidates) c.toJson()],
-        'key': key,
+    final payload = <String, dynamic>{
+      'candidates': [for (final c in candidates) c.toJson()],
+      'key': key,
         // Without this the PC files the download under the UPLOADER's tags: their track number,
         // their idea of how many tracks the record has, their year. A wrong number collides with
         // one the album already uses, and a collision is what the library reads as two pressings —
         // which is how a single album ends up as four tiles.
-        if (authority != null) 'authority': authority.toJson(),
-      });
+      if (authority != null) 'authority': authority.toJson(),
+    };
+    try {
+      final res = await _rpc.post('/api/soulseek/download', payload);
       await refresh();
       return res['ok'] == true;
     } catch (e) {
+      // Queued rather than lost. The title comes from the authority when there is one — the
+      // peer's own filename is whatever they happened to call it.
+      final title = authority?.title ?? candidates.first.filename.split(RegExp(r'[\\/]')).last;
+      if (await _enqueueForLater(QueueKind.soulseek, title, payload)) return true;
       lastError = e.toString();
       notifyListeners();
       rethrow;
@@ -281,19 +322,24 @@ class RemoteDownloadManager extends DownloadManager {
   @override
   Future<int> enqueueSoulseekAlbum(List<List<SoulseekFile>> tracks,
       {List<TrackTags?> authorities = const []}) async {
+    final payload = <String, dynamic>{
+      'tracks': [
+        for (final t in tracks) [for (final f in t) f.toJson()]
+      ],
+      'authorities': [
+        for (var i = 0; i < tracks.length; i++)
+          i < authorities.length ? authorities[i]?.toJson() : null
+      ],
+    };
     try {
-      final res = await _rpc.post('/api/soulseek/download-album', {
-        'tracks': [
-          for (final t in tracks) [for (final f in t) f.toJson()]
-        ],
-        'authorities': [
-          for (var i = 0; i < tracks.length; i++)
-            i < authorities.length ? authorities[i]?.toJson() : null
-        ],
-      });
+      final res = await _rpc.post('/api/soulseek/download-album', payload);
       await refresh();
       return (res['started'] as num?)?.toInt() ?? 0;
     } catch (e) {
+      // One queue item for the whole album, not one per track: the PC replays the same request it
+      // would have received, so the tracks arrive together and share their authorities.
+      final title = authorities.firstOrNull?.album ?? 'Album';
+      if (await _enqueueForLater(QueueKind.soulseekAlbum, title, payload)) return tracks.length;
       lastError = e.toString();
       notifyListeners();
       rethrow;

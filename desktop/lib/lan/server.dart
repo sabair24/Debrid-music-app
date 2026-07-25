@@ -560,10 +560,7 @@ class LanServer {
     if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
     final body = await _jsonBody(req);
     if (body == null) return;
-    final fileId = (body['fileId'] as num?)?.toInt();
-    // Deliberately not awaited: enqueue starts the work and returns, and the client watches
-    // /api/jobs. Holding the request open for a download would time out long before it finished.
-    manager.enqueue(SearchResult.fromJson(body), fileId: fileId);
+    startTorrentDownload(body);
     return _json(req.response, {'ok': true});
   }
 
@@ -582,6 +579,67 @@ class LanServer {
     }
   }
 
+  // ── Starting a download from a request body ────────────────────────────────
+  //
+  // Public because the queue worker replays exactly these bodies when the PC comes back online
+  // after a device asked for something while it was off. Sharing the parsing is the point: a
+  // download that was queued must land the same way as one asked for live, including the
+  // authority tags — and two copies of this parsing would eventually disagree about that.
+
+  /// The body of `POST /api/online/download`.
+  void startTorrentDownload(Map<String, dynamic> body) {
+    final manager = downloads;
+    if (manager == null) return;
+    final fileId = (body['fileId'] as num?)?.toInt();
+    // Deliberately not awaited: enqueue starts the work and returns, and the caller watches
+    // /api/jobs. Holding a request open for a download would time out long before it finished.
+    manager.enqueue(SearchResult.fromJson(body), fileId: fileId);
+  }
+
+  /// The body of `POST /api/soulseek/download`. False when nothing usable was in it.
+  Future<bool> startSoulseekDownload(Map<String, dynamic> body) async {
+    final manager = downloads;
+    if (manager == null) return false;
+    final candidates = <SoulseekFile>[];
+    for (final c in (body['candidates'] as List? ?? const [])) {
+      if (c is! Map<String, dynamic>) continue;
+      final f = SoulseekFile.fromJson(c);
+      if (f != null) candidates.add(f);
+    }
+    if (candidates.isEmpty) return false;
+    return manager.enqueueSoulseekBest(candidates,
+        key: body['key'] as String?, authority: _authorityOf(body));
+  }
+
+  /// The body of `POST /api/soulseek/download-album`. How many tracks were started.
+  Future<int> startSoulseekAlbumDownload(Map<String, dynamic> body) async {
+    final manager = downloads;
+    if (manager == null) return 0;
+    final tracks = <List<SoulseekFile>>[];
+    for (final t in (body['tracks'] as List? ?? const [])) {
+      if (t is! List) continue;
+      final files = <SoulseekFile>[];
+      for (final c in t) {
+        if (c is! Map<String, dynamic>) continue;
+        final f = SoulseekFile.fromJson(c);
+        if (f != null) files.add(f);
+      }
+      tracks.add(files);
+    }
+    if (tracks.isEmpty) return 0;
+    // Index-aligned with `tracks`, so a missing entry is a null rather than a shift — a shift
+    // would file every remaining track under the previous one's identity.
+    final wire = body['authorities'] as List? ?? const [];
+    final authorities = <TrackTags?>[
+      for (var i = 0; i < tracks.length; i++)
+        if (i < wire.length && wire[i] is Map<String, dynamic>)
+          TrackTags.fromJson(wire[i] as Map<String, dynamic>)
+        else
+          null
+    ];
+    return manager.enqueueSoulseekAlbum(tracks, authorities: authorities);
+  }
+
   /// What the device says this track IS, when it says anything.
   ///
   /// Optional on purpose: a client from before this existed sends no authority, and must keep
@@ -597,16 +655,8 @@ class LanServer {
     if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
     final body = await _jsonBody(req);
     if (body == null) return;
-    final candidates = <SoulseekFile>[];
-    for (final c in (body['candidates'] as List? ?? const [])) {
-      if (c is! Map<String, dynamic>) continue;
-      final f = SoulseekFile.fromJson(c);
-      if (f != null) candidates.add(f);
-    }
-    if (candidates.isEmpty) return _json(req.response, {'ok': false, 'reason': 'geen kandidaten'});
     try {
-      final started = await manager.enqueueSoulseekBest(candidates,
-          key: body['key'] as String?, authority: _authorityOf(body));
+      final started = await startSoulseekDownload(body);
       return _json(req.response, {'ok': started});
     } catch (e) {
       return _unavailable(req, '$e');
@@ -622,28 +672,8 @@ class LanServer {
     if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
     final body = await _jsonBody(req);
     if (body == null) return;
-    final tracks = <List<SoulseekFile>>[];
-    for (final t in (body['tracks'] as List? ?? const [])) {
-      if (t is! List) continue;
-      final files = <SoulseekFile>[];
-      for (final c in t) {
-        if (c is! Map<String, dynamic>) continue;
-        final f = SoulseekFile.fromJson(c);
-        if (f != null) files.add(f);
-      }
-      tracks.add(files);
-    }
-    if (tracks.isEmpty) return _json(req.response, {'started': 0, 'reason': 'geen kandidaten'});
-    final wire = body['authorities'] as List? ?? const [];
-    final authorities = <TrackTags?>[
-      for (var i = 0; i < tracks.length; i++)
-        if (i < wire.length && wire[i] is Map<String, dynamic>)
-          TrackTags.fromJson(wire[i] as Map<String, dynamic>)
-        else
-          null
-    ];
     try {
-      final started = await manager.enqueueSoulseekAlbum(tracks, authorities: authorities);
+      final started = await startSoulseekAlbumDownload(body);
       return _json(req.response, {'started': started});
     } catch (e) {
       return _unavailable(req, '$e');
