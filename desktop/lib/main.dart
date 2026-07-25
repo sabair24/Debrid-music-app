@@ -2492,8 +2492,12 @@ class _TrackRowState extends State<TrackRow> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       title,
-                      // Only the guests — the album already belongs to the main artist.
-                      ArtistNames(names: guests, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      // Only the guests — the album already belongs to the main artist. Out of the
+                      // highlight's path on a television for the same reason as the track lists:
+                      // this sits inside a row that is itself the thing you want to press.
+                      _maybeFocusable(
+                        ArtistNames(names: guests, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      ),
                     ],
                   );
                 }),
@@ -3563,10 +3567,21 @@ class _ArtistLineState extends State<ArtistLine> {
 /// Every track list in the app used to print the artist as plain text, so the one place a record's
 /// artist was reachable from was an album page. Wherever a name is shown it is now the way to that
 /// artist — and a "A feat. B" tag becomes two names, because a guest is an artist too.
+/// Clickable everywhere, but out of the remote's path on a television.
+///
+/// For controls that sit INSIDE something you already press. A mouse can reach a small link within
+/// a big target; a remote has to stop on both, and the small one is almost never what you meant.
+Widget _maybeFocusable(Widget child) => isTv ? ExcludeFocus(child: child) : child;
+
 Widget _artistLine(({String main, List<String> featured}) who, TextStyle style) {
   final names = [if (who.main.trim().isNotEmpty) who.main.trim(), ...who.featured];
   if (names.isEmpty) return const SizedBox.shrink();
-  return ArtistNames(names: names, style: style);
+  final line = ArtistNames(names: names, style: style);
+  // Every name here is its own focus stop, and this line sits inside a row of a track list. On a
+  // television that turns one press-down-to-the-next-track into three or four, all the way through
+  // a list that can be ten thousand rows long. The names stay clickable — ExcludeFocus takes them
+  // out of the highlight's path, not out of the app.
+  return isTv ? ExcludeFocus(child: line) : line;
 }
 
 /// A row of artist names, each tappable. Takes the names as-is — the caller decides who's on it.
@@ -3757,13 +3772,13 @@ class PlayerBar extends StatelessWidget {
                           inactiveTrackColor: const Color(0xFF2A2F42),
                           thumbColor: Colors.white,
                         ),
-                        child: Slider(
+                        child: _maybeFocusable(Slider(
                           value: _progress(p),
                           onChanged: t == null || p.duration.inMilliseconds == 0
                               ? null
                               : (v) => p.seek(Duration(
                                   milliseconds: (v * p.duration.inMilliseconds).round())),
-                        ),
+                        )),
                       ),
                     ),
                     Text(_fmt(p.duration), style: const TextStyle(color: _muted, fontSize: 11.5)),
@@ -3914,12 +3929,14 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                             inactiveTrackColor: const Color(0xFF2A2F42),
                             thumbColor: Colors.white,
                           ),
-                          child: Slider(
+                          // Same as the player bar's: a Slider eats left and right to change its
+                          // value, so the highlight would enter the seek bar and never leave it.
+                          child: _maybeFocusable(Slider(
                             value: prog,
                             onChanged: t == null || p.duration.inMilliseconds == 0
                                 ? null
                                 : (v) => p.seek(Duration(milliseconds: (v * p.duration.inMilliseconds).round())),
-                          ),
+                          )),
                         ),
                       ),
                       Text(_fmt(p.duration), style: const TextStyle(color: _muted, fontSize: 12)),
@@ -4680,7 +4697,17 @@ Future<void> _confirmDelete(BuildContext context, String what, List<String> path
         style: const TextStyle(color: _muted, fontSize: 13, height: 1.45),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Annuleren')),
+        // Where the highlight starts, said out loud rather than left to whatever Flutter picks.
+        //
+        // "Ook van pc" deletes files from the disk and cannot be undone, and it is the last action
+        // — which is exactly where a convention of "focus the primary button" would put it. On a
+        // remote, one stray press of OK on a dialog you had not read yet would be gone music. So
+        // the highlight starts on Cancel, and reaching the red button takes two deliberate presses.
+        TextButton(
+          autofocus: isTv,
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Annuleren'),
+        ),
         TextButton(
           onPressed: () => Navigator.pop(ctx, 'library'),
           child: const Text('Alleen uit bibliotheek'),
@@ -6446,7 +6473,10 @@ class _HeroCarouselState extends State<HeroCarousel> {
 
   Widget _slide(CatalogAlbumHit hit) {
     final cover = hit.album.cover;
-    return Pressable(
+    // The whole banner is clickable AND carries a "Bekijken" button that does the same thing. For a
+    // mouse that is a convenience; for a remote it is two stops with one outcome, and a ring drawn
+    // around 260 points of artwork. On a television only the button takes the highlight.
+    return _maybeFocusable(Pressable(
       onPressed: () => Navigator.of(context)
           .push(MaterialPageRoute(builder: (_) => AlbumBrowsePage(hit.artist, hit.album))),
       borderRadius: BorderRadius.circular(12),
@@ -6527,7 +6557,7 @@ class _HeroCarouselState extends State<HeroCarousel> {
           ],
         ),
       ),
-    );
+    ));
   }
 }
 
