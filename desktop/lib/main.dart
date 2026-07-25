@@ -28,6 +28,7 @@ import 'cloud/cloud_session.dart';
 import 'cloud/queue_store.dart';
 import 'cloud/queue_worker.dart';
 import 'cloud/device_identity.dart';
+import 'lan/client.dart';
 import 'lan/client_mode.dart';
 import 'lan/client_session.dart';
 import 'lan/remote_services.dart';
@@ -39,6 +40,7 @@ import 'metadata.dart';
 import 'models.dart';
 import 'paths.dart';
 import 'musicbrainz.dart';
+import 'offline.dart';
 import 'online.dart';
 import 'organize.dart';
 import 'player.dart';
@@ -158,11 +160,24 @@ Future<void> main() async {
   final mode = await resolveMode(settings);
 
   late final PlayerStore player;
+
+  // Music kept on this device. Loaded before anything can play, because the resolver below asks it
+  // on every track and an empty store would stream a copy that is already here.
+  final offline = OfflineStore();
+  await offline.load();
+
   final session = ClientSession(
     library: library,
     settings: settings,
     owner: mode.owner,
-    applyMediaResolver: (resolver) => player.mediaResolver = resolver,
+    // The one place a path becomes something to play, so "the copy if we have it, otherwise the
+    // PC" is decided once. No screen, and not the player itself, needs to know that offline
+    // copies exist.
+    applyMediaResolver: (resolver) => player.mediaResolver = (path) {
+      final local = offline.localFor(path);
+      if (local != null) return local;
+      return resolver(path);
+    },
     endpoint: mode.endpoint,
   );
 
@@ -256,6 +271,7 @@ Future<void> main() async {
         ChangeNotifierProvider<AppSettings>.value(value: settings),
         ChangeNotifierProvider<LibraryStore>.value(value: library),
         ChangeNotifierProvider<PlayerStore>.value(value: player),
+        ChangeNotifierProvider<OfflineStore>.value(value: offline),
         Provider<OnlineService>.value(value: online),
         // One instance for the whole app. The 1100 ms spacing MusicBrainz asks for is held in
         // INSTANCE fields, so two widgets each constructing their own would fire unspaced and
@@ -1172,6 +1188,237 @@ class _NavPillsState extends State<_NavPills> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The music this device is carrying.
+///
+/// Shown above the PC's own download queue, and only when there is something to show or something
+/// on the way — an empty heading on the machine that holds the library would be noise.
+class _OfflineSection extends StatelessWidget {
+  const _OfflineSection();
+
+  static String _size(int bytes) {
+    if (bytes >= 1000 * 1000 * 1000) return '${(bytes / 1e9).toStringAsFixed(1)} GB';
+    if (bytes >= 1000 * 1000) return '${(bytes / 1e6).round()} MB';
+    return '${(bytes / 1000).round()} kB';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final offline = context.watch<OfflineStore>();
+    final tracks = offline.tracks;
+    final jobs = offline.jobs;
+    if (tracks.isEmpty && jobs.isEmpty) return const SizedBox.shrink();
+
+    // Grouped by album, because that is how it was put there and how anyone thinks about it.
+    final byAlbum = <String, List<OfflineTrack>>{};
+    for (final t in tracks) {
+      byAlbum.putIfAbsent('${t.artist}|${t.album}', () => []).add(t);
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          const Text('Op dit toestel',
+              style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
+          const SizedBox(width: 14),
+          Text('${tracks.length} nummers · ${_size(offline.bytes)}',
+              style: const TextStyle(color: _muted, fontSize: 12.5)),
+          const Spacer(),
+          if (tracks.isNotEmpty)
+            TextButton.icon(
+              onPressed: () async {
+                final sure = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    backgroundColor: _panel,
+                    title: const Text('Alles van dit toestel halen?',
+                        style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                    content: const Text(
+                        'Je muziek blijft gewoon op je pc staan. Alleen de kopieën op dit '
+                        'toestel gaan weg.',
+                        style: TextStyle(color: _muted, height: 1.4)),
+                    actions: [
+                      TextButton(
+                        autofocus: isTv,
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('Annuleren'),
+                      ),
+                      TextButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('Alles weghalen')),
+                    ],
+                  ),
+                );
+                if (sure == true) await offline.clear();
+              },
+              icon: const Icon(Icons.delete_sweep_outlined, size: 17),
+              label: const Text('Alles weghalen'),
+            ),
+        ]),
+        const SizedBox(height: 12),
+        for (final job in jobs)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(children: [
+              SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2.4, value: job.progress, color: _accent),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Text(job.title, maxLines: 1, overflow: TextOverflow.ellipsis)),
+              Text(job.progress == null ? '' : '${(job.progress! * 100).round()}%',
+                  style: const TextStyle(color: _muted, fontSize: 12.5)),
+            ]),
+          ),
+        for (final entry in byAlbum.entries)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+              decoration: BoxDecoration(
+                color: _panel,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: _line),
+              ),
+              child: Row(children: [
+                const Icon(Icons.offline_pin_rounded, size: 18, color: _accent2),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(entry.value.first.album,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+                      Text(
+                          '${entry.value.first.artist} · ${entry.value.length} nummers · '
+                          '${_size(entry.value.fold(0, (n, t) => n + t.bytes))}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: _muted, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                TvLabelled(
+                  label: 'Weghalen',
+                  child: IconButton(
+                    icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                    color: _muted,
+                    tooltip: 'Van dit toestel halen',
+                    onPressed: () async {
+                      for (final t in entry.value) {
+                        await offline.remove(t.path);
+                      }
+                    },
+                  ),
+                ),
+              ]),
+            ),
+          ),
+        const SizedBox(height: 26),
+      ],
+    );
+  }
+}
+
+/// Put a record on this device, or take it off again.
+///
+/// One button for a whole album rather than one per track: nobody wants a record where nine of
+/// twelve songs play in the car. It reports how far it is, because a lossless album is a few
+/// hundred megabytes and silence for two minutes reads as a broken button.
+class _OfflineAlbumButton extends StatefulWidget {
+  const _OfflineAlbumButton({required this.album});
+  final Album album;
+
+  @override
+  State<_OfflineAlbumButton> createState() => _OfflineAlbumButtonState();
+}
+
+class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
+  bool _working = false;
+  int _done = 0;
+
+  Future<void> _fetch(OfflineStore offline, RemoteClient client) async {
+    final tracks = widget.album.tracks;
+    setState(() {
+      _working = true;
+      _done = 0;
+    });
+    var failed = 0;
+    for (final t in tracks) {
+      if (!mounted) return;
+      final ok = await offline.download(
+        libraryPath: t.path,
+        // The path IS the URL in client mode — the catalogue hands out stream URLs — but it is
+        // stored without the token, which is added at the moment of use and never written down.
+        url: client.authorized(t.path),
+        title: t.title,
+        artist: t.artist,
+        album: widget.album.title,
+      );
+      if (!ok) failed++;
+      if (mounted) setState(() => _done++);
+    }
+    if (!mounted) return;
+    setState(() => _working = false);
+    if (failed > 0) {
+      _srcToast(context, failed == 1
+          ? 'Eén nummer is niet opgehaald. Probeer het opnieuw.'
+          : '$failed nummers zijn niet opgehaald. Probeer het opnieuw.');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final offline = context.watch<OfflineStore>();
+    final client = context.watch<LibraryStore>().remote;
+    if (client == null) return const SizedBox.shrink();
+
+    final tracks = widget.album.tracks;
+    final here = tracks.where((t) => offline.has(t.path)).length;
+    final all = here == tracks.length && tracks.isNotEmpty;
+
+    return FilledButton.icon(
+      style: FilledButton.styleFrom(
+        backgroundColor: all ? _accent2.withValues(alpha: .18) : _panel2,
+        foregroundColor: all ? _accent2 : Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      ),
+      onPressed: _working
+          ? null
+          : () async {
+              if (all) {
+                for (final t in tracks) {
+                  await offline.remove(t.path);
+                }
+                return;
+              }
+              await _fetch(offline, client);
+            },
+      icon: Icon(
+        _working
+            ? Icons.downloading_rounded
+            : all
+                ? Icons.offline_pin_rounded
+                : Icons.download_for_offline_outlined,
+        size: 20,
+      ),
+      label: Text(_working
+          ? 'Ophalen $_done/${tracks.length}'
+          : all
+              ? 'Op dit toestel'
+              // Partly here is worth saying: it is the state a failed or cancelled run leaves
+              // behind, and "Offline" would claim more than is true.
+              : here > 0
+                  ? 'Offline ($here/${tracks.length})'
+                  : 'Offline bewaren'),
     );
   }
 }
@@ -2104,6 +2351,13 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       label: const Text('Afspelen'),
                     ),
                     const SizedBox(width: 10),
+                    // Only where the music lives somewhere else. On the PC the files ARE the
+                    // library; offering to copy them onto the machine they are already on would be
+                    // nonsense.
+                    if (context.watch<LibraryStore>().isRemote) ...[
+                      _OfflineAlbumButton(album: album),
+                      const SizedBox(width: 10),
+                    ],
                     FilledButton.icon(
                       style: FilledButton.styleFrom(
                         backgroundColor: _panel2,
@@ -4991,6 +5245,10 @@ class DownloadsView extends StatelessWidget {
         return ListView(
           padding: const EdgeInsets.fromLTRB(28, 22, 28, 30),
           children: [
+            // What is kept on THIS device, above what is being fetched onto the PC. Two different
+            // things that both live under "downloads": one is music arriving into your library,
+            // the other is a copy of your library travelling with you.
+            const _OfflineSection(),
             Row(
               children: [
                 const Text('Mijn downloads',
