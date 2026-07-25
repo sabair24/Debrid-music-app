@@ -519,6 +519,14 @@ class _HomeShellState extends State<HomeShell> {
 
   // Library search + quality filter (applies to Albums / Tracks / Artiesten).
   final _searchCtl = TextEditingController();
+
+  /// Skipped when arrowing around on a television, and only entered on purpose.
+  ///
+  /// A text field takes focus like anything else, and on Android taking focus opens the on-screen
+  /// keyboard — which then swallows every arrow press, so the highlight is stuck inside a keyboard
+  /// covering half the screen and the album grid below it is unreachable. Pressing down from the
+  /// navigation must land on the records, not in a keyboard nobody asked for.
+  final _searchFocus = FocusNode(skipTraversal: isTv, debugLabel: 'library search');
   String _q = '';
   QFilter _qFilter = QFilter.all;
   AlbumSort _sort = AlbumSort.titel;
@@ -590,10 +598,18 @@ class _HomeShellState extends State<HomeShell> {
         child: Row(
           children: [
             Expanded(
-              child: TextField(
-                controller: _searchCtl,
-                onChanged: (v) => setState(() => _q = v.trim()),
-                style: const TextStyle(fontSize: 14),
+              // On a television the field is behind a press: the highlight stops on the search
+              // bar, OK opens the keyboard, and BACK closes it again. Everywhere else this is the
+              // same bare field it always was — a mouse still clicks straight into it.
+              child: MaybePressable(
+                enabled: isTv,
+                onPressed: () => _searchFocus.requestFocus(),
+                borderRadius: BorderRadius.circular(999),
+                child: TextField(
+                  controller: _searchCtl,
+                  focusNode: _searchFocus,
+                  onChanged: (v) => setState(() => _q = v.trim()),
+                  style: const TextStyle(fontSize: 14),
                 decoration: InputDecoration(
                   isDense: true,
                   hintText: 'Zoek in je bibliotheek — artiest, album of nummer…',
@@ -615,6 +631,7 @@ class _HomeShellState extends State<HomeShell> {
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
+                ),
                 ),
               ),
             ),
@@ -1178,10 +1195,15 @@ class _AlbumCardState extends State<AlbumCard> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: () => Navigator.of(context)
+      child: Pressable(
+        onPressed: () => Navigator.of(context)
             .push(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: a))),
+        borderRadius: BorderRadius.circular(14),
+        // The card already grows and lights up on hover, so focus drives that same state rather
+        // than adding a second, different animation on top of it. A remote then gets exactly the
+        // look a mouse gets, plus the ring that says which card it is.
+        scaleOnFocus: false,
+        onFocusChange: (v) => setState(() => _hover = v),
         // Grows on hover, like the TV app. 1.06 is deliberate: the grid's 20px gap is wider than
         // the ~6px a card gains per side, so a raised card never collides with its neighbours
         // (grid children paint in order, so an overlap would be drawn OVER the raised card).

@@ -180,6 +180,38 @@ class _PressableState extends State<Pressable> {
   }
 }
 
+/// A [Pressable] on a television and nothing at all anywhere else.
+///
+/// For the handful of places where the remote needs a step that a mouse must not get. Written as a
+/// widget rather than an `if` at each call site so the child is built once and reads the same in
+/// both cases — a conditional tree there would mean the field is rebuilt from scratch whenever the
+/// condition is touched, losing what you were typing.
+class MaybePressable extends StatelessWidget {
+  const MaybePressable({
+    super.key,
+    required this.enabled,
+    required this.child,
+    this.onPressed,
+    this.borderRadius = const BorderRadius.all(Radius.circular(10)),
+  });
+
+  final bool enabled;
+  final Widget child;
+  final VoidCallback? onPressed;
+  final BorderRadius borderRadius;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!enabled) return child;
+    return Pressable(
+      onPressed: onPressed,
+      borderRadius: borderRadius,
+      scaleOnFocus: false,
+      child: child,
+    );
+  }
+}
+
 /// The app's own accent, not Flutter's default focus colour. From three metres away a thin grey
 /// outline on a dark panel is invisible, and "where am I" is the only question a remote asks.
 const _ring = Color(0xFF7C5CFF);
