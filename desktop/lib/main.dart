@@ -713,21 +713,45 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Column(
-        children: [
-          _topBar(),
-          const _OfflineBanner(),
-          Expanded(
-            child: Column(
-              children: [
-                if (_searchable) _searchBar(),
-                Expanded(child: _content()),
-              ],
+    // BACK, on a television, must go back.
+    //
+    // The seven sections are a number in this state, not routes, so Flutter's navigator has
+    // nothing to pop and Android takes BACK as "leave the app". Pressing it on Albums dropped you
+    // straight out to the TV launcher — which on a remote, where BACK is the button you reach for
+    // constantly, makes the app feel like it crashes.
+    //
+    // canPop stays true on Start, so a second BACK still leaves. An app you cannot get out of is
+    // the other half of this mistake.
+    return PopScope(
+      canPop: _view == 5,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        setState(() => _view = 5);
+      },
+      child: Scaffold(
+        // Televisions overscan: a strip around the edge of the picture falls off the screen, and
+        // how much differs per set. The margin goes on the CONTENTS of the bars rather than around
+        // the whole app, so the top bar's glass and the player bar's surface still reach the panel
+        // edge — a floating panel with a black gutter around it looks like a mistake, and the point
+        // was only to keep the things you read and press away from the edge.
+        body: Column(
+          children: [
+            _topBar(),
+            const _OfflineBanner(),
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: tvOverscan.left),
+                child: Column(
+                  children: [
+                    if (_searchable) _searchBar(),
+                    Expanded(child: _content()),
+                  ],
+                ),
+              ),
             ),
-          ),
-          const PlayerBar(),
-        ],
+            const PlayerBar(),
+          ],
+        ),
       ),
     );
   }
@@ -2631,11 +2655,22 @@ class _ArtistsViewState extends State<ArtistsView> {
   @override
   Widget build(BuildContext context) {
     if (_selected != null) {
-      return ArtistDetailView(
-        name: _selected!,
-        libraryAlbums: _source.where((a) => a.artist == _selected!).toList(),
-        onBack: () => setState(() => _selected = null),
-        onArtist: (n) => setState(() => _selected = n),
+      // The artist page is a swapped-in body, not a route, so BACK would skip past it to the
+      // shell's own handler and land you on Start — losing the artist grid you were in. This
+      // nests inside the shell's PopScope and the inner one wins, which gives the sequence a
+      // remote expects: artist → grid → Start → out.
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop) return;
+          setState(() => _selected = null);
+        },
+        child: ArtistDetailView(
+          name: _selected!,
+          libraryAlbums: _source.where((a) => a.artist == _selected!).toList(),
+          onBack: () => setState(() => _selected = null),
+          onArtist: (n) => setState(() => _selected = n),
+        ),
       );
     }
     // Only artists that still have a matching album after the shell's search/filter.
