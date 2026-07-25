@@ -2168,6 +2168,9 @@ class _MetadataEditorState extends State<MetadataEditor> {
     _artist.dispose();
     _title.dispose();
     _query.dispose();
+    for (final n in _editFocus.values) {
+      n.dispose();
+    }
     super.dispose();
   }
 
@@ -2420,7 +2423,26 @@ class _MetadataEditorState extends State<MetadataEditor> {
     );
   }
 
-  Widget _field(TextEditingController c, String label) => TextField(controller: c, decoration: _inputDeco(label));
+  /// Same bargain as everywhere else on a television: skipped when arrowing, entered with OK.
+  ///
+  /// Three fields here, and this dialog is the one place you correct a record by hand — so the
+  /// keyboard opening itself over the whole screen the moment the highlight passes by is worse
+  /// than usual: you cannot see what you are correcting.
+  final _editFocus = <TextEditingController, FocusNode>{};
+
+  FocusNode _editFocusFor(TextEditingController c) =>
+      _editFocus.putIfAbsent(c, () => FocusNode(skipTraversal: isTv));
+
+  Widget _field(TextEditingController c, String label) => MaybePressable(
+        enabled: isTv,
+        onPressed: () => _editFocusFor(c).requestFocus(),
+        borderRadius: BorderRadius.circular(8),
+        child: TextField(
+          controller: c,
+          focusNode: _editFocusFor(c),
+          decoration: _inputDeco(label),
+        ),
+      );
 
   InputDecoration _inputDeco(String label) => InputDecoration(
         labelText: label,
@@ -8509,6 +8531,14 @@ class _SettingsDialogState extends State<SettingsDialog> {
   String? _tidyResult;
   final Map<String, ConnResult> _conn = {};
 
+  /// One focus node per field, made on demand by [_field].
+  ///
+  /// Eight text fields on one screen, and on a television every one of them opens the leanback
+  /// keyboard the moment it takes focus — after which the keyboard owns all four arrows and the
+  /// only way out is BACK, which closes the settings and discards everything typed. So they are
+  /// skipped when arrowing and entered on purpose, and the nodes have to be kept somewhere.
+  final _fieldFocus = <TextEditingController, FocusNode>{};
+
   @override
   void dispose() {
     _discogs.dispose();
@@ -8519,6 +8549,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _lastfm.dispose();
     _rtUser.dispose();
     _rtPass.dispose();
+    for (final n in _fieldFocus.values) {
+      n.dispose();
+    }
     super.dispose();
   }
 
@@ -8720,8 +8753,13 @@ class _SettingsDialogState extends State<SettingsDialog> {
         children: [
           Text(label, style: const TextStyle(color: _muted, fontSize: 12.5)),
           const SizedBox(height: 5),
-          TextField(
+          MaybePressable(
+            enabled: isTv,
+            onPressed: () => _focusFor(c).requestFocus(),
+            borderRadius: BorderRadius.circular(9),
+            child: TextField(
             controller: c,
+            focusNode: _focusFor(c),
             obscureText: obscure,
             style: const TextStyle(fontSize: 14),
             decoration: InputDecoration(
@@ -8735,11 +8773,19 @@ class _SettingsDialogState extends State<SettingsDialog> {
               focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _accent)),
             ),
+            ),
           ),
         ],
       ),
     );
   }
+
+  /// The node for this field, made once and kept. Keyed by the controller because that is what
+  /// [_field] is handed — there is no id, and eight call sites should not have to invent one.
+  FocusNode _focusFor(TextEditingController c) => _fieldFocus.putIfAbsent(
+        c,
+        () => FocusNode(skipTraversal: isTv),
+      );
 
   @override
   Widget build(BuildContext context) {
