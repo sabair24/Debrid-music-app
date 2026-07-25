@@ -44,8 +44,14 @@ jobs:
         shell: pwsh
         run: |
           $override = "${{ github.event.inputs.version_override }}"
+          $ref = "${{ github.ref }}"
           if ($override -ne "") {
             $version = $override
+          } elseif ($ref -like "refs/tags/win-v*") {
+            # On a tag, the TAG is the version. Reading pubspec here meant win-v1.4.0 shipped an
+            # installer called 1.3.0 — the release, the filename and the tag all disagreeing, with
+            # no way to tell from the download which code you were getting.
+            $version = $ref -replace '^refs/tags/win-v', ''
           } else {
             $content = Get-Content pubspec.yaml -Raw
             if ($content -match 'version:\s*([\d]+\.[\d]+\.[\d]+)') { $version = $Matches[1] } else { $version = "0.1.0" }
