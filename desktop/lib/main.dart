@@ -50,6 +50,7 @@ import 'settings.dart';
 import 'soulseek.dart';
 import 'tidal.dart';
 import 'torbox.dart';
+import 'tv.dart';
 
 const _bg = Color(0xFF0C0D12);
 const _panel = Color(0xFF181B26);
@@ -108,6 +109,9 @@ Future<void> main() async {
   // Before anything reads a setting or a cache: on iOS the app's own folder cannot be worked out
   // from the environment, it has to be asked for.
   await initAppPaths();
+  // Before the first widget: whether this is a television decides focus rings, overscan margins
+  // and type sizes, and a layout that changes shape one frame after it appears looks broken.
+  await initTvMode();
   if (_isDesktop) await windowManager.ensureInitialized();
   if (!await _claimSingleInstance()) {
     exit(0);
@@ -1030,12 +1034,17 @@ class _NavPillsState extends State<_NavPills> {
                       SizedBox(
                         width: widths[i],
                         child: MouseRegion(
-                          cursor: SystemMouseCursors.click,
                           onEnter: (_) => setState(() => _hover = i),
                           onExit: (_) => setState(() => _hover = _hover == i ? null : _hover),
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: () => widget.onSelect(_items[i].$1),
+                          child: Pressable(
+                            // The row is tight and measured to the pixel; a growing pill would
+                            // shove its neighbours sideways as the highlight moves.
+                            scaleOnFocus: false,
+                            borderRadius: BorderRadius.circular(999),
+                            // The first thing a remote should land on. Without it the app starts
+                            // with the highlight nowhere and the first press appears to do nothing.
+                            autofocus: isTv && i == 0,
+                            onPressed: () => widget.onSelect(_items[i].$1),
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
