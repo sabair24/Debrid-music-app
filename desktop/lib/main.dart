@@ -4750,7 +4750,11 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                                 roles: al == null
                                     ? const {}
                                     : lib.albumArtRoles(al.artist, al.title),
-                                playing: p.playing,
+                                // Out and spinning while a speaker has it too. This device is
+                                // deliberately silent then, so p.playing is false — but the record
+                                // IS playing, just somewhere else, and that is what you came to
+                                // this screen to look at.
+                                playing: p.playing || context.watch<SpeakerTarget>().isCasting,
                                 onFront: (f) {
                                   if (mounted && !identical(f, _shown)) {
                                     setState(() => _shown = f);
@@ -4807,7 +4811,26 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 8),
+                // Where it is actually coming out, when that is not here. No fake progress bar
+                // above it: the position lives on the speaker and this device does not know it, so
+                // a bar that crawled along on a guess would be a lie you could watch.
+                Builder(builder: (context) {
+                  final target = context.watch<SpeakerTarget>();
+                  if (!target.isCasting) return const SizedBox(height: 8);
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 4, bottom: 4),
+                    child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                      const Icon(Icons.speaker_rounded, size: 16, color: _accent),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text('Speelt op ${target.device!.name}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: _accent, fontSize: 13.5)),
+                      ),
+                    ]),
+                  );
+                }),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -10018,31 +10041,49 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
 
     if (disc == null) return sleeve;
 
+    // Built once and handed to the animation as a child, so none of this is rebuilt per frame.
+    //
+    // The order is load-bearing. ClipOval forces a saveLayer — Flutter renders into an offscreen
+    // buffer, masks it, then composites — which is the most expensive thing in the raster pipeline.
+    // Written the obvious way, that saveLayer sat INSIDE the rotation, so a ~660px disc was masked
+    // and re-composited sixty times a second. That is the stutter, and it was mine, not the Shield's.
+    //
+    // With the clip inside a RepaintBoundary and the rotation outside it, the mask is rasterised
+    // ONCE into a layer and each frame only moves a transform.
+    final spinningDisc = RotationTransition(
+      turns: _spin,
+      child: RepaintBoundary(
+        child: ClipOval(
+          child: Image.memory(disc, width: s * .92, height: s * .92, fit: BoxFit.cover),
+        ),
+      ),
+    );
+
     return SizedBox(
       width: s + travel,
       height: s,
-      child: AnimatedBuilder(
-        animation: Listenable.merge([_slide, _spin]),
-        builder: (context, _) {
-          final t = Curves.easeOutCubic.transform(_slide.value);
-          return Stack(
-            clipBehavior: Clip.none,
-            children: [
-              // Behind the sleeve, and drawn first so it stays there.
-              Positioned(
-                left: t * travel,
-                top: s * .04,
-                child: Transform.rotate(
-                  angle: _spin.value * 6.283185,
-                  child: ClipOval(
-                    child: Image.memory(disc, width: s * .92, height: s * .92, fit: BoxFit.cover),
-                  ),
-                ),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // Behind the sleeve, and drawn first so it stays there.
+          Positioned(
+            left: 0,
+            top: s * .04,
+            child: AnimatedBuilder(
+              animation: _slide,
+              // Translate rather than reposition: a Positioned inside a builder would relayout the
+              // Stack every frame, where a transform only moves an already-painted layer.
+              builder: (context, child) => Transform.translate(
+                offset: Offset(Curves.easeOutCubic.transform(_slide.value) * travel, 0),
+                child: child,
               ),
-              Positioned(left: 0, top: 0, child: sleeve),
-            ],
-          );
-        },
+              child: spinningDisc,
+            ),
+          ),
+          // Never rebuilt: it is outside the builder entirely, and it never changes while a record
+          // plays.
+          Positioned(left: 0, top: 0, child: sleeve),
+        ],
       ),
     );
   }
