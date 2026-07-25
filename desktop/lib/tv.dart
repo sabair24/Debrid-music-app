@@ -215,6 +215,60 @@ class _PressableState extends State<Pressable> {
   }
 }
 
+/// An icon that says what it does, once the highlight is on it.
+///
+/// Icon buttons carry their meaning in a tooltip, and a tooltip appears on mouse hover or on a
+/// long press. A remote produces neither — so a row of four near-identical glyphs carries no
+/// meaning at all from three metres, and the only thing on screen is a ring around a picture.
+///
+/// Not solvable by configuring [Tooltip]: it has no focus trigger. So the label is drawn here,
+/// under the icon, while the icon holds the focus. Off a television this is the child untouched,
+/// tooltip and all.
+class TvLabelled extends StatefulWidget {
+  const TvLabelled({super.key, required this.label, required this.child});
+
+  final String label;
+  final Widget child;
+
+  @override
+  State<TvLabelled> createState() => _TvLabelledState();
+}
+
+class _TvLabelledState extends State<TvLabelled> {
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isTv) return widget.child;
+    return Focus(
+      // Watching, not taking: the button inside is what holds the highlight. A Focus that could
+      // take it itself would add a second stop in front of every icon.
+      canRequestFocus: false,
+      skipTraversal: true,
+      onFocusChange: (v) => v == _focused ? null : setState(() => _focused = v),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          widget.child,
+          // Reserved whether or not it is shown, so a row of icons does not jump in height as the
+          // highlight runs along it.
+          SizedBox(
+            height: 14,
+            child: _focused
+                ? Text(
+                    widget.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11, height: 1.1, color: _ring),
+                  )
+                : null,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// A [Pressable] on a television and nothing at all anywhere else.
 ///
 /// For the handful of places where the remote needs a step that a mouse must not get. Written as a

@@ -4041,7 +4041,40 @@ void _srcToast(BuildContext context, String m) {
 /// two different takes can run equally long. A refusal you cannot overrule turns into a button that
 /// silently does nothing, which is worse than the duplicate it was avoiding. Longer on screen than
 /// a plain toast, because it asks something of the reader.
+/// A message with a way to overrule it.
+///
+/// On a television this cannot be a toast. A SnackBarAction is technically focusable but the
+/// highlight never travels there, and it is gone after eight seconds — so the button sits on
+/// screen, plainly visible, and cannot be reached. That matters here more than it sounds: this is
+/// the ONLY way to overrule the app when it wrongly decides a download is a duplicate you already
+/// own. On a remote that whole branch of the app was dead.
 void _srcToastAction(BuildContext context, String m, String label, VoidCallback onTap) {
+  if (isTv) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _panel,
+        content: Text(m, style: const TextStyle(height: 1.4)),
+        actions: [
+          // The highlight starts on "leave it" — the action behind this dialog is a download the
+          // app has already advised against.
+          TextButton(
+            autofocus: true,
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Laat maar'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              onTap();
+            },
+            child: Text(label),
+          ),
+        ],
+      ),
+    );
+    return;
+  }
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
     content: Text(m),
     duration: const Duration(seconds: 8),
@@ -4635,8 +4668,8 @@ class _OntdekViewState extends State<OntdekView> {
                       width: 48,
                       height: 48,
                       child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))))
-                  : IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, tooltip: 'Afspelen', onPressed: () => _play(i, t)),
-              IconButton(icon: const Icon(Icons.radio_rounded, size: 20), color: _muted, tooltip: 'Radio hieruit', onPressed: () => startRadio(context, t.artist)),
+                  : TvLabelled(label: 'Afspelen', child: IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, tooltip: 'Afspelen', onPressed: () => _play(i, t))),
+              TvLabelled(label: 'Radio', child: IconButton(icon: const Icon(Icons.radio_rounded, size: 20), color: _muted, tooltip: 'Radio hieruit', onPressed: () => startRadio(context, t.artist))),
               IconButton(
                   icon: Icon(open ? Icons.expand_less_rounded : Icons.download_rounded, size: 20),
                   color: _muted,
@@ -5239,9 +5272,9 @@ Widget _torrentTile(BuildContext context, SearchResult r) {
           ),
         ),
         _qualityBadge(q),
-        IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, tooltip: 'Beste nummer afspelen', onPressed: () => _playTorrent(context, r)),
-        IconButton(icon: const Icon(Icons.queue_music_rounded), color: _muted, tooltip: 'Kies nummer', onPressed: () => _pickTorrentTracks(context, r)),
-        IconButton(icon: const Icon(Icons.download_rounded), color: _muted, tooltip: 'Alles downloaden', onPressed: () => _downloadTorrent(context, r)),
+        TvLabelled(label: 'Beste nummer', child: IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, tooltip: 'Beste nummer afspelen', onPressed: () => _playTorrent(context, r))),
+        TvLabelled(label: 'Kies nummer', child: IconButton(icon: const Icon(Icons.queue_music_rounded), color: _muted, tooltip: 'Kies nummer', onPressed: () => _pickTorrentTracks(context, r))),
+        TvLabelled(label: 'Alles', child: IconButton(icon: const Icon(Icons.download_rounded), color: _muted, tooltip: 'Alles downloaden', onPressed: () => _downloadTorrent(context, r))),
       ],
     ),
   );
@@ -5434,6 +5467,11 @@ class OnlineSearchScreen extends StatefulWidget {
 
 class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   final _c = TextEditingController();
+
+  /// Skipped when arrowing on a television, for the same reason as the library search: focus opens
+  /// the leanback keyboard, and the keyboard then swallows every arrow press — so the whole tab
+  /// below it becomes unreachable. OK on the field is what opens it.
+  final _searchFocus = FocusNode(skipTraversal: isTv, debugLabel: 'online search');
   final _catalog = CatalogService();
   int _mode = 0; // 0 = Bladeren, 1 = Direct, 2 = TIDAL
   // browse (artists + albums + tracks)
@@ -5749,8 +5787,13 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           child: Row(
             children: [
               Expanded(
-                child: TextField(
+                child: MaybePressable(
+                  enabled: isTv,
+                  onPressed: _searchFocus.requestFocus,
+                  borderRadius: BorderRadius.circular(11),
+                  child: TextField(
                   controller: _c,
+                  focusNode: _searchFocus,
                   onSubmitted: (_) => _search(),
                   decoration: InputDecoration(
                     hintText: _mode == 0
@@ -5765,12 +5808,19 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                         borderRadius: BorderRadius.circular(11), borderSide: const BorderSide(color: _line)),
                   ),
                 ),
+                ),
               ),
               const SizedBox(width: 10),
               FilledButton(
                 style: FilledButton.styleFrom(
                     backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18)),
-                onPressed: (_busy || _browseBusy || _tidalBusy) ? null : _search,
+                // Guarded, not disabled: while a search runs this was the only thing next to a
+                // skipped field, so disabling it left the highlight nowhere to be.
+                onPressed: () {
+                  if (_busy || _browseBusy || _tidalBusy) return;
+                  _search();
+                },
+                autofocus: isTv,
                 child: const Text('Zoek'),
               ),
             ],
