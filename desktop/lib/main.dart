@@ -1724,10 +1724,24 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         ? null
         : (_showMissing ? comp.slots : [for (final s in comp.slots) if (!s.missing) s]);
     return Scaffold(
+      // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin — its app bar
+      // icons and the sleeve were hard against the panel edge, which is the first strip a
+      // television crops away. Horizontal and top only: the player bar below draws its own
+      // surface to the bottom edge and must keep doing so.
       body: Column(
         children: [
+          // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin — its app bar
+          // icons and the sleeve were hard against the panel edge, which is the first strip a
+          // television crops away. Around the scrolling part only: the player bar below draws its
+          // own surface and must keep reaching the edge, or it floats in a black gutter.
           Expanded(
-            child: CustomScrollView(
+            child: Padding(
+              padding: EdgeInsets.only(
+                left: tvOverscan.left,
+                right: tvOverscan.right,
+                top: tvOverscan.top,
+              ),
+              child: CustomScrollView(
               slivers: [
                 SliverAppBar(
                   backgroundColor: _bg,
@@ -1871,6 +1885,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                 if (_officialBonus.isNotEmpty) SliverToBoxAdapter(child: _bonusSection()),
                 const SliverToBoxAdapter(child: SizedBox(height: 24)),
               ],
+              ),
             ),
           ),
           const PlayerBar(),
