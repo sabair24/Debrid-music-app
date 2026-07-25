@@ -19,6 +19,7 @@ import 'net.dart';
 import 'pairing.dart';
 import 'range.dart';
 import 'state_store.dart';
+import 'tokens.dart';
 import 'transcode.dart';
 
 /// The port the other devices look for. Fixed on purpose — an ephemeral port would mean every
@@ -43,7 +44,9 @@ class LanServer {
     this.soulseek,
     this.downloads,
     this.settings,
-  }) : catalog = LanCatalog(library) {
+    GrantStore? grants,
+  })  : grants = grants ?? GrantStore(),
+        catalog = LanCatalog(library) {
     cast = CastManager(catalog: catalog, token: token, port: port);
   }
 
@@ -62,6 +65,10 @@ class LanServer {
   /// Needed by [LibraryStore.applyCorrection] — a hand-picked cover is written into the cover
   /// cache, and that lives where the settings say.
   final AppSettings? settings;
+
+  /// Which devices may fetch anything, one token each. See `tokens.dart` — it deliberately knows
+  /// nothing about who signed in, so this server keeps working with the internet unplugged.
+  final GrantStore grants;
   final LanStateStore state;
   final PairingStore pairing;
 
@@ -229,7 +236,28 @@ class LanServer {
     // The query form is not laziness: a UPnP renderer and an <audio> tag both fetch the URL
     // themselves and have nowhere to put a header.
     final query = req.uri.queryParameters['token'] ?? '';
-    return token.isNotEmpty && (bearer == token || query == token);
+    final offered = bearer.isNotEmpty ? bearer : query;
+    if (offered.isEmpty) return false;
+
+    // A per-device grant, or the one shared token this used to have. The legacy check stays and is
+    // NOT rotated on upgrade: a device paired yesterday must keep working the moment this ships,
+    // and unpairing everything at once is exactly what the old design was stuck with.
+    if (grants.accepts(offered)) {
+      if (grants.touch(offered)) unawaited(grants.save());
+      return true;
+    }
+    return token.isNotEmpty && _constantTimeEquals(offered, token);
+  }
+
+  /// Not `==`. Comparing a secret with an early-exit comparison leaks, through timing, how much of
+  /// a guess was right — which is the one thing a guesser needs.
+  static bool _constantTimeEquals(String a, String b) {
+    if (a.length != b.length) return false;
+    var diff = 0;
+    for (var i = 0; i < a.length; i++) {
+      diff |= a.codeUnitAt(i) ^ b.codeUnitAt(i);
+    }
+    return diff == 0;
   }
 
   Future<void> _catalog(HttpRequest req) async {
