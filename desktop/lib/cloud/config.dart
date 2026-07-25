@@ -25,7 +25,8 @@ class CloudConfig {
   /// how a build can point at a test project without editing the file.
   static const CloudConfig current = CloudConfig(
     projectId: String.fromEnvironment('FIREBASE_PROJECT_ID', defaultValue: 'debridmusic-app'),
-    apiKey: String.fromEnvironment('FIREBASE_API_KEY', defaultValue: ''),
+    apiKey: String.fromEnvironment('FIREBASE_API_KEY',
+        defaultValue: 'AIzaSyB48pQ7Bp9AeRSViAMA5TC2ZBDV0JFnDRE'),
   );
 
   Uri authUrl(String method) => Uri.parse(
