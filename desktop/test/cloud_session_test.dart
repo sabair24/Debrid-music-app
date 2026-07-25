@@ -236,6 +236,70 @@ void main() {
       expect(reopened.accepts(grant.token), isTrue);
     });
 
+    /// The PC making itself findable — the step every device depends on and nothing tested.
+    ///
+    /// Signing in on the PC only pays off through this heartbeat: until the server document exists,
+    /// a Mac that signs in is told "Nog geen pc gevonden onder dit account". That is why signing in
+    /// from Settings starts it immediately instead of waiting for the next launch.
+    test('a signed-in PC publishes where it is, and answers what was waiting', () async {
+      final s = session();
+      await s.signIn('saber@example.test', 'goed');
+
+      final grants = GrantStore(file: File('${scratch.path}/grants.json'));
+      final store = Firestore(token: 'id-token', config: _config, client: db.client());
+      // A device that asked while the PC was off.
+      await store.set('users/user-1/servers/pc-1/grants/ipad-abc', {
+        'status': 'pending',
+        'deviceName': 'iPad van Saber',
+        'platform': 'ios',
+      });
+
+      s.startAsOwner(
+        serverId: 'pc-1',
+        serverName: 'SABER-PC',
+        port: 8477,
+        addresses: () => ['http://192.168.0.10:8477'],
+        grants: grants,
+        trackCount: () => 325,
+      );
+      // The first beat is fired, not awaited — the app must not wait on a network to draw.
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+
+      final doc = await store.get('users/user-1/servers/pc-1');
+      expect(doc, isNotNull, reason: 'zonder dit document vindt geen enkel apparaat deze pc');
+      expect(doc!.data['name'], 'SABER-PC');
+      expect(doc.data['port'], 8477);
+      expect(doc.data['online'], isTrue);
+      expect(doc.data['urls'], contains('http://192.168.0.10:8477'));
+      expect(doc.data['trackCount'], 325);
+
+      // And the request that was already waiting is answered in the same beat.
+      final answered = await store.get('users/user-1/servers/pc-1/grants/ipad-abc');
+      expect(answered?.data['status'], 'granted');
+      expect('${answered?.data['token']}', isNotEmpty);
+
+      s.dispose();
+    });
+
+    test('signed out, nothing is published at all', () async {
+      final s = session();
+      expect(s.isSignedIn, isFalse);
+
+      s.startAsOwner(
+        serverId: 'pc-1',
+        serverName: 'SABER-PC',
+        port: 8477,
+        addresses: () => ['http://192.168.0.10:8477'],
+        grants: GrantStore(file: File('${scratch.path}/grants.json')),
+        trackCount: () => 0,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+
+      expect(db.writes, isEmpty,
+          reason: 'een pc zonder account heeft geen account om zich onder te melden');
+      s.dispose();
+    });
+
     test('a PC that is off leaves the request pending, and says so', () async {
       final s = session();
       await s.signIn('saber@example.test', 'goed');

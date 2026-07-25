@@ -204,21 +204,8 @@ Future<void> main() async {
   // serving music for something that has nothing to do with serving music.
   final cloud = CloudSession();
   unawaited(cloud.restore().then((_) async {
-    if (!mode.owner || !cloud.isSignedIn) return;
-    if (settings.serverId.isEmpty) {
-      settings.serverId = generateDeviceToken().substring(0, 16);
-      await settings.save();
-    }
-    // Publish where this PC is, and hand a token to any device that asked. This is what replaces
-    // discovery for the ordinary case — and what fixes "Geen pc gevonden" when mDNS is blocked.
-    cloud.startAsOwner(
-      serverId: settings.serverId,
-      serverName: deviceName(),
-      port: settings.lanPort,
-      addresses: () => sharing.addresses,
-      grants: sharing.grants,
-      trackCount: () => library.tracks.length,
-    );
+    if (!mode.owner) return;
+    await publishAsOwner(cloud, settings, sharing, library);
   }));
 
   if (mode.owner) {
@@ -368,6 +355,34 @@ class DebridApp extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Publish where this PC is, and hand a token to any device that asked.
+///
+/// This is what replaces discovery for the ordinary case — and what fixes "Geen pc gevonden" when
+/// mDNS is blocked. Does nothing until someone is signed in; there is no account to publish under
+/// before that.
+///
+/// A function rather than a few lines inside main() because it has two callers now: the session
+/// restored from disk at startup, and the moment someone signs in from Settings. Without the second
+/// one, signing in on the PC appeared to do nothing at all until the app was restarted — and the
+/// PC has to be published before any Mac or iPad can find it, so that is the very first thing a
+/// new account does.
+Future<void> publishAsOwner(
+    CloudSession cloud, AppSettings settings, LanSharing sharing, LibraryStore library) async {
+  if (!cloud.isSignedIn) return;
+  if (settings.serverId.isEmpty) {
+    settings.serverId = generateDeviceToken().substring(0, 16);
+    await settings.save();
+  }
+  cloud.startAsOwner(
+    serverId: settings.serverId,
+    serverName: deviceName(),
+    port: settings.lanPort,
+    addresses: () => sharing.addresses,
+    grants: sharing.grants,
+    trackCount: () => library.tracks.length,
+  );
 }
 
 /// What the PC lists this device as. Its own name, because "iPad" is what you look for in a list
@@ -7585,6 +7600,14 @@ class _SharingSectionState extends State<_SharingSection> {
   late final TextEditingController _root;
   bool _showToken = false;
 
+  // Signing this PC in to the account. The same two fields as LoginScreen, but a different job: a
+  // Mac signs in to FIND the music, this machine signs in to be findable.
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  bool _cloudBusy = false;
+  bool _cloudRegister = false;
+  String? _cloudError;
+
   @override
   void initState() {
     super.initState();
@@ -7594,7 +7617,198 @@ class _SharingSectionState extends State<_SharingSection> {
   @override
   void dispose() {
     _root.dispose();
+    _email.dispose();
+    _password.dispose();
     super.dispose();
+  }
+
+  /// Sign in (or register) and start publishing straight away.
+  ///
+  /// The publish is not left to the next launch: the reason to sign in here is so a Mac or an iPad
+  /// can find this PC, and "restart the app first" is not an answer to that.
+  Future<void> _cloudSubmit() async {
+    final email = _email.text.trim();
+    final password = _password.text;
+    if (email.isEmpty || password.isEmpty) {
+      setState(() => _cloudError = 'Vul je e-mailadres en wachtwoord in.');
+      return;
+    }
+    setState(() {
+      _cloudBusy = true;
+      _cloudError = null;
+    });
+    final cloud = context.read<CloudSession>();
+    try {
+      if (_cloudRegister) {
+        await cloud.register(email, password);
+      } else {
+        await cloud.signIn(email, password);
+      }
+      if (!mounted) return;
+      await publishAsOwner(cloud, context.read<AppSettings>(), context.read<LanSharing>(),
+          context.read<LibraryStore>());
+      if (!mounted) return;
+      // Not kept in memory a moment longer than the request needs them.
+      _email.clear();
+      _password.clear();
+      setState(() => _cloudBusy = false);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _cloudBusy = false;
+        _cloudError = '$e';
+      });
+    }
+  }
+
+  /// This PC's account: signed in, or the form to sign in with.
+  Widget _cloudPanel(CloudSession cloud) {
+    // A build with no Firebase project configured cannot sign in to anything, and saying so is
+    // better than a form that always fails. The pairing code below still works.
+    if (cloud.state == CloudState.disabled) {
+      return const Padding(
+        padding: EdgeInsets.only(bottom: 14),
+        child: Text(
+          'Deze build heeft geen cloud-project, dus inloggen kan niet. '
+          'Je apparaten koppelen met de code hieronder werkt gewoon.',
+          style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
+        ),
+      );
+    }
+
+    final title = Row(
+      children: [
+        const Icon(Icons.cloud_outlined, size: 16, color: _muted),
+        const SizedBox(width: 6),
+        const Text('Account', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+        if (cloud.state == CloudState.restoring) ...[
+          const SizedBox(width: 8),
+          const SizedBox(width: 11, height: 11, child: CircularProgressIndicator(strokeWidth: 1.6)),
+        ],
+      ],
+    );
+
+    if (cloud.isSignedIn) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            title,
+            const SizedBox(height: 6),
+            Text(cloud.user?.email ?? 'Ingelogd',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 2),
+            Text(
+              cloud.lastError != null
+                  ? 'Deze pc kon zich niet aanmelden: ${cloud.lastError}'
+                  : 'Deze pc meldt zich aan onder dit account. Log op je Mac, iPad of Shield in met '
+                      'hetzelfde account — dan vinden ze hem zonder code.',
+              style: TextStyle(
+                  color: cloud.lastError != null ? const Color(0xFFFF6B6B) : _muted,
+                  fontSize: 11.5,
+                  height: 1.35),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () async {
+                final serverId = context.read<AppSettings>().serverId;
+                // Tell the account this PC is going away before forgetting the account, or the
+                // devices keep seeing a server that will never answer again.
+                if (serverId.isNotEmpty) {
+                  try {
+                    await cloud.goOffline(serverId);
+                  } catch (_) {/* signing out matters more than the last word */}
+                }
+                await cloud.signOut();
+              },
+              icon: const Icon(Icons.logout_rounded, size: 16),
+              label: const Text('Uitloggen'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          title,
+          const SizedBox(height: 4),
+          const Text(
+            'Log in en je Mac, iPad en Shield vinden deze pc zonder code — ook op een netwerk '
+            'dat automatisch zoeken blokkeert. Begin hier: een apparaat kan pas verbinden als '
+            'deze pc onder het account bekend is.',
+            style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _email,
+                  enabled: !_cloudBusy,
+                  autofillHints: const [AutofillHints.email],
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(
+                    labelText: 'E-mailadres',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: _password,
+                  enabled: !_cloudBusy,
+                  obscureText: true,
+                  autofillHints: [_cloudRegister ? AutofillHints.newPassword : AutofillHints.password],
+                  onSubmitted: (_) => _cloudBusy ? null : _cloudSubmit(),
+                  decoration: const InputDecoration(
+                    labelText: 'Wachtwoord',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (_cloudError != null) ...[
+            const SizedBox(height: 8),
+            Text(_cloudError!,
+                style: const TextStyle(color: Color(0xFFFF6B6B), fontSize: 12, height: 1.35)),
+          ],
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: _accent),
+                onPressed: _cloudBusy ? null : _cloudSubmit,
+                child: Text(_cloudBusy
+                    ? 'Bezig…'
+                    : (_cloudRegister ? 'Account aanmaken' : 'Inloggen')),
+              ),
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: _cloudBusy
+                    ? null
+                    : () => setState(() {
+                          _cloudRegister = !_cloudRegister;
+                          _cloudError = null;
+                        }),
+                child: Text(_cloudRegister
+                    ? 'Ik heb al een account'
+                    : 'Nog geen account? Maak er een'),
+              ),
+            ],
+          ),
+          const Divider(height: 26),
+        ],
+      ),
+    );
   }
 
   void _copy(String value, String what) {
@@ -7694,6 +7908,9 @@ class _SharingSectionState extends State<_SharingSection> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // The account comes first: it is what a device uses to find this PC, and the code below is
+        // the fallback for when it cannot.
+        _cloudPanel(context.watch<CloudSession>()),
         Row(
           children: [
             const Expanded(
