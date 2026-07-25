@@ -315,15 +315,34 @@ class _BookletViewState extends State<BookletView> with TickerProviderStateMixin
           const SizedBox(width: 8),
         ],
       ),
-      body: Focus(
-        autofocus: true,
-        onKeyEvent: _onKey,
-        child: Stack(
-          children: [
-            Positioned.fill(child: _stage()),
-            if (_grid) Positioned.fill(child: _overview()),
-            if (_zoom != null) Positioned.fill(child: _zoomView(_zoom!)),
-          ],
+      // BACK peels one layer at a time — enlargement, then overview, then the book itself.
+      //
+      // The enlargement and the overview are drawn INTO this screen rather than pushed as routes,
+      // so Android's BACK went straight past them and closed the whole booklet. Escape already did
+      // the layered thing on a keyboard; this gives the same behaviour to the button a remote user
+      // actually reaches for.
+      body: PopScope(
+        canPop: _zoom == null && !_grid,
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop) return;
+          setState(() {
+            if (_zoom != null) {
+              _zoom = null;
+            } else {
+              _grid = false;
+            }
+          });
+        },
+        child: Focus(
+          autofocus: true,
+          onKeyEvent: _onKey,
+          child: Stack(
+            children: [
+              Positioned.fill(child: _stage()),
+              if (_grid) Positioned.fill(child: _overview()),
+              if (_zoom != null) Positioned.fill(child: _zoomView(_zoom!)),
+            ],
+          ),
         ),
       ),
     );
@@ -335,10 +354,22 @@ class _BookletViewState extends State<BookletView> with TickerProviderStateMixin
       case LogicalKeyboardKey.arrowRight:
       case LogicalKeyboardKey.pageDown:
       case LogicalKeyboardKey.space:
+      // A remote's skip-forward is the closest thing it has to "next page", and on a Shield it is
+      // right under your thumb.
+      case LogicalKeyboardKey.mediaTrackNext:
         _go(1);
       case LogicalKeyboardKey.arrowLeft:
       case LogicalKeyboardKey.pageUp:
+      case LogicalKeyboardKey.mediaTrackPrevious:
         _go(-1);
+      // OK on the book enlarges the page you are looking at, and OK again puts it back. The two
+      // toolbar buttons above are unreachable from here — this Focus owns every key while the book
+      // has the highlight — so without this a remote could turn pages and do nothing else.
+      case LogicalKeyboardKey.select:
+      case LogicalKeyboardKey.gameButtonA:
+      case LogicalKeyboardKey.enter:
+        if (_grid) return KeyEventResult.ignored;
+        setState(() => _zoom = _zoom == null ? _sheet : null);
       case LogicalKeyboardKey.home:
         _goToSheet(0);
       case LogicalKeyboardKey.end:
