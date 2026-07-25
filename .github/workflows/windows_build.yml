@@ -45,6 +45,13 @@ jobs:
         run: |
           $override = "${{ github.event.inputs.version_override }}"
           $ref = "${{ github.ref }}"
+          # The build number always comes from pubspec, whatever decides the NAME. Once
+          # --build-name is passed, Flutter stops falling back to pubspec for the number
+          # (flutter_tools/lib/src/cmake.dart), so leaving it out silently shipped an app whose
+          # Info screen read "1.4.2" with no build at all.
+          $content = Get-Content pubspec.yaml -Raw
+          if ($content -match 'version:\s*[\d.]+\+(\d+)') { $build = $Matches[1] } else { $build = "1" }
+          echo "BUILD=$build" >> $env:GITHUB_OUTPUT
           if ($override -ne "") {
             $version = $override
           } elseif ($ref -like "refs/tags/win-v*") {
@@ -67,7 +74,7 @@ jobs:
           # comes from the tag. That is the same disagreement the step above fixes, one layer down:
           # win-v1.4.0 installed an app whose Settings screen read 1.3.0, so there was no way to
           # tell from the running app which build you had.
-          flutter build windows --release --build-name=${{ steps.version.outputs.VERSION }}
+          flutter build windows --release --build-name=${{ steps.version.outputs.VERSION }} --build-number=${{ steps.version.outputs.BUILD }}
 
       - name: Verify build output
         shell: pwsh
