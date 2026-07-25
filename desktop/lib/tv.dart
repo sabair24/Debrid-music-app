@@ -171,7 +171,16 @@ class _PressableState extends State<Pressable> {
       );
     }
 
-    return FocusableActionDetector(
+    // Holding OK is a real gesture on a remote, and Flutter does not give it to you.
+    //
+    // ActivateIntent fires on key DOWN, so a hold had already run onPressed before anything could
+    // notice it was a hold — which meant "hold OK to set the backdrop" silently overwrote the
+    // portrait instead. When there is a long press to reach, the keys are handled here on the way
+    // UP: short is a press, long is a long press. Nothing changes for a mouse, or when a widget has
+    // no long press to offer.
+    final holdable = isTv && widget.onLongPress != null && widget.onPressed != null;
+
+    Widget detector = FocusableActionDetector(
       focusNode: widget.focusNode,
       autofocus: widget.autofocus,
       enabled: enabled,
@@ -183,7 +192,7 @@ class _PressableState extends State<Pressable> {
         if (v) _bringIntoView();
       },
       onShowHoverHighlight: (v) => v == _hovered ? null : setState(() => _hovered = v),
-      shortcuts: _activateShortcuts,
+      shortcuts: holdable ? const <ShortcutActivator, Intent>{} : _activateShortcuts,
       actions: {
         ActivateIntent: CallbackAction<ActivateIntent>(onInvoke: (_) {
           _activate();
@@ -212,6 +221,62 @@ class _PressableState extends State<Pressable> {
         ),
       ),
     );
+
+    if (!holdable) return detector;
+
+    // Wrapped, not focusable: key events bubble from the focused node up through its ancestors, so
+    // this sees OK without adding a second stop in front of every control that has a long press.
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onKeyEvent: _onHoldKey,
+      child: detector,
+    );
+  }
+
+  /// When OK went down, so the way up can tell a press from a hold.
+  DateTime? _downAt;
+
+  /// Set when the key started auto-repeating, which is Android's own way of saying "still held".
+  ///
+  /// Checked as well as the clock, not instead of it: a remote that repeats quickly would beat a
+  /// wall-clock threshold, and one that does not repeat at all still gets caught by the clock.
+  bool _repeated = false;
+
+  static const _holdFor = Duration(milliseconds: 500);
+
+  KeyEventResult _onHoldKey(FocusNode _, KeyEvent e) {
+    final k = e.logicalKey;
+    final ours = k == LogicalKeyboardKey.select ||
+        k == LogicalKeyboardKey.gameButtonA ||
+        k == LogicalKeyboardKey.enter ||
+        k == LogicalKeyboardKey.numpadEnter ||
+        k == LogicalKeyboardKey.space;
+    if (!ours) return KeyEventResult.ignored;
+    // Repeats are what a held button produces; they are not extra presses.
+    if (e is KeyRepeatEvent) {
+      _repeated = true;
+      return KeyEventResult.handled;
+    }
+    if (e is KeyDownEvent) {
+      _downAt = DateTime.now();
+      _repeated = false;
+      return KeyEventResult.handled;
+    }
+    if (e is KeyUpEvent) {
+      final down = _downAt;
+      final held = _repeated;
+      _downAt = null;
+      _repeated = false;
+      if (down == null) return KeyEventResult.ignored;
+      if (held || DateTime.now().difference(down) >= _holdFor) {
+        widget.onLongPress?.call();
+      } else {
+        _activate();
+      }
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 }
 

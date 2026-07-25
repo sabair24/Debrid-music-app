@@ -212,17 +212,19 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 16),
                   FilledButton(
-                    // Guarded rather than disabled, and that matters most on a television.
+                    // Guarded on a television, disabled everywhere else.
                     //
                     // While _busy, both fields and both links below are disabled too. A disabled
                     // Material widget leaves the traversal order, so with onPressed:null this
                     // screen held NOT ONE focusable widget — and awaitAccess waits up to a minute
                     // on a PC that may be switched off. A remote pointing at a screen with nothing
                     // to focus is a frozen app, whatever the spinner says.
-                    onPressed: () {
-                      if (_busy) return;
-                      _submit();
-                    },
+                    onPressed: (!isTv && _busy)
+                        ? null
+                        : () {
+                            if (_busy) return;
+                            _submit();
+                          },
                     // Where the highlight starts on a TV: on the button, not in a text field —
                     // a focused field raises the on-screen keyboard over everything before you
                     // have read a word of the screen.

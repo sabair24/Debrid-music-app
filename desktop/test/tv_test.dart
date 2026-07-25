@@ -183,4 +183,76 @@ void main() {
       expect(tvOverscan, EdgeInsets.zero);
     });
   });
+
+  group('OK ingedrukt houden', () {
+    // adb cannot simulate a held key — `input keyevent --longpress` sets a flag and releases
+    // immediately — so this is where the hold path is proven. It matters: on a television, holding
+    // OK on a track row is the ONLY way to reach "move" and "delete", because Flutter's directional
+    // traversal can never select a node whose rectangle lies inside the focused one's.
+    testWidgets('a short press is a press, a held one is a long press', (tester) async {
+      var pressed = 0, held = 0;
+      await tester.pumpWidget(_app(Pressable(
+        autofocus: true,
+        onPressed: () => pressed++,
+        onLongPress: () => held++,
+        child: const Text('Nummer'),
+      )));
+      await tester.pumpAndSettle();
+
+      // Down and straight up: a press.
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.select);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.select);
+      await tester.pumpAndSettle();
+      expect(pressed, 1);
+      expect(held, 0);
+
+      // Down, Android repeats because it is still held, then up: a long press.
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.select);
+      await tester.sendKeyRepeatEvent(LogicalKeyboardKey.select);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.select);
+      await tester.pumpAndSettle();
+      expect(held, 1, reason: 'de herhaling is hoe Android zegt dat de knop nog ingedrukt is');
+      expect(pressed, 1, reason: 'vasthouden mag niet OOK het nummer starten');
+    });
+
+    testWidgets('without a long press to reach, nothing changes', (tester) async {
+      var pressed = 0;
+      await tester.pumpWidget(_app(Pressable(
+        autofocus: true,
+        onPressed: () => pressed++,
+        child: const Text('Alleen drukken'),
+      )));
+      await tester.pumpAndSettle();
+
+      // Still the ordinary path: ActivateIntent on key down, which is what every other control in
+      // the app relies on.
+      await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      await tester.pumpAndSettle();
+      expect(pressed, 1);
+    });
+
+    testWidgets('a phone keeps the pointer long-press and not the key one', (tester) async {
+      setTvModeForTest(false);
+      var pressed = 0, held = 0;
+      await tester.pumpWidget(_app(Pressable(
+        autofocus: true,
+        onPressed: () => pressed++,
+        onLongPress: () => held++,
+        child: const SizedBox(width: 120, height: 40, child: Text('Nummer')),
+      )));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Nummer'));
+      await tester.pumpAndSettle();
+      expect(held, 1, reason: 'een vinger of muis houdt gewoon vast zoals altijd');
+
+      // And the key path is NOT installed off a television, so OK is still a plain press.
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.enter);
+      await tester.sendKeyRepeatEvent(LogicalKeyboardKey.enter);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(pressed, greaterThan(0));
+      expect(held, 1, reason: 'een toetsenbord dat herhaalt is geen lang indrukken op een pc');
+    });
+  });
 }

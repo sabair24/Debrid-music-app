@@ -2499,6 +2499,45 @@ class TrackRow extends StatefulWidget {
   State<TrackRow> createState() => _TrackRowState();
 }
 
+/// What the hover icons offer, reachable by holding OK.
+///
+/// The same two actions and the same dialogs — this is a way IN to them, not a second way of doing
+/// them. The highlight starts on "Sluiten", because one of the two deletes a file.
+Future<void> _trackOptions(BuildContext context, Track t) async {
+  final choice = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: _panel,
+      title: Text(titleWithoutFeat(t.title),
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+      content: const Text('Wat wil je met dit nummer doen?',
+          style: TextStyle(color: _muted, height: 1.4)),
+      actions: [
+        TextButton(
+          autofocus: true,
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Sluiten'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, 'move'),
+          child: const Text('Naar ander album'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, 'delete'),
+          child: const Text('Verwijderen'),
+        ),
+      ],
+    ),
+  );
+  if (choice == null || !context.mounted) return;
+  if (choice == 'move') {
+    final from = context.read<LibraryStore>().albumForPath(t.path);
+    await showDialog<bool>(context: context, builder: (_) => MoveTrackDialog(track: t, from: from));
+  } else {
+    await _confirmDelete(context, '“${t.title}”', [t.path]);
+  }
+}
+
 class _TrackRowState extends State<TrackRow> {
   bool _hover = false;
   @override
@@ -2513,6 +2552,16 @@ class _TrackRowState extends State<TrackRow> {
         onPressed: () => context
             .read<PlayerStore>()
             .playQueue(widget.queue, widget.index, cover: widget.albumCover),
+        // Hold OK for what the mouse reaches by hovering.
+        //
+        // "Verplaatsen" and "Verwijderen" live INSIDE this row, and Flutter's directional traversal
+        // can never select a node whose rectangle lies within the focused one's — so with a remote
+        // those two were simply unreachable, and moving or deleting a single track could not be
+        // done from the sofa at all. A held OK is the ordinary television gesture for "options".
+        //
+        // Television only: on a desktop a long press is a held mouse button, which nobody means as
+        // "open a menu", and the hover icons are already right there.
+        onLongPress: isTv ? () => _trackOptions(context, t) : null,
         borderRadius: BorderRadius.circular(10),
         // A list of rows: one growing would push every row under it down as the highlight runs
         // through the album. The row already lights up on hover, and focus drives that.
@@ -5887,12 +5936,19 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
               FilledButton(
                 style: FilledButton.styleFrom(
                     backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18)),
-                // Guarded, not disabled: while a search runs this was the only thing next to a
-                // skipped field, so disabling it left the highlight nowhere to be.
-                onPressed: () {
-                  if (_busy || _browseBusy || _tidalBusy) return;
-                  _search();
-                },
+                // Guarded on a television, disabled everywhere else.
+                //
+                // Disabling it is right under a mouse — the button greys out and the cursor says
+                // so. On a TV it is wrong: a disabled button leaves the traversal order, and while
+                // a search runs this was the only thing next to a field that is skipped, so the
+                // highlight had nowhere to be. Guarding it on BOTH would have quietly taken the
+                // grey away from Windows and the iPad, where nothing was broken.
+                onPressed: (!isTv && (_busy || _browseBusy || _tidalBusy))
+                    ? null
+                    : () {
+                        if (_busy || _browseBusy || _tidalBusy) return;
+                        _search();
+                      },
                 autofocus: isTv,
                 child: const Text('Zoek'),
               ),
@@ -6433,26 +6489,30 @@ class BioText extends StatelessWidget {
   const BioText(this.artist, this.text, {super.key});
   @override
   Widget build(BuildContext context) {
-    return Pressable(
-      onPressed: () => showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          backgroundColor: _panel,
-          title: Text(artist, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-          content: SizedBox(
-            width: 540,
-            child: SingleChildScrollView(
-              child: Text(text, style: const TextStyle(color: Color(0xFFC7CBDA), fontSize: 13.5, height: 1.5)),
+    // Capped where the long text actually lives, so artist bios and album blurbs both get it.
+    // Align is load-bearing: a list hands its children a TIGHT width and a bare ConstrainedBox
+    // cannot shrink below that — without it the cap silently does nothing.
+    //
+    // The Align sits OUTSIDE the Pressable, not inside it. Inside, the opaque hit test claimed the
+    // Align's full row width, so on Windows a hand cursor appeared and a click landed hundreds of
+    // pixels to the right of any text — over empty background. The press target is the paragraph.
+    return Align(
+      alignment: Alignment.topLeft,
+      child: Pressable(
+        onPressed: () => showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            backgroundColor: _panel,
+            title: Text(artist, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            content: SizedBox(
+              width: 540,
+              child: SingleChildScrollView(
+                child: Text(text, style: const TextStyle(color: Color(0xFFC7CBDA), fontSize: 13.5, height: 1.5)),
+              ),
             ),
+            actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Sluiten'))],
           ),
-          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Sluiten'))],
         ),
-      ),
-      // Capped where the long text actually lives, so artist bios and album blurbs both get it.
-      // Align is load-bearing: a list hands its children a TIGHT width and a bare ConstrainedBox
-      // cannot shrink below that — without it the cap silently does nothing.
-      child: Align(
-        alignment: Alignment.topLeft,
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 820),
           child: Column(
