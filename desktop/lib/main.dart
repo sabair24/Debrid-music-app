@@ -28,6 +28,7 @@ import 'cloud/cloud_session.dart';
 import 'cloud/queue_store.dart';
 import 'cloud/queue_worker.dart';
 import 'cloud/device_identity.dart';
+import 'lan/cast_receiver.dart';
 import 'lan/client.dart';
 import 'lan/client_mode.dart';
 import 'lan/client_session.dart';
@@ -166,6 +167,7 @@ Future<void> main() async {
   final offline = OfflineStore();
   await offline.load();
 
+
   final session = ClientSession(
     library: library,
     settings: settings,
@@ -205,6 +207,21 @@ Future<void> main() async {
   // The lockscreen, Control Center and the media keys. Not awaited on the critical path — the
   // window should not wait on a system service to come up.
   unawaited(initNowPlaying(player, cover: library.coverForTrack));
+
+  // Being cast TO. Only on a television: that is the box wired to the amplifier, and a phone that
+  // answered here would start playing whenever somebody in the house picked a speaker.
+  //
+  // "Stop" pauses rather than tearing the queue down — a sender that stops casting has usually
+  // moved the music somewhere else, and coming back to a cleared queue loses your place.
+  if (isTv) {
+    unawaited(CastReceiver(
+      deviceName: _thisDeviceName,
+      onPlay: (tracks, index) => player.playQueue(tracks, index),
+      onStop: () {
+        if (player.playing) player.playPause();
+      },
+    ).start());
+  }
 
   // What "the library changed" means differs: the PC rescans its disk, a client asks the PC for
   // the catalogue again — which is how a download started from the iPad shows up there.
