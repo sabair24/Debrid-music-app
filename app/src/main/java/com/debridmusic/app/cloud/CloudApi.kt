@@ -30,13 +30,17 @@ interface CloudAuthApi {
     // No default arguments anywhere in these interfaces, on purpose. Retrofit builds a dynamic
     // proxy, and Kotlin implements defaults through a synthetic $default helper — a combination
     // that fails at runtime rather than at compile time, which is the worst place to find out.
-    @POST("accounts:signInWithPassword")
+    // "./" is load-bearing. Without it OkHttp resolves "accounts:signInWithPassword" against the
+    // base and reads "accounts:" as a URL SCHEME — the colon Google puts in its method names is
+    // the same character that separates a scheme from its path. The result is a Malformed URL at
+    // runtime, on the first sign-in, with a build that compiled perfectly.
+    @POST("./accounts:signInWithPassword")
     suspend fun signIn(
         @Query("key") key: String,
         @Body body: AuthRequest,
     ): AuthResponse
 
-    @POST("accounts:signUp")
+    @POST("./accounts:signUp")
     suspend fun signUp(
         @Query("key") key: String,
         @Body body: AuthRequest,
