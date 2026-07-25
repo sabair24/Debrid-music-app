@@ -22,10 +22,14 @@ import 'editions.dart';
 import 'connectivity.dart';
 import 'enrichment.dart';
 import 'lan/sharing.dart';
+import 'lan/tokens.dart';
+import 'cloud/cloud_session.dart';
+import 'cloud/device_identity.dart';
 import 'lan/client_mode.dart';
 import 'lan/client_session.dart';
 import 'lan/remote_services.dart';
 import 'now_playing.dart';
+import 'login_screen.dart';
 import 'pairing_screen.dart';
 import 'library.dart';
 import 'metadata.dart';
@@ -195,6 +199,28 @@ Future<void> main() async {
     soulseek: mode.owner ? soulseek : null,
     downloads: mode.owner ? downloads : null,
   );
+  // Signing in. Restoring a saved session is deliberately NOT awaited before the first frame: a
+  // slow network would otherwise hold the whole app on a blank screen, and on the PC it would delay
+  // serving music for something that has nothing to do with serving music.
+  final cloud = CloudSession();
+  unawaited(cloud.restore().then((_) async {
+    if (!mode.owner || !cloud.isSignedIn) return;
+    if (settings.serverId.isEmpty) {
+      settings.serverId = generateDeviceToken().substring(0, 16);
+      await settings.save();
+    }
+    // Publish where this PC is, and hand a token to any device that asked. This is what replaces
+    // discovery for the ordinary case — and what fixes "Geen pc gevonden" when mDNS is blocked.
+    cloud.startAsOwner(
+      serverId: settings.serverId,
+      serverName: deviceName(),
+      port: settings.lanPort,
+      addresses: () => sharing.addresses,
+      grants: sharing.grants,
+      trackCount: () => library.tracks.length,
+    );
+  }));
+
   if (mode.owner) {
     unawaited(sharing.applySettings());
     // What plays here counts too: the position and the play count go into the same shared state
@@ -224,6 +250,7 @@ Future<void> main() async {
         ChangeNotifierProvider<DownloadManager>.value(value: downloads),
         ChangeNotifierProvider<LanSharing>.value(value: sharing),
         ChangeNotifierProvider<ClientSession>.value(value: session),
+        ChangeNotifierProvider<CloudSession>.value(value: cloud),
       ],
       child: const DebridApp(),
     ),
@@ -312,13 +339,32 @@ class DebridApp extends StatelessWidget {
       // On a Mac or an iPad that has never met the PC there is no library to show yet, so the
       // pairing screen comes first. Everywhere else — and from the moment it is paired — this is
       // the same app it has always been.
-      home: Consumer<ClientSession>(
-        builder: (context, session, _) => session.ready
-            ? const HomeShell()
-            : PairingScreen(
-                deviceName: _thisDeviceName(),
-                onPaired: session.connect,
-              ),
+      // On a Mac or an iPad that is not connected to a PC yet there is no library to show, so the
+      // login comes first. Everywhere else — and from the moment it is connected — this is the same
+      // app it has always been.
+      home: Consumer2<ClientSession, CloudSession>(
+        builder: (context, session, cloud, _) {
+          if (session.ready) return const HomeShell();
+          // The pairing code is still reachable, and is the whole screen when this build has no
+          // Firebase project: nobody should be stuck behind a login that cannot work.
+          if (cloud.state == CloudState.disabled || session.preferPairingCode) {
+            return PairingScreen(
+              deviceName: _thisDeviceName(),
+              onPaired: session.connect,
+            );
+          }
+          if (cloud.state == CloudState.restoring) {
+            return const Scaffold(
+              backgroundColor: _bg,
+              body: Center(child: CircularProgressIndicator(color: _accent)),
+            );
+          }
+          return LoginScreen(
+            session: cloud,
+            onConnected: session.connect,
+            onUseCode: session.usePairingCode,
+          );
+        },
       ),
     );
   }

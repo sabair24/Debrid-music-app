@@ -32,6 +32,10 @@ class AppSettings extends ChangeNotifier {
   bool lanEnabled = true;
   int lanPort = 47820;
   String lanToken = '';
+
+  /// This PC's own id in the cloud, so a device knows which machine it asked. Generated once and
+  /// kept: changing it would orphan every grant handed out under the old one.
+  String serverId = '';
   /// Where the music lives. Only the machine that owns the files sets this.
   String musicRoot = '';
 
@@ -63,6 +67,7 @@ class AppSettings extends ChangeNotifier {
         lanEnabled = (m['lan_enabled'] ?? true) as bool;
         lanPort = (m['lan_port'] ?? 47820) as int;
         lanToken = (m['lan_token'] ?? '') as String;
+        serverId = (m['server_id'] ?? '') as String;
         musicRoot = (m['music_root'] ?? '') as String;
       }
     } catch (_) {}
@@ -93,6 +98,7 @@ class AppSettings extends ChangeNotifier {
         'lan_enabled': lanEnabled,
         'lan_port': lanPort,
         'lan_token': lanToken,
+        'server_id': serverId,
         'music_root': musicRoot,
       }));
     } catch (_) {}

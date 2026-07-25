@@ -11,6 +11,7 @@ import 'net.dart';
 import 'pairing.dart';
 import 'server.dart';
 import 'state_store.dart';
+import 'tokens.dart';
 
 /// Owns the LAN server's lifecycle and everything the settings panel shows about it.
 ///
@@ -37,6 +38,10 @@ class LanSharing extends ChangeNotifier {
   /// Playlists, favourites, play position and counts — shared with every device. Lives here
   /// rather than in the server so switching sharing off doesn't drop what the PC itself knows.
   final LanStateStore state;
+
+  /// One token per device. Same reason it lives here and not in the server: turning sharing off
+  /// must not forget which devices you trust.
+  final GrantStore grants = GrantStore();
 
   /// The six-digit code a new device types in. Outlives any one server instance so toggling
   /// sharing mid-pairing doesn't strand the device halfway.
@@ -109,6 +114,7 @@ class LanSharing extends ChangeNotifier {
       soulseek: soulseek,
       downloads: downloads,
       settings: settings,
+      grants: grants,
     );
     _error = await server.start();
     _server = _error == null ? server : null;

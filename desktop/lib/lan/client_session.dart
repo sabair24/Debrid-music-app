@@ -39,6 +39,15 @@ class ClientSession extends ChangeNotifier {
   /// The app shows its normal self when there is nothing left to ask for.
   bool get ready => owner || _endpoint != null;
 
+  /// The user asked for the old six digits instead of logging in. Kept for the case the login
+  /// cannot help with: a network with no internet, and a PC two metres away.
+  bool preferPairingCode = false;
+
+  void usePairingCode() {
+    preferPairingCode = true;
+    notifyListeners();
+  }
+
   /// Set once the first catalogue has landed, so the library screen can say "verbinden…" rather
   /// than "geen muziek gevonden" while it is still on its way.
   bool loading = false;

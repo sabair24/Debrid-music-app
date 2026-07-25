@@ -24,7 +24,7 @@ class CloudConfig {
   /// Fill these in for your project. A `--dart-define` of the same name overrides them, which is
   /// how a build can point at a test project without editing the file.
   static const CloudConfig current = CloudConfig(
-    projectId: String.fromEnvironment('FIREBASE_PROJECT_ID', defaultValue: ''),
+    projectId: String.fromEnvironment('FIREBASE_PROJECT_ID', defaultValue: 'debridmusic-app'),
     apiKey: String.fromEnvironment('FIREBASE_API_KEY', defaultValue: ''),
   );
 
