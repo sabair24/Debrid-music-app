@@ -23,6 +23,7 @@ import 'connectivity.dart';
 import 'enrichment.dart';
 import 'lan/sharing.dart';
 import 'lan/tokens.dart';
+import 'cloud/catalog_mirror.dart';
 import 'cloud/cloud_session.dart';
 import 'cloud/queue_store.dart';
 import 'cloud/queue_worker.dart';
@@ -288,6 +289,8 @@ Future<void> main() async {
       void refreshQueue() {
         unawaited(cloud.db().then((db) {
           manager.queue = db == null ? null : FirestoreQueue(db: db, uid: cloud.uid);
+          // The same account also holds the catalogue copy this device falls back on.
+          session.mirror = db == null ? null : CatalogMirror(db: db, uid: cloud.uid);
         }).catchError((Object _) {
           // No queue is a worse experience than a queue, but not worth failing a start over: an
           // unreachable PC then simply reports the failure it always did.
@@ -427,8 +430,26 @@ Future<void> publishAsOwner(CloudSession cloud, AppSettings settings, LanSharing
       downloads: downloads,
       workerId: settings.serverId,
     )..start();
+
+    // Copy the library up so a Mac or an iPad can browse it with this PC asleep. Driven off the
+    // catalogue's own fingerprint, so an unchanged library costs one read and no writes — and
+    // enriching a cover, which changes no byte of that catalogue, costs nothing at all.
+    _mirrorTimer?.cancel();
+    final mirror = CatalogMirror(db: db, uid: cloud.uid);
+    Future<void> publish() async {
+      if (library.tracks.isEmpty) return; // never publish an empty library over a good one
+      await mirror.publish(server.catalog.snapshot());
+    }
+
+    unawaited(publish());
+    _mirrorTimer = Timer.periodic(const Duration(minutes: 5), (_) => unawaited(publish()));
   }
 }
+
+/// The catalogue copy, refreshed on a slow timer. Five minutes because the fingerprint check makes
+/// an unchanged run nearly free, and a download that just landed should not take an hour to show
+/// up on a device that is out of the house.
+Timer? _mirrorTimer;
 
 /// The one worker for this process. Held so signing in twice does not leave two of them racing
 /// each other for the same items.
@@ -649,6 +670,7 @@ class _HomeShellState extends State<HomeShell> {
       body: Column(
         children: [
           _topBar(),
+          const _OfflineBanner(),
           Expanded(
             child: Column(
               children: [
@@ -863,6 +885,46 @@ class _HomeShellState extends State<HomeShell> {
 /// geometry is known in the same frame it animates in — no first-frame jump, no post-frame
 /// measuring pass. That also means the label's weight must not change between states (only its
 /// colour does), or the pill would no longer match what it sits behind.
+/// Says the library on screen is the cloud copy, not the PC.
+///
+/// Without it, a tap on play does nothing and there is no way to tell why — the albums are all
+/// there, the covers are all there, and the files are on a machine that is asleep.
+class _OfflineBanner extends StatelessWidget {
+  const _OfflineBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    if (!lib.fromCloudMirror) return const SizedBox.shrink();
+    final when = lib.mirrorUpdatedAt;
+    return Container(
+      width: double.infinity,
+      color: const Color(0xFF2A2416),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+      child: Row(children: [
+        const Icon(Icons.cloud_off_rounded, size: 17, color: Color(0xFFE8C36A)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            'Je pc staat uit — dit is de kopie van je bibliotheek'
+            '${when == null ? '' : ' van ${_ago(when)}'}. '
+            'Bladeren en downloads klaarzetten kan; afspelen niet.',
+            style: const TextStyle(color: Color(0xFFE8C36A), fontSize: 12.5),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  static String _ago(DateTime when) {
+    final d = DateTime.now().toUtc().difference(when.toUtc());
+    if (d.inMinutes < 2) return 'zojuist';
+    if (d.inHours < 1) return '${d.inMinutes} minuten geleden';
+    if (d.inDays < 1) return '${d.inHours} uur geleden';
+    return '${d.inDays} dagen geleden';
+  }
+}
+
 class _NavPills extends StatefulWidget {
   final int active;
   final ValueChanged<int> onSelect;

@@ -862,6 +862,14 @@ class LibraryStore extends ChangeNotifier {
   /// instead of re-sending twelve thousand tracks.
   String? _catalogEtag;
 
+  /// True when what is on screen came from the cloud copy rather than from the PC. Everything is
+  /// browsable; nothing is playable, because the files are on a machine that is not answering.
+  /// Screens read this to say so, rather than letting a tap on play do nothing.
+  bool fromCloudMirror = false;
+
+  /// When the PC last copied its library up. Only meaningful while [fromCloudMirror].
+  DateTime? mirrorUpdatedAt;
+
   set remote(RemoteClient? client) {
     _remote = client;
     _catalogEtag = null;
@@ -906,6 +914,9 @@ class LibraryStore extends ChangeNotifier {
     }
 
     _adoptCatalog(catalog, client);
+    // Live again: what is on screen is playable, whatever it was a moment ago.
+    fromCloudMirror = false;
+    mirrorUpdatedAt = null;
     scanned = tracks.length;
     scanning = false;
     notifyListeners();
@@ -914,6 +925,33 @@ class LibraryStore extends ChangeNotifier {
       _rescanQueued = false;
       await loadRemote(quiet: quiet);
     }
+    return true;
+  }
+
+  /// Fill the library from the cloud copy, for when the PC is not answering.
+  ///
+  /// Deliberately the same [_adoptCatalog] the live path uses: the copy IS the catalogue the PC
+  /// serves, so the albums, pressings and covers come out identical. What differs is only that
+  /// nothing can be played, and [fromCloudMirror] says so.
+  ///
+  /// Refuses to overwrite a live catalogue. Coming back from a lock screen can land this after the
+  /// PC has already answered, and replacing a playable library with an unplayable copy of itself
+  /// is the one outcome nobody wants.
+  bool adoptMirror(Map<String, dynamic> json, {DateTime? updatedAt}) {
+    if (!isRemote) return false;
+    if (!fromCloudMirror && tracks.isNotEmpty) return false;
+    final client = _remote;
+    if (client == null) return false;
+    try {
+      _adoptCatalog(CatalogDto.fromJson(json), client);
+    } catch (e) {
+      debugPrint('Cloud catalogue unusable: $e');
+      return false;
+    }
+    fromCloudMirror = true;
+    mirrorUpdatedAt = updatedAt;
+    scanned = tracks.length;
+    notifyListeners();
     return true;
   }
 

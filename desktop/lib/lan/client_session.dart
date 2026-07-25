@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 import '../library.dart';
 import '../settings.dart';
 import 'client.dart';
+import '../cloud/catalog_mirror.dart';
 import 'client_mode.dart';
 
 class ClientSession extends ChangeNotifier {
@@ -54,6 +55,10 @@ class ClientSession extends ChangeNotifier {
 
   /// The last thing that went wrong talking to the PC, for the settings screen.
   String? lastError;
+
+  /// The cloud copy of the library, for when the PC does not answer. Null when not signed in, and
+  /// then an unreachable PC means an empty screen exactly as it did before.
+  CatalogMirror? mirror;
 
   Timer? _poll;
 
@@ -117,8 +122,29 @@ class ClientSession extends ChangeNotifier {
         // New records may have arrived; only the ones without a cover are fetched.
         unawaited(library.loadRemoteCovers(settings));
       }
+      if (library.tracks.isEmpty) await _fillFromMirror();
     } catch (e) {
       lastError = e.toString();
+      // The PC did not answer. Show the cloud copy rather than nothing — you can browse, and put
+      // downloads in the queue for when it wakes up.
+      await _fillFromMirror();
+    }
+  }
+
+  /// Fall back to the copy the PC published. Only ever fills an empty screen: [adoptMirror]
+  /// refuses to replace a live library, so this cannot turn a playable one unplayable.
+  Future<void> _fillFromMirror() async {
+    final m = mirror;
+    if (m == null) return;
+    try {
+      final copy = await m.fetch();
+      if (copy == null) return;
+      if (library.adoptMirror(copy.json, updatedAt: copy.updatedAt)) {
+        unawaited(library.loadRemoteCovers(settings));
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('Cloud catalogue unavailable: $e');
     }
   }
 
