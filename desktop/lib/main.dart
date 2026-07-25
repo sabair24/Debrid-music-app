@@ -50,6 +50,7 @@ import 'recommend.dart';
 import 'release_format.dart';
 import 'rutracker.dart';
 import 'settings.dart';
+import 'speakers.dart';
 import 'soulseek.dart';
 import 'tidal.dart';
 import 'torbox.dart';
@@ -161,6 +162,9 @@ Future<void> main() async {
   final mode = await resolveMode(settings);
 
   late final PlayerStore player;
+
+  // Where the music comes out. Starts as this device's own output, which is the ordinary case.
+  final speakers = SpeakerTarget();
 
   // Music kept on this device. Loaded before anything can play, because the resolver below asks it
   // on every track and an empty store would stream a copy that is already here.
@@ -289,6 +293,7 @@ Future<void> main() async {
         ChangeNotifierProvider<LibraryStore>.value(value: library),
         ChangeNotifierProvider<PlayerStore>.value(value: player),
         ChangeNotifierProvider<OfflineStore>.value(value: offline),
+        ChangeNotifierProvider<SpeakerTarget>.value(value: speakers),
         Provider<OnlineService>.value(value: online),
         // One instance for the whole app. The 1100 ms spacing MusicBrainz asks for is held in
         // INSTANCE fields, so two widgets each constructing their own would fire unspaced and
@@ -4438,6 +4443,7 @@ class PlayerBar extends StatelessWidget {
                       color: p.repeat == RepeatMode.off ? _muted : _accent,
                       onPressed: p.cycleRepeat,
                     ),
+                    const _SpeakerButton(),
                   ],
                 ),
                 Row(
@@ -4482,6 +4488,66 @@ class PlayerBar extends StatelessWidget {
 }
 
 // ── Now playing (full screen, enlargeable art) ───────────────────────────────
+/// Where the music comes out — and, while it is somewhere else, a way back.
+///
+/// One button in both players. It carries the state rather than hiding it: cast to a speaker and it
+/// turns accent-coloured and names the speaker underneath, because "why is there no sound from this
+/// device" is the question a silent cast button leaves you with.
+class _SpeakerButton extends StatelessWidget {
+  const _SpeakerButton({this.iconSize = 20});
+  final double iconSize;
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    final client = lib.remote;
+    // Only where a PC is doing the sending. On the machine that holds the music this is its own
+    // output and there is nothing to choose.
+    if (client == null) return const SizedBox.shrink();
+
+    final target = context.watch<SpeakerTarget>();
+    final player = context.read<PlayerStore>();
+    final casting = target.isCasting;
+
+    return TvLabelled(
+      label: 'Speaker',
+      child: IconButton(
+        icon: Icon(casting ? Icons.speaker_rounded : Icons.speaker_group_outlined, size: iconSize),
+        color: casting ? _accent : _muted,
+        tooltip: casting ? 'Speelt op ${target.device!.name}' : 'Afspelen op…',
+        onPressed: () => showSpeakerPicker(
+          context,
+          client: client,
+          target: target,
+          thisDeviceName: _thisDeviceName(),
+          onPickedHere: () {
+            // Silence the speaker before taking the music back, or it keeps playing the queue it
+            // was given and you have the same record in two rooms.
+            final was = target.device;
+            if (was != null) unawaited(client.castControl(was.id, 'stop'));
+          },
+          onPickedRemote: (device) async {
+            final ids = [
+              for (final t in player.queueTracks)
+                if (lib.remoteTrackId(t.path) case final id?) id,
+            ];
+            if (ids.isEmpty) {
+              _srcToast(context, 'Zet eerst iets op, dan stuur ik het door.');
+              return;
+            }
+            final index = player.queueTracks.indexWhere((t) => t.path == player.current?.path);
+            // This device goes quiet: the point is that it plays THERE.
+            if (player.playing) player.playPause();
+            final ok = await client.castPlay(device.id, ids, index < 0 ? 0 : index);
+            if (!context.mounted) return;
+            if (!ok) _srcToast(context, '${device.name} nam het niet aan.');
+          },
+        ),
+      ),
+    );
+  }
+}
+
 /// The mini player a phone gets: the track, one button, and the whole thing opens the full player.
 ///
 /// Not the desktop bar with smaller numbers. On a phone there is room for a cover, a title and one
@@ -4566,7 +4632,8 @@ Widget _compactBar(BuildContext context, PlayerStore p, Track? t, double bottomI
                 color: _muted,
                 onPressed: p.hasNext ? p.next : null,
               ),
-              const SizedBox(width: 6),
+              const _SpeakerButton(iconSize: 22),
+              const SizedBox(width: 2),
             ],
           ),
         ),
@@ -4777,6 +4844,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                         iconSize: 24,
                         color: p.repeat == RepeatMode.off ? _muted : _accent,
                         onPressed: p.cycleRepeat),
+                    const SizedBox(width: 12),
+                    const _SpeakerButton(iconSize: 24),
                   ],
                 ),
                 const Spacer(),

@@ -1053,6 +1053,10 @@ class LibraryStore extends ChangeNotifier {
     await loadRemote(quiet: true);
   }
 
+  /// The PC's id for a track we are showing, for anything that has to name tracks TO the PC —
+  /// removing them, moving them, or handing a queue to a speaker.
+  String? remoteTrackId(String path) => _remoteTrackId(path);
+
   /// The PC's id for a track we are showing. Its path is the stream URL, and the id is in it.
   String? _remoteTrackId(String path) {
     final segments = Uri.tryParse(path)?.pathSegments ?? const [];

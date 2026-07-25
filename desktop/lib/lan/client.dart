@@ -82,6 +82,41 @@ class ServerHealth {
   const ServerHealth({this.name = '', this.version = '', this.trackCount = 0});
 }
 
+/// A speaker, a television, or anything else on the network that can be handed a URL.
+class CastDevice {
+  const CastDevice({
+    required this.id,
+    required this.name,
+    required this.kind,
+    this.model = '',
+    this.maxSampleRate = 0,
+  });
+
+  final String id;
+  final String name;
+  final String model;
+
+  /// The highest rate this thing will accept, or 0 for no ceiling. A Sonos stops at 48 kHz, so a
+  /// 24/96 record is converted on the way — worth saying before you press play rather than
+  /// afterwards.
+  final int maxSampleRate;
+
+  /// `shield` for a device running this app, anything else for a UPnP renderer. The difference is
+  /// worth showing: only the first plays the file untouched — a speaker takes what its own decoder
+  /// will accept, and the PC converts to meet it.
+  final String kind;
+
+  bool get playsUntouched => kind == 'shield';
+
+  static CastDevice fromJson(Map<String, dynamic> j) => CastDevice(
+        id: (j['id'] ?? '').toString(),
+        name: (j['name'] ?? 'Onbekend').toString(),
+        kind: (j['kind'] ?? 'upnp').toString(),
+        model: (j['model'] ?? '').toString(),
+        maxSampleRate: (j['maxSampleRate'] as num?)?.toInt() ?? 0,
+      );
+}
+
 class RemoteException implements Exception {
   final String message;
 
@@ -173,6 +208,50 @@ class RemoteClient {
   /// The read-only keys the PC is willing to share, so this device can look things up itself.
   /// Empty rather than throwing when the PC has none: that is a PC without a Discogs token, which
   /// is a perfectly ordinary thing to be.
+  /// The speakers and televisions the PC can see.
+  ///
+  /// Asked of the PC rather than discovered here, and that is deliberate: SSDP is multicast, which
+  /// an iPad may not send without an Apple entitlement, and the audio has to leave from the PC
+  /// anyway. One implementation, on the machine that holds the music.
+  Future<List<CastDevice>> castDevices() async {
+    try {
+      final res = await _get('/api/cast/devices');
+      final j = jsonDecode(utf8.decode(res.bodyBytes));
+      if (j is! List) return const [];
+      return [
+        for (final e in j)
+          if (e is Map<String, dynamic>) CastDevice.fromJson(e),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Send a queue to one of them. The PC does the sending; this only says what and where.
+  Future<bool> castPlay(String deviceId, List<String> trackIds, int index) =>
+      _castPost('/api/cast/play', {'deviceId': deviceId, 'trackIds': trackIds, 'index': index});
+
+  /// pause | resume | next | prev | stop | volume (with [value] 0-100).
+  Future<bool> castControl(String deviceId, String action, {int? value}) => _castPost(
+        '/api/cast/control',
+        {'deviceId': deviceId, 'action': action, if (value != null) 'value': value},
+      );
+
+  Future<bool> _castPost(String path, Map<String, dynamic> body) async {
+    try {
+      final res = await _http
+          .post(_api(path),
+              headers: {..._headers, 'Content-Type': 'application/json'},
+              body: jsonEncode(body))
+          .timeout(timeout);
+      return res.statusCode == 200;
+    } catch (_) {
+      // A speaker that did not take it is a speaker that stays silent; the picker says so rather
+      // than throwing into a build.
+      return false;
+    }
+  }
+
   Future<Map<String, String>> config() async {
     try {
       final res = await _get('/api/config');
