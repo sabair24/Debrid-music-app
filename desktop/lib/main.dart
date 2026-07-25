@@ -208,6 +208,16 @@ Future<void> main() async {
     await publishAsOwner(cloud, settings, sharing, library);
   }));
 
+  // Which build is answering. /health reported an empty version since the field was added — it was
+  // never assigned — so the one question you ask a machine you cannot see had no answer.
+  unawaited(() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      sharing.version = '${info.version}+${info.buildNumber}';
+    } catch (_) {
+      // Not knowing the version is a worse answer than none, but not a reason to fail to start.
+    }
+  }());
   if (mode.owner) {
     unawaited(sharing.applySettings());
     // What plays here counts too: the position and the play count go into the same shared state
