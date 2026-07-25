@@ -52,6 +52,7 @@ class LanSharing extends ChangeNotifier {
   String? _error;
   List<String> _addresses = const [];
   bool _stateLoaded = false;
+  bool _adoptLegacy = false;
   String version = '';
 
   bool get running => _server?.running ?? false;
@@ -75,10 +76,24 @@ class LanSharing extends ChangeNotifier {
     if (!_stateLoaded) {
       _stateLoaded = true;
       await state.load();
+      // The grants too. Without this the PC starts with an empty set of device tokens, so every
+      // device that had been given access is refused after a restart — and does not recover by
+      // itself, because the cloud only answers requests that are still pending.
+      await grants.load();
+      _adoptLegacy = true;
     }
     if (settings.lanToken.isEmpty) {
       settings.lanToken = generateLanToken();
       await settings.save();
+    }
+    if (_adoptLegacy) {
+      _adoptLegacy = false;
+      // After the token exists, not before: on a first run it is generated a few lines up, and
+      // adopting an empty one silently does nothing.
+      //
+      // Everything paired before per-device tokens existed becomes one row you can revoke on
+      // purpose, rather than an empty list while devices are demonstrably connected.
+      grants.adoptLegacyToken(settings.lanToken);
     }
 
     final wanted = settings.lanEnabled;
