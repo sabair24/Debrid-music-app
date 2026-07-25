@@ -2654,38 +2654,57 @@ class _MetadataEditorState extends State<MetadataEditor> {
                 ],
               ),
               const SizedBox(height: 14),
-              Row(
-                children: [
-                  Container(
-                    decoration: BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(8)),
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: _provider,
-                        dropdownColor: _panel2,
-                        items: MetadataSearch.providers
-                            .map((p) => DropdownMenuItem(value: p, child: Text(p)))
-                            .toList(),
-                        onChanged: (v) => setState(() => _provider = v ?? 'Deezer'),
-                      ),
+              // Source, query and button. On a phone the query is what gets crushed — between a
+              // "Deezer" dropdown and a "Zoeken" button it came out about fifty points wide and
+              // showed two characters of what you typed. So on a phone it gets its own line.
+              Builder(builder: (context) {
+                final narrow = isCompact(context);
+                final source = Container(
+                  decoration: BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: _provider,
+                      dropdownColor: _panel2,
+                      items: MetadataSearch.providers
+                          .map((p) => DropdownMenuItem(value: p, child: Text(p)))
+                          .toList(),
+                      onChanged: (v) => setState(() => _provider = v ?? 'Deezer'),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: TextField(
-                      controller: _query,
-                      onSubmitted: (_) => _search(),
-                      decoration: _inputDeco('Zoeken…'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  FilledButton(
-                    style: FilledButton.styleFrom(backgroundColor: _accent),
-                    onPressed: _searching ? null : _search,
-                    child: const Text('Zoeken'),
-                  ),
-                ],
-              ),
+                );
+                final field = TextField(
+                  controller: _query,
+                  focusNode: _editFocusFor(_query),
+                  onSubmitted: (_) => _search(),
+                  decoration: _inputDeco('Zoeken…'),
+                );
+                final button = FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  onPressed: _searching ? null : _search,
+                  child: const Text('Zoeken'),
+                );
+                if (!narrow) {
+                  return Row(children: [
+                    source,
+                    const SizedBox(width: 8),
+                    Expanded(child: field),
+                    const SizedBox(width: 8),
+                    button,
+                  ]);
+                }
+                return Column(
+                  children: [
+                    Row(children: [
+                      source,
+                      const SizedBox(width: 8),
+                      Expanded(child: button),
+                    ]),
+                    const SizedBox(height: 8),
+                    field,
+                  ],
+                );
+              }),
               const SizedBox(height: 12),
               Expanded(
                 child: _searching
@@ -7869,6 +7888,11 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       backgroundColor: _bg,
       body: ArtistBackdrop(
         name: widget.artist.name,
+        // Same as the album browse page: this draws its own hero rather than an AppBar, so the
+        // status bar had nothing keeping it clear. The backdrop stays behind it — only the
+        // content is inset.
+        child: SafeArea(
+        bottom: false,
         child: CustomScrollView(
         slivers: [
           SliverToBoxAdapter(
@@ -7935,6 +7959,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
             ),
           ],
         ],
+        ),
         ),
       ),
     );
@@ -8342,7 +8367,12 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     final al = widget.album;
     return Scaffold(
       backgroundColor: _bg,
-      body: ListView(
+      // Its own header rather than an AppBar, so nothing was adding the status bar's height —
+      // the cover and the title were drawn UNDER the clock and the wifi icons. The album page
+      // escaped this only because a SliverAppBar puts that inset in by itself.
+      body: SafeArea(
+        bottom: false,
+        child: ListView(
         padding: const EdgeInsets.only(bottom: 40),
         children: [
           Padding(
@@ -8391,6 +8421,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
           else
             ..._tracks.asMap().entries.map((e) => _trackRow(e.key, e.value)),
         ],
+        ),
       ),
     );
   }
