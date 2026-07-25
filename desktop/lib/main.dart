@@ -52,6 +52,18 @@ import 'tidal.dart';
 import 'torbox.dart';
 import 'tv.dart';
 
+/// What a focused Material button looks like: the same ring the rest of the app draws.
+///
+/// Only `side` and `overlayColor`, so a button that sets its own colour, padding or shape keeps
+/// all of it — this adds the one thing that was missing rather than taking the styling over.
+final ButtonStyle _focusOutline = ButtonStyle(
+  side: WidgetStateProperty.resolveWith((states) => states.contains(WidgetState.focused)
+      ? BorderSide(color: _accent, width: isTv ? 3 : 2)
+      : null),
+  overlayColor: WidgetStateProperty.resolveWith((states) =>
+      states.contains(WidgetState.focused) ? _accent.withValues(alpha: .22) : null),
+);
+
 const _bg = Color(0xFF0C0D12);
 const _panel = Color(0xFF181B26);
 const _panel2 = Color(0xFF1F2331);
@@ -357,6 +369,20 @@ class DebridApp extends StatelessWidget {
           secondary: _accent2,
           surface: _panel,
         ),
+        // Every InkWell, ListTile and Material button in the app can already take focus — Flutter
+        // gives them that for free, which is why they were reachable with a remote before anything
+        // was changed. What they could not do was SAY so: the default focus tint is a whisper of
+        // white, and on these panels, from a sofa, it is not there at all. One line rather than
+        // twenty-five edits, and a mouse never sees it because a mouse never focuses.
+        focusColor: _accent.withValues(alpha: isTv ? .34 : .18),
+        // Material's buttons signal focus with a tint of their own foreground colour — about a
+        // tenth of white. On the purple "Afspelen" button that is nothing at all, and on a TV a
+        // button you cannot tell is selected is a button you press by accident. So they get the
+        // same outline every other focusable thing in this app got.
+        filledButtonTheme: FilledButtonThemeData(style: _focusOutline),
+        textButtonTheme: TextButtonThemeData(style: _focusOutline),
+        outlinedButtonTheme: OutlinedButtonThemeData(style: _focusOutline),
+        iconButtonTheme: IconButtonThemeData(style: _focusOutline),
         fontFamily: 'Segoe UI',
       ),
       // On a Mac or an iPad that has never met the PC there is no library to show yet, so the
@@ -2006,6 +2032,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                         backgroundColor: _accent,
                         padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
                       ),
+                      // Where the highlight lands when an album opens on a television. Flutter's
+                      // default is the first focusable thing in the route, which here is the back
+                      // arrow — so opening a record put the highlight on "leave this record".
+                      autofocus: isTv,
                       onPressed: () => player.playQueue(album.tracks, 0, cover: album.cover),
                       icon: const Icon(Icons.play_arrow_rounded),
                       label: const Text('Afspelen'),
@@ -2394,11 +2424,15 @@ class _TrackRowState extends State<TrackRow> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: () => context
+      child: Pressable(
+        onPressed: () => context
             .read<PlayerStore>()
             .playQueue(widget.queue, widget.index, cover: widget.albumCover),
+        borderRadius: BorderRadius.circular(10),
+        // A list of rows: one growing would push every row under it down as the highlight runs
+        // through the album. The row already lights up on hover, and focus drives that.
+        scaleOnFocus: false,
+        onFocusChange: (v) => setState(() => _hover = v),
         child: Container(
           margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
@@ -2721,9 +2755,12 @@ class _CreditChipState extends State<_CreditChip> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: () => Navigator.of(context)
+      child: Pressable(
+        onPressed: () => Navigator.of(context)
             .push(MaterialPageRoute(builder: (_) => PersonPage(widget.credit.name, role: widget.credit.role))),
+        borderRadius: BorderRadius.circular(999),
+        scaleOnFocus: false,
+        onFocusChange: (v) => setState(() => _hover = v),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
           decoration: BoxDecoration(
@@ -3126,12 +3163,15 @@ class _DiscoCardState extends State<_DiscoCard> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: () => Navigator.of(context).push(MaterialPageRoute(
+      child: Pressable(
+        onPressed: () => Navigator.of(context).push(MaterialPageRoute(
           builder: (_) => have
               ? AlbumDetailPage(album: widget.owned!)
               : AlbumBrowsePage(widget.artist, a),
         )),
+        borderRadius: BorderRadius.circular(14),
+        scaleOnFocus: false,
+        onFocusChange: (v) => setState(() => _hover = v),
         child: AnimatedScale(
           scale: _hover ? 1.06 : 1,
           duration: const Duration(milliseconds: 170),
@@ -3208,8 +3248,11 @@ class _RelatedArtistCardState extends State<_RelatedArtistCard> {
         cursor: SystemMouseCursors.click,
         onEnter: (_) => setState(() => _hover = true),
         onExit: (_) => setState(() => _hover = false),
-        child: GestureDetector(
-          onTap: widget.onTap,
+        child: Pressable(
+          onPressed: widget.onTap,
+          borderRadius: BorderRadius.circular(14),
+          scaleOnFocus: false,
+          onFocusChange: (v) => setState(() => _hover = v),
           child: AnimatedScale(
             scale: _hover ? 1.06 : 1,
             duration: const Duration(milliseconds: 170),
@@ -3268,8 +3311,11 @@ class _ArtistCardState extends State<_ArtistCard> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
+      child: Pressable(
+        onPressed: widget.onTap,
+        borderRadius: BorderRadius.circular(14),
+        scaleOnFocus: false,
+        onFocusChange: (v) => setState(() => _hover = v),
         child: AnimatedScale(
           scale: _hover ? 1.06 : 1,
           duration: const Duration(milliseconds: 170),
@@ -3515,8 +3561,13 @@ class _ArtistNamesState extends State<ArtistNames> {
               cursor: SystemMouseCursors.click,
               onEnter: (_) => setState(() => _hover = names[i]),
               onExit: (_) => setState(() => _hover = _hover == names[i] ? null : _hover),
-              child: GestureDetector(
-                onTap: () => openArtist(context, names[i]),
+              child: Pressable(
+                onPressed: () => openArtist(context, names[i]),
+                borderRadius: BorderRadius.circular(6),
+                scaleOnFocus: false,
+                // The name is underlined on hover; focus does the same, so a remote sees the link
+                // as a link rather than as a ring around a piece of prose.
+                onFocusChange: (v) => setState(() => _hover = v ? names[i] : null),
                 child: Text(
                   names[i],
                   maxLines: 1,
@@ -3562,11 +3613,14 @@ class PlayerBar extends StatelessWidget {
             width: side,
             child: Row(
               children: [
-                GestureDetector(
-                  onTap: t == null
+                Pressable(
+                  // Null while nothing plays, which also stops the highlight from resting on a
+                  // cover that opens nothing.
+                  onPressed: t == null
                       ? null
                       : () => Navigator.of(context)
                           .push(MaterialPageRoute(builder: (_) => const NowPlayingScreen())),
+                  borderRadius: BorderRadius.circular(8),
                   child: MouseRegion(
                     cursor: t == null ? MouseCursor.defer : SystemMouseCursors.click,
                     child: cover(p.currentCover, size: 54, radius: 8),
@@ -3739,13 +3793,14 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                   ),
                 ),
                 const Spacer(),
-                GestureDetector(
+                Pressable(
                   // What the sleeve is actually drawing wins; the player's snapshot is only the
                   // fallback for a track whose art has not resolved yet.
-                  onTap: (_shown ?? p.currentCover) == null
+                  onPressed: (_shown ?? p.currentCover) == null
                       ? null
                       : () => showDialog(
                           context: context, builder: (_) => _ZoomView((_shown ?? p.currentCover)!)),
+                  borderRadius: BorderRadius.circular(10),
                   child: MouseRegion(
                     cursor: (_shown ?? p.currentCover) == null
                         ? MouseCursor.defer
@@ -4339,8 +4394,11 @@ class _HoverCardState extends State<_HoverCard> {
         cursor: SystemMouseCursors.click,
         onEnter: (_) => setState(() => _hover = true),
         onExit: (_) => setState(() => _hover = false),
-        child: GestureDetector(
-          onTap: widget.onTap,
+        child: Pressable(
+          onPressed: widget.onTap,
+          borderRadius: BorderRadius.circular(14),
+          scaleOnFocus: false,
+          onFocusChange: (v) => setState(() => _hover = v),
           child: AnimatedScale(
             scale: _hover ? 1.06 : 1,
             duration: const Duration(milliseconds: 170),
@@ -5846,8 +5904,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
 
   Widget _modeChip(String label, int m) {
     final sel = _mode == m;
-    return GestureDetector(
-      onTap: () => _setMode(m),
+    return Pressable(
+      onPressed: () => _setMode(m),
+      borderRadius: BorderRadius.circular(999),
+      scaleOnFocus: false,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
@@ -6188,8 +6248,8 @@ class BioText extends StatelessWidget {
   const BioText(this.artist, this.text, {super.key});
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => showDialog(
+    return Pressable(
+      onPressed: () => showDialog(
         context: context,
         builder: (_) => AlertDialog(
           backgroundColor: _panel,
@@ -6351,9 +6411,11 @@ class _HeroCarouselState extends State<HeroCarousel> {
 
   Widget _slide(CatalogAlbumHit hit) {
     final cover = hit.album.cover;
-    return GestureDetector(
-      onTap: () => Navigator.of(context)
+    return Pressable(
+      onPressed: () => Navigator.of(context)
           .push(MaterialPageRoute(builder: (_) => AlbumBrowsePage(hit.artist, hit.album))),
+      borderRadius: BorderRadius.circular(12),
+      scaleOnFocus: false,
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         child: Stack(
@@ -9572,9 +9634,14 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
         final isPortrait = portrait == img.uri;
         final isBackdrop = backdrop == img.uri;
         final lib = context.read<LibraryStore>();
-        return GestureDetector(
-          onTap: () => lib.setArtistArt(widget.artist, 'portrait', img.uri),
+        return Pressable(
+          onPressed: () => lib.setArtistArt(widget.artist, 'portrait', img.uri),
+          // Right-click sets the backdrop, and a remote has no right button — so holding OK now
+          // does the same thing. Both, not one instead of the other: choosing a backdrop was
+          // something you simply could not do from the sofa, and nothing on screen said why.
           onSecondaryTap: () => lib.setArtistArt(widget.artist, 'backdrop', img.uri),
+          onLongPress: () => lib.setArtistArt(widget.artist, 'backdrop', img.uri),
+          borderRadius: BorderRadius.circular(10),
           child: Container(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(8),

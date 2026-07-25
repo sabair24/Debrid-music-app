@@ -82,6 +82,7 @@ class Pressable extends StatefulWidget {
     required this.child,
     this.onPressed,
     this.onLongPress,
+    this.onSecondaryTap,
     this.borderRadius = const BorderRadius.all(Radius.circular(10)),
     this.autofocus = false,
     this.focusNode,
@@ -93,6 +94,11 @@ class Pressable extends StatefulWidget {
   final Widget child;
   final VoidCallback? onPressed;
   final VoidCallback? onLongPress;
+
+  /// Right-click. Kept because a mouse has one and dropping it here would quietly take a feature
+  /// away from Windows, Mac and iPad to give one to the remote — where the same action is reached
+  /// by holding OK, which is [onLongPress].
+  final VoidCallback? onSecondaryTap;
 
   /// Matched to the shape of what is being wrapped, so the ring hugs a cover's corners instead of
   /// drawing a rectangle around a rounded card.
@@ -160,6 +166,7 @@ class _PressableState extends State<Pressable> {
         behavior: HitTestBehavior.opaque,
         onTap: widget.onPressed,
         onLongPress: widget.onLongPress,
+        onSecondaryTap: widget.onSecondaryTap,
         child: DecoratedBox(
           decoration: BoxDecoration(
             borderRadius: widget.borderRadius,
