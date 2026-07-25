@@ -4800,34 +4800,46 @@ class TracksView extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(28, 22, 24, 10),
-          child: Row(
-            children: [
-              const Text('Tracks', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-              const SizedBox(width: 10),
-              Text('${tracks.length}', style: const TextStyle(color: _muted, fontSize: 14)),
-              const Spacer(),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                    backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12)),
-                onPressed: () => player.shuffleAll(tracks),
-                icon: const Icon(Icons.shuffle_rounded, size: 18),
-                label: const Text('Shuffle alles'),
-              ),
-              const SizedBox(width: 8),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                    backgroundColor: _panel2,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12)),
-                onPressed: () => player.playQueue(tracks, 0),
-                icon: const Icon(Icons.play_arrow_rounded, size: 18),
-                label: const Text('Speel alles'),
-              ),
-            ],
-          ),
-        ),
+        Builder(builder: (context) {
+          final narrow = isCompact(context);
+          final title = Row(mainAxisSize: MainAxisSize.min, children: [
+            const Text('Tracks', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+            const SizedBox(width: 10),
+            Text('${tracks.length}', style: const TextStyle(color: _muted, fontSize: 14)),
+          ]);
+          final buttons = [
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                  backgroundColor: _accent,
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12)),
+              onPressed: () => player.shuffleAll(tracks),
+              icon: const Icon(Icons.shuffle_rounded, size: 18),
+              label: const Text('Shuffle alles'),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                  backgroundColor: _panel2,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12)),
+              onPressed: () => player.playQueue(tracks, 0),
+              icon: const Icon(Icons.play_arrow_rounded, size: 18),
+              label: const Text('Speel alles'),
+            ),
+          ];
+          return Padding(
+            padding: EdgeInsets.fromLTRB(narrow ? 18 : 28, 22, narrow ? 18 : 24, 10),
+            // Title, count and two buttons. Three pixels too wide on a phone, and the count
+            // vanished under the first button — so on a phone the buttons drop to their own line.
+            // The Row stays everywhere else, Spacer and all, because that is where it fits.
+            child: narrow
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [title, const SizedBox(height: 10), Row(children: buttons)],
+                  )
+                : Row(children: [title, const Spacer(), ...buttons]),
+          );
+        }),
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.only(bottom: 12),
