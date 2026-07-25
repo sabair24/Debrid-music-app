@@ -112,6 +112,17 @@ class SettingsStore @Inject constructor(
     suspend fun setServerToken(v: String) { dataStore.edit { it[KEY_SERVER_TOKEN] = v.trim() } }
     suspend fun setServerLastSync(millis: Long) { dataStore.edit { it[KEY_SERVER_LAST_SYNC] = millis } }
 
+    // ── Signing in, so every device shares one account ──────────────────────────
+    // The refresh token is long-lived and is this device's session. The device id has to survive
+    // too: access is granted and revoked per device, and a new id would look like a new device.
+    val cloudRefreshToken: Flow<String> = dataStore.data.map { it[KEY_CLOUD_REFRESH] ?: "" }
+    val cloudUid: Flow<String> = dataStore.data.map { it[KEY_CLOUD_UID] ?: "" }
+    val cloudDeviceId: Flow<String> = dataStore.data.map { it[KEY_CLOUD_DEVICE_ID] ?: "" }
+
+    suspend fun setCloudRefreshToken(v: String) { dataStore.edit { it[KEY_CLOUD_REFRESH] = v.trim() } }
+    suspend fun setCloudUid(v: String) { dataStore.edit { it[KEY_CLOUD_UID] = v.trim() } }
+    suspend fun setCloudDeviceId(v: String) { dataStore.edit { it[KEY_CLOUD_DEVICE_ID] = v.trim() } }
+
     companion object {
         val KEY_LASTFM_API_KEY = stringPreferencesKey("last_fm_api_key")
         val KEY_DISCOGS_TOKEN = stringPreferencesKey("discogs_token")
@@ -134,6 +145,9 @@ class SettingsStore @Inject constructor(
         val KEY_DOWNLOAD_TREE_URI = stringPreferencesKey("download_tree_uri")
         val KEY_MAX_DOWNLOAD_BYTES = longPreferencesKey("max_download_bytes")
         val KEY_MAX_CONCURRENT_DOWNLOADS = intPreferencesKey("max_concurrent_downloads")
+        val KEY_CLOUD_REFRESH = stringPreferencesKey("cloud_refresh_token")
+        val KEY_CLOUD_UID = stringPreferencesKey("cloud_uid")
+        val KEY_CLOUD_DEVICE_ID = stringPreferencesKey("cloud_device_id")
         val KEY_SERVER_URL = stringPreferencesKey("server_url")
         val KEY_SERVER_TOKEN = stringPreferencesKey("server_token")
         val KEY_SERVER_LAST_SYNC = longPreferencesKey("server_last_sync")

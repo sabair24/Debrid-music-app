@@ -16,6 +16,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -51,15 +52,66 @@ fun TvPairingScreen(
     ) {
         // ── Which PC ────────────────────────────────────────────────────────
         Column(modifier = Modifier.weight(1f)) {
-            Text("Koppel met je pc", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text("Verbind met je pc", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(6.dp))
             Text(
-                "Open DebridMusic op je pc → Instellingen → Apparaat koppelen. " +
-                    "Typ de zes cijfers hiernaast in.",
+                "Log in met hetzelfde account als op je pc. Je muziek blijft daar — " +
+                    "de pc geeft dit apparaat toegang zodra je bent ingelogd.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Spacer(Modifier.height(16.dp))
+
+            OutlinedTextField(
+                value = state.email,
+                onValueChange = viewModel::setEmail,
+                label = { Text("E-mailadres") },
+                singleLine = true,
+                enabled = !state.signingIn,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = state.password,
+                onValueChange = viewModel::setPassword,
+                label = { Text("Wachtwoord") },
+                singleLine = true,
+                enabled = !state.signingIn,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(onClick = viewModel::signIn, enabled = !state.signingIn) {
+                    Text(if (state.register) "Account aanmaken" else "Inloggen")
+                }
+                TextButton(onClick = viewModel::toggleRegister, enabled = !state.signingIn) {
+                    Text(if (state.register) "Ik heb al een account" else "Nog geen account?")
+                }
+            }
+            if (state.signInMessage.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    state.signInMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+
             Spacer(Modifier.height(20.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+
+            // Still here, and deliberately. A network with no internet, or a Firebase having a bad
+            // day, must not leave you unable to reach a PC in the next room.
+            Text("Of koppel met een code", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Op je pc → Instellingen → Apparaat koppelen. Typ de zes cijfers hiernaast in.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(16.dp))
 
             if (state.connectedUrl.isNotBlank()) {
                 Text(

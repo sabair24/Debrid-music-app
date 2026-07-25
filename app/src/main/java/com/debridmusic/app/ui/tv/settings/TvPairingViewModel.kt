@@ -3,6 +3,8 @@ package com.debridmusic.app.ui.tv.settings
 import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.debridmusic.app.cloud.CloudConnect
+import com.debridmusic.app.cloud.CloudSession
 import com.debridmusic.app.data.local.SettingsStore
 import com.debridmusic.app.data.repository.MusicRepository
 import com.debridmusic.app.server.DiscoveredServer
@@ -27,6 +29,13 @@ data class TvPairingUiState(
     val pairedName: String = "",
     val trackCount: Int = 0,
     val connectedUrl: String = "",
+    // ── Signing in ─────────────────────────────────────────────────────────
+    val email: String = "",
+    val password: String = "",
+    val signingIn: Boolean = false,
+    val register: Boolean = false,
+    val signedIn: Boolean = false,
+    val signInMessage: String = "",
 )
 
 /**
@@ -42,6 +51,8 @@ class TvPairingViewModel @Inject constructor(
     private val serverRepository: ServerRepository,
     private val musicRepository: MusicRepository,
     private val settingsStore: SettingsStore,
+    private val cloudSession: CloudSession,
+    private val cloudConnect: CloudConnect,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(TvPairingUiState())
@@ -50,8 +61,90 @@ class TvPairingViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             _state.update { it.copy(connectedUrl = settingsStore.serverUrl.first()) }
+            // A session saved on this device. If it restores, connecting needs no typing at all —
+            // which on a TV remote is the whole point.
+            if (runCatching { cloudSession.restore() }.getOrDefault(false)) {
+                _state.update { it.copy(signedIn = true) }
+                connectViaCloud()
+            }
         }
         search()
+    }
+
+    fun setEmail(v: String) = _state.update { it.copy(email = v, signInMessage = "") }
+    fun setPassword(v: String) = _state.update { it.copy(password = v, signInMessage = "") }
+    fun toggleRegister() = _state.update { it.copy(register = !it.register, signInMessage = "") }
+
+    /**
+     * Sign in, then let the PC hand this device its own token.
+     *
+     * Replaces the six digits, and is worth more than the saved typing: the code gave every device
+     * the same shared secret, so a single device could never be cut off on its own.
+     */
+    fun signIn() {
+        val s = _state.value
+        if (s.signingIn) return
+        if (s.email.isBlank() || s.password.isBlank()) {
+            _state.update { it.copy(signInMessage = "Vul je e-mailadres en wachtwoord in.") }
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(signingIn = true, signInMessage = "") }
+            val result = runCatching {
+                if (s.register) cloudSession.register(s.email, s.password)
+                else cloudSession.signIn(s.email, s.password)
+            }
+            if (result.isFailure) {
+                _state.update {
+                    it.copy(
+                        signingIn = false,
+                        signInMessage = "Inloggen mislukte: ${result.exceptionOrNull()?.message ?: "onbekende fout"}",
+                    )
+                }
+                return@launch
+            }
+            _state.update { it.copy(signedIn = true, password = "") }
+            connectViaCloud()
+        }
+    }
+
+    private suspend fun connectViaCloud() {
+        _state.update { it.copy(signingIn = true, signInMessage = "Toegang aanvragen bij je pc…") }
+        when (val r = runCatching { cloudConnect.connect() }.getOrNull()) {
+            is CloudConnect.Result.Connected -> {
+                _state.update {
+                    it.copy(
+                        signingIn = false,
+                        connectedUrl = r.url,
+                        signInMessage = "Verbonden met ${r.serverName}.",
+                    )
+                }
+                // The same pull the pairing path does. Connecting to a PC and then showing an
+                // empty screen looks like a failure, whichever way you got there.
+                syncNow(r.url)
+            }
+            is CloudConnect.Result.NoServer -> _state.update {
+                it.copy(
+                    signingIn = false,
+                    signInMessage = "Nog geen pc onder dit account. Log op je pc in met hetzelfde account.",
+                )
+            }
+            is CloudConnect.Result.Waiting -> _state.update {
+                it.copy(
+                    signingIn = false,
+                    signInMessage = "${r.serverName} heeft nog niet geantwoord. Zet hem aan — je aanvraag blijft staan.",
+                )
+            }
+            is CloudConnect.Result.Unreachable -> _state.update {
+                it.copy(
+                    signingIn = false,
+                    signInMessage = "${r.serverName} gaf toegang, maar is op dit netwerk niet bereikbaar.",
+                )
+            }
+            null -> _state.update {
+                it.copy(signingIn = false, signInMessage = "Verbinden mislukte. Probeer het opnieuw.")
+            }
+        }
     }
 
     fun search() {

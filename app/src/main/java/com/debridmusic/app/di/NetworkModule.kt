@@ -38,6 +38,40 @@ object NetworkModule {
     @Provides @Singleton
     fun provideDataStore(@ApplicationContext ctx: Context): DataStore<Preferences> = ctx.dataStore
 
+    // ── Signing in: Firebase over REST ──────────────────────────────────────
+    //
+    // Three bases rather than one because Firebase's REST surface is three services, and no SDK
+    // because that would pull in Play services and a google-services.json per variant. The wire
+    // format matches the Windows, Mac and iPad app exactly, so there is one shape to keep in step
+    // instead of four.
+
+    @Provides @Singleton
+    fun provideCloudAuthApi(okHttpClient: OkHttpClient): com.debridmusic.app.cloud.CloudAuthApi =
+        Retrofit.Builder()
+            .baseUrl(com.debridmusic.app.cloud.CloudConfig.AUTH_BASE)
+            .client(okHttpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(com.debridmusic.app.cloud.CloudAuthApi::class.java)
+
+    @Provides @Singleton
+    fun provideCloudTokenApi(okHttpClient: OkHttpClient): com.debridmusic.app.cloud.CloudTokenApi =
+        Retrofit.Builder()
+            .baseUrl(com.debridmusic.app.cloud.CloudConfig.TOKEN_BASE)
+            .client(okHttpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(com.debridmusic.app.cloud.CloudTokenApi::class.java)
+
+    @Provides @Singleton
+    fun provideCloudFirestoreApi(okHttpClient: OkHttpClient): com.debridmusic.app.cloud.CloudFirestoreApi =
+        Retrofit.Builder()
+            .baseUrl(com.debridmusic.app.cloud.CloudConfig.FIRESTORE_BASE)
+            .client(okHttpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(com.debridmusic.app.cloud.CloudFirestoreApi::class.java)
+
     @Provides @Singleton @Named("musicbrainz")
     fun provideMusicBrainzRetrofit(okHttpClient: OkHttpClient): Retrofit =
         Retrofit.Builder()
