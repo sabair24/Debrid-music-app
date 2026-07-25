@@ -2,6 +2,8 @@ package com.debridmusic.app.cloud
 
 import com.debridmusic.app.data.local.SettingsStore
 import com.debridmusic.app.server.ServerRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import javax.inject.Inject
@@ -59,13 +61,23 @@ class CloudConnect @Inject constructor(
     /**
      * Does this address answer? Asked without a token on purpose — /health is the one route that
      * needs none, so a "no" here means unreachable rather than unauthorised.
+     *
+     * On [Dispatchers.IO], and that is not a detail. `execute()` blocks, and every caller reaches
+     * this from `viewModelScope.launch`, which is the main thread: Android answers a blocking
+     * network call there with NetworkOnMainThreadException. `runCatching` then swallows it and
+     * reports the address as unreachable — so a PC on the same wifi, answering /health perfectly,
+     * was refused on every network there is. The rest of the flow uses Retrofit's suspend
+     * functions, which move themselves off the main thread, which is why sign-in and the grant
+     * worked and only this last step failed.
      */
-    private fun reachable(base: String): Boolean = runCatching {
-        okHttpClient.newBuilder()
-            .callTimeout(java.time.Duration.ofSeconds(4))
-            .build()
-            .newCall(Request.Builder().url("$base/health").build())
-            .execute()
-            .use { it.isSuccessful }
-    }.getOrDefault(false)
+    private suspend fun reachable(base: String): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            okHttpClient.newBuilder()
+                .callTimeout(java.time.Duration.ofSeconds(4))
+                .build()
+                .newCall(Request.Builder().url("$base/health").build())
+                .execute()
+                .use { it.isSuccessful }
+        }.getOrDefault(false)
+    }
 }
