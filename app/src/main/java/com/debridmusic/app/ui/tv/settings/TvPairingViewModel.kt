@@ -115,39 +115,18 @@ class TvPairingViewModel @Inject constructor(
     private suspend fun connectViaCloud() {
         _state.update { it.copy(signingIn = true, signInMessage = "Toegang aanvragen bij je pc…") }
         when (val r = runCatching { cloudConnect.connect() }.getOrNull()) {
+            null -> _state.update {
+                it.copy(signingIn = false, signInMessage = "Verbinden mislukte. Probeer het opnieuw.")
+            }
             is CloudConnect.Result.Connected -> {
                 _state.update {
-                    it.copy(
-                        signingIn = false,
-                        connectedUrl = r.url,
-                        signInMessage = "Verbonden met ${r.serverName}.",
-                    )
+                    it.copy(signingIn = false, connectedUrl = r.url, signInMessage = r.sentence)
                 }
                 // The same pull the pairing path does. Connecting to a PC and then showing an
                 // empty screen looks like a failure, whichever way you got there.
                 syncNow(r.url)
             }
-            is CloudConnect.Result.NoServer -> _state.update {
-                it.copy(
-                    signingIn = false,
-                    signInMessage = "Nog geen pc onder dit account. Log op je pc in met hetzelfde account.",
-                )
-            }
-            is CloudConnect.Result.Waiting -> _state.update {
-                it.copy(
-                    signingIn = false,
-                    signInMessage = "${r.serverName} heeft nog niet geantwoord. Zet hem aan — je aanvraag blijft staan.",
-                )
-            }
-            is CloudConnect.Result.Unreachable -> _state.update {
-                it.copy(
-                    signingIn = false,
-                    signInMessage = "${r.serverName} gaf toegang, maar is op dit netwerk niet bereikbaar.",
-                )
-            }
-            null -> _state.update {
-                it.copy(signingIn = false, signInMessage = "Verbinden mislukte. Probeer het opnieuw.")
-            }
+            else -> _state.update { it.copy(signingIn = false, signInMessage = r.sentence) }
         }
     }
 

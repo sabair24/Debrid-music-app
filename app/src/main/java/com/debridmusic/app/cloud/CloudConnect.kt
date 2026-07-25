@@ -31,6 +31,19 @@ class CloudConnect @Inject constructor(
         data class Waiting(val serverName: String) : Result
         /** Access granted, but no published address answers from this network. */
         data class Unreachable(val serverName: String) : Result
+
+        /**
+         * What to put on screen. Here rather than in each screen because the TV and the phone show
+         * the same four outcomes, and four sentences maintained twice become two different
+         * explanations of the same state.
+         */
+        val sentence: String
+            get() = when (this) {
+                is Connected -> "Verbonden met $serverName."
+                NoServer -> "Nog geen pc onder dit account. Log op je pc in met hetzelfde account."
+                is Waiting -> "$serverName heeft nog niet geantwoord. Zet hem aan — je aanvraag blijft staan."
+                is Unreachable -> "$serverName gaf toegang, maar is op dit netwerk niet bereikbaar."
+            }
     }
 
     /**

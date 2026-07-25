@@ -35,6 +35,7 @@ fun SettingsScreen(
     var showLastFmKey by remember { mutableStateOf(false) }
     var showTorBoxKey by remember { mutableStateOf(false) }
     var showServerToken by remember { mutableStateOf(false) }
+    var showCloudPassword by remember { mutableStateOf(false) }
     var showLastFmSecret by remember { mutableStateOf(false) }
     var showLastFmPassword by remember { mutableStateOf(false) }
 
@@ -342,8 +343,88 @@ fun SettingsScreen(
             // ── Music server ─────────────────────────────────────────────────
             SectionHeader("Muziekserver")
 
+            if (state.signedIn) {
+                Text(
+                    text = "Ingelogd. Je pc geeft dit toestel zijn eigen toegang zodra hij aanstaat.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Text(
+                    text = "Log in met hetzelfde account als op je pc. Je muziek blijft daar — " +
+                        "dit toestel krijgt alleen toegang.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = state.email,
+                    onValueChange = viewModel::setEmail,
+                    label = { Text("E-mailadres") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = state.password,
+                    onValueChange = viewModel::setPassword,
+                    label = { Text("Wachtwoord") },
+                    singleLine = true,
+                    visualTransformation =
+                        if (showCloudPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        IconButton(onClick = { showCloudPassword = !showCloudPassword }) {
+                            Icon(
+                                if (showCloudPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                null,
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            if (state.signInMessage.isNotBlank()) {
+                Text(
+                    state.signInMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (state.signedIn) {
+                    OutlinedButton(onClick = viewModel::signOutCloud, modifier = Modifier.weight(1f)) {
+                        Text("Uitloggen")
+                    }
+                } else {
+                    Button(
+                        onClick = viewModel::signIn,
+                        enabled = !state.signingIn,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        if (state.signingIn) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(if (state.register) "Account aanmaken" else "Inloggen")
+                    }
+                    TextButton(onClick = viewModel::toggleRegister, enabled = !state.signingIn) {
+                        Text(if (state.register) "Ik heb al een account" else "Nog geen account?")
+                    }
+                }
+            }
+
+            HorizontalDivider()
+
+            // The old way, kept rather than replaced. A network without internet, or a Firebase
+            // having a bad day, must not leave you unable to reach a machine in the next room.
             Text(
-                text = "Stream van je eigen PC-server. Vul het adres en token uit de server in.",
+                text = "Of vul het adres en token handmatig in.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

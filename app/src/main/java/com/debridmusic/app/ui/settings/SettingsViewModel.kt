@@ -9,6 +9,9 @@ import com.debridmusic.app.data.remote.dto.TorBoxUser
 import com.debridmusic.app.data.repository.DiscogsRepository
 import com.debridmusic.app.metadata.EnrichmentProgress
 import com.debridmusic.app.metadata.MetadataEnricher
+import com.debridmusic.app.cloud.CloudAuthException
+import com.debridmusic.app.cloud.CloudConnect
+import com.debridmusic.app.cloud.CloudSession
 import com.debridmusic.app.player.EqController
 import com.debridmusic.app.player.ScrobbleManager
 import com.debridmusic.app.soulseek.SoulseekRepository
@@ -88,6 +91,13 @@ data class SettingsUiState(
     val serverBusy: Boolean = false,
     val serverStatus: String? = null,
     val serverLastSync: Long = 0L,
+    // Signing in, which is how the URL and token above get filled in without typing them
+    val email: String = "",
+    val password: String = "",
+    val signingIn: Boolean = false,
+    val register: Boolean = false,
+    val signedIn: Boolean = false,
+    val signInMessage: String = "",
 )
 
 @HiltViewModel
@@ -107,12 +117,23 @@ class SettingsViewModel @Inject constructor(
     private val scrobbleManager: ScrobbleManager,
     private val serverRepository: com.debridmusic.app.server.ServerRepository,
     private val musicRepository: com.debridmusic.app.data.repository.MusicRepository,
+    private val cloudSession: CloudSession,
+    private val cloudConnect: CloudConnect,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SettingsUiState())
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
 
     init {
+        viewModelScope.launch {
+            // A session saved on this phone. Restoring it reconnects without typing anything —
+            // and reconnects to the address the PC publishes NOW, which is the point: a laptop
+            // that changed wifi would otherwise leave a stale URL in the field below.
+            if (runCatching { cloudSession.restore() }.getOrDefault(false)) {
+                _state.update { it.copy(signedIn = true) }
+                connectViaCloud()
+            }
+        }
         viewModelScope.launch {
             combine(
                 settingsStore.lastFmApiKey,
@@ -353,6 +374,86 @@ class SettingsViewModel @Inject constructor(
     fun setDiscogsToken(token: String) =
         _state.update { it.copy(discogsToken = token, discogsUsername = null, discogsError = null) }
     fun setTorBoxApiKey(key: String) = _state.update { it.copy(torBoxApiKey = key, torBoxUser = null, torBoxError = null) }
+
+    // ── Inloggen ────────────────────────────────────────────────────────────────
+    //
+    // Same flow as the TV, and deliberately the same four sentences (CloudConnect.Result.sentence):
+    // one account, one explanation of what went wrong, wherever you are standing.
+
+    fun setEmail(v: String) = _state.update { it.copy(email = v, signInMessage = "") }
+    fun setPassword(v: String) = _state.update { it.copy(password = v, signInMessage = "") }
+    fun toggleRegister() = _state.update { it.copy(register = !it.register, signInMessage = "") }
+
+    /**
+     * Sign in, then let the PC hand this phone its own token.
+     *
+     * Replaces pasting a URL and a 32-character token by hand — which is what this screen asked for
+     * until now, and which nobody does correctly on a phone keyboard. It is also the only way to
+     * revoke one device: the pasted token is the same string on every device that has it.
+     */
+    fun signIn() {
+        val s = _state.value
+        if (s.signingIn) return
+        if (s.email.isBlank() || s.password.isBlank()) {
+            _state.update { it.copy(signInMessage = "Vul je e-mailadres en wachtwoord in.") }
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(signingIn = true, signInMessage = "") }
+            val result = runCatching {
+                if (s.register) cloudSession.register(s.email, s.password)
+                else cloudSession.signIn(s.email, s.password)
+            }
+            if (result.isFailure) {
+                val cause = result.exceptionOrNull()
+                // A CloudAuthException already reads as a sentence; anything else is technical and
+                // needs the prefix to mean anything at all.
+                val text = when {
+                    cause is CloudAuthException -> cause.message.orEmpty()
+                    else -> "Inloggen mislukte: ${cause?.message ?: "onbekende fout"}"
+                }
+                _state.update { it.copy(signingIn = false, signInMessage = text) }
+                return@launch
+            }
+            // The password is not kept a moment longer than the request that used it.
+            _state.update { it.copy(signedIn = true, password = "") }
+            connectViaCloud()
+        }
+    }
+
+    /** Sign out of the account. The server URL and token stay, so music keeps playing. */
+    fun signOutCloud() {
+        viewModelScope.launch {
+            cloudSession.signOut()
+            _state.update {
+                it.copy(signedIn = false, email = "", password = "", signInMessage = "Uitgelogd.")
+            }
+        }
+    }
+
+    private suspend fun connectViaCloud() {
+        _state.update { it.copy(signingIn = true, signInMessage = "Toegang aanvragen bij je pc…") }
+        when (val r = runCatching { cloudConnect.connect() }.getOrNull()) {
+            null -> _state.update {
+                it.copy(signingIn = false, signInMessage = "Verbinden mislukte. Probeer het opnieuw.")
+            }
+            is CloudConnect.Result.Connected -> {
+                // Into the same two fields the manual path writes, so everything downstream —
+                // "Test verbinding", "Synchroniseren", playback — is unaware of how they got filled.
+                _state.update {
+                    it.copy(
+                        signingIn = false,
+                        serverUrl = r.url,
+                        serverToken = settingsStore.serverToken.first(),
+                        signInMessage = r.sentence,
+                    )
+                }
+                // Connecting and then showing an empty library looks like a failure.
+                syncServerLibrary()
+            }
+            else -> _state.update { it.copy(signingIn = false, signInMessage = r.sentence) }
+        }
+    }
 
     // ── Self-hosted music server ────────────────────────────────────────────────
     fun setServerUrl(v: String) = _state.update { it.copy(serverUrl = v, serverStatus = null) }
