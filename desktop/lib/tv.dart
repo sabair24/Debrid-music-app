@@ -64,6 +64,34 @@ Future<void> initTvMode() async {
 @visibleForTesting
 void setTvModeForTest(bool value) => _isTv = value;
 
+/// Is the window narrow enough that things have to stack rather than sit side by side?
+///
+/// A phone in portrait is about 412 points wide. Until now the app had exactly one breakpoint, and
+/// it only moved the wordmark in the top bar — everything else was either desktop-sized or
+/// "touch"-sized, and `_isTouch` cannot tell a 412-point phone from an 834-point iPad. That is why
+/// the album page gave its title column eight points and printed one letter per line.
+///
+/// 600 is where a layout designed side-by-side stops fitting side by side, not a device class: a
+/// desktop window dragged narrow gets the same treatment, which is the honest test of whether the
+/// narrow layout actually works.
+bool isCompact(BuildContext context) => MediaQuery.sizeOf(context).width < 600;
+
+/// The width a dialog may actually take.
+///
+/// Every dialog in this app asked for a fixed width between 460 and 860 points, chosen when the
+/// only thing running it was a desktop window. On a phone each one of those overflows its own
+/// screen. Ask for what you want; take what there is.
+double dialogWidth(BuildContext context, double preferred) {
+  final available = MediaQuery.sizeOf(context).width - 32;
+  return preferred < available ? preferred : available;
+}
+
+/// The same for height, for the dialogs that fix both.
+double dialogHeight(BuildContext context, double preferred) {
+  final available = MediaQuery.sizeOf(context).height - 120;
+  return preferred < available ? preferred : available;
+}
+
 /// How far the safe area sits in from the panel edge.
 ///
 /// Televisions overscan: a part of the picture falls off the edge of the screen, and how much

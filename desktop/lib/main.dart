@@ -652,14 +652,49 @@ class _HomeShellState extends State<HomeShell> {
         ),
       );
 
-  Widget _searchBar() => _glassPill(
+  /// The field, with the filters beside it or under it.
+  ///
+  /// Four chips and a sort button take roughly 390 points. Beside a text field on a 412-point phone
+  /// that leaves the field nothing, and its hint printed one letter per line — the same failure as
+  /// the album header, in the one place that is on screen the whole time.
+  Widget _searchBar(BuildContext context) {
+    final narrow = isCompact(context);
+    if (!narrow) return _searchBarRow();
+    return Column(
+      children: [
+        _glassPill(child: Row(children: [Expanded(child: _searchField())])),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 38,
+          // Scrolled rather than wrapped: a second row of chips would push the records themselves
+          // below the fold on a phone, and these are a filter you set once.
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            children: [..._filterChips(), ..._sortControl()],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _searchBarRow() => _glassPill(
         child: Row(
           children: [
-            Expanded(
+            Expanded(child: _searchField()),
+            const SizedBox(width: 10),
+            ..._filterChips(),
+            ..._sortControl(),
+          ],
+        ),
+      );
+
+  /// The text field itself, shared by both shapes of the bar.
+  Widget _searchField() =>
               // On a television the field is behind a press: the highlight stops on the search
               // bar, OK opens the keyboard, and BACK closes it again. Everywhere else this is the
               // same bare field it always was — a mouse still clicks straight into it.
-              child: MaybePressable(
+              MaybePressable(
                 enabled: isTv,
                 onPressed: () => _searchFocus.requestFocus(),
                 borderRadius: BorderRadius.circular(999),
@@ -691,9 +726,9 @@ class _HomeShellState extends State<HomeShell> {
                   focusedBorder: InputBorder.none,
                 ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 10),
+              );
+
+  List<Widget> _filterChips() => [
             ...QFilter.values.map((f) {
               final sel = _qFilter == f;
               return Padding(
@@ -712,7 +747,13 @@ class _HomeShellState extends State<HomeShell> {
                 ),
               );
             }),
-            if (_view == 0) ...[
+      ];
+
+  /// Sorting, which only the Albums view offers.
+  List<Widget> _sortControl() => _view != 0
+      ? const []
+      : [
+
               const SizedBox(width: 8),
               PopupMenuButton<AlbumSort>(
                 tooltip: 'Sorteren',
@@ -738,10 +779,7 @@ class _HomeShellState extends State<HomeShell> {
                   ]),
                 ),
               ),
-            ],
-          ],
-        ),
-      );
+        ];
 
   @override
   Widget build(BuildContext context) {
@@ -783,7 +821,7 @@ class _HomeShellState extends State<HomeShell> {
                 padding: EdgeInsets.symmetric(horizontal: tvOverscan.left),
                 child: Column(
                   children: [
-                    if (_searchable) _searchBar(),
+                    if (_searchable) _searchBar(context),
                     Expanded(child: _content()),
                   ],
                 ),
@@ -2113,7 +2151,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                     ),
                   ),
                 if (comp != null && !comp.complete)
-                  SliverToBoxAdapter(child: _completenessBar(comp)),
+                  SliverToBoxAdapter(child: _completenessBar(context, comp)),
                 SliverList(
                   delegate: SliverChildBuilderDelegate(
                     (_, i) {
@@ -2230,8 +2268,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   ///
   /// Only ever shown when something IS missing: a record you hold complete says so by having no
   /// bar at all, which is quieter than a badge on every album page in the library.
-  Widget _completenessBar(AlbumCompleteness c) {
+  Widget _completenessBar(BuildContext context, AlbumCompleteness c) {
     final missing = c.missing;
+    final narrow = isCompact(context);
     return Container(
       margin: const EdgeInsets.fromLTRB(20, 4, 20, 8),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -2240,8 +2279,14 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: _line),
       ),
-      child: Row(
+      // Icon, sentence, a text button and a filled button. On a phone the sentence is what gets
+      // squeezed, and "4 van 12 nummers" came out one letter per line. Stacked instead: the
+      // sentence on its own row, the two buttons under it.
+      child: Flex(
+        direction: narrow ? Axis.vertical : Axis.horizontal,
+        crossAxisAlignment: narrow ? CrossAxisAlignment.start : CrossAxisAlignment.center,
         children: [
+          Row(children: [
           const Icon(Icons.playlist_add_check_rounded, size: 18, color: _accent2),
           const SizedBox(width: 10),
           Expanded(
@@ -2260,6 +2305,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
               ],
             ),
           ),
+          ]),
+          if (narrow) const SizedBox(height: 6),
           TextButton(
             onPressed: () => setState(() => _showMissing = !_showMissing),
             child: Text(_showMissing ? 'Verberg ontbrekende' : 'Toon ontbrekende',
@@ -2291,15 +2338,22 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
   Widget _header(BuildContext context) {
     final player = context.read<PlayerStore>();
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(28, 8, 28, 24),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          AlbumArt(
+    final narrow = isCompact(context);
+    final pad = narrow ? 18.0 : 28.0;
+
+    // The sleeve asks for more room than its own width: the disc slides out to the side, and
+    // AlbumArt reserves size * 1.62 for that. Beside a title column on a phone that came to 404 of
+    // 412 points, so the title got eight and printed one letter per line.
+    //
+    // Sized from what there actually is rather than from a number chosen for a desktop window, and
+    // divided by 1.62 so the disc has somewhere to go instead of sliding off the screen.
+    final available = MediaQuery.sizeOf(context).width - pad * 2;
+    final artSize = narrow ? (available / 1.62).clamp(120.0, 240.0) : 200.0;
+
+    final art = AlbumArt(
             artist: album.artist,
             album: album.title,
-            size: 200,
+            size: artSize,
             fallback: album.cover,
             chosen: album.correctedCover,
             pinned: context.watch<LibraryStore>().pinnedRelease(album),
@@ -2310,15 +2364,15 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             trackCount: _official.isNotEmpty ? _official.length : album.tracks.length,
             playing: _albumIsPlaying(context),
             roles: context.watch<LibraryStore>().albumArtRoles(album.artist, album.title),
-          ),
-          const SizedBox(width: 24),
-          Expanded(
-            child: Column(
+          );
+
+    final details = Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(album.isSingle ? 'Single' : 'Album', style: const TextStyle(color: _muted)),
                 const SizedBox(height: 6),
-                Text(album.title, style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w800)),
+                Text(album.title,
+                    style: TextStyle(fontSize: narrow ? 24 : 30, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 6),
                 // The artist is a link: from a record you're holding, the obvious next question is
                 // "what else did they make".
@@ -2337,8 +2391,12 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                   ],
                 ),
                 const SizedBox(height: 18),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
+                // Wrapped on a phone rather than a Row. Afspelen, Offline bewaren and Radio are
+                // 447 points side by side and a phone has 411 — the row hung 36 pixels off the
+                // right edge, with "Radio" half outside the screen.
+                Wrap(
+                  spacing: narrow ? 8 : 0,
+                  runSpacing: 10,
                   children: [
                     FilledButton.icon(
                       style: FilledButton.styleFrom(
@@ -2353,7 +2411,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       icon: const Icon(Icons.play_arrow_rounded),
                       label: const Text('Afspelen'),
                     ),
-                    const SizedBox(width: 10),
+                    if (!narrow) const SizedBox(width: 10),
                     // Only where the music lives somewhere else AND where carrying a copy makes
                     // sense. On the PC the files ARE the library. And a television is bolted to the
                     // wall next to the machine it streams from, on mains power, with a few gigabytes
@@ -2361,7 +2419,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                     // it can already play is all cost and no benefit.
                     if (context.watch<LibraryStore>().isRemote && !isTv) ...[
                       _OfflineAlbumButton(album: album),
-                      const SizedBox(width: 10),
+                      if (!narrow) const SizedBox(width: 10),
                     ],
                     FilledButton.icon(
                       style: FilledButton.styleFrom(
@@ -2376,7 +2434,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                     // Offered only where there is something to merge: the library holds more than
                     // one pressing of this record, or the user already told us to keep them one.
                     if (album.edition != null || context.watch<LibraryStore>().isMerged(album)) ...[
-                      const SizedBox(width: 10),
+                      if (!narrow) const SizedBox(width: 10),
                       Builder(builder: (context) {
                         final merged = context.watch<LibraryStore>().isMerged(album);
                         return FilledButton.icon(
@@ -2404,10 +2462,22 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                   ],
                 ),
               ],
+            );
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(pad, 8, pad, 24),
+      // Stacked on a phone, side by side everywhere else. The sleeve and a title column simply do
+      // not both fit across 412 points, and squeezing them is what produced a column of single
+      // letters.
+      child: narrow
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [art, const SizedBox(height: 16), details],
+            )
+          : Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [art, const SizedBox(width: 24), Expanded(child: details)],
             ),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -2549,8 +2619,8 @@ class _MetadataEditorState extends State<MetadataEditor> {
       backgroundColor: _panel,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SizedBox(
-        width: 580,
-        height: 640,
+        width: dialogWidth(context, 580),
+        height: dialogHeight(context, 640),
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
@@ -4042,6 +4112,15 @@ class PlayerBar extends StatelessWidget {
     // plus the controls do not fit on an iPad in portrait — 596 of 834 points gone before the
     // buttons start — so they give way instead of overflowing.
     final width = MediaQuery.sizeOf(context).width;
+
+    // A phone gets a different bar entirely, not a squeezed one.
+    //
+    // The desktop bar reserves a side block for the track and centres the transport in what is
+    // left. At 411 points that block bottoms out at its 96-point floor, of which the cover takes 54
+    // and the gap 12 — leaving thirty points for the title, which printed "Niets aan het spelen"
+    // one letter per line and overflowed the bar by 45 pixels.
+    if (isCompact(context)) return _compactBar(context, p, t, bottomInset);
+
     final side = math.min(280.0, math.max(96.0, (width - 336) / 2));
     return Container(
       height: 84 + bottomInset,
@@ -4118,6 +4197,10 @@ class PlayerBar extends StatelessWidget {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
+                    // Shuffle and repeat are the two you reach for least, and on a phone the row
+                    // has to hold a rewind and a forward besides. They are on the full player,
+                    // which is one tap away.
+                    if (!isCompact(context))
                     IconButton(
                       icon: const Icon(Icons.shuffle_rounded, size: 20),
                       color: p.shuffle ? _accent : _muted,
@@ -4168,6 +4251,7 @@ class PlayerBar extends StatelessWidget {
                       color: _muted,
                       onPressed: p.hasNext ? p.next : null,
                     ),
+                    if (!isCompact(context))
                     IconButton(
                       icon: Icon(p.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded,
                           size: 20),
@@ -4218,6 +4302,115 @@ class PlayerBar extends StatelessWidget {
 }
 
 // ── Now playing (full screen, enlargeable art) ───────────────────────────────
+/// The mini player a phone gets: the track, one button, and the whole thing opens the full player.
+///
+/// Not the desktop bar with smaller numbers. On a phone there is room for a cover, a title and one
+/// control — shuffle, repeat, skip-back and the seek bar all live on the full player, which is now
+/// one tap away because the entire bar is the tap target rather than the 54-point cover on the far
+/// left.
+Widget _compactBar(BuildContext context, PlayerStore p, Track? t, double bottomInset) {
+  final open = t == null
+      ? null
+      : () => Navigator.of(context)
+          .push(MaterialPageRoute(builder: (_) => const NowPlayingScreen()));
+
+  return Container(
+    height: 66 + bottomInset,
+    decoration: const BoxDecoration(
+      color: Color(0xFF12141D),
+      border: Border(top: BorderSide(color: _line)),
+    ),
+    padding: EdgeInsets.only(bottom: bottomInset),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // The progress line, full width and two points tall. A draggable slider needs a thumb and
+        // room for a thumb; this only has to answer "how far in am I".
+        SizedBox(
+          height: 2,
+          child: LinearProgressIndicator(
+            value: p.duration.inMilliseconds == 0
+                ? 0
+                : p.position.inMilliseconds / p.duration.inMilliseconds,
+            backgroundColor: const Color(0xFF2A2F42),
+            valueColor: const AlwaysStoppedAnimation(_accent),
+          ),
+        ),
+        Expanded(
+          child: Row(
+            children: [
+              Expanded(
+                child: Pressable(
+                  onPressed: open,
+                  borderRadius: BorderRadius.circular(10),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
+                    child: Row(
+                      children: [
+                        cover(p.currentCover, size: 44, radius: 6),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(t?.title ?? '—',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w600, fontSize: 14)),
+                              Text(
+                                  t == null
+                                      ? 'Niets aan het spelen'
+                                      : (p.radioMode && p.radioStatus.isNotEmpty
+                                          ? p.radioStatus
+                                          : t.artist),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: _muted, fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: Icon(p.playing ? Icons.pause_rounded : Icons.play_arrow_rounded, size: 30),
+                color: Colors.white,
+                onPressed: t == null ? null : p.playPause,
+              ),
+              IconButton(
+                icon: const Icon(Icons.skip_next_rounded, size: 26),
+                color: _muted,
+                onPressed: p.hasNext ? p.next : null,
+              ),
+              const SizedBox(width: 6),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+/// How big the sleeve on the now-playing screen may be.
+///
+/// AlbumArt reserves size * 1.62 so the disc has somewhere to slide out to. At the old fixed 360
+/// that is 583 points — on a 412-point phone the disc came out into a part of the screen that is
+/// not there, which is why it looked like the animation had been lost.
+///
+/// Also capped by height: in landscape, or on a phone with the keyboard up, a sleeve sized from
+/// the width alone pushes the title and the transport controls off the bottom.
+double _sleeve(BuildContext context) {
+  final size = MediaQuery.sizeOf(context);
+  final byWidth = (size.width - 40) / 1.62;
+  final byHeight = size.height * 0.42;
+  final smaller = byWidth < byHeight ? byWidth : byHeight;
+  return smaller.clamp(140.0, 360.0);
+}
+
 class NowPlayingScreen extends StatefulWidget {
   const NowPlayingScreen({super.key});
 
@@ -4283,7 +4476,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                       // The album is taken from the track that is playing, so the disc that comes
                       // out is the one this song is actually on.
                       child: t == null
-                          ? cover(p.currentCover, size: 360, radius: 16)
+                          ? cover(p.currentCover, size: _sleeve(context), radius: 16)
                           : Builder(builder: (context) {
                               // Ask the library which album this track is on, rather than resolving
                               // the record again from its artist and title. Without it this screen
@@ -4294,7 +4487,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                               return AlbumArt(
                                 artist: al?.artist ?? t.artist,
                                 album: al?.title ?? t.album,
-                                size: 360,
+                                size: _sleeve(context),
                                 fallback: p.currentCover,
                                 chosen: al?.correctedCover,
                                 trackCount: al?.tracks.length ?? 0,
@@ -4333,7 +4526,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                 ),
                 const SizedBox(height: 26),
                 SizedBox(
-                  width: 540,
+                  width: dialogWidth(context, 540),
                   child: Row(
                     children: [
                       Text(_fmt(p.position), style: const TextStyle(color: _muted, fontSize: 12)),
@@ -5961,7 +6154,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         backgroundColor: _panel,
         title: const Text('TIDAL-code plakken', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
         content: SizedBox(
-          width: 460,
+          width: dialogWidth(context, 460),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -6687,7 +6880,7 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
       backgroundColor: _bg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       child: Container(
-        width: 560,
+        width: dialogWidth(context, 560),
         constraints: const BoxConstraints(maxHeight: 560),
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -6805,7 +6998,7 @@ class BioText extends StatelessWidget {
             backgroundColor: _panel,
             title: Text(artist, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             content: SizedBox(
-              width: 540,
+              width: dialogWidth(context, 540),
               child: SingleChildScrollView(
                 child: Text(text, style: const TextStyle(color: Color(0xFFC7CBDA), fontSize: 13.5, height: 1.5)),
               ),
@@ -6892,7 +7085,10 @@ class _HeroCarouselState extends State<HeroCarousel> {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(18),
         child: SizedBox(
-          height: 260,
+          // The banner lays a cover beside a title, a year and a button. On a phone that column is
+          // narrow enough that the title takes two lines and the button fell one pixel past the
+          // bottom — so the banner is taller there, not shorter.
+          height: isCompact(context) ? 300 : 260,
           child: Stack(
             children: [
               PageView.builder(
@@ -6993,20 +7189,23 @@ class _HeroCarouselState extends State<HeroCarousel> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(28, 24, 28, 28),
+              // 28 a side plus a 168 cover plus a 24 gap is 248 of a phone's 411 points, and the
+              // 163 left over is not enough for the button beside it — "Bekijken" broke in half.
+              padding: EdgeInsets.fromLTRB(
+                  isCompact(context) ? 16 : 28, 24, isCompact(context) ? 16 : 28, 28),
               child: Row(
                 children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(10),
                     child: SizedBox(
-                      width: 168,
-                      height: 168,
+                      width: isCompact(context) ? 118 : 168,
+                      height: isCompact(context) ? 118 : 168,
                       child: cover == null
                           ? Container(color: _panel2)
                           : Image.network(cover, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(color: _panel2)),
                     ),
                   ),
-                  const SizedBox(width: 24),
+                  SizedBox(width: isCompact(context) ? 14 : 24),
                   Expanded(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -9199,7 +9398,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       backgroundColor: _panel,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Container(
-        width: 480,
+        width: dialogWidth(context, 480),
         constraints: const BoxConstraints(maxHeight: 640),
         padding: const EdgeInsets.all(24),
         child: Column(
@@ -9746,8 +9945,8 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       backgroundColor: _panel,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SizedBox(
-        width: 820,
-        height: 660,
+        width: dialogWidth(context, 820),
+        height: dialogHeight(context, 660),
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
@@ -10027,8 +10226,8 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
       backgroundColor: _panel,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SizedBox(
-        width: 760,
-        height: 620,
+        width: dialogWidth(context, 760),
+        height: dialogHeight(context, 620),
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
@@ -10175,8 +10374,8 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
       backgroundColor: _panel,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SizedBox(
-        width: 860,
-        height: 680,
+        width: dialogWidth(context, 860),
+        height: dialogHeight(context, 680),
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
@@ -10344,8 +10543,8 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
       backgroundColor: _panel,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SizedBox(
-        width: 640,
-        height: 600,
+        width: dialogWidth(context, 640),
+        height: dialogHeight(context, 600),
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -10472,8 +10671,8 @@ class _RenumberDialogState extends State<RenumberDialog> {
       backgroundColor: _panel,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SizedBox(
-        width: 700,
-        height: 620,
+        width: dialogWidth(context, 700),
+        height: dialogHeight(context, 620),
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -10604,8 +10803,8 @@ class _PickAlbumDialogState extends State<PickAlbumDialog> {
       backgroundColor: _panel,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SizedBox(
-        width: 620,
-        height: 560,
+        width: dialogWidth(context, 620),
+        height: dialogHeight(context, 560),
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -10705,8 +10904,8 @@ class _RedundantCleanupDialogState extends State<RedundantCleanupDialog> {
       backgroundColor: _panel,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SizedBox(
-        width: 760,
-        height: 640,
+        width: dialogWidth(context, 760),
+        height: dialogHeight(context, 640),
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -10872,8 +11071,8 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
       backgroundColor: _panel,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SizedBox(
-        width: 720,
-        height: 620,
+        width: dialogWidth(context, 720),
+        height: dialogHeight(context, 620),
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
