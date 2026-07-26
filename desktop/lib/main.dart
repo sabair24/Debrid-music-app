@@ -380,6 +380,7 @@ Future<void> main() async {
   // Wrapped so a scan hiccup can never prevent enrichment from running.
   () async {
     await library.loadCorrections(); // apply manual fixes as tracks are built
+    await library.uids.load(); // the names albums keep across a rename — before the first regroup
     await library.loadHidden(); // keep "removed from library only" tracks out
     await library.loadMerged(); // records the user told us to keep together
     await library.loadArtistArtChoice(); // portraits and backdrops the user picked

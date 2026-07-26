@@ -131,6 +131,24 @@ class CoverEnricher {
     await _fixFile(a).writeAsBytes(bytes);
   }
 
+  /// Carry a hand-picked cover to the album's new name.
+  ///
+  /// [keyFor] is the artist and the title, so correcting either moves the filename this was saved
+  /// under. Within the session nothing showed, because the cover is carried across a regroup by
+  /// track path — but at the next start the lookup went to the new name, found nothing, and the
+  /// cover the user chose by hand was gone. Nobody would connect that to a rename days earlier.
+  Future<void> reKeyFixedCover(
+      String oldArtist, String oldTitle, String newArtist, String newTitle) async {
+    final from = _fnv('${oldArtist.toLowerCase()}|${oldTitle.toLowerCase()}');
+    final to = _fnv('${newArtist.toLowerCase()}|${newTitle.toLowerCase()}');
+    if (from == to) return;
+    try {
+      final src = File('${fixDir.path}${Platform.pathSeparator}$from.jpg');
+      if (!await src.exists()) return;
+      await src.rename('${fixDir.path}${Platform.pathSeparator}$to.jpg');
+    } catch (_) {/* the cover is still on the album in memory; this is only the next start */}
+  }
+
   /// Download raw image bytes for a chosen cover URL (with the right User-Agent).
   Future<Uint8List?> downloadImage(String url) => _download(url);
   File _artistFile(String name) => File('${artistDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.jpg');

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
+import 'album_id.dart';
 import 'completeness.dart';
 import 'editions.dart';
 import 'enrichment.dart';
@@ -306,6 +307,13 @@ class LibraryStore extends ChangeNotifier {
   int _metaRev = 0;
   void _bumpMeta() => _metaRev++;
 
+  /// A name for each album that a rename does not move. Maintained at the tail of every
+  /// [rebuildAlbums]; see album_id.dart for why it exists and why it may only ever observe.
+  late final AlbumUids uids = AlbumUids(dir: () => _appDir);
+
+  /// The uid of an album, for anything that wants to remember something about it.
+  String uidOf(Album a) => uids.uidOf(a);
+
   // Manual metadata corrections (non-destructive): file path -> {title,artist,album}.
   // Applied to scanned tracks so wrong tags are fixed without touching the files.
   final Map<String, Map<String, String>> _corrections = {};
@@ -486,11 +494,15 @@ class LibraryStore extends ChangeNotifier {
       m.removeWhere((_, v) => v == url);
       m[role] = url;
     }
+    await _saveAlbumArtRoles();
+    notifyListeners();
+  }
+
+  Future<void> _saveAlbumArtRoles() async {
     try {
       await Directory(_appDir).create(recursive: true);
       await _albumArtRolesFile.writeAsString(jsonEncode(_albumArtRoles));
     } catch (_) {}
-    notifyListeners();
   }
 
   // ── Chosen artist art ─────────────────────────────────────────────────────
@@ -560,11 +572,15 @@ class LibraryStore extends ChangeNotifier {
     final k = _styleKey(artist, album);
     if (_styles[k]?.join() == styles.join()) return;
     _styles[k] = styles;
+    await _saveStyles();
+    notifyListeners();
+  }
+
+  Future<void> _saveStyles() async {
     try {
       await Directory(_appDir).create(recursive: true);
       await _stylesFile.writeAsString(jsonEncode(_styles));
     } catch (_) {}
-    notifyListeners();
   }
 
   /// Every style seen so far, most common first — the vocabulary this library actually uses.
@@ -732,6 +748,10 @@ class LibraryStore extends ChangeNotifier {
       changed = true;
     }
     if (changed) await _saveCorrections();
+
+    // Same moment, same evidence: this scan saw the music, so a path it did not see is gone rather
+    // than merely unreachable. Hidden tracks count as present here too.
+    uids.prune(live);
   }
 
   /// The correction map for a path, created on demand — so an extension can add to it.
@@ -746,6 +766,9 @@ class LibraryStore extends ChangeNotifier {
   /// worse than either half alone, and it would have taken the album's pinned release with it.
   void _reKeyCorrection(String from, String to) {
     if (from == to) return;
+    // The album's identity is held against its files too, and for the same reason: a move the app
+    // performed itself would otherwise read as a brand-new record.
+    uids.reKey(from, to);
     final old = _corrections.remove(from);
     if (old == null || old.isEmpty) return;
     _corrections.putIfAbsent(to, () => {}).addAll(old);
@@ -873,8 +896,47 @@ class LibraryStore extends ChangeNotifier {
       match.correctedCover = coverBytes;
       await CoverEnricher(settings).saveFixedCover(match, coverBytes);
     }
+    await _carryAlbumKeys(settings, target.artist, target.title, newArtist, newTitle);
     _bumpMeta();
     notifyListeners();
+  }
+
+  /// Move everything filed under an album's NAME to its new name.
+  ///
+  /// Three maps and one cached file are keyed on `artist|title`, which is exactly what a correction
+  /// changes — so the most ordinary edit in the app silently threw away the scans the user assigned
+  /// by hand, the decision to keep two pressings together, the record's styles, and (at the next
+  /// start) the cover they picked themselves. None of that was deleted by anyone; the key moved out
+  /// from under it.
+  ///
+  /// Not solved by re-keying these to the album uid, tempting as that is: [albumArtKey] deliberately
+  /// ignores the edition, so two split pressings of one record share their scans today. Giving them
+  /// separate uids would quietly split that too.
+  Future<void> _carryAlbumKeys(AppSettings settings, String oldArtist, String oldTitle,
+      String newArtist, String newTitle) async {
+    final oldKey = albumArtKey(oldArtist, oldTitle);
+    final newKey = albumArtKey(newArtist, newTitle);
+    if (oldKey == newKey) return;
+
+    final roles = _albumArtRoles.remove(oldKey);
+    if (roles != null && roles.isNotEmpty) {
+      _albumArtRoles[newKey] = roles;
+      await _saveAlbumArtRoles();
+    }
+
+    final styles = _styles.remove(oldKey);
+    if (styles != null && styles.isNotEmpty) {
+      _styles[newKey] = styles;
+      await _saveStyles();
+    }
+
+    // The merge set stores the same key with an `album::` prefix.
+    if (_merged.remove('album::$oldKey')) {
+      _merged.add('album::$newKey');
+      await _saveMerged();
+    }
+
+    await CoverEnricher(settings).reKeyFixedCover(oldArtist, oldTitle, newArtist, newTitle);
   }
 
   Future<void> scan() async {
@@ -1360,6 +1422,11 @@ class LibraryStore extends ChangeNotifier {
       ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
 
     _rebuildTrackIndexes();
+
+    // Put a durable name on whatever grouping just decided. LAST, and reading only — see the header
+    // of album_id.dart: the moment identity feeds back into grouping, merge/split/renumber gains a
+    // loop where a previous answer constrains the next one.
+    uids.reconcile(albums);
   }
 
   /// ONE spelling per artist. Tags disagree about capitalisation and accents ("Lady Gaga" vs
