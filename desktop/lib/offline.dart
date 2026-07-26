@@ -192,22 +192,32 @@ class OfflineStore extends ChangeNotifier {
     final target = _fileFor(libraryPath, ext);
     final temp = File('${target.path}.part');
 
+    // Held outside the try so the failure path can close it. A connection that drops mid-stream
+    // makes `res.stream` throw, which skips the close below — and Windows refuses to delete a file
+    // that is still open, so the .part survived and the next attempt found a name it thought it
+    // already had. On a Mac the same code passes: unlink does not mind an open handle.
+    IOSink? sink;
     try {
       final res = await _http.send(http.Request('GET', Uri.parse(url)));
       if (res.statusCode != 200) throw HttpException('HTTP ${res.statusCode}');
 
       final total = res.contentLength ?? 0;
       var written = 0;
-      final sink = temp.openWrite();
+      // Two names for one sink on purpose: `out` is what writes, `sink` is only "there is still a
+      // handle to let go of". Nulling `sink` after a clean close is what keeps the failure path
+      // below from closing an already-closed sink.
+      final out = temp.openWrite();
+      sink = out;
       await for (final chunk in res.stream) {
         if (_cancelled.contains(libraryPath)) {
-          await sink.close();
+          await out.close();
+          sink = null;
           await temp.delete();
           _jobs.remove(libraryPath);
           notifyListeners();
           return false;
         }
-        sink.add(chunk);
+        out.add(chunk);
         written += chunk.length;
         if (total > 0) {
           final next = written / total;
@@ -219,7 +229,8 @@ class OfflineStore extends ChangeNotifier {
           }
         }
       }
-      await sink.close();
+      await out.close();
+      sink = null; // closed cleanly — nothing for the failure path below to close again
 
       // The server said how big it would be. Fewer bytes than that means the connection dropped,
       // and a truncated FLAC is worse than no copy at all: it plays and then stops, which sounds
@@ -250,6 +261,11 @@ class OfflineStore extends ChangeNotifier {
     } catch (e) {
       job.error = '$e';
       _jobs.remove(libraryPath);
+      // Close before deleting, and swallow what close() rethrows: a sink whose stream errored
+      // hands that same error back here, and it is already being reported as job.error.
+      try {
+        await sink?.close();
+      } catch (_) {/* the write already failed — this is only letting go of the handle */}
       try {
         if (await temp.exists()) await temp.delete();
       } catch (_) {/* nothing to clean up */}
