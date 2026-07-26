@@ -15,7 +15,14 @@ Track _mk(Directory root, String folder, String file,
     int secs = 200,
     int kb = 100,
     bool single = false}) {
-  final d = Directory('${root.path}${Platform.pathSeparator}$folder')..createSync(recursive: true);
+  // The folders are written with backslashes because that is how they read on the machine this
+  // library lives on. On macOS a backslash is an ordinary character, so `Albums\BSB\Backstreet
+  // Boys` became ONE directory with that literal name — while the assertions below build the path
+  // with Platform.pathSeparator and looked for a folder that could never exist. The test has never
+  // run anywhere but Windows.
+  final folderPath = folder.replaceAll(r'\', Platform.pathSeparator);
+  final d = Directory('${root.path}${Platform.pathSeparator}$folderPath')
+    ..createSync(recursive: true);
   final f = File('${d.path}${Platform.pathSeparator}$file')..writeAsBytesSync(List.filled(kb * 1024, 7));
   return Track(
     path: f.path,
