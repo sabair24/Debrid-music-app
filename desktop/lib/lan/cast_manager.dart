@@ -37,6 +37,41 @@ class ShieldTarget {
       };
 }
 
+/// The subnets to sweep for a television, from every address this machine has.
+///
+/// De-duplicated: two addresses on one subnet is one subnet. A plain function so the rule can be
+/// stated in a test — the bug this exists for raises nothing and logs nothing, it just returns an
+/// empty list as confidently as a correct search would.
+Set<String> sweepPrefixes(Iterable<String> addresses) =>
+    {for (final a in addresses) a.split('.').take(3).join('.')};
+
+/// Ask one host whether the music receiver is listening, and what it calls itself.
+///
+/// Null for anything that is not ours: a closed port, some other web server, or the Debrid **Media**
+/// app — which lives on the same television and answers the same shape one port down. Offering that
+/// as a speaker would start a video player when somebody picked a place to listen.
+Future<String?> probeShield(String host, {int port = ShieldTarget.port}) async {
+  final client = HttpClient()..connectionTimeout = const Duration(milliseconds: 600);
+  try {
+    final request = await client.getUrl(Uri.parse('http://$host:$port/ping'));
+    final response = await request.close().timeout(const Duration(milliseconds: 900));
+    if (response.statusCode != 200) return null;
+    final body = await response.transform(utf8.decoder).join();
+    if (!body.contains('debridmusic')) return null;
+    // The receiver says what the television calls itself. Use it — "Woonkamer" is what the speaker
+    // list should read; an address is what you fall back to, not what you show.
+    try {
+      final name = (jsonDecode(body) as Map)['name'];
+      if (name is String && name.trim().isNotEmpty) return name.trim();
+    } catch (_) {/* not JSON we understand; the address still identifies it */}
+    return 'Shield ($host)';
+  } catch (_) {
+    return null;
+  } finally {
+    client.close(force: true);
+  }
+}
+
 /// Sends music to a speaker or the TV, and keeps it going.
 ///
 /// The PC does this, not the iPad. Three reasons, in order of how much they matter:
@@ -83,40 +118,32 @@ class CastManager {
   /// A direct probe of the /24 rather than mDNS: the Shield's receiver is a bare socket with no
   /// service advertisement, and on a home network 254 parallel pings with a short timeout finish
   /// in under a second.
+  ///
+  /// EVERY /24 this machine is on, not just the first. A PC with a Hyper-V switch, a VPN adapter or
+  /// two network cards has several, and [primaryLanAddress] can only guess which one the television
+  /// is on — guess wrong and the sweep runs to completion against a subnet with nothing in it, then
+  /// reports no Shield with as much confidence as if it had looked in the right place.
   Future<List<ShieldTarget>> _findShields() async {
-    final own = await primaryLanAddress();
-    if (own == null) return [];
-    final prefix = own.split('.').take(3).join('.');
+    final own = await lanAddresses();
+    if (own.isEmpty) return [];
+    final mine = own.toSet();
+    final prefixes = sweepPrefixes(own);
     final found = <ShieldTarget>[];
     await Future.wait([
-      for (var i = 1; i < 255; i++)
-        () async {
-          final host = '$prefix.$i';
-          if (host == own) return;
-          final name = await _pingShield(host);
-          if (name != null) found.add(ShieldTarget(host: host, name: name));
-        }()
+      for (final prefix in prefixes)
+        for (var i = 1; i < 255; i++)
+          () async {
+            final host = '$prefix.$i';
+            if (mine.contains(host)) return;
+            final name = await _pingShield(host);
+            if (name != null) found.add(ShieldTarget(host: host, name: name));
+          }()
     ]);
     found.sort((a, b) => a.host.compareTo(b.host));
     return found;
   }
 
-  Future<String?> _pingShield(String host) async {
-    final client = HttpClient()..connectionTimeout = const Duration(milliseconds: 600);
-    try {
-      final request = await client.getUrl(Uri.parse('http://$host:${ShieldTarget.port}/ping'));
-      final response = await request.close().timeout(const Duration(milliseconds: 900));
-      if (response.statusCode != 200) return null;
-      final body = await response.transform(utf8.decoder).join();
-      // The media app answers on 8123 with its own name; be sure this is the music receiver.
-      if (!body.contains('debridmusic')) return null;
-      return 'Shield ($host)';
-    } catch (_) {
-      return null;
-    } finally {
-      client.close(force: true);
-    }
-  }
+  Future<String?> _pingShield(String host) => probeShield(host);
 
   // ── Playing ──────────────────────────────────────────────────────────────
 

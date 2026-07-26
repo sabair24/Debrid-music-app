@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:xml/xml.dart';
 
+import 'net.dart';
+
 /// A speaker on the network that can be told to play a URL.
 class Renderer {
   const Renderer({
@@ -68,18 +70,23 @@ class UpnpControlPoint {
   ];
 
   /// Broadcast an M-SEARCH and describe whatever answers.
+  ///
+  /// One socket per network card, not one bound to 0.0.0.0. A multicast datagram sent from the
+  /// wildcard address leaves by whichever single interface the routing table prefers, and on a
+  /// Windows PC that is very often not the one the speakers are on — a Hyper-V switch, a VPN
+  /// adapter or the second of two network cards will happily win. The search then goes out on a
+  /// network with nothing on it, and a Sonos that is plugged in and playing simply never appears.
+  ///
+  /// Asking on every card costs one extra socket each and removes the guess entirely.
   Future<List<Renderer>> discover({Duration timeout = const Duration(seconds: 3)}) async {
     final locations = <String>{};
-    RawDatagramSocket? socket;
-    try {
-      socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-      socket.multicastHops = 2;
-      final group = InternetAddress(_ssdpAddress);
-      final completer = Completer<void>();
+    final sockets = <RawDatagramSocket>[];
+    final group = InternetAddress(_ssdpAddress);
 
-      socket.listen((event) {
+    void collect(RawDatagramSocket s) {
+      s.listen((event) {
         if (event != RawSocketEvent.read) return;
-        final packet = socket?.receive();
+        final packet = s.receive();
         if (packet == null) return;
         final text = utf8.decode(packet.data, allowMalformed: true);
         for (final line in const LineSplitter().convert(text)) {
@@ -88,7 +95,32 @@ class UpnpControlPoint {
           }
         }
       });
+    }
 
+    for (final address in await lanAddresses()) {
+      try {
+        final s = await RawDatagramSocket.bind(InternetAddress(address), 0);
+        s.multicastHops = 2;
+        collect(s);
+        sockets.add(s);
+      } on SocketException catch (e) {
+        // One card refusing to bind is not a reason to search on none of them.
+        debugPrint('SSDP: cannot search from $address: ${e.message}');
+      }
+    }
+
+    // A machine with no usable card of its own still gets one try the old way.
+    if (sockets.isEmpty) {
+      try {
+        final s = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0)..multicastHops = 2;
+        collect(s);
+        sockets.add(s);
+      } on SocketException catch (e) {
+        debugPrint('SSDP discovery failed: ${e.message}');
+      }
+    }
+
+    if (sockets.isNotEmpty) {
       for (final target in _searchTargets) {
         final message = 'M-SEARCH * HTTP/1.1\r\n'
             'HOST: $_ssdpAddress:$_ssdpPort\r\n'
@@ -97,16 +129,17 @@ class UpnpControlPoint {
             'ST: $target\r\n\r\n';
         // Twice: SSDP is UDP, and a single lost packet means a speaker silently doesn't appear.
         for (var i = 0; i < 2; i++) {
-          socket.send(utf8.encode(message), group, _ssdpPort);
+          for (final s in sockets) {
+            try {
+              s.send(utf8.encode(message), group, _ssdpPort);
+            } catch (_) {/* that card is not going to answer; the others still might */}
+          }
         }
       }
-
-      Timer(timeout, () => completer.complete());
-      await completer.future;
-    } on SocketException catch (e) {
-      debugPrint('SSDP discovery failed: ${e.message}');
-    } finally {
-      socket?.close();
+      await Future<void>.delayed(timeout);
+    }
+    for (final s in sockets) {
+      s.close();
     }
 
     final byHost = <String, Renderer>{};
