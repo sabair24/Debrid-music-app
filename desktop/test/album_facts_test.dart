@@ -191,18 +191,19 @@ void main() {
     });
 
     test('a folder that cannot be written to is not an error', () async {
-      final readonly = Directory('${scratch.path}${Platform.pathSeparator}ro')
-        ..createSync();
-      await Process.run('chmod', ['0555', readonly.path]);
-      try {
-        store.put(_facts('uid1', 'h1'), folder: readonly.path);
-        await Future<void>.delayed(const Duration(milliseconds: 40));
+      // A FILE where the folder should be, rather than chmod 0555: chmod does not exist on Windows,
+      // so this test threw ProcessException there and the whole suite was red on the machine the
+      // app ships to. A read-only DIRECTORY would not have worked either — Windows largely ignores
+      // that attribute for directories. Writing into a path whose parent is a plain file fails on
+      // every platform, in the same FileSystemException this is about.
+      final blocked = File('${scratch.path}${Platform.pathSeparator}ro')
+        ..writeAsStringSync('ik ben geen map');
 
-        expect(store.get('uid1'), isNotNull, reason: 'de index heeft alles nog');
-        expect(store.sidecarsWritable, isFalse, reason: 'en probeert het niet nog 12.000 keer');
-      } finally {
-        await Process.run('chmod', ['0755', readonly.path]);
-      }
+      store.put(_facts('uid1', 'h1'), folder: blocked.path);
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+
+      expect(store.get('uid1'), isNotNull, reason: 'de index heeft alles nog');
+      expect(store.sidecarsWritable, isFalse, reason: 'en probeert het niet nog 12.000 keer');
     });
   });
 
