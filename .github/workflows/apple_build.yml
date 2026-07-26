@@ -391,10 +391,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          ZIP=$(ls desktop/out/DebridMusic-macOS-*.zip 2>/dev/null | head -1)
+          # `out/`, not `desktop/out/`: this job runs with working-directory: desktop, so the path
+          # that the release ACTION uses (workspace-relative) is not the path a run step uses. The
+          # first version of this looked in desktop/desktop/out, found nothing, and — worse — said
+          # so as a warning and exited 0. The step went green having done nothing at all.
+          ZIP=$(ls out/DebridMusic-macOS-*.zip 2>/dev/null | head -1)
           if [ -z "$ZIP" ]; then
-            echo "::warning::No Mac zip was built, so there is nothing to attach."
-            exit 0
+            # A failure, not a warning. The Mac build runs unconditionally before this, so no zip
+            # means something upstream broke — and a green step that attached nothing is exactly
+            # how the Mac silently stayed behind in the first place.
+            echo "::error::No Mac zip in desktop/out — nothing was attached to $TAG."
+            exit 1
           fi
           for i in $(seq 1 30); do
             if gh release view "$TAG" >/dev/null 2>&1; then
