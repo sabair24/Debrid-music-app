@@ -32,6 +32,9 @@ permissions:
 
 env:
   TEAM_ID: DR8YNUC2S7
+  # The provisioning profile's name in Apple's portal. One place, because the archive, the export
+  # and the sanity check must all say exactly the same string — a typo there is a failed build.
+  PROFILE_NAME: DebridMusic App Store
 
 defaults:
   run:
@@ -242,6 +245,38 @@ jobs:
       # on the command line and then quietly ignored — TestFlight would keep seeing the version
       # from pubspec.yaml no matter what tag you pushed.
 
+      # The provisioning profile, so nothing has to be created on the fly.
+      #
+      # This is what ends the certificate problem for good. Automatic signing asks Apple for a
+      # profile, and when it cannot find one it CREATES a development certificate — a new one on
+      # every CI machine, until the account hits its cap and every build fails. With the profile
+      # supplied, the archive is signed manually and `-allowProvisioningUpdates` is gone from that
+      # step: Xcode is no longer even permitted to create anything.
+      #
+      # The profile expires after a year. When it does, this step fails with a clear message rather
+      # than the build quietly signing with something else.
+      - name: Install the provisioning profile
+        if: steps.gate.outputs.ready == 'true' && (startsWith(github.ref, 'refs/tags/apple-v') || inputs.testflight)
+        env:
+          PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+        run: |
+          if [ -z "$PROFILE" ]; then
+            echo "::error::APPLE_PROVISIONING_PROFILE is not set. Without it Xcode falls back to creating a certificate per run and the account fills up."
+            exit 1
+          fi
+          DEST="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$DEST"
+          echo "$PROFILE" | base64 --decode > "$DEST/DebridMusic.mobileprovision"
+          # Read it back so a wrong paste fails HERE, with a readable message, rather than as an
+          # opaque signing error four minutes later.
+          NAME=$(security cms -D -i "$DEST/DebridMusic.mobileprovision" | plutil -extract Name raw -)
+          EXPIRES=$(security cms -D -i "$DEST/DebridMusic.mobileprovision" | plutil -extract ExpirationDate raw -)
+          echo "Profiel: $NAME (verloopt $EXPIRES)"
+          if [ "$NAME" != "$PROFILE_NAME" ]; then
+            echo "::error::Het profiel heet '$NAME', de workflow verwacht '$PROFILE_NAME'."
+            exit 1
+          fi
+
       - name: Archive for iOS
         if: steps.gate.outputs.ready == 'true' && (startsWith(github.ref, 'refs/tags/apple-v') || inputs.testflight)
         env:
@@ -251,11 +286,10 @@ jobs:
           xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/DebridMusic-iOS.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath ~/private_keys/AuthKey_${KEY_ID}.p8 \
-            -authenticationKeyID "$KEY_ID" \
-            -authenticationKeyIssuerID "$ISSUER_ID" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
             FLUTTER_BUILD_NAME="${{ steps.version.outputs.VERSION }}" \
             FLUTTER_BUILD_NUMBER="${{ steps.version.outputs.BUILD }}" \
             archive
@@ -273,7 +307,11 @@ jobs:
           <dict>
             <key>method</key><string>app-store-connect</string>
             <key>teamID</key><string>${TEAM_ID}</string>
-            <key>signingStyle</key><string>automatic</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.debridmedia.music</key><string>${PROFILE_NAME}</string>
+            </dict>
             <key>destination</key><string>upload</string>
           </dict>
           </plist>
