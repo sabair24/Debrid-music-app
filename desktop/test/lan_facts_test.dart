@@ -166,6 +166,51 @@ void main() {
     });
   });
 
+  group('and keeps it across a restart', () {
+    test('the index is read back, so a second start asks nothing', () async {
+      // The bug this pins down: the store was written on every album open and never loaded again on
+      // a phone or a television, so closing the app threw away everything it had been told and the
+      // next start fetched all of it a second time. Which is the loading it exists to remove.
+      final dir = '${root.path}${Platform.pathSeparator}client';
+      final first = AlbumFactsStore(dir: () => dir);
+      first.put(AlbumFacts(
+        uid: albumId,
+        trackSetHash: 'h1',
+        updatedMs: 1730000000000,
+        source: 'MusicBrainz',
+        tracklist: const [ChoiceTrack('1', 'Mysterons', 306)],
+      ));
+      await first.flush();
+      first.dispose();
+
+      final afterRestart = AlbumFactsStore(dir: () => dir);
+      await afterRestart.load();
+
+      expect(afterRestart.get(albumId), isNotNull, reason: 'anders begint elk toestel elke keer opnieuw');
+      expect(
+          needsResolve(afterRestart.get(albumId),
+              trackSetHash: 'h1', nowMs: DateTime.now().millisecondsSinceEpoch),
+          isFalse);
+      afterRestart.dispose();
+    });
+
+    test('a PC that moved to another address does not invalidate it', () {
+      // A client's track path is the stream URL, so it carries the PC's address — and a router
+      // handing out a new lease would otherwise read as "every record changed". The hash is over
+      // the file NAMES for exactly this reason.
+      List<Track> at(String host) => [
+            for (var i = 1; i <= 2; i++)
+              Track(
+                  path: 'http://$host:47820/stream/abc$i.flac',
+                  title: 't$i',
+                  artist: 'Portishead',
+                  album: 'Dummy'),
+          ];
+
+      expect(trackSetHashOf(at('192.168.0.117')), trackSetHashOf(at('192.168.0.42')));
+    });
+  });
+
   group('the client keeps what it was told', () {
     test('so opening the same album twice asks the PC once', () async {
       seed();

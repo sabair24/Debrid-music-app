@@ -121,6 +121,23 @@ Future<bool> _claimSingleInstance() async {
   }
 }
 
+/// Held for the life of the process so the listener is not collected while the app runs.
+// ignore: unused_element
+AppLifecycleListener? _saveOnLeaving;
+
+/// Everything that is written on a debounce, written now.
+///
+/// Deliberately not throwing: this runs while the app is being taken away, and a failure here is a
+/// slower next start, not something anyone can act on.
+Future<void> _flushStores(LibraryStore library) async {
+  try {
+    await library.facts.flush();
+    await library.uids.flush();
+  } catch (e) {
+    debugPrint('Could not write the album index on the way out: $e');
+  }
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
@@ -299,6 +316,21 @@ Future<void> main() async {
     };
   }
 
+  // Write what has been learned before the app goes away.
+  //
+  // Both stores save on a two-second debounce, which is right while the app is running and worth
+  // nothing at the moment it closes: on Android the process is killed whenever the system feels
+  // like it, and on a desktop the window shuts long before a timer that was set a moment ago. The
+  // last few albums somebody opened would be exactly the ones lost.
+  //
+  // `hidden` and `paused` rather than only `detached`: detached is not reliably delivered on
+  // Android, and a backgrounded app that never comes back has simply ended.
+  _saveOnLeaving = AppLifecycleListener(
+    onHide: () => unawaited(_flushStores(library)),
+    onPause: () => unawaited(_flushStores(library)),
+    onDetach: () => unawaited(_flushStores(library)),
+  );
+
   runApp(
     MultiProvider(
       providers: [
@@ -369,6 +401,12 @@ Future<void> main() async {
       refreshQueue();
     }
     () async {
+      // What this device was told about its records, BEFORE it connects. Without this the index was
+      // written on every album open and never read back, so closing the app threw away everything
+      // it had learned and the next start asked the PC for all of it again — which is exactly the
+      // loading this store exists to remove. It belongs here and not only on the PC: a phone keeps
+      // its own copy of the answers, keyed by the PC's album id.
+      await library.facts.load();
       final endpoint = mode.endpoint;
       if (endpoint != null) await session.connect(endpoint, remember: false);
       // Whatever the PC is downloading shows up in "Mijn downloads" here too, progress and all.
