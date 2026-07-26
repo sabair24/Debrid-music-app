@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
+import 'album_facts.dart';
 import 'album_id.dart';
 import 'completeness.dart';
 import 'editions.dart';
@@ -313,6 +314,20 @@ class LibraryStore extends ChangeNotifier {
 
   /// The uid of an album, for anything that wants to remember something about it.
   String uidOf(Album a) => uids.uidOf(a);
+
+  /// What was worked out about each record — which pressing, its tracklist, what is missing. See
+  /// album_facts.dart. Reached through the library because that is what knows the albums.
+  late final AlbumFactsStore facts = AlbumFactsStore(dir: () => _appDir);
+
+  /// How many albums have a track in each folder, refreshed with the albums. Only used to spot a
+  /// flat dump, where a sidecar per album would be several albums fighting over one filename.
+  Map<String, int> _albumsPerDir = const {};
+
+  /// Where this album's sidecar belongs, or null when there is no sensible place for one.
+  String? sidecarFolderFor(Album a) => albumFolderOf(a, _albumsPerDir);
+
+  /// Which files this record is made of — the signal that facts need working out again.
+  String trackSetHashFor(Album a) => trackSetHashOf(a.tracks);
 
   // Manual metadata corrections (non-destructive): file path -> {title,artist,album}.
   // Applied to scanned tracks so wrong tags are fixed without touching the files.
@@ -1427,6 +1442,7 @@ class LibraryStore extends ChangeNotifier {
     // of album_id.dart: the moment identity feeds back into grouping, merge/split/renumber gains a
     // loop where a previous answer constrains the next one.
     uids.reconcile(albums);
+    _albumsPerDir = albumsPerDirOf(albums);
   }
 
   /// ONE spelling per artist. Tags disagree about capitalisation and accents ("Lady Gaga" vs

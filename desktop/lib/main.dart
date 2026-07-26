@@ -13,6 +13,8 @@ import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'album_facts.dart';
+import 'album_facts_resolver.dart';
 import 'booklet_view.dart';
 import 'catalog.dart';
 import 'completeness.dart';
@@ -381,6 +383,7 @@ Future<void> main() async {
   () async {
     await library.loadCorrections(); // apply manual fixes as tracks are built
     await library.uids.load(); // the names albums keep across a rename — before the first regroup
+    await library.facts.load(); // pressings and tracklists already worked out — one file, one read
     await library.loadHidden(); // keep "removed from library only" tracks out
     await library.loadMerged(); // records the user told us to keep together
     await library.loadArtistArtChoice(); // portraits and backdrops the user picked
@@ -1842,6 +1845,21 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
   String get _albumKey => '${artistKey(album.artist)}|${normKey(album.title)}';
 
+  /// Take whatever is already known about this record, before the first frame is painted.
+  ///
+  /// This is the difference between an album page that fills instantly and one that shows a spinner
+  /// for six seconds — on every single visit, on every device, because none of them kept the answer
+  /// and none of them shared it.
+  void _adoptFacts(AlbumFacts f) {
+    _official = f.tracklist;
+    _officialFrom = f.source;
+    _officialYear = f.year;
+    _officialBonus = f.bonus;
+    _officialBestFit = f.bestFit;
+    _officialMbid = f.mbid;
+    _officialFor = _albumKey;
+  }
+
   /// The official tracklist: which pressing of this record you actually own.
   ///
   /// Chosen by CONTAINMENT, not by size. Asking for the first pressing big enough to hold the
@@ -1854,7 +1872,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   ///
   /// A pinned pressing wins outright — if you picked an edition in the gallery, that edition is
   /// the answer, not a candidate.
-  Future<void> _loadOfficial() async {
+  Future<void> _loadOfficial({bool force = false}) async {
     if (!mounted || album.isSingle) return;
     final a = album;
     final want = _albumKey;
@@ -1863,98 +1881,50 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     final settings = context.read<AppSettings>();
     final pinnedMbid = lib.pinnedMbid(a);
     final pinned = lib.pinnedRelease(a);
+
+    final uid = lib.uidOf(a);
+    final hash = lib.trackSetHashFor(a);
+    final known = lib.facts.get(uid);
+
+    // What we already know, unless something below says otherwise. Painted with no spinner and no
+    // request — this is the point of the whole exercise.
+    if (!needsResolve(known,
+        trackSetHash: hash,
+        nowMs: DateTime.now().millisecondsSinceEpoch,
+        pinnedMbid: pinnedMbid,
+        pinned: pinned,
+        force: force)) {
+      setState(() {
+        _adoptFacts(known!);
+        _officialBusy = false;
+      });
+      return;
+    }
+
     setState(() {
       _officialBusy = true;
       _officialFor = want;
     });
 
-    var out = const <ChoiceTrack>[];
-    var from = '';
-    var bonus = const <BonusTrack>[];
-    var bestFit = true;
-    String? mbid;
-    int? year;
-    try {
-      MbRelease? rel;
-      if (pinnedMbid != null && pinnedMbid.isNotEmpty) rel = await mb.release(pinnedMbid);
-      if (rel == null) {
-        final groups = await mb.searchReleaseGroups(DiscogsService.plainTitle(a.title),
-            artist: a.artist);
-        // Not merely "not a compilation": a SINGLE of the same name is a different record, and
-        // picking it described a sixteen-track album with a two-track sleeve.
-        final g = MusicBrainzService.pickReleaseGroup(groups, single: a.isSingle);
-        if (g != null) {
-          // One request for every pressing of the record, already in preference order.
-          final all = await mb.editionsOf(g.mbid);
-          final owned = albumTrackCount(a.tracks);
-          final counts = [for (final r in all) r.trackCount];
-          // The three smallest that fit, PLUS the fullest pressing of the record.
-          //
-          // Smallest-that-fits alone is not enough. Owning three tracks of Gotta Get Thru This
-          // shortlists three twelve-track pressings, and the acoustic version you hold is only on
-          // the sixteen — so the pressing that actually describes what you have never gets looked
-          // at. The fullest one is fetched anyway for the bonus list, so scoring it costs nothing.
-          final fullest = counts.isEmpty
-              ? -1
-              : counts.indexed.reduce((x, y) => y.$2 > x.$2 ? y : x).$1;
-          final shortlist = <int>{
-            ...shortlistPressings(counts, owned),
-            if (fullest >= 0) fullest,
-          }.toList();
+    final fresh = await resolveAlbumFacts(
+      a,
+      uid: uid,
+      trackSetHash: hash,
+      mb: mb,
+      settings: settings,
+      pinnedMbid: pinnedMbid,
+      pinned: pinned,
+    );
 
-          final tried = <MbRelease>[];
-          final lists = <List<ChoiceTrack>>[];
-          final scored = <AlbumCompleteness>[];
-          for (final i in shortlist) {
-            final list = await mb.tracklistOf(all[i]);
-            if (list.isEmpty) continue;
-            tried.add(all[i]);
-            lists.add(list);
-            scored.add(matchAlbumTracks(list, a.tracks, a.artist));
-          }
-          final pick = pickPressing(scored);
-          if (pick >= 0) {
-            rel = tried[pick];
-            out = lists[pick];
-            bestFit = scored[pick].namesEverything;
-            // Everything fetched that is not the chosen pressing is where the extras come from.
-            bonus = bonusTracks(out, a.tracks, a.artist, [
-              for (var i = 0; i < tried.length; i++)
-                if (i != pick) (tried[i].line, lists[i])
-            ]);
-          }
-        }
-      }
-      if (rel != null) {
-        if (out.isEmpty) out = await mb.tracklistOf(rel);
-        year = rel.albumYear ?? rel.year;
-        if (out.isNotEmpty) {
-          from = 'MusicBrainz';
-          mbid = rel.mbid; // so the sleeve comes from this pressing, not from a second guess
-        }
-      }
-    } catch (_) {/* Discogs gets its turn below */}
-    if (out.isEmpty) {
-      try {
-        // Here expectedTracks IS safe to pass: Discogs only uses it to drop masters too SMALL to
-        // hold the library, never ones bigger.
-        final e = await DiscogsService(settings)
-            .edition(a.artist, a.title, expectedTracks: albumTrackCount(a.tracks), pinned: pinned);
-        if (e != null && e.tracklist.isNotEmpty) {
-          out = [for (final t in e.tracklist) ChoiceTrack(t.position, t.title, t.seconds)];
-          year = e.albumYear ?? e.year;
-          from = 'Discogs';
-        }
-      } catch (_) {}
+    // Kept even when it found nothing — an empty answer carries a failedMs, and remembering a "no"
+    // for a day is what stops the six-request chain being paid again at every open.
+    if (uid.isNotEmpty) {
+      lib.facts.put(fresh, folder: lib.sidecarFolderFor(a));
     }
+
     if (!mounted) return;
     setState(() {
-      _official = out;
-      _officialFrom = from;
-      _officialYear = year;
-      _officialBonus = bonus;
-      _officialBestFit = bestFit;
-      _officialMbid = mbid;
+      _adoptFacts(fresh);
       _officialBusy = false;
     });
   }
@@ -2326,6 +2296,31 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       ]),
                     ),
                   ),
+                // Remembering an answer means being able to be wrong about it for a long time. The
+                // pressing is picked automatically, and when it picked badly there has to be a way
+                // to say "look again" without waiting a day for the retry window.
+                if (!_officialBusy && !album.isSingle)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 0, 20, 6),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        // A plain TextButton: it already takes focus and already draws the app's
+                        // focus ring from the theme, so a remote reaches it without extra wrapping.
+                        child: TextButton.icon(
+                          onPressed: () => _loadOfficial(force: true),
+                          icon: const Icon(Icons.refresh_rounded, size: 15),
+                          label: Text(
+                            _official.isEmpty
+                                ? 'Geen officiële tracklijst gevonden — opnieuw zoeken'
+                                : 'Tracklijst opnieuw ophalen',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          style: TextButton.styleFrom(foregroundColor: _muted),
+                        ),
+                      ),
+                    ),
+                  ),
                 if (comp != null && !comp.complete)
                   SliverToBoxAdapter(child: _completenessBar(context, comp)),
                 SliverList(
@@ -2533,6 +2528,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     final art = AlbumArt(
             artist: album.artist,
             album: album.title,
+            identity: context.watch<LibraryStore>().uidOf(album),
             size: artSize,
             fallback: album.cover,
             chosen: album.correctedCover,
@@ -4755,6 +4751,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                               return AlbumArt(
                                 artist: al?.artist ?? t.artist,
                                 album: al?.title ?? t.album,
+                                identity: al == null ? '' : lib.uidOf(al),
                                 size: _sleeve(context),
                                 fallback: p.currentCover,
                                 chosen: al?.correctedCover,
@@ -9942,6 +9939,12 @@ class AlbumArt extends StatefulWidget {
   /// correcting a deliberate choice is the app arguing with its owner.
   final Uint8List? chosen;
   final double size;
+
+  /// Which RECORD this is, when the caller knows (the album uid). Only used to tell "the same
+  /// record under a new name" apart from "a different record altogether": scans are kept on screen
+  /// through the first, and must not be through the second.
+  final String identity;
+
   final int trackCount;
   final bool playing;
 
@@ -9964,6 +9967,7 @@ class AlbumArt extends StatefulWidget {
     required this.artist,
     required this.album,
     required this.size,
+    this.identity = '',
     this.fallback,
     this.chosen,
     this.trackCount = 0,
@@ -10006,9 +10010,16 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
         old.pinned != widget.pinned ||
         old.pinnedMbid != widget.pinnedMbid ||
         !mapEquals(old.roles, widget.roles)) {
-      // The old scans stay up until the new ones arrive. Clearing here left a gap the length of a
-      // network round trip, in which the disc vanished and the sleeve fell back to the file's own
-      // cover — which read as the app losing the choice that was just made.
+      // A DIFFERENT record: drop what is up. Keeping it would put one album's sleeve and disc on
+      // another album's page for the length of a round trip, which is not a smaller lie than a gap.
+      if (widget.identity.isNotEmpty && old.identity.isNotEmpty &&
+          old.identity != widget.identity) {
+        setState(() => _art = null);
+      }
+      // Otherwise the old scans stay up until the new ones arrive — renaming a record does not
+      // change its sleeve. Clearing here left a gap the length of a network round trip, in which
+      // the disc vanished and the sleeve fell back to the file's own cover, which read as the app
+      // losing the choice that was just made.
       _load();
     }
     if (old.playing != widget.playing) _sync();
