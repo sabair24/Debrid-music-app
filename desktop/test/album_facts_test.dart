@@ -288,6 +288,50 @@ void main() {
     });
   });
 
+  /// The case the sidecars exist for: a machine that has the music but has never worked anything
+  /// out about it. Without this, a reinstall re-derives the whole library from MusicBrainz one
+  /// album at a time, at a request a second.
+  group('a fresh install over an existing library', () {
+    test('rebuilds the index from what is next to the music, with no network', () async {
+      final root = Directory('${scratch.path}${Platform.pathSeparator}music')..createSync();
+      final albums = <String>[];
+      for (var i = 0; i < 3; i++) {
+        final dir = Directory('${root.path}${Platform.pathSeparator}Album$i')..createSync();
+        albums.add(dir.path);
+        store.put(_facts('old-uid-$i', 'h$i'), folder: dir.path);
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      for (final d in albums) {
+        expect(File('$d${Platform.pathSeparator}$kSidecarName').existsSync(), isTrue);
+      }
+
+      // The new install: same folders on disk, empty index, and its own names for the records.
+      final reinstalled =
+          AlbumFactsStore(dir: () => '${scratch.path}${Platform.pathSeparator}fresh');
+      expect(reinstalled.count, 0);
+      for (var i = 0; i < 3; i++) {
+        await reinstalled.adoptSidecar('new-uid-$i', albums[i], 'h$i');
+      }
+
+      expect(reinstalled.count, 3);
+      expect(reinstalled.get('new-uid-1')!.tracklist.map((t) => t.title),
+          ['Mysterons', 'Sour Times']);
+      reinstalled.dispose();
+    });
+
+    test('a folder with no sidecar is simply skipped', () async {
+      final bare = Directory('${scratch.path}${Platform.pathSeparator}bare')..createSync();
+      expect(await store.adoptSidecar('uid1', bare.path, 'h1'), isNull);
+      expect(store.count, 0);
+    });
+
+    test('a corrupt sidecar is skipped, not fatal', () async {
+      final dir = Directory('${scratch.path}${Platform.pathSeparator}broken')..createSync();
+      await File('${dir.path}${Platform.pathSeparator}$kSidecarName').writeAsString('{half a fi');
+      expect(await store.adoptSidecar('uid1', dir.path, 'h1'), isNull);
+    });
+  });
+
   group('what counts as the same record', () {
     test('moving the folder does not change the hash', () {
       final before = [_t(r'D:\M\Dummy\01.flac'), _t(r'D:\M\Dummy\02.flac')];

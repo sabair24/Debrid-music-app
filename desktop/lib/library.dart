@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -329,6 +330,34 @@ class LibraryStore extends ChangeNotifier {
 
   /// Where this album's sidecar belongs, or null when there is no sensible place for one.
   String? sidecarFolderFor(Album a) => albumFolderOf(a, _albumsPerDir);
+
+  /// Read back what a previous install — or another machine — left next to the music.
+  ///
+  /// Only for albums the index has never heard of, which in the ordinary case is none of them and
+  /// costs nothing at all. It is the reinstall, the new PC and the folder copied in from a laptop
+  /// that this exists for: without it every one of those would re-derive the whole library from
+  /// MusicBrainz, one album at a time, at a request a second.
+  ///
+  /// After the scan and off the critical path — nothing on screen is waiting for it, and an album
+  /// whose facts arrive a moment late simply fills in a moment late.
+  Future<void> _adoptSidecars() async {
+    var adopted = 0;
+    for (final a in albums) {
+      final uid = uids.uidOf(a);
+      if (uid.isEmpty || facts.get(uid) != null) continue;
+      final folder = sidecarFolderFor(a);
+      if (folder == null) continue;
+      final found = await facts.adoptSidecar(uid, folder, trackSetHashOf(a.tracks));
+      if (found != null) adopted++;
+      // A breath between albums. This walks the whole library on a fresh install, and it is not
+      // more important than the screen the user is looking at.
+      await Future<void>.delayed(Duration.zero);
+    }
+    if (adopted > 0) {
+      debugPrint('Adopted $adopted album sidecars from disk');
+      notifyListeners();
+    }
+  }
 
   /// Which files this record is made of — the signal that facts need working out again.
   String trackSetHashFor(Album a) => trackSetHashOf(a.tracks);
@@ -1003,6 +1032,9 @@ class LibraryStore extends ChangeNotifier {
     // Only now may anything be forgotten: this scan saw the music, so a path it did not see is
     // genuinely absent rather than merely unreachable.
     await _sweepCorrections();
+
+    // And pick up what previous installs left next to the music.
+    unawaited(_adoptSidecars());
 
     // Pass 2 — one embedded cover per album, off the UI thread. Guarded with a
     // timeout: a malformed file that makes readMetadata hang can never stall

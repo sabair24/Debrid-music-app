@@ -1434,10 +1434,18 @@ class _OfflineSection extends StatelessWidget {
     final jobs = offline.jobs;
     if (tracks.isEmpty && jobs.isEmpty) return const SizedBox.shrink();
 
+    // A copy on this device keeps the artist and album it was downloaded WITH, and that is the only
+    // list in the app a correction never reached: rename a record and its downloads went on calling
+    // themselves by the old name forever. So ask the library, by path, and fall back to the stored
+    // strings only for a track the library no longer has — where they are all there is.
+    final lib = context.watch<LibraryStore>();
+    String artistOf(OfflineTrack t) => lib.trackByPath(t.path)?.artist ?? t.artist;
+    String albumOf(OfflineTrack t) => lib.trackByPath(t.path)?.album ?? t.album;
+
     // Grouped by album, because that is how it was put there and how anyone thinks about it.
     final byAlbum = <String, List<OfflineTrack>>{};
     for (final t in tracks) {
-      byAlbum.putIfAbsent('${t.artist}|${t.album}', () => []).add(t);
+      byAlbum.putIfAbsent('${artistOf(t)}|${albumOf(t)}', () => []).add(t);
     }
 
     return Column(
@@ -1515,12 +1523,12 @@ class _OfflineSection extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(entry.value.first.album,
+                      Text(albumOf(entry.value.first),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
                       Text(
-                          '${entry.value.first.artist} · ${entry.value.length} nummers · '
+                          '${artistOf(entry.value.first)} · ${entry.value.length} nummers · '
                           '${_size(entry.value.fold(0, (n, t) => n + t.bytes))}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
