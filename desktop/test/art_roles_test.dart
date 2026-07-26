@@ -77,4 +77,43 @@ void main() {
     final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
     expect(j.values.first, {'front': 'http://x/f.jpg'});
   });
+
+  /// Choosing an EDITION and overruling one of its scans are different acts, and one has to win.
+  ///
+  /// A role outranks the pinned pressing — that is what makes it an override. So a sleeve picked
+  /// once from the digital release went on winning after the user deliberately chose the CD, and the
+  /// tick on a row looked like it did nothing at all.
+  group('choosing an edition starts from that edition', () {
+    test('it drops the scans picked by hand', () async {
+      await lib.setAlbumArtRole('Yasmine', 'Prêt-à-porter', 'front', 'http://digital/front.jpg');
+      await lib.setAlbumArtRole('Yasmine', 'Prêt-à-porter', 'disc', 'http://cd/disc.jpg');
+      expect(lib.albumArtRoles('Yasmine', 'Prêt-à-porter'), isNotEmpty);
+
+      // What the tick on a gallery row does before it pins the pressing.
+      await lib.clearAlbumArtRoles('Yasmine', 'Prêt-à-porter');
+
+      expect(lib.albumArtRoles('Yasmine', 'Prêt-à-porter'), isEmpty,
+          reason: 'anders houdt de oude hoes de nieuwe uitgave tegen');
+    });
+
+    test('and leaves every other record alone', () async {
+      await lib.setAlbumArtRole('Yasmine', 'Prêt-à-porter', 'front', 'http://digital/front.jpg');
+      await lib.setAlbumArtRole('Garou', 'Seul', 'disc', 'http://cd/seul.jpg');
+
+      await lib.clearAlbumArtRoles('Yasmine', 'Prêt-à-porter');
+
+      expect(lib.albumArtRoles('Yasmine', 'Prêt-à-porter'), isEmpty);
+      expect(lib.albumArtRoles('Garou', 'Seul'), {'disc': 'http://cd/seul.jpg'});
+    });
+
+    test('clearing is written down, and clearing nothing is not an error', () async {
+      await lib.setAlbumArtRole('X', 'Rec', 'front', 'http://x/f.jpg');
+      await lib.clearAlbumArtRoles('X', 'Rec');
+      await lib.clearAlbumArtRoles('X', 'Rec'); // must not throw
+
+      final again = LibraryStore()..configDirOverride = lib.configDirOverride;
+      await again.loadAlbumArtRoles();
+      expect(again.albumArtRoles('X', 'Rec'), isEmpty);
+    });
+  });
 }

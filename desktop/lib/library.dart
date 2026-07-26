@@ -578,6 +578,22 @@ class LibraryStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Forget every hand-picked scan for this record, so the pressing decides again.
+  ///
+  /// One write and one notify instead of three: the caller used to set each role to empty in turn,
+  /// which saved and rebuilt the whole album grid once per role.
+  ///
+  /// Called when a whole EDITION is chosen, and that is the point of it. A role outranks the pinned
+  /// pressing — that is what makes it an override — so a front cover picked from the digital release
+  /// went on winning after you deliberately chose the CD, and choosing an edition looked like it did
+  /// nothing. Picking an edition means "use its scans"; picking a single scan is the exception you
+  /// make afterwards.
+  Future<void> clearAlbumArtRoles(String artist, String album) async {
+    if (_albumArtRoles.remove(albumArtKey(artist, album)) == null) return;
+    await _saveAlbumArtRoles();
+    notifyListeners();
+  }
+
   Future<void> _saveAlbumArtRoles() async {
     try {
       await Directory(_appDir).create(recursive: true);

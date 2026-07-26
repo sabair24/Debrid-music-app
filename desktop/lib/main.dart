@@ -10422,6 +10422,13 @@ class AlbumArt extends StatefulWidget {
   State<AlbumArt> createState() => _AlbumArtState();
 }
 
+/// How far the disc stays out when nothing is playing.
+///
+/// Enough to see that there IS one, and to check the scan you just chose; not so much that pressing
+/// play has nothing left to show. A quarter of the travel leaves the label behind the sleeve, so it
+/// still reads as a disc tucked into a card rather than one lying beside it.
+const _discRest = 0.26;
+
 /// A disc with a hole in it, the way a CD has one.
 ///
 /// Two circles in one path with [PathFillType.evenOdd]: the outer one keeps, the inner one gives
@@ -10605,8 +10612,16 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
               animation: _slide,
               // Translate rather than reposition: a Positioned inside a builder would relayout the
               // Stack every frame, where a transform only moves an already-painted layer.
+              // A resting sliver, always. Standing still the disc used to sit entirely behind the
+              // sleeve, so an album page you were not playing showed no disc at all — and somebody
+              // who had just chosen a disc scan had no way to look at it without pressing play.
+              // The reveal is still the reveal: it comes the rest of the way out and starts turning.
               builder: (context, child) => Transform.translate(
-                offset: Offset(Curves.easeOutCubic.transform(_slide.value) * travel, 0),
+                offset: Offset(
+                  (_discRest + (1 - _discRest) * Curves.easeOutCubic.transform(_slide.value)) *
+                      travel,
+                  0,
+                ),
                 child: child,
               ),
               child: spinningDisc,
@@ -10816,6 +10831,10 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
             : await DiscogsService(settings).fetchImage(c.front!.uri);
       }
       if (!mounted) return;
+      // Choosing an EDITION means using its scans — all three of them. Any single scan picked
+      // earlier is an override that outranks the pressing, so leaving those in place made this
+      // button look like it did nothing: you chose the CD and kept the digital sleeve.
+      await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title);
       await lib.applyCorrection(widget.album, settings,
           coverBytes: front,
           discogsRelease: c.isMb ? null : c.releaseId,
@@ -11281,12 +11300,8 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
                 Padding(
                   padding: const EdgeInsets.only(top: 10),
                   child: TextButton(
-                    onPressed: () async {
-                      for (final (role, _) in _roles) {
-                        await lib.setAlbumArtRole(
-                            widget.album.artist, widget.album.title, role, '');
-                      }
-                    },
+                    onPressed: () =>
+                        lib.clearAlbumArtRoles(widget.album.artist, widget.album.title),
                     child: const Text('Alles weer laten raden',
                         style: TextStyle(color: _muted, fontSize: 12)),
                   ),
