@@ -6,6 +6,9 @@ import 'dart:ui' show ImageFilter;
 // with the player's. Ours is the one this app means everywhere.
 import 'package:flutter/material.dart' hide RepeatMode;
 import 'package:flutter/foundation.dart' show mapEquals;
+// For PointerDeviceKind: the nav chip is drag-scrolled with a mouse, which Flutter leaves out of
+// the default set on purpose.
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
@@ -223,6 +226,10 @@ Future<void> main() async {
   final SoulseekService soulseek = mode.owner
       ? SoulseekService(settings)
       : RemoteSoulseekService(settings, () => session.endpoint);
+  // How often this pc has logged in to Soulseek lately, and any wait the server imposed. Read
+  // before anything can search — the guard exists to survive a restart, and a restart is precisely
+  // when it used to be blind. Only here: a client never logs in, it asks the pc to.
+  if (mode.owner) await soulseek.client.loadGuard();
 
   player = PlayerStore()
     ..resolver = online.resolveRadio
@@ -428,7 +435,12 @@ Future<void> main() async {
       // so the watch is hung off the session rather than started once here.
       session.addListener(() {
         if (session.ready) downloads.startWatching();
+        // A speaker is steered through the PC, so the remote to steer with appears when the pairing
+        // does. Set here rather than read during a build: reaching for it mid-build made whether the
+        // buttons worked depend on which screen had been drawn.
+        speakers.client = library.remote;
       });
+      speakers.client = library.remote;
       // Where a download goes when the PC does not answer: into the queue, for the PC to pick up
       // when it comes back. Re-read whenever the sign-in changes, so signing out takes the queue
       // with it rather than writing to an account nobody is using.
@@ -1168,15 +1180,32 @@ class _HomeShellState extends State<HomeShell> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: Center(
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            // Every section stays reachable when they no longer fit side by side.
-                            // A menu would hide them; scrolling keeps them where they were.
-                            child: Consumer<DownloadManager>(
-                              builder: (_, dm, __) => _NavPills(
-                                active: _view,
-                                onSelect: (i) => setState(() => _view = i),
-                                badge: dm.jobs.where((j) => j.busy).length,
+                          // Draggable with a mouse, not only with a wheel or a finger.
+                          //
+                          // Flutter leaves the mouse out of dragDevices on purpose — on a page, a
+                          // mouse-drag is a text selection, not a scroll. Here there is no text to
+                          // select and the wheel is the only way to reach a section that does not
+                          // fit, which on a narrow window is most of them.
+                          child: ScrollConfiguration(
+                            behavior: ScrollConfiguration.of(context).copyWith(
+                              dragDevices: {
+                                PointerDeviceKind.touch,
+                                PointerDeviceKind.mouse,
+                                PointerDeviceKind.stylus,
+                                PointerDeviceKind.trackpad,
+                              },
+                              scrollbars: false,
+                            ),
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              // Every section stays reachable when they no longer fit side by side.
+                              // A menu would hide them; scrolling keeps them where they were.
+                              child: Consumer<DownloadManager>(
+                                builder: (_, dm, __) => _NavPills(
+                                  active: _view,
+                                  onSelect: (i) => setState(() => _view = i),
+                                  badge: dm.jobs.where((j) => j.busy).length,
+                                ),
                               ),
                             ),
                           ),
@@ -1368,7 +1397,19 @@ class _NavPillsState extends State<_NavPills> {
   int? _hover;
 
   static const _items = NavSections.items;
-  static const _style = TextStyle(fontSize: 13, fontWeight: FontWeight.w600);
+
+  /// `leadingDistribution: even` is the whole fix for the text sitting high in the pill.
+  ///
+  /// A line box is taller than the glyphs, and by default all of that slack goes ABOVE the
+  /// baseline — so centring the box leaves the letters above the middle of the pill. Even
+  /// distribution splits the slack top and bottom, which is what puts them where the eye expects.
+  /// A hard-coded nudge would have done it on this font at this size and been wrong on the next.
+  static const _style = TextStyle(
+    fontSize: 13,
+    fontWeight: FontWeight.w600,
+    height: 1.2,
+    leadingDistribution: TextLeadingDistribution.even,
+  );
   static final _padH = _isTouch ? 20.0 : 15.0;
   static const _badgeW = 21.0;
 
@@ -4437,13 +4478,79 @@ void _nudge(PlayerStore p, int seconds) {
   p.seek(target);
 }
 
+/// The transport, wherever the music actually is.
+///
+/// Casting moves the remote. Every one of these controls used to speak to the local libmpv, which
+/// is deliberately silent while a speaker has the queue — so on a phone steering the KEF, pause,
+/// next, previous and the scrubber all appeared to do nothing while the music played on.
+///
+/// One place, read by the desktop bar, the phone bar and the full player alike: three copies of
+/// "which player am I talking to" is three chances for one of them to be wrong.
+class _Transport {
+  _Transport(BuildContext context)
+      : player = context.watch<PlayerStore>(),
+        speaker = context.watch<SpeakerTarget>();
+
+  final PlayerStore player;
+  final SpeakerTarget speaker;
+
+  bool get casting => speaker.isCasting;
+  Track? get track => player.current;
+
+  /// Position and length come from the SPEAKER while casting — it is the only one that knows.
+  Duration get position => casting ? (speaker.position ?? Duration.zero) : player.position;
+  Duration get duration => casting ? (speaker.duration ?? Duration.zero) : player.duration;
+  bool get playing => casting ? speaker.isPlaying : player.playing;
+
+  double get progress => duration.inMilliseconds == 0
+      ? 0.0
+      : (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0);
+
+  bool get canSeek => duration.inMilliseconds > 0 && (casting || track != null);
+
+  VoidCallback? get playPause => casting
+      ? () => unawaited(speaker.playPause())
+      : (track == null ? null : player.playPause);
+
+  VoidCallback? get next => casting
+      ? ((speaker.status?.hasNext ?? false) ? () => unawaited(speaker.next()) : null)
+      : (player.hasNext ? player.next : null);
+
+  /// Below three seconds, "previous" means the previous track; after that it means this one again.
+  /// That is a local nicety and stays local: the speaker is told plainly which track to play.
+  VoidCallback? get previous => casting
+      ? ((speaker.status?.hasPrev ?? false) ? () => unawaited(speaker.previous()) : null)
+      : (player.hasPrev || player.position > const Duration(seconds: 3) ? player.prev : null);
+
+  /// While the finger moves. Carried locally when casting and sent once on release — a seek per
+  /// pixel would flood an embedded UPnP stack and land behind where you let go.
+  void scrub(double fraction) =>
+      casting ? speaker.scrubTo(duration * fraction) : player.seek(duration * fraction);
+
+  void seekEnd(double fraction) {
+    if (casting) unawaited(speaker.seekTo(duration * fraction));
+  }
+
+  /// Ten seconds either way, for a remote — and for a speaker, the only seek that needs no slider.
+  void nudge(int seconds) {
+    if (!casting) return _nudge(player, seconds);
+    final total = duration;
+    if (total.inMilliseconds <= 0) return;
+    var target = position + Duration(seconds: seconds);
+    if (target < Duration.zero) target = Duration.zero;
+    if (target > total) target = total;
+    unawaited(speaker.seekTo(target));
+  }
+}
+
 // ── Now-playing bar ──────────────────────────────────────────────────────────
 class PlayerBar extends StatelessWidget {
   const PlayerBar({super.key});
   @override
   Widget build(BuildContext context) {
-    final p = context.watch<PlayerStore>();
-    final t = p.current;
+    final x = _Transport(context);
+    final p = x.player;
+    final t = x.track;
     // Under the home indicator on an iPad: the bar's colour runs to the bottom edge, its contents
     // stop above the bar the system draws over everything.
     final bottomInset = _isTouch ? MediaQuery.viewPaddingOf(context).bottom : 0.0;
@@ -4458,7 +4565,7 @@ class PlayerBar extends StatelessWidget {
     // left. At 411 points that block bottoms out at its 96-point floor, of which the cover takes 54
     // and the gap 12 — leaving thirty points for the title, which printed "Niets aan het spelen"
     // one letter per line and overflowed the bar by 45 pixels.
-    if (isCompact(context)) return _compactBar(context, p, t, bottomInset);
+    if (isCompact(context)) return _compactBar(context, x, bottomInset);
 
     final side = math.min(280.0, math.max(96.0, (width - 336) / 2));
     return Container(
@@ -4548,7 +4655,7 @@ class PlayerBar extends StatelessWidget {
                     IconButton(
                       icon: const Icon(Icons.skip_previous_rounded),
                       color: _muted,
-                      onPressed: p.hasPrev || p.position > const Duration(seconds: 3) ? p.prev : null,
+                      onPressed: x.previous,
                     ),
                     // Seeking, for a remote.
                     //
@@ -4565,16 +4672,16 @@ class PlayerBar extends StatelessWidget {
                         icon: const Icon(Icons.replay_10_rounded, size: 22),
                         color: _muted,
                         tooltip: '10 seconden terug',
-                        onPressed: t == null ? null : () => _nudge(p, -10),
+                        onPressed: x.canSeek ? () => x.nudge(-10) : null,
                       ),
                     const SizedBox(width: 2),
                     Container(
                       decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
                       child: IconButton(
-                        icon: Icon(p.playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
+                        icon: Icon(x.playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
                         color: _bg,
                         iconSize: 26,
-                        onPressed: t == null ? null : p.playPause,
+                        onPressed: x.playPause,
                       ),
                     ),
                     const SizedBox(width: 2),
@@ -4583,26 +4690,28 @@ class PlayerBar extends StatelessWidget {
                         icon: const Icon(Icons.forward_10_rounded, size: 22),
                         color: _muted,
                         tooltip: '10 seconden vooruit',
-                        onPressed: t == null ? null : () => _nudge(p, 10),
+                        onPressed: x.canSeek ? () => x.nudge(10) : null,
                       ),
                     IconButton(
                       icon: const Icon(Icons.skip_next_rounded),
                       color: _muted,
-                      onPressed: p.hasNext ? p.next : null,
+                      onPressed: x.next,
                     ),
                     if (!isCompact(context))
                     IconButton(
                       icon: Icon(p.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded,
                           size: 20),
                       color: p.repeat == RepeatMode.off ? _muted : _accent,
-                      onPressed: p.cycleRepeat,
+                      // Local only: the speaker is handed one track at a time, so a change here
+                      // would take effect on whatever is sent next and look like it did nothing.
+                      onPressed: x.casting ? null : p.cycleRepeat,
                     ),
                     const _SpeakerButton(),
                   ],
                 ),
                 Row(
                   children: [
-                    Text(_fmt(p.position), style: const TextStyle(color: _muted, fontSize: 11.5)),
+                    Text(_fmt(x.position), style: const TextStyle(color: _muted, fontSize: 11.5)),
                     Expanded(
                       child: SliderTheme(
                         data: SliderTheme.of(context).copyWith(
@@ -4614,15 +4723,13 @@ class PlayerBar extends StatelessWidget {
                           thumbColor: Colors.white,
                         ),
                         child: _maybeFocusable(Slider(
-                          value: _progress(p),
-                          onChanged: t == null || p.duration.inMilliseconds == 0
-                              ? null
-                              : (v) => p.seek(Duration(
-                                  milliseconds: (v * p.duration.inMilliseconds).round())),
+                          value: x.progress,
+                          onChanged: x.canSeek ? x.scrub : null,
+                          onChangeEnd: x.casting && x.canSeek ? x.seekEnd : null,
                         )),
                       ),
                     ),
-                    Text(_fmt(p.duration), style: const TextStyle(color: _muted, fontSize: 11.5)),
+                    Text(_fmt(x.duration), style: const TextStyle(color: _muted, fontSize: 11.5)),
                   ],
                 ),
               ],
@@ -4635,10 +4742,6 @@ class PlayerBar extends StatelessWidget {
     );
   }
 
-  double _progress(PlayerStore p) {
-    if (p.duration.inMilliseconds == 0) return 0;
-    return (p.position.inMilliseconds / p.duration.inMilliseconds).clamp(0.0, 1.0);
-  }
 }
 
 // ── Now playing (full screen, enlargeable art) ───────────────────────────────
@@ -4708,7 +4811,9 @@ class _SpeakerButton extends StatelessWidget {
 /// control — shuffle, repeat, skip-back and the seek bar all live on the full player, which is now
 /// one tap away because the entire bar is the tap target rather than the 54-point cover on the far
 /// left.
-Widget _compactBar(BuildContext context, PlayerStore p, Track? t, double bottomInset) {
+Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
+  final p = x.player;
+  final t = x.track;
   final open = t == null
       ? null
       : () => Navigator.of(context)
@@ -4729,9 +4834,7 @@ Widget _compactBar(BuildContext context, PlayerStore p, Track? t, double bottomI
         SizedBox(
           height: 2,
           child: LinearProgressIndicator(
-            value: p.duration.inMilliseconds == 0
-                ? 0
-                : p.position.inMilliseconds / p.duration.inMilliseconds,
+            value: x.progress,
             backgroundColor: const Color(0xFF2A2F42),
             valueColor: const AlwaysStoppedAnimation(_accent),
           ),
@@ -4777,14 +4880,14 @@ Widget _compactBar(BuildContext context, PlayerStore p, Track? t, double bottomI
                 ),
               ),
               IconButton(
-                icon: Icon(p.playing ? Icons.pause_rounded : Icons.play_arrow_rounded, size: 30),
+                icon: Icon(x.playing ? Icons.pause_rounded : Icons.play_arrow_rounded, size: 30),
                 color: Colors.white,
-                onPressed: t == null ? null : p.playPause,
+                onPressed: x.playPause,
               ),
               IconButton(
                 icon: const Icon(Icons.skip_next_rounded, size: 26),
                 color: _muted,
-                onPressed: p.hasNext ? p.next : null,
+                onPressed: x.next,
               ),
               const _SpeakerButton(iconSize: 22),
               const SizedBox(width: 2),
@@ -4836,11 +4939,15 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final p = context.watch<PlayerStore>();
-    final t = p.current;
-    final prog = p.duration.inMilliseconds == 0
-        ? 0.0
-        : (p.position.inMilliseconds / p.duration.inMilliseconds).clamp(0.0, 1.0);
+    final x = _Transport(context);
+    final p = x.player;
+    final t = x.track;
+    final cast = x.speaker;
+    final casting = x.casting;
+    final position = x.position;
+    final duration = x.duration;
+    final playing = x.playing;
+    final prog = x.progress;
     return Scaffold(
       backgroundColor: _bg,
       body: Stack(
@@ -4942,7 +5049,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                   width: dialogWidth(context, 540),
                   child: Row(
                     children: [
-                      Text(_fmt(p.position), style: const TextStyle(color: _muted, fontSize: 12)),
+                      Text(_fmt(position), style: const TextStyle(color: _muted, fontSize: 12)),
                       Expanded(
                         child: SliderTheme(
                           data: SliderTheme.of(context).copyWith(
@@ -4956,13 +5063,19 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                           // value, so the highlight would enter the seek bar and never leave it.
                           child: _maybeFocusable(Slider(
                             value: prog,
-                            onChanged: t == null || p.duration.inMilliseconds == 0
+                            // Dragging is carried locally and sent once on release: a seek per pixel
+                            // would flood an embedded stack and land behind where you let go.
+                            onChanged: duration.inMilliseconds == 0 || (!casting && t == null)
                                 ? null
-                                : (v) => p.seek(Duration(milliseconds: (v * p.duration.inMilliseconds).round())),
+                                : casting
+                                    ? (v) => cast.scrubTo(duration * v)
+                                    : (v) => p.seek(duration * v),
+                            onChangeEnd:
+                                casting && duration.inMilliseconds > 0 ? (v) => cast.seekTo(duration * v) : null,
                           )),
                         ),
                       ),
-                      Text(_fmt(p.duration), style: const TextStyle(color: _muted, fontSize: 12)),
+                      Text(_fmt(duration), style: const TextStyle(color: _muted, fontSize: 12)),
                     ],
                   ),
                 ),
@@ -4999,15 +5112,17 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                         icon: const Icon(Icons.skip_previous_rounded),
                         iconSize: 34,
                         color: _text,
-                        onPressed: p.hasPrev || p.position > const Duration(seconds: 3) ? p.prev : null),
+                        onPressed: casting
+                            ? (cast.status?.hasPrev ?? false ? cast.previous : null)
+                            : (p.hasPrev || p.position > const Duration(seconds: 3) ? p.prev : null)),
                     const SizedBox(width: 8),
                     Container(
                       decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
                       child: IconButton(
-                        icon: Icon(p.playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
+                        icon: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
                         color: _bg,
                         iconSize: 40,
-                        onPressed: t == null ? null : p.playPause,
+                        onPressed: casting ? cast.playPause : (t == null ? null : p.playPause),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -5015,17 +5130,61 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                         icon: const Icon(Icons.skip_next_rounded),
                         iconSize: 34,
                         color: _text,
-                        onPressed: p.hasNext ? p.next : null),
+                        onPressed: casting
+                            ? (cast.status?.hasNext ?? false ? cast.next : null)
+                            : (p.hasNext ? p.next : null)),
                     const SizedBox(width: 12),
+                    // Shuffle and repeat stay local on purpose: the speaker plays the queue the PC
+                    // hands it one track at a time, so changing the order here would take effect on
+                    // whatever is sent NEXT and look like it did nothing now.
                     IconButton(
                         icon: Icon(p.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded),
                         iconSize: 24,
                         color: p.repeat == RepeatMode.off ? _muted : _accent,
-                        onPressed: p.cycleRepeat),
+                        onPressed: casting ? null : p.cycleRepeat),
                     const SizedBox(width: 12),
                     const _SpeakerButton(iconSize: 24),
                   ],
                 ),
+                // The speaker's own volume, and only when it says it has one. A Sonos and the KEF
+                // both do; a renderer without RenderingControl simply shows nothing here rather
+                // than a slider that moves and changes nothing.
+                if (casting && cast.hasVolume)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: SizedBox(
+                      width: dialogWidth(context, 320),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.volume_down_rounded, size: 19, color: _muted),
+                          Expanded(
+                            child: SliderTheme(
+                              data: SliderTheme.of(context).copyWith(
+                                trackHeight: 3,
+                                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                                activeTrackColor: _accent,
+                                inactiveTrackColor: const Color(0xFF2A2F42),
+                                thumbColor: Colors.white,
+                              ),
+                              child: _maybeFocusable(Slider(
+                                value: cast.volume.clamp(0, 100).toDouble(),
+                                max: 100,
+                                onChanged: (v) => cast.setVolume(v.round()),
+                              )),
+                            ),
+                          ),
+                          const Icon(Icons.volume_up_rounded, size: 19, color: _muted),
+                          const SizedBox(width: 6),
+                          SizedBox(
+                            width: 30,
+                            child: Text('${cast.volume}',
+                                textAlign: TextAlign.right,
+                                style: const TextStyle(color: _muted, fontSize: 12)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 const Spacer(),
               ],
             ),
@@ -5505,8 +5664,33 @@ class _HomeStartViewState extends State<HomeStartView> {
         padding: const EdgeInsets.symmetric(horizontal: 24),
         itemCount: ts.length,
         separatorBuilder: (_, __) => const SizedBox(width: 14),
-        itemBuilder: (_, i) => _card(_netCover(ts[i].cover, size: 140), ts[i].title, ts[i].artist, () => _playRec(ts[i])),
+        // To the album, the same as every other row here. A tile that started playing instead was
+        // the odd one out, and it gave you no way to see what the record was.
+        //
+        // Long-press still plays it: the quickest way to hear a recommendation should not disappear
+        // because the tap now goes somewhere better.
+        itemBuilder: (_, i) => _HoverCard(
+          art: _netCover(ts[i].cover, size: 140),
+          title: ts[i].title,
+          subtitle: ts[i].artist,
+          onTap: () => _openRec(ts[i]),
+          onLongPress: () => _playRec(ts[i]),
+        ),
       );
+
+  /// Where a recommended track lives. Deezer names the album it came from; when it does not, the
+  /// track itself is still worth hearing, so that falls back to playing it.
+  void _openRec(RecTrack t) {
+    if (!t.hasAlbum) {
+      unawaited(_playRec(t));
+      return;
+    }
+    // A positive id is a Deezer one — see CatalogAlbum.ref — and this hit came from Deezer. The
+    // tracklist and the year are fetched by the page itself, so nothing is invented here.
+    final album = CatalogAlbum(t.albumId, t.album, t.cover, null, 0, 'album');
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => AlbumBrowsePage(t.artist, album)));
+  }
 
   Widget _card(Widget art, String title, String subtitle, VoidCallback onTap) =>
       _HoverCard(art: art, title: title, subtitle: subtitle, onTap: onTap);
@@ -5518,7 +5702,16 @@ class _HoverCard extends StatefulWidget {
   final Widget art;
   final String title, subtitle;
   final VoidCallback onTap;
-  const _HoverCard({required this.art, required this.title, required this.subtitle, required this.onTap});
+
+  /// The second thing this tile can do, where it has one — play a recommendation outright instead
+  /// of opening the record it is on. Null everywhere else, and then nothing changes.
+  final VoidCallback? onLongPress;
+  const _HoverCard(
+      {required this.art,
+      required this.title,
+      required this.subtitle,
+      required this.onTap,
+      this.onLongPress});
 
   @override
   State<_HoverCard> createState() => _HoverCardState();
@@ -5537,6 +5730,7 @@ class _HoverCardState extends State<_HoverCard> {
         onExit: (_) => setState(() => _hover = false),
         child: Pressable(
           onPressed: widget.onTap,
+          onLongPress: widget.onLongPress,
           borderRadius: BorderRadius.circular(14),
           scaleOnFocus: false,
           onFocusChange: (v) => setState(() => _hover = v),
@@ -10130,6 +10324,37 @@ class AlbumArt extends StatefulWidget {
   State<AlbumArt> createState() => _AlbumArtState();
 }
 
+/// A disc with a hole in it, the way a CD has one.
+///
+/// Two circles in one path with [PathFillType.evenOdd]: the outer one keeps, the inner one gives
+/// back. The sleeve behind shows through the hole, which is what makes it read as a disc lying on
+/// top rather than as a printed circle.
+///
+/// Still one clip, so the [RepaintBoundary] above it does its job exactly as before: the mask is
+/// rasterised once and each frame only turns an existing layer. Doing this with a second widget
+/// stacked on top — a hole painted in the background colour — would have looked right on the album
+/// page and wrong everywhere the background is not that colour.
+class _DiscClipper extends CustomClipper<Path> {
+  const _DiscClipper();
+
+  /// A CD is 120 mm across with a 15 mm hole: an eighth. Measured rather than eyeballed, because
+  /// slightly too big reads as a vinyl label and slightly too small as a smudge.
+  static const _holeFraction = 15 / 120;
+
+  @override
+  Path getClip(Size size) {
+    final centre = Offset(size.width / 2, size.height / 2);
+    final radius = size.shortestSide / 2;
+    return Path()
+      ..fillType = PathFillType.evenOdd
+      ..addOval(Rect.fromCircle(center: centre, radius: radius))
+      ..addOval(Rect.fromCircle(center: centre, radius: radius * _holeFraction));
+  }
+
+  @override
+  bool shouldReclip(_DiscClipper oldClipper) => false;
+}
+
 class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
   ReleaseArt? _art;
   late final AnimationController _slide = AnimationController(
@@ -10261,7 +10486,8 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     final spinningDisc = RotationTransition(
       turns: _spin,
       child: RepaintBoundary(
-        child: ClipOval(
+        child: ClipPath(
+          clipper: const _DiscClipper(),
           child: Image.memory(disc, width: s * .92, height: s * .92, fit: BoxFit.cover),
         ),
       ),

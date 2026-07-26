@@ -38,7 +38,18 @@ class RecTrack {
   final String artist;
   final String title;
   final String? cover;
-  const RecTrack(this.artist, this.title, this.cover);
+
+  /// Which record it is on, and Deezer's id for it. Empty and 0 when the source did not say.
+  ///
+  /// Both were always in the answer — the cover above is that same album's — and throwing them away
+  /// is why a tile under "Aanbevolen voor jou" could only start playing. Every other row on that
+  /// screen opens the album; this one now can too.
+  final String album;
+  final int albumId;
+  const RecTrack(this.artist, this.title, this.cover, {this.album = '', this.albumId = 0});
+
+  /// True when there is a record to open rather than only a song to play.
+  bool get hasAlbum => albumId > 0 && album.trim().isNotEmpty && artist.trim().isNotEmpty;
   String get query => artist.isEmpty ? title : '$artist $title';
 }
 
@@ -70,6 +81,8 @@ class RecommendService {
               ((t['artist']?['name']) ?? '') as String,
               (t['title'] ?? '') as String,
               (t['album']?['cover_medium']) as String?,
+              album: ((t['album']?['title']) ?? '') as String,
+              albumId: ((t['album']?['id']) as num?)?.toInt() ?? 0,
             ))
         .where((r) => r.title.isNotEmpty)
         .toList();

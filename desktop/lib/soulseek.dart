@@ -4,6 +4,9 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
+
+import 'paths.dart';
 
 /// One file offered by a Soulseek peer.
 class SoulseekFile {
@@ -419,11 +422,64 @@ class SoulseekClient {
   void noteLoginRefused() {
     _blockedUntil = DateTime.now().add(_backoff[_refusals.clamp(0, _backoff.length - 1)]);
     _refusals++;
+    unawaited(_saveGuard());
   }
 
   void noteLoginOk() {
     _blockedUntil = null;
     _refusals = 0;
+    unawaited(_saveGuard());
+  }
+
+  // ── The guard, across restarts ────────────────────────────────────────────
+  // Everything above lived in memory only, so closing the app forgot it — and closing the app is
+  // exactly the case it exists for. Four launches in ten minutes, each opening an album (which
+  // fires a background search, which logs in), sailed straight past a guard that says four per ten
+  // minutes, and Soulseek did the refusing instead of us. Worse: a restart also cleared a wait the
+  // server had just imposed, so the next attempt went out immediately and earned a longer one.
+  //
+  // Kept next to the rest of the app's state. Small enough to write on every change; the writes are
+  // fire-and-forget because a guard that cannot be saved must not stop a login from happening.
+  File get _guardFile => appFile('soulseek_guard.json');
+
+  Future<void> loadGuard() async {
+    try {
+      final f = _guardFile;
+      if (!await f.exists()) return;
+      final j = jsonDecode(await f.readAsString());
+      if (j is! Map) return;
+      final until = DateTime.tryParse('${j['blockedUntil'] ?? ''}');
+      // A wait that has already run out is not carried forward, and a clock that moved backwards
+      // must not lock the account out for a day.
+      if (until != null && until.isAfter(DateTime.now()) &&
+          until.difference(DateTime.now()) <= const Duration(hours: 1)) {
+        _blockedUntil = until;
+      }
+      _refusals = (j['refusals'] as num?)?.toInt() ?? 0;
+      final times = (j['logins'] as List?) ?? const [];
+      final cut = DateTime.now().subtract(_loginWindow);
+      _loginTimes
+        ..clear()
+        ..addAll([
+          for (final t in times)
+            if (DateTime.tryParse('$t') case final d?)
+              if (d.isAfter(cut)) d,
+        ]);
+    } catch (e) {
+      debugPrint('soulseek_guard.json unreadable: $e');
+    }
+  }
+
+  Future<void> _saveGuard() async {
+    try {
+      await _guardFile.writeAsString(jsonEncode({
+        'blockedUntil': _blockedUntil?.toIso8601String(),
+        'refusals': _refusals,
+        'logins': [for (final t in _loginTimes) t.toIso8601String()],
+      }));
+    } catch (e) {
+      debugPrint('Could not save soulseek_guard.json: $e');
+    }
   }
 
   /// The user has looked and knows the account is fine — usually because the official client is
@@ -432,6 +488,7 @@ class SoulseekClient {
   void allowOneRetry() {
     _blockedUntil = null;
     _loginTimes.clear();
+    unawaited(_saveGuard());
   }
 
   // ── Login budget ──────────────────────────────────────────────────────────
@@ -464,7 +521,10 @@ class SoulseekClient {
     return null;
   }
 
-  void noteLoginAttempt() => _loginTimes.add(DateTime.now());
+  void noteLoginAttempt() {
+    _loginTimes.add(DateTime.now());
+    unawaited(_saveGuard());
+  }
 
   /// A connection that dies within a minute of logging in was almost certainly KICKED by another
   /// client on the same account. Fighting back immediately is what creates the burst, so stand
