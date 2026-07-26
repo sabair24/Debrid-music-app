@@ -11,6 +11,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 import '../paths.dart';
 
@@ -56,20 +57,71 @@ Future<DeviceIdentity> thisDevice() async {
   return identity;
 }
 
+/// The same channel `tv.dart` uses. A MethodChannel is only a name, so a second handle to it costs
+/// nothing and keeps this module out of the UI layer.
+const _platform = MethodChannel('debridmusic/device');
+
+/// What Android says this device is called. Null everywhere else, and until [initDeviceName] runs.
+String? _platformName;
+
+/// Ask Android for this device's name, before anything publishes one.
+///
+/// Same shape and the same reason as [initTvMode]: `audio_service` warms an engine up front, so
+/// Dart can be running before the activity has registered the channel. Bounded, and a device that
+/// never answers simply falls back below.
+Future<void> initDeviceName() async {
+  if (!Platform.isAndroid) return;
+  for (var attempt = 0; attempt < 20; attempt++) {
+    try {
+      final name = await _platform.invokeMethod<String>('deviceName');
+      final trimmed = name?.trim() ?? '';
+      if (trimmed.isNotEmpty) _platformName = trimmed;
+      return;
+    } on MissingPluginException {
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    } catch (e) {
+      debugPrint('Device name unavailable: $e');
+      return;
+    }
+  }
+}
+
+/// A hostname that names no device. Android and iOS both answer `localhost`, and it is true and
+/// useless: seven phones listed as "localhost" is a device list you cannot revoke anything from.
+bool _namesNobody(String host) {
+  final h = host.toLowerCase();
+  return h == 'localhost' || h.startsWith('localhost.') || h == '127.0.0.1' || h == 'android';
+}
+
 /// What the PC lists this device as. Its own name, because "iPad van Saber" is what you look for
 /// in a list — not a serial number.
+///
+/// Only the id is read back from disk, never the name, so a device that used to report a poor one
+/// corrects itself the next time it connects.
 String deviceName() {
+  // Trimmed here as well as where it is stored: "is this a usable name" belongs with the answer,
+  // not with whoever happened to set it.
+  final fromPlatform = _platformName?.trim();
+  if (fromPlatform != null && fromPlatform.isNotEmpty) return fromPlatform;
   try {
     final host = Platform.localHostname;
-    if (host.isNotEmpty) return host;
+    if (host.isNotEmpty && !_namesNobody(host)) return host;
   } catch (_) {/* sandboxed iOS can refuse this */}
   return switch (platformName()) {
     'ios' => 'iPad',
     'macos' => 'Mac',
     'windows' => 'Windows-pc',
+    // Reached only when the channel stayed silent — an Android build without the native side, or
+    // an engine that came up without an activity. Still better than "localhost".
+    'android' => 'Android-toestel',
+    'linux' => 'Linux-pc',
     _ => 'Apparaat',
   };
 }
+
+/// For tests: pretend the platform answered (or didn't).
+@visibleForTesting
+void setPlatformDeviceNameForTest(String? name) => _platformName = name;
 
 String platformName() {
   if (Platform.isIOS) return 'ios';

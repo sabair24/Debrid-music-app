@@ -149,6 +149,9 @@ Future<void> main() async {
   // Before the first widget: whether this is a television decides focus rings, overscan margins
   // and type sizes, and a layout that changes shape one frame after it appears looks broken.
   await initTvMode();
+  // And what this device is called, before it publishes that name anywhere. Same channel, same
+  // race — and on Android the alternative is a device list in which every phone reads "localhost".
+  await initDeviceName();
   if (_isDesktop) await windowManager.ensureInitialized();
   if (!await _claimSingleInstance()) {
     exit(0);
