@@ -277,6 +277,12 @@ jobs:
             exit 1
           fi
 
+      # The signing settings live in the Runner target (ios/Runner.xcodeproj), NOT on the command
+      # line below. A build setting passed to xcodebuild applies to EVERY target in the workspace,
+      # including the CocoaPods framework targets — audio_service, media_kit, Pods-Runner — which
+      # answer "does not support provisioning profiles" and fail the archive. Scoping to one target
+      # is only possible in the project, so that is where it goes. Keep the profile name there in
+      # step with PROFILE_NAME above; the install step checks the file, the project names it.
       - name: Archive for iOS
         if: steps.gate.outputs.ready == 'true' && (startsWith(github.ref, 'refs/tags/apple-v') || inputs.testflight)
         env:
@@ -287,9 +293,6 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/DebridMusic-iOS.xcarchive" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
             FLUTTER_BUILD_NAME="${{ steps.version.outputs.VERSION }}" \
             FLUTTER_BUILD_NUMBER="${{ steps.version.outputs.BUILD }}" \
             archive
