@@ -10621,7 +10621,16 @@ class ReleaseGallery extends StatefulWidget {
   State<ReleaseGallery> createState() => _ReleaseGalleryState();
 }
 
+/// The three things a scan can be, and what to call each on screen.
+///
+/// One list, read by the gallery and by the assign dialog: two copies would drift, and the role
+/// KEYS are what album_art_roles.json stores — a label changed in one place and not the other would
+/// write a role nothing reads.
+const artRoles = [('front', 'hoes'), ('back', 'achter'), ('disc', 'cd')];
+
 class _ReleaseGalleryState extends State<ReleaseGallery> {
+  static const _roles = artRoles;
+
   List<ReleaseChoice>? _choices;
   String? _error;
 
@@ -10633,6 +10642,63 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   /// Which formats to show. Everything Discogs has is fetched; this only narrows what is listed,
   /// so switching filters never costs another request.
   String _filter = 'Alles';
+
+  /// role → the scan picked for it, possibly from a DIFFERENT pressing than the others.
+  ///
+  /// A record you own rarely matches one catalogue entry exactly: the sleeve is best photographed on
+  /// the digital release, the tray inlay only exists on the CD, and the disc scan on a third. Held
+  /// here until Save so a half-made choice never reaches the album, and so "cancel" means cancel.
+  final Map<String, ChoiceImage> _staged = {};
+  bool _saving = false;
+
+  void _stage(String role, ChoiceImage img) {
+    setState(() {
+      // Tapping the same one again takes it back, which is the only way to undo without cancelling
+      // the whole dialog.
+      if (_staged[role]?.uri == img.uri) {
+        _staged.remove(role);
+      } else {
+        _staged[role] = img;
+      }
+    });
+  }
+
+  /// Write the picked scans and have every screen show them in the same frame.
+  ///
+  /// Two different writes, on purpose:
+  ///   - back and disc are ROLES: a url per role, which releaseArt reads and which its cache key
+  ///     already includes, so the album page re-fetches by itself.
+  ///   - the front is also fetched and pinned as the album's cover, because the grid, the player bar
+  ///     and the Tracks list read Album.cover and would otherwise keep the old sleeve until
+  ///     something happened to re-enrich them. That is the difference between "instant on this page"
+  ///     and "instant everywhere", which is what was asked for.
+  Future<void> _save() async {
+    if (_staged.isEmpty || _saving) return;
+    setState(() => _saving = true);
+    final lib = context.read<LibraryStore>();
+    final settings = context.read<AppSettings>();
+    final mbSvc = context.read<MusicBrainzService>();
+    try {
+      for (final e in _staged.entries) {
+        await lib.setAlbumArtRole(widget.album.artist, widget.album.title, e.key, e.value.uri);
+      }
+      final front = _staged['front'];
+      if (front != null) {
+        // Each catalogue serves its own images, and Discogs wants its token on the request.
+        final bytes = front.uri.contains('coverartarchive.org')
+            ? await mbSvc.fetchImage(front.uri)
+            : await DiscogsService(settings).fetchImage(front.uri);
+        if (bytes != null && bytes.isNotEmpty) {
+          await lib.setAlbumCover(widget.album, settings, bytes);
+        }
+      }
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      _srcToast(context, 'Kon de keuze niet opslaan: $e');
+    }
+  }
 
   @override
   void initState() {
@@ -10858,6 +10924,40 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                   child: Text('Discogs was niet bereikbaar — dit zijn alleen de MusicBrainz-uitgaves.',
                       style: TextStyle(color: _muted, fontSize: 11.5)),
                 ),
+              // Only once something is picked: an empty bar at the bottom of every gallery would be
+              // a control that does nothing, most of the time.
+              if (_staged.isNotEmpty) ...[
+                const Divider(height: 18),
+                Row(children: [
+                  Expanded(
+                    child: Text(
+                      // Names what will change, in the words the thumbnails use, so pressing Save is
+                      // not a leap of faith.
+                      'Overnemen: ${[
+                        for (final r in _roles)
+                          if (_staged.containsKey(r.$1)) r.$2
+                      ].join(', ')}',
+                      style: const TextStyle(color: _muted, fontSize: 12),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _saving ? null : () => setState(_staged.clear),
+                    child: const Text('Ongedaan maken'),
+                  ),
+                  const SizedBox(width: 6),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(backgroundColor: _accent),
+                    onPressed: _saving ? null : _save,
+                    icon: _saving
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.check_rounded, size: 18),
+                    label: Text(_saving ? 'Opslaan…' : 'Opslaan'),
+                  ),
+                ]),
+              ],
             ],
           ),
         ),
@@ -10918,11 +11018,11 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
               // Clicking one opens every scan this pressing has, to say which is which — the roles
               // below are inferred, and inference on a catalogue that never labels its images gets
               // the back and the disc the wrong way round often enough to need an answer.
-              _thumb(c.front, 'hoes', onTap: () => _assign(c)),
+              _thumb(c.front, 'hoes', role: 'front', row: c, onLongPress: () => _assign(c)),
               const SizedBox(width: 8),
-              _thumb(c.back, 'achter', onTap: () => _assign(c)),
+              _thumb(c.back, 'achter', role: 'back', row: c, onLongPress: () => _assign(c)),
               const SizedBox(width: 8),
-              _thumb(c.disc, 'cd', onTap: () => _assign(c)),
+              _thumb(c.disc, 'cd', role: 'disc', row: c, onLongPress: () => _assign(c)),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -10970,14 +11070,35 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     );
   }
 
-  Widget _thumb(ChoiceImage? img, String label, {VoidCallback? onTap}) => InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(6),
-        // The whole point is to correct a wrong one, so an empty slot has to be clickable too.
-        child: Tooltip(
-          message: 'Klik om te zeggen welke scan dit is',
-          child: Column(children: [
-            ClipRRect(
+  /// One scan of one pressing, and a way to say "this one, for this role".
+  ///
+  /// Tap picks it for [role] on the RECORD — the sleeve of the digital edition beside the disc of
+  /// the CD, which is the thing a record collector's own copy actually looks like. Long-press still
+  /// opens every scan this pressing has, for the case where the roles within one pressing are simply
+  /// swapped.
+  Widget _thumb(ChoiceImage? img, String label,
+      {required String role, required ReleaseChoice row, VoidCallback? onLongPress}) {
+    final staged = _staged[role];
+    final chosen = img != null && staged != null && staged.uri == img.uri;
+    return InkWell(
+      onTap: img == null ? null : () => _stage(role, img),
+      onLongPress: onLongPress,
+      borderRadius: BorderRadius.circular(6),
+      child: Tooltip(
+        message: img == null
+            ? 'Deze uitgave heeft geen $label'
+            : 'Klik: neem deze $label over · Lang indrukken: alle scans van deze uitgave',
+        child: Column(children: [
+          Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: chosen ? _accent : Colors.transparent,
+                width: 2,
+              ),
+            ),
+            padding: const EdgeInsets.all(1),
+            child: ClipRRect(
               borderRadius: BorderRadius.circular(6),
               child: img == null
                   ? Container(
@@ -10987,11 +11108,17 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                       child: const Icon(Icons.close_rounded, size: 16, color: _muted))
                   : _netCover(img.thumb, size: 58, radius: 6),
             ),
-            const SizedBox(height: 3),
-            Text(label, style: const TextStyle(color: _muted, fontSize: 10)),
-          ]),
-        ),
-      );
+          ),
+          const SizedBox(height: 3),
+          Text(label,
+              style: TextStyle(
+                  color: chosen ? _accent : _muted,
+                  fontSize: 10,
+                  fontWeight: chosen ? FontWeight.w700 : FontWeight.w400)),
+        ]),
+      ),
+    );
+  }
 
   /// Which catalogue found this pressing. The user asked to be able to choose the source, so the
   /// source has to be readable on the row rather than inferred from what the row happens to carry.
@@ -11041,7 +11168,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
   List<ChoiceImage>? _images;
   String? _error;
 
-  static const _roles = [('front', 'hoes'), ('back', 'achter'), ('disc', 'cd')];
+  static const _roles = artRoles;
 
   @override
   void initState() {
