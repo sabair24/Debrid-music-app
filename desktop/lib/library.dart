@@ -169,7 +169,15 @@ class LibraryStore extends ChangeNotifier {
   bool _rescanQueued = false;
   final Map<String, Uint8List> artistImages = {};
   final Map<String, String> artistBios = {};
-  String rootPath = r'D:\Flac music 2024';
+  /// Where the music lives. Empty until [AppSettings.musicRoot] is applied in main().
+  ///
+  /// Empty rather than a path, deliberately. This used to default to one developer's `D:\Flac
+  /// music 2024`, and on Windows that is not harmless: `ownsTheMusic` answers true there whatever
+  /// the settings say, so a PC with no music folder configured would scan a stranger's path,
+  /// find nothing, and show an empty library without a word of explanation. main() now carries
+  /// the legacy value over into the settings once, so it is visible and changeable instead of
+  /// baked in here.
+  String rootPath = '';
 
   /// Albums/singles found to be entirely duplicates of a real album you own — recomputed after each
   /// full scan, so the library can offer to tidy them without the user going hunting. Empty until a

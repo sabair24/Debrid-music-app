@@ -135,6 +135,42 @@ void main() {
       expect(repaired.soulseekPass, 'nieuwgeheim');
     });
 
+    test('a readable file full of nothing does NOT replace the spare', () async {
+      // The gap the Windows check found. A stray `AppSettings().save()` — a test, a probe, any code
+      // path that builds a fresh one — writes valid JSON with every field empty. That loads without
+      // complaint, so loadFailed stays false and the guard above never fires. If the spare were
+      // then overwritten too, both copies would be gone and nothing would have gone wrong loudly.
+      await seeded();
+      await AppSettings().load(); // makes the spare
+      expect(AppSettings.backupFile().existsSync(), isTrue);
+
+      await (AppSettings()..forgetLoadFailure()).save(); // the accident
+      expect(jsonDecode(AppSettings.file().readAsStringSync())['soulseek_pass'], '');
+
+      await AppSettings().load(); // the start that used to finish the job
+
+      final spare = jsonDecode(AppSettings.backupFile().readAsStringSync()) as Map<String, dynamic>;
+      expect(spare['soulseek_pass'], 'geheim',
+          reason: 'de oudere, vollere kopie blijft staan — dat is waar hij voor is');
+      expect(spare['rutracker_pass'], 'ookgeheim');
+    });
+
+    test('and losing one credential on purpose still refreshes it', () async {
+      // Equal or fuller replaces, so an ordinary edit keeps the spare current. Only a file that
+      // lost something is refused, and then only until it is filled in again.
+      await seeded();
+      await AppSettings().load();
+
+      final edit = AppSettings();
+      await edit.load();
+      edit.torboxToken = 'nieuwe-sleutel';
+      await edit.save();
+      await AppSettings().load();
+
+      expect(jsonDecode(AppSettings.backupFile().readAsStringSync())['torbox_token'],
+          'nieuwe-sleutel');
+    });
+
     test('and it says so, instead of looking like a fresh install', () async {
       AppSettings.file().writeAsStringSync('{niet eens json');
       final s = AppSettings();

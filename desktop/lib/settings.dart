@@ -77,9 +77,15 @@ class AppSettings extends ChangeNotifier {
       if (await f.exists()) {
         try {
           _apply(jsonDecode(await f.readAsString()) as Map<String, dynamic>);
-          // Only a file that actually parsed becomes the spare.
+          // A file that parsed AND is at least as complete as the spare becomes the new spare.
+          //
+          // Parsing is not enough on its own. A file full of empty strings is perfectly valid JSON:
+          // it loads without complaint, `loadFailed` stays false, and the spare is then replaced by
+          // those blanks — so the protection against an unreadable file does nothing against a
+          // readable file with nothing in it. That is exactly what a stray `AppSettings().save()`
+          // produces, and it is the shape the near-miss on Windows would have taken.
           try {
-            await f.copy(backup.path);
+            if (await _atLeastAsComplete(backup)) await f.copy(backup.path);
           } catch (_) {/* a spare we could not write is not a reason to fail the start */}
           notifyListeners();
           return;
@@ -113,6 +119,32 @@ class AppSettings extends ChangeNotifier {
       loadError = '$e';
     }
     notifyListeners();
+  }
+
+  /// How many credentials are actually filled in. The measure of "worth keeping".
+  static int _filled(Map<String, dynamic> m) => [
+        'discogs_token', 'torbox_token', 'lastfm_key', 'soulseek_user', 'soulseek_pass',
+        'rutracker_user', 'rutracker_pass', 'tidal_client_id', 'tidal_client_secret',
+        'tidal_refresh_token', 'lan_token', 'music_root',
+      ].where((k) => (m[k] ?? '').toString().isNotEmpty).length;
+
+  /// Is what was just loaded at least as complete as the spare on disk?
+  ///
+  /// Equal counts still refresh the spare, so ordinary edits keep it current. Only a file that has
+  /// LOST credentials is refused — and then the older, fuller copy stays exactly where it is.
+  Future<bool> _atLeastAsComplete(File backup) async {
+    try {
+      if (!await backup.exists()) return true;
+      final old = jsonDecode(await backup.readAsString());
+      if (old is! Map<String, dynamic>) return true;
+      final before = _filled(old);
+      final now = _filled(toJson());
+      if (now >= before) return true;
+      debugPrint('Keeping settings.bak.json: it holds $before credentials and this file has $now');
+      return false;
+    } catch (_) {
+      return true; // an unreadable spare is worth replacing
+    }
   }
 
   /// The user has typed their settings again and pressed Save, so writing is wanted after all.

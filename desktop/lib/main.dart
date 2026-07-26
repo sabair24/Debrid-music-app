@@ -183,7 +183,20 @@ Future<void> main() async {
   final library = LibraryStore();
   // Before anything reads it: the download manager captures the root by value, and the LAN
   // server derives every track id from paths relative to it.
-  if (settings.musicRoot.trim().isNotEmpty) library.rootPath = settings.musicRoot.trim();
+  if (settings.musicRoot.trim().isNotEmpty) {
+    library.rootPath = settings.musicRoot.trim();
+  } else if (Platform.isWindows) {
+    // One-time carry-over. `rootPath` used to default to this path in the source, and on Windows
+    // `ownsTheMusic` answers true regardless of the settings — so a PC that never set a music
+    // folder has been scanning it all along without the setting ever showing that. Write it in, so
+    // it appears in Settings and can be changed, and so no other machine inherits it silently.
+    const legacy = r'D:\Flac music 2024';
+    if (Directory(legacy).existsSync()) {
+      settings.musicRoot = legacy;
+      library.rootPath = legacy;
+      await settings.save();
+    }
+  }
   // Which of the two this is: the machine that holds the music, or one reading it. Decided once,
   // here, and everything below branches on the answer rather than on the platform.
   final mode = await resolveMode(settings);
