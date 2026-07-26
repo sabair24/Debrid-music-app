@@ -235,6 +235,27 @@ Future<void> main() async {
     ..resolver = online.resolveRadio
     ..coverResolver = library.coverForTrack
     ..trackResolver = library.trackByPath
+    // Tapping a track while a speaker has the music sends the queue THERE. Without this the phone
+    // started playing it out loud while the KEF carried on with the old queue — which is what
+    // "I pressed the next song and it came out of the phone" was.
+    ..castQueue = (tracks, index) async {
+      final device = speakers.device;
+      final client = speakers.client;
+      if (device == null || client == null) return false;
+      final ids = [
+        for (final t in tracks)
+          if (library.remoteTrackId(t.path) case final id?) id,
+      ];
+      // Nothing the pc can serve — a radio stream, say. Let it play here rather than silently
+      // dropping it.
+      if (ids.isEmpty) return false;
+      final at = index.clamp(0, ids.length - 1);
+      final ok = await client.castPlay(device.id, ids, at);
+      if (ok) unawaited(speakers.refresh(withVolume: true));
+      return ok;
+    }
+    // Last in the cascade: an arrow body swallows whatever follows it, so a `..x = () => y` line
+    // in the middle turns the next entry into part of that expression.
     ..metaRevOf = () => library.metaRev;
   // A correction made while the record plays has to reach the player too. Every path that makes one
   // — the release gallery, the metadata editor, a rescan, an edit arriving from another device —

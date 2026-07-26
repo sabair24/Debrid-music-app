@@ -194,7 +194,18 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     }
   }
 
+  /// Where a new queue goes when a speaker has the music. Set by main to the cast target; null on a
+  /// device that is not casting, and then nothing here changes.
+  ///
+  /// Returning true means the speaker took it and this device stays silent. Without this, tapping a
+  /// track while casting started it HERE: the phone began playing out loud while the KEF carried on
+  /// with the queue it had been given. Every entry point goes through [playQueue], so this is the
+  /// one seam that covers a track row, an album's play button and the shuffle-everything button
+  /// alike.
+  Future<bool> Function(List<Track> tracks, int index)? castQueue;
+
   Future<void> playQueue(List<Track> tracks, int index, {Uint8List? cover}) async {
+    if (await _handedToSpeaker(tracks, index, cover)) return;
     radioMode = false;
     _resumable = true;
     resumedPaused = false;
@@ -205,9 +216,40 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _saveQueue();
   }
 
+  /// Hand a queue to the speaker, and keep it here WITHOUT opening it.
+  ///
+  /// The queue and the cover still live locally, because every screen reads the title, the artist
+  /// and the sleeve from here — the difference is only that libmpv is never asked to play it.
+  Future<bool> _handedToSpeaker(List<Track> tracks, int index, Uint8List? cover) async {
+    final hand = castQueue;
+    if (hand == null || tracks.isEmpty) return false;
+    if (!await hand(tracks, index)) return false;
+    // Whatever was coming out of this device stops: the point is that it plays THERE.
+    if (playing) await _player.pause();
+    radioMode = false;
+    _resumable = true;
+    resumedPaused = false;
+    currentCover = cover;
+    _original = List.of(tracks);
+    _rebuildOrder(start: (index >= 0 && index < _original.length) ? _original[index] : null);
+    playing = false;
+    position = Duration.zero;
+    notifyListeners();
+    _saveQueue();
+    return true;
+  }
+
   /// Shuffle the whole library (or any list): every track plays exactly once (repeat
   /// off), starting from a random one. Scales to tens of thousands of tracks.
   Future<void> shuffleAll(List<Track> tracks) async {
+    // Shuffled HERE and then handed over in that order: the speaker is given one track at a time,
+    // so it has no notion of shuffling a queue itself.
+    final shuffled = List.of(tracks)..shuffle();
+    if (await _handedToSpeaker(shuffled, 0, null)) {
+      shuffle = true;
+      notifyListeners();
+      return;
+    }
     radioMode = false;
     _resumable = true;
     resumedPaused = false;

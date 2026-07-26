@@ -81,7 +81,18 @@ void main() {
   tearDown(() async {
     await server.stop();
     store.dispose();
-    scratch.deleteSync(recursive: true);
+    // Windows keeps a handle for a moment after the last close, so a straight delete failed with
+    // "the process cannot access the file" — but only when the suite ran under load, which is the
+    // worst kind of red: one that never reproduces on its own. Retry briefly, then let it go; a
+    // leftover temp folder is not worth failing a test that has already made its point.
+    for (var attempt = 0; attempt < 10; attempt++) {
+      try {
+        scratch.deleteSync(recursive: true);
+        return;
+      } on FileSystemException {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+    }
   });
 
   const path = r'D:\Flac music 2024\Adele\30\01 Strangers By Nature.flac';
