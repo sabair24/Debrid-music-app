@@ -46,16 +46,43 @@ class MetadataSearch {
   static const providers = ['Deezer', 'Discogs', 'MusicBrainz'];
 
   /// [track] true searches individual tracks (for a single), false searches albums.
+  ///
+  /// For an album the query is ALSO tried as a song title, and each hit comes back as the record it
+  /// is on. That is the thing Discogs does and this did not: typing "Yasmine porselein" found
+  /// nothing, because there is no release by that name — the song is track four of *Prêt-à-porter*.
+  /// Knowing a song and wanting the album is at least as common as the other way round.
+  ///
+  /// Album hits come first and the song-derived ones after, so a query that really is an album title
+  /// is not pushed down the list by them. Each of those says which song put it there, because
+  /// "Prêt-à-porter" appearing under a search for "porselein" is otherwise a mystery.
   Future<List<MetaResult>> search(String provider, String query, {bool track = false}) async {
     if (query.trim().isEmpty) return [];
-    switch (provider) {
-      case 'Discogs':
-        return _discogs(query);
-      case 'MusicBrainz':
-        return _musicbrainz(query);
-      default:
-        return _deezer(query, track);
+    final direct = switch (provider) {
+      'Discogs' => await _discogs(query),
+      'MusicBrainz' => await _musicbrainz(query),
+      _ => await _deezer(query, track),
+    };
+    if (track) return direct;
+    final viaTrack = switch (provider) {
+      'Discogs' => await _discogsByTrack(query),
+      'MusicBrainz' => await _musicbrainzByTrack(query),
+      _ => await _deezerByTrack(query),
+    };
+    return _merged(direct, viaTrack);
+  }
+
+  /// Album hits first, song-derived after, and nothing twice.
+  ///
+  /// Keyed on the pressing where there is one and on artist+album otherwise: the same record found
+  /// both ways is one row, and two different pressings of it stay two.
+  static List<MetaResult> _merged(List<MetaResult> first, List<MetaResult> then) {
+    final out = <MetaResult>[];
+    final seen = <String>{};
+    for (final m in [...first, ...then]) {
+      final key = m.mbid ?? (m.releaseId?.toString() ?? '${m.artist}|${m.album}'.toLowerCase());
+      if (seen.add(key)) out.add(m);
     }
+    return out;
   }
 
   Future<List<MetaResult>> _deezer(String query, bool track) async {
@@ -100,39 +127,49 @@ class MetadataSearch {
         headers: {'User-Agent': _ua},
       ).timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return [];
-      final results = (jsonDecode(r.body)['results'] as List?) ?? const [];
-      final out = <MetaResult>[];
-      for (final e in results) {
-        final ttl = (e['title'] ?? '') as String; // usually "Artist - Album"
-        var artist = '', album = ttl;
-        final dash = ttl.indexOf(' - ');
-        if (dash > 0) {
-          artist = ttl.substring(0, dash).trim();
-          album = ttl.substring(dash + 3).trim();
-        }
-        final cover = (e['cover_image'] ?? e['thumb']) as String?;
-        // Format first, because it is the thing worth choosing on: a CD carries a catalogue number
-        // and a country, a digital entry usually carries neither.
-        final formats = [for (final f in (e['format'] as List? ?? const [])) f.toString()];
-        final bits = <String>[
-          if (formats.isNotEmpty) formats.first,
-          if ((e['country'] as String?)?.isNotEmpty ?? false) e['country'] as String,
-          if ((e['catno'] as String?)?.isNotEmpty ?? false) e['catno'] as String,
-          if ((e['year'] as String?)?.isNotEmpty ?? false) e['year'] as String,
-        ];
-        out.add(MetaResult(
-          title: album,
-          artist: artist,
-          album: album,
-          coverUrl: (cover != null && cover.isNotEmpty && !cover.contains('spacer')) ? cover : null,
-          releaseId: (e['id'] as num?)?.toInt(),
-          detail: bits.isEmpty ? null : bits.join(' · '),
-        ));
-      }
-      return out;
+      return _discogsRows(jsonDecode(r.body));
     } catch (_) {
       return [];
     }
+  }
+
+  /// Discogs search results as rows. Shared, because searching by title and searching by track
+  /// answer in exactly the same shape — only the question differs.
+  ///
+  /// [because] names the song that brought these in, for the search that asked by track.
+  static List<MetaResult> _discogsRows(dynamic body, {String? because}) {
+    final results = (body is Map ? body['results'] as List? : null) ?? const [];
+    final out = <MetaResult>[];
+    for (final e in results) {
+      if (e is! Map) continue;
+      final ttl = (e['title'] ?? '') as String; // usually "Artist - Album"
+      var artist = '', album = ttl;
+      final dash = ttl.indexOf(' - ');
+      if (dash > 0) {
+        artist = ttl.substring(0, dash).trim();
+        album = ttl.substring(dash + 3).trim();
+      }
+      final cover = (e['cover_image'] ?? e['thumb']) as String?;
+      // Format first, because it is the thing worth choosing on: a CD carries a catalogue number
+      // and a country, a digital entry usually carries neither.
+      final formats = [for (final f in (e['format'] as List? ?? const [])) f.toString()];
+      final bits = <String>[
+        if (formats.isNotEmpty) formats.first,
+        if ((e['country'] as String?)?.isNotEmpty ?? false) e['country'] as String,
+        if ((e['catno'] as String?)?.isNotEmpty ?? false) e['catno'] as String,
+        if ((e['year'] as String?)?.isNotEmpty ?? false) e['year'] as String,
+      ];
+      final line = bits.isEmpty ? null : bits.join(' · ');
+      out.add(MetaResult(
+        title: album,
+        artist: artist,
+        album: album,
+        coverUrl: (cover != null && cover.isNotEmpty && !cover.contains('spacer')) ? cover : null,
+        releaseId: (e['id'] as num?)?.toInt(),
+        detail: because == null ? line : _because(because, line),
+      ));
+    }
+    return out;
   }
 
   /// Every pressing MusicBrainz knows, CD first, each saying what it is.
@@ -181,6 +218,103 @@ class MetadataSearch {
               detail: r.line.isEmpty ? null : r.line,
             )
       ];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  // ── The same question, asked as a song ──────────────────────────────────────
+
+  /// One line saying which song brought this record into the list.
+  static String _because(String song, String? existing) {
+    final via = 'bevat “$song”';
+    return existing == null || existing.isEmpty ? via : '$existing · $via';
+  }
+
+  /// Deezer already answers this: a track hit names the album it is on.
+  Future<List<MetaResult>> _deezerByTrack(String query) async {
+    final tracks = await _deezer(query, true);
+    return [
+      for (final t in tracks)
+        if (t.album.isNotEmpty)
+          MetaResult(
+            // The row is a RECORD now, so its title is the album's — the song is why it is here.
+            title: t.album,
+            artist: t.artist,
+            album: t.album,
+            coverUrl: t.coverUrl,
+            detail: _because(t.title, t.detail),
+          )
+    ];
+  }
+
+  /// Discogs searches tracklists directly — `track=` is a field of its release search.
+  Future<List<MetaResult>> _discogsByTrack(String query) async {
+    if (settings.discogsToken.isEmpty) return [];
+    try {
+      final tok = Uri.encodeComponent(settings.discogsToken);
+      final r = await http.get(
+        Uri.parse('https://api.discogs.com/database/search?type=release&token=$tok'
+            '&track=${Uri.encodeComponent(query)}&per_page=12'),
+        headers: {'User-Agent': _ua},
+      ).timeout(const Duration(seconds: 8));
+      if (r.statusCode != 200) return [];
+      return _discogsRows(jsonDecode(r.body), because: query);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// A song title, then the records it was recorded onto.
+  ///
+  /// Two steps and one request: the recording search already answers with the releases each hit
+  /// appears on, so no per-recording lookup is needed — which matters on a service that asks for
+  /// one request a second.
+  Future<List<MetaResult>> _musicbrainzByTrack(String query) async {
+    try {
+      final mb = MusicBrainzService();
+      // Scoped the same way the album search is: "Yasmine porselein" is an artist and a song, and
+      // unscoped it matches the whole string as one phrase against the title.
+      var artist = '', song = query.trim();
+      final dash = query.indexOf(' - ');
+      if (dash > 0) {
+        artist = query.substring(0, dash).trim();
+        song = query.substring(dash + 3).trim();
+      } else {
+        final words = query.trim().split(RegExp(r'\s+'));
+        for (var take = words.length - 1; take >= 1; take--) {
+          final cand = words.take(take).join(' ');
+          final a = await mb.resolveArtist(cand);
+          if (a != null && a.name.toLowerCase() == cand.toLowerCase()) {
+            artist = a.name;
+            song = words.skip(take).join(' ');
+            break;
+          }
+        }
+      }
+      if (song.isEmpty) return [];
+      final found = await mb.searchRecordings(song, artist: artist, max: 25);
+      final out = <MetaResult>[];
+      // One row per RECORD, not per pressing. "Porselein" sits on sixteen releases of which fifteen
+      // are compilations, and listing them all buries the one album somebody wanted under a
+      // greatest-hits pile. Titles are already ranked studio-album-first by searchRecordings.
+      final byTitle = <String>{};
+      for (final rec in found) {
+        for (final rel in rec.releases) {
+          if (!byTitle.add(rel.title.toLowerCase())) continue;
+          out.add(MetaResult(
+            title: rel.title,
+            artist: rec.artist,
+            album: rel.title,
+            coverUrl: 'https://coverartarchive.org/release/${rel.mbid}/front-500',
+            mbid: rel.mbid,
+            detail: _because(rec.title, rel.isCompilation ? 'verzamelaar' : null),
+          ));
+          // Enough to find the record without turning the dialog into a discography.
+          if (out.length >= 12) return out;
+        }
+      }
+      return out;
     } catch (_) {
       return [];
     }

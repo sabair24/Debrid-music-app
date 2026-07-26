@@ -286,11 +286,44 @@ class MbReleaseGroup {
 
 /// One recorded performance. Not a track: the same recording appears as a track on every release
 /// that carries it, which is why a search hit names the release it was found on.
+/// One release a recording appears on: enough to name it, to pin it, and to rank it.
+class MbRecordingRelease {
+  final String mbid, title;
+
+  /// Album / Single / EP / Broadcast / Other, as the release GROUP calls it. Empty when unstated.
+  final String primaryType;
+
+  /// Compilation, Live, Soundtrack, Remix… A studio album has none.
+  final List<String> secondaryTypes;
+
+  const MbRecordingRelease(this.mbid, this.title,
+      {this.primaryType = '', this.secondaryTypes = const []});
+
+  /// The artist's own record, as opposed to something their song was licensed onto.
+  ///
+  /// This is the whole difference between a useful answer and a useless one. "Porselein" by Yasmine
+  /// is on sixteen releases; fifteen are compilations — *30 kleinkunst klassiekers deel 5*, *Tien om
+  /// te zien: Editie 2023* — and exactly one is the album somebody searching for that song wants.
+  bool get isStudioAlbum => primaryType == 'Album' && secondaryTypes.isEmpty;
+
+  bool get isCompilation => secondaryTypes.contains('Compilation');
+}
+
 class MbRecording {
   final String mbid, title, artist;
   final int? ms;
   final String? onRelease;
-  const MbRecording(this.mbid, this.title, this.artist, {this.ms, this.onRelease});
+
+  /// EVERY release this recording appears on, not only the first.
+  ///
+  /// "Which record is this song on" is a question with more than one answer — a track sits on its
+  /// album, on a single, and on three compilations. Keeping only the first made a search by track
+  /// title able to name one of them and hide the rest, which for the case this exists for ("I know
+  /// the song, find me the album") is the wrong one about as often as it is the right one.
+  final List<MbRecordingRelease> releases;
+
+  const MbRecording(this.mbid, this.title, this.artist,
+      {this.ms, this.onRelease, this.releases = const []});
 
   int get seconds => ms == null ? 0 : (ms! / 1000).round();
 
@@ -301,12 +334,35 @@ class MbRecording {
         : ((credits.first as Map)['name'] ?? (credits.first as Map)['artist']?['name'] ?? '')
             .toString();
     final rels = (j['releases'] as List<dynamic>? ?? const []);
+    final on = <MbRecordingRelease>[];
+    for (final r in rels) {
+      if (r is! Map) continue;
+      final id = (r['id'] ?? '').toString();
+      final title = (r['title'] ?? '').toString();
+      if (id.isEmpty || title.isEmpty) continue;
+      final group = r['release-group'];
+      on.add(MbRecordingRelease(
+        id,
+        title,
+        primaryType: group is Map ? (group['primary-type'] ?? '').toString() : '',
+        secondaryTypes: group is Map
+            ? [for (final s in (group['secondary-types'] as List? ?? const [])) s.toString()]
+            : const [],
+      ));
+    }
+    // The artist's own records first, then everything else, and a compilation last of all. Order
+    // rather than a filter: a song that only ever appeared on a compilation must still be findable.
+    on.sort((a, b) {
+      int rank(MbRecordingRelease r) => r.isStudioAlbum ? 0 : (r.isCompilation ? 2 : 1);
+      return rank(a).compareTo(rank(b));
+    });
     return MbRecording(
       (j['id'] ?? '').toString(),
       (j['title'] ?? '').toString(),
       artist,
       ms: (j['length'] as num?)?.toInt(),
-      onRelease: rels.isEmpty || rels.first is! Map ? null : (rels.first as Map)['title']?.toString(),
+      onRelease: on.isEmpty ? null : on.first.title,
+      releases: on,
     );
   }
 }
