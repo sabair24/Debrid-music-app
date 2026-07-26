@@ -215,10 +215,17 @@ class DiscogsService {
   // response. Going over doesn't just fail the one call — it returns 429s for a while — so requests
   // are spaced out rather than fired in bursts, and the app slows down further when the header says
   // we're running low.
+  //
+  // STATIC, and that is the whole point. The budget belongs to the token, and there is one token;
+  // but this service is constructed fresh at fourteen call sites, so as instance fields these gave
+  // every caller its own private idea of the limit. Opening one album page starts three of them at
+  // once — the sleeve, the info panel and the credits — each politely spacing ITS requests 1.1 s
+  // apart while collectively firing three times the allowance. Sharing the lane is what makes the
+  // spacing mean anything.
   static const _minGap = Duration(milliseconds: 1100);
-  DateTime _lastCall = DateTime.fromMillisecondsSinceEpoch(0);
-  Future<void> _turn = Future.value();
-  int _remaining = 60;
+  static DateTime _lastCall = DateTime.fromMillisecondsSinceEpoch(0);
+  static Future<void> _turn = Future.value();
+  static int _remaining = 60;
 
   /// Serialises every call and keeps them [_minGap] apart. Returns null on any failure — a missing
   /// album page is a disappointment, a crashed one is a bug.
@@ -718,13 +725,20 @@ extension DiscogsArtwork on DiscogsService {
     //
     // The version marks a schema change: nothing here expires, so without bumping it every album
     // would keep serving the art it cached first. v2 was when the archive started being consulted;
-    // v3 was the move to 1200px scans; v4 is roles becoming part of the question.
+    // v3 was the move to 1200px scans; v4 is roles becoming part of the question; v5 drops the
+    // search terms once a pin makes them irrelevant.
+    //
+    // With a pin, artist/album/expectedTracks do not reach the answer — the pin does; they are only
+    // how a release is FOUND when there is none. Leaving them in meant renaming an album guaranteed
+    // a miss, and a miss is a network round trip during which the page keeps showing the previous
+    // record's scans. Correcting a name is exactly when someone is looking at the sleeve.
+    final pinnedKey = '${pinned ?? 0}|${pinnedMbid ?? ''}';
+    final searchKey = (pinned == null && pinnedMbid == null)
+        ? '$artist|$album|$expectedTracks'
+        : '';
     final roleKey = (roles.entries.map((e) => '${e.key}=${e.value}').toList()..sort()).join(',');
     final key = sha1
-        .convert(
-          utf8.encode(
-              'art|v4|$artist|$album|$expectedTracks|${pinned ?? 0}|${pinnedMbid ?? ''}|$roleKey'),
-        )
+        .convert(utf8.encode('art|v5|$searchKey|$pinnedKey|$roleKey'))
         .toString();
     final dir = Directory('$artDir${Platform.pathSeparator}$key');
     final cached = await _readArt(dir);

@@ -614,29 +614,72 @@ class LibraryStore extends ChangeNotifier {
     return deleted;
   }
 
+  /// Read the hand-made metadata. Reads only — it never decides anything is gone.
+  ///
+  /// This used to drop every entry whose file it could not stat, and then write the result back.
+  /// With the music drive not mounted — a NAS still waking up, an external disk unplugged, a drive
+  /// letter that changed — every path fails that check at once, and months of hand-made metadata is
+  /// overwritten with an empty file, silently, before the user has clicked anything. Forgetting is
+  /// now [_sweepCorrections]'s job, and it only runs after a scan that actually found music.
   Future<void> loadCorrections() async {
     try {
       final f = _correctionsFile;
       if (!await f.exists()) return;
       final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
       _corrections.clear();
-      var orphans = 0;
       for (final e in j.entries) {
-        final path = e.key, v = e.value;
+        final v = e.value;
         if (v is! Map) continue;
-        // Drop a correction whose file is gone. An album moved or re-ripped leaves its old
-        // corrections behind as orphans, and they cause real confusion: Adele's 30 had fifteen
-        // live pins under one folder and fifteen dead, empty ones under a deleted Japanese edition,
-        // and reading the wrong list made the pin look empty when it was not.
-        if (!File(path).existsSync()) {
-          orphans++;
-          continue;
-        }
-        _corrections[path] = v.map((k, val) => MapEntry(k.toString(), val.toString()));
+        _corrections[e.key] = v.map((k, val) => MapEntry(k.toString(), val.toString()));
       }
-      // Persist the cleanup, but only when there was something to clean — no pointless rewrite.
-      if (orphans > 0) await _saveCorrections();
     } catch (_) {}
+  }
+
+  /// How long a file may be missing before its correction is forgotten.
+  static const int _correctionGraceDays = 90;
+
+  /// When a correction's file was first noticed missing. Inert everywhere else: [_applyCorrection]
+  /// and the pin readers ask for named keys, so an extra one changes nothing.
+  static const String _goneKey = '_gone';
+
+  /// Forget corrections for files that have been gone for a season.
+  ///
+  /// An album moved or re-ripped leaves its old corrections behind, and they do cause real
+  /// confusion — Adele's 30 had fifteen live pins under one folder and fifteen dead, empty ones
+  /// under a deleted Japanese edition. So they do get cleaned up; just never on the evidence of a
+  /// single failed stat, and never on a scan that found nothing at all.
+  Future<void> _sweepCorrections() async {
+    // An empty library is not evidence that the music is gone. It is evidence that we cannot see it.
+    if (tracks.isEmpty) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    // Hidden tracks are excluded from `tracks` but their files are still there — "remove from
+    // library only" must not quietly become "forget what I typed about it".
+    final live = <String>{for (final t in tracks) t.path, ..._hidden};
+    final drop = <String>[];
+    var changed = false;
+    for (final e in _corrections.entries) {
+      if (live.contains(e.key)) {
+        if (e.value.remove(_goneKey) != null) changed = true; // it came back
+        continue;
+      }
+      // Nothing but a timestamp is not a correction worth keeping.
+      if (e.value.keys.every((k) => k == _goneKey)) {
+        drop.add(e.key);
+        continue;
+      }
+      final since = int.tryParse(e.value[_goneKey] ?? '');
+      if (since == null) {
+        e.value[_goneKey] = '$now';
+        changed = true;
+      } else if (now - since > _correctionGraceDays * 86400000) {
+        drop.add(e.key);
+      }
+    }
+    for (final p in drop) {
+      _corrections.remove(p);
+      changed = true;
+    }
+    if (changed) await _saveCorrections();
   }
 
   /// The correction map for a path, created on demand — so an extension can add to it.
@@ -820,6 +863,10 @@ class LibraryStore extends ChangeNotifier {
     // it reads file sizes and headers, too heavy to redo on every regroup.
     _recomputeDuplicates();
     notifyListeners();
+
+    // Only now may anything be forgotten: this scan saw the music, so a path it did not see is
+    // genuinely absent rather than merely unreachable.
+    await _sweepCorrections();
 
     // Pass 2 — one embedded cover per album, off the UI thread. Guarded with a
     // timeout: a malformed file that makes readMetadata hang can never stall

@@ -336,7 +336,12 @@ class MusicBrainzService {
   /// disappointment, a crashed one is a bug.
   Future<Map<String, dynamic>?> _get(String url, {required String lane, required Duration gap}) async {
     final cached = await _readCache(url);
-    if (cached != null) return cached;
+    if (cached != null) {
+      final miss = _missAge(cached);
+      if (miss == null) return cached; // a real answer
+      if (miss <= (_isNotFound(cached) ? _missKeepFound : _missKeepFlaky)) return null;
+      // A remembered "no" that has had its chance to change — fall through and ask again.
+    }
 
     final done = Completer<Map<String, dynamic>?>();
     _turn[lane] = (_turn[lane] ?? Future.value()).then((_) async {
@@ -351,17 +356,20 @@ class MusicBrainzService {
         // 404 from the Cover Art Archive means this pressing has no scans. Very common, and not a
         // failure — it is the signal to fall back to Discogs.
         if (r.statusCode != 200) {
+          await _writeMiss(url, notFound: r.statusCode == 404);
           done.complete(null);
           return;
         }
         final body = jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true));
         if (body is! Map<String, dynamic>) {
+          await _writeMiss(url, notFound: false);
           done.complete(null);
           return;
         }
         await _writeCache(url, body);
         done.complete(body);
       } catch (_) {
+        await _writeMiss(url, notFound: false);
         done.complete(null);
       }
     });
@@ -395,6 +403,36 @@ class MusicBrainzService {
       await _cacheFile(url).writeAsString(jsonEncode(body));
     } catch (_) {/* a cache that can't be written is not a reason to fail the call */}
   }
+
+  // ── Remembering a "no" ──────────────────────────────────────────────────────
+  // Only answers used to be kept, so a 503 from the rate limiter, a timeout, or one offline moment
+  // left nothing behind and the whole six-request chain was paid again at the next album open —
+  // forever, because it never got far enough to cache anything. A refusal is information too.
+  //
+  // Two lifetimes, because two different things are being remembered. "This pressing has no scans"
+  // is a fact about the archive and rarely changes; "the server would not talk to me" is about this
+  // minute, and holding on to it for a day would leave the app blind long after the outage passed.
+  static const _missKey = '_miss';
+  static const _notFoundKey = '_notfound';
+  static const _missKeepFound = Duration(days: 7);
+  static const _missKeepFlaky = Duration(hours: 1);
+
+  /// How long ago this entry recorded a refusal, or null if it is a real answer.
+  ///
+  /// A marker is exactly `{_miss: ms}` plus an optional flag, so it cannot be confused with a
+  /// MusicBrainz document — which is never that small and never carries these keys.
+  static Duration? _missAge(Map<String, dynamic> j) {
+    final ts = j[_missKey];
+    if (ts is! num || j.length > 2) return null;
+    return Duration(milliseconds: DateTime.now().millisecondsSinceEpoch - ts.toInt());
+  }
+
+  static bool _isNotFound(Map<String, dynamic> j) => j[_notFoundKey] == true;
+
+  Future<void> _writeMiss(String url, {required bool notFound}) => _writeCache(url, {
+        _missKey: DateTime.now().millisecondsSinceEpoch,
+        if (notFound) _notFoundKey: true,
+      });
 
   /// Lucene needs its own punctuation escaped, or a title with a colon in it — *Interstella 5555:
   /// The Story* — becomes a field query and matches nothing.
