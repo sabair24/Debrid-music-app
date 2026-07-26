@@ -514,8 +514,14 @@ class MusicBrainzService {
     // keeps reporting the true number. Measured on Thriller: 41 of 85 come back. That matters
     // because the shortlist ranks over ALL pressings, so a truncated roster could pick a different
     // pressing than before. Never split mid-release, though: what does come back is complete.
-    final total = (rich?['release-count'] as num?)?.toInt() ?? out.length;
-    if (out.length < (total < max ? total : max)) {
+    final total = (rich?['release-count'] as num?)?.toInt() ?? 0;
+    // `rich == null` is its own case and NOT a special one to skip: the big request failed outright
+    // — a timeout, a 503, no network — and that is exactly when the smaller one is worth trying.
+    // Folding it into the arithmetic below does the opposite of what it looks like: `total` is then
+    // 0, `0 < 0` is false, and a failed browse silently returns nothing where the old code would
+    // have returned the roster. A machine with no network passed this locally and CI caught it.
+    final truncated = rich == null || out.length < (total < max ? total : max);
+    if (truncated) {
       // Fetch the plain roster for the full, correctly ordered list, and graft the tracklists we
       // already paid for onto it by mbid. Iterating the PLAIN list is the point: orderByPreference
       // sorts, Dart's sort is not stable, and a record with genuinely tied pressings has its winner

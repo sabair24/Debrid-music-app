@@ -155,7 +155,13 @@ void main() {
     test('the roster still arrives, and the old chain takes over', () async {
       // A 526 kB body is likelier to hit the 12 s timeout than a 132 kB one, so this path is not
       // hypothetical. It must land on today's behaviour, not on nothing.
-      cacheFile(richUrl()).writeAsStringSync(jsonEncode({'_miss': 1}));
+      // A FRESH miss marker, not an ancient one. `{_miss: 1}` is epoch 1970, which the cache reads
+      // as "that no is long expired, ask again" — so the test made a real network call and only
+      // passed on a machine that had one. On the build machine there is no network, the request
+      // failed, and the bug this test exists for surfaced. Timestamped now, it is a remembered no
+      // and never leaves the process.
+      cacheFile(richUrl())
+          .writeAsStringSync(jsonEncode({'_miss': DateTime.now().millisecondsSinceEpoch}));
       seed(plainUrl(), releases: [for (var i = 1; i <= 4; i++) release('r$i', tracks: 9)], total: 4);
 
       final out = await mb.editionsOf(rg, tracklists: true);
