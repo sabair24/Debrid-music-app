@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'editions.dart';
@@ -329,8 +329,15 @@ class MusicBrainzService {
   // seconds for its images would be politeness aimed at the wrong host.
   static const _wsGap = Duration(milliseconds: 1100);
   static const _caaGap = Duration(milliseconds: 250);
-  final _lastCall = <String, DateTime>{};
-  final _turn = <String, Future<void>>{};
+
+  // STATIC, for the same reason discogs.dart says it there: the budget belongs to the SERVER, and
+  // there is one server. This service is constructed at five separate places — the provider, the
+  // booklet builder, the metadata editor and twice inside DiscogsService — and as instance fields
+  // each of those got a private lane. Five lanes spacing their own requests 1.1 s apart is about
+  // 4.5 requests a second at musicbrainz.org, well over the one a second it asks for, while every
+  // one of them believes it is being polite.
+  static final _lastCall = <String, DateTime>{};
+  static final _turn = <String, Future<void>>{};
 
   /// Serialised per host, spaced out, disk-cached. Null on any failure: a missing album page is a
   /// disappointment, a crashed one is a bug.
@@ -468,15 +475,56 @@ class MusicBrainzService {
     return body == null ? null : MbRelease.from(body);
   }
 
+  /// The URL for a release-group browse. Built in one place so a test can ask for the same string
+  /// this does, instead of being a copy that drifts.
+  ///
+  /// The parameter ORDER is load-bearing. The disk cache is keyed on sha1 of the whole URL, so
+  /// reordering the query string silently throws away every cached browse on every machine.
+  @visibleForTesting
+  String editionsUrl(String releaseGroupId, {int max = 100, bool tracklists = false}) =>
+      '$_root/release?release-group=${releaseGroupId.trim()}'
+      '&fmt=json&inc=media+labels+artist-credits${tracklists ? '+recordings' : ''}&limit=$max';
+
   /// Every pressing of a record, in one request.
-  Future<List<MbRelease>> editionsOf(String releaseGroupId, {int max = 100}) async {
+  ///
+  /// With [tracklists] the browse also asks for `recordings`, and every pressing comes back with
+  /// its tracks already in it. That removes four of the six requests an album used to cost: the
+  /// browse without it returns `media[].track-count` but no `media[].tracks`, so [tracklistOf] had
+  /// to fetch each shortlisted pressing separately at 1.1 s apart. Measured: the bigger browse is
+  /// 145 kB against 18 kB and takes 0.33 s against 0.21 s — still faster than ONE of the four
+  /// lookups it replaces. [MbRelease.from] parses it unchanged.
+  ///
+  /// Off by default: the pressing gallery ([editionChoices]) wants the small answer.
+  Future<List<MbRelease>> editionsOf(String releaseGroupId,
+      {int max = 100, bool tracklists = false}) async {
     if (releaseGroupId.trim().isEmpty) return const [];
-    final body = await _ws('$_root/release?release-group=${releaseGroupId.trim()}'
-        '&fmt=json&inc=media+labels+artist-credits&limit=$max');
-    final list = body?['releases'] as List<dynamic>? ?? const [];
-    final out = <MbRelease>[];
-    for (final r in list) {
-      if (r is Map<String, dynamic>) out.add(MbRelease.from(r));
+    List<MbRelease> parse(Map<String, dynamic>? body) => [
+          for (final r in (body?['releases'] as List<dynamic>? ?? const []))
+            if (r is Map<String, dynamic>) MbRelease.from(r),
+        ];
+
+    if (!tracklists) {
+      return orderByPreference(parse(await _ws(editionsUrl(releaseGroupId, max: max))));
+    }
+
+    final rich = await _ws(editionsUrl(releaseGroupId, max: max, tracklists: true));
+    var out = parse(rich);
+
+    // The server caps a browse at roughly 500 tracks total and truncates SILENTLY — `release-count`
+    // keeps reporting the true number. Measured on Thriller: 41 of 85 come back. That matters
+    // because the shortlist ranks over ALL pressings, so a truncated roster could pick a different
+    // pressing than before. Never split mid-release, though: what does come back is complete.
+    final total = (rich?['release-count'] as num?)?.toInt() ?? out.length;
+    if (out.length < (total < max ? total : max)) {
+      // Fetch the plain roster for the full, correctly ordered list, and graft the tracklists we
+      // already paid for onto it by mbid. Iterating the PLAIN list is the point: orderByPreference
+      // sorts, Dart's sort is not stable, and a record with genuinely tied pressings has its winner
+      // decided by input order. Same order in, same pressing out.
+      final plain = parse(await _ws(editionsUrl(releaseGroupId, max: max)));
+      if (plain.isNotEmpty) {
+        final withTracks = {for (final r in out) r.mbid: r};
+        out = [for (final r in plain) withTracks[r.mbid] ?? r];
+      }
     }
     return orderByPreference(out);
   }

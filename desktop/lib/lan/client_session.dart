@@ -103,10 +103,15 @@ class ClientSession extends ChangeNotifier {
     _poll?.cancel();
     _poll = null;
     await forgetPairedServer();
-    // Nothing was written to disk, so forgetting is enough — but clear it anyway so the app is not
-    // still holding the PC's key after you told it to forget the PC.
+    // The PC's key does not stay behind after you tell the app to forget the PC.
+    //
+    // And it is WRITTEN, not merely dropped from memory. "Nothing was written to disk" was only
+    // true for a device that had never pressed Save in Settings — the dialog is not owner-only, and
+    // its Save button writes the token this device was handed. Clearing without saving left the
+    // real token on disk and two blanks in memory, waiting for some unrelated save to persist them.
     settings.discogsToken = '';
     settings.lastfmKey = '';
+    await settings.save();
     library.remote = null;
     applyMediaResolver((p) => p);
     _endpoint = null;

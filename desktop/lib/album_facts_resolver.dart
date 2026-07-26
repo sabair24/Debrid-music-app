@@ -65,7 +65,9 @@ Future<AlbumFacts> resolveAlbumFacts(
       final g = MusicBrainzService.pickReleaseGroup(groups, single: album.isSingle);
       if (g != null) {
         // One request for every pressing of the record, already in preference order.
-        final all = await mb.editionsOf(g.mbid);
+        // With the tracklists in the browse itself this is the LAST MusicBrainz request for most
+        // records: the loop below then finds every pressing already carrying its tracks.
+        final all = await mb.editionsOf(g.mbid, tracklists: true);
         final owned = albumTrackCount(album.tracks);
         final counts = [for (final r in all) r.trackCount];
         // The three smallest that fit, PLUS the fullest pressing of the record.

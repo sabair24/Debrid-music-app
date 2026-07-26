@@ -43,11 +43,74 @@ class AppSettings extends ChangeNotifier {
     return appFile('settings.json');
   }
 
+  /// The last copy that parsed. This file holds the only passwords the app has and they exist
+  /// nowhere else — so there is always a second one.
+  static File backupFile() => appFile('settings.bak.json');
+
+  /// Set when the file on disk exists but could not be read.
+  ///
+  /// While this is true [save] refuses to write. A truncated file used to parse as "every field is
+  /// empty", and the next save — from a TIDAL token refresh, a rescan, anything — made that the
+  /// truth. Reading a broken file is recoverable; overwriting a broken file with blanks is not.
+  bool loadFailed = false;
+
+  /// Why, in a sentence, for the settings screen to show.
+  String loadError = '';
+
+  /// A probe. [_testAll] builds a throwaway AppSettings to check one service without touching the
+  /// real one; if anything down that path ever calls [save], it would write an object that has
+  /// never seen your TIDAL tokens, your LAN token or your music folder straight over the real file.
+  bool readOnly = false;
+
   Future<void> load() async {
+    final f = file();
+    final backup = backupFile();
+    loadFailed = false;
+    loadError = '';
     try {
-      final f = file();
       if (await f.exists()) {
-        final m = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+        try {
+          _apply(jsonDecode(await f.readAsString()) as Map<String, dynamic>);
+          // Only a file that actually parsed becomes the spare.
+          try {
+            await f.copy(backup.path);
+          } catch (_) {/* a spare we could not write is not a reason to fail the start */}
+          notifyListeners();
+          return;
+        } catch (e) {
+          loadError = '$e';
+        }
+      } else {
+        notifyListeners();
+        return; // a first run, not a loss
+      }
+
+      // The file is there and unreadable. Try the spare before giving up.
+      if (await backup.exists()) {
+        try {
+          _apply(jsonDecode(await backup.readAsString()) as Map<String, dynamic>);
+          debugPrint('settings.json unreadable ($loadError) — recovered from settings.bak.json');
+          // Recovered, so saving is safe again: what is in memory is a real set of settings.
+          loadFailed = false;
+          loadError = '';
+          notifyListeners();
+          return;
+        } catch (_) {/* both gone; fall through */}
+      }
+
+      // Nothing readable anywhere. Keep the broken file — it is the only trace of the passwords —
+      // and refuse to save over it.
+      loadFailed = true;
+      debugPrint('settings.json unreadable and no usable backup: $loadError');
+    } catch (e) {
+      loadFailed = true;
+      loadError = '$e';
+    }
+    notifyListeners();
+  }
+
+  void _apply(Map<String, dynamic> m) {
+    {
         discogsToken = (m['discogs_token'] ?? '') as String;
         torboxToken = (m['torbox_token'] ?? '') as String;
         lastfmKey = (m['lastfm_key'] ?? '') as String;
@@ -69,16 +132,11 @@ class AppSettings extends ChangeNotifier {
         lanToken = (m['lan_token'] ?? '') as String;
         serverId = (m['server_id'] ?? '') as String;
         musicRoot = (m['music_root'] ?? '') as String;
-      }
-    } catch (_) {}
-    notifyListeners();
+    }
   }
 
-  Future<void> save() async {
-    try {
-      final f = file();
-      await f.parent.create(recursive: true);
-      await f.writeAsString(jsonEncode({
+  /// Everything worth writing down, as it goes into the file.
+  Map<String, dynamic> toJson() => {
         'discogs_token': discogsToken,
         'torbox_token': torboxToken,
         'lastfm_key': lastfmKey,
@@ -100,8 +158,34 @@ class AppSettings extends ChangeNotifier {
         'lan_token': lanToken,
         'server_id': serverId,
         'music_root': musicRoot,
-      }));
-    } catch (_) {}
+      };
+
+  /// Write the settings down.
+  ///
+  /// Through a temp file and a rename, like every other state file in this app
+  /// (`lan/tokens.dart`, `lan/state_store.dart`, `album_facts.dart`). It used to be a bare
+  /// `writeAsString`, so a crash or a power cut mid-write truncated the one file holding the
+  /// passwords — and the truncated file then read back as "everything is empty".
+  Future<void> save() async {
+    if (readOnly) {
+      debugPrint('Refusing to save a probe AppSettings over the real one');
+      return;
+    }
+    if (loadFailed) {
+      // The file on disk is broken and we could not recover it. What is in memory is defaults, and
+      // writing defaults over the only copy of the passwords is how the loss becomes permanent.
+      debugPrint('Refusing to save: settings.json could not be read ($loadError)');
+      return;
+    }
+    try {
+      final f = file();
+      await f.parent.create(recursive: true);
+      final tmp = File('${f.path}.tmp');
+      await tmp.writeAsString(jsonEncode(toJson()));
+      await tmp.rename(f.path);
+    } catch (e) {
+      debugPrint('settings.json not written: $e');
+    }
     notifyListeners();
   }
 }

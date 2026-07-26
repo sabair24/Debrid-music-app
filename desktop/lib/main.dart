@@ -9617,6 +9617,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
   Future<void> _testAll() async {
     final real = context.read<AppSettings>();
     final probe = AppSettings()
+      // A throwaway that must never reach the disk. It has never seen the TIDAL tokens, the LAN
+      // token, the server id or the music folder, so one save() from anywhere down this path would
+      // write those away as empty. Today nothing on this path saves; this is so that stays true.
+      ..readOnly = true
       ..torboxToken = _torbox.text.trim()
       ..discogsToken = _discogs.text.trim()
       ..soulseekUser = _slskUser.text.trim()

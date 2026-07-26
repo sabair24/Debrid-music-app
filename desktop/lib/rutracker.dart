@@ -118,7 +118,15 @@ class RuTrackerService {
     }
   }
 
-  Future<List<SearchResult>> search(String query) async {
+  /// Set when the session died and logging back in needs a human — a captcha.
+  ///
+  /// Read by the search UI so it can say so. Without it an expired session is indistinguishable
+  /// from "RuTracker has nothing", which is exactly what it looked like: you search, you get
+  /// nothing, and nowhere does it say you are logged out.
+  RtCaptcha? pendingCaptcha;
+  String lastError = '';
+
+  Future<List<SearchResult>> search(String query, {bool allowRelogin = true}) async {
     if (!configured || settings.rutrackerCookie.isEmpty) return [];
     try {
       final req = http.Request(
@@ -131,8 +139,27 @@ class RuTrackerService {
           await http.Response.fromStream(await client.send(req)).timeout(const Duration(seconds: 15));
       client.close();
       if (resp.statusCode == 302) {
-        // Session expired — drop the cookie so the next login refreshes it.
+        // The session expired. RuTracker's cookie does not last forever, and nothing renewed it:
+        // login() had exactly two callers, the button in Settings and a test. So the cookie was
+        // dropped, an empty list came back, and the whole thing read as "it forgot my login".
+        //
+        // We hold the username and the password, so log in again and do the search over. Once —
+        // `allowRelogin` stops a broken login from bouncing between the two forever.
         settings.rutrackerCookie = '';
+        await settings.save(); // in memory only left a dead cookie on disk until some other save
+        if (!allowRelogin) return [];
+
+        final again = await login();
+        if (again.ok) {
+          pendingCaptcha = null;
+          lastError = '';
+          return search(query, allowRelogin: false);
+        }
+        // A captcha cannot be answered from here — but it CAN be said out loud.
+        pendingCaptcha = again.captcha;
+        lastError = again.captcha != null
+            ? 'RuTracker vraagt om een captcha — log opnieuw in bij Instellingen.'
+            : (again.error ?? 'RuTracker-login mislukt.');
         return [];
       }
       final html = latin1.decode(resp.bodyBytes, allowInvalid: true);
