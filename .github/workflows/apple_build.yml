@@ -2,7 +2,9 @@ name: DebridMusic Apple Build
 
 # The Mac and iPad app — the SAME Flutter app as Windows, in desktop/.
 #
-#   • tag apple-v*      → iPad to TestFlight, Mac app on the GitHub Release
+#   • tag apple-v*      → iPad to TestFlight, Mac app on its own GitHub Release
+#   • tag win-v*        → the same, but the Mac app is attached to the WINDOWS release, so one
+#                          tag ships all four platforms and they cannot drift apart
 #   • workflow_dispatch → manual run; tick "testflight" to push a build to TestFlight
 #
 # This replaced a workflow that built a separate SwiftUI app. There is one codebase now, so the
@@ -20,6 +22,11 @@ on:
   push:
     tags:
       - 'apple-v*'
+      # A win-v tag too, so ONE tag ships all four platforms. Tagging them separately is how the
+      # Mac ended up three versions behind the PC: the Windows tag went up, the Apple one was
+      # forgotten, and nothing said so. See the release step at the bottom for how the two tags
+      # differ — a win-v run adds the Mac zip to the Windows release rather than making its own.
+      - 'win-v*'
   workflow_dispatch:
     inputs:
       testflight:
@@ -75,6 +82,7 @@ jobs:
           # number as the last two.
           case "$GITHUB_REF" in
             refs/tags/apple-v*) VERSION="${GITHUB_REF#refs/tags/apple-v}" ;;
+            refs/tags/win-v*) VERSION="${GITHUB_REF#refs/tags/win-v}" ;;
             *) VERSION=$(sed -n 's/^version: *\([0-9][0-9.]*\).*/\1/p' pubspec.yaml) ;;
           esac
           [ -n "$VERSION" ] || VERSION="0.1.0"
@@ -195,7 +203,7 @@ jobs:
       # Profiles are still fetched by -allowProvisioningUpdates below. Those are not capped; the
       # certificate was the scarce thing.
       - name: Import the signing certificate
-        if: steps.gate.outputs.ready == 'true' && (startsWith(github.ref, 'refs/tags/apple-v') || inputs.testflight)
+        if: steps.gate.outputs.ready == 'true' && (startsWith(github.ref, 'refs/tags/apple-v') || startsWith(github.ref, 'refs/tags/win-v') || inputs.testflight)
         env:
           CERT_P12: ${{ secrets.APPLE_DIST_CERT_P12 }}
           CERT_PASSWORD: ${{ secrets.APPLE_DIST_CERT_PASSWORD }}
@@ -256,7 +264,7 @@ jobs:
       # The profile expires after a year. When it does, this step fails with a clear message rather
       # than the build quietly signing with something else.
       - name: Install the provisioning profile
-        if: steps.gate.outputs.ready == 'true' && (startsWith(github.ref, 'refs/tags/apple-v') || inputs.testflight)
+        if: steps.gate.outputs.ready == 'true' && (startsWith(github.ref, 'refs/tags/apple-v') || startsWith(github.ref, 'refs/tags/win-v') || inputs.testflight)
         env:
           PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
         run: |
@@ -284,7 +292,7 @@ jobs:
       # is only possible in the project, so that is where it goes. Keep the profile name there in
       # step with PROFILE_NAME above; the install step checks the file, the project names it.
       - name: Archive for iOS
-        if: steps.gate.outputs.ready == 'true' && (startsWith(github.ref, 'refs/tags/apple-v') || inputs.testflight)
+        if: steps.gate.outputs.ready == 'true' && (startsWith(github.ref, 'refs/tags/apple-v') || startsWith(github.ref, 'refs/tags/win-v') || inputs.testflight)
         env:
           KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
@@ -298,7 +306,7 @@ jobs:
             archive
 
       - name: Export and upload to TestFlight
-        if: steps.gate.outputs.ready == 'true' && (startsWith(github.ref, 'refs/tags/apple-v') || inputs.testflight)
+        if: steps.gate.outputs.ready == 'true' && (startsWith(github.ref, 'refs/tags/apple-v') || startsWith(github.ref, 'refs/tags/win-v') || inputs.testflight)
         env:
           KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
@@ -370,6 +378,35 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # On a win-v tag the Windows workflow already made the release. Add the Mac zip to it rather
+      # than making a second one — and do it with a plain upload, NOT the release action above,
+      # because that would rewrite the name and the notes the Windows job just wrote.
+      #
+      # The two jobs run at the same time and the Windows one is slower, so the release may not
+      # exist yet. Wait for it instead of failing: this is the ordinary case, not an error.
+      - name: Add the Mac app to the Windows release (on a win-v tag)
+        if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/win-v') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ZIP=$(ls desktop/out/DebridMusic-macOS-*.zip 2>/dev/null | head -1)
+          if [ -z "$ZIP" ]; then
+            echo "::warning::No Mac zip was built, so there is nothing to attach."
+            exit 0
+          fi
+          for i in $(seq 1 30); do
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release upload "$TAG" "$ZIP" --clobber
+              echo "::notice::Mac app attached to $TAG."
+              exit 0
+            fi
+            echo "Waiting for the Windows job to create the $TAG release… ($i/30)"
+            sleep 20
+          done
+          echo "::error::The $TAG release never appeared, so the Mac app was not attached. It is in this run's artifacts."
+          exit 1
 
       # The runner is thrown away regardless, but leaving a signing certificate unlocked in a
       # default keychain for the rest of the job is not a habit worth having.
