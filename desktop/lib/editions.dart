@@ -73,7 +73,19 @@ class ReleaseChoice {
   });
 
   /// The same pressing with its scans filled in.
-  ReleaseChoice withArt({ChoiceImage? front, ChoiceImage? back, ChoiceImage? disc}) => ReleaseChoice(
+  /// [tracks] because the lookup that finds the scans returns the tracklist in the same answer.
+  ///
+  /// It used to be dropped on the floor: a Discogs pressing therefore never had one, and "take this
+  /// pressing's numbering" said "Deze uitgave geeft geen nummering" about a release whose tracks
+  /// were sitting right there on the screen. Passing null keeps whatever the row already had, so a
+  /// caller that only knows about art cannot erase a tracklist by accident.
+  ReleaseChoice withArt({
+    ChoiceImage? front,
+    ChoiceImage? back,
+    ChoiceImage? disc,
+    List<ChoiceTrack>? tracks,
+  }) =>
+      ReleaseChoice(
         source: source,
         releaseId: releaseId,
         mbid: mbid,
@@ -86,7 +98,7 @@ class ReleaseChoice {
         front: front ?? this.front,
         back: back,
         disc: disc,
-        tracklist: tracklist,
+        tracklist: tracks ?? tracklist,
         detailed: true,
       );
 

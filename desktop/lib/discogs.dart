@@ -1133,6 +1133,11 @@ extension DiscogsChoices on DiscogsService {
       front: front == null ? row.front : of(front),
       back: back == null ? null : of(back),
       disc: disc == null ? null : of(disc),
+      // The same answer carries the tracklist. Kept rather than discarded: it costs nothing, and
+      // without it "take this pressing's numbering" had nothing to take.
+      tracks: e.tracklist.isEmpty
+          ? null
+          : [for (final t in e.tracklist) ChoiceTrack(t.position, t.title, t.seconds)],
     );
   }
 }

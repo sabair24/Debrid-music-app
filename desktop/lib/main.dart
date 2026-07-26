@@ -10760,10 +10760,17 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     final lib = context.read<LibraryStore>();
     final mbSvc = context.read<MusicBrainzService>();
     var list = c.tracklist;
+    // A row arrives without a tracklist until something looks it up — the picker lists a whole
+    // master off one request and fills the rest in as rows come into view. So ask, per catalogue,
+    // rather than telling the user a pressing has no numbering when only nobody had asked yet.
     if (list.isEmpty && c.isMb && c.mbid != null) {
-      // Only the first few pressings arrive with a tracklist; this one is being asked for by name.
       final full = await mbSvc.release(c.mbid!);
       if (full != null) list = await mbSvc.tracklistOf(full);
+    } else if (list.isEmpty && !c.isMb && c.releaseId > 0) {
+      final full = await DiscogsService(context.read<AppSettings>()).release(c.releaseId);
+      if (full != null) {
+        list = [for (final t in full.tracklist) ChoiceTrack(t.position, t.title, t.seconds)];
+      }
     }
     if (!mounted || list.isEmpty) {
       if (mounted) _srcToast(context, 'Deze uitgave geeft geen nummering.');
