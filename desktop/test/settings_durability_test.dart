@@ -112,6 +112,29 @@ void main() {
           reason: 'het kapotte bestand is het enige spoor van de wachtwoorden — laat het staan');
     });
 
+    test('and typing them again repairs it — the guard has to end somewhere', () async {
+      await seeded();
+      final whole = AppSettings.file().readAsStringSync();
+      AppSettings.file().writeAsStringSync(whole.substring(0, 20));
+
+      final after = AppSettings();
+      await after.load();
+      expect(after.loadFailed, isTrue);
+
+      // What the Save button in Settings does: the values on screen came from the fields, not from
+      // a failed load, so writing them is a repair rather than the loss the guard exists for.
+      after
+        ..soulseekUser = 'saber'
+        ..soulseekPass = 'nieuwgeheim'
+        ..forgetLoadFailure();
+      await after.save();
+
+      final repaired = AppSettings();
+      await repaired.load();
+      expect(repaired.loadFailed, isFalse);
+      expect(repaired.soulseekPass, 'nieuwgeheim');
+    });
+
     test('and it says so, instead of looking like a fresh install', () async {
       AppSettings.file().writeAsStringSync('{niet eens json');
       final s = AppSettings();

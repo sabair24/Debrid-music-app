@@ -115,6 +115,17 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The user has typed their settings again and pressed Save, so writing is wanted after all.
+  ///
+  /// [save] refuses while [loadFailed] — the broken file is the only trace of the passwords, and
+  /// blanks over it would be final. That protection has to end somewhere, and this is the somewhere:
+  /// an explicit save from the settings screen, where the values on screen are the ones the user
+  /// just entered rather than the empty defaults of a failed load.
+  void forgetLoadFailure() {
+    loadFailed = false;
+    loadError = '';
+  }
+
   /// Take a settings map as [toJson] produces it. Public so the account copy can be merged in
   /// without this file needing to know anything about Firestore.
   void applyJson(Map<String, dynamic> m) {

@@ -1213,13 +1213,20 @@ class _HomeShellState extends State<HomeShell> {
                       ),
                       const SizedBox(width: 10),
                       if (!compact)
-                        Consumer<LibraryStore>(
-                          builder: (_, lib, __) => Text(
+                        Consumer2<LibraryStore, FactsWarmer>(
+                          builder: (_, lib, warmer, __) => Text(
                             lib.scanning
                                 ? 'Scannen… ${lib.scanned}'
                                 : (lib.enriching
                                     ? 'Covers ophalen…'
-                                    : '${lib.albums.length} albums · ${lib.tracks.length} nummers'),
+                                    // Fourth state, after the two that were already here. The PC
+                                    // works through the records nobody has opened yet; without a
+                                    // line saying so it is invisible work that writes files into
+                                    // the music folder, which is the kind of thing you find out
+                                    // about at the wrong moment.
+                                    : (warmer.status.isNotEmpty
+                                        ? warmer.status
+                                        : '${lib.albums.length} albums · ${lib.tracks.length} nummers')),
                             style: const TextStyle(color: _muted, fontSize: 11.5),
                           ),
                         ),
@@ -9571,6 +9578,32 @@ class _SharingSectionState extends State<_SharingSection> {
           'inclusief je eigen covers en persingen.',
           style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
         ),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            const Expanded(
+              child: Text('Albuminfo vooraf ophalen',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+            ),
+            Switch(
+              value: settings.warmFacts,
+              activeThumbColor: _accent,
+              onChanged: (on) async {
+                settings.warmFacts = on;
+                await settings.save();
+                // The warmer reads the setting before every album, so switching off stops the
+                // sweep where it is rather than at the end of the library.
+              },
+            ),
+          ],
+        ),
+        const Text(
+          'Deze pc zoekt van elke plaat de persing en de officiële tracklijst op vóórdat je hem '
+          'opent, zodat een album nooit meer laat wachten. Eén keer per plaat, en elk toestel in '
+          'huis heeft er wat aan. Hij schrijft bij elk album een klein bestandje in die albummap, '
+          'zodat je metadata meeverhuist met je muziek.',
+          style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
+        ),
         if (settings.lanEnabled) ...[
           const SizedBox(height: 10),
           if (sharing.error != null)
@@ -10091,7 +10124,34 @@ class _SettingsDialogState extends State<SettingsDialog> {
           children: [
             const Text('Instellingen', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
-            const Text('Sleutels blijven alleen op deze PC.', style: TextStyle(color: _muted, fontSize: 13)),
+            Text(
+              context.watch<CloudSession>().isSignedIn
+                  ? 'Je sleutels reizen mee met je account, zodat een nieuwe installatie ze '
+                      'terugkrijgt.'
+                  : 'Sleutels blijven op dit apparaat. Log in en ze reizen mee met je account.',
+              style: const TextStyle(color: _muted, fontSize: 13),
+            ),
+            // The one thing that must not stay quiet. When settings.json cannot be read, the app
+            // now refuses to save over it — which is right, and which without a word here would
+            // simply look like "my settings do not stick" with no reason given anywhere.
+            if (context.watch<AppSettings>().loadFailed) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFF6B6B).withValues(alpha: .12),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFFF6B6B).withValues(alpha: .4)),
+                ),
+                child: const Text(
+                  'Je instellingenbestand is beschadigd en kon niet worden gelezen. De app bewaart '
+                  'nu niets, expres: dat bestand is het enige waar je wachtwoorden in staan, en er '
+                  'lege velden overheen schrijven zou ze definitief wissen. Vul ze hieronder '
+                  'opnieuw in en druk op Opslaan, dan is het hersteld.',
+                  style: TextStyle(color: Color(0xFFFF6B6B), fontSize: 12, height: 1.4),
+                ),
+              ),
+            ],
             const SizedBox(height: 18),
             Flexible(
               child: SingleChildScrollView(
@@ -10246,6 +10306,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     s.rutrackerUser = _rtUser.text.trim();
                     s.rutrackerPass = _rtPass.text;
                     s.lastfmKey = _lastfm.text.trim();
+                    // Pressing Save here is the deliberate override of the refuse-to-write guard:
+                    // these values came from the fields, not from a failed load, so writing them
+                    // over a broken file is a repair rather than the loss the guard exists for.
+                    s.forgetLoadFailure();
                     await s.save();
                     if (context.mounted) Navigator.pop(context);
                     lib.enrich(s); // pick up covers that need the (new) Discogs token
