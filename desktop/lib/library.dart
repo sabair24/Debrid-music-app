@@ -529,6 +529,30 @@ class LibraryStore extends ChangeNotifier {
   Map<String, String> albumArtRoles(String artist, String album) =>
       _albumArtRoles[albumArtKey(artist, album)] ?? const {};
 
+  /// Pin a front cover by hand, and have every screen show it at once.
+  ///
+  /// Separate from [applyCorrection], which also rewrites titles and the pinned pressing: choosing a
+  /// sleeve from one edition while keeping another edition's disc is a picture decision, not a
+  /// re-identification of the record.
+  ///
+  /// Written to [Album.correctedCover] rather than left to the album page to fetch, because that is
+  /// what makes it INSTANT everywhere. The grid, the player bar, the now-playing screen and the
+  /// Tracks list all read Album.cover, where a corrected cover outranks everything; the notify then
+  /// reaches all of them in the same frame. A role alone would only have changed the page you were
+  /// standing on.
+  Future<void> setAlbumCover(Album a, AppSettings settings, Uint8List bytes) async {
+    if (bytes.isEmpty) return;
+    a.correctedCover = bytes;
+    try {
+      await CoverEnricher(settings).saveFixedCover(a, bytes);
+    } catch (e) {
+      // The choice already shows; not being able to cache it only costs a fetch next start.
+      debugPrint('Could not save the chosen cover: $e');
+    }
+    _bumpMeta();
+    notifyListeners();
+  }
+
   /// Say what an image IS. [url] empty clears that role and lets the app guess again.
   Future<void> setAlbumArtRole(String artist, String album, String role, String url) async {
     final k = albumArtKey(artist, album);
