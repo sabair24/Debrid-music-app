@@ -418,16 +418,36 @@ class SoulseekClient {
   /// clears itself in a minute or two, and punishing it for thirty was just wrong.
   static const _backoff = [Duration(minutes: 2), Duration(minutes: 6), Duration(minutes: 15), Duration(minutes: 30)];
   int _refusals = 0;
+  DateTime? _lastRefusalAt;
+
+  /// After a quiet hour, start counting again.
+  ///
+  /// The escalation only makes sense while refusals keep coming. It used to reset by accident —
+  /// the counter lived in memory, so closing the app cleared it — and once it survived a restart
+  /// there was nothing left to clear it but a successful login. One bad afternoon would otherwise
+  /// leave you on half-hour waits for good.
+  static const _forgetAfter = Duration(hours: 1);
+
+  void _decayRefusals() {
+    final last = _lastRefusalAt;
+    if (last != null && DateTime.now().difference(last) > _forgetAfter) {
+      _refusals = 0;
+      _lastRefusalAt = null;
+    }
+  }
 
   void noteLoginRefused() {
+    _decayRefusals();
     _blockedUntil = DateTime.now().add(_backoff[_refusals.clamp(0, _backoff.length - 1)]);
     _refusals++;
+    _lastRefusalAt = DateTime.now();
     unawaited(_saveGuard());
   }
 
   void noteLoginOk() {
     _blockedUntil = null;
     _refusals = 0;
+    _lastRefusalAt = null;
     unawaited(_saveGuard());
   }
 
@@ -456,6 +476,9 @@ class SoulseekClient {
         _blockedUntil = until;
       }
       _refusals = (j['refusals'] as num?)?.toInt() ?? 0;
+      _lastRefusalAt = DateTime.tryParse('${j['lastRefusalAt'] ?? ''}');
+      // A file written yesterday must not start today on a half-hour wait.
+      _decayRefusals();
       final times = (j['logins'] as List?) ?? const [];
       final cut = DateTime.now().subtract(_loginWindow);
       _loginTimes
@@ -470,17 +493,34 @@ class SoulseekClient {
     }
   }
 
-  Future<void> _saveGuard() async {
-    try {
-      await _guardFile.writeAsString(jsonEncode({
-        'blockedUntil': _blockedUntil?.toIso8601String(),
-        'refusals': _refusals,
-        'logins': [for (final t in _loginTimes) t.toIso8601String()],
-      }));
-    } catch (e) {
-      debugPrint('Could not save soulseek_guard.json: $e');
-    }
+  /// Saves are chained, and each one lands whole.
+  ///
+  /// Two of these can be triggered a millisecond apart — an attempt and a refusal — and writing the
+  /// same file twice at once produced a torn one that the next start could not read. Same
+  /// tmp-then-rename as [GrantStore.save], for the same reason: a half-written guard reads as no
+  /// guard at all, which is precisely the state this is here to prevent.
+  Future<void> _saving = Future.value();
+
+  Future<void> _saveGuard() {
+    final payload = jsonEncode({
+      'blockedUntil': _blockedUntil?.toIso8601String(),
+      'refusals': _refusals,
+      'lastRefusalAt': _lastRefusalAt?.toIso8601String(),
+      'logins': [for (final t in _loginTimes) t.toIso8601String()],
+    });
+    return _saving = _saving.then((_) async {
+      try {
+        final tmp = File('${_guardFile.path}.tmp');
+        await tmp.writeAsString(payload);
+        await tmp.rename(_guardFile.path);
+      } catch (e) {
+        debugPrint('Could not save soulseek_guard.json: $e');
+      }
+    });
   }
+
+  /// Wait for the last save to land. For tests, and for anywhere that wants to be sure.
+  Future<void> guardSaved() => _saving;
 
   /// The user has looked and knows the account is fine — usually because the official client is
   /// logged in right now. Our own back-off must never be the thing standing in their way, so let
@@ -533,6 +573,10 @@ class SoulseekClient {
     final ok = _lastLoginOk;
     if (ok != null && DateTime.now().difference(ok) < const Duration(minutes: 1)) {
       _blockedUntil = DateTime.now().add(const Duration(minutes: 5));
+      // Saved, like every other way the guard changes. Without this the screen said "wait 6 more
+      // minutes" while soulseek_guard.json said nothing was wrong — and a restart walked straight
+      // back into the kick that caused it.
+      unawaited(_saveGuard());
     }
   }
 
