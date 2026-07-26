@@ -311,9 +311,61 @@ class CastManager {
         }
       case 'volume':
         await _upnp.setVolume(renderer, value ?? 50);
+      case 'seek':
+        // Seconds on the wire rather than a formatted time: the phone has a slider, not a clock,
+        // and the H:MM:SS the renderer wants is upnp.dart's business.
+        await _upnp.seek(renderer, Duration(seconds: value ?? 0));
       default:
         throw ArgumentError('unknown action: $action');
     }
+  }
+
+  /// What the speaker is doing, for a device that is holding the remote.
+  ///
+  /// Everything here is asked of the SPEAKER. A phone that is only steering does not decode the
+  /// audio and cannot know the position; the alternative was a bar that crawled along on a guess,
+  /// which is a lie you can sit and watch.
+  ///
+  /// Every field is optional on purpose. A renderer that answers some questions and not others is
+  /// ordinary, and "no volume" must not cost you the play button.
+  /// [withVolume] because this is polled while a bar moves on screen, and an embedded UPnP stack is
+  /// not a web server. Volume almost never changes on its own, so asking for it every two seconds
+  /// is a third more traffic to the speaker for an answer that is nearly always the same one.
+  Future<Map<String, dynamic>> status(String deviceId, {bool withVolume = false}) async {
+    final out = <String, dynamic>{'casting': false};
+    // A Shield runs our own receiver and reports through the shared state, not through UPnP.
+    if (_shields.any((s) => s.id == deviceId)) return out;
+
+    final Renderer renderer;
+    try {
+      renderer = await _renderer(deviceId);
+    } catch (_) {
+      return out; // gone from the network; the caller shows its own last known state
+    }
+    final session = _session;
+    out['casting'] = session != null && session.renderer.id == renderer.id;
+    if (session != null) {
+      out['index'] = session.index;
+      out['queueLength'] = session.queue.length;
+      out['trackId'] = session.queue.elementAtOrNull(session.index);
+    }
+    // Asked in parallel: three round trips to an embedded stack, one after the other, is most of a
+    // second — and this is polled while someone watches a progress bar.
+    final results = await Future.wait([
+      _upnp.positionInfo(renderer).catchError((_) => null),
+      _upnp.transportState(renderer).catchError((_) => null),
+      if (withVolume) _upnp.getVolume(renderer).catchError((_) => null),
+    ]);
+    final pos = results[0] as ({Duration position, Duration duration})?;
+    final state = results[1] as TransportState?;
+    final volume = withVolume ? results[2] as int? : null;
+    if (pos != null) {
+      out['positionMs'] = pos.position.inMilliseconds;
+      out['durationMs'] = pos.duration.inMilliseconds;
+    }
+    if (state != null) out['playing'] = state.isPlaying;
+    if (volume != null) out['volume'] = volume;
+    return out;
   }
 
   Future<void> _postShield(ShieldTarget shield, String path) async {

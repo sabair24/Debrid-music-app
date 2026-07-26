@@ -297,6 +297,58 @@ class UpnpControlPoint {
     return match == null ? null : int.tryParse(match.group(1)!);
   }
 
+  /// Jump to a point in the track that is playing.
+  ///
+  /// REL_TIME, which is the unit every renderer that seeks at all supports; TRACK_NR exists too but
+  /// means something else entirely. A renderer that cannot seek answers with a SOAP fault, which
+  /// [_soap] already swallows — the scrubber then simply does nothing rather than breaking playback.
+  Future<void> seek(Renderer r, Duration to) async {
+    await _soap(r.avTransportUrl, 'AVTransport', 'Seek',
+        '<InstanceID>0</InstanceID><Unit>REL_TIME</Unit><Target>${upnpTime(to)}</Target>');
+  }
+
+  /// Where the speaker is in the track, and how long the track is.
+  ///
+  /// Asked of the SPEAKER rather than counted here. This device does not decode the audio, so a
+  /// timer of its own would drift away from the truth within a minute — and a progress bar you can
+  /// watch being wrong is worse than none.
+  Future<({Duration position, Duration duration})?> positionInfo(Renderer r) async {
+    final body = await _soap(r.avTransportUrl, 'AVTransport', 'GetPositionInfo',
+        '<InstanceID>0</InstanceID>');
+    if (body == null) return null;
+    final rel = _tag(body, 'RelTime'), dur = _tag(body, 'TrackDuration');
+    final position = parseUpnpTime(rel), duration = parseUpnpTime(dur);
+    if (position == null) return null;
+    return (position: position, duration: duration ?? Duration.zero);
+  }
+
+  static String? _tag(String body, String name) =>
+      RegExp('<$name>([^<]*)</$name>').firstMatch(body)?.group(1);
+
+  /// UPnP wants H:MM:SS, and answers in it. Hours are not optional in the request.
+  static String upnpTime(Duration d) {
+    final s = d.isNegative ? Duration.zero : d;
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${s.inHours}:${two(s.inMinutes % 60)}:${two(s.inSeconds % 60)}';
+  }
+
+  /// The other direction, and the reason this is a named function rather than a one-liner: what
+  /// comes back is not one format. Renderers answer "0:01:23" and "00:01:23.000", a Sonos uses a
+  /// comma for the fraction, and while nothing is loaded most of them answer "NOT_IMPLEMENTED" —
+  /// which parsed as zero would draw a track that had jumped back to the start.
+  static Duration? parseUpnpTime(String? text) {
+    final t = text?.trim() ?? '';
+    if (t.isEmpty || t.toUpperCase().startsWith('NOT_IMPL')) return null;
+    final parts = t.split(':');
+    if (parts.length != 3) return null;
+    final h = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    // The seconds field may carry a fraction; nobody needs it for a scrubber.
+    final s = double.tryParse(parts[2].replaceAll(',', '.'));
+    if (h == null || m == null || s == null) return null;
+    return Duration(hours: h, minutes: m, seconds: s.floor());
+  }
+
   /// What the speaker is doing — used to notice a track ended and send the next one.
   Future<TransportState?> transportState(Renderer r) async {
     final body = await _soap(r.avTransportUrl, 'AVTransport', 'GetTransportInfo',

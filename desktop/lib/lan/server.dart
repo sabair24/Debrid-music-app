@@ -206,6 +206,13 @@ class LanServer {
         return _castPlay(req);
       case '/api/cast/control':
         return _castControl(req);
+      case '/api/cast/status':
+        // GET with the id in the query: a phone polls this while a progress bar is on screen, and
+        // a body on every poll is needless ceremony.
+        return _json(
+            res,
+            await cast.status(req.uri.queryParameters['deviceId'] ?? '',
+                withVolume: req.uri.queryParameters['volume'] == '1'));
       case '/api/online/search':
         return _onlineSearch(req);
       case '/api/online/tracklist':

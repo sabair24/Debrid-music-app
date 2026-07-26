@@ -10,6 +10,8 @@
 /// to run SSDP itself.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'lan/client.dart';
@@ -32,10 +34,159 @@ class SpeakerTarget extends ChangeNotifier {
 
   bool get isCasting => _device != null;
 
+  /// The client to steer through, set once by main. Null on the machine that holds the music, which
+  /// is also the machine that never needs it.
+  RemoteClient? client;
+
+  CastStatus? _status;
+
+  /// What the speaker last told us. Null until the first answer arrives, and again if it stops
+  /// answering — which is not the same as "stopped", and must not be drawn as one.
+  CastStatus? get status => _status;
+
+  Timer? _poll;
+
+  /// The real answer, and when it arrived. Between polls the position is worked out from these two
+  /// rather than left to sit still for two seconds: interpolating from a measured anchor is not the
+  /// same as inventing a bar out of nothing, and it is never more than one poll out.
+  Duration? _anchorPosition;
+  DateTime? _anchorAt;
+
+  /// Set while a drag is in progress, so an answer that is already in flight — describing where the
+  /// speaker was BEFORE the seek — cannot yank the handle back under the finger.
+  Duration? _scrubbing;
+
+  /// Where to draw the handle: what the finger is doing, else the anchor carried forward.
+  Duration? get position {
+    final scrubbing = _scrubbing;
+    if (scrubbing != null) return scrubbing;
+    final anchor = _anchorPosition, at = _anchorAt;
+    if (anchor == null || at == null) return null;
+    if (_status?.playing != true) return anchor;
+    final ahead = anchor + DateTime.now().difference(at);
+    final total = _status?.duration;
+    return total != null && total > Duration.zero && ahead > total ? total : ahead;
+  }
+
+  Duration? get duration => _status?.duration;
+
+  /// Whether the SPEAKER is playing. The local player is deliberately silent while casting, so its
+  /// own flag says nothing about the record you are listening to.
+  bool get isPlaying => _status?.playing ?? false;
+
+  int get volume => _status?.volume ?? 50;
+
+  bool get hasVolume => _status?.volume != null;
+
   void select(CastDevice? d) {
     if (_device?.id == d?.id) return;
     _device = d;
+    _status = null;
+    _anchorPosition = null;
+    _anchorAt = null;
+    _scrubbing = null;
     notifyListeners();
+    if (d == null) {
+      _poll?.cancel();
+      _poll = null;
+    } else {
+      _startPolling();
+    }
+  }
+
+  /// Ask the speaker where it is, every two seconds.
+  ///
+  /// Two, not one: each poll is a SOAP round trip to embedded hardware, and the bar between polls
+  /// is carried by [position] rather than by asking more often.
+  void _startPolling() {
+    _poll?.cancel();
+    unawaited(refresh(withVolume: true));
+    _poll = Timer.periodic(const Duration(seconds: 2), (_) => unawaited(refresh()));
+  }
+
+  Future<void> refresh({bool withVolume = false}) async {
+    final device = _device, c = client;
+    if (device == null || c == null) return;
+    final fresh = await c.castStatus(device.id, withVolume: withVolume);
+    // Selected somewhere else while this was in flight — that answer is about a speaker nobody is
+    // looking at any more.
+    if (fresh == null || _device?.id != device.id) return;
+    // Keep the volume we knew: a poll that did not ask for it must not read as "no volume control".
+    _status = fresh.volume == null && _status?.volume != null
+        ? CastStatus(
+            casting: fresh.casting,
+            position: fresh.position,
+            duration: fresh.duration,
+            playing: fresh.playing,
+            volume: _status!.volume,
+            index: fresh.index,
+            queueLength: fresh.queueLength,
+          )
+        : fresh;
+    if (fresh.position != null) {
+      _anchorPosition = fresh.position;
+      _anchorAt = DateTime.now();
+    }
+    notifyListeners();
+  }
+
+  Future<void> _send(String action, {int? value}) async {
+    final device = _device, c = client;
+    if (device == null || c == null) return;
+    await c.castControl(device.id, action, value: value);
+    // Ask straight away rather than waiting for the next tick: a button that takes two seconds to
+    // look like it worked reads as a button that did not.
+    await refresh();
+  }
+
+  Future<void> playPause() => _send(isPlaying ? 'pause' : 'play');
+
+  Future<void> next() => _send('next');
+
+  Future<void> previous() => _send('previous');
+
+  /// While a finger is on the scrubber. Nothing is sent yet — a seek per pixel would flood the
+  /// speaker and land somewhere behind where you let go.
+  void scrubTo(Duration to) {
+    _scrubbing = to;
+    notifyListeners();
+  }
+
+  Future<void> seekTo(Duration to) async {
+    _scrubbing = to;
+    // Carry the handle at the new spot immediately, so it does not snap back for one poll.
+    _anchorPosition = to;
+    _anchorAt = DateTime.now();
+    notifyListeners();
+    await _send('seek', value: to.inSeconds);
+    _scrubbing = null;
+    notifyListeners();
+  }
+
+  Future<void> setVolume(int v) async {
+    final clamped = v.clamp(0, 100);
+    // Shown at once; the speaker confirms a moment later.
+    final was = _status;
+    if (was != null) {
+      _status = CastStatus(
+        casting: was.casting,
+        position: was.position,
+        duration: was.duration,
+        playing: was.playing,
+        volume: clamped,
+        index: was.index,
+        queueLength: was.queueLength,
+      );
+      notifyListeners();
+    }
+    await _send('volume', value: clamped);
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    _poll = null;
+    super.dispose();
   }
 }
 

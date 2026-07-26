@@ -118,6 +118,49 @@ class CastDevice {
       );
 }
 
+/// What a speaker is doing, as the speaker itself reports it.
+///
+/// Nullable throughout, and that is the point: this is read from an embedded UPnP stack that may
+/// answer some questions and not others. A missing position means "do not draw a bar", never
+/// "back to the start".
+class CastStatus {
+  const CastStatus({
+    required this.casting,
+    this.position,
+    this.duration,
+    this.playing,
+    this.volume,
+    this.index,
+    this.queueLength,
+  });
+
+  /// True when this speaker is playing a queue THIS pc started. A speaker someone else in the house
+  /// is using answers false, and then its position is none of our business.
+  final bool casting;
+  final Duration? position;
+  final Duration? duration;
+  final bool? playing;
+  final int? volume;
+  final int? index;
+  final int? queueLength;
+
+  bool get hasPrev => (index ?? 0) > 0;
+  bool get hasNext => index != null && queueLength != null && index! + 1 < queueLength!;
+
+  static Duration? _ms(Object? v) =>
+      v is num ? Duration(milliseconds: v.toInt()) : null;
+
+  static CastStatus fromJson(Map<String, dynamic> j) => CastStatus(
+        casting: j['casting'] == true,
+        position: _ms(j['positionMs']),
+        duration: _ms(j['durationMs']),
+        playing: j['playing'] is bool ? j['playing'] as bool : null,
+        volume: (j['volume'] as num?)?.toInt(),
+        index: (j['index'] as num?)?.toInt(),
+        queueLength: (j['queueLength'] as num?)?.toInt(),
+      );
+}
+
 class RemoteException implements Exception {
   final String message;
 
@@ -252,11 +295,27 @@ class RemoteClient {
   Future<bool> castPlay(String deviceId, List<String> trackIds, int index) =>
       _castPost('/api/cast/play', {'deviceId': deviceId, 'trackIds': trackIds, 'index': index});
 
-  /// pause | resume | next | prev | stop | volume (with [value] 0-100).
+  /// play | pause | stop | next | previous | volume ([value] 0-100) | seek ([value] in seconds).
   Future<bool> castControl(String deviceId, String action, {int? value}) => _castPost(
         '/api/cast/control',
         {'deviceId': deviceId, 'action': action, if (value != null) 'value': value},
       );
+
+  /// What the speaker is doing: position, length, whether it is playing, and its volume.
+  ///
+  /// Every field is optional — a renderer that answers some questions and not others is ordinary.
+  /// An empty map means "could not ask", which is different from "stopped" and must not be drawn
+  /// as a track that jumped back to zero.
+  Future<CastStatus?> castStatus(String deviceId, {bool withVolume = false}) async {
+    try {
+      final res = await _get('/api/cast/status?deviceId=${Uri.encodeComponent(deviceId)}'
+          '${withVolume ? '&volume=1' : ''}');
+      final j = jsonDecode(utf8.decode(res.bodyBytes));
+      return j is Map<String, dynamic> ? CastStatus.fromJson(j) : null;
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<bool> _castPost(String path, Map<String, dynamic> body) async {
     try {
