@@ -313,7 +313,11 @@ class LibraryStore extends ChangeNotifier {
   late final AlbumUids uids = AlbumUids(dir: () => _appDir);
 
   /// The uid of an album, for anything that wants to remember something about it.
-  String uidOf(Album a) => uids.uidOf(a);
+  ///
+  /// On a client the PC's album id stands in. Nothing here mints uids — the albums are the PC's and
+  /// so is the answer that gets filed against them; a second naming scheme on this side would only
+  /// be a way for the two to disagree.
+  String uidOf(Album a) => isRemote ? (remoteAlbumId(a) ?? '') : uids.uidOf(a);
 
   /// What was worked out about each record — which pressing, its tracklist, what is missing. See
   /// album_facts.dart. Reached through the library because that is what knows the albums.

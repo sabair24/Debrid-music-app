@@ -18,6 +18,7 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+import '../album_facts.dart';
 import 'dtos.dart';
 
 /// A paired PC: where it is and what proves we may talk to it.
@@ -161,6 +162,26 @@ class RemoteClient {
       CatalogDto.fromJson(decoded),
       res.headers['etag'],
     );
+  }
+
+  /// What the PC knows about a record: its pressing, the label's tracklist, what is missing.
+  ///
+  /// Asked of the PC rather than worked out here, and that is the point. Every device used to run
+  /// its own MusicBrainz search on every album open — four devices browsing meant four independent
+  /// six-request chains against one anonymous per-second budget, each with a private cache that
+  /// helped nobody else. The PC works it out once and hands it round.
+  ///
+  /// The first ask for a record the PC has not looked at yet takes as long as it always did; every
+  /// ask after that, from any device, is instant.
+  Future<AlbumFacts?> albumFacts(String albumId, {String? etag, bool force = false}) async {
+    // Through [query], never as a string on the path: _api replaces the whole path, so a `?` in
+    // there is escaped INTO it and the server sees a route it has never heard of.
+    final res = await _get('/api/album/facts',
+        etag: etag, query: {'albumId': albumId, if (force) 'force': '1'});
+    if (res.statusCode == 304 || res.statusCode == 404) return null;
+    final decoded = jsonDecode(utf8.decode(res.bodyBytes));
+    if (decoded is! Map<String, dynamic>) return null;
+    return AlbumFacts.fromJson(decoded);
   }
 
   /// The URL to hand libmpv. It carries the file extension because that is how players — and

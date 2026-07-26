@@ -5,8 +5,11 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import '../album_facts.dart';
+import '../album_facts_resolver.dart';
 import '../library.dart';
 import '../models.dart';
+import '../musicbrainz.dart';
 import '../online.dart';
 import '../organize.dart';
 import '../settings.dart';
@@ -44,6 +47,7 @@ class LanServer {
     this.soulseek,
     this.downloads,
     this.settings,
+    this.musicbrainz,
     GrantStore? grants,
   })  : grants = grants ?? GrantStore(),
         catalog = LanCatalog(library) {
@@ -65,6 +69,11 @@ class LanServer {
   /// Needed by [LibraryStore.applyCorrection] — a hand-picked cover is written into the cover
   /// cache, and that lives where the settings say.
   final AppSettings? settings;
+
+  /// So this machine can work out an album's pressing on a client's behalf. Nullable for the tests
+  /// that only care about the library; without it `/api/album/facts` answers only what is already
+  /// known, which is a slower client rather than a broken one.
+  final MusicBrainzService? musicbrainz;
 
   /// Which devices may fetch anything, one token each. See `tokens.dart` — it deliberately knows
   /// nothing about who signed in, so this server keeps working with the internet unplugged.
@@ -181,6 +190,8 @@ class LanServer {
         return _json(res, [for (final a in catalog.snapshot().catalog.albums) a.toJson()]);
       case '/api/library/tracks':
         return _tracks(req);
+      case '/api/album/facts':
+        return _albumFacts(req);
       case '/api/search':
         return _json(res, catalog.search(req.uri.queryParameters['q'] ?? '').toJson());
       case '/api/state':
@@ -278,6 +289,62 @@ class LanServer {
     res.headers.contentLength = snap.json.length;
     res.add(snap.json);
     return res.close();
+  }
+
+  /// What this record IS — its pressing, the label's tracklist, what is missing.
+  ///
+  /// The PC answers this so that no other device ever has to. Before, every device ran its own
+  /// MusicBrainz search on every album open: four devices browsing meant four independent
+  /// six-request chains against the same anonymous one-per-second budget, each with its own cache,
+  /// none of them helping the others. Now the answer is worked out once, here, and handed out.
+  ///
+  /// Resolved on demand when it is not yet known, rather than 404ing. Otherwise a client could only
+  /// see facts for albums somebody had already opened ON the PC, which is not a rule anyone could
+  /// predict from the outside.
+  Future<void> _albumFacts(HttpRequest req) async {
+    final res = req.response;
+    final id = req.uri.queryParameters['albumId'] ?? '';
+    final album = catalog.album(id);
+    if (album == null) return _json(res, {'error': 'unknown album'}, status: HttpStatus.notFound);
+
+    final uid = library.uidOf(album);
+    final hash = library.trackSetHashFor(album);
+    var facts = library.facts.get(uid);
+
+    if (needsResolve(facts,
+        trackSetHash: hash,
+        nowMs: DateTime.now().millisecondsSinceEpoch,
+        pinnedMbid: library.pinnedMbid(album),
+        pinned: library.pinnedRelease(album),
+        force: req.uri.queryParameters['force'] == '1')) {
+      final mb = musicbrainz;
+      final s = settings;
+      if (mb != null && s != null && uid.isNotEmpty) {
+        facts = await resolveAlbumFacts(album,
+            uid: uid,
+            trackSetHash: hash,
+            mb: mb,
+            settings: s,
+            pinnedMbid: library.pinnedMbid(album),
+            pinned: library.pinnedRelease(album));
+        library.facts.put(facts, folder: library.sidecarFolderFor(album));
+      }
+    }
+
+    // Nothing known and nothing able to find out — say so at once. A client that gets this shows
+    // the tracks it has, which is what it showed before any of this existed.
+    if (facts == null) return _json(res, {'error': 'no facts'}, status: HttpStatus.notFound);
+
+    // Cheap to revalidate: the body is a tracklist, and it changes about as often as the record
+    // does. A client that already has this version pays a few bytes.
+    final etag = '"$uid-${facts.updatedMs}"';
+    if (req.headers.value(HttpHeaders.ifNoneMatchHeader) == etag) {
+      res.statusCode = HttpStatus.notModified;
+      res.headers.set(HttpHeaders.etagHeader, etag);
+      return res.close();
+    }
+    res.headers.set(HttpHeaders.etagHeader, etag);
+    return _json(res, facts.toJson());
   }
 
   Future<void> _tracks(HttpRequest req) async {

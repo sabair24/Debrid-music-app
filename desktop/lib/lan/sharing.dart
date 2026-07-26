@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../library.dart';
+import '../musicbrainz.dart';
 import '../online.dart';
 import '../settings.dart';
 import 'discovery.dart';
@@ -24,6 +25,7 @@ class LanSharing extends ChangeNotifier {
     this.online,
     this.soulseek,
     this.downloads,
+    this.musicbrainz,
   }) : state = LanStateStore(File('${_appDir()}${Platform.pathSeparator}state.json'));
 
   final LibraryStore library;
@@ -34,6 +36,10 @@ class LanSharing extends ChangeNotifier {
   final OnlineService? online;
   final SoulseekService? soulseek;
   final DownloadManager? downloads;
+
+  /// So this PC can work out an album's pressing when a phone or the television asks for it —
+  /// once, here, instead of once per device.
+  final MusicBrainzService? musicbrainz;
 
   /// Playlists, favourites, play position and counts — shared with every device. Lives here
   /// rather than in the server so switching sharing off doesn't drop what the PC itself knows.
@@ -129,6 +135,7 @@ class LanSharing extends ChangeNotifier {
       soulseek: soulseek,
       downloads: downloads,
       settings: settings,
+      musicbrainz: musicbrainz,
       grants: grants,
     );
     _error = await server.start();

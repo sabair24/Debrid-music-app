@@ -264,6 +264,8 @@ Future<void> main() async {
     online: mode.owner ? online : null,
     soulseek: mode.owner ? soulseek : null,
     downloads: mode.owner ? downloads : null,
+    // And so it can say what a record IS, once, for every device that asks.
+    musicbrainz: mode.owner ? musicbrainz : null,
   );
   // Signing in. Restoring a saved session is deliberately NOT awaited before the first frame: a
   // slow network would otherwise hold the whole app on a blank screen, and on the PC it would delay
@@ -1845,6 +1847,38 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
   String get _albumKey => '${artistKey(album.artist)}|${normKey(album.title)}';
 
+  /// Ask the PC what this record is.
+  ///
+  /// Null when the PC cannot say — it is not paired, it went to sleep, or it has no answer. The
+  /// page then shows the tracklist it always showed, which is what is actually on disk; a missing
+  /// official tracklist costs the "what is missing" section and nothing else.
+  Future<AlbumFacts?> _factsFromPc(LibraryStore lib, String uid, String hash,
+      {bool force = false}) async {
+    final client = lib.remote;
+    if (client == null || uid.isEmpty) return null;
+    try {
+      final f = await client.albumFacts(uid, force: force);
+      if (f == null) return null;
+      // The PC files this under its own name for the record; on this side the album id IS the name,
+      // and the hash is this device's view of the same files.
+      return AlbumFacts(
+        uid: uid,
+        trackSetHash: hash,
+        updatedMs: f.updatedMs,
+        source: f.source,
+        mbid: f.mbid,
+        discogsRelease: f.discogsRelease,
+        bestFit: f.bestFit,
+        tracklist: f.tracklist,
+        bonus: f.bonus,
+        year: f.year,
+        failedMs: f.failedMs,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Take whatever is already known about this record, before the first frame is painted.
   ///
   /// This is the difference between an album page that fills instantly and one that shows a spinner
@@ -1906,20 +1940,31 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       _officialFor = want;
     });
 
-    final fresh = await resolveAlbumFacts(
-      a,
-      uid: uid,
-      trackSetHash: hash,
-      mb: mb,
-      settings: settings,
-      pinnedMbid: pinnedMbid,
-      pinned: pinned,
-    );
+    // On a phone, an iPad or the television the PC does the looking up. Not an optimisation — it is
+    // the difference between one MusicBrainz search per record and one per record PER DEVICE,
+    // against a budget of one request a second that all of them share.
+    final fresh = lib.isRemote
+        ? await _factsFromPc(lib, uid, hash, force: force)
+        : await resolveAlbumFacts(
+            a,
+            uid: uid,
+            trackSetHash: hash,
+            mb: mb,
+            settings: settings,
+            pinnedMbid: pinnedMbid,
+            pinned: pinned,
+          );
+    if (fresh == null) {
+      if (mounted) setState(() => _officialBusy = false);
+      return;
+    }
 
     // Kept even when it found nothing — an empty answer carries a failedMs, and remembering a "no"
     // for a day is what stops the six-request chain being paid again at every open.
     if (uid.isNotEmpty) {
-      lib.facts.put(fresh, folder: lib.sidecarFolderFor(a));
+      // No sidecar from here: the music lives on the PC, and this device has no business writing
+      // into a folder it only sees over a stream URL.
+      lib.facts.put(fresh, folder: lib.isRemote ? null : lib.sidecarFolderFor(a));
     }
 
     if (!mounted) return;
