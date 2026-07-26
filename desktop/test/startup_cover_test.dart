@@ -1,14 +1,25 @@
 // Reproduces the app's startup path (scan → enrich) against the real library at
 // D:\Flac music 2024 to prove covers populate and nothing hangs.
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:debridmusic/library.dart';
 import 'package:debridmusic/settings.dart';
+
+/// The folder these three read. It used to be the hard-coded default of LibraryStore.rootPath, so
+/// they passed on this machine by accident and could never have passed anywhere else. Now it is said
+/// out loud, and a machine without it skips instead of failing.
+const realLibrary = r'D:\Flac music 2024';
+
+/// Nothing to scan on a machine that does not hold the music — say so rather than fail.
+final skipUnlessLibrary =
+    Directory(realLibrary).existsSync() ? null : 'geen $realLibrary op deze machine';
 
 void main() {
   test('scan returns quickly and covers load from cache', () async {
     final settings = AppSettings();
     await settings.load();
-    final lib = LibraryStore();
+    final lib = LibraryStore()..rootPath = realLibrary;
 
     final sw = Stopwatch()..start();
     await lib.scan();
@@ -30,5 +41,5 @@ void main() {
 
     // With 60 cached covers on disk, the vast majority must be present.
     expect(withCover, greaterThan(40));
-  }, timeout: const Timeout(Duration(minutes: 4)));
+  }, timeout: const Timeout(Duration(minutes: 4)), skip: skipUnlessLibrary);
 }
