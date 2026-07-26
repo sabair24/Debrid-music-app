@@ -23,12 +23,14 @@ import 'discogs.dart';
 import 'editions.dart';
 import 'connectivity.dart';
 import 'enrichment.dart';
+import 'facts_warmer.dart';
 import 'lan/sharing.dart';
 import 'lan/tokens.dart';
 import 'cloud/catalog_mirror.dart';
 import 'cloud/cloud_session.dart';
 import 'cloud/queue_store.dart';
 import 'cloud/queue_worker.dart';
+import 'cloud/settings_sync.dart';
 import 'cloud/device_identity.dart';
 import 'lan/cast_receiver.dart';
 import 'lan/client.dart';
@@ -274,6 +276,16 @@ Future<void> main() async {
   // Share this library with the Mac, the iPad and the Shield. Started before the scan finishes:
   // a device probing /health then gets a real answer straight away, and the catalogue fills in
   // by itself as the scan lands.
+  // Looking records up before you ask for them. Only the machine holding the music does this — a
+  // phone asks the PC for facts, so warming there would be four devices doing one job against one
+  // shared budget. Constructed everywhere so the provider tree is the same shape on every platform.
+  final warmer = FactsWarmer(
+    library: library,
+    settings: settings,
+    mb: musicbrainz,
+    enabled: mode.owner,
+  );
+
   final sharing = LanSharing(
     library: library,
     settings: settings,
@@ -288,6 +300,39 @@ Future<void> main() async {
   // slow network would otherwise hold the whole app on a blank screen, and on the PC it would delay
   // serving music for something that has nothing to do with serving music.
   final cloud = CloudSession();
+
+  // Your service logins, carried by your own account.
+  //
+  // On Windows and macOS settings.json already survives a reinstall. On a phone it does not — an
+  // uninstall takes the whole container — so the account you already sign in with is the only thing
+  // that can hand a Soulseek or RuTracker login back to a freshly installed app.
+  //
+  // Pull fills only what is EMPTY here, so signing in on a working machine can never replace a
+  // token in use with an older one from another device. Push is debounced and fingerprinted because
+  // AppSettings notifies on load as well as on save, and a TIDAL refresh saves on its own.
+  SettingsSync? settingsSync;
+  Timer? settingsPush;
+  Future<void> syncSettings() async {
+    if (!cloud.isSignedIn) {
+      settingsSync = null;
+      return;
+    }
+    if (settingsSync == null) {
+      final db = await cloud.db();
+      if (db == null) return;
+      settingsSync = SettingsSync(db: db, uid: cloud.uid);
+      final filled = await settingsSync!.pullIntoEmpty(settings);
+      if (filled > 0) debugPrint('Restored $filled service keys from your account');
+    }
+    await settingsSync!.push(settings);
+  }
+
+  cloud.addListener(() => unawaited(syncSettings()));
+  settings.addListener(() {
+    settingsPush?.cancel();
+    settingsPush = Timer(const Duration(seconds: 3), () => unawaited(syncSettings()));
+  });
+
   unawaited(cloud.restore().then((_) async {
     if (!mode.owner) return;
     await publishAsOwner(cloud, settings, sharing, library, downloads);
@@ -336,6 +381,7 @@ Future<void> main() async {
       providers: [
         ChangeNotifierProvider<AppSettings>.value(value: settings),
         ChangeNotifierProvider<LibraryStore>.value(value: library),
+        ChangeNotifierProvider<FactsWarmer>.value(value: warmer),
         ChangeNotifierProvider<PlayerStore>.value(value: player),
         ChangeNotifierProvider<OfflineStore>.value(value: offline),
         ChangeNotifierProvider<SpeakerTarget>.value(value: speakers),
@@ -441,6 +487,10 @@ Future<void> main() async {
       await downloads.resumePending();
     } catch (_) {}
     await library.enrichArtists(settings);
+    // Last, deliberately. Everything above this either draws the first screen or fetches something
+    // you can see; this is the only part nobody is waiting for. Not awaited either — it runs for as
+    // long as there are records it has not looked up yet.
+    unawaited(warmer.start());
   }();
 }
 

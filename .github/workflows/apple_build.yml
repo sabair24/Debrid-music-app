@@ -99,7 +99,9 @@ jobs:
             test/edition_split_test.dart test/artist_name_test.dart test/album_cover_key_test.dart \
             test/flac_tags_test.dart test/featured_test.dart \
             test/corrections_durability_test.dart test/player_refresh_test.dart \
-            test/album_id_test.dart test/album_facts_test.dart test/lan_facts_test.dart
+            test/album_id_test.dart test/album_facts_test.dart test/lan_facts_test.dart \
+            test/settings_durability_test.dart test/mb_browse_recordings_test.dart \
+            test/facts_warmer_test.dart test/cast_discovery_test.dart
 
       - name: Build for the iPad (unsigned)
         # Proves the iOS build compiles even with no App Store Connect key configured.

@@ -39,6 +39,12 @@ class AppSettings extends ChangeNotifier {
   /// Where the music lives. Only the machine that owns the files sets this.
   String musicRoot = '';
 
+  /// Let the PC look records up in the background instead of waiting for you to open them.
+  ///
+  /// Only the owner acts on this. Off means the app behaves as it did: the first visit to a record
+  /// pays for the lookup, every visit after that is free.
+  bool warmFacts = true;
+
   static File file() {
     return appFile('settings.json');
   }
@@ -109,6 +115,13 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Take a settings map as [toJson] produces it. Public so the account copy can be merged in
+  /// without this file needing to know anything about Firestore.
+  void applyJson(Map<String, dynamic> m) {
+    _apply(m);
+    notifyListeners();
+  }
+
   void _apply(Map<String, dynamic> m) {
     {
         discogsToken = (m['discogs_token'] ?? '') as String;
@@ -132,6 +145,7 @@ class AppSettings extends ChangeNotifier {
         lanToken = (m['lan_token'] ?? '') as String;
         serverId = (m['server_id'] ?? '') as String;
         musicRoot = (m['music_root'] ?? '') as String;
+        warmFacts = (m['warm_facts'] ?? true) as bool;
     }
   }
 
@@ -158,6 +172,7 @@ class AppSettings extends ChangeNotifier {
         'lan_token': lanToken,
         'server_id': serverId,
         'music_root': musicRoot,
+        'warm_facts': warmFacts,
       };
 
   /// Write the settings down.
