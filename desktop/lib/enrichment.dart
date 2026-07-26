@@ -102,6 +102,17 @@ class CoverEnricher {
   Directory get bioDir => Directory(_dir('bios'));
   Directory get fixDir => Directory(_dir('fixcovers'));
 
+  /// The sleeve OF a pressing that was actually identified — kept apart from [cacheDir] because it
+  /// ranks differently: an enriched cover is a guess by name and loses to whatever the files carry,
+  /// while this one belongs to a named release and beats it.
+  ///
+  /// That distinction only mattered within a session until now. D'Eux, downloaded off Soulseek,
+  /// carries "The Essential Céline Dion" as its embedded art — someone's rip of the compilation. The
+  /// album page fetched the right sleeve and handed it to the library, so the grid corrected itself
+  /// the moment you opened the record; nothing was written down, so the next start went back to the
+  /// wrong one. The fix looked like it worked every time you checked it.
+  Directory get resolvedDir => Directory(_dir('resolved'));
+
   // Stable FNV-1a hash (Dart's String.hashCode is randomized per run, so it can't
   // be used for a persistent on-disk cache key).
   static String _fnv(String s) {
@@ -125,13 +136,45 @@ class CoverEnricher {
     return b.length > 100 ? b : null;
   }
 
+  File _resolvedFile(Album a) => File('${resolvedDir.path}${Platform.pathSeparator}${keyFor(a)}.jpg');
+  File _resolvedFromFile(Album a) =>
+      File('${resolvedDir.path}${Platform.pathSeparator}${keyFor(a)}.from');
+
+  /// The saved sleeve of an identified pressing, with the marker saying WHICH pressing
+  /// (`rel:12345`, `mb:<uuid>`).
+  ///
+  /// The marker is required, not optional: bytes without it cannot be told apart from a by-name
+  /// guess, and a guess must not outrank the art in the files.
+  Future<(Uint8List, String)?> resolvedCover(Album a) async {
+    try {
+      final img = _resolvedFile(a), from = _resolvedFromFile(a);
+      if (!await img.exists() || !await from.exists()) return null;
+      final marker = (await from.readAsString()).trim();
+      if (marker.isEmpty) return null;
+      final b = await img.readAsBytes();
+      return b.length > 100 ? (b, marker) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Write down a sleeve that was traced to a specific pressing, so the next start knows it too.
+  Future<void> saveResolvedCover(Album a, Uint8List bytes, String from) async {
+    if (bytes.length <= 100 || from.trim().isEmpty) return;
+    try {
+      await resolvedDir.create(recursive: true);
+      await _resolvedFile(a).writeAsBytes(bytes);
+      await _resolvedFromFile(a).writeAsString(from.trim());
+    } catch (_) {/* the cover is on the album in memory; this only costs the next start */}
+  }
+
   /// Persist a user-picked cover for [a] (survives rescans; top display priority).
   Future<void> saveFixedCover(Album a, Uint8List bytes) async {
     await fixDir.create(recursive: true);
     await _fixFile(a).writeAsBytes(bytes);
   }
 
-  /// Carry a hand-picked cover to the album's new name.
+  /// Carry a hand-picked cover — and a traced one — to the album's new name.
   ///
   /// [keyFor] is the artist and the title, so correcting either moves the filename this was saved
   /// under. Within the session nothing showed, because the cover is carried across a regroup by
@@ -142,11 +185,14 @@ class CoverEnricher {
     final from = _fnv('${oldArtist.toLowerCase()}|${oldTitle.toLowerCase()}');
     final to = _fnv('${newArtist.toLowerCase()}|${newTitle.toLowerCase()}');
     if (from == to) return;
-    try {
-      final src = File('${fixDir.path}${Platform.pathSeparator}$from.jpg');
-      if (!await src.exists()) return;
-      await src.rename('${fixDir.path}${Platform.pathSeparator}$to.jpg');
-    } catch (_) {/* the cover is still on the album in memory; this is only the next start */}
+    // Both caches are keyed the same way, so both go stale on the same rename.
+    for (final (dir, ext) in [(fixDir, 'jpg'), (resolvedDir, 'jpg'), (resolvedDir, 'from')]) {
+      try {
+        final src = File('${dir.path}${Platform.pathSeparator}$from.$ext');
+        if (!await src.exists()) continue;
+        await src.rename('${dir.path}${Platform.pathSeparator}$to.$ext');
+      } catch (_) {/* the cover is still on the album in memory; this is only the next start */}
+    }
   }
 
   /// Download raw image bytes for a chosen cover URL (with the right User-Agent).

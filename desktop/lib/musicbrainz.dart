@@ -395,7 +395,38 @@ class MusicBrainzService {
   static final _lastCall = <String, DateTime>{};
   static final _turn = <String, Future<void>>{};
 
-  /// Serialised per host, spaced out, disk-cached. Null on any failure: a missing album page is a
+  /// Wait for a turn on [lane], and ONLY for the turn.
+  ///
+  /// The request used to sit inside the chained future, so each caller waited out the previous ROUND
+  /// TRIP rather than the gap — and a Cover Art Archive lookup takes one to two seconds, not the
+  /// 250 ms this lane is spaced for. Eight pressings meant fifteen seconds of standing in line for
+  /// work archive.org is happy to take several at a time. Asking the callers in parallel could not
+  /// help while the lane held every request from start to finish, which is why that change bought
+  /// nothing; this is the part that had to move.
+  ///
+  /// What the lane still guarantees is exactly what the two services ask for: one request STARTED
+  /// per [gap]. Overlapping round trips raise the concurrency, not the rate.
+  @visibleForTesting
+  static Future<void> laneSlot(String lane, Duration gap) {
+    final slot = (_turn[lane] ?? Future.value()).then((_) async {
+      final last = _lastCall[lane] ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final since = DateTime.now().difference(last);
+      if (since < gap) await Future<void>.delayed(gap - since);
+      _lastCall[lane] = DateTime.now();
+    });
+    // The chain must survive a failed turn, or one thrown error deadlocks the lane for the session.
+    _turn[lane] = slot.catchError((_) {});
+    return slot;
+  }
+
+  /// Forget every lane's timing. Tests only — the lanes are static because the budget is.
+  @visibleForTesting
+  static void resetLanes() {
+    _lastCall.clear();
+    _turn.clear();
+  }
+
+  /// Spaced out per host, disk-cached. Null on any failure: a missing album page is a
   /// disappointment, a crashed one is a bug.
   Future<Map<String, dynamic>?> _get(String url, {required String lane, required Duration gap}) async {
     final cached = await _readCache(url);
@@ -406,37 +437,28 @@ class MusicBrainzService {
       // A remembered "no" that has had its chance to change — fall through and ask again.
     }
 
-    final done = Completer<Map<String, dynamic>?>();
-    _turn[lane] = (_turn[lane] ?? Future.value()).then((_) async {
-      try {
-        final last = _lastCall[lane] ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final since = DateTime.now().difference(last);
-        if (since < gap) await Future<void>.delayed(gap - since);
-        _lastCall[lane] = DateTime.now();
-        final r = await http
-            .get(Uri.parse(url), headers: {'User-Agent': _ua, 'Accept': 'application/json'})
-            .timeout(const Duration(seconds: 12));
-        // 404 from the Cover Art Archive means this pressing has no scans. Very common, and not a
-        // failure — it is the signal to fall back to Discogs.
-        if (r.statusCode != 200) {
-          await _writeMiss(url, notFound: r.statusCode == 404);
-          done.complete(null);
-          return;
-        }
-        final body = jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true));
-        if (body is! Map<String, dynamic>) {
-          await _writeMiss(url, notFound: false);
-          done.complete(null);
-          return;
-        }
-        await _writeCache(url, body);
-        done.complete(body);
-      } catch (_) {
-        await _writeMiss(url, notFound: false);
-        done.complete(null);
+    try {
+      await laneSlot(lane, gap);
+      final r = await http
+          .get(Uri.parse(url), headers: {'User-Agent': _ua, 'Accept': 'application/json'})
+          .timeout(const Duration(seconds: 12));
+      // 404 from the Cover Art Archive means this pressing has no scans. Very common, and not a
+      // failure — it is the signal to fall back to Discogs.
+      if (r.statusCode != 200) {
+        await _writeMiss(url, notFound: r.statusCode == 404);
+        return null;
       }
-    });
-    return done.future;
+      final body = jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true));
+      if (body is! Map<String, dynamic>) {
+        await _writeMiss(url, notFound: false);
+        return null;
+      }
+      await _writeCache(url, body);
+      return body;
+    } catch (_) {
+      await _writeMiss(url, notFound: false);
+      return null;
+    }
   }
 
   Future<Map<String, dynamic>?> _ws(String url) => _get(url, lane: 'ws', gap: _wsGap);
@@ -780,8 +802,11 @@ class MusicBrainzService {
   /// [detail] caps how many get their scans and tracklist fetched. Those cost a request each and
   /// the browse can return a hundred pressings, so the rest are listed on what the browse already
   /// said and filled in when tapped. Without the cap the dialog would take two minutes.
+  /// [onPartial] is called with the list as it fills in: once as soon as the pressings are named,
+  /// then again each time a pressing's scans arrive. Same contract as the Discogs side, so the
+  /// gallery can treat both sources the same way.
   Future<List<ReleaseChoice>> editionChoices(String artist, String album,
-      {int max = 40, String? pinnedMbid}) async {
+      {int max = 40, String? pinnedMbid, void Function(List<ReleaseChoice>)? onPartial}) async {
     final out = <ReleaseChoice>[];
     final seen = <String>{};
 
@@ -838,21 +863,43 @@ class MusicBrainzService {
 
     // The pressing the user already chose is always offered, whether or not it would have made the
     // cut — their own choice missing from the list of choices is the one unacceptable outcome.
+    String? pinnedGroup;
     if (pinnedMbid != null && pinnedMbid.isNotEmpty) {
       final p = await release(pinnedMbid);
-      if (p != null) offer(p, always: true);
+      if (p != null) {
+        offer(p, always: true);
+        // A lookup already asks for `release-groups`, so this costs nothing extra — and it is the
+        // answer the search below spends ten to twenty seconds arriving at.
+        pinnedGroup = (p.releaseGroupId ?? '').isEmpty ? null : p.releaseGroupId;
+      }
     }
 
-    final groups = await searchReleaseGroups(album, artist: artist);
-    if (groups.isEmpty) return out;
-    // A compilation carrying the album's name is not the album. Studio records first.
-    final ranked = [...groups]..sort((a, b) {
+    // With a pin there is nothing to search FOR: the user named a pressing, and a pressing belongs
+    // to exactly one release group, which the lookup above already told us. That matters because
+    // MusicBrainz's `?query=` endpoint is by far the slowest thing in opening this dialog —
+    // measured on the same album, four times over: 44 ms, 12.1 s, 15.9 s, 17.9 s, while resolving
+    // the group straight from the pinned release took 48–232 ms. Nothing was shown until it
+    // answered, so the gallery looked broken for a quarter of a minute at a time.
+    final List<MbReleaseGroup> ranked;
+    if (pinnedGroup != null) {
+      ranked = const [];
+    } else {
+      final groups = await searchReleaseGroups(album, artist: artist);
+      if (groups.isEmpty) return out;
+      // A compilation carrying the album's name is not the album. Studio records first.
+      ranked = [...groups]..sort((a, b) {
         final byComp = (a.isCompilation ? 1 : 0).compareTo(b.isCompilation ? 1 : 0);
         if (byComp != 0) return byComp;
         return _kindRank(a.primaryType).compareTo(_kindRank(b.primaryType));
       });
+    }
 
-    for (final g in ranked.take(2)) {
+    // The pinned pressing's own group first, then the ranked search results — which is only ever one
+    // or the other, but written as one loop so the browse and the row cap behave identically.
+    for (final g in [
+      if (pinnedGroup != null) MbReleaseGroup(pinnedGroup, album, artist, '', 'Album'),
+      ...ranked.take(2),
+    ]) {
       if (candidates.length >= max) break;
       // No track-count filter here, deliberately. Every release in a group IS this record, so a
       // count that differs is a different PRESSING — the 16-track European edition of Escape, the
@@ -864,23 +911,38 @@ class MusicBrainzService {
       }
     }
 
-    // The scans, asked for together rather than one after another. Each is a separate GET to
-    // archive.org and they were being awaited in turn — forty pressings meant forty times the
-    // 250 ms lane gap, ten seconds of waiting for work that overlaps. The lane still spaces the
-    // requests out; we simply stop standing in the queue for each one.
+    // Rows first, scans afterwards.
     //
-    // In batches, so the row cap still means what it meant: a pressing the archive knows nothing
-    // about is dropped, and the next candidate takes its place instead of leaving a short list.
-    var i = 0;
-    while (i < candidates.length && out.length < max) {
-      final batch = candidates.skip(i).take(max - out.length).toList();
-      i += batch.length;
-      final scans = await Future.wait([for (final c in batch) art(c.$1.mbid)]);
-      for (var k = 0; k < batch.length; k++) {
-        final row = rowFor(batch[k].$1, scans[k], always: batch[k].$2);
-        if (row != null) out.add(row);
+    // Naming the pressings costs nothing beyond the browse that already ran, so the list can be on
+    // screen while the archive is still being asked about the artwork. It used to be the other way
+    // round — every scan lookup finished before a single row was built — and since a Cover Art
+    // Archive lookup takes one to two seconds, that was most of the wait spent on a spinner.
+    //
+    // A row only ever APPEARS. Before its scans are known a pressing is offered on its own details
+    // (format, country, catalogue number, year); one with none of those waits until its scans turn
+    // up, because a row that shows itself and then vanishes is worse than one that arrives late.
+    final scans = <String, List<MbImage>>{};
+    List<ReleaseChoice> build() {
+      final rows = <ReleaseChoice>[];
+      for (final (r, always) in candidates) {
+        if (rows.length >= max) break;
+        final row = rowFor(r, scans[r.mbid] ?? const [], always: always);
+        if (row != null) rows.add(row);
       }
+      return rows;
     }
+
+    onPartial?.call(build());
+    await Future.wait([
+      for (final (r, _) in candidates)
+        art(r.mbid).then((imgs) {
+          scans[r.mbid] = imgs;
+          onPartial?.call(build());
+        }).catchError((_) {
+          scans[r.mbid] = const <MbImage>[];
+        }),
+    ]);
+    out.addAll(build());
     return out;
   }
 

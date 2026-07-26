@@ -11,6 +11,41 @@ library;
 
 enum EditionSource { musicbrainz, discogs }
 
+/// The four things that name a pressing on the album page.
+typedef Pressing = ({String format, String? catno, String? country, int? year});
+
+/// "cd · 88725453152 · FR" — the line that says WHICH copy of the record is on screen.
+///
+/// [pinned] is the pressing the user chose; [guessed] is whatever the app matched for itself. When
+/// there is a pin it wins every field, and that is not a preference — it is the only way the line
+/// can be true. Choose the French CD in the gallery and the page kept reading
+/// "Uitgave: cd · 88725453152 · Canada", because the panel only ever asked Discogs, which has never
+/// heard of a MusicBrainz pin. The pin was on disk and correct; the one sentence describing your
+/// copy of the record contradicted the choice you had just made.
+///
+/// [recordYear] is the album's own year. The pressing's year is only worth printing when it differs
+/// — otherwise the line just repeats the one above it.
+List<String> pressingFacts({
+  Pressing? pinned,
+  Pressing? guessed,
+  int? recordYear,
+  String Function(String)? formatLabel,
+}) {
+  final p = pinned ?? guessed;
+  if (p == null) return const [];
+  final label = formatLabel ?? (f) => f;
+  final catno = (p.catno ?? '').trim();
+  final country = (p.country ?? '').trim();
+  return <String>[
+    if (p.format.trim().isNotEmpty) label(p.format.trim()),
+    if (p.year != null && p.year != recordYear) '${p.year}',
+    // Discogs writes "none" where a release carries no catalogue number; printing it says less than
+    // leaving the field out.
+    if (catno.isNotEmpty && catno.toLowerCase() != 'none') catno,
+    if (country.isNotEmpty) country,
+  ];
+}
+
 class ChoiceImage {
   final String uri, thumb;
   const ChoiceImage(this.uri, this.thumb);

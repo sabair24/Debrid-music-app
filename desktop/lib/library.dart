@@ -713,7 +713,12 @@ class LibraryStore extends ChangeNotifier {
   /// `embeddedCover`, so for any record whose files carry a wrong sleeve this method appeared to
   /// work and changed nothing anyone could see: the album page had the right art because it drew
   /// its own, and one step back to the grid showed the old one again.
-  void adoptAlbumCover(String artist, String album, Uint8List bytes, {String? from}) {
+  /// [settings] is what lets the art be WRITTEN DOWN, and without it this correction lasts exactly
+  /// as long as the app stays open. That was the shape of the D'Eux bug: its files carry the sleeve
+  /// of a Greatest Hits, opening the album put the real one on the grid, and closing the app threw
+  /// it away — so the same record was wrong again every morning and right every time it was checked.
+  void adoptAlbumCover(String artist, String album, Uint8List bytes,
+      {String? from, AppSettings? settings}) {
     if (bytes.length < 500) return;
     var changed = false;
     for (final a in albums) {
@@ -724,6 +729,11 @@ class LibraryStore extends ChangeNotifier {
         if (identical(a.resolvedCover, bytes) && a.resolvedFrom == from) continue;
         a.resolvedCover = bytes;
         a.resolvedFrom = from;
+        // Only a traced sleeve is kept: it belongs to a named pressing, so it is a fact about the
+        // record. A by-name guess is not, and one saved guess would outrank the files forever.
+        if (settings != null) {
+          unawaited(CoverEnricher(settings).saveResolvedCover(a, bytes, from));
+        }
       } else {
         if (identical(a.enriched, bytes)) continue;
         a.enriched = bytes;
@@ -1582,6 +1592,16 @@ class LibraryStore extends ChangeNotifier {
       if (fixed != null) {
         album.correctedCover = fixed;
         continue;
+      }
+      // A sleeve traced to a pinned pressing on an earlier run. Restored BEFORE the check below,
+      // because it has to win against the embedded art rather than fill in for its absence — for a
+      // rip tagged with the wrong record, `album.cover` is not null, it is confidently wrong.
+      if (album.resolvedCover == null) {
+        final traced = await enricher.resolvedCover(album);
+        if (traced != null) {
+          album.resolvedCover = traced.$1;
+          album.resolvedFrom = traced.$2;
+        }
       }
       if (album.cover != null) continue;
       final bytes = await enricher.cached(album);

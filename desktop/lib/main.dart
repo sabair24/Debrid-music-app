@@ -8302,6 +8302,14 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
   DiscogsEdition? _edition;
   Uint8List? _back;
 
+  /// The pressing the user pinned on MusicBrainz, when that is where they pinned it.
+  ///
+  /// Without this the line below described a Discogs pressing nobody chose. Pick the French CD in
+  /// the gallery and it still read "Uitgave: cd · 88725453152 · Canada" — the pin was on disk and
+  /// correct, but this panel only ever asked Discogs, so the one sentence naming your copy of the
+  /// record contradicted the choice you had just made.
+  MbRelease? _mbEdition;
+
   @override
   void initState() {
     super.initState();
@@ -8339,6 +8347,16 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     final info = await CoverEnricher(settings).albumInfo(artist, album);
     if (!mounted || mine != _gen || artist != widget.artist || album != widget.album) return;
     if (info != null) setState(() => _info = info);
+    // A MusicBrainz pin is fetched FIRST, and on purpose: it is one cached lookup and it decides
+    // what the pressing line says, so it should not sit behind the slower Discogs edition.
+    final mbid = widget.pinnedMbid;
+    if (mbid != null && mbid.isNotEmpty) {
+      final mb = await context.read<MusicBrainzService>().release(mbid).catchError((_) => null);
+      if (!mounted || mine != _gen || artist != widget.artist || album != widget.album) return;
+      if (mb != null) setState(() => _mbEdition = mb);
+    } else if (_mbEdition != null) {
+      setState(() => _mbEdition = null);
+    }
     final discogs = DiscogsService(settings);
     final ed =
         await discogs.edition(artist, album, expectedTracks: widget.trackCount, pinned: widget.pinned).catchError((_) => null);
@@ -8375,7 +8393,8 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
   Widget build(BuildContext context) {
     final info = _info;
     final ed = _edition;
-    if (info == null && ed == null) return const SizedBox.shrink();
+    final mb = _mbEdition;
+    if (info == null && ed == null && mb == null) return const SizedBox.shrink();
     // Discogs describes one specific pressing, so where the two disagree its year and label are
     // the ones that belong to the record in front of you.
     final genres = <String>{...ed?.genres ?? const [], ...ed?.styles ?? const []};
@@ -8389,17 +8408,22 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     final facts = <String>[
       if (year != null) '$year',
       ...genres.take(4),
-      if ((ed?.label ?? info?.label) != null) (ed?.label ?? info?.label)!,
+      // Same reason as the pressing line: the label that pressed YOUR copy, when you named it.
+      if ((mb?.label ?? ed?.label ?? info?.label) != null) (mb?.label ?? ed?.label ?? info?.label)!,
     ];
     // The pressing itself, kept apart from the genre soup: this is the line that says WHICH copy
-    // of the record the page is describing.
-    final pressing = <String>[
-      if (ed != null && ed.format.isNotEmpty) _formatLabel(ed.format),
-      // Only when it differs from the album's own year — otherwise it just repeats the line above.
-      if (ed?.year != null && ed!.year != year) '${ed.year}',
-      if (ed?.catno != null && ed!.catno!.isNotEmpty && ed.catno!.toLowerCase() != 'none') ed.catno!,
-      if (ed?.country != null && ed!.country!.isNotEmpty) ed.country!,
-    ];
+    // of the record the page is describing. The precedence rule lives in pressingFacts, where it
+    // can be held to it — see editions.dart.
+    final pressing = pressingFacts(
+      pinned: mb == null
+          ? null
+          : (format: mb.format, catno: mb.catno, country: mb.country, year: mb.year),
+      guessed: ed == null
+          ? null
+          : (format: ed.format, catno: ed.catno, country: ed.country, year: ed.year),
+      recordYear: year,
+      formatLabel: _formatLabel,
+    );
     final text = info?.text;
 
     return Padding(
@@ -8456,7 +8480,10 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
                 child: Text(
                     // Named, so it is always plain whether the page is describing the release YOU
                     // chose or the one the app picked for itself.
-                    '${widget.pinned != null ? "Jouw uitgave" : "Uitgave"}: ${pressing.join(' · ')}',
+                    // "Jouw" means the user pinned this, on EITHER catalogue — saying "Uitgave" after
+                    // they chose one reads as the app ignoring them, which is what it was doing.
+                    '${widget.pinned != null || (widget.pinnedMbid ?? '').isNotEmpty ? "Jouw uitgave" : "Uitgave"}'
+                    ': ${pressing.join(' · ')}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: _muted, fontSize: 12)),
@@ -10543,7 +10570,11 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
         final from = widget.pinnedMbid != null && widget.pinnedMbid!.isNotEmpty
             ? 'mb:${widget.pinnedMbid}'
             : (widget.pinned != null && widget.pinned! > 0 ? 'rel:${widget.pinned}' : null);
-        context.read<LibraryStore>().adoptAlbumCover(artist, album, front, from: from);
+        // With the settings, a traced sleeve is written down and survives the next start; the
+        // correction used to live only for as long as the window stayed open.
+        context
+            .read<LibraryStore>()
+            .adoptAlbumCover(artist, album, front, from: from, settings: context.read<AppSettings>());
       }
       widget.onFront?.call(widget.chosen ?? front ?? widget.fallback);
     } catch (_) {/* no artwork is not an error worth showing */}
@@ -10747,9 +10778,16 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     final pinnedDg = lib.pinnedRelease(widget.album);
 
     try {
-      final mb = await context
-          .read<MusicBrainzService>()
-          .editionChoices(widget.album.artist, widget.album.title, pinnedMbid: pinnedMb);
+      // Shown as it fills in: the pressings the moment they are named, then their scans as each
+      // arrives. Waiting for the whole answer is what made this dialog feel broken — the rows were
+      // ready seconds before the artwork the spinner was actually waiting for.
+      final mb = await context.read<MusicBrainzService>().editionChoices(
+          widget.album.artist, widget.album.title,
+          pinnedMbid: pinnedMb,
+          onPartial: (rows) {
+            if (!mounted || rows.isEmpty) return;
+            setState(() => _choices = rows);
+          });
       if (!mounted) return;
       setState(() {
         _choices = mb;

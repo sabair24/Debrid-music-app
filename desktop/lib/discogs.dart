@@ -227,49 +227,49 @@ class DiscogsService {
   static Future<void> _turn = Future.value();
   static int _remaining = 60;
 
-  /// Serialises every call and keeps them [_minGap] apart. Returns null on any failure — a missing
+  /// Starts every call at least [_minGap] after the last one. Returns null on any failure — a missing
   /// album page is a disappointment, a crashed one is a bug.
   Future<Map<String, dynamic>?> _get(String url) async {
     if (!available) return null;
     final cached = await _readCache(url);
     if (cached != null) return cached;
 
-    final done = Completer<Map<String, dynamic>?>();
-    _turn = _turn.then((_) async {
-      try {
-        final since = DateTime.now().difference(_lastCall);
-        // Below a fifth of the budget, ease off hard: something else (a background sweep) is
-        // eating it, and a 429 costs more than waiting.
-        final gap = _remaining < 12 ? _minGap * 3 : _minGap;
-        if (since < gap) await Future<void>.delayed(gap - since);
-        _lastCall = DateTime.now();
-        final r = await http
-            .get(
-              Uri.parse(url),
-              headers: {
-                'User-Agent': _ua,
-                'Authorization': 'Discogs token=${settings.discogsToken.trim()}',
-              },
-            )
-            .timeout(const Duration(seconds: 12));
-        final left = int.tryParse(r.headers['x-discogs-ratelimit-remaining'] ?? '');
-        if (left != null) _remaining = left;
-        if (r.statusCode != 200) {
-          done.complete(null);
-          return;
-        }
-        final body = jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true));
-        if (body is! Map<String, dynamic>) {
-          done.complete(null);
-          return;
-        }
-        await _writeCache(url, body);
-        done.complete(body);
-      } catch (_) {
-        done.complete(null);
-      }
+    // The lane hands out a START SLOT; it does not hold the request. Sixty a minute is a budget of
+    // requests SENT, so spacing the sends is what honours it — waiting for each response before
+    // sending the next only made the app slower without asking Discogs for anything less.
+    final slot = _turn.then((_) async {
+      final since = DateTime.now().difference(_lastCall);
+      // Below a fifth of the budget, ease off hard: something else (a background sweep) is
+      // eating it, and a 429 costs more than waiting.
+      final gap = _remaining < 12 ? _minGap * 3 : _minGap;
+      if (since < gap) await Future<void>.delayed(gap - since);
+      _lastCall = DateTime.now();
     });
-    return done.future;
+    // The chain must survive a failed turn, or one thrown error deadlocks the lane for the session.
+    _turn = slot.catchError((_) {});
+    try {
+      await slot;
+      final r = await http
+          .get(
+            Uri.parse(url),
+            headers: {
+              'User-Agent': _ua,
+              'Authorization': 'Discogs token=${settings.discogsToken.trim()}',
+            },
+          )
+          .timeout(const Duration(seconds: 12));
+      final left = int.tryParse(r.headers['x-discogs-ratelimit-remaining'] ?? '');
+      // Responses can now land out of order, so a stale header must not raise the budget back up:
+      // the lowest number seen is the honest one until a request actually reports more room.
+      if (left != null && (left < _remaining || left > _remaining + 5)) _remaining = left;
+      if (r.statusCode != 200) return null;
+      final body = jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true));
+      if (body is! Map<String, dynamic>) return null;
+      await _writeCache(url, body);
+      return body;
+    } catch (_) {
+      return null;
+    }
   }
 
   // ── Cache ─────────────────────────────────────────────────────────────────
