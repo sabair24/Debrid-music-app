@@ -28,6 +28,28 @@ String _baseName(String p) {
 }
 
 /// Pass 1 (runs in a background isolate): read tags only — fast + low memory.
+/// The cover an album already had, carried across a regroup by TRACK PATH.
+///
+/// A class rather than the list of three this replaced, because the fourth slot brought a String
+/// along with it and a `List<Uint8List?>` has nowhere to put that. Naming the fields also means the
+/// two places that restore it can no longer disagree about which index was which.
+class _Covers {
+  const _Covers(this.embedded, this.enriched, this.corrected, this.resolved, this.resolvedFrom);
+  final Uint8List? embedded, enriched, corrected, resolved;
+  final String? resolvedFrom;
+
+  factory _Covers.of(Album a) =>
+      _Covers(a.embeddedCover, a.enriched, a.correctedCover, a.resolvedCover, a.resolvedFrom);
+
+  void applyTo(Album a) {
+    a.embeddedCover = embedded;
+    a.enriched = enriched;
+    a.correctedCover = corrected;
+    a.resolvedCover = resolved;
+    a.resolvedFrom = resolvedFrom;
+  }
+}
+
 List<Map<String, dynamic>> _scanTags(String root) {
   final out = <Map<String, dynamic>>[];
   final dir = Directory(root);
@@ -270,6 +292,19 @@ class LibraryStore extends ChangeNotifier {
 
   /// Resolve a saved file path back to a library track (for resume).
   Track? trackByPath(String path) => _trackByPath[path];
+
+  /// Bumped whenever a track's TEXT changes — its title, artist, album or numbering.
+  ///
+  /// Deliberately not "bumped whenever anything changes". This store notifies hundreds of times
+  /// during startup while covers stream in, and every one of those is a `Track` set that has not
+  /// moved at all. Anything that has to react to a real metadata change reads this integer instead
+  /// of comparing the tracks themselves — the same split, and for the same reason, as `rev` versus
+  /// `progressRev` in LanStateStore.
+  ///
+  /// Not bumped by: cover work of any kind, art roles, styles, duplicate recomputation.
+  int get metaRev => _metaRev;
+  int _metaRev = 0;
+  void _bumpMeta() => _metaRev++;
 
   // Manual metadata corrections (non-destructive): file path -> {title,artist,album}.
   // Applied to scanned tracks so wrong tags are fixed without touching the files.
@@ -555,16 +590,32 @@ class LibraryStore extends ChangeNotifier {
   /// there and nowhere else: opening the album showed the right art, going back to the grid
   /// showed the old one. Now the correction reaches the library the moment it is found.
   ///
-  /// Stored as the ENRICHED cover, never over one the user picked by hand.
-  void adoptAlbumCover(String artist, String album, Uint8List bytes) {
+  /// Never over one the user picked by hand.
+  ///
+  /// [from] says which release this is the sleeve OF — `rel:12345`, `mb:<uuid>`. Pass it only when
+  /// a pressing was actually identified, and the art is filed as [Album.resolvedCover], which
+  /// outranks whatever is embedded in the files. Leave it null for a search-by-name guess, which is
+  /// filed as [Album.enriched] and stays below the embedded cover.
+  ///
+  /// That distinction is the whole fix. Everything used to land in `enriched`, which loses to
+  /// `embeddedCover`, so for any record whose files carry a wrong sleeve this method appeared to
+  /// work and changed nothing anyone could see: the album page had the right art because it drew
+  /// its own, and one step back to the grid showed the old one again.
+  void adoptAlbumCover(String artist, String album, Uint8List bytes, {String? from}) {
     if (bytes.length < 500) return;
     var changed = false;
     for (final a in albums) {
       if (a.tracks.isEmpty) continue;
       if (artistKey(a.artist) != artistKey(artist) || normKey(a.title) != normKey(album)) continue;
       if (a.correctedCover != null) continue;
-      if (identical(a.enriched, bytes)) continue;
-      a.enriched = bytes;
+      if (from != null) {
+        if (identical(a.resolvedCover, bytes) && a.resolvedFrom == from) continue;
+        a.resolvedCover = bytes;
+        a.resolvedFrom = from;
+      } else {
+        if (identical(a.enriched, bytes)) continue;
+        a.enriched = bytes;
+      }
       changed = true;
     }
     if (changed) notifyListeners();
@@ -610,6 +661,7 @@ class LibraryStore extends ChangeNotifier {
     await _saveHidden();
     tracks.removeWhere((t) => list.contains(t.path));
     rebuildAlbums();
+    _bumpMeta();
     notifyListeners();
     return deleted;
   }
@@ -712,6 +764,7 @@ class LibraryStore extends ChangeNotifier {
       ..clear()
       ..addAll(corrected);
     rebuildAlbums();
+    _bumpMeta();
     notifyListeners();
   }
 
@@ -820,6 +873,7 @@ class LibraryStore extends ChangeNotifier {
       match.correctedCover = coverBytes;
       await CoverEnricher(settings).saveFixedCover(match, coverBytes);
     }
+    _bumpMeta();
     notifyListeners();
   }
 
@@ -858,6 +912,7 @@ class LibraryStore extends ChangeNotifier {
           .map(_applyCorrection));
     scanned = tracks.length;
     rebuildAlbums();
+    _bumpMeta();
     scanning = false;
     // Look for albums that are wholly duplicates of one you already own. Only after a full scan —
     // it reads file sizes and headers, too heavy to redo on every regroup.
@@ -1007,9 +1062,9 @@ class LibraryStore extends ChangeNotifier {
     // Covers, keyed by track path exactly as [rebuildAlbums] does — a refreshed catalogue makes
     // fresh Album objects, and without this the grid blanks on every poll and then refetches every
     // cover over the network.
-    final coversByPath = <String, List<Uint8List?>>{};
+    final coversByPath = <String, _Covers>{};
     for (final a in albums) {
-      final snap = [a.embeddedCover, a.enriched, a.correctedCover];
+      final snap = _Covers.of(a);
       for (final t in a.tracks) {
         coversByPath[t.path] = snap;
       }
@@ -1037,9 +1092,7 @@ class LibraryStore extends ChangeNotifier {
       for (final t in ts) {
         final saved = coversByPath[t.path];
         if (saved == null) continue;
-        al.embeddedCover = saved[0];
-        al.enriched = saved[1];
-        al.correctedCover = saved[2];
+        saved.applyTo(al);
         break;
       }
       _remoteAlbums[al] = (
@@ -1264,10 +1317,10 @@ class LibraryStore extends ChangeNotifier {
     // keying on it lost the covers of any album that moved — and correcting a record's numbering
     // moves it by definition: repairing the duplicate numbers is what makes editionSplit() stop
     // splitting, which is the whole point and would have blanked the record it just fixed.
-    final coversByPath = <String, List<Uint8List?>>{};
+    final coversByPath = <String, _Covers>{};
     for (final a in albums) {
       if (a.tracks.isEmpty) continue;
-      final snap = [a.embeddedCover, a.enriched, a.correctedCover];
+      final snap = _Covers.of(a);
       for (final t in a.tracks) {
         coversByPath[t.path] = snap;
       }
@@ -1299,9 +1352,7 @@ class LibraryStore extends ChangeNotifier {
       for (final t in ts) {
         final saved = coversByPath[t.path];
         if (saved == null) continue;
-        al.embeddedCover = saved[0];
-        al.enriched = saved[1];
-        al.correctedCover = saved[2];
+        saved.applyTo(al);
         break;
       }
       return al;

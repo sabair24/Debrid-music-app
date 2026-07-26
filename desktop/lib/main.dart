@@ -202,12 +202,21 @@ Future<void> main() async {
 
   player = PlayerStore()
     ..resolver = online.resolveRadio
-    ..coverResolver = library.coverForTrack;
-  // A cover corrected while the record plays has to reach the player too. Every path that changes
-  // one — the release gallery, the metadata editor, an enrich — ends in notifyListeners(), so this
-  // one wire covers all of them. Without it the bar and the tap-to-zoom kept serving the bytes
-  // captured when the track opened, while the album page showed the new sleeve.
-  library.addListener(() => player.refreshCover());
+    ..coverResolver = library.coverForTrack
+    ..trackResolver = library.trackByPath
+    ..metaRevOf = () => library.metaRev;
+  // A correction made while the record plays has to reach the player too. Every path that makes one
+  // — the release gallery, the metadata editor, a rescan, an edit arriving from another device —
+  // ends in notifyListeners(), so this one wire covers all of them.
+  //
+  // Two calls because they answer two different questions and are guarded differently: the cover is
+  // one identity check, the text is a walk of the queue behind a revision counter. Without the
+  // first, the bar and the tap-to-zoom kept serving the bytes captured when the track opened.
+  // Without the second, the name under them never changed at all.
+  library.addListener(() {
+    player.refreshCover();
+    player.refreshTracks();
+  });
   // The lockscreen, Control Center and the media keys. Not awaited on the critical path — the
   // window should not wait on a system service to come up.
   unawaited(initNowPlaying(player, cover: library.coverForTrack));
@@ -10035,9 +10044,16 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
       if (art != null) setState(() => _art = art);
       // Hand it to the library too. Without this the correction lived only on the open page: the
       // album showed the right sleeve, and going back to the grid showed the wrong one again.
+      //
+      // `from` is what makes that actually true now. With a pressing pinned or matched, this is the
+      // art OF that release and outranks whatever the files carry; without one it is a search by
+      // name, which is a guess and stays below the embedded cover.
       final front = art?.front;
       if (front != null && mounted) {
-        context.read<LibraryStore>().adoptAlbumCover(artist, album, front);
+        final from = widget.pinnedMbid != null && widget.pinnedMbid!.isNotEmpty
+            ? 'mb:${widget.pinnedMbid}'
+            : (widget.pinned != null && widget.pinned! > 0 ? 'rel:${widget.pinned}' : null);
+        context.read<LibraryStore>().adoptAlbumCover(artist, album, front, from: from);
       }
       widget.onFront?.call(widget.chosen ?? front ?? widget.fallback);
     } catch (_) {/* no artwork is not an error worth showing */}

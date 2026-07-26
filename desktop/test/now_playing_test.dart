@@ -134,6 +134,48 @@ void main() {
     expect(item?.artUri, isNull);
   });
 
+  test('correcting the playing track reaches the lockscreen', () async {
+    // The guard here used to be the path alone. Renaming the artist of what is playing changes no
+    // path, so the republish was suppressed and Control Center kept the old name until the next
+    // song — the one surface where you would most notice.
+    final player = FakePlayer()..current = _track('/muziek/01.flac');
+    final handler = NowPlayingHandler(player, null);
+    expect((await _item(handler, '/muziek/01.flac'))?.artist, 'Portishead');
+
+    player
+      ..current = Track(
+        path: '/muziek/01.flac',
+        title: 'Mysterons',
+        artist: 'Portishead & Beth Gibbons',
+        album: 'Dummy',
+        duration: const Duration(seconds: 305),
+      )
+      ..tick();
+
+    final again = await _until(handler, (i) => i.artist == 'Portishead & Beth Gibbons');
+    expect(again?.artist, 'Portishead & Beth Gibbons');
+    expect(again?.id, '/muziek/01.flac', reason: 'zelfde nummer, andere naam');
+  });
+
+  test('a position tick still republishes nothing', () async {
+    // The reason the guard exists at all: this listener fires several times a second, and every
+    // republish writes artwork to disk and wakes the OS.
+    final art = Uint8List.fromList(List.generate(2048, (i) => (i * 7) % 256));
+    final player = FakePlayer()..current = _track('/muziek/01.flac');
+    final handler = NowPlayingHandler(player, (_) => art);
+    await _item(handler, '/muziek/01.flac');
+
+    for (var i = 1; i <= 20; i++) {
+      player
+        ..position = Duration(seconds: i)
+        ..tick();
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+
+    expect(Directory('${scratch.path}/nowplaying').listSync().length, 1,
+        reason: 'één hoes, niet één per tik');
+  });
+
   test('nothing playing publishes nothing', () async {
     final player = FakePlayer()..current = _track('/muziek/01.flac');
     final handler = NowPlayingHandler(player, null);
@@ -148,10 +190,15 @@ void main() {
 
 /// The handler publishes asynchronously — the artwork has to be written to disk first — so wait
 /// for the item that belongs to [path] rather than reading whatever is there this microtask.
-Future<MediaItem?> _item(NowPlayingHandler handler, String path) async {
+Future<MediaItem?> _item(NowPlayingHandler handler, String path) =>
+    _until(handler, (i) => i.id == path);
+
+/// Same, for a republish that does NOT change the path — which is the whole point of the
+/// correction test: waiting on the id there would return the stale item immediately.
+Future<MediaItem?> _until(NowPlayingHandler handler, bool Function(MediaItem) ready) async {
   for (var i = 0; i < 100; i++) {
     final item = handler.mediaItem.valueOrNull;
-    if (item?.id == path) return item;
+    if (item != null && ready(item)) return item;
     await Future<void>.delayed(const Duration(milliseconds: 5));
   }
   return handler.mediaItem.valueOrNull;

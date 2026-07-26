@@ -47,6 +47,20 @@ class Track {
     this.bitsPerSample = 0,
   });
 
+  /// Do these two read the same on screen?
+  ///
+  /// The question the player asks after a correction, and it is deliberately narrow: only the
+  /// fields something actually renders. Not duration, not size, not addedMs — those come back
+  /// slightly different from a re-stat of a file nobody touched, and treating that as a change
+  /// would rebuild the player bar every time the library so much as looked at the disk.
+  bool sameDisplayAs(Track o) =>
+      title == o.title &&
+      artist == o.artist &&
+      album == o.album &&
+      trackNo == o.trackNo &&
+      trackTotal == o.trackTotal &&
+      year == o.year;
+
   /// Effective bitrate in kbit/s, worked out from the size and the duration (a FLAC has no
   /// single stated bitrate — it varies with the music).
   int? get bitrateKbps {
@@ -80,13 +94,30 @@ class Album {
   /// Web-fetched cover (Deezer/Discogs/MusicBrainz), set by the enricher.
   Uint8List? enriched;
 
+  /// The sleeve of a pressing we actually IDENTIFIED — a release the user pinned, or the one the
+  /// album page resolved and is showing right now.
+  ///
+  /// Separate from [enriched] because the two are not equally trustworthy. [enriched] is the answer
+  /// to "search the web for this artist and title", which for a common name is a guess, and a guess
+  /// must not overrule the picture inside the file. This one answers "give me the art of release
+  /// 12345", which is a fact.
+  ///
+  /// Without it the album page and the rest of the app disagreed on screen: the page resolved the
+  /// right sleeve and handed it back to the library, the library filed it under [enriched], and
+  /// [cover] handed the grid the wrong embedded one it already had. Right album, right sleeve, one
+  /// step back and the old one again.
+  Uint8List? resolvedCover;
+
+  /// Which release [resolvedCover] came from — `rel:12345` or `mb:<uuid>`.
+  String? resolvedFrom;
+
   /// User-picked cover via the manual metadata editor — wins over everything and
   /// survives rescans (a wrong embedded cover must not come back).
   Uint8List? correctedCover;
 
   Album(this.title, this.artist, this.tracks, {this.isSingle = false});
 
-  Uint8List? get cover => correctedCover ?? embeddedCover ?? enriched;
+  Uint8List? get cover => correctedCover ?? resolvedCover ?? embeddedCover ?? enriched;
 
   int? get year {
     for (final t in tracks) {

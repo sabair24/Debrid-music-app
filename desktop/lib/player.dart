@@ -35,6 +35,38 @@ abstract interface class NowPlayingSource implements Listenable {
   void seek(Duration d);
 }
 
+/// Re-resolve a queue against the library, or null when nothing anyone can see has changed.
+///
+/// Pulled out of [PlayerStore.refreshTracks] as a plain function so it can be tested: constructing
+/// a PlayerStore loads libmpv, which does not exist in a test run, and this is the half with the
+/// invariants worth pinning down.
+///
+/// [original] and [order] hold the SAME instances in different orders — order is original with
+/// shuffle applied. Replacing values position by position therefore preserves the permutation
+/// exactly, which is what keeps the playing index pointing at the playing song. Rebuilding order
+/// from the resolver instead would silently unshuffle the queue.
+({List<Track> original, List<Track> order})? remapQueue(
+  List<Track> original,
+  List<Track> order,
+  Track? Function(String path) resolve,
+) {
+  final fresh = <String, Track>{};
+  var changed = false;
+  for (final t in original) {
+    final n = resolve(t.path);
+    // Null is not an answer: the album is mid-regroup, or this is a stream with no library entry.
+    // Keeping what we have beats blanking the bar — the same rule refreshCover follows.
+    if (n == null) continue;
+    fresh[t.path] = n;
+    if (!t.sameDisplayAs(n)) changed = true;
+  }
+  if (!changed) return null;
+  return (
+    original: [for (final t in original) fresh[t.path] ?? t],
+    order: [for (final t in order) fresh[t.path] ?? t],
+  );
+}
+
 /// Native (libmpv) player with a queue, shuffle, repeat and a Radio mode.
 class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   final Player _player = Player();
@@ -70,6 +102,20 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// Resolves an album cover for a track (set by main to LibraryStore.coverForTrack)
   /// so the flat Tracks queue shows the right cover per song.
   Uint8List? Function(Track)? coverResolver;
+
+  /// Looks a queued track up again by path (set by main to LibraryStore.trackByPath), so a
+  /// correction reaches what is playing. See [refreshTracks].
+  Track? Function(String path)? trackResolver;
+
+  /// The library's "something a track is CALLED has changed" counter. See [refreshTracks] for why
+  /// this is a counter and not a comparison.
+  int Function()? metaRevOf;
+  int _seenMetaRev = -1;
+
+  /// How many times [refreshTracks] actually walked the queue. The point of the counter above is
+  /// that this stays near zero while covers stream in; a test that cannot see it cannot prove that.
+  @visibleForTesting
+  int remapCount = 0;
 
   /// Last step before a path is handed to libmpv. Identity on the machine that owns the music; on
   /// a Mac or an iPad it turns a library path into a stream URL carrying the pairing token.
@@ -298,6 +344,40 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     final fresh = coverResolver!(t);
     if (fresh == null || identical(fresh, currentCover)) return;
     currentCover = fresh;
+    notifyListeners();
+  }
+
+  /// Ask again what the queued tracks are CALLED.
+  ///
+  /// The same bug as [refreshCover], one layer up and never fixed. The queue holds `Track` values
+  /// taken when it was built; `Track` is immutable and a correction builds new ones, so the player
+  /// keeps pointing at the old objects for as long as the queue lives. Correct an artist while it
+  /// plays and every list in the app updates except the three places you are actually looking at —
+  /// the player bar, the now-playing screen and the lockscreen — where the old name simply stays.
+  ///
+  /// Remapping both lists element-wise keeps the shuffle permutation and [_index] exactly as they
+  /// were: the two hold the same instances in different orders, so replacing values in place moves
+  /// nothing. Nothing reopens, so the music does not skip.
+  void refreshTracks() {
+    // Radio items carry their own artist/title from the recommender, not from the library, and the
+    // local ones are held in a final field. Nothing here to refresh, and nothing stale either.
+    if (radioMode || _original.isEmpty) return;
+    final resolve = trackResolver;
+    if (resolve == null) return;
+
+    // The guard that makes this affordable. The library notifies once per cached cover during
+    // startup enrichment — hundreds of times — and a shuffled queue can be the entire library, so
+    // walking it on every notification would be millions of lookups for nothing. An integer says
+    // "no track's text has changed since you last asked" in one comparison.
+    final rev = metaRevOf?.call() ?? 0;
+    if (rev == _seenMetaRev) return;
+    _seenMetaRev = rev;
+    remapCount++;
+
+    final next = remapQueue(_original, _order, resolve);
+    if (next == null) return;
+    _original = next.original;
+    _order = next.order;
     notifyListeners();
   }
 

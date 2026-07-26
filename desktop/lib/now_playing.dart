@@ -56,25 +56,34 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
   final NowPlayingSource player;
   final Uint8List? Function(Track)? coverFor;
 
-  /// The last track published, so the artwork is only written to disk when the track really
-  /// changes — this listener fires on every position tick.
-  String? _publishedPath;
+  /// What was last published, so the artwork is only written to disk when something the lockscreen
+  /// SHOWS has changed — this listener fires on every position tick.
+  ///
+  /// The path alone is not enough. Correcting the artist of the track that is playing changes no
+  /// path, so this used to suppress the republish and Control Center kept the old name until the
+  /// next song. The signature covers exactly the four fields [_publishItem] puts on screen.
+  String? _publishedSig;
   bool _lastPlaying = false;
   Duration _lastPosition = Duration.zero;
+
+  /// Joined on a NUL, which cannot occur in any of the four. A printable separator would let a
+  /// title that ends where an artist begins produce the signature of a different pair.
+  static String _sigOf(Track t) => [t.path, t.title, t.artist, t.album].join('\u0000');
 
   void _onChanged() {
     final track = player.current;
     if (track == null) {
-      if (_publishedPath != null) {
-        _publishedPath = null;
+      if (_publishedSig != null) {
+        _publishedSig = null;
         mediaItem.add(null);
         playbackState.add(PlaybackState(processingState: AudioProcessingState.idle));
       }
       return;
     }
 
-    if (track.path != _publishedPath) {
-      _publishedPath = track.path;
+    final sig = _sigOf(track);
+    if (sig != _publishedSig) {
+      _publishedSig = sig;
       unawaited(_publishItem(track));
     }
 
