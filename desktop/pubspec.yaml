@@ -1,5 +1,5 @@
-﻿name: debridmusic
-description: "DebridMusic â€” native music hub for Windows."
+name: debridmusic
+description: "DebridMusic — native music hub for Windows."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 2.3.8+200
+version: 2.3.9+201
 
 environment:
   sdk: ^3.9.2
@@ -32,9 +32,9 @@ dependencies:
     sdk: flutter
 
   cupertino_icons: ^1.0.8
-  # Native audio playback (libmpv) â€” plays FLAC/MP3/etc on Windows.
+  # Native audio playback (libmpv) — plays FLAC/MP3/etc on Windows.
   media_kit: ^1.1.11
-  # One bundle for every platform â€” the Windows-only package cannot build for macOS or iOS.
+  # One bundle for every platform — the Windows-only package cannot build for macOS or iOS.
   media_kit_libs_audio: ^1.0.7
   # Lockscreen / Control Center / media keys. libmpv plays the audio; this is only what tells
   # the system what is playing and takes the buttons back.
@@ -55,7 +55,7 @@ dependencies:
   # 5.0.1 raised its floor to Flutter 3.41; CI and this machine are both on 3.35.6, so pub could
   # not resolve it at all. 5.0.0 is the same major version and the same API.
   nsd: ^5.0.0
-  # QR code in Settings â€” how a device gets paired without retyping a 32-character token.
+  # QR code in Settings — how a device gets paired without retyping a 32-character token.
   qr_flutter: ^4.1.0
   # Pixel access, to tell a scan of the disc apart from a scan of the back cover.
   image: ^4.8.0
@@ -86,7 +86,7 @@ flutter:
   assets:
     # The app's own mark, so the top bar can show the icon the app actually has instead of
     # drawing something that merely resembles it. flutter_launcher_icons already reads this
-    # file to generate the platform bundles â€” now the running app reads it too, and the two
+    # file to generate the platform bundles — now the running app reads it too, and the two
     # cannot drift apart again.
     - assets/icon/app_icon.png
 

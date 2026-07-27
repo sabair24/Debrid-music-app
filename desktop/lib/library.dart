@@ -2121,12 +2121,18 @@ extension LibraryNormalise on LibraryStore {
 
   /// Write the plan into the files.
   ///
-  /// Returns how many were written. Each file goes through [stampTags] → `writeFlacFields`, which
-  /// rebuilds only the comment block and copies every other block byte for byte — so the embedded
-  /// cover, the ReplayGain values and anything hand-written survive — and lands atomically via
-  /// tmp-then-rename.
-  Future<int> applyNormalise(NormalisePlan plan) async {
+  /// Each file goes through [stampTags] → `writeFlacFields`, which rebuilds only the comment block
+  /// and copies every other block byte for byte — so the embedded cover, the ReplayGain values and
+  /// anything hand-written survive — and lands atomically via tmp-then-rename.
+  ///
+  /// Returns what was written AND what was not. A file the player has open cannot be replaced —
+  /// the rename fails — and that is not rare: normalising the record you are listening to hits it
+  /// every time. Measured here: the dialog promised twelve files, eleven landed, and the one that
+  /// did not was the track playing at that moment. A count alone hides that; "11 written" reads
+  /// like success when twelve were asked for.
+  Future<({int written, List<String> failed})> applyNormalise(NormalisePlan plan) async {
     var written = 0;
+    final failed = <String>[];
     for (final s in plan.writing) {
       final tags = TrackTags(
         title: s.title ?? s.track.title,
@@ -2137,7 +2143,10 @@ extension LibraryNormalise on LibraryStore {
         trackTotal: plan.total,
         year: plan.year,
       );
-      if (!await stampTags(File(s.track.path), tags)) continue;
+      if (!await stampTags(File(s.track.path), tags)) {
+        failed.add(s.name);
+        continue;
+      }
       written++;
       // The file now says the right thing, so a correction saying the same thing is a second truth
       // that can only drift. Cleared for the files that were ACTUALLY written, and only the fields
@@ -2154,7 +2163,7 @@ extension LibraryNormalise on LibraryStore {
       await saveCorrectionsNow();
       await scan();
     }
-    return written;
+    return (written: written, failed: failed);
   }
 }
 

@@ -107,7 +107,7 @@ void main() {
     expect(plan.safe, isTrue);
     expect(plan.writing, hasLength(3));
 
-    expect(await lib.applyNormalise(plan), 3);
+    expect((await lib.applyNormalise(plan)).written, 3);
 
     // Terug van schijf lezen: het bestand zelf moet nu kloppen, niet alleen het geheugen.
     for (final p in [a.path, b.path, c.path]) {
@@ -134,7 +134,7 @@ void main() {
     final plan = lib.planNormalise(tegel, pressing(), albumTitle: "Backstreet's Back");
     expect(plan.steps, hasLength(3), reason: 'alle bestanden van de plaat, niet alleen de tegel');
     expect(plan.totalsNow, {0, 11, 14}, reason: 'nu pas is de rommel zichtbaar');
-    expect(await lib.applyNormalise(plan), 3);
+    expect((await lib.applyNormalise(plan)).written, 3);
 
     for (final p in [a.path, b.path, c.path]) {
       expect(readFlacTags(File(p))!.trackTotal, 3);
@@ -230,7 +230,7 @@ void main() {
 
     final plan = lib.planNormalise(Album("X's", 'BSB', alle), pressing(), albumTitle: "X's");
     expect(plan.writing, hasLength(3), reason: 'alle drie worden geschreven');
-    expect(await lib.applyNormalise(plan), 3);
+    expect((await lib.applyNormalise(plan)).written, 3);
 
     final t = readFlacTags(File(vreemd.path))!;
     expect(t.album, "X's", reason: 'hoort bij deze plaat');

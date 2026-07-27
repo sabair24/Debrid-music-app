@@ -11844,12 +11844,27 @@ class NormaliseTagsDialog extends StatefulWidget {
 class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
   bool _busy = false;
 
+  /// Files the write could not reach, and how many did land. Empty until a write has run.
+  List<String> _failed = const [];
+  int _written = 0;
+
   Future<void> _go() async {
     setState(() => _busy = true);
-    final n = await context.read<LibraryStore>().applyNormalise(widget.plan);
+    final r = await context.read<LibraryStore>().applyNormalise(widget.plan);
     if (!mounted) return;
-    _srcToast(context, n == 0 ? 'Er is niets geschreven.' : '$n bestanden gelijkgetrokken');
-    Navigator.of(context).pop(n > 0);
+    // Name what did not land. A bare count reads as success even when a file was missed, and the
+    // one that gets missed is usually the track you are listening to — the player holds it open.
+    if (r.failed.isNotEmpty) {
+      setState(() {
+        _busy = false;
+        _failed = r.failed;
+        _written = r.written;
+      });
+      return;
+    }
+    _srcToast(context,
+        r.written == 0 ? 'Er is niets geschreven.' : '${r.written} bestanden gelijkgetrokken');
+    Navigator.of(context).pop(r.written > 0);
   }
 
   @override
@@ -11969,6 +11984,29 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                 ],
               ]),
             ),
+            if (_failed.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(
+                      '$_written van de ${plan.writing.length} geschreven. '
+                      'Deze konden niet — een bestand dat de speler open heeft, kan niet vervangen worden:',
+                      style: const TextStyle(color: Colors.orangeAccent, fontSize: 12.5)),
+                  for (final f in _failed)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2, left: 8),
+                      child: Text(f,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.orangeAccent, fontSize: 11.5)),
+                    ),
+                  const Padding(
+                    padding: EdgeInsets.only(top: 2),
+                    child: Text('Stop het afspelen en klik opnieuw — de rest is al klaar.',
+                        style: TextStyle(color: _muted, fontSize: 11.5)),
+                  ),
+                ]),
+              ),
             if (blocked)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
