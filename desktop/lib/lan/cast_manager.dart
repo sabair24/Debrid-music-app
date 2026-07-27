@@ -211,6 +211,14 @@ class CastManager {
     final track = id == null ? null : catalog.track(id);
     if (id == null || track == null) return;
 
+    // Stamped BEFORE the SOAP calls, not after. Opening a track is three round trips of up to eight
+    // seconds each, and until this line ran the timestamp still described the PREVIOUS track — so
+    // the five-second tick arriving mid-open found the grace period long expired, asked a renderer
+    // that had not started yet, was told STOPPED, and advanced again. The track being opened was
+    // skipped without a sound. It is set again after the calls land, so the grace period is measured
+    // from when the speaker actually got the track.
+    session.startedAt = DateTime.now();
+
     final url = await _streamUrlFor(id, track.ext, session.renderer, track.sampleRate);
     await _upnp.playUrl(
       session.renderer,
@@ -262,23 +270,46 @@ class CastManager {
     return 'http://$base:$port/art/${dto!.artworkRef}?token=$token';
   }
 
+  /// True while an advance is in flight, so the five-second tick cannot start a second one.
+  ///
+  /// Every step of an advance is slow — one state query plus three more round trips to open the next
+  /// track, each allowed eight seconds — and the timer kept firing straight through it. Two overlapping
+  /// advances each move the index, so the queue walks forward faster than the speaker plays it.
+  bool _advancing = false;
+
   /// Move to the next track once the speaker says it has finished.
   Future<void> _maybeAdvance() async {
+    if (_advancing) return;
     final session = _session;
     if (session == null) return;
     // Give the renderer a moment after a start before believing "STOPPED" — a Sonos reports
     // exactly that for a second or two while it fetches the first bytes.
     if (DateTime.now().difference(session.startedAt) < const Duration(seconds: 8)) return;
 
-    final state = await _upnp.transportState(session.renderer);
-    if (state == null || !state.isStopped) return;
-    if (session.index + 1 >= session.queue.length) {
-      _advance?.cancel();
-      _session = null;
-      return;
+    _advancing = true;
+    try {
+      final state = await _upnp.transportState(session.renderer);
+      if (state == null || !state.isStopped) return;
+      if (session.index + 1 >= session.queue.length) {
+        _advance?.cancel();
+        _session = null;
+        return;
+      }
+      session.index++;
+      try {
+        await _openCurrent();
+      } catch (e) {
+        // The index had already moved, and the timer throws the error away — so a renderer that
+        // refuses the track (a busy Sonos answers "Transition not available" with an HTTP 500) lost
+        // that song silently and the next tick took the one after it. Put the queue back where it
+        // was and let the next tick try the same track again.
+        session.index--;
+        session.startedAt = DateTime.now();
+        debugPrint('cast: kon ${session.queue.elementAtOrNull(session.index + 1)} niet openen: $e');
+      }
+    } finally {
+      _advancing = false;
     }
-    session.index++;
-    await _openCurrent();
   }
 
   Future<void> control(String deviceId, String action, {int? value}) async {

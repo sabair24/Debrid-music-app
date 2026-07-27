@@ -1197,16 +1197,32 @@ class DownloadManager extends ChangeNotifier {
     return results.where((ok) => ok).length;
   }
 
+  /// Fetch one file of a torrent to disk.
+  ///
+  /// Two things here were only true on the happy path, and both of them put broken music in the
+  /// library. The handle and the connection were closed AFTER the loop, so an aborted stream — wifi
+  /// dropping, the CDN hanging up — jumped to the catch and left them open. On Windows that stray
+  /// handle means the truncated file cannot be moved or deleted for the rest of the session, so the
+  /// cleanup, the filing into the library and the duplicate sweep all fail on exactly the files that
+  /// need them. [SoulseekClient._pump] already gets this right, with a comment saying why.
+  ///
+  /// And there was no size check at all: progress went to 1 and the status to 'done' regardless. A
+  /// stream that ends early but cleanly is not an error anywhere in this function, so a CDN cutting
+  /// off mid-file produced a forty-second track that the app called finished.
   Future<void> _download(int torrentId, TbFile f, Directory destDir, DownloadJob job) async {
+    http.Client? client;
+    IOSink? sink;
+    File? dest;
+    var complete = false;
     try {
       final url = await online.resolveTrackUrl(torrentId, f.id);
-      final client = http.Client();
+      client = http.Client();
       final req = http.Request('GET', Uri.parse(url));
       final resp = await client.send(req);
       if (resp.statusCode < 200 || resp.statusCode >= 300) throw 'HTTP ${resp.statusCode}';
       final total = resp.contentLength ?? f.size;
-      final dest = File('${destDir.path}${Platform.pathSeparator}${_sanitize(f.label)}');
-      final sink = dest.openWrite();
+      dest = File('${destDir.path}${Platform.pathSeparator}${_sanitize(f.label)}');
+      sink = dest.openWrite();
       var received = 0;
       await for (final chunk in resp.stream) {
         sink.add(chunk);
@@ -1219,16 +1235,29 @@ class DownloadManager extends ChangeNotifier {
           }
         }
       }
-      await sink.close();
-      client.close();
-      job.progress = 1;
-      job.status = 'done';
-      notifyListeners();
-      await onLibraryChanged();
+      // Short of what was announced is a failure, however politely the stream ended. Only when the
+      // length was never announced (total <= 0) is "it ended" all we have to go on.
+      complete = total <= 0 ? received > 0 : received >= total;
+      if (!complete) throw 'incompleet: $received van $total bytes';
     } catch (_) {
       job.status = 'failed';
       notifyListeners();
+      return;
+    } finally {
+      try {
+        await sink?.close();
+      } catch (_) {}
+      client?.close();
+      // A part-file must not survive: the scanner does not skip this folder, so what is left here
+      // ends up in the library as a track that stops halfway.
+      if (!complete && dest != null) {
+        await dest.delete().catchError((_) => dest!);
+      }
     }
+    job.progress = 1;
+    job.status = 'done';
+    notifyListeners();
+    await onLibraryChanged();
   }
 
   String _sanitize(String s) => s.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();

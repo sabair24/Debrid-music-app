@@ -308,8 +308,16 @@ class RemoteClient {
   /// as a track that jumped back to zero.
   Future<CastStatus?> castStatus(String deviceId, {bool withVolume = false}) async {
     try {
-      final res = await _get('/api/cast/status?deviceId=${Uri.encodeComponent(deviceId)}'
-          '${withVolume ? '&volume=1' : ''}');
+      // Through `query`, not glued into the path. `_api` builds the URL with
+      // `baseUrl.replace(path: path)`, and Dart percent-encodes a `?` that appears in a path — so
+      // the PC was asked for `/api/cast/status%3FdeviceId=…`, which matches no route. It answered
+      // 404, the catch below turned that into null, and null is indistinguishable from "the speaker
+      // did not answer". Every status was therefore missing: no position, no volume, no play state.
+      // That is why the transport controls went dead the moment a phone or iPad cast to a speaker.
+      final res = await _get('/api/cast/status', query: {
+        'deviceId': deviceId,
+        if (withVolume) 'volume': '1',
+      });
       final j = jsonDecode(utf8.decode(res.bodyBytes));
       return j is Map<String, dynamic> ? CastStatus.fromJson(j) : null;
     } catch (_) {

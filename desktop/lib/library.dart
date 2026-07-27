@@ -413,12 +413,7 @@ class LibraryStore extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> _saveHidden() async {
-    try {
-      await Directory(_appDir).create(recursive: true);
-      await _hiddenFile.writeAsString(jsonEncode(_hidden.toList()));
-    } catch (_) {}
-  }
+  Future<void> _saveHidden() => _writeJson(_hiddenFile, _hidden.toList());
 
   /// Number of files currently hidden but still on disk (shown in Settings so it's not a
   /// one-way door — the user can always bring them back).
@@ -442,12 +437,7 @@ class LibraryStore extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> _saveMerged() async {
-    try {
-      await Directory(_appDir).create(recursive: true);
-      await _mergedFile.writeAsString(jsonEncode(_merged.toList()));
-    } catch (_) {}
-  }
+  Future<void> _saveMerged() => _writeJson(_mergedFile, _merged.toList());
 
   /// Put every edition of this record back together, and keep it that way.
   Future<void> mergeEditions(Album a) async {
@@ -594,12 +584,7 @@ class LibraryStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _saveAlbumArtRoles() async {
-    try {
-      await Directory(_appDir).create(recursive: true);
-      await _albumArtRolesFile.writeAsString(jsonEncode(_albumArtRoles));
-    } catch (_) {}
-  }
+  Future<void> _saveAlbumArtRoles() => _writeJson(_albumArtRolesFile, _albumArtRoles);
 
   // ── Chosen artist art ─────────────────────────────────────────────────────
   // Which portrait and which backdrop the user picked for an artist. Kept beside the other
@@ -631,10 +616,7 @@ class LibraryStore extends ChangeNotifier {
 
   Future<void> setArtistArt(String artist, String kind, String url) async {
     _artistArtChoice.putIfAbsent(artistKey(artist), () => {})[kind] = url;
-    try {
-      await Directory(_appDir).create(recursive: true);
-      await _artistArtChoiceFile.writeAsString(jsonEncode(_artistArtChoice));
-    } catch (_) {}
+    await _writeJson(_artistArtChoiceFile, _artistArtChoice);
     notifyListeners();
   }
 
@@ -672,12 +654,7 @@ class LibraryStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _saveStyles() async {
-    try {
-      await Directory(_appDir).create(recursive: true);
-      await _stylesFile.writeAsString(jsonEncode(_styles));
-    } catch (_) {}
-  }
+  Future<void> _saveStyles() => _writeJson(_stylesFile, _styles);
 
   /// Every style seen so far, most common first — the vocabulary this library actually uses.
   List<MapEntry<String, int>> styleTally() {
@@ -806,7 +783,14 @@ class LibraryStore extends ChangeNotifier {
         if (v is! Map) continue;
         _corrections[e.key] = v.map((k, val) => MapEntry(k.toString(), val.toString()));
       }
-    } catch (_) {}
+      _correctionsUnreadable = false;
+    } catch (e) {
+      // The file is there and unreadable. Say so, and refuse to write over it — see
+      // [_correctionsUnreadable]. Swallowing this is what turned one bad read into total loss: the
+      // next edit wrote an almost-empty map over months of work without a word.
+      debugPrint('corrections.json unreadable, refusing to overwrite it: $e');
+      _correctionsUnreadable = true;
+    }
   }
 
   /// How long a file may be missing before its correction is forgotten.
@@ -897,11 +881,49 @@ class LibraryStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _saveCorrections() async {
+  /// Write one of this store's JSON files so it is never left half-written.
+  ///
+  /// `writeAsString` truncates first and fills after, so anything that interrupts that window — a
+  /// full disk, an antivirus or sync tool holding the handle, the process going away — leaves
+  /// truncated JSON behind. Six files were written that way, and one of them is corrections.json:
+  /// every hand-made edit in this library, 213 of them here. The failure was swallowed whole, so the
+  /// dialog said the correction had been saved while nothing had reached the disk.
+  ///
+  /// tmp-then-rename is what the rest of the app's state already does — settings.dart, album_id,
+  /// album_facts, lan/state_store, lan/tokens — so these six were a forgotten corner, not a choice.
+  /// A rename is atomic: either the old file is there or the new one is, never half of either.
+  Future<bool> _writeJson(File f, Object data) async {
     try {
       await Directory(_appDir).create(recursive: true);
-      await _correctionsFile.writeAsString(jsonEncode(_corrections));
-    } catch (_) {}
+      final tmp = File('${f.path}.tmp');
+      await tmp.writeAsString(jsonEncode(data));
+      await tmp.rename(f.path);
+      return true;
+    } catch (e) {
+      debugPrint('${f.path} not written: $e');
+      return false;
+    }
+  }
+
+  /// Set when corrections.json was there but could not be read.
+  ///
+  /// The pairing with [_writeJson] is what makes the guarantee whole. Atomic writes stop a crash
+  /// from truncating the file; this stops the app from calmly overwriting a file it failed to parse
+  /// with the near-empty map it has in memory. One bad read used to be enough to lose the lot on the
+  /// next edit. Note that an EMPTY corrections.json is perfectly normal on a fresh install, so
+  /// emptiness is not the signal — a failed parse is.
+  bool _correctionsUnreadable = false;
+
+  /// True when hand-made corrections exist on disk that this session could not read. The UI can say
+  /// so instead of letting the user work on top of a file that is about to be replaced.
+  bool get correctionsUnreadable => _correctionsUnreadable;
+
+  Future<void> _saveCorrections() async {
+    if (_correctionsUnreadable) {
+      debugPrint('Refusing to save: corrections.json could not be read this session');
+      return;
+    }
+    await _writeJson(_correctionsFile, _corrections);
   }
 
   Track _applyCorrection(Track t) {
@@ -984,7 +1006,14 @@ class LibraryStore extends ChangeNotifier {
     rebuildAlbums();
 
     // Find the regrouped album this correction produced, and attach the new cover.
-    final newArtist = (artist?.trim().isNotEmpty ?? false) ? artist!.trim() : target.artist;
+    //
+    // cleanArtistName, exactly as the correction above was written with it. Trimming alone gave a
+    // DIFFERENT name — Discogs hands back "Adele (3)" for any artist with a namesake, and the saved
+    // correction says "Adele" — so every key derived from it pointed at an album that does not
+    // exist. The styles, the assigned back and disc scans, the merge decision and the cover chosen
+    // in that same dialog were all lifted off the old key and filed under a dead one: gone, quietly,
+    // at the moment the user was told their correction had been applied.
+    final newArtist = (artist?.trim().isNotEmpty ?? false) ? cleanArtistName(artist!) : target.artist;
     final newTitle = target.isSingle
         ? ((title?.trim().isNotEmpty ?? false) ? title!.trim() : target.title)
         : ((albumTitle?.trim().isNotEmpty ?? false) ? albumTitle!.trim() : target.title);

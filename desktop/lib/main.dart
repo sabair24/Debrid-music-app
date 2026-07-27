@@ -4838,7 +4838,15 @@ class _SpeakerButton extends StatelessWidget {
             if (player.playing) player.playPause();
             final ok = await client.castPlay(device.id, ids, index < 0 ? 0 : index);
             if (!context.mounted) return;
-            if (!ok) _srcToast(context, '${device.name} nam het niet aan.');
+            if (!ok) {
+              _srcToast(context, '${device.name} nam het niet aan.');
+              // Put it back. The speaker was made the destination before anyone knew whether it
+              // would accept, so a refusal left the app paused here and claiming to play there:
+              // "Speelt op X" in the header, the record spinning, and no sound anywhere. One honest
+              // toast followed by an interface that contradicted it until the user intervened.
+              target.select(null);
+              if (!player.playing) player.playPause();
+            }
           },
         ),
       ),
