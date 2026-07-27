@@ -2007,35 +2007,54 @@ class NormalisePlan {
   Set<String> get albumsNow => {for (final s in steps) s.track.album};
   Set<int> get totalsNow => {for (final s in steps) s.track.trackTotal};
 
-  /// Two files landing on one number. Refused for the same reason [RenumberPlan.collides] is: the
-  /// numbering is being fixed BECAUSE it collides.
-  bool get collides {
-    final seen = <int>{};
+  /// Every pair this plan would land on one number or one title, named.
+  ///
+  /// One definition, so the guard and the message can never disagree. And it names the files: "two
+  /// files would collide" without saying WHICH two leaves you nothing to act on — the dialog said
+  /// "choose an edition that fits" without a word about where it didn't fit.
+  ///
+  /// A number collision counts only between files the pressing recognised; a file it did not
+  /// recognise keeps the number it already had, which we are not changing.
+  ///
+  /// A title collision counts only when this plan CREATES it. Two files that already carry the same
+  /// title are already folded into one in the tracklist; refusing over that would block the feature
+  /// on exactly the messy albums it exists for — two rips of one record, both tagged "Missing You".
+  List<({bool number, String text})> get clashList {
+    final out = <({bool number, String text})>[];
+    final byNo = <int, NormaliseStep>{};
     for (final s in writing) {
       final n = s.trackNo;
-      if (n != null && !seen.add(n)) return true;
+      if (n == null) continue;
+      final prev = byNo[n];
+      if (prev == null) {
+        byNo[n] = s;
+        continue;
+      }
+      out.add((number: true, text: 'nummer $n — ${prev.name} en ${s.name}'));
     }
-    return false;
-  }
 
-  /// Two files ending up with one title. [LibraryStore._dedupeTracks] keys on artist+title, so this
-  /// would not read as a tagging mistake — it would read as a track disappearing.
-  ///
-  /// Only a collision this plan CREATES counts. Two files that already carry the same title are
-  /// already deduped to one in the tracklist; refusing over that would block the feature on exactly
-  /// the messy albums it exists for — two rips of one record, both tagged "Missing You".
-  bool get titleCollides {
     final already = <String>{}, twice = <String>{};
     for (final s in writing) {
       if (!already.add(normKey(s.track.title))) twice.add(normKey(s.track.title));
     }
-    final after = <String>{};
+    final byTitle = <String, NormaliseStep>{};
     for (final s in writing) {
       final k = normKey(s.title ?? s.track.title);
-      if (!after.add(k) && !twice.contains(k)) return true;
+      final prev = byTitle[k];
+      if (prev == null) {
+        byTitle[k] = s;
+        continue;
+      }
+      if (twice.contains(k)) continue; // stond er al zo in — niet onze schuld
+      out.add((number: false, text: '"${s.title ?? s.track.title}" — ${prev.name} en ${s.name}'));
     }
-    return false;
+    return out;
   }
+
+  List<String> get clashes => [for (final c in clashList) c.text];
+
+  bool get collides => clashList.any((c) => c.number);
+  bool get titleCollides => clashList.any((c) => !c.number);
 
   bool get safe => !collides && !titleCollides && writing.isNotEmpty;
 }

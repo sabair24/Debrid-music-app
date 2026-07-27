@@ -259,6 +259,38 @@ void main() {
     expect(vers.albums.length, 1, reason: 'één tegel, ook met een bestand dat de persing niet kent');
   });
 
+  test('een botsing noemt de bestanden bij naam', () {
+    // "Twee bestanden zouden botsen" zonder te zeggen welke, laat je niets om aan te pakken.
+    final a = file('01.flac', {'TITLE': 'Everybody', 'ARTIST': 'BSB', 'ALBUM': 'X', 'TRACKNUMBER': '1'}, secs: 220);
+    final b = file('99.flac', {'TITLE': 'Iets Anders', 'ARTIST': 'BSB', 'ALBUM': 'X', 'TRACKNUMBER': '1'}, secs: 61);
+
+    final lib = LibraryStore()..tracks.addAll([a.track, b.track]);
+    lib.rebuildAlbums();
+    // b wordt niet herkend en houdt nummer 1; a krijgt nummer 1 van de persing. Dat botst niet in
+    // het plan, want b's nummer veranderen we niet — dus geen melding.
+    final plan = lib.planNormalise(Album('X', 'BSB', [a.track, b.track]), pressing());
+    expect(plan.clashes, isEmpty);
+    expect(plan.safe, isTrue);
+
+    // De botsing die wél voorkomt, en die de Backstreet-map liet zien: één bestand krijgt de
+    // officiële titel en komt daarmee op de titel van een bestand dat de persing NIET kende en dat
+    // de zijne dus houdt. Die twee verschilden eerst — dus deze botsing maken wij.
+    final typo = file('02.flac', {'TITLE': 'Missin You', 'ARTIST': 'BSB', 'ALBUM': 'Y', 'TRACKNUMBER': '4'}, secs: 300);
+    final exact = file('03.flac', {'TITLE': 'Missing You', 'ARTIST': 'BSB', 'ALBUM': 'Y', 'TRACKNUMBER': '9'}, secs: 300);
+    final lib2 = LibraryStore()..tracks.addAll([typo.track, exact.track]);
+    lib2.rebuildAlbums();
+    // typo staat vooraan, pakt de enige regel uit de pool; exact vindt niets meer en houdt zijn
+    // eigen titel — die dan gelijk is aan wat typo net gekregen heeft.
+    final p2 = lib2.planNormalise(Album('Y', 'BSB', [typo.track, exact.track]),
+        [const ChoiceTrack('1', 'Missing You', 300)]);
+    expect(p2.clashes, isNotEmpty, reason: 'twee keer "Missing You" na afloop');
+    expect(p2.clashes.first, contains('02.flac'));
+    expect(p2.clashes.first, contains('03.flac'));
+    expect(p2.titleCollides, isTrue);
+    expect(p2.collides, isFalse, reason: 'de nummers botsen niet, alleen de titels');
+    expect(p2.safe, isFalse);
+  });
+
   test('twee bestanden die nu al dezelfde titel hebben blokkeren het plan niet', () {
     // De dubbele rip is precies waarom deze knop bestaat; er hier op weigeren maakt hem nutteloos.
     final a = file('01.flac', {'TITLE': 'Missing You', 'ARTIST': 'BSB', 'ALBUM': 'X', 'TRACKNUMBER': '1'}, secs: 300);

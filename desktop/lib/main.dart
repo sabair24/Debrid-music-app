@@ -11970,12 +11970,26 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
               ]),
             ),
             if (blocked)
-              const Padding(
-                padding: EdgeInsets.only(top: 8),
-                child: Text(
-                    'Twee bestanden zouden op hetzelfde nummer of dezelfde titel uitkomen. '
-                    'Dat wordt niet geschreven — kies eerst een uitgave die bij deze bestanden past.',
-                    style: TextStyle(color: Colors.orangeAccent, fontSize: 12.5)),
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text(
+                      'Dit wordt niet geschreven — deze bestanden zouden op elkaar uitkomen:',
+                      style: TextStyle(color: Colors.orangeAccent, fontSize: 12.5)),
+                  for (final c in plan.clashes)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2, left: 8),
+                      child: Text(c,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.orangeAccent, fontSize: 11.5)),
+                    ),
+                  const Padding(
+                    padding: EdgeInsets.only(top: 2),
+                    child: Text('Kies een uitgave die bij deze bestanden past, of haal de dubbele weg.',
+                        style: TextStyle(color: _muted, fontSize: 11.5)),
+                  ),
+                ]),
               ),
             const SizedBox(height: 12),
             Row(children: [
