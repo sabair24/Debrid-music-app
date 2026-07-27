@@ -745,6 +745,46 @@ class DiscogsArtist {
   List<DiscogsImage> get backdrops => images.where((i) => i.isWide).toList();
 }
 
+/// Where an album's scans live on disk, as one name.
+///
+/// Both pins are part of it. Without that a new choice would keep answering with the scans fetched
+/// for the old one — which is half of why picking a release changed the front cover and left the back
+/// and the disc exactly as they were.
+///
+/// expectedTracks is in it because it CHANGES the answer — it decides which pressings qualify.
+/// Leaving it out meant a library album and the same album opened from browse (which knows no track
+/// count) shared one entry, and whichever ran first won permanently.
+///
+/// A hand-assigned role belongs in it for the same reason a pin does: change what the back cover IS
+/// and the entry cached under the old answer must not keep being served.
+///
+/// The version marks a schema change: nothing here expires, so without bumping it every album would
+/// keep serving the art it cached first. v2 was when the archive started being consulted; v3 was the
+/// move to 1200px scans; v4 is roles becoming part of the question; v5 drops the search terms once a
+/// pin makes them irrelevant.
+///
+/// With a pin, artist/album/expectedTracks do not reach the answer — the pin does; they are only how
+/// a release is FOUND when there is none. Leaving them in meant renaming an album guaranteed a miss,
+/// and a miss is a network round trip during which the page keeps showing the previous record's
+/// scans. Correcting a name is exactly when someone is looking at the sleeve.
+///
+/// Shared with [DiscogsService.hasReleaseArt] so the warmer asks the same question the reader does.
+/// Two spellings of this key would mean warming one place and reading another.
+String artCacheKey(
+  String artist,
+  String album,
+  int expectedTracks,
+  int? pinned,
+  String? pinnedMbid,
+  Map<String, String> roles,
+) {
+  final pinnedKey = '${pinned ?? 0}|${pinnedMbid ?? ''}';
+  final searchKey =
+      (pinned == null && pinnedMbid == null) ? '$artist|$album|$expectedTracks' : '';
+  final roleKey = (roles.entries.map((e) => '${e.key}=${e.value}').toList()..sort()).join(',');
+  return sha1.convert(utf8.encode('art|v5|$searchKey|$pinnedKey|$roleKey')).toString();
+}
+
 /// The three scans an album page shows: the sleeve, its back, and the disc itself.
 class ReleaseArt {
   final Uint8List? front, back, disc;
@@ -785,14 +825,7 @@ extension DiscogsArtwork on DiscogsService {
     // how a release is FOUND when there is none. Leaving them in meant renaming an album guaranteed
     // a miss, and a miss is a network round trip during which the page keeps showing the previous
     // record's scans. Correcting a name is exactly when someone is looking at the sleeve.
-    final pinnedKey = '${pinned ?? 0}|${pinnedMbid ?? ''}';
-    final searchKey = (pinned == null && pinnedMbid == null)
-        ? '$artist|$album|$expectedTracks'
-        : '';
-    final roleKey = (roles.entries.map((e) => '${e.key}=${e.value}').toList()..sort()).join(',');
-    final key = sha1
-        .convert(utf8.encode('art|v5|$searchKey|$pinnedKey|$roleKey'))
-        .toString();
+    final key = artCacheKey(artist, album, expectedTracks, pinned, pinnedMbid, roles);
     final dir = Directory('$artDir${Platform.pathSeparator}$key');
     final cached = await _readArt(dir);
     if (cached != null) return cached;
@@ -1040,6 +1073,28 @@ extension DiscogsArtwork on DiscogsService {
   }
 
   String get artDir => '$appDir${Platform.pathSeparator}releaseart';
+
+  /// Are this record's scans already on disk?
+  ///
+  /// Answers from the `done` marker rather than from the images, because a release that genuinely
+  /// has only a front cover is finished too — see [DiscogsArtwork._writeArt]. Exists so the warmer
+  /// can tell an album that still needs its artwork from one that already has it, without going near
+  /// the network.
+  Future<bool> hasReleaseArt(
+    String artist,
+    String album, {
+    int expectedTracks = 0,
+    int? pinned,
+    String? pinnedMbid,
+    Map<String, String> roles = const {},
+  }) async {
+    final key = artCacheKey(artist, album, expectedTracks, pinned, pinnedMbid, roles);
+    try {
+      return await File('$artDir${Platform.pathSeparator}$key${Platform.pathSeparator}done').exists();
+    } catch (_) {
+      return false;
+    }
+  }
 
   Future<ReleaseArt?> _readArt(Directory dir) async {
     try {

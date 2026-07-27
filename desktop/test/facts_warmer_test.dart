@@ -189,6 +189,30 @@ void main() {
       w.dispose();
     });
 
+    test('een album waarvan de feiten AL klaar zijn krijgt alsnog zijn scans', () async {
+      // Het gat dat de meting zichtbaar maakte. De eerste versie warmde de scans binnen de
+      // feitenlus, en die lus bezoekt alleen albums die nog feiten nodig hebben. Na de eerste veeg
+      // heeft bijna elk album die al, dus juist de platen waar de klacht over ging -- bekende
+      // tracklijst, geen scans -- werden nooit bereikt. Bij het starten kwam er precies één map in
+      // de artwork-cache en daarna niets meer.
+      seedLibrary(['Bekend']);
+      final a = library.albums.single;
+      library.facts.put(AlbumFacts(
+        uid: library.uidOf(a),
+        trackSetHash: library.trackSetHashFor(a),
+        source: 'MusicBrainz',
+        tracklist: const [ChoiceTrack('1', 'Mysterons', 306)],
+      ));
+
+      final w = warmer(found: (_) => true);
+      await w.start();
+
+      expect(asked, isEmpty, reason: 'de feiten hoefden niet opgehaald te worden');
+      expect(warmedArt, hasLength(1), reason: 'de scans wel');
+      expect(w.artWarmed, 1);
+      w.dispose();
+    });
+
     test('een album zonder tracklijst krijgt ook geen scans gewarmd', () async {
       // Niets gevonden betekent dat we niet weten welke persing dit is. Dan is er geen sleutel om
       // onder te warmen, en zou het een zoekopdracht op naam worden -- precies de gok die de

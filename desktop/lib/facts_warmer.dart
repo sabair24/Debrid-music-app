@@ -175,7 +175,20 @@ class FactsWarmer extends ChangeNotifier {
     if (library.scanning) return; // the album list is about to be replaced anyway
 
     final todo = _todo();
-    if (todo.isEmpty) return;
+    // No facts to fetch is NOT a reason to stop: the artwork pass below is for albums whose facts
+    // are already settled, which after the first sweep is nearly all of them. Returning here is
+    // exactly why the first version added one entry to the artwork cache and then went quiet.
+    if (todo.isEmpty) {
+      _running = true;
+      notifyListeners();
+      try {
+        await _warmMissingArt();
+      } finally {
+        _running = false;
+        notifyListeners();
+      }
+      return;
+    }
 
     _running = true;
     _done = 0;
@@ -234,36 +247,6 @@ class FactsWarmer extends ChangeNotifier {
         }
         held.clear();
         library.facts.put(fresh, folder: library.sidecarFolderFor(album));
-
-        // And the scans, straight after, with EXACTLY the arguments the album page will use.
-        //
-        // This is what makes opening a record instant instead of a wait. The tracklist was already
-        // warmed here; the sleeve, the back and the disc were not, and they are the slow part —
-        // Discogs has to resolve the pressing and then download the images. Measured on ANTI: after
-        // thirty seconds on the page the back and the disc were still missing, and they only showed
-        // up on a second visit, off the disk cache the first visit had filled after the user had
-        // already left.
-        //
-        // The arguments have to match the page's to the letter, because expectedTracks and both pins
-        // are part of the cache key — warm it under a different key and the page still fetches. So
-        // the track count comes from the pressing just resolved (which is what the page uses once
-        // the facts are in) and falls back to the file count exactly as the page does.
-        try {
-          await warmArt(
-            album.artist,
-            album.title,
-            expectedTracks: fresh.tracklist.isNotEmpty ? fresh.tracklist.length : album.tracks.length,
-            pinned: library.pinnedRelease(album),
-            pinnedMbid: library.pinnedMbid(album) ?? fresh.mbid,
-            roles: library.albumArtRoles(album.artist, album.title),
-            settings: settings,
-          );
-        } catch (e) {
-          // Artwork is not why this loop exists. A record with a tracklist and no scans is still a
-          // better record than one with neither.
-          debugPrint('Warming art for ${album.title} failed: $e');
-        }
-
         _done++;
         notifyListeners();
       }
@@ -271,12 +254,77 @@ class FactsWarmer extends ChangeNotifier {
       for (final h in held) {
         library.facts.put(h);
       }
+      await _warmMissingArt();
     } finally {
       _running = false;
       await library.facts.flush();
       notifyListeners();
     }
   }
+
+  /// Second pass: albums whose facts are settled but whose scans are not.
+  ///
+  /// Measured after the first version of this shipped: starting the app added exactly ONE entry to
+  /// the artwork cache and then stopped. Correct, and useless — the sweep above only visits albums
+  /// that still need FACTS, and by then almost every album has them. Which means the records the
+  /// complaint was about, the ones with a known tracklist and no scans, were never reached. ANTI is
+  /// one of them.
+  ///
+  /// Newest first for the same reason as the main sweep, and it asks [DiscogsService.hasReleaseArt]
+  /// before every fetch so a warm album costs one file check and no network at all.
+  Future<void> _warmMissingArt() async {
+    final discogs = DiscogsService(settings);
+    for (final album in _byNewest()) {
+      if (_stopped || !settings.warmFacts || library.scanning) break;
+      final uid = library.uidOf(album);
+      if (uid.isEmpty || _artTried.contains(uid)) continue;
+      final facts = library.facts.get(uid);
+      // No tracklist means no pressing, and without one the artwork is a search by name — the guess
+      // that produces the wrong sleeve. Leave those to the page, where the user can see and correct it.
+      if (facts == null || facts.tracklist.isEmpty) continue;
+
+      final expected = facts.tracklist.length;
+      final mbid = library.pinnedMbid(album) ?? facts.mbid;
+      final pinned = library.pinnedRelease(album);
+      final roles = library.albumArtRoles(album.artist, album.title);
+      if (await discogs.hasReleaseArt(album.artist, album.title,
+          expectedTracks: expected, pinned: pinned, pinnedMbid: mbid, roles: roles)) {
+        _artTried.add(uid); // already there — never look again this session
+        continue;
+      }
+
+      _artTried.add(uid);
+      try {
+        await warmArt(album.artist, album.title,
+            expectedTracks: expected,
+            pinned: pinned,
+            pinnedMbid: mbid,
+            roles: roles,
+            settings: settings);
+        _artDone++;
+        notifyListeners();
+      } catch (e) {
+        debugPrint('Warming art for ${album.title} failed: $e');
+        break; // one failure is usually the network, and the next fifty will fail the same way
+      }
+    }
+  }
+
+  /// Every album that could hold facts, newest first. The record that just landed is the one you are
+  /// about to open.
+  List<Album> _byNewest() {
+    final out = [for (final a in library.albums) if (!a.isSingle) a];
+    out.sort((x, y) => y.addedMs.compareTo(x.addedMs));
+    return out;
+  }
+
+  /// Albums whose artwork was looked at this session, so a second sweep does not re-check them.
+  final Set<String> _artTried = {};
+  int _artDone = 0;
+
+  /// How many records had their scans fetched this session. Shown nowhere yet; it is what a test and
+  /// a log line read to tell "warmed" apart from "was already there".
+  int get artWarmed => _artDone;
 
   /// Wait, then try exactly one album. Doubling to an hour, so a machine that is off the network
   /// all evening checks a handful of times rather than continuously.
