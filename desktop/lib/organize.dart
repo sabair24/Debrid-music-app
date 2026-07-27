@@ -263,6 +263,13 @@ class TrackTags {
   }
 
   /// The Vorbis comments this authority dictates. Only these; everything else in the file stays.
+  /// Both spellings of the total, always together.
+  ///
+  /// Vorbis never settled on one: rippers write TRACKTOTAL, TOTALTRACKS, or both. Writing only
+  /// TRACKTOTAL and leaving a stale TOTALTRACKS behind puts two different answers in one file, and
+  /// which one you get depends on the reader. Measured on the real Backstreet's Back after the
+  /// first normalisation: TRACKTOTAL=16 beside TOTALTRACKS=11 in the same file. This app read 16 and
+  /// showed one tile; Roon or a phone reading the other field would still see the record split.
   Map<String, String?> get vorbisFields => {
         'TITLE': title,
         'ARTIST': artist,
@@ -270,6 +277,7 @@ class TrackTags {
         'ALBUM': album,
         if (trackNo > 0) 'TRACKNUMBER': '$trackNo',
         if (trackTotal > 0) 'TRACKTOTAL': '$trackTotal',
+        if (trackTotal > 0) 'TOTALTRACKS': '$trackTotal',
         if (year != null) 'DATE': '$year',
       };
 }

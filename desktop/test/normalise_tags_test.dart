@@ -307,6 +307,22 @@ void main() {
     expect(na['mbid'], 'blijft-staan', reason: 'de gekozen persing is van de gebruiker');
   });
 
+  test('de oude TOTALTRACKS blijft niet naast de nieuwe TRACKTOTAL staan', () async {
+    // Op de echte plaat gemeten na de eerste keer gelijktrekken: TRACKTOTAL=16 in hetzelfde bestand
+    // als TOTALTRACKS=11. Deze app leest tracktotal eerst en zag dus één plaat; Roon of een telefoon
+    // die het andere veld leest, zou hem nog steeds gesplitst zien. Twee waarheden in één bestand.
+    final a = file('01.flac',
+        {'TITLE': 'Everybody', 'ARTIST': 'BSB', 'ALBUM': 'X', 'TRACKNUMBER': '1', 'TOTALTRACKS': '11'},
+        secs: 220);
+    final lib = LibraryStore()..tracks.add(a.track);
+    lib.rebuildAlbums();
+    await lib.applyNormalise(lib.planNormalise(Album('X', 'BSB', [a.track]), pressing()));
+
+    final raw = readFlacRawFields(File(a.path));
+    expect(raw['tracktotal'], '3');
+    expect(raw['totaltracks'], '3', reason: 'allebei, of het bestand spreekt zichzelf tegen');
+  });
+
   test('er blijft geen .tags-restant achter', () async {
     final a = file('01.flac', {'TITLE': 'Everybody', 'ARTIST': 'BSB', 'ALBUM': 'X', 'TRACKNUMBER': '1'}, secs: 220);
     final lib = LibraryStore()..tracks.add(a.track);

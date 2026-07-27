@@ -95,6 +95,39 @@ bool tagParserWouldClaim(File f) {
   }
 }
 
+/// Every Vorbis comment in [f], lowercased keys, exactly as written.
+///
+/// [readFlacTags] answers what a field MEANS, folding the rival spellings together — which is right
+/// for reading and useless for checking what is actually in the file. This says what is on disk, so
+/// a test can catch a stale TOTALTRACKS sitting beside a fresh TRACKTOTAL.
+Map<String, String> readFlacRawFields(File f) {
+  RandomAccessFile? raf;
+  final fields = <String, String>{};
+  try {
+    raf = f.openSync();
+    if (String.fromCharCodes(raf.readSync(4)) != 'fLaC') return fields;
+    for (var block = 0; block < 64; block++) {
+      final h = raf.readSync(4);
+      if (h.length < 4) break;
+      final isLast = (h[0] & 0x80) != 0;
+      final type = h[0] & 0x7F;
+      final len = (h[1] << 16) | (h[2] << 8) | h[3];
+      if (len < 0 || len > 64 * 1024 * 1024) break;
+      if (type == 4) {
+        _readVorbis(raf.readSync(len), fields);
+      } else {
+        raf.setPositionSync(raf.positionSync() + len);
+      }
+      if (isLast) break;
+    }
+  } catch (_) {/* unreadable — an empty map says the same thing */} finally {
+    try {
+      raf?.closeSync();
+    } catch (_) {}
+  }
+  return fields;
+}
+
 /// Reads [f]'s FLAC tags, or null if it isn't FLAC / has no readable header.
 FlacTags? readFlacTags(File f) {
   RandomAccessFile? raf;

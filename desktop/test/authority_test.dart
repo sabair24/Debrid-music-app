@@ -146,9 +146,16 @@ void main() {
 
     test('names only the fields it is allowed to overwrite', () {
       final f = _release.forTrack(_official[1], 2).vorbisFields;
-      expect(f.keys.toSet(),
-          {'TITLE', 'ARTIST', 'ALBUMARTIST', 'ALBUM', 'TRACKNUMBER', 'TRACKTOTAL', 'DATE'});
+      expect(f.keys.toSet(), {
+        'TITLE', 'ARTIST', 'ALBUMARTIST', 'ALBUM', 'TRACKNUMBER',
+        // Both spellings of the total, deliberately. Writing one and leaving the other stale put
+        // TRACKTOTAL=16 beside TOTALTRACKS=11 in the same file on the real Backstreet's Back: this
+        // app read 16 and showed one record, a reader that takes the other field saw it split.
+        'TRACKTOTAL', 'TOTALTRACKS',
+        'DATE',
+      });
       expect(f['TRACKNUMBER'], '2');
+      expect(f['TRACKTOTAL'], f['TOTALTRACKS'], reason: 'never two answers in one file');
       expect(f['DATE'], '1996', reason: 'a year, not the package writers\' YYYY/MM/DD');
     });
   });
