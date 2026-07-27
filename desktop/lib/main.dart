@@ -8498,41 +8498,68 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     final artist = widget.artist, album = widget.album;
     final mine = ++_gen;
     final settings = context.read<AppSettings>();
-    // The blurb comes from TheAudioDB, which is the only one of the two that writes one. Discogs
-    // knows what the record IS: which pressing, on whose label, under what catalogue number.
-    final info = await CoverEnricher(settings).albumInfo(artist, album);
-    if (!mounted || mine != _gen || artist != widget.artist || album != widget.album) return;
-    if (info != null) setState(() => _info = info);
-    // A MusicBrainz pin is fetched FIRST, and on purpose: it is one cached lookup and it decides
-    // what the pressing line says, so it should not sit behind the slower Discogs edition.
-    final mbid = widget.pinnedMbid;
-    if (mbid != null && mbid.isNotEmpty) {
-      final mb = await context.read<MusicBrainzService>().release(mbid).catchError((_) => null);
-      if (!mounted || mine != _gen || artist != widget.artist || album != widget.album) return;
-      if (mb != null) setState(() => _mbEdition = mb);
-    } else if (_mbEdition != null) {
-      setState(() => _mbEdition = null);
-    }
+    final mbService = context.read<MusicBrainzService>();
+    final store = context.read<LibraryStore>();
     final discogs = DiscogsService(settings);
-    final ed =
-        await discogs.edition(artist, album, expectedTracks: widget.trackCount, pinned: widget.pinned).catchError((_) => null);
-    if (!mounted || mine != _gen || artist != widget.artist || album != widget.album) return;
-    if (ed != null) setState(() => _edition = ed);
-    // Remember what this record sounds like. The map fills in as albums are opened, which is what
-    // makes browsing by style possible without sweeping the whole library up front.
-    if (ed != null && mounted) {
-      unawaited(context.read<LibraryStore>().rememberStyles(artist, album, [...ed.genres, ...ed.styles]));
-    }
-    // The scans come off the same cached edition, so this costs nothing beyond the images.
-    final art = await discogs
+
+    /// Still looking at the same record? Read before every setState: each of these lands on its own
+    /// schedule now, so any of them can come back after the page has moved on.
+    bool stillHere() =>
+        mounted && mine == _gen && artist == widget.artist && album == widget.album;
+
+    // Four independent questions, asked at the same time instead of in a queue.
+    //
+    // They used to be four awaits in a row, and the scans were last. Measured on ANTI: the pressing
+    // line landed after thirteen seconds and the back and the disc were still not there after
+    // thirty, because their request had not been SENT yet — it was waiting behind TheAudioDB,
+    // MusicBrainz and the Discogs edition. Nothing in the artwork chain needs any of those three:
+    // every argument it takes comes from the widget. See DiscogsService.edition's in-flight table
+    // for why asking for the edition twice at once costs one fetch, not two.
+    final blurb = CoverEnricher(settings).albumInfo(artist, album).catchError((_) => null);
+
+    final mbid = widget.pinnedMbid;
+    final pressing = (mbid != null && mbid.isNotEmpty)
+        ? mbService.release(mbid).catchError((_) => null)
+        : Future.value(null);
+
+    final release = discogs
+        .edition(artist, album, expectedTracks: widget.trackCount, pinned: widget.pinned)
+        .catchError((_) => null);
+
+    final scans = discogs
         .releaseArt(artist, album,
             expectedTracks: widget.trackCount,
             pinned: widget.pinned,
             pinnedMbid: widget.pinnedMbid,
             roles: widget.roles)
         .catchError((_) => null);
-    if (!mounted || mine != _gen || artist != widget.artist || album != widget.album) return;
-    if (art?.back != null) setState(() => _back = art!.back);
+
+    // The blurb comes from TheAudioDB, which is the only one of these that writes one.
+    unawaited(blurb.then((info) {
+      if (info != null && stillHere()) setState(() => _info = info);
+    }));
+
+    unawaited(pressing.then((mb) {
+      if (!stillHere()) return;
+      if (mb != null) {
+        setState(() => _mbEdition = mb);
+      } else if (mbid == null || mbid.isEmpty) {
+        if (_mbEdition != null) setState(() => _mbEdition = null);
+      }
+    }));
+
+    // Discogs knows what the record IS: which pressing, on whose label, under what catalogue number.
+    unawaited(release.then((ed) {
+      if (ed == null || !stillHere()) return;
+      setState(() => _edition = ed);
+      // Remember what this record sounds like. The map fills in as albums are opened, which is what
+      // makes browsing by style possible without sweeping the whole library up front.
+      unawaited(store.rememberStyles(artist, album, [...ed.genres, ...ed.styles]));
+    }));
+
+    unawaited(scans.then((art) {
+      if (art?.back != null && stillHere()) setState(() => _back = art!.back);
+    }));
   }
 
   /// "CD" reads oddly next to a year; "File" reads as nothing at all.

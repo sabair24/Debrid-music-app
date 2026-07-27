@@ -528,12 +528,35 @@ class DiscogsService {
   /// [expectedTracks] is what the library says the album holds; a pressing with far fewer tracks is
   /// a single or a sampler that got filed under the same master, and describing the album with it
   /// would be worse than useless.
+  /// Which pressing this record is, according to Discogs.
+  ///
+  /// One question at a time per record, like [DiscogsArtwork.releaseArt] already did. The album page
+  /// asks for the edition and for the artwork at the same moment now, and the artwork chain resolves
+  /// the edition itself — so without this the page would run that whole search twice at once, and
+  /// each run is a handful of requests out of sixty a minute.
   Future<DiscogsEdition?> edition(
     String artist,
     String album, {
     int expectedTracks = 0,
     int? pinned,
-  }) async {
+  }) {
+    final key = '${normKey(artist)}|${normKey(album)}|$expectedTracks|${pinned ?? 0}';
+    final running = _editionInFlight[key];
+    if (running != null) return running;
+    final work = _editionFresh(artist, album, expectedTracks, pinned)
+        .whenComplete(() => _editionInFlight.remove(key));
+    _editionInFlight[key] = work;
+    return work;
+  }
+
+  static final _editionInFlight = <String, Future<DiscogsEdition?>>{};
+
+  Future<DiscogsEdition?> _editionFresh(
+    String artist,
+    String album,
+    int expectedTracks,
+    int? pinned,
+  ) async {
     // A release the user pointed at is not a candidate to be weighed against the others — it is the
     // answer. Everything the page shows is read from it.
     if (pinned != null && pinned > 0) {

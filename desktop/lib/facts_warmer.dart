@@ -35,6 +35,25 @@ import 'settings.dart';
 /// every album page for twenty-four hours. Three, and lean on the cheap side of that trade.
 const int _outageAfter = 3;
 
+/// Pull an album's scans into the on-disk cache. The default [FactsWarmer.warmArt].
+///
+/// Returns nothing on purpose: the caller does not want the bytes, it wants them to be on disk by
+/// the time the page asks. [DiscogsArtwork.releaseArt] owns the cache key and the in-flight table,
+/// so a page that opens mid-warm joins the same fetch instead of starting a second one.
+Future<void> fetchReleaseArt(
+  String artist,
+  String album, {
+  required int expectedTracks,
+  int? pinned,
+  String? pinnedMbid,
+  required Map<String, String> roles,
+  required AppSettings settings,
+}) =>
+    DiscogsService(settings)
+        .releaseArt(artist, album,
+            expectedTracks: expectedTracks, pinned: pinned, pinnedMbid: pinnedMbid, roles: roles)
+        .then((_) {});
+
 class FactsWarmer extends ChangeNotifier {
   FactsWarmer({
     required this.library,
@@ -42,6 +61,7 @@ class FactsWarmer extends ChangeNotifier {
     required this.mb,
     required this.enabled,
     this.resolve = resolveAlbumFacts,
+    this.warmArt = fetchReleaseArt,
     this.rearmDelay = const Duration(seconds: 10),
     this.outageBackoff = const Duration(minutes: 15),
   });
@@ -64,6 +84,17 @@ class FactsWarmer extends ChangeNotifier {
     int? pinned,
     DiscogsService? discogs,
   }) resolve;
+
+  /// Injected for the same reason [resolve] is: a test drives the whole loop without a socket.
+  final Future<void> Function(
+    String artist,
+    String album, {
+    required int expectedTracks,
+    int? pinned,
+    String? pinnedMbid,
+    required Map<String, String> roles,
+    required AppSettings settings,
+  }) warmArt;
 
   final Duration rearmDelay;
   final Duration outageBackoff;
@@ -203,6 +234,36 @@ class FactsWarmer extends ChangeNotifier {
         }
         held.clear();
         library.facts.put(fresh, folder: library.sidecarFolderFor(album));
+
+        // And the scans, straight after, with EXACTLY the arguments the album page will use.
+        //
+        // This is what makes opening a record instant instead of a wait. The tracklist was already
+        // warmed here; the sleeve, the back and the disc were not, and they are the slow part —
+        // Discogs has to resolve the pressing and then download the images. Measured on ANTI: after
+        // thirty seconds on the page the back and the disc were still missing, and they only showed
+        // up on a second visit, off the disk cache the first visit had filled after the user had
+        // already left.
+        //
+        // The arguments have to match the page's to the letter, because expectedTracks and both pins
+        // are part of the cache key — warm it under a different key and the page still fetches. So
+        // the track count comes from the pressing just resolved (which is what the page uses once
+        // the facts are in) and falls back to the file count exactly as the page does.
+        try {
+          await warmArt(
+            album.artist,
+            album.title,
+            expectedTracks: fresh.tracklist.isNotEmpty ? fresh.tracklist.length : album.tracks.length,
+            pinned: library.pinnedRelease(album),
+            pinnedMbid: library.pinnedMbid(album) ?? fresh.mbid,
+            roles: library.albumArtRoles(album.artist, album.title),
+            settings: settings,
+          );
+        } catch (e) {
+          // Artwork is not why this loop exists. A record with a tracklist and no scans is still a
+          // better record than one with neither.
+          debugPrint('Warming art for ${album.title} failed: $e');
+        }
+
         _done++;
         notifyListeners();
       }

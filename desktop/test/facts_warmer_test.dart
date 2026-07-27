@@ -26,6 +26,10 @@ void main() {
   late AppSettings settings;
   late List<String> asked;
 
+  /// What the warmer pulled the scans for, so the test can hold onto the one thing that makes an
+  /// album page instant: the artwork is warmed under the SAME key the page will ask with.
+  late List<String> warmedArt;
+
   Track track(String album, int i, {int addedMs = 0}) => Track(
         path: '/m/$album/$i.flac',
         title: 'nr $i',
@@ -53,6 +57,7 @@ void main() {
       ..configDirOverride = scratch.path
       ..rootPath = scratch.path;
     asked = [];
+    warmedArt = [];
   });
 
   tearDown(() {
@@ -85,6 +90,10 @@ void main() {
             failedMs: found(uid) ? null : 1730000000000,
           );
         },
+        warmArt: (artist, album,
+            {required expectedTracks, pinned, pinnedMbid, required roles, required settings}) async {
+          warmedArt.add('$artist|$album|$expectedTracks');
+        },
       );
 
   group('who warms', () {
@@ -114,6 +123,10 @@ void main() {
             source: 'MusicBrainz',
             tracklist: const [ChoiceTrack('1', 'Mysterons', 306)],
           );
+        },
+        warmArt: (artist, album,
+            {required expectedTracks, pinned, pinnedMbid, required roles, required settings}) async {
+          warmedArt.add('$artist|$album|$expectedTracks');
         },
       );
 
@@ -154,6 +167,38 @@ void main() {
           library.albums.firstWhere((a) => library.uidOf(a) == uid).title,
       ];
       expect(titles, ['Nieuw', 'Midden', 'Oud']);
+      w.dispose();
+    });
+
+    test('de scans worden ook gewarmd, en onder de sleutel die de pagina straks vraagt', () async {
+      // Waar het om begonnen was. De tracklijst werd al gewarmd, de hoes/achterkant/cd niet -- en
+      // dat is het langzame deel. Op ANTI stond na dertig seconden op de pagina de achterkant en de
+      // cd er nog niet, en kwamen ze pas op een tweede bezoek uit de schijfcache die het eerste
+      // bezoek had gevuld nadat de gebruiker al was weggeklikt.
+      //
+      // expectedTracks zit IN de cachesleutel. Warm je onder een ander aantal, dan haalt de pagina
+      // hem alsnog op en is het warmen weggegooid werk. De persing die net is opgelost telt hier
+      // één nummer, dus dat is wat er moet staan -- niet het aantal bestanden.
+      seedLibrary(['Dummy']); // twee bestanden, en de persing zegt één nummer
+      final w = warmer(found: (_) => true);
+      await w.start();
+
+      expect(warmedArt, hasLength(1));
+      expect(warmedArt.single, endsWith('|Dummy|1'),
+          reason: 'het aantal van de persing, niet van de bestanden');
+      w.dispose();
+    });
+
+    test('een album zonder tracklijst krijgt ook geen scans gewarmd', () async {
+      // Niets gevonden betekent dat we niet weten welke persing dit is. Dan is er geen sleutel om
+      // onder te warmen, en zou het een zoekopdracht op naam worden -- precies de gok die de
+      // verkeerde hoes oplevert.
+      seedLibrary(['Onbekend']);
+      final w = warmer(found: (_) => false);
+      await w.start();
+
+      expect(asked, hasLength(1));
+      expect(warmedArt, isEmpty);
       w.dispose();
     });
 
