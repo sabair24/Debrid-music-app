@@ -1637,19 +1637,64 @@ class LibraryStore extends ChangeNotifier {
       if (bytes != null) album.enriched = bytes;
     }
     notifyListeners();
-    // Phase 2 — network fill for whatever is still missing.
+    // Phase 2 fills the gaps over the network, and startup does NOT wait for it — see
+    // [enrichFromWeb]. Everything on screen comes from phase 1 above.
+    unawaited(enrichFromWeb(settings));
+  }
+
+  /// The sweep that is running, if one is.
+  ///
+  /// Nothing stopped a second one before: a rescan, a new Discogs token and the album screen all
+  /// call enrich, and two sweeps over the same list each set `enriching` and each cleared it — so
+  /// the status line went off while the other was still going, and every album was fetched twice.
+  ///
+  /// Held as the FUTURE rather than a bool so a caller that wants the finished picture can wait for
+  /// the one already in flight. Returning immediately would be a lie of a different kind: "done"
+  /// when the work has not happened yet.
+  Future<void>? _sweep;
+
+  /// Fetch the covers phase 1 could not find, in the background.
+  ///
+  /// This used to be awaited inside [enrich], and [enrich] is awaited during startup — so restoring
+  /// the queue you left playing and resuming interrupted downloads both sat behind a full network
+  /// sweep. Nobody is waiting for a cover that is not on screen yet; they ARE waiting for their
+  /// music.
+  ///
+  /// Fetched a few at a time rather than one after another. Each album is up to three services in
+  /// sequence (Deezer, Discogs, the archive) with eight-second timeouts, and doing that strictly in
+  /// turn is what made this take half a minute. Six at a time: enough to overlap the waiting,
+  /// little enough that the services are not being leaned on.
+  Future<void> enrichFromWeb(AppSettings settings) =>
+      _sweep ??= _enrichFromWeb(settings).whenComplete(() => _sweep = null);
+
+  Future<void> _enrichFromWeb(AppSettings settings) async {
     enriching = true;
     notifyListeners();
-    for (final album in albums) {
-      if (album.cover != null) continue;
-      final bytes = await enricher.fetchAndCache(album);
-      if (bytes != null) {
-        album.enriched = bytes;
+    try {
+      final enricher = CoverEnricher(settings);
+      // Albums already searched and found to have nothing are skipped entirely — that check is a
+      // stat, not a request. See [CoverEnricher.searchedAndEmpty].
+      final todo = <Album>[];
+      for (final a in albums) {
+        if (a.cover != null) continue;
+        if (await enricher.searchedAndEmpty(a)) continue;
+        todo.add(a);
+      }
+      const atOnce = 6;
+      for (var i = 0; i < todo.length; i += atOnce) {
+        final batch = todo.skip(i).take(atOnce).toList();
+        await Future.wait([
+          for (final album in batch)
+            enricher.fetchAndCache(album).then((bytes) {
+              if (bytes != null) album.enriched = bytes;
+            }).catchError((_) {}),
+        ]);
         notifyListeners();
       }
+    } finally {
+      enriching = false;
+      notifyListeners();
     }
-    enriching = false;
-    notifyListeners();
   }
 
   /// Artist photos (Deezer) + bios (TheAudioDB). Phase 1 = disk cache (instant),
@@ -1668,16 +1713,45 @@ class LibraryStore extends ChangeNotifier {
       }
     }
     notifyListeners();
-    // Phase 2 — network fill.
-    for (final name in artists) {
-      if (!artistImages.containsKey(name)) {
-        final b = await enricher.fetchArtistImage(name);
-        if (b != null) { artistImages[name] = b; notifyListeners(); }
+    unawaited(enrichArtistsFromWeb(settings));
+  }
+
+  Future<void>? _artistSweep;
+
+  /// Portraits and bios over the network, in the background and a few at a time.
+  ///
+  /// Same two reasons as [enrichFromWeb]: this was awaited during startup, and every artist was a
+  /// photo lookup followed by a bio lookup strictly in turn. With sixty artists that is a hundred
+  /// and twenty round trips in single file, at the end of a start nobody thinks is still going.
+  Future<void> enrichArtistsFromWeb(AppSettings settings) =>
+      _artistSweep ??= _enrichArtistsFromWeb(settings).whenComplete(() => _artistSweep = null);
+
+  Future<void> _enrichArtistsFromWeb(AppSettings settings) async {
+    try {
+      final enricher = CoverEnricher(settings);
+      final todo = [
+        for (final n in artists)
+          if (!artistImages.containsKey(n) || !artistBios.containsKey(n)) n,
+      ];
+      const atOnce = 6;
+      for (var i = 0; i < todo.length; i += atOnce) {
+        await Future.wait([
+          for (final name in todo.skip(i).take(atOnce))
+            Future(() async {
+              if (!artistImages.containsKey(name)) {
+                final b = await enricher.fetchArtistImage(name);
+                if (b != null) artistImages[name] = b;
+              }
+              if (!artistBios.containsKey(name)) {
+                final bio = await enricher.fetchArtistBio(name);
+                if (bio != null) artistBios[name] = bio;
+              }
+            }).catchError((_) {}),
+        ]);
+        notifyListeners();
       }
-      if (!artistBios.containsKey(name)) {
-        final bio = await enricher.fetchArtistBio(name);
-        if (bio != null) { artistBios[name] = bio; notifyListeners(); }
-      }
+    } finally {
+      notifyListeners();
     }
   }
 

@@ -309,6 +309,36 @@ class DiscogsService {
   Future<int?> masterId(String artist, String album) async =>
       (await masterIds(artist, album)).firstOrNull;
 
+  /// A cover image URL straight out of a release search — the cheapest thing Discogs will give.
+  ///
+  /// Lives here, and not in the cover enricher that wants it, for the reason the rate-limit comment
+  /// at the top of this file spells out: the budget belongs to the token, and there is one token. The
+  /// enricher was calling api.discogs.com with a bare `http.get`, so those requests were invisible to
+  /// this lane and to this cache — two independent ideas of "sixty a minute" on one allowance, and
+  /// nothing remembered between starts. Six albums enriched at once made that a burst.
+  ///
+  /// One request in the common case, two when the strict query finds nothing, both cached on disk.
+  Future<String?> coverFromSearch(String artist, String album, {bool generic = false}) async {
+    String? pick(Map<String, dynamic>? body) {
+      for (final it in (body?['results'] as List?) ?? const []) {
+        if (it is! Map) continue;
+        final ci = (it['cover_image'] ?? it['thumb']) as String?;
+        // Discogs serves a transparent spacer where a release has no image at all.
+        if (ci != null && ci.isNotEmpty && !ci.contains('spacer')) return ci;
+      }
+      return null;
+    }
+
+    final who = cleanArtistName(artist);
+    final strict = StringBuffer(
+        'https://api.discogs.com/database/search?type=release&release_title=${_q(album)}');
+    if (!generic && who.isNotEmpty) strict.write('&artist=${_q(who)}');
+    final first = pick(await _get(strict.toString()));
+    if (first != null) return first;
+    final q = generic || who.isEmpty ? album : '$who $album';
+    return pick(await _get('https://api.discogs.com/database/search?type=release&q=${_q(q)}'));
+  }
+
   /// Candidate masters, most album-like first.
   Future<List<int>> masterIds(String artist, String album) async {
     final title = plainTitle(album);

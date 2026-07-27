@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
+import 'discogs.dart';
 import 'models.dart';
 import 'settings.dart';
 import 'paths.dart';
@@ -415,12 +416,46 @@ class CoverEnricher {
   }
 
   /// Fetch + cache a cover for [a]; returns the bytes (or null if nothing found).
+  /// How long a fruitless search is taken at its word before it is worth asking again.
+  ///
+  /// Some records genuinely have no cover anywhere — a Soulseek rip of a bootleg, a live set nobody
+  /// catalogued. Without a marker, those were searched again on EVERY start: Deezer, then Discogs,
+  /// then the Cover Art Archive, one after another, for each of them, forever. Measured here: 23 of
+  /// 136 albums found nothing, so that is 23 albums times three services of pure waiting, every
+  /// single time the app opened.
+  ///
+  /// Two weeks rather than forever, because catalogues do gain artwork.
+  static const _rememberMiss = Duration(days: 14);
+
+  File _missFile(Album a) => File('${cacheDir.path}${Platform.pathSeparator}${keyFor(a)}.none');
+
+  /// Has this album been searched recently and come up empty?
+  Future<bool> searchedAndEmpty(Album a) async {
+    try {
+      final f = _missFile(a);
+      if (!await f.exists()) return false;
+      if (DateTime.now().difference(await f.lastModified()) <= _rememberMiss) return true;
+      await f.delete().catchError((_) => f);
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<Uint8List?> fetchAndCache(Album a) async {
     final bytes = await _find(a.artist, a.title);
-    if (bytes != null) {
+    try {
       await cacheDir.create(recursive: true);
-      await _cacheFile(a).writeAsBytes(bytes);
-    }
+      if (bytes != null) {
+        await _cacheFile(a).writeAsBytes(bytes);
+        // A record that has just been found must not stay on the do-not-ask list.
+        final miss = _missFile(a);
+        if (await miss.exists()) await miss.delete().catchError((_) => miss);
+      } else {
+        // Nothing found. Write that down, or the next start repeats the whole chain.
+        await _missFile(a).writeAsString('');
+      }
+    } catch (_) {/* a note we could not write only costs one repeated search */}
     return bytes;
   }
 
@@ -463,26 +498,15 @@ class CoverEnricher {
   }
 
   Future<String?> _discogsCover(String artist, String album, bool generic) async {
-    Future<String?> search(String url) async {
-      try {
-        final r = await http.get(Uri.parse(url), headers: {'User-Agent': _ua}).timeout(const Duration(seconds: 8));
-        if (r.statusCode != 200) return null;
-        final results = (jsonDecode(r.body)['results'] as List?) ?? const [];
-        for (final it in results) {
-          final ci = (it['cover_image'] ?? it['thumb']) as String?;
-          if (ci != null && ci.isNotEmpty && !ci.contains('spacer')) return ci;
-        }
-      } catch (_) {}
+    // Through DiscogsService, which owns the token's budget and the disk cache. This used to call
+    // api.discogs.com with a bare http.get: invisible to that budget, and nothing remembered between
+    // starts. Harmless while covers were fetched one at a time; a burst now that six are enriched at
+    // once, and the token pays for it.
+    try {
+      return await DiscogsService(settings).coverFromSearch(artist, album, generic: generic);
+    } catch (_) {
       return null;
     }
-
-    final tok = Uri.encodeComponent(settings.discogsToken);
-    final strict = StringBuffer('https://api.discogs.com/database/search?type=release&token=$tok&release_title=${Uri.encodeComponent(album)}');
-    if (!generic && artist.isNotEmpty) strict.write('&artist=${Uri.encodeComponent(artist)}');
-    final s = await search(strict.toString());
-    if (s != null) return s;
-    final q = generic ? album : '$artist $album';
-    return search('https://api.discogs.com/database/search?type=release&token=$tok&q=${Uri.encodeComponent(q)}');
   }
 
   Future<Uint8List?> _musicbrainzCover(String artist, String album) async {

@@ -19,3 +19,7 @@ local.properties
 *.keystore
 # …except the project's stable app-signing key (private repo, needed by CI)
 !app/debridmusic.keystore
+
+# Het release-wachtwoord van de Android-sleutel. Nooit in de repo.
+key.properties
+desktop/android/key.properties

@@ -3,6 +3,11 @@ name: Build & Release APK
 on:
   push:
     branches: [ "main", "claude/**" ]
+    # The release tag builds every platform. Without this the APK only ever came from a push to
+    # main or a claude/** branch, so work living on a feature branch shipped to Windows, the Mac and
+    # the iPad while Android silently stayed weeks behind — which is exactly what happened.
+    tags:
+      - 'win-v*'
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
@@ -53,6 +58,33 @@ jobs:
       #
       # arm64 only: media_kit ships libmpv as a native library per architecture, and both the Shield
       # and any current phone are arm64. Carrying four triples the APK for nothing.
+      # The release keystore, from repository secrets. Absent secrets are not an error: the Gradle
+      # config falls back to the debug key and says so in the log, which is how every APK was signed
+      # before. What must never happen is a debug-signed APK passing for a signed one, so the step
+      # below states which of the two it is.
+      - name: Write the signing key
+        working-directory: desktop/android
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > release.jks
+            {
+              echo "storeFile=release.jks"
+              echo "storePassword=$STORE_PASSWORD"
+              echo "keyAlias=$KEY_ALIAS"
+              echo "keyPassword=${KEY_PASSWORD:-$STORE_PASSWORD}"
+            } > key.properties
+            echo "SIGNED=ja" >> "$GITHUB_ENV"
+            echo "Release-sleutel geschreven; de APK wordt echt gesigneerd."
+          else
+            echo "SIGNED=nee" >> "$GITHUB_ENV"
+            echo "Geen ANDROID_KEYSTORE_BASE64 in de secrets — de APK wordt met de DEBUG-sleutel gesigneerd."
+          fi
+
       - name: Build release APK
         working-directory: desktop
         run: |
@@ -65,6 +97,24 @@ jobs:
              "build/app/outputs/flutter-apk/DebridMusic-v${VERSION}-build${BUILD_NUMBER}.apk"
           echo "APK_NAME=DebridMusic-v${VERSION}-build${BUILD_NUMBER}.apk" >> "$GITHUB_ENV"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      # Read back out of the APK itself rather than trusting what we think we configured. The
+      # certificate's subject is the difference: a debug key says "CN=Android Debug".
+      - name: Say which key actually signed it
+        working-directory: desktop
+        run: |
+          APK="build/app/outputs/flutter-apk/${APK_NAME}"
+          SIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | tail -1 || true)
+          if [ -n "$SIGNER" ]; then
+            echo "verwacht: gesigneerd=${SIGNED}"
+            "$SIGNER" verify --print-certs "$APK" | grep -i "Signer #1 certificate DN" || true
+            if [ "$SIGNED" = "ja" ] && "$SIGNER" verify --print-certs "$APK" | grep -qi "Android Debug"; then
+              echo "::error::De sleutel is geschreven maar de APK draagt nog het debug-certificaat."
+              exit 1
+            fi
+          else
+            echo "apksigner niet gevonden; overgeslagen."
+          fi
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

@@ -31,13 +31,23 @@ void main() {
     // ignore: avoid_print
     print('embedded covers after scan: $embedded');
 
-    // Phase 1 of enrich() must fill most covers from the on-disk cache fast.
-    // Run enrich but only wait a bounded time; phase-1 (cache) is synchronous disk I/O.
+    // enrich() is now the DISK phase only, and returns as soon as that is done — the web sweep runs
+    // behind it so that startup can get on with restoring the queue and resuming downloads. That
+    // split is the point of the measurement below: phase one has to be quick, because it is the one
+    // anything waits for.
     sw.reset();
-    await lib.enrich(settings).timeout(const Duration(seconds: 120), onTimeout: () {});
+    await lib.enrich(settings);
+    // ignore: avoid_print
+    print('enrich() (schijf) returned in ${sw.elapsedMilliseconds}ms');
+    expect(sw.elapsedMilliseconds, lessThan(20000),
+        reason: 'de schijffase mag het opstarten niet ophouden');
+
+    // And then the web sweep, awaited here because a test wants the finished picture.
+    sw.reset();
+    await lib.enrichFromWeb(settings).timeout(const Duration(minutes: 3), onTimeout: () {});
     final withCover = lib.albums.where((a) => a.cover != null).length;
     // ignore: avoid_print
-    print('covers after enrich: $withCover / ${lib.albums.length} (in ${sw.elapsedMilliseconds}ms)');
+    print('covers after web sweep: $withCover / ${lib.albums.length} (in ${sw.elapsedMilliseconds}ms)');
 
     // With 60 cached covers on disk, the vast majority must be present.
     expect(withCover, greaterThan(40));
