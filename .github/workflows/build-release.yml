@@ -98,22 +98,63 @@ jobs:
           echo "APK_NAME=DebridMusic-v${VERSION}-build${BUILD_NUMBER}.apk" >> "$GITHUB_ENV"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
-      # Read back out of the APK itself rather than trusting what we think we configured. The
-      # certificate's subject is the difference: a debug key says "CN=Android Debug".
+      # Read the certificate back OUT of the finished APK rather than trusting what we think we
+      # configured. A debug key identifies itself: "CN=Android Debug, O=Android, C=US".
+      #
+      # The first version of this step printed one line and then nothing — no certificate, and no
+      # "apksigner not found" either. It had piped apksigner straight into grep with `|| true`, so a
+      # tool that wrote to stderr, or failed outright, produced silence that read exactly like a pass.
+      # A check that cannot run must SAY so and fail when it matters, or it is worse than no check:
+      # it is a green tick over an unanswered question.
       - name: Say which key actually signed it
         working-directory: desktop
         run: |
           APK="build/app/outputs/flutter-apk/${APK_NAME}"
+          echo "verwacht: gesigneerd=${SIGNED}"
+          echo "APK: $APK"
+          if [ ! -f "$APK" ]; then
+            echo "::error::De APK staat niet waar hij verwacht wordt — de controle kon niet lopen."
+            ls -la build/app/outputs/flutter-apk/ || true
+            exit 1
+          fi
+
           SIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | tail -1 || true)
+          echo "apksigner: ${SIGNER:-<niet gevonden>}"
+
+          CERTS=""
           if [ -n "$SIGNER" ]; then
-            echo "verwacht: gesigneerd=${SIGNED}"
-            "$SIGNER" verify --print-certs "$APK" | grep -i "Signer #1 certificate DN" || true
-            if [ "$SIGNED" = "ja" ] && "$SIGNER" verify --print-certs "$APK" | grep -qi "Android Debug"; then
+            # stderr erbij: apksigner schrijft een deel van zijn uitvoer daarheen, en dat was precies
+            # wat de vorige versie kwijtraakte.
+            CERTS=$("$SIGNER" verify --print-certs "$APK" 2>&1) || true
+          fi
+          if [ -z "$CERTS" ] && command -v keytool >/dev/null 2>&1; then
+            # Reservepad: keytool leest de signature block net zo goed.
+            CERTS=$(keytool -printcert -jarfile "$APK" 2>&1) || true
+          fi
+
+          if [ -z "$CERTS" ]; then
+            echo "Kon het certificaat niet uitlezen."
+            if [ "$SIGNED" = "ja" ]; then
+              echo "::error::Er is een sleutel geschreven, maar niet te controleren of de APK hem draagt."
+              exit 1
+            fi
+            echo "Niet fataal: deze build hoort debug-gesigneerd te zijn."
+            exit 0
+          fi
+
+          echo "$CERTS" | grep -iE "owner|Signer #1 certificate (DN|SHA-256)" || echo "$CERTS" | head -20
+
+          if echo "$CERTS" | grep -qi "Android Debug"; then
+            echo "Dit is de DEBUG-sleutel."
+            if [ "$SIGNED" = "ja" ]; then
               echo "::error::De sleutel is geschreven maar de APK draagt nog het debug-certificaat."
               exit 1
             fi
           else
-            echo "apksigner niet gevonden; overgeslagen."
+            echo "Dit is NIET de debug-sleutel."
+            if [ "$SIGNED" != "ja" ]; then
+              echo "::warning::Onverwacht: geen sleutel geschreven, maar het certificaat is niet het debug-certificaat."
+            fi
           fi
 
       - name: Upload APK artifact
@@ -123,11 +164,18 @@ jobs:
           path: desktop/build/app/outputs/flutter-apk/${{ env.APK_NAME }}
           retention-days: 30
 
-      # Publishes only the built APK to a SEPARATE PUBLIC repo so the in-app
-      # updater can read releases and download the APK without authentication,
-      # while this source repo stays private.
+      # Publishes only the built APK to a SEPARATE PUBLIC repo so the in-app updater can read releases
+      # and download the APK without authentication. That was written when this source repo was
+      # private; it is public now, so the split is no longer load-bearing — but the updater points at
+      # that repo, and moving it would break every phone already carrying the app.
+      #
+      # The tag has to be here too. Adding win-v* to this workflow made the APK BUILD on a release
+      # tag, and it went green — but this step still only fired for main, so the artifact was built
+      # and never published. A green Android build that no phone can see is the same as no build.
       - name: Publish APK to public releases repo
-        if: github.ref == 'refs/heads/main' && env.RELEASES_TOKEN != ''
+        if: >-
+          (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/win-v'))
+          && env.RELEASES_TOKEN != ''
         env:
           RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
         uses: softprops/action-gh-release@v2
