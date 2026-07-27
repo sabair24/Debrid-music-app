@@ -884,19 +884,51 @@ extension DiscogsArtwork on DiscogsService {
         max: 25,
       );
       if (hits.isEmpty) return null;
+
+      // In waves, and the wave is the point. This walked up to twenty-five pressings ONE AT A TIME,
+      // and the cap of four counted only pressings that turned out to have scans — so a record whose
+      // first twenty entries are bare (common: catalogue stubs rank as high as documented pressings)
+      // paid for twenty round trips in single file before it reached the fourth useful one. At one to
+      // two seconds each that is half a minute, and it is the reason an album page could sit there
+      // with no back cover and no disc for far longer than it had any right to.
+      //
+      // Four at a time, at most three waves. Asking four when one would have done costs three cached
+      // lookups; asking them in turn cost seconds each. Order is still respected: the front comes
+      // from the FIRST pressing that has one, because that is the sleeve this record is known by, so
+      // the results are walked in hit order regardless of which answer arrived first.
+      const perWave = 4;
+      const maxLooked = 4;
       Uint8List? front, back, disc;
       var looked = 0;
-      for (final r in hits) {
-        if (looked >= 4 || (front != null && back != null && disc != null)) break;
-        final images = await mb.art(r.mbid);
-        if (images.isEmpty) continue;
-        looked++;
-        // The front must come from the FIRST pressing that has one — that is the sleeve this
-        // record is known by. Back and disc may be borrowed from later ones.
-        for (final i in images) {
-          if (front == null && i.isFront) front = await mb.fetchImage(i.full);
-          if (back == null && i.isBack) back = await mb.fetchImage(i.full);
-          if (disc == null && i.isDisc) disc = await mb.fetchImage(i.full);
+      for (var w = 0; w * perWave < hits.length && w < 3; w++) {
+        if (looked >= maxLooked || (front != null && back != null && disc != null)) break;
+        final wave = hits.skip(w * perWave).take(perWave).toList();
+        final scans = await Future.wait([for (final r in wave) mb.art(r.mbid)]);
+        for (final images in scans) {
+          if (images.isEmpty) continue;
+          if (looked >= maxLooked) break;
+          looked++;
+          // The three downloads together: they are separate GETs to archive.org and waiting for one
+          // before starting the next added a second per role for nothing.
+          final want = <String, MbImage>{};
+          for (final i in images) {
+            if (front == null && i.isFront) want.putIfAbsent('front', () => i);
+            if (back == null && i.isBack) want.putIfAbsent('back', () => i);
+            if (disc == null && i.isDisc) want.putIfAbsent('disc', () => i);
+          }
+          if (want.isEmpty) continue;
+          final keys = want.keys.toList();
+          final bytes = await Future.wait([for (final k in keys) mb.fetchImage(want[k]!.full)]);
+          for (var n = 0; n < keys.length; n++) {
+            switch (keys[n]) {
+              case 'front':
+                front ??= bytes[n];
+              case 'back':
+                back ??= bytes[n];
+              case 'disc':
+                disc ??= bytes[n];
+            }
+          }
         }
       }
       if (front == null && back == null && disc == null) return null;

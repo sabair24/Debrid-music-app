@@ -1608,6 +1608,30 @@ class LibraryStore extends ChangeNotifier {
         _trackByPath[t.path] = t;
       }
     }
+
+    // Everything in the flat list that no album claims.
+    //
+    // These indexes were built from `albums` alone, and [_dedupeTracks] leaves the second copy of a
+    // take OUT of its album while the flat list keeps every file. So a folded-away duplicate was
+    // visible in Tracks, playable from there, and invisible to all three lookups: no cover
+    // (coverForTrack), no album on the now-playing screen (albumForPath), and — the one that stings —
+    // no resume, because `player.restore` looks the last-played path up through trackByPath and got
+    // null. Close the app on such a track and it simply did not come back.
+    //
+    // Filed against the album that absorbed it, found by the identity the dedupe folded on, so the
+    // cover and the album page are the ones that record actually belongs to.
+    final byIdentity = <String, Album>{};
+    for (final a in albums) {
+      for (final t in a.tracks) {
+        byIdentity.putIfAbsent(trackIdentity(t.artist, t.title), () => a);
+      }
+    }
+    for (final t in tracks) {
+      if (_trackByPath.containsKey(t.path)) continue;
+      _trackByPath[t.path] = t;
+      final a = byIdentity[trackIdentity(t.artist, t.title)];
+      if (a != null) _albumByPath[t.path] = a;
+    }
   }
 
   /// Fill missing album covers. Phase 1 loads everything already on disk (instant,

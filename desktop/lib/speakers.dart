@@ -104,10 +104,23 @@ class SpeakerTarget extends ChangeNotifier {
     _poll = Timer.periodic(const Duration(seconds: 2), (_) => unawaited(refresh()));
   }
 
+  /// True while a poll is out. The tick is every two seconds and the request is allowed thirty, so
+  /// without this a PC that answers slowly — asleep, on a weak link, busy — collected up to fifteen
+  /// overlapping requests on one client, each of which would then arrive out of order and take turns
+  /// overwriting the position with an older reading.
+  bool _polling = false;
+
   Future<void> refresh({bool withVolume = false}) async {
+    if (_polling) return;
     final device = _device, c = client;
     if (device == null || c == null) return;
-    final fresh = await c.castStatus(device.id, withVolume: withVolume);
+    _polling = true;
+    final CastStatus? fresh;
+    try {
+      fresh = await c.castStatus(device.id, withVolume: withVolume);
+    } finally {
+      _polling = false;
+    }
     // Selected somewhere else while this was in flight — that answer is about a speaker nobody is
     // looking at any more.
     if (fresh == null || _device?.id != device.id) return;

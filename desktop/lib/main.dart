@@ -2753,12 +2753,22 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
   /// Is the track playing right now one of THIS album's? The disc only turns for the record it
   /// belongs to — every sleeve in the library spinning at once would be nonsense.
-  bool _albumIsPlaying(BuildContext context) {
-    final p = context.watch<PlayerStore>();
+  /// `select`, not `watch`, and that difference is the whole album page.
+  ///
+  /// PlayerStore calls notifyListeners on every position tick — media_kit emits one every hundred
+  /// milliseconds or so — and watching it from here rebuilt this entire page five to ten times a
+  /// second for as long as anything was playing. That build is not cheap: it re-runs
+  /// matchAlbumTracks over the official tracklist every time. All of that to answer one yes-or-no
+  /// question that changes when the TRACK changes, not when the second hand moves.
+  ///
+  /// select re-runs the little function below on each notify and only rebuilds when its ANSWER
+  /// differs. Walking a fourteen-track list ten times a second costs nothing; rebuilding the page
+  /// did.
+  bool _albumIsPlaying(BuildContext context) => context.select<PlayerStore, bool>((p) {
     if (!p.playing) return false;
     final now = p.current?.path;
     return now != null && album.tracks.any((t) => t.path == now);
-  }
+  });
 
   Widget _header(BuildContext context) {
     final player = context.read<PlayerStore>();
@@ -5895,10 +5905,16 @@ class _OntdekViewState extends State<OntdekView> {
       owned.add('${_radioNorm(t.artist)}|${_radioNorm(t.title)}');
     }
     List<RecTrack> recs;
+    // "The lookup failed" and "your library already has everything it suggested" are different
+    // answers, and they were both reported as the second one. Told that nothing new was found, the
+    // obvious conclusion is that there is nothing left to discover — not that the request never
+    // arrived. Refreshing then looks pointless when it is exactly the thing that would help.
+    var failed = false;
     try {
       recs = await _rec.discover(seeds.take(4).toList());
     } catch (_) {
       recs = const [];
+      failed = true;
     }
     final fresh = recs
         .where((r) => !owned.contains('${_radioNorm(r.artist)}|${_radioNorm(r.title)}'))
@@ -5907,7 +5923,11 @@ class _OntdekViewState extends State<OntdekView> {
       setState(() {
         _tracks = fresh;
         _busy = false;
-        _status = fresh.isEmpty ? 'Niets nieuws gevonden — ververs eens.' : null;
+        _status = fresh.isNotEmpty
+            ? null
+            : failed
+                ? 'De suggesties konden niet worden opgehaald. Zit je online? Probeer het nog eens.'
+                : 'Niets nieuws gevonden — ververs eens.';
       });
     }
   }
@@ -10898,12 +10918,17 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     final settings = context.read<AppSettings>();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final filled = await DiscogsService(settings).detailOf(c).catchError((_) => null);
-      if (!mounted || filled == null) return;
+      if (!mounted) return;
       final list = _choices;
       if (list == null) return;
       final i = list.indexWhere((x) => x.key == c.key);
       if (i < 0) return;
-      setState(() => _choices = [...list]..[i] = filled);
+      // A failed lookup still ANSWERS the question. Returning here left the row saying "scans
+      // ophalen…" with its little spinner for as long as the dialog stayed open — and never again,
+      // because `_asked` already holds this id so it is not retried. The row promised something that
+      // was no longer coming. Marked as looked-up instead: the three slots then read "asked, and
+      // there was nothing", which is true and is what the crosses are for.
+      setState(() => _choices = [...list]..[i] = filled ?? c.withArt());
     });
   }
 
