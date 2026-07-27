@@ -92,19 +92,35 @@ class AppSettings extends ChangeNotifier {
         } catch (e) {
           loadError = '$e';
         }
-      } else {
+      } else if (!await backup.exists()) {
         notifyListeners();
         return; // a first run, not a loss
       }
 
-      // The file is there and unreadable. Try the spare before giving up.
+      // Gone, or there and unreadable. Either way the spare is what it is FOR.
+      //
+      // A missing file used to take the branch above and stop: "a first run, not a loss". But a
+      // settings.json that has been deleted — a cleanup tool, a sync conflict, a restored profile —
+      // is not a first run, and next to it sat a spare holding every token. The app started blank
+      // and asked for credentials it already had. Worse, filling the dialog in then wrote a file
+      // covering only the fields that dialog owns: the LAN token, the server id, the music folder
+      // and the TIDAL tokens are not on it, so the "repair" completed the loss. Reading the spare
+      // first means the object is whole by the time anyone presses Save.
       if (await backup.exists()) {
         try {
           _apply(jsonDecode(await backup.readAsString()) as Map<String, dynamic>);
-          debugPrint('settings.json unreadable ($loadError) — recovered from settings.bak.json');
+          debugPrint(loadError.isEmpty
+              ? 'settings.json is gone — recovered from settings.bak.json'
+              : 'settings.json unreadable ($loadError) — recovered from settings.bak.json');
           // Recovered, so saving is safe again: what is in memory is a real set of settings.
           loadFailed = false;
           loadError = '';
+          // Put the primary back, or every start from here on runs on the spare and the file the
+          // user (and every other tool) looks at stays missing. Safe precisely because the object is
+          // whole again — that is what the branch above just established.
+          try {
+            if (!await f.exists()) await backup.copy(f.path);
+          } catch (_) {/* running from the spare still works; this is only tidiness */}
           notifyListeners();
           return;
         } catch (_) {/* both gone; fall through */}
