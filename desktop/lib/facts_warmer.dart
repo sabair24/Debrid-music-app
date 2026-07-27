@@ -247,6 +247,14 @@ class FactsWarmer extends ChangeNotifier {
         }
         held.clear();
         library.facts.put(fresh, folder: library.sidecarFolderFor(album));
+        // This record's scans NOW, before moving on to the next album's facts.
+        //
+        // Measured with the progress line in the corner: the facts loop had 26 albums to work
+        // through at roughly half a minute each. An artwork pass that waits for that loop to finish
+        // does not land for ten minutes — and the album whose scans you actually want is the one
+        // that just downloaded, which is first in this loop. So it gets them here, and the backlog
+        // is caught up afterwards.
+        await _warmArtFor(album, fresh);
         _done++;
         notifyListeners();
       }
@@ -273,40 +281,57 @@ class FactsWarmer extends ChangeNotifier {
   /// Newest first for the same reason as the main sweep, and it asks [DiscogsService.hasReleaseArt]
   /// before every fetch so a warm album costs one file check and no network at all.
   Future<void> _warmMissingArt() async {
-    final discogs = DiscogsService(settings);
     for (final album in _byNewest()) {
       if (_stopped || !settings.warmFacts || library.scanning) break;
       final uid = library.uidOf(album);
       if (uid.isEmpty || _artTried.contains(uid)) continue;
       final facts = library.facts.get(uid);
-      // No tracklist means no pressing, and without one the artwork is a search by name — the guess
-      // that produces the wrong sleeve. Leave those to the page, where the user can see and correct it.
-      if (facts == null || facts.tracklist.isEmpty) continue;
+      if (facts == null) continue;
+      if (!await _warmArtFor(album, facts)) break;
+    }
+  }
 
-      final expected = facts.tracklist.length;
-      final mbid = library.pinnedMbid(album) ?? facts.mbid;
-      final pinned = library.pinnedRelease(album);
-      final roles = library.albumArtRoles(album.artist, album.title);
-      if (await discogs.hasReleaseArt(album.artist, album.title,
-          expectedTracks: expected, pinned: pinned, pinnedMbid: mbid, roles: roles)) {
-        _artTried.add(uid); // already there — never look again this session
-        continue;
-      }
+  /// One album's scans, with the arguments the album page will use.
+  ///
+  /// Returns false only when the fetch itself failed — the caller reads that as "the network is
+  /// gone" and stops, because the next fifty will fail the same way.
+  ///
+  /// The arguments have to match the page's to the letter: expectedTracks and both pins are part of
+  /// the cache key, so warming under a different track count means the page still fetches and the
+  /// warming was wasted. The count comes from the pressing just resolved — what the page uses once
+  /// the facts are in — and falls back to the file count exactly as the page does.
+  Future<bool> _warmArtFor(Album album, AlbumFacts facts) async {
+    final uid = library.uidOf(album);
+    if (uid.isEmpty || _artTried.contains(uid)) return true;
+    // No tracklist means no pressing, and without one the artwork is a search by name — the guess
+    // that produces the wrong sleeve. Leave those to the page, where the user can see and correct it.
+    if (facts.tracklist.isEmpty) return true;
 
-      _artTried.add(uid);
-      try {
-        await warmArt(album.artist, album.title,
-            expectedTracks: expected,
-            pinned: pinned,
-            pinnedMbid: mbid,
-            roles: roles,
-            settings: settings);
-        _artDone++;
-        notifyListeners();
-      } catch (e) {
-        debugPrint('Warming art for ${album.title} failed: $e');
-        break; // one failure is usually the network, and the next fifty will fail the same way
-      }
+    final expected = facts.tracklist.length;
+    final mbid = library.pinnedMbid(album) ?? facts.mbid;
+    final pinned = library.pinnedRelease(album);
+    final roles = library.albumArtRoles(album.artist, album.title);
+
+    // One attempt per album per session, whatever the outcome — recorded before the check so a
+    // throw cannot cause a re-pick, and so the catch-up pass never repeats what this already did.
+    _artTried.add(uid);
+    if (await DiscogsService(settings).hasReleaseArt(album.artist, album.title,
+        expectedTracks: expected, pinned: pinned, pinnedMbid: mbid, roles: roles)) {
+      return true; // already on disk — one file check, no network
+    }
+    try {
+      await warmArt(album.artist, album.title,
+          expectedTracks: expected,
+          pinned: pinned,
+          pinnedMbid: mbid,
+          roles: roles,
+          settings: settings);
+      _artDone++;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      debugPrint('Warming art for ${album.title} failed: $e');
+      return false;
     }
   }
 
