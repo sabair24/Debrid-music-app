@@ -1944,8 +1944,7 @@ class MergePlan {
 class NormaliseStep {
   final Track track;
 
-  /// The pressing entry this file was matched to, or null when nothing matched — then the file is
-  /// left exactly as it is. A record we cannot name is not a record we should rewrite.
+  /// The pressing entry this file was matched to, or null when nothing matched.
   final ChoiceTrack? official;
 
   /// The new values. Null means "leave this field alone".
@@ -1955,11 +1954,24 @@ class NormaliseStep {
   /// Why this file is being skipped, in words, or null when it is not.
   final String? skipped;
 
+  /// Why this file only gets the album fields, in words. Set when the pressing does not recognise
+  /// it — its own title and number are left alone.
+  final String? note;
+
   const NormaliseStep(this.track, this.official,
-      {this.title, this.trackNo, this.skipped});
+      {this.title, this.trackNo, this.skipped, this.note});
 
   String get name => File(track.path).uri.pathSegments.last;
   bool get willWrite => skipped == null;
+
+  /// Album, albumartiest, aantal en jaar — but not the title or the number.
+  ///
+  /// Measured on the real folder: leaving an unrecognised file out entirely got Backstreet's Back
+  /// from four tiles down to two, not one. The second rip of track 10 was titled differently, so
+  /// the pressing did not know it, so it kept TOTALTRACKS=0 — and one file with a different total
+  /// is a tile. We do not know WHICH track it is; we do know which record it is on, because the
+  /// user is looking at that record and confirming this album by name.
+  bool get albumOnly => skipped == null && official == null;
 }
 
 /// Everything that pulling an album's tags into line would do, so it can be shown before it is done.
@@ -1985,6 +1997,12 @@ class NormalisePlan {
   List<NormaliseStep> get writing => steps.where((s) => s.willWrite).toList();
   List<NormaliseStep> get skipped => steps.where((s) => !s.willWrite).toList();
 
+  /// Written, but only the album fields — the pressing did not recognise these.
+  List<NormaliseStep> get albumOnly => steps.where((s) => s.albumOnly).toList();
+
+  /// Written in full: title and number come from the pressing.
+  List<NormaliseStep> get renamed => steps.where((s) => s.willWrite && !s.albumOnly).toList();
+
   /// The values on disk today, so the dialog can say what is actually being fixed.
   Set<String> get albumsNow => {for (final s in steps) s.track.album};
   Set<int> get totalsNow => {for (final s in steps) s.track.trackTotal};
@@ -2002,10 +2020,19 @@ class NormalisePlan {
 
   /// Two files ending up with one title. [LibraryStore._dedupeTracks] keys on artist+title, so this
   /// would not read as a tagging mistake — it would read as a track disappearing.
+  ///
+  /// Only a collision this plan CREATES counts. Two files that already carry the same title are
+  /// already deduped to one in the tracklist; refusing over that would block the feature on exactly
+  /// the messy albums it exists for — two rips of one record, both tagged "Missing You".
   bool get titleCollides {
-    final seen = <String>{};
+    final already = <String>{}, twice = <String>{};
     for (final s in writing) {
-      if (!seen.add(normKey(s.title ?? s.track.title))) return true;
+      if (!already.add(normKey(s.track.title))) twice.add(normKey(s.track.title));
+    }
+    final after = <String>{};
+    for (final s in writing) {
+      final k = normKey(s.title ?? s.track.title);
+      if (!after.add(k) && !twice.contains(k)) return true;
     }
     return false;
   }
@@ -2037,7 +2064,9 @@ extension LibraryNormalise on LibraryStore {
       }
       final best = matchOfficial(pool, t.title, t.duration?.inSeconds ?? 0);
       if (best == null) {
-        steps.add(NormaliseStep(t, null, skipped: 'niet herkend in deze persing — blijft zoals hij is'));
+        // Not "leave it alone": see [NormaliseStep.albumOnly] for why that left two tiles standing.
+        steps.add(NormaliseStep(t, null,
+            note: 'niet herkend in deze persing — alleen album en aantal, titel en nummer blijven'));
         continue;
       }
       pool.remove(best);

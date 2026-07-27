@@ -178,7 +178,7 @@ void main() {
     expect(plan.writing.map((s) => s.name), ['01.flac']);
   });
 
-  test('een nummer dat de persing niet kent blijft ongemoeid', () {
+  test('een nummer dat de persing niet kent houdt titel en nummer', () {
     final a = file('01.flac', {'TITLE': 'Everybody', 'ARTIST': 'BSB', 'ALBUM': 'X', 'TRACKNUMBER': '1'}, secs: 220);
     final vreemd = file('99.flac', {'TITLE': 'Iets Heel Anders', 'ARTIST': 'BSB', 'ALBUM': 'X', 'TRACKNUMBER': '9'}, secs: 61);
 
@@ -186,8 +186,65 @@ void main() {
     lib.rebuildAlbums();
     final plan = lib.planNormalise(Album('X', 'BSB', [a.track, vreemd.track]), pressing());
 
-    expect(plan.skipped.map((s) => s.name), contains('99.flac'));
-    expect(plan.skipped.firstWhere((s) => s.name == '99.flac').skipped, contains('niet herkend'));
+    final s = plan.albumOnly.single;
+    expect(s.name, '99.flac');
+    expect(s.note, contains('niet herkend'));
+    expect(s.title, isNull, reason: 'we weten niet welk nummer dit is');
+    expect(s.trackNo, isNull);
+    expect(plan.skipped, isEmpty, reason: 'het is wel een FLAC — het album mag er wel in');
+  });
+
+  test('maar krijgt wél het album en het aantal — anders blijft het een eigen tegel', () async {
+    // Gemeten op de echte map: een onbekend bestand overslaan bracht Backstreet's Back van vier
+    // tegels naar twee, niet naar één. Dat ene bestand hield TOTALTRACKS=0 en dus een eigen tegel.
+    final a = file('01.flac', {'TITLE': 'Everybody', 'ARTIST': 'BSB', 'ALBUM': "X's", 'TRACKNUMBER': '1', 'TOTALTRACKS': '11'}, secs: 220);
+    final b = file('02.flac', {'TITLE': 'As Long as You Love Me', 'ARTIST': 'BSB', 'ALBUM': 'X’s', 'TRACKNUMBER': '2'}, secs: 216);
+    final vreemd = file('99.flac', {'TITLE': 'Iets Heel Anders', 'ARTIST': 'BSB', 'ALBUM': 'X’s', 'TRACKNUMBER': '9'}, secs: 61);
+
+    final alle = [a.track, b.track, vreemd.track];
+    final lib = LibraryStore()..tracks.addAll(alle);
+    lib.rebuildAlbums();
+
+    final plan = lib.planNormalise(Album("X's", 'BSB', alle), pressing(), albumTitle: "X's");
+    expect(plan.writing, hasLength(3), reason: 'alle drie worden geschreven');
+    expect(await lib.applyNormalise(plan), 3);
+
+    final t = readFlacTags(File(vreemd.path))!;
+    expect(t.album, "X's", reason: 'hoort bij deze plaat');
+    expect(t.trackTotal, 3, reason: 'en telt mee in hetzelfde aantal');
+    expect(t.title, 'Iets Heel Anders', reason: 'de titel is niet van ons om te verzinnen');
+    expect(t.trackNo, 9, reason: 'en het nummer evenmin');
+
+    // Waar het om begonnen was.
+    final vers = LibraryStore()
+      ..tracks.addAll([
+        for (final p in [a.path, b.path, vreemd.path])
+          () {
+            final x = readFlacTags(File(p))!;
+            return Track(
+                path: p,
+                title: x.title ?? '',
+                artist: x.artist ?? '',
+                album: x.album ?? '',
+                trackNo: x.trackNo,
+                trackTotal: x.trackTotal,
+                duration: x.duration,
+                isFlac: true);
+          }(),
+      ]);
+    vers.rebuildAlbums();
+    expect(vers.albums.length, 1, reason: 'één tegel, ook met een bestand dat de persing niet kent');
+  });
+
+  test('twee bestanden die nu al dezelfde titel hebben blokkeren het plan niet', () {
+    // De dubbele rip is precies waarom deze knop bestaat; er hier op weigeren maakt hem nutteloos.
+    final a = file('01.flac', {'TITLE': 'Missing You', 'ARTIST': 'BSB', 'ALBUM': 'X', 'TRACKNUMBER': '1'}, secs: 300);
+    final b = file('02.flac', {'TITLE': 'Missing You', 'ARTIST': 'BSB', 'ALBUM': 'X', 'TRACKNUMBER': '1'}, secs: 300);
+
+    final lib = LibraryStore()..tracks.addAll([a.track, b.track]);
+    lib.rebuildAlbums();
+    final plan = lib.planNormalise(Album('X', 'BSB', [a.track, b.track]), pressing());
+    expect(plan.titleCollides, isFalse, reason: 'die botsing stond er al, die maken wij niet');
   });
 
   test('twee bestanden op één nummer wordt geweigerd', () {

@@ -11900,7 +11900,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
             const SizedBox(height: 10),
             Expanded(
               child: ListView(children: [
-                for (final s in plan.writing)
+                for (final s in plan.renamed)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 5),
                     child: Row(children: [
@@ -11922,6 +11922,29 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                           style: const TextStyle(fontSize: 11.5, color: _muted)),
                     ]),
                   ),
+                if (plan.albumOnly.isNotEmpty) ...[
+                  const Divider(height: 22),
+                  const Text('Alleen album en aantal — titel en nummer blijven',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _muted)),
+                  const SizedBox(height: 6),
+                  for (final s in plan.albumOnly)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(children: [
+                        SizedBox(
+                            width: 46,
+                            child: Text('${s.track.trackNo}',
+                                style: const TextStyle(fontSize: 12.5, color: _muted))),
+                        Expanded(
+                            child: Text(s.track.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 13, color: _muted))),
+                        Text('${s.track.trackTotal == 0 ? "geen" : s.track.trackTotal} → ${plan.total}',
+                            style: const TextStyle(fontSize: 11.5, color: _muted)),
+                      ]),
+                    ),
+                ],
                 if (plan.skipped.isNotEmpty) ...[
                   const Divider(height: 22),
                   const Text('Blijft ongemoeid',
