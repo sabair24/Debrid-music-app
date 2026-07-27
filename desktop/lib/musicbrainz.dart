@@ -817,7 +817,11 @@ class MusicBrainzService {
     // different host on its own 250 ms lane, so asking for all of them is cheap. The tracklist is
     // now fetched only when something actually wants it — see [tracklistOf], which the
     // "take this numbering" action already calls on demand.
-    ReleaseChoice? rowFor(MbRelease r, List<MbImage> images, {bool always = false}) {
+    /// [known] is whether this pressing's scans have actually been looked up. Without it a row that
+    /// is merely still loading claims it HAS no back and no disc, which is a different statement
+    /// and a false one — see [ReleaseChoice.detailed].
+    ReleaseChoice? rowFor(MbRelease r, List<MbImage> images,
+        {bool always = false, bool known = true}) {
       ChoiceImage? front, back, disc;
       for (final i in images) {
         // The archive states what each scan IS — Front, Back, Medium — so nothing here is inferred
@@ -850,6 +854,7 @@ class MusicBrainzService {
         front: front,
         back: back,
         disc: disc,
+        detailed: known,
       );
     }
 
@@ -926,7 +931,8 @@ class MusicBrainzService {
       final rows = <ReleaseChoice>[];
       for (final (r, always) in candidates) {
         if (rows.length >= max) break;
-        final row = rowFor(r, scans[r.mbid] ?? const [], always: always);
+        final asked = scans.containsKey(r.mbid);
+        final row = rowFor(r, scans[r.mbid] ?? const [], always: always, known: asked);
         if (row != null) rows.add(row);
       }
       return rows;

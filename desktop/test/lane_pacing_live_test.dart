@@ -60,12 +60,24 @@ void main() {
     final counts = <int>[];
     final firstPartial = Stopwatch()..start();
     var firstPartialMs = -1;
+    bool? firstBatchDetailed;
 
     final out = await MusicBrainzService().editionChoices('Céline Dion', 'Sans attendre',
         pinnedMbid: 'bcd34d7e-2ffa-48d0-bd4b-19d278ca0a0c', onPartial: (rows) {
-      if (firstPartialMs < 0) firstPartialMs = firstPartial.elapsedMilliseconds;
+      if (firstPartialMs < 0) {
+        firstPartialMs = firstPartial.elapsedMilliseconds;
+        firstBatchDetailed = rows.every((r) => r.detailed);
+      }
       counts.add(rows.length);
     });
+
+    // The first rows exist before anything has been asked about their artwork, and they have to say
+    // so: a row that draws a cross over "hoes" while the lookup is still in flight is telling the
+    // user this pressing has no sleeve, which is not something anyone knows yet.
+    expect(firstBatchDetailed, isFalse,
+        reason: 'the first rows claimed their scans had been looked up');
+    expect(out.every((r) => r.detailed), isTrue,
+        reason: 'by the end every row has actually been asked about');
 
     expect(counts, isNotEmpty, reason: 'nothing was published while it worked');
     expect(counts.first, greaterThan(0), reason: 'the pressings are named before anything is fetched');

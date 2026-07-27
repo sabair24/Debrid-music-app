@@ -11162,14 +11162,22 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       {required String role, required ReleaseChoice row, VoidCallback? onLongPress}) {
     final staged = _staged[role];
     final chosen = img != null && staged != null && staged.uri == img.uri;
+    // Nothing here yet, and nobody has looked — as opposed to looked and found none.
+    final waiting = img == null && !row.detailed;
     return InkWell(
       onTap: img == null ? null : () => _stage(role, img),
       onLongPress: onLongPress,
       borderRadius: BorderRadius.circular(6),
       child: Tooltip(
-        message: img == null
-            ? 'Deze uitgave heeft geen $label'
-            : 'Klik: neem deze $label over · Lang indrukken: alle scans van deze uitgave',
+        message: img != null
+            ? 'Klik: neem deze $label over · Lang indrukken: alle scans van deze uitgave'
+            // "Has none" and "nobody has asked yet" are different statements, and the row now
+            // appears before its scans do — so for a second or two the cross was claiming the
+            // first while the second was true. The badges beside it already made that distinction;
+            // the thumbnails were still saying it flatly.
+            : waiting
+                ? 'De scans van deze uitgave worden opgehaald…'
+                : 'Deze uitgave heeft geen $label',
         child: Column(children: [
           Container(
             decoration: BoxDecoration(
@@ -11182,13 +11190,17 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
             padding: const EdgeInsets.all(1),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(6),
-              child: img == null
-                  ? Container(
+              child: img != null
+                  ? _netCover(img.thumb, size: 58, radius: 6)
+                  : Container(
                       width: 58,
                       height: 58,
                       color: Colors.white.withValues(alpha: .04),
-                      child: const Icon(Icons.close_rounded, size: 16, color: _muted))
-                  : _netCover(img.thumb, size: 58, radius: 6),
+                      // Nothing at all while we wait: an empty frame reads as "not yet", where any
+                      // mark at this size reads as an answer.
+                      child: waiting
+                          ? null
+                          : const Icon(Icons.close_rounded, size: 16, color: _muted)),
             ),
           ),
           const SizedBox(height: 3),
