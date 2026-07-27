@@ -686,6 +686,32 @@ String _thisDeviceName() {
 }
 
 // ── Cover helpers ────────────────────────────────────────────────────────────
+
+/// How many pixels wide this artwork actually needs to be decoded at.
+///
+/// Every Image in this file decoded at the source resolution, and the sources are big: the covers
+/// this app stores are 1200x1200, some originals over 3000. Decoded, a 1200px sleeve is 1200 x 1200 x
+/// 4 bytes — 5.8 MB of bitmap — and a 120px grid tile needs 57 KB of that. A hundred and twenty-five
+/// albums on screen therefore ask for far more than Flutter's image cache holds, so it evicts and
+/// re-decodes while you scroll: the work is done again and again for pictures that were already
+/// there.
+///
+/// A hint, not a resize: `cacheWidth` tells the decoder how small it may go, and BoxFit still does
+/// the layout. Multiplied by the screen's pixel ratio so a 2x display gets a sharp image rather than
+/// a soft one, and clamped because a hint derived from a wrong ratio should cost a little sharpness,
+/// never correctness.
+int _decodeWidth(double logicalSize) {
+  var dpr = 1.0;
+  try {
+    dpr = WidgetsBinding.instance.platformDispatcher.views.first.devicePixelRatio;
+  } catch (_) {/* no view yet — the default is fine for a hint */}
+  if (!dpr.isFinite || dpr < 1) dpr = 1;
+  if (dpr > 4) dpr = 4;
+  // Never below 64: a hint smaller than that makes even a list thumbnail visibly mushy.
+  final w = (logicalSize * dpr).round();
+  return w < 64 ? 64 : w;
+}
+
 Widget cover(Uint8List? bytes, {double size = 160, double radius = 12, bool circle = false}) {
   final shape = circle ? BoxShape.circle : BoxShape.rectangle;
   final br = circle ? null : BorderRadius.circular(radius);
@@ -695,7 +721,8 @@ Widget cover(Uint8List? bytes, {double size = 160, double radius = 12, bool circ
       height: size,
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(shape: shape, borderRadius: br),
-      child: Image.memory(bytes, fit: BoxFit.cover, gaplessPlayback: true),
+      child: Image.memory(bytes,
+          fit: BoxFit.cover, gaplessPlayback: true, cacheWidth: _decodeWidth(size)),
     );
   }
   return Container(
@@ -5003,7 +5030,10 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
         children: [
           if (p.currentCover != null)
             Positioned.fill(
-              child: Opacity(opacity: .22, child: Image.memory(p.currentCover!, fit: BoxFit.cover)),
+              // Blurred to almost nothing behind the player, so it never needed the full picture.
+              child: Opacity(
+                  opacity: .22,
+                  child: Image.memory(p.currentCover!, fit: BoxFit.cover, cacheWidth: 480)),
             ),
           Positioned.fill(child: Container(color: _bg.withValues(alpha: .5))),
           SafeArea(
@@ -6655,7 +6685,9 @@ Widget _netCover(String? url, {double size = 160, double radius = 12, bool circl
     height: size,
     clipBehavior: Clip.antiAlias,
     decoration: BoxDecoration(shape: shape, borderRadius: br),
-    child: Image.network(url, fit: BoxFit.cover,
+    child: Image.network(url,
+        fit: BoxFit.cover,
+        cacheWidth: _decodeWidth(size),
         errorBuilder: (_, __, ___) => placeholder,
         loadingBuilder: (c, w, p) => p == null ? w : placeholder),
   );
@@ -8526,7 +8558,8 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
               borderRadius: BorderRadius.circular(6),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(6),
-                child: Image.memory(_back!, height: 116, fit: BoxFit.contain),
+                child: Image.memory(_back!,
+                    height: 116, fit: BoxFit.contain, cacheWidth: _decodeWidth(200)),
               ),
             ),
           ],
@@ -10625,7 +10658,8 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
       borderRadius: BorderRadius.circular(10),
       child: front == null
           ? Container(width: s, height: s, color: _panel2, child: const Icon(Icons.album, color: _muted))
-          : Image.memory(front, width: s, height: s, fit: BoxFit.cover),
+          : Image.memory(front,
+              width: s, height: s, fit: BoxFit.cover, cacheWidth: _decodeWidth(s)),
     );
 
     if (disc == null) return sleeve;
@@ -10644,7 +10678,13 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
       child: RepaintBoundary(
         child: ClipPath(
           clipper: const _DiscClipper(),
-          child: Image.memory(disc, width: s * .92, height: s * .92, fit: BoxFit.cover),
+          child: Image.memory(disc,
+              width: s * .92,
+              height: s * .92,
+              fit: BoxFit.cover,
+              // This one rotates sixty times a second. Decoding it at 1200px to spin it inside a
+              // 600px circle is the most expensive picture in the app.
+              cacheWidth: _decodeWidth(s * .92)),
         ),
       ),
     );
