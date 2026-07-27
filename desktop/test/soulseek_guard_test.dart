@@ -1,7 +1,7 @@
 /// The Soulseek login guard, and the fact that it has to survive the app closing.
 ///
 /// Soulseek allows one login per account and rate-limits repeated ones. The app has a guard for
-/// that — four logins per ten minutes, plus a growing wait after a refusal — but it lived in memory
+/// that â€” four logins per ten minutes, plus a growing wait after a refusal â€” but it lived in memory
 /// only, so closing and reopening the app forgot it. That is precisely the case it exists for:
 /// four launches, each opening an album (which searches in the background, which logs in), sailed
 /// straight past a guard that says four per ten minutes, and Soulseek did the refusing instead.
@@ -37,7 +37,7 @@ void main() {
 
   test('a refused login is written down, not only remembered', () async {
     final a = SoulseekClient();
-    a.noteLoginRefused();
+    a.noteLoginRefused('');
     expect(a.blocked, isTrue);
 
     // A new process, same folder.
@@ -49,7 +49,7 @@ void main() {
   });
 
   test('a kick is written down too', () async {
-    // noteConnectionLost sets a five-minute stand-down of its own, and did not save it — so the
+    // noteConnectionLost sets a five-minute stand-down of its own, and did not save it â€” so the
     // screen said "wait 6 more minutes" while the file on disk said nothing was wrong.
     final a = SoulseekClient();
     a.noteLoggedIn();
@@ -123,16 +123,16 @@ void main() {
     }));
     final c = SoulseekClient();
     await c.loadGuard();
-    c.noteLoginRefused();
-    // Back to the first step of the back-off, which is two minutes — not the thirty it was on.
+    c.noteLoginRefused('');
+    // Back to the first step of the back-off, which is two minutes â€” not the thirty it was on.
     expect(c.blockedFor!.inMinutes, lessThan(5));
   });
 
   test('a refusal that keeps coming does escalate', () async {
     final c = SoulseekClient();
-    c.noteLoginRefused();
+    c.noteLoginRefused('');
     final first = c.blockedFor!;
-    c.noteLoginRefused();
+    c.noteLoginRefused('');
     final second = c.blockedFor!;
     expect(second, greaterThan(first), reason: 'blijft het misgaan, dan langer wachten');
     await c.guardSaved();
@@ -141,7 +141,7 @@ void main() {
 
   test('a successful login clears everything, on disk as well', () async {
     final c = SoulseekClient();
-    c.noteLoginRefused();
+    c.noteLoginRefused('');
     expect(c.blocked, isTrue);
     c.noteLoggedIn();
     expect(c.blocked, isFalse);
@@ -155,7 +155,7 @@ void main() {
     for (var i = 0; i < 4; i++) {
       c.noteLoginAttempt();
     }
-    c.noteLoginRefused();
+    c.noteLoginRefused('');
     expect(c.mustNotLogin, isTrue);
 
     c.allowOneRetry();

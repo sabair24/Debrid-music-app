@@ -6412,9 +6412,21 @@ Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy,
           const SizedBox(width: 10),
           Icon(Icons.pause_circle_outline_rounded, size: 13, color: Colors.orange.shade300),
           const SizedBox(width: 4),
-          Text(
-              'gepauzeerd — login geweigerd, wacht nog ${(context.read<SoulseekService>().blockedFor?.inMinutes ?? 0) + 1} min',
-              style: TextStyle(color: Colors.orange.shade300, fontSize: 11.5)),
+          // The reason comes from the client, which knows which of the five it is. This line used
+          // to say "login geweigerd" for all of them — including a login that had just worked and
+          // was then kicked, and a server that never answered at all.
+          Tooltip(
+            message: context.read<SoulseekService>().whyNotLogin ?? '',
+            child: Text(
+                () {
+                  final s = context.read<SoulseekService>();
+                  final left = s.blockedFor;
+                  return left == null
+                      ? 'gepauzeerd — ${s.pauseLabel}'
+                      : 'gepauzeerd — ${s.pauseLabel}, nog ${left.inMinutes + 1} min';
+                }(),
+                style: TextStyle(color: Colors.orange.shade300, fontSize: 11.5)),
+          ),
           const SizedBox(width: 6),
           // This wait is OUR guard, not Soulseek's. When the official client is logged in fine,
           // the account clearly isn't blocked and the user should never be stuck behind it.

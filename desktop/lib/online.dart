@@ -226,13 +226,27 @@ class SoulseekService {
 
   bool get available => settings.soulseekUser.isNotEmpty && settings.soulseekPass.isNotEmpty;
 
-  /// True while the client is backing off after a refused login (account rate-limited/blocked).
-  /// While this holds, NOTHING touches Soulseek — so normal browsing can't keep feeding the block.
-  bool get blocked => client.blocked;
+  /// True while nothing may touch Soulseek — so normal browsing can't keep feeding the problem.
+  ///
+  /// [SoulseekClient.mustNotLogin], not `blocked`: the login budget stops logins just as firmly and
+  /// used to do it invisibly, leaving the panel to report "0 bronnen" with no reason given.
+  bool get blocked => client.mustNotLogin;
   Duration? get blockedFor => client.blockedFor;
 
-  /// Drop our own back-off and let one login through — see [SlskClient.allowOneRetry].
-  void retryLoginNow() => client.allowOneRetry();
+  /// What is actually going on — see [SlskPause]. The screen wrote its own text from one boolean
+  /// and called a kick, a silence and a wrong password all "login geweigerd".
+  SlskPause get pause => client.pause;
+  String get pauseLabel => client.pauseLabel;
+  String? get whyNotLogin => client.whyNotLogin;
+
+  /// Drop every wait standing in the way and let one login through.
+  ///
+  /// The session's own counters go too. Without them the button cleared the client's back-off and
+  /// the session refused anyway, so nothing happened and the notice stayed on screen.
+  void retryLoginNow() {
+    client.allowOneRetry();
+    _session?.allowRetry();
+  }
 
   // ── The one logged-in connection ──────────────────────────────────────────
   // Soulseek allows a single login per account and blocks on a burst of them, so EVERYTHING that
@@ -248,6 +262,14 @@ class SoulseekService {
     _idle?.cancel();
     try {
       client.listenPort = settings.soulseekPort; // so firewalled peers can reach us
+      // A session holds the username and password it was built with. Correcting them in Settings
+      // therefore changed nothing until the old session happened to idle out — so the fix for a
+      // wrong password appeared not to work, which is the worst possible moment to be ignored.
+      final s0 = _session;
+      if (s0 != null && (s0.user != settings.soulseekUser || s0.pass != settings.soulseekPass)) {
+        s0.close();
+        _session = null;
+      }
       final s = _session ??= client.newSession(settings.soulseekUser, settings.soulseekPass);
       return await body(s);
     } finally {

@@ -21,7 +21,7 @@ void main() {
   test('a refused login stops all traffic', () {
     final c = SoulseekClient();
     expect(c.mustNotLogin, isFalse);
-    c.noteLoginRefused();
+    c.noteLoginRefused('');
     expect(c.mustNotLogin, isTrue);
     expect(c.blocked, isTrue);
     expect(c.blockedFor, isNotNull);
@@ -32,53 +32,53 @@ void main() {
     c.noteLoginAttempt();
     c.noteLoggedIn();
     expect(c.mustNotLogin, isFalse);
-    c.noteConnectionLost(); // dropped seconds after login → another client took the account
+    c.noteConnectionLost(); // dropped seconds after login â†’ another client took the account
     expect(c.mustNotLogin, isTrue);
   });
 
   test('a connection lost long after login is not treated as a kick', () {
     final c = SoulseekClient();
-    c.noteConnectionLost(); // never logged in — nothing to stand down from
+    c.noteConnectionLost(); // never logged in â€” nothing to stand down from
     expect(c.blocked, isFalse);
   });
 
   test('a successful login clears an earlier refusal', () {
     final c = SoulseekClient();
-    c.noteLoginRefused();
+    c.noteLoginRefused('');
     expect(c.blocked, isTrue);
     c.noteLoggedIn();
     expect(c.blocked, isFalse);
   });
 }
 
-/// The back-off is OUR guard, not Soulseek's, so it has to be proportionate — and escapable when
+/// The back-off is OUR guard, not Soulseek's, so it has to be proportionate â€” and escapable when
 /// the user can see the account is fine (the official client logged in right beside it).
 void backoff() {
   test('one refusal costs minutes, not half an hour', () {
     final c = SoulseekClient();
-    c.noteLoginRefused();
+    c.noteLoginRefused('');
     expect(c.blocked, isTrue);
     expect(c.blockedFor!.inMinutes, lessThan(3));
   });
 
   test('but a refusal that keeps repeating costs more each time', () {
     final c = SoulseekClient();
-    c.noteLoginRefused();
+    c.noteLoginRefused('');
     final first = c.blockedFor!;
-    c.noteLoginRefused();
+    c.noteLoginRefused('');
     final second = c.blockedFor!;
-    c.noteLoginRefused();
+    c.noteLoginRefused('');
     expect(second, greaterThan(first));
     expect(c.blockedFor!, greaterThan(second));
   });
 
   test('a successful login forgets the escalation', () {
     final c = SoulseekClient();
-    c.noteLoginRefused();
-    c.noteLoginRefused();
-    c.noteLoginRefused();
+    c.noteLoginRefused('');
+    c.noteLoginRefused('');
+    c.noteLoginRefused('');
     c.noteLoggedIn();
-    c.noteLoginRefused();
+    c.noteLoginRefused('');
     expect(c.blockedFor!.inMinutes, lessThan(3)); // back to the first step
   });
 
@@ -87,7 +87,7 @@ void backoff() {
     for (var i = 0; i < 6; i++) {
       c.noteLoginAttempt();
     }
-    c.noteLoginRefused();
+    c.noteLoginRefused('');
     expect(c.mustNotLogin, isTrue);
     c.allowOneRetry();
     expect(c.mustNotLogin, isFalse);

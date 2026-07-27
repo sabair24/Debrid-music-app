@@ -116,6 +116,32 @@ List<SoulseekFile> sortSoulseek(Iterable<SoulseekFile> files) {
   return audio;
 }
 
+/// Why the app is not talking to Soulseek right now.
+///
+/// There used to be one flag for all of this, and the screen read "login geweigerd" for every one
+/// of them — including [kicked], which happens AFTER a login that worked, and [noAnswer], where the
+/// server never said anything at all. Telling someone their login was refused when it was not is
+/// worse than saying nothing: they go and check the password that was never the problem.
+enum SlskPause {
+  none,
+
+  /// The server answered and said no, and told us why. [SoulseekClient.serverSaid] has its words.
+  refused,
+
+  /// The server's reason names the username or the password. Waiting cannot fix this one.
+  badLogin,
+
+  /// We asked and nothing came back before the timeout. Says nothing about the account.
+  noAnswer,
+
+  /// We logged in fine and were then thrown off — another client took the account. Soulseek allows
+  /// one session per user, so this is the native client (or a phone) doing exactly what it should.
+  kicked,
+
+  /// Our own budget, not the server's: too many logins in too short a window.
+  tooMany,
+}
+
 // ── wire helpers (little-endian) ─────────────────────────────────────────────
 class _W {
   final _b = BytesBuilder();
@@ -436,11 +462,50 @@ class SoulseekClient {
     }
   }
 
-  void noteLoginRefused() {
+  /// Which of the several very different situations we are in. See [SlskPause].
+  SlskPause _pause = SlskPause.none;
+  SlskPause get pause => blocked ? _pause : (_budgetSpent ? SlskPause.tooMany : SlskPause.none);
+
+  /// The server's own words for a refusal, kept verbatim. It sends a reason string after the
+  /// success flag and the app used to read the flag and drop the rest, which is why every refusal
+  /// looked identical and none of them could be acted on.
+  String _serverSaid = '';
+  String get serverSaid => _serverSaid;
+
+  /// Does the server's reason name the credentials? Then waiting is not the answer, and no amount
+  /// of backing off will change it.
+  static bool _namesCredentials(String reason) {
+    final r = reason.toUpperCase();
+    return r.contains('INVALIDPASS') ||
+        r.contains('INVALIDUSERNAME') ||
+        r.contains('INVALID USERNAME') ||
+        r.contains('PASSWORD');
+  }
+
+  /// The server answered and said no. [reason] is its own text; pass it through unchanged.
+  void noteLoginRefused(String reason) {
     _decayRefusals();
-    _blockedUntil = DateTime.now().add(_backoff[_refusals.clamp(0, _backoff.length - 1)]);
-    _refusals++;
-    _lastRefusalAt = DateTime.now();
+    _serverSaid = reason.trim();
+    if (_namesCredentials(_serverSaid)) {
+      // A wrong password is not a burst to back off from. Escalating 2 → 6 → 15 → 30 minutes over
+      // it only hides the one thing the user has to be told, and hides it for longer each time.
+      _pause = SlskPause.badLogin;
+      _blockedUntil = DateTime.now().add(const Duration(minutes: 10));
+    } else {
+      _pause = SlskPause.refused;
+      _blockedUntil = DateTime.now().add(_backoff[_refusals.clamp(0, _backoff.length - 1)]);
+      _refusals++;
+      _lastRefusalAt = DateTime.now();
+    }
+    unawaited(_saveGuard());
+  }
+
+  /// We asked and nothing came back. That is not a refusal and must never be counted as one: the
+  /// account may be perfectly fine and the network merely slow. A short flat wait, no escalation.
+  void noteLoginNoAnswer() {
+    _pause = SlskPause.noAnswer;
+    _serverSaid = '';
+    _blockedUntil = DateTime.now().add(const Duration(minutes: 1));
     unawaited(_saveGuard());
   }
 
@@ -448,6 +513,8 @@ class SoulseekClient {
     _blockedUntil = null;
     _refusals = 0;
     _lastRefusalAt = null;
+    _pause = SlskPause.none;
+    _serverSaid = '';
     unawaited(_saveGuard());
   }
 
@@ -474,6 +541,11 @@ class SoulseekClient {
       if (until != null && until.isAfter(DateTime.now()) &&
           until.difference(DateTime.now()) <= const Duration(hours: 1)) {
         _blockedUntil = until;
+        // Only meaningful alongside a live wait; a stale reason with no wait would label a pause
+        // that is not happening.
+        final name = '${j['pause'] ?? ''}';
+        _pause = SlskPause.values.firstWhere((p) => p.name == name, orElse: () => SlskPause.refused);
+        _serverSaid = '${j['serverSaid'] ?? ''}';
       }
       _refusals = (j['refusals'] as num?)?.toInt() ?? 0;
       _lastRefusalAt = DateTime.tryParse('${j['lastRefusalAt'] ?? ''}');
@@ -507,12 +579,22 @@ class SoulseekClient {
       'refusals': _refusals,
       'lastRefusalAt': _lastRefusalAt?.toIso8601String(),
       'logins': [for (final t in _loginTimes) t.toIso8601String()],
+      // The reason travels with the wait. Carrying the wait alone across a restart meant the app
+      // came back knowing it had to pause but no longer knowing why, and said so in the vaguest
+      // possible way — which is how a kick turned into "login geweigerd" the next morning.
+      'pause': _pause.name,
+      'serverSaid': _serverSaid,
     });
+    // The destination is fixed HERE, with the payload, not when the write's turn comes round. The
+    // path is read from the app folder, and a queued write that resolves it later would land
+    // wherever the app folder points by then — which is a real difference for anything that moves
+    // it, and is how a queued save from one test ended up in the next one's directory.
+    final dest = _guardFile;
     return _saving = _saving.then((_) async {
       try {
-        final tmp = File('${_guardFile.path}.tmp');
+        final tmp = File('${dest.path}.tmp');
         await tmp.writeAsString(payload);
-        await tmp.rename(_guardFile.path);
+        await tmp.rename(dest.path);
       } catch (e) {
         debugPrint('Could not save soulseek_guard.json: $e');
       }
@@ -552,14 +634,37 @@ class SoulseekClient {
   /// we've simply logged in too often. [whyNotLogin] explains which, for the UI.
   bool get mustNotLogin => blocked || _budgetSpent;
 
-  String? get whyNotLogin {
-    if (blocked) return 'Soulseek weigerde de login — de app wacht even voor het opnieuw probeert.';
-    if (_budgetSpent) {
-      return 'Te vaak opnieuw ingelogd. Draait de officiële Soulseek-app? Sluit die — jullie '
-          'kicken elkaar er dan om beurten uit. De app probeert het straks vanzelf opnieuw.';
-    }
-    return null;
-  }
+  /// One sentence, true for the situation we are actually in. The screen used to write its own
+  /// text from a single boolean and got it wrong for three of the five cases.
+  String? get whyNotLogin => switch (pause) {
+        SlskPause.none => null,
+        SlskPause.badLogin => _serverSaid.isEmpty
+            ? 'Soulseek herkent je gebruikersnaam of wachtwoord niet. Wachten helpt hier niet — '
+                'pas je login aan bij Instellingen.'
+            : 'Soulseek weigert je login en zegt: "$_serverSaid". Wachten helpt hier niet — pas je '
+                'login aan bij Instellingen.',
+        SlskPause.refused => _serverSaid.isEmpty
+            ? 'Soulseek weigerde de login zonder reden op te geven. De app probeert het straks weer.'
+            : 'Soulseek weigerde de login: "$_serverSaid". De app probeert het straks weer.',
+        SlskPause.noAnswer =>
+          'Soulseek gaf geen antwoord. Dat zegt niets over je account — de app probeert het zo weer.',
+        SlskPause.kicked =>
+          'Je was ingelogd en bent er afgegooid: een andere Soulseek-app gebruikt dit account. '
+              'Soulseek staat er één tegelijk toe. Sluit de officiële app, dan blijft deze verbonden.',
+        SlskPause.tooMany =>
+          'Te vaak opnieuw ingelogd. Draait de officiële Soulseek-app? Sluit die — jullie kicken '
+              'elkaar er dan om beurten uit. De app probeert het straks vanzelf opnieuw.',
+      };
+
+  /// A few words for the strip above the results, where a sentence does not fit.
+  String get pauseLabel => switch (pause) {
+        SlskPause.none => '',
+        SlskPause.badLogin => 'gebruikersnaam of wachtwoord klopt niet',
+        SlskPause.refused => 'Soulseek weigerde de login',
+        SlskPause.noAnswer => 'Soulseek antwoordde niet',
+        SlskPause.kicked => 'andere Soulseek-app heeft het account overgenomen',
+        SlskPause.tooMany => 'te vaak ingelogd, even rustig aan',
+      };
 
   void noteLoginAttempt() {
     _loginTimes.add(DateTime.now());
@@ -572,6 +677,10 @@ class SoulseekClient {
   void noteConnectionLost() {
     final ok = _lastLoginOk;
     if (ok != null && DateTime.now().difference(ok) < const Duration(minutes: 1)) {
+      // NOT a refusal: the login worked and something took the account off us afterwards. Saying
+      // "login geweigerd" here sent the user to check a password that was never wrong.
+      _pause = SlskPause.kicked;
+      _serverSaid = '';
       _blockedUntil = DateTime.now().add(const Duration(minutes: 5));
       // Saved, like every other way the guard changes. Without this the screen said "wait 6 more
       // minutes" while soulseek_guard.json said nothing was wrong — and a restart walked straight
@@ -851,8 +960,22 @@ class SlskSession {
   Socket? _server;
   _Conn? _conn;
   StreamSubscription<Uint8List>? _sub;
+  /// A sentinel that cannot come off the wire: the timeout path needs to be told apart from a
+  /// server that answered with an empty reason.
+  static const _noAnswer = ' geen antwoord';
+
   int _loginTries = 0; // consecutive failed logins — capped so a blocked account isn't hammered
   DateTime? _lastLoginAttempt; // throttle re-logins (guards a kick/re-login storm)
+
+  /// Let the next call try again, whatever this session has been through.
+  ///
+  /// These two are why "nu opnieuw proberen" could do nothing at all: the button cleared the
+  /// client's back-off, but two failures had already closed this session's own door and only a
+  /// successful login reopened it — which needs a login, which the door was blocking.
+  void allowRetry() {
+    _loginTries = 0;
+    _lastLoginAttempt = null;
+  }
   Future<bool>? _ensuring; // in-flight login, shared by concurrent downloads (never 2 logins)
 
   // Per-peer routing for the concurrently-active downloads.
@@ -925,12 +1048,18 @@ class SlskSession {
       final s = await Socket.connect(SoulseekClient._host, SoulseekClient._port, timeout: const Duration(seconds: 8));
       _server = s; // own the socket NOW so _drop() closes it on ANY failure path (no leak)
       final c = _Conn(s);
-      final login = Completer<bool>();
+      // (ok, what the server said). The reason string sits right after the success flag and used to
+      // be dropped on the floor, which is why every refusal reached the user as the same four words.
+      final login = Completer<(bool, String)>();
       _sub = c.messages.listen((payload) {
         final r = _R(payload);
         final code = r.u32();
         if (code == 1) {
-          if (!login.isCompleted) login.complete(r.u8() != 0);
+          final ok = r.u8() != 0;
+          // On success this field is the server's greeting, on failure the reason. Only the second
+          // is worth repeating to anyone.
+          final said = r.str();
+          if (!login.isCompleted) login.complete((ok, ok ? '' : said));
         } else if (code == 3) {
           // GetPeerAddress reply — route to the download waiting on THIS peer.
           final uname = r.str();
@@ -959,9 +1088,18 @@ class SlskSession {
       }, onError: (_) => _lost(), onDone: _lost);
       client.noteLoginAttempt();
       c.send(_message(1, (_W()..str(user)..str(pass)..u32(160)..str(_md5hex(pass))..u32(17)).bytes()));
-      final ok = await login.future.timeout(const Duration(seconds: 12), onTimeout: () => false);
+      // Silence and a refusal are different events with different answers, and folding them into
+      // one boolean is what put "login geweigerd" on screen for a server that never replied. The
+      // probe that found this logged in with these exact bytes in 251 ms, so a twelve-second
+      // silence means something is wrong with the connection, not with the account.
+      final (ok, said) = await login.future
+          .timeout(const Duration(seconds: 12), onTimeout: () => (false, _noAnswer));
       if (!ok) {
-        client.noteLoginRefused(); // trip the global breaker — stop all Soulseek traffic for a while
+        if (said == _noAnswer) {
+          client.noteLoginNoAnswer();
+        } else {
+          client.noteLoginRefused(said); // trip the breaker — stop all Soulseek traffic for a while
+        }
         _drop();
         return false;
       }
