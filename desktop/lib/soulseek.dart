@@ -104,8 +104,19 @@ class SlskQueued extends SlskResult {
 }
 
 /// Audio files, best-first: FLAC, then free slots, then speed, then size.
+///
+/// WAV is left out entirely, and not merely ranked low as it used to be.
+///
+/// A WAV cannot carry the tags this app writes. `stampTags` refuses anything but FLAC, and the RIFF
+/// writer in the dependency only rewrites a `LIST/INFO` chunk that is ALREADY there — it never adds
+/// one. Measured on the six that had landed here: every single one carried nothing but `fmt` and
+/// `data`, so the library read no artist, no album and no title and filed each of them as a nameless
+/// single under "Onbekende artiest". Ranking it below FLAC was not enough: with no FLAC on offer, a
+/// WAV still won, and won a copy of the record that the app could never label.
+///
+/// Everything already on disk keeps playing — this is about what is offered, not about what you have.
 List<SoulseekFile> sortSoulseek(Iterable<SoulseekFile> files) {
-  final audio = files.where((f) => f.isAudio).toList();
+  final audio = files.where((f) => f.isAudio && f.ext != 'wav').toList();
   audio.sort((a, b) {
     final fa = a.isFlac ? 1 : 0, fb = b.isFlac ? 1 : 0;
     if (fa != fb) return fb - fa;

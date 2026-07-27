@@ -412,6 +412,11 @@ String trackIdentity(String artist, String title) => '${normKey(artist)}|${normK
 /// no tags this app can write (the tag writer is FLAC-only), so a WAV that wins lands untagged and
 /// scans as a nameless "Onbekende artiest" single. For a library headed to Roon a WAV is strictly
 /// worse than the identical FLAC, so it never beats one.
+///
+/// New downloads no longer offer WAV at all — see [sortSoulseek], which drops it before anything gets
+/// to choose. Ranking it low was not enough: where no FLAC was on offer a WAV still won, and won a
+/// copy the app could never label. This ranking still matters for what is ALREADY on disk, which is
+/// what the duplicate sweep compares.
 int formatRank(String path) {
   final e = path.toLowerCase();
   if (e.endsWith('.flac') || e.endsWith('.ape') || e.endsWith('.alac')) return 4;
