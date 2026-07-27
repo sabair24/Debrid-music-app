@@ -1940,6 +1940,159 @@ class MergePlan {
       ].join(' · ');
 }
 
+/// What writing one file's tags would change, old value beside new so it can be read first.
+class NormaliseStep {
+  final Track track;
+
+  /// The pressing entry this file was matched to, or null when nothing matched — then the file is
+  /// left exactly as it is. A record we cannot name is not a record we should rewrite.
+  final ChoiceTrack? official;
+
+  /// The new values. Null means "leave this field alone".
+  final String? title;
+  final int? trackNo;
+
+  /// Why this file is being skipped, in words, or null when it is not.
+  final String? skipped;
+
+  const NormaliseStep(this.track, this.official,
+      {this.title, this.trackNo, this.skipped});
+
+  String get name => File(track.path).uri.pathSegments.last;
+  bool get willWrite => skipped == null;
+}
+
+/// Everything that pulling an album's tags into line would do, so it can be shown before it is done.
+///
+/// The album title and the track total are deliberately NOT per file: they are the two fields that
+/// split one record into several tiles, so they get one value for the whole album or the exercise is
+/// pointless. Backstreet's Back held thirteen files claiming four different totals and two different
+/// apostrophes; that is four tiles for one record.
+class NormalisePlan {
+  final List<NormaliseStep> steps;
+
+  /// The one spelling every file will carry.
+  final String album;
+  final String albumArtist;
+
+  /// The one total every file will carry — the length of the pressing.
+  final int total;
+  final int? year;
+
+  const NormalisePlan(this.steps,
+      {required this.album, required this.albumArtist, required this.total, this.year});
+
+  List<NormaliseStep> get writing => steps.where((s) => s.willWrite).toList();
+  List<NormaliseStep> get skipped => steps.where((s) => !s.willWrite).toList();
+
+  /// The values on disk today, so the dialog can say what is actually being fixed.
+  Set<String> get albumsNow => {for (final s in steps) s.track.album};
+  Set<int> get totalsNow => {for (final s in steps) s.track.trackTotal};
+
+  /// Two files landing on one number. Refused for the same reason [RenumberPlan.collides] is: the
+  /// numbering is being fixed BECAUSE it collides.
+  bool get collides {
+    final seen = <int>{};
+    for (final s in writing) {
+      final n = s.trackNo;
+      if (n != null && !seen.add(n)) return true;
+    }
+    return false;
+  }
+
+  /// Two files ending up with one title. [LibraryStore._dedupeTracks] keys on artist+title, so this
+  /// would not read as a tagging mistake — it would read as a track disappearing.
+  bool get titleCollides {
+    final seen = <String>{};
+    for (final s in writing) {
+      if (!seen.add(normKey(s.title ?? s.track.title))) return true;
+    }
+    return false;
+  }
+
+  bool get safe => !collides && !titleCollides && writing.isNotEmpty;
+}
+
+extension LibraryNormalise on LibraryStore {
+  /// What pulling this album's tags into line would do. Nothing is written.
+  ///
+  /// This is the one operation here that changes the FILES rather than working around them. Until
+  /// now the app had three ways to paper over disagreeing tags — a correction in memory, a renumber
+  /// into corrections.json, and merging editions by hand — and the tags on disk stayed as wrong as
+  /// they were. Anything else reading that folder (Roon, a phone, the next rescan on another
+  /// machine) still saw four records.
+  ///
+  /// Matched on TITLE and running time like [planRenumber], never on the existing number: that
+  /// number is the broken input.
+  NormalisePlan planNormalise(Album album, List<ChoiceTrack> official, {String? albumTitle, int? year}) {
+    final pool = [...official];
+    final steps = <NormaliseStep>[];
+    for (final t in album.tracks) {
+      // Only FLAC. writeFlacFields is the only writer this app has, and the tag writers for the
+      // other containers in its dependency drop every field they do not model — so for an MP3 the
+      // honest thing is to leave the file alone and say so, rather than quietly skip it.
+      if (!t.path.toLowerCase().endsWith('.flac')) {
+        steps.add(NormaliseStep(t, null, skipped: 'geen FLAC — alleen FLAC kan de app veilig herschrijven'));
+        continue;
+      }
+      final best = matchOfficial(pool, t.title, t.duration?.inSeconds ?? 0);
+      if (best == null) {
+        steps.add(NormaliseStep(t, null, skipped: 'niet herkend in deze persing — blijft zoals hij is'));
+        continue;
+      }
+      pool.remove(best);
+      steps.add(NormaliseStep(t, best,
+          title: best.title.trim().isEmpty ? null : best.title.trim(),
+          trackNo: trackNoFromPosition(best.position, best.disc, official)));
+    }
+    return NormalisePlan(
+      steps,
+      album: (albumTitle ?? album.title).trim(),
+      albumArtist: album.artist.trim(),
+      total: official.length,
+      year: year ?? album.year,
+    );
+  }
+
+  /// Write the plan into the files.
+  ///
+  /// Returns how many were written. Each file goes through [stampTags] → `writeFlacFields`, which
+  /// rebuilds only the comment block and copies every other block byte for byte — so the embedded
+  /// cover, the ReplayGain values and anything hand-written survive — and lands atomically via
+  /// tmp-then-rename.
+  Future<int> applyNormalise(NormalisePlan plan) async {
+    var written = 0;
+    for (final s in plan.writing) {
+      final tags = TrackTags(
+        title: s.title ?? s.track.title,
+        artist: s.track.artist,
+        album: plan.album,
+        trackNo: s.trackNo ?? s.track.trackNo,
+        albumArtist: plan.albumArtist,
+        trackTotal: plan.total,
+        year: plan.year,
+      );
+      if (!await stampTags(File(s.track.path), tags)) continue;
+      written++;
+      // The file now says the right thing, so a correction saying the same thing is a second truth
+      // that can only drift. Cleared for the files that were ACTUALLY written, and only the fields
+      // this just wrote — a pinned pressing or a corrected artist is the user's and stays.
+      final c = _corrections[s.track.path];
+      if (c != null) {
+        c.remove('trackNo');
+        c.remove('trackTotal');
+        c.remove('title');
+        if (c.isEmpty) _corrections.remove(s.track.path);
+      }
+    }
+    if (written > 0) {
+      await saveCorrectionsNow();
+      await scan();
+    }
+    return written;
+  }
+}
+
 extension LibraryRenumber on LibraryStore {
   /// What taking [official] as this record's numbering would do. Nothing is written.
   ///
@@ -2138,16 +2291,24 @@ extension LibraryMove on LibraryStore {
   /// landed — see [LibraryStore._reKeyCorrection] for what forgetting that used to cost.
   Future<Map<String, String>> _apply(List<MovePlan> plan) async {
     final landed = <String, String>{};
+    final vacated = <String>{};
     for (final p in plan) {
       if (!p.movesFile) continue;
       try {
         final dest = File(p.to!);
         if (await dest.exists()) continue;
         await dest.parent.create(recursive: true);
+        final from = File(p.from).parent.path;
         final at = await moveWithRetry(File(p.from), dest);
         _reKeyCorrection(p.from, at);
         landed[p.from] = at;
+        vacated.add(from);
       } catch (_) {/* locked, or across volumes — the file stays put and stays in the library */}
+    }
+    // Gathering an album empties the folders it was scattered over. Those are exactly the leftovers
+    // the user was deleting by hand.
+    for (final d in vacated) {
+      await pruneVacated(d, rootPath);
     }
     return landed;
   }
@@ -2357,8 +2518,10 @@ extension LibraryDuplicates on LibraryStore {
         final dest = File('$dubbel$sep${File(from).uri.pathSegments.last}');
         if (await dest.exists()) return; // already a copy there — leave this one where it is
         await dest.parent.create(recursive: true);
+        final was = File(from).parent.path;
         final at = await moveWithRetry(File(from), dest);
         _reKeyCorrection(from, at);
+        await pruneVacated(was, rootPath);
       } catch (_) {/* locked or across volumes — the scan still sorts it out */}
     }
 
@@ -2398,14 +2561,11 @@ extension LibraryDuplicates on LibraryStore {
     }
 
     await saveCorrectionsNow();
-    // The source folder is empty now (a single's parent may hold others — only remove if bare).
+    // The source folder is empty now. pruneVacated also takes the artist folder above it when that
+    // record was the only one there, and sweeps a Thumbs.db that would otherwise keep an empty
+    // folder standing — the old check here required a literally bare folder and stopped at one level.
     final srcDir = r.source.tracks.isEmpty ? null : File(r.source.tracks.first.path).parent.path;
-    if (srcDir != null && srcDir != targetDir) {
-      try {
-        final d = Directory(srcDir);
-        if (d.existsSync() && d.listSync().isEmpty) d.deleteSync();
-      } catch (_) {}
-    }
+    if (srcDir != null && srcDir != targetDir) await pruneVacated(srcDir, rootPath);
     await scan();
   }
 }

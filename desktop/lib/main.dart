@@ -527,6 +527,10 @@ Future<void> main() async {
     try {
       await library.scan();
     } catch (_) {}
+    // Folders that emptied out before this ran — a merge in an older build, a rip the user pulled
+    // out by hand. From now on each move sweeps up after itself (see [pruneVacated]); this clears
+    // what is already there. Once per launch, not per scan: it walks every folder.
+    unawaited(sweepEmptyFolders(library.rootPath));
     await library.enrich(settings);
     // Reopen the last queue where you left off (paused) — covers are loaded by now.
     await player.restore(library.trackByPath);
@@ -2189,6 +2193,25 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   String _jobKey(int i) => 'own:$_albumKey:$i';
 
   /// What this track IS, regardless of what the peer called it. The same rule as the browse page:
+  /// Pull this album's tags into line, in the files themselves.
+  ///
+  /// The four "Backstreet's Back" tiles were thirteen files from four Soulseek sources claiming four
+  /// different track totals and two spellings of the title. Every other repair on this page paints
+  /// over that — a correction in memory, a renumber into corrections.json, merging editions by hand —
+  /// and the folder stays as wrong as it was for anything else that reads it.
+  Future<void> _normaliseTags() async {
+    final lib = context.read<LibraryStore>();
+    if (_official.isEmpty) {
+      _srcToast(context, 'Geen officiële tracklijst — kies eerst een uitgave.');
+      return;
+    }
+    final plan = lib.planNormalise(album, _official, albumTitle: album.title, year: _officialYear);
+    if (!mounted) return;
+    final done = await showDialog<bool>(
+        context: context, builder: (_) => NormaliseTagsDialog(album: album, plan: plan));
+    if (done == true && mounted) _refresh();
+  }
+
   /// Soulseek supplies audio, the app supplies the numbering, the title, the album and the year.
   TrackTags _authorityFor(AlbumSlot s) => TrackTags(
         title: s.title,
@@ -2489,6 +2512,15 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                               context: context, builder: (_) => ReleaseGallery(album));
                           if (picked == true && mounted) _refresh();
                         },
+                      ),
+                    // The only button here that changes the FILES rather than working around them.
+                    // Everything else on this page paints over disagreeing tags; this pulls them
+                    // into line, so anything else reading the folder sees one record too.
+                    if (!album.isSingle && !context.read<LibraryStore>().isRemote)
+                      IconButton(
+                        icon: const Icon(Icons.label_outline_rounded),
+                        tooltip: 'Tags gelijktrekken — één album, één nummering, in de bestanden',
+                        onPressed: _official.isEmpty ? null : _normaliseTags,
                       ),
                     if (!album.isSingle)
                       IconButton(
@@ -11795,6 +11827,152 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
 /// tens and a track with no number at all, so its tracklist could not be read or played in order.
 /// The pressing knows; the tags do not. But rewriting what a user's library says about their own
 /// files is not something to do silently, so the whole list is shown and collisions are refused.
+/// Read the whole plan before a single byte is written.
+///
+/// This is the one dialog in the app that changes files the user already owns, so it says exactly
+/// what it will do — per file, old beside new — and names what it will NOT touch instead of quietly
+/// leaving it out.
+class NormaliseTagsDialog extends StatefulWidget {
+  final Album album;
+  final NormalisePlan plan;
+  const NormaliseTagsDialog({super.key, required this.album, required this.plan});
+
+  @override
+  State<NormaliseTagsDialog> createState() => _NormaliseTagsDialogState();
+}
+
+class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
+  bool _busy = false;
+
+  Future<void> _go() async {
+    setState(() => _busy = true);
+    final n = await context.read<LibraryStore>().applyNormalise(widget.plan);
+    if (!mounted) return;
+    _srcToast(context, n == 0 ? 'Er is niets geschreven.' : '$n bestanden gelijkgetrokken');
+    Navigator.of(context).pop(n > 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final plan = widget.plan;
+    final blocked = plan.collides || plan.titleCollides;
+    final totals = plan.totalsNow.toList()..sort();
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: dialogWidth(context, 720),
+        height: dialogHeight(context, 640),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Tags gelijktrekken', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text('${widget.album.artist} — ${widget.album.title}',
+                style: const TextStyle(color: _muted, fontSize: 12.5)),
+            const SizedBox(height: 12),
+            // What is actually wrong today, in numbers. "Your files disagree" means nothing; "four
+            // different totals" is the reason there are four tiles.
+            if (totals.length > 1 || plan.albumsNow.length > 1)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                    color: _panel2, borderRadius: BorderRadius.circular(8)),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  if (totals.length > 1)
+                    Text(
+                        'De bestanden zeggen nu ${totals.length} verschillende aantallen: '
+                        '${totals.map((t) => t == 0 ? "geen" : "$t").join(", ")}. '
+                        'Daarom staat deze plaat in ${totals.length} tegels.',
+                        style: const TextStyle(fontSize: 12.5)),
+                  if (plan.albumsNow.length > 1) ...[
+                    const SizedBox(height: 4),
+                    Text('En ${plan.albumsNow.length} schrijfwijzen van de albumtitel.',
+                        style: const TextStyle(fontSize: 12.5, color: _muted)),
+                  ],
+                ]),
+              ),
+            const SizedBox(height: 12),
+            Text('Wordt: album "${plan.album}" · ${plan.total} nummers'
+                '${plan.year != null ? " · ${plan.year}" : ""}',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 10),
+            Expanded(
+              child: ListView(children: [
+                for (final s in plan.writing)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 5),
+                    child: Row(children: [
+                      SizedBox(
+                          width: 46,
+                          child: Text(
+                              s.trackNo == s.track.trackNo
+                                  ? '${s.trackNo}'
+                                  : '${s.track.trackNo} → ${s.trackNo}',
+                              style: TextStyle(
+                                  fontSize: 12.5,
+                                  color: s.trackNo == s.track.trackNo ? _muted : _accent2))),
+                      Expanded(
+                          child: Text(s.title ?? s.track.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 13))),
+                      Text('${s.track.trackTotal == 0 ? "geen" : s.track.trackTotal} → ${plan.total}',
+                          style: const TextStyle(fontSize: 11.5, color: _muted)),
+                    ]),
+                  ),
+                if (plan.skipped.isNotEmpty) ...[
+                  const Divider(height: 22),
+                  const Text('Blijft ongemoeid',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _muted)),
+                  const SizedBox(height: 6),
+                  for (final s in plan.skipped)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 3),
+                      child: Text('${s.name} — ${s.skipped}',
+                          style: const TextStyle(fontSize: 12, color: _muted)),
+                    ),
+                ],
+              ]),
+            ),
+            if (blocked)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text(
+                    'Twee bestanden zouden op hetzelfde nummer of dezelfde titel uitkomen. '
+                    'Dat wordt niet geschreven — kies eerst een uitgave die bij deze bestanden past.',
+                    style: TextStyle(color: Colors.orangeAccent, fontSize: 12.5)),
+              ),
+            const SizedBox(height: 12),
+            Row(children: [
+              const Expanded(
+                child: Text('De hoes, de ReplayGain-waarden en al het andere in het bestand blijven staan.',
+                    style: TextStyle(color: _muted, fontSize: 11.5)),
+              ),
+              TextButton(
+                  onPressed: _busy ? null : () => Navigator.of(context).pop(false),
+                  child: const Text('Annuleren')),
+              const SizedBox(width: 6),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(backgroundColor: _accent),
+                onPressed: (_busy || blocked || !plan.safe) ? null : _go,
+                icon: _busy
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.check_rounded, size: 18),
+                label: Text(_busy ? 'Schrijven…' : 'Schrijf ${plan.writing.length} bestanden'),
+              ),
+            ]),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
 class RenumberDialog extends StatefulWidget {
   final Album album;
   final RenumberPlan plan;

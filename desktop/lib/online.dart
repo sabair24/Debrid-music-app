@@ -679,8 +679,6 @@ class DownloadManager extends ChangeNotifier {
       var how = Placement.stuck;
       try {
         how = (await placeFileDetailed(staged, _downloadsRoot, tags: job.authority)).how;
-        // Non-recursive: only removes the per-peer staging folder once it's actually empty.
-        await staged.parent.delete();
       } catch (_) {/* leave it where it landed — the scan still finds it */}
       job.progress = 1;
       job.status = 'done';
@@ -994,7 +992,6 @@ class DownloadManager extends ChangeNotifier {
             // The SAME authority as the first landing. Without it the sweep would quietly undo the
             // numbering a quarter of an hour later, using whatever this new peer's tags happen to say.
             how = (await placeFileDetailed(staged, _downloadsRoot, tags: job.authority)).how;
-            await staged.parent.delete();
           } catch (_) {/* the scan still finds it wherever it landed */}
           if (how == Placement.duplicate) {
             settle('had al de beste kwaliteit');

@@ -493,7 +493,9 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, Tr
     if (await dest.exists()) {
       if (same(src, dest)) {
         if (!newWins(dest)) {
+          final gone = src.parent.path;
           await src.delete().catchError((_) => src);
+          await pruneVacated(gone, root);
           return PlaceOutcome(dest.path, Placement.duplicate);
         }
         losers.add(dest);
@@ -507,17 +509,26 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, Tr
       final rival = _sameTrackOtherFormat(dest);
       if (rival != null && same(src, rival)) {
         if (!newWins(rival)) {
+          final gone = src.parent.path;
           await src.delete().catchError((_) => src);
+          await pruneVacated(gone, root);
           return PlaceOutcome(rival.path, Placement.duplicate);
         }
         losers.add(rival);
       }
     }
+    final srcDir = src.parent.path;
+    final loserDirs = [for (final l in losers) l.parent.path];
     final landed = await _install(src, dest, losers);
     // Soulseek delivered the audio; the record's identity comes from here. Without this the file
     // sits under the right name in the right folder while its TAGS still say it is track 1 of
     // "The Essential Backstreet Boys" — and the tags are what the library and Roon actually read.
     await stampTags(File(landed), t);
+    // The folder the file came from, and the folder a replaced copy came from, are often empty now:
+    // the per-peer staging folder always, and an album folder whose last track was superseded.
+    for (final d in {srcDir, ...loserDirs}) {
+      await pruneVacated(d, root);
+    }
     return PlaceOutcome(landed, Placement.moved);
   } catch (_) {
     return PlaceOutcome(src.path, Placement.stuck); // cross-device or locked — the scan still finds it
@@ -794,21 +805,91 @@ Future<TidyReport> tidyDownloads(String downloadsRoot) async {
   }
 
   // Sweep up the now-empty folders left behind.
-  await _pruneEmptyDirs(dir);
+  await sweepEmptyFolders(dir.path);
   return report;
 }
 
-Future<void> _pruneEmptyDirs(Directory root) async {
+/// The files Windows and macOS drop into a folder by themselves. A folder holding nothing but
+/// these was emptied by us; the user never put them there.
+const _osJunk = {'thumbs.db', 'desktop.ini', '.ds_store'};
+
+/// True when [child] sits strictly below [root] — never [root] itself.
+bool _under(String child, String root) {
+  if (root.trim().isEmpty) return false;
+  final sep = Platform.pathSeparator;
+  String norm(String p) {
+    var s = p.replaceAll('/', sep).replaceAll('\\', sep);
+    while (s.length > 1 && s.endsWith(sep)) {
+      s = s.substring(0, s.length - 1);
+    }
+    return Platform.isWindows ? s.toLowerCase() : s;
+  }
+
+  final c = norm(child), r = norm(root);
+  return c.length > r.length + 1 && c.startsWith('$r$sep');
+}
+
+/// Remove the folder a file just left, and every parent that empties with it, stopping below
+/// [root]. Called from each place that moves a file OUT of a folder.
+///
+/// Cover art is deliberately not treated as junk. A folder still holding folder.jpg keeps standing,
+/// because deleting a picture the user put there is not what "clean up empty folders" means — only
+/// the OS's own droppings are swept along.
+Future<void> pruneVacated(String vacated, String root) async {
+  var dir = Directory(vacated);
+  // Eight hops is far more than the tree is deep (root/Albums/Artist/Album/dubbel) and stops a
+  // symlink loop from walking the disk.
+  for (var hop = 0; hop < 8; hop++) {
+    if (!_under(dir.path, root)) return;
+    List<FileSystemEntity> kids;
+    try {
+      if (!await dir.exists()) {
+        dir = dir.parent;
+        continue;
+      }
+      kids = await dir.list(followLinks: false).toList();
+    } catch (_) {
+      return;
+    }
+    final onlyJunk = kids.every((e) => e is File && _osJunk.contains(e.uri.pathSegments.last.toLowerCase()));
+    if (!onlyJunk) return; // something real is still in there
+    try {
+      for (final k in kids) {
+        await k.delete();
+      }
+      await dir.delete();
+    } catch (_) {
+      return; // in use, or no permission — leave it and stop climbing
+    }
+    dir = dir.parent;
+  }
+}
+
+/// Sweep every empty folder under [root]. Deepest first, so an artist folder whose only album
+/// folder just went goes with it in the same pass.
+///
+/// Walks the whole tree, so this is a once-per-launch or once-per-tidy job — the everyday case is
+/// [pruneVacated], which only looks at the folder a file just left.
+Future<void> sweepEmptyFolders(String root) async {
+  if (root.trim().isEmpty) return;
   try {
     final dirs = <Directory>[];
-    await for (final e in root.list(recursive: true, followLinks: false)) {
+    await for (final e in Directory(root).list(recursive: true, followLinks: false)) {
       if (e is Directory) dirs.add(e);
     }
     dirs.sort((a, b) => b.path.length.compareTo(a.path.length)); // deepest first
     for (final d in dirs) {
+      if (!_under(d.path, root)) continue; // never the root itself
       try {
-        if (await d.list().isEmpty) await d.delete();
-      } catch (_) {}
+        final kids = await d.list(followLinks: false).toList();
+        if (!kids.every((e) => e is File && _osJunk.contains(e.uri.pathSegments.last.toLowerCase()))) {
+          continue;
+        }
+        for (final k in kids) {
+          await k.delete();
+        }
+        await d.delete();
+      } catch (_) {/* in use — leave this one */}
     }
   } catch (_) {}
 }
