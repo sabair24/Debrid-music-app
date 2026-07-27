@@ -125,7 +125,9 @@ jobs:
           if [ -n "$SIGNER" ]; then
             # stderr erbij: apksigner schrijft een deel van zijn uitvoer daarheen, en dat was precies
             # wat de vorige versie kwijtraakte.
-            CERTS=$("$SIGNER" verify --print-certs "$APK" 2>&1) || true
+            # --verbose voegt de regels toe die zeggen WELKE handtekeningschema's erin zitten. Zonder
+            # dat stond hier alleen wie het ondertekend heeft, en niet hoe.
+            CERTS=$("$SIGNER" verify --verbose --print-certs "$APK" 2>&1) || true
           fi
           if [ -z "$CERTS" ] && command -v keytool >/dev/null 2>&1; then
             # Reservepad: keytool leest de signature block net zo goed.
@@ -155,6 +157,15 @@ jobs:
             if [ "$SIGNED" != "ja" ]; then
               echo "::warning::Onverwacht: geen sleutel geschreven, maar het certificaat is niet het debug-certificaat."
             fi
+          fi
+
+          # Welke schema's er in zitten. 2.3.6 droeg alleen v2 omdat AGP v3 uit laat staan tenzij je
+          # het vraagt, en v3 is wat sleutelrotatie later mogelijk maakt. Gemeten in plaats van
+          # aangenomen, om dezelfde reden als het certificaat hierboven.
+          echo "$CERTS" | grep -iE "^Verified using" || echo "(geen schemaregels — apksigner draaide zonder --verbose?)"
+          if [ "$SIGNED" = "ja" ] && ! echo "$CERTS" | grep -qi "^Verified using v3 scheme.*true"; then
+            echo "::error::De APK draagt geen v3-handtekening. enableV3Signing staat uit of is genegeerd."
+            exit 1
           fi
 
       - name: Upload APK artifact

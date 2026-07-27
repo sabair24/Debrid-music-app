@@ -61,6 +61,12 @@ android {
                 storePassword = keyProps.getProperty("storePassword")
                 keyAlias = keyProps.getProperty("keyAlias")
                 keyPassword = keyProps.getProperty("keyPassword")
+                // Measured on the published 2.3.6 APK: v2 true, v3 false. AGP leaves v3 off unless
+                // it is asked, and v3 has been the current scheme since Android 9 — it is what makes
+                // rotating this key later possible at all, without which a lost keystore means a new
+                // app id. v1 stays off on purpose: minSdk is 24, so nothing here can read it.
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }
