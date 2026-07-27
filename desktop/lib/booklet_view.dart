@@ -244,6 +244,16 @@ class _BookletViewState extends State<BookletView> with TickerProviderStateMixin
   void _go(int dir) {
     if (_busy || !_canGo(dir)) return;
     final to = _sheet + dir;
+    // With a page enlarged, the turn happens behind the overlay where nobody can see it — but it
+    // HAPPENED: the arrows walked the booklet invisibly, and closing the zoom dropped you on a spread
+    // you never chose. Take the zoom along instead, which is what pressing right while looking at a
+    // page plainly means.
+    if (_zoom != null) {
+      _crossTo(to);
+      setState(() => _zoom = to);
+      _prefetch();
+      return;
+    }
     if (_b.turns(_sheet, to)) {
       _turnDir = dir;
       _turnTo = to;

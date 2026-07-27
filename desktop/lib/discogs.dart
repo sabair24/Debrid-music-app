@@ -774,6 +774,38 @@ extension DiscogsArtwork on DiscogsService {
     final cached = await _readArt(dir);
     if (cached != null) return cached;
 
+    // One chain per album, however many widgets ask.
+    //
+    // Opening an album page starts two of these at the same moment with IDENTICAL arguments — the
+    // sleeve widget wants all three scans, the info panel wants the back cover — and on a cold cache
+    // they both missed above and both ran the whole thing: two searches, two rounds of scan lookups,
+    // two sets of image downloads, and two writes into the same directory. The disk cache only helps
+    // the SECOND opening; nothing was stopping the first from doing everything twice.
+    //
+    // Static, like the rate-limit lane and for the same reason: DiscogsService is constructed fresh
+    // at fourteen call sites, so an instance field would give each caller its own idea of what is
+    // already running.
+    final running = _artInFlight[key];
+    if (running != null) return running;
+    final work = _releaseArtFresh(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir)
+        .whenComplete(() => _artInFlight.remove(key));
+    _artInFlight[key] = work;
+    return work;
+  }
+
+  static final _artInFlight = <String, Future<ReleaseArt?>>{};
+
+  /// The artwork chain itself. Only reached on a cache miss, and only once per album at a time —
+  /// see [releaseArt], which owns the cache key and the in-flight table.
+  Future<ReleaseArt?> _releaseArtFresh(
+    String artist,
+    String album,
+    int expectedTracks,
+    int? pinned,
+    String? pinnedMbid,
+    Map<String, String> roles,
+    Directory dir,
+  ) async {
     // What the user SAID an image is outranks everything below — the archive's own labels included.
     // Fetched first and kept aside; the automatic answers fill only the roles left unassigned.
     Uint8List? saidFront, saidBack, saidDisc;

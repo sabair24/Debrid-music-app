@@ -1126,7 +1126,21 @@ class LibraryStore extends ChangeNotifier {
     // Pass 2 — one embedded cover per album, off the UI thread. Guarded with a
     // timeout: a malformed file that makes readMetadata hang can never stall
     // startup (which would also block cover enrichment from ever running).
-    final firstPaths = albums.map((a) => a.tracks.first.path).toList();
+    // Only the albums that do not already have one.
+    //
+    // This asked for every album's first track every time, and a rescan runs after every finished
+    // download — so downloading one song re-opened and re-parsed the metadata of all hundred and
+    // thirty-six first tracks to read pictures that were already in memory. rebuildAlbums carries
+    // covers across the regroup (see _Covers), so an album that had one still has it; a genuinely new
+    // album has null and is read.
+    //
+    // The trade: art changed inside a file we have already read is not picked up until the cover is
+    // corrected by hand. Re-reading everything on the chance that a tag was edited outside the app
+    // was paying seconds, on every download, for something that essentially does not happen.
+    final firstPaths = [
+      for (final a in albums)
+        if (a.embeddedCover == null && a.tracks.isNotEmpty) a.tracks.first.path,
+    ];
     try {
       final covers = await readCoversInIsolate(firstPaths).timeout(const Duration(seconds: 30));
       for (final a in albums) {
@@ -1394,7 +1408,21 @@ class LibraryStore extends ChangeNotifier {
   /// fetch only the first time. Deliberately not part of [loadRemote]: the library should appear
   /// immediately, with the covers filling in behind it, rather than the screen staying empty until
   /// the last one has arrived.
-  Future<void> loadRemoteCovers(AppSettings settings) async {
+  Future<void>? _remoteCoverSweep;
+
+  /// Covers for a library that lives on the paired PC.
+  ///
+  /// Guarded like [enrichFromWeb], and for the same reason found in the same audit: this is started
+  /// from three places in client_session — once on connecting and again on every catalogue change —
+  /// and a catalogue changes whenever the PC finishes a download. Two sweeps then walked the same
+  /// album list over the same wifi, each setting `enriching` and each clearing it, so the status line
+  /// went off while the other was still fetching. Held as the future so a caller can wait for the one
+  /// already running instead of starting a second.
+  Future<void> loadRemoteCovers(AppSettings settings) =>
+      _remoteCoverSweep ??=
+          _loadRemoteCovers(settings).whenComplete(() => _remoteCoverSweep = null);
+
+  Future<void> _loadRemoteCovers(AppSettings settings) async {
     final client = _remote;
     if (client == null) return;
     final enricher = CoverEnricher(settings);

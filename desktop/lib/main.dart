@@ -3747,6 +3747,11 @@ class _PersonPageState extends State<PersonPage> {
   List<CreditedWork> _works = const [];
   bool _busy = true;
 
+  /// The lookup failed, as opposed to answering that there is nothing. Wikidata's SPARQL endpoint
+  /// times out readily on prolific producers, and saying "geen verdere producties gevonden voor deze
+  /// naam" about a failure states something about the PERSON that was never established.
+  bool _failed = false;
+
   @override
   void initState() {
     super.initState();
@@ -3754,10 +3759,11 @@ class _PersonPageState extends State<PersonPage> {
   }
 
   Future<void> _load() async {
-    final w = await CreditsService(context.read<AppSettings>()).producedBy(widget.name);
+    final r = await CreditsService(context.read<AppSettings>()).producedBy(widget.name);
     if (!mounted) return;
     setState(() {
-      _works = w;
+      _works = r.works;
+      _failed = r.failed;
       _busy = false;
     });
   }
@@ -3805,11 +3811,15 @@ class _PersonPageState extends State<PersonPage> {
               ),
             )
           else if (_works.isEmpty)
-            const SliverToBoxAdapter(
+            SliverToBoxAdapter(
               child: Padding(
-                padding: EdgeInsets.fromLTRB(24, 24, 24, 0),
-                child: Text('Geen verdere producties gevonden voor deze naam.',
-                    style: TextStyle(color: _muted)),
+                padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
+                child: Text(
+                    _failed
+                        ? 'De producties konden niet worden opgehaald. Wikidata antwoordde niet — '
+                            'probeer het straks nog eens.'
+                        : 'Geen verdere producties gevonden voor deze naam.',
+                    style: const TextStyle(color: _muted)),
               ),
             )
           else ...[

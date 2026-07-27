@@ -125,13 +125,23 @@ class CreditsService {
 
   /// Everything Wikidata says this person produced. Empty for people it doesn't know — which is
   /// how the UI decides whether their name is worth making clickable.
-  Future<List<CreditedWork>> producedBy(String person) async {
+  /// The records this person is credited on, and whether the lookup actually SUCCEEDED.
+  ///
+  /// Every failure used to be cached as an empty list: a Wikidata timeout, a 503, a network drop —
+  /// all remembered as "this person produced nothing", for the rest of the session, and shown to the
+  /// user as a fact about the person. Wikidata's SPARQL endpoint times out often enough on prolific
+  /// producers that this was the common case rather than the rare one.
+  ///
+  /// A genuine empty answer is still cached, because that IS the answer. A failure is not cached at
+  /// all, so opening the page again tries again.
+  Future<({List<CreditedWork> works, bool failed})> producedBy(String person) async {
     final key = person.toLowerCase();
     final hit = _worksCache[key];
-    if (hit != null) return hit;
+    if (hit != null) return (works: hit, failed: false);
     try {
       final qid = await _entityFor(person);
-      if (qid == null) return _worksCache[key] = const [];
+      // No entity is a real answer: Wikidata has never heard of this name.
+      if (qid == null) return (works: _worksCache[key] = const [], failed: false);
       // DISTINCT, and no performer join: a work with several performers multiplied the rows, and
       // for a prolific producer that grew heavy enough to time out — Quincy Jones returned nothing
       // while a smaller catalogue came back fine.
@@ -145,7 +155,7 @@ SELECT DISTINCT ?workLabel ?date WHERE {
         Uri.parse('https://query.wikidata.org/sparql?format=json&query=${Uri.encodeComponent(query)}'),
         headers: {'User-Agent': _ua, 'Accept': 'application/sparql-results+json'},
       ).timeout(const Duration(seconds: 30));
-      if (r.statusCode != 200) return _worksCache[key] = const [];
+      if (r.statusCode != 200) return (works: const <CreditedWork>[], failed: true);
       final rows = (jsonDecode(utf8.decode(r.bodyBytes))['results']?['bindings'] as List?) ?? const [];
       final seen = <String>{};
       final out = <CreditedWork>[];
@@ -158,9 +168,11 @@ SELECT DISTINCT ?workLabel ?date WHERE {
         out.add(CreditedWork(title, year: year));
       }
       out.sort((a, b) => (b.year ?? '').compareTo(a.year ?? ''));
-      return _worksCache[key] = out;
+      return (works: _worksCache[key] = out, failed: false);
     } catch (_) {
-      return _worksCache[key] = const [];
+      // Not cached: a timeout says nothing about this person, and remembering it as "nothing" made
+      // the page state that as a fact until the app was restarted.
+      return (works: const <CreditedWork>[], failed: true);
     }
   }
 
