@@ -355,6 +355,77 @@ void main() {
     expect(raw['totaltracks'], '3', reason: 'allebei, of het bestand spreekt zichzelf tegen');
   });
 
+  test('terugzetten geeft precies de oude waarden terug', () async {
+    final a = file(
+        '01.flac',
+        {'TITLE': 'Everybodie', 'ARTIST': 'BSB', 'ALBUM': 'Verkeerd Album', 'TRACKNUMBER': '7', 'TOTALTRACKS': '11'},
+        secs: 220);
+    final lib = LibraryStore()..tracks.add(a.track);
+    lib.rebuildAlbums();
+    final voor = readFlacRawFields(File(a.path));
+    // Vasthouden: applyNormalise eindigt op een rescan, en die laat lib.albums hier leeg achter.
+    final album = Album('X', 'BSB', [a.track]);
+
+    await lib.applyNormalise(lib.planNormalise(album, pressing()));
+    expect(readFlacRawFields(File(a.path))['album'], 'X', reason: 'eerst echt geschreven');
+    expect(lib.undoableTagWrites(album), 1);
+
+    final r = await lib.undoTagWrites(album);
+    expect(r.restored, 1);
+    expect(r.failed, isEmpty);
+
+    final na = readFlacRawFields(File(a.path));
+    for (final k in ['title', 'artist', 'album', 'tracknumber', 'totaltracks']) {
+      expect(na[k], voor[k], reason: 'veld $k moet terug zijn zoals het was');
+    }
+  });
+
+  test('een veld dat er niet was, wordt weer weggehaald', () async {
+    // Het gat waar een naïeve terugweg in valt: alleen oude waarden terugschrijven laat de velden
+    // staan die er eerst helemaal niet waren, en dan is "terugzetten" geen terugzetten.
+    final a = file('01.flac', {'TITLE': 'Everybody', 'ARTIST': 'BSB', 'ALBUM': 'X'}, secs: 220);
+    expect(readFlacRawFields(File(a.path)).containsKey('tracktotal'), isFalse);
+
+    final lib = LibraryStore()..tracks.add(a.track);
+    lib.rebuildAlbums();
+    final album = Album('X', 'BSB', [a.track]);
+    await lib.applyNormalise(lib.planNormalise(album, pressing()));
+    expect(readFlacRawFields(File(a.path))['tracktotal'], '3');
+
+    await lib.undoTagWrites(album);
+    final na = readFlacRawFields(File(a.path));
+    expect(na.containsKey('tracktotal'), isFalse, reason: 'stond er niet, hoort er niet te staan');
+    expect(na.containsKey('totaltracks'), isFalse);
+    expect(na['title'], 'Everybody', reason: 'de rest blijft wel gewoon staan');
+  });
+
+  test('terugzetten kan maar één keer, en zegt dat door niets meer aan te bieden', () async {
+    final a = file('01.flac', {'TITLE': 'Everybody', 'ARTIST': 'BSB', 'ALBUM': 'X', 'TRACKNUMBER': '9'}, secs: 220);
+    final lib = LibraryStore()..tracks.add(a.track);
+    lib.rebuildAlbums();
+    final album = Album('X', 'BSB', [a.track]);
+    await lib.applyNormalise(lib.planNormalise(album, pressing()));
+    await lib.undoTagWrites(album);
+    expect(lib.undoableTagWrites(album), 0);
+    final weer = await lib.undoTagWrites(album);
+    expect(weer.restored, 0, reason: 'niets meer om terug te zetten');
+  });
+
+  test('de terugweg overleeft een herstart', () async {
+    final a = file('01.flac', {'TITLE': 'Everybody', 'ARTIST': 'BSB', 'ALBUM': 'Oud', 'TRACKNUMBER': '9'}, secs: 220);
+    final lib = LibraryStore()..tracks.add(a.track);
+    lib.rebuildAlbums();
+    await lib.applyNormalise(lib.planNormalise(Album('X', 'BSB', [a.track]), pressing()));
+
+    // Een verse store, zoals na het opstarten: leest het bestand van schijf terug.
+    final vers = LibraryStore()..tracks.add(a.track);
+    vers.rebuildAlbums();
+    await vers.loadTagUndo();
+    expect(vers.undoableTagWrites(vers.albums.first), 1);
+    await vers.undoTagWrites(vers.albums.first);
+    expect(readFlacRawFields(File(a.path))['album'], 'Oud');
+  });
+
   test('er blijft geen .tags-restant achter', () async {
     final a = file('01.flac', {'TITLE': 'Everybody', 'ARTIST': 'BSB', 'ALBUM': 'X', 'TRACKNUMBER': '1'}, secs: 220);
     final lib = LibraryStore()..tracks.add(a.track);

@@ -215,6 +215,62 @@ bool sameTitle(String a, String b, {int? secondsA, int? secondsB}) {
   return shared / (aw.length > bw.length ? aw.length : bw.length) >= .8;
 }
 
+/// Two files of one record that hold the same recording.
+///
+/// Named apart from `sameRecording` in organize.dart on purpose: that one asks whether a peer's
+/// offering is the track you clicked, this one asks whether two files you already own are the same
+/// song. Same question, opposite side of the download.
+class SameRecordingPair {
+  /// The copy worth keeping, and the one it beats.
+  final Track keep, drop;
+
+  /// Why [keep] wins, in words, from the same grounds [firstIsBetter] decides on.
+  final String why;
+  const SameRecordingPair(this.keep, this.drop, this.why);
+}
+
+/// Files in one album that are the same recording twice.
+///
+/// Deliberately NOT on running time alone. On Backstreet's Back ten of the pairs fall within
+/// [_slack] seconds of each other — 4:23 beside 4:25, 3:30 beside 3:33 — so a length-only rule
+/// would call half the record a duplicate. The pair has to agree on the TITLE as well, through the
+/// same [sameTitle] the pressing match uses: four fifths of the words, running times that agree,
+/// and the SAME version markers, so a radio edit is never folded into the album cut.
+///
+/// This is the pair the album page could not see. Two rips of "If You Want It to Be Good Girl"
+/// landed under different names because they were filed against different pressings, and nothing
+/// afterwards ever compared two files in the library with each other.
+///
+/// [better] decides which copy wins; it reads the files, so it is passed in and the pure part of
+/// this stays testable without a disk.
+List<SameRecordingPair> sameRecordingPairs(
+  List<Track> tracks, {
+  required bool Function(Track a, Track b) better,
+  String Function(Track keep, Track drop)? why,
+}) {
+  final out = <SameRecordingPair>[];
+  final spoken = <String>{};
+  for (var i = 0; i < tracks.length; i++) {
+    final a = tracks[i];
+    if (spoken.contains(a.path)) continue;
+    final sa = a.duration?.inSeconds ?? 0;
+    if (sa <= 0) continue; // no length, no evidence — a title alone is not enough to drop a file
+    for (var j = i + 1; j < tracks.length; j++) {
+      final b = tracks[j];
+      if (spoken.contains(b.path)) continue;
+      final sb = b.duration?.inSeconds ?? 0;
+      if (sb <= 0) continue;
+      if (!sameTitle(a.title, b.title, secondsA: sa, secondsB: sb)) continue;
+      final aWins = better(a, b);
+      final keep = aWins ? a : b, drop = aWins ? b : a;
+      out.add(SameRecordingPair(keep, drop, why?.call(keep, drop) ?? ''));
+      spoken..add(a.path)..add(b.path);
+      break; // one partner per file; a third copy is reported the next time round
+    }
+  }
+  return out;
+}
+
 /// Which pressings are worth fetching a tracklist for, cheaply, from their track counts alone.
 ///
 /// Costs nothing — the release-group browse already states every pressing's count — and it is the

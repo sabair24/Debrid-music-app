@@ -447,6 +447,26 @@ bool firstIsBetter(File a, File b) {
   return a.lengthSync() > b.lengthSync();
 }
 
+/// Why [keep] beat [drop], read off the same three grounds [firstIsBetter] decides on and in that
+/// order — so the sentence can never say one thing while the choice says another.
+String whyBetter(File keep, File drop) {
+  String ext(File f) {
+    final n = f.path;
+    final i = n.lastIndexOf('.');
+    return i < 0 ? '?' : n.substring(i + 1).toUpperCase();
+  }
+
+  final rk = formatRank(keep.path), rd = formatRank(drop.path);
+  if (rk != rd) return '${ext(keep)} boven ${ext(drop)}';
+  if (_isMultichannelFile(keep) != _isMultichannelFile(drop)) return 'stereo boven surround';
+  try {
+    String mb(File f) => '${(f.lengthSync() / 1024 / 1024).toStringAsFixed(1)} MB';
+    return '${mb(keep)} tegen ${mb(drop)}';
+  } catch (_) {
+    return 'groter bestand';
+  }
+}
+
 /// Surround by its own header, or by a release name that says so (covers non-FLAC too).
 bool _isMultichannelFile(File f) {
   final tags = readFlacTags(f);
@@ -553,10 +573,21 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, Tr
 /// handle and leave the track unmovable for the rest of the session.
 Future<bool> stampTags(File f, TrackTags t) async {
   if (!t.isAuthoritative) return false;
+  return writeTagFields(f, t.vorbisFields);
+}
+
+/// Write an explicit set of Vorbis fields into a FLAC. A null value deletes that field.
+///
+/// The same writer [stampTags] uses; the difference is that the caller says what the fields are
+/// instead of deriving them from a release. Undoing a rewrite needs exactly that: it has to be able
+/// to put back "this field was not here", which no [TrackTags] can express.
+///
+/// Runs in an isolate: parsing a stranger's file is exactly where a throw would otherwise leak the
+/// handle and leave the track unmovable for the rest of the session.
+Future<bool> writeTagFields(File f, Map<String, String?> fields) async {
   if (!f.path.toLowerCase().endsWith('.flac')) return false;
   try {
     final path = f.path;
-    final fields = t.vorbisFields;
     return await Isolate.run(() => writeFlacFields(File(path), fields))
         .timeout(const Duration(seconds: 30));
   } catch (_) {

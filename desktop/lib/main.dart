@@ -519,6 +519,7 @@ Future<void> main() async {
     await library.loadCorrections(); // apply manual fixes as tracks are built
     await library.uids.load(); // the names albums keep across a rename — before the first regroup
     await library.facts.load(); // pressings and tracklists already worked out — one file, one read
+    await library.loadTagUndo(); // the way back from a tag rewrite, before anything can write again
     await library.loadHidden(); // keep "removed from library only" tracks out
     await library.loadMerged(); // records the user told us to keep together
     await library.loadArtistArtChoice(); // portraits and backdrops the user picked
@@ -2212,6 +2213,37 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     if (done == true && mounted) _refresh();
   }
 
+  Future<void> _undoTagWrites() async {
+    final lib = context.read<LibraryStore>();
+    final n = lib.undoableTagWrites(album);
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        backgroundColor: _panel,
+        title: const Text('Tags terugzetten'),
+        content: Text('$n ${n == 1 ? "bestand krijgt" : "bestanden krijgen"} de waarden terug die '
+            'er stonden voor het laatste gelijktrekken. Was er daarvoor geen waarde, dan wordt het '
+            'veld weer weggehaald.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Annuleren')),
+          FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: _accent),
+              onPressed: () => Navigator.pop(c, true),
+              child: const Text('Terugzetten')),
+        ],
+      ),
+    );
+    if (yes != true || !mounted) return;
+    final r = await lib.undoTagWrites(album);
+    if (!mounted) return;
+    _srcToast(
+        context,
+        r.failed.isEmpty
+            ? '${r.restored} bestanden teruggezet'
+            : '${r.restored} teruggezet · ${r.failed.length} in gebruik: ${r.failed.first}');
+    _refresh();
+  }
+
   /// Soulseek supplies audio, the app supplies the numbering, the title, the album and the year.
   TrackTags _authorityFor(AlbumSlot s) => TrackTags(
         title: s.title,
@@ -2521,6 +2553,16 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                         icon: const Icon(Icons.label_outline_rounded),
                         tooltip: 'Tags gelijktrekken — één album, één nummering, in de bestanden',
                         onPressed: _official.isEmpty ? null : _normaliseTags,
+                      ),
+                    // Only appears once there is something to undo. A button that is there but does
+                    // nothing teaches you not to trust it.
+                    if (!album.isSingle &&
+                        !context.read<LibraryStore>().isRemote &&
+                        context.read<LibraryStore>().undoableTagWrites(album) > 0)
+                      IconButton(
+                        icon: const Icon(Icons.undo_rounded),
+                        tooltip: 'Tags terugzetten zoals ze waren voor het gelijktrekken',
+                        onPressed: _undoTagWrites,
                       ),
                     if (!album.isSingle)
                       IconButton(
@@ -11841,12 +11883,36 @@ class NormaliseTagsDialog extends StatefulWidget {
   State<NormaliseTagsDialog> createState() => _NormaliseTagsDialogState();
 }
 
+String _fileName(String path) => File(path).uri.pathSegments.last;
+
 class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
   bool _busy = false;
 
   /// Files the write could not reach, and how many did land. Empty until a write has run.
   List<String> _failed = const [];
   int _written = 0;
+
+  /// Same-recording pairs in this record, worked out once when the dialog opens. A title collision
+  /// is nearly always one of these, and the pairs are what turns the refusal into something to do.
+  List<SameRecordingPair> _dupes = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _dupes = context.read<LibraryStore>().duplicateRecordings(widget.album);
+  }
+
+  Future<void> _parkDupes() async {
+    setState(() => _busy = true);
+    final n = await context.read<LibraryStore>().parkDuplicates(_dupes);
+    if (!mounted) return;
+    _srcToast(
+        context,
+        n == 0
+            ? 'Kon de kopie niet verplaatsen — staat hij open in de speler?'
+            : '$n opzij gezet in $dupeFolder · niets gewist');
+    Navigator.of(context).pop(n > 0);
+  }
 
   Future<void> _go() async {
     setState(() => _busy = true);
@@ -12022,11 +12088,37 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(color: Colors.orangeAccent, fontSize: 11.5)),
                     ),
-                  const Padding(
-                    padding: EdgeInsets.only(top: 2),
-                    child: Text('Kies een uitgave die bij deze bestanden past, of haal de dubbele weg.',
-                        style: TextStyle(color: _muted, fontSize: 11.5)),
-                  ),
+                  // Almost always the same cause: two rips of one song that landed under different
+                  // names. Saying so is not enough — the way out belongs here too.
+                  if (_dupes.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 2),
+                      child: Text('Kies een uitgave die bij deze bestanden past.',
+                          style: TextStyle(color: _muted, fontSize: 11.5)),
+                    )
+                  else ...[
+                    const SizedBox(height: 6),
+                    for (final d in _dupes)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 8, top: 2),
+                        child: Text('Zelfde nummer, twee bestanden: ${d.drop.title} — '
+                            'behouden ${_fileName(d.keep.path)} (${d.why})',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      ),
+                    const SizedBox(height: 6),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: OutlinedButton.icon(
+                        onPressed: _busy ? null : _parkDupes,
+                        icon: const Icon(Icons.inbox_rounded, size: 16),
+                        label: Text(_dupes.length == 1
+                            ? 'Mindere kopie opzij zetten'
+                            : '${_dupes.length} mindere kopieën opzij zetten'),
+                      ),
+                    ),
+                  ],
                 ]),
               ),
             const SizedBox(height: 12),

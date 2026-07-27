@@ -396,6 +396,39 @@ class LibraryStore extends ChangeNotifier {
 
   File get _correctionsFile => File('$_appDir${Platform.pathSeparator}corrections.json');
 
+  // ── The way back from a tag rewrite ───────────────────────────────────────
+  // Writing tags is the one thing this app does that changes files the user already owns, and
+  // until now it had no undo at all. Per path, the values those fields carried BEFORE the last
+  // write — including the ones that were not there, recorded as null, because "this field did not
+  // exist" is a state an undo has to be able to restore.
+  //
+  // Deliberately not in the album sidecar next to the music: that file is a cache of catalogue
+  // facts, thrown away whenever the record changes (AlbumFacts.staleFor). Undo data that a cache
+  // sweep can delete is not undo data.
+  //
+  // One level deep. Normalising the same album twice puts you back to how it was after the first
+  // write, not to the beginning — the same as every other undo, and the honest thing to show.
+  final Map<String, Map<String, String?>> _tagUndo = {};
+  File get _tagUndoFile => File('$_appDir${Platform.pathSeparator}tag_undo.json');
+
+  Future<void> loadTagUndo() async {
+    try {
+      final f = _tagUndoFile;
+      if (!await f.exists()) return;
+      final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      _tagUndo.clear();
+      j.forEach((path, v) {
+        if (v is Map) {
+          _tagUndo[path] = {
+            for (final e in v.entries) e.key.toString(): e.value?.toString(),
+          };
+        }
+      });
+    } catch (_) {/* unreadable — no undo rather than a crash */}
+  }
+
+  Future<void> _saveTagUndo() => _writeJson(_tagUndoFile, _tagUndo);
+
   // ── Hidden tracks ─────────────────────────────────────────────────────────
   // "Remove from library only" keeps the FILE on disk but excludes it from the library. The
   // paths live in hidden.json so a rescan doesn't bring them straight back.
@@ -2143,11 +2176,17 @@ extension LibraryNormalise on LibraryStore {
         trackTotal: plan.total,
         year: plan.year,
       );
+      // What is in the file right now, for exactly the fields about to be overwritten. Read before
+      // the write or there is nothing to go back to; a field that is absent is recorded as null so
+      // the undo deletes it again instead of leaving our value behind.
+      final raw = readFlacRawFields(File(s.track.path));
+      final before = {for (final k in tags.vorbisFields.keys) k: raw[k.toLowerCase()]};
       if (!await stampTags(File(s.track.path), tags)) {
         failed.add(s.name);
         continue;
       }
       written++;
+      _tagUndo[s.track.path] = before;
       // The file now says the right thing, so a correction saying the same thing is a second truth
       // that can only drift. Cleared for the files that were ACTUALLY written, and only the fields
       // this just wrote — a pinned pressing or a corrected artist is the user's and stays.
@@ -2160,10 +2199,78 @@ extension LibraryNormalise on LibraryStore {
       }
     }
     if (written > 0) {
+      await _saveTagUndo();
       await saveCorrectionsNow();
       await scan();
     }
     return (written: written, failed: failed);
+  }
+
+  /// The same recording held twice in this record, across every tile it was split into.
+  ///
+  /// Reads the files to decide which copy wins — a handful of pairs per album, so cheap enough to
+  /// ask for on opening a page, and the answer is what the user needs before they can act on it.
+  List<SameRecordingPair> duplicateRecordings(Album album) => sameRecordingPairs(
+        recordTracks(album),
+        better: (a, b) => firstIsBetter(File(a.path), File(b.path)),
+        why: (keep, drop) => whyBetter(File(keep.path), File(drop.path)),
+      );
+
+  /// Move the lesser copy of each pair into the parking folder beside the album.
+  ///
+  /// Never deleted, only moved out of the way: the scan skips [dupeFolder], so the record stops
+  /// holding the same song twice while the file itself is still there if the judgement was wrong.
+  /// The same safety net [consolidate] already uses.
+  Future<int> parkDuplicates(List<SameRecordingPair> pairs) async {
+    final sep = Platform.pathSeparator;
+    var moved = 0;
+    for (final p in pairs) {
+      try {
+        final from = File(p.drop.path);
+        final dest = File('${from.parent.path}$sep$dupeFolder$sep${from.uri.pathSegments.last}');
+        if (await dest.exists()) continue; // already a copy parked there — leave this one alone
+        await dest.parent.create(recursive: true);
+        final at = await moveWithRetry(from, dest);
+        _reKeyCorrection(p.drop.path, at);
+        _tagUndo.remove(p.drop.path); // its undo target is gone from the library
+        moved++;
+      } catch (_) {/* in use or across volumes — the pair is simply reported again next time */}
+    }
+    if (moved > 0) {
+      await _saveTagUndo();
+      await saveCorrectionsNow();
+      await scan();
+    }
+    return moved;
+  }
+
+  /// How many files of this record could be put back as they were.
+  int undoableTagWrites(Album album) =>
+      recordTracks(album).where((t) => _tagUndo.containsKey(t.path)).length;
+
+  /// Put this record's tags back to the values they had before the last rewrite.
+  ///
+  /// Restores through the same writer, so a field recorded as absent is DELETED again rather than
+  /// left standing with our value — [writeFlacFields] already treats null that way. A file the
+  /// player holds open fails here for the same reason it fails on the way out, and is named.
+  Future<({int restored, List<String> failed})> undoTagWrites(Album album) async {
+    var restored = 0;
+    final failed = <String>[];
+    for (final t in recordTracks(album)) {
+      final before = _tagUndo[t.path];
+      if (before == null) continue;
+      if (!await writeTagFields(File(t.path), before)) {
+        failed.add(File(t.path).uri.pathSegments.last);
+        continue;
+      }
+      _tagUndo.remove(t.path);
+      restored++;
+    }
+    if (restored > 0) {
+      await _saveTagUndo();
+      await scan();
+    }
+    return (restored: restored, failed: failed);
   }
 }
 
