@@ -2051,10 +2051,27 @@ extension LibraryNormalise on LibraryStore {
   ///
   /// Matched on TITLE and running time like [planRenumber], never on the existing number: that
   /// number is the broken input.
+  /// Every file of this record, including the ones the app split off into their own tiles.
+  ///
+  /// Planning over the clicked tile alone cannot work, and the GUI showed it straight away: that
+  /// tile held 8 of the 13 files, all agreeing on 11, so there was nothing to reconcile INSIDE it.
+  /// The disagreement lives BETWEEN the tiles — which is why there are tiles. [_groupKey] splits on
+  /// the track total but keeps one base key per artist+title, and normKey already folds the curly
+  /// apostrophe into a straight one, so that key gathers all four.
+  List<Track> recordTracks(Album album) {
+    final first = album.tracks.firstOrNull;
+    if (first == null || first.album.isEmpty) return album.tracks;
+    final all = editionsOfRecord('album::${artistKey(first.artist)}|${normKey(first.album)}');
+    if (all == null || all.isEmpty) return album.tracks;
+    // The clicked tile's own order first, so the list reads like the page it was opened from.
+    final seen = {for (final t in album.tracks) t.path};
+    return [...album.tracks, ...all.where((t) => !seen.contains(t.path))];
+  }
+
   NormalisePlan planNormalise(Album album, List<ChoiceTrack> official, {String? albumTitle, int? year}) {
     final pool = [...official];
     final steps = <NormaliseStep>[];
-    for (final t in album.tracks) {
+    for (final t in recordTracks(album)) {
       // Only FLAC. writeFlacFields is the only writer this app has, and the tag writers for the
       // other containers in its dependency drop every field they do not model — so for an MP3 the
       // honest thing is to leave the file alone and say so, rather than quietly skip it.

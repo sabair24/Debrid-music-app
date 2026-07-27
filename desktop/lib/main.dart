@@ -11855,6 +11855,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
   @override
   Widget build(BuildContext context) {
     final plan = widget.plan;
+    final album = widget.album;
     final blocked = plan.collides || plan.titleCollides;
     final totals = plan.totalsNow.toList()..sort();
     return Dialog(
@@ -11873,7 +11874,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
             const SizedBox(height: 12),
             // What is actually wrong today, in numbers. "Your files disagree" means nothing; "four
             // different totals" is the reason there are four tiles.
-            if (totals.length > 1 || plan.albumsNow.length > 1)
+            if (totals.length > 1 || plan.albumsNow.length > 1 || plan.steps.length > album.tracks.length)
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(10),
@@ -11889,6 +11890,15 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                   if (plan.albumsNow.length > 1) ...[
                     const SizedBox(height: 4),
                     Text('En ${plan.albumsNow.length} schrijfwijzen van de albumtitel.',
+                        style: const TextStyle(fontSize: 12.5, color: _muted)),
+                  ],
+                  // The tile you opened holds only part of the record. Say so, or the file count
+                  // below reads as a mistake.
+                  if (plan.steps.length > album.tracks.length) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                        'Dit gaat over alle ${plan.steps.length} bestanden van deze plaat, '
+                        'niet alleen de ${album.tracks.length} in deze tegel.',
                         style: const TextStyle(fontSize: 12.5, color: _muted)),
                   ],
                 ]),

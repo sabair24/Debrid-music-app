@@ -118,6 +118,29 @@ void main() {
     }
   });
 
+  test('plannen vanaf één tegel pakt de andere tegels erbij', () async {
+    // In de GUI gezien: de aangeklikte tegel hield 8 van de 13 bestanden, die het onderling eens
+    // waren. Er viel binnen die tegel niets recht te trekken — het verschil zit TUSSEN de tegels.
+    final a = file('01.flac', {'TITLE': 'Everybody', 'ARTIST': 'Backstreet Boys', 'ALBUM': "Backstreet's Back", 'TRACKNUMBER': '1', 'TOTALTRACKS': '11'}, secs: 220);
+    final b = file('02.flac', {'TITLE': 'As Long as You Love Me', 'ARTIST': 'Backstreet Boys', 'ALBUM': 'Backstreet’s Back', 'TRACKNUMBER': '1', 'TOTALTRACKS': '14'}, secs: 216);
+    final c = file('03.flac', {'TITLE': 'All I Have to Give', 'ARTIST': 'Backstreet Boys', 'ALBUM': "Backstreet's Back", 'TRACKNUMBER': '3'}, secs: 250);
+
+    final lib = LibraryStore()..tracks.addAll([a.track, b.track, c.track]);
+    lib.rebuildAlbums();
+    final tegel = lib.albums.first;
+    expect(lib.albums.length, greaterThan(1), reason: 'zo begint het');
+    expect(tegel.tracks.length, lessThan(3), reason: 'de tegel houdt maar een deel');
+
+    final plan = lib.planNormalise(tegel, pressing(), albumTitle: "Backstreet's Back");
+    expect(plan.steps, hasLength(3), reason: 'alle bestanden van de plaat, niet alleen de tegel');
+    expect(plan.totalsNow, {0, 11, 14}, reason: 'nu pas is de rommel zichtbaar');
+    expect(await lib.applyNormalise(plan), 3);
+
+    for (final p in [a.path, b.path, c.path]) {
+      expect(readFlacTags(File(p))!.trackTotal, 3);
+    }
+  });
+
   test('en dan is het één album in plaats van vier', () async {
     // De directe regressie op wat de gebruiker ziet.
     final a = file('01.flac', {'TITLE': 'Everybody', 'ARTIST': 'Backstreet Boys', 'ALBUM': "Backstreet's Back", 'TRACKNUMBER': '1'}, secs: 220);
