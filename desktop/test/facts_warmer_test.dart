@@ -81,7 +81,6 @@ void main() {
         enabled: enabled,
         rearmDelay: const Duration(milliseconds: 20),
         outageBackoff: const Duration(milliseconds: 50),
-        discogsBreather: const Duration(milliseconds: 1),
         resolve: (album, {required uid, required trackSetHash, required mb, required settings,
             pinnedMbid, pinned, discogs}) async {
           asked.add(uid);
@@ -209,7 +208,6 @@ void main() {
         mb: MusicBrainzService(),
         enabled: true,
         rearmDelay: const Duration(milliseconds: 5),
-        discogsBreather: const Duration(milliseconds: 1),
         resolve: (album, {required uid, required trackSetHash, required mb, required settings,
             pinnedMbid, pinned, discogs}) async {
           // Traag, zodat de artwork-lus zeker een ronde doet met een lege feitenkast.
@@ -343,7 +341,6 @@ void main() {
         mb: MusicBrainzService(),
         enabled: true,
         rearmDelay: const Duration(milliseconds: 5),
-        discogsBreather: const Duration(milliseconds: 1),
         resolve: (album, {required uid, required trackSetHash, required mb, required settings,
             pinnedMbid, pinned, discogs}) async {
           asked.add(uid);

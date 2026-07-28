@@ -65,23 +65,6 @@ const _artDeadline = Duration(seconds: 20);
 /// something is systematically slow and hammering on is how you pile up runaway fetches.
 const _tooSlowLimit = 5;
 
-/// A safety net for the Discogs backfill, not a working limit.
-///
-/// Ten minutes, and it is deliberately far above what one record costs. Two minutes was tried and
-/// every single record hit it — "Tout Un Jour" and "Per ongeluk" both ran the full 120 seconds and
-/// wrote nothing — because that chain really is about thirty-six requests, spaced a second apart and
-/// three seconds once the budget dips below a fifth.
-///
-/// And the timeout was making it worse, not better. A Dart timeout does not cancel work: abandoning
-/// at two minutes left the chain running and immediately started another one beside it, so the
-/// backfill piled up concurrent Discogs chains all competing for the same sixty requests a minute.
-/// The queue got slower the longer it ran.
-///
-/// This pass has a twenty-second breather and all evening. One record at a time, finished, is both
-/// faster overall and kinder to the budget the foreground shares. The net is only here so a chain
-/// that hangs cannot hold the queue forever.
-const _discogsDeadline = Duration(minutes: 10);
-
 
 /// A written record of what the warmer decided, in `warm.log` beside the other state files.
 ///
@@ -152,7 +135,6 @@ class FactsWarmer extends ChangeNotifier {
     this.warmArt = fetchReleaseArt,
     this.rearmDelay = const Duration(seconds: 10),
     this.outageBackoff = const Duration(minutes: 15),
-    this.discogsBreather = const Duration(seconds: 20),
   });
 
   final LibraryStore library;
@@ -193,16 +175,6 @@ class FactsWarmer extends ChangeNotifier {
   /// test's stub has no chain to trace.
   void Function(String)? artTrace;
 
-  /// The pause between records in the Discogs backfill.
-  ///
-  /// The point of that pass is not to finish fast, it is to finish without ever being in the user's
-  /// way. Twenty seconds hands most of the sixty-a-minute budget back between records, so opening an
-  /// album never queues behind it. Forty leftovers therefore take an evening, in the background,
-  /// once — and then never again, because what is written stays written.
-  ///
-  /// Injected so a test can drive the pass without waiting out the real thing.
-  final Duration discogsBreather;
-
   final Duration rearmDelay;
   final Duration outageBackoff;
 
@@ -232,28 +204,28 @@ class FactsWarmer extends ChangeNotifier {
     // the ten minutes after that are unaccounted for.
     DiscogsService.laneTrace = _log.line;
     library.addListener(_onLibraryChanged);
-    // Side by side, not one after the other. The artwork loop is the one that decides whether
-    // opening a record is instant, and it must not wait for two dozen tracklists first.
-    //
-    // The flag goes up BEFORE either starts. Without it the artwork loop can finish its first pass,
-    // find nothing (because no tracklist has landed yet), see no facts sweep running, and stop —
-    // before the facts sweep has so much as begun. Awaited so a caller can tell when both are done;
-    // main() does not wait for this.
-    // Artwork FIRST, and on its own. Not side by side — that was the mistake.
-    //
-    // Read off warm.log on the real library: both loops started, and a hundred and twenty seconds
-    // later the artwork round had not finished its FIRST album. The bottleneck here is not
-    // concurrency, it is sixty Discogs requests a minute; run two loops and they simply halve each
-    // other, and the app triples its own spacing once the budget drops below twelve. So one at a
-    // time, and the one the user notices goes first: 79 of 130 records already have their tracklist
-    // and are missing only their scans.
+    // Artwork FIRST, and on its own. Side by side was the mistake, and warm.log said so: both loops
+    // started, and two minutes later the artwork round had not finished its FIRST album. Two loops
+    // sharing one per-second budget simply halve each other. So one at a time, and the one the user
+    // notices goes first — 79 of 130 records already have their tracklist and are missing only their
+    // scans, which is exactly what makes opening a record feel slow.
     await _artSweep();
     await _wantFacts();
     // Once more, for the records the facts sweep just resolved.
     await _artSweep();
-    // And finally the ones the free sources could not finish, through Discogs. Last, slowly, and
-    // only what is left — see [_discogsBackfill].
-    await _discogsBackfill();
+    // There is no Discogs pass here, and that is a decision rather than an omission.
+    //
+    // One was built and measured over six releases. It never completed a single record. Every round
+    // found a different reason — it gave up when a scan was running, it rode on a free-only chain
+    // that skips Discogs by design, it had no trace at all — and each was fixed, and the next one
+    // appeared. The last trace says it plainly: the free sources finish a record in 124 milliseconds
+    // and the very first Discogs call then runs for nine minutes without the rate-limit lane
+    // reporting a single queued request.
+    //
+    // It was also the wrong shape. Discogs already runs when someone OPENS an album, which is where
+    // its cost is worth paying: one record, on demand, with a person waiting. Warming it for a
+    // hundred and thirty records ahead of time holds the one lane that path needs. The free sources
+    // are what background work should use — they warm the whole library in minutes.
   }
 
   /// How many facts sweeps have been asked for and not yet finished.
@@ -526,89 +498,7 @@ class FactsWarmer extends ChangeNotifier {
     return did;
   }
 
-  /// The leftovers, through Discogs. Last in the queue, one at a time, and deliberately unhurried.
-  ///
-  /// The free sources cover what they cover. Measured on this library: of fifty-five records warmed,
-  /// two got a back cover from TheAudioDB and forty-two got no answer at all — and asking by hand for
-  /// I AM...SASHA FIERCE, BREAK MY SOUL REMIXES and MAKSIM returns fourteen bytes of nothing, so those
-  /// records genuinely are not in it. Discogs does have them. It is simply expensive: about thirty-six
-  /// requests per record out of sixty a minute.
-  ///
-  /// So it runs here, after everything cheap is done, with a pause between records that leaves the
-  /// budget mostly free for whatever the user opens. That matters more than finishing quickly — this
-  /// is a one-off backfill, and once a record is written it never comes back.
-  ///
-  /// Nothing is retried: [_discogsTried] holds one attempt per record per session, exactly like the
-  /// free pass, so a record that fails costs one attempt and not a loop.
-  Future<void> _discogsBackfill() async {
-    if (_stopped || !settings.warmFacts || library.isRemote) return;
-    _log.line('discogs-naveeg: start');
-    var did = 0, over = 0, geenFeiten = 0;
-    for (final album in _artOrder()) {
-      if (_stopped || !settings.warmFacts) {
-        _log.line('discogs-naveeg: gestopt (gestopt=$_stopped aan=${settings.warmFacts})');
-        break;
-      }
-      // A rescan is a reason to WAIT, not to give up. It used to break here, and measured on the
-      // real library that ended the whole backfill five milliseconds after it started — "opgehaald=0
-      // alwarm=0", nothing looked at — because a scan happened to be running at that moment. Nothing
-      // ever ran it again, so one unlucky instant cost the entire pass for the session.
-      while (library.scanning && !_stopped) {
-        await Future<void>.delayed(const Duration(seconds: 2));
-      }
-      final uid = library.uidOf(album);
-      if (uid.isEmpty || _discogsTried.contains(uid)) continue;
-      final facts = library.facts.get(uid);
-      if (facts == null || facts.tracklist.isEmpty) {
-        geenFeiten++;
-        continue;
-      }
 
-      final expected = facts.tracklist.length;
-      final mbid = library.pinnedMbid(album) ?? facts.mbid;
-      final pinned = library.pinnedRelease(album);
-      final roles = library.albumArtRoles(album.artist, album.title);
-      if (await DiscogsService(settings).hasReleaseArt(album.artist, album.title,
-          expectedTracks: expected, pinned: pinned, pinnedMbid: mbid, roles: roles)) {
-        over++;
-        continue; // the free pass already finished this one
-      }
-
-      _discogsTried.add(uid);
-      _log.line('discogs-naveeg: "${album.title}" ophalen…');
-      final t0 = DateTime.now();
-      try {
-        // trace, like the free pass. Leaving it off meant this pass ran the whole chain blind: ten
-        // minutes on one record and not a single line about where they went — the fourth time in
-        // this feature that I have been left guessing at something I could have simply written down.
-        await warmArt(album.artist, album.title,
-                expectedTracks: expected,
-                pinned: pinned,
-                pinnedMbid: mbid,
-                roles: roles,
-                settings: settings,
-                freeOnly: false,
-                trace: _log.line)
-            .timeout(_discogsDeadline);
-        did++;
-        _artDone++;
-        notifyListeners();
-        _log.line('discogs-naveeg: "${album.title}" klaar in '
-            '${DateTime.now().difference(t0).inSeconds}s');
-      } on TimeoutException {
-        _log.line('discogs-naveeg: "${album.title}" over ${_discogsDeadline.inSeconds}s — verder');
-      } catch (e) {
-        _log.line('discogs-naveeg: "${album.title}" gooide $e — gestopt');
-        break;
-      }
-      // Breathing room, so opening an album never queues behind this.
-      await Future<void>.delayed(discogsBreather);
-    }
-    _log.line('discogs-naveeg: klaar — opgehaald=$did alwarm=$over geenfeiten=$geenFeiten');
-  }
-
-  /// One Discogs attempt per record per session.
-  final Set<String> _discogsTried = {};
 
   /// Records to warm the scans for: the ones with a MusicBrainz id first, then the rest.
   ///
