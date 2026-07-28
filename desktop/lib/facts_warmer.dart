@@ -228,6 +228,9 @@ class FactsWarmer extends ChangeNotifier {
   /// Begin, and keep an ear on the library so records added later get picked up too.
   Future<void> start() async {
     if (!enabled || library.isRemote) return;
+    // The rate-limit lane gets somewhere to write. Without it warm.log stops at "naar Discogs" and
+    // the ten minutes after that are unaccounted for.
+    DiscogsService.laneTrace = _log.line;
     library.addListener(_onLibraryChanged);
     // Side by side, not one after the other. The artwork loop is the one that decides whether
     // opening a record is instant, and it must not wait for two dozen tracklists first.

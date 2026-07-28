@@ -232,6 +232,18 @@ class DiscogsService {
   static Future<void> _turn = Future.value();
   static int _remaining = 60;
 
+  /// Somewhere to write what the rate-limit lane is doing. Set once by the warmer.
+  ///
+  /// The last blind spot in this chain. warm.log could show that a record reached "naar Discogs" in
+  /// 142 ms and then produced nothing for ten minutes, and no more: the wait is inside [_get], behind
+  /// a queue that nothing reported on. Meanwhile the Discogs cache directory had not gained a file in
+  /// over ten minutes, so not one request was completing — but whether that was a long queue, a stuck
+  /// chain or no requests at all could not be told apart from the outside.
+  static void Function(String)? laneTrace;
+
+  /// How many requests are waiting for a slot right now.
+  static int _queued = 0;
+
   /// Starts every call at least [_minGap] after the last one. Returns null on any failure — a missing
   /// album page is a disappointment, a crashed one is a bug.
   Future<Map<String, dynamic>?> _get(String url) async {
@@ -252,8 +264,17 @@ class DiscogsService {
     });
     // The chain must survive a failed turn, or one thrown error deadlocks the lane for the session.
     _turn = slot.catchError((_) {});
+    final queuedAt = DateTime.now();
+    _queued++;
     try {
       await slot;
+      final wachtte = DateTime.now().difference(queuedAt);
+      _queued--;
+      // Only when it actually cost something. A lane that hands out slots promptly says nothing.
+      if (wachtte.inMilliseconds > 1500) {
+        laneTrace?.call('  [discogs] ${wachtte.inSeconds}s in de rij (nog $_queued wachtend, '
+            'budget $_remaining) voor ${Uri.parse(url).path}');
+      }
       final r = await http
           .get(
             Uri.parse(url),
@@ -280,8 +301,9 @@ class DiscogsService {
       }
       await _writeCache(url, body);
       return body;
-    } catch (_) {
+    } catch (e) {
       transportErrors++;
+      laneTrace?.call('  [discogs] ${Uri.parse(url).path} brak: $e');
       return null;
     }
   }
