@@ -829,6 +829,13 @@ extension DiscogsArtwork on DiscogsService {
     int? pinned,
     String? pinnedMbid,
     Map<String, String> roles = const {},
+    // Where the seconds actually go, when a caller cares. The warmer passes its log here.
+    //
+    // Earned by three wrong guesses in a row: "it is the images", "it is the Discogs budget", "it is
+    // the two loops competing". Each was ruled out by measurement and none of them was it — with the
+    // facts sweep fully deferred and the whole budget free, one record still ran past ninety seconds.
+    // Guessing at a chain with five stages from the outside does not work.
+    void Function(String)? trace,
   }) async {
     // Both pins are part of the cache key. Without that a new choice would keep answering with the
     // scans fetched for the old one — which is half of why picking a release changed the front
@@ -866,8 +873,11 @@ extension DiscogsArtwork on DiscogsService {
     // at fourteen call sites, so an instance field would give each caller its own idea of what is
     // already running.
     final running = _artInFlight[key];
-    if (running != null) return running;
-    final work = _releaseArtFresh(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir)
+    if (running != null) {
+      trace?.call('  [kunst] al onderweg voor dezelfde sleutel — meegelift');
+      return running;
+    }
+    final work = _releaseArtFresh(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace)
         .whenComplete(() => _artInFlight.remove(key));
     _artInFlight[key] = work;
     return work;
@@ -885,7 +895,12 @@ extension DiscogsArtwork on DiscogsService {
     String? pinnedMbid,
     Map<String, String> roles,
     Directory dir,
+    void Function(String)? trace,
   ) async {
+    final t0 = DateTime.now();
+    void step(String what) =>
+        trace?.call('  [kunst] +${DateTime.now().difference(t0).inMilliseconds}ms $what');
+    step('begin');
     // What the user SAID an image is outranks everything below — the archive's own labels included.
     // Fetched first and kept aside; the automatic answers fill only the roles left unassigned.
     Uint8List? saidFront, saidBack, saidDisc;
@@ -925,6 +940,8 @@ extension DiscogsArtwork on DiscogsService {
     ReleaseArt? partial;
     if (pinnedMbid != null && pinnedMbid.isNotEmpty) {
       final exact = await _artFromCaa(pinnedMbid);
+      step('archief voor de gepinde persing: '
+          '${exact == null ? "niets" : "voor=${exact.front != null} achter=${exact.back != null} cd=${exact.disc != null}"}');
       if (exact != null) {
         final art = said(exact);
         if (enough(art) || (art.front != null && art.back != null && art.disc != null)) {
@@ -944,8 +961,10 @@ extension DiscogsArtwork on DiscogsService {
     // spent over two minutes waiting for a slot. Anything free that can answer first should.
     if ((partial?.back == null || partial?.disc == null) && artist.isNotEmpty && album.isNotEmpty) {
       final info = await CoverEnricher(settings).albumInfo(artist, album);
+      step('theaudiodb: achter=${info?.backUrl != null} cd=${info?.discUrl != null}');
       final back = partial?.back ?? await _fetchIf(info?.backUrl);
       final disc = partial?.disc ?? await _fetchIf(info?.discUrl);
+      step('theaudiodb-afbeeldingen: achter=${back != null} cd=${disc != null}');
       if (back != null || disc != null) {
         final art = said(ReleaseArt(front: partial?.front, back: back, disc: disc));
         if (enough(art)) {
@@ -971,7 +990,9 @@ extension DiscogsArtwork on DiscogsService {
       // disc scan that were already downloaded whenever the front was the one image missing.
     }
 
+    step('naar Discogs — de gemeterde weg');
     final e = await edition(artist, album, expectedTracks: expectedTracks, pinned: pinned);
+    step('Discogs-persing: ${e == null ? "niets" : "${e.images.length} afbeeldingen"}');
     if (e == null || e.images.isEmpty) {
       // Discogs has nothing to add, but the archive may still have given us something.
       final art = said(caa ?? const ReleaseArt());

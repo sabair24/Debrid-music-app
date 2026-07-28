@@ -95,7 +95,7 @@ void main() {
           );
         },
         warmArt: (artist, album,
-            {required expectedTracks, pinned, pinnedMbid, required roles, required settings}) async {
+            {required expectedTracks, pinned, pinnedMbid, required roles, required settings, trace}) async {
           warmedArt.add('$artist|$album|$expectedTracks');
         },
       );
@@ -129,7 +129,7 @@ void main() {
           );
         },
         warmArt: (artist, album,
-            {required expectedTracks, pinned, pinnedMbid, required roles, required settings}) async {
+            {required expectedTracks, pinned, pinnedMbid, required roles, required settings, trace}) async {
           warmedArt.add('$artist|$album|$expectedTracks');
         },
       );
@@ -218,7 +218,7 @@ void main() {
           );
         },
         warmArt: (artist, album,
-            {required expectedTracks, pinned, pinnedMbid, required roles, required settings}) async {
+            {required expectedTracks, pinned, pinnedMbid, required roles, required settings, trace}) async {
           warmedArt.add('$artist|$album|$expectedTracks');
         },
       );
@@ -346,7 +346,7 @@ void main() {
               uid: uid, trackSetHash: trackSetHash, source: '', networkFailed: stuk);
         },
         warmArt: (artist, album,
-            {required expectedTracks, pinned, pinnedMbid, required roles, required settings}) async {},
+            {required expectedTracks, pinned, pinnedMbid, required roles, required settings, trace}) async {},
       );
 
       await w.start();

@@ -104,10 +104,15 @@ Future<void> fetchReleaseArt(
   String? pinnedMbid,
   required Map<String, String> roles,
   required AppSettings settings,
+  void Function(String)? trace,
 }) =>
     DiscogsService(settings)
         .releaseArt(artist, album,
-            expectedTracks: expectedTracks, pinned: pinned, pinnedMbid: pinnedMbid, roles: roles)
+            expectedTracks: expectedTracks,
+            pinned: pinned,
+            pinnedMbid: pinnedMbid,
+            roles: roles,
+            trace: trace)
         .then((_) {});
 
 class FactsWarmer extends ChangeNotifier {
@@ -150,7 +155,14 @@ class FactsWarmer extends ChangeNotifier {
     String? pinnedMbid,
     required Map<String, String> roles,
     required AppSettings settings,
+    void Function(String)? trace,
   }) warmArt;
+
+  /// Per-step timings from inside the artwork chain, when something wants them.
+  ///
+  /// Set by [FactsWarmer] so warm.log shows where a record's ninety seconds went. Nullable because a
+  /// test's stub has no chain to trace.
+  void Function(String)? artTrace;
 
   final Duration rearmDelay;
   final Duration outageBackoff;
@@ -522,7 +534,8 @@ class FactsWarmer extends ChangeNotifier {
                 pinned: pinned,
                 pinnedMbid: mbid,
                 roles: roles,
-                settings: settings)
+                settings: settings,
+                trace: artTrace ?? _log.line)
             .timeout(_artDeadline);
       } on TimeoutException {
         _log.line('scans: "${album.title}" duurde langer dan ${_artDeadline.inSeconds}s — '
