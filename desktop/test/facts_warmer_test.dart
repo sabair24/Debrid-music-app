@@ -70,6 +70,9 @@ void main() {
   FactsWarmer warmer({
     required bool Function(String uid) found,
     bool enabled = true,
+    // Of a lege uitkomst een STORING is of "nooit van gehoord". Alleen het eerste hoort de veeg stil
+    // te leggen; het tweede is een normale bibliotheek en kwam elf keer op rij voor.
+    bool brokenNetwork = false,
   }) =>
       FactsWarmer(
         library: library,
@@ -88,6 +91,7 @@ void main() {
             source: found(uid) ? 'MusicBrainz' : '',
             tracklist: found(uid) ? const [ChoiceTrack('1', 'Mysterons', 306)] : const [],
             failedMs: found(uid) ? null : 1730000000000,
+            networkFailed: !found(uid) && brokenNetwork,
           );
         },
         warmArt: (artist, album,
@@ -292,17 +296,62 @@ void main() {
   group('when the network is gone', () {
     test('it stops instead of blinding the whole library', () async {
       seedLibrary([for (var i = 0; i < 40; i++) 'Album$i']);
-      final w = warmer(found: (_) => false);
+      final w = warmer(found: (_) => false, brokenNetwork: true);
 
       await w.start();
 
       expect(asked.length, lessThanOrEqualTo(3),
-          reason: 'niet veertig — drie leges op rij is een storing, geen bibliotheek vol onbekende platen');
+          reason: 'niet veertig — drie gebroken opzoekingen op rij is een storing');
       for (final uid in asked) {
         expect(library.facts.get(uid), isNull,
             reason: 'niets mag failedMs krijgen, anders is elk album een etmaal blind');
       }
       expect(w.running, isFalse);
+      w.dispose();
+    });
+
+    test('een bibliotheek vol onbekende platen legt de veeg NIET stil', () async {
+      // Dit is de vastloper zoals hij zich in het echt voordeed: de teller sprong naar 15 van de 26
+      // en bleef daar staan, elke run, ook een hele nacht. Elf platen die MusicBrainz noch Discogs
+      // kent, achter elkaar, werden gelezen als een dode netwerkverbinding. De veeg gooide de
+      // gevonden antwoorden weg, zette een nieuwe poging een uur later, en stopte -- met alles erna,
+      // inclusief al het artwork, nooit bereikt.
+      seedLibrary([for (var i = 0; i < 20; i++) 'Album$i']);
+      final w = warmer(found: (_) => false); // niets gevonden, maar niets brak
+
+      await w.start();
+
+      expect(asked, hasLength(20), reason: 'alle twintig bekeken, niet gestopt na drie');
+      expect(w.running, isFalse);
+      w.dispose();
+    });
+
+    test('een enkele storing tussen onbekende platen legt hem ook niet stil', () async {
+      // De guard mag alleen afgaan op een REEKS storingen. Eén hikje tussen platen die simpelweg
+      // niet bestaan is geen storing, en de teller in de hoek moet doorlopen.
+      seedLibrary([for (var i = 0; i < 12; i++) 'Album$i']);
+      var n = 0;
+      late FactsWarmer w;
+      w = FactsWarmer(
+        library: library,
+        settings: settings,
+        mb: MusicBrainzService(),
+        enabled: true,
+        rearmDelay: const Duration(milliseconds: 5),
+        resolve: (album, {required uid, required trackSetHash, required mb, required settings,
+            pinnedMbid, pinned, discogs}) async {
+          asked.add(uid);
+          final stuk = (++n == 4); // precies één gebroken opzoeking
+          return AlbumFacts(
+              uid: uid, trackSetHash: trackSetHash, source: '', networkFailed: stuk);
+        },
+        warmArt: (artist, album,
+            {required expectedTracks, pinned, pinnedMbid, required roles, required settings}) async {},
+      );
+
+      await w.start();
+
+      expect(asked, hasLength(12));
       w.dispose();
     });
 

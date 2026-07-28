@@ -54,6 +54,13 @@ Future<AlbumFacts> resolveAlbumFacts(
   int? year;
   int? release;
 
+  /// Did a lookup actually BREAK, as opposed to answering "never heard of it"?
+  ///
+  /// Both used to arrive here as an empty tracklist, and the warmer reads three empties in a row as
+  /// "the network is gone" — so eleven genuinely obscure records in a row shut the sweep down and
+  /// froze it at fifteen of twenty-six, every single run. Telling the two apart is the whole point.
+  var threw = false;
+
   try {
     MbRelease? rel;
     if (pinnedMbid != null && pinnedMbid.isNotEmpty) rel = await mb.release(pinnedMbid);
@@ -114,7 +121,9 @@ Future<AlbumFacts> resolveAlbumFacts(
         mbid = rel.mbid; // so the sleeve comes from this pressing, not from a second guess
       }
     }
-  } catch (_) {/* Discogs gets its turn below */}
+  } catch (_) {
+    threw = true; // Discogs gets its turn below; remember that this side broke
+  }
 
   if (out.isEmpty) {
     try {
@@ -128,7 +137,9 @@ Future<AlbumFacts> resolveAlbumFacts(
         from = 'Discogs';
         release = e.releaseId;
       }
-    } catch (_) {}
+    } catch (_) {
+      threw = true;
+    }
   }
 
   return AlbumFacts(
@@ -144,5 +155,6 @@ Future<AlbumFacts> resolveAlbumFacts(
     year: year,
     // Only an empty answer is a failure. A record that resolved is never retried on a timer.
     failedMs: out.isEmpty ? now : null,
+    networkFailed: out.isEmpty && threw,
   );
 }

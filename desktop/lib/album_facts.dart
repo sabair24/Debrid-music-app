@@ -60,6 +60,7 @@ class AlbumFacts {
     this.bonus = const [],
     this.year,
     this.failedMs,
+    this.networkFailed = false,
   });
 
   /// The album this belongs to — see album_id.dart. Not artist+title, precisely so that correcting
@@ -95,6 +96,14 @@ class AlbumFacts {
   /// When the lookup last came back with nothing. The missing half of the old cache: without it a
   /// server that was down for an hour cost six requests per album open for the rest of time.
   final int? failedMs;
+
+  /// Did the lookup BREAK, rather than answer "never heard of this record"?
+  ///
+  /// Deliberately not written to disk and not read back: it describes one attempt, not the record.
+  /// The warmer's outage guard is the only thing that reads it, and it is what stops eleven obscure
+  /// albums in a row from being mistaken for a dead network — which used to freeze the sweep at
+  /// fifteen of twenty-six on every run.
+  final bool networkFailed;
 
   bool get isEmpty => tracklist.isEmpty;
 

@@ -237,9 +237,17 @@ class FactsWarmer extends ChangeNotifier {
         }
 
         if (fresh.isEmpty) {
-          // Offline, MusicBrainz down, or genuinely an unknown record — indistinguishable from
-          // here, so do not decide yet.
           held.add(fresh);
+          // Only a lookup that BROKE counts towards the outage guard. A record MusicBrainz and
+          // Discogs simply do not have is not evidence of anything, and the library has plenty:
+          // eleven of those in a row tripped the guard on every single run, which cleared the held
+          // answers, scheduled a retry an hour out, and left the counter frozen at 15 of 26 — with
+          // everything after it, including all the artwork, never reached. That is the whole reason
+          // warming looked broken. See AlbumFacts.networkFailed.
+          if (!fresh.networkFailed) {
+            blanks = 0;
+            continue;
+          }
           if (++blanks >= _outageAfter) {
             // Treat it as an outage: throw the held failures away so NOTHING carries failedMs, and
             // come back later. Storing them would blind those albums for a day over a dropped
