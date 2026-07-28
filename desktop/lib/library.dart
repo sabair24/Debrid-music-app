@@ -386,6 +386,11 @@ class LibraryStore extends ChangeNotifier {
     return appDir;
   }
 
+  /// Where this library's state files live — the same folder [_appDir] resolves to, exposed so
+  /// something outside this class (the warmer's log) can write beside them and honour a test's
+  /// override rather than scribbling in the real app directory.
+  String get configDir => _appDir;
+
   /// What is recorded against a file, or null. For tests.
   @visibleForTesting
   Map<String, String>? correctionForTest(String path) => _corrections[path];

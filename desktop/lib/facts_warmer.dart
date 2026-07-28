@@ -17,6 +17,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
@@ -38,6 +39,36 @@ const int _outageAfter = 3;
 /// What one album's artwork attempt came to. "Already there" is not progress and not a failure, and
 /// telling those two apart is what stops the artwork loop from either spinning or giving up.
 enum _Art { fetched, already, failed }
+
+/// A written record of what the warmer decided, in `warm.log` beside the other state files.
+///
+/// This exists because four attempts at fixing "the counter sticks at 15" were spent guessing. A
+/// release build strips [debugPrint], so from the outside the warmer is a black box: the only
+/// signals were a counter that turns out to count something other than progress, and a cache
+/// directory that either grows or does not. Everything else was inference.
+///
+/// Deliberately blunt: append a line, truncate when it gets long, never throw. A logger that can
+/// break the thing it observes is worse than none.
+class WarmLog {
+  WarmLog(this._path);
+  final String _path;
+
+  /// Kept small enough to read in one go and to never matter on disk. Rewritten from the tail rather
+  /// than rotated: there is nothing here worth keeping across sessions.
+  static const _maxBytes = 256 * 1024;
+
+  void line(String s) {
+    try {
+      final f = File(_path);
+      if (f.existsSync() && f.lengthSync() > _maxBytes) {
+        final keep = f.readAsStringSync();
+        f.writeAsStringSync(keep.substring(keep.length ~/ 2), flush: true);
+      }
+      final t = DateTime.now().toIso8601String().substring(11, 23);
+      f.writeAsStringSync('$t  $s\n', mode: FileMode.append, flush: true);
+    } catch (_) {/* observing must never break the observed */}
+  }
+}
 
 /// Pull an album's scans into the on-disk cache. The default [FactsWarmer.warmArt].
 ///
@@ -147,6 +178,8 @@ class FactsWarmer extends ChangeNotifier {
   /// because an album it skipped for want of a tracklist may be about to get one.
   bool _factsPending = false;
 
+  late final WarmLog _log = WarmLog('${library.configDir}${Platform.pathSeparator}warm.log');
+
   void stop() {
     _stopped = true;
     _rearm?.cancel();
@@ -201,6 +234,7 @@ class FactsWarmer extends ChangeNotifier {
     if (library.scanning) return; // the album list is about to be replaced anyway
 
     final todo = _todo();
+    _log.line('feiten: veeg start, ${todo.length} te doen van ${library.albums.length} albums');
     if (todo.isEmpty) return;
 
     _running = true;
@@ -232,7 +266,7 @@ class FactsWarmer extends ChangeNotifier {
             pinned: library.pinnedRelease(album),
           );
         } catch (e) {
-          debugPrint('Warming $uid failed: $e');
+          _log.line('feiten: "${album.title}" gooide $e — veeg gestopt');
           break;
         }
 
@@ -246,14 +280,20 @@ class FactsWarmer extends ChangeNotifier {
           // warming looked broken. See AlbumFacts.networkFailed.
           if (!fresh.networkFailed) {
             blanks = 0;
+            _log.line('feiten: "${album.title}" niet in de catalogi — door');
+            // Counted as handled. It used to leave the counter where it was, so eleven unknown
+            // records in a row read as "frozen at 15 of 26" while the sweep was in fact working.
+            _done++;
+            notifyListeners();
             continue;
           }
+          _log.line('feiten: "${album.title}" opzoeking BRAK (${blanks + 1}/$_outageAfter)');
           if (++blanks >= _outageAfter) {
             // Treat it as an outage: throw the held failures away so NOTHING carries failedMs, and
             // come back later. Storing them would blind those albums for a day over a dropped
             // wifi connection, and a warmer can do that to a whole library in seconds — the miss
             // cache answers instantly once it is warm.
-            debugPrint('Warming stopped: $_outageAfter records in a row found nothing');
+            _log.line('feiten: $_outageAfter gebroken opzoekingen op rij — gestopt, nieuwe poging later');
             held.clear();
             _scheduleRetry();
             break;
@@ -279,6 +319,7 @@ class FactsWarmer extends ChangeNotifier {
       _running = false;
       await library.facts.flush();
       notifyListeners();
+      _log.line('feiten: veeg klaar, $_done van $_total behandeld');
     }
   }
 
@@ -303,8 +344,16 @@ class FactsWarmer extends ChangeNotifier {
   /// cannot stampede, and neither waits for the other. Newest first, so the record that just
   /// downloaded gets its scans without standing behind two dozen tracklists.
   Future<void> _artSweep() async {
-    if (_artRunning || _stopped || !enabled || library.isRemote) return;
-    if (!settings.warmFacts) return;
+    if (_artRunning || _stopped || !enabled || library.isRemote) {
+      _log.line('scans: veeg NIET gestart (loopt=$_artRunning gestopt=$_stopped '
+          'aan=$enabled remote=${library.isRemote})');
+      return;
+    }
+    if (!settings.warmFacts) {
+      _log.line('scans: veeg niet gestart — warm_facts staat uit');
+      return;
+    }
+    _log.line('scans: veeg start');
     _artRunning = true;
     try {
       // Keep going while the facts sweep is still producing albums to work on: an album skipped
@@ -326,25 +375,39 @@ class FactsWarmer extends ChangeNotifier {
 
   /// One pass over the library. Returns how many records had their scans fetched.
   Future<int> _warmMissingArt() async {
-    var did = 0;
+    var did = 0, geenFeiten = 0, alWarm = 0, overgeslagen = 0;
     for (final album in _byNewest()) {
-      if (_stopped || !settings.warmFacts || library.scanning) break;
+      if (_stopped || !settings.warmFacts || library.scanning) {
+        _log.line('scans: ronde afgebroken (gestopt=$_stopped aan=${settings.warmFacts} scan=${library.scanning})');
+        break;
+      }
       final uid = library.uidOf(album);
-      if (uid.isEmpty || _artTried.contains(uid)) continue;
+      if (uid.isEmpty || _artTried.contains(uid)) {
+        overgeslagen++;
+        continue;
+      }
       final facts = library.facts.get(uid);
       // Not resolved yet, or resolved to nothing. Deliberately NOT marked as tried: the facts sweep
       // may still be on its way to this album, and burning its one attempt here would leave it
       // without scans for the rest of the session.
-      if (facts == null || facts.tracklist.isEmpty) continue;
+      if (facts == null || facts.tracklist.isEmpty) {
+        geenFeiten++;
+        continue;
+      }
       switch (await _warmArtFor(album, facts)) {
         case _Art.fetched:
           did++;
+          _log.line('scans: "${album.title}" opgehaald');
         case _Art.already:
-          break; // one file check, no network — not progress, and not a reason to stop
+          alWarm++; // one file check, no network — not progress, and not a reason to stop
         case _Art.failed:
+          _log.line('scans: "${album.title}" MISLUKT — ronde gestopt '
+              '(opgehaald=$did alwarm=$alWarm geenfeiten=$geenFeiten)');
           return did; // usually the network; the next fifty fail the same way
       }
     }
+    _log.line('scans: ronde klaar — opgehaald=$did alwarm=$alWarm '
+        'geenfeiten=$geenFeiten overgeslagen=$overgeslagen feitenLoopt=$_factsPending');
     return did;
   }
 
@@ -379,7 +442,7 @@ class FactsWarmer extends ChangeNotifier {
       notifyListeners();
       return _Art.fetched;
     } catch (e) {
-      debugPrint('Warming art for ${album.title} failed: $e');
+      _log.line('scans: "${album.title}" gooide $e');
       return _Art.failed;
     }
   }
