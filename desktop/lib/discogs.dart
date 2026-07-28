@@ -895,7 +895,16 @@ extension DiscogsArtwork on DiscogsService {
     // Static, like the rate-limit lane and for the same reason: DiscogsService is constructed fresh
     // at fourteen call sites, so an instance field would give each caller its own idea of what is
     // already running.
-    final running = _artInFlight[key];
+    // The lane key carries freeOnly, and the cache key deliberately does not.
+    //
+    // On disk they are the same entry — the same three pictures of the same record — so the cache key
+    // must not split. But two chains for one record are NOT interchangeable while they run: the free
+    // one stops before Discogs. Sharing this table meant the backfill could join a free-only chain
+    // already in progress and get its answer, so the metered pass it exists to perform never
+    // happened. And they do overlap: warm.log shows the free sweep re-arming at 16:03:02 while the
+    // backfill was working on a record from 16:02:53.
+    final lane = '$key|${freeOnly ? 'vrij' : 'vol'}';
+    final running = _artInFlight[lane];
     if (running != null) {
       trace?.call('  [kunst] al onderweg voor dezelfde sleutel — meegelift');
       return running;
@@ -903,10 +912,10 @@ extension DiscogsArtwork on DiscogsService {
     final work =
         _releaseArtFresh(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly)
             .whenComplete(() {
-      _artInFlight.remove(key);
+      _artInFlight.remove(lane);
       trace?.call('  [kunst] whenComplete — uit de in-flight tabel');
     });
-    _artInFlight[key] = work;
+    _artInFlight[lane] = work;
     trace?.call('  [kunst] work aangemaakt en teruggegeven aan de aanroeper');
     return work;
   }

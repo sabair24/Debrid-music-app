@@ -575,13 +575,17 @@ class FactsWarmer extends ChangeNotifier {
       _log.line('discogs-naveeg: "${album.title}" ophalen…');
       final t0 = DateTime.now();
       try {
+        // trace, like the free pass. Leaving it off meant this pass ran the whole chain blind: ten
+        // minutes on one record and not a single line about where they went — the fourth time in
+        // this feature that I have been left guessing at something I could have simply written down.
         await warmArt(album.artist, album.title,
                 expectedTracks: expected,
                 pinned: pinned,
                 pinnedMbid: mbid,
                 roles: roles,
                 settings: settings,
-                freeOnly: false)
+                freeOnly: false,
+                trace: _log.line)
             .timeout(_discogsDeadline);
         did++;
         _artDone++;
