@@ -415,8 +415,19 @@ class CoverEnricher {
   }
 
   Directory get _albumInfoDir => Directory(_dir('albuminfo'));
+
+  /// The `v2` is a schema marker, and it is load-bearing.
+  ///
+  /// Nothing in this cache expires. Every entry written before [AlbumInfo.backUrl] and
+  /// [AlbumInfo.discUrl] existed came back from disk with both fields null, and the code above then
+  /// never asked TheAudioDB again — so the back cover and the disc it does have stayed invisible
+  /// forever. Traced on the real library: ANTI warmed with `theaudiodb: achter=false cd=false` while
+  /// a live call to the same endpoint returns strAlbumBack AND strAlbumCDart for it.
+  ///
+  /// Same lesson as the artwork key's version, learned twice in one morning: adding a field to a
+  /// cached record does nothing until the old records are re-derived.
   File _albumInfoFile(String artist, String album) => File('${_albumInfoDir.path}${Platform.pathSeparator}'
-      '${_fnv('${artist.toLowerCase()}|${album.toLowerCase()}')}.json');
+      '${_fnv('v2|${artist.toLowerCase()}|${album.toLowerCase()}')}.json');
 
   Future<String?> cachedBio(String name) async {
     final f = _bioFile(name);
