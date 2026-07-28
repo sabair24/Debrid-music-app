@@ -164,19 +164,27 @@ class FactsWarmer extends ChangeNotifier {
     // find nothing (because no tracklist has landed yet), see no facts sweep running, and stop —
     // before the facts sweep has so much as begun. Awaited so a caller can tell when both are done;
     // main() does not wait for this.
-    _factsPending = true;
     final art = _artSweep();
-    try {
-      await _sweep();
-    } finally {
-      _factsPending = false;
-    }
+    await _wantFacts();
     await art;
   }
 
-  /// A facts sweep is running or about to. The artwork loop keeps looking round while this is true,
-  /// because an album it skipped for want of a tracklist may be about to get one.
-  bool _factsPending = false;
+  /// How many facts sweeps have been asked for and not yet finished.
+  ///
+  /// A counter, not a flag, and that is the whole point. As a bool it was set true by the rearm timer
+  /// and cleared in `whenComplete` — but a second [_sweep] while one is already running returns
+  /// immediately at its re-entrancy guard, so `whenComplete` fired at once and cleared the flag while
+  /// the first sweep was still going. The artwork loop then saw "no tracklists on the way", broke,
+  /// and nothing ever restarted it. One stray notifyListeners from the library was enough to end
+  /// artwork warming for the session.
+  int _factsWanted = 0;
+  bool get _factsPending => _factsWanted > 0;
+
+  /// Ask for a facts sweep and keep [_factsPending] true for as long as this request is outstanding.
+  Future<void> _wantFacts() {
+    _factsWanted++;
+    return _sweep().whenComplete(() => _factsWanted--);
+  }
 
   late final WarmLog _log = WarmLog('${library.configDir}${Platform.pathSeparator}warm.log');
 
@@ -194,9 +202,8 @@ class FactsWarmer extends ChangeNotifier {
     // otherwise restart the sweep forever.
     _rearm?.cancel();
     _rearm = Timer(rearmDelay, () {
-      _factsPending = true;
       unawaited(_artSweep());
-      unawaited(_sweep().whenComplete(() => _factsPending = false));
+      unawaited(_wantFacts());
     });
   }
 
@@ -474,7 +481,12 @@ class FactsWarmer extends ChangeNotifier {
       // The albums that came back empty are still in `_tried`, so this picks up where it left off
       // rather than re-attempting them. That is correct: nothing was written for them, and they
       // come round again on the next start.
-      unawaited(_sweep());
+      //
+      // BOTH loops. This used to wake only the facts sweep, and by the time it fired the artwork loop
+      // had long since seen nothing to do and broken — so every record the retry resolved got its
+      // tracklist and never its scans, for the rest of the session, with nothing saying so.
+      unawaited(_artSweep());
+      unawaited(_wantFacts());
     });
   }
 

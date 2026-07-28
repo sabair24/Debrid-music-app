@@ -59,7 +59,16 @@ Future<AlbumFacts> resolveAlbumFacts(
   /// Both used to arrive here as an empty tracklist, and the warmer reads three empties in a row as
   /// "the network is gone" — so eleven genuinely obscure records in a row shut the sweep down and
   /// froze it at fifteen of twenty-six, every single run. Telling the two apart is the whole point.
+  ///
+  /// An exception is NOT enough to detect it, and relying on one was worse than the bug it replaced.
+  /// Neither service throws on a network fault: `MusicBrainzService._get` and `DiscogsService._get`
+  /// both catch everything and return null, so a timeout, a 503 and a clean 404 are indistinguishable
+  /// at this level. With only the catch blocks below, this flag could never be true, the guard was
+  /// dead, and one offline launch would have written `failedMs` across the entire library — blinding
+  /// every album page for a day and stopping the artwork loop too, since it skips records with no
+  /// tracklist. Hence the counters: they are the only place that knows.
   var threw = false;
+  final errorsBefore = MusicBrainzService.transportErrors + DiscogsService.transportErrors;
 
   try {
     MbRelease? rel;
@@ -155,6 +164,8 @@ Future<AlbumFacts> resolveAlbumFacts(
     year: year,
     // Only an empty answer is a failure. A record that resolved is never retried on a timer.
     failedMs: out.isEmpty ? now : null,
-    networkFailed: out.isEmpty && threw,
+    networkFailed: out.isEmpty &&
+        (threw ||
+            MusicBrainzService.transportErrors + DiscogsService.transportErrors > errorsBefore),
   );
 }

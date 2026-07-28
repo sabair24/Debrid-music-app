@@ -445,21 +445,39 @@ class MusicBrainzService {
       // 404 from the Cover Art Archive means this pressing has no scans. Very common, and not a
       // failure — it is the signal to fall back to Discogs.
       if (r.statusCode != 200) {
+        if (r.statusCode != 404) transportErrors++;
         await _writeMiss(url, notFound: r.statusCode == 404);
         return null;
       }
       final body = jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true));
       if (body is! Map<String, dynamic>) {
+        transportErrors++;
         await _writeMiss(url, notFound: false);
         return null;
       }
       await _writeCache(url, body);
       return body;
     } catch (_) {
+      transportErrors++;
       await _writeMiss(url, notFound: false);
       return null;
     }
   }
+
+  /// Requests that came back without a usable answer for a reason other than "this does not exist".
+  ///
+  /// A timeout, a DNS failure, a 503, a body that is not JSON — every one of those arrives at the
+  /// caller as the same `null` a clean 404 produces, because [_get] swallows everything and never
+  /// throws. Anything that needs to tell "the network is broken" from "the catalogue has never heard
+  /// of this record" has to read this; there is no exception to catch.
+  ///
+  /// That distinction is not academic. The warmer's outage guard exists so that one offline launch
+  /// cannot mark a whole library as "nothing found" for a day, and a guard that reads exceptions
+  /// reads something that never happens.
+  ///
+  /// Static and monotonic: callers snapshot it before a lookup and compare after. A 404 deliberately
+  /// does not count — the Cover Art Archive answers 404 for most pressings, and that is an answer.
+  static int transportErrors = 0;
 
   Future<Map<String, dynamic>?> _ws(String url) => _get(url, lane: 'ws', gap: _wsGap);
 

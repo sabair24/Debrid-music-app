@@ -262,15 +262,34 @@ class DiscogsService {
       // Responses can now land out of order, so a stale header must not raise the budget back up:
       // the lowest number seen is the honest one until a request actually reports more room.
       if (left != null && (left < _remaining || left > _remaining + 5)) _remaining = left;
-      if (r.statusCode != 200) return null;
+      if (r.statusCode != 200) {
+        // 404 is an answer: Discogs does not have this release. Anything else — 429, 5xx — means we
+        // did not get to ask properly, which is a different thing entirely. See [transportErrors].
+        if (r.statusCode != 404) transportErrors++;
+        return null;
+      }
       final body = jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true));
-      if (body is! Map<String, dynamic>) return null;
+      if (body is! Map<String, dynamic>) {
+        transportErrors++;
+        return null;
+      }
       await _writeCache(url, body);
       return body;
     } catch (_) {
+      transportErrors++;
       return null;
     }
   }
+
+  /// Requests that came back without a usable answer for a reason other than "this does not exist".
+  ///
+  /// Same purpose as [MusicBrainzService.transportErrors], and needed for the same reason: [_get]
+  /// turns a timeout, a rate-limit refusal and a 5xx into the same `null` that a genuine 404 gives,
+  /// so nothing downstream can tell a broken network from an unknown record without this.
+  ///
+  /// Static because DiscogsService is constructed fresh at fourteen call sites — an instance field
+  /// would give every caller its own private count of a problem that is global.
+  static int transportErrors = 0;
 
   // ── Cache ─────────────────────────────────────────────────────────────────
   // Discogs data barely changes and the rate limit is the scarce resource, so anything fetched is
