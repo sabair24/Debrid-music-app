@@ -47,14 +47,37 @@ class AlbumInfo {
   final String? description, review, genre, style, label;
   final int? year;
   final double? score;
-  const AlbumInfo({this.description, this.review, this.year, this.genre, this.style, this.label, this.score});
+
+  /// Where TheAudioDB keeps this record's back cover and its disc, if it has them.
+  ///
+  /// Read from the same response the description comes out of — which this app has been fetching on
+  /// every album page open and throwing these two fields away. Worth having for one reason above all:
+  /// they cost nothing. The Cover Art Archive has no scans for most pressings, and the fallback after
+  /// it is Discogs, whose sixty requests a minute are the scarcest thing in the app; measured on the
+  /// real library, one album's artwork could sit there for over two minutes waiting for its turn.
+  /// TheAudioDB is keyless and unmetered, and for ANTI it has both.
+  final String? backUrl, discUrl;
+
+  const AlbumInfo({
+    this.description,
+    this.review,
+    this.year,
+    this.genre,
+    this.style,
+    this.label,
+    this.score,
+    this.backUrl,
+    this.discUrl,
+  });
 
   bool get isEmpty =>
       (description == null || description!.isEmpty) &&
       (review == null || review!.isEmpty) &&
       year == null &&
       genre == null &&
-      label == null;
+      label == null &&
+      backUrl == null &&
+      discUrl == null;
 
   /// The blurb to show: the encyclopedic description first, a review only if that's all there is.
   String? get text => (description != null && description!.isNotEmpty) ? description : review;
@@ -67,6 +90,8 @@ class AlbumInfo {
         'style': style,
         'label': label,
         'score': score,
+        if (backUrl != null) 'backUrl': backUrl,
+        if (discUrl != null) 'discUrl': discUrl,
       };
 
   factory AlbumInfo.fromJson(Map<String, dynamic> j) => AlbumInfo(
@@ -77,6 +102,8 @@ class AlbumInfo {
         style: j['style'] as String?,
         label: j['label'] as String?,
         score: (j['score'] as num?)?.toDouble(),
+        backUrl: j['backUrl'] as String?,
+        discUrl: j['discUrl'] as String?,
       );
 }
 
@@ -372,6 +399,11 @@ class CoverEnricher {
         style: s('strStyle'),
         label: s('strLabel'),
         score: double.tryParse(s('intScore') ?? ''),
+        // Free, and already in this response. Verified live on Rihanna/ANTI: strAlbumBack and
+        // strAlbumCDart both filled. The app has been downloading this JSON on every album page open
+        // and dropping these two on the floor, then paying the Discogs budget for the same two scans.
+        backUrl: s('strAlbumBack'),
+        discUrl: s('strAlbumCDart'),
       );
       if (info.isEmpty) return null;
       await _albumInfoDir.create(recursive: true);

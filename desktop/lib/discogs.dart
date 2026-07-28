@@ -10,6 +10,11 @@ import 'package:http/http.dart' as http;
 
 import 'catalog.dart';
 import 'editions.dart';
+// Mutual with enrichment.dart, which delegates its cover search here. Deliberate: TheAudioDB's album
+// entry holds the back cover and the disc, CoverEnricher.albumInfo already fetches and CACHES that
+// entry for the page's blurb, and reading it here reuses that one request instead of asking the same
+// endpoint a second time per album. Dart resolves import cycles between libraries without complaint.
+import 'enrichment.dart';
 import 'musicbrainz.dart';
 import 'organize.dart';
 import 'release_format.dart';
@@ -907,19 +912,48 @@ extension DiscogsArtwork on DiscogsService {
         );
 
     // A pinned MusicBrainz pressing is an exact answer: take its scans and no one else's.
+    ReleaseArt? partial;
     if (pinnedMbid != null && pinnedMbid.isNotEmpty) {
       final exact = await _artFromCaa(pinnedMbid);
       if (exact != null) {
         final art = said(exact);
-        await _writeArt(dir, art);
-        return art;
+        // Complete, or as complete as the archive gets for this pressing. Anything short of all
+        // three falls through to the free sources below rather than to Discogs.
+        if (art.front != null && art.back != null && art.disc != null) {
+          await _writeArt(dir, art);
+          return art;
+        }
+        partial = art;
+      }
+    }
+
+    // TheAudioDB, before anything metered. It keeps a back cover and a disc scan per album
+    // (strAlbumBack, strAlbumCDart), it is keyless and unmetered, and the album page fetches this
+    // very response for the blurb already — the two fields were simply never read.
+    //
+    // This sits here on purpose. Below is Discogs, whose sixty requests a minute are the scarcest
+    // thing in this app: measured on the real library with two loops running, ONE album's artwork
+    // spent over two minutes waiting for a slot. Anything free that can answer first should.
+    if ((partial?.back == null || partial?.disc == null) && artist.isNotEmpty && album.isNotEmpty) {
+      final info = await CoverEnricher(settings).albumInfo(artist, album);
+      final back = partial?.back ?? await _fetchIf(info?.backUrl);
+      final disc = partial?.disc ?? await _fetchIf(info?.discUrl);
+      if (back != null || disc != null) {
+        final art = said(ReleaseArt(front: partial?.front, back: back, disc: disc));
+        // Only stop here when nothing is still missing; a lone back cover is worth keeping but not
+        // worth giving up the front for.
+        if (art.front != null && art.back != null && art.disc != null) {
+          await _writeArt(dir, art);
+          return art;
+        }
+        partial = art;
       }
     }
 
     // Otherwise the Cover Art Archive first — unless a Discogs release is pinned, because that is
     // the user's own answer to "which pressing is this", and quietly describing it with someone
     // else's scans is exactly the disregard that made pinning feel broken before.
-    ReleaseArt? caa;
+    ReleaseArt? caa = partial;
     if (pinned == null && (pinnedMbid == null || pinnedMbid.isEmpty)) {
       caa = await _artFromMusicBrainz(artist, album, expectedTracks);
       if (caa != null && caa.front != null && caa.back != null && caa.disc != null) {
@@ -1151,6 +1185,10 @@ extension DiscogsArtwork on DiscogsService {
   }
 
   /// Discogs serves images from its own CDN and wants the same User-Agent as the API.
+  /// [fetchImage] for a url that may not be there. Saves the caller a null dance per image.
+  Future<Uint8List?> _fetchIf(String? url) async =>
+      (url == null || url.isEmpty) ? null : fetchImage(url);
+
   Future<Uint8List?> fetchImage(String url) async {
     try {
       final r = await http
