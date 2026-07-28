@@ -112,7 +112,11 @@ Future<void> fetchReleaseArt(
             pinned: pinned,
             pinnedMbid: pinnedMbid,
             roles: roles,
-            trace: trace)
+            trace: trace,
+            // The archive and TheAudioDB only. Traced on the real library: those two are done in 2.7
+            // seconds, and the Discogs chain after them had not returned in eighty-seven. Seventy-nine
+            // records at ninety seconds each is not a background task, it is a week.
+            freeOnly: true)
         .then((_) {});
 
 class FactsWarmer extends ChangeNotifier {

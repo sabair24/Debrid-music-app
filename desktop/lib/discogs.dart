@@ -829,6 +829,16 @@ extension DiscogsArtwork on DiscogsService {
     int? pinned,
     String? pinnedMbid,
     Map<String, String> roles = const {},
+    /// Only the sources that cost nothing: the Cover Art Archive and TheAudioDB. Never Discogs.
+    ///
+    /// For the background warmer, which has 79 records to get through. Measured from inside the chain
+    /// on the real library: the archive answers in 2.5 seconds and TheAudioDB in another 0.2, and then
+    /// `edition` — up to three masters × three formats × three pressings, about thirty-six requests,
+    /// spaced a second apart and three seconds once the budget dips — did not return within
+    /// eighty-seven. Per record. Warming a library that way finishes some time next week.
+    ///
+    /// The page keeps the full chain: that is one record, on demand, with someone watching it.
+    bool freeOnly = false,
     // Where the seconds actually go, when a caller cares. The warmer passes its log here.
     //
     // Earned by three wrong guesses in a row: "it is the images", "it is the Discogs budget", "it is
@@ -858,8 +868,13 @@ extension DiscogsArtwork on DiscogsService {
     // record's scans. Correcting a name is exactly when someone is looking at the sleeve.
     final key = artCacheKey(artist, album, expectedTracks, pinned, pinnedMbid, roles);
     final dir = Directory('$artDir${Platform.pathSeparator}$key');
+    // Only a FINISHED entry short-circuits. The warmer may have left images here from the free
+    // sources without the marker; those are worth having on screen but they are not the last word, and
+    // serving them as the answer would mean the back and the disc never get looked for.
     final cached = await _readArt(dir);
-    if (cached != null) return cached;
+    if (cached != null && await File('${dir.path}${Platform.pathSeparator}done').exists()) {
+      return cached;
+    }
 
     // One chain per album, however many widgets ask.
     //
@@ -877,8 +892,9 @@ extension DiscogsArtwork on DiscogsService {
       trace?.call('  [kunst] al onderweg voor dezelfde sleutel — meegelift');
       return running;
     }
-    final work = _releaseArtFresh(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace)
-        .whenComplete(() => _artInFlight.remove(key));
+    final work =
+        _releaseArtFresh(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly)
+            .whenComplete(() => _artInFlight.remove(key));
     _artInFlight[key] = work;
     return work;
   }
@@ -896,6 +912,7 @@ extension DiscogsArtwork on DiscogsService {
     Map<String, String> roles,
     Directory dir,
     void Function(String)? trace,
+    bool freeOnly,
   ) async {
     final t0 = DateTime.now();
     void step(String what) =>
@@ -988,6 +1005,20 @@ extension DiscogsArtwork on DiscogsService {
       }
       // A partial answer is kept, not discarded. Requiring a front threw away a back cover and a
       // disc scan that were already downloaded whenever the front was the one image missing.
+    }
+
+    // The warmer stops here. What the free sources found is written, but WITHOUT the done marker
+    // unless it is complete enough — so the page still knows to run the full chain when someone
+    // actually opens this record, and the sleeve it does have shows up immediately meanwhile.
+    if (freeOnly) {
+      final art = said(partial ?? const ReleaseArt());
+      step('gratis bronnen klaar — geen Discogs (warmen): '
+          'voor=${art.front != null} achter=${art.back != null} cd=${art.disc != null}');
+      if (!art.isEmpty) {
+        await _writeArt(dir, art, done: enough(art));
+        return art;
+      }
+      return null;
     }
 
     step('naar Discogs — de gemeterde weg');
@@ -1194,7 +1225,7 @@ extension DiscogsArtwork on DiscogsService {
     }
   }
 
-  Future<void> _writeArt(Directory dir, ReleaseArt art) async {
+  Future<void> _writeArt(Directory dir, ReleaseArt art, {bool done = true}) async {
     try {
       await dir.create(recursive: true);
       Future<void> one(String n, Uint8List? b) async {
@@ -1205,6 +1236,11 @@ extension DiscogsArtwork on DiscogsService {
       await one('back', art.back);
       await one('disc', art.disc);
       // A marker, so a release that genuinely has only a front cover isn't refetched every visit.
+      //
+      // Withheld when the background warmer wrote a partial answer from the free sources only. The
+      // images are worth keeping — the sleeve shows at once — but the record has not been fully looked
+      // up, and marking it done would mean the page never goes on to find the back and the disc.
+      if (!done) return;
       await File('${dir.path}${Platform.pathSeparator}done').writeAsString('1');
     } catch (_) {
       /* a cache that can't be written is not worth failing over */
