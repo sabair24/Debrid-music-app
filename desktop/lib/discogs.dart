@@ -911,15 +911,23 @@ extension DiscogsArtwork on DiscogsService {
           disc: saidDisc ?? found.disc,
         );
 
+    /// Enough to stop looking, without paying Discogs for the rest.
+    ///
+    /// The back and the disc are what the free sources can actually supply and what the page is
+    /// missing; the FRONT the library almost always already has, embedded in the files, and the album
+    /// page falls back to it. Requiring all three before stopping is what kept sending every record
+    /// on to Discogs: measured on the real library, each one then ran past ninety seconds and
+    /// finished nothing at all in five minutes, because the sixty-a-minute budget is shared with the
+    /// tracklist sweep and its spacing triples when the budget runs low.
+    bool enough(ReleaseArt a) => a.back != null && a.disc != null;
+
     // A pinned MusicBrainz pressing is an exact answer: take its scans and no one else's.
     ReleaseArt? partial;
     if (pinnedMbid != null && pinnedMbid.isNotEmpty) {
       final exact = await _artFromCaa(pinnedMbid);
       if (exact != null) {
         final art = said(exact);
-        // Complete, or as complete as the archive gets for this pressing. Anything short of all
-        // three falls through to the free sources below rather than to Discogs.
-        if (art.front != null && art.back != null && art.disc != null) {
+        if (enough(art) || (art.front != null && art.back != null && art.disc != null)) {
           await _writeArt(dir, art);
           return art;
         }
@@ -940,9 +948,7 @@ extension DiscogsArtwork on DiscogsService {
       final disc = partial?.disc ?? await _fetchIf(info?.discUrl);
       if (back != null || disc != null) {
         final art = said(ReleaseArt(front: partial?.front, back: back, disc: disc));
-        // Only stop here when nothing is still missing; a lone back cover is worth keeping but not
-        // worth giving up the front for.
-        if (art.front != null && art.back != null && art.disc != null) {
+        if (enough(art)) {
           await _writeArt(dir, art);
           return art;
         }
