@@ -97,7 +97,8 @@ jobs:
         run: |
           $ver = "1.6.1"
           $url = "https://github.com/acoustid/chromaprint/releases/download/v$ver/chromaprint-fpcalc-$ver-windows-x86_64.zip"
-          Invoke-WebRequest -Uri $url -OutFile "fpcalc.zip" -UseBasicParsing
+          . "$env:GITHUB_WORKSPACE/.github/haal.ps1"
+          Haal $url "fpcalc.zip"
           Expand-Archive "fpcalc.zip" -DestinationPath "fpcalc_tmp" -Force
           $exe = (Get-ChildItem "fpcalc_tmp" -Recurse -Filter "fpcalc.exe" | Select-Object -First 1).FullName
           if (-not $exe) { echo "fpcalc.exe niet gevonden in de zip"; exit 1 }
@@ -108,7 +109,9 @@ jobs:
 
       - name: Download VC++ Redistributable
         shell: pwsh
-        run: Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "vc_redist.x64.exe" -UseBasicParsing
+        run: |
+          . "$env:GITHUB_WORKSPACE/.github/haal.ps1"
+          Haal "https://aka.ms/vs/17/release/vc_redist.x64.exe" "vc_redist.x64.exe"
 
       - name: Install Inno Setup
         shell: pwsh
