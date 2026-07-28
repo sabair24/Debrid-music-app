@@ -35,6 +35,10 @@ import 'settings.dart';
 /// every album page for twenty-four hours. Three, and lean on the cheap side of that trade.
 const int _outageAfter = 3;
 
+/// What one album's artwork attempt came to. "Already there" is not progress and not a failure, and
+/// telling those two apart is what stops the artwork loop from either spinning or giving up.
+enum _Art { fetched, already, failed }
+
 /// Pull an album's scans into the on-disk cache. The default [FactsWarmer.warmArt].
 ///
 /// Returns nothing on purpose: the caller does not want the bytes, it wants them to be on disk by
@@ -122,8 +126,26 @@ class FactsWarmer extends ChangeNotifier {
   Future<void> start() async {
     if (!enabled || library.isRemote) return;
     library.addListener(_onLibraryChanged);
-    await _sweep();
+    // Side by side, not one after the other. The artwork loop is the one that decides whether
+    // opening a record is instant, and it must not wait for two dozen tracklists first.
+    //
+    // The flag goes up BEFORE either starts. Without it the artwork loop can finish its first pass,
+    // find nothing (because no tracklist has landed yet), see no facts sweep running, and stop —
+    // before the facts sweep has so much as begun. Awaited so a caller can tell when both are done;
+    // main() does not wait for this.
+    _factsPending = true;
+    final art = _artSweep();
+    try {
+      await _sweep();
+    } finally {
+      _factsPending = false;
+    }
+    await art;
   }
+
+  /// A facts sweep is running or about to. The artwork loop keeps looking round while this is true,
+  /// because an album it skipped for want of a tracklist may be about to get one.
+  bool _factsPending = false;
 
   void stop() {
     _stopped = true;
@@ -138,7 +160,11 @@ class FactsWarmer extends ChangeNotifier {
     // quiet. `_tried` is deliberately NOT cleared: a library that notifies mid-sweep would
     // otherwise restart the sweep forever.
     _rearm?.cancel();
-    _rearm = Timer(rearmDelay, () => unawaited(_sweep()));
+    _rearm = Timer(rearmDelay, () {
+      _factsPending = true;
+      unawaited(_artSweep());
+      unawaited(_sweep().whenComplete(() => _factsPending = false));
+    });
   }
 
   /// The albums that still need looking up, newest first.
@@ -175,20 +201,7 @@ class FactsWarmer extends ChangeNotifier {
     if (library.scanning) return; // the album list is about to be replaced anyway
 
     final todo = _todo();
-    // No facts to fetch is NOT a reason to stop: the artwork pass below is for albums whose facts
-    // are already settled, which after the first sweep is nearly all of them. Returning here is
-    // exactly why the first version added one entry to the artwork cache and then went quiet.
-    if (todo.isEmpty) {
-      _running = true;
-      notifyListeners();
-      try {
-        await _warmMissingArt();
-      } finally {
-        _running = false;
-        notifyListeners();
-      }
-      return;
-    }
+    if (todo.isEmpty) return;
 
     _running = true;
     _done = 0;
@@ -247,14 +260,6 @@ class FactsWarmer extends ChangeNotifier {
         }
         held.clear();
         library.facts.put(fresh, folder: library.sidecarFolderFor(album));
-        // This record's scans NOW, before moving on to the next album's facts.
-        //
-        // Measured with the progress line in the corner: the facts loop had 26 albums to work
-        // through at roughly half a minute each. An artwork pass that waits for that loop to finish
-        // does not land for ten minutes — and the album whose scans you actually want is the one
-        // that just downloaded, which is first in this loop. So it gets them here, and the backlog
-        // is caught up afterwards.
-        await _warmArtFor(album, fresh);
         _done++;
         notifyListeners();
       }
@@ -262,7 +267,6 @@ class FactsWarmer extends ChangeNotifier {
       for (final h in held) {
         library.facts.put(h);
       }
-      await _warmMissingArt();
     } finally {
       _running = false;
       await library.facts.flush();
@@ -280,44 +284,81 @@ class FactsWarmer extends ChangeNotifier {
   ///
   /// Newest first for the same reason as the main sweep, and it asks [DiscogsService.hasReleaseArt]
   /// before every fetch so a warm album costs one file check and no network at all.
-  Future<void> _warmMissingArt() async {
+  /// Its own loop, deliberately not interleaved with the facts sweep.
+  ///
+  /// The version before this awaited the artwork inside the facts loop, so every album waited for
+  /// three image downloads before the next tracklist was even asked for. Measured with the progress
+  /// line in the corner: three albums in three minutes, of twenty-six. I made that loop slower to
+  /// make the artwork sooner, which is a trade nobody asked for.
+  ///
+  /// Two loops instead. They share the same per-second lanes into MusicBrainz and Discogs, so they
+  /// cannot stampede, and neither waits for the other. Newest first, so the record that just
+  /// downloaded gets its scans without standing behind two dozen tracklists.
+  Future<void> _artSweep() async {
+    if (_artRunning || _stopped || !enabled || library.isRemote) return;
+    if (!settings.warmFacts) return;
+    _artRunning = true;
+    try {
+      // Keep going while the facts sweep is still producing albums to work on: an album skipped
+      // because its tracklist had not landed yet must get another turn, or the two loops racing
+      // would cost exactly the coverage this exists for.
+      for (var round = 0; round < 200; round++) {
+        if (_stopped || !settings.warmFacts) break;
+        if (await _warmMissingArt() > 0) continue;
+        if (!_factsPending) break; // nothing left, and no tracklists on the way either
+        await Future.delayed(rearmDelay);
+      }
+    } finally {
+      _artRunning = false;
+      notifyListeners();
+    }
+  }
+
+  bool _artRunning = false;
+
+  /// One pass over the library. Returns how many records had their scans fetched.
+  Future<int> _warmMissingArt() async {
+    var did = 0;
     for (final album in _byNewest()) {
       if (_stopped || !settings.warmFacts || library.scanning) break;
       final uid = library.uidOf(album);
       if (uid.isEmpty || _artTried.contains(uid)) continue;
       final facts = library.facts.get(uid);
-      if (facts == null) continue;
-      if (!await _warmArtFor(album, facts)) break;
+      // Not resolved yet, or resolved to nothing. Deliberately NOT marked as tried: the facts sweep
+      // may still be on its way to this album, and burning its one attempt here would leave it
+      // without scans for the rest of the session.
+      if (facts == null || facts.tracklist.isEmpty) continue;
+      switch (await _warmArtFor(album, facts)) {
+        case _Art.fetched:
+          did++;
+        case _Art.already:
+          break; // one file check, no network — not progress, and not a reason to stop
+        case _Art.failed:
+          return did; // usually the network; the next fifty fail the same way
+      }
     }
+    return did;
   }
 
   /// One album's scans, with the arguments the album page will use.
-  ///
-  /// Returns false only when the fetch itself failed — the caller reads that as "the network is
-  /// gone" and stops, because the next fifty will fail the same way.
   ///
   /// The arguments have to match the page's to the letter: expectedTracks and both pins are part of
   /// the cache key, so warming under a different track count means the page still fetches and the
   /// warming was wasted. The count comes from the pressing just resolved — what the page uses once
   /// the facts are in — and falls back to the file count exactly as the page does.
-  Future<bool> _warmArtFor(Album album, AlbumFacts facts) async {
+  Future<_Art> _warmArtFor(Album album, AlbumFacts facts) async {
     final uid = library.uidOf(album);
-    if (uid.isEmpty || _artTried.contains(uid)) return true;
-    // No tracklist means no pressing, and without one the artwork is a search by name — the guess
-    // that produces the wrong sleeve. Leave those to the page, where the user can see and correct it.
-    if (facts.tracklist.isEmpty) return true;
-
     final expected = facts.tracklist.length;
     final mbid = library.pinnedMbid(album) ?? facts.mbid;
     final pinned = library.pinnedRelease(album);
     final roles = library.albumArtRoles(album.artist, album.title);
 
-    // One attempt per album per session, whatever the outcome — recorded before the check so a
-    // throw cannot cause a re-pick, and so the catch-up pass never repeats what this already did.
+    // One attempt per album per session, whatever the outcome — recorded before the attempt so a
+    // throw cannot cause a re-pick.
     _artTried.add(uid);
     if (await DiscogsService(settings).hasReleaseArt(album.artist, album.title,
         expectedTracks: expected, pinned: pinned, pinnedMbid: mbid, roles: roles)) {
-      return true; // already on disk — one file check, no network
+      return _Art.already;
     }
     try {
       await warmArt(album.artist, album.title,
@@ -328,10 +369,10 @@ class FactsWarmer extends ChangeNotifier {
           settings: settings);
       _artDone++;
       notifyListeners();
-      return true;
+      return _Art.fetched;
     } catch (e) {
       debugPrint('Warming art for ${album.title} failed: $e');
-      return false;
+      return _Art.failed;
     }
   }
 

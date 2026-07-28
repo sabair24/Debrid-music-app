@@ -189,6 +189,44 @@ void main() {
       w.dispose();
     });
 
+    test('de artwork-lus wacht op de feiten in plaats van meteen op te geven', () async {
+      // De race die dit blootlegde: de twee lussen lopen naast elkaar, dus de artwork-lus kan zijn
+      // eerste ronde doen vóór er ook maar één tracklijst binnen is. Zonder signaal ziet hij dan
+      // niets te doen, geen lopende feitenveeg, en stopt hij — voordat de feitenveeg is begonnen.
+      seedLibrary(['Traag']);
+      late FactsWarmer w;
+      w = FactsWarmer(
+        library: library,
+        settings: settings,
+        mb: MusicBrainzService(),
+        enabled: true,
+        rearmDelay: const Duration(milliseconds: 5),
+        resolve: (album, {required uid, required trackSetHash, required mb, required settings,
+            pinnedMbid, pinned, discogs}) async {
+          // Traag, zodat de artwork-lus zeker een ronde doet met een lege feitenkast.
+          await Future.delayed(const Duration(milliseconds: 120));
+          asked.add(uid);
+          return AlbumFacts(
+            uid: uid,
+            trackSetHash: trackSetHash,
+            source: 'MusicBrainz',
+            tracklist: const [ChoiceTrack('1', 'Mysterons', 306)],
+          );
+        },
+        warmArt: (artist, album,
+            {required expectedTracks, pinned, pinnedMbid, required roles, required settings}) async {
+          warmedArt.add('$artist|$album|$expectedTracks');
+        },
+      );
+
+      await w.start();
+
+      expect(asked, hasLength(1));
+      expect(warmedArt, hasLength(1),
+          reason: 'de scans komen alsnog, ook al was de feitenkast bij de eerste ronde leeg');
+      w.dispose();
+    });
+
     test('een album waarvan de feiten AL klaar zijn krijgt alsnog zijn scans', () async {
       // Het gat dat de meting zichtbaar maakte. De eerste versie warmde de scans binnen de
       // feitenlus, en die lus bezoekt alleen albums die nog feiten nodig hebben. Na de eerste veeg
