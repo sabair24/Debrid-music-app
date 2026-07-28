@@ -259,7 +259,10 @@ class DiscogsService {
       // Below a fifth of the budget, ease off hard: something else (a background sweep) is
       // eating it, and a 429 costs more than waiting.
       final gap = _remaining < 12 ? _minGap * 3 : _minGap;
-      if (since < gap) await Future<void>.delayed(gap - since);
+      // Never longer than the gap itself — see the note on MusicBrainzService.laneSlot. A clock that
+      // steps backwards makes `since` negative, and `gap - since` then swallows the whole jump.
+      final wacht = since.isNegative || since > gap ? Duration.zero : gap - since;
+      if (wacht > Duration.zero) await Future<void>.delayed(wacht);
       _lastCall = DateTime.now();
     });
     // The chain must survive a failed turn, or one thrown error deadlocks the lane for the session.

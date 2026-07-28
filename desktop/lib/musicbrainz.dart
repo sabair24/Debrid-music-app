@@ -411,7 +411,16 @@ class MusicBrainzService {
     final slot = (_turn[lane] ?? Future.value()).then((_) async {
       final last = _lastCall[lane] ?? DateTime.fromMillisecondsSinceEpoch(0);
       final since = DateTime.now().difference(last);
-      if (since < gap) await Future<void>.delayed(gap - since);
+      // Never longer than the gap itself, whatever the arithmetic says.
+      //
+      // `gap - since` is only "the rest of the gap" while `since` is positive. Let the clock step
+      // backwards — a time sync, a suspend, a timezone shift — and `since` goes negative, so
+      // `gap - since` becomes the gap PLUS the whole jump. An hour's correction turns a 1.1 second
+      // spacing into an hour of silence, and because the lane is one chain, every request behind it
+      // waits too: no socket, no log line, nothing to see. Which is exactly what one record in the
+      // facts sweep did, twice, for three-quarters of an hour.
+      final wacht = since.isNegative || since > gap ? Duration.zero : gap - since;
+      if (wacht > Duration.zero) await Future<void>.delayed(wacht);
       _lastCall[lane] = DateTime.now();
     });
     // The chain must survive a failed turn, or one thrown error deadlocks the lane for the session.
@@ -452,7 +461,17 @@ class MusicBrainzService {
     try {
       final queuedAt = DateTime.now();
       _queued++;
+      // A slot that never arrives has to say so ITSELF. The line below only prints once the wait is
+      // over, so a lane that hangs forever prints nothing at all — and "hung lane", "long queue" and
+      // "no request made" then look identical from the outside. That ambiguity cost an evening.
+      var binnen = false;
+      unawaited(Future<void>.delayed(const Duration(seconds: 5)).then((_) {
+        if (binnen) return;
+        laneTrace?.call('  [$lane] WACHT AL 5s op een slot voor ${Uri.parse(url).path} '
+            '(nog $_queued in de rij)');
+      }));
       await laneSlot(lane, gap);
+      binnen = true;
       _queued--;
       final wachtte = DateTime.now().difference(queuedAt);
       // Only when it actually cost something. A lane that hands out slots promptly says nothing, and
