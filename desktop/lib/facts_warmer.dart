@@ -117,7 +117,7 @@ Future<void> fetchReleaseArt(
             // seconds, and the Discogs chain after them had not returned in eighty-seven. Seventy-nine
             // records at ninety seconds each is not a background task, it is a week.
             freeOnly: true)
-        .then((_) {});
+        .then((_) => trace?.call('  [kunst] releaseArt() teruggekeerd'));
 
 class FactsWarmer extends ChangeNotifier {
   FactsWarmer({

@@ -1016,8 +1016,10 @@ extension DiscogsArtwork on DiscogsService {
           'voor=${art.front != null} achter=${art.back != null} cd=${art.disc != null}');
       if (!art.isEmpty) {
         await _writeArt(dir, art, done: enough(art));
+        step('weggeschreven (done=${enough(art)}) — keten klaar');
         return art;
       }
+      step('niets gevonden — keten klaar');
       return null;
     }
 
