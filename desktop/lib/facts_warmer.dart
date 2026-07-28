@@ -55,7 +55,11 @@ enum _Art { fetched, already, failed, tooSlow }
 ///
 /// The abandoned fetch keeps running — a Dart timeout does not cancel work — so it may still finish
 /// and fill the cache. This only stops the queue from waiting on it.
-const _artDeadline = Duration(seconds: 90);
+/// Twenty seconds. Traced from inside the chain, the free sources finish in under six: the archive
+/// answers in two and a half and TheAudioDB in a fifth of a second. Ninety was set when the chain
+/// still ran on to Discogs; it no longer does when warming, so ninety is only how long the queue sits
+/// still when something goes wrong.
+const _artDeadline = Duration(seconds: 20);
 
 /// Abandonments in one round before the round gives up. One slow record is normal; six in a row means
 /// something is systematically slow and hammering on is how you pile up runaway fetches.

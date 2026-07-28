@@ -894,8 +894,12 @@ extension DiscogsArtwork on DiscogsService {
     }
     final work =
         _releaseArtFresh(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly)
-            .whenComplete(() => _artInFlight.remove(key));
+            .whenComplete(() {
+      _artInFlight.remove(key);
+      trace?.call('  [kunst] whenComplete — uit de in-flight tabel');
+    });
     _artInFlight[key] = work;
+    trace?.call('  [kunst] work aangemaakt en teruggegeven aan de aanroeper');
     return work;
   }
 
