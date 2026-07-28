@@ -42,15 +42,20 @@ enum _Art { fetched, already, failed, tooSlow }
 
 /// How long one record may spend on its scans before the queue moves on without it.
 ///
-/// Read straight off warm.log on the real library: "Het Beste Van Petra" (eighteen tracks, no
-/// MusicBrainz id) started at 08:43:50 and after three minutes had still not returned — holding up
-/// the seventy-eight records behind it, ANTI among them, which has an id and takes the short path.
-/// Without an id the chain is TheAudioDB, then a Cover Art Archive search across every pressing, then
-/// the whole Discogs search; that is genuinely minutes, and it is nobody else's turn meanwhile.
+/// The point is that one expensive record must not hold up the rest: read off warm.log, "Het Beste
+/// Van Petra" (eighteen tracks, no MusicBrainz id) ran for over three minutes with seventy-eight
+/// records waiting behind it.
+///
+/// Ninety seconds, not twenty-five, and that number came from measuring too. At twenty-five EVERY
+/// album timed out — including ones with an id taking the short path — while the cache still grew by
+/// three in three minutes, because the abandoned fetches finished in the background afterwards. So
+/// the real cost of one record is around a minute, most of it image bytes: three scans at 1200px.
+/// Cutting that off at twenty-five seconds abandoned work that was nearly done and then paid for it
+/// again on the next round.
 ///
 /// The abandoned fetch keeps running — a Dart timeout does not cancel work — so it may still finish
 /// and fill the cache. This only stops the queue from waiting on it.
-const _artDeadline = Duration(seconds: 25);
+const _artDeadline = Duration(seconds: 90);
 
 /// Abandonments in one round before the round gives up. One slow record is normal; six in a row means
 /// something is systematically slow and hammering on is how you pile up runaway fetches.
@@ -449,22 +454,26 @@ class FactsWarmer extends ChangeNotifier {
     return did;
   }
 
-  /// Records to warm the scans for: the ones with a known pressing first, then the rest.
+  /// Records to warm the scans for: the ones with a MusicBrainz id first, then the rest.
   ///
-  /// Cost, not just recency. A record with a MusicBrainz id goes straight to that pressing in the
-  /// Cover Art Archive — one request. Without one the chain is TheAudioDB, then an archive search
-  /// across every pressing of the record, then the whole Discogs search, and on the real library that
-  /// took over three minutes for a single album while seventy-eight waited behind it. Newest still
-  /// wins within each group, so a record that just downloaded is still first among its equals.
+  /// Cost, not just recency. An id goes straight to that pressing in the Cover Art Archive — one
+  /// request, then the images. Without one the chain is TheAudioDB, then an archive search across
+  /// every pressing of the record, then the whole Discogs search.
+  ///
+  /// A DISCOGS pin deliberately does not count as cheap, and the first version of this had that
+  /// wrong. It read "has some kind of pin" as "will be quick", so "Het Beste Van Petra" — no mbid,
+  /// but a pinned Discogs release — sorted to the very front and was the one record that blocked
+  /// everything. A Discogs pin means the metered path: sixty requests a minute, tripled spacing once
+  /// the budget runs low. It belongs at the back.
+  ///
+  /// Newest still wins within each group, so a record that just downloaded is first among its equals.
   List<Album> _artOrder() {
-    final withId = <Album>[], without = <Album>[];
+    final withMbid = <Album>[], rest = <Album>[];
     for (final a in _byNewest()) {
-      final f = library.facts.get(library.uidOf(a));
-      final hasId = (library.pinnedMbid(a) ?? f?.mbid ?? '').isNotEmpty ||
-          (library.pinnedRelease(a) ?? 0) > 0;
-      (hasId ? withId : without).add(a);
+      final mbid = library.pinnedMbid(a) ?? library.facts.get(library.uidOf(a))?.mbid ?? '';
+      (mbid.isNotEmpty ? withMbid : rest).add(a);
     }
-    return [...withId, ...without];
+    return [...withMbid, ...rest];
   }
 
   /// One album's scans, with the arguments the album page will use.
@@ -503,7 +512,7 @@ class FactsWarmer extends ChangeNotifier {
             .timeout(_artDeadline);
       } on TimeoutException {
         _log.line('scans: "${album.title}" duurde langer dan ${_artDeadline.inSeconds}s — '
-            'verder met de rest');
+            'verder met de rest (hij loopt op de achtergrond door)');
         return _Art.tooSlow;
       }
       _artDone++;
