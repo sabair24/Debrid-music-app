@@ -7,6 +7,7 @@
 /// it is what most of this file tests.
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -280,6 +281,48 @@ void main() {
       expect(warmedArt.map((s) => s.split('|')[1]), contains('Binnengekomen'),
           reason: 'de plaat die tijdens de ronde binnenkwam hoort zijn scans nog te krijgen, '
               'zonder dat er iets anders in de bibliotheek verandert');
+      w.dispose();
+    });
+
+    test('een plaat die blijft hangen houdt de rest van de rij niet tegen', () async {
+      // Op de echte bibliotheek: "Vlaamse Diva's" stond drie kwartier op 4/29 -- geen cachebestand
+      // geschreven, geen socket open naar musicbrainz.org, niets te zien. De scanronde heeft sinds
+      // dag één een tijdslimiet en loopt daarom wél door; deze had er geen.
+      seedLibrary(['Eerste', 'Blijft hangen', 'Derde'],
+          added: {'Eerste': 3000, 'Blijft hangen': 2000, 'Derde': 1000});
+
+      final w = FactsWarmer(
+        library: library,
+        settings: settings,
+        mb: MusicBrainzService(),
+        enabled: true,
+        rearmDelay: const Duration(seconds: 30),
+        factsDeadline: const Duration(milliseconds: 150),
+        resolve: (album, {required uid, required trackSetHash, required mb, required settings,
+            pinnedMbid, pinned, discogs}) async {
+          asked.add(uid);
+          if (album.title == 'Blijft hangen') {
+            await Completer<void>().future; // komt nooit terug, precies zoals in het echt
+          }
+          return AlbumFacts(
+            uid: uid,
+            trackSetHash: trackSetHash,
+            source: 'MusicBrainz',
+            tracklist: const [ChoiceTrack('1', 'Mysterons', 306)],
+          );
+        },
+        warmArt: (artist, album,
+            {required expectedTracks, pinned, pinnedMbid, required roles, required settings, freeOnly = true, trace}) async {},
+      );
+
+      await w.start();
+
+      final titels = [
+        for (final uid in asked)
+          library.albums.firstWhere((a) => library.uidOf(a) == uid).title,
+      ];
+      expect(titels, contains('Derde'),
+          reason: 'de plaat achter de vastgelopene hoort gewoon aan de beurt te komen');
       w.dispose();
     });
 

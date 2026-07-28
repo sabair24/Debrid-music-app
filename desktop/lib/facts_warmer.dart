@@ -136,6 +136,7 @@ class FactsWarmer extends ChangeNotifier {
     this.rearmDelay = const Duration(seconds: 10),
     this.outageBackoff = const Duration(minutes: 15),
     this.scanWait = const Duration(minutes: 3),
+    this.factsDeadline = const Duration(seconds: 90),
   });
 
   final LibraryStore library;
@@ -176,6 +177,14 @@ class FactsWarmer extends ChangeNotifier {
   /// test's stub has no chain to trace.
   void Function(String)? artTrace;
 
+  /// How long one record may spend on its tracklist before the queue moves on without it.
+  ///
+  /// Ninety seconds, and that is generous on purpose: a record MusicBrainz has never heard of falls
+  /// through to Discogs, which really is about thirty-six requests a second apart. What it is not
+  /// generous about is forever. Note that a Dart timeout does not cancel the work — the abandoned
+  /// lookup may still finish and fill the caches; this only stops the queue from waiting on it.
+  final Duration factsDeadline;
+
   /// How long the artwork round is willing to sit out a disk scan before giving up on this round.
   ///
   /// Three minutes because that is comfortably longer than a scan of this library takes and far
@@ -210,6 +219,7 @@ class FactsWarmer extends ChangeNotifier {
     // The rate-limit lane gets somewhere to write. Without it warm.log stops at "naar Discogs" and
     // the ten minutes after that are unaccounted for.
     DiscogsService.laneTrace = _log.line;
+    MusicBrainzService.laneTrace = _log.line;
     library.addListener(_onLibraryChanged);
     // Artwork FIRST, and on its own. Side by side was the mistake, and warm.log said so: both loops
     // started, and two minutes later the artwork round had not finished its FIRST album. Two loops
@@ -359,7 +369,18 @@ class FactsWarmer extends ChangeNotifier {
             settings: settings,
             pinnedMbid: library.pinnedMbid(album),
             pinned: library.pinnedRelease(album),
-          );
+          ).timeout(factsDeadline);
+        } on TimeoutException {
+          // The queue moves on. It does not retry: this record is already in [_tried], so it gets
+          // its turn again next session rather than blocking this one twice.
+          //
+          // The artwork round has had a deadline since the day it was written, and that is exactly
+          // why it finishes. This one had none, and on the real library "Vlaamse Diva's" held the
+          // remaining twenty-eight records for three-quarters of an hour — no cache file written, no
+          // socket open, nothing to see. One slow record is a nuisance; one stuck record without a
+          // deadline is the whole sweep.
+          _log.line('feiten: "${album.title}" te traag — overgeslagen, de rij gaat door');
+          continue;
         } catch (e) {
           _log.line('feiten: "${album.title}" gooide $e — veeg gestopt');
           break;

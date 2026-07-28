@@ -426,6 +426,18 @@ class MusicBrainzService {
     _turn.clear();
   }
 
+  /// Somewhere to write what this lane is doing. Set once by the warmer.
+  ///
+  /// The Discogs lane got one first, and it settled the question there in a single line. This side
+  /// stayed blind, and it cost an evening: "Vlaamse Diva's" sat in the facts sweep for
+  /// three-quarters of an hour without one cache file being written and without one socket open to
+  /// musicbrainz.org — which could mean a long queue, a stuck chain, or no request at all, and from
+  /// the outside those three look identical.
+  static void Function(String)? laneTrace;
+
+  /// How many requests are waiting for a slot right now, across all lanes.
+  static int _queued = 0;
+
   /// Spaced out per host, disk-cached. Null on any failure: a missing album page is a
   /// disappointment, a crashed one is a bug.
   Future<Map<String, dynamic>?> _get(String url, {required String lane, required Duration gap}) async {
@@ -438,7 +450,17 @@ class MusicBrainzService {
     }
 
     try {
+      final queuedAt = DateTime.now();
+      _queued++;
       await laneSlot(lane, gap);
+      _queued--;
+      final wachtte = DateTime.now().difference(queuedAt);
+      // Only when it actually cost something. A lane that hands out slots promptly says nothing, and
+      // this file must not become the thing that fills warm.log.
+      if (wachtte.inMilliseconds > 1500) {
+        laneTrace?.call('  [$lane] ${wachtte.inSeconds}s in de rij '
+            '(nog $_queued wachtend) voor ${Uri.parse(url).path}');
+      }
       final r = await http
           .get(Uri.parse(url), headers: {'User-Agent': _ua, 'Accept': 'application/json'})
           .timeout(const Duration(seconds: 12));
