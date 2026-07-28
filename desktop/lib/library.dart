@@ -9,6 +9,7 @@ import 'album_id.dart';
 import 'completeness.dart';
 import 'editions.dart';
 import 'enrichment.dart';
+import 'fingerprint.dart';
 import 'flac_tags.dart';
 import 'lan/client.dart';
 import 'lan/dtos.dart';
@@ -2215,11 +2216,31 @@ extension LibraryNormalise on LibraryStore {
   ///
   /// Reads the files to decide which copy wins — a handful of pairs per album, so cheap enough to
   /// ask for on opening a page, and the answer is what the user needs before they can act on it.
-  List<SameRecordingPair> duplicateRecordings(Album album) => sameRecordingPairs(
+  List<SameRecordingPair> duplicateRecordings(Album album, {Map<String, List<int>> prints = const {}}) =>
+      sameRecordingPairs(
         recordTracks(album),
         better: (a, b) => firstIsBetter(File(a.path), File(b.path)),
         why: (keep, drop) => whyBetter(File(keep.path), File(drop.path)),
+        prints: prints,
       );
+
+  /// The same, after actually LISTENING to the record's files.
+  ///
+  /// Two hundred milliseconds per track the first time and nothing ever after, so a dozen-track
+  /// album costs a couple of seconds once. Worth it: on the real library the titles alone missed
+  /// "Workin' Day and Night" against "Working Day And Night" — one recording, twice, in one folder —
+  /// and would have offered Adele's duet for deletion. Falls straight back to the title rule when
+  /// fpcalc is not installed.
+  Future<List<SameRecordingPair>> duplicateRecordingsHeard(Album album) async {
+    final fp = Fingerprinter();
+    if (!fp.available) return duplicateRecordings(album);
+    final prints = <String, List<int>>{};
+    for (final t in recordTracks(album)) {
+      final f = await fp.of(t.path);
+      if (f != null && f.raw.isNotEmpty) prints[t.path] = f.raw;
+    }
+    return duplicateRecordings(album, prints: prints);
+  }
 
   /// Move the lesser copy of each pair into the parking folder beside the album.
   ///

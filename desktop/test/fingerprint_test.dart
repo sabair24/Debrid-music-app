@@ -42,22 +42,22 @@ void main() {
       final s = similarity(reeks(400, zaad: 1), reeks(400, zaad: 99));
       expect(s, greaterThan(0.4));
       expect(s, lessThan(0.62));
-      expect(s, lessThan(maybeSameRecording));
+      expect(s, lessThan(maybeSameRecordingScore));
     });
 
     test('de twijfelband ligt tussen de duetversie en de echte dubbels', () {
       // Gemeten op de bibliotheek: Adele's "Easy On Me" tegen "Easy On Me (With Chris Stapleton)"
       // scoort 0,929 -- een ANDERE opname op dezelfde begeleiding. De echte dubbels begonnen pas bij
       // 0,951. Eén drempel zou die duetversie dus ter verwijdering hebben aangeboden.
-      expect(maybeSameRecording, lessThan(0.929));
-      expect(sameRecording, greaterThan(0.929));
-      expect(sameRecording, lessThan(0.951), reason: 'de laagste echte dubbel moet er nog onder');
+      expect(maybeSameRecordingScore, lessThan(0.929));
+      expect(sameRecordingScore, greaterThan(0.929));
+      expect(sameRecordingScore, lessThan(0.951), reason: 'de laagste echte dubbel moet er nog onder');
     });
 
     test('dezelfde opname, andere codering, blijft boven de drempel', () {
       final a = reeks(400);
       final s = similarity(a, metRuis(a, 1));
-      expect(s, greaterThan(sameRecording),
+      expect(s, greaterThan(sameRecordingScore),
           reason: 'een ander formaat van hetzelfde nummer hoort herkend te worden');
       expect(s, lessThan(1.0));
     });
@@ -67,7 +67,7 @@ void main() {
       // identieke audio dan als ruis, en precies dat maakte deze hele vergelijking waardeloos.
       final a = reeks(400);
       final verschoven = a.sublist(12); // twaalf frames later begonnen
-      expect(similarity(a, verschoven), greaterThan(sameRecording));
+      expect(similarity(a, verschoven), greaterThan(sameRecordingScore));
       expect(similarity(a, verschoven, maxOffset: 0), lessThan(0.62),
           reason: 'zonder uitlijnen is hetzelfde nummer niet van ruis te onderscheiden');
     });

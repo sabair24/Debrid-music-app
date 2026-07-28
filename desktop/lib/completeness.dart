@@ -1,4 +1,5 @@
 import 'editions.dart';
+import 'fingerprint.dart';
 import 'models.dart';
 import 'organize.dart';
 
@@ -217,7 +218,7 @@ bool sameTitle(String a, String b, {int? secondsA, int? secondsB}) {
 
 /// Two files of one record that hold the same recording.
 ///
-/// Named apart from `sameRecording` in organize.dart on purpose: that one asks whether a peer's
+/// Named apart from `sameRecordingScore` in organize.dart on purpose: that one asks whether a peer's
 /// offering is the track you clicked, this one asks whether two files you already own are the same
 /// song. Same question, opposite side of the download.
 class SameRecordingPair {
@@ -243,10 +244,23 @@ class SameRecordingPair {
 ///
 /// [better] decides which copy wins; it reads the files, so it is passed in and the pure part of
 /// this stays testable without a disk.
+/// [prints] is what the AUDIO says, by file path, and when it has an opinion it is the last word.
+///
+/// The titles were all this ever had, and titles are the thing that is wrong. Michael Jackson's
+/// *Off The Wall* holds one recording twice in one folder, filed as "Workin' Day and Night" and
+/// "Working Day And Night": three of four words shared, so [sameTitle] says no and the album kept
+/// two copies of one song — which is exactly the kind of clash that splits a record into two tiles.
+/// The fingerprints score that pair 1.000.
+///
+/// It overrules in both directions, and the second one matters more. Adele's *30* has "Easy On Me"
+/// and "Easy On Me (With Chris Stapleton)" — near-identical titles, near-identical length — and the
+/// audio says 0.929: the same backing, a different performance. Without a listen, that duet was a
+/// deletion waiting to be offered.
 List<SameRecordingPair> sameRecordingPairs(
   List<Track> tracks, {
   required bool Function(Track a, Track b) better,
   String Function(Track keep, Track drop)? why,
+  Map<String, List<int>> prints = const {},
 }) {
   final out = <SameRecordingPair>[];
   final spoken = <String>{};
@@ -254,13 +268,22 @@ List<SameRecordingPair> sameRecordingPairs(
     final a = tracks[i];
     if (spoken.contains(a.path)) continue;
     final sa = a.duration?.inSeconds ?? 0;
-    if (sa <= 0) continue; // no length, no evidence — a title alone is not enough to drop a file
+    final fa = prints[a.path];
+    // No length and no fingerprint means no evidence — a title alone is not enough to drop a file.
+    if (sa <= 0 && fa == null) continue;
     for (var j = i + 1; j < tracks.length; j++) {
       final b = tracks[j];
       if (spoken.contains(b.path)) continue;
       final sb = b.duration?.inSeconds ?? 0;
-      if (sb <= 0) continue;
-      if (!sameTitle(a.title, b.title, secondsA: sa, secondsB: sb)) continue;
+      final fb = prints[b.path];
+      if (sb <= 0 && fb == null) continue;
+      if (fa != null && fb != null) {
+        // Both were heard. Whatever the tags claim, this decides.
+        if (similarity(fa, fb) < sameRecordingScore) continue;
+      } else {
+        if (sa <= 0 || sb <= 0) continue;
+        if (!sameTitle(a.title, b.title, secondsA: sa, secondsB: sb)) continue;
+      }
       final aWins = better(a, b);
       final keep = aWins ? a : b, drop = aWins ? b : a;
       out.add(SameRecordingPair(keep, drop, why?.call(keep, drop) ?? ''));

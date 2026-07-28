@@ -95,15 +95,15 @@ double similarity(List<int> a, List<int> b, {int maxOffset = 30}) {
 /// at 0.929. That is a DIFFERENT recording over largely the same backing, and calling it a duplicate
 /// would have offered a real track for deletion. Hence 0.95: it separates that case from every true
 /// duplicate found, with room on both sides.
-const double sameRecording = 0.95;
+const double sameRecordingScore = 0.95;
 
 /// Possibly the same recording — worth showing, not worth acting on.
 ///
-/// The band between this and [sameRecording] is where a duet, an alternate take or a radio edit of
+/// The band between this and [sameRecordingScore] is where a duet, an alternate take or a radio edit of
 /// the same backing lands. Nothing here is ever deleted on its own, so the honest thing is to show
 /// the pair and say it is a doubt, rather than pick a single number and be confidently wrong about
 /// Adele.
-const double maybeSameRecording = 0.90;
+const double maybeSameRecordingScore = 0.90;
 
 int _popcount(int v) {
   var x = v & 0xFFFFFFFF;

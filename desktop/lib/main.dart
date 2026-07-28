@@ -11926,7 +11926,14 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
   @override
   void initState() {
     super.initState();
-    _dupes = context.read<LibraryStore>().duplicateRecordings(widget.album);
+    // The title rule first, so the dialog has an answer immediately, and then the audio — which
+    // takes a second or two the first time and can both ADD a pair the titles missed and take one
+    // away that the titles got wrong.
+    final lib = context.read<LibraryStore>();
+    _dupes = lib.duplicateRecordings(widget.album);
+    lib.duplicateRecordingsHeard(widget.album).then((gehoord) {
+      if (mounted) setState(() => _dupes = gehoord);
+    });
   }
 
   Future<void> _parkDupes() async {
