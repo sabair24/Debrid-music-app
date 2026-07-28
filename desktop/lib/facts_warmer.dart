@@ -320,7 +320,7 @@ class FactsWarmer extends ChangeNotifier {
     _running = true;
     _done = 0;
     _total = todo.length;
-    notifyListeners();
+    _notify();
 
     // Empty answers are HELD, not stored — see the note at the top of this file.
     final held = <AlbumFacts>[];
@@ -364,7 +364,7 @@ class FactsWarmer extends ChangeNotifier {
             // Counted as handled. It used to leave the counter where it was, so eleven unknown
             // records in a row read as "frozen at 15 of 26" while the sweep was in fact working.
             _done++;
-            notifyListeners();
+            _notify();
             continue;
           }
           _log.line('feiten: "${album.title}" opzoeking BRAK (${blanks + 1}/$_outageAfter)');
@@ -389,7 +389,7 @@ class FactsWarmer extends ChangeNotifier {
         held.clear();
         library.facts.put(fresh, folder: library.sidecarFolderFor(album));
         _done++;
-        notifyListeners();
+        _notify();
       }
       // Anything still held at a clean finish was a genuine miss among successes.
       for (final h in held) {
@@ -398,8 +398,22 @@ class FactsWarmer extends ChangeNotifier {
     } finally {
       _running = false;
       await library.facts.flush();
-      notifyListeners();
+      _notify();
       _log.line('feiten: veeg klaar, $_done van $_total behandeld');
+    }
+
+    // A tracklist that just landed is a record whose scans can now be fetched, and until this line
+    // existed nothing went back for them. start() calls the artwork sweep once more after its facts
+    // sweep, which covers the launch — but a record that arrives later, from Soulseek, only got a
+    // rearm that woke the FACTS sweep. Its scans then waited for the next unrelated library change.
+    // That is the "as soon as a track comes in it should be instant" case, and this is the return
+    // trip that makes it true.
+    // Awaited, not fired and forgotten. Unawaited, this returns to [start] with `_artRunning` already
+    // true, so start's own follow-up sweep hits the re-entrancy guard and returns at once — and start
+    // then reports itself finished while the scans it is supposed to have warmed are still running.
+    if (_done > 0 && !_stopped) {
+      _log.line('feiten: $_done nieuw — scans erachteraan');
+      await _artSweep();
     }
   }
 
@@ -436,32 +450,50 @@ class FactsWarmer extends ChangeNotifier {
     _log.line('scans: veeg start');
     _artRunning = true;
     try {
-      // Keep going while the facts sweep is still producing albums to work on: an album skipped
-      // because its tracklist had not landed yet must get another turn, or the two loops racing
-      // would cost exactly the coverage this exists for.
-      // One pass, then return. It used to keep looping every ten seconds for as long as the facts
-      // sweep was running, and measured on the real library that was two things at once: a log line
-      // every ten seconds saying "115 skipped, 0 fetched", and — far worse — the Discogs backfill
-      // never starting at all, because it waits for this to return and this waited for the facts
-      // sweep. Records that get their tracklist later are covered by the second call in [start],
-      // which is what that call is for.
+      // Rounds until one finds nothing new, then return. NOT a timer that keeps waking while the
+      // facts sweep runs: that version wrote a line every ten seconds saying "115 skipped, 0
+      // fetched" and never returned to its caller. A record whose tracklist lands later is picked up
+      // by the sweep the facts round now kicks off when it finishes, not by polling for it.
       await _warmMissingArt();
       _log.line('scans: veeg klaar, $_artDone opgehaald deze sessie');
     } finally {
       _artRunning = false;
-      notifyListeners();
+      _notify();
     }
   }
 
   bool _artRunning = false;
 
-  /// One pass over the library. Returns how many records had their scans fetched.
+  /// Passes over the library until one adds nothing. Returns how many records had their scans
+  /// fetched.
+  ///
+  /// More than one pass because [_artOrder] is a snapshot: a record that finishes downloading while
+  /// the round is halfway through the library is simply not in the list being walked, and a single
+  /// pass would leave it until the next library change woke the warmer again. Each pass only visits
+  /// what is not in [_artTried], and that set only grows, so this cannot run away — a second pass
+  /// with nothing new to do costs one list rebuild and no network at all, and stops.
+  ///
+  /// A pass that broke off early does NOT get another turn. Both reasons it breaks off — the network
+  /// failing, or five records in a row abandoned — are exactly the cases where going round again
+  /// means fifty more of the same. Those come back on the next rearm instead.
   Future<int> _warmMissingArt() async {
+    var total = 0;
+    while (true) {
+      final before = _artTried.length;
+      final pass = await _warmArtPass();
+      total += pass.did;
+      if (_stopped || pass.brokeOff || _artTried.length == before) return total;
+      _log.line('scans: ${_artTried.length - before} nieuw behandeld — nog een ronde');
+    }
+  }
+
+  /// One pass over the library as it is right now.
+  Future<({int did, bool brokeOff})> _warmArtPass() async {
     var did = 0, geenFeiten = 0, alWarm = 0, overgeslagen = 0, teTraag = 0;
     for (final album in _artOrder()) {
       if (_stopped || !settings.warmFacts || library.scanning) {
         _log.line('scans: ronde afgebroken (gestopt=$_stopped aan=${settings.warmFacts} scan=${library.scanning})');
-        break;
+        return (did: did, brokeOff: true);
       }
       final uid = library.uidOf(album);
       if (uid.isEmpty || _artTried.contains(uid)) {
@@ -485,17 +517,18 @@ class FactsWarmer extends ChangeNotifier {
           // Not progress and not a failure: the queue simply stopped waiting for this one.
           if (++teTraag >= _tooSlowLimit) {
             _log.line('scans: $teTraag keer te traag — ronde gestopt, later opnieuw');
-            return did;
+            return (did: did, brokeOff: true);
           }
         case _Art.failed:
           _log.line('scans: "${album.title}" MISLUKT — ronde gestopt '
               '(opgehaald=$did alwarm=$alWarm geenfeiten=$geenFeiten)');
-          return did; // usually the network; the next fifty fail the same way
+          // Usually the network; the next fifty fail the same way.
+          return (did: did, brokeOff: true);
       }
     }
     _log.line('scans: ronde klaar — opgehaald=$did alwarm=$alWarm geenfeiten=$geenFeiten '
         'overgeslagen=$overgeslagen tetraag=$teTraag feitenLoopt=$_factsPending');
-    return did;
+    return (did: did, brokeOff: false);
   }
 
 
@@ -563,7 +596,7 @@ class FactsWarmer extends ChangeNotifier {
         return _Art.tooSlow;
       }
       _artDone++;
-      notifyListeners();
+      _notify();
       _log.line('scans: "${album.title}" klaar in ${DateTime.now().difference(t0).inSeconds}s');
       return _Art.fetched;
     } catch (e) {
@@ -610,9 +643,25 @@ class FactsWarmer extends ChangeNotifier {
 
   late Duration _nextBackoff = outageBackoff;
 
+  /// True from [dispose] onwards, so a sweep still in flight cannot notify a dead notifier.
+  ///
+  /// [stop] sets `_stopped`, but every one of those checks sits at the TOP of a loop or a method: a
+  /// round already inside an await finishes what it was doing and reaches its `finally`, and a
+  /// ChangeNotifier throws if that `finally` notifies after disposal. Quitting the app while the
+  /// warmer is mid-record is exactly that, and so is a test that ends its sweep and tears the object
+  /// down in the same turn.
+  bool _disposed = false;
+
+  /// [notifyListeners], minus the throw when there is no longer anything to notify.
+  void _notify() {
+    if (_disposed) return;
+    notifyListeners();
+  }
+
   @override
   void dispose() {
     stop();
+    _disposed = true;
     library.removeListener(_onLibraryChanged);
     super.dispose();
   }

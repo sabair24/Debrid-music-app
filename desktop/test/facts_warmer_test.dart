@@ -234,6 +234,55 @@ void main() {
       w.dispose();
     });
 
+    test('een plaat die MIDDEN in de ronde binnenkomt krijgt zijn scans in dezelfde ronde', () async {
+      // "Van zodra dat een track binnen is van Soulseek moet dat instant gebeuren." De lijst waar de
+      // artwork-ronde overheen loopt is een momentopname: een album dat binnenkomt terwijl die ronde
+      // halverwege is, stáát er niet in. Eén ronde liet hem daardoor liggen tot een volgende
+      // bibliotheekwijziging de warmer toevallig weer wakker maakte.
+      seedLibrary(['Eerste']);
+      var toegevoegd = false;
+      late FactsWarmer w;
+      w = FactsWarmer(
+        library: library,
+        settings: settings,
+        mb: MusicBrainzService(),
+        enabled: true,
+        rearmDelay: const Duration(milliseconds: 5),
+        resolve: (album, {required uid, required trackSetHash, required mb, required settings,
+            pinnedMbid, pinned, discogs}) async {
+          asked.add(uid);
+          return AlbumFacts(
+            uid: uid,
+            trackSetHash: trackSetHash,
+            source: 'MusicBrainz',
+            tracklist: const [ChoiceTrack('1', 'Mysterons', 306)],
+          );
+        },
+        warmArt: (artist, album,
+            {required expectedTracks, pinned, pinnedMbid, required roles, required settings, freeOnly = true, trace}) async {
+          warmedArt.add('$artist|$album|$expectedTracks');
+          // De download landt terwijl de ronde bezig is met de plaat ervoor.
+          if (!toegevoegd) {
+            toegevoegd = true;
+            library.tracks.add(track('Binnengekomen', 1));
+            library.tracks.add(track('Binnengekomen', 2));
+            library.rebuildAlbums();
+            library.notifyListeners(); // wat een afgeronde download ook doet
+          }
+        },
+      );
+
+      await w.start();
+      // Zo lang duurt de herwek-timer plus de veeg die eruit volgt. Niets in deze test praat met het
+      // netwerk, dus als het na een tiende seconde niet gebeurd is, gebeurt het niet meer.
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      expect(warmedArt.map((s) => s.split('|')[1]), contains('Binnengekomen'),
+          reason: 'de plaat die tijdens de ronde binnenkwam hoort zijn scans nog te krijgen, '
+              'zonder dat er iets anders in de bibliotheek verandert');
+      w.dispose();
+    });
+
     test('een album waarvan de feiten AL klaar zijn krijgt alsnog zijn scans', () async {
       // Het gat dat de meting zichtbaar maakte. De eerste versie warmde de scans binnen de
       // feitenlus, en die lus bezoekt alleen albums die nog feiten nodig hebben. Na de eerste veeg
