@@ -83,6 +83,29 @@ jobs:
           if (-not (Test-Path "$dir\debridmusic.exe")) { echo "MISSING: $dir\debridmusic.exe"; Get-ChildItem $dir; exit 1 }
           echo "OK: $dir\debridmusic.exe"
 
+      # Chromaprint's fpcalc: turns audio into the numbers that say what a recording IS, regardless
+      # of how it is tagged. 1.7 MB zipped, next to the app's own exe — the installer copies this
+      # whole folder, so nothing downstream needs to know it is here.
+      #
+      # Only on the machine that holds the music. A phone or a television has no files to fingerprint
+      # and asks the PC for facts anyway, so there is no Android or iOS binary to ship.
+      #
+      # Pinned to a version, not "latest": a build that quietly changes its fingerprint algorithm
+      # would invalidate every cached fingerprint on every user's disk without a line of code moving.
+      - name: Bundle fpcalc (Chromaprint)
+        shell: pwsh
+        run: |
+          $ver = "1.6.1"
+          $url = "https://github.com/acoustid/chromaprint/releases/download/v$ver/chromaprint-fpcalc-$ver-windows-x86_64.zip"
+          Invoke-WebRequest -Uri $url -OutFile "fpcalc.zip" -UseBasicParsing
+          Expand-Archive "fpcalc.zip" -DestinationPath "fpcalc_tmp" -Force
+          $exe = (Get-ChildItem "fpcalc_tmp" -Recurse -Filter "fpcalc.exe" | Select-Object -First 1).FullName
+          if (-not $exe) { echo "fpcalc.exe niet gevonden in de zip"; exit 1 }
+          Copy-Item $exe "build\windows\x64\runner\Release\fpcalc.exe" -Force
+          $dest = "build\windows\x64\runner\Release\fpcalc.exe"
+          if (-not (Test-Path $dest)) { echo "MISSING: $dest"; exit 1 }
+          echo "OK: fpcalc $ver ($([math]::Round((Get-Item $dest).Length/1MB,1)) MB)"
+
       - name: Download VC++ Redistributable
         shell: pwsh
         run: Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "vc_redist.x64.exe" -UseBasicParsing

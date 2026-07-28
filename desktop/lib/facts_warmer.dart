@@ -24,6 +24,7 @@ import 'package:flutter/foundation.dart';
 import 'album_facts.dart';
 import 'album_facts_resolver.dart';
 import 'discogs.dart';
+import 'fingerprint.dart';
 import 'library.dart';
 import 'models.dart';
 import 'musicbrainz.dart';
@@ -221,6 +222,10 @@ class FactsWarmer extends ChangeNotifier {
     DiscogsService.laneTrace = _log.line;
     MusicBrainzService.laneTrace = _log.line;
     resolveTrace = _log.line;
+    // Said once, at the top, because "is the helper actually there" is the first question every
+    // fingerprint problem starts with — and a packaging mistake is invisible from inside the app.
+    final fp = Fingerprinter();
+    _log.line(fp.available ? 'fpcalc: ${fp.tool}' : 'fpcalc: NIET gevonden — geen vingerafdrukken');
     library.addListener(_onLibraryChanged);
     // Artwork FIRST, and on its own. Side by side was the mistake, and warm.log said so: both loops
     // started, and two minutes later the artwork round had not finished its FIRST album. Two loops
