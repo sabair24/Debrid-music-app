@@ -65,13 +65,22 @@ const _artDeadline = Duration(seconds: 20);
 /// something is systematically slow and hammering on is how you pile up runaway fetches.
 const _tooSlowLimit = 5;
 
-/// How long one record may spend on the Discogs chain in the backfill.
+/// A safety net for the Discogs backfill, not a working limit.
 ///
-/// Generous on purpose: measured, that chain is about thirty-six requests spaced a second apart, and
-/// three seconds each once the budget dips below a fifth. Two minutes is roughly its honest cost, and
-/// cutting it shorter only throws away work that was nearly done — the mistake the free pass already
-/// taught me at twenty-five seconds.
-const _discogsDeadline = Duration(minutes: 2);
+/// Ten minutes, and it is deliberately far above what one record costs. Two minutes was tried and
+/// every single record hit it — "Tout Un Jour" and "Per ongeluk" both ran the full 120 seconds and
+/// wrote nothing — because that chain really is about thirty-six requests, spaced a second apart and
+/// three seconds once the budget dips below a fifth.
+///
+/// And the timeout was making it worse, not better. A Dart timeout does not cancel work: abandoning
+/// at two minutes left the chain running and immediately started another one beside it, so the
+/// backfill piled up concurrent Discogs chains all competing for the same sixty requests a minute.
+/// The queue got slower the longer it ran.
+///
+/// This pass has a twenty-second breather and all evening. One record at a time, finished, is both
+/// faster overall and kinder to the budget the foreground shares. The net is only here so a chain
+/// that hangs cannot hold the queue forever.
+const _discogsDeadline = Duration(minutes: 10);
 
 
 /// A written record of what the warmer decided, in `warm.log` beside the other state files.
