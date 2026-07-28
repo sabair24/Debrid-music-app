@@ -372,7 +372,16 @@ class CoverEnricher {
   /// than holding whole round trips — the lesson the MusicBrainz lane already carries.
   static Future<void> _audioDbTurn = Future<void>.value();
   static DateTime _audioDbLast = DateTime.fromMillisecondsSinceEpoch(0);
-  static const _audioDbGap = Duration(milliseconds: 1200);
+  /// Three seconds, and the number came from measuring rather than guessing.
+  ///
+  /// At 1.2s a sweep of fifty-six records got forty-seven empty answers. Five of those were then asked
+  /// for by hand, one at a time: Unapologetic and Loud both came back with a back cover AND a disc, so
+  /// the endpoint had the data and was refusing the pace. (The other three genuinely are not in
+  /// TheAudioDB — a different problem, and not this one.)
+  ///
+  /// This runs in the background with all the time in the world; fifty-six records at three seconds is
+  /// under three minutes of pacing. Being refused is what costs the user something.
+  static const _audioDbGap = Duration(seconds: 3);
 
   static Future<void> _audioDbSlot() {
     final slot = _audioDbTurn.then((_) async {
@@ -398,10 +407,15 @@ class CoverEnricher {
     if (!fetch) return null;
     if (_generic.contains(artist.trim().toLowerCase()) || album.trim().isEmpty) return null;
     try {
+      // Ask for the record, not for the folder name. Measured: "Talk That Talk (Deluxe)" returns no
+      // album at all, while the same request without the suffix finds it — TheAudioDB indexes one
+      // entry per record, not per edition. plainTitle is the same stripper the Discogs search uses,
+      // so both sides ask the same question.
+      final ask = DiscogsService.plainTitle(album);
       await _audioDbSlot();
       final r = await http.get(
         Uri.parse('https://theaudiodb.com/api/v1/json/2/searchalbum.php'
-            '?s=${Uri.encodeComponent(artist)}&a=${Uri.encodeComponent(album)}'),
+            '?s=${Uri.encodeComponent(artist)}&a=${Uri.encodeComponent(ask)}'),
         headers: {'User-Agent': _ua},
       ).timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return null;
