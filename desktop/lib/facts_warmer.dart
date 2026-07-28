@@ -38,7 +38,23 @@ const int _outageAfter = 3;
 
 /// What one album's artwork attempt came to. "Already there" is not progress and not a failure, and
 /// telling those two apart is what stops the artwork loop from either spinning or giving up.
-enum _Art { fetched, already, failed }
+enum _Art { fetched, already, failed, tooSlow }
+
+/// How long one record may spend on its scans before the queue moves on without it.
+///
+/// Read straight off warm.log on the real library: "Het Beste Van Petra" (eighteen tracks, no
+/// MusicBrainz id) started at 08:43:50 and after three minutes had still not returned — holding up
+/// the seventy-eight records behind it, ANTI among them, which has an id and takes the short path.
+/// Without an id the chain is TheAudioDB, then a Cover Art Archive search across every pressing, then
+/// the whole Discogs search; that is genuinely minutes, and it is nobody else's turn meanwhile.
+///
+/// The abandoned fetch keeps running — a Dart timeout does not cancel work — so it may still finish
+/// and fill the cache. This only stops the queue from waiting on it.
+const _artDeadline = Duration(seconds: 25);
+
+/// Abandonments in one round before the round gives up. One slow record is normal; six in a row means
+/// something is systematically slow and hammering on is how you pile up runaway fetches.
+const _tooSlowLimit = 5;
 
 /// A written record of what the warmer decided, in `warm.log` beside the other state files.
 ///
@@ -392,8 +408,8 @@ class FactsWarmer extends ChangeNotifier {
 
   /// One pass over the library. Returns how many records had their scans fetched.
   Future<int> _warmMissingArt() async {
-    var did = 0, geenFeiten = 0, alWarm = 0, overgeslagen = 0;
-    for (final album in _byNewest()) {
+    var did = 0, geenFeiten = 0, alWarm = 0, overgeslagen = 0, teTraag = 0;
+    for (final album in _artOrder()) {
       if (_stopped || !settings.warmFacts || library.scanning) {
         _log.line('scans: ronde afgebroken (gestopt=$_stopped aan=${settings.warmFacts} scan=${library.scanning})');
         break;
@@ -414,18 +430,41 @@ class FactsWarmer extends ChangeNotifier {
       switch (await _warmArtFor(album, facts)) {
         case _Art.fetched:
           did++;
-          _log.line('scans: "${album.title}" opgehaald');
         case _Art.already:
           alWarm++; // one file check, no network — not progress, and not a reason to stop
+        case _Art.tooSlow:
+          // Not progress and not a failure: the queue simply stopped waiting for this one.
+          if (++teTraag >= _tooSlowLimit) {
+            _log.line('scans: $teTraag keer te traag — ronde gestopt, later opnieuw');
+            return did;
+          }
         case _Art.failed:
           _log.line('scans: "${album.title}" MISLUKT — ronde gestopt '
               '(opgehaald=$did alwarm=$alWarm geenfeiten=$geenFeiten)');
           return did; // usually the network; the next fifty fail the same way
       }
     }
-    _log.line('scans: ronde klaar — opgehaald=$did alwarm=$alWarm '
-        'geenfeiten=$geenFeiten overgeslagen=$overgeslagen feitenLoopt=$_factsPending');
+    _log.line('scans: ronde klaar — opgehaald=$did alwarm=$alWarm geenfeiten=$geenFeiten '
+        'overgeslagen=$overgeslagen tetraag=$teTraag feitenLoopt=$_factsPending');
     return did;
+  }
+
+  /// Records to warm the scans for: the ones with a known pressing first, then the rest.
+  ///
+  /// Cost, not just recency. A record with a MusicBrainz id goes straight to that pressing in the
+  /// Cover Art Archive — one request. Without one the chain is TheAudioDB, then an archive search
+  /// across every pressing of the record, then the whole Discogs search, and on the real library that
+  /// took over three minutes for a single album while seventy-eight waited behind it. Newest still
+  /// wins within each group, so a record that just downloaded is still first among its equals.
+  List<Album> _artOrder() {
+    final withId = <Album>[], without = <Album>[];
+    for (final a in _byNewest()) {
+      final f = library.facts.get(library.uidOf(a));
+      final hasId = (library.pinnedMbid(a) ?? f?.mbid ?? '').isNotEmpty ||
+          (library.pinnedRelease(a) ?? 0) > 0;
+      (hasId ? withId : without).add(a);
+    }
+    return [...withId, ...without];
   }
 
   /// One album's scans, with the arguments the album page will use.
@@ -454,12 +493,19 @@ class FactsWarmer extends ChangeNotifier {
       // guessing at "the counter is stuck".
       _log.line('scans: "${album.title}" ophalen… (aantal=$expected mbid=${mbid ?? "-"})');
       final t0 = DateTime.now();
-      await warmArt(album.artist, album.title,
-          expectedTracks: expected,
-          pinned: pinned,
-          pinnedMbid: mbid,
-          roles: roles,
-          settings: settings);
+      try {
+        await warmArt(album.artist, album.title,
+                expectedTracks: expected,
+                pinned: pinned,
+                pinnedMbid: mbid,
+                roles: roles,
+                settings: settings)
+            .timeout(_artDeadline);
+      } on TimeoutException {
+        _log.line('scans: "${album.title}" duurde langer dan ${_artDeadline.inSeconds}s — '
+            'verder met de rest');
+        return _Art.tooSlow;
+      }
       _artDone++;
       notifyListeners();
       _log.line('scans: "${album.title}" klaar in ${DateTime.now().difference(t0).inSeconds}s');
