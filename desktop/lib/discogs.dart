@@ -787,6 +787,13 @@ class DiscogsArtist {
 /// move to 1200px scans; v4 is roles becoming part of the question; v5 drops the search terms once a
 /// pin makes them irrelevant.
 ///
+/// v6 is what the `done` marker MEANS. Until now it was written whenever anything at all was found,
+/// so a record the Cover Art Archive answered with a front cover and nothing else was marked finished
+/// — and then nothing ever looked for its back or its disc again. ANTI was exactly that: TheAudioDB
+/// has both scans for it, the warmer skipped it as "already warm", and the page kept showing only the
+/// sleeve. Every old entry has to be re-derived for that to come loose, which is what a version bump
+/// is for.
+///
 /// With a pin, artist/album/expectedTracks do not reach the answer — the pin does; they are only how
 /// a release is FOUND when there is none. Leaving them in meant renaming an album guaranteed a miss,
 /// and a miss is a network round trip during which the page keeps showing the previous record's
@@ -806,7 +813,7 @@ String artCacheKey(
   final searchKey =
       (pinned == null && pinnedMbid == null) ? '$artist|$album|$expectedTracks' : '';
   final roleKey = (roles.entries.map((e) => '${e.key}=${e.value}').toList()..sort()).join(',');
-  return sha1.convert(utf8.encode('art|v5|$searchKey|$pinnedKey|$roleKey')).toString();
+  return sha1.convert(utf8.encode('art|v6|$searchKey|$pinnedKey|$roleKey')).toString();
 }
 
 /// The three scans an album page shows: the sleeve, its back, and the disc itself.
