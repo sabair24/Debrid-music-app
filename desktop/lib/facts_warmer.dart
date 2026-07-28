@@ -164,9 +164,18 @@ class FactsWarmer extends ChangeNotifier {
     // find nothing (because no tracklist has landed yet), see no facts sweep running, and stop —
     // before the facts sweep has so much as begun. Awaited so a caller can tell when both are done;
     // main() does not wait for this.
-    final art = _artSweep();
+    // Artwork FIRST, and on its own. Not side by side — that was the mistake.
+    //
+    // Read off warm.log on the real library: both loops started, and a hundred and twenty seconds
+    // later the artwork round had not finished its FIRST album. The bottleneck here is not
+    // concurrency, it is sixty Discogs requests a minute; run two loops and they simply halve each
+    // other, and the app triples its own spacing once the budget drops below twelve. So one at a
+    // time, and the one the user notices goes first: 79 of 130 records already have their tracklist
+    // and are missing only their scans.
+    await _artSweep();
     await _wantFacts();
-    await art;
+    // Once more, for the records the facts sweep just resolved.
+    await _artSweep();
   }
 
   /// How many facts sweeps have been asked for and not yet finished.
@@ -372,6 +381,7 @@ class FactsWarmer extends ChangeNotifier {
         if (!_factsPending) break; // nothing left, and no tracklists on the way either
         await Future.delayed(rearmDelay);
       }
+      _log.line('scans: veeg klaar, $_artDone opgehaald deze sessie');
     } finally {
       _artRunning = false;
       notifyListeners();
@@ -439,6 +449,11 @@ class FactsWarmer extends ChangeNotifier {
       return _Art.already;
     }
     try {
+      // Logged BEFORE the call, with the clock. Without this a record that takes four minutes is
+      // indistinguishable from a loop that has stopped — which is exactly the two hours I spent
+      // guessing at "the counter is stuck".
+      _log.line('scans: "${album.title}" ophalen… (aantal=$expected mbid=${mbid ?? "-"})');
+      final t0 = DateTime.now();
       await warmArt(album.artist, album.title,
           expectedTracks: expected,
           pinned: pinned,
@@ -447,6 +462,7 @@ class FactsWarmer extends ChangeNotifier {
           settings: settings);
       _artDone++;
       notifyListeners();
+      _log.line('scans: "${album.title}" klaar in ${DateTime.now().difference(t0).inSeconds}s');
       return _Art.fetched;
     } catch (e) {
       _log.line('scans: "${album.title}" gooide $e');
