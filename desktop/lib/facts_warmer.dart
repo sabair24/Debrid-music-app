@@ -135,6 +135,7 @@ class FactsWarmer extends ChangeNotifier {
     this.warmArt = fetchReleaseArt,
     this.rearmDelay = const Duration(seconds: 10),
     this.outageBackoff = const Duration(minutes: 15),
+    this.scanWait = const Duration(minutes: 3),
   });
 
   final LibraryStore library;
@@ -174,6 +175,12 @@ class FactsWarmer extends ChangeNotifier {
   /// Set by [FactsWarmer] so warm.log shows where a record's ninety seconds went. Nullable because a
   /// test's stub has no chain to trace.
   void Function(String)? artTrace;
+
+  /// How long the artwork round is willing to sit out a disk scan before giving up on this round.
+  ///
+  /// Three minutes because that is comfortably longer than a scan of this library takes and far
+  /// shorter than an evening. Injected so a test does not have to wait it out.
+  final Duration scanWait;
 
   final Duration rearmDelay;
   final Duration outageBackoff;
@@ -334,6 +341,14 @@ class FactsWarmer extends ChangeNotifier {
         if (uid.isEmpty) continue;
         _tried.add(uid); // before the attempt, so a throw cannot cause a re-pick
 
+        // Logged before the attempt, with the clock, for the same reason the artwork round is:
+        // without it a facts sweep is a black box. Measured on the real library, this one ran nine
+        // minutes on twenty-eight records without writing a single line — a record MusicBrainz does
+        // not have falls through to Discogs, which is about thirty-six requests at a second apart.
+        // That is fine, and it is completely unreadable from the outside.
+        final begonnen = DateTime.now();
+        _log.line('feiten: "${album.title}" ophalen… ($_done/$_total)');
+
         AlbumFacts fresh;
         try {
           fresh = await resolve(
@@ -349,6 +364,9 @@ class FactsWarmer extends ChangeNotifier {
           _log.line('feiten: "${album.title}" gooide $e — veeg gestopt');
           break;
         }
+        _log.line('feiten: "${album.title}" klaar in '
+            '${DateTime.now().difference(begonnen).inSeconds}s '
+            '(${fresh.source.isEmpty ? "niets" : fresh.source}, ${fresh.tracklist.length} nummers)');
 
         if (fresh.isEmpty) {
           held.add(fresh);
@@ -487,12 +505,42 @@ class FactsWarmer extends ChangeNotifier {
     }
   }
 
+  /// Sit out a disk scan. False if it is still going after [scanWait], which is the round's cue to
+  /// stop and come back later rather than sit here all evening.
+  ///
+  /// Polled rather than listened for. A listener would mean adding and removing one inside a loop
+  /// that already has a listener on the same object, and half a second of latency costs nothing
+  /// against a scan measured in tens of seconds.
+  Future<bool> _waitForScan() async {
+    if (!library.scanning) return true;
+    _log.line('scans: even wachten, de schijfscan loopt');
+    final until = DateTime.now().add(scanWait);
+    while (library.scanning && !_stopped) {
+      if (DateTime.now().isAfter(until)) return false;
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+    if (_stopped) return false;
+    _log.line('scans: schijfscan klaar — door met de ronde');
+    return true;
+  }
+
   /// One pass over the library as it is right now.
   Future<({int did, bool brokeOff})> _warmArtPass() async {
     var did = 0, geenFeiten = 0, alWarm = 0, overgeslagen = 0, teTraag = 0;
     for (final album in _artOrder()) {
-      if (_stopped || !settings.warmFacts || library.scanning) {
-        _log.line('scans: ronde afgebroken (gestopt=$_stopped aan=${settings.warmFacts} scan=${library.scanning})');
+      if (_stopped || !settings.warmFacts) {
+        _log.line('scans: ronde afgebroken (gestopt=$_stopped aan=${settings.warmFacts})');
+        return (did: did, brokeOff: true);
+      }
+      // A disk scan is a PAUSE, not the end of the round.
+      //
+      // It used to break off here, and on the real library that fired at every launch: the first
+      // round died on "scan=true" fifty seconds in, start's follow-up round died on the same flag a
+      // millisecond later, and nothing warmed until a rearm timer happened to come round again.
+      // Worse, a finished Soulseek download is itself what triggers a rescan — so the one moment the
+      // scans are wanted most was the one moment the round gave up.
+      if (!await _waitForScan()) {
+        _log.line('scans: ronde afgebroken — de schijfscan duurt te lang');
         return (did: did, brokeOff: true);
       }
       final uid = library.uidOf(album);

@@ -283,6 +283,52 @@ void main() {
       w.dispose();
     });
 
+    test('een schijfscan onderbreekt de ronde niet, hij zet hem stil', () async {
+      // Op de echte bibliotheek ging dit elke start mis: de eerste ronde stierf vijftig seconden ver
+      // op "scan=true", de naveeg van start() een milliseconde later op dezelfde vlag, en er warmde
+      // niets meer tot een herwek-timer toevallig langskwam. En een afgeronde Soulseek-download IS
+      // precies wat een herscan aanzet -- dus het moment waarop de scans het hardst nodig zijn was
+      // het moment waarop de ronde het opgaf.
+      seedLibrary(['Een', 'Twee', 'Drie']);
+      for (final a in library.albums) {
+        library.facts.put(AlbumFacts(
+          uid: library.uidOf(a),
+          trackSetHash: library.trackSetHashFor(a),
+          updatedMs: 1730000000000,
+          source: 'MusicBrainz',
+          tracklist: const [ChoiceTrack('1', 'Mysterons', 306)],
+        ));
+      }
+
+      late FactsWarmer w;
+      w = FactsWarmer(
+        library: library,
+        settings: settings,
+        mb: MusicBrainzService(),
+        enabled: true,
+        rearmDelay: const Duration(seconds: 30), // geen timer die dit alsnog redt
+        scanWait: const Duration(seconds: 5),
+        resolve: (album, {required uid, required trackSetHash, required mb, required settings,
+            pinnedMbid, pinned, discogs}) async =>
+            library.facts.get(uid)!,
+        warmArt: (artist, album,
+            {required expectedTracks, pinned, pinnedMbid, required roles, required settings, freeOnly = true, trace}) async {
+          warmedArt.add('$artist|$album|$expectedTracks');
+          // Na de eerste plaat begint er een scan, zoals bij een binnengekomen download.
+          if (warmedArt.length == 1) {
+            library.scanning = true;
+            Future.delayed(const Duration(milliseconds: 600), () => library.scanning = false);
+          }
+        },
+      );
+
+      await w.start();
+
+      expect(warmedArt, hasLength(3),
+          reason: 'de ronde hoort na de scan gewoon verder te gaan, niet af te breken');
+      w.dispose();
+    });
+
     test('een album waarvan de feiten AL klaar zijn krijgt alsnog zijn scans', () async {
       // Het gat dat de meting zichtbaar maakte. De eerste versie warmde de scans binnen de
       // feitenlus, en die lus bezoekt alleen albums die nog feiten nodig hebben. Na de eerste veeg
