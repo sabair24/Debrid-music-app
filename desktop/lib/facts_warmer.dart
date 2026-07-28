@@ -455,12 +455,13 @@ class FactsWarmer extends ChangeNotifier {
       // Keep going while the facts sweep is still producing albums to work on: an album skipped
       // because its tracklist had not landed yet must get another turn, or the two loops racing
       // would cost exactly the coverage this exists for.
-      for (var round = 0; round < 200; round++) {
-        if (_stopped || !settings.warmFacts) break;
-        if (await _warmMissingArt() > 0) continue;
-        if (!_factsPending) break; // nothing left, and no tracklists on the way either
-        await Future.delayed(rearmDelay);
-      }
+      // One pass, then return. It used to keep looping every ten seconds for as long as the facts
+      // sweep was running, and measured on the real library that was two things at once: a log line
+      // every ten seconds saying "115 skipped, 0 fetched", and — far worse — the Discogs backfill
+      // never starting at all, because it waits for this to return and this waited for the facts
+      // sweep. Records that get their tracklist later are covered by the second call in [start],
+      // which is what that call is for.
+      await _warmMissingArt();
       _log.line('scans: veeg klaar, $_artDone opgehaald deze sessie');
     } finally {
       _artRunning = false;
