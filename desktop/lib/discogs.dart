@@ -1016,6 +1016,8 @@ extension DiscogsArtwork on DiscogsService {
     final needMore = partial == null || partial.back == null || partial.disc == null;
     if (pinned == null && needMore) {
       final wider = await _artFromMusicBrainz(artist, album, expectedTracks);
+      step('archief over andere persingen: ${wider == null ? "niets" : "voor=${wider.front != null} "
+          "achter=${wider.back != null} cd=${wider.disc != null}"}');
       if (wider != null) {
         caa = ReleaseArt(
           front: partial?.front ?? wider.front,
