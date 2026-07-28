@@ -10072,7 +10072,7 @@ class SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
-  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _rtUser, _rtPass, _slskPort;
+  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _rtUser, _rtPass, _slskPort, _acoustid;
 
   @override
   void initState() {
@@ -10084,6 +10084,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskPass = TextEditingController(text: s.soulseekPass);
     _slskPort = TextEditingController(text: s.soulseekPort > 0 ? s.soulseekPort.toString() : "");
     _lastfm = TextEditingController(text: s.lastfmKey);
+    _acoustid = TextEditingController(text: s.acoustidKey);
     _rtUser = TextEditingController(text: s.rutrackerUser);
     _rtPass = TextEditingController(text: s.rutrackerPass);
   }
@@ -10110,6 +10111,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskPass.dispose();
     _slskPort.dispose();
     _lastfm.dispose();
+    _acoustid.dispose();
     _rtUser.dispose();
     _rtPass.dispose();
     for (final n in _fieldFocus.values) {
@@ -10429,6 +10431,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                       ],
                     ),
                     _field('Last.fm API-sleutel', _lastfm),
+                    const SizedBox(height: 8),
+                    // Alleen nodig voor platen die geen enkele catalogus op naam kan vinden -- de
+                    // verzamelaars. Gratis, via acoustid.org/new-application.
+                    _field('AcoustID-sleutel (verzamelaars herkennen)', _acoustid),
                     const SizedBox(height: 4),
                     const Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
@@ -10551,6 +10557,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     s.rutrackerUser = _rtUser.text.trim();
                     s.rutrackerPass = _rtPass.text;
                     s.lastfmKey = _lastfm.text.trim();
+                    s.acoustidKey = _acoustid.text.trim();
                     // Pressing Save here is the deliberate override of the refuse-to-write guard:
                     // these values came from the fields, not from a failed load, so writing them
                     // over a broken file is a repair rather than the loss the guard exists for.

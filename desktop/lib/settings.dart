@@ -9,6 +9,11 @@ class AppSettings extends ChangeNotifier {
   String discogsToken = '';
   String torboxToken = '';
   String lastfmKey = '';
+
+  /// AcoustID application key, from acoustid.org/new-application. Free, and only needed for records
+  /// no catalogue can name by title — the compilations. Everything else fingerprinting does happens
+  /// on this machine and needs no key at all.
+  String acoustidKey = '';
   String soulseekUser = '';
   String soulseekPass = '';
   /// Port we LISTEN on for incoming Soulseek peers. Soulseek only delivers a firewalled peer's
@@ -139,7 +144,7 @@ class AppSettings extends ChangeNotifier {
 
   /// How many credentials are actually filled in. The measure of "worth keeping".
   static int _filled(Map<String, dynamic> m) => [
-        'discogs_token', 'torbox_token', 'lastfm_key', 'soulseek_user', 'soulseek_pass',
+        'discogs_token', 'torbox_token', 'lastfm_key', 'acoustid_key', 'soulseek_user', 'soulseek_pass',
         'rutracker_user', 'rutracker_pass', 'tidal_client_id', 'tidal_client_secret',
         'tidal_refresh_token', 'lan_token', 'music_root',
       ].where((k) => (m[k] ?? '').toString().isNotEmpty).length;
@@ -186,6 +191,7 @@ class AppSettings extends ChangeNotifier {
         discogsToken = (m['discogs_token'] ?? '') as String;
         torboxToken = (m['torbox_token'] ?? '') as String;
         lastfmKey = (m['lastfm_key'] ?? '') as String;
+        acoustidKey = (m['acoustid_key'] ?? '') as String;
         soulseekUser = (m['soulseek_user'] ?? '') as String;
         soulseekPass = (m['soulseek_pass'] ?? '') as String;
         soulseekPort = (m['soulseek_port'] ?? 0) as int;
@@ -213,6 +219,7 @@ class AppSettings extends ChangeNotifier {
         'discogs_token': discogsToken,
         'torbox_token': torboxToken,
         'lastfm_key': lastfmKey,
+        'acoustid_key': acoustidKey,
         'soulseek_user': soulseekUser,
         'soulseek_pass': soulseekPass,
         'soulseek_port': soulseekPort,

@@ -10,10 +10,12 @@
 /// record, not once per visit.
 library;
 
+import 'acoustid.dart';
 import 'album_facts.dart';
 import 'completeness.dart';
 import 'discogs.dart';
 import 'editions.dart';
+import 'fingerprint.dart';
 import 'models.dart';
 import 'musicbrainz.dart';
 import 'settings.dart';
@@ -181,6 +183,28 @@ Future<AlbumFacts> resolveAlbumFacts(
     }
   }
 
+  // Last, and only when asking by name has failed both times: ask the AUDIO.
+  //
+  // This is the compilations. "Various Artists — Serious Beats 51" is not a search anybody can
+  // answer, and eight records in this library come back empty from both catalogues for exactly that
+  // reason. Fingerprints turn the question round: each file says what recording it is, and the
+  // release group they agree on is the record. Deliberately last — it costs a fingerprint per file
+  // and a request per file, which is far more than a title lookup, and it is wasted on the ninety
+  // per cent of records a title lookup already answers.
+  if (out.isEmpty) {
+    try {
+      final gevonden = await _fromSound(album, mb, settings, stap);
+      if (gevonden != null && gevonden.$2.isNotEmpty) {
+        mbid = gevonden.$1.mbid;
+        out = gevonden.$2;
+        year = gevonden.$1.albumYear ?? gevonden.$1.year;
+        from = 'AcoustID';
+      }
+    } catch (_) {
+      threw = true;
+    }
+  }
+
   stap('klaar — bron "${from.isEmpty ? "niets" : from}", ${out.length} nummers');
 
   return AlbumFacts(
@@ -200,4 +224,73 @@ Future<AlbumFacts> resolveAlbumFacts(
         (threw ||
             MusicBrainzService.transportErrors + DiscogsService.transportErrors > errorsBefore),
   );
+}
+
+/// How many files of a record are worth fingerprinting to identify it.
+///
+/// The vote does not need every track — six agreeing out of eight asked is already conclusive — and
+/// each one costs a fingerprint plus a request. Twelve keeps a fifty-track box set from turning into
+/// a fifty-request errand while still giving a normal compilation nearly all of itself to vote with.
+const _heardAtMost = 12;
+
+/// Name a record by what its files SOUND like, when no catalogue could name it by title.
+///
+/// Returns the chosen pressing and its tracklist, or null. Everything after the release group is the
+/// ordinary machinery — [MusicBrainzService.editionsOf] and [pickPressing] — because once the
+/// release group is known this is an ordinary record again. That is the point of stopping here
+/// rather than building a second way to choose a pressing.
+Future<(MbRelease, List<ChoiceTrack>)?> _fromSound(
+  Album album,
+  MusicBrainzService mb,
+  AppSettings settings,
+  void Function(String) stap,
+) async {
+  final acoust = AcoustIdService(settings);
+  if (!acoust.available) {
+    stap('geluid: geen AcoustID-sleutel — overgeslagen');
+    return null;
+  }
+  final fp = Fingerprinter();
+  if (!fp.available) {
+    stap('geluid: fpcalc ontbreekt — overgeslagen');
+    return null;
+  }
+
+  final perTrack = <List<String>>[];
+  var gevraagd = 0;
+  for (final t in album.tracks) {
+    if (gevraagd >= _heardAtMost) break;
+    final a = await fp.of(t.path, compressed: true);
+    if (a == null) continue;
+    gevraagd++;
+    final matches = await acoust.identify(a);
+    perTrack.add([for (final m in matches) ...m.releaseGroups]);
+  }
+  stap('geluid: $gevraagd bestanden gevraagd, '
+      '${perTrack.where((l) => l.isNotEmpty).length} herkend');
+  if (perTrack.isEmpty) return null;
+
+  final groep = bestReleaseGroup(perTrack);
+  if (groep == null) {
+    stap('geluid: geen uitgave waar genoeg nummers het over eens zijn');
+    return null;
+  }
+  stap('geluid: release-groep $groep');
+
+  final all = await mb.editionsOf(groep, tracklists: true);
+  if (all.isEmpty) return null;
+  final tried = <MbRelease>[];
+  final lists = <List<ChoiceTrack>>[];
+  final scored = <AlbumCompleteness>[];
+  for (final r in all.take(4)) {
+    final list = await mb.tracklistOf(r);
+    if (list.isEmpty) continue;
+    tried.add(r);
+    lists.add(list);
+    scored.add(matchAlbumTracks(list, album.tracks, album.artist));
+  }
+  final pick = pickPressing(scored);
+  if (pick < 0) return null;
+  stap('geluid: persing ${tried[pick].mbid}, ${lists[pick].length} nummers');
+  return (tried[pick], lists[pick]);
 }
