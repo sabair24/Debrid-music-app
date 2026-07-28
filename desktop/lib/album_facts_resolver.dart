@@ -18,6 +18,18 @@ import 'models.dart';
 import 'musicbrainz.dart';
 import 'settings.dart';
 
+/// Somewhere to write which STEP of a resolve is running. Set once by the warmer.
+///
+/// A library-level hook rather than a parameter on purpose: [resolveAlbumFacts] is injected into
+/// FactsWarmer as a function value, so adding an argument would rewrite that typedef and every stub
+/// in the tests to observe something no caller cares about.
+///
+/// It exists because one record — "Vlaamse Diva's" — sat here for three-quarters of an hour on two
+/// separate runs with no socket open, no cache file written, no queue line and no CPU. The lane got
+/// a trace and stayed silent, which ruled the lane out and left the rest of this function as one
+/// unlit room. This lights it.
+void Function(String)? resolveTrace;
+
 /// The official tracklist: which pressing of this record you actually own.
 ///
 /// Chosen by CONTAINMENT, not by size. Asking for the first pressing big enough to hold the
@@ -70,12 +82,22 @@ Future<AlbumFacts> resolveAlbumFacts(
   var threw = false;
   final errorsBefore = MusicBrainzService.transportErrors + DiscogsService.transportErrors;
 
+  final t0 = DateTime.now();
+  void stap(String s) =>
+      resolveTrace?.call('    [oplos +${DateTime.now().difference(t0).inMilliseconds}ms] $s');
+  stap('begin — ${album.tracks.length} bestanden, pin=${pinned ?? "-"} mbid=${pinnedMbid ?? "-"}');
+
   try {
     MbRelease? rel;
-    if (pinnedMbid != null && pinnedMbid.isNotEmpty) rel = await mb.release(pinnedMbid);
+    if (pinnedMbid != null && pinnedMbid.isNotEmpty) {
+      rel = await mb.release(pinnedMbid);
+      stap('gepinde persing: ${rel == null ? "niets" : "gevonden"}');
+    }
     if (rel == null) {
+      stap('zoeken op release-groep…');
       final groups =
           await mb.searchReleaseGroups(DiscogsService.plainTitle(album.title), artist: album.artist);
+      stap('release-groepen: ${groups.length}');
       // Not merely "not a compilation": a SINGLE of the same name is a different record, and
       // picking it described a sixteen-track album with a two-track sleeve.
       final g = MusicBrainzService.pickReleaseGroup(groups, single: album.isSingle);
@@ -83,7 +105,9 @@ Future<AlbumFacts> resolveAlbumFacts(
         // One request for every pressing of the record, already in preference order.
         // With the tracklists in the browse itself this is the LAST MusicBrainz request for most
         // records: the loop below then finds every pressing already carrying its tracks.
+        stap('persingen ophalen voor groep ${g.mbid}…');
         final all = await mb.editionsOf(g.mbid, tracklists: true);
+        stap('persingen: ${all.length}');
         final owned = albumTrackCount(album.tracks);
         final counts = [for (final r in all) r.trackCount];
         // The three smallest that fit, PLUS the fullest pressing of the record.
@@ -102,8 +126,10 @@ Future<AlbumFacts> resolveAlbumFacts(
         final tried = <MbRelease>[];
         final lists = <List<ChoiceTrack>>[];
         final scored = <AlbumCompleteness>[];
+        stap('shortlist: ${shortlist.length} persingen wegen');
         for (final i in shortlist) {
           final list = await mb.tracklistOf(all[i]);
+          stap('  persing $i: ${list.length} nummers');
           if (list.isEmpty) continue;
           tried.add(all[i]);
           lists.add(list);
@@ -134,12 +160,16 @@ Future<AlbumFacts> resolveAlbumFacts(
     threw = true; // Discogs gets its turn below; remember that this side broke
   }
 
+  stap('MusicBrainz klaar — ${out.length} nummers');
+
   if (out.isEmpty) {
     try {
+      stap('naar Discogs…');
       // Here expectedTracks IS safe to pass: Discogs only uses it to drop masters too SMALL to hold
       // the library, never ones bigger.
       final e = await (discogs ?? DiscogsService(settings)).edition(album.artist, album.title,
           expectedTracks: albumTrackCount(album.tracks), pinned: pinned);
+      stap('Discogs: ${e == null ? "niets" : "${e.tracklist.length} nummers"}');
       if (e != null && e.tracklist.isNotEmpty) {
         out = [for (final t in e.tracklist) ChoiceTrack(t.position, t.title, t.seconds)];
         year = e.albumYear ?? e.year;
@@ -150,6 +180,8 @@ Future<AlbumFacts> resolveAlbumFacts(
       threw = true;
     }
   }
+
+  stap('klaar — bron "${from.isEmpty ? "niets" : from}", ${out.length} nummers');
 
   return AlbumFacts(
     uid: uid,

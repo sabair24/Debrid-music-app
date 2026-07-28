@@ -220,6 +220,7 @@ class FactsWarmer extends ChangeNotifier {
     // the ten minutes after that are unaccounted for.
     DiscogsService.laneTrace = _log.line;
     MusicBrainzService.laneTrace = _log.line;
+    resolveTrace = _log.line;
     library.addListener(_onLibraryChanged);
     // Artwork FIRST, and on its own. Side by side was the mistake, and warm.log said so: both loops
     // started, and two minutes later the artwork round had not finished its FIRST album. Two loops
