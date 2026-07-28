@@ -359,6 +359,32 @@ class CoverEnricher {
     return bytes;
   }
 
+  /// One TheAudioDB request at a time, spaced out. The same treatment MusicBrainz and Discogs already
+  /// get, and it turns out to be just as necessary here.
+  ///
+  /// Measured on the real library: the background sweep asked for roughly seventy albums in four
+  /// minutes and only twenty-two came back with anything. A manual call to the identical URL for one
+  /// of the failures — Rihanna / ANTI — returns both the back cover and the disc. So the misses were
+  /// the free endpoint pushing back, not data it does not have, and the two scans this whole thread is
+  /// about were among the casualties.
+  ///
+  /// Static, so every CoverEnricher in the process queues behind one line. Spaces the SENDS rather
+  /// than holding whole round trips — the lesson the MusicBrainz lane already carries.
+  static Future<void> _audioDbTurn = Future<void>.value();
+  static DateTime _audioDbLast = DateTime.fromMillisecondsSinceEpoch(0);
+  static const _audioDbGap = Duration(milliseconds: 1200);
+
+  static Future<void> _audioDbSlot() {
+    final slot = _audioDbTurn.then((_) async {
+      final since = DateTime.now().difference(_audioDbLast);
+      if (since < _audioDbGap) await Future<void>.delayed(_audioDbGap - since);
+      _audioDbLast = DateTime.now();
+    });
+    // The chain must survive a failed turn, or one thrown error deadlocks the lane for the session.
+    _audioDbTurn = slot.catchError((_) {});
+    return slot;
+  }
+
   /// The sleeve notes for a release: what it is, when, on what label, how it was received —
   /// the album equivalent of a film's synopsis panel.
   Future<AlbumInfo?> albumInfo(String artist, String album, {bool fetch = true}) async {
@@ -372,6 +398,7 @@ class CoverEnricher {
     if (!fetch) return null;
     if (_generic.contains(artist.trim().toLowerCase()) || album.trim().isEmpty) return null;
     try {
+      await _audioDbSlot();
       final r = await http.get(
         Uri.parse('https://theaudiodb.com/api/v1/json/2/searchalbum.php'
             '?s=${Uri.encodeComponent(artist)}&a=${Uri.encodeComponent(album)}'),

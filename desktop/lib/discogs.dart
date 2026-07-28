@@ -989,7 +989,7 @@ extension DiscogsArtwork on DiscogsService {
     // spent over two minutes waiting for a slot. Anything free that can answer first should.
     if ((partial?.back == null || partial?.disc == null) && artist.isNotEmpty && album.isNotEmpty) {
       final info = await CoverEnricher(settings).albumInfo(artist, album);
-      step('theaudiodb: achter=${info?.backUrl != null} cd=${info?.discUrl != null}');
+      step('theaudiodb: ${info == null ? "GEEN ANTWOORD" : "achter=${info.backUrl != null} cd=${info.discUrl != null}"}');
       final back = partial?.back ?? await _fetchIf(info?.backUrl);
       final disc = partial?.disc ?? await _fetchIf(info?.discUrl);
       step('theaudiodb-afbeeldingen: achter=${back != null} cd=${disc != null}');
