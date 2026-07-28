@@ -1,4 +1,5 @@
 import 'package:debridmusic/discogs.dart';
+import 'package:debridmusic/settings.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Which pressing of an album the library describes.
@@ -19,6 +20,29 @@ DiscogsVersion v(String major, {int? year, String? label, String? catno, int id 
 
 void main() {
   masters();
+
+  test('edition() komt terug, ook als er niets te vinden is', () async {
+    // De duurste bug van de hele avond, en hij is met nul netwerk te vangen.
+    //
+    //     final work = _editionFresh(...).whenComplete(() => _editionInFlight.remove(key));
+    //
+    // Een pijl-body GEEFT TERUG wat remove() teruggeeft, en op een Map<String, Future<…>> is dat de
+    // verwijderde Future. whenComplete belooft dan te wachten tot díé future klaar is -- en dat is
+    // work zelf. Work wachtte op work, voor altijd: geen socket, geen CPU, geen wachtrij, geen
+    // logregel. Eén plaat hield de feitenveeg drie kwartier vast, en de Discogs-naveeg heeft over
+    // zes herschrijvingen geen enkele plaat afgemaakt om exact deze reden.
+    //
+    // Zonder token doet _get geen enkel verzoek, dus dit is een zuivere test van de bedrading:
+    // masterIds geeft niets, _editionFresh keert meteen terug, en edition() hoort dat door te geven.
+    final d = DiscogsService(AppSettings()); // geen token
+    expect(d.available, isFalse, reason: 'deze test mag het net niet aanraken');
+
+    final e = await d
+        .edition('Various Artists', "Vlaamse Diva's", expectedTracks: 1)
+        .timeout(const Duration(seconds: 5),
+            onTimeout: () => throw StateError('edition() kwam nooit terug'));
+    expect(e, isNull);
+  });
   test('a documented CD leads — it is the best-documented object', () {
     final order = DiscogsService.orderByPreference([
       v('CD', year: 2001, label: 'Virgin', catno: 'CD1', id: 2),

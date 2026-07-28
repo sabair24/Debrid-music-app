@@ -609,8 +609,20 @@ class DiscogsService {
       laneTrace?.call('  [discogs] sluit aan bij een lopende uitgave-zoektocht voor $key');
       return running;
     }
-    final work = _editionFresh(artist, album, expectedTracks, pinned)
-        .whenComplete(() => _editionInFlight.remove(key));
+    // A BLOCK body, and that is the whole bug fixed.
+    //
+    // `() => _editionInFlight.remove(key)` is an arrow, so it RETURNS what remove() returns — and on
+    // a Map<String, Future<…>> that is the removed Future. whenComplete's contract is explicit: if
+    // the callback returns a future, the result does not complete until that future does. The value
+    // just removed is `work` itself, so work waited for work. Forever.
+    //
+    // No socket, no CPU, no queue, no log line: exactly the shape of a record that sat in the facts
+    // sweep for three-quarters of an hour. Only records MusicBrainz cannot answer ever reach this
+    // line, which is why the library looked healthy — and why the Discogs backfill never finished a
+    // single record across six rewrites. It was calling this.
+    final work = _editionFresh(artist, album, expectedTracks, pinned).whenComplete(() {
+      _editionInFlight.remove(key);
+    });
     _editionInFlight[key] = work;
     return work;
   }
