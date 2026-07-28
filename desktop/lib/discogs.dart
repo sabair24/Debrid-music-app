@@ -387,7 +387,8 @@ class DiscogsService {
   /// same artist and title as the record it advertises. Searching for Michael Jackson's *Bad*
   /// returns three masters called exactly that, and the first is a promo flexi-disc with three
   /// pressings — taking it described the album as a Belgian promo single.
-  static final _notAnAlbum = RegExp(
+  /// Public so the artwork extension can apply the same rule; it is one judgement, not two.
+  static final notAnAlbum = RegExp(
     r'^(promo|sampler|single|ep|flexi-disc|unofficial release|dvd|blu-ray)$',
     caseSensitive: false,
   );
@@ -400,7 +401,7 @@ class DiscogsService {
     for (final f in formats) {
       final t = f.trim();
       if (t.toLowerCase() == 'album') score += 3;
-      if (_notAnAlbum.hasMatch(t)) score -= 4;
+      if (notAnAlbum.hasMatch(t)) score -= 4;
     }
     return score;
   }
@@ -1052,7 +1053,26 @@ extension DiscogsArtwork on DiscogsService {
     }
 
     step('naar Discogs — de gemeterde weg');
-    final e = await edition(artist, album, expectedTracks: expectedTracks, pinned: pinned);
+    // One search plus one release, before the pressing hunt.
+    //
+    // [edition] answers "WHICH pressing is this record", and it earns its cost on the album page,
+    // where the pressing line and the scans have to describe the same object. Here we only want
+    // pictures, and it was charging about thirty-six requests for them: measured in warm.log, "Tout
+    // Un Jour" and "Per ongeluk" each ran past two full minutes and wrote nothing at all.
+    //
+    // Asked by hand against the same API, one search and one release fetch reach the images in two
+    // requests — and the material is there: three, seven and eighty images for the three records I
+    // tried. Borrowing pictures from a sibling pressing is already how this file works; the disc has
+    // been fetched that way for a long time (see [_discFromAnotherPressing]).
+    //
+    // Not when the user pinned a release. Then they answered the question themselves and the answer
+    // is that pressing's own scans.
+    DiscogsEdition? e;
+    if (pinned == null) {
+      e = await _quickRelease(artist, album);
+      step('Discogs snelzoek: ${e == null ? "niets" : "${e.images.length} afbeeldingen"}');
+    }
+    e ??= await edition(artist, album, expectedTracks: expectedTracks, pinned: pinned);
     step('Discogs-persing: ${e == null ? "niets" : "${e.images.length} afbeeldingen"}');
     if (e == null || e.images.isEmpty) {
       // Discogs has nothing to add, but the archive may still have given us something.
@@ -1176,6 +1196,36 @@ extension DiscogsArtwork on DiscogsService {
     } catch (_) {
       return null; // no art from here is not an error — the Discogs path takes over
     }
+  }
+
+  /// The first release Discogs offers for this record, in two requests.
+  ///
+  /// Deliberately not [edition]: no master walk, no per-format version lists, no track-count fitting.
+  /// Those exist to pick the RIGHT pressing, and that question costs about thirty-six requests out of
+  /// sixty a minute. For artwork any pressing of the record will do — the pictures are of the same
+  /// record either way — so this asks the search for a release and fetches it. Two requests.
+  ///
+  /// Returns null on anything doubtful, and the caller then falls back to the full chain: a wrong
+  /// record's sleeve is worse than a slow one.
+  Future<DiscogsEdition?> _quickRelease(String artist, String album) async {
+    final who = cleanArtistName(artist);
+    final title = DiscogsService.plainTitle(album);
+    final body = await _get(
+      'https://api.discogs.com/database/search?type=release&per_page=5'
+      '&artist=${_q(who)}&release_title=${_q(title)}',
+    );
+    final results = body?['results'] as List<dynamic>? ?? const [];
+    for (final r in results.take(3)) {
+      if (r is! Map<String, dynamic>) continue;
+      final id = (r['id'] as num?)?.toInt() ?? 0;
+      if (id <= 0) continue;
+      // The search states the formats; a promo single carrying the album's name is not the album.
+      final formats = [for (final f in (r['format'] as List<dynamic>? ?? const [])) f.toString()];
+      if (formats.any(DiscogsService.notAnAlbum.hasMatch)) continue;
+      final e = await release(id);
+      if (e != null && e.images.isNotEmpty) return e;
+    }
+    return null;
   }
 
   /// The scans of ONE pressing, because the user named it. No borrowing from anywhere else.
