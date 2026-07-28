@@ -62,13 +62,24 @@ String? bestReleaseGroup(List<List<String>> perTrack, {double minShare = 2 / 3})
     }
   }
   String? beste;
-  var hoogste = 0;
+  var hoogste = 0, evenveel = 0;
   for (final e in stemmen.entries) {
     if (e.value > hoogste) {
       hoogste = e.value;
       beste = e.key;
+      evenveel = 1;
+    } else if (e.value == hoogste) {
+      evenveel++;
     }
   }
+  // A tie is not a winner, and that rule is what makes a single file safe.
+  //
+  // "Vlaamse Diva's" is one file. Every release group that one recording appears on then has exactly
+  // one vote, so "the highest" is whichever the map happened to hand over first — a guess wearing a
+  // number. One track appears on a dozen compilations; that is not evidence about which record this
+  // folder is. Requiring a STRICT majority makes a lone file abstain by construction, without a
+  // special case for it.
+  if (evenveel != 1) return null;
   // Measured against the files that got an ANSWER, not against every file in the folder: a
   // compilation where AcoustID knows six of twelve tracks and all six agree is a solid answer, and
   // counting the six it never heard of as votes against would throw it away.

@@ -191,8 +191,10 @@ Future<AlbumFacts> resolveAlbumFacts(
   // release group they agree on is the record. Deliberately last — it costs a fingerprint per file
   // and a request per file, which is far more than a title lookup, and it is wasted on the ninety
   // per cent of records a title lookup already answers.
+  var heard = false;
   if (out.isEmpty) {
     try {
+      heard = canHear(settings);
       final gevonden = await _fromSound(album, mb, settings, stap);
       if (gevonden != null && gevonden.$2.isNotEmpty) {
         mbid = gevonden.$1.mbid;
@@ -219,12 +221,22 @@ Future<AlbumFacts> resolveAlbumFacts(
     bonus: bonus,
     year: year,
     // Only an empty answer is a failure. A record that resolved is never retried on a timer.
+    // Recorded even when the audio found nothing, because "we asked" is what stops it being asked
+    // every single sweep for the rest of the day.
+    heard: heard,
     failedMs: out.isEmpty ? now : null,
     networkFailed: out.isEmpty &&
         (threw ||
             MusicBrainzService.transportErrors + DiscogsService.transportErrors > errorsBefore),
   );
 }
+
+/// Can this machine ask the audio at all — is there an fpcalc AND a key?
+///
+/// Read by [needsResolve] as well as here, so that "a failure from before we could listen" and
+/// "a failure with the audio included" are decided by the same test in both places.
+bool canHear(AppSettings settings) =>
+    AcoustIdService(settings).available && Fingerprinter().available;
 
 /// How many files of a record are worth fingerprinting to identify it.
 ///

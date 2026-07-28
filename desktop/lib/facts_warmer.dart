@@ -307,7 +307,8 @@ class FactsWarmer extends ChangeNotifier {
           trackSetHash: library.trackSetHashFor(a),
           nowMs: now,
           pinnedMbid: library.pinnedMbid(a),
-          pinned: library.pinnedRelease(a))) {
+          pinned: library.pinnedRelease(a),
+          canHear: canHear(settings))) {
         continue;
       }
       out.add(a);

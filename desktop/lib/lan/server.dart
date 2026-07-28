@@ -323,6 +323,8 @@ class LanServer {
         nowMs: DateTime.now().millisecondsSinceEpoch,
         pinnedMbid: library.pinnedMbid(album),
         pinned: library.pinnedRelease(album),
+        // Null on a client, which has no files to fingerprint anyway.
+        canHear: settings != null && canHear(settings!),
         force: req.uri.queryParameters['force'] == '1')) {
       final mb = musicbrainz;
       final s = settings;

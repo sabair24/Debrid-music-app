@@ -5,6 +5,8 @@
 library;
 
 import 'package:debridmusic/acoustid.dart';
+import 'package:debridmusic/album_facts.dart';
+import 'package:debridmusic/editions.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -55,9 +57,76 @@ void main() {
       expect(bestReleaseGroup(perTrack), 'de plaat');
     });
 
+    test('één bestand benoemt geen plaat', () {
+      // "Vlaamse Diva's" is één bestand. Elke groep waar die ene opname op staat krijgt dan precies
+      // één stem, en "de hoogste" is wie de tabel toevallig eerst teruggeeft -- een gok met een
+      // getal erbij. Eén nummer staat op een dozijn verzamelaars; dat zegt niets over deze map.
+      expect(bestReleaseGroup([['a', 'b', 'c']]), isNull);
+    });
+
+    test('een gelijkspel is geen winnaar', () {
+      expect(bestReleaseGroup([['a'], ['b']]), isNull);
+      // Maar een echte meerderheid wel, ook als er een tweede groep meestemt.
+      expect(bestReleaseGroup([['a'], ['a', 'b'], ['a']]), 'a');
+    });
+
     test('helemaal niets is geen antwoord', () {
       expect(bestReleaseGroup(const []), isNull);
       expect(bestReleaseGroup([<String>[], <String>[]]), isNull);
+    });
+  });
+
+  group('een mislukking van vóór het luisteren krijgt één nieuwe kans', () {
+    // Gemeten op de avond dat vingerafdrukken uitkwamen: de acht verzamelaars waar het voor gebouwd
+    // was, waren uren eerder al mislukt op titel. Ze droegen dus failedMs, en de takenlijst van de
+    // veeg kwam terug met "25 te doen van 132" -- met geen van de acht erin. De functie kon pas de
+    // volgende dag geprobeerd worden.
+    AlbumFacts mislukt({required bool heard}) => AlbumFacts(
+          uid: 'u',
+          trackSetHash: 'h',
+          failedMs: DateTime.now().millisecondsSinceEpoch,
+          heard: heard,
+        );
+
+    test('nog niet geluisterd: opnieuw proberen', () {
+      expect(
+          needsResolve(mislukt(heard: false),
+              trackSetHash: 'h', nowMs: DateTime.now().millisecondsSinceEpoch, canHear: true),
+          isTrue);
+    });
+
+    test('al geluisterd: met rust laten', () {
+      expect(
+          needsResolve(mislukt(heard: true),
+              trackSetHash: 'h', nowMs: DateTime.now().millisecondsSinceEpoch, canHear: true),
+          isFalse,
+          reason: 'één extra poging, geen lus');
+    });
+
+    test('kan niet luisteren: dan verandert er niets', () {
+      expect(
+          needsResolve(mislukt(heard: false),
+              trackSetHash: 'h', nowMs: DateTime.now().millisecondsSinceEpoch, canHear: false),
+          isFalse);
+    });
+
+    test('een geslaagde opzoeking wordt niet opnieuw gedaan om te luisteren', () {
+      final goed = AlbumFacts(
+        uid: 'u',
+        trackSetHash: 'h',
+        source: 'MusicBrainz',
+        tracklist: const [ChoiceTrack('1', 'Iets', 200)],
+      );
+      expect(
+          needsResolve(goed,
+              trackSetHash: 'h', nowMs: DateTime.now().millisecondsSinceEpoch, canHear: true),
+          isFalse);
+    });
+
+    test('"geluisterd" overleeft de schijf', () {
+      final j = mislukt(heard: true).toJson();
+      expect(AlbumFacts.fromJson(j)!.heard, isTrue);
+      expect(AlbumFacts.fromJson(mislukt(heard: false).toJson())!.heard, isFalse);
     });
   });
 

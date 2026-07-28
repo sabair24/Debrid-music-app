@@ -2140,6 +2140,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         nowMs: DateTime.now().millisecondsSinceEpoch,
         pinnedMbid: pinnedMbid,
         pinned: pinned,
+        canHear: canHear(context.read<AppSettings>()),
         force: force)) {
       setState(() {
         _adoptFacts(known!);

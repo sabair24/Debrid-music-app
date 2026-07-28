@@ -61,6 +61,7 @@ class AlbumFacts {
     this.year,
     this.failedMs,
     this.networkFailed = false,
+    this.heard = false,
   });
 
   /// The album this belongs to — see album_id.dart. Not artist+title, precisely so that correcting
@@ -105,6 +106,18 @@ class AlbumFacts {
   /// fifteen of twenty-six on every run.
   final bool networkFailed;
 
+  /// Has the AUDIO been asked about this record, or only the catalogues?
+  ///
+  /// Written to disk, unlike [networkFailed], because it describes what has been TRIED and that
+  /// outlives the attempt. It exists for one reason: a record that both catalogues could not name is
+  /// stamped with [failedMs] and goes blind for a day, so on the evening fingerprinting shipped, the
+  /// eight compilations it was built for were not even in the sweep's to-do list. They had failed
+  /// hours earlier, by title, before there was anything else to ask.
+  ///
+  /// So a failure from before the audio was consulted earns exactly one fresh attempt, and a failure
+  /// that already includes the audio does not. One extra try per record, never a loop.
+  final bool heard;
+
   bool get isEmpty => tracklist.isEmpty;
 
   /// Has the album itself changed under these facts?
@@ -131,6 +144,7 @@ class AlbumFacts {
         if (!bestFit) 'bestFit': false,
         if (year != null) 'year': year,
         if (failedMs != null) 'failedMs': failedMs,
+        if (heard) 'heard': true,
         if (tracklist.isNotEmpty)
           'tracks': [
             for (final t in tracklist)
@@ -169,6 +183,7 @@ class AlbumFacts {
       bestFit: j['bestFit'] != false,
       year: (j['year'] as num?)?.toInt(),
       failedMs: (j['failedMs'] as num?)?.toInt(),
+      heard: j['heard'] == true,
       tracklist: [
         for (final t in (j['tracks'] as List? ?? const []))
           if (t is Map) track(t),
@@ -200,9 +215,18 @@ bool needsResolve(
   String? pinnedMbid,
   int? pinned,
   bool force = false,
+  bool canHear = false,
 }) {
   if (force || known == null) return true;
   if (known.staleFor(trackSetHash)) return true;
+  // A record that failed BEFORE the audio could be asked gets one more turn, without waiting out the
+  // day the miss cache would otherwise impose.
+  //
+  // Measured, the evening fingerprinting shipped: the eight compilations it was built for had all
+  // failed hours earlier by title, so they carried failedMs and the sweep's to-do list came back
+  // "25 te doen van 132" — with not one of the eight in it. The feature could not have been tried
+  // until the next day. [AlbumFacts.heard] makes that a single extra attempt rather than a loop.
+  if (canHear && known.isEmpty && !known.heard) return true;
   // A pin the stored answer does not already describe. Picking a pressing changes no file at all,
   // so the hash above cannot see it — and serving the tracklist of the pressing someone just
   // replaced is the one staleness they would certainly notice.
