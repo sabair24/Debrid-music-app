@@ -130,6 +130,16 @@ void main() {
     });
   });
 
+  test('de meta-parameter scheidt met een SPATIE, niet met een plus', () {
+    // Eén teken, en het verschil tussen een antwoord en stilte. De documentatie schrijft
+    // meta=recordings+releasegroups, maar dat is een URL waarin + een spatie IS. Als formulierveld
+    // codeert Dart een letterlijke plus als %2B, en dan kreeg de server één onbekend woord binnen.
+    // Gemeten op Michael Jackson: perfecte match op 0,9998 en nul metadata -- wat van buitenaf leest
+    // als "AcoustID kent deze plaat niet".
+    expect(AcoustIdService.metaParam, isNot(contains('+')));
+    expect(AcoustIdService.metaParam.split(' '), containsAll(['recordings', 'releasegroupids']));
+  });
+
   group('antwoord lezen', () {
     test('beide vormen van release-groepen worden gelezen, beste score eerst', () {
       final body = {

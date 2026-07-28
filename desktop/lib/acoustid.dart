@@ -102,6 +102,17 @@ class AcoustIdService {
   /// Somewhere to write what this is doing. Set by the warmer, like the other services.
   static void Function(String)? trace;
 
+  /// What to ask for back. Separated by a SPACE, and that one character is the difference between
+  /// an answer and silence.
+  ///
+  /// The documentation writes `meta=recordings+releasegroups`, but that is a URL, where `+` IS a
+  /// space — AcoustID splits this value on spaces. Sent as a form field, Dart encodes a literal plus
+  /// as %2B, so the server received one unknown word "recordings+releasegroupids" and answered
+  /// exactly as it should: a perfect fingerprint match, score 0.9998 on Michael Jackson, and no
+  /// metadata whatsoever. From the outside that reads as "AcoustID does not know this record", which
+  /// is how eight compilations came back "0 herkend" with nothing in the log to say why.
+  static const String metaParam = 'recordings releasegroupids';
+
   static Future<void> _slot() {
     final slot = _turn.then((_) async {
       final since = DateTime.now().difference(_lastCall);
@@ -135,7 +146,7 @@ class AcoustIdService {
               'client': key,
               'duration': fp.seconds.round().toString(),
               'fingerprint': code,
-              'meta': 'recordings+releasegroupids',
+              'meta': metaParam,
             },
           )
           .timeout(const Duration(seconds: 15));

@@ -21,6 +21,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import 'acoustid.dart';
 import 'album_facts.dart';
 import 'album_facts_resolver.dart';
 import 'discogs.dart';
@@ -222,6 +223,7 @@ class FactsWarmer extends ChangeNotifier {
     DiscogsService.laneTrace = _log.line;
     MusicBrainzService.laneTrace = _log.line;
     resolveTrace = _log.line;
+    AcoustIdService.trace = _log.line;
     // Said once, at the top, because "is the helper actually there" is the first question every
     // fingerprint problem starts with — and a packaging mistake is invisible from inside the app.
     final fp = Fingerprinter();
