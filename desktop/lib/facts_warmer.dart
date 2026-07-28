@@ -531,13 +531,26 @@ class FactsWarmer extends ChangeNotifier {
   Future<void> _discogsBackfill() async {
     if (_stopped || !settings.warmFacts || library.isRemote) return;
     _log.line('discogs-naveeg: start');
-    var did = 0, over = 0;
+    var did = 0, over = 0, geenFeiten = 0;
     for (final album in _artOrder()) {
-      if (_stopped || !settings.warmFacts || library.scanning) break;
+      if (_stopped || !settings.warmFacts) {
+        _log.line('discogs-naveeg: gestopt (gestopt=$_stopped aan=${settings.warmFacts})');
+        break;
+      }
+      // A rescan is a reason to WAIT, not to give up. It used to break here, and measured on the
+      // real library that ended the whole backfill five milliseconds after it started — "opgehaald=0
+      // alwarm=0", nothing looked at — because a scan happened to be running at that moment. Nothing
+      // ever ran it again, so one unlucky instant cost the entire pass for the session.
+      while (library.scanning && !_stopped) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
       final uid = library.uidOf(album);
       if (uid.isEmpty || _discogsTried.contains(uid)) continue;
       final facts = library.facts.get(uid);
-      if (facts == null || facts.tracklist.isEmpty) continue;
+      if (facts == null || facts.tracklist.isEmpty) {
+        geenFeiten++;
+        continue;
+      }
 
       final expected = facts.tracklist.length;
       final mbid = library.pinnedMbid(album) ?? facts.mbid;
@@ -575,7 +588,7 @@ class FactsWarmer extends ChangeNotifier {
       // Breathing room, so opening an album never queues behind this.
       await Future<void>.delayed(discogsBreather);
     }
-    _log.line('discogs-naveeg: klaar — opgehaald=$did alwarm=$over');
+    _log.line('discogs-naveeg: klaar — opgehaald=$did alwarm=$over geenfeiten=$geenFeiten');
   }
 
   /// One Discogs attempt per record per session.

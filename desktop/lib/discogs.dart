@@ -1125,11 +1125,22 @@ extension DiscogsArtwork on DiscogsService {
       // lookups; asking them in turn cost seconds each. Order is still respected: the front comes
       // from the FIRST pressing that has one, because that is the sleeve this record is known by, so
       // the results are walked in hit order regardless of which answer arrived first.
+      // Four at a time, and now it keeps going while a role is still missing.
+      //
+      // It used to stop after four pressings that had ANY scans, which is what a request budget buys
+      // you — except the Cover Art Archive does not have one. Their own API documentation says it
+      // plainly: "There are currently no rate limiting rules in place at coverartarchive.org."
+      // Stopping at four while the back cover and the disc were still empty was caution paid to a
+      // toll booth that is not there, and it is a large part of why so many records ended up with a
+      // front and nothing else. The front is usually settled by the first pressing; the back and the
+      // disc are the rare ones, so those are what the extra waves are for.
+      //
+      // Still bounded — this is somebody's charity server and each wave is four image lookups.
       const perWave = 4;
-      const maxLooked = 4;
+      const maxLooked = 12;
       Uint8List? front, back, disc;
       var looked = 0;
-      for (var w = 0; w * perWave < hits.length && w < 3; w++) {
+      for (var w = 0; w * perWave < hits.length && w < 5; w++) {
         if (looked >= maxLooked || (front != null && back != null && disc != null)) break;
         final wave = hits.skip(w * perWave).take(perWave).toList();
         final scans = await Future.wait([for (final r in wave) mb.art(r.mbid)]);
