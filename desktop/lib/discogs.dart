@@ -1003,20 +1003,35 @@ extension DiscogsArtwork on DiscogsService {
       }
     }
 
-    // Otherwise the Cover Art Archive first — unless a Discogs release is pinned, because that is
-    // the user's own answer to "which pressing is this", and quietly describing it with someone
-    // else's scans is exactly the disregard that made pinning feel broken before.
+    // The archive again, now across the record's OTHER pressings.
+    //
+    // This used to be skipped entirely whenever anything was pinned. For a Discogs pin that is right:
+    // the user answered "which pressing is this", and describing it with someone else's scans is the
+    // disregard that made pinning feel broken. But for a MusicBrainz pin it was throwing away the
+    // cheapest source there is. Traced on ANTI: the pinned pressing gives `voor=true achter=false
+    // cd=false`, and one pressing having no back cover says nothing about the record — a sibling
+    // pressing in the same free archive very often has one. The front still comes from the pinned
+    // pressing; only the roles it cannot fill are looked for elsewhere.
     ReleaseArt? caa = partial;
-    if (pinned == null && (pinnedMbid == null || pinnedMbid.isEmpty)) {
-      caa = await _artFromMusicBrainz(artist, album, expectedTracks);
-      if (caa != null && caa.front != null && caa.back != null && caa.disc != null) {
+    final needMore = partial == null || partial.back == null || partial.disc == null;
+    if (pinned == null && needMore) {
+      final wider = await _artFromMusicBrainz(artist, album, expectedTracks);
+      if (wider != null) {
+        caa = ReleaseArt(
+          front: partial?.front ?? wider.front,
+          back: partial?.back ?? wider.back,
+          disc: partial?.disc ?? wider.disc,
+        );
         final art = said(caa);
-        await _writeArt(dir, art);
-        return art;
+        if (enough(art)) {
+          await _writeArt(dir, art);
+          return art;
+        }
       }
       // A partial answer is kept, not discarded. Requiring a front threw away a back cover and a
       // disc scan that were already downloaded whenever the front was the one image missing.
     }
+    partial = caa;
 
     // The warmer stops here. What the free sources found is written, but WITHOUT the done marker
     // unless it is complete enough — so the page still knows to run the full chain when someone
