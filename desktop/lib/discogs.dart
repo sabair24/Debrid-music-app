@@ -269,8 +269,18 @@ class DiscogsService {
     _turn = slot.catchError((_) {});
     final queuedAt = DateTime.now();
     _queued++;
+    // A slot that never arrives has to say so ITSELF — the line below only prints once the wait is
+    // over, so a lane that hangs prints nothing at all. MusicBrainz got this first and its silence
+    // is what ruled that side out; this side had no such proof.
+    var binnen = false;
+    unawaited(Future<void>.delayed(const Duration(seconds: 5)).then((_) {
+      if (binnen) return;
+      laneTrace?.call('  [discogs] WACHT AL 5s op een slot voor ${Uri.parse(url).path} '
+          '(nog $_queued in de rij, budget $_remaining)');
+    }));
     try {
       await slot;
+      binnen = true;
       final wachtte = DateTime.now().difference(queuedAt);
       _queued--;
       // Only when it actually cost something. A lane that hands out slots promptly says nothing.
@@ -592,7 +602,13 @@ class DiscogsService {
   }) {
     final key = '${normKey(artist)}|${normKey(album)}|$expectedTracks|${pinned ?? 0}';
     final running = _editionInFlight[key];
-    if (running != null) return running;
+    if (running != null) {
+      // Joining a chain that is ALREADY hung means hanging with it, silently and forever. Worth
+      // saying out loud: an abandoned lookup keeps running (a Dart timeout does not cancel), so this
+      // table can hand out a future that will never complete.
+      laneTrace?.call('  [discogs] sluit aan bij een lopende uitgave-zoektocht voor $key');
+      return running;
+    }
     final work = _editionFresh(artist, album, expectedTracks, pinned)
         .whenComplete(() => _editionInFlight.remove(key));
     _editionInFlight[key] = work;
@@ -607,13 +623,20 @@ class DiscogsService {
     int expectedTracks,
     int? pinned,
   ) async {
+    final t0 = DateTime.now();
+    void stap(String s) =>
+        laneTrace?.call('    [uitgave +${DateTime.now().difference(t0).inMilliseconds}ms] $s');
+    stap('begin "$artist" / "$album" (aantal=$expectedTracks pin=${pinned ?? "-"})');
+
     // A release the user pointed at is not a candidate to be weighed against the others — it is the
     // answer. Everything the page shows is read from it.
     if (pinned != null && pinned > 0) {
       final picked = await release(pinned);
+      stap('gepinde uitgave: ${picked == null ? "niets" : "gevonden"}');
       if (picked != null) return picked;
     }
     final masters = await masterIds(artist, album);
+    stap('masters: ${masters.length}');
     if (masters.isEmpty) return null;
     DiscogsEdition? fallback;
     for (final master in masters.take(3)) {
@@ -633,6 +656,7 @@ class DiscogsService {
       // makes "digital, else CD, else vinyl" true for a record with hundreds of pressings.
       for (final format in releaseFormatOrder) {
         final ordered = orderByPreference(await _versions(master, format: format), main: main);
+        stap('  master $master, formaat $format: ${ordered.length} persingen');
         if (ordered.isEmpty) continue;
         // Only ever fetch a handful in full: each one is a request out of sixty a minute.
         for (final v in ordered.take(3)) {
