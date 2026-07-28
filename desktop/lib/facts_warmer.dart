@@ -270,6 +270,20 @@ class FactsWarmer extends ChangeNotifier {
     if (!settings.warmFacts) return;
     if (library.scanning) return; // the album list is about to be replaced anyway
 
+    // The scans get the line to themselves while they are working.
+    //
+    // Making start() call these one after the other was not enough, and warm.log said so: the artwork
+    // sweep began at 09:29:08 and twelve seconds later the rearm timer launched the facts sweep
+    // alongside it anyway. Both then shared sixty Discogs requests a minute — and this app triples its
+    // own spacing once fewer than twelve are left — so every record ran past ninety seconds and five
+    // minutes produced nothing. "One at a time" has to be enforced here, not just in the caller.
+    if (_artRunning) {
+      _log.line('feiten: uitgesteld, de scans zijn aan de beurt');
+      _rearm?.cancel();
+      _rearm = Timer(rearmDelay, () => unawaited(_wantFacts()));
+      return;
+    }
+
     final todo = _todo();
     _log.line('feiten: veeg start, ${todo.length} te doen van ${library.albums.length} albums');
     if (todo.isEmpty) return;
