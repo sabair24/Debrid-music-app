@@ -2131,11 +2131,19 @@ extension LibraryNormalise on LibraryStore {
     final pool = [...official];
     final steps = <NormaliseStep>[];
     for (final t in recordTracks(album)) {
-      // Only FLAC. writeFlacFields is the only writer this app has, and the tag writers for the
-      // other containers in its dependency drop every field they do not model — so for an MP3 the
-      // honest thing is to leave the file alone and say so, rather than quietly skip it.
-      if (!t.path.toLowerCase().endsWith('.flac')) {
-        steps.add(NormaliseStep(t, null, skipped: 'geen FLAC — alleen FLAC kan de app veilig herschrijven'));
+      // FLAC and MP3. Anything else this app has no writer for, and a writer that drops the fields
+      // it does not model is worse than leaving the file alone — so those are named here rather
+      // than quietly skipped.
+      //
+      // The MP3 half was added later, and this line was missed the first time round: `writeTagFields`
+      // and `applyRecognised` had both learned about ID3 while the plan still refused every mp3
+      // before it got that far. The one route that writes tags in bulk therefore never used the new
+      // writer at all, which is exactly the sort of half-landed change a screenshot catches and a
+      // green test suite does not.
+      final laag = t.path.toLowerCase();
+      if (!laag.endsWith('.flac') && !laag.endsWith('.mp3')) {
+        steps.add(NormaliseStep(t, null,
+            skipped: 'alleen FLAC en MP3 kan de app veilig herschrijven'));
         continue;
       }
       final best = matchOfficial(pool, t.title, t.duration?.inSeconds ?? 0);
@@ -2186,7 +2194,12 @@ extension LibraryNormalise on LibraryStore {
       // What is in the file right now, for exactly the fields about to be overwritten. Read before
       // the write or there is nothing to go back to; a field that is absent is recorded as null so
       // the undo deletes it again instead of leaving our value behind.
-      final raw = readFlacRawFields(File(s.track.path));
+      // Read from the container the file actually is, or the undo has nothing to put back: an mp3
+      // read with the FLAC reader comes back empty, and "empty" means "this field was absent", which
+      // would make undoing DELETE the tags instead of restoring them.
+      final raw = s.track.path.toLowerCase().endsWith('.mp3')
+          ? readMp3RawFields(File(s.track.path))
+          : readFlacRawFields(File(s.track.path));
       final before = {for (final k in tags.vorbisFields.keys) k: raw[k.toLowerCase()]};
       if (!await stampTags(File(s.track.path), tags)) {
         failed.add(s.name);

@@ -566,9 +566,10 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, Tr
 
 /// Write an official release's identity into a landed file. No-op unless [t] is authoritative.
 ///
-/// Only FLAC is rewritten. The tag writers for the other containers in this app's dependency drop
-/// every field they don't model — ReplayGain, MusicBrainz ids, anything hand-written — so for an
-/// MP3 the honest thing is to leave the file alone and let its correct filename and folder speak.
+/// FLAC and MP3, through [writeTagFields]. Both are rewritten by this app's own writers, which
+/// rebuild only the tag and copy every other byte — the reason it is safe to do at all. Anything
+/// else is left alone and lets its correct filename and folder speak, because the tag writers on
+/// offer for those containers drop every field they do not model.
 ///
 /// Runs in an isolate: parsing a stranger's file is exactly where a throw would otherwise leak the
 /// handle and leave the track unmovable for the rest of the session.

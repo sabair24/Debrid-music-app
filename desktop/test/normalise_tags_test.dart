@@ -182,23 +182,30 @@ void main() {
     expect(vers.albums.length, 1, reason: 'één plaat, één tegel');
   });
 
-  test('een niet-FLAC wordt gemeld, niet stil overgeslagen', () {
+  test('een mp3 doet mee, een container zonder schrijver wordt gemeld', () {
+    // Dit legde eerst vast dat élke niet-FLAC werd overgeslagen. Sinds de app een eigen ID3-schrijver
+    // heeft -- die alleen de tag herbouwt en elk ander frame byte voor byte laat staan -- geldt dat
+    // niet meer voor mp3. Wat blijft gelden is de reden erachter: een container waarvoor geen veilige
+    // schrijver bestaat wordt bij naam gemeld en niet stil overgeslagen.
     final a = file('01.flac', {'TITLE': 'Everybody', 'ARTIST': 'BSB', 'ALBUM': 'X', 'TRACKNUMBER': '1'}, secs: 220);
-    final mp3 = Track(
-        path: '${scratch.path}${Platform.pathSeparator}02.mp3',
-        title: 'As Long as You Love Me',
+    Track los(String naam, String titel, int nr, int secs) => Track(
+        path: '${scratch.path}${Platform.pathSeparator}$naam',
+        title: titel,
         artist: 'BSB',
         album: 'X',
-        trackNo: 2,
-        duration: const Duration(seconds: 216));
+        trackNo: nr,
+        duration: Duration(seconds: secs));
+    final mp3 = los('02.mp3', 'As Long as You Love Me', 2, 216);
+    final wav = los('03.wav', 'Everybody', 3, 220);
 
-    final lib = LibraryStore()..tracks.addAll([a.track, mp3]);
+    final lib = LibraryStore()..tracks.addAll([a.track, mp3, wav]);
     lib.rebuildAlbums();
-    final plan = lib.planNormalise(Album('X', 'BSB', [a.track, mp3]), pressing());
+    final plan = lib.planNormalise(Album('X', 'BSB', [a.track, mp3, wav]), pressing());
 
     expect(plan.skipped, hasLength(1));
-    expect(plan.skipped.single.skipped, contains('geen FLAC'));
-    expect(plan.writing.map((s) => s.name), ['01.flac']);
+    expect(plan.skipped.single.name, '03.wav');
+    expect(plan.skipped.single.skipped, contains('FLAC en MP3'));
+    expect(plan.writing.map((s) => s.name), containsAll(['01.flac', '02.mp3']));
   });
 
   test('een nummer dat de persing niet kent houdt titel en nummer', () {
