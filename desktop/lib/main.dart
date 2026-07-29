@@ -29,6 +29,8 @@ import 'connectivity.dart';
 import 'enrichment.dart';
 import 'facts_warmer.dart';
 import 'fingerprint.dart';
+import 'flac_tags.dart';
+import 'mp3_tags.dart';
 import 'lan/sharing.dart';
 import 'lan/tokens.dart';
 import 'cloud/catalog_mirror.dart';
@@ -2238,6 +2240,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
     setState(() => _recognising = true);
     final found = <Track, AcoustIdMatch>{};
+    final current = <String, ({String artist, String title})>{};
     final unknown = <String>[];
     try {
       // Every tile the record was split into, not just the one that was clicked — named through the
@@ -2245,6 +2248,16 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       for (final t in LibraryNormalise(lib).recordTracks(album)) {
         final a = await fp.of(t.path, compressed: true);
         final naam = t.path.split(RegExp(r'[\\/]')).last;
+        // Read from the FILE, because that is what a write would change. A Track carries the album
+        // artist for a compilation, so comparing against it invents differences that are not there.
+        final laag = t.path.toLowerCase();
+        final raw = laag.endsWith('.mp3')
+            ? readMp3RawFields(File(t.path))
+            : laag.endsWith('.flac')
+                ? readFlacRawFields(File(t.path))
+                : const <String, String?>{};
+        current[t.path] =
+            (artist: raw['artist'] ?? t.artist, title: raw['title'] ?? t.title);
         if (a == null) {
           unknown.add(naam);
           continue;
@@ -2267,8 +2280,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
     final done = await showDialog<bool>(
         context: context,
-        builder: (_) =>
-            RecogniseTracksDialog(album: album, found: found, unknown: unknown));
+        builder: (_) => RecogniseTracksDialog(
+            album: album, found: found, current: current, unknown: unknown));
     if (done == true && mounted) _refresh();
   }
 
@@ -12601,12 +12614,26 @@ class RecogniseTracksDialog extends StatefulWidget {
   /// track → what the audio said, best match first. Only files with an answer are in here.
   final Map<Track, AcoustIdMatch> found;
 
+  /// What the FILE's own tags say right now, by path.
+  ///
+  /// Not [Track.artist], and that distinction is the whole reason this map exists. Measured on
+  /// "Jij Bent Zo Mooi": the file's ARTIST already read "Petra", while the Track carried
+  /// "Various Artists" — which is the ALBUM artist, and a perfectly correct value for a
+  /// compilation. Comparing against the Track made a confirmation screen state the current value
+  /// wrongly and offer a repair that was not one. A screen that asks "shall I change this to that"
+  /// has to be right about "this".
+  final Map<String, ({String artist, String title})> current;
+
   /// Files that were asked about and came back unknown, by name, so the screen can say so instead
   /// of quietly listing fewer rows than there are files.
   final List<String> unknown;
 
   const RecogniseTracksDialog(
-      {super.key, required this.album, required this.found, required this.unknown});
+      {super.key,
+      required this.album,
+      required this.found,
+      required this.current,
+      required this.unknown});
 
   @override
   State<RecogniseTracksDialog> createState() => _RecogniseTracksDialogState();
@@ -12625,9 +12652,15 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
 
   late final Set<String> _chosen = {for (final e in _changes) e.key.path};
 
-  static bool _differs(Track t, AcoustIdMatch m) =>
-      (m.artist.isNotEmpty && normKey(m.artist) != normKey(t.artist)) ||
-      (m.title.isNotEmpty && normKey(m.title) != normKey(t.title));
+  /// What the file says now — falling back to the Track only when the tags could not be read.
+  ({String artist, String title}) _nu(Track t) =>
+      widget.current[t.path] ?? (artist: t.artist, title: t.title);
+
+  bool _differs(Track t, AcoustIdMatch m) {
+    final nu = _nu(t);
+    return (m.artist.isNotEmpty && normKey(m.artist) != normKey(nu.artist)) ||
+        (m.title.isNotEmpty && normKey(m.title) != normKey(nu.title));
+  }
 
   Future<void> _go() async {
     setState(() => _busy = true);
@@ -12696,7 +12729,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
                       const SizedBox(width: 4),
                       Expanded(
                         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text('${e.key.artist} — ${e.key.title}',
+                          Text('${_nu(e.key).artist} — ${_nu(e.key).title}',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(color: _muted, fontSize: 12.5)),
