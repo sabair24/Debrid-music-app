@@ -48,6 +48,22 @@ const String kTrackTotal = 'TRACKTOTAL';
 /// The v2.3 spelling for frames that were renamed in v2.4.
 const Map<String, String> _v23 = {'TDRC': 'TYER'};
 
+/// ID3v2.2 spells every frame in three letters. Not an abbreviation of the later names — a separate
+/// vocabulary that has to be mapped, which is half the reason v2.2 was refused outright at first.
+const Map<String, String> _v22 = {
+  'TIT2': 'TT2',
+  'TPE1': 'TP1',
+  'TPE2': 'TP2',
+  'TALB': 'TAL',
+  'TRCK': 'TRK',
+  'TDRC': 'TYE',
+  'TYER': 'TYE',
+};
+
+/// The frame id this version uses for a v2.4-spelled name.
+String _idFor(String id, int major) =>
+    major == 2 ? (_v22[id] ?? id) : (major == 3 ? (_v23[id] ?? id) : id);
+
 /// One ID3v2 tag, as far as we need to understand it.
 class Id3Header {
   const Id3Header(this.major, this.revision, this.flags, this.size);
@@ -61,14 +77,24 @@ class Id3Header {
   final int size;
 
   bool get unsynchronised => flags & 0x80 != 0;
-  bool get extendedHeader => flags & 0x40 != 0;
+
+  /// Bit 6, and it does not mean the same thing in every version: an extended header in v2.3/v2.4,
+  /// whole-tag COMPRESSION in v2.2 — where the spec simply says a reader should ignore the tag.
+  /// Either way it is a layout this does not model, so either way it is a refusal.
+  bool get awkward => flags & 0x40 != 0;
+
+  /// Bytes of frame header: id + size (+ flags, which v2.2 does not have).
+  int get frameHeaderSize => major == 2 ? 6 : 10;
+
+  /// Letters in a frame id. Three in v2.2, four after.
+  int get idSize => major == 2 ? 3 : 4;
 
   /// Can this file be rewritten safely at all?
   ///
-  /// Only v2.3 and v2.4 with none of the awkward flags. Everything else is a different layout, and
-  /// "probably close enough" is not a standard this file is written to.
-  bool get writable =>
-      (major == 3 || major == 4) && !unsynchronised && !extendedHeader;
+  /// v2.2, v2.3 and v2.4, none of them carrying a flag whose layout is not modelled here. Anything
+  /// else is a different format, and "probably close enough" is not a standard this file is written
+  /// to — a writer that half-understands a layout is how a library gets quietly corrupted.
+  bool get writable => major >= 2 && major <= 4 && !unsynchronised && !awkward;
 }
 
 /// Read the tag header, or null when the file does not start with one.
@@ -114,12 +140,12 @@ Map<String, String?> readMp3RawFields(File f) {
     for (final fr in _frames(body, h.major)) {
       if (!fr.id.startsWith('T')) continue;
       final naam = kMp3Frames.entries
-          .where((e) => (h.major == 3 ? _v23[e.value] ?? e.value : e.value) == fr.id)
+          .where((e) => _idFor(e.value, h.major) == fr.id)
           .map((e) => e.key)
           .firstOrNull;
       if (naam == null) continue;
       final waarde = _decodeText(body.sublist(fr.dataStart, fr.dataEnd));
-      if (fr.id == 'TRCK' && waarde != null && waarde.contains('/')) {
+      if (fr.id == _idFor('TRCK', h.major) && waarde != null && waarde.contains('/')) {
         final d = waarde.split('/');
         out['tracknumber'] = d[0].trim();
         out[kTrackTotal.toLowerCase()] = d[1].trim();
@@ -146,23 +172,32 @@ class _Frame {
 /// rest of this is not something to reason about", and stopping is the safe answer.
 List<_Frame> _frames(Uint8List body, int major) {
   final out = <_Frame>[];
+  final idLen = major == 2 ? 3 : 4;
+  final headLen = major == 2 ? 6 : 10;
+  final b = body;
   var i = 0;
-  while (i + 10 <= body.length) {
-    if (body[i] == 0) break; // padding
-    final id = String.fromCharCodes(body.sublist(i, i + 4));
-    if (!RegExp(r'^[A-Z0-9]{4}$').hasMatch(id)) break;
-    // The trap: v2.3 frame sizes are plain big-endian, v2.4 made them syncsafe. Reading one as the
-    // other lands mid-frame and everything after it is garbage.
-    final b = body;
-    final size = major == 4
-        ? ((b[i + 4] & 0x7F) << 21) |
-            ((b[i + 5] & 0x7F) << 14) |
-            ((b[i + 6] & 0x7F) << 7) |
-            (b[i + 7] & 0x7F)
-        : (b[i + 4] << 24) | (b[i + 5] << 16) | (b[i + 6] << 8) | b[i + 7];
-    if (size < 0 || i + 10 + size > body.length) break;
-    out.add(_Frame(id, i, i + 10, i + 10 + size));
-    i += 10 + size;
+  while (i + headLen <= body.length) {
+    if (b[i] == 0) break; // padding
+    final id = String.fromCharCodes(b.sublist(i, i + idLen));
+    if (!RegExp('^[A-Z0-9]{$idLen}\$').hasMatch(id)) break;
+    // Three shapes, and getting them confused lands mid-frame with everything after it garbage:
+    // v2.2 is three plain bytes, v2.3 four plain bytes, v2.4 four SYNCSAFE bytes. That last change
+    // is the one implementations trip over, because a v2.4 size read as plain still looks like a
+    // number.
+    final int size;
+    if (major == 2) {
+      size = (b[i + 3] << 16) | (b[i + 4] << 8) | b[i + 5];
+    } else if (major == 4) {
+      size = ((b[i + 4] & 0x7F) << 21) |
+          ((b[i + 5] & 0x7F) << 14) |
+          ((b[i + 6] & 0x7F) << 7) |
+          (b[i + 7] & 0x7F);
+    } else {
+      size = (b[i + 4] << 24) | (b[i + 5] << 16) | (b[i + 6] << 8) | b[i + 7];
+    }
+    if (size < 0 || i + headLen + size > body.length) break;
+    out.add(_Frame(id, i, i + headLen, i + headLen + size));
+    i += headLen + size;
   }
   return out;
 }
@@ -257,6 +292,15 @@ bool _readOnly(File f) {
 }
 
 Uint8List _frameHeader(String id, int size, int major) {
+  if (major == 2) {
+    // Six bytes: three letters, three size bytes, and no flags at all.
+    final b = Uint8List(6);
+    b.setRange(0, 3, id.codeUnits);
+    b[3] = (size >> 16) & 0xFF;
+    b[4] = (size >> 8) & 0xFF;
+    b[5] = size & 0xFF;
+    return b;
+  }
   final b = Uint8List(10);
   b.setRange(0, 4, id.codeUnits);
   if (major == 4) {
@@ -295,20 +339,20 @@ bool writeMp3Fields(File f, Map<String, String?> fields, {void Function(String)?
 
   final wanted = <String, String?>{};
   for (final e in fields.entries) {
-    var id = kMp3Frames[e.key.toUpperCase()];
+    final id = kMp3Frames[e.key.toUpperCase()];
     if (id == null) continue;
-    if (h.major == 3) id = _v23[id] ?? id;
-    wanted[id] = e.value;
+    wanted[_idFor(id, h.major)] = e.value;
   }
   // Join the number and the total the way ID3 wants them. The total on its own is not a frame, so a
   // caller that sets only TRACKTOTAL needs the number the file already carries to write it at all.
   final totaalGevraagd = fields.keys.any((k) => k.toUpperCase() == kTrackTotal);
   if (totaalGevraagd) {
     final totaal = fields.entries.firstWhere((e) => e.key.toUpperCase() == kTrackTotal).value;
-    final nummer = wanted.containsKey('TRCK')
-        ? wanted['TRCK']
+    final trck = _idFor('TRCK', h.major);
+    final nummer = wanted.containsKey(trck)
+        ? wanted[trck]
         : readMp3RawFields(f)['tracknumber'];
-    wanted['TRCK'] = (nummer == null || nummer.isEmpty)
+    wanted[trck] = (nummer == null || nummer.isEmpty)
         ? null
         : (totaal == null || totaal.isEmpty) ? nummer : '$nummer/$totaal';
   }

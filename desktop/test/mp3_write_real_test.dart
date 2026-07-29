@@ -83,8 +83,10 @@ void main() {
     });
 
     var geschreven = 0, geweigerd = 0;
+    final versiesGeschreven = <int>{};
     for (var i = 0; i < mp3s.length; i++) {
       final kopie = mp3s[i].copySync('${dir.path}${Platform.pathSeparator}$i.mp3');
+      final versie = readId3Header(kopie)?.major;
       final audioVoor = _audioNa(kopie);
       final vreemdVoor = _vreemdeFrames(kopie);
 
@@ -104,6 +106,7 @@ void main() {
         continue;
       }
       geschreven++;
+      if (versie != null) versiesGeschreven.add(versie);
 
       final na = readMp3RawFields(kopie);
       expect(na['artist'], 'Petra', reason: naam);
@@ -120,8 +123,15 @@ void main() {
         expect(vreemdNa[k], vreemdVoor[k], reason: '$naam: $k is niet byte-identiek gebleven');
       }
     }
-    print('geschreven: $geschreven, geweigerd: $geweigerd van ${mp3s.length}');
+    print('geschreven: $geschreven, geweigerd: $geweigerd van ${mp3s.length} '
+        '(versies geschreven: ${(versiesGeschreven.toList()..sort()).map((v) => "2.$v").join(", ")})');
     expect(geschreven, greaterThan(0), reason: 'als alles geweigerd wordt is er niets bewezen');
+    // Alle drie de vormen, want ze hebben elk een andere framekop: v2.2 heeft drie letters, drie
+    // groottebytes en geen vlaggen; v2.3 vier en vier plus vlaggen; v2.4 dezelfde kop maar met een
+    // syncsafe grootte. Zonder deze regel zou een terugval naar "v2.2 weer weigeren" nog steeds
+    // groen zijn, want er blijven dan genoeg bestanden over om iets te bewijzen.
+    expect(versiesGeschreven, containsAll([2, 3, 4]),
+        reason: 'elk van de drie framekoppen hoort geschreven te zijn');
   });
 
   test('nummer en totaal reizen samen in één veld', () {
