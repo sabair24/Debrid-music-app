@@ -16,6 +16,7 @@ import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'acoustid.dart';
 import 'album_facts.dart';
 import 'album_facts_resolver.dart';
 import 'booklet_view.dart';
@@ -2215,6 +2216,64 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     if (done == true && mounted) _refresh();
   }
 
+  /// Ask the AUDIO what this record's files are, and offer to write the answer into them.
+  ///
+  /// The catalogues answer "which album is this", and for a loose file filed under a compilation
+  /// they cannot answer at all — "Various Artists" names nobody. A fingerprint answers a question
+  /// they were never asked: which RECORDING this is. Measured on this library, that turns
+  /// "Various Artists — Jij Bent Zo Mooi" into "Petra — Jij bent zo mooi" at 99% certainty.
+  Future<void> _recogniseTracks() async {
+    final lib = context.read<LibraryStore>();
+    final settings = context.read<AppSettings>();
+    final acoust = AcoustIdService(settings);
+    if (!acoust.available) {
+      _srcToast(context, 'Zet eerst een AcoustID-sleutel in Instellingen — gratis via acoustid.org.');
+      return;
+    }
+    final fp = Fingerprinter();
+    if (!fp.available) {
+      _srcToast(context, 'fpcalc ontbreekt — herinstalleer de app om dit te gebruiken.');
+      return;
+    }
+
+    setState(() => _recognising = true);
+    final found = <Track, AcoustIdMatch>{};
+    final unknown = <String>[];
+    try {
+      // Every tile the record was split into, not just the one that was clicked — named through the
+      // extension because two of them define recordTracks and Dart will not pick for us.
+      for (final t in LibraryNormalise(lib).recordTracks(album)) {
+        final a = await fp.of(t.path, compressed: true);
+        final naam = t.path.split(RegExp(r'[\\/]')).last;
+        if (a == null) {
+          unknown.add(naam);
+          continue;
+        }
+        final m = await acoust.identify(a);
+        if (m.isEmpty) {
+          unknown.add(naam);
+        } else {
+          found[t] = m.first;
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _recognising = false);
+      _srcToast(context, 'Herkennen mislukt: $e');
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _recognising = false);
+
+    final done = await showDialog<bool>(
+        context: context,
+        builder: (_) =>
+            RecogniseTracksDialog(album: album, found: found, unknown: unknown));
+    if (done == true && mounted) _refresh();
+  }
+
+  bool _recognising = false;
+
   Future<void> _undoTagWrites() async {
     final lib = context.read<LibraryStore>();
     final n = lib.undoableTagWrites(album);
@@ -2555,6 +2614,21 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                         icon: const Icon(Icons.label_outline_rounded),
                         tooltip: 'Tags gelijktrekken — één album, één nummering, in de bestanden',
                         onPressed: _official.isEmpty ? null : _normaliseTags,
+                      ),
+                    // Deliberately NOT gated on a tracklist: this is what to reach for exactly when
+                    // there isn't one. A file whose album is a compilation nobody can find is the
+                    // case the catalogues cannot answer and the audio can.
+                    if (!context.read<LibraryStore>().isRemote)
+                      IconButton(
+                        icon: _recognising
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2, color: _accent))
+                            : const Icon(Icons.graphic_eq_rounded),
+                        tooltip: 'Herkennen op geluid — wat zegt de audio dat dit is?',
+                        onPressed: _recognising ? null : _recogniseTracks,
                       ),
                     // Only appears once there is something to undo. A button that is there but does
                     // nothing teaches you not to trust it.
@@ -12504,6 +12578,191 @@ class _PickAlbumDialogState extends State<PickAlbumDialog> {
                   autofocus: isTv,
                   onPressed: () => Navigator.of(context).pop(), child: const Text('Annuleren')),
             ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// What the AUDIO says each file is, next to what its tags claim — before anything is written.
+///
+/// For a loose file this is the only question worth asking. `13 - Various Artists - Jij Bent Zo
+/// Mooi.mp3` cannot be identified by its album, because "Various Artists" names nobody and the
+/// album is a compilation no catalogue can find. The fingerprint answers in one line: Petra, "Jij
+/// bent zo mooi", 0.99.
+///
+/// Only ARTIST and TITLE, and only where the two disagree with the file. AcoustID knows which
+/// RECORDING this is; it says nothing about which pressing this copy came from, so the album, the
+/// number and the year are left exactly as they are.
+class RecogniseTracksDialog extends StatefulWidget {
+  final Album album;
+
+  /// track → what the audio said, best match first. Only files with an answer are in here.
+  final Map<Track, AcoustIdMatch> found;
+
+  /// Files that were asked about and came back unknown, by name, so the screen can say so instead
+  /// of quietly listing fewer rows than there are files.
+  final List<String> unknown;
+
+  const RecogniseTracksDialog(
+      {super.key, required this.album, required this.found, required this.unknown});
+
+  @override
+  State<RecogniseTracksDialog> createState() => _RecogniseTracksDialogState();
+}
+
+class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
+  bool _busy = false;
+  List<String> _failed = const [];
+
+  /// Rows where the audio actually disagrees with the file. A match that confirms what the tags
+  /// already say is reassuring and completely pointless to write.
+  late final List<MapEntry<Track, AcoustIdMatch>> _changes = [
+    for (final e in widget.found.entries)
+      if (_differs(e.key, e.value)) e,
+  ];
+
+  late final Set<String> _chosen = {for (final e in _changes) e.key.path};
+
+  static bool _differs(Track t, AcoustIdMatch m) =>
+      (m.artist.isNotEmpty && normKey(m.artist) != normKey(t.artist)) ||
+      (m.title.isNotEmpty && normKey(m.title) != normKey(t.title));
+
+  Future<void> _go() async {
+    setState(() => _busy = true);
+    final lib = context.read<LibraryStore>();
+    final r = await lib.applyRecognised({
+      for (final e in _changes)
+        if (_chosen.contains(e.key.path))
+          e.key: (artist: e.value.artist, title: e.value.title),
+    });
+    if (!mounted) return;
+    if (r.failed.isEmpty) {
+      _srcToast(context, '${r.written} bijgewerkt · ongedaan maken kan met de terugknop');
+      Navigator.of(context).pop(true);
+      return;
+    }
+    // Named, not counted. "3 written" reads like success when four were asked for, and the one that
+    // did not land is nearly always the track playing at that moment.
+    setState(() {
+      _busy = false;
+      _failed = r.failed;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: dialogWidth(context, 760),
+        height: dialogHeight(context, 620),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Wat zegt de audio?',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text(
+              _changes.isEmpty
+                  ? widget.found.isEmpty
+                      ? 'Geen van deze nummers is herkend.'
+                      : 'Alles herkend, en de tags kloppen al — er valt niets te wijzigen.'
+                  : '${_changes.length} ${_changes.length == 1 ? 'nummer wijkt' : 'nummers wijken'} af '
+                      '· alleen artiest en titel worden geschreven, album en nummering blijven',
+              style: const TextStyle(color: _muted, fontSize: 12.5),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: ListView(children: [
+                for (final e in _changes)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(11),
+                    decoration:
+                        BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(9)),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Checkbox(
+                        value: _chosen.contains(e.key.path),
+                        activeColor: _accent,
+                        onChanged: _busy
+                            ? null
+                            : (v) => setState(() => v == true
+                                ? _chosen.add(e.key.path)
+                                : _chosen.remove(e.key.path)),
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text('${e.key.artist} — ${e.key.title}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: _muted, fontSize: 12.5)),
+                          const SizedBox(height: 3),
+                          Row(children: [
+                            const Icon(Icons.arrow_forward_rounded, size: 14, color: _accent),
+                            const SizedBox(width: 7),
+                            Expanded(
+                              child: Text('${e.value.artist} — ${e.value.title}',
+                                  maxLines: 2,
+                                  style: const TextStyle(
+                                      fontSize: 13.5, fontWeight: FontWeight.w600)),
+                            ),
+                            Text('${(e.value.score * 100).round()}%',
+                                style: const TextStyle(color: _accent2, fontSize: 11.5)),
+                          ]),
+                        ]),
+                      ),
+                    ]),
+                  ),
+                if (widget.unknown.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text('Niet herkend (${widget.unknown.length})',
+                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 4),
+                  for (final n in widget.unknown)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(n,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: _muted, fontSize: 11.5)),
+                    ),
+                ],
+                if (_failed.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  const Text('Niet gelukt',
+                      style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                  for (final f in _failed)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(f, style: const TextStyle(color: _accent2, fontSize: 11.5)),
+                    ),
+                ],
+              ]),
+            ),
+            const SizedBox(height: 8),
+            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              TextButton(
+                  autofocus: isTv,
+                  onPressed: () => Navigator.of(context).pop(_failed.isNotEmpty),
+                  child: Text(_changes.isEmpty ? 'Sluiten' : 'Annuleren')),
+              if (_changes.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  onPressed: _busy || _chosen.isEmpty ? null : _go,
+                  child: _busy
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : Text('${_chosen.length} in de bestanden schrijven'),
+                ),
+              ],
+            ]),
           ]),
         ),
       ),

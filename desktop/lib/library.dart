@@ -2212,6 +2212,60 @@ extension LibraryNormalise on LibraryStore {
     return (written: written, failed: failed);
   }
 
+  /// Write what the AUDIO says a file is into the file itself: artist and title, nothing else.
+  ///
+  /// The narrowest possible write, on purpose. AcoustID answers "which recording is this", and that
+  /// is exactly two fields — it says nothing about which album this copy came from, which track
+  /// number it had there, or what year that pressing is, so this touches none of them. A record
+  /// tagged "Various Artists — Jij Bent Zo Mooi" becomes "Petra — Jij bent zo mooi" and stays in the
+  /// same folder, on the same album, under the same number.
+  ///
+  /// Same guarantees as [applyNormalise], because it is the same machinery: the previous values are
+  /// read BEFORE the write so [undoTagWrites] can put them back, a field that was absent is recorded
+  /// as null so undoing deletes it again rather than leaving ours behind, and a file the player has
+  /// open comes back in `failed` instead of being silently skipped.
+  Future<({int written, List<String> failed})> applyRecognised(
+      Map<Track, ({String artist, String title})> naming) async {
+    var written = 0;
+    final failed = <String>[];
+    for (final e in naming.entries) {
+      final t = e.key;
+      final naam = t.path.split(Platform.pathSeparator).last;
+      if (!t.path.toLowerCase().endsWith('.flac')) {
+        // The other containers' tag writers in this app's dependency drop every field they do not
+        // model, so for an MP3 the honest thing is to leave the file alone and say so.
+        failed.add('$naam — alleen FLAC kan de app veilig herschrijven');
+        continue;
+      }
+      final raw = readFlacRawFields(File(t.path));
+      final velden = <String, String?>{
+        'ARTIST': e.value.artist.isEmpty ? null : e.value.artist,
+        'TITLE': e.value.title.isEmpty ? null : e.value.title,
+      }..removeWhere((_, v) => v == null);
+      if (velden.isEmpty) continue;
+      final before = {for (final k in velden.keys) k: raw[k.toLowerCase()]};
+      if (!writeFlacFields(File(t.path), velden)) {
+        failed.add(naam);
+        continue;
+      }
+      written++;
+      _tagUndo[t.path] = before;
+      // A correction saying the artist or title is something else is now a second truth that can
+      // only drift away from the file. The rest of the user's corrections stay theirs.
+      final c = _corrections[t.path];
+      if (c != null) {
+        c..remove('title')..remove('artist');
+        if (c.isEmpty) _corrections.remove(t.path);
+      }
+    }
+    if (written > 0) {
+      await _saveTagUndo();
+      await saveCorrectionsNow();
+      await scan();
+    }
+    return (written: written, failed: failed);
+  }
+
   /// The same recording held twice in this record, across every tile it was split into.
   ///
   /// Reads the files to decide which copy wins — a handful of pairs per album, so cheap enough to

@@ -29,12 +29,20 @@ import 'settings.dart';
 
 /// What AcoustID says one file is: the recording, and the releases it appears on.
 class AcoustIdMatch {
-  const AcoustIdMatch(this.score, this.recordingId, this.title, this.releaseGroups);
+  const AcoustIdMatch(this.score, this.recordingId, this.title, this.releaseGroups,
+      {this.artist = ''});
 
   /// How sure AcoustID is, 0..1. Its own number, not ours.
   final double score;
   final String recordingId;
   final String title;
+
+  /// Everyone credited, joined the way the tag would read it. Empty when the recording carries no
+  /// artist — which happens, and is why nothing downstream may assume this is filled.
+  ///
+  /// Kept beside the title because for a loose file the pair IS the answer: a track sitting in the
+  /// root under a compilation's name is not going to be identified by its album, only by what it is.
+  final String artist;
 
   /// Release-group MBIDs this recording appears on. The raw material for the vote.
   final List<String> releaseGroups;
@@ -195,7 +203,17 @@ class AcoustIdService {
             if (s.isNotEmpty) groups.add(s);
           }
         }
-        out.add(AcoustIdMatch(score, id, '${rec['title'] ?? ''}', groups));
+        // "artists" is a list because a duet is two credits, and joining them with the ampersand
+        // the tag would use keeps the answer usable as-is.
+        final wie = <String>[];
+        for (final a in lijst(rec['artists'])) {
+          if (a is Map<String, dynamic>) {
+            final n = '${a['name'] ?? ''}'.trim();
+            if (n.isNotEmpty) wie.add(n);
+          }
+        }
+        out.add(AcoustIdMatch(score, id, '${rec['title'] ?? ''}', groups,
+            artist: wie.join(' & ')));
       }
     }
     // Best first: a caller that only wants one answer should get the likeliest.

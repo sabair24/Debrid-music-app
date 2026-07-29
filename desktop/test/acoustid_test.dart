@@ -185,6 +185,46 @@ void main() {
       expect(out.last.releaseGroups, ['g1', 'g2']);
     });
 
+    test('de artiest komt mee, en een duet leest als één regel', () {
+      // Voor een los bestand IS het paar artiest-plus-titel het antwoord: een nummer dat in de
+      // wortel staat onder de naam van een verzamelaar valt niet op zijn album te herkennen.
+      final out = AcoustIdService.parseLookup({
+        'status': 'ok',
+        'results': [
+          {
+            'score': 1.0,
+            'recordings': [
+              {
+                'id': 'r',
+                'title': 'Voodoo',
+                'artists': [
+                  {'name': 'Nunca'},
+                  {'name': 'Pat Krimson'},
+                ],
+              }
+            ]
+          }
+        ],
+      });
+      expect(out.single.artist, 'Nunca & Pat Krimson');
+      expect(out.single.title, 'Voodoo');
+    });
+
+    test('een opname zonder artiest levert een lege naam, geen uitzondering', () {
+      final out = AcoustIdService.parseLookup({
+        'status': 'ok',
+        'results': [
+          {
+            'score': 1.0,
+            'recordings': [
+              {'id': 'r', 'title': 'Naamloos', 'artists': 'rommel'}
+            ]
+          }
+        ],
+      });
+      expect(out.single.artist, isEmpty);
+    });
+
     test('rommel levert niets op in plaats van een uitzondering', () {
       expect(AcoustIdService.parseLookup({'status': 'ok'}), isEmpty);
       expect(AcoustIdService.parseLookup({'status': 'ok', 'results': 'geen lijst'}), isEmpty);
