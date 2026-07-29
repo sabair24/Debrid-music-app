@@ -65,17 +65,30 @@ double similarity(List<int> a, List<int> b, {int maxOffset = 30}) {
   if (a.isEmpty || b.isEmpty) return 0;
   var best = 0.0;
   for (var offset = -maxOffset; offset <= maxOffset; offset++) {
-    final start = offset < 0 ? -offset : 0;
-    final overlap = (offset < 0 ? a.length + offset : b.length - offset)
-        .clamp(0, offset < 0 ? b.length : a.length);
+    // Written as two mirrored cases rather than one clever expression, because the clever expression
+    // was wrong: both branches shifted the SAME list forward, so a positive offset read a[i+offset]
+    // while the overlap had been worked out for b — and on two fingerprints of different lengths
+    // that walks off the end. It survived the first measurements because they happened to compare
+    // near-equal lengths; the library-wide pass, which sorts by duration and compares across the
+    // whole spread, threw a range error on the third second.
+    //
+    // `offset` is how far B is shifted later than A.
+    final int ai, bi, overlap;
+    if (offset >= 0) {
+      ai = 0;
+      bi = offset;
+      overlap = (b.length - offset) < a.length ? b.length - offset : a.length;
+    } else {
+      ai = -offset;
+      bi = 0;
+      overlap = (a.length + offset) < b.length ? a.length + offset : b.length;
+    }
     // Too little to judge on. Comparing eleven frames of a four-minute song finds a coincidence
     // sooner or later, and a coincidence scored 1.0 is worse than no answer.
     if (overlap < 20) continue;
     var bits = 0;
     for (var i = 0; i < overlap; i++) {
-      final x = a[offset < 0 ? start + i : i + offset];
-      final y = b[offset < 0 ? i : start + i];
-      bits += _popcount(x ^ y);
+      bits += _popcount(a[ai + i] ^ b[bi + i]);
     }
     final score = 1 - (bits / (overlap * 32));
     if (score > best) best = score;

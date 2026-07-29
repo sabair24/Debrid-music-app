@@ -27,6 +27,7 @@ import 'editions.dart';
 import 'connectivity.dart';
 import 'enrichment.dart';
 import 'facts_warmer.dart';
+import 'fingerprint.dart';
 import 'lan/sharing.dart';
 import 'lan/tokens.dart';
 import 'cloud/catalog_mirror.dart';
@@ -10092,6 +10093,52 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
   bool _testing = false;
   bool _rtBusy = false;
+
+  /// The listen-for-duplicates pass: whether it is running, how far, and what it came to.
+  bool _dupeBusy = false;
+  int _dupeDone = 0, _dupeTotal = 0;
+  String? _dupeResult;
+
+  Future<void> _findSoundDupes() async {
+    final lib = context.read<LibraryStore>();
+    setState(() {
+      _dupeBusy = true;
+      _dupeResult = null;
+      _dupeDone = 0;
+      _dupeTotal = lib.tracks.length;
+    });
+    List<SameRecordingPair> paren;
+    try {
+      paren = await lib.duplicatesEverywhere(onProgress: (done, total) {
+        // Every file would be a rebuild per fingerprint; a tenth of the library is enough for the
+        // number to move and cheap enough not to matter.
+        if (!mounted || (done % 20 != 0 && done != total)) return;
+        setState(() {
+          _dupeDone = done;
+          _dupeTotal = total;
+        });
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _dupeBusy = false;
+        _dupeResult = 'Zoeken mislukt: $e';
+      });
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _dupeBusy = false);
+    if (paren.isEmpty && !Fingerprinter().available) {
+      setState(() => _dupeResult = 'fpcalc ontbreekt — herinstalleer de app om dit te gebruiken.');
+      return;
+    }
+    final done = await showDialog<bool>(
+        context: context, builder: (_) => SoundDuplicatesDialog(pairs: paren));
+    if (!mounted) return;
+    setState(() => _dupeResult = done == true
+        ? 'Opgeruimd — kijk in $dupeFolder als je iets terug wil.'
+        : '${paren.length} ${paren.length == 1 ? 'paar' : 'paren'} gevonden');
+  }
   bool _tidying = false;
   String? _tidyResult;
   final Map<String, ConnResult> _conn = {};
@@ -10501,6 +10548,53 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(_tidyResult!, style: TextStyle(color: _accent2, fontSize: 12)),
                       ),
+                    // Its own entry, next to the tidy-up rather than on an album page, because the
+                    // duplicates that cost the most disk do not share a record — one copy loose in
+                    // the root and one filed away, or the same download in two Soulseek folders.
+                    if (!context.read<LibraryStore>().isRemote) ...[
+                      const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('Dubbele opnames zoeken',
+                                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                                const SizedBox(height: 2),
+                                Text(
+                                    _dupeDone > 0 && _dupeBusy
+                                        ? 'Luisteren… $_dupeDone van $_dupeTotal'
+                                        : 'Vergelijkt hoe je bestanden KLINKEN, niet hoe ze heten — zo komen '
+                                            'twee rips van hetzelfde nummer boven, ook onder een andere titel of '
+                                            'in een andere map. De eerste keer duurt dat ongeveer een minuut; '
+                                            'daarna is het onmiddellijk.',
+                                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          FilledButton.icon(
+                            style: FilledButton.styleFrom(
+                                backgroundColor: _panel2, foregroundColor: Colors.white),
+                            onPressed: _dupeBusy ? null : _findSoundDupes,
+                            icon: _dupeBusy
+                                ? const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
+                                : const Icon(Icons.graphic_eq_rounded, size: 16),
+                            label: Text(_dupeBusy ? 'Bezig…' : 'Zoeken'),
+                          ),
+                        ],
+                      ),
+                      if (_dupeResult != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child:
+                              Text(_dupeResult!, style: TextStyle(color: _accent2, fontSize: 12)),
+                        ),
+                    ],
                     // Tracks removed "from library only" are still on disk — offer them back.
                     Consumer<LibraryStore>(
                       builder: (_, lib, __) => lib.hiddenCount == 0
@@ -12410,6 +12504,162 @@ class _PickAlbumDialogState extends State<PickAlbumDialog> {
                   autofocus: isTv,
                   onPressed: () => Navigator.of(context).pop(), child: const Text('Annuleren')),
             ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// The same recording, twice, anywhere in the library — found by LISTENING, not by reading names.
+///
+/// Deliberately its own screen rather than a line on an album page: the expensive duplicates do not
+/// share a record. Measured over 389 files, the five it finds are a track sitting loose in the root
+/// as well as filed under its album, the same recording downloaded into two different Soulseek
+/// folders, one compilation track held as both .flac and .m4a, a FLAC beside an MP3 of the same
+/// song, and a 242 MB rip beside an 87 MB one. Not one of those is visible from inside a record.
+///
+/// Nothing is deleted here either. The lesser copy of each pair goes to `_dubbel` beside the music,
+/// which the scan skips — so the library stops holding the song twice while the file is still there
+/// if the judgement was wrong.
+class SoundDuplicatesDialog extends StatefulWidget {
+  final List<SameRecordingPair> pairs;
+  const SoundDuplicatesDialog({super.key, required this.pairs});
+
+  @override
+  State<SoundDuplicatesDialog> createState() => _SoundDuplicatesDialogState();
+}
+
+class _SoundDuplicatesDialogState extends State<SoundDuplicatesDialog> {
+  bool _busy = false;
+
+  /// Which pairs the user still wants acted on. Everything is ticked to begin with, because every
+  /// pair here cleared the strict threshold — but the choice has to be per pair, since "the better
+  /// copy" is a judgement about a file the app has never heard the user's opinion on.
+  late final Set<String> _chosen = {for (final p in widget.pairs) p.drop.path};
+
+  Future<void> _go() async {
+    setState(() => _busy = true);
+    final lib = context.read<LibraryStore>();
+    final n = await lib
+        .parkDuplicates([for (final p in widget.pairs) if (_chosen.contains(p.drop.path)) p]);
+    if (!mounted) return;
+    _srcToast(
+        context,
+        n == 0
+            ? 'Kon niets verplaatsen — staat er een bestand open in de speler?'
+            : '$n opzij gezet in $dupeFolder · niets gewist');
+    Navigator.of(context).pop(true);
+  }
+
+  String _kort(String pad) {
+    final d = pad.split(RegExp(r'[\\/]'));
+    return d.length < 3 ? pad : d.sublist(d.length - 2).join('/');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ps = widget.pairs;
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: dialogWidth(context, 780),
+        height: dialogHeight(context, 640),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Dezelfde opname, twee keer',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text(
+              ps.isEmpty
+                  ? 'Niets gevonden — geen enkel bestand klinkt hetzelfde als een ander.'
+                  : '${ps.length} ${ps.length == 1 ? 'paar' : 'paren'} · herkend aan de audio, niet aan de naam · '
+                      'de mindere gaat naar $dupeFolder, er wordt niets gewist',
+              style: const TextStyle(color: _muted, fontSize: 12.5),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: ListView.builder(
+                itemCount: ps.length,
+                itemBuilder: (_, i) {
+                  final p = ps[i];
+                  final aan = _chosen.contains(p.drop.path);
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(11),
+                    decoration:
+                        BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(9)),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Checkbox(
+                        value: aan,
+                        activeColor: _accent,
+                        onChanged: _busy
+                            ? null
+                            : (v) => setState(() => v == true
+                                ? _chosen.add(p.drop.path)
+                                : _chosen.remove(p.drop.path)),
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(p.keep.title.isEmpty ? _kort(p.keep.path) : p.keep.title,
+                              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+                          const SizedBox(height: 4),
+                          Row(children: [
+                            const Icon(Icons.check_circle_rounded, size: 14, color: _accent2),
+                            const SizedBox(width: 7),
+                            Expanded(
+                              child: Text('blijft: ${_kort(p.keep.path)}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 11.5)),
+                            ),
+                          ]),
+                          const SizedBox(height: 2),
+                          Row(children: [
+                            const Icon(Icons.subdirectory_arrow_right_rounded,
+                                size: 14, color: _muted),
+                            const SizedBox(width: 7),
+                            Expanded(
+                              child: Text('naar $dupeFolder: ${_kort(p.drop.path)}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: _muted, fontSize: 11.5)),
+                            ),
+                          ]),
+                          if (p.why.isNotEmpty) ...[
+                            const SizedBox(height: 3),
+                            Text(p.why, style: const TextStyle(color: _muted, fontSize: 11)),
+                          ],
+                        ]),
+                      ),
+                    ]),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              TextButton(
+                  autofocus: isTv,
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: Text(ps.isEmpty ? 'Sluiten' : 'Annuleren')),
+              if (ps.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  onPressed: _busy || _chosen.isEmpty ? null : _go,
+                  child: _busy
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : Text('${_chosen.length} opzij zetten'),
+                ),
+              ],
+            ]),
           ]),
         ),
       ),

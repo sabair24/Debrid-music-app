@@ -2224,6 +2224,69 @@ extension LibraryNormalise on LibraryStore {
         prints: prints,
       );
 
+  /// Every pair of files in the WHOLE library that hold the same recording.
+  ///
+  /// [duplicateRecordings] only ever looks inside one record, and the duplicates that cost the most
+  /// disk are not there. Measured over 389 files: one track sitting loose in the root as well as
+  /// filed under its album, the same recording downloaded twice into two different Soulseek folders,
+  /// and one compilation track held as both .flac and .m4a. None of those share a record, so none of
+  /// them were findable before.
+  ///
+  /// Length first, fingerprints second. Comparing all 389 against each other is 75,000 pairs; only
+  /// comparing those already within [_dupeSlack] seconds of each other brings it to about 10,000,
+  /// and a pair whose lengths disagree by more than that is not the same recording anyway.
+  ///
+  /// Fingerprints only — deliberately no title fallback. Across records the titles are worth nothing:
+  /// "Intro" appears on nine albums, and a name-based rule here would offer real music for deletion.
+  /// [tool] is injected only by tests: outside the installed app there is no executable next to
+  /// [Platform.resolvedExecutable], so a test that does not pass it silently measures nothing.
+  Future<List<SameRecordingPair>> duplicatesEverywhere({
+    void Function(int done, int total)? onProgress,
+    String? tool,
+  }) async {
+    final fp = Fingerprinter(toolPath: tool);
+    if (!fp.available) return const [];
+
+    final prints = <String, List<int>>{};
+    final secs = <String, double>{};
+    final all = tracks.where((t) => t.path.isNotEmpty).toList();
+    for (var i = 0; i < all.length; i++) {
+      final a = await fp.of(all[i].path);
+      if (a != null && a.raw.isNotEmpty) {
+        prints[all[i].path] = a.raw;
+        secs[all[i].path] = a.seconds;
+      }
+      onProgress?.call(i + 1, all.length);
+    }
+
+    final heard = all.where((t) => prints.containsKey(t.path)).toList()
+      ..sort((x, y) => secs[x.path]!.compareTo(secs[y.path]!));
+    final out = <SameRecordingPair>[];
+    final spoken = <String>{};
+    for (var i = 0; i < heard.length; i++) {
+      final a = heard[i];
+      if (spoken.contains(a.path)) continue;
+      // Sorted by length, so the moment the gap opens past the slack every later file is further
+      // still. That turns the inner loop from "the rest of the library" into a handful.
+      for (var j = i + 1; j < heard.length; j++) {
+        final b = heard[j];
+        if (secs[b.path]! - secs[a.path]! > _dupeSlack) break;
+        if (spoken.contains(b.path)) continue;
+        if (similarity(prints[a.path]!, prints[b.path]!) < sameRecordingScore) continue;
+        final aWins = firstIsBetter(File(a.path), File(b.path));
+        final keep = aWins ? a : b, drop = aWins ? b : a;
+        out.add(SameRecordingPair(keep, drop, whyBetter(File(keep.path), File(drop.path))));
+        spoken..add(a.path)..add(b.path);
+        break;
+      }
+    }
+    return out;
+  }
+
+  /// How far two lengths may differ before they cannot be the same recording. Twelve seconds is the
+  /// same slack every other matcher in this app uses.
+  static const double _dupeSlack = 12;
+
   /// The same, after actually LISTENING to the record's files.
   ///
   /// Two hundred milliseconds per track the first time and nothing ever after, so a dozen-track

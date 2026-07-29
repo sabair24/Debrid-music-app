@@ -79,6 +79,21 @@ void main() {
       expect(similarity(a, a.sublist(0, 10)), 0.0);
     });
 
+    test('lijsten van verschillende lengte lopen niet van de rand', () {
+      // De fout die de bibliotheekbrede ronde eruit gooide: de twee helften van het uitlijnen waren
+      // geen spiegelbeeld, dus een positieve verschuiving las a[i+offset] terwijl de overlap voor b
+      // was uitgerekend. Met bijna gelijke lengtes viel dat niet op; over de hele bibliotheek, waar
+      // alles van 1 tot 20 minuten langs elkaar komt, viel het er meteen uit.
+      final kort = reeks(60);
+      final lang = reeks(900, zaad: 5);
+      expect(() => similarity(kort, lang), returnsNormally);
+      expect(() => similarity(lang, kort), returnsNormally);
+      // En de uitkomst hoort dezelfde te zijn, welke kant je hem ook invoert.
+      final a = reeks(400);
+      final b = [...a.sublist(20), ...reeks(20, zaad: 9)];
+      expect(similarity(a, b), closeTo(similarity(b, a), 1e-9));
+    });
+
     test('leeg is geen gelijkenis', () {
       expect(similarity(const [], reeks(50)), 0.0);
       expect(similarity(reeks(50), const []), 0.0);
