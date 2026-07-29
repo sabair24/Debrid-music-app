@@ -30,7 +30,7 @@ import 'settings.dart';
 /// What AcoustID says one file is: the recording, and the releases it appears on.
 class AcoustIdMatch {
   const AcoustIdMatch(this.score, this.recordingId, this.title, this.releaseGroups,
-      {this.artist = ''});
+      {this.artist = '', this.seconds});
 
   /// How sure AcoustID is, 0..1. Its own number, not ours.
   final double score;
@@ -43,6 +43,14 @@ class AcoustIdMatch {
   /// Kept beside the title because for a loose file the pair IS the answer: a track sitting in the
   /// root under a compilation's name is not going to be identified by its album, only by what it is.
   final String artist;
+
+  /// How long THIS recording runs, in seconds, or null when the answer did not say.
+  ///
+  /// The score answers "is this the same music", not "is this the same version", and those come
+  /// apart exactly where it matters. Measured: "Ain't No Other Man" scored 99% against a recording
+  /// titled "(radio edit)" — 3:17 — for a file that is the 3:49 album cut. Taking the top score
+  /// alone would have written the version marker of a recording the file is not.
+  final double? seconds;
 
   /// Release-group MBIDs this recording appears on. The raw material for the vote.
   final List<String> releaseGroups;
@@ -213,11 +221,35 @@ class AcoustIdService {
           }
         }
         out.add(AcoustIdMatch(score, id, '${rec['title'] ?? ''}', groups,
-            artist: wie.join(' & ')));
+            artist: wie.join(' & '), seconds: (rec['duration'] as num?)?.toDouble()));
       }
     }
     // Best first: a caller that only wants one answer should get the likeliest.
     out.sort((a, b) => b.score.compareTo(a.score));
     return out;
+  }
+
+  /// The match that best describes a file of [seconds] — not merely the best-scoring one.
+  ///
+  /// A fingerprint identifies the MUSIC; several recordings can share it and disagree about which
+  /// version they are. On "Ain't No Other Man" the top score, 99%, belongs to a recording titled
+  /// "(radio edit)" that runs 3:17, while the file is the 3:49 album cut. Writing that title would
+  /// have added a version marker the file does not deserve — a wrong answer arriving with high
+  /// confidence, which is the worst kind.
+  ///
+  /// So: among matches whose own length agrees with the file, take the best-scoring. Only when none
+  /// of them says how long it is does the raw top score win, because then there is nothing better to
+  /// go on. Returns null for an empty list.
+  static AcoustIdMatch? bestFor(List<AcoustIdMatch> matches, double? seconds) {
+    if (matches.isEmpty) return null;
+    if (seconds == null || seconds <= 0) return matches.first;
+    // Twelve seconds, the same slack every other matcher in this app uses.
+    final passend =
+        matches.where((m) => m.seconds != null && (m.seconds! - seconds).abs() <= 12).toList();
+    if (passend.isNotEmpty) return passend.first; // already sorted by score
+    // Nobody stated a length: no reason to prefer any of them over the best score.
+    if (matches.every((m) => m.seconds == null)) return matches.first;
+    // Lengths were stated and none of them fits. Saying nothing beats naming the wrong version.
+    return null;
   }
 }

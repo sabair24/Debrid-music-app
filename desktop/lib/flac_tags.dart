@@ -220,14 +220,20 @@ FlacTags? readFlacTags(File f) {
 ///
 /// A key mapped to null is REMOVED — that is how a stale "03/12" TRACKNUMBER gets replaced by a
 /// clean number plus its own TRACKTOTAL.
-bool writeFlacFields(File f, Map<String, String?> fields) {
+bool writeFlacFields(File f, Map<String, String?> fields, {void Function(String)? trace}) {
   if (fields.isEmpty) return false;
   RandomAccessFile? raf;
   try {
     raf = f.openSync();
     final size = raf.lengthSync();
-    if (size < 8) return false;
-    if (String.fromCharCodes(raf.readSync(4)) != 'fLaC') return false;
+    if (size < 8) {
+      trace?.call('het bestand is te klein om een FLAC te zijn');
+      return false;
+    }
+    if (String.fromCharCodes(raf.readSync(4)) != 'fLaC') {
+      trace?.call('geen FLAC-kenmerk aan het begin van het bestand');
+      return false;
+    }
 
     // Walk the metadata blocks, keeping each one's type and raw body. Only the comment block is
     // rebuilt; every other block is carried over exactly as it was found.
@@ -277,8 +283,9 @@ bool writeFlacFields(File f, Map<String, String?> fields) {
       ]);
       out.add(body);
     }
-    return _finish(f, out.toBytes(), audio);
-  } catch (_) {
+    return _finish(f, out.toBytes(), audio, trace);
+  } catch (e) {
+    trace?.call('$e');
     return false; // a file we can't rewrite safely is one we leave alone
   } finally {
     try {
@@ -288,7 +295,7 @@ bool writeFlacFields(File f, Map<String, String?> fields) {
 }
 
 /// Write beside the original and rename over it, so an interruption can never leave half a file.
-bool _finish(File f, List<int> meta, List<int> audio) {
+bool _finish(File f, List<int> meta, List<int> audio, [void Function(String)? trace]) {
   final tmp = File('${f.path}.tags');
   try {
     final sink = tmp.openSync(mode: FileMode.write);
@@ -301,7 +308,13 @@ bool _finish(File f, List<int> meta, List<int> audio) {
     }
     tmp.renameSync(f.path);
     return true;
-  } catch (_) {
+  } catch (e) {
+    // The rename is where this normally fails, and "access denied" covers two different situations
+    // that need two different answers: the player is holding the file, or Windows has it marked
+    // read-only. A bare filename under "did not work" sends someone looking for a bug in the app.
+    trace?.call(e is PathAccessException
+        ? 'kon het bestand niet vervangen — staat het open in de speler, of op alleen-lezen?'
+        : '$e');
     try {
       if (tmp.existsSync()) tmp.deleteSync();
     } catch (_) {}

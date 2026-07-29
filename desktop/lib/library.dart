@@ -2264,7 +2264,7 @@ extension LibraryNormalise on LibraryStore {
       final redenen = <String>[];
       final ok = mp3
           ? writeMp3Fields(File(t.path), velden, trace: redenen.add)
-          : writeFlacFields(File(t.path), velden);
+          : writeFlacFields(File(t.path), velden, trace: redenen.add);
       if (!ok) {
         failed.add(redenen.isEmpty ? naam : '$naam — ${redenen.join('; ')}');
         continue;

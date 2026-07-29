@@ -2262,11 +2262,14 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
           unknown.add(naam);
           continue;
         }
-        final m = await acoust.identify(a);
-        if (m.isEmpty) {
+        // The file's own length decides which of the matches is meant — see [bestFor]. Null means
+        // the fingerprint was recognised but every candidate is a different version, and that is a
+        // "not recognised" as far as the user is concerned rather than a wrong suggestion.
+        final beste = AcoustIdService.bestFor(await acoust.identify(a), a.seconds);
+        if (beste == null) {
           unknown.add(naam);
         } else {
-          found[t] = m.first;
+          found[t] = beste;
         }
       }
     } catch (e) {

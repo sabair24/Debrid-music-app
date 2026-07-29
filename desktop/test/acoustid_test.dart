@@ -153,6 +153,51 @@ void main() {
     expect(AcoustIdService.metaParam.split(' '), containsAll(['recordings', 'releasegroupids']));
   });
 
+  group('welke opname is bedoeld', () {
+    AcoustIdMatch m(double score, String titel, double? secs) =>
+        AcoustIdMatch(score, 'r-$titel', titel, const [], artist: 'Christina Aguilera', seconds: secs);
+
+    test('de looptijd van het bestand beslist, niet de score alleen', () {
+      // Gemeten geval. De hoogste score, 99%, hoort bij een opname met "(radio edit)" in de titel
+      // die 3:17 duurt, terwijl het bestand de albumversie van 3:49 is. Blind de topscore nemen had
+      // een versiemarkering geschreven die het bestand niet verdient -- een fout antwoord met hoog
+      // vertrouwen, en dat is de vervelendste soort.
+      final beste = AcoustIdService.bestFor([
+        m(0.99, "Ain't No Other Man (radio edit)", 197),
+        m(0.95, "Ain't No Other Man", 229),
+      ], 229);
+      expect(beste!.title, "Ain't No Other Man");
+    });
+
+    test('zegt niemand hoe lang hij is, dan telt de score gewoon', () {
+      final beste = AcoustIdService.bestFor([
+        m(0.99, 'Iets', null),
+        m(0.80, 'Iets anders', null),
+      ], 229);
+      expect(beste!.title, 'Iets');
+    });
+
+    test('past geen enkele opgegeven lengte, dan liever niets zeggen', () {
+      // Zwijgen is beter dan de verkeerde versie benoemen: de gebruiker ziet dan "niet herkend"
+      // in plaats van een voorstel dat zijn tags zou verslechteren.
+      expect(
+          AcoustIdService.bestFor([
+            m(0.99, 'Live at Wembley', 574),
+            m(0.90, 'Extended Mix', 480),
+          ], 229),
+          isNull);
+    });
+
+    test('zonder lengte van het bestand blijft de score de enige maat', () {
+      final beste = AcoustIdService.bestFor([m(0.99, 'Iets', 197)], null);
+      expect(beste!.title, 'Iets');
+    });
+
+    test('niets in, niets uit', () {
+      expect(AcoustIdService.bestFor(const [], 200), isNull);
+    });
+  });
+
   group('antwoord lezen', () {
     test('beide vormen van release-groepen worden gelezen, beste score eerst', () {
       final body = {
