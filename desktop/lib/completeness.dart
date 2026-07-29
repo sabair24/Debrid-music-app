@@ -118,6 +118,20 @@ AlbumCompleteness matchAlbumTracks(
 
   bool durationsAgree(int? a, int? b) => a == null || b == null || a <= 0 || b <= 0 || (a - b).abs() <= _slack;
 
+  /// Wide enough for a wrong printed time, far too narrow for a different performance.
+  ///
+  /// Only the last pass uses this, and only on an exact title with a single candidate. Two numbers,
+  /// both earned: Petra's "Laat Je Gaan" is 24 seconds off a catalogue that says 3:10 — a rounded or
+  /// mistyped time — and RENAISSANCE's "Cozy" has a live take six minutes longer than the studio
+  /// cut, which must stay a MISSING track or the download that would fetch it never appears.
+  ///
+  /// A quarter as well as a minute, because a minute means nothing to a thirty-second interlude.
+  bool looseEnough(int? off, int? file) {
+    if (off == null || file == null || off <= 0 || file <= 0) return false;
+    final gap = (off - file).abs();
+    return gap <= 60 && gap <= off * 0.25;
+  }
+
   // Exact title first, across the whole list, so a looser match can never steal a file from the
   // entry that names it outright.
   for (var i = 0; i < official.length; i++) {
@@ -168,6 +182,36 @@ AlbumCompleteness matchAlbumTracks(
       claimed.add(t.path);
       break;
     }
+  }
+
+  // Very last: an EXACT title match that only the running time rejected.
+  //
+  // Measured on Het Beste Van Petra. The file is `02 - Laat Je Gaan.flac`, in that album's own
+  // folder, titled exactly what the pressing calls track 2 — and the catalogue says 3:10 where the
+  // file plays 3:34. Twenty-four seconds is well past the slack, so every pass above refused it and
+  // the record showed "2 · Laat Je Gaan — niet in bibliotheek" with the file listed underneath as
+  // not being on this release. Which is nonsense on its face.
+  //
+  // Catalogue times for a 1996 CNR compilation are rounded, mistyped, or copied from a different
+  // pressing. An exact title on the record's own tracklist is much stronger evidence than a printed
+  // duration — but only when nothing else wants either side, which is why this runs after
+  // everything else and takes only rows and files that are still free. A radio edit does not reach
+  // here at all: its title carries a version marker, so it never matched exactly to begin with.
+  for (var i = 0; i < official.length; i++) {
+    if (owned.containsKey(i)) continue;
+    final want = normKey(official[i].title);
+    if (want.isEmpty) continue;
+    final passend = [
+      for (final t in tracks)
+        if (!claimed.contains(t.path) &&
+            normKey(t.title) == want &&
+            looseEnough(official[i].seconds, t.duration?.inSeconds))
+          t,
+    ];
+    // Exactly one candidate, or it is a guess again.
+    if (passend.length != 1) continue;
+    owned[i] = passend.single;
+    claimed.add(passend.single.path);
   }
 
   return AlbumCompleteness(

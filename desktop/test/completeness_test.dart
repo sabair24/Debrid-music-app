@@ -17,6 +17,67 @@ Track _t(String title, int seconds, {String? path, String artist = 'Beyoncé', i
 ChoiceTrack _o(int n, String title, int? seconds) => ChoiceTrack('$n', title, seconds);
 
 void main() {
+  group('exacte titel tegen een afwijkende looptijd', () {
+    // Het geval van Het Beste Van Petra: het bestand heet exact zoals track 2 van de persing, staat
+    // in de map van díé plaat, en duurt 3:34 waar de catalogus 3:10 zegt. Vierentwintig seconden is
+    // ver buiten de speling, dus elke pas wees hem af en de plaat toonde "2 · Laat Je Gaan — niet in
+    // bibliotheek" met het bestand eronder als "niet op deze uitgave".
+    test('een exacte titel wint alsnog als niemand anders die rij of dat bestand wil', () {
+      final r = matchAlbumTracks(
+        [_o(1, 'Ik Leef Voor Jou', 222), _o(2, 'Laat Je Gaan', 190)],
+        [_t('Laat Je Gaan', 214, no: 2)],
+        'Petra',
+      );
+      expect(r.slots[1].track, isNotNull, reason: 'track 2 hoort gevuld te zijn');
+      expect(r.slots[1].track!.duration!.inSeconds, 214);
+      expect(r.namesEverything, isTrue, reason: 'niets hoort als "niet op deze uitgave" over te blijven');
+    });
+
+    test('twee bestanden met dezelfde titel blijven een gok, dus geen match', () {
+      // Precies waarom dit alleen bij één kandidaat mag: met twee is het weer raden. Allebei buiten
+      // de gewone speling van twaalf seconden maar binnen de ruimere grens, zodat ze allebei tot
+      // deze laatste pas komen en de dubbelzinnigheid echt is.
+      final r = matchAlbumTracks(
+        [_o(1, 'Laat Je Gaan', 190)],
+        [_t('Laat Je Gaan', 214, no: 1), _t('Laat Je Gaan', 206, no: 9)],
+        'Petra',
+      );
+      expect(r.slots[0].track, isNull);
+    });
+
+    test('een live-uitvoering blijft ontbreken, hoe exact de titel ook is', () {
+      // De grens waar dit om draait. Zonder hem zou de app een nummer dat je NIET hebt als aanwezig
+      // tellen en daarmee de download verbergen die het zou halen.
+      final r = matchAlbumTracks(
+        [_o(1, 'Cozy', 209)],
+        [_t('Cozy', 574)],
+        'Beyoncé',
+      );
+      expect(r.slots.first.missing, isTrue);
+    });
+
+    test('een korte interlude krijgt geen minuut speling', () {
+      // Een minuut betekent niets voor een nummer van dertig seconden -- vandaar ook de kwart.
+      final r = matchAlbumTracks(
+        [_o(1, 'Intro', 30)],
+        [_t('Intro', 75)],
+        'Beyoncé',
+      );
+      expect(r.slots.first.missing, isTrue);
+    });
+
+    test('een radio-edit komt hier niet eens langs', () {
+      // Zijn titel draagt een versiemarkering, dus hij matchte nooit exact -- de bescherming waar de
+      // looptijdregel voor bedoeld was blijft dus staan.
+      final r = matchAlbumTracks(
+        [_o(1, 'Laat Je Gaan', 190)],
+        [_t('Laat Je Gaan (Radio Edit)', 214, no: 1)],
+        'Petra',
+      );
+      expect(r.slots[0].track, isNull);
+    });
+  });
+
   group('matchAlbumTracks', () {
     test('one owned track out of sixteen is one owned track out of sixteen', () {
       // The case that started this: RENAISSANCE showed "1 nummers" and nothing else, so the album
