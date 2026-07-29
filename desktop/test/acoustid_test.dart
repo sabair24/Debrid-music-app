@@ -81,23 +81,23 @@ void main() {
     // was, waren uren eerder al mislukt op titel. Ze droegen dus failedMs, en de takenlijst van de
     // veeg kwam terug met "25 te doen van 132" -- met geen van de acht erin. De functie kon pas de
     // volgende dag geprobeerd worden.
-    AlbumFacts mislukt({required bool heard}) => AlbumFacts(
+    AlbumFacts mislukt({required int heard}) => AlbumFacts(
           uid: 'u',
           trackSetHash: 'h',
           failedMs: DateTime.now().millisecondsSinceEpoch,
-          heard: heard,
+          heardVersion: heard,
         );
 
     test('nog niet geluisterd: opnieuw proberen', () {
       expect(
-          needsResolve(mislukt(heard: false),
+          needsResolve(mislukt(heard: 0),
               trackSetHash: 'h', nowMs: DateTime.now().millisecondsSinceEpoch, canHear: true),
           isTrue);
     });
 
     test('al geluisterd: met rust laten', () {
       expect(
-          needsResolve(mislukt(heard: true),
+          needsResolve(mislukt(heard: kSoundVersion),
               trackSetHash: 'h', nowMs: DateTime.now().millisecondsSinceEpoch, canHear: true),
           isFalse,
           reason: 'één extra poging, geen lus');
@@ -105,7 +105,7 @@ void main() {
 
     test('kan niet luisteren: dan verandert er niets', () {
       expect(
-          needsResolve(mislukt(heard: false),
+          needsResolve(mislukt(heard: 0),
               trackSetHash: 'h', nowMs: DateTime.now().millisecondsSinceEpoch, canHear: false),
           isFalse);
     });
@@ -123,10 +123,23 @@ void main() {
           isFalse);
     });
 
-    test('"geluisterd" overleeft de schijf', () {
-      final j = mislukt(heard: true).toJson();
-      expect(AlbumFacts.fromJson(j)!.heard, isTrue);
-      expect(AlbumFacts.fromJson(mislukt(heard: false).toJson())!.heard, isFalse);
+    test('een gerepareerde geluidsweg levert opnieuw een beurt op', () {
+      // Precies wat er misging: versie 1 vroeg AcoustID met een plus in plaats van een spatie, dus
+      // die "poging" kon per definitie niets vinden -- en verbruikte wel de enige kans. Nu opent een
+      // hoger versienummer die kans weer, en dezelfde versie niet.
+      expect(
+          needsResolve(mislukt(heard: kSoundVersion - 1),
+              trackSetHash: 'h', nowMs: DateTime.now().millisecondsSinceEpoch, canHear: true),
+          isTrue);
+    });
+
+    test('"geluisterd" overleeft de schijf, ook de oude booleaanse vorm', () {
+      final j = mislukt(heard: kSoundVersion).toJson();
+      expect(AlbumFacts.fromJson(j)!.heardVersion, kSoundVersion);
+      expect(AlbumFacts.fromJson(mislukt(heard: 0).toJson())!.heardVersion, 0);
+      // Wat de ene build met een bool wegschreef betekent "versie 1 geprobeerd" -- en versie 1 is
+      // juist de kapotte, dus die platen horen hun beurt terug te krijgen.
+      expect(AlbumFacts.fromJson({'uid': 'u', 'hash': 'h', 'heard': true})!.heardVersion, 1);
     });
   });
 

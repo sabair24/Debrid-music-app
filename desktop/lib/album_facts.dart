@@ -41,6 +41,18 @@ import 'models.dart';
 /// Discogs art key, because nothing here expires on its own.
 const int kAlbumFactsSchema = 1;
 
+/// Bumped whenever the AUDIO path changes in a way that could turn a "nothing found" into an answer.
+///
+/// Every record whose lookup came back empty under an older number gets one more turn — see
+/// [AlbumFacts.heardVersion]. Deliberately separate from [kAlbumFactsSchema]: that one invalidates
+/// stored ANSWERS, this one only re-opens stored FAILURES, which is far cheaper and is the only
+/// thing a repair to the fingerprint path actually needs.
+///
+/// 1 — first release. AcoustID was asked with `meta=recordings+releasegroupids`, a literal plus,
+///     which the server reads as one unknown word. Every lookup matched and returned no metadata.
+/// 2 — the plus became a space.
+const int kSoundVersion = 2;
+
 /// The name of the file dropped next to an album's music.
 const String kSidecarName = '.debridmusic-album.json';
 
@@ -61,7 +73,7 @@ class AlbumFacts {
     this.year,
     this.failedMs,
     this.networkFailed = false,
-    this.heard = false,
+    this.heardVersion = 0,
   });
 
   /// The album this belongs to — see album_id.dart. Not artist+title, precisely so that correcting
@@ -106,17 +118,25 @@ class AlbumFacts {
   /// fifteen of twenty-six on every run.
   final bool networkFailed;
 
-  /// Has the AUDIO been asked about this record, or only the catalogues?
+  /// WHICH version of the audio path has been asked about this record. 0 = none.
   ///
   /// Written to disk, unlike [networkFailed], because it describes what has been TRIED and that
-  /// outlives the attempt. It exists for one reason: a record that both catalogues could not name is
-  /// stamped with [failedMs] and goes blind for a day, so on the evening fingerprinting shipped, the
-  /// eight compilations it was built for were not even in the sweep's to-do list. They had failed
-  /// hours earlier, by title, before there was anything else to ask.
+  /// outlives the attempt. It began as a bool, and the bool was not enough — the story is worth
+  /// keeping because it is the whole reason this is a number.
   ///
-  /// So a failure from before the audio was consulted earns exactly one fresh attempt, and a failure
-  /// that already includes the audio does not. One extra try per record, never a loop.
-  final bool heard;
+  /// A record neither catalogue can name is stamped with [failedMs] and goes blind for a day. So on
+  /// the evening fingerprinting shipped, the eight compilations it was built for were not in the
+  /// sweep's to-do list at all: they had failed hours earlier, by title, before there was anything
+  /// else to ask. Hence "one fresh attempt once we can listen".
+  ///
+  /// But that attempt was then spent by a build whose lookup was broken — a plus where AcoustID
+  /// wanted a space — and the flag recorded "we listened" for a run that could not hear. The fix
+  /// shipped and the records it was for were locked out for a day.
+  ///
+  /// A version fixes both halves: repairing the audio path earns every stuck record one more turn,
+  /// and a record that has already had THIS version's attempt is left alone. The same trick as
+  /// [kAlbumFactsSchema] and the `v6` in the artwork key.
+  final int heardVersion;
 
   bool get isEmpty => tracklist.isEmpty;
 
@@ -144,7 +164,7 @@ class AlbumFacts {
         if (!bestFit) 'bestFit': false,
         if (year != null) 'year': year,
         if (failedMs != null) 'failedMs': failedMs,
-        if (heard) 'heard': true,
+        if (heardVersion > 0) 'heard': heardVersion,
         if (tracklist.isNotEmpty)
           'tracks': [
             for (final t in tracklist)
@@ -183,7 +203,9 @@ class AlbumFacts {
       bestFit: j['bestFit'] != false,
       year: (j['year'] as num?)?.toInt(),
       failedMs: (j['failedMs'] as num?)?.toInt(),
-      heard: j['heard'] == true,
+      // `true` is what the one build that wrote a bool put there. It means "version 1 was tried",
+      // and version 1 is exactly the broken one, so reading it as 1 gives those records their turn.
+      heardVersion: j['heard'] == true ? 1 : (j['heard'] as num?)?.toInt() ?? 0,
       tracklist: [
         for (final t in (j['tracks'] as List? ?? const []))
           if (t is Map) track(t),
@@ -225,8 +247,9 @@ bool needsResolve(
   // Measured, the evening fingerprinting shipped: the eight compilations it was built for had all
   // failed hours earlier by title, so they carried failedMs and the sweep's to-do list came back
   // "25 te doen van 132" — with not one of the eight in it. The feature could not have been tried
-  // until the next day. [AlbumFacts.heard] makes that a single extra attempt rather than a loop.
-  if (canHear && known.isEmpty && !known.heard) return true;
+  // until the next day. [AlbumFacts.heardVersion] makes that one attempt per version of the audio
+  // path — so repairing that path earns a turn, and repeating the same version does not.
+  if (canHear && known.isEmpty && known.heardVersion < kSoundVersion) return true;
   // A pin the stored answer does not already describe. Picking a pressing changes no file at all,
   // so the hash above cannot see it — and serving the tracklist of the pressing someone just
   // replaced is the one staleness they would certainly notice.

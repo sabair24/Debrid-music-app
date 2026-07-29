@@ -191,10 +191,10 @@ Future<AlbumFacts> resolveAlbumFacts(
   // release group they agree on is the record. Deliberately last — it costs a fingerprint per file
   // and a request per file, which is far more than a title lookup, and it is wasted on the ninety
   // per cent of records a title lookup already answers.
-  var heard = false;
+  var heard = 0;
   if (out.isEmpty) {
     try {
-      heard = canHear(settings);
+      heard = canHear(settings) ? kSoundVersion : 0;
       final gevonden = await _fromSound(album, mb, settings, stap);
       if (gevonden != null && gevonden.$2.isNotEmpty) {
         mbid = gevonden.$1.mbid;
@@ -223,7 +223,7 @@ Future<AlbumFacts> resolveAlbumFacts(
     // Only an empty answer is a failure. A record that resolved is never retried on a timer.
     // Recorded even when the audio found nothing, because "we asked" is what stops it being asked
     // every single sweep for the rest of the day.
-    heard: heard,
+    heardVersion: heard,
     failedMs: out.isEmpty ? now : null,
     networkFailed: out.isEmpty &&
         (threw ||
