@@ -1940,6 +1940,54 @@ class AlbumsGrid extends StatelessWidget {
   }
 }
 
+/// Two pixels that say "something is on its way for this record", and nothing when it is not.
+///
+/// Deliberately a line and not a spinner. Metadata arrives while you are reading the page — a
+/// tracklist, then a sleeve, then a back cover — and a spinner in the corner of every tile would
+/// turn a quiet grid into a fairground. A hairline under the artwork is visible when you look for it
+/// and invisible when you are not, which is exactly the weight this news deserves.
+///
+/// [SizedBox.shrink] when idle rather than a transparent line: an empty box takes no layout, so a
+/// card does not shift by two pixels the moment its turn comes round.
+class BusyLine extends StatelessWidget {
+  const BusyLine({super.key, required this.busy, this.width});
+
+  final bool busy;
+  final double? width;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!busy) return const SizedBox.shrink();
+    return SizedBox(
+      width: width,
+      height: 2,
+      child: LinearProgressIndicator(
+        minHeight: 2,
+        backgroundColor: Colors.white.withValues(alpha: .06),
+        valueColor: AlwaysStoppedAnimation(_accent.withValues(alpha: .55)),
+      ),
+    );
+  }
+}
+
+/// The same line, wired to whichever record the warmer is working on right now.
+///
+/// Listens to a ValueNotifier rather than the warmer itself, so a hundred and thirty tiles rebuild
+/// two pixels each instead of their whole card every time a counter moves.
+class WarmingLine extends StatelessWidget {
+  const WarmingLine({super.key, required this.uid, this.width});
+
+  final String uid;
+  final double? width;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<String?>(
+        valueListenable: FactsWarmer.busyAlbum,
+        builder: (_, busy, __) =>
+            BusyLine(busy: uid.isNotEmpty && busy == uid, width: width),
+      );
+}
+
 class AlbumCard extends StatefulWidget {
   final Album album;
   const AlbumCard({super.key, required this.album});
@@ -1987,6 +2035,9 @@ class _AlbumCardState extends State<AlbumCard> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(child: LayoutBuilder(builder: (_, c) => cover(a.cover, size: c.maxWidth))),
+              // Directly under the sleeve, where the eye already is when it wonders whether the
+              // cover is the final one.
+              WarmingLine(uid: context.read<LibraryStore>().uidOf(a)),
               const SizedBox(height: 9),
               Text(a.title,
                   maxLines: 1,
@@ -2703,6 +2754,21 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                   SliverToBoxAdapter(
                     child: CreditsPanel(artist: album.artist, album: album.title),
                   ),
+                // A line for everything still on its way, not only the tracklist.
+                //
+                // The spinner below says "fetching the official tracklist" and disappears the moment
+                // one arrives — after which the sleeve, the back cover and the disc are still being
+                // fetched with nothing on screen to say so. That is the gap: a record looks finished
+                // while it is not, and the cover changing under your eyes reads as a glitch instead
+                // of as work completing.
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+                    child: _officialBusy
+                        ? const BusyLine(busy: true)
+                        : WarmingLine(uid: context.read<LibraryStore>().uidOf(album)),
+                  ),
+                ),
                 if (_officialBusy && _official.isEmpty && !album.isSingle)
                   const SliverToBoxAdapter(
                     child: Padding(

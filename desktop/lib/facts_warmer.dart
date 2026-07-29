@@ -270,6 +270,21 @@ class FactsWarmer extends ChangeNotifier {
     return _sweep().whenComplete(() => _factsWanted--);
   }
 
+  /// Which record is being looked up right now, by uid, or null when nothing is.
+  ///
+  /// A ValueNotifier and not part of [notifyListeners] on purpose. A hundred and thirty album tiles
+  /// listening to the warmer would each rebuild on every counter tick; this way only the two-pixel
+  /// line inside a card is rebuilt, and only when the value actually changes.
+  ///
+  /// Static because the tiles have no route to the warmer instance — it lives at the top of the
+  /// provider tree and they are built deep inside a grid — and because there is only ever one.
+  static final ValueNotifier<String?> busyAlbum = ValueNotifier<String?>(null);
+
+  /// Set around one record's work and cleared after, whatever the outcome.
+  void _busy(String? uid) {
+    if (busyAlbum.value != uid) busyAlbum.value = uid;
+  }
+
   late final WarmLog _log = WarmLog('${library.configDir}${Platform.pathSeparator}warm.log');
 
   void stop() {
@@ -367,6 +382,7 @@ class FactsWarmer extends ChangeNotifier {
         // That is fine, and it is completely unreadable from the outside.
         final begonnen = DateTime.now();
         _log.line('feiten: "${album.title}" ophalen… ($_done/$_total)');
+        _busy(uid);
 
         AlbumFacts fresh;
         try {
@@ -445,6 +461,7 @@ class FactsWarmer extends ChangeNotifier {
       }
     } finally {
       _running = false;
+      _busy(null);
       await library.facts.flush();
       _notify();
       _log.line('feiten: veeg klaar, $_done van $_total behandeld');
@@ -651,8 +668,9 @@ class FactsWarmer extends ChangeNotifier {
     _artTried.add(uid);
     if (await DiscogsService(settings).hasReleaseArt(album.artist, album.title,
         expectedTracks: expected, pinned: pinned, pinnedMbid: mbid, roles: roles)) {
-      return _Art.already;
+      return _Art.already; // one file check, nothing to show a line for
     }
+    _busy(uid);
     try {
       // Logged BEFORE the call, with the clock. Without this a record that takes four minutes is
       // indistinguishable from a loop that has stopped — which is exactly the two hours I spent
@@ -680,6 +698,9 @@ class FactsWarmer extends ChangeNotifier {
     } catch (e) {
       _log.line('scans: "${album.title}" gooide $e');
       return _Art.failed;
+    } finally {
+      // Whatever happened — fetched, abandoned, thrown — the line stops.
+      _busy(null);
     }
   }
 
