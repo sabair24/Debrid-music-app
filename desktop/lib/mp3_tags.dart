@@ -37,6 +37,14 @@ const Map<String, String> kMp3Frames = {
   'DATE': 'TDRC', // v2.4 spelling; v2.3 uses TYER and is mapped below
 };
 
+/// Vorbis keeps the track number and the track total in two fields; ID3 keeps them in one, written
+/// `6/18`. Callers speak Vorbis — [writeMp3Fields] and [readMp3RawFields] do the joining and the
+/// splitting, so nothing above this file has to know which container it is talking to.
+///
+/// Without this, normalising an MP3 wrote the number and quietly dropped the total, which is exactly
+/// the half-answer that made albums disagree about their own length in the first place.
+const String kTrackTotal = 'TRACKTOTAL';
+
 /// The v2.3 spelling for frames that were renamed in v2.4.
 const Map<String, String> _v23 = {'TDRC': 'TYER'};
 
@@ -110,7 +118,14 @@ Map<String, String?> readMp3RawFields(File f) {
           .map((e) => e.key)
           .firstOrNull;
       if (naam == null) continue;
-      out[naam.toLowerCase()] = _decodeText(body.sublist(fr.dataStart, fr.dataEnd));
+      final waarde = _decodeText(body.sublist(fr.dataStart, fr.dataEnd));
+      if (fr.id == 'TRCK' && waarde != null && waarde.contains('/')) {
+        final d = waarde.split('/');
+        out['tracknumber'] = d[0].trim();
+        out[kTrackTotal.toLowerCase()] = d[1].trim();
+        continue;
+      }
+      out[naam.toLowerCase()] = waarde;
     }
   } catch (_) {/* an unreadable tag is not a reason to fail the caller */}
   return out;
@@ -284,6 +299,18 @@ bool writeMp3Fields(File f, Map<String, String?> fields, {void Function(String)?
     if (id == null) continue;
     if (h.major == 3) id = _v23[id] ?? id;
     wanted[id] = e.value;
+  }
+  // Join the number and the total the way ID3 wants them. The total on its own is not a frame, so a
+  // caller that sets only TRACKTOTAL needs the number the file already carries to write it at all.
+  final totaalGevraagd = fields.keys.any((k) => k.toUpperCase() == kTrackTotal);
+  if (totaalGevraagd) {
+    final totaal = fields.entries.firstWhere((e) => e.key.toUpperCase() == kTrackTotal).value;
+    final nummer = wanted.containsKey('TRCK')
+        ? wanted['TRCK']
+        : readMp3RawFields(f)['tracknumber'];
+    wanted['TRCK'] = (nummer == null || nummer.isEmpty)
+        ? null
+        : (totaal == null || totaal.isEmpty) ? nummer : '$nummer/$totaal';
   }
   if (wanted.isEmpty) {
     trace?.call('geen van de gevraagde velden hoort bij een frame dat we schrijven');

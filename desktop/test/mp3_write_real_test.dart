@@ -123,4 +123,40 @@ void main() {
     print('geschreven: $geschreven, geweigerd: $geweigerd van ${mp3s.length}');
     expect(geschreven, greaterThan(0), reason: 'als alles geweigerd wordt is er niets bewezen');
   });
+
+  test('nummer en totaal reizen samen in één veld', () {
+    // Vorbis heeft er twee velden voor, ID3 één, geschreven als "6/18". Zonder dit schreef het
+    // gelijktrekken op een mp3 het nummer en liet het totaal stilletjes vallen -- precies het halve
+    // antwoord waardoor albums het oneens werden over hun eigen lengte.
+    final root = Directory(r'D:\Flac music 2024');
+    if (!root.existsSync()) {
+      markTestSkipped('bibliotheek niet aanwezig');
+      return;
+    }
+    final bron = root
+        .listSync(recursive: true, followLinks: false)
+        .whereType<File>()
+        .firstWhere((f) =>
+            f.path.toLowerCase().endsWith('.mp3') &&
+            (readId3Header(f)?.writable ?? false));
+
+    final dir = Directory.systemTemp.createTempSync('trck');
+    addTearDown(() {
+      try {
+        dir.deleteSync(recursive: true);
+      } catch (_) {}
+    });
+    final kopie = bron.copySync('${dir.path}${Platform.pathSeparator}t.mp3');
+
+    expect(writeMp3Fields(kopie, {'TRACKNUMBER': '6', 'TRACKTOTAL': '18'}), isTrue);
+    var na = readMp3RawFields(kopie);
+    expect(na['tracknumber'], '6');
+    expect(na['tracktotal'], '18', reason: 'het totaal hoort terug te komen, niet te verdwijnen');
+
+    // En alleen het totaal veranderen houdt het nummer dat er al stond.
+    expect(writeMp3Fields(kopie, {'TRACKTOTAL': '20'}), isTrue);
+    na = readMp3RawFields(kopie);
+    expect(na['tracknumber'], '6');
+    expect(na['tracktotal'], '20');
+  });
 }
