@@ -5,6 +5,7 @@ import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 
 import 'editions.dart';
 import 'flac_tags.dart';
+import 'mp3_tags.dart';
 
 /// Where a downloaded release belongs in the folder tree.
 enum RelKind { album, single, compilation }
@@ -585,10 +586,16 @@ Future<bool> stampTags(File f, TrackTags t) async {
 /// Runs in an isolate: parsing a stranger's file is exactly where a throw would otherwise leak the
 /// handle and leave the track unmovable for the rest of the session.
 Future<bool> writeTagFields(File f, Map<String, String?> fields) async {
-  if (!f.path.toLowerCase().endsWith('.flac')) return false;
+  final path = f.path;
+  final mp3 = path.toLowerCase().endsWith('.mp3');
+  if (!mp3 && !path.toLowerCase().endsWith('.flac')) return false;
   try {
-    final path = f.path;
-    return await Isolate.run(() => writeFlacFields(File(path), fields))
+    // The one place the format is decided, because it is also the one place undoing goes through.
+    // Both writers keep the same promise: rebuild only the tag, copy every other byte, land through
+    // a temporary file, and refuse rather than guess.
+    return await Isolate.run(() => mp3
+            ? writeMp3Fields(File(path), fields)
+            : writeFlacFields(File(path), fields))
         .timeout(const Duration(seconds: 30));
   } catch (_) {
     return false; // the file is still filed correctly; only its tags stayed as they were

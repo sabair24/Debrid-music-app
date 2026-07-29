@@ -14,6 +14,7 @@ import 'flac_tags.dart';
 import 'lan/client.dart';
 import 'lan/dtos.dart';
 import 'models.dart';
+import 'mp3_tags.dart';
 import 'organize.dart';
 import 'settings.dart';
 import 'paths.dart';
@@ -2231,21 +2232,28 @@ extension LibraryNormalise on LibraryStore {
     for (final e in naming.entries) {
       final t = e.key;
       final naam = t.path.split(Platform.pathSeparator).last;
-      if (!t.path.toLowerCase().endsWith('.flac')) {
-        // The other containers' tag writers in this app's dependency drop every field they do not
-        // model, so for an MP3 the honest thing is to leave the file alone and say so.
-        failed.add('$naam — alleen FLAC kan de app veilig herschrijven');
+      final laag = t.path.toLowerCase();
+      final mp3 = laag.endsWith('.mp3');
+      if (!mp3 && !laag.endsWith('.flac')) {
+        failed.add('$naam — alleen FLAC en MP3 kan de app veilig herschrijven');
         continue;
       }
-      final raw = readFlacRawFields(File(t.path));
+      final raw = mp3 ? readMp3RawFields(File(t.path)) : readFlacRawFields(File(t.path));
       final velden = <String, String?>{
         'ARTIST': e.value.artist.isEmpty ? null : e.value.artist,
         'TITLE': e.value.title.isEmpty ? null : e.value.title,
       }..removeWhere((_, v) => v == null);
       if (velden.isEmpty) continue;
       final before = {for (final k in velden.keys) k: raw[k.toLowerCase()]};
-      if (!writeFlacFields(File(t.path), velden)) {
-        failed.add(naam);
+      // The reason travels with the failure. "Could not write" sends someone looking for a bug;
+      // "the file is read-only" and "ID3v2.2, not fully modelled" are things a person can act on,
+      // and both of those are real files in this library.
+      final redenen = <String>[];
+      final ok = mp3
+          ? writeMp3Fields(File(t.path), velden, trace: redenen.add)
+          : writeFlacFields(File(t.path), velden);
+      if (!ok) {
+        failed.add(redenen.isEmpty ? naam : '$naam — ${redenen.join('; ')}');
         continue;
       }
       written++;
