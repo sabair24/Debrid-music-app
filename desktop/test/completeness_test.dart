@@ -212,6 +212,34 @@ void main() {
       expect(c.slots.last.index, -1, reason: 'en het bestand blijft zichtbaar');
     });
 
+    test('één verkeerd getikte letter in een merk is geen andere mix', () {
+      // Gemeten op Technotronic — Trip on This (The Remixes). De catalogus schrijft "(Morales
+      // Spinster mix)"; op de achterkant van de hoes — en dus in de rip — staat "Spineter". Eén
+      // letter, allebei 5:35, en de plaat meldde nummer 2 als ontbrekend terwijl het bestand er vlak
+      // onder stond als "niet op deze uitgave". Twee keer hetzelfde nummer op één scherm, één keer
+      // als gat en één keer als weeskind.
+      final c = matchAlbumTracks(
+        [_o(2, 'Spin That Wheel (Morales Spinster mix)', 335)],
+        [_t('Spin That Wheel (Morales Spineter Mix)', 335, no: 2)],
+        'Technotronic',
+      );
+      expect(c.slots.first.track, isNotNull);
+      expect(c.namesEverything, isTrue, reason: 'niets hoort als weeskind over te blijven');
+    });
+
+    test('maar een kort woord blijft letterlijk, want daar is een letter geen typfout', () {
+      // "mix" tegen "remix" scheelt ook maar twee tekens, en dat ZIJN verschillende opnames. Vandaar
+      // dat de soepelheid pas begint bij woorden van zes letters: lang genoeg dat één afwijkende
+      // letter een uitschieter van de vingers is en geen ander woord.
+      final c = matchAlbumTracks(
+        [_o(1, 'Turn It Up (extended mix)', 328)],
+        [_t('Turn It Up (extended remix)', 328)],
+        'Technotronic',
+      );
+      expect(c.slots.first.missing, isTrue);
+      expect(c.slots.last.index, -1, reason: 'en het bestand blijft zichtbaar');
+    });
+
     test('two different songs are not folded together by a shared word', () {
       final c = matchAlbumTracks([_o(1, 'Like a Child', 269)], [_t('Like a Prayer', 269)], 'X');
       expect(c.slots.first.missing, isTrue);

@@ -231,9 +231,66 @@ const _slack = 12;
 
 Set<String> _words(String s) => normKey(s).split(' ').where((w) => w.isNotEmpty).toSet();
 
+/// True when [a] becomes [b] by changing, adding or removing a single character.
+bool _oneEditApart(String a, String b) {
+  if ((a.length - b.length).abs() > 1) return false;
+  if (a.length == b.length) {
+    var afwijkend = 0;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i] && ++afwijkend > 1) return false;
+    }
+    return afwijkend == 1;
+  }
+  final lang = a.length > b.length ? a : b, kort = a.length > b.length ? b : a;
+  var i = 0, j = 0, overgeslagen = 0;
+  while (i < lang.length && j < kort.length) {
+    if (lang[i] == kort[j]) {
+      i++;
+      j++;
+      continue;
+    }
+    if (++overgeslagen > 1) return false;
+    i++;
+  }
+  return true;
+}
+
+/// Are these two version markers the same marker, allowing for one slip of the finger?
+///
+/// Gemeten op Technotronic's "Trip on This (The Remixes)": de persing schrijft "(Morales Spinster
+/// mix)" en de rip "(Morales Spineter Mix)" -- één letter -- en daarmee meldde de plaat nummer 2 als
+/// ontbrekend terwijl het bestand er vlak onder stond als "niet op deze uitgave". Twee keer hetzelfde
+/// nummer op één scherm, één keer als gat en één keer als weeskind.
+///
+/// Alleen binnen woorden die lang genoeg zijn om een typfout te herkennen: "mix" tegen "remix" en
+/// "edit" tegen "mix" blijven verschillende markeringen, en dat is precies waar het vergelijken van
+/// markeringen voor bestaat. Een radio-edit wordt hier nooit de albumversie.
+bool _sameMarker(String a, String b) {
+  if (a == b) return true;
+  final aw = a.split(' '), bw = b.split(' ');
+  if (aw.length != bw.length) return false;
+  for (var i = 0; i < aw.length; i++) {
+    if (aw[i] == bw[i]) continue;
+    if (aw[i].length < 6 || bw[i].length < 6) return false;
+    if (!_oneEditApart(aw[i], bw[i])) return false;
+  }
+  return true;
+}
+
 /// Do both titles carry the same version markers? "(radio edit)" on one side and nothing on the
 /// other means two different recordings, however alike the words are.
-bool _sameMarkers(Set<String> a, Set<String> b) => a.length == b.length && a.containsAll(b);
+bool _sameMarkers(Set<String> a, Set<String> b) {
+  if (a.length != b.length) return false;
+  // Elk merk aan de ene kant moet zijn EIGEN tegenhanger aan de andere kant vinden, anders zouden
+  // twee bijna-gelijke merken allebei op dezelfde partner kunnen matchen.
+  final over = b.toList();
+  for (final x in a) {
+    final i = over.indexWhere((y) => _sameMarker(x, y));
+    if (i < 0) return false;
+    over.removeAt(i);
+  }
+  return true;
+}
 
 /// Are these two titles the same song, allowing for how differently catalogues spell them?
 ///
