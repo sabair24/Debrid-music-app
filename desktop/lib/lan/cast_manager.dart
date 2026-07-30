@@ -610,7 +610,10 @@ class CastManager {
     final state = await stateF;
     final volume = volF == null ? null : await volF;
     if (pos != null) {
-      out['positionMs'] = pos.position.inMilliseconds;
+      // Ontbreekt de klok, dan blijft het veld weg in plaats van nul te worden -- de telefoon leest een
+      // ontbrekend veld als "onbekend" en een nul als "terug bij het begin".
+      final p = pos.position;
+      if (p != null) out['positionMs'] = p.inMilliseconds;
       out['durationMs'] = pos.duration.inMilliseconds;
     }
     if (state != null) out['playing'] = state.isPlaying;

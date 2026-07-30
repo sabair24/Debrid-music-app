@@ -316,19 +316,32 @@ class UpnpControlPoint {
   /// weten WELK nummer er speelt: geeft de app het volgende nummer alvast mee (SetNextAVTransportURI),
   /// dan schuift de speaker zelf door en gaat van PLAYING naar PLAYING zonder ooit STOPPED te zeggen.
   /// Wie op STOPPED wacht om zijn index te verhogen, loopt vanaf dat moment één nummer achter.
-  Future<({Duration position, Duration duration, String? trackUri})?> positionInfo(Renderer r) async {
+  Future<({Duration? position, Duration duration, String? trackUri})?> positionInfo(Renderer r) async {
     final body = await _soap(r.avTransportUrl, 'AVTransport', 'GetPositionInfo',
         '<InstanceID>0</InstanceID>');
     if (body == null) return null;
-    final rel = _tag(body, 'RelTime'), dur = _tag(body, 'TrackDuration');
-    final position = parseUpnpTime(rel), duration = parseUpnpTime(dur);
-    if (position == null) return null;
+    return parsePositionInfo(body);
+  }
+
+  /// Wat er in een GetPositionInfo-antwoord staat.
+  ///
+  /// Apart van de SOAP-aanroep zodat de regels hieronder in een test staan in plaats van in een speaker.
+  ///
+  /// [position] mag null zijn, en dat is het hele punt van deze functie. Eerder gaf dit bestand het hele
+  /// antwoord op zodra RelTime ontbrak -- en daarmee ook de TrackURI, terwijl dáár los van de klok
+  /// informatie in zit. Een speaker die zijn positie niet meldt werd zo onvolgbaar: de app kon niet
+  /// zien dat hij een nummer verder was en bleef achterlopen tot je zelf iets aanraakte.
+  ///
+  /// Null blijft null en wordt nooit nul. Als nul gelezen zou een gepauzeerde speaker een nummer tonen
+  /// dat naar het begin was gesprongen, en de voortgangsbalk zou elke twee seconden met je vinger vechten.
+  static ({Duration? position, Duration duration, String? trackUri})? parsePositionInfo(String body) {
+    final position = parseUpnpTime(_tag(body, 'RelTime'));
+    final duration = parseUpnpTime(_tag(body, 'TrackDuration'));
     final uri = _tag(body, 'TrackURI')?.trim();
-    return (
-      position: position,
-      duration: duration ?? Duration.zero,
-      trackUri: (uri == null || uri.isEmpty) ? null : _unescape(uri),
-    );
+    final schoon = (uri == null || uri.isEmpty) ? null : _unescape(uri);
+    // Geen klok én geen URI is geen antwoord.
+    if (position == null && schoon == null) return null;
+    return (position: position, duration: duration ?? Duration.zero, trackUri: schoon);
   }
 
   /// De URI komt als XML-tekst terug, dus `&amp;` moet weer een `&` worden voordat je hem vergelijkt

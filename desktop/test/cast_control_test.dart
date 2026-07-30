@@ -47,6 +47,39 @@ void main() {
     });
   });
 
+  group('wat er in een GetPositionInfo-antwoord staat', () {
+    String soap({String? rel, String? dur, String? uri}) => '<Res>'
+        '${rel == null ? '' : '<RelTime>$rel</RelTime>'}'
+        '${dur == null ? '' : '<TrackDuration>$dur</TrackDuration>'}'
+        '${uri == null ? '' : '<TrackURI>$uri</TrackURI>'}'
+        '</Res>';
+
+    test('een gewoon antwoord geeft alle drie', () {
+      final p = UpnpControlPoint.parsePositionInfo(
+          soap(rel: '0:01:23', dur: '0:03:28', uri: 'http://x/stream/abc.flac?token=1&amp;maxRate=48000'));
+      expect(p!.position, const Duration(minutes: 1, seconds: 23));
+      expect(p.duration, const Duration(minutes: 3, seconds: 28));
+      expect(p.trackUri, contains('&maxRate=48000'), reason: 'de XML-escape moet eruit');
+    });
+
+    test('geen klok, maar wel een URI: de URI blijft', () {
+      // DE reden dat dit een losse functie werd. Wie hier null teruggeeft gooit ook de TrackURI weg, en
+      // dan kan de app niet meer zien dat zo'n speaker een nummer verder is -- hij loopt achter tot je
+      // zelf iets aanraakt.
+      final p = UpnpControlPoint.parsePositionInfo(
+          soap(rel: 'NOT_IMPLEMENTED', uri: 'http://x/stream/abc.flac'));
+      expect(p, isNotNull);
+      expect(p!.position, isNull, reason: 'geen klok is niet klok-op-nul');
+      expect(p.trackUri, 'http://x/stream/abc.flac');
+      expect(p.duration, Duration.zero);
+    });
+
+    test('een leeg antwoord blijft niets', () {
+      expect(UpnpControlPoint.parsePositionInfo(soap()), isNull);
+      expect(UpnpControlPoint.parsePositionInfo(soap(rel: 'NOT_IMPLEMENTED', uri: '')), isNull);
+    });
+  });
+
   group('what the speaker reported', () {
     test('a missing field stays missing rather than becoming a zero', () {
       final s = CastStatus.fromJson({'casting': true});
