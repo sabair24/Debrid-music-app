@@ -432,16 +432,21 @@ class CastManager {
       out['queueLength'] = session.queue.length;
       out['trackId'] = session.queue.elementAtOrNull(session.index);
     }
-    // Asked in parallel: three round trips to an embedded stack, one after the other, is most of a
-    // second — and this is polled while someone watches a progress bar.
-    final results = await Future.wait([
-      _upnp.positionInfo(renderer).catchError((_) => null),
-      _upnp.transportState(renderer).catchError((_) => null),
-      if (withVolume) _upnp.getVolume(renderer).catchError((_) => null),
-    ]);
-    final pos = results[0] as ({Duration position, Duration duration})?;
-    final state = results[1] as TransportState?;
-    final volume = withVolume ? results[2] as int? : null;
+    // Alle drie tegelijk gestart en pas daarna afgewacht: drie ronden naar een embedded stack, één na
+    // de ander, is bijna een seconde — en dit wordt gepolst terwijl iemand naar een voortgangsbalk kijkt.
+    //
+    // Bewust drie losse futures en geen Future.wait met een lijst. Die geeft een List<Object?> terug, en
+    // dan is elk element een `as`-cast die de compiler niet kan nakijken. Precies dat ging mis toen
+    // positionInfo er een veld bij kreeg: de cast bleef op het oude record staan, de analyzer zag niets,
+    // en élke statusvraag over een échte speaker klapte met een 500. De app las dat als "niet
+    // bereikbaar", en dan vallen volgende en vorige dood terwijl de muziek doorloopt. Zo geschreven
+    // klaagt de compiler de volgende keer wél.
+    final posF = _upnp.positionInfo(renderer).catchError((_) => null);
+    final stateF = _upnp.transportState(renderer).catchError((_) => null);
+    final volF = withVolume ? _upnp.getVolume(renderer).catchError((_) => null) : null;
+    final pos = await posF;
+    final state = await stateF;
+    final volume = volF == null ? null : await volF;
     if (pos != null) {
       out['positionMs'] = pos.position.inMilliseconds;
       out['durationMs'] = pos.duration.inMilliseconds;
