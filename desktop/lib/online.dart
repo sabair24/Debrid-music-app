@@ -1009,6 +1009,9 @@ class DownloadManager extends ChangeNotifier {
       title: t.title.trim(),
       album: t.album,
       sinceMs: DateTime.now().millisecondsSinceEpoch,
+      // Het gezag van DEZE landing gaat mee: de FLAC die de mp3 dagen later vervangt hoort op dezelfde
+      // plek en met dezelfde nummering te belanden, ook als de peer een bestand zonder tags stuurt.
+      authority: t,
     ));
     if (nieuw) {
       await _wants.save();
@@ -1101,7 +1104,12 @@ class DownloadManager extends ChangeNotifier {
           }
           if (res is! SlskDone) continue;
           try {
-            await placeFileDetailed(File(res.path), _downloadsRoot, tags: job.authority);
+            // Het gezag van de wens, niet dat van dit wegwerp-job: een peer stuurt geregeld een
+            // bestand zonder één tag, en dan landt het als "Onbekende artiest" in Singles. Precies wat
+            // de eerste echte vondst deed voordat dit erin stond.
+            await placeFileDetailed(File(res.path), _downloadsRoot,
+                tags: w.authority ??
+                    TrackTags(title: w.title, artist: w.artist, album: w.album, trackNo: 0));
           } catch (_) {/* de scan vindt hem waar hij ook landde */}
           goed = true;
           return;

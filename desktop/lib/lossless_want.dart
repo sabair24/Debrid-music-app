@@ -16,7 +16,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
-import 'organize.dart' show normKey;
+import 'organize.dart' show TrackTags, normKey;
 
 /// Eén openstaande wens.
 class LosslessWant {
@@ -28,9 +28,18 @@ class LosslessWant {
     this.tries = 0,
     this.lastTryMs = 0,
     this.refused = const {},
+    this.authority,
   });
 
   final String artist, title, album;
+
+  /// De tags waarmee de mp3 destijds is opgeborgen, meegegeven aan de FLAC die hem vervangt.
+  ///
+  /// Zonder dit landde de eerste echte vondst als `Singles\Onbekende artiest\Daft Punk - One More Time
+  /// (club mix).flac`: de peer had een bestand zónder tags, en er was niets om op terug te vallen. De
+  /// eenmalige jacht geeft hierom al `job.authority` mee -- "dezelfde autoriteit als de eerste
+  /// landing" -- en een wens die dagen later uitkomt heeft dat net zo hard nodig.
+  final TrackTags? authority;
 
   /// Wanneer de wens ontstond, en hoe vaak er al gezocht is. Samen bepalen ze het ritme.
   final int sinceMs, tries, lastTryMs;
@@ -56,6 +65,7 @@ class LosslessWant {
         tries: tries ?? this.tries,
         lastTryMs: lastTryMs ?? this.lastTryMs,
         refused: refused ?? this.refused,
+        authority: authority,
       );
 
   Map<String, dynamic> toJson() => {
@@ -66,16 +76,19 @@ class LosslessWant {
         'tries': tries,
         'lastTryMs': lastTryMs,
         if (refused.isNotEmpty) 'refused': refused,
+        if (authority != null) 'authority': authority!.toJson(),
       };
 
   static LosslessWant? fromJson(Map<String, dynamic> j) {
     final a = (j['artist'] ?? '').toString().trim();
     final t = (j['title'] ?? '').toString().trim();
     if (a.isEmpty || t.isEmpty) return null; // zonder naam valt er niets te zoeken
+    final auth = j['authority'];
     return LosslessWant(
       artist: a,
       title: t,
       album: (j['album'] ?? '').toString(),
+      authority: auth is Map<String, dynamic> ? TrackTags.fromJson(auth) : null,
       sinceMs: (j['sinceMs'] as num?)?.toInt() ?? 0,
       tries: (j['tries'] as num?)?.toInt() ?? 0,
       lastTryMs: (j['lastTryMs'] as num?)?.toInt() ?? 0,

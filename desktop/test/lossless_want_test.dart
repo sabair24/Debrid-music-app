@@ -8,6 +8,7 @@ library;
 import 'dart:io';
 
 import 'package:debridmusic/lossless_want.dart';
+import 'package:debridmusic/organize.dart' show TrackTags;
 import 'package:flutter_test/flutter_test.dart';
 
 const _uur = 3600 * 1000;
@@ -95,6 +96,37 @@ void main() {
       expect(w.tries, 2);
       expect(w.sinceMs, 42);
       expect(w.refused['DANY2905'], 'banned');
+    });
+
+    test('het gezag van de eerste landing reist mee', () async {
+      // Zonder dit landde de eerste echte vondst als "Singles\Onbekende artiest\Daft Punk - One More
+      // Time (club mix).flac": de peer stuurde een bestand zonder één tag, en er was niets om op terug
+      // te vallen. Een wens die dagen later uitkomt moet weten waar hij hoort.
+      lijst.want(LosslessWant(
+        artist: 'Daft Punk',
+        title: 'One More Time (Club Mix)',
+        album: 'One More Time',
+        authority: const TrackTags(
+            title: 'One More Time (Club Mix)',
+            artist: 'Daft Punk',
+            album: 'One More Time',
+            trackNo: 3,
+            trackTotal: 4),
+      ));
+      await lijst.save();
+
+      final opnieuw = LosslessWants('${tmp.path}${Platform.pathSeparator}lossless_wanted.json');
+      await opnieuw.load();
+      final a = opnieuw.all.single.authority;
+      expect(a, isNotNull, reason: 'anders belandt de FLAC onder "Onbekende artiest"');
+      expect(a!.trackNo, 3);
+      expect(a.album, 'One More Time');
+      expect(a.isAuthoritative, isTrue, reason: 'trackTotal maakt het gezaghebbend, net als bij de mp3');
+    });
+
+    test('een wens zonder gezag blijft bruikbaar', () {
+      // Oude regels op schijf hebben dit veld niet, en een landing zonder officiële match ook niet.
+      expect(_w('A', 'B').authority, isNull);
     });
 
     test('een lege lijst laat geen bestand achter', () async {
