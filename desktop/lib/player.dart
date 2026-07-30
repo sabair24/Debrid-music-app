@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -64,6 +65,31 @@ abstract interface class NowPlayingSource implements Listenable {
   return (
     original: [for (final t in original) fresh[t.path] ?? t],
     order: [for (final t in order) fresh[t.path] ?? t],
+  );
+}
+
+/// De speelvolgorde, met [anker] als het nummer dat blijft klinken.
+///
+/// Los van [PlayerStore] omdat die een libmpv-speler in een veld bouwt en dus in geen enkele test te
+/// maken is -- terwijl juist deze regel gelijk moet lopen met wat een SPEAKER in handen heeft. Twee
+/// eigenschappen doen ertoe, en die staan in cast_control_test.dart:
+///
+/// * op de teruggegeven index staat het anker, dus wie deze lijst doorgeeft hoeft niets te heropenen;
+/// * er valt niets weg en er komt niets bij, dus dezelfde nummers in een andere volgorde.
+///
+/// Zonder de eerste zou shuffle tijdens het casten het lopende nummer opnieuw laten beginnen; zonder de
+/// tweede zouden de app en de speaker uit elkaar lopen en toont het scherm een ander album dan er klinkt.
+({List<Track> order, int index}) ordenVoor(List<Track> alles, Track? anker, {required bool shuffle}) {
+  if (shuffle && alles.isNotEmpty) {
+    final rest = List.of(alles);
+    if (anker != null) rest.removeWhere((t) => t.path == anker.path);
+    rest.shuffle();
+    return (order: [if (anker != null) anker, ...rest], index: 0);
+  }
+  final order = List.of(alles);
+  return (
+    order: order,
+    index: anker == null ? 0 : order.indexWhere((t) => t.path == anker.path).clamp(0, order.length - 1),
   );
 }
 
@@ -245,6 +271,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     // herschudden en daarmee weer laten afwijken van wat er speelt.
     _order = List.of(aangenomen);
     _index = _order.isEmpty ? -1 : 0;
+    opSpeaker = true;
     playing = false;
     position = Duration.zero;
     notifyListeners();
@@ -385,17 +412,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   }
 
   void _rebuildOrder({Track? start}) {
-    final anchor = start ?? current;
-    if (shuffle && _original.isNotEmpty) {
-      final rest = List.of(_original);
-      if (anchor != null) rest.removeWhere((t) => t.path == anchor.path);
-      rest.shuffle();
-      _order = [if (anchor != null) anchor, ...rest];
-      _index = 0;
-    } else {
-      _order = List.of(_original);
-      _index = anchor == null ? 0 : _order.indexWhere((t) => t.path == anchor.path).clamp(0, _order.length - 1);
-    }
+    final uit = ordenVoor(_original, start ?? current, shuffle: shuffle);
+    _order = uit.order;
+    _index = uit.index;
   }
 
   /// Ask again what the playing track's cover is.
@@ -453,6 +472,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   Future<void> _openCurrent() async {
     final t = current;
     if (t == null) return;
+    // Alles wat hier geopend wordt klinkt UIT DIT TOESTEL. Eén plek, want elke lokale weg komt hier
+    // langs -- een vlag die per aanroeper gezet moet worden vergeet je er vroeg of laat één van.
+    opSpeaker = false;
     if (coverResolver != null) currentCover = coverResolver!(t);
     await _player.open(Media(mediaResolver(t.path)), play: true);
     _saveProgress(force: true); // track changed → persist the new spot
@@ -510,9 +532,31 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   void seek(Duration d) => _player.seek(d);
   void setVolume(double v) => _player.setVolume(v);
 
+  /// Staat de wachtrij bij een speaker in plaats van bij libmpv?
+  ///
+  /// Nodig omdat er dan TWEE lijsten zijn die gelijk moeten blijven, en de index die de speaker
+  /// terugmeldt in de zijne telt.
+  bool opSpeaker = false;
+
+  /// De speaker dezelfde nieuwe volgorde geven, zonder het lopende nummer opnieuw te beginnen.
+  Future<void> Function(List<Track> volgorde, int index)? castReorder;
+
   void toggleShuffle() {
     shuffle = !shuffle;
-    if (_original.isNotEmpty) _rebuildOrder();
+    if (_original.isEmpty) {
+      notifyListeners();
+      return;
+    }
+    _rebuildOrder();
+    // Heeft een speaker de wachtrij, dan moet DIE dezelfde volgorde krijgen.
+    //
+    // Zonder deze regel schudde de app haar eigen lijst en liet die van de speaker staan. De index die
+    // de speaker daarna elke twee seconden terugmeldt wees vanaf dat moment in twee verschillende
+    // lijsten: het scherm toonde een ander album dan er klonk, zonder dat er iets haperde. Precies wat
+    // [_handedToSpeaker] voor de overdracht al voorkomt -- alleen kon shuffle het daarna weer stukmaken.
+    //
+    // [_rebuildOrder] zet het spelende nummer vooraan, dus de speaker hoeft niets opnieuw te openen.
+    if (opSpeaker) unawaited(castReorder?.call(_order, _index) ?? Future<void>.value());
     notifyListeners();
   }
 

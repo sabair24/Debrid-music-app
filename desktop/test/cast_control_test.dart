@@ -14,6 +14,7 @@ import 'package:debridmusic/lan/cast_manager.dart';
 import 'package:debridmusic/lan/client.dart';
 import 'package:debridmusic/lan/upnp.dart';
 import 'package:debridmusic/models.dart';
+import 'package:debridmusic/player.dart';
 import 'package:debridmusic/speakers.dart';
 
 void main() {
@@ -195,6 +196,42 @@ void main() {
     test('een index buiten de lijst landt binnen de lijst', () {
       final over = buildHandover([t('1'), t('2')], 99, (x) => 'id-${x.path}');
       expect(over.at, 1);
+    });
+  });
+
+  /// Shuffle indrukken terwijl een speaker de wachtrij heeft.
+  ///
+  /// De speler schudde zijn EIGEN lijst en liet die van de speaker staan. De index die de speaker daarna
+  /// elke twee seconden terugmeldt telt in zijn lijst, en die werd hier in een andere gelezen: het scherm
+  /// toonde een ander album dan er klonk, zonder dat er iets haperde.
+  group('shuffle terwijl de speaker de wachtrij heeft', () {
+    Track t(String p) => Track(path: p, title: p, artist: 'A', album: 'B', duration: const Duration(minutes: 3));
+
+    final alles = [for (var i = 0; i < 12; i++) t('n$i')];
+
+    test('het spelende nummer staat op de teruggegeven index, dus de speaker heropent niets', () {
+      final klinkt = alles[4];
+      final uit = ordenVoor(alles, klinkt, shuffle: true);
+      expect(uit.order[uit.index].path, klinkt.path);
+    });
+
+    test('dezelfde nummers, alleen anders gerangschikt', () {
+      // DE eigenschap. Valt er één weg of komt er één bij, dan wijst elke index die de speaker
+      // terugmeldt vanaf dat moment ergens anders heen dan bedoeld.
+      final uit = ordenVoor(alles, alles[4], shuffle: true);
+      expect(uit.order.length, alles.length);
+      expect(uit.order.map((x) => x.path).toSet(), alles.map((x) => x.path).toSet());
+    });
+
+    test('shuffle uit: de oorspronkelijke volgorde, en de index zoekt het nummer op', () {
+      final uit = ordenVoor(alles, alles[7], shuffle: false);
+      expect(uit.order.map((x) => x.path), orderedEquals(alles.map((x) => x.path)));
+      expect(uit.index, 7);
+    });
+
+    test('zonder anker begint hij vooraan in plaats van bij min één', () {
+      expect(ordenVoor(alles, null, shuffle: false).index, 0);
+      expect(ordenVoor(const <Track>[], null, shuffle: true).order, isEmpty);
     });
   });
 

@@ -270,6 +270,16 @@ Future<void> main() async {
       // Vanaf hier is de wachtrij van de speler de wachtrij van de speaker, met dezelfde nummering.
       return over.tracks;
     }
+    // Shuffle tijdens het casten: dezelfde nummers, andere volgorde, en het lopende nummer speelt door.
+    // Zonder deze draad schudt de app alleen zichzelf en gaan de twee lijsten uiteen.
+    ..castReorder = (volgorde, index) async {
+      final device = speakers.device;
+      final client = speakers.client;
+      if (device == null || client == null) return;
+      final over = buildHandover(volgorde, index, (t) => library.castTrackId(t.path));
+      if (over.isEmpty) return;
+      await client.castRequeue(device.id, over.ids, over.at);
+    }
     // Last in the cascade: an arrow body swallows whatever follows it, so a `..x = () => y` line
     // in the middle turns the next entry into part of that expression.
     ..metaRevOf = () => library.metaRev;

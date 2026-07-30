@@ -295,6 +295,12 @@ class RemoteClient {
   Future<bool> castPlay(String deviceId, List<String> trackIds, int index) =>
       _castPost('/api/cast/play', {'deviceId': deviceId, 'trackIds': trackIds, 'index': index});
 
+  /// Een andere volgorde voor wat er nog komt, zonder het lopende nummer opnieuw te beginnen.
+  ///
+  /// Voor shuffle tijdens het casten. [index] is waar het nummer dat NU speelt in de nieuwe lijst staat.
+  Future<bool> castRequeue(String deviceId, List<String> trackIds, int index) =>
+      _castPost('/api/cast/requeue', {'deviceId': deviceId, 'trackIds': trackIds, 'index': index});
+
   /// play | pause | stop | next | previous | volume ([value] 0-100) | seek ([value] in seconds).
   Future<bool> castControl(String deviceId, String action, {int? value}) => _castPost(
         '/api/cast/control',

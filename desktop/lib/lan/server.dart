@@ -211,6 +211,8 @@ class LanServer {
         return _json(res, await cast.devices());
       case '/api/cast/play':
         return _castPlay(req);
+      case '/api/cast/requeue':
+        return _castRequeue(req);
       case '/api/cast/control':
         return _castControl(req);
       case '/api/cast/status':
@@ -411,6 +413,26 @@ class LanServer {
     } catch (e) {
       // A speaker that has gone off the network, or a track that isn't there any more. The
       // client shows this, so it must read like something a person can act on.
+      req.response.statusCode = HttpStatus.badRequest;
+      return _json(req.response, {'error': '$e'});
+    }
+  }
+
+  /// Dezelfde nummers in een andere volgorde, terwijl het lopende nummer doorspeelt.
+  Future<void> _castRequeue(HttpRequest req) async {
+    if (req.method != 'POST') {
+      req.response.statusCode = HttpStatus.methodNotAllowed;
+      return req.response.close();
+    }
+    final map = await _body(req);
+    try {
+      await cast.requeue(
+        (map['deviceId'] ?? '') as String,
+        [for (final id in (map['trackIds'] as List? ?? const [])) id.toString()],
+        (map['index'] as int?) ?? 0,
+      );
+      return _json(req.response, {'ok': true});
+    } catch (e) {
       req.response.statusCode = HttpStatus.badRequest;
       return _json(req.response, {'error': '$e'});
     }

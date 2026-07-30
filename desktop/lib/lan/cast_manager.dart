@@ -299,24 +299,49 @@ class CastManager {
 
     // Hand the renderer the next one straight away, so the gap between two songs is the
     // speaker's own and not a round trip through here.
+    await _armNext(session);
+  }
+
+  /// Geef de speaker alvast het nummer ná het huidige.
+  ///
+  /// De URL wordt bewaard, want dit is precies wat de speaker straks zelf gaat spelen zonder het te
+  /// melden. Hem terugzien in TrackURI is NODIG om de overgang te zien, maar niet genoeg: een Sonos
+  /// meldt hem al zodra hij hem ontvangt. Wat de overgang bewijst staat in [_echtGewisseld].
+  Future<void> _armNext(_Session session) async {
     final nextId = session.queue.elementAtOrNull(session.index + 1);
     final nextTrack = nextId == null ? null : catalog.track(nextId);
-    if (nextId != null && nextTrack != null) {
-      final nextUrl = await _streamUrlFor(nextId, nextTrack.ext, session.renderer, nextTrack.sampleRate);
-      await _upnp.setNextUrl(
-        session.renderer,
-        nextUrl,
-        title: nextTrack.title,
-        artist: nextTrack.artist,
-        album: nextTrack.album,
-        mime: mimeForExt(nextTrack.ext),
-      );
-      // Bewaard, want dit is precies de URL die de speaker straks zelf gaat spelen zonder het te
-      // melden. Hem terugzien in TrackURI is NODIG om de overgang te zien, maar niet genoeg: een Sonos
-      // meldt hem al zodra hij hem ontvangt. Wat de overgang bewijst staat in [_echtGewisseld].
-      session.nextUrl = nextUrl;
-      _log?.line('    volgende meegegeven: ${_naam(nextId)}  (${_idVanUrl(nextUrl)})');
-    }
+    if (nextId == null || nextTrack == null) return;
+    final nextUrl = await _streamUrlFor(nextId, nextTrack.ext, session.renderer, nextTrack.sampleRate);
+    await _upnp.setNextUrl(
+      session.renderer,
+      nextUrl,
+      title: nextTrack.title,
+      artist: nextTrack.artist,
+      album: nextTrack.album,
+      mime: mimeForExt(nextTrack.ext),
+    );
+    session.nextUrl = nextUrl;
+    _log?.line('    volgende meegegeven: ${_naam(nextId)}  (${_idVanUrl(nextUrl)})');
+  }
+
+  /// Een andere volgorde voor wat er nog komt, zonder het lopende nummer aan te raken.
+  ///
+  /// Hiervoor bestond alleen [play], en die opent het huidige nummer opnieuw -- dus druk je tijdens het
+  /// casten op shuffle, dan zou het liedje van voren af aan beginnen. Zonder deze weg deed de app iets
+  /// ergers: ze schudde haar EIGEN lijst en liet die van de speaker staan. De index die de speaker
+  /// terugmeldde wees daarna in twee verschillende lijsten, en dan toont het scherm een ander album dan
+  /// er klinkt -- zonder dat er iets hapert of een melding verschijnt.
+  ///
+  /// De aanroeper zet het spelende nummer op [index]; dat is wat de volgorde hier en daar gelijk houdt.
+  Future<void> requeue(String deviceId, List<String> trackIds, int index) async {
+    final session = _session;
+    if (session == null || session.renderer.id != deviceId || trackIds.isEmpty) return;
+    session.queue = List.of(trackIds);
+    session.index = index.clamp(0, trackIds.length - 1);
+    session.nextUrl = null;
+    _log?.line('wachtrij vervangen: ${trackIds.length} nummers, nu op ${session.index} '
+        '${_naam(session.queue.elementAtOrNull(session.index))}');
+    await _armNext(session);
   }
 
   /// Is de speaker zelf doorgeschoven naar het nummer dat we hem alvast meegaven?
@@ -361,24 +386,9 @@ class CastManager {
     session.hoogstePositie = Duration.zero;
     // Alleen de VOLGENDE doorgeven, niet opnieuw openen: de speaker speelt dit nummer al, en er
     // opnieuw een URL op zetten zou hem vanaf nul laten beginnen.
-    final nextId = session.queue.elementAtOrNull(session.index + 1);
-    final nextTrack = nextId == null ? null : catalog.track(nextId);
-    if (nextId != null && nextTrack != null) {
-      try {
-        final nextUrl =
-            await _streamUrlFor(nextId, nextTrack.ext, session.renderer, nextTrack.sampleRate);
-        await _upnp.setNextUrl(
-          session.renderer,
-          nextUrl,
-          title: nextTrack.title,
-          artist: nextTrack.artist,
-          album: nextTrack.album,
-          mime: mimeForExt(nextTrack.ext),
-        );
-        session.nextUrl = nextUrl;
-        _log?.line('    volgende meegegeven: ${_naam(nextId)}  (${_idVanUrl(nextUrl)})');
-      } catch (_) {/* dan stopt de speaker na dit nummer en pakt _maybeAdvance het op */}
-    }
+    try {
+      await _armNext(session);
+    } catch (_) {/* dan stopt de speaker na dit nummer en pakt _maybeAdvance het op */}
     return true;
   }
 
@@ -701,7 +711,10 @@ class _Session {
   _Session({required this.renderer, required this.queue, required this.index});
 
   final Renderer renderer;
-  final List<String> queue;
+
+  /// Niet final: shuffle tijdens het casten geeft een andere volgorde voor wat er nog komt. Zie
+  /// [CastManager.requeue].
+  List<String> queue;
   int index;
   DateTime startedAt = DateTime.now();
 
