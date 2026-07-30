@@ -5164,6 +5164,13 @@ class _SpeakerButton extends StatelessWidget {
             // 2. `opSpeaker` bleef uit, dus shuffle indrukken schudde alleen deze kant.
             //
             // Precies de fout die _handedToSpeaker voor de andere weg al oploste.
+            if (player.queueTracks.isEmpty) {
+              _srcToast(context, 'Zet eerst iets op, dan stuur ik het door.');
+              return;
+            }
+            // Onthouden wat er stond, want een weigering hoort terug te zetten en niet te starten: dit
+            // pad zette de speler ongevraagd aan als hij gepauzeerd was toen je een speaker koos.
+            final speeldeHier = player.playing;
             final ok = await player.handOverToSpeaker();
             if (!context.mounted) return;
             if (!ok) {
@@ -5173,7 +5180,7 @@ class _SpeakerButton extends StatelessWidget {
               // "Speelt op X" in the header, the record spinning, and no sound anywhere. One honest
               // toast followed by an interface that contradicted it until the user intervened.
               target.select(null);
-              if (!player.playing) player.playPause();
+              if (speeldeHier && !player.playing) player.playPause();
             }
           },
         ),
