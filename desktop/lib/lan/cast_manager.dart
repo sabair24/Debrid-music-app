@@ -265,6 +265,18 @@ class CastManager {
   Future<bool> _followedRenderer(String? trackUri) async {
     final session = _session;
     if (session == null || trackUri == null) return false;
+    // Niet binnen de genadeperiode na het openen van een nummer, en dat is niet overdreven
+    // voorzichtigheid maar een gemeten fout. Sonos neemt de "volgende"-URL op in zijn EIGEN wachtrij en
+    // meldt hem daarna al in TrackURI, terwijl hij nog aan het huidige nummer bezig is. Eén druk op
+    // volgende gaf daardoor:
+    //
+    //     16:09:02  index=4  pos=1s
+    //     16:09:04  index=5  pos=1s
+    //
+    // De positie die dóórloopt in plaats van terug naar nul te springen verraadt het: er wisselde geen
+    // nummer, alleen de boekhouding schoof op. Een ECHTE doorschuiving komt altijd aan het eind van een
+    // nummer en dus ruim na deze periode, dus dit kost de goede kant niets.
+    if (DateTime.now().difference(session.startedAt) < _startGrace) return false;
     final volgende = session.nextUrl;
     if (volgende == null || trackUri != volgende) return false;
     if (session.index + 1 >= session.queue.length) return false;
@@ -321,6 +333,15 @@ class CastManager {
   /// Every step of an advance is slow — one state query plus three more round trips to open the next
   /// track, each allowed eight seconds — and the timer kept firing straight through it. Two overlapping
   /// advances each move the index, so the queue walks forward faster than the speaker plays it.
+  /// Hoe lang een net geopend nummer met rust wordt gelaten voordat de speaker geloofd wordt.
+  ///
+  /// Eén constante voor beide vragen die erop leunen -- "is hij gestopt?" en "is hij doorgeschoven?" --
+  /// want ze beschermen tegen hetzelfde: een renderer die de eerste seconden nog niets zinnigs meldt.
+  /// Een Sonos zegt STOPPED terwijl hij de eerste bytes ophaalt, en meldt de volgende-URL al in
+  /// TrackURI terwijl hij nog aan het huidige nummer bezig is. Twee keer uitgeschreven zouden ze
+  /// uiteen gaan lopen.
+  static const _startGrace = Duration(seconds: 8);
+
   bool _advancing = false;
 
   /// Move to the next track once the speaker says it has finished.
@@ -330,7 +351,7 @@ class CastManager {
     if (session == null) return;
     // Give the renderer a moment after a start before believing "STOPPED" — a Sonos reports
     // exactly that for a second or two while it fetches the first bytes.
-    if (DateTime.now().difference(session.startedAt) < const Duration(seconds: 8)) return;
+    if (DateTime.now().difference(session.startedAt) < _startGrace) return;
 
     _advancing = true;
     try {
