@@ -13,6 +13,7 @@ import 'fingerprint.dart';
 import 'flac_tags.dart';
 import 'lan/client.dart';
 import 'lan/dtos.dart';
+import 'lan/ids.dart';
 import 'models.dart';
 import 'mp3_tags.dart';
 import 'organize.dart';
@@ -1431,6 +1432,25 @@ class LibraryStore extends ChangeNotifier {
   /// The PC's id for a track we are showing, for anything that has to name tracks TO the PC —
   /// removing them, moving them, or handing a queue to a speaker.
   String? remoteTrackId(String path) => _remoteTrackId(path);
+
+  /// Het id waarmee de PC dit nummer serveert — of het pad nu een stream-URL is of een bestand.
+  ///
+  /// Twee wegen, omdat er twee soorten pad zijn. Op een telefoon IS het pad de stream-URL en zit het id
+  /// erin. Op de pc is het pad een bestand op schijf, en dan moet het id net zo berekend worden als de
+  /// server het doet: [trackIdFor] over het pad relatief aan de muziekwortel.
+  ///
+  /// Zonder die tweede weg gaf dit op de pc voor élk nummer null terug. Gemeten toen de speakerknop daar
+  /// net bij was gekomen: de knop verscheen, de speaker werd paars, "Speelt op Sonos Move" stond op het
+  /// scherm — en er was in twintig seconden polsen niets naar die speaker gegaan. De muziek liep lokaal
+  /// door. Precies de tegenspraak waar de rest van dit bestand tegen gebouwd is.
+  String? castTrackId(String path) {
+    final viaUrl = _remoteTrackId(path);
+    if (viaUrl != null) return viaUrl;
+    // Alleen waar de muziek zelf staat: op een client zou de wortel iets anders betekenen en zou dit
+    // een id verzinnen dat de pc niet kent.
+    if (remote != null || rootPath.isEmpty) return null;
+    return trackIdFor(path, rootPath);
+  }
 
   /// The PC's id for a track we are showing. Its path is the stream URL, and the id is in it.
   String? _remoteTrackId(String path) {

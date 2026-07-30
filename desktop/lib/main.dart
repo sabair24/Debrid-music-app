@@ -260,7 +260,7 @@ Future<void> main() async {
       final client = speakers.client;
       if (device == null || client == null) return null;
       // De nummers en de id's naast elkaar, met de startindex meegeschoven — zie buildHandover.
-      final over = buildHandover(tracks, index, (t) => library.remoteTrackId(t.path));
+      final over = buildHandover(tracks, index, (t) => library.castTrackId(t.path));
       // Nothing the pc can serve — a radio stream, say. Let it play here rather than silently
       // dropping it.
       if (over.isEmpty) return null;
@@ -5150,7 +5150,7 @@ class _SpeakerButton extends StatelessWidget {
             // Twee plekken, één fout — nu één functie.
             final index = player.queueTracks.indexWhere((t) => t.path == player.current?.path);
             final over = buildHandover(
-                player.queueTracks, index < 0 ? 0 : index, (t) => lib.remoteTrackId(t.path));
+                player.queueTracks, index < 0 ? 0 : index, (t) => lib.castTrackId(t.path));
             if (over.isEmpty) {
               _srcToast(context, 'Zet eerst iets op, dan stuur ik het door.');
               return;
