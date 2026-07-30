@@ -427,11 +427,6 @@ class CastManager {
     }
     final session = _session;
     out['casting'] = session != null && session.renderer.id == renderer.id;
-    if (session != null) {
-      out['index'] = session.index;
-      out['queueLength'] = session.queue.length;
-      out['trackId'] = session.queue.elementAtOrNull(session.index);
-    }
     // Alle drie tegelijk gestart en pas daarna afgewacht: drie ronden naar een embedded stack, één na
     // de ander, is bijna een seconde — en dit wordt gepolst terwijl iemand naar een voortgangsbalk kijkt.
     //
@@ -453,7 +448,37 @@ class CastManager {
     }
     if (state != null) out['playing'] = state.isPlaying;
     if (volume != null) out['volume'] = volume;
+
+    // Ook hier kijken of de speaker zelf is doorgeschoven, en niet alleen in de tijdklok van vijf
+    // seconden. De positie is net al opgehaald, dus dit kost geen ronde extra -- en een telefoon polst
+    // elke twee seconden. Gemeten op de KEF: de positie klapte van 209 naar 1 seconde terwijl de index
+    // nog op het vorige nummer stond; die achterstand is nu twee tellen in plaats van vijf.
+    //
+    // Het antwoord wordt NA deze vraag samengesteld: eerst bijwerken, dan vertellen. Andersom zou deze
+    // poll nog de oude index melden en pas de volgende de nieuwe.
+    await _followGuarded(pos?.trackUri);
+    final nu = _session;
+    if (nu != null && nu.renderer.id == renderer.id) {
+      out['index'] = nu.index;
+      out['queueLength'] = nu.queue.length;
+      out['trackId'] = nu.queue.elementAtOrNull(nu.index);
+    }
     return out;
+  }
+
+  /// [_followedRenderer] met hetzelfde slot als de tijdklok ervoor.
+  ///
+  /// Nodig omdat de status door meerdere toestellen tegelijk gepolst wordt: twee overlappende
+  /// doorschuivingen verhogen allebei de index en dan loopt de wachtrij sneller dan de speaker speelt --
+  /// exact de fout die de tijdklok eerder maakte en waarvoor [_advancing] bestaat.
+  Future<void> _followGuarded(String? trackUri) async {
+    if (_advancing || trackUri == null) return;
+    _advancing = true;
+    try {
+      await _followedRenderer(trackUri);
+    } catch (_) {/* een mislukte doorschuiving mag geen statusvraag laten klappen */} finally {
+      _advancing = false;
+    }
   }
 
   Future<void> _postShield(ShieldTarget shield, String path) async {

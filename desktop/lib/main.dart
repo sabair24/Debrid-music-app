@@ -473,6 +473,24 @@ Future<void> main() async {
     });
   }
 
+  // Ook op de pc een speaker kunnen kiezen.
+  //
+  // Casten liep altijd via een ánder toestel: dat vroeg de pc om te zenden, en op de pc zelf was er
+  // "niets te kiezen" omdat dat zijn eigen uitgang is. Maar de KEF en de Sonos staan in dezelfde kamer
+  // als de pc, en dan is naar de telefoon grijpen om de muziek te verplaatsen onzin.
+  //
+  // De pc spreekt zijn eigen server aan, over de lus. Dat is niet een omweg maar precies dezelfde weg
+  // die een telefoon neemt -- dezelfde ontdekking, dezelfde SOAP, dezelfde wachtrij -- en dus meteen
+  // even goed getest. Alleen [SpeakerTarget] krijgt deze client: library.remote blijft null, want dat
+  // veld schakelt de hele bibliotheek naar "haal alles bij de pc" en de pc IS de pc.
+  if (mode.owner && settings.lanEnabled) {
+    speakers.client = RemoteClient(RemoteEndpoint(
+      baseUrl: Uri.parse('http://127.0.0.1:${settings.lanPort}'),
+      token: settings.lanToken,
+      name: 'deze pc',
+    ));
+  }
+
   // A device that does not hold the music has nothing to scan: its library comes from the PC,
   // where the corrections, the pinned pressings and the chosen covers have already been applied.
   if (!mode.owner) {
@@ -5106,12 +5124,12 @@ class _SpeakerButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final lib = context.watch<LibraryStore>();
-    final client = lib.remote;
-    // Only where a PC is doing the sending. On the machine that holds the music this is its own
-    // output and there is nothing to choose.
-    if (client == null) return const SizedBox.shrink();
-
     final target = context.watch<SpeakerTarget>();
+    // Gekeken naar de client waarmee GESTUURD wordt, niet naar de bibliotheek. Dat scheelt: op de pc is
+    // library.remote null — de bibliotheek staat daar zelf — en daarmee was de knop er niet, ook niet
+    // toen de pc zijn eigen server kon aanspreken. Wie de speakers kan bedienen mag ze kiezen.
+    final client = target.client;
+    if (client == null) return const SizedBox.shrink();
     final player = context.read<PlayerStore>();
     final casting = target.isCasting;
 
@@ -5133,18 +5151,19 @@ class _SpeakerButton extends StatelessWidget {
             if (was != null) unawaited(client.castControl(was.id, 'stop'));
           },
           onPickedRemote: (device) async {
-            final ids = [
-              for (final t in player.queueTracks)
-                if (lib.remoteTrackId(t.path) case final id?) id,
-            ];
-            if (ids.isEmpty) {
+            // Dezelfde overdracht als bij het aantikken van een nummer, en om dezelfde reden: hier werd
+            // ook alleen op id's gefilterd terwijl de index in de ongefilterde wachtrij bleef wijzen.
+            // Twee plekken, één fout — nu één functie.
+            final index = player.queueTracks.indexWhere((t) => t.path == player.current?.path);
+            final over = buildHandover(
+                player.queueTracks, index < 0 ? 0 : index, (t) => lib.remoteTrackId(t.path));
+            if (over.isEmpty) {
               _srcToast(context, 'Zet eerst iets op, dan stuur ik het door.');
               return;
             }
-            final index = player.queueTracks.indexWhere((t) => t.path == player.current?.path);
             // This device goes quiet: the point is that it plays THERE.
             if (player.playing) player.playPause();
-            final ok = await client.castPlay(device.id, ids, index < 0 ? 0 : index);
+            final ok = await client.castPlay(device.id, over.ids, over.at);
             if (!context.mounted) return;
             if (!ok) {
               _srcToast(context, '${device.name} nam het niet aan.');
