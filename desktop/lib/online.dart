@@ -11,6 +11,7 @@ import 'search.dart';
 import 'settings.dart';
 import 'soulseek.dart';
 import 'torbox.dart';
+import 'warm_log.dart';
 import 'paths.dart';
 
 /// TorBox search + resolve + download, ported from the server's OnlineService.
@@ -418,6 +419,16 @@ class DownloadManager extends ChangeNotifier {
   /// Total time spent chasing a better copy after a playable one already landed.
   static const _upgradeBudget = Duration(minutes: 10);
 
+  /// Wat deze weg besloot, in `downloads.log` naast de andere staatbestanden.
+  ///
+  /// Gebouwd omdat een vraag niet te beantwoorden was. Een FLAC die via de app niet binnenkwam en via
+  /// de native client meteen wel: er zijn vier mechanismen die dat kunnen verklaren -- geen kandidaat
+  /// gevonden, tien minuten opwaardeerbudget op, wachten achter een andere opwaardering, of een
+  /// herstart die de jacht afkapt -- en van buitenaf zijn ze niet van elkaar te onderscheiden.
+  /// pending_downloads.json wordt opgeruimd en warm.log gaat alleen over de metadata-warmer, dus na
+  /// een uur is er niets meer om naar te kijken. Precies de les die warm.log zelf al opschreef.
+  late final WarmLog _log = WarmLog('$appDir${Platform.pathSeparator}downloads.log');
+
   /// Upgrades run one at a time and take NO download slot, so they can never delay a track you
   /// have nothing of yet. Queued rather than dropped, so a whole album still gets upgraded.
   final List<Future<void> Function()> _upgradeQueue = [];
@@ -699,12 +710,16 @@ class DownloadManager extends ChangeNotifier {
 
     Future<SlskResult> attempt(SoulseekFile f,
         {required bool wait, SlskCancel? cancel, void Function()? onQueued, bool Function()? claim}) async {
+      final t0 = DateTime.now();
+      SlskResult uit;
       try {
-        return await _rawTransfer(session, f, job, () => onQueued?.call(),
+        uit = await _rawTransfer(session, f, job, () => onQueued?.call(),
             waitInQueue: wait, cancel: cancel, claim: claim);
       } catch (_) {
-        return SlskFail('Downloadfout'); // unexpected throw → a failed attempt, keep going
+        uit = SlskFail('Downloadfout'); // unexpected throw → a failed attempt, keep going
       }
+      _log.line('   ${f.username}: ${_uitkomst(uit)}  na ${_kort(DateTime.now().difference(t0))}');
+      return uit;
     }
 
     // Three pools, raced in this order. A race is won by whoever SENDS first, not by whoever is
@@ -716,6 +731,15 @@ class DownloadManager extends ChangeNotifier {
     // An MP3 stays what it has always been here: an absolute last resort, never a shortcut — so a
     // free MP3 does NOT beat waiting for a FLAC.
     final lossy = ranked.where((f) => !isLossless(f)).toList();
+
+    // De eerste vraag bij "hij kwam niet binnen" is of er überhaupt iets te halen was. Zonder deze
+    // regel is "geen kandidaat gevonden" niet te onderscheiden van "wel gevonden, maar afgebroken".
+    _log.line('"${job.name}": ${ranked.length} kandidaten '
+        '(stereo ${stereo.length}, surround ${surround.length}, lossy ${lossy.length})');
+    for (final f in ranked.take(3)) {
+      _log.line('   beste: ${f.username}  ${f.displayName}  '
+          '${isLossless(f) ? "lossless" : "lossy"}  wachtrij=${f.queueLength} vrij=${f.freeSlots}');
+    }
 
     /// Ask every candidate peer and let the FIRST ONE THAT ACTUALLY SENDS win.
     ///
@@ -920,11 +944,28 @@ class DownloadManager extends ChangeNotifier {
     } catch (_) {/* already gone, or the folder still holds something */}
   }
 
+  /// Eén regel per uitkomst, kort genoeg om honderd pogingen naast elkaar te kunnen lezen.
+  static String _uitkomst(SlskResult r) => switch (r) {
+        SlskDone() => 'GELEVERD',
+        SlskQueued(place: final p) => 'in de wachtrij${p > 0 ? " (plaats $p)" : ""}',
+        SlskCancelled() => 'gestopt',
+        // Geen vangnet-tak: SlskResult is gesloten, dus als er ooit een uitkomst bijkomt hoort de
+        // compiler te klagen in plaats van hem stil als "onbekend" weg te schrijven.
+        SlskFail(reason: final w) => 'mislukt: $w',
+      };
+
+  static String _kort(Duration d) =>
+      d.inMinutes >= 1 ? '${d.inMinutes}m${d.inSeconds % 60}s' : '${d.inSeconds}s';
+
   /// Queue a background hunt for a better copy of a track you can already play.
   void _queueUpgrade(List<SoulseekFile> better, DownloadJob job) {
     job.status = 'upgrading';
     job.detail = 'speelbaar · betere kwaliteit zoeken';
     notifyListeners();
+    // Of hij meteen begint of achter een andere jacht staat, is een van de vier verklaringen voor
+    // "hij kwam niet binnen" -- en de enige die je nooit op het scherm ziet.
+    _log.line('"${job.name}": ${better.length} betere kandidaten, opwaarderen in de rij'
+        '${_upgradeRunning ? " (er loopt al een jacht, ${_upgradeQueue.length + 1} wachtend)" : ""}');
     _upgradeQueue.add(() => _chaseUpgrade(better, job));
     unawaited(_drainUpgrades());
   }
@@ -961,12 +1002,20 @@ class DownloadManager extends ChangeNotifier {
       notifyListeners();
     }
 
+    _log.line('"${job.name}": jacht op betere kwaliteit start, budget ${_kort(_upgradeBudget)} '
+        'voor ${better.length} peers samen');
     try {
       await soulseek.withSession((session) async {
         for (final f in better) {
           if (job.cancelled) return; // the user stopped this track; don't keep chasing it
           final left = deadline.difference(DateTime.now());
-          if (left <= const Duration(seconds: 30)) return; // too little left to be worth trying
+          if (left <= const Duration(seconds: 30)) {
+            // DE grens waar dit stukloopt, en zonder deze regel is hij van buitenaf onzichtbaar: de
+            // jacht houdt gewoon op en er komt nooit iets binnen.
+            _log.line('   budget op na ${_kort(_upgradeBudget - left)} — '
+                '${better.length - better.indexOf(f)} peers niet meer geprobeerd');
+            return;
+          }
           job.status = 'upgrading';
           job.progress = 1;
           job.detail = 'speelbaar · wacht op ${f.username} voor betere kwaliteit';
@@ -975,13 +1024,20 @@ class DownloadManager extends ChangeNotifier {
           SlskResult res;
           final c = SlskCancel();
           job.live.add(c);
+          final t0 = DateTime.now();
           try {
             res = await _rawTransfer(session, f, shadow, () {}, waitInQueue: true, maxWait: left, cancel: c);
           } catch (_) {
+            _log.line('   ${f.username}: fout  na ${_kort(DateTime.now().difference(t0))}'
+                '  (${_kort(left)} budget over bij de start)');
             continue;
           } finally {
             job.live.remove(c);
           }
+          // De looptijd naast het resterende budget: zo zie je of een peer nog aan de gang was toen
+          // het budget hem afkapte, of dat hij zelf niets deed.
+          _log.line('   ${f.username}: ${_uitkomst(res)}  na ${_kort(DateTime.now().difference(t0))}'
+              '  (${_kort(left)} budget over bij de start)');
           if (res is SlskCancelled) return;
           if (res is! SlskDone) continue;
 
@@ -1008,7 +1064,14 @@ class DownloadManager extends ChangeNotifier {
       });
     } catch (_) {/* nothing lost — you still have the copy that landed first */}
 
-    if (job.status == 'upgrading') settle('beste vrije kwaliteit behouden');
+    if (job.status == 'upgrading') {
+      // Hier eindigt de jacht zonder resultaat, en dit is de regel die zegt DAT hij geëindigd is.
+      // Zonder hem lijkt een opwaardering die niets vond precies op een die nog loopt -- en de app
+      // begint hem niet opnieuw, ook niet na een herstart.
+      _log.line('"${job.name}": jacht klaar zonder betere kopie, '
+          '${_kort(_upgradeBudget - deadline.difference(DateTime.now()))} verbruikt — komt niet terug');
+      settle('beste vrije kwaliteit behouden');
+    }
   }
 
   /// The order to try peers in when hunting for one that can start RIGHT NOW.
