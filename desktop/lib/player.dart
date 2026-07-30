@@ -202,7 +202,14 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// with the queue it had been given. Every entry point goes through [playQueue], so this is the
   /// one seam that covers a track row, an album's play button and the shuffle-everything button
   /// alike.
-  Future<bool> Function(List<Track> tracks, int index)? castQueue;
+  /// Geeft terug WELKE nummers de speaker gekregen heeft, in die volgorde -- of null als hij niets nam.
+  ///
+  /// Niet zomaar true/false, en dat is de reparatie. De overdracht filtert de lijst op wat de pc kan
+  /// serveren, en elk nummer dat wegvalt schoof alles erachter op terwijl de index in de OUDE lijst
+  /// bleef wijzen. Bij shuffle-all over een hele bibliotheek is dat gegarandeerd mis: de app toonde een
+  /// ander album dan er klonk. Door de aangenomen lijst terug te geven lopen beide kanten per definitie
+  /// gelijk, in plaats van dat er twee keer hetzelfde gerekend moet worden.
+  Future<List<Track>?> Function(List<Track> tracks, int index)? castQueue;
 
   Future<void> playQueue(List<Track> tracks, int index, {Uint8List? cover}) async {
     if (await _handedToSpeaker(tracks, index, cover)) return;
@@ -223,20 +230,40 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   Future<bool> _handedToSpeaker(List<Track> tracks, int index, Uint8List? cover) async {
     final hand = castQueue;
     if (hand == null || tracks.isEmpty) return false;
-    if (!await hand(tracks, index)) return false;
+    final aangenomen = await hand(tracks, index);
+    if (aangenomen == null || aangenomen.isEmpty) return false;
     // Whatever was coming out of this device stops: the point is that it plays THERE.
     if (playing) await _player.pause();
     radioMode = false;
     _resumable = true;
     resumedPaused = false;
     currentCover = cover;
-    _original = List.of(tracks);
-    _rebuildOrder(start: (index >= 0 && index < _original.length) ? _original[index] : null);
+    // De lijst die de SPEAKER heeft, niet de lijst die gevraagd was. Zo betekent "nummer 5" aan beide
+    // kanten hetzelfde, en hoeft niemand een index om te rekenen.
+    _original = List.of(aangenomen);
+    // De volgorde staat al vast: hij is hier geschud en zo doorgegeven. Opnieuw ordenen zou hem
+    // herschudden en daarmee weer laten afwijken van wat er speelt.
+    _order = List.of(aangenomen);
+    _index = _order.isEmpty ? -1 : 0;
     playing = false;
     position = Duration.zero;
     notifyListeners();
     _saveQueue();
     return true;
+  }
+
+  /// De speaker zegt bij welk nummer hij is; volg dat.
+  ///
+  /// Zonder dit staat de app stil op het nummer dat bij de overdracht is doorgegeven terwijl de speaker
+  /// verder loopt -- de balk, de hoes en het album op het scherm horen dan bij iets wat niet klinkt.
+  /// Alleen de index verschuift: er wordt hier niets geopend of gespeeld, want het geluid komt daar
+  /// vandaan.
+  void followSpeaker(int index) {
+    if (index < 0 || index >= _order.length || index == _index) return;
+    _index = index;
+    position = Duration.zero;
+    refreshCover();
+    notifyListeners();
   }
 
   /// Shuffle the whole library (or any list): every track plays exactly once (repeat

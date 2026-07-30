@@ -15,12 +15,51 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'lan/client.dart';
+import 'models.dart';
 
 const _panel = Color(0xFF181B26);
 const _line = Color(0xFF272B3A);
 const _muted = Color(0xFF9AA0B4);
 const _accent = Color(0xFF7C5CFF);
 const _accent2 = Color(0xFF00D4C8);
+
+/// Wat er naar de speaker gaat, en waar het gevraagde nummer in die lijst staat.
+class Handover {
+  const Handover(this.ids, this.tracks, this.at);
+
+  /// De id's voor de speaker en de nummers die daarbij horen, in dezelfde volgorde en even lang.
+  final List<String> ids;
+  final List<Track> tracks;
+
+  /// De startpositie, geteld in DEZE lijst.
+  final int at;
+
+  bool get isEmpty => ids.isEmpty;
+}
+
+/// Bouw de overdracht op: de id's voor de speaker, de bijbehorende nummers, en de startindex.
+///
+/// Waarom dit een aparte functie is en niet drie regels in de aanroeper: de lijst wordt GEFILTERD op
+/// wat de pc kan serveren, en de startindex hoort in de nieuwe lijst te wijzen. Eerder werd alleen op
+/// id's gefilterd en bleef de index in de oude lijst staan -- elk nummer dat wegviel schoof alles
+/// erachter op. Bij shuffle-all over een hele bibliotheek is dat gegarandeerd mis, en dan toont de app
+/// een ander album dan er klinkt.
+///
+/// Valt het gevraagde nummer zelf weg, dan wordt er iets eerder begonnen in plaats van iets later:
+/// een nummer te vroeg hoor je en corrigeer je, een nummer dat overgeslagen wordt merk je niet.
+Handover buildHandover(List<Track> tracks, int index, String? Function(Track) idOf) {
+  final ids = <String>[];
+  final gestuurd = <Track>[];
+  var at = 0;
+  for (var i = 0; i < tracks.length; i++) {
+    final id = idOf(tracks[i]);
+    if (id == null) continue;
+    if (i <= index) at = ids.length;
+    ids.add(id);
+    gestuurd.add(tracks[i]);
+  }
+  return Handover(ids, gestuurd, ids.isEmpty ? 0 : at.clamp(0, ids.length - 1));
+}
 
 /// Where the music is playing right now, as far as this device knows.
 ///

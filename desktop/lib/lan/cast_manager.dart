@@ -230,6 +230,8 @@ class CastManager {
       artUrl: await _artUrlFor(id, session.renderer),
     );
     session.startedAt = DateTime.now();
+    session.currentUrl = url;
+    session.nextUrl = null;
 
     // Hand the renderer the next one straight away, so the gap between two songs is the
     // speaker's own and not a round trip through here.
@@ -245,7 +247,51 @@ class CastManager {
         album: nextTrack.album,
         mime: mimeForExt(nextTrack.ext),
       );
+      // Bewaard, want dit is precies de URL die de speaker straks zelf gaat spelen zonder het te
+      // melden. Hem terugzien in TrackURI is het enige signaal dat de overgang heeft plaatsgevonden.
+      session.nextUrl = nextUrl;
     }
+  }
+
+  /// Is de speaker zelf doorgeschoven naar het nummer dat we hem alvast meegaven?
+  ///
+  /// De naadloze overgang van SetNextAVTransportURI is onzichtbaar in de transportstatus: PLAYING
+  /// blijft PLAYING. Wat wél verandert is TrackURI. Zodra die gelijk is aan de URL die we als "volgende"
+  /// hebben doorgegeven, weten we dat de speaker een nummer verder is en verhogen we de index -- en
+  /// geven we meteen het nummer daarna mee, zodat de keten niet na twee liedjes ophoudt.
+  ///
+  /// Dit vervangt de STOPPED-weg niet: een speaker die de volgende-URL niet ondersteunt stopt wél, en
+  /// dan is [_maybeAdvance] nog steeds wat de wachtrij doorzet.
+  Future<bool> _followedRenderer(String? trackUri) async {
+    final session = _session;
+    if (session == null || trackUri == null) return false;
+    final volgende = session.nextUrl;
+    if (volgende == null || trackUri != volgende) return false;
+    if (session.index + 1 >= session.queue.length) return false;
+    session.index++;
+    session.startedAt = DateTime.now();
+    session.currentUrl = volgende;
+    session.nextUrl = null;
+    // Alleen de VOLGENDE doorgeven, niet opnieuw openen: de speaker speelt dit nummer al, en er
+    // opnieuw een URL op zetten zou hem vanaf nul laten beginnen.
+    final nextId = session.queue.elementAtOrNull(session.index + 1);
+    final nextTrack = nextId == null ? null : catalog.track(nextId);
+    if (nextId != null && nextTrack != null) {
+      try {
+        final nextUrl =
+            await _streamUrlFor(nextId, nextTrack.ext, session.renderer, nextTrack.sampleRate);
+        await _upnp.setNextUrl(
+          session.renderer,
+          nextUrl,
+          title: nextTrack.title,
+          artist: nextTrack.artist,
+          album: nextTrack.album,
+          mime: mimeForExt(nextTrack.ext),
+        );
+        session.nextUrl = nextUrl;
+      } catch (_) {/* dan stopt de speaker na dit nummer en pakt _maybeAdvance het op */}
+    }
+    return true;
   }
 
   /// The URL to hand the speaker — converted first when the speaker cannot take the original.
@@ -288,6 +334,12 @@ class CastManager {
 
     _advancing = true;
     try {
+      // Eerst: is de speaker zelf al doorgeschoven? Dan is er niets te doen behalve bijhouden waar hij
+      // is. Deze vraag gaat vóór de transportstatus, want in dat geval staat die nog op PLAYING en zou
+      // de rest van deze functie niets doen terwijl de index achterloopt.
+      final pos = await _upnp.positionInfo(session.renderer).catchError((_) => null);
+      if (await _followedRenderer(pos?.trackUri)) return;
+
       final state = await _upnp.transportState(session.renderer);
       if (state == null || !state.isStopped) return;
       if (session.index + 1 >= session.queue.length) {
@@ -434,6 +486,15 @@ class _Session {
   final List<String> queue;
   int index;
   DateTime startedAt = DateTime.now();
+
+  /// De URL's die deze speaker gekregen heeft voor het huidige en het volgende nummer.
+  ///
+  /// Nodig om te ZIEN dat de speaker zelf is doorgeschoven. De app geeft het volgende nummer alvast
+  /// mee zodat er geen gat valt tussen twee liedjes, en dan gaat een Sonos van PLAYING naar PLAYING
+  /// zonder ooit STOPPED te zeggen. Wie alleen op STOPPED let, loopt vanaf dat moment één nummer
+  /// achter: de speaker speelt nummer 2, de app toont nummer 1, en "volgende" gaat naar het nummer dat
+  /// al klinkt. Bij één album valt dat nauwelijks op, bij shuffle-all is elk nummer een ander album.
+  String? currentUrl, nextUrl;
 }
 
 extension _ElementAtOrNull<E> on List<E> {

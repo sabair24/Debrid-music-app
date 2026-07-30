@@ -312,15 +312,33 @@ class UpnpControlPoint {
   /// Asked of the SPEAKER rather than counted here. This device does not decode the audio, so a
   /// timer of its own would drift away from the truth within a minute — and a progress bar you can
   /// watch being wrong is worse than none.
-  Future<({Duration position, Duration duration})?> positionInfo(Renderer r) async {
+  /// [trackUri] komt uit dezelfde respons en kost dus geen extra ronde. Hij is de enige manier om te
+  /// weten WELK nummer er speelt: geeft de app het volgende nummer alvast mee (SetNextAVTransportURI),
+  /// dan schuift de speaker zelf door en gaat van PLAYING naar PLAYING zonder ooit STOPPED te zeggen.
+  /// Wie op STOPPED wacht om zijn index te verhogen, loopt vanaf dat moment één nummer achter.
+  Future<({Duration position, Duration duration, String? trackUri})?> positionInfo(Renderer r) async {
     final body = await _soap(r.avTransportUrl, 'AVTransport', 'GetPositionInfo',
         '<InstanceID>0</InstanceID>');
     if (body == null) return null;
     final rel = _tag(body, 'RelTime'), dur = _tag(body, 'TrackDuration');
     final position = parseUpnpTime(rel), duration = parseUpnpTime(dur);
     if (position == null) return null;
-    return (position: position, duration: duration ?? Duration.zero);
+    final uri = _tag(body, 'TrackURI')?.trim();
+    return (
+      position: position,
+      duration: duration ?? Duration.zero,
+      trackUri: (uri == null || uri.isEmpty) ? null : _unescape(uri),
+    );
   }
+
+  /// De URI komt als XML-tekst terug, dus `&amp;` moet weer een `&` worden voordat je hem vergelijkt
+  /// met de URL die je zelf verstuurd hebt.
+  static String _unescape(String s) => s
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&apos;', "'")
+      .replaceAll('&amp;', '&');
 
   static String? _tag(String body, String name) =>
       RegExp('<$name>([^<]*)</$name>').firstMatch(body)?.group(1);

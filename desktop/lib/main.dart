@@ -258,18 +258,17 @@ Future<void> main() async {
     ..castQueue = (tracks, index) async {
       final device = speakers.device;
       final client = speakers.client;
-      if (device == null || client == null) return false;
-      final ids = [
-        for (final t in tracks)
-          if (library.remoteTrackId(t.path) case final id?) id,
-      ];
+      if (device == null || client == null) return null;
+      // De nummers en de id's naast elkaar, met de startindex meegeschoven — zie buildHandover.
+      final over = buildHandover(tracks, index, (t) => library.remoteTrackId(t.path));
       // Nothing the pc can serve — a radio stream, say. Let it play here rather than silently
       // dropping it.
-      if (ids.isEmpty) return false;
-      final at = index.clamp(0, ids.length - 1);
-      final ok = await client.castPlay(device.id, ids, at);
-      if (ok) unawaited(speakers.refresh(withVolume: true));
-      return ok;
+      if (over.isEmpty) return null;
+      final ok = await client.castPlay(device.id, over.ids, over.at);
+      if (!ok) return null;
+      unawaited(speakers.refresh(withVolume: true));
+      // Vanaf hier is de wachtrij van de speler de wachtrij van de speaker, met dezelfde nummering.
+      return over.tracks;
     }
     // Last in the cascade: an arrow body swallows whatever follows it, so a `..x = () => y` line
     // in the middle turns the next entry into part of that expression.
@@ -285,6 +284,15 @@ Future<void> main() async {
   library.addListener(() {
     player.refreshCover();
     player.refreshTracks();
+  });
+  // De speaker vertelt elke twee seconden bij welk nummer hij is; hier gaat dat de speler in. Zonder
+  // deze regel werd die index netjes doorgegeven en door niemand gelezen: de app bleef staan op het
+  // nummer van de overdracht terwijl de speaker doorliep, en dan hoort de hoes op het scherm bij iets
+  // wat niet klinkt. Alleen tijdens casten, want anders is de speler zelf de waarheid.
+  speakers.addListener(() {
+    if (!speakers.isCasting) return;
+    final at = speakers.status?.index;
+    if (at != null) player.followSpeaker(at);
   });
   // The lockscreen, Control Center and the media keys. Not awaited on the critical path — the
   // window should not wait on a system service to come up.
@@ -4842,14 +4850,25 @@ class _Transport {
       ? () => unawaited(speaker.playPause())
       : (track == null ? null : player.playPause);
 
+  /// Bij twijfel de eigen wachtrij, niet grijs.
+  ///
+  /// `hasNext` eist dat de speaker zowel zijn index als de lengte meldt, en `hasPrev` leest een
+  /// ontbrekende index als nul. Zwijgt de status even -- een sessie die net is afgelopen, een speaker
+  /// die één poll niet antwoordt -- dan vielen beide knoppen dood terwijl de muziek gewoon doorliep.
+  /// Dat is wat "de app verliest de controle" was.
+  ///
+  /// Sinds de overdracht teruggeeft welke nummers de speaker gekregen heeft, is de wachtrij hier
+  /// dezelfde lijst met dezelfde nummering. De app weet dus zelf of er een volgende is, en dat is een
+  /// beter antwoord dan een grijze knop. Een druk die de speaker niet kan uitvoeren doet niets; een
+  /// knop die niet ingedrukt kan worden doet ook niets, maar leest als een defect.
   VoidCallback? get next => casting
-      ? ((speaker.status?.hasNext ?? false) ? () => unawaited(speaker.next()) : null)
+      ? ((speaker.status?.hasNext ?? player.hasNext) ? () => unawaited(speaker.next()) : null)
       : (player.hasNext ? player.next : null);
 
   /// Below three seconds, "previous" means the previous track; after that it means this one again.
   /// That is a local nicety and stays local: the speaker is told plainly which track to play.
   VoidCallback? get previous => casting
-      ? ((speaker.status?.hasPrev ?? false) ? () => unawaited(speaker.previous()) : null)
+      ? ((speaker.status?.hasPrev ?? player.hasPrev) ? () => unawaited(speaker.previous()) : null)
       : (player.hasPrev || player.position > const Duration(seconds: 3) ? player.prev : null);
 
   /// While the finger moves. Carried locally when casting and sent once on release — a seek per

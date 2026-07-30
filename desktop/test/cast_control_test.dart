@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/lan/client.dart';
 import 'package:debridmusic/lan/upnp.dart';
+import 'package:debridmusic/models.dart';
 import 'package:debridmusic/speakers.dart';
 
 void main() {
@@ -120,6 +121,46 @@ void main() {
       await t.setVolume(40);
       expect(t.isCasting, isTrue);
       t.dispose();
+    });
+  });
+
+  group('de wachtrij die de speaker krijgt', () {
+    Track t(String naam) => Track(path: naam, title: naam, artist: 'A', album: 'B');
+
+    test('alles serveerbaar: één op één, en de index blijft staan', () {
+      final over = buildHandover([t('1'), t('2'), t('3')], 2, (x) => 'id-${x.path}');
+      expect(over.ids, ['id-1', 'id-2', 'id-3']);
+      expect(over.at, 2);
+    });
+
+    test('een nummer dat de pc niet kan serveren schuift de index mee', () {
+      // DE fout. Nummer 2 valt weg, dus wat de gebruiker aantikte staat nu op plek 1 in plaats van 2.
+      // Voorheen ging er een 2 naar de speaker en toonde de app nummer 3: een ander album dan er klonk.
+      final over = buildHandover(
+          [t('1'), t('geen id'), t('3')], 2, (x) => x.path == 'geen id' ? null : 'id-${x.path}');
+      expect(over.ids, ['id-1', 'id-3']);
+      expect(over.at, 1);
+      expect(over.tracks.map((x) => x.path), ['1', '3'],
+          reason: 'de speler moet exact deze lijst krijgen, anders rekent hij weer anders');
+    });
+
+    test('valt het gevraagde nummer zelf weg, dan iets eerder beginnen', () {
+      // Een nummer te vroeg hoor je en corrigeer je; een nummer dat overgeslagen wordt merk je niet.
+      final over = buildHandover(
+          [t('1'), t('2'), t('weg'), t('4')], 2, (x) => x.path == 'weg' ? null : 'id-${x.path}');
+      expect(over.ids, ['id-1', 'id-2', 'id-4']);
+      expect(over.at, 1);
+    });
+
+    test('niets serveerbaar is geen overdracht', () {
+      final over = buildHandover([t('1'), t('2')], 0, (_) => null);
+      expect(over.isEmpty, isTrue);
+      expect(over.at, 0);
+    });
+
+    test('een index buiten de lijst landt binnen de lijst', () {
+      final over = buildHandover([t('1'), t('2')], 99, (x) => 'id-${x.path}');
+      expect(over.at, 1);
     });
   });
 }
