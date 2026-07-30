@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'json_body.dart';
 import 'rutracker.dart';
 import 'torbox.dart';
 
@@ -20,7 +21,7 @@ class ApibaySource implements SearchSource {
     try {
       final r = await http.get(Uri.parse('https://apibay.org/q.php?q=${Uri.encodeComponent(query)}&cat=100'));
       if (r.statusCode != 200) return [];
-      final arr = (jsonDecode(r.body) as List?) ?? const [];
+      final arr = (jsonBody(r) as List?) ?? const [];
       final out = <SearchResult>[];
       for (final e in arr) {
         final m = e as Map<String, dynamic>;
@@ -55,7 +56,7 @@ class BitSearchSource implements SearchSource {
     try {
       final r = await http.get(Uri.parse('https://bitsearch.eu/api/v1/search?q=${Uri.encodeComponent(query)}&category=audio&sort=seeders&p=1'));
       if (r.statusCode != 200) return [];
-      final j = jsonDecode(r.body) as Map<String, dynamic>;
+      final j = jsonBody(r) as Map<String, dynamic>;
       if (j['success'] != true) return [];
       final results = (j['results'] as List?) ?? const [];
       return results
@@ -96,7 +97,7 @@ class KnabenSource implements SearchSource {
       final r = await http.post(Uri.parse('https://api.knaben.org/v1'),
           headers: {'Content-Type': 'application/json'}, body: body);
       if (r.statusCode != 200) return [];
-      final hits = (jsonDecode(r.body)['hits'] as List?) ?? const [];
+      final hits = (jsonBody(r)['hits'] as List?) ?? const [];
       final out = <SearchResult>[];
       for (final e in hits) {
         final m = e as Map<String, dynamic>;

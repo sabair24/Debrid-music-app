@@ -1,6 +1,6 @@
-import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import 'json_body.dart';
 import 'online.dart';
 import 'rutracker.dart';
 import 'settings.dart';
@@ -61,7 +61,7 @@ class ConnectionChecker {
               .get(Uri.parse('https://api.discogs.com/oauth/identity'), headers: headers)
               .timeout(const Duration(seconds: 8));
           if (id.statusCode == 200) {
-            final name = (jsonDecode(id.body)['username'] ?? '') as String;
+            final name = (jsonBody(id)['username'] ?? '') as String;
             if (name.isNotEmpty) return ConnResult(ConnState.ok, 'Ingelogd als $name');
           }
         } catch (_) {/* the token works; the name is decoration */}

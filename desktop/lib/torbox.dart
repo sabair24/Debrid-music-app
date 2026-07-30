@@ -1,5 +1,5 @@
-import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'json_body.dart';
 
 /// One torrent hit (from a search source), reused through the TorBox resolve flow.
 class SearchResult {
@@ -115,7 +115,7 @@ class TorBox {
           .get(Uri.parse('$_base/user/me?settings=false'), headers: _auth)
           .timeout(const Duration(seconds: 12));
       if (r.statusCode != 200) return false;
-      final j = jsonDecode(r.body);
+      final j = jsonBody(r);
       return j is Map && (j['success'] == true || j['data'] != null);
     } catch (_) {
       return false;
@@ -130,7 +130,7 @@ class TorBox {
           .get(Uri.parse('$_base/torrents/checkcached?hash=$q&format=list&list_files=false'), headers: _auth)
           .timeout(const Duration(seconds: 15));
       if (r.statusCode != 200) return {};
-      final data = (jsonDecode(r.body)['data'] as List?) ?? const [];
+      final data = (jsonBody(r)['data'] as List?) ?? const [];
       return data.map((e) => (e['hash'] as String?)?.toLowerCase()).whereType<String>().toSet();
     } catch (_) {
       return {};
@@ -143,7 +143,7 @@ class TorBox {
       final r = await http
           .post(Uri.parse('$_base/torrents/createtorrent'), headers: _auth, body: {'magnet': magnet})
           .timeout(const Duration(seconds: 15));
-      final j = jsonDecode(r.body) as Map<String, dynamic>;
+      final j = jsonBody(r) as Map<String, dynamic>;
       final data = j['data'] as Map<String, dynamic>?;
       final detail = (j['detail'] ?? j['error'] ?? '').toString();
       final id = (data?['torrent_id'] as int?);
@@ -159,7 +159,7 @@ class TorBox {
           .get(Uri.parse('$_base/torrents/mylist?bypass_cache=true'), headers: _auth)
           .timeout(const Duration(seconds: 15));
       if (r.statusCode != 200) return [];
-      final data = (jsonDecode(r.body)['data'] as List?) ?? const [];
+      final data = (jsonBody(r)['data'] as List?) ?? const [];
       return data.map((e) => TbTorrent.fromJson(e as Map<String, dynamic>)).toList();
     } catch (_) {
       return [];
@@ -175,7 +175,7 @@ class TorBox {
         headers: _auth,
       ).timeout(const Duration(seconds: 15));
       if (r.statusCode != 200) return null;
-      final url = jsonDecode(r.body)['data'] as String?;
+      final url = jsonBody(r)['data'] as String?;
       return (url != null && url.isNotEmpty) ? url : null;
     } catch (_) {
       return null;

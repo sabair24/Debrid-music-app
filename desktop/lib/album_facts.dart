@@ -35,6 +35,7 @@ import 'package:flutter/foundation.dart';
 import 'completeness.dart';
 import 'editions.dart';
 import 'models.dart';
+import 'mojibake.dart';
 
 /// Bumped when the shape below changes in a way that makes stored answers wrong. Everything with an
 /// older number is re-derived on sight — the same trick as `ArtistArt.schema` and the `v5` in the
@@ -186,9 +187,13 @@ class AlbumFacts {
   static AlbumFacts? fromJson(Map<String, dynamic> j) {
     final uid = (j['uid'] ?? '').toString();
     if (uid.isEmpty) return null;
+    // Titels komen hier van schijf, en op schijf staat 124 keer een dubbel gecodeerde apostrof of
+    // accentletter -- geschreven door een build die er niet meer is, terwijl de caches van
+    // MusicBrainz en Discogs schoon zijn. Bij het inlezen rechtzetten is de goedkoopste weg: het
+    // hoeft niet opnieuw over de lijn, en de eerstvolgende bewaring schrijft de nette tekst terug.
     ChoiceTrack track(Map m) => ChoiceTrack(
           (m['p'] ?? '').toString(),
-          (m['t'] ?? '').toString(),
+          unmojibake((m['t'] ?? '').toString()),
           (m['s'] as num?)?.toInt(),
           disc: (m['d'] as num?)?.toInt() ?? 1,
         );
@@ -394,6 +399,14 @@ class AlbumFactsStore extends ChangeNotifier {
       }
       for (final e in (j['folders'] as Map?)?.entries ?? const <MapEntry>[]) {
         _folders['${e.key}'] = '${e.value}';
+      }
+      // Eén regel, en hij is de reden dat de reparatie geen pleister is: bij oude data loopt dit
+      // getal één keer op en blijft het daarna nul. Blijft het terugkomen, dan schrijft iets nog
+      // steeds verminkte tekst weg en is er een echte bron te zoeken.
+      if (mojibakeHersteld > 0) {
+        debugPrint('feiten: $mojibakeHersteld dubbel gecodeerde titels rechtgezet bij het inlezen');
+        _dirty = true;
+        _scheduleSave();
       }
     } catch (e) {
       debugPrint('album_facts.json unusable, starting empty: $e');

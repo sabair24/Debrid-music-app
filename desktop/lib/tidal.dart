@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
+import 'json_body.dart';
 import 'settings.dart';
 import 'paths.dart';
 
@@ -152,7 +153,7 @@ class TidalService {
       } catch (_) {}
       throw 'Token-uitwisseling mislukt (${r.statusCode}): ${r.body}';
     }
-    _storeToken(jsonDecode(r.body) as Map<String, dynamic>);
+    _storeToken(jsonBody(r) as Map<String, dynamic>);
     await settings.save();
   }
 
@@ -179,7 +180,7 @@ class TidalService {
           .post(Uri.parse(_tokenUrl), headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: body)
           .timeout(const Duration(seconds: 15));
       if (r.statusCode != 200) return null;
-      _storeToken(jsonDecode(r.body) as Map<String, dynamic>);
+      _storeToken(jsonBody(r) as Map<String, dynamic>);
       await settings.save();
       return settings.tidalAccessToken;
     } catch (_) {
@@ -199,7 +200,7 @@ class TidalService {
       final body = r.body.length > 300 ? r.body.substring(0, 300) : r.body;
       throw 'TIDAL API ${r.statusCode}: $body';
     }
-    return jsonDecode(r.body) as Map<String, dynamic>;
+    return jsonBody(r) as Map<String, dynamic>;
   }
 
   Future<void> _fetchProfile() async {

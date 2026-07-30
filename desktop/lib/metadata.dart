@@ -1,6 +1,6 @@
-import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import 'json_body.dart';
 import 'musicbrainz.dart';
 import 'settings.dart';
 
@@ -92,7 +92,7 @@ class MetadataSearch {
           .get(Uri.parse('https://api.deezer.com/$path?q=${Uri.encodeComponent(query)}&limit=12'))
           .timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return [];
-      final data = (jsonDecode(r.body)['data'] as List?) ?? const [];
+      final data = (jsonBody(r)['data'] as List?) ?? const [];
       final out = <MetaResult>[];
       for (final e in data) {
         if (track) {
@@ -127,7 +127,7 @@ class MetadataSearch {
         headers: {'User-Agent': _ua},
       ).timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return [];
-      return _discogsRows(jsonDecode(r.body));
+      return _discogsRows(jsonBody(r));
     } catch (_) {
       return [];
     }
@@ -259,7 +259,7 @@ class MetadataSearch {
         headers: {'User-Agent': _ua},
       ).timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return [];
-      return _discogsRows(jsonDecode(r.body), because: query);
+      return _discogsRows(jsonBody(r), because: query);
     } catch (_) {
       return [];
     }

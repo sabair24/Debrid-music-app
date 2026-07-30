@@ -1,5 +1,5 @@
-import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'json_body.dart';
 
 /// Deezer catalog (keyless) — powers the Stremio-style browse:
 /// search artist → their albums → an album's tracks. Sources (torrents/Soulseek)
@@ -133,7 +133,7 @@ class CatalogService {
     try {
       final r = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
       if (r.statusCode != 200) return null;
-      final j = jsonDecode(r.body);
+      final j = jsonBody(r);
       return j is Map<String, dynamic> ? j : null;
     } catch (_) {
       return null;

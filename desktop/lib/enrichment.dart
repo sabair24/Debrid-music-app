@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
+import 'json_body.dart';
 import 'discogs.dart';
 import 'models.dart';
 import 'settings.dart';
@@ -268,7 +269,7 @@ class CoverEnricher {
           .get(Uri.parse('https://api.deezer.com/search/artist?q=${Uri.encodeComponent(name)}&limit=1'))
           .timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return null;
-      final data = (jsonDecode(r.body)['data'] as List?) ?? const [];
+      final data = (jsonBody(r)['data'] as List?) ?? const [];
       if (data.isEmpty) return null;
       final url = (data.first['picture_xl'] ?? data.first['picture_big']) as String?;
       if (url == null || url.isEmpty || url.contains(_noPhoto)) return null;
@@ -486,7 +487,7 @@ class CoverEnricher {
         headers: {'User-Agent': _ua},
       ).timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return null;
-      final artists = (jsonDecode(r.body)['artists'] as List?) ?? const [];
+      final artists = (jsonBody(r)['artists'] as List?) ?? const [];
       if (artists.isEmpty) return null;
       final a = artists.first as Map<String, dynamic>;
       final bio = ((a['strBiographyNL'] ?? a['strBiographyEN']) as String?)?.trim();
@@ -571,7 +572,7 @@ class CoverEnricher {
           .get(Uri.parse('https://api.deezer.com/search/album?q=${Uri.encodeComponent(query)}&limit=1'))
           .timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return null;
-      final data = (jsonDecode(r.body)['data'] as List?) ?? const [];
+      final data = (jsonBody(r)['data'] as List?) ?? const [];
       if (data.isEmpty) return null;
       final a = data.first as Map<String, dynamic>;
       final url = (a['cover_xl'] ?? a['cover_big']) as String?;
@@ -602,7 +603,7 @@ class CoverEnricher {
         headers: {'User-Agent': _ua},
       ).timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return null;
-      final releases = (jsonDecode(r.body)['releases'] as List?) ?? const [];
+      final releases = (jsonBody(r)['releases'] as List?) ?? const [];
       for (final rel in releases.take(3)) {
         final id = rel['id'] as String?;
         if (id == null) continue;

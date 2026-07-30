@@ -1,5 +1,5 @@
-import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'json_body.dart';
 
 import 'organize.dart' show artistKey;
 
@@ -62,7 +62,7 @@ class RecommendService {
     try {
       final r = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
       if (r.statusCode != 200) return null;
-      final j = jsonDecode(r.body);
+      final j = jsonBody(r);
       return j is Map<String, dynamic> ? j : null;
     } catch (_) {
       return null;
