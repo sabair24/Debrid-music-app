@@ -36,6 +36,7 @@ import 'completeness.dart';
 import 'editions.dart';
 import 'models.dart';
 import 'mojibake.dart';
+import 'warm_log.dart';
 
 /// Bumped when the shape below changes in a way that makes stored answers wrong. Everything with an
 /// older number is re-derived on sight — the same trick as `ArtistArt.schema` and the `v5` in the
@@ -216,8 +217,12 @@ class AlbumFacts {
           if (t is Map) track(t),
       ],
       bonus: [
+        // Ook de uitgaveregel, en dat was het gat in de eerste versie hiervan: die staat op het
+        // scherm onder "Op andere uitgaves" als "CD-R · US · 2022", en het middenpunt daarin was
+        // net zo dubbel gecodeerd als de apostrofs in de titels. Op schijf gemeten: 124 verminkte
+        // titels weg en toen nog steeds tien "Â·" over, allemaal in dit veld.
         for (final b in (j['bonus'] as List? ?? const []))
-          if (b is Map) BonusTrack(track(b), (b['e'] ?? '').toString()),
+          if (b is Map) BonusTrack(track(b), unmojibake((b['e'] ?? '').toString())),
       ],
     );
   }
@@ -403,8 +408,12 @@ class AlbumFactsStore extends ChangeNotifier {
       // Eén regel, en hij is de reden dat de reparatie geen pleister is: bij oude data loopt dit
       // getal één keer op en blijft het daarna nul. Blijft het terugkomen, dan schrijft iets nog
       // steeds verminkte tekst weg en is er een echte bron te zoeken.
+      //
+      // In warm.log en niet via debugPrint, want een release-build gooit debugPrint weg -- en een
+      // teller die niemand kan lezen bewijst niets. Precies de les die dat logboek zelf al opschreef.
       if (mojibakeHersteld > 0) {
-        debugPrint('feiten: $mojibakeHersteld dubbel gecodeerde titels rechtgezet bij het inlezen');
+        WarmLog('${dir()}${Platform.pathSeparator}warm.log')
+            .line('feiten: $mojibakeHersteld dubbel gecodeerde teksten rechtgezet bij het inlezen');
         _dirty = true;
         _scheduleSave();
       }

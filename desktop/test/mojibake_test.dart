@@ -4,6 +4,7 @@
 /// titel verbouwt is erger dan de verminking zelf, want die valt niet op.
 library;
 
+import 'package:debridmusic/album_facts.dart';
 import 'package:debridmusic/mojibake.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -28,6 +29,45 @@ void main() {
     test('meerdere in één titel', () {
       expect(unmojibake('Pour que tu mâ€™aimes encore â€” live'),
           'Pour que tu m’aimes encore — live');
+    });
+  });
+
+  group('aangesloten op de feiten die van schijf komen', () {
+    // De functie alleen testen was niet genoeg: de eerste versie zat op de tracktitel en niet op de
+    // uitgaveregel van bonusnummers. Op schijf zag ik toen 124 verminkte titels verdwijnen en nog
+    // tien "Â·" overblijven, allemaal in dat ene veld. Vandaar een test op de BEDRADING.
+    test('titels én de uitgaveregel van bonusnummers', () {
+      final f = AlbumFacts.fromJson({
+        'uid': 'u',
+        'schema': kAlbumFactsSchema,
+        'hash': 'h',
+        'tracks': [
+          {'p': '10', 't': 'Nobodyâ€™s Business', 's': 216},
+        ],
+        'bonus': [
+          {'p': '3', 't': 'MÃ¡s es amar', 's': 240, 'e': 'CD-R Â· US Â· 2022'},
+        ],
+      });
+      expect(f!.tracklist.single.title, 'Nobody’s Business');
+      expect(f.bonus.single.track.title, 'Más es amar');
+      expect(f.bonus.single.edition, 'CD-R · US · 2022');
+    });
+
+    test('en een plaat die al goed staat komt er ongewijzigd door', () {
+      final f = AlbumFacts.fromJson({
+        'uid': 'u',
+        'schema': kAlbumFactsSchema,
+        'hash': 'h',
+        'tracks': [
+          {'p': '1', 't': 'Ce rêve bleu', 's': 200},
+        ],
+        'bonus': [
+          {'p': '2', 't': 'TEXAS HOLD ’EM', 's': 233, 'e': 'CD · US · 2024'},
+        ],
+      });
+      expect(f!.tracklist.single.title, 'Ce rêve bleu');
+      expect(f.bonus.single.edition, 'CD · US · 2024');
+      expect(mojibakeHersteld, 0, reason: 'niets te repareren, dus de teller blijft staan');
     });
   });
 

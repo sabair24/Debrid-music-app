@@ -30,6 +30,7 @@ import 'library.dart';
 import 'models.dart';
 import 'musicbrainz.dart';
 import 'settings.dart';
+import 'warm_log.dart';
 
 /// How many empty answers in a row mean "the network is gone" rather than "three obscure records".
 ///
@@ -68,35 +69,6 @@ const _artDeadline = Duration(seconds: 20);
 const _tooSlowLimit = 5;
 
 
-/// A written record of what the warmer decided, in `warm.log` beside the other state files.
-///
-/// This exists because four attempts at fixing "the counter sticks at 15" were spent guessing. A
-/// release build strips [debugPrint], so from the outside the warmer is a black box: the only
-/// signals were a counter that turns out to count something other than progress, and a cache
-/// directory that either grows or does not. Everything else was inference.
-///
-/// Deliberately blunt: append a line, truncate when it gets long, never throw. A logger that can
-/// break the thing it observes is worse than none.
-class WarmLog {
-  WarmLog(this._path);
-  final String _path;
-
-  /// Kept small enough to read in one go and to never matter on disk. Rewritten from the tail rather
-  /// than rotated: there is nothing here worth keeping across sessions.
-  static const _maxBytes = 256 * 1024;
-
-  void line(String s) {
-    try {
-      final f = File(_path);
-      if (f.existsSync() && f.lengthSync() > _maxBytes) {
-        final keep = f.readAsStringSync();
-        f.writeAsStringSync(keep.substring(keep.length ~/ 2), flush: true);
-      }
-      final t = DateTime.now().toIso8601String().substring(11, 23);
-      f.writeAsStringSync('$t  $s\n', mode: FileMode.append, flush: true);
-    } catch (_) {/* observing must never break the observed */}
-  }
-}
 
 /// Pull an album's scans into the on-disk cache. The default [FactsWarmer.warmArt].
 ///
