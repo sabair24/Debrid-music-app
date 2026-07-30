@@ -5127,7 +5127,6 @@ class _SpeakerButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final lib = context.watch<LibraryStore>();
     final target = context.watch<SpeakerTarget>();
     // Gekeken naar de client waarmee GESTUURD wordt, niet naar de bibliotheek. Dat scheelt: op de pc is
     // library.remote null — de bibliotheek staat daar zelf — en daarmee was de knop er niet, ook niet
@@ -5155,19 +5154,17 @@ class _SpeakerButton extends StatelessWidget {
             if (was != null) unawaited(client.castControl(was.id, 'stop'));
           },
           onPickedRemote: (device) async {
-            // Dezelfde overdracht als bij het aantikken van een nummer, en om dezelfde reden: hier werd
-            // ook alleen op id's gefilterd terwijl de index in de ongefilterde wachtrij bleef wijzen.
-            // Twee plekken, één fout — nu één functie.
-            final index = player.queueTracks.indexWhere((t) => t.path == player.current?.path);
-            final over = buildHandover(
-                player.queueTracks, index < 0 ? 0 : index, (t) => lib.castTrackId(t.path));
-            if (over.isEmpty) {
-              _srcToast(context, 'Zet eerst iets op, dan stuur ik het door.');
-              return;
-            }
-            // This device goes quiet: the point is that it plays THERE.
-            if (player.playing) player.playPause();
-            final ok = await client.castPlay(device.id, over.ids, over.at);
+            // Dezelfde weg als het aantikken van een nummer, en nu ook echt dezelfde: dit blok bouwde
+            // zijn eigen overdracht en sloeg [PlayerStore.handOverToSpeaker] over. Twee gevolgen, allebei
+            // stil:
+            //
+            // 1. de speler nam de AANGENOMEN lijst niet over, dus viel er één nummer weg dat de pc niet
+            //    kan serveren, dan schoof alles erachter op bij de speaker terwijl het hier bleef staan --
+            //    en telt elke index die de speaker terugmeldt vanaf dat moment verkeerd;
+            // 2. `opSpeaker` bleef uit, dus shuffle indrukken schudde alleen deze kant.
+            //
+            // Precies de fout die _handedToSpeaker voor de andere weg al oploste.
+            final ok = await player.handOverToSpeaker();
             if (!context.mounted) return;
             if (!ok) {
               _srcToast(context, '${device.name} nam het niet aan.');

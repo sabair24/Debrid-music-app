@@ -279,6 +279,16 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     return true;
   }
 
+  /// Geef de wachtrij die hier staat door aan de speaker die zojuist gekozen is.
+  ///
+  /// Eén weg naar buiten, en dat is het punt: de speakerkiezer bouwde zijn eigen overdracht en nam
+  /// daardoor de aangenomen lijst niet over en zette [opSpeaker] niet. Alles wat [_handedToSpeaker]
+  /// regelt -- filteren, de lijst van de SPEAKER aannemen, hier stil worden -- gold daar niet.
+  ///
+  /// False als er niets te sturen viel of de speaker het weigerde; de aanroeper zet de keuze dan terug.
+  Future<bool> handOverToSpeaker() =>
+      _handedToSpeaker(_order, _index < 0 ? 0 : _index, currentCover);
+
   /// De speaker zegt bij welk nummer hij is; volg dat.
   ///
   /// Zonder dit staat de app stil op het nummer dat bij de overdracht is doorgegeven terwijl de speaker
