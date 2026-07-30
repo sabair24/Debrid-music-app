@@ -634,16 +634,40 @@ final _versionWordRe = RegExp(
 final _bracketRe = RegExp(r'[(\[]([^)\]]{1,60})[)\]]');
 final _partRe = RegExp(r'\b(?:part|pt\.?)\s*(\d+)\b');
 
-/// The version markers a filename claims: `D.A.N.C.E. (Live Version).flac` → `{live version}`.
-/// Only bracketed segments that actually contain a version word count, so noise like `(2021)`,
-/// `(WWW)` or `[PMEDIA]` doesn't masquerade as a different take.
-Set<String> versionMarkers(String filename) {
+/// Bracketed woorden die GEEN versie aanduiden maar juist de gewone albumopname.
+///
+/// "(Album Version)" betekent letterlijk: de versie die op het album staat. Een catalogus schrijft
+/// die zelden mee, een ripper vaak wel, en dat verschil liet de plaat er onvolledig uitzien.
+///
+/// Gemeten over de hele bibliotheek: Rihanna's Loud verloor er drie nummers aan ("What's My Name?
+/// (Album Version)" tegen een kale rij) en "Te Amo" één, met dezelfde looptijd aan beide kanten. Het
+/// omgekeerde komt ook voor -- daar staat het merk juist op de UITGAVE en niet op het bestand.
+///
+/// Bewust alleen dit. "single version", "original mix" en "club mix" schelen ook maar een woord en
+/// zijn wel degelijk andere opnames; "album" is het enige woord dat de standaardversie aanwijst.
+const _geenEchtMerk = {'album version', 'album mix'};
+
+/// Elk haakje dat over een VERSIE gaat, ook de haakjes die geen onderscheid maken.
+///
+/// [versionMarkers] zeeft de nep-merken hieruit weg, want die mogen twee opnames niet scheiden. De
+/// titelvergelijking wil ze juist allemaal kwijt: "(Album Version)" hoort niet bij de naam van het
+/// nummer, dus het mag ook niet meewegen in hoeveel woorden twee titels delen.
+Set<String> versionBrackets(String filename) {
   final base = filename.toLowerCase().replaceAll(RegExp(r'\.[a-z0-9]{2,5}$'), '');
   final out = <String>{};
   for (final m in _bracketRe.allMatches(base)) {
     final seg = m.group(1)!.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (_versionWordRe.hasMatch(seg)) out.add(seg);
   }
+  return out;
+}
+
+/// The version markers a filename claims: `D.A.N.C.E. (Live Version).flac` → `{live version}`.
+/// Only bracketed segments that actually contain a version word count, so noise like `(2021)`,
+/// `(WWW)` or `[PMEDIA]` doesn't masquerade as a different take.
+Set<String> versionMarkers(String filename) {
+  final out = versionBrackets(filename).where((s) => !_geenEchtMerk.contains(s)).toSet();
+  final base = filename.toLowerCase().replaceAll(RegExp(r'\.[a-z0-9]{2,5}$'), '');
   final part = _partRe.firstMatch(base);
   if (part != null) out.add('part ${part.group(1)}');
   return out;

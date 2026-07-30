@@ -240,6 +240,54 @@ void main() {
       expect(c.slots.last.index, -1, reason: 'en het bestand blijft zichtbaar');
     });
 
+    test('"(Album Version)" is geen versie maar juist de gewone opname', () {
+      // Gemeten over de hele bibliotheek: Rihanna's Loud verloor hier drie nummers aan. De ripper
+      // schrijft "(Album Version)" waar de catalogus niets zegt, en dat woord betekent letterlijk
+      // "de versie die op het album staat". Zelfde looptijd aan beide kanten.
+      final c = matchAlbumTracks(
+        [_o(1, "What's My Name?", 263), _o(2, 'Man Down', 267)],
+        [_t("What's My Name? (Album Version)", 263), _t('Man Down (Album Version)', 267)],
+        'Rihanna',
+      );
+      expect(c.namesEverything, isTrue);
+      expect(c.complete, isTrue);
+    });
+
+    test('en ook als het merk juist op de UITGAVE staat', () {
+      // Het komt beide kanten op voor: "Te Amo" op schijf tegen "Te amo (album version)" in de
+      // catalogus van Now That's What I Call Music! 76.
+      final c = matchAlbumTracks(
+        [_o(1, 'Te amo (album version)', 220)],
+        [_t('Te Amo', 220)],
+        'Rihanna',
+      );
+      expect(c.complete, isTrue);
+    });
+
+    test('maar "(single version)" blijft wel een andere opname', () {
+      // Alleen het woord "album" wijst de standaardversie aan. Een single-edit is een echte andere
+      // opname en moet als ontbrekend blijven staan, anders verdwijnt de downloadknop ervoor.
+      final c = matchAlbumTracks(
+        [_o(1, 'Rock With You', 220)],
+        [_t('Rock With You (Single Version)', 220)],
+        'Michael Jackson',
+      );
+      expect(c.slots.first.missing, isTrue);
+      expect(c.slots.last.index, -1);
+    });
+
+    test('een haakje dat geen versie is blijft meewegen', () {
+      // Adele's 30 heeft "Easy On Me" en het duet met Chris Stapleton allebei, met bijna dezelfde
+      // lengte. Alleen VERSIE-haakjes mogen uit de woordvergelijking; een credit moet blijven staan,
+      // anders valt het duet op de rij van de albumversie.
+      final c = matchAlbumTracks(
+        [_o(1, 'Easy on Me', 224)],
+        [_t('Easy On Me (With Chris Stapleton)', 224)],
+        'Adele',
+      );
+      expect(c.slots.first.missing, isTrue);
+    });
+
     test('two different songs are not folded together by a shared word', () {
       final c = matchAlbumTracks([_o(1, 'Like a Child', 269)], [_t('Like a Prayer', 269)], 'X');
       expect(c.slots.first.missing, isTrue);

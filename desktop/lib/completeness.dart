@@ -229,7 +229,26 @@ AlbumCompleteness matchAlbumTracks(
 /// Seconds two timings may differ and still be the same recording. Matches [fileOffersTitle].
 const _slack = 12;
 
-Set<String> _words(String s) => normKey(s).split(' ').where((w) => w.isNotEmpty).toSet();
+/// De woorden van de SONGTITEL, zonder de merken.
+///
+/// Merken worden apart vergeleken door [_sameMarkers]. Ze daarnaast ook nog in de woordoverlap laten
+/// meetellen straft hetzelfde verschil twee keer af, en dat is precies genoeg om een treffer te
+/// missen: "What's My Name? (Album Version)" tegen een kale rij haalde zo 60% -- onder de grens van
+/// vier vijfde -- terwijl het over dezelfde drie woorden gaat. Gemeten over de hele bibliotheek kostte
+/// dit Rihanna's Loud drie nummers.
+///
+/// Alleen erkende merken gaan eruit. Een haakje dat GEEN versie aanduidt -- "(feat. JAY-Z)", "(With
+/// Chris Stapleton)" -- blijft meetellen, want daar kan het verschil tussen twee opnames in zitten:
+/// Adele's 30 heeft "Easy On Me" en het duet met Chris Stapleton allebei, en die mogen niet op één
+/// rij vallen.
+Set<String> _words(String s) {
+  var kaal = s;
+  for (final m in versionBrackets(s)) {
+    kaal = kaal.replaceAll(
+        RegExp('[(\\[]\\s*${RegExp.escape(m)}\\s*[)\\]]', caseSensitive: false), ' ');
+  }
+  return normKey(kaal).split(' ').where((w) => w.isNotEmpty).toSet();
+}
 
 /// True when [a] becomes [b] by changing, adding or removing a single character.
 bool _oneEditApart(String a, String b) {
