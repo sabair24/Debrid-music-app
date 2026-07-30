@@ -337,10 +337,18 @@ class CastManager {
     final session = _session;
     if (session == null || session.renderer.id != deviceId || trackIds.isEmpty) return;
     session.queue = List.of(trackIds);
-    session.index = index.clamp(0, trackIds.length - 1);
+    // Waar staat het nummer dat NU klinkt in de nieuwe lijst? Dat is de index -- ongeacht wat de
+    // aanroeper meestuurt. De speaker speelt door, dus de boekhouding hoort zich naar het geluid te
+    // voegen en niet andersom. Zo kan één verkeerd gerekende index aan de andere kant hier geen
+    // scheefstand meer veroorzaken, en als hij tóch afwijkt staat dat in het logboek.
+    final huidig = _idVanUrl(session.currentUrl);
+    final plek = huidig == null ? -1 : trackIds.indexOf(huidig);
+    session.index = plek >= 0 ? plek : index.clamp(0, trackIds.length - 1);
     session.nextUrl = null;
     _log?.line('wachtrij vervangen: ${trackIds.length} nummers, nu op ${session.index} '
-        '${_naam(session.queue.elementAtOrNull(session.index))}');
+        '${_naam(session.queue.elementAtOrNull(session.index))}'
+        '${plek >= 0 && plek != index ? '  (aanroeper zei $index)' : ''}'
+        '${plek < 0 ? '  (het spelende nummer zit niet in de nieuwe lijst)' : ''}');
     await _armNext(session);
   }
 
