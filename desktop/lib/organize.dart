@@ -372,9 +372,35 @@ TrackTags? readTags(File f) {
       );
     }
   }
+  // Zelfde vangnet voor mp3 als hierboven voor FLAC, en het ontbrak precies waar het nodig was.
+  //
+  // Gemeten geval: één bestand in de wortel van de bibliotheek werd bij het opbergen overgeslagen
+  // met "geen tags te lezen", terwijl de eigen ID3-lezer er zes velden uit haalt -- artiest, titel,
+  // album en drie die vol reclame stonden. Het pakket claimt hem niet, en voor FLAC staat er wel een
+  // terugval en voor mp3 stond er niets. Dezelfde scheefheid als bij het SCHRIJVEN: de mp3-schrijver
+  // was ook op alles aangesloten behalve op de weg die hem het meest gebruikt.
+  //
+  // Bewust NA het pakket en niet ervoor. Het pakket leest ook ID3v1, en deze lezer heeft een
+  // v2-kop nodig; ervoor zetten zou dus voor élke mp3 gaan gelden en een v1-only bestand juist
+  // slechter af maken. Als vangnet raakt hij alleen de bestanden die nu helemaal niets opleveren.
+  TrackTags? viaEigenId3() {
+    if (!base.toLowerCase().endsWith('.mp3')) return null;
+    final raw = readMp3RawFields(f);
+    final titel = raw['title']?.trim() ?? '';
+    final artiest = raw['artist']?.trim() ?? '';
+    final album = raw['album']?.trim() ?? '';
+    if (titel.isEmpty && artiest.isEmpty && album.isEmpty) return null;
+    return TrackTags(
+      title: titel.isEmpty ? noExt : titel,
+      artist: artiest,
+      album: album,
+      trackNo: int.tryParse(raw['tracknumber'] ?? '') ?? 0,
+    );
+  }
+
   // A staged download the package cannot parse would otherwise lock itself into the staging
   // folder: the handle it keeps on the refusal makes the file un-renameable for good.
-  if (!tagParserWouldClaim(f)) return null;
+  if (!tagParserWouldClaim(f)) return viaEigenId3();
   try {
     final m = readMetadata(f, getImage: false);
     return TrackTags(
@@ -384,7 +410,7 @@ TrackTags? readTags(File f) {
       trackNo: m.trackNumber ?? 0,
     );
   } catch (_) {
-    return null;
+    return viaEigenId3();
   }
 }
 
