@@ -713,6 +713,27 @@ class LibraryStore extends ChangeNotifier {
   List<Album> albumsWithStyle(String style) =>
       albums.where((a) => stylesOf(a).any((s) => s.toLowerCase() == style.toLowerCase())).toList();
 
+  /// Heb je dit nummer al lossless, waar in de bibliotheek het ook staat?
+  ///
+  /// De vraag die een staande FLAC-wens laat vervallen, en hij moet over de HELE bibliotheek gaan --
+  /// niet binnen het album waar het nummer voor bedoeld was. Gemeten geval: de gebruiker haalde de
+  /// FLAC met de native Soulseek-client binnen, en die landde in een map die naar de peer heet, onder
+  /// de albumnaam "De Ultieme Belgie-Holland Top 100" in plaats van de plaat waar de mp3 in staat.
+  /// Binnen het album zoeken had hem gemist, en dan blijft de app eeuwig jagen op iets wat al op
+  /// schijf staat -- en biedt hij het bovendien aan om te downloaden.
+  ///
+  /// Via [trackIdentity], dus versiemarkeringen blijven staan: "Trein (instrumentaal)" vervult de wens
+  /// naar "Trein" niet. Een verzamelaar waar de artiest-tag "Various Artists" zegt en de uitvoerder in
+  /// PERFORMER staat wordt hier niet gevonden; dat is een bekende ondergrens en geen stille aanname.
+  bool hasLossless(String artist, String title) {
+    final gezocht = trackIdentity(artist, title);
+    for (final t in tracks) {
+      if (!t.isFlac) continue;
+      if (trackIdentity(t.artist, t.title) == gezocht) return true;
+    }
+    return false;
+  }
+
   /// Hand the library a cover found while an album page was open.
   ///
   /// The album page draws its own sleeve from Discogs, so a wrong embedded cover was corrected

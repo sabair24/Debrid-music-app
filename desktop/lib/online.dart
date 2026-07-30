@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'organize.dart';
+import 'lossless_want.dart';
 import 'quality.dart';
 import 'rutracker.dart';
 import 'search.dart';
@@ -390,6 +391,13 @@ class DownloadManager extends ChangeNotifier {
   final SoulseekService soulseek;
   final String musicRoot;
   final Future<void> Function() onLibraryChanged;
+
+  /// Heeft de bibliotheek dit nummer al lossless? Laat een staande wens vervallen.
+  ///
+  /// Als vraag naar buiten en niet als eigen index: de bibliotheek weet dit al, en een tweede
+  /// administratie zou ernaast gaan lopen zodra de gebruiker een map verplaatst.
+  bool Function(String artist, String title)? haveLossless;
+
   DownloadManager(this.online, this.soulseek, this.musicRoot, this.onLibraryChanged);
 
   final List<DownloadJob> jobs = [];
@@ -874,6 +882,14 @@ class DownloadManager extends ChangeNotifier {
       final ok = await succeed(res);
       final better = ranked.where((f) => clearlyBetter(f, from)).toList();
       if (ok && better.isNotEmpty) _queueUpgrade(better, job);
+      // FLAC is koning. Landde er lossy, dan blijft de FLAC gewenst -- ook als er vandaag geen enkele
+      // lossless bron was, want morgen staat er een andere peer online. Dat is niet theoretisch:
+      // gemeten op één nummer waar de enige lossless peer het account geband had, en een dag later
+      // leverde een andere hem in twee seconden.
+      //
+      // Bewust hier en niet bij _queueUpgrade: die vuurt alleen als er NU een betere bron in de lijst
+      // staat, en juist het geval zonder kandidaat is het geval dat een staande wens nodig heeft.
+      if (ok && !isLossless(from)) await _wantLossless(job, from);
       return ok;
     }
 
@@ -956,6 +972,158 @@ class DownloadManager extends ChangeNotifier {
 
   static String _kort(Duration d) =>
       d.inMinutes >= 1 ? '${d.inMinutes}m${d.inSeconds % 60}s' : '${d.inSeconds}s';
+
+  // ── FLAC is koning: de staande wens ──────────────────────────────────────
+  //
+  // De eenmalige jacht hierboven blijft staan voor de snelle winst -- als er NU een betere bron is,
+  // is tien minuten wachten de beste kans. Wat eronder ligt is het lange spel: een lijst die een
+  // herstart overleeft en dagen blijft proberen, omdat peers per dag wisselen.
+
+  late final LosslessWants _wants =
+      LosslessWants('$_appDir${Platform.pathSeparator}lossless_wanted.json');
+  bool _wantsLoaded = false;
+  bool _sweeping = false;
+
+  Future<void> _ensureWants() async {
+    if (_wantsLoaded) return;
+    _wantsLoaded = true;
+    await _wants.load();
+  }
+
+  /// Hoeveel nummers wachten er nog op hun FLAC. Voor het scherm en voor het logboek.
+  int get losslessWanted => _wants.count;
+
+  /// Zet dit nummer op de lijst. De TAGS beslissen wat er gezocht wordt, niet de bestandsnaam van de
+  /// peer: die heet bij de een "215 - sabien tiels - trein.flac" en bij de ander "5-03 Sabien Tiels -
+  /// Trein.mp3", en daar valt geen zoekvraag van te maken.
+  Future<void> _wantLossless(DownloadJob job, SoulseekFile landed) async {
+    final t = job.authority;
+    if (t == null || t.artist.trim().isEmpty || t.title.trim().isEmpty) {
+      _log.line('"${job.name}": lossy geland, maar zonder artiest+titel valt er niets te wensen');
+      return;
+    }
+    if (haveLossless?.call(t.artist, t.title) ?? false) return; // je hebt hem al, elders
+    await _ensureWants();
+    final nieuw = _wants.want(LosslessWant(
+      artist: t.artist.trim(),
+      title: t.title.trim(),
+      album: t.album,
+      sinceMs: DateTime.now().millisecondsSinceEpoch,
+    ));
+    if (nieuw) {
+      await _wants.save();
+      _log.line('"${job.name}": lossy geland — FLAC blijft gewenst '
+          '(${_wants.count} op de lijst)');
+    }
+  }
+
+  /// Loop de wensen af die aan de beurt zijn, met een VERSE zoekopdracht per wens.
+  ///
+  /// Vers zoeken is het hele punt. De opgeslagen kandidaten van gisteren zijn de peers van gisteren;
+  /// resumePending doet het hierom al zo, en dat is precies waarom een hervatte download vandaag een
+  /// andere peer vond die in twee seconden leverde waar de enige van gisteren geband bleek.
+  Future<int> sweepLosslessWants() async {
+    if (_sweeping) return 0;
+    _sweeping = true;
+    try {
+      await _ensureWants();
+      final have = haveLossless;
+      if (have != null) {
+        final weg = _wants.forgetWhatWeHave(have);
+        if (weg.isNotEmpty) {
+          await _wants.save();
+          _log.line('wensen: ${weg.length} vervallen — die FLAC staat al in de bibliotheek');
+        }
+      }
+      final nu = DateTime.now().millisecondsSinceEpoch;
+      final rij = _wants.due(nu);
+      if (rij.isEmpty) return 0;
+      _log.line('wensen: ${rij.length} van ${_wants.count} aan de beurt');
+      var gehaald = 0;
+      for (final w in rij) {
+        if (await _chaseWant(w)) gehaald++;
+      }
+      await _wants.save();
+      return gehaald;
+    } finally {
+      _sweeping = false;
+    }
+  }
+
+  /// Eén wens: zoek opnieuw, sla geweigerde peers over, en probeer de beste lossless.
+  Future<bool> _chaseWant(LosslessWant w) async {
+    List<SoulseekFile> hits;
+    try {
+      hits = await soulseek.search(w.query);
+    } catch (_) {
+      return false; // geen net; de wens blijft staan en het ritme schuift niet op
+    }
+    final lossless = hits
+        .where((f) => isLossless(f) && !isMultichannel(f))
+        .where((f) => !w.refused.containsKey(f.username))
+        .toList()
+      ..sort(_rankSlsk);
+    _log.line('wens "${w.artist} — ${w.title}": ${hits.length} treffers, '
+        '${lossless.length} bruikbaar lossless (poging ${w.tries + 1}'
+        '${w.refused.isEmpty ? "" : ", ${w.refused.length} peers overgeslagen"})');
+    if (lossless.isEmpty) {
+      _wants.update(w.met(tries: w.tries + 1, lastTryMs: DateTime.now().millisecondsSinceEpoch));
+      return false;
+    }
+
+    final job = DownloadJob(w.title);
+    final geweigerd = Map<String, String>.of(w.refused);
+    var goed = false;
+    try {
+      await soulseek.withSession((session) async {
+        for (final f in lossless.take(4)) {
+          final t0 = DateTime.now();
+          SlskResult res;
+          try {
+            // Ruim wachten mag hier: deze jacht houdt geen downloadslot bezig en er zit niemand op te
+            // wachten. Een plaats in een wachtrij is waardevol -- weggooien is wat de app hiervoor deed.
+            res = await _rawTransfer(session, f, job, () {},
+                waitInQueue: true, maxWait: const Duration(minutes: 30));
+          } catch (_) {
+            continue;
+          }
+          _log.line('   ${f.username}: ${_uitkomst(res)}  na ${_kort(DateTime.now().difference(t0))}');
+          if (res is SlskFail) {
+            final reden = res.reason.toLowerCase();
+            // Onthouden, want de enige lossless bron voor een nummer kan er één zijn. Zonder dit
+            // verbrandt elke ronde zijn poging op dezelfde peer die het account geband heeft.
+            if (reden.contains('banned') || reden.contains('geweigerd')) {
+              geweigerd[f.username] = 'banned';
+            } else if (reden.contains('firewall')) {
+              geweigerd[f.username] = 'firewall';
+            }
+            continue;
+          }
+          if (res is! SlskDone) continue;
+          try {
+            await placeFileDetailed(File(res.path), _downloadsRoot, tags: job.authority);
+          } catch (_) {/* de scan vindt hem waar hij ook landde */}
+          goed = true;
+          return;
+        }
+      });
+    } catch (_) {/* niets verloren: je houdt de kopie die je had */}
+
+    if (goed) {
+      _wants.forget(w.key);
+      _log.line('wens "${w.artist} — ${w.title}": FLAC binnen na ${w.tries + 1} '
+          'poging${w.tries == 0 ? "" : "en"} — van de lijst');
+      try {
+        await onLibraryChanged();
+      } catch (_) {}
+      return true;
+    }
+    _wants.update(w.met(
+        tries: w.tries + 1, lastTryMs: DateTime.now().millisecondsSinceEpoch, refused: geweigerd));
+    _log.line('wens "${w.artist} — ${w.title}": nog niet — volgende poging over '
+        '${_kort(wachtVoor(w.tries + 1))}');
+    return false;
+  }
 
   /// Queue a background hunt for a better copy of a track you can already play.
   void _queueUpgrade(List<SoulseekFile> better, DownloadJob job) {

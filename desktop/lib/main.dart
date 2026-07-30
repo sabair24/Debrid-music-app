@@ -544,6 +544,16 @@ Future<void> main() async {
     try {
       await downloads.resumePending();
     } catch (_) {}
+    // FLAC is koning, en dat vraagt om volhouden. De wens naar een lossless kopie staat op schijf en
+    // wordt hier weer opgepakt: na de scan, zodat een FLAC die inmiddels van buiten de app is
+    // binnengekomen de wens laat vervallen in plaats van hem opnieuw te laten halen.
+    //
+    // Daarna op een rustig ritme, want de reden dat het niet lukt beweegt langzaam: een peer die nu
+    // offline is, is dat over vijf minuten ook. Elke wens heeft bovendien zijn eigen wachttijd; dit
+    // is alleen het kloppen op de deur.
+    downloads.haveLossless = library.hasLossless;
+    unawaited(downloads.sweepLosslessWants());
+    Timer.periodic(const Duration(minutes: 20), (_) => unawaited(downloads.sweepLosslessWants()));
     await library.enrichArtists(settings);
     // Last, deliberately. Everything above this either draws the first screen or fetches something
     // you can see; this is the only part nobody is waiting for. Not awaited either — it runs for as
