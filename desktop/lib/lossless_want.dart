@@ -18,6 +18,43 @@ import 'dart:io';
 
 import 'organize.dart' show TrackTags, normKey;
 
+/// Namen die geen artiest zijn maar "dit is een verzamelaar".
+///
+/// Ze horen niet in een zoekvraag: een peer noemt zijn bestand naar de uitvoerder en nooit naar
+/// "Various Artists". Bewust een korte, letterlijke lijst en geen slimme regel -- iets wat zelf
+/// beslist wat "verdacht" is, gooit ooit een echte artiestennaam weg.
+final _verzamelnaam = RegExp(
+    r'^\s*(various(\s*artists?)?|v\.?\s*a\.?|diverse(\s+artiesten)?|verschillende\s+artiesten|'
+    r'unknown(\s+artist)?|onbekende?\s+artiest)\s*$',
+    caseSensitive: false);
+
+/// Staat hier "de plaat is van meer dan één artiest" in plaats van een naam?
+bool isVerzamelnaam(String s) => _verzamelnaam.hasMatch(s);
+
+/// De uitvoerder uit een bestandsnaam van de vorm `NN - Uitvoerder - Titel.ext`.
+///
+/// De enige bron die op het juiste moment wél beschikbaar is. Een verzamelaar-mp3 heeft "Various
+/// Artists" in de ARTIST-tag en geen PERFORMER-veld (dat bestaat in ID3 niet), maar de peer noemt zijn
+/// bestand vrijwel altijd naar de echte artiest -- daar zoeken andere mensen immers op.
+///
+/// Alleen als het STAARTSTUK de titel is. Zonder die eis is het middenstuk net zo goed een deel van de
+/// titel, en dan gaat de app zoeken op een woord dat niemand als artiest kent -- een vergiftigde
+/// zoekvraag met een geloofwaardig gezicht, wat erger is dan geen.
+String? performerFromFilename(String filename, String title) {
+  var naam = filename.replaceAll('\\', '/');
+  naam = naam.substring(naam.lastIndexOf('/') + 1);
+  final punt = naam.lastIndexOf('.');
+  if (punt > 0) naam = naam.substring(0, punt);
+  // Het nummer vooraan eraf: "5-03", "13", "215" of "01." horen niet bij de naam.
+  naam = naam.replaceFirst(RegExp(r'^\s*\d+([-.]\d+)?\s*[-.]?\s*'), '');
+  final delen = naam.split(RegExp(r'\s+-\s+'));
+  if (delen.length < 2) return null;
+  if (normKey(delen.last) != normKey(title)) return null; // het staartstuk is de titel niet
+  final uitvoerder = delen.sublist(0, delen.length - 1).join(' - ').trim();
+  if (uitvoerder.isEmpty || isVerzamelnaam(uitvoerder)) return null;
+  return uitvoerder;
+}
+
 /// Eén openstaande wens.
 class LosslessWant {
   const LosslessWant({
@@ -29,9 +66,16 @@ class LosslessWant {
     this.lastTryMs = 0,
     this.refused = const {},
     this.authority,
+    this.performer,
   });
 
   final String artist, title, album;
+
+  /// Wie het nummer werkelijk uitvoert, als dat iets anders is dan de artiest-tag.
+  ///
+  /// Op een verzamelaar zegt ARTIST "Various Artists" en staat de echte naam in PERFORMER -- precies
+  /// waar de splitser hem zelf neerzet. Alleen deze naam maakt een zoekvraag die iets vindt.
+  final String? performer;
 
   /// De tags waarmee de mp3 destijds is opgeborgen, meegegeven aan de FLAC die hem vervangt.
   ///
@@ -55,7 +99,21 @@ class LosslessWant {
   String get key => '${normKey(artist)}|${normKey(title)}';
 
   /// Waar de app naar zoekt. Dezelfde vorm als wat de gebruiker zelf zou typen.
-  String get query => '$artist $title'.trim();
+  ///
+  /// De ARTIEST-tag is hier niet altijd de artiest. Op een verzamelaar staat er "Various Artists", en
+  /// dat woord in de zoekvraag stoppen maakt hem juist slechter: gemeten gaf "Various Artists Jij Bent
+  /// Zo Mooi" precies één treffer, terwijl de titel alleen door tientallen mappen heen zoekt. Peers
+  /// noemen hun bestanden naar de UITVOERDER, nooit naar "Various Artists".
+  ///
+  /// Dus: [performer] als die bekend is, anders de artiest zolang dat een echte naam is, en anders de
+  /// titel alleen. Een matige zoekvraag is beter dan een vergiftigde.
+  String get query {
+    for (final naam in [performer, artist]) {
+      final n = (naam ?? '').trim();
+      if (n.isNotEmpty && !isVerzamelnaam(n)) return '$n $title'.trim();
+    }
+    return title.trim();
+  }
 
   LosslessWant met({int? tries, int? lastTryMs, Map<String, String>? refused}) => LosslessWant(
         artist: artist,
@@ -66,6 +124,7 @@ class LosslessWant {
         lastTryMs: lastTryMs ?? this.lastTryMs,
         refused: refused ?? this.refused,
         authority: authority,
+        performer: performer,
       );
 
   Map<String, dynamic> toJson() => {
@@ -77,6 +136,7 @@ class LosslessWant {
         'lastTryMs': lastTryMs,
         if (refused.isNotEmpty) 'refused': refused,
         if (authority != null) 'authority': authority!.toJson(),
+        if (performer != null && performer!.isNotEmpty) 'performer': performer,
       };
 
   static LosslessWant? fromJson(Map<String, dynamic> j) {
@@ -89,6 +149,7 @@ class LosslessWant {
       title: t,
       album: (j['album'] ?? '').toString(),
       authority: auth is Map<String, dynamic> ? TrackTags.fromJson(auth) : null,
+      performer: (j['performer'] as String?)?.trim(),
       sinceMs: (j['sinceMs'] as num?)?.toInt() ?? 0,
       tries: (j['tries'] as num?)?.toInt() ?? 0,
       lastTryMs: (j['lastTryMs'] as num?)?.toInt() ?? 0,

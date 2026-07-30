@@ -156,4 +156,64 @@ void main() {
       expect(_w('Sabien Tiels', 'Trein').query, 'Sabien Tiels Trein');
     });
   });
+
+  group('de zoekvraag van een verzamelaar', () {
+    test('"Various Artists" gaat er niet in — dan liever de titel alleen', () {
+      // Gemeten: "Various Artists Jij Bent Zo Mooi" gaf precies één treffer. Peers noemen hun bestand
+      // naar de uitvoerder en nooit naar "Various Artists", dus dat woord maakt de vraag slechter.
+      expect(LosslessWant(artist: 'Various Artists', title: 'Jij Bent Zo Mooi').query,
+          'Jij Bent Zo Mooi');
+    });
+
+    test('de uitvoerder gaat er wél in, en gaat vóór de artiest-tag', () {
+      expect(
+          const LosslessWant(artist: 'Various Artists', title: 'Jij Bent Zo Mooi', performer: 'Petra')
+              .query,
+          'Petra Jij Bent Zo Mooi');
+    });
+
+    test('elke schrijfwijze van "verzamelaar" wordt herkend', () {
+      // "Diverse" staat er kaal bij, en dat is een keuze: op een Nederlandse verzamelaar betekent dat
+      // woord "diverse artiesten". Er bestaat ook een rapper Diverse; die valt dan terug op de titel
+      // alleen, wat een matige zoekvraag is en geen verkeerde.
+      for (final n in ['Various', 'various artists', 'VA', 'V.A.', 'Diverse', 'Diverse artiesten',
+        'Unknown Artist', 'Onbekende artiest', '  Various Artists  ']) {
+        expect(isVerzamelnaam(n), isTrue, reason: '"$n" is geen artiest');
+      }
+    });
+
+    test('maar een echte naam blijft een echte naam', () {
+      // De grens, en hij is smal met opzet: deze bestaan allemaal en mogen niet wegvallen.
+      for (final n in ['Various Cruelties', 'VNV Nation', 'Unknown Mortal Orchestra', 'Diversion']) {
+        expect(isVerzamelnaam(n), isFalse, reason: '"$n" is wel een artiest');
+      }
+    });
+  });
+
+  group('de uitvoerder uit een bestandsnaam', () {
+    test('de gewone vorm van een peer', () {
+      expect(performerFromFilename('5-03 Sabien Tiels - Trein.mp3', 'Trein'), 'Sabien Tiels');
+      expect(performerFromFilename('215 - sabien tiels - trein.flac', 'Trein'), 'sabien tiels');
+      expect(performerFromFilename('01. Daft Punk - One More Time.flac', 'One More Time'), 'Daft Punk');
+    });
+
+    test('een pad ervoor stoort niet', () {
+      expect(performerFromFilename(r'd:\muziek\top 100\13 - Petra - Jij Bent Zo Mooi.mp3',
+          'Jij Bent Zo Mooi'), 'Petra');
+    });
+
+    test('een artiest met een streepje in de naam blijft heel', () {
+      expect(performerFromFilename('04 - Jean-Michel Jarre - Oxygene - Part IV.flac', 'Part IV'),
+          'Jean-Michel Jarre - Oxygene');
+    });
+
+    test('past het staartstuk niet bij de titel, dan liever niets', () {
+      // Zonder deze eis is het middenstuk net zo goed een deel van de titel, en dan zoekt de app op
+      // een woord dat niemand als artiest kent -- met een geloofwaardig gezicht.
+      expect(performerFromFilename('01 - Intro - Iets Anders.flac', 'Iets'), isNull);
+      expect(performerFromFilename('Trein.mp3', 'Trein'), isNull, reason: 'geen streepje, geen naam');
+      expect(performerFromFilename('13 - Various Artists - Jij Bent Zo Mooi.mp3', 'Jij Bent Zo Mooi'),
+          isNull, reason: 'dat is nog steeds geen artiest');
+    });
+  });
 }

@@ -1012,6 +1012,9 @@ class DownloadManager extends ChangeNotifier {
       // Het gezag van DEZE landing gaat mee: de FLAC die de mp3 dagen later vervangt hoort op dezelfde
       // plek en met dezelfde nummering te belanden, ook als de peer een bestand zonder tags stuurt.
       authority: t,
+      // En de naam waar peers hun bestand naar noemen, uit de bestandsnaam van deze peer. Op een
+      // verzamelaar is dat de enige echte artiestennaam die er te vinden is.
+      performer: performerFromFilename(landed.displayName, t.title),
     ));
     if (nieuw) {
       await _wants.save();
