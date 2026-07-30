@@ -482,7 +482,23 @@ class CastManager {
     if (nu != null && nu.renderer.id == renderer.id) {
       out['index'] = nu.index;
       out['queueLength'] = nu.queue.length;
-      out['trackId'] = nu.queue.elementAtOrNull(nu.index);
+      final tid = nu.queue.elementAtOrNull(nu.index);
+      out['trackId'] = tid;
+
+      // Wat de speaker niet weet, weet de bibliotheek wel.
+      //
+      // Een Sonos geeft geen tracklengte terug -- TrackDuration blijft leeg of nul -- en zonder lengte
+      // heeft de voortgangsbalk geen eindpunt en valt er niet in te slepen. Gemeten naast elkaar: de
+      // KEF meldt hem wel, de Move niet. Dat is geen fout van de app maar wel iets wat de app kan
+      // oplossen, want dit is een nummer van deze pc en zijn lengte staat in de catalogus.
+      //
+      // Alleen INVULLEN wat ontbreekt, nooit overschrijven. Wat de speaker zelf zegt gaat over het
+      // bestand zoals hij het ontvangt, en dat kan korter zijn dan het origineel: een hi-res album gaat
+      // voor een Sonos door de omzetter heen.
+      if (((out['durationMs'] as int?) ?? 0) <= 0) {
+        final lengte = tid == null ? null : catalog.track(tid)?.duration;
+        if (lengte != null && lengte > Duration.zero) out['durationMs'] = lengte.inMilliseconds;
+      }
     }
     return out;
   }
