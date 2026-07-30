@@ -271,7 +271,6 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     // herschudden en daarmee weer laten afwijken van wat er speelt.
     _order = List.of(aangenomen);
     _index = _order.isEmpty ? -1 : 0;
-    opSpeaker = true;
     playing = false;
     position = Duration.zero;
     notifyListeners();
@@ -282,8 +281,8 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// Geef de wachtrij die hier staat door aan de speaker die zojuist gekozen is.
   ///
   /// Eén weg naar buiten, en dat is het punt: de speakerkiezer bouwde zijn eigen overdracht en nam
-  /// daardoor de aangenomen lijst niet over en zette [opSpeaker] niet. Alles wat [_handedToSpeaker]
-  /// regelt -- filteren, de lijst van de SPEAKER aannemen, hier stil worden -- gold daar niet.
+  /// daardoor de aangenomen lijst niet over. Alles wat [_handedToSpeaker] regelt -- filteren, de lijst
+  /// van de SPEAKER aannemen, hier stil worden -- gold daar niet.
   ///
   /// False als er niets te sturen viel of de speaker het weigerde; de aanroeper zet de keuze dan terug.
   Future<bool> handOverToSpeaker() =>
@@ -482,9 +481,6 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   Future<void> _openCurrent() async {
     final t = current;
     if (t == null) return;
-    // Alles wat hier geopend wordt klinkt UIT DIT TOESTEL. Eén plek, want elke lokale weg komt hier
-    // langs -- een vlag die per aanroeper gezet moet worden vergeet je er vroeg of laat één van.
-    opSpeaker = false;
     if (coverResolver != null) currentCover = coverResolver!(t);
     await _player.open(Media(mediaResolver(t.path)), play: true);
     _saveProgress(force: true); // track changed → persist the new spot
@@ -542,13 +538,15 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   void seek(Duration d) => _player.seek(d);
   void setVolume(double v) => _player.setVolume(v);
 
-  /// Staat de wachtrij bij een speaker in plaats van bij libmpv?
-  ///
-  /// Nodig omdat er dan TWEE lijsten zijn die gelijk moeten blijven, en de index die de speaker
-  /// terugmeldt in de zijne telt.
-  bool opSpeaker = false;
-
   /// De speaker dezelfde nieuwe volgorde geven, zonder het lopende nummer opnieuw te beginnen.
+  ///
+  /// Wordt ALTIJD aangeroepen bij het herschikken, ook als er niets gecast wordt. Dat is met opzet: de
+  /// vorige versie vroeg eerst aan een vlag in deze klasse of de wachtrij bij een speaker stond, en die
+  /// vlag stond uit omdat de speakerkiezer buiten [_handedToSpeaker] om ging. De reparatie kwam daardoor
+  /// nooit aan de beurt en niets verried dat -- er is geen foutpad, er gebeurt alleen niets.
+  ///
+  /// Wie de speakers bedient wéét of er een speaker gekozen is; die kant beslist. Eén waarheid in plaats
+  /// van een kopie die kan verlopen, en als bijvangst komt elke druk op shuffle in cast.log terecht.
   Future<void> Function(List<Track> volgorde, int index)? castReorder;
 
   void toggleShuffle() {
@@ -566,7 +564,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     // [_handedToSpeaker] voor de overdracht al voorkomt -- alleen kon shuffle het daarna weer stukmaken.
     //
     // [_rebuildOrder] zet het spelende nummer vooraan, dus de speaker hoeft niets opnieuw te openen.
-    if (opSpeaker) unawaited(castReorder?.call(_order, _index) ?? Future<void>.value());
+    unawaited(castReorder?.call(_order, _index) ?? Future<void>.value());
     notifyListeners();
   }
 

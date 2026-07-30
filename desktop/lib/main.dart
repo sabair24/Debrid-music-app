@@ -5161,7 +5161,7 @@ class _SpeakerButton extends StatelessWidget {
             // 1. de speler nam de AANGENOMEN lijst niet over, dus viel er één nummer weg dat de pc niet
             //    kan serveren, dan schoof alles erachter op bij de speaker terwijl het hier bleef staan --
             //    en telt elke index die de speaker terugmeldt vanaf dat moment verkeerd;
-            // 2. `opSpeaker` bleef uit, dus shuffle indrukken schudde alleen deze kant.
+            // 2. de speler wist niet dat hij op een speaker stond, dus shuffle schudde alleen deze kant.
             //
             // Precies de fout die _handedToSpeaker voor de andere weg al oploste.
             if (player.queueTracks.isEmpty) {
