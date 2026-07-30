@@ -1160,6 +1160,10 @@ class DownloadManager extends ChangeNotifier {
     final dest = File('${dir.path}${Platform.pathSeparator}${_sanitize(file.displayName)}');
     var settled = claim == null; // no race → this attempt owns the UI from the start
     var mine = claim == null;
+    // Alleen bij een VERANDERING, want een peer herhaalt zijn plaats. Zonder deze regel is een
+    // download die in een wachtrij staat onzichtbaar in het logboek tot hij eindigt -- en dat is juist
+    // het geval dat we willen kunnen nakijken. Bleek bij het uittesten van het logboek zelf.
+    var laatstePlaats = -1;
     return _cleanStaging(dir, dest, session.download(file, dest, (rec, tot) {
       if (!settled && rec > 0) {
         settled = true;
@@ -1183,6 +1187,10 @@ class DownloadManager extends ChangeNotifier {
         }
       }
     }, onStatus: (q) {
+      if (q.place != laatstePlaats) {
+        laatstePlaats = q.place;
+        _log.line('   ${file.username}: wachtrij${q.place > 0 ? " plaats ${q.place}" : " (plaats onbekend)"}');
+      }
       // In a race the job line belongs to the race, which knows about all the runners; one of
       // twenty peers announcing its queue position would just fight the other nineteen for it.
       if (claim == null) {
