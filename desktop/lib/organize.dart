@@ -632,7 +632,46 @@ final _versionWordRe = RegExp(
     r'unplugged|version|mix|remaster(ed)?|alternate|alt take|session|karaoke|dub|bonus|'
     r'single|club|original|mono|stereo)\b');
 final _bracketRe = RegExp(r'[(\[]([^)\]]{1,60})[)\]]');
-final _partRe = RegExp(r'\b(?:part|pt\.?)\s*(\d+)\b');
+final _partRe = RegExp(r'\b(?:part|pt\.?)\s*(\d+|[ivx]+)\b', caseSensitive: false);
+
+/// Het deelnummer in een titel, Romeins of Arabisch, altijd als hetzelfde getal.
+///
+/// Gemeten op Rihanna's Loud: MusicBrainz schrijft "Love the Way You Lie (Part II)" en het bestand
+/// heet "Love the Way You Lie, Pt. 2" -- zelfde nummer, allebei 4:56 -- en die twee hielden elkaar
+/// buiten de deur omdat het ene merk "part 2" heette en het andere niets.
+String? _partNumber(String s) {
+  final m = _partRe.firstMatch(s);
+  if (m == null) return null;
+  final ruw = m.group(1)!.toLowerCase();
+  final arabisch = int.tryParse(ruw);
+  if (arabisch != null) return arabisch > 0 ? '$arabisch' : null;
+  const waarde = {'i': 1, 'v': 5, 'x': 10};
+  var totaal = 0, hoogste = 0;
+  for (var i = ruw.length - 1; i >= 0; i--) {
+    final v = waarde[ruw[i]];
+    if (v == null) return null;
+    if (v < hoogste) {
+      totaal -= v;
+    } else {
+      totaal += v;
+      hoogste = v;
+    }
+  }
+  return totaal > 0 ? '$totaal' : null;
+}
+
+/// De titel zonder alles wat een VERSIE aanduidt: de versie-haakjes en een "Part 2" of "Pt. II".
+///
+/// Voor het vergelijken van títels. Merken worden apart vergeleken, dus ze ook nog in de woorden
+/// laten staan straft hetzelfde verschil twee keer af -- en dat is genoeg om een treffer te missen.
+String withoutVersionText(String title) {
+  var out = title;
+  for (final merk in versionBrackets(title)) {
+    out = out.replaceAll(
+        RegExp('[(\\[]\\s*${RegExp.escape(merk)}\\s*[)\\]]', caseSensitive: false), ' ');
+  }
+  return out.replaceAll(_partRe, ' ');
+}
 
 /// Bracketed woorden die GEEN versie aanduiden maar juist de gewone albumopname.
 ///
@@ -668,8 +707,8 @@ Set<String> versionBrackets(String filename) {
 Set<String> versionMarkers(String filename) {
   final out = versionBrackets(filename).where((s) => !_geenEchtMerk.contains(s)).toSet();
   final base = filename.toLowerCase().replaceAll(RegExp(r'\.[a-z0-9]{2,5}$'), '');
-  final part = _partRe.firstMatch(base);
-  if (part != null) out.add('part ${part.group(1)}');
+  final deel = _partNumber(base);
+  if (deel != null) out.add('part $deel');
   return out;
 }
 

@@ -276,6 +276,30 @@ void main() {
       expect(c.slots.last.index, -1);
     });
 
+    test('"Pt. 2" en "(Part II)" zijn hetzelfde deel', () {
+      // Gemeten op Rihanna's Loud, en het stond letterlijk twee keer op één scherm: rij 11 als
+      // ontbrekend met een downloadknop, en het bestand eronder als "niet op deze uitgave" -- allebei
+      // 4:56. Het enige verschil was Romeins tegen Arabisch.
+      final c = matchAlbumTracks(
+        [_o(11, 'Love the Way You Lie (Part II)', 296)],
+        [_t('Love the Way You Lie, Pt. 2', 296)],
+        'Rihanna',
+      );
+      expect(c.complete, isTrue);
+    });
+
+    test('maar deel 1 en deel 2 blijven twee nummers', () {
+      // Precies waarom het deelnummer een MERK is en niet gewoon weggegooid wordt: zonder dat merk
+      // zouden twee delen van hetzelfde stuk op dezelfde rij vallen.
+      final c = matchAlbumTracks(
+        [_o(1, 'Suite (Part I)', 300), _o(2, 'Suite (Part II)', 300)],
+        [_t('Suite, Pt. 2', 300)],
+        'X',
+      );
+      expect(c.slots[0].missing, isTrue, reason: 'deel 1 heb je niet');
+      expect(c.slots[1].track, isNotNull, reason: 'deel 2 wel');
+    });
+
     test('een haakje dat geen versie is blijft meewegen', () {
       // Adele's 30 heeft "Easy On Me" en het duet met Chris Stapleton allebei, met bijna dezelfde
       // lengte. Alleen VERSIE-haakjes mogen uit de woordvergelijking; een credit moet blijven staan,
