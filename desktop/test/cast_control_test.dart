@@ -10,6 +10,7 @@ library;
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:debridmusic/lan/cast_manager.dart';
 import 'package:debridmusic/lan/client.dart';
 import 'package:debridmusic/lan/upnp.dart';
 import 'package:debridmusic/models.dart';
@@ -161,6 +162,108 @@ void main() {
     test('een index buiten de lijst landt binnen de lijst', () {
       final over = buildHandover([t('1'), t('2')], 99, (x) => 'id-${x.path}');
       expect(over.at, 1);
+    });
+  });
+
+  /// Waarom deze groep bestaat: "ik hoor de Backstreet Boys, maar zie de hoes van Michael Jackson."
+  ///
+  /// De app gaf de speaker het volgende nummer alvast mee en zag hem daarna in TrackURI terug. Dat werd
+  /// gelezen als "hij is doorgeschoven", maar een Sonos meldt die URI al zodra hij hem ONTVANGT. De index
+  /// schoof dus op terwijl er niets wisselde, gaf meteen het nummer daarna mee, en acht seconden later
+  /// gebeurde hetzelfde -- het scherm wandelde door de wachtrij terwijl één nummer speelde.
+  group('is de muziek gewisseld of alleen de boekhouding', () {
+    const lengte = Duration(seconds: 208); // een echt nummer van de Sonos-test
+
+    test('de gemeten valse melding: de URI staat er al, maar de klok loopt door', () {
+      final o = muziekIsGewisseld(
+        top: const Duration(seconds: 20),
+        positie: const Duration(seconds: 20),
+        gespeeld: const Duration(seconds: 20),
+        lengte: lengte,
+      );
+      expect(o.ja, isFalse, reason: 'twintig seconden in een nummer van 208 is geen overgang');
+    });
+
+    test('een heel nummer lang pollen schuift de wachtrij geen enkele plek op', () {
+      // DE test. Dit is precies wat er misging: niet één verkeerde beslissing maar een reeks, elke paar
+      // seconden opnieuw, tot het scherm albums verder stond dan het geluid.
+      var top = Duration.zero;
+      for (var s = 1; s < 208; s++) {
+        final positie = Duration(seconds: s);
+        final o = muziekIsGewisseld(
+            top: top, positie: positie, gespeeld: positie, lengte: lengte);
+        expect(o.ja, isFalse, reason: 'op $s seconden zei hij toch dat er gewisseld was: ${o.reden}');
+        if (positie > top) top = positie;
+      }
+    });
+
+    test('de echte overgang: de klok valt terug naar het begin', () {
+      final o = muziekIsGewisseld(
+        top: const Duration(seconds: 207),
+        positie: const Duration(seconds: 1),
+        gespeeld: const Duration(seconds: 208),
+        lengte: lengte,
+      );
+      expect(o.ja, isTrue);
+      expect(o.reden, contains('terug'));
+    });
+
+    test('een gat tussen twee metingen laat de overgang niet ontsnappen', () {
+      // Wie eist dat de positie bijna nul is, mist hem als er een halve minuut niet gepolst werd -- en
+      // loopt daarna de rest van het nummer achter, want terugvallen doet hij pas weer bij het volgende.
+      final o = muziekIsGewisseld(
+        top: const Duration(seconds: 207),
+        positie: const Duration(seconds: 25),
+        gespeeld: const Duration(seconds: 232),
+        lengte: lengte,
+      );
+      expect(o.ja, isTrue);
+    });
+
+    test('vlak na de start is een lage klok geen overgang maar een begin', () {
+      final o = muziekIsGewisseld(
+        top: const Duration(seconds: 3),
+        positie: const Duration(seconds: 3),
+        gespeeld: const Duration(seconds: 3),
+        lengte: lengte,
+      );
+      expect(o.ja, isFalse);
+    });
+
+    test('achteruit slepen is geen overgang, want het ijkpunt schuift mee', () {
+      // De app zet [hoogstePositie] op de plek waar naartoe gesleept is. Zonder dat zou achteruit slepen
+      // niet te onderscheiden zijn van een nummer dat afliep: bij allebei valt de klok terug.
+      final o = muziekIsGewisseld(
+        top: const Duration(seconds: 5), // net naar 0:05 gesleept
+        positie: const Duration(seconds: 5),
+        gespeeld: const Duration(seconds: 200),
+        lengte: lengte,
+      );
+      expect(o.ja, isFalse);
+    });
+
+    test('een speaker die op nul blijft staan wordt op de klok geloofd', () {
+      expect(
+        muziekIsGewisseld(
+                top: Duration.zero, positie: Duration.zero, gespeeld: const Duration(seconds: 100), lengte: lengte)
+            .ja,
+        isFalse,
+        reason: 'honderd van 208 seconden is nog niet om',
+      );
+      expect(
+        muziekIsGewisseld(
+                top: Duration.zero, positie: Duration.zero, gespeeld: const Duration(seconds: 200), lengte: lengte)
+            .ja,
+        isTrue,
+        reason: 'binnen de speling van het einde',
+      );
+    });
+
+    test('zonder positie én zonder lengte blijft alleen vertrouwen over', () {
+      // Niets om aan te toetsen. Dan liever doorschuiven dan de wachtrij laten hangen: de speaker meldde
+      // tenslotte wél de volgende-URL, en dat is nog altijd een aanwijzing.
+      final o = muziekIsGewisseld(top: Duration.zero, positie: null, gespeeld: const Duration(seconds: 9));
+      expect(o.ja, isTrue);
     });
   });
 }

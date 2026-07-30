@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../warm_log.dart';
 import 'catalog.dart';
 import 'dtos.dart';
 import 'net.dart';
@@ -72,6 +73,50 @@ Future<String?> probeShield(String host, {int port = ShieldTarget.port}) async {
   }
 }
 
+/// Is de MUZIEK een nummer opgeschoven, of alleen de boekhouding van de speaker?
+///
+/// Een losse functie omdat dit de regel is waar het casten twee keer op stukliep, en een regel die je in
+/// een test kunt uitschrijven is een regel die je kunt controleren. Hij wordt pas gesteld als de speaker
+/// de volgende-URL al in TrackURI meldt; de vraag hier is of dat ergens op slaat.
+///
+/// [top] is de hoogste positie die op het huidige nummer gezien is, [positie] wat de speaker nu meldt,
+/// [gespeeld] hoe lang geleden dit nummer geopend werd, [lengte] hoe lang het duurt (null = onbekend).
+///
+/// Twee wegen, want niet elke speaker meldt hetzelfde:
+///
+/// * **De positie viel terug.** Het echte bewijs. Een speaker die aan een nieuw nummer begint telt weer
+///   vanaf nul; zolang zijn klok dóórloopt speelt hetzelfde nummer nog, wat hij verder ook beweert.
+/// * **De klok van hier.** Alleen voor speakers die geen bruikbare positie geven. Zwakker -- pauzeren
+///   telt gewoon door -- maar het is dan de enige weg die nog open staat.
+///
+/// [terugval] staat ruim boven het geruis van een embedded klok en ruim onder de lengte van zelfs een kort
+/// nummer. Ruim mag: bij de valse melding is de terugval niet klein maar negatief, want de positie stijgt.
+({bool ja, String reden}) muziekIsGewisseld({
+  required Duration top,
+  required Duration gespeeld,
+  Duration? positie,
+  Duration? lengte,
+  Duration terugval = const Duration(seconds: 10),
+  Duration speling = const Duration(seconds: 15),
+}) {
+  // "Meldt deze speaker een positie?" is niet hetzelfde als "staat de positie hoog?". Op die twee door
+  // elkaar te halen ging een eerdere versie hiervan alsnog de mist in: vlak na het begin van een nummer
+  // staat de klok laag, en dan zou de klokweg het overnemen en meteen ja zeggen.
+  if (positie != null && !(positie == Duration.zero && top == Duration.zero)) {
+    if (top >= positie + terugval) {
+      return (ja: true, reden: 'positie viel terug ${top.inSeconds}s → ${positie.inSeconds}s');
+    }
+    return (ja: false, reden: 'positie loopt door (top ${top.inSeconds}s, nu ${positie.inSeconds}s)');
+  }
+  if (lengte == null || lengte <= Duration.zero) {
+    return (ja: true, reden: 'geen positie én geen lengte om aan te toetsen');
+  }
+  if (gespeeld >= lengte - speling) {
+    return (ja: true, reden: 'geen positie, maar ${gespeeld.inSeconds}s van ${lengte.inSeconds}s om');
+  }
+  return (ja: false, reden: 'geen positie, pas ${gespeeld.inSeconds}s van ${lengte.inSeconds}s gespeeld');
+}
+
 /// Sends music to a speaker or the TV, and keeps it going.
 ///
 /// The PC does this, not the iPad. Three reasons, in order of how much they matter:
@@ -85,14 +130,28 @@ class CastManager {
     required this.port,
     UpnpControlPoint? upnp,
     Transcoder? transcoder,
+    String? logPath,
   })  : _upnp = upnp ?? UpnpControlPoint(),
-        _transcoder = transcoder ?? Transcoder();
+        _transcoder = transcoder ?? Transcoder(),
+        _log = logPath == null ? null : WarmLog(logPath);
 
   final LanCatalog catalog;
   final UpnpControlPoint _upnp;
   final Transcoder _transcoder;
   final int port;
   String token;
+
+  /// Wat er tussen de app en de speaker gebeurt, in `cast.log` naast de andere staatbestanden.
+  ///
+  /// Bestaat omdat casten precies het soort fout heeft waar redeneren op stukloopt: alles speelt door,
+  /// niets klapt, er verschijnt geen melding -- alleen staat er een ander album op het scherm dan er
+  /// klinkt. Van buitenaf is dat één symptoom voor een handvol oorzaken, en een release-build slikt
+  /// [debugPrint]. Twee reparaties zijn zo op een vermoeden gemikt.
+  ///
+  /// Wat hier in gaat is de WAARNEMING, niet het oordeel: welke URI de speaker meldt, waar de positie
+  /// staat, wat de sessie denkt. Dan is achteraf te zien of een regel goed besliste op slechte feiten of
+  /// andersom.
+  final WarmLog? _log;
 
   Map<String, Renderer> _renderers = {};
   List<ShieldTarget> _shields = [];
@@ -159,6 +218,7 @@ class CastManager {
     }
 
     final renderer = await _renderer(deviceId);
+    _log?.line('── start op ${renderer.name}: ${trackIds.length} nummers, vanaf $index ──');
     _session = _Session(renderer: renderer, queue: trackIds, index: index.clamp(0, trackIds.length - 1));
     await _openCurrent();
     // The renderer plays one track; something has to notice it ended and send the next.
@@ -232,6 +292,10 @@ class CastManager {
     session.startedAt = DateTime.now();
     session.currentUrl = url;
     session.nextUrl = null;
+    // Een nieuw nummer begint weer bij nul, dus het ijkpunt voor de terugval ook. Zou dit blijven staan,
+    // dan zou de vorige lengte de eerstvolgende meting al als "teruggevallen" laten tellen.
+    session.hoogstePositie = Duration.zero;
+    _log?.line('open idx=${session.index}/${session.queue.length} ${_naam(id)}  (${_idVanUrl(url)})');
 
     // Hand the renderer the next one straight away, so the gap between two songs is the
     // speaker's own and not a round trip through here.
@@ -248,8 +312,10 @@ class CastManager {
         mime: mimeForExt(nextTrack.ext),
       );
       // Bewaard, want dit is precies de URL die de speaker straks zelf gaat spelen zonder het te
-      // melden. Hem terugzien in TrackURI is het enige signaal dat de overgang heeft plaatsgevonden.
+      // melden. Hem terugzien in TrackURI is NODIG om de overgang te zien, maar niet genoeg: een Sonos
+      // meldt hem al zodra hij hem ontvangt. Wat de overgang bewijst staat in [_echtGewisseld].
       session.nextUrl = nextUrl;
+      _log?.line('    volgende meegegeven: ${_naam(nextId)}  (${_idVanUrl(nextUrl)})');
     }
   }
 
@@ -262,9 +328,14 @@ class CastManager {
   ///
   /// Dit vervangt de STOPPED-weg niet: een speaker die de volgende-URL niet ondersteunt stopt wél, en
   /// dan is [_maybeAdvance] nog steeds wat de wachtrij doorzet.
-  Future<bool> _followedRenderer(String? trackUri) async {
+  Future<bool> _followedRenderer(String? trackUri, Duration? positie) async {
     final session = _session;
-    if (session == null || trackUri == null) return false;
+    if (session == null) return false;
+    // Eerst onthouden, en met de waarde van VOOR deze meting verder rekenen -- anders is de terugval
+    // die we zoeken al weggeschreven voordat we hem konden zien.
+    final top = session.hoogstePositie;
+    if (positie != null && positie > top) session.hoogstePositie = positie;
+    if (trackUri == null) return false;
     // Niet binnen de genadeperiode na het openen van een nummer, en dat is niet overdreven
     // voorzichtigheid maar een gemeten fout. Sonos neemt de "volgende"-URL op in zijn EIGEN wachtrij en
     // meldt hem daarna al in TrackURI, terwijl hij nog aan het huidige nummer bezig is. Eén druk op
@@ -280,10 +351,14 @@ class CastManager {
     final volgende = session.nextUrl;
     if (volgende == null || trackUri != volgende) return false;
     if (session.index + 1 >= session.queue.length) return false;
+    if (!_echtGewisseld(session, positie, top)) return false;
+    _log?.line('volgt speaker: ${session.index} → ${session.index + 1}  '
+        '${_naam(session.queue.elementAtOrNull(session.index + 1))}');
     session.index++;
     session.startedAt = DateTime.now();
     session.currentUrl = volgende;
     session.nextUrl = null;
+    session.hoogstePositie = Duration.zero;
     // Alleen de VOLGENDE doorgeven, niet opnieuw openen: de speaker speelt dit nummer al, en er
     // opnieuw een URL op zetten zou hem vanaf nul laten beginnen.
     final nextId = session.queue.elementAtOrNull(session.index + 1);
@@ -301,9 +376,70 @@ class CastManager {
           mime: mimeForExt(nextTrack.ext),
         );
         session.nextUrl = nextUrl;
+        _log?.line('    volgende meegegeven: ${_naam(nextId)}  (${_idVanUrl(nextUrl)})');
       } catch (_) {/* dan stopt de speaker na dit nummer en pakt _maybeAdvance het op */}
     }
     return true;
+  }
+
+  /// Is de MUZIEK gewisseld, of alleen de boekhouding van de speaker?
+  ///
+  /// Dit is de vraag waar het op stukliep. Een Sonos zet de volgende-URL in zijn eigen wachtrij en meldt
+  /// hem daarna in TrackURI terwijl het huidige nummer gewoon doorspeelt. "TrackURI is de volgende" was
+  /// dus geen bewijs van een overgang maar van een ONTVANGST, en die komt seconden na de start. De
+  /// genadeperiode van acht seconden stelde dat alleen maar uit: daarna klopte de voorwaarde nog steeds,
+  /// de index schoof op, de app gaf meteen het nummer dáárna mee -- en acht seconden later gebeurde
+  /// hetzelfde. Zo wandelde het scherm door de wachtrij terwijl er één nummer speelde. Dat is wat "ik
+  /// hoor de Backstreet Boys maar zie Michael Jackson" was.
+  ///
+  /// Wat een overgang wél verraadt is de positie: die valt terug naar nul. Zolang de klok van de speaker
+  /// dóórloopt, speelt hetzelfde nummer nog -- ongeacht welke URI hij noemt.
+  bool _echtGewisseld(_Session session, Duration? positie, Duration top) {
+    final oordeel = muziekIsGewisseld(
+      top: top,
+      positie: positie,
+      gespeeld: DateTime.now().difference(session.startedAt),
+      lengte: catalog.track(session.queue.elementAtOrNull(session.index) ?? '')?.duration,
+    );
+    if (!oordeel.ja) {
+      _zie('nog niet gewisseld: ${oordeel.reden} -- terwijl de speaker de volgende URI al meldt');
+      return false;
+    }
+    _log?.line('wissel gezien: ${oordeel.reden}');
+    return true;
+  }
+
+  static String _sec(Duration d) => '${d.inSeconds}s';
+
+  /// Hoe een nummer in het logboek heet.
+  String _naam(String? id) {
+    if (id == null) return '(niets)';
+    final t = catalog.track(id);
+    return t == null ? id : '${t.artist} - ${t.title}';
+  }
+
+  /// De id uit een stream-URL, want de hele URL is drie regels en zegt niet meer.
+  String? _idVanUrl(String? url) {
+    if (url == null) return null;
+    final m = RegExp(r'/stream/([^/.?]+)').firstMatch(url);
+    return m?.group(1);
+  }
+
+  String _laatsteRegel = '';
+  DateTime _laatstGezien = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Een waarneming die zichzelf elke twee seconden herhaalt, hooguit twee keer per minuut opschrijven.
+  ///
+  /// De cijfers eruit gehaald om te vergelijken: "top 12s, nu 12s" en "top 14s, nu 14s" zijn dezelfde
+  /// waarneming en horen niet allebei in het logboek. Een gebeurtenis -- een wissel, een opdracht, een
+  /// nieuw nummer -- gaat langs deze rem heen, want die is per definitie nieuw.
+  void _zie(String regel) {
+    final kern = regel.replaceAll(RegExp(r'\d+'), '#');
+    final nu = DateTime.now();
+    if (kern == _laatsteRegel && nu.difference(_laatstGezien) < const Duration(seconds: 30)) return;
+    _laatsteRegel = kern;
+    _laatstGezien = nu;
+    _log?.line(regel);
   }
 
   /// The URL to hand the speaker — converted first when the speaker cannot take the original.
@@ -359,9 +495,13 @@ class CastManager {
       // is. Deze vraag gaat vóór de transportstatus, want in dat geval staat die nog op PLAYING en zou
       // de rest van deze functie niets doen terwijl de index achterloopt.
       final pos = await _upnp.positionInfo(session.renderer).catchError((_) => null);
-      if (await _followedRenderer(pos?.trackUri)) return;
+      if (await _followedRenderer(pos?.trackUri, pos?.position)) return;
 
       final state = await _upnp.transportState(session.renderer);
+      _zie('kijk: ${state?.state ?? '?'} pos=${_sec(pos?.position ?? Duration.zero)} '
+          'top=${_sec(session.hoogstePositie)} idx=${session.index}/${session.queue.length} '
+          'uri=${_idVanUrl(pos?.trackUri) ?? '-'} nu=${_idVanUrl(session.currentUrl) ?? '-'} '
+          'volgende=${_idVanUrl(session.nextUrl) ?? '-'}');
       if (state == null || !state.isStopped) return;
       if (session.index + 1 >= session.queue.length) {
         _advance?.cancel();
@@ -392,6 +532,8 @@ class CastManager {
       return;
     }
     final renderer = await _renderer(deviceId);
+    _log?.line('opdracht $action${value == null ? '' : ' $value'}  '
+        '(idx=${_session?.index ?? -1})');
     switch (action) {
       case 'play':
         await _upnp.play(renderer);
@@ -418,6 +560,10 @@ class CastManager {
       case 'seek':
         // Seconds on the wire rather than a formatted time: the phone has a slider, not a clock,
         // and the H:MM:SS the renderer wants is upnp.dart's business.
+        //
+        // Het ijkpunt voor de terugval verzetten, want anders is achteruit slepen niet te onderscheiden
+        // van een nummer dat afliep: allebei valt de positie terug. Zo verzet slepen de meetlat mee.
+        _session?.hoogstePositie = Duration(seconds: value ?? 0);
         await _upnp.seek(renderer, Duration(seconds: value ?? 0));
       default:
         throw ArgumentError('unknown action: $action');
@@ -477,7 +623,7 @@ class CastManager {
     //
     // Het antwoord wordt NA deze vraag samengesteld: eerst bijwerken, dan vertellen. Andersom zou deze
     // poll nog de oude index melden en pas de volgende de nieuwe.
-    await _followGuarded(pos?.trackUri);
+    await _followGuarded(pos?.trackUri, pos?.position);
     final nu = _session;
     if (nu != null && nu.renderer.id == renderer.id) {
       out['index'] = nu.index;
@@ -508,11 +654,13 @@ class CastManager {
   /// Nodig omdat de status door meerdere toestellen tegelijk gepolst wordt: twee overlappende
   /// doorschuivingen verhogen allebei de index en dan loopt de wachtrij sneller dan de speaker speelt --
   /// exact de fout die de tijdklok eerder maakte en waarvoor [_advancing] bestaat.
-  Future<void> _followGuarded(String? trackUri) async {
-    if (_advancing || trackUri == null) return;
+  Future<void> _followGuarded(String? trackUri, Duration? positie) async {
+    // Geen `trackUri == null` meer als afslag hierboven: de positie moet óók onthouden worden als de
+    // speaker even geen URI meldt, anders mist de terugval straks zijn ijkpunt.
+    if (_advancing) return;
     _advancing = true;
     try {
-      await _followedRenderer(trackUri);
+      await _followedRenderer(trackUri, positie);
     } catch (_) {/* een mislukte doorschuiving mag geen statusvraag laten klappen */} finally {
       _advancing = false;
     }
@@ -562,6 +710,15 @@ class _Session {
   /// achter: de speaker speelt nummer 2, de app toont nummer 1, en "volgende" gaat naar het nummer dat
   /// al klinkt. Bij één album valt dat nauwelijks op, bij shuffle-all is elk nummer een ander album.
   String? currentUrl, nextUrl;
+
+  /// De hoogste positie die op DIT nummer gezien is.
+  ///
+  /// Dit is wat een echte nummerwissel verraadt. Een speaker die van nummer wisselt begint opnieuw te
+  /// tellen, dus de positie valt terug van bijna-de-hele-lengte naar nul. Zolang die terugval niet is
+  /// gezien, klinkt hetzelfde nummer nog -- wat de speaker verder ook beweert.
+  ///
+  /// Het hoogste in plaats van het laatste, zodat één rare meting tussendoor niets kapotmaakt.
+  Duration hoogstePositie = Duration.zero;
 }
 
 extension _ElementAtOrNull<E> on List<E> {

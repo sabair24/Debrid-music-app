@@ -52,7 +52,13 @@ class LanServer {
     GrantStore? grants,
   })  : grants = grants ?? GrantStore(),
         catalog = LanCatalog(library) {
-    cast = CastManager(catalog: catalog, token: token, port: port);
+    final dir = library.configDir;
+    cast = CastManager(
+      catalog: catalog,
+      token: token,
+      port: port,
+      logPath: dir.isEmpty ? null : '$dir${Platform.pathSeparator}cast.log',
+    );
   }
 
   final LibraryStore library;
