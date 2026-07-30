@@ -305,7 +305,7 @@ Future<void> main() async {
   // moved the music somewhere else, and coming back to a cleared queue loses your place.
   if (isTv) {
     unawaited(CastReceiver(
-      deviceName: _thisDeviceName,
+      deviceName: deviceName,
       onPlay: (tracks, index) => player.playQueue(tracks, index),
       onStop: () {
         if (player.playing) player.playPause();
@@ -633,7 +633,7 @@ class DebridApp extends StatelessWidget {
           // Firebase project: nobody should be stuck behind a login that cannot work.
           if (cloud.state == CloudState.disabled || session.preferPairingCode) {
             return PairingScreen(
-              deviceName: _thisDeviceName(),
+              deviceName: deviceName(),
               onPaired: session.connect,
             );
           }
@@ -720,15 +720,9 @@ Timer? _mirrorTimer;
 /// each other for the same items.
 QueueWorker? _worker;
 
-/// What the PC lists this device as. Its own name, because "iPad" is what you look for in a list
-/// of paired devices — not a serial number.
-String _thisDeviceName() {
-  try {
-    return Platform.localHostname;
-  } catch (_) {
-    return Platform.isIOS ? 'iPad' : 'Mac';
-  }
-}
+// The device's own name lives in `cloud/device_identity.dart` — one implementation, because a
+// second one here is how the television ended up in the speaker list as "localhost": Android's
+// hostname really is that, and only the shared [deviceName] filters it out.
 
 // ── Cover helpers ────────────────────────────────────────────────────────────
 
@@ -5143,7 +5137,7 @@ class _SpeakerButton extends StatelessWidget {
           context,
           client: client,
           target: target,
-          thisDeviceName: _thisDeviceName(),
+          thisDeviceName: deviceName(),
           onPickedHere: () {
             // Silence the speaker before taking the music back, or it keeps playing the queue it
             // was given and you have the same record in two rooms.

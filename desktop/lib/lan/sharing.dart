@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../cloud/device_identity.dart';
 import '../library.dart';
 import '../musicbrainz.dart';
 import '../online.dart';
@@ -143,7 +144,7 @@ class LanSharing extends ChangeNotifier {
     if (_server != null) {
       final discovery = LanDiscovery(
         port: _server!.boundPort,
-        deviceName: Platform.localHostname,
+        deviceName: deviceName(),
         trackCount: () => library.tracks.length,
       );
       await discovery.start();
@@ -186,7 +187,7 @@ class LanSharing extends ChangeNotifier {
         'playing': playing,
         'at': DateTime.now().millisecondsSinceEpoch,
       }
-    ], deviceId: 'pc-${Platform.localHostname}', deviceName: Platform.localHostname);
+    ], deviceId: 'pc-${deviceName()}', deviceName: deviceName());
   }
 
   void reportPlayed(String trackPath) {
@@ -194,7 +195,7 @@ class LanSharing extends ChangeNotifier {
     if (id == null) return;
     state.applyOps([
       {'type': 'played', 'trackId': id, 'at': DateTime.now().millisecondsSinceEpoch}
-    ], deviceId: 'pc-${Platform.localHostname}');
+    ], deviceId: 'pc-${deviceName()}');
   }
 
   /// A file path back to the id the other devices know it by. Null for anything that isn't a

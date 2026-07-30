@@ -48,6 +48,22 @@ void main() {
         reason: 'een platform dat we niet herkennen kan de pc niet in een lijst zetten');
   });
 
+  test('nothing else names this device, or the filter above is decoration', () {
+    // This test exists because every test above it passed while the television still appeared in
+    // the speaker list as "localhost". main.dart, lan/server.dart and lan/sharing.dart each carried
+    // their own copy — `Platform.localHostname`, unfiltered — and those copies, not this one, fed
+    // the cast receiver, the pairing screen and what the PC advertises over the network.
+    // A filter helps only where there is one implementation, so that is what is pinned here.
+    final offenders = <String>[];
+    for (final f in Directory('lib').listSync(recursive: true).whereType<File>()) {
+      if (!f.path.endsWith('.dart')) continue;
+      if (f.path.endsWith('device_identity.dart')) continue;
+      if (f.readAsStringSync().contains('Platform.localHostname')) offenders.add(f.path);
+    }
+    expect(offenders, isEmpty,
+        reason: 'gebruik deviceName() uit cloud/device_identity.dart — die filtert "localhost" weg');
+  });
+
   group('the identity itself', () {
     test('the id is kept but the name is not, so a bad name corrects itself', () async {
       // Only `id` is read back from device_id.json — see thisDevice(). That is what lets a phone

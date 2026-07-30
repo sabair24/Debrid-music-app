@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../album_facts.dart';
+import '../cloud/device_identity.dart';
 import '../album_facts_resolver.dart';
 import '../library.dart';
 import '../models.dart';
@@ -167,7 +168,7 @@ class LanServer {
         'status': 'ok',
         'name': 'debridmusic-desktop',
         'version': version,
-        'deviceName': Platform.localHostname,
+        'deviceName': deviceName(),
         'trackCount': library.tracks.length,
         'albumCount': library.albums.length,
       });
@@ -383,7 +384,7 @@ class LanServer {
     }
     return _json(req.response, {
       'token': token,
-      'name': Platform.localHostname,
+      'name': deviceName(),
       'trackCount': library.tracks.length,
     });
   }
