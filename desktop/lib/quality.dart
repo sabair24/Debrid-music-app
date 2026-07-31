@@ -48,6 +48,29 @@ int effectieveBitrate({int? bitrate, int? durationSec, int? size}) {
   return 0;
 }
 
+/// Meer dan twee kanalen — uitgerekend, niet geraden.
+///
+/// Een FLAC is nooit gróter dan onbewerkt; comprimeren maakt kleiner. Onbewerkt stereo is
+/// `sampleRate × bits × 2`, dus een bestand dat daar overheen gaat kan onmogelijk stereo zijn: het heeft
+/// meer kanalen. Dat is geen aanwijzing maar een tegenspraak.
+///
+/// Waarom dit ertoe doet: een 5.1-mix wordt op een stereo-installatie teruggemengd, en is dan mínder dan
+/// een gewone stereomix — terwijl hij véél groter is en dus bovenaan elke lijst op grootte belandt. De
+/// naam verraadt hem lang niet altijd; dit wel.
+///
+/// Voorbeeld uit de eigen zoekresultaten: een bestand dat 24/96 meldt en 10958 kbit/s meet. Onbewerkt
+/// stereo is daar 4608 kbit/s. Dat kán niet, dus het is meerkanaals — en het stond bovenaan.
+///
+/// Null-veilig: zonder sample rate of bitdiepte valt er niets te bewijzen en is het antwoord `false`.
+/// De naamherkenning blijft daarnaast bestaan voor precies dat geval.
+bool meerDanStereo({int? sampleRate, int? bitDepth, required int kbps}) {
+  if (sampleRate == null || bitDepth == null || sampleRate <= 0 || bitDepth <= 0 || kbps <= 0) {
+    return false;
+  }
+  final onbewerktStereo = sampleRate * bitDepth * 2 / 1000;
+  return kbps > onbewerktStereo;
+}
+
 /// Waar een bestand in de rangschikking komt: hoger is beter.
 ///
 /// Drie lagen, van zwaar naar licht.

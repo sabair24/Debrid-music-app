@@ -118,6 +118,26 @@ void main() {
           reason: 'zelfs een magere mp3 in stereo is bruikbaarder dan een 5.1-mix');
     });
 
+    test('meer dan twee kanalen is te BEWIJZEN, niet te raden', () {
+      // Een FLAC is nooit groter dan onbewerkt. Onbewerkt stereo op 24/96 is 4608 kbit/s, dus een
+      // bestand dat 24/96 meldt en 10958 meet kan onmogelijk stereo zijn. Dit stond bovenaan de
+      // zoekresultaten, zonder "5.1" in de naam.
+      expect(meerDanStereo(sampleRate: 96000, bitDepth: 24, kbps: 10958), isTrue);
+      // En een echte 24/96 stereo zit er ruim onder: comprimeren maakt kleiner.
+      expect(meerDanStereo(sampleRate: 96000, bitDepth: 24, kbps: 3182), isFalse);
+      // 24/192 stereo mag tot 9216 gaan — precies het gebied waar de oude vaste grens van 6500 echte
+      // stereobestanden ten onrechte wegdrukte.
+      expect(meerDanStereo(sampleRate: 192000, bitDepth: 24, kbps: 6511), isFalse);
+      // En andersom: een 5.1 op cd-kwaliteit zit ónder die 6500 en glipte er dus doorheen.
+      expect(meerDanStereo(sampleRate: 44100, bitDepth: 16, kbps: 2600), isTrue);
+    });
+
+    test('zonder de getallen valt er niets te bewijzen', () {
+      // Dan blijft de naamherkenning over; hier hoort geen gok uit te komen.
+      expect(meerDanStereo(sampleRate: null, bitDepth: null, kbps: 10958), isFalse);
+      expect(meerDanStereo(sampleRate: 96000, bitDepth: 24, kbps: 0), isFalse);
+    });
+
     test('binnen surround geldt dezelfde rangorde', () {
       // Blijft er niets anders over, dan wil je nog steeds de beste van de slechte groep bovenaan.
       expect(kwaliteitsRang(lossless: true, kbps: 8638, stereo: false),

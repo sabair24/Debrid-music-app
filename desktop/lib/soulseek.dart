@@ -44,6 +44,19 @@ class SoulseekFile {
   final int? durationSec;
   final bool isVbr;
 
+  /// Sample rate en bitdiepte, zoals de peer ze zelf meldt.
+  ///
+  /// Deze twee stonden al in het antwoord en werden weggegooid: de ontleder pakte type 0, 1 en 2
+  /// (bitrate, duur, VBR) en liet de rest vallen. Gemeten op een echte zoekopdracht komt er bij élk
+  /// lossless bestand `4=<sample rate>` en `5=<bitdiepte>` mee — en juist géén bitrate, want die zegt
+  /// bij lossless niets vaststaands.
+  ///
+  /// Daarmee hoeft er niets meer geschat te worden. Op een zoekresultaat kan hetzelfde etiket staan als
+  /// in de bibliotheek — `24/192` — en het aantal kanalen wordt een som in plaats van een gok: een FLAC
+  /// is nooit groter dan onbewerkt, dus wie boven `sampleRate × bits × 2` uitkomt heeft er meer dan twee.
+  final int? sampleRate;
+  final int? bitDepth;
+
   SoulseekFile({
     required this.username,
     required this.filename,
@@ -54,12 +67,15 @@ class SoulseekFile {
     this.bitrate,
     this.durationSec,
     this.isVbr = false,
+    this.sampleRate,
+    this.bitDepth,
   });
 
   SoulseekFile copyWith({int? speed, int? queueLength, bool? freeSlots}) => SoulseekFile(
         username: username, filename: filename, size: size,
         speed: speed ?? this.speed, queueLength: queueLength ?? this.queueLength,
         freeSlots: freeSlots ?? this.freeSlots, bitrate: bitrate, durationSec: durationSec, isVbr: isVbr,
+        sampleRate: sampleRate, bitDepth: bitDepth,
       );
 
   String get displayName => filename.replaceAll('\\', '/').split('/').last;
@@ -82,6 +98,8 @@ class SoulseekFile {
         'bitrate': bitrate,
         'durationSec': durationSec,
         'isVbr': isVbr,
+        'sampleRate': sampleRate,
+        'bitDepth': bitDepth,
       };
 
   static SoulseekFile? fromJson(Map<String, dynamic> j) {
@@ -97,6 +115,8 @@ class SoulseekFile {
       bitrate: (j['bitrate'] as num?)?.toInt(),
       durationSec: (j['durationSec'] as num?)?.toInt(),
       isVbr: j['isVbr'] as bool? ?? false,
+      sampleRate: (j['sampleRate'] as num?)?.toInt(),
+      bitDepth: (j['bitDepth'] as num?)?.toInt(),
     );
   }
 }
@@ -784,6 +804,7 @@ class SoulseekClient {
       // zijn bitrate, duur en VBR — maar er zijn er meer, en de vraag is welke er in de praktijk
       // binnenkomen. De app las ze wel van de lijn en gooide ze meteen weg.
       final kenmerken = <int, int>{};
+      int? sr, bits;
       for (var a = 0; a < numAttr; a++) {
         final t = r.u32();
         final v = r.u32();
@@ -794,10 +815,24 @@ class SoulseekClient {
           dur = v;
         } else if (t == 2) {
           vbr = v != 0;
+        } else if (t == 4) {
+          // Sample rate. Gemeten op een echte zoekopdracht: bij lossless bestanden komt deze altijd
+          // mee en komt er juist géén bitrate — 44100, 88200, 96000 en 176400 op twaalf van de twaalf.
+          sr = v;
+        } else if (t == 5) {
+          bits = v; // bitdiepte; alleen ooit 16 of 24
         }
       }
       _noteerKenmerken(filename, kenmerken);
-      files.add(SoulseekFile(username: peerUser, filename: filename, size: size, bitrate: bitrate, durationSec: dur, isVbr: vbr));
+      files.add(SoulseekFile(
+          username: peerUser,
+          filename: filename,
+          size: size,
+          bitrate: bitrate,
+          durationSec: dur,
+          isVbr: vbr,
+          sampleRate: sr,
+          bitDepth: bits));
     }
     final freeSlots = r.remaining > 0 ? r.boolean() : false;
     final speed = r.remaining >= 4 ? r.u32() : 0;

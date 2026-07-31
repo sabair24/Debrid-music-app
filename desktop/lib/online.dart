@@ -568,8 +568,23 @@ class DownloadManager extends ChangeNotifier {
   ///
   /// The release name is the reliable signal; the bitrate is the backstop for rips that don't say
   /// so. 6500k is above what stereo 24/192 FLAC reaches (~5000k) and below 5.1 24/96 (~8000k).
-  static bool isMultichannel(SoulseekFile f) =>
-      _multichannelRe.hasMatch(f.filename) || effectiveKbps(f) > 6500;
+  /// Drie wegen, van hard naar zacht — want elke weg alleen laat er doorheen glippen.
+  ///
+  /// 1. De SOM. Sinds de peer zijn sample rate en bitdiepte meestuurt, is dit te bewijzen: een FLAC is
+  ///    nooit groter dan onbewerkt, dus wie boven `sampleRate × bits × 2` uitkomt heeft meer kanalen.
+  ///    Zie [meerDanStereo]. Dit vervangt de vaste 6500 hieronder waar het kan, en dat is nodig: die
+  ///    grens zit precies in het gebied waar 24/192 stereo leeft (4600–6500), dus hij nam echte
+  ///    stereobestanden mee én liet een 5.1 op cd-kwaliteit (~2600) lopen.
+  /// 2. De NAAM, voor peers die geen sample rate sturen.
+  /// 3. De vaste grens, als vangnet voor diezelfde peers.
+  static bool isMultichannel(SoulseekFile f) {
+    final kbps = effectiveKbps(f);
+    if (f.sampleRate != null && f.bitDepth != null) {
+      return meerDanStereo(sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: kbps) ||
+          _multichannelRe.hasMatch(f.filename);
+    }
+    return _multichannelRe.hasMatch(f.filename) || kbps > 6500;
+  }
 
   Future<void> enqueueSoulseek(SoulseekFile file) => enqueueSoulseekBest([file]);
 

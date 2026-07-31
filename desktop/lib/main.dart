@@ -7059,20 +7059,62 @@ Future<int?> _kleurBuitenDeTekendraad(Uint8List bytes) =>
 /// Lossless boven lossy, daarbinnen op bitrate; zie [kwaliteitsRang]. Bij gelijke kwaliteit wint de peer
 /// met een vrije plek, want het beste bestand van iemand die niets uitdeelt heb je nog steeds niet.
 int _besteEerst(SoulseekFile a, SoulseekFile b) {
-  int rang(SoulseekFile f) => kwaliteitsRang(
-        lossless: f.isFlac || const {'alac', 'ape', 'wav', 'aiff'}.contains(f.ext),
-        kbps: effectieveBitrate(bitrate: f.bitrate, durationSec: f.durationSec, size: f.size),
-        // Op de hele naam en niet alleen op het bestandsnaampje: uploaders zetten "5.1" net zo vaak in
-        // de mapnaam als in de bestandsnaam.
-        stereo: surroundLabel(f.filename) == null,
-      );
+  int rang(SoulseekFile f) {
+    final kbps = effectieveBitrate(bitrate: f.bitrate, durationSec: f.durationSec, size: f.size);
+    return kwaliteitsRang(
+      lossless: f.isFlac || const {'alac', 'ape', 'wav', 'aiff'}.contains(f.ext),
+      // Het formaat dat de peer meldt gaat vóór de gemeten bitrate. Twee ripjes van dezelfde 24/96
+      // verschillen een paar procent in bitrate zonder dat er iets beters aan is; hun sample rate maal
+      // bitdiepte is identiek, en dát is waar het om gaat.
+      kbps: (f.sampleRate != null && f.bitDepth != null && f.sampleRate! > 0 && f.bitDepth! > 0)
+          ? f.sampleRate! * f.bitDepth! ~/ 1000
+          : kbps,
+      // Twee wegen: de som bewijst het, de naam vangt de peers die geen sample rate sturen. Op de hele
+      // naam en niet alleen het bestandsnaampje — uploaders zetten "5.1" net zo vaak in de mapnaam.
+      stereo: !meerDanStereo(sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: kbps) &&
+          surroundLabel(f.filename) == null,
+    );
+  }
   final verschil = rang(b) - rang(a);
   if (verschil != 0) return verschil;
   if (a.freeSlots != b.freeSlots) return a.freeSlots ? -1 : 1;
   return a.queueLength.compareTo(b.queueLength);
 }
 
-Quality _slskQuality(SoulseekFile f) => qualityFromFile(
+/// Wat er als waarschuwing op de rij komt, of null bij gewoon stereo.
+///
+/// De naam gaat vóór als hij iets zegt — "5.1" is duidelijker dan "meerkanaals". Zegt de naam niets,
+/// dan beslist de som: een bestand dat boven zijn eigen onbewerkte stereogrootte uitkomt heeft meer
+/// kanalen, en dat is precies het geval dat de naam laat lopen.
+String? _surroundMerk(SoulseekFile f) {
+  final uitNaam = surroundLabel(f.filename);
+  if (uitNaam != null) return uitNaam;
+  final kbps = effectieveBitrate(bitrate: f.bitrate, durationSec: f.durationSec, size: f.size);
+  return meerDanStereo(sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: kbps)
+      ? 'meerkanaals'
+      : null;
+}
+
+/// Het etiket op een zoekresultaat, met het formaat dat de peer zélf meldt.
+///
+/// Sinds de sample rate en de bitdiepte bewaard worden, staat hier `FLAC · 24/192` in plaats van een
+/// bitrate die de app zelf uit grootte en duur moest afleiden. Dezelfde notatie als in de bibliotheek —
+/// dan is een zoekresultaat rechtstreeks te vergelijken met wat je al hebt, en dat is de hele vraag.
+///
+/// Zonder die twee getallen blijft het de oude weg: bij mp3 zegt bitdiepte niets, en een peer die niets
+/// meldt heeft nog steeds een bitrate die uit te rekenen valt.
+Quality _slskQuality(SoulseekFile f) {
+  final sr = f.sampleRate, bits = f.bitDepth;
+  if (f.isFlac && sr != null && bits != null && sr > 0 && bits > 0) {
+    return Quality(
+      'FLAC · ${depthRateLabel(sampleRate: sr, bitsPerSample: bits)}',
+      isHiRes(sampleRate: sr, bitsPerSample: bits) ? QTier.hires : QTier.lossless,
+    );
+  }
+  return _slskQualityUitGrootte(f);
+}
+
+Quality _slskQualityUitGrootte(SoulseekFile f) => qualityFromFile(
       name: f.displayName,
       ext: f.ext,
       isFlac: f.isFlac,
@@ -7196,7 +7238,7 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
         // juist als "beter", terwijl het op een stereo-installatie minder is.
         //
         // Oranje en niet groen: dit is een waarschuwing, geen keurmerk.
-        if (surroundLabel(f.filename) != null) ...[
+        if (_surroundMerk(f) != null) ...[
           Container(
             margin: const EdgeInsets.only(right: 6),
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -7205,7 +7247,7 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
               borderRadius: BorderRadius.circular(5),
               border: Border.all(color: const Color(0xFFE8913A).withValues(alpha: .45)),
             ),
-            child: Text(surroundLabel(f.filename)!,
+            child: Text(_surroundMerk(f)!,
                 style: const TextStyle(
                     fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFFE8913A))),
           ),
