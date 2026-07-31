@@ -494,13 +494,34 @@ String whyBetter(File keep, File drop) {
   }
 }
 
+/// Wat een naam zegt over het aantal kanalen: `5.1`, `7.1`, `Atmos`, … of null voor gewoon stereo.
+///
+/// Een LABEL en geen ja/nee, want dit is bedoeld om te tonen. Bij een zoekresultaat is de naam alles wat
+/// er is — Soulseek meldt het kanaalaantal niet — en dan is "5.1" een bruikbaar antwoord en "surround"
+/// een vaag antwoord. Beide zijn beter dan het verschil niet zien.
+///
+/// **Dit is een aanwijzing, geen meting.** Een surroundbestand dat zichzelf niet zo noemt glipt hier
+/// doorheen; pas als het bestand op schijf staat leest [_isMultichannelFile] het echte kanaalaantal uit
+/// de FLAC-kop. Daarom staat die weg er nog steeds naast en gaat de naam alleen vóór als er niets beters
+/// is.
+String? surroundLabel(String naam) {
+  final m = RegExp(r'(\b5[\._ ]1\b|\b7[\._ ]1\b|surround|multi[\- ]?channel|quadraphonic|quad\b|atmos)',
+          caseSensitive: false)
+      .firstMatch(naam);
+  if (m == null) return null;
+  final gevonden = m.group(0)!.toLowerCase();
+  if (gevonden.startsWith('5')) return '5.1';
+  if (gevonden.startsWith('7')) return '7.1';
+  if (gevonden.startsWith('atmos')) return 'Atmos';
+  if (gevonden.startsWith('quad')) return 'quad';
+  return 'surround';
+}
+
 /// Surround by its own header, or by a release name that says so (covers non-FLAC too).
 bool _isMultichannelFile(File f) {
   final tags = readFlacTags(f);
   if (tags != null && tags.channels > 0) return tags.multichannel;
-  return RegExp(r'(\b5[\._ ]1\b|\b7[\._ ]1\b|surround|multi[\- ]?channel|quadraphonic|atmos)',
-          caseSensitive: false)
-      .hasMatch(f.path);
+  return surroundLabel(f.path) != null;
 }
 
 /// What happened to a file we tried to file away.

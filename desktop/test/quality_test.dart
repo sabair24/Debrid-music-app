@@ -107,5 +107,21 @@ void main() {
       expect(kwaliteitsRang(lossless: true, kbps: 6511),
           greaterThan(kwaliteitsRang(lossless: true, kbps: 2900)));
     });
+
+    test('surround zakt onder ELK stereobestand, hoe groot hij ook is', () {
+      // DE test. Een 5.1-bestand is groot omdat het zes kanalen draagt, niet omdat het beter klinkt —
+      // op een stereo-installatie wordt het teruggemengd. Op bitrate alleen sorteren zet het dus precies
+      // verkeerd om: hoe onbruikbaarder, hoe hoger.
+      final surroundFlac = kwaliteitsRang(lossless: true, kbps: 8638, stereo: false);
+      expect(surroundFlac, lessThan(kwaliteitsRang(lossless: true, kbps: 900)));
+      expect(surroundFlac, lessThan(kwaliteitsRang(lossless: false, kbps: 128)),
+          reason: 'zelfs een magere mp3 in stereo is bruikbaarder dan een 5.1-mix');
+    });
+
+    test('binnen surround geldt dezelfde rangorde', () {
+      // Blijft er niets anders over, dan wil je nog steeds de beste van de slechte groep bovenaan.
+      expect(kwaliteitsRang(lossless: true, kbps: 8638, stereo: false),
+          greaterThan(kwaliteitsRang(lossless: false, kbps: 320, stereo: false)));
+    });
   });
 }

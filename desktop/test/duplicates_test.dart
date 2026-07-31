@@ -209,4 +209,32 @@ void main() {
       //  the detection tests, which build the albums directly.)
     });
   });
+
+  /// Wat een naam over het kanaalaantal prijsgeeft.
+  ///
+  /// Bij een zoekresultaat is de naam alles wat er is — Soulseek meldt het kanaalaantal niet — en zonder
+  /// dit was een 5.1-bestand alleen te herkennen aan zijn verdachte grootte. Juist die grootte leest als
+  /// "beter", terwijl het op een stereo-installatie minder is.
+  group('surround aan de naam herkennen', () {
+    test('de gangbare schrijfwijzen', () {
+      expect(surroundLabel('02 - Baby Be Mine (5.1 mix).flac'), '5.1');
+      expect(surroundLabel('Thriller [5_1 surround]/01 - x.flac'), '5.1');
+      expect(surroundLabel('Dangerous 7.1 remix.flac'), '7.1');
+      expect(surroundLabel('Album (Dolby Atmos)/01.flac'), 'Atmos');
+      expect(surroundLabel('Tubular Bells - Quadraphonic.flac'), 'quad');
+      expect(surroundLabel('x - multi-channel edition.flac'), 'surround');
+    });
+
+    test('gewone stereo blijft ongemerkt', () {
+      expect(surroundLabel('02 - Baby Be Mine.flac'), isNull);
+      expect(surroundLabel('Michael Jackson - Thriller (2012 Remaster).flac'), isNull);
+    });
+
+    test('een getal dat toevallig 5.1 lijkt is geen surround', () {
+      // Woordgrenzen doen hier het werk: een versienummer of een tijdsduur mag geen bestand
+      // wegdrukken naar de bodem van de lijst.
+      expect(surroundLabel('track 15.10 - iets.flac'), isNull);
+      expect(surroundLabel('Best of 1975.1998.flac'), isNull);
+    });
+  });
 }

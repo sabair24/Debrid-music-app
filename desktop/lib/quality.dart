@@ -50,13 +50,21 @@ int effectieveBitrate({int? bitrate, int? durationSec, int? size}) {
 
 /// Waar een bestand in de rangschikking komt: hoger is beter.
 ///
-/// Lossless krijgt een eigen laag, want geen enkele mp3 haalt een FLAC in — een 320k mp3 hoort onder een
-/// 900k FLAC te staan en niet erboven. Binnen een laag beslist de bitrate.
+/// Drie lagen, van zwaar naar licht.
 ///
-/// Bestaat omdat de zoekresultaten in de volgorde stonden waarin de peers toevallig antwoordden. Een
-/// bestand van 212 MB kon daardoor onder een van 30 MB staan, en dan zie je niet dat er iets veel beters
-/// tussen zit dan wat je al hebt.
-int kwaliteitsRang({required bool lossless, required int kbps}) => (lossless ? 1000000 : 0) + kbps;
+/// **Stereo boven surround**, en dat is de zwaarste. Een 5.1-bestand is groot omdat het zes kanalen
+/// draagt, niet omdat het beter klinkt — op een stereo-installatie wordt het teruggemengd, en dan heb je
+/// een enorm bestand dat mínder is dan een gewone stereomix. Op bitrate alleen sorteren zet het dus
+/// precies verkeerd om: hoe onbruikbaarder, hoe hoger. Wie stereo wil, wil ze allemaal eerst zien.
+///
+/// **Lossless boven lossy.** Geen enkele mp3 haalt een FLAC in: een 320k mp3 hoort onder een 900k FLAC.
+///
+/// **Dan pas de bitrate.** Binnen dezelfde soort is dat recht evenredig met wat erin zit.
+///
+/// De sprongen zijn zo groot dat een laag nooit door de laag eronder ingehaald kan worden, ook niet door
+/// de hoogste bitrate die bestaat.
+int kwaliteitsRang({required bool lossless, required int kbps, bool stereo = true}) =>
+    (stereo ? 100000000 : 0) + (lossless ? 1000000 : 0) + kbps;
 
 /// "24/96" of "16/44.1" -- zoals het op een hoes en in een winkel staat: bitdiepte gedeeld door kHz.
 ///

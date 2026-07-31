@@ -7062,6 +7062,9 @@ int _besteEerst(SoulseekFile a, SoulseekFile b) {
   int rang(SoulseekFile f) => kwaliteitsRang(
         lossless: f.isFlac || const {'alac', 'ape', 'wav', 'aiff'}.contains(f.ext),
         kbps: effectieveBitrate(bitrate: f.bitrate, durationSec: f.durationSec, size: f.size),
+        // Op de hele naam en niet alleen op het bestandsnaampje: uploaders zetten "5.1" net zo vaak in
+        // de mapnaam als in de bestandsnaam.
+        stereo: surroundLabel(f.filename) == null,
       );
   final verschil = rang(b) - rang(a);
   if (verschil != 0) return verschil;
@@ -7188,6 +7191,25 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
             ],
           ),
         ),
+        // Het kanaalaantal, als de naam het prijsgeeft. Zonder dit was een 5.1-bestand niet van een
+        // stereobestand te onderscheiden behalve aan zijn verdachte grootte — en die grootte leest
+        // juist als "beter", terwijl het op een stereo-installatie minder is.
+        //
+        // Oranje en niet groen: dit is een waarschuwing, geen keurmerk.
+        if (surroundLabel(f.filename) != null) ...[
+          Container(
+            margin: const EdgeInsets.only(right: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: const Color(0xFFE8913A).withValues(alpha: .16),
+              borderRadius: BorderRadius.circular(5),
+              border: Border.all(color: const Color(0xFFE8913A).withValues(alpha: .45)),
+            ),
+            child: Text(surroundLabel(f.filename)!,
+                style: const TextStyle(
+                    fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFFE8913A))),
+          ),
+        ],
         _qualityBadge(q),
         _downloadControl(context,
             jobKey: _slskKey(f),
