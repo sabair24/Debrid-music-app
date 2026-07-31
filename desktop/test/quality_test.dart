@@ -40,4 +40,30 @@ void main() {
     expect(QFilter.mp3.matches(mp3), true);
     expect(QFilter.all.matches(mp3), true);
   });
+
+  /// Waarom dit bestaat: het Hi-Res-filter in de bibliotheek meldde "niets binnen dit filter" terwijl
+  /// er 102 van die nummers stonden — en in dezelfde lijst gouden badges. Het filter raadde uit de titel
+  /// en de duur, en een titel zegt zelden "24bit/96kHz".
+  group('hi-res van een bestand dat hier staat', () {
+    test('boven 48 kHz is hi-res, ongeacht hoe het nummer heet', () {
+      expect(isHiRes(sampleRate: 96000, bitsPerSample: 24), isTrue);
+      expect(isHiRes(sampleRate: 88200, bitsPerSample: 24), isTrue);
+      expect(isHiRes(sampleRate: 192000, bitsPerSample: 24), isTrue);
+      expect(isHiRes(sampleRate: 176400, bitsPerSample: 24), isTrue);
+    });
+
+    test('cd-kwaliteit is dat niet, ook niet als het nummer druk gemasterd is', () {
+      // De oude weg keek naar de bitrate, en een luid gemasterde 44,1/16 haalt ook boven de 1500 kbit/s.
+      expect(isHiRes(sampleRate: 44100, bitsPerSample: 16), isFalse);
+      expect(isHiRes(sampleRate: 48000, bitsPerSample: 16), isFalse);
+    });
+
+    test('24 bit op 48 kHz telt ook mee', () {
+      expect(isHiRes(sampleRate: 48000, bitsPerSample: 24), isTrue);
+    });
+
+    test('niets bekend is geen hi-res', () {
+      expect(isHiRes(sampleRate: 0, bitsPerSample: 0), isFalse);
+    });
+  });
 }

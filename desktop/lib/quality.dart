@@ -22,6 +22,18 @@ final _hiresTokens =
 final _kbps = RegExp(r'\b(320|256|224|192|160|128)\s?k(?:bps)?\b', caseSensitive: false);
 final _vx = RegExp(r'\bV([012])\b');
 
+/// Is dit een hi-res bestand? Uit de cijfers van het bestand zelf.
+///
+/// Voor muziek die HIER staat hoeft er niets geraden te worden: sample rate en bitdiepte staan in de
+/// tags en zeggen het precies. [qualityFromFile] raadt uit een naam en een bitrate, en dat moet ook wel
+/// bij een release van een vreemde -- maar op de eigen bibliotheek raadde het mis. De titel van een
+/// nummer zegt zelden "24bit/96kHz", dus viel élk lokaal nummer in "lossless" en bleef het Hi-Res-filter
+/// leeg terwijl er 102 van die nummers stonden.
+///
+/// De grens ligt op 48 kHz omdat dat is wat een Sonos nog kan; alles daarboven moet door de omzetter.
+bool isHiRes({required int sampleRate, required int bitsPerSample}) =>
+    sampleRate > 48000 || bitsPerSample > 16;
+
 /// Quality from a torrent/release name.
 Quality qualityFromName(String name) {
   if (_dsd.hasMatch(name)) return const Quality('DSD', QTier.hires);

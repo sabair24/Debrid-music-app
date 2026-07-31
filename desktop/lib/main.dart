@@ -926,10 +926,11 @@ class _HomeShellState extends State<HomeShell> {
 
   /// Does this track match the current search box + quality filter?
   bool _matches(Track t) {
-    if (!_qFilter.matches(qualityFromFile(
-        name: t.title, ext: t.isFlac ? 'flac' : 'mp3', isFlac: t.isFlac, durationSec: t.duration?.inSeconds))) {
-      return false;
-    }
+    // Dezelfde functie als het badge naast het nummer, en dat is de reparatie. Hier stond een eigen
+    // aanroep die de grootte NIET meegaf, dus kwam er nooit een bitrate uit en nooit "hi-res": het
+    // Hi-Res-filter meldde "niets binnen dit filter" terwijl er in dezelfde lijst gouden badges stonden.
+    // Twee antwoorden op één vraag; nu één.
+    if (!_qFilter.matches(_trackQuality(t))) return false;
     if (_q.isEmpty) return true;
     final q = normKey(_q);
     if (normKey(t.title).contains(q) || normKey(t.artist).contains(q) || normKey(t.album).contains(q)) {
@@ -6847,13 +6848,23 @@ Widget _qualityBadge(Quality q) {
 
 /// Quality of a LOCAL library track (real bitrate from size÷duration, so a 16/44 FLAC and a
 /// 24-bit hi-res FLAC read differently).
-Quality _trackQuality(Track t) => qualityFromFile(
-      name: t.title,
-      ext: t.ext,
-      isFlac: t.isFlac,
-      durationSec: t.duration?.inSeconds,
-      size: t.sizeBytes,
-    );
+/// De kwaliteit van een nummer uit de eigen bibliotheek.
+///
+/// Het label komt uit de bitrate -- "FLAC · 2788k" zegt meer dan "FLAC" -- maar of het hi-res IS wordt
+/// bepaald door de sample rate en de bitdiepte, want die staan in het bestand. De bitrate is daar maar
+/// een benadering van: een druk gemasterd nummer van 44,1 kHz haalt ook 1500 kbit/s.
+Quality _trackQuality(Track t) {
+  final basis = qualityFromFile(
+    name: t.title,
+    ext: t.ext,
+    isFlac: t.isFlac,
+    durationSec: t.duration?.inSeconds,
+    size: t.sizeBytes,
+  );
+  if (!t.isFlac || t.sampleRate <= 0) return basis;
+  final hoog = isHiRes(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample);
+  return Quality(basis.label, hoog ? QTier.hires : QTier.lossless);
+}
 
 Quality _slskQuality(SoulseekFile f) => qualityFromFile(
       name: f.displayName,
