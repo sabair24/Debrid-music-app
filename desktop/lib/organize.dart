@@ -625,7 +625,23 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
     // Soulseek delivered the audio; the record's identity comes from here. Without this the file
     // sits under the right name in the right folder while its TAGS still say it is track 1 of
     // "The Essential Backstreet Boys" — and the tags are what the library and Roon actually read.
+    //
+    // En bij het vóégen bij een bestaand album: neem de albumnaam van de buren over. Dat is niet
+    // cosmetisch. De bibliotheek groepeert op de ALBUM-tag en niet op de map, en elke peer schrijft een
+    // andere: gemeten kwamen er voor Thriller drie varianten binnen -- "Thriller", "Thriller (MFSL One
+    // Step)" en "Thriller (Epic, Mjj Productions - 88875143731, Eu)". Zonder dit staat het betere
+    // bestand netjes in de goede map en tóch als apart album in beeld, wat precies de klacht was.
+    //
+    // Overgenomen van een buurbestand en niet van de uitgave die de download koos: het gaat erom dat
+    // deze negen bij elkáár horen, en de buren zijn de enigen die weten onder welke naam dat is.
     await stampTags(File(landed), t);
+    if (elders != null) {
+      // Rechtstreeks dat ene veld, en niet via [stampTags]: die schrijft met opzet niets als de tags
+      // niet van een officiële uitgave komen, en die van een peer zijn dat nooit. Precies daarom hield
+      // het binnengekomen bestand zijn eigen albumnaam en stond het album alsnog dubbel in beeld.
+      final naam = _albumVanBuren(elders, landed);
+      if (naam != null) await writeTagFields(File(landed), {'ALBUM': naam});
+    }
     // The folder the file came from, and the folder a replaced copy came from, are often empty now:
     // the per-peer staging folder always, and an album folder whose last track was superseded.
     for (final d in {srcDir, ...loserDirs}) {
@@ -900,6 +916,31 @@ String _reuseExistingFolders(String root, String rel) {
 ///
 /// Order matters: deleting first and moving second means a failed move (locked file, disk full)
 /// leaves you with NEITHER — the copy you had is gone and the new one is stranded in staging.
+/// De albumnaam die de buren in deze map dragen, of null als er niets te leren valt.
+///
+/// De bibliotheek groepeert op de ALBUM-tag en niet op de map. Landt er een bestand in een map waar de
+/// rest een andere albumnaam heeft, dan staat het als apart album in beeld — hoe netjes het op schijf
+/// ook staat. Gemeten kwamen er voor Thriller drie varianten binnen: "Thriller", "Thriller (MFSL One
+/// Step)" en "Thriller (Epic, Mjj Productions - 88875143731, Eu)".
+///
+/// De meest vóórkomende naam wint, niet de eerste die we tegenkomen: bij een album dat half vervangen
+/// is, hoort de meerderheid te beslissen en niet de alfabetische volgorde.
+String? _albumVanBuren(String map, String zelf) {
+  final tellen = <String, int>{};
+  try {
+    for (final f in Directory(map).listSync().whereType<File>()) {
+      if (f.path == zelf) continue;
+      final naam = readTags(f)?.album.trim() ?? '';
+      if (naam.isEmpty) continue;
+      tellen[naam] = (tellen[naam] ?? 0) + 1;
+    }
+  } catch (_) {
+    return null; // map niet te lezen: dan maar de eigen naam, dat is het oude gedrag
+  }
+  if (tellen.isEmpty) return null;
+  return tellen.entries.reduce((a, b) => b.value > a.value ? b : a).key;
+}
+
 /// Waar een kopie heen gaat die het aflegt tegen een betere: opzij, niet weg.
 ///
 /// Staat hier en niet in library.dart omdat dit bestand lager in de stapel zit — library.dart

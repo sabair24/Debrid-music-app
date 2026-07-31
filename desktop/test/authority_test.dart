@@ -291,6 +291,44 @@ void main() {
       expect(geparkeerd.single.lengthSync(), lessThan(5000));
     });
 
+    test('de nieuwkomer neemt de albumnaam van de buren over', () async {
+      // Zonder dit staat het betere bestand netjes in de goede map en tóch als apart album in beeld:
+      // de bibliotheek groepeert op de ALBUM-tag, en elke peer schrijft een andere. Gemeten kwamen er
+      // voor Thriller drie varianten binnen — "Thriller", "Thriller (MFSL One Step)" en
+      // "Thriller (Epic, Mjj Productions - 88875143731, Eu)".
+      final root = Directory(Directory.systemTemp.createTempSync('naam').path);
+      addTearDown(() {
+        try {
+          root.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final sep = Platform.pathSeparator;
+      final map = Directory('${root.path}${sep}Michael Jackson${sep}Thriller (MFSL One Step)')
+        ..createSync(recursive: true);
+      // Drie buren die het eens zijn, en één afwijkende: de meerderheid hoort te beslissen.
+      for (final n in ['01', '03', '04']) {
+        File('${map.path}$sep$n - x.flac').writeAsBytesSync(
+            _peerFlac(['TITLE=x', 'ARTIST=Michael Jackson', 'ALBUM=Thriller (MFSL One Step)']));
+      }
+      File('${map.path}${sep}05 - y.flac').writeAsBytesSync(
+          _peerFlac(['TITLE=y', 'ARTIST=Michael Jackson', 'ALBUM=Thriller (iets anders)']));
+
+      final staging = Directory('${root.path}${sep}_in')..createSync();
+      final nieuw = File('${staging.path}${sep}02 - Baby Be Mine.flac')
+        ..writeAsBytesSync(_peerFlac([
+          'TITLE=Baby Be Mine',
+          'ARTIST=Michael Jackson',
+          'ALBUM=Thriller (Epic, Mjj Productions - 88875143731, Eu)',
+        ], pad: 9000));
+
+      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t) => map.path);
+
+      expect(uit.how, Placement.moved);
+      final geschreven = readFlacTags(File(uit.path))!;
+      expect(geschreven.album, 'Thriller (MFSL One Step)',
+          reason: 'de nieuwkomer hoort bij dit album, dus draagt hij die naam');
+    });
+
     test('een MINDERE versie dringt zich niet op', () async {
       // Dezelfde weg, andersom: wie al het beste heeft, houdt het. Anders zou elke volgende download
       // je bibliotheek weer omlaag trekken.
