@@ -34,6 +34,21 @@ final _vx = RegExp(r'\bV([012])\b');
 bool isHiRes({required int sampleRate, required int bitsPerSample}) =>
     sampleRate > 48000 || bitsPerSample > 16;
 
+/// "24/96" -- zoals het op een hoes en in een winkel staat: bitdiepte gedeeld door kHz.
+///
+/// Voor een hi-res bestand zegt dit meer dan een bitrate. "FLAC · 2973k" is de uitkomst van de muziek
+/// én de compressie samen en verschilt per nummer; "24/96" is wat het bestand IS en waar je het aan
+/// herkent. Bij cd-kwaliteit is het andersom -- daar is 16/44.1 vanzelfsprekend en zegt de bitrate wél
+/// iets -- dus die blijft daar staan.
+///
+/// De rate met één decimaal als hij niet rond is, want 88.2 en 176.4 zijn geen 88 en 176.
+String hiResLabel({required int sampleRate, required int bitsPerSample}) {
+  final khz = sampleRate % 1000 == 0
+      ? '${sampleRate ~/ 1000}'
+      : (sampleRate / 1000).toStringAsFixed(1);
+  return '$bitsPerSample/$khz';
+}
+
 /// Quality from a torrent/release name.
 Quality qualityFromName(String name) {
   if (_dsd.hasMatch(name)) return const Quality('DSD', QTier.hires);

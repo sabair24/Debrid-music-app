@@ -65,5 +65,15 @@ void main() {
     test('niets bekend is geen hi-res', () {
       expect(isHiRes(sampleRate: 0, bitsPerSample: 0), isFalse);
     });
+
+    test('het etiket schrijft de rate zoals hij op de hoes staat', () {
+      expect(hiResLabel(sampleRate: 96000, bitsPerSample: 24), '24/96');
+      expect(hiResLabel(sampleRate: 192000, bitsPerSample: 24), '24/192');
+      // 88,2 en 176,4 zijn geen 88 en 176: dat zijn de veelvouden van de cd-rate en die decimaal is
+      // precies waaraan je ze herkent.
+      expect(hiResLabel(sampleRate: 88200, bitsPerSample: 24), '24/88.2');
+      expect(hiResLabel(sampleRate: 176400, bitsPerSample: 24), '24/176.4');
+      expect(hiResLabel(sampleRate: 44100, bitsPerSample: 24), '24/44.1');
+    });
   });
 }

@@ -6862,8 +6862,15 @@ Quality _trackQuality(Track t) {
     size: t.sizeBytes,
   );
   if (!t.isFlac || t.sampleRate <= 0) return basis;
-  final hoog = isHiRes(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample);
-  return Quality(basis.label, hoog ? QTier.hires : QTier.lossless);
+  if (!isHiRes(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample)) {
+    return Quality(basis.label, QTier.lossless);
+  }
+  // Bij hi-res het formaat zelf tonen in plaats van de bitrate: "FLAC · 24/96" zegt wat het bestand is,
+  // "FLAC · 2973k" is de uitkomst van de muziek en de compressie samen en verschilt per nummer.
+  return Quality(
+    'FLAC · ${hiResLabel(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample)}',
+    QTier.hires,
+  );
 }
 
 Quality _slskQuality(SoulseekFile f) => qualityFromFile(
