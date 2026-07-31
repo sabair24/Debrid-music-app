@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:io';
+// Voor het uitlezen van de hoeskleur: dat decodeert een plaatje en hoort niet op de tekendraad.
+import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 // Flutter 3.36+ exports a RepeatMode of its own (for RepeatingAnimationBuilder), which collides
@@ -47,6 +49,7 @@ import 'lan/remote_services.dart';
 import 'now_playing.dart';
 import 'login_screen.dart';
 import 'pairing_screen.dart';
+import 'artwork.dart' show dominantColour;
 import 'library.dart';
 import 'metadata.dart';
 import 'models.dart';
@@ -799,6 +802,55 @@ extension AlbumSortX on AlbumSort {
       };
 }
 
+/// Een ruit matglas: hij vervaagt écht wat erachter langs schuift.
+///
+/// Eén recept, want het stond twee keer woordelijk in dit bestand — op de balk bovenaan en op de
+/// navigatiestrip — en twee kopieën van dezelfde getallen lopen uiteen zodra er één wordt bijgesteld.
+///
+/// Wat het glas maakt is de vervaging níét alleen. Het is de vervaging plus een vulling die bovenaan
+/// lichter is dan onderaan (zo vangt glas licht), plus een haarfijne lichte rand, plus een schaduw die
+/// het van de achtergrond tilt. Laat er één van weg en het wordt een grijze rechthoek met ronde hoeken.
+Widget glassSurface({
+  required Widget child,
+  EdgeInsetsGeometry padding = const EdgeInsets.all(5),
+  double blur = 26,
+  double fillTop = .085,
+  double fillBottom = .028,
+  double edge = .10,
+  double shadow = .34,
+  double shadowBlur = 26,
+  Offset shadowOffset = const Offset(0, 9),
+}) =>
+    ClipRRect(
+      borderRadius: BorderRadius.circular(999),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.white.withValues(alpha: fillTop),
+                Colors.white.withValues(alpha: fillBottom),
+              ],
+            ),
+            border: Border.all(color: Colors.white.withValues(alpha: edge)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: shadow),
+                blurRadius: shadowBlur,
+                offset: shadowOffset,
+              ),
+            ],
+          ),
+          child: child,
+        ),
+      ),
+    );
+
 // ── Home shell ───────────────────────────────────────────────────────────────
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
@@ -949,34 +1001,9 @@ class _HomeShellState extends State<HomeShell> {
   /// pane of glass rather than a flat rounded box.
   Widget _glassPill({required Widget child}) => Padding(
         padding: const EdgeInsets.fromLTRB(18, 14, 18, 6),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(999),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(8, 7, 10, 7),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(999),
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.white.withValues(alpha: .085),
-                    Colors.white.withValues(alpha: .028),
-                  ],
-                ),
-                border: Border.all(color: Colors.white.withValues(alpha: .10)),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: .34),
-                    blurRadius: 26,
-                    offset: const Offset(0, 9),
-                  ),
-                ],
-              ),
-              child: child,
-            ),
-          ),
+        child: glassSurface(
+          padding: const EdgeInsets.fromLTRB(8, 7, 10, 7),
+          child: child,
         ),
       );
 
@@ -1516,12 +1543,16 @@ class _NavPillsState extends State<_NavPills> {
 
   static const _items = NavSections.items;
 
-  /// `leadingDistribution: even` is the whole fix for the text sitting high in the pill.
+  /// `leadingDistribution: even` verdeelt de speling BINNEN de regelbox.
   ///
-  /// A line box is taller than the glyphs, and by default all of that slack goes ABOVE the
-  /// baseline — so centring the box leaves the letters above the middle of the pill. Even
-  /// distribution splits the slack top and bottom, which is what puts them where the eye expects.
-  /// A hard-coded nudge would have done it on this font at this size and been wrong on the next.
+  /// Een regelbox is hoger dan de letters, en standaard komt die hele speling bóven de basislijn te
+  /// staan — dan hangen de letters hoog in hun eigen boxje. Even verdelen zet ze waar het oog ze
+  /// verwacht. Een vaste verschuiving had het op dit lettertype op deze grootte ook gedaan, en op het
+  /// volgende weer niet.
+  ///
+  /// Hier stond dat dit "the whole fix" was voor tekst die te hoog in de pil staat. Dat was het niet:
+  /// het zet de letters goed in hun regelbox, maar die box hing daarna nog steeds tegen de bovenkant
+  /// van de pil. De andere helft staat bij de [Stack] in [build].
   static const _style = TextStyle(
     fontSize: 13,
     fontWeight: FontWeight.w600,
@@ -1555,106 +1586,108 @@ class _NavPillsState extends State<_NavPills> {
     }
     final activeIdx = _items.indexWhere((e) => e.$1 == widget.active);
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(999),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-        child: Container(
-          padding: const EdgeInsets.all(5),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(999),
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Colors.white.withValues(alpha: .085),
-                Colors.white.withValues(alpha: .028),
-              ],
-            ),
-            border: Border.all(color: Colors.white.withValues(alpha: .10)),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withValues(alpha: .34), blurRadius: 26, offset: const Offset(0, 9)),
-            ],
-          ),
-          child: SizedBox(
-            height: _height,
-            width: total,
-            child: Stack(
+    return glassSurface(
+      child: SizedBox(
+        height: _height,
+        width: total,
+        // `fit: expand` en niet de standaard `loose` — dít is de andere helft van de tekst die te hoog
+        // stond. Een niet-gepositioneerd kind in een losse Stack krimpt tot zijn eigen hoogte (13pt maal
+        // 1.2, dus krap 16) en wordt daarna naar de BOVENkant van het vak van 32 (muis) of 44 (vinger)
+        // gelegd. De pil erachter staat op `top: 0, bottom: 0` en vult wél alles — en zo hangt het label
+        // tegen de bovenrand van een pil die twee keer zo hoog is.
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (activeIdx >= 0)
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOutCubic,
+                left: offsets[activeIdx],
+                width: widths[activeIdx],
+                top: 0,
+                bottom: 0,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(999),
+                    // Drie stops en niet twee. De eerste twee liggen vlak bij elkaar en maken een
+                    // haarfijne lichte rand langs de bovenkant — daar waar glas het licht vangt. Dat
+                    // kan hier niet met een échte rand: een BoxDecoration met een borderRadius eist een
+                    // gelijke rand rondom, dus een lichtere bovenzijde moet uit het verloop komen.
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      stops: const [0, .10, 1],
+                      colors: [
+                        Colors.white.withValues(alpha: .34),
+                        Colors.white.withValues(alpha: .19),
+                        Colors.white.withValues(alpha: .075),
+                      ],
+                    ),
+                    border: Border.all(color: Colors.white.withValues(alpha: .22)),
+                    // Zacht en dichtbij: de pil moet van de strip getild worden, niet ervan losgemaakt.
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: .28),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            Row(
+              // Rekken, zodat elke chip de volle hoogte van de strip krijgt. Zonder dit staat er alleen
+              // een breedte op elk vakje en is het aanraakgebied maar zo hoog als de letters — dan tik je
+              // naast een tab terwijl je hem raakt.
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (activeIdx >= 0)
-                  AnimatedPositioned(
-                    duration: const Duration(milliseconds: 300),
-                    curve: Curves.easeOutCubic,
-                    left: offsets[activeIdx],
-                    width: widths[activeIdx],
-                    top: 0,
-                    bottom: 0,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
+                for (var i = 0; i < _items.length; i++)
+                  SizedBox(
+                    width: widths[i],
+                    child: MouseRegion(
+                      onEnter: (_) => setState(() => _hover = i),
+                      onExit: (_) => setState(() => _hover = _hover == i ? null : _hover),
+                      child: Pressable(
+                        // The row is tight and measured to the pixel; a growing pill would
+                        // shove its neighbours sideways as the highlight moves.
+                        scaleOnFocus: false,
                         borderRadius: BorderRadius.circular(999),
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.white.withValues(alpha: .17),
-                            Colors.white.withValues(alpha: .07),
+                        // The first thing a remote should land on. Without it the app starts
+                        // with the highlight nowhere and the first press appears to do nothing.
+                        autofocus: isTv && i == 0,
+                        onPressed: () => widget.onSelect(_items[i].$1),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              _items[i].$2,
+                              style: _style.copyWith(
+                                color: _items[i].$1 == widget.active
+                                    ? Colors.white
+                                    : (_hover == i ? Colors.white70 : _muted),
+                              ),
+                            ),
+                            if (_items[i].$1 == 6 && widget.badge > 0) ...[
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: _accent,
+                                  borderRadius: BorderRadius.circular(9),
+                                ),
+                                child: Text('${widget.badge}',
+                                    style: const TextStyle(
+                                        fontSize: 10, fontWeight: FontWeight.w800, color: Colors.white)),
+                              ),
+                            ],
                           ],
                         ),
-                        border: Border.all(color: Colors.white.withValues(alpha: .20)),
                       ),
                     ),
                   ),
-                Row(
-                  children: [
-                    for (var i = 0; i < _items.length; i++)
-                      SizedBox(
-                        width: widths[i],
-                        child: MouseRegion(
-                          onEnter: (_) => setState(() => _hover = i),
-                          onExit: (_) => setState(() => _hover = _hover == i ? null : _hover),
-                          child: Pressable(
-                            // The row is tight and measured to the pixel; a growing pill would
-                            // shove its neighbours sideways as the highlight moves.
-                            scaleOnFocus: false,
-                            borderRadius: BorderRadius.circular(999),
-                            // The first thing a remote should land on. Without it the app starts
-                            // with the highlight nowhere and the first press appears to do nothing.
-                            autofocus: isTv && i == 0,
-                            onPressed: () => widget.onSelect(_items[i].$1),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Text(
-                                  _items[i].$2,
-                                  style: _style.copyWith(
-                                    color: _items[i].$1 == widget.active
-                                        ? Colors.white
-                                        : (_hover == i ? Colors.white70 : _muted),
-                                  ),
-                                ),
-                                if (_items[i].$1 == 6 && widget.badge > 0) ...[
-                                  const SizedBox(width: 6),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                                    decoration: BoxDecoration(
-                                      color: _accent,
-                                      borderRadius: BorderRadius.circular(9),
-                                    ),
-                                    child: Text('${widget.badge}',
-                                        style: const TextStyle(
-                                            fontSize: 10, fontWeight: FontWeight.w800, color: Colors.white)),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
               ],
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -2139,7 +2172,36 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   /// (which hands this page a NEW Album object for the same record) does not.
   String _officialFor = '';
 
-  bool _showMissing = true;
+  /// De kleur waar de hoes naar neigt, en de bytes waar hij uit kwam.
+  ///
+  /// Null zolang er niets berekend is, én null bij een zwart-witte hoes — dan blijft de achtergrond
+  /// gewoon `_bg`. Zie [dominantColour]: geen was is beter dan een grijze.
+  int? _was;
+  Uint8List? _wasVan;
+
+  /// Reken de kleur uit de hoes uit, buiten de tekendraad om.
+  ///
+  /// In een isolate omdat dit een plaatje decodeert: op een hoes van een paar megabyte is dat genoeg
+  /// werk om een beeldje te laten vallen, en dit gebeurt precies op het moment dat de pagina opent.
+  Future<void> _kleurUitHoes(Uint8List? bytes) async {
+    if (bytes == null || identical(bytes, _wasVan)) return;
+    _wasVan = bytes;
+    int? kleur;
+    try {
+      kleur = await Isolate.run(() => dominantColour(bytes));
+    } catch (_) {
+      return; // een hoes die niet te lezen is, laat de achtergrond gewoon zoals hij was
+    }
+    if (mounted && kleur != _was) setState(() => _was = kleur);
+  }
+
+  /// Ontbrekende nummers staan standaard INGEKLAPT.
+  ///
+  /// Bij een album waarvan je er vier van de twintig hebt, stonden er zestien grijze regels tussen je
+  /// eigen vier — dan zoek je je eigen muziek bij elkaar in een lijst die vooral over gaten gaat. De
+  /// balk erboven blijft staan met de telling en de downloadknop, dus het gat verdwijnt niet uit beeld;
+  /// het staat alleen niet meer vóór wat je wél hebt.
+  bool _showMissing = false;
 
   /// One album-wide Soulseek search, kept for the whole visit. Fifteen missing tracks is fifteen
   /// searches otherwise, on a login that allows exactly one session.
@@ -2658,12 +2720,42 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     final rows = comp == null
         ? null
         : (_showMissing ? comp.slots : [for (final s in comp.slots) if (!s.missing) s]);
+    final wasKleur = _was == null ? null : Color(_was!);
+    // Hoeveel van de hoeskleur er in de achtergrond mag. Een donkerblauwe hoes verdraagt veel meer dan
+    // een fel gele: die tekst is wit, en op geel houdt dat op. Vandaar geschaald op helderheid in plaats
+    // van één vast getal — anders is het op de helft van je platen te veel en op de andere helft niets.
+    final wasSterkte = wasKleur == null ? 0.0 : .46 - .30 * wasKleur.computeLuminance();
+    final wasTop = wasKleur == null ? _bg : Color.lerp(_bg, wasKleur, wasSterkte)!;
+
     return Scaffold(
       // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin — its app bar
       // icons and the sleeve were hard against the panel edge, which is the first strip a
       // television crops away. Horizontal and top only: the player bar below draws its own
       // surface to the bottom edge and must keep doing so.
-      body: Column(
+      body: Stack(
+        children: [
+          // De was: bovenaan de kleur van de hoes, onderaan gewoon de achtergrond. Hij staat áchter de
+          // hele pagina en scrollt dus niet mee — hij hoort bij het album, niet bij de tracklijst.
+          //
+          // Op zeven tiende is hij al helemaal weg, want daaronder staan de tracklijst en de grijze
+          // "niet in bibliotheek"-regels, en die zijn transparant: alles wat daar nog kleur draagt,
+          // gaat van hun leesbaarheid af.
+          if (wasKleur != null)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      stops: const [0, .30, .70],
+                      colors: [wasTop, Color.lerp(_bg, wasKleur, wasSterkte * .38)!, _bg],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          Column(
         children: [
           // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin — its app bar
           // icons and the sleeve were hard against the panel edge, which is the first strip a
@@ -2679,7 +2771,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
               child: CustomScrollView(
               slivers: [
                 SliverAppBar(
-                  backgroundColor: _bg,
+                  // Dezelfde kleur als de bovenkant van de was, anders snijdt deze balk hem af met een
+                  // harde rand. Niet transparant: hij is vastgezet, en dan zou de tracklijst er
+                  // leesbaar-en-al onderdoor schuiven.
+                  backgroundColor: wasTop,
                   pinned: true,
                   leading: IconButton(
                     icon: const Icon(Icons.arrow_back_rounded),
@@ -2899,6 +2994,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
           ),
           const PlayerBar(),
         ],
+          ),
+        ],
       ),
     );
   }
@@ -3076,6 +3173,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             trackCount: _official.isNotEmpty ? _official.length : album.tracks.length,
             playing: _albumIsPlaying(context),
             roles: context.watch<LibraryStore>().albumArtRoles(album.artist, album.title),
+            // De hoes die hier uiteindelijk getekend wordt, is ook de hoes waar de achtergrond zijn
+            // kleur uit haalt. Vandaar via deze terugroep en niet uit album.cover: dit widget kiest
+            // zelf tussen jouw gekozen scan, de gepinde persing en het bestand, en de was moet bij het
+            // plaatje horen dat je ziet.
+            onFront: _kleurUitHoes,
           );
 
     final details = Column(
@@ -5304,7 +5406,14 @@ double _sleeve(BuildContext context) {
   // constraint anyway, so the looser factor there costs nothing.
   final byHeight = size.height * (narrow ? 0.34 : 0.46);
   final smaller = byWidth < byHeight ? byWidth : byHeight;
-  return smaller.clamp(140.0, 360.0);
+  // Het plafond hangt van de indeling af. Op een breed scherm was 360 de bindende grens en niet de
+  // ruimte: 0.46 van 1440 punten hoog is 662, teruggeklemd naar 360 — een postzegel midden op een groot
+  // scherm. Op een telefoon blijft 360 wél juist, want daar eisen de titel en de knoppenrij eronder hun
+  // plek op.
+  //
+  // Hoger mag zonder gevaar: [byWidth] deelt de breedte al door de ruimte die de cd nodig heeft om uit
+  // te schuiven, dus de hoes kan nooit zo groot worden dat de cd van het scherm loopt.
+  return smaller.clamp(140.0, narrow ? 360.0 : 520.0);
 }
 
 class NowPlayingScreen extends StatefulWidget {
@@ -5674,28 +5783,21 @@ void _srcToastAction(BuildContext context, String m, String label, VoidCallback 
 }
 
 // ── Radio / Smart Shuffle ────────────────────────────────────────────────────
-String _radioNorm(String s) {
-  var x = s.toLowerCase();
-  // Drop version/edition suffixes — "(2012 Remaster)", "[Live]", "- Single Version" —
-  // so a clean library file matches a Deezer title that carries them (and vice-versa).
-  x = x.replaceAll(RegExp(r'[\(\[].*?[\)\]]'), ' ');
-  final f = x.indexOf(' feat');
-  if (f > 0) x = x.substring(0, f);
-  return x.replaceAll(RegExp(r'[^a-z0-9]'), '');
-}
+// De normalisatie staat in recommend.dart als [recNorm]: hij beantwoordt overal dezelfde vraag — Radio,
+// Ontdek en "Aanbevolen voor jou" — en drie kopieën van die regel zouden drie antwoorden geven.
 
 /// Build a Radio queue around [artist]: Deezer recommendations, matched against the
 /// local library (owned tracks play instantly; the rest resolve via TorBox on demand).
 List<RadioItem> _radioItemsFor(List<RecTrack> recs, LibraryStore lib) {
   final index = <String, Track>{};
   for (final t in lib.tracks) {
-    index.putIfAbsent('${_radioNorm(t.artist)}|${_radioNorm(t.title)}', () => t);
+    index.putIfAbsent('${recNorm(t.artist)}|${recNorm(t.title)}', () => t);
   }
   return recs
       .map((r) => RadioItem(
             artist: r.artist,
             title: r.title,
-            local: index['${_radioNorm(r.artist)}|${_radioNorm(r.title)}'],
+            local: index['${recNorm(r.artist)}|${recNorm(r.title)}'],
           ))
       .toList();
 }
@@ -5926,9 +6028,14 @@ class _HomeStartViewState extends State<HomeStartView> {
       fy = await fyF;
     } catch (_) {}
     if (!mounted) return;
+    // Wat je al hebt gaat eruit. Zonder dit stond deze rij vol met je eigen platen: hij komt via
+    // verwante artiesten binnen, en de verwanten van jouw bibliotheek zijn geregeld je bibliotheek.
+    // Dezelfde functie als Ontdek gebruikt, zodat de twee schermen niet elk hun eigen antwoord op
+    // "heb ik dit al?" krijgen.
+    final bezit = bezitSleutels(context.read<LibraryStore>().tracks);
     setState(() {
       _releases = rel;
-      _forYou = fy;
+      _forYou = nogNietInBezit(fy, bezit);
       _seedsLoading = false;
     });
   }
@@ -5970,9 +6077,16 @@ class _HomeStartViewState extends State<HomeStartView> {
     }
     final recent = [...lib.albums.where((a) => a.addedMs > 0)]..sort((a, b) => b.addedMs.compareTo(a.addedMs));
     final anyLoading = _chartsLoading || _seedsLoading || (!_seedsRequested && lib.scanning);
-    // New releases by artists you own lead the hero; the global chart fills in until those are
-    // loaded (or if you have no library yet), so the top of the page is never an empty band.
-    final hero = _releases.isNotEmpty ? _releases : _charts;
+    // De balk heet NIEUWE RELEASE, dus staat er alleen iets van dit jaar in. Hij toonde albums uit 2011
+    // en 2016 omdat er nergens op jaar gefilterd werd: het nieuwste dat er van een artiest te vinden is,
+    // is iets anders dan nieuw.
+    //
+    // Eerst je eigen artiesten, dan de wereldwijde lijst — maar allebei door hetzelfde jaarfilter, want
+    // een hitlijst vol evergreens hoort hier net zomin. Blijft er dan niets over, dan verdwijnt de balk;
+    // dat is beter dan hem vullen met iets wat niet is wat het belooft.
+    final ditJaar = DateTime.now().year;
+    final eigen = uitJaar(_releases, ditJaar);
+    final hero = eigen.isNotEmpty ? eigen : uitJaar(_charts, ditJaar);
 
     return ListView(
       padding: const EdgeInsets.only(bottom: 32),
@@ -6199,10 +6313,7 @@ class _OntdekViewState extends State<OntdekView> {
       _status = null;
       _expanded = null;
     });
-    final owned = <String>{};
-    for (final t in lib.tracks) {
-      owned.add('${_radioNorm(t.artist)}|${_radioNorm(t.title)}');
-    }
+    final owned = bezitSleutels(lib.tracks);
     List<RecTrack> recs;
     // "The lookup failed" and "your library already has everything it suggested" are different
     // answers, and they were both reported as the second one. Told that nothing new was found, the
@@ -6215,9 +6326,7 @@ class _OntdekViewState extends State<OntdekView> {
       recs = const [];
       failed = true;
     }
-    final fresh = recs
-        .where((r) => !owned.contains('${_radioNorm(r.artist)}|${_radioNorm(r.title)}'))
-        .toList();
+    final fresh = nogNietInBezit(recs, owned);
     if (mounted) {
       setState(() {
         _tracks = fresh;

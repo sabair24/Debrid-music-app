@@ -117,6 +117,21 @@ class CatalogAlbumHit {
   const CatalogAlbumHit(this.album, this.artist);
 }
 
+/// Alleen de albums die in [jaar] zijn uitgekomen.
+///
+/// Bestaat omdat de balk "NIEUWE RELEASE" albums uit 2011 en 2016 toonde. Er zat helemaal geen
+/// jaarfilter op: er werd aflopend op releasedatum gesorteerd en dat was het. Deezer levert bij
+/// `artist/{id}/albums` ook heruitgaves mee, en de wereldwijde hitlijst staat vol met evergreens — dus
+/// "het nieuwste dat ik van deze artiest vind" is iets heel anders dan "nieuw".
+///
+/// Het jaar komt als parameter binnen en wordt hier niet zelf opgehaald, zodat deze regel in een test
+/// uit te schrijven is zonder dat hij op de klok van de bouwmachine gaat leunen.
+///
+/// [CatalogAlbum.year] is TEKST (de eerste vier tekens van Deezers `release_date`), dus lezen met
+/// int.tryParse: een ontbrekende of onleesbare datum valt weg in plaats van als 0 mee te tellen.
+List<CatalogAlbumHit> uitJaar(List<CatalogAlbumHit> hits, int jaar) =>
+    [for (final h in hits) if (int.tryParse(h.album.year ?? '') == jaar) h];
+
 /// A track search hit — tapped to open torrent/Soulseek sources directly.
 class CatalogTrackHit {
   final String title;
@@ -154,14 +169,19 @@ class CatalogService {
   /// releases" endpoint is deprecated / empty). This is more personal anyway — "new from your
   /// artists". Runs the per-artist lookups concurrently and returns newest-release-first.
   Future<List<CatalogAlbumHit>> latestFromArtists(List<String> names) async {
-    final picks = names.take(6).toList();
+    // Twaalf artiesten en vier albums per stuk, waar dat er zes en twee waren. Wie hierna op één jaar
+    // filtert houdt van twaalf kandidaten meestal niets over; van achtenveertig wel iets.
+    final picks = names.take(12).toList();
     final results = await Future.wait(picks.map((name) async {
       try {
-        final aj = await _get('$_base/search/artist?q=${Uri.encodeComponent(name)}&limit=1');
-        final ad = (aj?['data'] as List?) ?? const [];
-        if (ad.isEmpty) return <CatalogAlbumHit>[];
-        final albums = await artistAlbums(ad.first['id'] as int); // newest-first, deduped
-        return albums.where((a) => !a.isSingle).take(2).map((a) => CatalogAlbumHit(a, name)).toList();
+        // Via searchArtists en niet via `search/artist?limit=1`, dat regel één blind overnam. Deezer
+        // sorteert zijn zoekresultaten niet op bekendheid, dus die eerste regel is geregeld een
+        // naamgenoot met één uitgave — en dan gaat deze hele balk over de verkeerde persoon. De
+        // rangschikking (exacte naam eerst, daarna op luisteraars) staat al in searchArtists.
+        final gevonden = await searchArtists(name);
+        if (gevonden.isEmpty) return <CatalogAlbumHit>[];
+        final albums = await artistAlbums(gevonden.first.id); // newest-first, deduped
+        return albums.where((a) => !a.isSingle).take(4).map((a) => CatalogAlbumHit(a, name)).toList();
       } catch (_) {
         return <CatalogAlbumHit>[];
       }

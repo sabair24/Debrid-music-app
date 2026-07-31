@@ -2,6 +2,79 @@ import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
 
+/// De kleur waar een hoes naar neigt, als ARGB — of null als er niets uitspringt.
+///
+/// Voor de was achter een albumpagina. Een plat gemiddelde over alle pixels is hiervoor onbruikbaar:
+/// dat wordt bruin. Rood en groen naast elkaar middelen tot modder, en een hoes met veel wit of zwart
+/// trekt het gemiddelde naar grijs — precies de kleuren waar je géén achtergrond van wil.
+///
+/// Dus niet middelen maar STEMMEN. Elke pixel die iets van een kleur is, stemt op zijn emmer in een
+/// grof raster (4 bits per kanaal), en zijn stem weegt zo zwaar als hij verzadigd is. De zwaarste emmer
+/// wint en geeft het gemiddelde van zijn eigen pixels terug — een echte kleur uit de hoes, niet een
+/// mengsel dat er nergens in voorkomt.
+///
+/// Drie soorten pixels stemmen niet mee, en dat is waar de kleur vandaan blijft komen:
+///  * bijna zwart — daar is elke kleurmeting ruis;
+///  * bijna wit — hetzelfde, plus het is meestal papier of achtergrond;
+///  * vrijwel grijs — dat is de definitie van "geen kleur".
+///
+/// Blijft er dan niets over, dan **null**: een zwart-witte hoes hoort geen gekleurde was te krijgen, en
+/// een flauw grijsje is lelijker dan helemaal geen was.
+///
+/// Draait op 64×64 en niet op de volle hoes: kleur overleeft dat verkleinen ruimschoots, en dit wordt
+/// per album gedaan terwijl iemand naar het scherm kijkt.
+int? dominantColour(Uint8List bytes) {
+  img.Image? im;
+  try {
+    im = img.decodeImage(bytes);
+  } catch (_) {
+    return null;
+  }
+  if (im == null || im.width < 8 || im.height < 8) return null;
+  const n = 64;
+  final t = img.copyResize(im, width: n, height: n);
+
+  final emmers = <int, _Emmer>{};
+  for (var y = 0; y < n; y++) {
+    for (var x = 0; x < n; x++) {
+      final p = t.getPixel(x, y);
+      final r = p.r.toDouble(), g = p.g.toDouble(), b = p.b.toDouble();
+      final hoog = r > g ? (r > b ? r : b) : (g > b ? g : b);
+      final laag = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      if (hoog < 40 || laag > 215) continue; // bijna zwart, of bijna wit
+      final verzadiging = (hoog - laag) / hoog; // hoog > 0, want hoog >= 40
+      if (verzadiging < .22) continue; // grijs
+      final sleutel = ((r ~/ 16) << 8) | ((g ~/ 16) << 4) | (b ~/ 16);
+      (emmers[sleutel] ??= _Emmer()).stem(r, g, b, verzadiging);
+    }
+  }
+
+  _Emmer? beste;
+  for (final e in emmers.values) {
+    if (beste == null || e.gewicht > beste.gewicht) beste = e;
+  }
+  // Een handvol pixels is een compressie-artefact of een stofje op de scan, geen kleur van de hoes.
+  if (beste == null || beste.aantal < 10) return null;
+  return 0xFF000000 |
+      ((beste.r / beste.aantal).round() << 16) |
+      ((beste.g / beste.aantal).round() << 8) |
+      (beste.b / beste.aantal).round();
+}
+
+/// Eén emmer van het kleurenraster: hoe zwaar er op gestemd is, en het gemiddelde eronder.
+class _Emmer {
+  double gewicht = 0, r = 0, g = 0, b = 0;
+  int aantal = 0;
+
+  void stem(double pr, double pg, double pb, double verzadiging) {
+    gewicht += verzadiging;
+    r += pr;
+    g += pg;
+    b += pb;
+    aantal++;
+  }
+}
+
 /// What a scan of a release actually shows.
 ///
 /// Discogs says only "primary" or "secondary". A CD release's secondaries are the back of the

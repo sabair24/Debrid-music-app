@@ -178,4 +178,62 @@ void main() {
       expect(looksLikeDisc(_png(_disc())), isTrue);
     });
   });
+
+  /// De kleur waar een hoes naar neigt, voor de was achter een albumpagina.
+  ///
+  /// Waarom niet gewoon middelen: dat wordt bruin. Rood naast groen middelt tot modder, en een hoes met
+  /// veel wit trekt alles naar grijs — juist de kleuren waar je geen achtergrond van wil.
+  group('de kleur waar een hoes naar neigt', () {
+    int r(int c) => (c >> 16) & 0xFF;
+    int g(int c) => (c >> 8) & 0xFF;
+    int b(int c) => c & 0xFF;
+
+    img.Image vlak(int rr, int gg, int bb) {
+      final im = img.Image(width: 200, height: 200);
+      img.fill(im, color: img.ColorRgb8(rr, gg, bb));
+      return im;
+    }
+
+    test('een effen rode hoes geeft rood', () {
+      final c = dominantColour(_png(vlak(220, 30, 40)));
+      expect(c, isNotNull);
+      expect(r(c!), greaterThan(180));
+      expect(g(c), lessThan(90));
+      expect(b(c), lessThan(90));
+    });
+
+    test('een grijze hoes geeft niets, en dat is het punt', () {
+      // Een verloop van zwart naar wit: overal is de verzadiging nul. Een flauw grijsje achter de
+      // pagina is lelijker dan helemaal geen was, dus hier hoort null uit te komen en geen "kleur".
+      final im = img.Image(width: 200, height: 200);
+      for (var y = 0; y < 200; y++) {
+        for (var x = 0; x < 200; x++) {
+          final v = (x * 255 / 199).round();
+          im.setPixelRgb(x, y, v, v, v);
+        }
+      }
+      expect(dominantColour(_png(im)), isNull);
+    });
+
+    test('zwart en wit stemmen niet mee', () {
+      expect(dominantColour(_png(vlak(0, 0, 0))), isNull);
+      expect(dominantColour(_png(vlak(255, 255, 255))), isNull);
+    });
+
+    test('een kleine felle vlek wint van een grote grijze vlakte', () {
+      // DE test. Op een hoes die vooral grijs is, is die ene gekleurde vlek precies wat je onthoudt —
+      // en een gemiddelde over alle pixels zou hem wegpoetsen tot iets wat nergens in de hoes voorkomt.
+      final im = img.Image(width: 200, height: 200);
+      img.fill(im, color: img.ColorRgb8(128, 128, 130));
+      img.fillRect(im, x1: 80, y1: 80, x2: 119, y2: 119, color: img.ColorRgb8(20, 90, 210));
+      final c = dominantColour(_png(im));
+      expect(c, isNotNull);
+      expect(b(c!), greaterThan(150), reason: 'de blauwe vlek hoort te winnen');
+      expect(r(c), lessThan(90));
+    });
+
+    test('rommel is geen hoes', () {
+      expect(dominantColour(Uint8List.fromList([1, 2, 3, 4])), isNull);
+    });
+  });
 }

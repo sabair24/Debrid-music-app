@@ -1,7 +1,40 @@
 import 'package:http/http.dart' as http;
 import 'json_body.dart';
 
+import 'models.dart' show Track;
 import 'organize.dart' show artistKey;
+
+/// De sleutel waarop "heb ik dit al?" beantwoord wordt.
+///
+/// Versiemarkeringen gaan eruit — "(2012 Remaster)", "[Live]", "- Single Version" — en alles vanaf
+/// " feat" ook, zodat een schoon bestand in de bibliotheek matcht met een Deezer-titel die ze wél
+/// draagt, en andersom.
+///
+/// Dat het zo los is, is met opzet. Bezit je een nummer, dan hoef je het niet aanbevolen te krijgen
+/// omdat het een andere mix is. De strengere weg bestaat ook — `LibraryStore.ownedTrack` houdt de
+/// markeringen juist vast — maar die beantwoordt een andere vraag: "heb ik precies dít bestand?".
+String recNorm(String s) {
+  var x = s.toLowerCase();
+  x = x.replaceAll(RegExp(r'[\(\[].*?[\)\]]'), ' ');
+  final f = x.indexOf(' feat');
+  if (f > 0) x = x.substring(0, f);
+  return x.replaceAll(RegExp(r'[^a-z0-9]'), '');
+}
+
+/// De sleutels van alles wat er al staat, om aanbevelingen tegen te houden.
+Set<String> bezitSleutels(Iterable<Track> eigen) =>
+    {for (final t in eigen) '${recNorm(t.artist)}|${recNorm(t.title)}'};
+
+/// De aanbevelingen die nog níét in de bibliotheek staan.
+///
+/// "Aanbevolen voor jou" hield zijn uitkomst nergens tegen de bibliotheek. De sprong via verwante
+/// artiesten nijgt naar onbekend werk, maar verwante artiesten van jouw eigen bibliotheek zijn
+/// geregeld je eigen bibliotheek — en dan staat er een rij met muziek die je al hebt.
+///
+/// Alleen op NUMMERS filteren en niet op artiesten: dat je iemand kent betekent niet dat hij nooit meer
+/// langs mag komen.
+List<RecTrack> nogNietInBezit(List<RecTrack> recs, Set<String> bezit) =>
+    [for (final r in recs) if (!bezit.contains('${recNorm(r.artist)}|${recNorm(r.title)}')) r];
 
 /// Which of Deezer's artist hits is the artist actually meant.
 ///
@@ -137,7 +170,9 @@ class RecommendService {
       }
     }
 
-    for (final s in seeds.take(4)) {
+    // Zes en niet vier. De aanroeper gaf er al zes mee en hier vielen er twee stil weg — en sinds de
+    // uitkomst tegen de bibliotheek wordt gehouden, blijft er van een krappe oogst weinig over.
+    for (final s in seeds.take(6)) {
       final id = await _artistId(s);
       if (id == null) continue;
       final rel = ((await _get('$_base/artist/$id/related?limit=4'))?['data'] as List?) ?? const [];
