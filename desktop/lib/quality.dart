@@ -71,6 +71,32 @@ bool meerDanStereo({int? sampleRate, int? bitDepth, required int kbps}) {
   return kbps > onbewerktStereo;
 }
 
+/// Eén getal voor "hoeveel muziek zit hierin", ook als de peer het formaat niet meldt.
+///
+/// Zonder dit worden twee verschillende dingen met elkaar vergeleken. Meldt de peer 24/192, dan wordt er
+/// op `sampleRate × bitDepth` afgerekend: 4608, de RUWE capaciteit. Meldt hij niets, dan blijft alleen de
+/// gemeten bitrate over, en dat is wat het INGEPAKTE bestand gebruikt — ongeveer tweederde daarvan. Elk
+/// bestand waarvan we het formaat niet kennen staat daardoor stelselmatig te hoog: een onbekende cd-rip
+/// komt op 900 uit tegen 705 voor een gemelde 16/44.1, en wint dus van zijn eigen gelijke.
+///
+/// De verhouding is gemeten aan echte bestanden uit deze bibliotheek: 32/384 kwam op .69 en .70 uit,
+/// 24/192 op .59, 24/96 op .69 — samen rond de .65 van onbewerkt stereo. Delen door `2 × .65` brengt een
+/// gemeten bitrate dus terug op dezelfde schaal als een gemeld formaat.
+///
+/// Het blijft een schatting, en dat mag: het gaat om de volgorde, niet om het getal. Wat het weghaalt is
+/// de voorsprong die "onbekend" nu cadeau krijgt — precies omgekeerd aan wat je wilt.
+///
+/// Voor lossy heeft ruwe capaciteit geen betekenis. Daar is de bitrate zelf het getal dat telt, en die
+/// blijft staan; lossy zit toch al in een lagere laag van [kwaliteitsRang].
+int capaciteitOpEenSchaal(
+    {int? sampleRate, int? bitDepth, required int kbps, required bool lossless}) {
+  if (sampleRate != null && bitDepth != null && sampleRate > 0 && bitDepth > 0) {
+    return sampleRate * bitDepth ~/ 1000;
+  }
+  if (!lossless || kbps <= 0) return kbps;
+  return (kbps / 1.3).round();
+}
+
 /// Waar een bestand in de rangschikking komt: hoger is beter.
 ///
 /// Drie lagen, van zwaar naar licht.

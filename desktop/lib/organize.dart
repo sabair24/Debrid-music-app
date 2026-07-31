@@ -686,6 +686,9 @@ Future<bool> writeTagFields(File f, Map<String, String?> fields) async {
     return await Isolate.run(() => mp3
             ? writeMp3Fields(File(path), fields)
             : writeFlacFields(File(path), fields))
+        // Dertig seconden is ruim: een volledige herschrijving van 723 MB op 32/384 -- het grootste
+        // dat hier binnenkomt -- gemeten op 3 seconden. Dit kapt een vastgelopen schrijver af, geen
+        // eerlijke kopie.
         .timeout(const Duration(seconds: 30));
   } catch (_) {
     return false; // the file is still filed correctly; only its tags stayed as they were

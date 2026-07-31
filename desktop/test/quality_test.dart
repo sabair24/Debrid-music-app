@@ -138,6 +138,33 @@ void main() {
       expect(meerDanStereo(sampleRate: 96000, bitDepth: 24, kbps: 0), isFalse);
     });
 
+    test('een gemeld formaat en een gemeten bitrate horen op DEZELFDE schaal', () {
+      // De fout die hieronder zat: 24/192 werd op ruwe capaciteit afgerekend (4608) en een bestand
+      // zonder gemeld formaat op wat het INGEPAKT gebruikt. Dat scheelt een derde, en dus won elk
+      // onbekend bestand van zijn eigen gelijke.
+      expect(capaciteitOpEenSchaal(sampleRate: 192000, bitDepth: 24, kbps: 5430, lossless: true), 4608,
+          reason: 'meldt de peer het formaat, dan telt dat en niet de gemeten bitrate');
+      // Dezelfde 16/44.1, één keer gemeld en één keer gemeten: die horen nu naast elkaar te liggen.
+      final gemeld = capaciteitOpEenSchaal(sampleRate: 44100, bitDepth: 16, kbps: 900, lossless: true);
+      final gemeten = capaciteitOpEenSchaal(kbps: 900, lossless: true);
+      expect((gemeld - gemeten).abs(), lessThan(60),
+          reason: 'stelselmatig 900 tegen 705 was juist het probleem');
+    });
+
+    test('een onbekende cd-rip verslaat geen gemelde 24/96 meer', () {
+      // Het geval uit de zoekresultaten: een FLAC waarvan de peer niets meldt en die 3195 kbit/s meet,
+      // is een 24/96 — en hoort dus NIET boven een gemelde 24/192 te staan.
+      final onbekend = capaciteitOpEenSchaal(kbps: 3195, lossless: true);
+      expect(onbekend, lessThan(capaciteitOpEenSchaal(sampleRate: 192000, bitDepth: 24, kbps: 0, lossless: true)));
+      expect(onbekend, greaterThan(capaciteitOpEenSchaal(sampleRate: 44100, bitDepth: 16, kbps: 0, lossless: true)));
+    });
+
+    test('bij lossy blijft de bitrate zelf staan', () {
+      // Ruwe capaciteit zegt niets over een mp3; daar IS de bitrate het getal dat telt.
+      expect(capaciteitOpEenSchaal(kbps: 320, lossless: false), 320);
+      expect(capaciteitOpEenSchaal(kbps: 0, lossless: true), 0, reason: 'onbekend blijft onbekend');
+    });
+
     test('binnen surround geldt dezelfde rangorde', () {
       // Blijft er niets anders over, dan wil je nog steeds de beste van de slechte groep bovenaan.
       expect(kwaliteitsRang(lossless: true, kbps: 8638, stereo: false),

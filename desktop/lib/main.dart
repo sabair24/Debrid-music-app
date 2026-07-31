@@ -7064,14 +7064,16 @@ Future<int?> _kleurBuitenDeTekendraad(Uint8List bytes) =>
 int _besteEerst(SoulseekFile a, SoulseekFile b) {
   int rang(SoulseekFile f) {
     final kbps = effectieveBitrate(bitrate: f.bitrate, durationSec: f.durationSec, size: f.size);
+    final lossless = f.isFlac || const {'alac', 'ape', 'wav', 'aiff'}.contains(f.ext);
     return kwaliteitsRang(
-      lossless: f.isFlac || const {'alac', 'ape', 'wav', 'aiff'}.contains(f.ext),
+      lossless: lossless,
       // Het formaat dat de peer meldt gaat vóór de gemeten bitrate. Twee ripjes van dezelfde 24/96
       // verschillen een paar procent in bitrate zonder dat er iets beters aan is; hun sample rate maal
-      // bitdiepte is identiek, en dát is waar het om gaat.
-      kbps: (f.sampleRate != null && f.bitDepth != null && f.sampleRate! > 0 && f.bitDepth! > 0)
-          ? f.sampleRate! * f.bitDepth! ~/ 1000
-          : kbps,
+      // bitdiepte is identiek, en dát is waar het om gaat. Meldt de peer niets, dan rekent
+      // [capaciteitOpEenSchaal] de gemeten bitrate terug naar diezelfde maat — anders vergelijk je een
+      // ruwe capaciteit met een ingepakte en staat elk onbekend bestand een derde te hoog.
+      kbps: capaciteitOpEenSchaal(
+          sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: kbps, lossless: lossless),
       // Twee wegen: de som bewijst het, de naam vangt de peers die geen sample rate sturen. Op de hele
       // naam en niet alleen het bestandsnaampje — uploaders zetten "5.1" net zo vaak in de mapnaam.
       stereo: !meerDanStereo(sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: kbps) &&
