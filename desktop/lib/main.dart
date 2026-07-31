@@ -50,6 +50,7 @@ import 'now_playing.dart';
 import 'login_screen.dart';
 import 'pairing_screen.dart';
 import 'artwork.dart' show dominantColour;
+import 'warm_log.dart' show WarmLog;
 import 'library.dart';
 import 'metadata.dart';
 import 'models.dart';
@@ -2183,15 +2184,31 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   ///
   /// In een isolate omdat dit een plaatje decodeert: op een hoes van een paar megabyte is dat genoeg
   /// werk om een beeldje te laten vallen, en dit gebeurt precies op het moment dat de pagina opent.
+  /// Wat de was besloot, in `ui.log` naast de andere logboeken.
+  ///
+  /// Eén regel per hoes, dus het blijft klein. Hij staat er omdat "de achtergrond blijft zwart" van
+  /// buitenaf één symptoom is voor vier oorzaken — geen bytes, een onleesbare hoes, een hoes zonder
+  /// kleur, of een kleur die wél berekend werd en niet aankwam — en die zijn van elkaar te scheiden
+  /// zodra je ze opschrijft. Zonder dit heb ik er twee builds op zitten raden.
+  late final WarmLog _uiLog = WarmLog('$appDir${Platform.pathSeparator}ui.log');
+
   Future<void> _kleurUitHoes(Uint8List? bytes) async {
-    if (bytes == null || identical(bytes, _wasVan)) return;
+    if (bytes == null) {
+      _uiLog.line('was "${album.artist} - ${album.title}": geen hoesbytes op deze pagina');
+      return;
+    }
+    if (identical(bytes, _wasVan)) return;
     _wasVan = bytes;
     int? kleur;
     try {
       kleur = await Isolate.run(() => dominantColour(bytes));
-    } catch (_) {
+    } catch (e) {
+      _uiLog.line('was "${album.title}": ${bytes.length} bytes, maar het uitrekenen klapte: $e');
       return; // een hoes die niet te lezen is, laat de achtergrond gewoon zoals hij was
     }
+    _uiLog.line('was "${album.artist} - ${album.title}": ${bytes.length} bytes → '
+        '${kleur == null ? 'geen kleur (te grijs/zwart/wit)' : '#${kleur.toRadixString(16).substring(2)}'}'
+        '${mounted ? '' : '  (pagina al gesloten)'}');
     if (mounted && kleur != _was) setState(() => _was = kleur);
   }
 
