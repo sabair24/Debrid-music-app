@@ -207,6 +207,22 @@ class LibraryStore extends ChangeNotifier {
   /// The track we already own that matches this artist+title (null if we don't have it).
   Track? ownedTrack(String artist, String title) => _owned[trackIdentity(artist, title)];
 
+  /// In welke MAP deze opname al staat, of null als je hem nog niet hebt.
+  ///
+  /// Voor het opbergen van een download: die hoort naar het album te gaan waar de opname al in zit, en
+  /// niet naar een nieuwe map die uit zijn eigen albumtag volgt. Anders staat een 24/192 van Thriller
+  /// naast je 24/96 in plaats van erin — twee albums in de bibliotheek, en het betere bestand vervangt
+  /// het mindere nooit, want die vergelijking kijkt alleen binnen één map.
+  ///
+  /// Zowel de nauwe als de ruime vraag, in die volgorde: [ownedTrack] is een opzoeking in één stap en
+  /// klopt precies, [recordingElsewhere] vangt de gevallen waar de tags net anders geschreven staan.
+  String? folderOfRecording(String artist, String title) {
+    final t = ownedTrack(artist, title) ?? recordingElsewhere(artist, title);
+    if (t == null) return null;
+    final i = t.path.lastIndexOf(Platform.pathSeparator);
+    return i <= 0 ? null : t.path.substring(0, i);
+  }
+
   /// A copy of this recording ANYWHERE in the library, whatever album it happens to be filed under.
   ///
   /// [ownedTrack] answers a narrower question and missed exactly the case that mattered. It keys on
@@ -1985,7 +2001,9 @@ class MovePlan {
 ///
 /// Not deleted — the user asked to tidy the folder, not to lose a file. Still scanned, and still
 /// hidden from the tracklist by [LibraryStore._dedupeTracks], exactly as a duplicate is today.
-const dupeFolder = '_dubbel';
+/// Waar een verslagen kopie geparkeerd wordt. Eén naam, gedefinieerd in organize.dart -- dat bestand
+/// zit lager in de stapel en gebruikt hem ook.
+const dupeFolder = parkeerMap;
 
 /// What one track's file would do in a gather, and why.
 enum MoveFate {

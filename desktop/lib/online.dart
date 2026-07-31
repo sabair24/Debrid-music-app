@@ -398,6 +398,13 @@ class DownloadManager extends ChangeNotifier {
   /// administratie zou ernaast gaan lopen zodra de gebruiker een map verplaatst.
   bool Function(String artist, String title)? haveLossless;
 
+  /// Waar deze opname al staat, zodat een betere versie er NAARTOE gaat in plaats van ernaast.
+  ///
+  /// Zonder dit bergt de app een download op volgens diens eigen albumtag, en dan landt een 24/192 van
+  /// Thriller in een map "Thriller" naast je "Thriller (MFSL One Step)" — twee albums, en het mindere
+  /// bestand blijft staan omdat de vervangingsregel alleen binnen één map kijkt.
+  String? Function(String artist, String title)? mapVanBestaande;
+
   DownloadManager(this.online, this.soulseek, this.musicRoot, this.onLibraryChanged);
 
   final List<DownloadJob> jobs = [];
@@ -712,7 +719,7 @@ class DownloadManager extends ChangeNotifier {
       final staged = File(res.path);
       var how = Placement.stuck;
       try {
-        how = (await placeFileDetailed(staged, _downloadsRoot, tags: job.authority)).how;
+        how = (await placeFileDetailed(staged, _downloadsRoot, tags: job.authority, staatAl: mapVanBestaande)).how;
       } catch (_) {/* leave it where it landed — the scan still finds it */}
       job.progress = 1;
       job.status = 'done';
@@ -1127,7 +1134,8 @@ class DownloadManager extends ChangeNotifier {
             // de eerste echte vondst deed voordat dit erin stond.
             await placeFileDetailed(File(res.path), _downloadsRoot,
                 tags: w.authority ??
-                    TrackTags(title: w.title, artist: w.artist, album: w.album, trackNo: 0));
+                    TrackTags(title: w.title, artist: w.artist, album: w.album, trackNo: 0),
+                staatAl: mapVanBestaande);
           } catch (_) {/* de scan vindt hem waar hij ook landde */}
           goed = true;
           return;
@@ -1241,7 +1249,7 @@ class DownloadManager extends ChangeNotifier {
             final staged = File(res.path);
             // The SAME authority as the first landing. Without it the sweep would quietly undo the
             // numbering a quarter of an hour later, using whatever this new peer's tags happen to say.
-            how = (await placeFileDetailed(staged, _downloadsRoot, tags: job.authority)).how;
+            how = (await placeFileDetailed(staged, _downloadsRoot, tags: job.authority, staatAl: mapVanBestaande)).how;
           } catch (_) {/* the scan still finds it wherever it landed */}
           if (how == Placement.duplicate) {
             settle('had al de beste kwaliteit');

@@ -227,6 +227,116 @@ void main() {
       expect(flacs.single.path, isNot(contains('(2)')));
     });
 
+    /// De uitgave zoals de downloadweg hem kent voordat er iets binnenkomt.
+    final thrillerTracks = [const ChoiceTrack('2', 'Baby Be Mine', 260)];
+    final thriller = ReleaseAuthority(
+      artist: 'Michael Jackson',
+      album: 'Thriller',
+      albumArtist: 'Michael Jackson',
+      year: 1982,
+      tracks: thrillerTracks,
+    ).forTrack(thrillerTracks.first, 2);
+
+    test('een betere versie gaat NAAR het album waar de opname al staat', () async {
+      // Het geval uit de bibliotheek. Je hebt Thriller op 24/96 in een map die "Thriller (MFSL One
+      // Step)" heet, want zo staat het in de tags. Er komt een 24/192 binnen die `ALBUM = Thriller`
+      // draagt. Zonder de opzoeking landt die in een NIEUWE map: twee albums in de bibliotheek, en het
+      // mindere bestand blijft staan omdat de vervangingsregel alleen binnen één map kijkt.
+      final root = Directory(Directory.systemTemp.createTempSync('vervang').path);
+      addTearDown(() {
+        try {
+          root.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final sep = Platform.pathSeparator;
+
+      // Wat er al staat: kleiner, in een map met de naam van de persing.
+      final bestaandeMap = Directory('${root.path}${sep}Michael Jackson${sep}Thriller (MFSL One Step)')
+        ..createSync(recursive: true);
+      final oud = File('${bestaandeMap.path}${sep}02 - Baby Be Mine.flac')
+        ..writeAsBytesSync(_peerFlac(['TITLE=Baby Be Mine', 'ARTIST=Michael Jackson'], pad: 1000));
+
+      // Wat er binnenkomt: groter, met een andere albumtag.
+      final staging = Directory('${root.path}${sep}_in')..createSync();
+      final nieuw = File('${staging.path}${sep}02 Michael Jackson - CD-01 - Baby Be Mine.flac')
+        ..writeAsBytesSync(_peerFlac(
+            ['TITLE=Baby Be Mine', 'ARTIST=Michael Jackson', 'ALBUM=Thriller'],
+            pad: 9000));
+
+      // Met een gezaghebbende tracklijst, want zo loopt de echte downloadweg: de uitgave is al gekozen
+      // voordat er ook maar één byte binnenkwam.
+      final uit = await placeFileDetailed(nieuw, root.path,
+          tags: thriller,
+          staatAl: (artiest, titel) =>
+              titel.toLowerCase().contains('baby be mine') ? bestaandeMap.path : null);
+
+      expect(uit.how, Placement.moved);
+      expect(File(uit.path).parent.path, bestaandeMap.path,
+          reason: 'de nieuwe hoort in het bestaande album, niet in een tweede map');
+      final over = bestaandeMap
+          .listSync()
+          .whereType<File>()
+          .where((f) => f.path.endsWith('.flac'))
+          .toList();
+      expect(over, hasLength(1), reason: 'één opname, één bestand — geen tweede album ernaast');
+      expect(over.single.lengthSync(), greaterThan(5000), reason: 'en dat is de grootste van de twee');
+      expect(over.single.path, oud.path, reason: 'op precies de plek waar de oude stond');
+      // Weggooien doet de app niet: de vorige staat geparkeerd, niet verdwenen.
+      final geparkeerd = root
+          .listSync(recursive: true)
+          .whereType<File>()
+          .where((f) => f.path.contains('_dubbel') && f.path.endsWith('.flac'))
+          .toList();
+      expect(geparkeerd, hasLength(1), reason: 'de mindere is opzij gezet, niet gewist');
+      expect(geparkeerd.single.lengthSync(), lessThan(5000));
+    });
+
+    test('een MINDERE versie dringt zich niet op', () async {
+      // Dezelfde weg, andersom: wie al het beste heeft, houdt het. Anders zou elke volgende download
+      // je bibliotheek weer omlaag trekken.
+      final root = Directory(Directory.systemTemp.createTempSync('vervang2').path);
+      addTearDown(() {
+        try {
+          root.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final sep = Platform.pathSeparator;
+      final bestaandeMap = Directory('${root.path}${sep}Michael Jackson${sep}Thriller (MFSL One Step)')
+        ..createSync(recursive: true);
+      File('${bestaandeMap.path}${sep}02 - Baby Be Mine.flac')
+          .writeAsBytesSync(_peerFlac(['TITLE=Baby Be Mine', 'ARTIST=Michael Jackson'], pad: 9000));
+      final staging = Directory('${root.path}${sep}_in')..createSync();
+      final klein = File('${staging.path}${sep}02 - Baby Be Mine.flac')
+        ..writeAsBytesSync(_peerFlac(['TITLE=Baby Be Mine', 'ARTIST=Michael Jackson'], pad: 1000));
+
+      final uit = await placeFileDetailed(klein, root.path,
+          tags: thriller, staatAl: (artiest, titel) => bestaandeMap.path);
+
+      expect(uit.how, Placement.duplicate);
+      expect(klein.existsSync(), isFalse, reason: 'de mindere kopie is opgeruimd');
+      expect(File(uit.path).lengthSync(), greaterThan(5000), reason: 'de goede staat er nog');
+    });
+
+    test('zonder opzoeking blijft alles zoals het was', () async {
+      // De parameter is optioneel met opzet: alleen de downloadweg geeft hem mee. Het opbergen van een
+      // bestaande verzameling hoort niet ineens mappen samen te trekken.
+      final root = Directory(Directory.systemTemp.createTempSync('vervang3').path);
+      addTearDown(() {
+        try {
+          root.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final sep = Platform.pathSeparator;
+      final staging = Directory('${root.path}${sep}_in')..createSync();
+      final f = File('${staging.path}${sep}02 - Baby Be Mine.flac')
+        ..writeAsBytesSync(_peerFlac(
+            ['TITLE=Baby Be Mine', 'ARTIST=Michael Jackson', 'ALBUM=Thriller'],
+            pad: 1000));
+      final uit = await placeFileDetailed(f, root.path);
+      expect(uit.how, Placement.moved);
+      expect(uit.path, contains('Thriller'));
+    });
+
     test('without an authority the peer still decides, exactly as before', () async {
       final staging = Directory('${root.path}${Platform.pathSeparator}_in2')..createSync();
       final src = File('${staging.path}${Platform.pathSeparator}01 - Anywhere for You.flac')

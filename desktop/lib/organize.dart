@@ -541,7 +541,8 @@ class PlaceOutcome {
 /// failure — never loses the file). If the SAME RECORDING is already there, the better copy wins
 /// and the loser is dropped; a different recording that happens to tag identically (a live take,
 /// a remix whose version marker only lives in the filename) is kept alongside it.
-Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, TrackTags? tags}) async {
+Future<PlaceOutcome> placeFileDetailed(File src, String root,
+    {RelKind? kind, TrackTags? tags, String? Function(String artist, String title)? staatAl}) async {
   final t = tags ?? readTags(src);
   if (t == null) return PlaceOutcome(src.path, Placement.stuck);
   final base = src.uri.pathSegments.last;
@@ -551,8 +552,29 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, Tr
   // on title AND running time before it was ever downloaded, so a live take of a different length
   // never gets this far — which is the job _carryVersion was doing here.
   final named = t.isAuthoritative ? t : _carryVersion(t, base);
-  final rel = _reuseExistingFolders(root, relativePathFor(named, kind: kind, ext: ext));
-  var dest = File('$root${Platform.pathSeparator}$rel');
+  final volledig = relativePathFor(named, kind: kind, ext: ext);
+
+  // Heb je deze opname al? Dan gaat de nieuwe daar NAARTOE, en niet naar een map die uit zijn eigen
+  // albumtag volgt.
+  //
+  // Dit is het verschil tussen opwaarderen en verzamelen. Een 24/192 van Thriller draagt `ALBUM =
+  // Thriller`, terwijl de negen die je al hebt `ALBUM = Thriller (MFSL One Step)` dragen — twee uitgaves
+  // volgens de tags, dus twee mappen, dus twee albums in de bibliotheek. En omdat de vervangingsregel
+  // alleen binnen één map kijkt, kwam die er nooit aan te pas: het betere bestand landde ernaast en het
+  // mindere bleef staan.
+  //
+  // Met dit ene lijntje valt alles op zijn plek. De bestemming wordt het bestaande bestand, waarna
+  // [firstIsBetter] hieronder gewoon zijn werk doet: de hoogste resolutie blijft, de vorige gaat naar
+  // `_dubbel` (nooit weg), en er komt geen tweede album bij.
+  //
+  // De prijs is echt en de aanroeper moet hem willen: twee persingen náást elkaar bewaren kan hiermee
+  // niet meer op dit pad. Vandaar dat het een parameter is en geen vaste regel — alleen de downloadweg
+  // geeft hem mee.
+  final elders = staatAl?.call(named.artist, named.title);
+  final rel = elders == null
+      ? _reuseExistingFolders(root, volledig)
+      : '$elders${Platform.pathSeparator}${volledig.split(Platform.pathSeparator).last}';
+  var dest = File(elders == null ? '$root${Platform.pathSeparator}$rel' : rel);
   if (dest.path == src.path) return PlaceOutcome(src.path, Placement.moved);
   try {
     await dest.parent.create(recursive: true);
@@ -595,7 +617,11 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root, {RelKind? kind, Tr
     }
     final srcDir = src.parent.path;
     final loserDirs = [for (final l in losers) l.parent.path];
-    final landed = await _install(src, dest, losers);
+    // Alleen parkeren als we NAAR een bestaand album zijn gestuurd: dan is de verliezer een bestand dat
+    // al in de bibliotheek stond, en dat is van jou. Op de gewone weg is de verliezer iets wat deze
+    // download zelf net ophaalde, en dat mag gewoon weg.
+    final landed = await _install(src, dest, losers,
+        parkeerIn: elders == null ? null : '$root${Platform.pathSeparator}$parkeerMap');
     // Soulseek delivered the audio; the record's identity comes from here. Without this the file
     // sits under the right name in the right folder while its TAGS still say it is track 1 of
     // "The Essential Backstreet Boys" — and the tags are what the library and Roon actually read.
@@ -874,14 +900,36 @@ String _reuseExistingFolders(String root, String rel) {
 ///
 /// Order matters: deleting first and moving second means a failed move (locked file, disk full)
 /// leaves you with NEITHER — the copy you had is gone and the new one is stranded in staging.
-Future<String> _install(File src, File dest, List<File> losers) async {
+/// Waar een kopie heen gaat die het aflegt tegen een betere: opzij, niet weg.
+///
+/// Staat hier en niet in library.dart omdat dit bestand lager in de stapel zit — library.dart
+/// importeert organize.dart, andersom zou een kring worden. `dupeFolder` daar wijst hierheen, zodat er
+/// één naam is en niet twee die kunnen gaan verschillen.
+const parkeerMap = '_dubbel';
+
+Future<String> _install(File src, File dest, List<File> losers, {String? parkeerIn}) async {
   if (losers.isEmpty) return _move(src, dest);
   // Land beside the target first, so nothing is destroyed until the new file is really here.
   final tmp = File('${dest.path}.incoming');
   final landed = await _move(src, tmp);
   for (final l in losers) {
     try {
-      await l.delete();
+      // Wat de app zelf net binnenhaalde en meteen weer verloor, mag weg -- dat is afval van deze
+      // download. Maar een bestand dat AL in de bibliotheek stond is van de gebruiker, en dat wordt
+      // geparkeerd in plaats van gewist. Zo werkt Opruimen ook: de mindere gaat naar `_dubbel`, nooit
+      // de vuilnisbak in.
+      if (parkeerIn != null) {
+        final naam = l.uri.pathSegments.last;
+        final dir = Directory(parkeerIn);
+        await dir.create(recursive: true);
+        var doel = File('$parkeerIn${Platform.pathSeparator}$naam');
+        for (var n = 2; await doel.exists(); n++) {
+          doel = File('$parkeerIn${Platform.pathSeparator}($n) $naam');
+        }
+        await _move(l, doel);
+      } else {
+        await l.delete();
+      }
     } catch (_) {/* couldn't remove the old copy — the new one still lands */}
   }
   try {

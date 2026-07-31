@@ -592,6 +592,9 @@ Future<void> main() async {
     // offline is, is dat over vijf minuten ook. Elke wens heeft bovendien zijn eigen wachttijd; dit
     // is alleen het kloppen op de deur.
     downloads.haveLossless = library.hasLossless;
+    // Een betere versie hoort IN het album te landen waar de opname al staat, niet in een nieuwe map
+    // die uit zijn eigen albumtag volgt. Zie [LibraryStore.folderOfRecording].
+    downloads.mapVanBestaande = library.folderOfRecording;
     unawaited(downloads.sweepLosslessWants());
     Timer.periodic(const Duration(minutes: 20), (_) => unawaited(downloads.sweepLosslessWants()));
     await library.enrichArtists(settings);
