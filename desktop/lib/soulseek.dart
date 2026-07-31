@@ -7,6 +7,30 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
 import 'paths.dart';
+import 'warm_log.dart';
+
+/// Wat een peer per bestand aan eigenschappen meestuurt, in `soulseek.log`.
+///
+/// Bestaat voor precies één vraag: komt de SAMPLE RATE mee over de lijn? De ontleder verderop pakte er
+/// drie uit — bitrate, duur, VBR — en liet de rest vallen, dus stond er op een zoekresultaat een
+/// bitrate waar `24/192` had kunnen staan. Volgens de protocoldocumentatie zijn type 4 en 5 de sample
+/// rate en de bitdiepte; of jouw peers ze ook echt sturen is iets anders, en dat is te meten in plaats
+/// van aan te nemen.
+///
+/// Hooguit twaalf regels per keer dat de app draait, en alleen voor lossless bestanden: bij één
+/// zoekopdracht komen er duizenden binnen, en twaalf voorbeelden beantwoorden de vraag net zo goed.
+int _kenmerkenGelogd = 0;
+final WarmLog _slskLog = WarmLog('$appDir${Platform.pathSeparator}soulseek.log');
+
+void _noteerKenmerken(String filename, Map<int, int> kenmerken) {
+  if (_kenmerkenGelogd >= 12 || kenmerken.isEmpty) return;
+  final laag = filename.toLowerCase();
+  if (!laag.endsWith('.flac') && !laag.endsWith('.wav') && !laag.endsWith('.ape')) return;
+  _kenmerkenGelogd++;
+  final naam = filename.replaceAll(String.fromCharCode(92), '/').split('/').last;
+  final paren = kenmerken.entries.map((e) => '${e.key}=${e.value}').join('  ');
+  _slskLog.line('kenmerken "$naam": $paren');
+}
 
 /// One file offered by a Soulseek peer.
 class SoulseekFile {
@@ -756,9 +780,14 @@ class SoulseekClient {
       final numAttr = r.u32().clamp(0, 10);
       int? bitrate, dur;
       var vbr = false;
+      // Alles wat de peer stuurt wordt onthouden, niet alleen wat we vandaag gebruiken. Type 0, 1 en 2
+      // zijn bitrate, duur en VBR — maar er zijn er meer, en de vraag is welke er in de praktijk
+      // binnenkomen. De app las ze wel van de lijn en gooide ze meteen weg.
+      final kenmerken = <int, int>{};
       for (var a = 0; a < numAttr; a++) {
         final t = r.u32();
         final v = r.u32();
+        kenmerken[t] = v;
         if (t == 0) {
           bitrate = v;
         } else if (t == 1) {
@@ -767,6 +796,7 @@ class SoulseekClient {
           vbr = v != 0;
         }
       }
+      _noteerKenmerken(filename, kenmerken);
       files.add(SoulseekFile(username: peerUser, filename: filename, size: size, bitrate: bitrate, durationSec: dur, isVbr: vbr));
     }
     final freeSlots = r.remaining > 0 ? r.boolean() : false;
