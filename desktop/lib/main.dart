@@ -2720,12 +2720,33 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     final rows = comp == null
         ? null
         : (_showMissing ? comp.slots : [for (final s in comp.slots) if (!s.missing) s]);
+    // De kleur uit de hoes die deze pagina NU al heeft. [AlbumArt.onFront] meldt zich pas nadat Discogs
+    // geantwoord heeft — en die weg kan mislukken, overgeslagen worden of er seconden over doen, zodat
+    // de achtergrond zwart bleef terwijl de hoes gewoon in beeld stond. Hier hoeft niets opgehaald te
+    // worden: dit zijn de bytes uit het bestand zelf.
+    //
+    // Vanuit build en niet vanuit initState, want `album` wordt per build opnieuw opgezocht (een
+    // download die landt herschikt de groepering). Het kost niets: [_kleurUitHoes] stopt meteen als het
+    // om dezelfde bytes gaat, en dat is bij elke volgende build zo.
+    _kleurUitHoes(album.correctedCover ?? album.cover);
+    // De TINT van de hoes, niet zijn donkerte.
+    //
+    // Gemeten op de eigen platen: No Strings Attached geeft rgb(197,73,45) en dat werkt meteen, maar
+    // Thriller geeft rgb(25,37,43) en Adele's 25 geeft rgb(52,44,36). Zulke kleuren op een achtergrond
+    // van #0C0D12 leggen verandert niets zichtbaars — je krijgt zwart op zwart en het lijkt alsof de
+    // was stuk is, terwijl hij precies doet wat er staat.
+    //
+    // Daarom wordt de helderheid gelijkgetrokken en blijven alleen tint en verzadiging over. Dan wordt
+    // Thrillers donkerblauw een zichtbaar blauw en Adele's bruin een zichtbaar bruin, en houdt élke hoes
+    // dezelfde kracht. De verzadiging krijgt een ondergrens (anders blijft het grijzig) en een
+    // bovengrens (anders schreeuwt een felle hoes de tekst weg).
     final wasKleur = _was == null ? null : Color(_was!);
-    // Hoeveel van de hoeskleur er in de achtergrond mag. Een donkerblauwe hoes verdraagt veel meer dan
-    // een fel gele: die tekst is wit, en op geel houdt dat op. Vandaar geschaald op helderheid in plaats
-    // van één vast getal — anders is het op de helft van je platen te veel en op de andere helft niets.
-    final wasSterkte = wasKleur == null ? 0.0 : .46 - .30 * wasKleur.computeLuminance();
-    final wasTop = wasKleur == null ? _bg : Color.lerp(_bg, wasKleur, wasSterkte)!;
+    Color? wasBasis;
+    if (wasKleur != null) {
+      final hsl = HSLColor.fromColor(wasKleur);
+      wasBasis = hsl.withLightness(.42).withSaturation(hsl.saturation.clamp(.32, .78)).toColor();
+    }
+    final wasTop = wasBasis == null ? _bg : Color.lerp(_bg, wasBasis, .34)!;
 
     return Scaffold(
       // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin — its app bar
@@ -2740,7 +2761,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
           // Op zeven tiende is hij al helemaal weg, want daaronder staan de tracklijst en de grijze
           // "niet in bibliotheek"-regels, en die zijn transparant: alles wat daar nog kleur draagt,
           // gaat van hun leesbaarheid af.
-          if (wasKleur != null)
+          if (wasBasis != null)
             Positioned.fill(
               child: IgnorePointer(
                 child: DecoratedBox(
@@ -2749,7 +2770,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                       stops: const [0, .30, .70],
-                      colors: [wasTop, Color.lerp(_bg, wasKleur, wasSterkte * .38)!, _bg],
+                      colors: [wasTop, Color.lerp(_bg, wasBasis, .13)!, _bg],
                     ),
                   ),
                 ),
