@@ -2201,7 +2201,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     _wasVan = bytes;
     int? kleur;
     try {
-      kleur = await Isolate.run(() => dominantColour(bytes));
+      kleur = await _kleurBuitenDeTekendraad(bytes);
     } catch (e) {
       _uiLog.line('was "${album.title}": ${bytes.length} bytes, maar het uitrekenen klapte: $e');
       return; // een hoes die niet te lezen is, laat de achtergrond gewoon zoals hij was
@@ -7031,6 +7031,44 @@ Quality _trackQuality(Track t) {
   return basis;
 }
 
+/// De hoeskleur uitrekenen in een isolate — en dit MOET buiten de klasse staan.
+///
+/// Een closure neemt zijn hele omgeving mee, en de omgeving van een instantiemethode bevat `this`. Zet
+/// je `Isolate.run(() => dominantColour(bytes))` in een State, dan gaat die State mee de isolate in, en
+/// daaraan hangt de complete widgetboom. Dart weigert dat terecht:
+///
+///     object is unsendable - Class: _AsyncCompleter
+///      <- Instance of '_AlbumDetailPageState'
+///      <- _AlbumDetailPageState._kleurUitHoes.<anonymous closure>
+///
+/// Het venijnige is dat het van buiten niet te zien is: er verschijnt geen melding, de achtergrond
+/// blijft gewoon zwart, en de reparatie lijkt niet te werken terwijl elk onderdeel los wél werkt. Ik heb
+/// hem in een los Dart-programma getest — daar zit geen `this` omheen en daar wérkte het. Pas een
+/// logregel in de app zelf gaf de uitzondering te zien.
+///
+/// Hier omheen zit geen klasse, dus vangt de closure alleen [bytes], en dat is een Uint8List: verzendbaar.
+Future<int?> _kleurBuitenDeTekendraad(Uint8List bytes) =>
+    Isolate.run(() => dominantColour(bytes));
+
+/// Het beste bestand bovenaan.
+///
+/// De resultaten stonden in de volgorde waarin de peers toevallig antwoordden, en dat is geen volgorde.
+/// Een bestand van 212 MB kon onder een van 30 MB staan — en dan zie je niet dat er iets tussen zit dat
+/// veel beter is dan wat je al in de kast hebt.
+///
+/// Lossless boven lossy, daarbinnen op bitrate; zie [kwaliteitsRang]. Bij gelijke kwaliteit wint de peer
+/// met een vrije plek, want het beste bestand van iemand die niets uitdeelt heb je nog steeds niet.
+int _besteEerst(SoulseekFile a, SoulseekFile b) {
+  int rang(SoulseekFile f) => kwaliteitsRang(
+        lossless: f.isFlac || const {'alac', 'ape', 'wav', 'aiff'}.contains(f.ext),
+        kbps: effectieveBitrate(bitrate: f.bitrate, durationSec: f.durationSec, size: f.size),
+      );
+  final verschil = rang(b) - rang(a);
+  if (verschil != 0) return verschil;
+  if (a.freeSlots != b.freeSlots) return a.freeSlots ? -1 : 1;
+  return a.queueLength.compareTo(b.queueLength);
+}
+
 Quality _slskQuality(SoulseekFile f) => qualityFromFile(
       name: f.displayName,
       ext: f.ext,
@@ -7241,7 +7279,8 @@ class _SourcesViewState extends State<SourcesView> {
   Widget build(BuildContext context) {
     final ready = context.read<SoulseekService>().available;
     final torrents = _torrents.where((r) => _filter.matches(qualityFromName(r.name))).toList();
-    final slsk = _slsk.where((f) => _filter.matches(_slskQuality(f))).toList();
+    final slsk = _slsk.where((f) => _filter.matches(_slskQuality(f))).toList()
+      ..sort(_besteEerst);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -8029,7 +8068,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
 
   Widget _directResults(bool soulseekReady) {
     final torrents = _torrents.where((r) => _filter.matches(qualityFromName(r.name))).toList();
-    final slsk = _slsk.where((f) => _filter.matches(_slskQuality(f))).toList();
+    final slsk = _slsk.where((f) => _filter.matches(_slskQuality(f))).toList()
+      ..sort(_besteEerst);
     return ListView(
       padding: const EdgeInsets.only(bottom: 24),
       children: [

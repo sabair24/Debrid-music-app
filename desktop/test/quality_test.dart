@@ -81,4 +81,31 @@ void main() {
       expect(depthRateLabel(sampleRate: 48000, bitsPerSample: 16), '16/48');
     });
   });
+
+  /// De zoekresultaten van Soulseek stonden in de volgorde waarin de peers toevallig antwoordden. Een
+  /// bestand van 212 MB kon daardoor onder een van 30 MB staan, en dan zie je niet dat er iets tussen
+  /// zit dat veel beter is dan wat je al hebt.
+  group('het beste bestand bovenaan', () {
+    test('een peer die de bitrate niet meldt, wordt op grootte en duur gerekend', () {
+      // Soulseek-peers laten dit geregeld weg. Zonder deze omweg viel zo'n bestand op nul terug en
+      // belandde het onderaan — juist de FLAC's waar het om gaat.
+      expect(effectieveBitrate(bitrate: 320), 320);
+      // 212 MB over 4:20 — de orde van grootte van de 6511k die op het scherm stond.
+      expect(effectieveBitrate(durationSec: 260, size: 212 * 1024 * 1024), 6840);
+      expect(effectieveBitrate(), 0, reason: 'niets bekend is niet nul-als-getal maar onbekend');
+    });
+
+    test('geen enkele mp3 haalt een FLAC in', () {
+      // Een 320k mp3 hoort onder een 900k FLAC te staan en niet erboven; daarom een eigen laag in
+      // plaats van één doorlopende schaal.
+      expect(kwaliteitsRang(lossless: true, kbps: 900),
+          greaterThan(kwaliteitsRang(lossless: false, kbps: 320)));
+    });
+
+    test('binnen lossless wint de hoogste bitrate — 24/192 boven 24/96', () {
+      // Precies het geval uit de bibliotheek: 6511k (24/192) tegen 2900k (24/96).
+      expect(kwaliteitsRang(lossless: true, kbps: 6511),
+          greaterThan(kwaliteitsRang(lossless: true, kbps: 2900)));
+    });
+  });
 }

@@ -34,6 +34,30 @@ final _vx = RegExp(r'\bV([012])\b');
 bool isHiRes({required int sampleRate, required int bitsPerSample}) =>
     sampleRate > 48000 || bitsPerSample > 16;
 
+/// De bitrate waar je op af kunt gaan: wat de peer meldt, of anders wat grootte en duur zeggen.
+///
+/// Soulseek-peers laten de bitrate geregeld weg, en juist bij een FLAC is dat het getal dat telt: bij
+/// lossless is de bitrate recht evenredig met wat er in het bestand zit. 6511k is 24/192, rond de 2900k
+/// is 24/96, rond de 1000k is cd. Grootte gedeeld door speelduur geeft precies datzelfde getal, dus een
+/// ontbrekende melding is geen reden om een bestand als "onbekend" onderaan te laten belanden.
+int effectieveBitrate({int? bitrate, int? durationSec, int? size}) {
+  if (bitrate != null && bitrate > 0) return bitrate;
+  if (durationSec != null && durationSec > 0 && size != null && size > 0) {
+    return (size * 8 / durationSec / 1000).round();
+  }
+  return 0;
+}
+
+/// Waar een bestand in de rangschikking komt: hoger is beter.
+///
+/// Lossless krijgt een eigen laag, want geen enkele mp3 haalt een FLAC in — een 320k mp3 hoort onder een
+/// 900k FLAC te staan en niet erboven. Binnen een laag beslist de bitrate.
+///
+/// Bestaat omdat de zoekresultaten in de volgorde stonden waarin de peers toevallig antwoordden. Een
+/// bestand van 212 MB kon daardoor onder een van 30 MB staan, en dan zie je niet dat er iets veel beters
+/// tussen zit dan wat je al hebt.
+int kwaliteitsRang({required bool lossless, required int kbps}) => (lossless ? 1000000 : 0) + kbps;
+
 /// "24/96" of "16/44.1" -- zoals het op een hoes en in een winkel staat: bitdiepte gedeeld door kHz.
 ///
 /// Voor ELK lossless bestand, niet alleen voor hi-res. Een bitrate is de uitkomst van de muziek én de
