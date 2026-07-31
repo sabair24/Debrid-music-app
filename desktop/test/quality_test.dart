@@ -67,13 +67,18 @@ void main() {
     });
 
     test('het etiket schrijft de rate zoals hij op de hoes staat', () {
-      expect(hiResLabel(sampleRate: 96000, bitsPerSample: 24), '24/96');
-      expect(hiResLabel(sampleRate: 192000, bitsPerSample: 24), '24/192');
+      expect(depthRateLabel(sampleRate: 96000, bitsPerSample: 24), '24/96');
+      expect(depthRateLabel(sampleRate: 192000, bitsPerSample: 24), '24/192');
       // 88,2 en 176,4 zijn geen 88 en 176: dat zijn de veelvouden van de cd-rate en die decimaal is
       // precies waaraan je ze herkent.
-      expect(hiResLabel(sampleRate: 88200, bitsPerSample: 24), '24/88.2');
-      expect(hiResLabel(sampleRate: 176400, bitsPerSample: 24), '24/176.4');
-      expect(hiResLabel(sampleRate: 44100, bitsPerSample: 24), '24/44.1');
+      expect(depthRateLabel(sampleRate: 88200, bitsPerSample: 24), '24/88.2');
+      expect(depthRateLabel(sampleRate: 176400, bitsPerSample: 24), '24/176.4');
+      expect(depthRateLabel(sampleRate: 44100, bitsPerSample: 24), '24/44.1');
+    });
+
+    test('cd-kwaliteit krijgt hetzelfde etiket, want één notatie leest als één lijst', () {
+      expect(depthRateLabel(sampleRate: 44100, bitsPerSample: 16), '16/44.1');
+      expect(depthRateLabel(sampleRate: 48000, bitsPerSample: 16), '16/48');
     });
   });
 }

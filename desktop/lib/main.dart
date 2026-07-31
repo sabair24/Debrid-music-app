@@ -6861,15 +6861,14 @@ Quality _trackQuality(Track t) {
     durationSec: t.duration?.inSeconds,
     size: t.sizeBytes,
   );
-  if (!t.isFlac || t.sampleRate <= 0) return basis;
-  if (!isHiRes(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample)) {
-    return Quality(basis.label, QTier.lossless);
-  }
-  // Bij hi-res het formaat zelf tonen in plaats van de bitrate: "FLAC · 24/96" zegt wat het bestand is,
-  // "FLAC · 2973k" is de uitkomst van de muziek en de compressie samen en verschilt per nummer.
+  // Zonder die twee getallen valt er niets te tonen; dan blijft de bitrate over.
+  if (!t.isFlac || t.sampleRate <= 0 || t.bitsPerSample <= 0) return basis;
+  // Het formaat zelf in plaats van de bitrate, en bij ELKE lossless -- ook bij 16/44.1. Een bitrate is
+  // de uitkomst van de muziek en de compressie samen en verschilt per nummer; dit zegt wat het bestand
+  // is. En één notatie voor de hele lijst leest rustiger dan de ene rij "1433k" en de volgende "24/96".
   return Quality(
-    'FLAC · ${hiResLabel(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample)}',
-    QTier.hires,
+    'FLAC · ${depthRateLabel(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample)}',
+    isHiRes(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample) ? QTier.hires : QTier.lossless,
   );
 }
 
