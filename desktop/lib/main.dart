@@ -6861,15 +6861,27 @@ Quality _trackQuality(Track t) {
     durationSec: t.duration?.inSeconds,
     size: t.sizeBytes,
   );
-  // Zonder die twee getallen valt er niets te tonen; dan blijft de bitrate over.
-  if (!t.isFlac || t.sampleRate <= 0 || t.bitsPerSample <= 0) return basis;
   // Het formaat zelf in plaats van de bitrate, en bij ELKE lossless -- ook bij 16/44.1. Een bitrate is
   // de uitkomst van de muziek en de compressie samen en verschilt per nummer; dit zegt wat het bestand
   // is. En één notatie voor de hele lijst leest rustiger dan de ene rij "1433k" en de volgende "24/96".
-  return Quality(
-    'FLAC · ${depthRateLabel(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample)}',
-    isHiRes(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample) ? QTier.hires : QTier.lossless,
-  );
+  if (t.isFlac && t.sampleRate > 0 && t.bitsPerSample > 0) {
+    return Quality(
+      'FLAC · ${depthRateLabel(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample)}',
+      isHiRes(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample) ? QTier.hires : QTier.lossless,
+    );
+  }
+  // Bij een lossy bestand is bitdiepte betekenisloos en is de bitrate juist wél waar het om gaat. Toch
+  // met hetzelfde streepje ertussen, want anders staat er in dezelfde kolom één rij zonder enig getal
+  // en dat is precies waar de lijn breekt.
+  //
+  // Berekend uit grootte en duur, want de app leest geen MP3-framekop. Voor 320, 192 en 160 komt dat
+  // exact uit; bij VBR is het het echte gemiddelde, en bij een dikke ingesloten hoes kan het er een
+  // paar procent boven schieten -- die telt mee in de grootte.
+  final k = t.bitrateKbps;
+  if (!t.isFlac && k != null && k > 0 && t.ext.isNotEmpty) {
+    return Quality('${t.ext.toUpperCase()} · ${k}k', QTier.lossy);
+  }
+  return basis;
 }
 
 Quality _slskQuality(SoulseekFile f) => qualityFromFile(
