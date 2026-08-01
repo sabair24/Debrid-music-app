@@ -254,11 +254,15 @@ class LibraryStore extends ChangeNotifier {
   /// [exclude] holds the paths already on the page — a file cannot be elsewhere than where it is.
   Track? recordingElsewhere(String artist, String title,
       {int? seconds, Set<String> exclude = const {}}) {
-    final wantTitle = normKey(title);
+    // Eerst de nepmerken eruit. `normKey` haalt haakjes en streepjes weg maar laat de WOORDEN staan,
+    // dus "Escape (Album Version)" en "Escape" landen nog steeds op twee sleutels — terwijl het één
+    // opname is. Zie [withoutFakeVersion]: die laat een écht merk als "(Live)" juist staan, zodat een
+    // live-opname nog altijd niet voor de albumversie doorgaat.
+    final wantTitle = normKey(withoutFakeVersion(title));
     if (wantTitle.isEmpty) return null;
     final wantArtist = artistKey(splitFeatured(artist, title).main);
     for (final t in tracks) {
-      if (exclude.contains(t.path) || normKey(t.title) != wantTitle) continue;
+      if (exclude.contains(t.path) || normKey(withoutFakeVersion(t.title)) != wantTitle) continue;
       if (!_artistCovers(artistKey(splitFeatured(t.artist, t.title).main), wantArtist)) continue;
       final secs = t.duration?.inSeconds ?? 0;
       if (seconds != null &&

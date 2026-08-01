@@ -33,7 +33,9 @@ String _sleutel(File f) {
   final naam = f.uri.pathSegments.last.replaceFirst(RegExp(r'\.[^.]+$'), '');
   final titel = (readFlacTags(f)?.title ?? '').trim();
   final basis = titel.isNotEmpty ? titel : naam;
-  final kaal = basis
+  // Door dezelfde zeef als de app: "Escape (Album Version)" en "Escape" zijn één opname. Zonder dit
+  // kijkt dit gereedschap langs precies het geval waarvoor het gemaakt is.
+  final kaal = withoutFakeVersion(basis)
       .replaceFirst(RegExp(r'^\s*\d{1,3}\s*[-.)]?\s*'), '')
       .toLowerCase()
       .replaceAll(RegExp(r'[^a-z0-9]'), '');

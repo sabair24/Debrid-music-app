@@ -386,6 +386,111 @@ void main() {
           reason: 'het gaat er niet om van welke persing dit bestand kwam, maar bij welke plaat het hoort');
     });
 
+    test('"(Album Version)" is dezelfde opname, "(Live)" niet', () {
+      // De zeef die de vervanging weer aan de praat kreeg. "Album Version" betekent letterlijk: de
+      // versie die op het album staat -- dus juist NIET een afwijkende take. Een ripper schrijft het
+      // erbij, een catalogus zelden, en dat ene woord liet recordingElsewhere het bestaande bestand
+      // missen. Gemeten op Enrique's Escape: twee tegels, 7 nummers en 1.
+      expect(normKey(withoutFakeVersion('Escape (Album Version)')), normKey('Escape'));
+      expect(normKey(withoutFakeVersion("What's My Name? (Album Mix)")), normKey("What's My Name?"));
+      // En de wacht die de andere kant op staat: een ECHT merk moet blijven, anders gaat een
+      // live-opname straks door voor de albumversie en vervangt hij hem.
+      expect(normKey(withoutFakeVersion('Escape (Live)')), isNot(normKey('Escape')));
+      expect(normKey(withoutFakeVersion('Hero (Radio Edit)')), isNot(normKey('Hero')));
+      // Staan ze samen in één titel, dan blijft alles staan: liever een treffer mislopen dan twee
+      // verschillende opnames op één hoop.
+      expect(normKey(withoutFakeVersion('Escape (Album Version) (Live)')),
+          isNot(normKey('Escape')));
+    });
+
+    test('de nieuwkomer neemt de artiest over als de buren die voluit schrijven', () async {
+      // De bibliotheek groepeert ook op ARTIEST. Een bestand dat "Enrique" zegt tussen buren die
+      // "Enrique Iglesias" zeggen blijft dus een eigen tegel, zelfs in de goede map met de goede
+      // albumnaam.
+      final root = Directory(Directory.systemTemp.createTempSync('artiest').path);
+      addTearDown(() {
+        try {
+          root.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final sep = Platform.pathSeparator;
+      final map = Directory('${root.path}${sep}Enrique Iglesias${sep}Escape')..createSync(recursive: true);
+      for (final n in ['02', '03', '04']) {
+        File('${map.path}$sep$n - x.flac').writeAsBytesSync(
+            _peerFlac(['TITLE=x', 'ARTIST=Enrique Iglesias', 'ALBUM=Escape', 'TRACKTOTAL=16']));
+      }
+      final oud = File('${map.path}${sep}01 - Escape.flac')
+        ..writeAsBytesSync(
+            _peerFlac(['TITLE=Escape', 'ARTIST=Enrique Iglesias', 'ALBUM=Escape', 'TRACKTOTAL=16']));
+
+      final staging = Directory('${root.path}${sep}_in')..createSync();
+      final nieuw = File('${staging.path}${sep}01 - Escape (Album Version).flac')
+        ..writeAsBytesSync(_peerFlac(
+            ['TITLE=Escape (Album Version)', 'ARTIST=Enrique', 'ALBUM=Escape'],
+            pad: 9000));
+
+      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t) => oud.path);
+      expect(readFlacTags(File(uit.path))!.artist, 'Enrique Iglesias',
+          reason: 'de buren schrijven dezelfde artiest voluit, dus die naam hoort erbij');
+    });
+
+    test('een gastcredit wordt NIET platgeslagen door de buren', () async {
+      // De rem op de vorige regel. "Enrique Iglesias feat. Whitney Houston" is geen kortere schrijfwijze
+      // van "Enrique Iglesias" maar een andere credit, en die overschrijven is een echte fout -- eentje
+      // die je pas maanden later opmerkt.
+      final root = Directory(Directory.systemTemp.createTempSync('gast').path);
+      addTearDown(() {
+        try {
+          root.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final sep = Platform.pathSeparator;
+      final map = Directory('${root.path}${sep}Enrique Iglesias${sep}Escape')..createSync(recursive: true);
+      for (final n in ['02', '03', '04']) {
+        File('${map.path}$sep$n - x.flac').writeAsBytesSync(
+            _peerFlac(['TITLE=x', 'ARTIST=Enrique Iglesias', 'ALBUM=Escape']));
+      }
+      final oud = File('${map.path}${sep}05 - Hero.flac')
+        ..writeAsBytesSync(_peerFlac(['TITLE=Hero', 'ARTIST=Enrique Iglesias', 'ALBUM=Escape']));
+
+      final staging = Directory('${root.path}${sep}_in')..createSync();
+      final nieuw = File('${staging.path}${sep}05 - Hero.flac')
+        ..writeAsBytesSync(_peerFlac([
+          'TITLE=Hero',
+          'ARTIST=Enrique Iglesias feat. Whitney Houston',
+          'ALBUM=Escape',
+        ], pad: 9000));
+
+      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t) => oud.path);
+      expect(readFlacTags(File(uit.path))!.artist, contains('Whitney'),
+          reason: 'een langere credit is geen slordige schrijfwijze van een kortere');
+    });
+
+    test('twee buren zijn geen meerderheid voor een artiestnaam', () async {
+      // `_burenZeggen` slaat het bestand zelf over, dus in een map met twee nummers is één buur per
+      // definitie unaniem. Zonder ondergrens zou één slordig getagd bestand de hele map hernoemen.
+      final root = Directory(Directory.systemTemp.createTempSync('tweeburen').path);
+      addTearDown(() {
+        try {
+          root.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final sep = Platform.pathSeparator;
+      final map = Directory('${root.path}${sep}Various Artists${sep}Now 42')..createSync(recursive: true);
+      File('${map.path}${sep}01 - Artist One - Song A.flac')
+          .writeAsBytesSync(_peerFlac(['TITLE=Song A', 'ARTIST=Artist One', 'ALBUM=Now 42']));
+      final oud = File('${map.path}${sep}02 - Artist Two - Song B.flac')
+        ..writeAsBytesSync(_peerFlac(['TITLE=Song B', 'ARTIST=Artist Two', 'ALBUM=Now 42']));
+
+      final staging = Directory('${root.path}${sep}_in')..createSync();
+      final nieuw = File('${staging.path}${sep}02 - Song B.flac')
+        ..writeAsBytesSync(_peerFlac(['TITLE=Song B', 'ARTIST=Artist Two', 'ALBUM=Now 42'], pad: 9000));
+
+      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t) => oud.path);
+      expect(readFlacTags(File(uit.path))!.artist, 'Artist Two',
+          reason: 'één buur is geen meerderheid, en op een verzamelaar al helemaal niet');
+    });
+
     test('een MINDERE versie dringt zich niet op', () async {
       // Dezelfde weg, andersom: wie al het beste heeft, houdt het. Anders zou elke volgende download
       // je bibliotheek weer omlaag trekken.

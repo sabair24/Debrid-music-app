@@ -653,11 +653,20 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
       // splitst een album op dat getal zodra twee nummers hetzelfde tracknummer claimen. Een uploader
       // ripte van een andere persing en schrijft 11 of 17 waar jouw plaat 13 zegt, en dan breekt één
       // vervangen nummer de plaat in stukken. Zie [_burenZeggen].
+      // En de ARTIEST, maar alleen als de buren dezelfde artiest VOLLEDIGER schrijven. De bibliotheek
+      // groepeert ook op artiest, dus een bestand dat "Enrique" zegt tussen buren die "Enrique
+      // Iglesias" zeggen blijft een eigen tegel — ook al staat het in de goede map met de goede
+      // albumnaam. Gemeten op Escape: 7 nummers en 1.
+      //
+      // De dekkingstoets is de rem. Zonder die toets zou "Enrique Iglesias feat. Whitney Houston"
+      // worden platgeslagen tot "Enrique Iglesias" en was je de gastcredit kwijt — een echte fout,
+      // en eentje die je pas maanden later merkt.
       final buren = _burenZeggen(elders, landed);
       final velden = <String, String?>{
         if (buren.album != null) 'ALBUM': buren.album,
         if (buren.totaal != null) 'TRACKTOTAL': '${buren.totaal}',
         if (buren.totaal != null) 'TOTALTRACKS': '${buren.totaal}',
+        if (buren.artiest != null && _naamDekt(buren.artiest!, named.artist)) 'ARTIST': buren.artiest,
       };
       if (velden.isNotEmpty) await writeTagFields(File(landed), velden);
     }
@@ -815,6 +824,21 @@ Set<String> versionBrackets(String filename) {
 /// The version markers a filename claims: `D.A.N.C.E. (Live Version).flac` → `{live version}`.
 /// Only bracketed segments that actually contain a version word count, so noise like `(2021)`,
 /// `(WWW)` or `[PMEDIA]` doesn't masquerade as a different take.
+/// De titel zonder de haakjes die GEEN andere opname aanwijzen — en met alle andere er nog in.
+///
+/// Voor het HERKENNEN van een opname die je al hebt. `Escape (Album Version)` en `Escape` zijn
+/// hetzelfde nummer; `Escape (Live)` en `Escape` niet. Die eerste gelijkstelling ontbrak, en dat is
+/// duurder dan het klinkt: [LibraryStore.recordingElsewhere] vond het bestaande bestand niet, dus
+/// wist de downloadweg niet dat er iets te VERVANGEN viel, en kwam de betere kopie ernaast te liggen
+/// als een tweede album. Gemeten op Enrique's Escape: twee tegels, 7 nummers en 1.
+///
+/// Bewust via [versionMarkers] en niet met een eigen zeef. Die functie kent het verschil tussen een
+/// echt merk en een nepmerk al; hier wordt alleen zijn oordeel gebruikt. Staat er ook maar één echt
+/// merk in de titel, dan blijft de titel ongemoeid — liever een treffer mislopen dan twee verschillende
+/// opnames op één hoop.
+String withoutFakeVersion(String title) =>
+    versionMarkers(title).isEmpty ? withoutVersionText(title) : title;
+
 Set<String> versionMarkers(String filename) {
   final out = versionBrackets(filename).where((s) => !_geenEchtMerk.contains(s)).toSet();
   final base = filename.toLowerCase().replaceAll(RegExp(r'\.[a-z0-9]{2,5}$'), '');
@@ -982,14 +1006,34 @@ String _zelfdeNaamAndereExtensie(String bestaand, String bron) {
 /// Het gaat er hier niet om van welke persing dit bestand kwam, maar bij welke plaat het hoort. De buren
 /// zijn de enigen die dat weten, en de meerderheid beslist — bij een half vervangen album hoort niet de
 /// toevallige eerste te winnen.
-({String? album, int? totaal}) _burenZeggen(String map, String zelf) {
+/// Dekt [ruimer] de naam [smaller] volledig, op hele woorden?
+///
+/// "Enrique Iglesias" dekt "Enrique", maar "Amy" wordt niet gedekt door "Amy Winehouse" andersom te
+/// lezen — daar zou je de ene artiest voor de andere aanzien. Hele woorden dus, met spaties eromheen.
+///
+/// Staat hier en niet in library.dart, waar `LibraryStore._artistCovers` hetzelfde doet: dit bestand
+/// zit LAGER in de stapel, library.dart importeert organize.dart en andersom zou een kring worden.
+/// Dezelfde reden als bij [parkeerMap].
+bool _naamDekt(String ruimer, String smaller) {
+  final a = ' ${ruimer.toLowerCase().trim()} ';
+  final b = ' ${smaller.toLowerCase().trim()} ';
+  return b.trim().isNotEmpty && a.contains(b);
+}
+
+({String? album, int? totaal, String? artiest}) _burenZeggen(String map, String zelf) {
   final namen = <String, int>{};
   final totalen = <int, int>{};
+  final artiesten = <String, int>{};
+  var buren = 0;
   try {
     for (final f in Directory(map).listSync().whereType<File>()) {
       if (f.path == zelf) continue;
-      final naam = readTags(f)?.album.trim() ?? '';
+      final tags = readTags(f);
+      if (tags != null) buren++;
+      final naam = tags?.album.trim() ?? '';
       if (naam.isNotEmpty) namen[naam] = (namen[naam] ?? 0) + 1;
+      final art = tags?.artist.trim() ?? '';
+      if (art.isNotEmpty) artiesten[art] = (artiesten[art] ?? 0) + 1;
       // Voor het TOTAAL rechtstreeks de FLAC-lezer, want [readTags] geeft een [TrackTags] terug en die
       // draagt alleen titel, artiest, album en tracknummer -- `trackTotal` staat daar altijd op 0. Dat
       // is geen bug in TrackTags: dat type beschrijft wat er GESCHREVEN mag worden bij het opbergen.
@@ -998,11 +1042,16 @@ String _zelfdeNaamAndereExtensie(String bestaand, String bron) {
       if (totaal > 0) totalen[totaal] = (totalen[totaal] ?? 0) + 1;
     }
   } catch (_) {
-    return (album: null, totaal: null); // map niet te lezen: alles blijft zoals het was
+    return (album: null, totaal: null, artiest: null); // map niet te lezen: alles blijft zoals het was
   }
   return (
     album: namen.isEmpty ? null : namen.entries.reduce((a, b) => b.value > a.value ? b : a).key,
     totaal: totalen.isEmpty ? null : totalen.entries.reduce((a, b) => b.value > a.value ? b : a).key,
+    // De ARTIEST alleen bij een STEVIGE meerderheid, en dat is hier strenger dan bij de albumnaam.
+    // Een albumnaam die afwijkt is hooguit lelijk; een artiestnaam die afwijkt verandert onder wiens
+    // naam je muziek staat. Unanimiteit alleen is te zwak: `_burenZeggen` slaat het bestand zelf over,
+    // dus in een map met twee nummers is één buur per definitie unaniem. Vandaar de ondergrens.
+    artiest: (buren >= 3 && artiesten.length == 1) ? artiesten.keys.single : null,
   );
 }
 

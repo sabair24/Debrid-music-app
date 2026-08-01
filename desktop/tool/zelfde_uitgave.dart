@@ -56,7 +56,16 @@ Future<void> main(List<String> args) async {
       totaalVan[f.path] = t;
       if (t > 0) tellen[t] = (tellen[t] ?? 0) + 1;
     }
-    if (tellen.length < 2) continue;
+    // Een ONTBREKEND totaal telt mee als afwijking, ook al is het geen tweede getal. De bibliotheek
+    // rekent 0 als een eigen uitgave -- "een untagged rip die botst met een getagde is aantoonbaar
+    // niet van dezelfde persing" -- en dus splitst één bestand zonder dat veld de plaat net zo hard.
+    // Gemeten op Adele's 30: twaalf bestanden met 12, vier zonder iets, en toch twee tegels.
+    //
+    // Alleen niet als er niets te leren valt: staat de hele map op 0, dan is er geen meerderheid en
+    // blijft alles zoals het is.
+    if (tellen.isEmpty) continue;
+    final wijktAf = entry.value.where((f) => totaalVan[f.path] != tellen.keys.first).length;
+    if (tellen.length < 2 && wijktAf == 0) continue;
     gespleten++;
 
     final gesorteerd = tellen.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
