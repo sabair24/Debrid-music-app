@@ -223,6 +223,19 @@ class LibraryStore extends ChangeNotifier {
     return i <= 0 ? null : t.path.substring(0, i);
   }
 
+  /// Het BESTAND waarin deze opname al staat, of null als je hem nog niet hebt.
+  ///
+  /// De map alleen was niet genoeg, en dat kostte precies de reparatie waarvoor [folderOfRecording]
+  /// bedoeld was. De download landde wel in de goede map, maar zijn bestandsnaam werd afgeleid uit de
+  /// tags van de uploader — en die schrijft geen tracknummer. Zo kwam "Bailamos.flac" naast
+  /// "10 - Bailamos.flac" te staan: twee bestanden van hetzelfde nummer, want ze botsten nergens en de
+  /// vervangingsregel kwam er nooit aan te pas.
+  ///
+  /// Met het volledige pad wordt de bestemming letterlijk het bestand dat er al ligt, en dan doet
+  /// [firstIsBetter] zijn werk: de hoogste resolutie blijft, de mindere gaat naar `_dubbel`.
+  String? fileOfRecording(String artist, String title) =>
+      (ownedTrack(artist, title) ?? recordingElsewhere(artist, title))?.path;
+
   /// A copy of this recording ANYWHERE in the library, whatever album it happens to be filed under.
   ///
   /// [ownedTrack] answers a narrower question and missed exactly the case that mattered. It keys on

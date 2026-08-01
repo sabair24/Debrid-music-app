@@ -570,11 +570,20 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
   // De prijs is echt en de aanroeper moet hem willen: twee persingen náást elkaar bewaren kan hiermee
   // niet meer op dit pad. Vandaar dat het een parameter is en geen vaste regel — alleen de downloadweg
   // geeft hem mee.
-  final elders = staatAl?.call(named.artist, named.title);
-  final rel = elders == null
+  // [staatAl] geeft het PAD van het bestand dat er al ligt, niet alleen de map. Dat verschil is de hele
+  // reparatie. Met alleen de map werd de bestandsnaam alsnog uit de tags van de uploader afgeleid, en
+  // die schrijft geen tracknummer -- dus kwam "Bailamos.flac" naast "10 - Bailamos.flac" te liggen. Twee
+  // bestanden van hetzelfde nummer, want ze botsten nergens, en dan komt de vervangingsregel er nooit
+  // aan te pas. Gemeten op Enrique: twee opwaarderingen die er netjes NAAST kwamen te staan.
+  //
+  // De extensie blijft die van de BRON: een FLAC die een mp3 opvolgt hoort .flac te heten, en dan vindt
+  // [_sameTrackOtherFormat] hieronder de mp3 als de kopie die vervangen wordt.
+  final bestaand = staatAl?.call(named.artist, named.title);
+  final elders = bestaand == null ? null : File(bestaand).parent.path;
+  final rel = bestaand == null
       ? _reuseExistingFolders(root, volledig)
-      : '$elders${Platform.pathSeparator}${volledig.split(Platform.pathSeparator).last}';
-  var dest = File(elders == null ? '$root${Platform.pathSeparator}$rel' : rel);
+      : _zelfdeNaamAndereExtensie(bestaand, volledig);
+  var dest = File(bestaand == null ? '$root${Platform.pathSeparator}$rel' : rel);
   if (dest.path == src.path) return PlaceOutcome(src.path, Placement.moved);
   try {
     await dest.parent.create(recursive: true);
@@ -636,11 +645,21 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
     // deze negen bij elkáár horen, en de buren zijn de enigen die weten onder welke naam dat is.
     await stampTags(File(landed), t);
     if (elders != null) {
-      // Rechtstreeks dat ene veld, en niet via [stampTags]: die schrijft met opzet niets als de tags
+      // Rechtstreeks die velden, en niet via [stampTags]: die schrijft met opzet niets als de tags
       // niet van een officiële uitgave komen, en die van een peer zijn dat nooit. Precies daarom hield
       // het binnengekomen bestand zijn eigen albumnaam en stond het album alsnog dubbel in beeld.
-      final naam = _albumVanBuren(elders, landed);
-      if (naam != null) await writeTagFields(File(landed), {'ALBUM': naam});
+      //
+      // TRACKTOTAL gaat mee om dezelfde reden, maar tegen een ander soort dubbel: de bibliotheek
+      // splitst een album op dat getal zodra twee nummers hetzelfde tracknummer claimen. Een uploader
+      // ripte van een andere persing en schrijft 11 of 17 waar jouw plaat 13 zegt, en dan breekt één
+      // vervangen nummer de plaat in stukken. Zie [_burenZeggen].
+      final buren = _burenZeggen(elders, landed);
+      final velden = <String, String?>{
+        if (buren.album != null) 'ALBUM': buren.album,
+        if (buren.totaal != null) 'TRACKTOTAL': '${buren.totaal}',
+        if (buren.totaal != null) 'TOTALTRACKS': '${buren.totaal}',
+      };
+      if (velden.isNotEmpty) await writeTagFields(File(landed), velden);
     }
     // The folder the file came from, and the folder a replaced copy came from, are often empty now:
     // the per-peer staging folder always, and an album folder whose last track was superseded.
@@ -928,20 +947,63 @@ String _reuseExistingFolders(String root, String rel) {
 ///
 /// De meest vóórkomende naam wint, niet de eerste die we tegenkomen: bij een album dat half vervangen
 /// is, hoort de meerderheid te beslissen en niet de alfabetische volgorde.
-String? _albumVanBuren(String map, String zelf) {
-  final tellen = <String, int>{};
+/// Het pad van [bestaand], maar met de extensie van [bron].
+///
+/// Zo landt een FLAC die een mp3 opvolgt op `10 - Bailamos.flac` naast `10 - Bailamos.mp3`, waar
+/// [_sameTrackOtherFormat] hem herkent als dezelfde opname in een ander formaat en de mp3 laat wijken.
+/// Was de extensie die van het bestaande bestand, dan zou een FLAC als `.mp3` worden weggeschreven --
+/// een bestand dat over zichzelf liegt, en dat is erger dan het probleem.
+String _zelfdeNaamAndereExtensie(String bestaand, String bron) {
+  String ext(String p) {
+    final i = p.lastIndexOf('.');
+    final s = p.lastIndexOf(Platform.pathSeparator);
+    return i > s ? p.substring(i) : '';
+  }
+
+  final e = ext(bron);
+  if (e.isEmpty) return bestaand;
+  final i = bestaand.lastIndexOf('.');
+  final s = bestaand.lastIndexOf(Platform.pathSeparator);
+  return i > s ? '${bestaand.substring(0, i)}$e' : '$bestaand$e';
+}
+
+/// Wat de buren in deze map over hun plaat zeggen: onder welke NAAM ze staan, en van hoeveel nummers
+/// hun uitgave is.
+///
+/// Die tweede is er later bij gekomen, en niet voor de sier. De bibliotheek splitst een album zodra
+/// twee nummers hetzelfde tracknummer claimen én een verschillend TRACKTOTAL opgeven — zie
+/// `LibraryStore.editionSplit`. Dat is een goede regel: zo blijven twee echte persingen uit elkaar.
+///
+/// Maar bij het VERVANGEN van een nummer werkt hij averechts. De betere kopie komt van een willekeurige
+/// uploader, en die ripte van een andere persing: hij zegt 11 of 17 waar jouw plaat 13 zegt. Eén zo'n
+/// bestand is genoeg om het album in drieën te breken. Gemeten op Backstreet's Back: 12 nummers onder
+/// "13 nummers", 1 onder "11 nummers" en 2 onder "17 nummers" — drie tegels van één plaat.
+///
+/// Het gaat er hier niet om van welke persing dit bestand kwam, maar bij welke plaat het hoort. De buren
+/// zijn de enigen die dat weten, en de meerderheid beslist — bij een half vervangen album hoort niet de
+/// toevallige eerste te winnen.
+({String? album, int? totaal}) _burenZeggen(String map, String zelf) {
+  final namen = <String, int>{};
+  final totalen = <int, int>{};
   try {
     for (final f in Directory(map).listSync().whereType<File>()) {
       if (f.path == zelf) continue;
       final naam = readTags(f)?.album.trim() ?? '';
-      if (naam.isEmpty) continue;
-      tellen[naam] = (tellen[naam] ?? 0) + 1;
+      if (naam.isNotEmpty) namen[naam] = (namen[naam] ?? 0) + 1;
+      // Voor het TOTAAL rechtstreeks de FLAC-lezer, want [readTags] geeft een [TrackTags] terug en die
+      // draagt alleen titel, artiest, album en tracknummer -- `trackTotal` staat daar altijd op 0. Dat
+      // is geen bug in TrackTags: dat type beschrijft wat er GESCHREVEN mag worden bij het opbergen.
+      // Hier wordt gelezen, en dan is de volledige kop de juiste bron.
+      final totaal = readFlacTags(f)?.trackTotal ?? 0;
+      if (totaal > 0) totalen[totaal] = (totalen[totaal] ?? 0) + 1;
     }
   } catch (_) {
-    return null; // map niet te lezen: dan maar de eigen naam, dat is het oude gedrag
+    return (album: null, totaal: null); // map niet te lezen: alles blijft zoals het was
   }
-  if (tellen.isEmpty) return null;
-  return tellen.entries.reduce((a, b) => b.value > a.value ? b : a).key;
+  return (
+    album: namen.isEmpty ? null : namen.entries.reduce((a, b) => b.value > a.value ? b : a).key,
+    totaal: totalen.isEmpty ? null : totalen.entries.reduce((a, b) => b.value > a.value ? b : a).key,
+  );
 }
 
 /// Waar een kopie heen gaat die het aflegt tegen een betere: opzij, niet weg.

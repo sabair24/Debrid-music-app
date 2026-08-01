@@ -268,11 +268,13 @@ void main() {
       final uit = await placeFileDetailed(nieuw, root.path,
           tags: thriller,
           staatAl: (artiest, titel) =>
-              titel.toLowerCase().contains('baby be mine') ? bestaandeMap.path : null);
+              titel.toLowerCase().contains('baby be mine') ? oud.path : null);
 
       expect(uit.how, Placement.moved);
       expect(File(uit.path).parent.path, bestaandeMap.path,
           reason: 'de nieuwe hoort in het bestaande album, niet in een tweede map');
+      expect(uit.path, oud.path,
+          reason: 'en op het bestand zelf, niet ernaast onder de naam die de uploader koos');
       final over = bestaandeMap
           .listSync()
           .whereType<File>()
@@ -312,6 +314,9 @@ void main() {
       }
       File('${map.path}${sep}05 - y.flac').writeAsBytesSync(
           _peerFlac(['TITLE=y', 'ARTIST=Michael Jackson', 'ALBUM=Thriller (iets anders)']));
+      final oud = File('${map.path}${sep}02 - Baby Be Mine.flac')
+        ..writeAsBytesSync(
+            _peerFlac(['TITLE=Baby Be Mine', 'ARTIST=Michael Jackson', 'ALBUM=Thriller (MFSL One Step)']));
 
       final staging = Directory('${root.path}${sep}_in')..createSync();
       final nieuw = File('${staging.path}${sep}02 - Baby Be Mine.flac')
@@ -321,12 +326,64 @@ void main() {
           'ALBUM=Thriller (Epic, Mjj Productions - 88875143731, Eu)',
         ], pad: 9000));
 
-      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t) => map.path);
+      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t) => oud.path);
 
       expect(uit.how, Placement.moved);
       final geschreven = readFlacTags(File(uit.path))!;
       expect(geschreven.album, 'Thriller (MFSL One Step)',
           reason: 'de nieuwkomer hoort bij dit album, dus draagt hij die naam');
+    });
+
+    test('de nieuwkomer neemt ook het AANTAL NUMMERS van de buren over', () async {
+      // Het tweede soort dubbel, en het gemenere: de bibliotheek splitst een album zodra twee nummers
+      // hetzelfde tracknummer claimen én een ander TRACKTOTAL opgeven. Een uploader ript van een andere
+      // persing en schrijft 11 of 17 waar jouw plaat 13 zegt — en dan breekt één vervangen nummer de
+      // hele plaat. Gemeten op Backstreet's Back: drie tegels van één album, 12 + 1 + 2 nummers.
+      final root = Directory(Directory.systemTemp.createTempSync('totaal').path);
+      addTearDown(() {
+        try {
+          root.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final sep = Platform.pathSeparator;
+      final map = Directory('${root.path}${sep}Backstreet Boys${sep}Backstreet\'s Back')
+        ..createSync(recursive: true);
+      for (final n in ['01', '03', '04']) {
+        File('${map.path}$sep$n - x.flac').writeAsBytesSync(_peerFlac([
+          'TITLE=x',
+          'ARTIST=Backstreet Boys',
+          'ALBUM=Backstreet\'s Back',
+          'TRACKTOTAL=13',
+        ]));
+      }
+
+      final oud = File('${map.path}${sep}02 - Everybody.flac')
+        ..writeAsBytesSync(_peerFlac([
+          'TITLE=Everybody',
+          'ARTIST=Backstreet Boys',
+          'ALBUM=Backstreet\'s Back',
+          'TRACKTOTAL=13',
+        ]));
+
+      final staging = Directory('${root.path}${sep}_in')..createSync();
+      // Zonder tracknummer in de naam, precies zoals de uploaders het aanleveren: zo kwam
+      // "Bailamos.flac" naast "10 - Bailamos.flac" te liggen in plaats van erop.
+      final nieuw = File('${staging.path}${sep}Everybody.flac')
+        ..writeAsBytesSync(_peerFlac([
+          'TITLE=Everybody',
+          'ARTIST=Backstreet Boys',
+          'ALBUM=Backstreet\'s Back',
+          'TRACKTOTAL=17', // een andere persing — precies wat de plaat brak
+        ], pad: 9000));
+
+      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t) => oud.path);
+      expect(uit.path, oud.path, reason: 'op het bestaande bestand, niet ernaast');
+      expect(map.listSync().whereType<File>().where((f) => f.path.endsWith('.flac')), hasLength(4),
+          reason: 'drie buren plus de vervanger — geen vijfde bestand erbij');
+
+      expect(uit.how, Placement.moved);
+      expect(readFlacTags(File(uit.path))!.trackTotal, 13,
+          reason: 'het gaat er niet om van welke persing dit bestand kwam, maar bij welke plaat het hoort');
     });
 
     test('een MINDERE versie dringt zich niet op', () async {
@@ -341,14 +398,14 @@ void main() {
       final sep = Platform.pathSeparator;
       final bestaandeMap = Directory('${root.path}${sep}Michael Jackson${sep}Thriller (MFSL One Step)')
         ..createSync(recursive: true);
-      File('${bestaandeMap.path}${sep}02 - Baby Be Mine.flac')
-          .writeAsBytesSync(_peerFlac(['TITLE=Baby Be Mine', 'ARTIST=Michael Jackson'], pad: 9000));
+      final groot = File('${bestaandeMap.path}${sep}02 - Baby Be Mine.flac')
+        ..writeAsBytesSync(_peerFlac(['TITLE=Baby Be Mine', 'ARTIST=Michael Jackson'], pad: 9000));
       final staging = Directory('${root.path}${sep}_in')..createSync();
       final klein = File('${staging.path}${sep}02 - Baby Be Mine.flac')
         ..writeAsBytesSync(_peerFlac(['TITLE=Baby Be Mine', 'ARTIST=Michael Jackson'], pad: 1000));
 
       final uit = await placeFileDetailed(klein, root.path,
-          tags: thriller, staatAl: (artiest, titel) => bestaandeMap.path);
+          tags: thriller, staatAl: (artiest, titel) => groot.path);
 
       expect(uit.how, Placement.duplicate);
       expect(klein.existsSync(), isFalse, reason: 'de mindere kopie is opgeruimd');
