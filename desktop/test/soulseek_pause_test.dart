@@ -51,6 +51,32 @@ void main() {
         reason: 'promising to retry a wrong password is a promise that cannot come true');
   });
 
+  test('dezelfde INVALIDPASS na een geslaagde login is een account dat elders in gebruik is', () {
+    // Soulseek stuurt ÉÉN refusal voor twee heel verschillende dingen: een fout wachtwoord, en een
+    // naam die al ingelogd is. Dat als "wachtwoord fout" lezen kost tien minuten wachten plus het
+    // advies om een login te wijzigen die nooit het probleem was.
+    //
+    // Gemeten geval: de officiële Soulseek-app openen en weer sluiten was genoeg. De native client
+    // werkte prima, en de app zei "gebruikersnaam of wachtwoord klopt niet".
+    final c = SoulseekClient()
+      ..noteLoginOk()
+      ..noteLoginRefused('INVALIDPASS');
+    expect(c.pause, SlskPause.inUse);
+    expect(c.whyNotLogin, contains('ergens anders in gebruik'));
+    expect(c.whyNotLogin, isNot(contains('Instellingen')),
+        reason: 'iemand naar zijn wachtwoord sturen dat aantoonbaar werkte is het verkeerde advies');
+    expect(c.blockedFor!.inMinutes, lessThan(5),
+        reason: 'dit lost zichzelf op zodra de andere app dicht gaat, dus kort wachten');
+  });
+
+  test('zonder eerdere geslaagde login blijft INVALIDPASS gewoon een fout wachtwoord', () {
+    // De rem op de vorige regel. Wie zijn wachtwoord verkeerd intikt hoort dat te horen, en niet naar
+    // een niet-bestaande tweede app te gaan zoeken.
+    final c = SoulseekClient()..noteLoginRefused('INVALIDPASS');
+    expect(c.pause, SlskPause.badLogin);
+    expect(c.whyNotLogin, contains('Instellingen'));
+  });
+
   test('a wrong password does not escalate the wait', () {
     // 2 → 6 → 15 → 30 minutes made sense for a burst. Applied to a typo it just buries the message
     // deeper each time.
@@ -171,6 +197,11 @@ void main() {
           c.noteLoginRefused('busy');
         case SlskPause.badLogin:
           c.noteLoginRefused('INVALIDPASS');
+        case SlskPause.inUse:
+          // Dezelfde refusal, maar mét een geslaagde login ervoor — dat is het hele verschil.
+          c
+            ..noteLoginOk()
+            ..noteLoginRefused('INVALIDPASS');
         case SlskPause.noAnswer:
           c.noteLoginNoAnswer();
         case SlskPause.kicked:

@@ -186,6 +186,19 @@ enum SlskPause {
   /// The server's reason names the username or the password. Waiting cannot fix this one.
   badLogin,
 
+  /// The server said INVALIDPASS, but this login has worked before — so the password is almost
+  /// certainly fine and the account is simply in use somewhere else.
+  ///
+  /// Soulseek sends the SAME refusal for both cases: a wrong password, and a name that is already
+  /// logged in. Reading it as "wrong password" hands the user ten minutes of waiting plus the advice
+  /// to go change a login that was never the problem. Gemeten: de native client openen en weer
+  /// sluiten was genoeg om deze melding te krijgen terwijl er niets mis was.
+  ///
+  /// Het onderscheid is niet uit het antwoord te halen maar wél uit de geschiedenis: een wachtwoord
+  /// dat een uur geleden werkte is niet ineens fout. [kicked] dekt het geval waarin de andere app ons
+  /// er ná een geslaagde login afgooit; dit dekt het geval waarin we er niet eens meer in komen.
+  inUse,
+
   /// We asked and nothing came back before the timeout. Says nothing about the account.
   noAnswer,
 
@@ -542,10 +555,18 @@ class SoulseekClient {
     _decayRefusals();
     _serverSaid = reason.trim();
     if (_namesCredentials(_serverSaid)) {
-      // A wrong password is not a burst to back off from. Escalating 2 → 6 → 15 → 30 minutes over
-      // it only hides the one thing the user has to be told, and hides it for longer each time.
-      _pause = SlskPause.badLogin;
-      _blockedUntil = DateTime.now().add(const Duration(minutes: 10));
+      if (_werkteEerder) {
+        // Ditzelfde INVALIDPASS betekent hier iets heel anders: het account is elders in gebruik.
+        // Zie [SlskPause.inUse]. Kort wachten, want het lost zichzelf op zodra de andere app dicht
+        // gaat — en géén advies om een login te wijzigen die aantoonbaar werkte.
+        _pause = SlskPause.inUse;
+        _blockedUntil = DateTime.now().add(const Duration(minutes: 2));
+      } else {
+        // A wrong password is not a burst to back off from. Escalating 2 → 6 → 15 → 30 minutes over
+        // it only hides the one thing the user has to be told, and hides it for longer each time.
+        _pause = SlskPause.badLogin;
+        _blockedUntil = DateTime.now().add(const Duration(minutes: 10));
+      }
     } else {
       _pause = SlskPause.refused;
       _blockedUntil = DateTime.now().add(_backoff[_refusals.clamp(0, _backoff.length - 1)]);
@@ -564,12 +585,25 @@ class SoulseekClient {
     unawaited(_saveGuard());
   }
 
+  /// Wanneer deze inloggegevens voor het laatst aantoonbaar werkten.
+  ///
+  /// Het enige bewijs dat een INVALIDPASS níét over het wachtwoord gaat. Blijft een herstart staan,
+  /// want juist dan is de vraag "was dit ooit goed" niet meer uit het geheugen te beantwoorden.
+  DateTime? _laatstGoed;
+
+  /// Een geslaagde login van niet te lang geleden. Ruim genomen: iemand die zijn wachtwoord wijzigt
+  /// merkt dat binnen een week, en tot die tijd is "elders in gebruik" de veel waarschijnlijkere
+  /// verklaring — het is de enige die vanzelf overgaat.
+  bool get _werkteEerder =>
+      _laatstGoed != null && DateTime.now().difference(_laatstGoed!) < const Duration(days: 7);
+
   void noteLoginOk() {
     _blockedUntil = null;
     _refusals = 0;
     _lastRefusalAt = null;
     _pause = SlskPause.none;
     _serverSaid = '';
+    _laatstGoed = DateTime.now();
     unawaited(_saveGuard());
   }
 
@@ -604,6 +638,7 @@ class SoulseekClient {
       }
       _refusals = (j['refusals'] as num?)?.toInt() ?? 0;
       _lastRefusalAt = DateTime.tryParse('${j['lastRefusalAt'] ?? ''}');
+      _laatstGoed = DateTime.tryParse('${j['laatstGoed'] ?? ''}');
       // A file written yesterday must not start today on a half-hour wait.
       _decayRefusals();
       final times = (j['logins'] as List?) ?? const [];
@@ -639,6 +674,10 @@ class SoulseekClient {
       // possible way — which is how a kick turned into "login geweigerd" the next morning.
       'pause': _pause.name,
       'serverSaid': _serverSaid,
+      // Moet een herstart overleven, en juist dán telt het: na het opstarten is er geen geheugen meer
+      // van een geslaagde login, en dan zou het eerstvolgende INVALIDPASS weer als "wachtwoord fout"
+      // gelezen worden — met tien minuten wachten en het verkeerde advies erbij. Zie [_werkteEerder].
+      'laatstGoed': _laatstGoed?.toIso8601String(),
     });
     // The destination is fixed HERE, with the payload, not when the write's turn comes round. The
     // path is read from the app folder, and a queued write that resolves it later would land
@@ -698,6 +737,10 @@ class SoulseekClient {
                 'pas je login aan bij Instellingen.'
             : 'Soulseek weigert je login en zegt: "$_serverSaid". Wachten helpt hier niet — pas je '
                 'login aan bij Instellingen.',
+        SlskPause.inUse =>
+          'Soulseek weigert de login, maar dit wachtwoord werkte eerder wel. Vrijwel zeker is het '
+              'account ergens anders in gebruik — Soulseek staat er één tegelijk toe. Sluit de '
+              'officiële app of het apparaat dat ermee ingelogd is; de app probeert het zo weer.',
         SlskPause.refused => _serverSaid.isEmpty
             ? 'Soulseek weigerde de login zonder reden op te geven. De app probeert het straks weer.'
             : 'Soulseek weigerde de login: "$_serverSaid". De app probeert het straks weer.',
@@ -715,6 +758,7 @@ class SoulseekClient {
   String get pauseLabel => switch (pause) {
         SlskPause.none => '',
         SlskPause.badLogin => 'gebruikersnaam of wachtwoord klopt niet',
+        SlskPause.inUse => 'account is elders in gebruik',
         SlskPause.refused => 'Soulseek weigerde de login',
         SlskPause.noAnswer => 'Soulseek antwoordde niet',
         SlskPause.kicked => 'andere Soulseek-app heeft het account overgenomen',
