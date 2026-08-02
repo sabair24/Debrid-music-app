@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import 'release_format.dart';
 import 'settings.dart';
 
 /// One person credited on a release.
@@ -47,8 +48,14 @@ class CreditsService {
   final Map<String, List<Credit>> _cache = {};
 
   /// The people behind an album, most interesting roles first.
-  Future<List<Credit>> forAlbum(String artist, String album) async {
-    final key = '${artist.toLowerCase()}|${album.toLowerCase()}';
+  ///
+  /// [volledigAantal] is het aantal nummers van deze plaat, als de aanroeper de HELE tracklijst
+  /// kent — niet wat er toevallig van op schijf staat. Alleen dan is een uitgave af te wijzen omdat
+  /// hij te lang is, en dat is nodig: het zoeken hieronder gaat op tekst, en "Sia" + "Titans" (één
+  /// nummer) leverde een negenentwintigdelige soundtrack van Waxwork Records op. De credits die je
+  /// dan te zien kreeg waren filmcomponisten.
+  Future<List<Credit>> forAlbum(String artist, String album, {int volledigAantal = 0}) async {
+    final key = '${artist.toLowerCase()}|${album.toLowerCase()}|$volledigAantal';
     final hit = _cache[key];
     if (hit != null) return hit;
     final token = settings.discogsToken.trim();
@@ -87,6 +94,11 @@ class CreditsService {
             .timeout(const Duration(seconds: 12));
         if (r.statusCode != 200) continue;
         final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+
+        // Is dit dezelfde plaat? De tracklijst zit al in dit antwoord, dus deze toets kost niets.
+        // Dezelfde regel als overal elders — zie DiscogsService.fitsTrackCount.
+        final lengte = (j['tracklist'] as List?)?.length ?? 0;
+        if (volledigAantal > 0 && lengte > 0 && !fitsTrackCount(lengte, volledigAantal)) continue;
 
         final out = <Credit>[];
         final seen = <String>{};

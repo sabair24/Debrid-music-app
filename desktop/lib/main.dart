@@ -4027,12 +4027,11 @@ class ArtistsView extends StatefulWidget {
   /// Albums already narrowed by the shell's search/filter (defaults to the whole library).
   final List<Album>? albums;
 
-  /// How this view tells the shell it has a layer of its own to close.
+  /// Vroeger: hoe deze weergave de schil vertelde dat er een eigen laag openstond.
   ///
-  /// Handed up rather than handled here with a second PopScope. Both would be registered on the
-  /// SAME route — this view is a swapped-in body, not a route — so one press of BACK fires both:
-  /// the shell would jump to Start while this cleared its selection, and you would lose your place
-  /// in the artist list. Measured on the Shield, not guessed.
+  /// Er ís hier geen eigen laag meer. Een artiest opent nu dezelfde route als overal elders, dus BACK
+  /// wordt door de navigator afgehandeld en niet door de schil. De parameter blijft staan omdat de
+  /// schil hem aan meerdere weergaves doorgeeft; hij wordt hier bewust nooit gevuld.
   final void Function(VoidCallback?)? onInnerLayer;
 
   const ArtistsView({super.key, required this.lib, this.albums, this.onInnerLayer});
@@ -4041,33 +4040,10 @@ class ArtistsView extends StatefulWidget {
 }
 
 class _ArtistsViewState extends State<ArtistsView> {
-  String? _selected;
-
   List<Album> get _source => widget.albums ?? widget.lib.albums;
-
-  /// Select an artist, or go back to the grid, and tell the shell either way.
-  void _select(String? name) {
-    setState(() => _selected = name);
-    widget.onInnerLayer?.call(name == null ? null : () => _select(null));
-  }
-
-  @override
-  void dispose() {
-    // The shell must not keep a callback into a view that is gone.
-    widget.onInnerLayer?.call(null);
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
-    if (_selected != null) {
-      return ArtistDetailView(
-        name: _selected!,
-        libraryAlbums: _source.where((a) => a.artist == _selected!).toList(),
-        onBack: () => _select(null),
-        onArtist: _select,
-      );
-    }
     // Only artists that still have a matching album after the shell's search/filter.
     final visible = {for (final a in _source) a.artist};
     final artists = widget.lib.artists.where(visible.contains).toList();
@@ -4098,7 +4074,10 @@ class _ArtistsViewState extends State<ArtistsView> {
               return _ArtistCard(
                 name: name,
                 image: art,
-                onTap: () => _select(name),
+                // Dezelfde pagina als een aangeklikte naam elders in de app oplevert. Het was een
+                // ingewisselde laag met een eigen, magerdere artiestpagina — je kreeg dus een ander
+                // scherm afhankelijk van waar je vandaan kwam.
+                onTap: () => openArtist(context, name),
               );
             }, childCount: artists.length),
           ),
@@ -4112,7 +4091,12 @@ class _ArtistsViewState extends State<ArtistsView> {
 /// thread Roon pulls: from a record you like, to the producer, to everything else they touched.
 class CreditsPanel extends StatefulWidget {
   final String artist, album;
-  const CreditsPanel({super.key, required this.artist, required this.album});
+
+  /// Het aantal nummers van de HELE plaat, als de aanroeper dat kent — zie
+  /// [CreditsService.forAlbum]. Nul betekent "ik weet het niet", en dan wordt er niet op gewogen.
+  final int volledigAantal;
+  const CreditsPanel(
+      {super.key, required this.artist, required this.album, this.volledigAantal = 0});
 
   @override
   State<CreditsPanel> createState() => _CreditsPanelState();
@@ -4138,7 +4122,8 @@ class _CreditsPanelState extends State<CreditsPanel> {
 
   Future<void> _load() async {
     final artist = widget.artist, album = widget.album;
-    final c = await CreditsService(context.read<AppSettings>()).forAlbum(artist, album);
+    final c = await CreditsService(context.read<AppSettings>())
+        .forAlbum(artist, album, volledigAantal: widget.volledigAantal);
     if (!mounted || artist != widget.artist || album != widget.album) return;
     setState(() => _credits = c);
   }
@@ -4336,330 +4321,6 @@ class _PersonPageState extends State<PersonPage> {
           ],
           const SliverToBoxAdapter(child: SizedBox(height: 24)),
         ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Everything about one artist on a single page: what you own, their whole catalogue with the
-/// gaps visible, who they sound like, and who worked on the records.
-///
-/// The split is the point — "in mijn bibliotheek" answers "what can I play", "discografie"
-/// answers "what else is there", and a release you already own is marked as such so the gap in a
-/// collection is obvious at a glance.
-class ArtistDetailView extends StatefulWidget {
-  final String name;
-  final List<Album> libraryAlbums;
-  final VoidCallback onBack;
-  final void Function(String name)? onArtist;
-  const ArtistDetailView({
-    super.key,
-    required this.name,
-    required this.libraryAlbums,
-    required this.onBack,
-    this.onArtist,
-  });
-
-  @override
-  State<ArtistDetailView> createState() => _ArtistDetailViewState();
-}
-
-class _ArtistDetailViewState extends State<ArtistDetailView> {
-  final _catalog = CatalogService();
-  List<CatalogAlbum> _discography = [];
-  List<CatalogArtist> _related = [];
-  bool _busy = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  @override
-  void didUpdateWidget(ArtistDetailView old) {
-    super.didUpdateWidget(old);
-    if (old.name != widget.name) {
-      setState(() {
-        _discography = [];
-        _related = [];
-        _busy = true;
-      });
-      _load();
-    }
-  }
-
-  Future<void> _load() async {
-    final name = widget.name;
-    try {
-      final hits = await _catalog.searchArtists(name);
-      if (hits.isEmpty) {
-        if (mounted && name == widget.name) setState(() => _busy = false);
-        return;
-      }
-      final id = hits.first.id;
-      final albums = await _catalog.artistAlbums(id);
-      final related = await _catalog.relatedArtists(id);
-      if (!mounted || name != widget.name) return;
-      setState(() {
-        _discography = albums;
-        _related = related;
-        _busy = false;
-      });
-    } catch (_) {
-      if (mounted && name == widget.name) setState(() => _busy = false);
-    }
-  }
-
-  /// The library album matching a catalogue release, if you own it.
-  Album? _owned(CatalogAlbum a) {
-    final key = normKey(a.title);
-    for (final l in widget.libraryAlbums) {
-      if (normKey(l.title) == key) return l;
-    }
-    return null;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final lib = context.watch<LibraryStore>();
-    final trackCount = widget.libraryAlbums.fold<int>(0, (s, a) => s + a.tracks.length);
-    final bio = lib.artistBios[widget.name];
-
-    // Split the way a discography is actually read: the records first, the odds and ends after.
-    final main = _discography.where((a) => a.recordType == 'album').toList();
-    final rest = _discography.where((a) => a.recordType != 'album').toList();
-
-    return ArtistBackdrop(
-      name: widget.name,
-      fallbackImage: lib.artistImages[widget.name],
-      child: CustomScrollView(
-      slivers: [
-        SliverToBoxAdapter(
-          child: Stack(
-            children: [
-              ArtistHero(
-                name: widget.name,
-                ownBackdrop: false,
-                subtitle: '${widget.libraryAlbums.length} albums · $trackCount nummers in je bibliotheek',
-                fallbackImage: lib.artistImages[widget.name],
-                actions: [
-                  FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                        backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10)),
-                    onPressed: () => startRadio(context, widget.name),
-                    icon: const Icon(Icons.radio_rounded, size: 18),
-                    label: const Text('Radio'),
-                  ),
-                  const SizedBox(width: 10),
-                  // The app guesses portrait-vs-backdrop from the shape of a picture; a guess is
-                  // exactly the thing worth being able to overrule.
-                  FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                        backgroundColor: _panel2,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
-                    onPressed: () =>
-                        showDialog<void>(context: context, builder: (_) => ArtistArtGallery(widget.name)),
-                    icon: const Icon(Icons.photo_library_outlined, size: 18),
-                    label: const Text('Foto kiezen'),
-                  ),
-                ],
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 0, 0),
-                child: TextButton.icon(
-                  onPressed: widget.onBack,
-                  icon: const Icon(Icons.arrow_back_rounded, size: 18),
-                  label: const Text('Artiesten'),
-                ),
-              ),
-            ],
-          ),
-        ),
-        if (bio != null)
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(24, 4, 24, 14),
-              child: BioText(widget.name, bio),
-            ),
-          ),
-        _header('In mijn bibliotheek', '${widget.libraryAlbums.length}'),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-          sliver: SliverGrid(
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 190, mainAxisSpacing: 20, crossAxisSpacing: 20, childAspectRatio: .78),
-            delegate: SliverChildBuilderDelegate(
-              (_, i) => AlbumCard(album: widget.libraryAlbums[i]),
-              childCount: widget.libraryAlbums.length,
-            ),
-          ),
-        ),
-        if (_busy)
-          const SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.all(28),
-              child: Center(child: CircularProgressIndicator(color: _accent, strokeWidth: 2.4)),
-            ),
-          ),
-        if (main.isNotEmpty) ...[
-          _header('Discografie', '${main.length} albums'),
-          _discoGrid(main),
-        ],
-        if (rest.isNotEmpty) ...[
-          _header('Singles & EP’s', '${rest.length}'),
-          _discoGrid(rest),
-        ],
-        if (_related.isNotEmpty) ...[
-          _header('Klinkt als', '${_related.length}'),
-          SliverToBoxAdapter(
-            child: SizedBox(
-              height: 176,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                itemCount: _related.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 14),
-                itemBuilder: (_, i) {
-                  final r = _related[i];
-                  return _RelatedArtistCard(
-                    artist: r,
-                    inLibrary: lib.hasArtist(r.name),
-                    onTap: () {
-                      // Someone you already own opens your own page; anyone else opens theirs.
-                      if (lib.hasArtist(r.name) && widget.onArtist != null) {
-                        widget.onArtist!(lib.displayArtist(r.name));
-                      } else {
-                        Navigator.of(context).push(MaterialPageRoute(builder: (_) => ArtistBrowsePage(r)));
-                      }
-                    },
-                  );
-                },
-              ),
-            ),
-          ),
-        ],
-        const SliverToBoxAdapter(child: SizedBox(height: 28)),
-      ],
-      ),
-    );
-  }
-
-  Widget _header(String title, String badge) => SliverToBoxAdapter(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 20, 24, 10),
-          child: Row(
-            children: [
-              Text(title, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
-              const SizedBox(width: 10),
-              Text(badge, style: const TextStyle(color: _muted, fontSize: 12.5)),
-            ],
-          ),
-        ),
-      );
-
-  Widget _discoGrid(List<CatalogAlbum> items) => SliverPadding(
-        padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-        sliver: SliverGrid(
-          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 190, mainAxisSpacing: 20, crossAxisSpacing: 20, childAspectRatio: .78),
-          delegate: SliverChildBuilderDelegate(
-            (_, i) {
-              final a = items[i];
-              final owned = _owned(a);
-              return _DiscoCard(
-                album: a,
-                artist: widget.name,
-                owned: owned,
-              );
-            },
-            childCount: items.length,
-          ),
-        ),
-      );
-}
-
-/// A release from the catalogue, marked with whether it's already on your shelf.
-class _DiscoCard extends StatefulWidget {
-  final CatalogAlbum album;
-  final String artist;
-  final Album? owned;
-  const _DiscoCard({required this.album, required this.artist, this.owned});
-
-  @override
-  State<_DiscoCard> createState() => _DiscoCardState();
-}
-
-class _DiscoCardState extends State<_DiscoCard> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final a = widget.album;
-    final have = widget.owned != null;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: Pressable(
-        onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => have
-              ? AlbumDetailPage(album: widget.owned!)
-              : AlbumBrowsePage(widget.artist, a),
-        )),
-        borderRadius: BorderRadius.circular(14),
-        scaleOnFocus: false,
-        onFocusChange: (v) => setState(() => _hover = v),
-        child: AnimatedScale(
-          scale: _hover ? 1.06 : 1,
-          duration: const Duration(milliseconds: 170),
-          curve: Curves.easeOut,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 170),
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: _hover ? _panel2 : _panel,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: have ? _accent2.withValues(alpha: .45) : _line),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: LayoutBuilder(
-                    builder: (_, c) => Stack(
-                      children: [
-                        _netCover(a.cover, size: c.maxWidth),
-                        if (have)
-                          Positioned(
-                            right: 6,
-                            top: 6,
-                            child: Container(
-                              padding: const EdgeInsets.all(3),
-                              decoration: const BoxDecoration(color: _accent2, shape: BoxShape.circle),
-                              child: const Icon(Icons.check_rounded, size: 13, color: Colors.black),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 9),
-                Text(a.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
-                Text(
-                  have ? 'in je bibliotheek' : (a.year ?? ''),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: have ? _accent2 : _muted, fontSize: 12),
-                ),
-              ],
-            ),
-          ),
         ),
       ),
     );
@@ -9048,6 +8709,20 @@ class AlbumInfoPanel extends StatefulWidget {
   /// is really a single or a sampler filed under the same master.
   final int trackCount;
 
+  /// Is [trackCount] de HELE plaat, of alleen wat de bibliotheek er toevallig van heeft?
+  ///
+  /// Dat verschil beslist of een uitgave mag afvallen omdat hij te LANG is. Alleen de bladerpagina
+  /// weet het zeker — die telt de tracklijst van precies deze uitgave. De albumpagina telt wat er op
+  /// schijf staat, en dat is routinematig een deel: vier nummers van Demon Days zijn nog steeds
+  /// Demon Days, en een bovengrens op dat viertal zou elke echte persing van vijftien afwijzen. Dat
+  /// is precies waarom [DiscogsService.edition] alleen op "te weinig" toetst.
+  ///
+  /// Met een volledige tracklijst is de andere richting wél te vertrouwen, en die is nodig: Sia /
+  /// "Titans" is één nummer, en de tekstzoektocht bij Discogs leverde een soundtrack van Waxwork
+  /// Records met negenentwintig — jaartal, label, genres en credits van een plaat die niet van haar
+  /// is, boven een tracklijst die dat wel is.
+  final bool completeTracklist;
+
   /// The Discogs release the user pinned to this album, if any.
   final int? pinned;
 
@@ -9061,6 +8736,7 @@ class AlbumInfoPanel extends StatefulWidget {
       required this.artist,
       required this.album,
       this.trackCount = 0,
+      this.completeTracklist = false,
       this.pinned,
       this.pinnedMbid,
       this.roles = const {}});
@@ -9167,6 +8843,16 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     // Discogs knows what the record IS: which pressing, on whose label, under what catalogue number.
     unawaited(release.then((ed) {
       if (ed == null || !stillHere()) return;
+      // …maar alleen als het over DEZE plaat gaat. De zoektocht hierboven is op tekst en de laatste
+      // uitweg in `_editionFresh` geeft bewust de dichtstbijzijnde persing terug in plaats van
+      // niets — goed genoeg voor een album dat echt bestaat, fout voor een titel die Discogs niet
+      // kent. Zie `completeTracklist` voor waarom alleen de bladerpagina dit mag toetsen.
+      if (widget.completeTracklist &&
+          widget.trackCount > 0 &&
+          ed.tracklist.isNotEmpty &&
+          !DiscogsService.fitsTrackCount(ed.tracklist.length, widget.trackCount)) {
+        return;
+      }
       setState(() => _edition = ed);
       // Remember what this record sounds like. The map fills in as albums are opened, which is what
       // makes browsing by style possible without sweeping the whole library up front.
@@ -9345,11 +9031,19 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   String? _bio;
   bool _busy = true;
 
+  /// "Klinkt als" — overgenomen van de oude, tweede artiestpagina.
+  ///
+  /// Die pagina kreeg je via Bibliotheek → Artiesten en had als enige dit blok én "Foto kiezen";
+  /// deze had als enige de biografie, MusicBrainz en Discogs. Welk scherm je zag hing dus af van
+  /// waar je vandaan kwam. Nu is er één pagina en staat alles erop.
+  List<CatalogArtist> _related = const [];
+
   @override
   void initState() {
     super.initState();
     _load();
     _loadBio();
+    _loadRelated();
   }
 
   DiscographyService get _disco => DiscographyService(
@@ -9413,6 +9107,25 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     if (mounted && bio != null) setState(() => _bio = bio);
   }
 
+  /// Verwante artiesten. Alleen Deezer kent die, en alleen op nummer.
+  ///
+  /// Een pagina die vanuit MusicBrainz of vanuit een kale naam is geopend draagt geen Deezer-id, dus
+  /// die wordt hier alsnog opgezocht — met dezelfde naamcontrole als de discografie, want een
+  /// naamgenoot levert een rij "klinkt als" op die nergens op slaat.
+  Future<void> _loadRelated() async {
+    try {
+      final naam = widget.artist.name;
+      var id = widget.artist.ref.isMb ? 0 : widget.artist.id;
+      if (id == 0) {
+        final hits = await _catalog.searchArtists(naam);
+        id = hits.where((a) => artistKey(a.name) == artistKey(naam)).firstOrNull?.id ?? 0;
+      }
+      if (id == 0) return;
+      final r = await _catalog.relatedArtists(id);
+      if (mounted && naam == widget.artist.name) setState(() => _related = r);
+    } catch (_) {/* een pagina zonder "klinkt als" is nog steeds een goede pagina */}
+  }
+
   @override
   Widget build(BuildContext context) {
     // The records of this artist you actually hold. Matched on the normalised artist name, the same
@@ -9456,6 +9169,29 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                           if (mine.isNotEmpty) '${mine.length} in je bibliotheek',
                           '${rijen.length} albums',
                         ].join(' · '),
+                  actions: [
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                          backgroundColor: _accent,
+                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10)),
+                      onPressed: () => startRadio(context, widget.artist.name),
+                      icon: const Icon(Icons.radio_rounded, size: 18),
+                      label: const Text('Radio'),
+                    ),
+                    const SizedBox(width: 10),
+                    // De app raadt portret-of-achtergrond uit de vorm van een plaatje, en juist een
+                    // gok hoor je te kunnen overrulen.
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                          backgroundColor: _panel2,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+                      onPressed: () => showDialog<void>(
+                          context: context, builder: (_) => ArtistArtGallery(widget.artist.name)),
+                      icon: const Icon(Icons.photo_library_outlined, size: 18),
+                      label: const Text('Foto kiezen'),
+                    ),
+                  ],
                 ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(10, 8, 0, 0),
@@ -9531,8 +9267,35 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                 ),
               ),
             ],
-            const SliverToBoxAdapter(child: SizedBox(height: 24)),
           ],
+          // Onder de discografie, want dit is de uitgang van de pagina: als je hier niets vond, is de
+          // volgende vraag "wie klinkt hier dan op".
+          if (_related.isNotEmpty) ...[
+            SliverToBoxAdapter(child: _sectionTitle('Klinkt als', '${_related.length}')),
+            SliverToBoxAdapter(
+              child: SizedBox(
+                height: 176,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  itemCount: _related.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 14),
+                  itemBuilder: (_, i) {
+                    final r = _related[i];
+                    return _RelatedArtistCard(
+                      artist: r,
+                      inLibrary: lib.hasArtist(r.name),
+                      // Eén bestemming, ook hier: iemand die je zelf hebt en iemand die je niet hebt
+                      // openen dezelfde pagina. Dat verschil was juist de reden dat er twee waren.
+                      onTap: () => openArtist(
+                          context, lib.hasArtist(r.name) ? lib.displayArtist(r.name) : r.name),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+          const SliverToBoxAdapter(child: SizedBox(height: 24)),
         ],
         ),
         ),
@@ -9704,13 +9467,13 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     final ref = widget.album.ref;
     switch (ref.source) {
       case CatalogSource.musicbrainz:
-        await _loadMusicBrainzRelease(ref.id);
+        if (!await _loadMusicBrainzRelease(ref.id)) _geenTracklijst();
         return;
       case CatalogSource.musicbrainzGroup:
         await _loadMusicBrainzGroup(ref.id);
         return;
       case CatalogSource.discogsRelease:
-        await _loadDiscogsRelease(ref.intId);
+        if (!await _loadDiscogsRelease(ref.intId)) _geenTracklijst();
         return;
       case CatalogSource.discogsMaster:
         await _loadDiscogsMaster(ref.intId);
@@ -9727,34 +9490,46 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     await _preferOfficialTracklist();
   }
 
+  /// De pagina is uitgeladen en heeft geen nummers gevonden.
+  void _geenTracklijst() {
+    if (mounted) setState(() => _busy = false);
+  }
+
   /// A record, not a pressing — so resolve its best pressing first. Only a pressing has a
   /// tracklist, and this is the single easiest way to ship a page that loads nothing.
+  ///
+  /// Doorlopen tot er één persing nummers oplevert, in plaats van bij de best gerangschikte te
+  /// stoppen. GEMETEN op Sia / "Titans": de releasegroep heeft drie persingen, de best gerangschikte
+  /// levert helemaal niets op en de twee erachter allebei het ene nummer dat erop staat. Stoppen bij
+  /// de eerste gaf dus een lege pagina voor een plaat waarvan MusicBrainz de tracklijst gewoon heeft.
   Future<void> _loadMusicBrainzGroup(String groupMbid) async {
     try {
       final mb = context.read<MusicBrainzService>();
       final editions = MusicBrainzService.orderByPreference(await mb.editionsOf(groupMbid));
-      if (editions.isEmpty) {
-        if (mounted) setState(() => _busy = false);
-        return;
+      // Hooguit een handvol: elke persing is een eigen verzoek op een baan van 1100 ms, en een
+      // releasegroep als Thriller heeft er vijfentachtig.
+      for (final e in editions.take(4)) {
+        if (await _loadMusicBrainzRelease(e.mbid)) return;
       }
-      await _loadMusicBrainzRelease(editions.first.mbid);
-    } catch (_) {
-      if (mounted) setState(() => _busy = false);
-    }
+    } catch (_) {/* valt door naar de lege pagina */}
+    _geenTracklijst();
   }
 
-  Future<void> _loadMusicBrainzRelease(String mbid) async {
+  /// True zodra deze persing nummers opleverde. False betekent "vraag de volgende" — en dus
+  /// nadrukkelijk NIET dat de pagina klaar is met laden.
+  Future<bool> _loadMusicBrainzRelease(String mbid) async {
+    if (!mounted) return false;
     try {
       final e = await context.read<MusicBrainzService>().release(mbid);
-      if (!mounted) return;
+      if (!mounted || e == null || e.tracks.isEmpty) return false;
       setState(() {
         _tracks = [
-          for (var i = 0; i < (e?.tracks.length ?? 0); i++)
+          for (var i = 0; i < e.tracks.length; i++)
             CatalogTrack(
               // No Deezer id exists for these; the index keys the row and Soulseek is searched by
               // name anyway, which is all this page does with it.
               -(i + 1),
-              e!.tracks[i].title,
+              e.tracks[i].title,
               widget.artistName,
               e.tracks[i].seconds ?? 0,
               i + 1,
@@ -9762,8 +9537,9 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         ];
         _busy = false;
       });
+      return true;
     } catch (_) {
-      if (mounted) setState(() => _busy = false);
+      return false;
     }
   }
 
@@ -9773,28 +9549,30 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     try {
       final dg = DiscogsService(context.read<AppSettings>());
       final versions = DiscogsService.orderByPreference(await dg.versionsOf(masterId));
-      if (versions.isEmpty) {
-        if (mounted) setState(() => _busy = false);
-        return;
+      // Zelfde reden als bij MusicBrainz: de best gerangschikte persing is niet gegarandeerd de
+      // persing die nummers oplevert, en dan is de pagina leeg terwijl de plaat wél beschreven is.
+      // Drie, want elke persing kost een verzoek uit zestig per minuut.
+      for (final v in versions.take(3)) {
+        if (await _loadDiscogsRelease(v.id)) return;
       }
-      await _loadDiscogsRelease(versions.first.id);
-    } catch (_) {
-      if (mounted) setState(() => _busy = false);
-    }
+    } catch (_) {/* valt door naar de lege pagina */}
+    _geenTracklijst();
   }
 
-  Future<void> _loadDiscogsRelease(int releaseId) async {
+  /// True zodra deze persing nummers opleverde — zie [_loadMusicBrainzRelease].
+  Future<bool> _loadDiscogsRelease(int releaseId) async {
+    if (!mounted) return false;
     try {
       final e = await DiscogsService(context.read<AppSettings>()).release(releaseId);
-      if (!mounted) return;
+      if (!mounted || e == null || e.tracklist.isEmpty) return false;
       setState(() {
         _tracks = [
-          for (var i = 0; i < (e?.tracklist.length ?? 0); i++)
+          for (var i = 0; i < e.tracklist.length; i++)
             CatalogTrack(
               // No Deezer id exists for these; the index is enough to key a row and to search
               // Soulseek with, which is all this page does with it.
               -(i + 1),
-              e!.tracklist[i].title,
+              e.tracklist[i].title,
               widget.artistName,
               e.tracklist[i].seconds ?? 0,
               i + 1,
@@ -9802,8 +9580,9 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         ];
         _busy = false;
       });
+      return true;
     } catch (_) {
-      if (mounted) setState(() => _busy = false);
+      return false;
     }
   }
 
@@ -10076,12 +9855,33 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
               padding: const EdgeInsets.only(bottom: 8),
               child: SourcesView(query: '${widget.artistName} ${al.title}', authority: _release),
             ),
-          AlbumInfoPanel(artist: widget.artistName, album: al.title),
-          CreditsPanel(artist: widget.artistName, album: al.title),
+          // Geen beschrijving bij een plaat die deze pagina niet heeft kunnen identificeren.
+          //
+          // Deze twee zoeken op TEKST — artiest plus titel — terwijl de tracklijst op verwijzing
+          // zoekt. Bij Sia / "Titans" leverde de verwijzing niets en de tekstzoektocht een
+          // soundtrack van Waxwork Records: je kreeg een lege tracklijst met daarboven het jaartal,
+          // het label en de filmcomponisten van een plaat die niet van haar is. Liever niets dan
+          // het verkeerde — dat was de klacht.
+          if (!_busy && _tracks.isNotEmpty) ...[
+            AlbumInfoPanel(
+                artist: widget.artistName,
+                album: al.title,
+                // Zonder dit stond de vormcontrole UIT: DiscogsService.edition weegt alleen op
+                // aantal als expectedTracks > 0, en deze pagina gaf altijd nul door.
+                trackCount: _tracks.length,
+                // En dit aantal is de HELE plaat — het is de tracklijst die hieronder staat, niet
+                // wat er van op schijf staat. Alleen daarom mag een te lange uitgave hier afvallen.
+                completeTracklist: true),
+            CreditsPanel(
+                artist: widget.artistName, album: al.title, volledigAantal: _tracks.length),
+          ],
           if (_busy)
             const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator(color: _accent)))
           else if (_tracks.isEmpty)
-            const Padding(padding: EdgeInsets.all(24), child: Text('Geen tracklijst gevonden.', style: TextStyle(color: _muted)))
+            const Padding(
+                padding: EdgeInsets.all(24),
+                child: Text('Geen tracklijst gevonden voor deze uitgave.',
+                    style: TextStyle(color: _muted)))
           else
             ..._tracks.asMap().entries.map((e) => _trackRow(e.key, e.value)),
         ],

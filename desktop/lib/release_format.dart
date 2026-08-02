@@ -24,6 +24,23 @@ int releaseFormatRank(String major) {
   return i < 0 ? releaseFormatOrder.length : i;
 }
 
+/// Houdt een uitgave met [got] nummers de plaat die [want] nummers lang is?
+///
+/// Beide richtingen tellen, en er stond er lang maar één. Te weinig betekent een single of een
+/// sampler onder de master van het album. Te veel betekent een box of een twee-in-een: zoeken naar
+/// *Discovery* landde op een dubbel-cd van dertig nummers die ook Homework bleek te zijn, en *Bad*
+/// op een verjaardagsuitgave van tweeëndertig. Bonusnummers zijn normaal, een tweede album niet.
+///
+/// [want] is het aantal van de PLAAT — de tracklijst van de master, of die van de uitgave die de
+/// pagina toont. Nadrukkelijk niet wat de bibliotheek ervan heeft: vier nummers van Demon Days zijn
+/// nog steeds Demon Days, en met dat viertal als maatstaf valt elke echte persing van vijftien af.
+/// Wie alleen een deelverzameling kent, mag dus alleen op "te weinig" toetsen.
+///
+/// Staat hier en niet in één van de twee diensten om dezelfde reden als [releaseFormatRank]:
+/// Discogs en MusicBrainz stelden allebei deze vraag, allebei met hun eigen kopie van de formule, en
+/// twee kopieën van een regel die zo duur betaald is gaan het vroeg of laat oneens worden.
+bool fitsTrackCount(int got, int want) => got >= want - 2 && got <= want * 1.5 + 3;
+
 /// Which of [releaseFormatOrder] a raw format string belongs to.
 ///
 /// MusicBrainz names the physical thing, not the family: `12" Vinyl`, `Enhanced CD`, `Hybrid SACD`,

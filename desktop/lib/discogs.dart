@@ -19,6 +19,7 @@ import 'enrichment.dart';
 import 'musicbrainz.dart';
 import 'organize.dart';
 import 'release_format.dart';
+import 'release_format.dart' as fmt;
 import 'settings.dart';
 import 'paths.dart';
 
@@ -556,7 +557,9 @@ class DiscogsService {
   /// [want] is the MASTER's own tracklist, never the library's. Measuring against what is owned was
   /// wrong in the ordinary case: four tracks of Demon Days are still Demon Days, and every real
   /// fifteen-track pressing of it got rejected for being too long.
-  static bool fitsTrackCount(int got, int want) => got >= want - 2 && got <= want * 1.5 + 3;
+  ///
+  /// De formule zelf staat in release_format.dart, waar MusicBrainz hem ook uit leest.
+  static bool fitsTrackCount(int got, int want) => fmt.fitsTrackCount(got, want);
 
   /// CD first, digital last — the shared preference in [releaseFormatOrder]. It lives outside this
   /// class because MusicBrainz ranks the same records by the same rule, and two copies of a rule

@@ -10,6 +10,7 @@ import 'package:debridmusic/discography_service.dart';
 import 'package:debridmusic/discogs.dart';
 import 'package:debridmusic/musicbrainz.dart';
 import 'package:debridmusic/paths.dart';
+import 'package:debridmusic/release_format.dart';
 import 'package:debridmusic/settings.dart';
 
 /// De andere helft van de discografie: de échte netwerkpaden. Buiten de gewone run gehouden.
@@ -104,6 +105,76 @@ void main() {
           '${r.firstDate ?? '—'} | ${r.cover == null ? 'geen hoes' : 'hoes'} | '
           '${r.openRef?.source.name} | ${r.title}');
     }
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('METING: waar loopt Sia / "Titans" precies vast', () async {
+    // De klacht was niet dat de REGEL leeg is — die klopt — maar wat je krijgt als je erop klikt:
+    // een lege tracklijst met daarboven het label, het jaar en de credits van een andere plaat.
+    // Deze meting scheidt de twee opzoekingen die AlbumBrowsePage doet, want ze zoeken anders: de
+    // tracklijst op VERWIJZING, de uitgave-regel op TEKST.
+    final svc = await maak();
+    final s = AppSettings();
+    await s.load();
+    final mbSvc = MusicBrainzService();
+
+    final mb = await svc.vanMusicBrainz('Sia');
+    final rij = mb.releases.where((r) => r.key == discoKey('Titans')).firstOrNull;
+    // ignore: avoid_print
+    print('regel: ${rij == null ? "NIET GEVONDEN" : "${rij.title} | ${rij.kind.name} | "
+        "${rij.firstDate} | ref=${rij.openRef?.source.name}:${rij.openRef?.id}"}');
+    expect(rij, isNotNull, reason: 'zonder de regel valt er niets te openen en niets te meten');
+
+    // 1. De weg die de tracklijst neemt: releasegroep → persingen → nummers.
+    final persingen = await mbSvc.editionsOf(rij!.openRef!.id);
+    // ignore: avoid_print
+    print('persingen via editionsOf: ${persingen.length}');
+    var nummers = 0;
+    for (final p in MusicBrainzService.orderByPreference(persingen)) {
+      // NIET `vol?.tracks.length ?? 0`: dat geeft nul zowel bij een lege tracklijst als bij een
+      // aanroep die helemaal niets opleverde, en dat zijn twee verschillende reparaties.
+      final vol = await mbSvc.release(p.mbid);
+      // ignore: avoid_print
+      print('persing ${p.mbid} (${p.format}/${p.country}): '
+          '${vol == null ? "AANROEP LEVERDE NIETS" : "${vol.tracks.length} nummers, "
+              "track-count zegt ${vol.trackCount}"}');
+      if (vol != null && vol.tracks.isNotEmpty) nummers = vol.tracks.length;
+    }
+
+    // 2. De weg die de uitgave-regel neemt: artiest + titel als TEKST. Precies zoals de pagina hem
+    //    aanriep — met expectedTracks 0, want die gaf hij altijd door.
+    final dg = DiscogsService(s);
+    if (dg.available) {
+      final los = await dg.edition('Sia', 'Titans');
+      // ignore: avoid_print
+      print('Discogs op tekst, ZONDER aantal: ${los == null ? "niets" : "#${los.releaseId} "
+          "${los.year} ${los.label} ${los.country} — ${los.tracklist.length} nummers"}');
+      final met = await dg.edition('Sia', 'Titans', expectedTracks: 1);
+      // ignore: avoid_print
+      print('Discogs op tekst, MET aantal=1: ${met == null ? "niets" : "#${met.releaseId} "
+          "${met.year} ${met.label} ${met.country} — ${met.tracklist.length} nummers"}');
+    } else {
+      // ignore: avoid_print
+      print('Discogs: geen token — de tekstweg is hier niet te meten');
+    }
+
+    // ignore: avoid_print
+    print(nummers == 0
+        ? 'GEVOLG: lege tracklijst. De pagina mag dan geen uitgave-regel of credits tonen.'
+        : 'GEVOLG: er IS een tracklijst ($nummers) — de pagina hoorde niet leeg te zijn.');
+
+    // Dit is de reparatie: doorlopen tot er één persing nummers geeft, zoals
+    // _loadMusicBrainzGroup nu doet. Stoppen bij de eerste is wat de pagina leeg maakte.
+    expect(nummers, greaterThan(0),
+        reason: 'de tweede persing draagt het nummer wel — de eerste overslaan is de hele fix');
+
+    // En dit is de tweede helft: de tekstweg mag deze plaat niet beschrijven. Eén nummer tegen
+    // negenentwintig valt buiten fitsTrackCount, in beide richtingen getoetst.
+    expect(fitsTrackCount(29, nummers), isFalse,
+        reason: 'een soundtrack van 29 nummers is niet de single waar je naar kijkt');
+    // De ondergrens moet blijven werken zoals hij was: minder hebben dan de plaat lang is, is
+    // normaal, en daar mag niets op afvallen.
+    expect(fitsTrackCount(15, 15), isTrue);
+    expect(fitsTrackCount(17, 15), isTrue, reason: 'bonusnummers zijn gewoon');
   }, timeout: const Timeout(Duration(minutes: 3)));
 
   test('een plaat die twee bronnen kennen draagt twee merkjes en houdt zijn hoes', () async {

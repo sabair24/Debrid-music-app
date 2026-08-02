@@ -1,4 +1,6 @@
 import 'package:debridmusic/discogs.dart';
+import 'package:debridmusic/musicbrainz.dart';
+import 'package:debridmusic/release_format.dart';
 import 'package:debridmusic/settings.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -180,6 +182,41 @@ void masters() {
     });
     test('the artist prefix is not held against the title', () {
       expect(DiscogsService.titleScore('Discovery', a, t), greaterThan(0));
+    });
+  });
+
+  group('één regel, twee catalogi', () {
+    // De formule stond in DiscogsService én, ongelijkheid voor ongelijkheid overgeschreven, in
+    // MusicBrainzService.orderByPreference. Nu staat hij in release_format.dart en lezen ze hem
+    // allebei; deze twee tests zijn wat dat vasthoudt.
+    test('Discogs weegt langs de gedeelde regel', () {
+      for (final paar in const [[14, 14], [30, 14], [2, 11], [1, 29], [29, 1]]) {
+        expect(DiscogsService.fitsTrackCount(paar[0], paar[1]), fitsTrackCount(paar[0], paar[1]),
+            reason: 'got=${paar[0]} want=${paar[1]}');
+      }
+    });
+
+    test('MusicBrainz weegt langs dezelfde regel', () {
+      // Precies het geval waarop Sia / "Titans" de verkeerde plaat beschreef: een single van één
+      // nummer, en een soundtrack van negenentwintig onder dezelfde naam.
+      final uit = MusicBrainzService.orderByPreference(
+        const [
+          MbRelease(mbid: 'single', title: 'Titans', trackCount: 1),
+          MbRelease(mbid: 'soundtrack', title: 'Titans', trackCount: 29),
+        ],
+        expectedTracks: 1,
+      );
+      expect(uit.map((r) => r.mbid), ['single']);
+    });
+
+    test('een uitgave zonder opgegeven aantal blijft staan', () {
+      // Nul betekent "onbekend", niet "nul nummers" — een persing wegwerken omdat de catalogus zijn
+      // lengte niet noemt zou de helft van MusicBrainz uitsluiten.
+      final uit = MusicBrainzService.orderByPreference(
+        const [MbRelease(mbid: 'stil', title: 'Titans')],
+        expectedTracks: 1,
+      );
+      expect(uit, hasLength(1));
     });
   });
 

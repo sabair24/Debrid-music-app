@@ -703,10 +703,10 @@ class MusicBrainzService {
   static List<MbRelease> orderByPreference(List<MbRelease> all, {int expectedTracks = 0}) {
     final out = [
       for (final r in all)
+        // Dezelfde formule als Discogs gebruikt, uit release_format.dart. Hier stond een eigen kopie
+        // van precies dezelfde ongelijkheden.
         if (r.mbid.isNotEmpty &&
-            (expectedTracks <= 0 ||
-                r.trackCount == 0 ||
-                (r.trackCount >= expectedTracks - 2 && r.trackCount <= expectedTracks * 1.5 + 3)))
+            (expectedTracks <= 0 || r.trackCount == 0 || fitsTrackCount(r.trackCount, expectedTracks)))
           r
     ];
     out.sort((a, b) {
