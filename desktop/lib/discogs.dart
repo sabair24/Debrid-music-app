@@ -9,6 +9,7 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
 import 'catalog.dart';
+import 'discography.dart';
 import 'editions.dart';
 // Mutual with enrichment.dart, which delegates its cover search here. Deliberate: TheAudioDB's album
 // entry holds the back cover and the disc, CoverEnricher.albumInfo already fetches and CACHES that
@@ -769,6 +770,59 @@ class DiscogsService {
     }
     final first = results.isEmpty ? null : results.first as Map<String, dynamic>?;
     return (first?['id'] as num?)?.toInt();
+  }
+
+  /// Alles wat deze artiest zelf uitbracht, voor de discografie.
+  ///
+  /// Het enige endpoint dat hier ontbrak. Discogs weet dingen die Deezer noch MusicBrainz weet — het
+  /// formaat, en gratis een miniatuurhoes — en die hoes is de goedkoopste die er is: MusicBrainz heeft
+  /// er op dit niveau geen, en er per plaat een ophalen kost een verzoek op een baan van 1100 ms.
+  ///
+  /// `role == 'Main'` is de belangrijkste regel van dit endpoint. Zonder dat filter levert de pagina
+  /// van een gevraagde producer of sessiemuzikant honderden platen van anderen op, en dan is het geen
+  /// discografie meer maar een cv.
+  ///
+  /// Hard begrensd op twee pagina's. `pagination.pages` kan tien zijn, elke pagina is één verzoek uit
+  /// zestig per minuut, en dat budget wordt gedeeld met de albumpagina, het creditspaneel en de
+  /// warmer. Twee pagina's is tweehonderd uitgaves; wie meer heeft, heeft ook geen leesbare lijst meer.
+  ///
+  /// Loopt door dezelfde [_get] als de rest: baan, cache en foutentelling zitten daar al in.
+  Future<List<DiscoRelease>> artistReleases(int id, {int pages = 2}) async {
+    final uit = <DiscoRelease>[];
+    for (var p = 1; p <= pages; p++) {
+      final b = await _get('https://api.discogs.com/artists/$id/releases'
+          '?sort=year&sort_order=desc&per_page=100&page=$p');
+      final rijen = b?['releases'] as List<dynamic>? ?? const [];
+      if (rijen.isEmpty) break;
+      for (final r in rijen) {
+        if (r is! Map<String, dynamic>) continue;
+        if ((r['role'] as String? ?? '').trim() != 'Main') continue;
+        final rid = (r['id'] as num?)?.toInt();
+        final titel = (r['title'] as String? ?? '').trim();
+        if (rid == null || titel.isEmpty) continue;
+        // Een master is de PLAAT, een release één persing ervan. Beide takken bestaan al aan de
+        // andere kant, bij het openen van een album.
+        final master = (r['type'] as String? ?? '') == 'master';
+        final thumb = (r['thumb'] as String? ?? '').trim();
+        final jaar = (r['year'] as num?)?.toInt() ?? 0;
+        uit.add(DiscoRelease(
+          title: titel,
+          kind: kindFromDiscogs((r['format'] as String? ?? '')),
+          // Jaar nul betekent hier "onbekend" en niet het jaar nul. Als tekst laten staan zou die
+          // regel bij het sorteren op datum onderaan de twintigste eeuw belanden.
+          firstDate: jaar > 0 ? '$jaar' : null,
+          cover: thumb.isEmpty || thumb.contains('spacer') ? null : thumb,
+          sources: const {DiscoSource.discogs},
+          refs: {
+            DiscoSource.discogs:
+                master ? CatalogRef.discogsMaster(rid) : CatalogRef.discogsRelease(rid),
+          },
+        ));
+      }
+      final totaal = (b?['pagination'] as Map<String, dynamic>?)?['pages'] as num?;
+      if (totaal == null || p >= totaal.toInt()) break;
+    }
+    return uit;
   }
 
   /// What Discogs knows about an act: the write-up, who is in it, and every photo it holds.

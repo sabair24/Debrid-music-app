@@ -2170,13 +2170,29 @@ class _AlbumCardState extends State<AlbumCard> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
-              Text(
-                  // Six identical "Backstreet Boys" tiles are unusable, however correct the split
-                  // is. Naming the pressing is what makes them tellable apart — and choosable.
-                  a.edition == null ? a.artist : '${a.artist} · ${a.edition}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: _muted, fontSize: 12)),
+              // Artiest en editie stonden hier in ÉÉN string, en dat was precies wat de naam
+              // onaanklikbaar maakte. Nu een link plus de rest ernaast — dezelfde vorm die de
+              // albumpagina-kop al gebruikt.
+              //
+              // Six identical "Backstreet Boys" tiles are unusable, however correct the split is.
+              // Naming the pressing is what makes them tellable apart — and choosable.
+              _maybeFocusable(Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                      child: ArtistNames(
+                          names: [a.artist],
+                          style: const TextStyle(color: _muted, fontSize: 12))),
+                  if (a.edition != null)
+                    // Ook Flexible, anders loopt de rij over in een tegel van 140 punt zodra de
+                    // artiestnaam wat langer is.
+                    Flexible(
+                        child: Text(' · ${a.edition}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: _muted, fontSize: 12))),
+                ],
+              )),
               ],
             ),
           ),
@@ -5439,15 +5455,18 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
                                       fontWeight: FontWeight.w600, fontSize: 14)),
-                              Text(
-                                  t == null
-                                      ? 'Niets aan het spelen'
-                                      : (p.radioMode && p.radioStatus.isNotEmpty
-                                          ? p.radioStatus
-                                          : t.artist),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(color: _muted, fontSize: 12)),
+                              // Alleen de artiesttak wordt een link; "Niets aan het spelen" en de
+                              // radiostatus zijn geen naam. De brede speler doet dit al met
+                              // ArtistLine — deze smalle variant was als enige achtergebleven.
+                              if (t == null || (p.radioMode && p.radioStatus.isNotEmpty))
+                                Text(
+                                    t == null ? 'Niets aan het spelen' : p.radioStatus,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(color: _muted, fontSize: 12))
+                              else
+                                _artistLine(splitFeatured(t.artist, t.title),
+                                    const TextStyle(color: _muted, fontSize: 12)),
                             ],
                           ),
                         ),
@@ -6237,7 +6256,19 @@ class _HomeStartViewState extends State<HomeStartView> {
         separatorBuilder: (_, __) => const SizedBox(width: 14),
         itemBuilder: (_, i) => _card(
             cover(albums[i].cover, size: 140), albums[i].title, albums[i].artist,
-            () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: albums[i])))),
+            () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: albums[i]))),
+            artist: albums[i].artist),
+      );
+
+  /// De artiestnaam onder een tegel, aanklikbaar.
+  ///
+  /// [openArtist] neemt een NAAM en zoekt de artiest zelf op, dus dit werkt net zo goed voor een naam
+  /// die van Deezer komt als voor een naam uit je eigen bibliotheek — er is nergens een id voor nodig.
+  /// Dat is precies waarom "overal klikbaar" haalbaar was: het enige dat ontbrak, was een plek om de
+  /// widget neer te zetten.
+  static Widget _naamLink(String naam) => ArtistNames(
+        names: [naam],
+        style: const TextStyle(color: _muted, fontSize: 12),
       );
 
   Widget _catalogRow(List<CatalogAlbumHit> hits) => ListView.separated(
@@ -6245,10 +6276,13 @@ class _HomeStartViewState extends State<HomeStartView> {
         padding: const EdgeInsets.symmetric(horizontal: 24),
         itemCount: hits.length,
         separatorBuilder: (_, __) => const SizedBox(width: 14),
+        // Deze builder voedt TWEE rijen — "Top van dit moment" en "Nieuw van jouw artiesten" — dus
+        // deze ene regel maakt ze allebei klikbaar.
         itemBuilder: (_, i) => _card(
             _netCover(hits[i].album.cover, size: 140), hits[i].album.title, hits[i].artist,
             () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => AlbumBrowsePage(hits[i].artist, hits[i].album)))),
+                .push(MaterialPageRoute(builder: (_) => AlbumBrowsePage(hits[i].artist, hits[i].album))),
+            artist: hits[i].artist),
       );
 
   Widget _recRow(List<RecTrack> ts) => ListView.separated(
@@ -6265,6 +6299,9 @@ class _HomeStartViewState extends State<HomeStartView> {
           art: _netCover(ts[i].cover, size: 140),
           title: ts[i].title,
           subtitle: ts[i].artist,
+          // Juist hier: een aanbeveling gaat over een artiest die je NIET kent, en dan wil je als
+          // eerste weten wie dat is. `RecTrack` draagt alleen een naam, en dat is genoeg.
+          subtitleWidget: ts[i].artist.trim().isEmpty ? null : _naamLink(ts[i].artist),
           onTap: () => _openRec(ts[i]),
           onLongPress: () => _playRec(ts[i]),
         ),
@@ -6284,8 +6321,15 @@ class _HomeStartViewState extends State<HomeStartView> {
         .push(MaterialPageRoute(builder: (_) => AlbumBrowsePage(t.artist, album)));
   }
 
-  Widget _card(Widget art, String title, String subtitle, VoidCallback onTap) =>
-      _HoverCard(art: art, title: title, subtitle: subtitle, onTap: onTap);
+  /// [subtitle] blijft de kale tekst voor het geval de widget niets kan; [artist] maakt hem klikbaar.
+  Widget _card(Widget art, String title, String subtitle, VoidCallback onTap, {String? artist}) =>
+      _HoverCard(
+        art: art,
+        title: title,
+        subtitle: subtitle,
+        subtitleWidget: artist == null || artist.trim().isEmpty ? null : _naamLink(artist),
+        onTap: onTap,
+      );
 }
 
 /// A tile in one of the home rows. Same hover growth as the album and artist grids, so the whole
@@ -6293,6 +6337,13 @@ class _HomeStartViewState extends State<HomeStartView> {
 class _HoverCard extends StatefulWidget {
   final Widget art;
   final String title, subtitle;
+
+  /// De ondertitel als WIDGET, voor waar de artiestnaam aanklikbaar moet zijn.
+  ///
+  /// Naast de bestaande `String` en niet in plaats daarvan: dit is de tegel van álle vier de rijen op
+  /// het eerste scherm van de app, en die in één keer omzetten maakt een fout in de opmaak meteen
+  /// vier keer zichtbaar. Zo kan elke rij los mee.
+  final Widget? subtitleWidget;
   final VoidCallback onTap;
 
   /// The second thing this tile can do, where it has one — play a recommendation outright instead
@@ -6303,6 +6354,7 @@ class _HoverCard extends StatefulWidget {
       required this.title,
       required this.subtitle,
       required this.onTap,
+      this.subtitleWidget,
       this.onLongPress});
 
   @override
@@ -6359,8 +6411,18 @@ class _HoverCardState extends State<_HoverCard> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                         fontWeight: FontWeight.w600, fontSize: 13.5, color: _hover ? Colors.white : null)),
-                Text(widget.subtitle,
-                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 12)),
+                // De widget wint als hij er is. Op een afstandsbediening moet de naam GEEN eigen
+                // focusstop worden: dan krijgt elke tegel in een rij er een tweede bij en pijl je
+                // twee keer zo lang. Klikken blijft werken — `_maybeFocusable` haalt hem uit het pad
+                // van de highlight, niet uit de app. Dezelfde afweging als bij een tracklijstrij.
+                widget.subtitleWidget == null
+                    ? Text(widget.subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: _muted, fontSize: 12))
+                    : Align(
+                        alignment: Alignment.centerLeft,
+                        child: _maybeFocusable(widget.subtitleWidget!)),
               ],
             ),
           ),
@@ -8119,10 +8181,12 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
-                        Text(h.artist,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 11.5, color: _muted)),
+                        _maybeFocusable(Align(
+                          alignment: Alignment.centerLeft,
+                          child: ArtistNames(
+                              names: [h.artist],
+                              style: const TextStyle(fontSize: 11.5, color: _muted)),
+                        )),
                       ],
                     ),
                   ),
@@ -8612,10 +8676,12 @@ class _HeroCarouselState extends State<HeroCarousel> {
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontSize: 27, fontWeight: FontWeight.w800, height: 1.1)),
                         const SizedBox(height: 6),
-                        Text(hit.artist,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 15, color: Color(0xFFC7CBDA))),
+                        _maybeFocusable(Align(
+                          alignment: Alignment.centerLeft,
+                          child: ArtistNames(
+                              names: [hit.artist],
+                              style: const TextStyle(fontSize: 15, color: Color(0xFFC7CBDA))),
+                        )),
                         if (hit.album.year != null) ...[
                           const SizedBox(height: 2),
                           Text('${hit.album.year}', style: const TextStyle(fontSize: 12.5, color: _muted)),
@@ -9828,9 +9894,22 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                       const SizedBox(height: 6),
                       Text(al.title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
                       const SizedBox(height: 4),
-                      Text(
-                          '${widget.artistName}${al.year != null ? " · ${al.year}" : ""}${_tracks.isNotEmpty ? " · ${_tracks.length} nummers" : ""}',
-                          style: const TextStyle(color: _muted, fontSize: 13)),
+                      // De naam los van de rest, zodat je van een online album naar de artiest kunt.
+                      // Zelfde vorm als de kop van je eigen albumpagina.
+                      _maybeFocusable(Row(mainAxisSize: MainAxisSize.min, children: [
+                        Flexible(
+                            child: ArtistNames(
+                                names: [widget.artistName],
+                                style: const TextStyle(color: _muted, fontSize: 13))),
+                        Flexible(
+                          child: Text(
+                              '${al.year != null ? " · ${al.year}" : ""}'
+                              '${_tracks.isNotEmpty ? " · ${_tracks.length} nummers" : ""}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: _muted, fontSize: 13)),
+                        ),
+                      ])),
                       const SizedBox(height: 12),
                       FilledButton.icon(
                         style: FilledButton.styleFrom(backgroundColor: _panel2, foregroundColor: Colors.white),
@@ -13904,8 +13983,17 @@ class _OnlineAlbumCard extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
-          Text([hit.artist, if (hit.album.year != null) hit.album.year!].join(' · '),
-              maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 12)),
+          _maybeFocusable(Row(mainAxisSize: MainAxisSize.min, children: [
+            Flexible(
+                child: ArtistNames(
+                    names: [hit.artist], style: const TextStyle(color: _muted, fontSize: 12))),
+            if (hit.album.year != null)
+              Flexible(
+                  child: Text(' · ${hit.album.year}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: _muted, fontSize: 12))),
+          ])),
         ]),
       );
 }
