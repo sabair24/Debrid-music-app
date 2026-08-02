@@ -90,6 +90,25 @@ class DiscogsTrack {
 }
 
 /// One pressing of an album, with everything the library page shows about it.
+/// Wat één zoeksweep over de masters van een artiest opleverde.
+///
+/// Twee tabellen en geen rijen: deze sweep VULT bestaande regels aan en voegt er nooit een toe. Dat
+/// onderscheid is met opzet — de zoek-endpoint kent ook persingen en heruitgaves die in een
+/// discografie niets te zoeken hebben, en een lijst die van vullen naar aanvullen verschuift is niet
+/// meer te verantwoorden aan wie hem leest.
+class DiscogsSweep {
+  /// Discogs-master-id → zijn formaat als tekst, bijvoorbeeld "Vinyl, LP, Album".
+  final Map<int, String> formaatPerMaster;
+
+  /// [discoKey] van de titel → miniatuurhoes. Op sleutel en niet op id, want de regels die een hoes
+  /// missen komen van MusicBrainz en dragen geen Discogs-id.
+  final Map<String, String> hoesPerSleutel;
+
+  const DiscogsSweep(this.formaatPerMaster, this.hoesPerSleutel);
+
+  bool get isLeeg => formaatPerMaster.isEmpty && hoesPerSleutel.isEmpty;
+}
+
 class DiscogsEdition {
   final int releaseId;
   final String format; // File / CD / Vinyl / Cassette …
@@ -775,6 +794,56 @@ class DiscogsService {
     return (first?['id'] as num?)?.toInt();
   }
 
+  /// Wat de zoek-endpoint over de masters van deze artiest zegt: formaat en miniatuurhoes.
+  ///
+  /// Bestaat omdat `/artists/{id}/releases` voor een `type: master` GEEN `format`-veld levert — alleen
+  /// id, titel, `main_release`, jaar en hoes. GEMETEN op Sia: 95 van haar 162 eigen regels zijn zo'n
+  /// master, en die belandden allemaal in het blok "Overig" omdat [kindFromDiscogs] een lege string
+  /// kreeg. Een vijfde van de discografie ongesorteerd.
+  ///
+  /// De zoek-endpoint zet het formaat er wél bij, honderd masters per verzoek. Dat is dezelfde
+  /// eigenschap waar [albumScore] al op leunt — "Discogs puts 'Album' in the format list of exactly
+  /// the masters that are one" — nu voor de hele discografie in plaats van één plaat.
+  ///
+  /// De prijs is het hele punt. Per regel de hoofdpersing opvragen zou voor Sia 95 verzoeken kosten op
+  /// een baan van zestig per minuut; dit kost er twee. GEMETEN: dekking 92 van 95, en op een
+  /// steekproef van twaalf gaf het twaalf keer hetzelfde antwoord als het echte formaat van de
+  /// hoofdpersing.
+  ///
+  /// De hoes komt gratis mee en dicht een tweede gat: MusicBrainz levert op releasegroep-niveau nooit
+  /// een hoes, en de Cover Art Archive ook niet (gemeten: 0 van 25 Céline-verzamelaars). Voor een
+  /// grote catalogus ziet deze sweep bovendien masters die buiten de twee pagina's van
+  /// [artistReleases] vallen — daar zitten juist de oude verzamelaars zonder hoes.
+  Future<DiscogsSweep> artistSweep(int artistId, {int pages = 3}) async {
+    final perMaster = <int, String>{};
+    final hoesPerSleutel = <String, String>{};
+    for (var p = 1; p <= pages; p++) {
+      final b = await _get('https://api.discogs.com/database/search'
+          '?artist_id=$artistId&type=master&per_page=100&page=$p');
+      final rijen = b?['results'] as List<dynamic>? ?? const [];
+      if (rijen.isEmpty) break;
+      for (final r in rijen) {
+        if (r is! Map<String, dynamic>) continue;
+        final mid = (r['id'] as num?)?.toInt();
+        final formaat = (r['format'] as List<dynamic>? ?? const []).join(', ');
+        if (mid != null && formaat.isNotEmpty) perMaster[mid] = formaat;
+
+        // De zoekopdracht schrijft "Céline Dion - The French Collection II"; alleen de titel is de
+        // sleutel waarop de rest van de discografie vergelijkt.
+        var titel = (r['title'] as String? ?? '').trim();
+        final streep = titel.indexOf(' - ');
+        if (streep > 0) titel = titel.substring(streep + 3).trim();
+        final thumb = (r['thumb'] as String? ?? '').trim();
+        if (titel.isNotEmpty && thumb.isNotEmpty && !thumb.contains('spacer')) {
+          hoesPerSleutel.putIfAbsent(discoKey(titel), () => thumb);
+        }
+      }
+      final totaal = (b?['pagination'] as Map<String, dynamic>?)?['pages'] as num?;
+      if (totaal == null || p >= totaal.toInt()) break;
+    }
+    return DiscogsSweep(perMaster, hoesPerSleutel);
+  }
+
   /// Alles wat deze artiest zelf uitbracht, voor de discografie.
   ///
   /// Het enige endpoint dat hier ontbrak. Discogs weet dingen die Deezer noch MusicBrainz weet — het
@@ -790,7 +859,10 @@ class DiscogsService {
   /// warmer. Twee pagina's is tweehonderd uitgaves; wie meer heeft, heeft ook geen leesbare lijst meer.
   ///
   /// Loopt door dezelfde [_get] als de rest: baan, cache en foutentelling zitten daar al in.
-  Future<List<DiscoRelease>> artistReleases(int id, {int pages = 2}) async {
+  Future<List<DiscoRelease>> artistReleases(int id, {int pages = 2, DiscogsSweep? sweep_}) async {
+    // Zonder de sweep draagt elke master hier `RecordKind.other`. De aanroeper mag hem meegeven als
+    // hij hem toch al ophaalt; zie [artistSweep] voor waarom niet per regel.
+    final sweep = sweep_ ?? await artistSweep(id);
     final uit = <DiscoRelease>[];
     for (var p = 1; p <= pages; p++) {
       final b = await _get('https://api.discogs.com/artists/$id/releases'
@@ -806,11 +878,19 @@ class DiscogsService {
         // Een master is de PLAAT, een release één persing ervan. Beide takken bestaan al aan de
         // andere kant, bij het openen van een album.
         final master = (r['type'] as String? ?? '') == 'master';
-        final thumb = (r['thumb'] as String? ?? '').trim();
+        var thumb = (r['thumb'] as String? ?? '').trim();
+        if (thumb.isEmpty || thumb.contains('spacer')) {
+          thumb = sweep.hoesPerSleutel[discoKey(titel)] ?? '';
+        }
         final jaar = (r['year'] as num?)?.toInt() ?? 0;
+        // Een master draagt hier geen formaat; de sweep weet het wel. Zonder deze regel valt een
+        // vijfde van de discografie in "Overig".
+        final formaat = (r['format'] as String? ?? '').trim().isNotEmpty
+            ? (r['format'] as String)
+            : (master ? (sweep.formaatPerMaster[rid] ?? '') : '');
         uit.add(DiscoRelease(
           title: titel,
-          kind: kindFromDiscogs((r['format'] as String? ?? '')),
+          kind: kindFromDiscogs(formaat),
           // Jaar nul betekent hier "onbekend" en niet het jaar nul. Als tekst laten staan zou die
           // regel bij het sorteren op datum onderaan de twintigste eeuw belanden.
           firstDate: jaar > 0 ? '$jaar' : null,

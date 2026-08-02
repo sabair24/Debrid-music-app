@@ -43,6 +43,124 @@ DiscoRelease _dg(String titel, {String? datum, String? cover, int id = 7}) => Di
     );
 
 void main() {
+  group('een verzamelaar mag niet tot album gedegradeerd worden', () {
+    // Zolang Discogs-masters `other` droegen verloren ze altijd, en viel dit niet op. Nu ze hun
+    // formaat uit de zoeksweep krijgen doen ze mee in de soortkeuze — en die koos de LAAGSTE
+    // leesrang, waar album (0) boven compilation (4) staat. Dat is precies de fout die kindFromMb
+    // bestaat om te voorkomen, één laag hoger teruggekomen.
+    test('MusicBrainz zegt verzamelaar, Discogs zegt alleen "Album"', () {
+      final mb = DiscoRelease(
+        title: 'The Collection',
+        kind: RecordKind.compilation,
+        sources: const {DiscoSource.musicbrainz},
+        refs: {DiscoSource.musicbrainz: CatalogRef.musicbrainzGroup('x')},
+      );
+      final dg = DiscoRelease(
+        title: 'The Collection',
+        kind: kindFromDiscogs('CD, Album'),
+        sources: const {DiscoSource.discogs},
+        refs: {DiscoSource.discogs: CatalogRef.discogsMaster(9)},
+      );
+      expect(dg.kind, RecordKind.album, reason: 'zo leest Discogs het formaat nu eenmaal');
+      // "Compilation" in de tweede lijst van MusicBrainz is een UITSPRAAK dat het een verzamelaar is;
+      // "Album" in een Discogs-formaat is dat niet — dat staat op elke lp. De uitspraak wint.
+      expect(mb.mergedWith(dg).kind, RecordKind.compilation);
+      expect(dg.mergedWith(mb).kind, RecordKind.compilation, reason: 'en in beide volgordes');
+      expect(mb.mergedWith(dg).blok, RecordKind.compilation);
+    });
+
+    test('Deezer zegt verzamelaar, een andere bron zegt album', () {
+      final dz = DiscoRelease(
+        title: 'Greatest Hits',
+        kind: kindFromDeezer('compile'),
+        sources: const {DiscoSource.deezer},
+        refs: {DiscoSource.deezer: CatalogRef.deezer(3)},
+      );
+      final mb = _mb('Greatest Hits');
+      expect(dz.mergedWith(mb).kind, RecordKind.compilation);
+      expect(mb.mergedWith(dz).kind, RecordKind.compilation);
+    });
+
+    test('zonder verzamelaar in het spel blijft de oude regel gelden', () {
+      // Eén bron die "overig" zegt mag een album niet degraderen — dat was de bestaande afspraak en
+      // die moet blijven staan.
+      final a = _dz('Thriller');
+      final o = DiscoRelease(
+        title: 'Thriller',
+        kind: RecordKind.other,
+        sources: const {DiscoSource.discogs},
+        refs: {DiscoSource.discogs: CatalogRef.discogsMaster(1)},
+      );
+      expect(a.mergedWith(o).kind, RecordKind.album);
+      expect(o.mergedWith(a).kind, RecordKind.album);
+      // En een single naast een album blijft de bestaande keuze volgen.
+      expect(_dz('X').mergedWith(_mb('X', kind: RecordKind.single)).kind, RecordKind.album);
+    });
+
+    test('een master zonder formaat blijft eerlijk "overig"', () {
+      // De regressiebewaker op de aanleiding: `/artists/{id}/releases` geeft een master geen
+      // format-veld, en een lege string mag nooit stilletjes iets anders gaan betekenen.
+      expect(kindFromDiscogs(''), RecordKind.other);
+      expect(kindFromDiscogs('Vinyl, LP, Album, Compilation'), RecordKind.compilation);
+    });
+  });
+
+  group('hoezen aanvullen zonder rijen te verzinnen', () {
+    // Saber wees het aan bij Céline Dion: een blok Verzamelaars vol grijze schijven. GEMETEN: 54 van
+    // haar 55 hoesloze regels kent alléén MusicBrainz, dat op releasegroep-niveau nooit een hoes
+    // levert — en de Cover Art Archive daar evenmin (0 van 25 getoetst).
+    test('een regel zonder hoes krijgt die van de sweep', () {
+      final uit = vulHoezenAan([_mb('The French Collection II')], {
+        discoKey('The French Collection II'): 'http://img/fc2.jpg',
+      });
+      expect(uit.single.cover, 'http://img/fc2.jpg');
+    });
+
+    test('een hoes die er al is blijft staan', () {
+      // Aanvullen, niet vervangen. Anders kan deze stap een goede hoes door een mindere ruilen, en
+      // dat is precies het soort fout dat je nooit meer opmerkt.
+      final uit = vulHoezenAan([_dz('Unison', cover: 'http://echt/unison.jpg')], {
+        discoKey('Unison'): 'http://sweep/anders.jpg',
+      });
+      expect(uit.single.cover, 'http://echt/unison.jpg');
+    });
+
+    test('wat de sweep niet kent blijft zonder hoes, en de regel blijft bestaan', () {
+      final uit = vulHoezenAan([_mb('Mon Ami')], {discoKey('Iets anders'): 'http://img/x.jpg'});
+      expect(uit, hasLength(1));
+      expect(uit.single.cover, isNull);
+    });
+
+    test('aanvullen voegt nooit een regel toe, ook niet als de tabel er tien kent', () {
+      final uit = vulHoezenAan([_mb('Mon Ami')], {
+        discoKey('Mon Ami'): 'a',
+        discoKey('Een plaat die niet in de lijst staat'): 'b',
+        discoKey('En nog een'): 'c',
+      });
+      expect(uit, hasLength(1));
+    });
+
+    test('twee keer aanvullen verandert niets meer', () {
+      final tabel = {discoKey('Mon Ami'): 'http://img/ma.jpg'};
+      final een = vulHoezenAan([_mb('Mon Ami')], tabel);
+      final twee = vulHoezenAan(een, tabel);
+      expect(twee.single.cover, een.single.cover);
+      expect(twee, hasLength(1));
+    });
+
+    test('de rest van de regel blijft heel', () {
+      // Een aangevulde regel wordt opnieuw gebouwd; alles behalve de hoes moet erdoorheen komen,
+      // anders verliest hij zijn verwijzing en opent hij niets meer.
+      final bron = _mb('Mon Ami', datum: '1997-01-01', kind: RecordKind.compilation);
+      final uit = vulHoezenAan([bron], {discoKey('Mon Ami'): 'http://img/ma.jpg'}).single;
+      expect(uit.title, bron.title);
+      expect(uit.firstDate, '1997-01-01');
+      expect(uit.kind, RecordKind.compilation);
+      expect(uit.sources, bron.sources);
+      expect(uit.openRef, isNotNull);
+    });
+  });
+
   group('welk soort uitgave is dit', () {
     test('elke bron spelt het anders', () {
       expect(kindFromDeezer('compile'), RecordKind.compilation);

@@ -243,11 +243,27 @@ class DiscoRelease {
           : (title.length > other.title.length ? title : other.title),
       // Een echt type verslaat `other`; weten twee bronnen het allebei, dan wint de laagste rang —
       // album boven overig, zodat één bron die "overig" zegt een album niet degradeert.
+      //
+      // Behalve voor een VERZAMELAAR, en dat is geen uitzondering maar het herstel van een fout.
+      // [kindRank] is een LEESVOLGORDE — waar een blok op de pagina staat — en werd hier gebruikt
+      // alsof het een betrouwbaarheidsvolgorde was. Album staat op 0 en compilation op 4, dus won
+      // album altijd. Dat is precies waar [kindFromMb] tegen bestaat ("Alleen naar het eerste veld
+      // kijken zet elke verzamelbox tussen de studioalbums"), één laag hoger teruggekomen.
+      //
+      // De asymmetrie is inhoudelijk: "Compilation" in MusicBrainz' tweede lijst en Deezers
+      // `compile` zijn een UITSPRAAK dat dit een verzamelaar is. "Album" in een Discogs-formaat is
+      // dat niet — dat staat op elke lp, ook op die van een verzamelbox. Een uitspraak verslaat een
+      // afwezigheid, in beide volgordes.
+      //
+      // Lag er al, maar was onbereikbaar zolang Discogs-masters altijd `other` droegen; sinds die
+      // hun formaat uit de zoeksweep krijgen, doen ze mee en trokken ze verzamelaars naar Albums.
       kind: kind == other.kind
           ? kind
-          : (kind == RecordKind.other
-              ? other.kind
-              : (other.kind == RecordKind.other ? kind : _minKind(kind, other.kind))),
+          : (kind == RecordKind.compilation || other.kind == RecordKind.compilation
+              ? RecordKind.compilation
+              : (kind == RecordKind.other
+                  ? other.kind
+                  : (other.kind == RecordKind.other ? kind : _minKind(kind, other.kind)))),
       firstDate: vroegste(firstDate, other.firstDate),
       cover: (cover != null && cover!.isNotEmpty) ? cover : other.cover,
       trackCount: trackCount > 0 ? trackCount : other.trackCount,
@@ -310,6 +326,39 @@ List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
     }
   }
   return samen.values.toList();
+}
+
+/// Vult ontbrekende hoezen aan uit een losse tabel, zonder ooit een regel toe te voegen.
+///
+/// Saber wees het aan op de pagina van Céline Dion: een blok "Verzamelaars" waarin de meeste tegels
+/// een grijze schijf zijn. GEMETEN: van haar 274 regels missen er 55 een hoes, en 54 daarvan kent
+/// alléén MusicBrainz — dat levert op releasegroep-niveau nooit een hoes, en de Cover Art Archive
+/// evenmin (0 van 25 getoetst).
+///
+/// Aanvullen en niet vervangen: een hoes die er al is blijft staan, ongeacht wat de tabel zegt. Zo
+/// kan deze stap een goede hoes nooit door een mindere vervangen, en is hij idempotent.
+///
+/// De sleutel is [discoKey], dezelfde waarop [mergeDiscography] beslist of twee regels dezelfde plaat
+/// zijn. Bewust geen losser criterium: een hoes die bij de verkeerde plaat staat ziet er precies zo
+/// uit als een hoes die klopt, en dat is een fout die je nooit meer opmerkt.
+List<DiscoRelease> vulHoezenAan(List<DiscoRelease> rijen, Map<String, String> hoesPerSleutel) {
+  if (hoesPerSleutel.isEmpty) return rijen;
+  return [
+    for (final r in rijen)
+      if (r.cover != null && r.cover!.isNotEmpty) r
+      else if (hoesPerSleutel[r.key] case final h? when h.isNotEmpty)
+        DiscoRelease(
+          title: r.title,
+          kind: r.kind,
+          firstDate: r.firstDate,
+          cover: h,
+          trackCount: r.trackCount,
+          sources: r.sources,
+          refs: r.refs,
+        )
+      else
+        r
+  ];
 }
 
 /// Waarop de gebruiker kan sorteren.
