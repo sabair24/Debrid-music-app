@@ -26,6 +26,8 @@ import 'catalog.dart';
 import 'completeness.dart';
 import 'credits.dart';
 import 'discogs.dart';
+import 'discography.dart';
+import 'discography_service.dart';
 import 'editions.dart';
 import 'connectivity.dart';
 import 'enrichment.dart';
@@ -9330,7 +9332,16 @@ class ArtistBrowsePage extends StatefulWidget {
 
 class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   final _catalog = CatalogService();
-  List<CatalogAlbum> _albums = [];
+
+  /// De drie bronnen APART, en pas samengevoegd bij het tekenen.
+  ///
+  /// Eén gedeelde lijst zou betekenen dat de uitkomst afhangt van wie het eerst binnenkwam, en dan
+  /// verspringt de lijst terwijl je ernaar kijkt. Zo geeft elke hertekening hetzelfde antwoord — en is
+  /// dat antwoord precies wat `mergeDiscography` in de test oplevert.
+  List<DiscoRelease> _dz = const [], _mb = const [], _dg = const [];
+  BronStatus? _dzStatus, _mbStatus, _dgStatus;
+
+  DiscoSort _sort = DiscoSort.datum;
   String? _bio;
   bool _busy = true;
 
@@ -9341,31 +9352,57 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     _loadBio();
   }
 
+  DiscographyService get _disco => DiscographyService(
+        _catalog,
+        context.read<MusicBrainzService>(),
+        DiscogsService(context.read<AppSettings>()),
+      );
+
+  /// Drie bronnen, elk zodra hij klaar is.
+  ///
+  /// Dit was een OF/OF: een MusicBrainz-artiest kreeg alleen MusicBrainz, alle anderen alleen Deezer.
+  /// Daardoor miste je bij een gewone artiest elke regionale uitgave en elke compilatie die een
+  /// streamingcatalogus nooit heeft gekend, en bij een MusicBrainz-artiest élke hoes.
+  ///
+  /// Nu alle drie, in volgorde van snelheid: Deezer heeft geen rem en staat er meteen, MusicBrainz
+  /// kost één verzoek op een baan van 1100 ms, Discogs twee op een baan van zestig per minuut. De
+  /// pagina is dus bruikbaar voordat de trage bronnen binnen zijn, en groeit daarna.
   Future<void> _load() async {
     final ref = widget.artist.ref;
-    try {
-      // A MusicBrainz artist has no Deezer id, so asking Deezer for album id 0 returns nothing —
-      // and this page draws an empty grid with no empty state, so it looks like a working page for
-      // an artist with no records. It also has the better answer: MusicBrainz carries the regional
-      // oddities and the compilations a streaming catalogue has never listed.
-      if (ref.isMb) {
-        final groups = await context.read<MusicBrainzService>().discographyOf(ref.id);
-        if (!mounted) return;
-        setState(() {
-          _albums = [
-            for (final g in groups)
-              CatalogAlbum(0, g.title, null, g.firstDate, 0,
-                  g.primaryType.toLowerCase().isEmpty ? 'album' : g.primaryType.toLowerCase(),
-                  origin: CatalogRef.musicbrainzGroup(g.mbid))
-          ];
-          _busy = false;
-        });
-        return;
-      }
-      final a = await _catalog.artistAlbums(widget.artist.id);
-      if (mounted) setState(() { _albums = a; _busy = false; });
-    } catch (_) {
-      if (mounted) setState(() => _busy = false);
+    final naam = widget.artist.name;
+    final svc = _disco;
+
+    // De cache eerst, zodat een tweede bezoek niet leeg begint. Wat daarna binnenkomt overschrijft
+    // hem gewoon — samenvoegen is idempotent, dus dat kan geen kwaad.
+    final bewaard = await svc.lees(naam);
+    if (mounted && bewaard != null && bewaard.releases.isNotEmpty) {
+      setState(() {
+        _dz = bewaard.releases;
+        _busy = false;
+      });
+    }
+
+    Future<void> pak(Future<BronUitkomst> f, void Function(BronUitkomst) zet) async {
+      final u = await f;
+      if (!mounted) return;
+      setState(() {
+        zet(u);
+        _busy = false;
+      });
+    }
+
+    // Niet awaited op elkaar: de drie lopen naast elkaar en elke setState tekent wat er dán is.
+    await Future.wait([
+      pak(svc.vanDeezer(naam, bekendId: ref.isMb ? null : widget.artist.id),
+          (u) { _dz = u.releases; _dzStatus = u.status; }),
+      pak(svc.vanMusicBrainz(naam, bekendeMbid: ref.isMb ? ref.id : null),
+          (u) { _mb = u.releases; _mbStatus = u.status; }),
+      pak(svc.vanDiscogs(naam), (u) { _dg = u.releases; _dgStatus = u.status; }),
+    ]);
+
+    if (mounted) {
+      final alles = mergeDiscography([_dz, _mb, _dg]);
+      if (alles.isNotEmpty) unawaited(svc.schrijf(naam, alles));
     }
   }
 
@@ -9385,7 +9422,14 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
         .where((a) => artistKey(a.artist) == artistKey(widget.artist.name))
         .toList()
       ..sort((a, b) => (b.year ?? 0).compareTo(a.year ?? 0));
-    final owned = {for (final a in mine) normKey(a.title)};
+
+    // Samenvoegen gebeurt HIER, bij het tekenen, en niet in `_load`. Zo geeft elke hertekening
+    // hetzelfde antwoord ongeacht welke bron het eerst binnenkwam — zie de test daarop.
+    //
+    // Bezit langs dezelfde sleutel als de rest, want anders is "heb ik dit" een andere vraag dan "is
+    // dit dezelfde plaat" en vink je twee regels af voor één album.
+    final bezit = {for (final a in mine) discoKey(a.title)};
+    final rijen = sortDiscography(mergeDiscography([_dz, _mb, _dg]), _sort, bezit);
 
     return Scaffold(
       backgroundColor: _bg,
@@ -9408,7 +9452,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                       ? 'Albums laden…'
                       : [
                           if (mine.isNotEmpty) '${mine.length} in je bibliotheek',
-                          '${_albums.length} albums',
+                          '${rijen.length} albums',
                         ].join(' · '),
                 ),
                 Padding(
@@ -9448,16 +9492,33 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                 child: Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator(color: _accent))))
           else ...[
             SliverToBoxAdapter(
-                child: _sectionTitle(
-                    mine.isEmpty ? 'Discografie' : 'Volledige discografie', '${_albums.length}')),
+              child: Row(
+                children: [
+                  Expanded(
+                      child: _sectionTitle(
+                          mine.isEmpty ? 'Discografie' : 'Volledige discografie', '${rijen.length}')),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 20),
+                    child: _sorteerPil(),
+                  ),
+                ],
+              ),
+            ),
+            if (_bronRegel() case final regel?)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+                  child: Text(regel, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                ),
+              ),
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
               sliver: SliverGrid(
                 gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                     maxCrossAxisExtent: 180, mainAxisSpacing: 14, crossAxisSpacing: 14, childAspectRatio: .74),
                 delegate: SliverChildBuilderDelegate(
-                    (_, i) => _albumCard(_albums[i], owned.contains(normKey(_albums[i].title))),
-                    childCount: _albums.length),
+                    (_, i) => _discoCard(rijen[i], bezit.contains(rijen[i].key)),
+                    childCount: rijen.length),
               ),
             ),
           ],
@@ -9466,6 +9527,82 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
         ),
       ),
     );
+  }
+
+  /// Dezelfde pil als op de Albums-pagina, zodat sorteren overal hetzelfde ding is.
+  Widget _sorteerPil() => Container(
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: .06),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.white.withValues(alpha: .12)),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+        child: PopupMenuButton<DiscoSort>(
+          tooltip: 'Sorteren',
+          initialValue: _sort,
+          onSelected: (s) => setState(() => _sort = s),
+          itemBuilder: (_) => [
+            for (final s in DiscoSort.values) PopupMenuItem(value: s, child: Text(s.label)),
+          ],
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.sort_rounded, size: 15, color: _muted),
+            const SizedBox(width: 6),
+            Text(_sort.label, style: const TextStyle(fontSize: 12, color: _muted)),
+            const Icon(Icons.arrow_drop_down_rounded, size: 18, color: _muted),
+          ]),
+        ),
+      );
+
+  /// Wat de bronnen deden — alleen als er iets te melden valt.
+  ///
+  /// "Geen token", "niet bereikbaar" en "niets gevonden" zien er op een lege lijst hetzelfde uit, en
+  /// zonder Discogs-token faalt daar élke aanroep stil. Dat verschil hoort op het scherm te staan.
+  String? _bronRegel() {
+    final meldingen = <String>[];
+    if (_dgStatus == BronStatus.geenToken) meldingen.add('Discogs: geen token in Instellingen');
+    if (_dgStatus == BronStatus.onbereikbaar) meldingen.add('Discogs niet bereikbaar');
+    if (_mbStatus == BronStatus.onbereikbaar) meldingen.add('MusicBrainz niet bereikbaar');
+    if (_dzStatus == BronStatus.onbereikbaar) meldingen.add('Deezer niet bereikbaar');
+    for (final e in {
+      'Deezer': _dzStatus,
+      'MusicBrainz': _mbStatus,
+      'Discogs': _dgStatus,
+    }.entries) {
+      if (e.value == BronStatus.andereArtiest) {
+        meldingen.add('${e.key} kende alleen een naamgenoot — overgeslagen');
+      }
+    }
+    return meldingen.isEmpty ? null : meldingen.join(' · ');
+  }
+
+  /// Eén plaat uit de samengevoegde discografie.
+  Widget _discoCard(DiscoRelease r, bool owned) {
+    final al = r.toCatalogAlbum();
+    // Het merkje: welke catalogi deze plaat kennen. Alleen tonen als het iets toevoegt — bij één bron
+    // zegt het niets, en drie letters onder elke tegel is ruis.
+    final merk = r.sources.length > 1
+        ? r.sources.map((s) => switch (s) {
+              DiscoSource.deezer => 'D',
+              DiscoSource.musicbrainz => 'MB',
+              DiscoSource.discogs => 'DG',
+            }).join('·')
+        : null;
+    return Stack(children: [
+      _albumCard(al, owned),
+      if (merk != null)
+        Positioned(
+          left: 6,
+          top: 6,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: .55),
+              borderRadius: BorderRadius.circular(5),
+            ),
+            child: Text(merk, style: const TextStyle(fontSize: 9, color: Colors.white70)),
+          ),
+        ),
+    ]);
   }
 
   Widget _albumCard(CatalogAlbum al, [bool owned = false]) {
