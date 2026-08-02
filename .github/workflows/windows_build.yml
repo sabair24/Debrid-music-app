@@ -32,7 +32,14 @@ jobs:
       - name: Install Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.35.6'
+          # Gelijk aan apple_build.yml en build-release.yml. Windows liep zes versies achter, en juist
+          # daar zit het probleem: GEMETEN op een 144Hz-scherm haalt de draaiende plaat 70 beelden per
+          # seconde terwijl bouwen 0,4ms en rasteren 0,6ms kost van een budget van 6,9ms. Het frame is
+          # niet te duur, het BEGINT gemiddeld 10,4ms na de vsync-tik, en de UI-draad is dan 97% stil.
+          # Dat wijst onder Dart, naar de framescheduling van de embedder.
+          #
+          # Een versie die op twee andere platforms al bouwt is de goedkoopste toets die er is.
+          flutter-version: '3.41.9'
           channel: 'stable'
           cache: true
 
