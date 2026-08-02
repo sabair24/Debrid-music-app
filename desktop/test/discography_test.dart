@@ -71,14 +71,51 @@ void main() {
       expect(discoKey('Beyoncé'), discoKey('Beyonce'));
     });
 
-    test('een uitgave-staart telt niet mee, een echte titel wel', () {
-      expect(discoKey('30 (Deluxe Edition)'), discoKey('30'));
-      expect(discoKey('30 (Deluxe Edition) [2021 Remaster]'), discoKey('30'),
+    test('een deluxe valt NIET samen met het gewone album', () {
+      // Dit stond eerst andersom, en dat was fout. Een deluxe is geen andere PERSING maar een ander
+      // product: er staan nummers op die op het gewone album niet staan. Wegstrijken liet die uitgave
+      // stilzwijgend uit beeld verdwijnen -- en juist die wil je kunnen kiezen.
+      expect(discoKey('30 (Deluxe Edition)'), isNot(discoKey('30')));
+      expect(discoKey('Thriller (25th Anniversary Edition)'), isNot(discoKey('Thriller')));
+    });
+
+    test('maar hij komt wel in een eigen blok terecht', () {
+      expect(heeftEditieStaart('30 (Deluxe Edition)'), isTrue);
+      expect(heeftEditieStaart('30 (Deluxe Edition) [2021 Remaster]'), isTrue,
           reason: 'Discogs plakt er graag twee achter elkaar');
-      expect(discoKey('Thriller (25th Anniversary Edition)'), discoKey('Thriller'));
-      // En de grens: dit is een ANDERE plaat en mag niet samenvallen.
-      expect(discoKey('30 ans de succès'), isNot(discoKey('30')));
-      expect(discoKey('Thriller (Live)'), isNot(discoKey('Thriller')));
+      expect(heeftEditieStaart('Thriller (25th Anniversary Edition)'), isTrue);
+      // En de grens: dit zijn geen uitgave-staarten maar deel van de titel.
+      expect(heeftEditieStaart('30 ans de succès'), isFalse);
+      expect(heeftEditieStaart('Thriller (Live)'), isFalse);
+      expect(heeftEditieStaart('Thriller'), isFalse);
+    });
+  });
+
+  group('blokken', () {
+    test('een deluxe staat onder "Andere uitgaves", niet tussen de albums', () {
+      final blokken = inBlokken([
+        _dz('30', datum: '2021-11-19'),
+        _dz('30 (Deluxe Edition)', datum: '2021-11-19'),
+        DiscoRelease(title: 'Easy On Me', kind: RecordKind.single, firstDate: '2021-10-15'),
+        DiscoRelease(title: 'Verzamelaar', kind: RecordKind.compilation, firstDate: '2015-01-01'),
+      ], DiscoSort.datum, {});
+
+      expect(blokken.map((b) => b.soort).toList(),
+          [RecordKind.album, RecordKind.albumVersie, RecordKind.single, RecordKind.compilation]);
+      expect(blokken.first.rijen.single.title, '30');
+      expect(blokken[1].rijen.single.title, '30 (Deluxe Edition)');
+    });
+
+    test('lege blokken vallen weg', () {
+      final blokken = inBlokken([_dz('Alleen dit')], DiscoSort.datum, {});
+      expect(blokken, hasLength(1));
+      expect(blokken.first.soort, RecordKind.album);
+    });
+
+    test('elk blok heeft een kop', () {
+      for (final k in RecordKind.values) {
+        expect(blokTitel(k), isNotEmpty);
+      }
     });
   });
 
@@ -182,11 +219,12 @@ void main() {
       expect(uit.first.title, 'Oud');
     });
 
-    test('op type: album, EP, single, verzamelaar', () {
-      final uit = sortDiscography(lijst, DiscoSort.type, {});
-      final soorten = uit.map((r) => r.kind).toList();
-      expect(soorten.indexOf(RecordKind.single), lessThan(soorten.indexOf(RecordKind.compilation)));
-      expect(soorten.first, RecordKind.album);
+    test('de derde stand is alfabetisch, want het type bepaalt nu het blok', () {
+      // Binnen een blok staat alles al van hetzelfde soort; nog eens op type sorteren zou niets doen.
+      // Alfabetisch is dan het bruikbare antwoord: een plaat terugvinden waarvan je de naam weet.
+      final uit = sortDiscography(lijst, DiscoSort.type, {}).map((r) => r.title).toList();
+      final gesorteerd = [...uit]..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      expect(uit, gesorteerd);
     });
 
     test('elke sortering is TOTAAL, dus de lijst springt niet', () {

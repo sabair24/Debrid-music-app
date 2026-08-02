@@ -9429,7 +9429,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     // Bezit langs dezelfde sleutel als de rest, want anders is "heb ik dit" een andere vraag dan "is
     // dit dezelfde plaat" en vink je twee regels af voor één album.
     final bezit = {for (final a in mine) discoKey(a.title)};
-    final rijen = sortDiscography(mergeDiscography([_dz, _mb, _dg]), _sort, bezit);
+    final alles = mergeDiscography([_dz, _mb, _dg]);
+    final blokken = inBlokken(alles, _sort, bezit);
+    final rijen = alles;
 
     return Scaffold(
       backgroundColor: _bg,
@@ -9496,7 +9498,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                 children: [
                   Expanded(
                       child: _sectionTitle(
-                          mine.isEmpty ? 'Discografie' : 'Volledige discografie', '${rijen.length}')),
+                          mine.isEmpty ? 'Discografie' : 'Volledige discografie',
+                          '${rijen.length} in ${blokken.length} blokken')),
                   Padding(
                     padding: const EdgeInsets.only(right: 20),
                     child: _sorteerPil(),
@@ -9511,16 +9514,24 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                   child: Text(regel, style: const TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               ),
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
-              sliver: SliverGrid(
-                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                    maxCrossAxisExtent: 180, mainAxisSpacing: 14, crossAxisSpacing: 14, childAspectRatio: .74),
-                delegate: SliverChildBuilderDelegate(
-                    (_, i) => _discoCard(rijen[i], bezit.contains(rijen[i].key)),
-                    childCount: rijen.length),
+            // Per soort een eigen blok met een eigen kop. Zonder die scheiding staat een deluxe naast
+            // het gewone album met bijna dezelfde naam, en tussen tweehonderd singles zie je niet meer
+            // welke platen er eigenlijk zijn.
+            for (final blok in blokken) ...[
+              SliverToBoxAdapter(
+                  child: _sectionTitle(blokTitel(blok.soort), '${blok.rijen.length}')),
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                sliver: SliverGrid(
+                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 180, mainAxisSpacing: 14, crossAxisSpacing: 14, childAspectRatio: .74),
+                  delegate: SliverChildBuilderDelegate(
+                      (_, i) => _discoCard(blok.rijen[i], bezit.contains(blok.rijen[i].key)),
+                      childCount: blok.rijen.length),
+                ),
               ),
-            ),
+            ],
+            const SliverToBoxAdapter(child: SizedBox(height: 24)),
           ],
         ],
         ),
