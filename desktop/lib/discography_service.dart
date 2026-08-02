@@ -31,7 +31,15 @@ class BronUitkomst {
   final DiscoSource bron;
   final BronStatus status;
   final List<DiscoRelease> releases;
-  const BronUitkomst(this.bron, this.status, this.releases);
+
+  /// Hoezen die deze bron kent voor platen die hij zelf niet als regel oplevert.
+  ///
+  /// Alleen Discogs vult dit, uit zijn zoeksweep. Ze staan apart van [releases] omdat ze bestaande
+  /// regels van ANDERE bronnen aanvullen — MusicBrainz levert er nooit een — en er nadrukkelijk geen
+  /// regels bij mogen komen. Zie [DiscogsSweep].
+  final Map<String, String> hoezen;
+
+  const BronUitkomst(this.bron, this.status, this.releases, {this.hoezen = const {}});
 
   bool get gelukt => status == BronStatus.klaar;
 }
@@ -59,7 +67,10 @@ class DiscographyService {
   /// deze marker blijft elke eerder bezochte artiest voor altijd het oude antwoord serveren — ook als
   /// de samenvoegregel intussen veranderd is. Dezelfde truc, en dezelfde reden, als `art|v6|` in
   /// discogs.dart en `v2|` in enrichment.dart.
-  static const schema = 'disco|v1';
+  /// v2: Discogs-masters kregen hun soort uit de zoeksweep (waren allemaal `other`), regels zonder
+  /// hoes worden aangevuld, en Deezer-gastoptredens vallen af. Zonder deze bump blijft elke eerder
+  /// bezochte artiest het oude antwoord serveren — de onderliggende caches verlopen nooit.
+  static const schema = 'disco|v2';
 
   /// Hoe lang een bewaard antwoord meegaat voor er bij Deezer opnieuw wordt gekeken.
   ///
@@ -187,11 +198,45 @@ class DiscographyService {
     try {
       final id = await discogs.artistId(naam);
       if (id == null) return const BronUitkomst(DiscoSource.discogs, BronStatus.klaar, []);
-      final rijen = await discogs.artistReleases(id);
-      return BronUitkomst(DiscoSource.discogs, BronStatus.klaar, rijen);
+      // Eén sweep, twee doelen: het formaat van elke master (anders valt die in "Overig") en een
+      // miniatuurhoes voor regels die er geen hebben. Hier opgehaald en doorgegeven, zodat hij
+      // gegarandeerd één keer gebeurt in plaats van te leunen op de schijfcache.
+      final sweep = await discogs.artistSweep(id);
+      final rijen = await discogs.artistReleases(id, sweep_: sweep);
+      return BronUitkomst(DiscoSource.discogs, BronStatus.klaar, rijen,
+          hoezen: sweep.hoesPerSleutel);
     } catch (_) {
       return const BronUitkomst(DiscoSource.discogs, BronStatus.onbereikbaar, []);
     }
+  }
+
+  /// Welke van deze regels in werkelijkheid andermans plaat zijn.
+  ///
+  /// Levert de [discoKey]s die van de discografie af moeten. Alleen Deezer heeft dit nodig: Discogs
+  /// filtert al op `role == 'Main'` en MusicBrainz browst de releasegroepen van de artiest zelf, dus
+  /// die twee laten een gastoptreden al vallen. Deezers `/artist/{id}/albums` doet dat niet en noemt
+  /// de hoofdartiest ook niet — zie [CatalogService.albumArtists].
+  ///
+  /// GEMETEN op Enrique Iglesias: 15 van zijn 86 Deezer-regels zijn van iemand anders, van "Pavarotti
+  /// & Friends" tot vier taalversies van een single van Descemer Bueno. Wat één van de andere twee
+  /// bronnen óók kent gaat er niet langs, want dat is al gedekt; voor Enrique scheelt dat 39 verzoeken.
+  ///
+  /// Bij twijfel blijft een regel staan. Een plaat die ten onrechte verdwijnt merk je niet.
+  Future<Set<String>> gastoptredens(String naam, List<DiscoRelease> rijen) async {
+    final teVragen = <int, String>{}; // deezer album-id -> discoKey
+    for (final r in rijen) {
+      if (r.sources.length != 1 || !r.sources.contains(DiscoSource.deezer)) continue;
+      final ref = r.refs[DiscoSource.deezer];
+      if (ref == null || ref.intId <= 0) continue;
+      teVragen[ref.intId] = r.key;
+    }
+    if (teVragen.isEmpty) return const {};
+    final vanWie = await catalog.albumArtists(teVragen.keys);
+    return {
+      for (final e in teVragen.entries)
+        if (vanWie[e.key] case final wie?)
+          if (!_zelfdeArtiest(naam, wie)) e.value,
+    };
   }
 
   // ── Opslagvorm ─────────────────────────────────────────────────────────────

@@ -177,6 +177,51 @@ void main() {
     expect(fitsTrackCount(17, 15), isTrue, reason: 'bonusnummers zijn gewoon');
   }, timeout: const Timeout(Duration(minutes: 3)));
 
+  test('METING: waarom staat Pavarotti & Friends bij Enrique Iglesias onder Albums', () async {
+    // Saber wees dit aan: een plaat van Luciano Pavarotti waar Enrique één keer op meezingt, en hij
+    // staat tussen zijn eigen albums. Twee vragen die niet samenvallen — WELKE bron levert de regel,
+    // en waarom is zijn soort "album" in plaats van "verzamelaar".
+    final svc = await maak();
+    const naam = 'Enrique Iglesias';
+    final dz = await svc.vanDeezer(naam);
+    final mb = await svc.vanMusicBrainz(naam);
+    final dg = await svc.vanDiscogs(naam);
+
+    bool isHem(DiscoRelease r) => r.key.contains('pavarotti');
+    for (final paar in [('deezer', dz), ('musicbrainz', mb), ('discogs', dg)]) {
+      final treffers = paar.$2.releases.where(isHem).toList();
+      // ignore: avoid_print
+      print('${paar.$1}: ${treffers.isEmpty ? "kent hem NIET" : treffers.map((r) => ""
+          "${r.kind.name} | ${r.firstDate} | ${r.title}").join(" ;; ")}');
+    }
+
+    final samen = mergeDiscography([dz.releases, mb.releases, dg.releases]);
+    for (final r in samen.where(isHem)) {
+      // ignore: avoid_print
+      print('SAMEN: soort=${r.kind.name} blok=${r.blok.name} '
+          'bronnen=${r.sources.map((s) => s.name).join(",")} | ${r.title}');
+    }
+
+    final albums = samen.where((r) => r.blok == RecordKind.album).toList();
+    // ignore: avoid_print
+    print('blok Albums telt ${albums.length}');
+
+    // De vraag die de prijs van de reparatie bepaalt. MusicBrainz browst op releasegroep van de
+    // artiest en Discogs filtert op role == 'Main'; allebei laten ze een gastoptreden dus al vallen.
+    // Alleen wat UITSLUITEND Deezer kent hoeft nagekeken, en dat kost één verzoek per stuk.
+    final alleenDeezer = samen
+        .where((r) => r.sources.length == 1 && r.sources.contains(DiscoSource.deezer))
+        .toList();
+    // ignore: avoid_print
+    print('regels van Deezer: ${dz.releases.length}, waarvan ALLEEN Deezer: ${alleenDeezer.length}');
+    // ignore: avoid_print
+    print('  -> zoveel /album/{id}-verzoeken kost de controle');
+    for (final r in alleenDeezer.take(20)) {
+      // ignore: avoid_print
+      print('     ${r.kind.name} | ${r.firstDate ?? "—"} | ${r.title}');
+    }
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
   test('een plaat die twee bronnen kennen draagt twee merkjes en houdt zijn hoes', () async {
     final svc = await maak();
     final dz = await svc.vanDeezer('Michael Jackson');

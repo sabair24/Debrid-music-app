@@ -321,6 +321,33 @@ class CatalogService {
     return _contributorCache[key] = names;
   }
 
+  /// Van wie is dit album eigenlijk? Deezers hoofdartiest per album-id.
+  ///
+  /// Bestaat omdat `/artist/{id}/albums` GEEN artiestveld levert — gemeten, de regel draagt alleen
+  /// id, titel, hoezen, genre_id, fans, release_date, record_type en tracklist. Daardoor staan platen
+  /// waarop de artiest te GAST is niet te onderscheiden van zijn eigen werk, en belandde "Pavarotti &
+  /// Friends for Cambodia and Tibet" tussen de albums van Enrique Iglesias. `/album/{id}` zegt het wel:
+  /// `artist.name` is daar "Luciano Pavarotti", met Enrique als één van dertien gastartiesten.
+  ///
+  /// Eén verzoek per album, en dat is waarom de aanroeper zelf moet uitdunnen wat hij vraagt. Discogs
+  /// filtert al op `role == 'Main'` en MusicBrainz browst op de releasegroepen van de artiest zelf —
+  /// wat één van die twee ook kent, is dus al gedekt en hoeft hier niet langs.
+  ///
+  /// Deezer is hier de goedkope kant: gemeten 86 verzoeken in 12,7 s. Een lege uitkomst betekent
+  /// "niet te achterhalen", nooit "van iemand anders" — bij twijfel blijft een regel staan.
+  Future<Map<int, String>> albumArtists(Iterable<int> albumIds) async {
+    final uit = <int, String>{};
+    for (final id in albumIds) {
+      if (id <= 0) continue;
+      try {
+        final j = await _get('$_base/album/$id');
+        final naam = ((j?['artist']?['name']) as String? ?? '').trim();
+        if (naam.isNotEmpty) uit[id] = naam;
+      } catch (_) {/* een album dat niet antwoordt telt als onbekend, niet als vreemd */}
+    }
+    return uit;
+  }
+
   Future<List<CatalogAlbum>> artistAlbums(int artistId) async {
     final j = await _get('$_base/artist/$artistId/albums?limit=100');
     final data = (j?['data'] as List?) ?? const [];

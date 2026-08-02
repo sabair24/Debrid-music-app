@@ -9027,6 +9027,16 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   List<DiscoRelease> _dz = const [], _mb = const [], _dg = const [];
   BronStatus? _dzStatus, _mbStatus, _dgStatus;
 
+  /// Hoezen die Discogs' zoeksweep kent voor platen die hij zelf niet als regel oplevert.
+  Map<String, String> _hoezen = const {};
+
+  /// De [discoKey]s van regels die in werkelijkheid andermans plaat zijn.
+  ///
+  /// Saber wees "Pavarotti & Friends for Cambodia and Tibet" aan tussen de albums van Enrique
+  /// Iglesias — een plaat van Luciano Pavarotti waar Enrique op één nummer meezingt. Komt na het
+  /// laden binnen, want het kost één verzoek per regel die alleen Deezer kent.
+  Set<String> _gasten = const {};
+
   DiscoSort _sort = DiscoSort.datum;
   String? _bio;
   bool _busy = true;
@@ -9091,13 +9101,22 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           (u) { _dz = u.releases; _dzStatus = u.status; }),
       pak(svc.vanMusicBrainz(naam, bekendeMbid: ref.isMb ? ref.id : null),
           (u) { _mb = u.releases; _mbStatus = u.status; }),
-      pak(svc.vanDiscogs(naam), (u) { _dg = u.releases; _dgStatus = u.status; }),
+      pak(svc.vanDiscogs(naam),
+          (u) { _dg = u.releases; _dgStatus = u.status; _hoezen = u.hoezen; }),
     ]);
 
-    if (mounted) {
-      final alles = mergeDiscography([_dz, _mb, _dg]);
-      if (alles.isNotEmpty) unawaited(svc.schrijf(naam, alles));
-    }
+    if (!mounted) return;
+    final alles = vulHoezenAan(mergeDiscography([_dz, _mb, _dg]), _hoezen);
+    if (alles.isNotEmpty) unawaited(svc.schrijf(naam, alles));
+
+    // Pas NA de drie bronnen, want wat MusicBrainz of Discogs ook kent hoeft niet nagevraagd — die
+    // twee laten een gastoptreden al vallen. En pas nadat de pagina staat: dit kost een verzoek per
+    // regel die alleen Deezer kent, voor Enrique Iglesias zijn dat er 47.
+    final gasten = await svc.gastoptredens(naam, alles);
+    if (!mounted || gasten.isEmpty) return;
+    setState(() => _gasten = gasten);
+    // Opnieuw wegschrijven, zodat een tweede bezoek ze niet eerst weer laat opflitsen.
+    unawaited(svc.schrijf(naam, alles.where((r) => !gasten.contains(r.key)).toList()));
   }
 
   Future<void> _loadBio() async {
@@ -9142,7 +9161,11 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     // Bezit langs dezelfde sleutel als de rest, want anders is "heb ik dit" een andere vraag dan "is
     // dit dezelfde plaat" en vink je twee regels af voor één album.
     final bezit = {for (final a in mine) discoKey(a.title)};
-    final alles = mergeDiscography([_dz, _mb, _dg]);
+    // Hoezen aanvullen vóór het sorteren, gastoptredens eruit: allebei op de samengevoegde lijst,
+    // zodat elke hertekening hetzelfde antwoord geeft ongeacht wat er wanneer binnenkwam.
+    final alles = vulHoezenAan(mergeDiscography([_dz, _mb, _dg]), _hoezen)
+        .where((r) => !_gasten.contains(r.key))
+        .toList();
     final blokken = inBlokken(alles, _sort, bezit);
     final rijen = alles;
 
