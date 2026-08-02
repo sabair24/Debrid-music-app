@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 // Voor het uitlezen van de hoeskleur: dat decodeert een plaatje en hoort niet op de tekendraad.
 import 'dart:isolate';
@@ -52,6 +52,7 @@ import 'now_playing.dart';
 import 'login_screen.dart';
 import 'pairing_screen.dart';
 import 'artwork.dart' show dominantColour;
+import 'fps_probe.dart';
 import 'warm_log.dart' show WarmLog;
 import 'library.dart';
 import 'metadata.dart';
@@ -76,7 +77,7 @@ import 'tv.dart';
 /// What a focused Material button looks like: the same ring the rest of the app draws.
 ///
 /// Only `side` and `overlayColor`, so a button that sets its own colour, padding or shape keeps
-/// all of it — this adds the one thing that was missing rather than taking the styling over.
+/// all of it â€” this adds the one thing that was missing rather than taking the styling over.
 final ButtonStyle _focusOutline = ButtonStyle(
   side: WidgetStateProperty.resolveWith((states) => states.contains(WidgetState.focused)
       ? BorderSide(color: _accent, width: isTv ? 3 : 2)
@@ -96,7 +97,7 @@ const _accent2 = Color(0xFF00D4C8);
 
 /// Windows and macOS have windows to manage and one app instance per machine; iOS and Android
 /// have neither. Everything below that touches window_manager or the instance lock asks this
-/// first — on a phone or tablet those calls do not merely do nothing, they throw.
+/// first â€” on a phone or tablet those calls do not merely do nothing, they throw.
 bool get _isDesktop => Platform.isWindows || Platform.isMacOS || Platform.isLinux;
 
 /// True where a finger is the pointer. Hover states are harmless there (they simply never fire),
@@ -118,13 +119,13 @@ Future<bool> _claimSingleInstance() async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, _instancePort);
     server.listen((s) async {
       s.destroy();
-      // Een tweede start laat GEEN spoor na: die kopie sluit zichzelf af voor er ook maar één store
+      // Een tweede start laat GEEN spoor na: die kopie sluit zichzelf af voor er ook maar Ã©Ã©n store
       // bestaat, en deze kopie haalt alleen het venster naar voren. Van buiten ziet dat eruit als een
       // verse start terwijl de app misschien al uren draait -- en op precies die aanname liep een heel
-      // onderzoek naar vastlopen vast. Eén regel maakt het verschil zichtbaar.
+      // onderzoek naar vastlopen vast. EÃ©n regel maakt het verschil zichtbaar.
       try {
         WarmLog('$appDir${Platform.pathSeparator}start.log')
-            .line('tweede start opgevangen — dit venster naar voren, geen nieuwe kopie');
+            .line('tweede start opgevangen â€” dit venster naar voren, geen nieuwe kopie');
       } catch (_) {/* observing must never break the observed */}
       await windowManager.show();
       await windowManager.focus();
@@ -135,7 +136,7 @@ Future<bool> _claimSingleInstance() async {
       final s = await Socket.connect(InternetAddress.loopbackIPv4, _instancePort,
           timeout: const Duration(seconds: 2));
       s.destroy();
-      return false; // somebody answered — it really is us, already running
+      return false; // somebody answered â€” it really is us, already running
     } catch (_) {
       // The port belongs to something else entirely. Refusing to start over that would be worse
       // than the duplicate we're guarding against.
@@ -171,7 +172,7 @@ Future<void> main() async {
   // and type sizes, and a layout that changes shape one frame after it appears looks broken.
   await initTvMode();
   // And what this device is called, before it publishes that name anywhere. Same channel, same
-  // race — and on Android the alternative is a device list in which every phone reads "localhost".
+  // race â€” and on Android the alternative is a device list in which every phone reads "localhost".
   await initDeviceName();
   if (_isDesktop) await windowManager.ensureInitialized();
   if (!await _claimSingleInstance()) {
@@ -180,7 +181,7 @@ Future<void> main() async {
   if (_isDesktop) {
     // No system title bar: the app draws its own close/minimise/resize buttons into the top bar,
     // so the whole window is the app rather than the app inside a Windows frame. The size below
-    // is only what it restores DOWN to — it opens filling the screen.
+    // is only what it restores DOWN to â€” it opens filling the screen.
     await windowManager.waitUntilReadyToShow(
       const WindowOptions(
         size: Size(1240, 820),
@@ -205,7 +206,7 @@ Future<void> main() async {
     library.rootPath = settings.musicRoot.trim();
   } else if (Platform.isWindows) {
     // One-time carry-over. `rootPath` used to default to this path in the source, and on Windows
-    // `ownsTheMusic` answers true regardless of the settings — so a PC that never set a music
+    // `ownsTheMusic` answers true regardless of the settings â€” so a PC that never set a music
     // folder has been scanning it all along without the setting ever showing that. Write it in, so
     // it appears in Settings and can be changed, and so no other machine inherits it silently.
     const legacy = r'D:\Flac music 2024';
@@ -246,7 +247,7 @@ Future<void> main() async {
   );
 
   // Searching and downloading. On a Mac or an iPad these are the same classes as far as every
-  // screen is concerned — subclasses that hand the work to the PC, which has the TorBox key, the
+  // screen is concerned â€” subclasses that hand the work to the PC, which has the TorBox key, the
   // Soulseek login and somewhere to put the files. The endpoint is read at call time, so pairing
   // for the first time makes these start working without anything being rebuilt.
   final tidal = TidalService(settings);
@@ -258,7 +259,7 @@ Future<void> main() async {
       ? SoulseekService(settings)
       : RemoteSoulseekService(settings, () => session.endpoint);
   // How often this pc has logged in to Soulseek lately, and any wait the server imposed. Read
-  // before anything can search — the guard exists to survive a restart, and a restart is precisely
+  // before anything can search â€” the guard exists to survive a restart, and a restart is precisely
   // when it used to be blind. Only here: a client never logs in, it asks the pc to.
   if (mode.owner) await soulseek.client.loadGuard();
 
@@ -267,15 +268,15 @@ Future<void> main() async {
     ..coverResolver = library.coverForTrack
     ..trackResolver = library.trackByPath
     // Tapping a track while a speaker has the music sends the queue THERE. Without this the phone
-    // started playing it out loud while the KEF carried on with the old queue — which is what
+    // started playing it out loud while the KEF carried on with the old queue â€” which is what
     // "I pressed the next song and it came out of the phone" was.
     ..castQueue = (tracks, index) async {
       final device = speakers.device;
       final client = speakers.client;
       if (device == null || client == null) return null;
-      // De nummers en de id's naast elkaar, met de startindex meegeschoven — zie buildHandover.
+      // De nummers en de id's naast elkaar, met de startindex meegeschoven â€” zie buildHandover.
       final over = buildHandover(tracks, index, (t) => library.castTrackId(t.path));
-      // Nothing the pc can serve — a radio stream, say. Let it play here rather than silently
+      // Nothing the pc can serve â€” a radio stream, say. Let it play here rather than silently
       // dropping it.
       if (over.isEmpty) return null;
       final ok = await client.castPlay(device.id, over.ids, over.at);
@@ -298,7 +299,7 @@ Future<void> main() async {
     // in the middle turns the next entry into part of that expression.
     ..metaRevOf = () => library.metaRev;
   // A correction made while the record plays has to reach the player too. Every path that makes one
-  // — the release gallery, the metadata editor, a rescan, an edit arriving from another device —
+  // â€” the release gallery, the metadata editor, a rescan, an edit arriving from another device â€”
   // ends in notifyListeners(), so this one wire covers all of them.
   //
   // Two calls because they answer two different questions and are guarded differently: the cover is
@@ -318,14 +319,14 @@ Future<void> main() async {
     final at = speakers.status?.index;
     if (at != null) player.followSpeaker(at);
   });
-  // The lockscreen, Control Center and the media keys. Not awaited on the critical path — the
+  // The lockscreen, Control Center and the media keys. Not awaited on the critical path â€” the
   // window should not wait on a system service to come up.
   unawaited(initNowPlaying(player, cover: library.coverForTrack));
 
   // Being cast TO. Only on a television: that is the box wired to the amplifier, and a phone that
   // answered here would start playing whenever somebody in the house picked a speaker.
   //
-  // "Stop" pauses rather than tearing the queue down — a sender that stops casting has usually
+  // "Stop" pauses rather than tearing the queue down â€” a sender that stops casting has usually
   // moved the music somewhere else, and coming back to a cleared queue loses your place.
   if (isTv) {
     unawaited(CastReceiver(
@@ -338,7 +339,7 @@ Future<void> main() async {
   }
 
   // What "the library changed" means differs: the PC rescans its disk, a client asks the PC for
-  // the catalogue again — which is how a download started from the iPad shows up there.
+  // the catalogue again â€” which is how a download started from the iPad shows up there.
   Future<void> onLibraryChanged() async {
     if (mode.owner) {
       await library.scan();
@@ -356,7 +357,7 @@ Future<void> main() async {
   // Share this library with the Mac, the iPad and the Shield. Started before the scan finishes:
   // a device probing /health then gets a real answer straight away, and the catalogue fills in
   // by itself as the scan lands.
-  // Looking records up before you ask for them. Only the machine holding the music does this — a
+  // Looking records up before you ask for them. Only the machine holding the music does this â€” a
   // phone asks the PC for facts, so warming there would be four devices doing one job against one
   // shared budget. Constructed everywhere so the provider tree is the same shape on every platform.
   final warmer = FactsWarmer(
@@ -383,8 +384,8 @@ Future<void> main() async {
 
   // Your service logins, carried by your own account.
   //
-  // On Windows and macOS settings.json already survives a reinstall. On a phone it does not — an
-  // uninstall takes the whole container — so the account you already sign in with is the only thing
+  // On Windows and macOS settings.json already survives a reinstall. On a phone it does not â€” an
+  // uninstall takes the whole container â€” so the account you already sign in with is the only thing
   // that can hand a Soulseek or RuTracker login back to a freshly installed app.
   //
   // Pull fills only what is EMPTY here, so signing in on a working machine can never replace a
@@ -418,8 +419,8 @@ Future<void> main() async {
     await publishAsOwner(cloud, settings, sharing, library, downloads);
   }));
 
-  // Which build is answering. /health reported an empty version since the field was added — it was
-  // never assigned — so the one question you ask a machine you cannot see had no answer.
+  // Which build is answering. /health reported an empty version since the field was added â€” it was
+  // never assigned â€” so the one question you ask a machine you cannot see had no answer.
   unawaited(() async {
     try {
       final info = await PackageInfo.fromPlatform();
@@ -468,7 +469,7 @@ Future<void> main() async {
         Provider<OnlineService>.value(value: online),
         // One instance for the whole app. The 1100 ms spacing MusicBrainz asks for is held in
         // INSTANCE fields, so two widgets each constructing their own would fire unspaced and
-        // earn a 503 — and an album page builds three of these panels side by side.
+        // earn a 503 â€” and an album page builds three of these panels side by side.
         Provider<MusicBrainzService>.value(value: musicbrainz),
         Provider<SoulseekService>.value(value: soulseek),
         Provider<TidalService>.value(value: tidal),
@@ -483,7 +484,7 @@ Future<void> main() async {
 
   // Fill the screen, once there is a frame to fill it with.
   //
-  // Asked for inside waitUntilReadyToShow — before OR after show() — Windows quietly keeps the
+  // Asked for inside waitUntilReadyToShow â€” before OR after show() â€” Windows quietly keeps the
   // restore size while the window is still being realised, and the app opens in a small frame.
   // Both orderings were tried and both did. So ask after the first frame, and check the answer
   // instead of assuming it: read isMaximized back and retry for about half a second.
@@ -499,7 +500,7 @@ Future<void> main() async {
 
   // Ook op de pc een speaker kunnen kiezen.
   //
-  // Casten liep altijd via een ánder toestel: dat vroeg de pc om te zenden, en op de pc zelf was er
+  // Casten liep altijd via een Ã¡nder toestel: dat vroeg de pc om te zenden, en op de pc zelf was er
   // "niets te kiezen" omdat dat zijn eigen uitgang is. Maar de KEF en de Sonos staan in dezelfde kamer
   // als de pc, en dan is naar de telefoon grijpen om de muziek te verplaatsen onzin.
   //
@@ -552,7 +553,7 @@ Future<void> main() async {
     () async {
       // What this device was told about its records, BEFORE it connects. Without this the index was
       // written on every album open and never read back, so closing the app threw away everything
-      // it had learned and the next start asked the PC for all of it again — which is exactly the
+      // it had learned and the next start asked the PC for all of it again â€” which is exactly the
       // loading this store exists to remove. It belongs here and not only on the PC: a phone keeps
       // its own copy of the answers, keyed by the PC's album id.
       await library.facts.load();
@@ -560,7 +561,7 @@ Future<void> main() async {
       if (endpoint != null) await session.connect(endpoint, remember: false);
       // Whatever the PC is downloading shows up in "Mijn downloads" here too, progress and all.
       if (downloads is RemoteDownloadManager) downloads.startWatching();
-      // The queue is restored either way — the paths in it are stream URLs, and they resolve
+      // The queue is restored either way â€” the paths in it are stream URLs, and they resolve
       // against whatever library has just landed.
       await player.restore(library.trackByPath);
     }();
@@ -569,16 +570,16 @@ Future<void> main() async {
 
   // Waar het opstarten is gebleven, regel voor regel, naar schijf.
   //
-  // Dit blok is een rij van veertien awaits waarvan de meeste niets schrijven. Blijft er één hangen,
-  // dan stopt de app met werken zonder één spoor: het venster blijft staan met wat er toevallig op
+  // Dit blok is een rij van veertien awaits waarvan de meeste niets schrijven. Blijft er Ã©Ã©n hangen,
+  // dan stopt de app met werken zonder Ã©Ã©n spoor: het venster blijft staan met wat er toevallig op
   // stond, de LAN-server blijft antwoorden (die start eerder, op regel 422), en van buiten is niet te
   // zien of hij klaar is of vastzit.
   //
-  // Gemeten op 02-08: de app schreef hoesmateriaal tot 09:55:04, stopte midden in één plaat -- `front`
-  // wél, `done` niet -- en deed daarna elf minuten niets. Wat daar hing is niet te achterhalen, want
+  // Gemeten op 02-08: de app schreef hoesmateriaal tot 09:55:04, stopte midden in Ã©Ã©n plaat -- `front`
+  // wÃ©l, `done` niet -- en deed daarna elf minuten niets. Wat daar hing is niet te achterhalen, want
   // elke tak hier meldt zich hooguit via debugPrint en dat wordt in een release-build weggegooid.
   //
-  // Eén regel per fase kost niets en maakt het verschil tussen "hij was klaar" en "hij bleef op fase
+  // EÃ©n regel per fase kost niets en maakt het verschil tussen "hij was klaar" en "hij bleef op fase
   // vier staan" meteen leesbaar. Apart bestand, niet warm.log: die kapt zichzelf halverwege af zodra
   // hij 256 KB haalt, en juist de eerste regels zijn dan het interessantst.
   final startLog = WarmLog('$appDir${Platform.pathSeparator}start.log');
@@ -601,8 +602,8 @@ Future<void> main() async {
   // Wrapped so a scan hiccup can never prevent enrichment from running.
   () async {
     await library.loadCorrections(); // apply manual fixes as tracks are built
-    await library.uids.load(); // the names albums keep across a rename — before the first regroup
-    await library.facts.load(); // pressings and tracklists already worked out — one file, one read
+    await library.uids.load(); // the names albums keep across a rename â€” before the first regroup
+    await library.facts.load(); // pressings and tracklists already worked out â€” one file, one read
     await library.loadTagUndo(); // the way back from a tag rewrite, before anything can write again
     await library.loadHidden(); // keep "removed from library only" tracks out
     await library.loadMerged(); // records the user told us to keep together
@@ -613,12 +614,12 @@ Future<void> main() async {
     try {
       await fase('scan', library.scan);
     } catch (_) {}
-    // Folders that emptied out before this ran — a merge in an older build, a rip the user pulled
+    // Folders that emptied out before this ran â€” a merge in an older build, a rip the user pulled
     // out by hand. From now on each move sweeps up after itself (see [pruneVacated]); this clears
     // what is already there. Once per launch, not per scan: it walks every folder.
     unawaited(sweepEmptyFolders(library.rootPath));
     await fase('enrich', () => library.enrich(settings));
-    // Reopen the last queue where you left off (paused) — covers are loaded by now.
+    // Reopen the last queue where you left off (paused) â€” covers are loaded by now.
     await fase('player.restore', () => player.restore(library.trackByPath));
     // Downloads that were still running when the app (or the PC) went down. After the scan, so
     // anything that did finish is already in the library and won't be fetched twice.
@@ -641,10 +642,10 @@ Future<void> main() async {
     Timer.periodic(const Duration(minutes: 20), (_) => unawaited(downloads.sweepLosslessWants()));
     await fase('enrichArtists', () => library.enrichArtists(settings));
     // Last, deliberately. Everything above this either draws the first screen or fetches something
-    // you can see; this is the only part nobody is waiting for. Not awaited either — it runs for as
+    // you can see; this is the only part nobody is waiting for. Not awaited either â€” it runs for as
     // long as there are records it has not looked up yet.
     // Niet awaited, dus `fase` past hier niet: dit loopt zolang er platen zijn die hij nog niet kent.
-    // Wel een begin- en eindregel, want juist HIER stopte het op 02-08 — midden in het ophalen van
+    // Wel een begin- en eindregel, want juist HIER stopte het op 02-08 â€” midden in het ophalen van
     // hoesmateriaal, met `front` geschreven en `done` niet. Zonder deze twee regels is "hij is nog
     // bezig" niet te onderscheiden van "hij is blijven hangen".
     startLog.line('warmer ... (loopt door op de achtergrond)');
@@ -672,13 +673,13 @@ class DebridApp extends StatelessWidget {
           secondary: _accent2,
           surface: _panel,
         ),
-        // Every InkWell, ListTile and Material button in the app can already take focus — Flutter
+        // Every InkWell, ListTile and Material button in the app can already take focus â€” Flutter
         // gives them that for free, which is why they were reachable with a remote before anything
         // was changed. What they could not do was SAY so: the default focus tint is a whisper of
         // white, and on these panels, from a sofa, it is not there at all. One line rather than
         // twenty-five edits, and a mouse never sees it because a mouse never focuses.
         focusColor: _accent.withValues(alpha: isTv ? .34 : .18),
-        // Material's buttons signal focus with a tint of their own foreground colour — about a
+        // Material's buttons signal focus with a tint of their own foreground colour â€” about a
         // tenth of white. On the purple "Afspelen" button that is nothing at all, and on a TV a
         // button you cannot tell is selected is a button you press by accident. So they get the
         // same outline every other focusable thing in this app got.
@@ -689,10 +690,10 @@ class DebridApp extends StatelessWidget {
         fontFamily: 'Segoe UI',
       ),
       // On a Mac or an iPad that has never met the PC there is no library to show yet, so the
-      // pairing screen comes first. Everywhere else — and from the moment it is paired — this is
+      // pairing screen comes first. Everywhere else â€” and from the moment it is paired â€” this is
       // the same app it has always been.
       // On a Mac or an iPad that is not connected to a PC yet there is no library to show, so the
-      // login comes first. Everywhere else — and from the moment it is connected — this is the same
+      // login comes first. Everywhere else â€” and from the moment it is connected â€” this is the same
       // app it has always been.
       home: Consumer2<ClientSession, CloudSession>(
         builder: (context, session, cloud, _) {
@@ -724,13 +725,13 @@ class DebridApp extends StatelessWidget {
 
 /// Publish where this PC is, and hand a token to any device that asked.
 ///
-/// This is what replaces discovery for the ordinary case — and what fixes "Geen pc gevonden" when
+/// This is what replaces discovery for the ordinary case â€” and what fixes "Geen pc gevonden" when
 /// mDNS is blocked. Does nothing until someone is signed in; there is no account to publish under
 /// before that.
 ///
 /// A function rather than a few lines inside main() because it has two callers now: the session
 /// restored from disk at startup, and the moment someone signs in from Settings. Without the second
-/// one, signing in on the PC appeared to do nothing at all until the app was restarted — and the
+/// one, signing in on the PC appeared to do nothing at all until the app was restarted â€” and the
 /// PC has to be published before any Mac or iPad can find it, so that is the very first thing a
 /// new account does.
 Future<void> publishAsOwner(CloudSession cloud, AppSettings settings, LanSharing sharing,
@@ -750,7 +751,7 @@ Future<void> publishAsOwner(CloudSession cloud, AppSettings settings, LanSharing
   );
 
   // Work through anything chosen on another device while this PC was off. It replays the very
-  // request that device would have sent, into the same DownloadManager — so a queued download
+  // request that device would have sent, into the same DownloadManager â€” so a queued download
   // lands exactly like a live one, authority tags and all. Started here rather than in main() for
   // the same reason as the rest of this function: signing in from Settings has to start it too.
   final db = await cloud.db();
@@ -765,7 +766,7 @@ Future<void> publishAsOwner(CloudSession cloud, AppSettings settings, LanSharing
     )..start();
 
     // Copy the library up so a Mac or an iPad can browse it with this PC asleep. Driven off the
-    // catalogue's own fingerprint, so an unchanged library costs one read and no writes — and
+    // catalogue's own fingerprint, so an unchanged library costs one read and no writes â€” and
     // enriching a cover, which changes no byte of that catalogue, costs nothing at all.
     _mirrorTimer?.cancel();
     final mirror = CatalogMirror(db: db, uid: cloud.uid);
@@ -788,17 +789,17 @@ Timer? _mirrorTimer;
 /// each other for the same items.
 QueueWorker? _worker;
 
-// The device's own name lives in `cloud/device_identity.dart` — one implementation, because a
+// The device's own name lives in `cloud/device_identity.dart` â€” one implementation, because a
 // second one here is how the television ended up in the speaker list as "localhost": Android's
 // hostname really is that, and only the shared [deviceName] filters it out.
 
-// ── Cover helpers ────────────────────────────────────────────────────────────
+// â”€â”€ Cover helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// How many pixels wide this artwork actually needs to be decoded at.
 ///
 /// Every Image in this file decoded at the source resolution, and the sources are big: the covers
 /// this app stores are 1200x1200, some originals over 3000. Decoded, a 1200px sleeve is 1200 x 1200 x
-/// 4 bytes — 5.8 MB of bitmap — and a 120px grid tile needs 57 KB of that. A hundred and twenty-five
+/// 4 bytes â€” 5.8 MB of bitmap â€” and a 120px grid tile needs 57 KB of that. A hundred and twenty-five
 /// albums on screen therefore ask for far more than Flutter's image cache holds, so it evicts and
 /// re-decodes while you scroll: the work is done again and again for pictures that were already
 /// there.
@@ -811,7 +812,7 @@ int _decodeWidth(double logicalSize) {
   var dpr = 1.0;
   try {
     dpr = WidgetsBinding.instance.platformDispatcher.views.first.devicePixelRatio;
-  } catch (_) {/* no view yet — the default is fine for a hint */}
+  } catch (_) {/* no view yet â€” the default is fine for a hint */}
   if (!dpr.isFinite || dpr < 1) dpr = 1;
   if (dpr > 4) dpr = 4;
   // Never below 64: a hint smaller than that makes even a list thumbnail visibly mushy.
@@ -849,22 +850,22 @@ enum AlbumSort { titel, artiest, jaarNieuw, jaarOud, toegevoegd }
 
 extension AlbumSortX on AlbumSort {
   String get label => switch (this) {
-        AlbumSort.titel => 'Titel (A–Z)',
+        AlbumSort.titel => 'Titel (Aâ€“Z)',
         AlbumSort.artiest => 'Artiest',
-        AlbumSort.jaarNieuw => 'Jaar (nieuw→oud)',
-        AlbumSort.jaarOud => 'Jaar (oud→nieuw)',
+        AlbumSort.jaarNieuw => 'Jaar (nieuwâ†’oud)',
+        AlbumSort.jaarOud => 'Jaar (oudâ†’nieuw)',
         AlbumSort.toegevoegd => 'Recent toegevoegd',
       };
 }
 
-/// Een ruit matglas: hij vervaagt écht wat erachter langs schuift.
+/// Een ruit matglas: hij vervaagt Ã©cht wat erachter langs schuift.
 ///
-/// Eén recept, want het stond twee keer woordelijk in dit bestand — op de balk bovenaan en op de
-/// navigatiestrip — en twee kopieën van dezelfde getallen lopen uiteen zodra er één wordt bijgesteld.
+/// EÃ©n recept, want het stond twee keer woordelijk in dit bestand â€” op de balk bovenaan en op de
+/// navigatiestrip â€” en twee kopieÃ«n van dezelfde getallen lopen uiteen zodra er Ã©Ã©n wordt bijgesteld.
 ///
-/// Wat het glas maakt is de vervaging níét alleen. Het is de vervaging plus een vulling die bovenaan
+/// Wat het glas maakt is de vervaging nÃ­Ã©t alleen. Het is de vervaging plus een vulling die bovenaan
 /// lichter is dan onderaan (zo vangt glas licht), plus een haarfijne lichte rand, plus een schaduw die
-/// het van de achtergrond tilt. Laat er één van weg en het wordt een grijze rechthoek met ronde hoeken.
+/// het van de achtergrond tilt. Laat er Ã©Ã©n van weg en het wordt een grijze rechthoek met ronde hoeken.
 Widget glassSurface({
   required Widget child,
   EdgeInsetsGeometry padding = const EdgeInsets.all(5),
@@ -906,7 +907,7 @@ Widget glassSurface({
       ),
     );
 
-// ── Home shell ───────────────────────────────────────────────────────────────
+// â”€â”€ Home shell â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
   @override
@@ -922,7 +923,7 @@ class _HomeShellState extends State<HomeShell> {
   /// Skipped when arrowing around on a television, and only entered on purpose.
   ///
   /// A text field takes focus like anything else, and on Android taking focus opens the on-screen
-  /// keyboard — which then swallows every arrow press, so the highlight is stuck inside a keyboard
+  /// keyboard â€” which then swallows every arrow press, so the highlight is stuck inside a keyboard
   /// covering half the screen and the album grid below it is unreachable. Pressing down from the
   /// navigation must land on the records, not in a keyboard nobody asked for.
   final _searchFocus = FocusNode(skipTraversal: isTv, debugLabel: 'library search');
@@ -959,7 +960,7 @@ class _HomeShellState extends State<HomeShell> {
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-              child: Text('${lib.albums.length} albums · ${lib.tracks.length} nummers',
+              child: Text('${lib.albums.length} albums Â· ${lib.tracks.length} nummers',
                   style: const TextStyle(color: _muted, fontSize: 12.5)),
             ),
             const Divider(color: _line, height: 1),
@@ -1015,7 +1016,7 @@ class _HomeShellState extends State<HomeShell> {
 
   void _setInnerLayer(VoidCallback? pop) {
     if (_popInner == pop) return;
-    // During the child's build, so not inside setState — the flag only feeds canPop, which is
+    // During the child's build, so not inside setState â€” the flag only feeds canPop, which is
     // read on the next frame anyway.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) setState(() => _popInner = pop);
@@ -1036,7 +1037,7 @@ class _HomeShellState extends State<HomeShell> {
     // Dezelfde functie als het badge naast het nummer, en dat is de reparatie. Hier stond een eigen
     // aanroep die de grootte NIET meegaf, dus kwam er nooit een bitrate uit en nooit "hi-res": het
     // Hi-Res-filter meldde "niets binnen dit filter" terwijl er in dezelfde lijst gouden badges stonden.
-    // Twee antwoorden op één vraag; nu één.
+    // Twee antwoorden op Ã©Ã©n vraag; nu Ã©Ã©n.
     if (!_qFilter.matches(_trackQuality(t))) return false;
     if (_q.isEmpty) return true;
     final q = normKey(_q);
@@ -1051,7 +1052,7 @@ class _HomeShellState extends State<HomeShell> {
         searchKey(t.album).contains(qs);
   }
 
-  /// Frosted pill that sits at the top of every screen. It really does blur what's behind it —
+  /// Frosted pill that sits at the top of every screen. It really does blur what's behind it â€”
   /// the ambient glow in [_contentArea] gives the glass something to pick up, so it reads as a
   /// pane of glass rather than a flat rounded box.
   Widget _glassPill({required Widget child}) => Padding(
@@ -1065,7 +1066,7 @@ class _HomeShellState extends State<HomeShell> {
   /// The field, with the filters beside it or under it.
   ///
   /// Four chips and a sort button take roughly 390 points. Beside a text field on a 412-point phone
-  /// that leaves the field nothing, and its hint printed one letter per line — the same failure as
+  /// that leaves the field nothing, and its hint printed one letter per line â€” the same failure as
   /// the album header, in the one place that is on screen the whole time.
   Widget _searchBar(BuildContext context) {
     final narrow = isCompact(context);
@@ -1103,7 +1104,7 @@ class _HomeShellState extends State<HomeShell> {
   Widget _searchField() =>
               // On a television the field is behind a press: the highlight stops on the search
               // bar, OK opens the keyboard, and BACK closes it again. Everywhere else this is the
-              // same bare field it always was — a mouse still clicks straight into it.
+              // same bare field it always was â€” a mouse still clicks straight into it.
               MaybePressable(
                 enabled: isTv,
                 onPressed: () => _searchFocus.requestFocus(),
@@ -1115,7 +1116,7 @@ class _HomeShellState extends State<HomeShell> {
                   style: const TextStyle(fontSize: 14),
                 decoration: InputDecoration(
                   isDense: true,
-                  hintText: 'Zoek in je bibliotheek — artiest, album of nummer…',
+                  hintText: 'Zoek in je bibliotheek â€” artiest, album of nummerâ€¦',
                   hintStyle: const TextStyle(color: _muted, fontSize: 13.5),
                   prefixIcon: const Icon(Icons.search_rounded, size: 19, color: _muted),
                   suffixIcon: _q.isEmpty
@@ -1197,7 +1198,7 @@ class _HomeShellState extends State<HomeShell> {
     //
     // The seven sections are a number in this state, not routes, so Flutter's navigator has
     // nothing to pop and Android takes BACK as "leave the app". Pressing it on Albums dropped you
-    // straight out to the TV launcher — which on a remote, where BACK is the button you reach for
+    // straight out to the TV launcher â€” which on a remote, where BACK is the button you reach for
     // constantly, makes the app feel like it crashes.
     //
     // canPop stays true on Start, so a second BACK still leaves. An app you cannot get out of is
@@ -1206,8 +1207,8 @@ class _HomeShellState extends State<HomeShell> {
       canPop: _view == 5 && _popInner == null,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        // The innermost layer first. A section can have one of its own — the artist page is a
-        // swapped-in body, not a route — and it has to close before the section does, or BACK
+        // The innermost layer first. A section can have one of its own â€” the artist page is a
+        // swapped-in body, not a route â€” and it has to close before the section does, or BACK
         // from an artist lands on Start and loses your place in the list.
         final inner = _popInner;
         if (inner != null) {
@@ -1223,13 +1224,13 @@ class _HomeShellState extends State<HomeShell> {
         // Seven pills do not fit across 411 points: four of them sat off-screen behind a scroll
         // with nothing to show it was scrollable, so half the app was effectively hidden. A drawer
         // shows all seven at once, says which one you are on, and gives the content back its full
-        // width. Only on a phone — a television has 960 points and a desktop has more, and the
+        // width. Only on a phone â€” a television has 960 points and a desktop has more, and the
         // strip is the better thing there.
         drawer: isCompact(context) ? _sectionsDrawer(context) : null,
         // Televisions overscan: a strip around the edge of the picture falls off the screen, and
         // how much differs per set. The margin goes on the CONTENTS of the bars rather than around
         // the whole app, so the top bar's glass and the player bar's surface still reach the panel
-        // edge — a floating panel with a black gutter around it looks like a mistake, and the point
+        // edge â€” a floating panel with a black gutter around it looks like a mistake, and the point
         // was only to keep the things you read and press away from the edge.
         body: Column(
           children: [
@@ -1253,15 +1254,15 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
-  /// Brand, the navigation pill bar, and the library count — the old left rail, laid out
+  /// Brand, the navigation pill bar, and the library count â€” the old left rail, laid out
   /// horizontally. The soft glow behind it is what the glass has to blur; on a flat panel
   /// frosted glass is indistinguishable from a plain rounded box.
   /// The top bar doubles as the window's title bar.
   ///
   /// With the system frame gone this is the only thing left to grab, so dragging it moves the
-  /// window and double-clicking it maximises — the two gestures anyone expects of a title bar. The
+  /// window and double-clicking it maximises â€” the two gestures anyone expects of a title bar. The
   /// controls sitting on it keep working: DragToMoveArea only claims what no child handled.
-  /// On an iPad there is no window to drag and no `window_manager` behind these calls — the bar is
+  /// On an iPad there is no window to drag and no `window_manager` behind these calls â€” the bar is
   /// just a bar there.
   Widget _topBar() => isCompact(context)
       ? _compactTopBar()
@@ -1277,7 +1278,7 @@ class _HomeShellState extends State<HomeShell> {
         )
       : _topBarBody();
 
-  /// The section name and a way into the drawer — what a phone gets instead of the pill strip.
+  /// The section name and a way into the drawer â€” what a phone gets instead of the pill strip.
   Widget _compactTopBar() {
     final label = NavSections.items.firstWhere((e) => e.$1 == _view, orElse: () => (5, 'Start')).$2;
     final badge = context.watch<DownloadManager>().jobs.where((j) => j.busy).length;
@@ -1349,8 +1350,8 @@ class _HomeShellState extends State<HomeShell> {
               padding: EdgeInsets.fromLTRB(
                   18, 11 + (_isTouch ? MediaQuery.viewPaddingOf(context).top : 0), 18, 8),
               // The bar was built for a 1240-point window. An iPad in portrait is 834, and there
-              // it would simply overflow. Rather than a second navigation for touch — which is
-              // exactly the divergence this whole change is removing — the same bar drops what is
+              // it would simply overflow. Rather than a second navigation for touch â€” which is
+              // exactly the divergence this whole change is removing â€” the same bar drops what is
               // decoration (the wordmark, the counts) and lets the sections scroll.
               child: LayoutBuilder(
                 builder: (context, box) {
@@ -1375,7 +1376,7 @@ class _HomeShellState extends State<HomeShell> {
                         child: Center(
                           // Draggable with a mouse, not only with a wheel or a finger.
                           //
-                          // Flutter leaves the mouse out of dragDevices on purpose — on a page, a
+                          // Flutter leaves the mouse out of dragDevices on purpose â€” on a page, a
                           // mouse-drag is a text selection, not a scroll. Here there is no text to
                           // select and the wheel is the only way to reach a section that does not
                           // fit, which on a narrow window is most of them.
@@ -1409,9 +1410,9 @@ class _HomeShellState extends State<HomeShell> {
                         Consumer2<LibraryStore, FactsWarmer>(
                           builder: (_, lib, warmer, __) => Text(
                             lib.scanning
-                                ? 'Scannen… ${lib.scanned}'
+                                ? 'Scannenâ€¦ ${lib.scanned}'
                                 : (lib.enriching
-                                    ? 'Covers ophalen…'
+                                    ? 'Covers ophalenâ€¦'
                                     // Fourth state, after the two that were already here. The PC
                                     // works through the records nobody has opened yet; without a
                                     // line saying so it is invisible work that writes files into
@@ -1419,7 +1420,7 @@ class _HomeShellState extends State<HomeShell> {
                                     // about at the wrong moment.
                                     : (warmer.status.isNotEmpty
                                         ? warmer.status
-                                        : '${lib.albums.length} albums · ${lib.tracks.length} nummers')),
+                                        : '${lib.albums.length} albums Â· ${lib.tracks.length} nummers')),
                             style: const TextStyle(color: _muted, fontSize: 11.5),
                           ),
                         ),
@@ -1428,7 +1429,7 @@ class _HomeShellState extends State<HomeShell> {
                         icon: const Icon(Icons.settings_rounded, size: 19),
                         color: _muted,
                         tooltip: 'Instellingen',
-                        // 44 points on a touch screen — the smallest thing Apple expects a finger
+                        // 44 points on a touch screen â€” the smallest thing Apple expects a finger
                         // to hit, and a 19-point icon with default padding is under it.
                         constraints: _isTouch ? const BoxConstraints.tightFor(width: 44, height: 44) : null,
                         onPressed: () =>
@@ -1462,7 +1463,7 @@ class _HomeShellState extends State<HomeShell> {
           return const Center(child: CircularProgressIndicator());
         }
         if (lib.albums.isEmpty) {
-          // On a Mac or an iPad there is no folder to point at — the library comes from the PC,
+          // On a Mac or an iPad there is no folder to point at â€” the library comes from the PC,
           // and naming a drive letter there sends you looking in the wrong place entirely.
           return Center(
             child: Text(
@@ -1479,7 +1480,7 @@ class _HomeShellState extends State<HomeShell> {
         final albums = lib.albums.where((a) => a.tracks.any(_matches)).toList();
         if (albums.isEmpty) {
           return Center(
-            child: Text('Niets gevonden voor “$_q”.', style: const TextStyle(color: _muted)),
+            child: Text('Niets gevonden voor â€œ$_qâ€.', style: const TextStyle(color: _muted)),
           );
         }
         return _view == 0
@@ -1517,17 +1518,17 @@ class _HomeShellState extends State<HomeShell> {
       };
 }
 
-// ── Top navigation ───────────────────────────────────────────────────────────
+// â”€â”€ Top navigation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 /// The sections, as a row of labels inside one glass bar, with a pill that SLIDES to whichever
 /// section you're in.
 ///
 /// Item widths are measured from the text rather than read back after layout, so the pill's
-/// geometry is known in the same frame it animates in — no first-frame jump, no post-frame
+/// geometry is known in the same frame it animates in â€” no first-frame jump, no post-frame
 /// measuring pass. That also means the label's weight must not change between states (only its
 /// colour does), or the pill would no longer match what it sits behind.
 /// Says the library on screen is the cloud copy, not the PC.
 ///
-/// Without it, a tap on play does nothing and there is no way to tell why — the albums are all
+/// Without it, a tap on play does nothing and there is no way to tell why â€” the albums are all
 /// there, the covers are all there, and the files are on a machine that is asleep.
 class _OfflineBanner extends StatelessWidget {
   const _OfflineBanner();
@@ -1546,7 +1547,7 @@ class _OfflineBanner extends StatelessWidget {
         const SizedBox(width: 10),
         Expanded(
           child: Text(
-            'Je pc staat uit — dit is de kopie van je bibliotheek'
+            'Je pc staat uit â€” dit is de kopie van je bibliotheek'
             '${when == null ? '' : ' van ${_ago(when)}'}. '
             'Bladeren en downloads klaarzetten kan; afspelen niet.',
             style: const TextStyle(color: Color(0xFFE8C36A), fontSize: 12.5),
@@ -1600,8 +1601,8 @@ class _NavPillsState extends State<_NavPills> {
 
   /// `leadingDistribution: even` verdeelt de speling BINNEN de regelbox.
   ///
-  /// Een regelbox is hoger dan de letters, en standaard komt die hele speling bóven de basislijn te
-  /// staan — dan hangen de letters hoog in hun eigen boxje. Even verdelen zet ze waar het oog ze
+  /// Een regelbox is hoger dan de letters, en standaard komt die hele speling bÃ³ven de basislijn te
+  /// staan â€” dan hangen de letters hoog in hun eigen boxje. Even verdelen zet ze waar het oog ze
   /// verwacht. Een vaste verschuiving had het op dit lettertype op deze grootte ook gedaan, en op het
   /// volgende weer niet.
   ///
@@ -1645,10 +1646,10 @@ class _NavPillsState extends State<_NavPills> {
       child: SizedBox(
         height: _height,
         width: total,
-        // `fit: expand` en niet de standaard `loose` — dít is de andere helft van de tekst die te hoog
+        // `fit: expand` en niet de standaard `loose` â€” dÃ­t is de andere helft van de tekst die te hoog
         // stond. Een niet-gepositioneerd kind in een losse Stack krimpt tot zijn eigen hoogte (13pt maal
         // 1.2, dus krap 16) en wordt daarna naar de BOVENkant van het vak van 32 (muis) of 44 (vinger)
-        // gelegd. De pil erachter staat op `top: 0, bottom: 0` en vult wél alles — en zo hangt het label
+        // gelegd. De pil erachter staat op `top: 0, bottom: 0` en vult wÃ©l alles â€” en zo hangt het label
         // tegen de bovenrand van een pil die twee keer zo hoog is.
         child: Stack(
           fit: StackFit.expand,
@@ -1665,8 +1666,8 @@ class _NavPillsState extends State<_NavPills> {
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(999),
                     // Drie stops en niet twee. De eerste twee liggen vlak bij elkaar en maken een
-                    // haarfijne lichte rand langs de bovenkant — daar waar glas het licht vangt. Dat
-                    // kan hier niet met een échte rand: een BoxDecoration met een borderRadius eist een
+                    // haarfijne lichte rand langs de bovenkant â€” daar waar glas het licht vangt. Dat
+                    // kan hier niet met een Ã©chte rand: een BoxDecoration met een borderRadius eist een
                     // gelijke rand rondom, dus een lichtere bovenzijde moet uit het verloop komen.
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
@@ -1692,7 +1693,7 @@ class _NavPillsState extends State<_NavPills> {
               ),
             Row(
               // Rekken, zodat elke chip de volle hoogte van de strip krijgt. Zonder dit staat er alleen
-              // een breedte op elk vakje en is het aanraakgebied maar zo hoog als de letters — dan tik je
+              // een breedte op elk vakje en is het aanraakgebied maar zo hoog als de letters â€” dan tik je
               // naast een tab terwijl je hem raakt.
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -1752,7 +1753,7 @@ class _NavPillsState extends State<_NavPills> {
 /// The music this device is carrying.
 ///
 /// Shown above the PC's own download queue, and only when there is something to show or something
-/// on the way — an empty heading on the machine that holds the library would be noise.
+/// on the way â€” an empty heading on the machine that holds the library would be noise.
 class _OfflineSection extends StatelessWidget {
   const _OfflineSection();
 
@@ -1764,7 +1765,7 @@ class _OfflineSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Nothing to manage on a television, because nothing can be put there — see the button on the
+    // Nothing to manage on a television, because nothing can be put there â€” see the button on the
     // album page. Kept as a guard rather than assumed: a Shield that carries copies from an older
     // build should still be able to get rid of them.
     final offline = context.watch<OfflineStore>();
@@ -1775,7 +1776,7 @@ class _OfflineSection extends StatelessWidget {
     // A copy on this device keeps the artist and album it was downloaded WITH, and that is the only
     // list in the app a correction never reached: rename a record and its downloads went on calling
     // themselves by the old name forever. So ask the library, by path, and fall back to the stored
-    // strings only for a track the library no longer has — where they are all there is.
+    // strings only for a track the library no longer has â€” where they are all there is.
     final lib = context.watch<LibraryStore>();
     String artistOf(OfflineTrack t) => lib.trackByPath(t.path)?.artist ?? t.artist;
     String albumOf(OfflineTrack t) => lib.trackByPath(t.path)?.album ?? t.album;
@@ -1793,7 +1794,7 @@ class _OfflineSection extends StatelessWidget {
           const Text('Op dit toestel',
               style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
           const SizedBox(width: 14),
-          Text('${tracks.length} nummers · ${_size(offline.bytes)}',
+          Text('${tracks.length} nummers Â· ${_size(offline.bytes)}',
               style: const TextStyle(color: _muted, fontSize: 12.5)),
           const Spacer(),
           if (tracks.isNotEmpty)
@@ -1806,7 +1807,7 @@ class _OfflineSection extends StatelessWidget {
                     title: const Text('Alles van dit toestel halen?',
                         style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
                     content: const Text(
-                        'Je muziek blijft gewoon op je pc staan. Alleen de kopieën op dit '
+                        'Je muziek blijft gewoon op je pc staan. Alleen de kopieÃ«n op dit '
                         'toestel gaan weg.',
                         style: TextStyle(color: _muted, height: 1.4)),
                     actions: [
@@ -1866,7 +1867,7 @@ class _OfflineSection extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
                       Text(
-                          '${artistOf(entry.value.first)} · ${entry.value.length} nummers · '
+                          '${artistOf(entry.value.first)} Â· ${entry.value.length} nummers Â· '
                           '${_size(entry.value.fold(0, (n, t) => n + t.bytes))}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -1924,7 +1925,7 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
       if (!mounted) return;
       final ok = await offline.download(
         libraryPath: t.path,
-        // The path IS the URL in client mode — the catalogue hands out stream URLs — but it is
+        // The path IS the URL in client mode â€” the catalogue hands out stream URLs â€” but it is
         // stored without the token, which is added at the moment of use and never written down.
         url: client.authorized(t.path),
         title: t.title,
@@ -1938,7 +1939,7 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
     setState(() => _working = false);
     if (failed > 0) {
       _srcToast(context, failed == 1
-          ? 'Eén nummer is niet opgehaald. Probeer het opnieuw.'
+          ? 'EÃ©n nummer is niet opgehaald. Probeer het opnieuw.'
           : '$failed nummers zijn niet opgehaald. Probeer het opnieuw.');
     }
   }
@@ -1991,7 +1992,7 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
   }
 }
 
-// ── Albums grid ──────────────────────────────────────────────────────────────
+// â”€â”€ Albums grid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class AlbumsGrid extends StatelessWidget {
   final List<Album> albums;
   final String? title;
@@ -2000,7 +2001,7 @@ class AlbumsGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Only on the real library view (no search title), the app offers to tidy albums it found to be
-    // duplicates of one you already own. It never moves anything on its own — this just opens the
+    // duplicates of one you already own. It never moves anything on its own â€” this just opens the
     // dry-run.
     final dupes = title == null ? context.watch<LibraryStore>().duplicates : const <RedundantAlbum>[];
     return CustomScrollView(
@@ -2038,8 +2039,8 @@ class AlbumsGrid extends StatelessWidget {
                     Expanded(
                       child: Text(
                         dupes.length == 1
-                            ? '1 album is een dubbele van een album dat je al hebt — opruimen?'
-                            : '${dupes.length} albums zijn dubbels van albums die je al hebt — opruimen?',
+                            ? '1 album is een dubbele van een album dat je al hebt â€” opruimen?'
+                            : '${dupes.length} albums zijn dubbels van albums die je al hebt â€” opruimen?',
                         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                       ),
                     ),
@@ -2071,8 +2072,8 @@ class AlbumsGrid extends StatelessWidget {
 
 /// Two pixels that say "something is on its way for this record", and nothing when it is not.
 ///
-/// Deliberately a line and not a spinner. Metadata arrives while you are reading the page — a
-/// tracklist, then a sleeve, then a back cover — and a spinner in the corner of every tile would
+/// Deliberately a line and not a spinner. Metadata arrives while you are reading the page â€” a
+/// tracklist, then a sleeve, then a back cover â€” and a spinner in the corner of every tile would
 /// turn a quiet grid into a fairground. A hairline under the artwork is visible when you look for it
 /// and invisible when you are not, which is exactly the weight this news deserves.
 ///
@@ -2172,12 +2173,12 @@ class _AlbumCardState extends State<AlbumCard> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
-              // Artiest en editie stonden hier in ÉÉN string, en dat was precies wat de naam
-              // onaanklikbaar maakte. Nu een link plus de rest ernaast — dezelfde vorm die de
+              // Artiest en editie stonden hier in Ã‰Ã‰N string, en dat was precies wat de naam
+              // onaanklikbaar maakte. Nu een link plus de rest ernaast â€” dezelfde vorm die de
               // albumpagina-kop al gebruikt.
               //
               // Six identical "Backstreet Boys" tiles are unusable, however correct the split is.
-              // Naming the pressing is what makes them tellable apart — and choosable.
+              // Naming the pressing is what makes them tellable apart â€” and choosable.
               _maybeFocusable(Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -2189,7 +2190,7 @@ class _AlbumCardState extends State<AlbumCard> {
                     // Ook Flexible, anders loopt de rij over in een tegel van 140 punt zodra de
                     // artiestnaam wat langer is.
                     Flexible(
-                        child: Text(' · ${a.edition}',
+                        child: Text(' Â· ${a.edition}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(color: _muted, fontSize: 12))),
@@ -2204,7 +2205,7 @@ class _AlbumCardState extends State<AlbumCard> {
   }
 }
 
-// ── Album detail ─────────────────────────────────────────────────────────────
+// â”€â”€ Album detail â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class AlbumDetailPage extends StatefulWidget {
   final Album album;
   const AlbumDetailPage({super.key, required this.album});
@@ -2216,14 +2217,14 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   late Album album = widget.album;
 
   /// The record as its label pressed it, so the page can show what is MISSING and not only what
-  /// happens to be on disk. Empty until it lands — and empty is harmless: the tracklist then
+  /// happens to be on disk. Empty until it lands â€” and empty is harmless: the tracklist then
   /// renders exactly what it always did.
   List<ChoiceTrack> _official = const [];
   String _officialFrom = '';
   int? _officialYear;
   bool _officialBusy = false;
 
-  /// What the OTHER pressings of this record hold that yours doesn't — not missing, just elsewhere.
+  /// What the OTHER pressings of this record hold that yours doesn't â€” not missing, just elsewhere.
   List<BonusTrack> _officialBonus = const [];
   bool _showBonus = false;
 
@@ -2235,7 +2236,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   ///
   /// Handed to AlbumArt so the sleeve comes from that same pressing. Without it the art ran its own
   /// search keyed on how many FILES are here, and three files of a sixteen-track album filtered out
-  /// every pressing bigger than seven — so the page could only ever find the single's cover, while
+  /// every pressing bigger than seven â€” so the page could only ever find the single's cover, while
   /// the tile on the home screen showed the album's. Two surfaces, two answers, one record.
   String? _officialMbid;
 
@@ -2245,7 +2246,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
   /// De kleur waar de hoes naar neigt, en de bytes waar hij uit kwam.
   ///
-  /// Null zolang er niets berekend is, én null bij een zwart-witte hoes — dan blijft de achtergrond
+  /// Null zolang er niets berekend is, Ã©n null bij een zwart-witte hoes â€” dan blijft de achtergrond
   /// gewoon `_bg`. Zie [dominantColour]: geen was is beter dan een grijze.
   int? _was;
   Uint8List? _wasVan;
@@ -2256,9 +2257,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   /// werk om een beeldje te laten vallen, en dit gebeurt precies op het moment dat de pagina opent.
   /// Wat de was besloot, in `ui.log` naast de andere logboeken.
   ///
-  /// Eén regel per hoes, dus het blijft klein. Hij staat er omdat "de achtergrond blijft zwart" van
-  /// buitenaf één symptoom is voor vier oorzaken — geen bytes, een onleesbare hoes, een hoes zonder
-  /// kleur, of een kleur die wél berekend werd en niet aankwam — en die zijn van elkaar te scheiden
+  /// EÃ©n regel per hoes, dus het blijft klein. Hij staat er omdat "de achtergrond blijft zwart" van
+  /// buitenaf Ã©Ã©n symptoom is voor vier oorzaken â€” geen bytes, een onleesbare hoes, een hoes zonder
+  /// kleur, of een kleur die wÃ©l berekend werd en niet aankwam â€” en die zijn van elkaar te scheiden
   /// zodra je ze opschrijft. Zonder dit heb ik er twee builds op zitten raden.
   late final WarmLog _uiLog = WarmLog('$appDir${Platform.pathSeparator}ui.log');
 
@@ -2276,7 +2277,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       _uiLog.line('was "${album.title}": ${bytes.length} bytes, maar het uitrekenen klapte: $e');
       return; // een hoes die niet te lezen is, laat de achtergrond gewoon zoals hij was
     }
-    _uiLog.line('was "${album.artist} - ${album.title}": ${bytes.length} bytes → '
+    _uiLog.line('was "${album.artist} - ${album.title}": ${bytes.length} bytes â†’ '
         '${kleur == null ? 'geen kleur (te grijs/zwart/wit)' : '#${kleur.toRadixString(16).substring(2)}'}'
         '${mounted ? '' : '  (pagina al gesloten)'}');
     if (mounted && kleur != _was) setState(() => _was = kleur);
@@ -2285,9 +2286,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   /// Ontbrekende nummers staan standaard INGEKLAPT.
   ///
   /// Bij een album waarvan je er vier van de twintig hebt, stonden er zestien grijze regels tussen je
-  /// eigen vier — dan zoek je je eigen muziek bij elkaar in een lijst die vooral over gaten gaat. De
+  /// eigen vier â€” dan zoek je je eigen muziek bij elkaar in een lijst die vooral over gaten gaat. De
   /// balk erboven blijft staan met de telling en de downloadknop, dus het gat verdwijnt niet uit beeld;
-  /// het staat alleen niet meer vóór wat je wél hebt.
+  /// het staat alleen niet meer vÃ³Ã³r wat je wÃ©l hebt.
   bool _showMissing = false;
 
   /// One album-wide Soulseek search, kept for the whole visit. Fifteen missing tracks is fifteen
@@ -2307,7 +2308,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
   /// Ask the PC what this record is.
   ///
-  /// Null when the PC cannot say — it is not paired, it went to sleep, or it has no answer. The
+  /// Null when the PC cannot say â€” it is not paired, it went to sleep, or it has no answer. The
   /// page then shows the tracklist it always showed, which is what is actually on disk; a missing
   /// official tracklist costs the "what is missing" section and nothing else.
   Future<AlbumFacts?> _factsFromPc(LibraryStore lib, String uid, String hash,
@@ -2340,7 +2341,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   /// Take whatever is already known about this record, before the first frame is painted.
   ///
   /// This is the difference between an album page that fills instantly and one that shows a spinner
-  /// for six seconds — on every single visit, on every device, because none of them kept the answer
+  /// for six seconds â€” on every single visit, on every device, because none of them kept the answer
   /// and none of them shared it.
   void _adoptFacts(AlbumFacts f) {
     _official = f.tracklist;
@@ -2362,7 +2363,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   /// Candidates come from the RELEASE GROUP, not a free-text release search, so every one of them
   /// is a pressing of this same record and a same-named single can never win.
   ///
-  /// A pinned pressing wins outright — if you picked an edition in the gallery, that edition is
+  /// A pinned pressing wins outright â€” if you picked an edition in the gallery, that edition is
   /// the answer, not a candidate.
   Future<void> _loadOfficial({bool force = false}) async {
     if (!mounted || album.isSingle) return;
@@ -2379,7 +2380,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     final known = lib.facts.get(uid);
 
     // What we already know, unless something below says otherwise. Painted with no spinner and no
-    // request — this is the point of the whole exercise.
+    // request â€” this is the point of the whole exercise.
     if (!needsResolve(known,
         trackSetHash: hash,
         nowMs: DateTime.now().millisecondsSinceEpoch,
@@ -2399,7 +2400,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       _officialFor = want;
     });
 
-    // On a phone, an iPad or the television the PC does the looking up. Not an optimisation — it is
+    // On a phone, an iPad or the television the PC does the looking up. Not an optimisation â€” it is
     // the difference between one MusicBrainz search per record and one per record PER DEVICE,
     // against a budget of one request a second that all of them share.
     final fresh = lib.isRemote
@@ -2418,7 +2419,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       return;
     }
 
-    // Kept even when it found nothing — an empty answer carries a failedMs, and remembering a "no"
+    // Kept even when it found nothing â€” an empty answer carries a failedMs, and remembering a "no"
     // for a day is what stops the six-request chain being paid again at every open.
     if (uid.isNotEmpty) {
       // No sidecar from here: the music lives on the PC, and this device has no business writing
@@ -2433,7 +2434,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     });
   }
 
-  // ── Filling the gaps ──────────────────────────────────────────────────────
+  // â”€â”€ Filling the gaps â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   /// Stable per-track key so the download button can become that download's progress ring, and
   /// stay bound to it across rebuilds. Keyed on the record, not on this page's object identity.
@@ -2444,12 +2445,12 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   ///
   /// The four "Backstreet's Back" tiles were thirteen files from four Soulseek sources claiming four
   /// different track totals and two spellings of the title. Every other repair on this page paints
-  /// over that — a correction in memory, a renumber into corrections.json, merging editions by hand —
+  /// over that â€” a correction in memory, a renumber into corrections.json, merging editions by hand â€”
   /// and the folder stays as wrong as it was for anything else that reads it.
   Future<void> _normaliseTags() async {
     final lib = context.read<LibraryStore>();
     if (_official.isEmpty) {
-      _srcToast(context, 'Geen officiële tracklijst — kies eerst een uitgave.');
+      _srcToast(context, 'Geen officiÃ«le tracklijst â€” kies eerst een uitgave.');
       return;
     }
     final plan = lib.planNormalise(album, _official, albumTitle: album.title, year: _officialYear);
@@ -2462,20 +2463,20 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   /// Ask the AUDIO what this record's files are, and offer to write the answer into them.
   ///
   /// The catalogues answer "which album is this", and for a loose file filed under a compilation
-  /// they cannot answer at all — "Various Artists" names nobody. A fingerprint answers a question
+  /// they cannot answer at all â€” "Various Artists" names nobody. A fingerprint answers a question
   /// they were never asked: which RECORDING this is. Measured on this library, that turns
-  /// "Various Artists — Jij Bent Zo Mooi" into "Petra — Jij bent zo mooi" at 99% certainty.
+  /// "Various Artists â€” Jij Bent Zo Mooi" into "Petra â€” Jij bent zo mooi" at 99% certainty.
   Future<void> _recogniseTracks() async {
     final lib = context.read<LibraryStore>();
     final settings = context.read<AppSettings>();
     final acoust = AcoustIdService(settings);
     if (!acoust.available) {
-      _srcToast(context, 'Zet eerst een AcoustID-sleutel in Instellingen — gratis via acoustid.org.');
+      _srcToast(context, 'Zet eerst een AcoustID-sleutel in Instellingen â€” gratis via acoustid.org.');
       return;
     }
     final fp = Fingerprinter();
     if (!fp.available) {
-      _srcToast(context, 'fpcalc ontbreekt — herinstalleer de app om dit te gebruiken.');
+      _srcToast(context, 'fpcalc ontbreekt â€” herinstalleer de app om dit te gebruiken.');
       return;
     }
 
@@ -2484,7 +2485,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     final current = <String, ({String artist, String title})>{};
     final unknown = <String>[];
     try {
-      // Every tile the record was split into, not just the one that was clicked — named through the
+      // Every tile the record was split into, not just the one that was clicked â€” named through the
       // extension because two of them define recordTracks and Dart will not pick for us.
       for (final t in LibraryNormalise(lib).recordTracks(album)) {
         final a = await fp.of(t.path, compressed: true);
@@ -2503,7 +2504,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
           unknown.add(naam);
           continue;
         }
-        // The file's own length decides which of the matches is meant — see [bestFor]. Null means
+        // The file's own length decides which of the matches is meant â€” see [bestFor]. Null means
         // the fingerprint was recognised but every candidate is a different version, and that is a
         // "not recognised" as far as the user is concerned rather than a wrong suggestion.
         final beste = AcoustIdService.bestFor(await acoust.identify(a), a.seconds);
@@ -2558,7 +2559,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         context,
         r.failed.isEmpty
             ? '${r.restored} bestanden teruggezet'
-            : '${r.restored} teruggezet · ${r.failed.length} in gebruik: ${r.failed.first}');
+            : '${r.restored} teruggezet Â· ${r.failed.length} in gebruik: ${r.failed.first}');
     _refresh();
   }
 
@@ -2573,7 +2574,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         year: _officialYear ?? album.year,
       );
 
-  /// How many tracks to WRITE into a downloaded file — what the album already says, not what the
+  /// How many tracks to WRITE into a downloaded file â€” what the album already says, not what the
   /// pressing says.
   ///
   /// TRACKTOTAL is the tag the library separates editions on. Stamping a download with the official
@@ -2629,7 +2630,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   /// The copy of this slot we already hold somewhere ELSE in the library.
   ///
   /// The tracklist is matched against this album's own files only, so a copy filed under a
-  /// composite artist — or a loose rip with no album tag at all — reads as a gap on this page. It
+  /// composite artist â€” or a loose rip with no album tag at all â€” reads as a gap on this page. It
   /// is not one, and fetching it again is exactly what happened: the radio edit came down a second
   /// time, byte for byte identical to a file already on disk.
   Track? _ownedElsewhere(AlbumSlot s) => context.read<LibraryStore>().recordingElsewhere(
@@ -2642,9 +2643,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   /// Where a track lives, in the fewest words that still place it: its album, or else its folder.
   String _whereIs(Track t) {
     final a = context.read<LibraryStore>().albumForPath(t.path);
-    if (a != null) return '“${a.title}”';
+    if (a != null) return 'â€œ${a.title}â€';
     final parts = t.path.split(RegExp(r'[\\/]'));
-    return parts.length > 1 ? 'map “${parts[parts.length - 2]}”' : 'je bibliotheek';
+    return parts.length > 1 ? 'map â€œ${parts[parts.length - 2]}â€' : 'je bibliotheek';
   }
 
   Future<void> _downloadMissing(AlbumSlot s, {String? jobKey, bool force = false}) async {
@@ -2659,17 +2660,17 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       if (have != null) {
         _srcToastAction(
             context,
-            '“${s.title}” heb je al — staat onder ${_whereIs(have)}.',
+            'â€œ${s.title}â€ heb je al â€” staat onder ${_whereIs(have)}.',
             'Toch downloaden',
             () => _downloadMissing(s, jobKey: jobKey, force: true));
         return;
       }
     }
-    _srcToast(context, 'Bron zoeken voor “${s.title}”…');
+    _srcToast(context, 'Bron zoeken voor â€œ${s.title}â€â€¦');
     final cands = await _candidatesFor(s);
     if (!mounted) return;
     if (cands.isEmpty) {
-      _srcToast(context, 'Geen Soulseek-bron gevonden voor “${s.title}”.');
+      _srcToast(context, 'Geen Soulseek-bron gevonden voor â€œ${s.title}â€.');
       return;
     }
     try {
@@ -2677,7 +2678,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
           key: jobKey ?? _jobKey(s.index), authority: _authorityFor(s));
       if (mounted) {
         _srcToast(context,
-            started ? '“${s.title}” via Soulseek…' : '“${s.title}” loopt al — zie Mijn downloads.');
+            started ? 'â€œ${s.title}â€ via Soulseekâ€¦' : 'â€œ${s.title}â€ loopt al â€” zie Mijn downloads.');
       }
     } catch (e) {
       if (mounted) _srcToast(context, 'Download mislukt: $e');
@@ -2703,7 +2704,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   ///
   /// The enqueues are NOT awaited in the loop: enqueueSoulseekBest runs the transfer before it
   /// returns, so awaiting each would download them strictly one after another. Fired instead as
-  /// they are found — the manager already caps how many run at once on the shared login.
+  /// they are found â€” the manager already caps how many run at once on the shared login.
   Future<void> _downloadAllMissing(List<AlbumSlot> missing) async {
     final dm = context.read<DownloadManager>();
     final soulseek = context.read<SoulseekService>();
@@ -2723,10 +2724,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       }
     }
     if (wanted.isEmpty) {
-      _srcToast(context, 'Je hebt ze alle $already al — elders in je bibliotheek.');
+      _srcToast(context, 'Je hebt ze alle $already al â€” elders in je bibliotheek.');
       return;
     }
-    _srcToast(context, 'Bronnen zoeken voor ${wanted.length} ontbrekende nummers…');
+    _srcToast(context, 'Bronnen zoeken voor ${wanted.length} ontbrekende nummersâ€¦');
     final running = <Future<bool>>[];
     var none = 0;
     for (final s in wanted) {
@@ -2746,8 +2747,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         context,
         started == 0
             ? 'Geen bronnen gevonden voor de ontbrekende nummers.'
-            : '$started gestart${none > 0 ? ' · $none zonder bron' : ''}'
-                '${already > 0 ? ' · $already had je al' : ''} — zie Mijn downloads.');
+            : '$started gestart${none > 0 ? ' Â· $none zonder bron' : ''}'
+                '${already > 0 ? ' Â· $already had je al' : ''} â€” zie Mijn downloads.');
     await Future.wait(running);
   }
 
@@ -2758,7 +2759,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     for (final a in context.read<LibraryStore>().albums) {
       if (a.tracks.any((t) => paths.contains(t.path))) {
         setState(() => album = a);
-        // A merge, a correction or a newly picked pressing can all mean a different record — and
+        // A merge, a correction or a newly picked pressing can all mean a different record â€” and
         // the pinned edition is exactly what the tracklist is read from.
         if (_albumKey != _officialFor || _official.isEmpty) _loadOfficial();
         return;
@@ -2779,7 +2780,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    // Watch the library so a delete (or correction) shows up here immediately — _buildAlbums
+    // Watch the library so a delete (or correction) shows up here immediately â€” _buildAlbums
     // creates NEW Album objects, so holding on to the original would keep showing stale tracks.
     final lib = context.watch<LibraryStore>();
     final paths = album.tracks.map((t) => t.path).toSet();
@@ -2793,7 +2794,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     if (fresh != null) {
       album = fresh;
     } else if (lib.albums.isNotEmpty && !lib.scanning) {
-      // Every track of this album is gone — there's nothing left to show.
+      // Every track of this album is gone â€” there's nothing left to show.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) Navigator.of(context).maybePop();
       });
@@ -2808,7 +2809,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         ? null
         : (_showMissing ? comp.slots : [for (final s in comp.slots) if (!s.missing) s]);
     // De kleur uit de hoes die deze pagina NU al heeft. [AlbumArt.onFront] meldt zich pas nadat Discogs
-    // geantwoord heeft — en die weg kan mislukken, overgeslagen worden of er seconden over doen, zodat
+    // geantwoord heeft â€” en die weg kan mislukken, overgeslagen worden of er seconden over doen, zodat
     // de achtergrond zwart bleef terwijl de hoes gewoon in beeld stond. Hier hoeft niets opgehaald te
     // worden: dit zijn de bytes uit het bestand zelf.
     //
@@ -2820,11 +2821,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     //
     // Gemeten op de eigen platen: No Strings Attached geeft rgb(197,73,45) en dat werkt meteen, maar
     // Thriller geeft rgb(25,37,43) en Adele's 25 geeft rgb(52,44,36). Zulke kleuren op een achtergrond
-    // van #0C0D12 leggen verandert niets zichtbaars — je krijgt zwart op zwart en het lijkt alsof de
+    // van #0C0D12 leggen verandert niets zichtbaars â€” je krijgt zwart op zwart en het lijkt alsof de
     // was stuk is, terwijl hij precies doet wat er staat.
     //
     // Daarom wordt de helderheid gelijkgetrokken en blijven alleen tint en verzadiging over. Dan wordt
-    // Thrillers donkerblauw een zichtbaar blauw en Adele's bruin een zichtbaar bruin, en houdt élke hoes
+    // Thrillers donkerblauw een zichtbaar blauw en Adele's bruin een zichtbaar bruin, en houdt Ã©lke hoes
     // dezelfde kracht. De verzadiging krijgt een ondergrens (anders blijft het grijzig) en een
     // bovengrens (anders schreeuwt een felle hoes de tekst weg).
     final wasKleur = _was == null ? null : Color(_was!);
@@ -2836,14 +2837,14 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     final wasTop = wasBasis == null ? _bg : Color.lerp(_bg, wasBasis, .34)!;
 
     return Scaffold(
-      // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin — its app bar
+      // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin â€” its app bar
       // icons and the sleeve were hard against the panel edge, which is the first strip a
       // television crops away. Horizontal and top only: the player bar below draws its own
       // surface to the bottom edge and must keep doing so.
       body: Stack(
         children: [
-          // De was: bovenaan de kleur van de hoes, onderaan gewoon de achtergrond. Hij staat áchter de
-          // hele pagina en scrollt dus niet mee — hij hoort bij het album, niet bij de tracklijst.
+          // De was: bovenaan de kleur van de hoes, onderaan gewoon de achtergrond. Hij staat Ã¡chter de
+          // hele pagina en scrollt dus niet mee â€” hij hoort bij het album, niet bij de tracklijst.
           //
           // Op zeven tiende is hij al helemaal weg, want daaronder staan de tracklijst en de grijze
           // "niet in bibliotheek"-regels, en die zijn transparant: alles wat daar nog kleur draagt,
@@ -2865,7 +2866,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             ),
           Column(
         children: [
-          // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin — its app bar
+          // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin â€” its app bar
           // icons and the sleeve were hard against the panel edge, which is the first strip a
           // television crops away. Around the scrolling part only: the player bar below draws its
           // own surface and must keep reaching the edge, or it floats in a black gutter.
@@ -2910,7 +2911,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                     if (!album.isSingle)
                       IconButton(
                         icon: const Icon(Icons.photo_library_outlined),
-                        tooltip: 'Uitgave kiezen — met hoes, achterkant en cd',
+                        tooltip: 'Uitgave kiezen â€” met hoes, achterkant en cd',
                         onPressed: () async {
                           final picked = await showDialog<bool>(
                               context: context, builder: (_) => ReleaseGallery(album));
@@ -2923,7 +2924,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                     if (!album.isSingle && !context.read<LibraryStore>().isRemote)
                       IconButton(
                         icon: const Icon(Icons.label_outline_rounded),
-                        tooltip: 'Tags gelijktrekken — één album, één nummering, in de bestanden',
+                        tooltip: 'Tags gelijktrekken â€” Ã©Ã©n album, Ã©Ã©n nummering, in de bestanden',
                         onPressed: _official.isEmpty ? null : _normaliseTags,
                       ),
                     // Deliberately NOT gated on a tracklist: this is what to reach for exactly when
@@ -2938,7 +2939,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                                 child:
                                     CircularProgressIndicator(strokeWidth: 2, color: _accent))
                             : const Icon(Icons.graphic_eq_rounded),
-                        tooltip: 'Herkennen op geluid — wat zegt de audio dat dit is?',
+                        tooltip: 'Herkennen op geluid â€” wat zegt de audio dat dit is?',
                         onPressed: _recognising ? null : _recogniseTracks,
                       ),
                     // Only appears once there is something to undo. A button that is there but does
@@ -2974,7 +2975,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       icon: const Icon(Icons.delete_outline_rounded),
                       tooltip: album.isSingle ? 'Nummer verwijderen' : 'Album verwijderen',
                       onPressed: () async {
-                        await _confirmDelete(context, '“${album.title}”',
+                        await _confirmDelete(context, 'â€œ${album.title}â€',
                             album.tracks.map((t) => t.path).toList());
                         if (context.mounted) Navigator.of(context).maybePop();
                       },
@@ -3001,7 +3002,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                 // A line for everything still on its way, not only the tracklist.
                 //
                 // The spinner below says "fetching the official tracklist" and disappears the moment
-                // one arrives — after which the sleeve, the back cover and the disc are still being
+                // one arrives â€” after which the sleeve, the back cover and the disc are still being
                 // fetched with nothing on screen to say so. That is the gap: a record looks finished
                 // while it is not, and the cover changing under your eyes reads as a glitch instead
                 // of as work completing.
@@ -3020,7 +3021,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       child: Row(children: [
                         SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
                         SizedBox(width: 10),
-                        Text('Officiële tracklijst ophalen…',
+                        Text('OfficiÃ«le tracklijst ophalenâ€¦',
                             style: TextStyle(color: _muted, fontSize: 12)),
                       ]),
                     ),
@@ -3041,7 +3042,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                           icon: const Icon(Icons.refresh_rounded, size: 15),
                           label: Text(
                             _official.isEmpty
-                                ? 'Geen officiële tracklijst gevonden — opnieuw zoeken'
+                                ? 'Geen officiÃ«le tracklijst gevonden â€” opnieuw zoeken'
                                 : 'Tracklijst opnieuw ophalen',
                             style: const TextStyle(fontSize: 12),
                           ),
@@ -3069,18 +3070,18 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                           ? MissingTrackRow(
                               slot: s, jobKey: _jobKey(s.index), onDownload: () => _downloadMissing(s))
                           // The queue is what's playable, so the index has to be this track's place
-                          // in the FILES — its place in the release would play the wrong song.
+                          // in the FILES â€” its place in the release would play the wrong song.
                           : TrackRow(
                               track: t,
                               index: album.tracks.indexOf(t),
                               queue: album.tracks,
                               albumCover: album.cover,
-                              // An extra shows no number at all — not even its own tag's. See
+                              // An extra shows no number at all â€” not even its own tag's. See
                               // AlbumSlot.label.
                               label: s.index < 0 ? '' : s.label);
 
                       // A double album says which disc you are looking at, and files the pressing
-                      // doesn't name say so — left unlabelled the latter read as part of the record,
+                      // doesn't name say so â€” left unlabelled the latter read as part of the record,
                       // carrying their own tag's number into the middle of the official run.
                       String? heading;
                       if (s.index == -1 && (prev == null || prev.index != -1)) {
@@ -3108,7 +3109,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     );
   }
 
-  /// A quiet divider inside the tracklist — a disc number, or where the record stops.
+  /// A quiet divider inside the tracklist â€” a disc number, or where the record stops.
   Widget _listLabel(String text) => Padding(
         padding: const EdgeInsets.fromLTRB(34, 14, 20, 6),
         child: Align(
@@ -3120,7 +3121,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
   /// What the OTHER pressings of this record hold.
   ///
-  /// Not missing — never on your record. Backstreet's Back is eleven tracks in Britain and
+  /// Not missing â€” never on your record. Backstreet's Back is eleven tracks in Britain and
   /// thirteen in America, and there is a Malaysian second disc with a Christmas song on it. Folded
   /// shut by default, so a record you hold complete still looks complete.
   Widget _bonusSection() {
@@ -3138,7 +3139,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                 Icon(_showBonus ? Icons.expand_less_rounded : Icons.expand_more_rounded,
                     size: 18, color: _muted),
                 const SizedBox(width: 8),
-                Text('Op andere uitgaves · ${_officialBonus.length}',
+                Text('Op andere uitgaves Â· ${_officialBonus.length}',
                     style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                 const SizedBox(width: 8),
                 const Text('niet op jouw persing, wel op deze plaat',
@@ -3166,7 +3167,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     );
   }
 
-  /// "12 van 16 nummers · 4 ontbreken", and the way to fill them in.
+  /// "12 van 16 nummers Â· 4 ontbreken", and the way to fill them in.
   ///
   /// Only ever shown when something IS missing: a record you hold complete says so by having no
   /// bar at all, which is quieter than a badge on every album page in the library.
@@ -3195,14 +3196,14 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('${c.have} van ${c.total} nummers · ${missing.length} ontbreken',
+                Text('${c.have} van ${c.total} nummers Â· ${missing.length} ontbreken',
                     style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                 Text(
                     _officialBestFit
-                        ? 'Volgens ${c.source.isEmpty ? 'de officiële uitgave' : c.source}'
+                        ? 'Volgens ${c.source.isEmpty ? 'de officiÃ«le uitgave' : c.source}'
                         // No pressing named everything on disk, so this is the closest one rather
                         // than the record. Say so instead of presenting a near miss as fact.
-                        : 'Volgens de best passende uitgave — niet al je nummers staan erop',
+                        : 'Volgens de best passende uitgave â€” niet al je nummers staan erop',
                     style: const TextStyle(color: _muted, fontSize: 11.5)),
               ],
             ),
@@ -3230,11 +3231,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   }
 
   /// Is the track playing right now one of THIS album's? The disc only turns for the record it
-  /// belongs to — every sleeve in the library spinning at once would be nonsense.
+  /// belongs to â€” every sleeve in the library spinning at once would be nonsense.
   /// `select`, not `watch`, and that difference is the whole album page.
   ///
-  /// PlayerStore calls notifyListeners on every position tick — media_kit emits one every hundred
-  /// milliseconds or so — and watching it from here rebuilt this entire page five to ten times a
+  /// PlayerStore calls notifyListeners on every position tick â€” media_kit emits one every hundred
+  /// milliseconds or so â€” and watching it from here rebuilt this entire page five to ten times a
   /// second for as long as anything was playing. That build is not cheap: it re-runs
   /// matchAlbumTracks over the official tracklist every time. All of that to answer one yes-or-no
   /// question that changes when the TRACK changes, not when the second hand moves.
@@ -3275,7 +3276,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             chosen: album.correctedCover,
             pinned: context.watch<LibraryStore>().pinnedRelease(album),
             // Your own choice still wins; otherwise the pressing this page is describing. Without
-            // that the art searched on its own and was steered by the FILE count — three files of a
+            // that the art searched on its own and was steered by the FILE count â€” three files of a
             // sixteen-track album ruled out every pressing over seven, so it found the single.
             pinnedMbid: context.watch<LibraryStore>().pinnedMbid(album) ?? _officialMbid,
             trackCount: _official.isNotEmpty ? _official.length : album.tracks.length,
@@ -3307,14 +3308,14 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                         if (album.year != null) '${album.year}',
                         if (album.genre != null) album.genre!,
                         '${album.tracks.length} nummers',
-                      ].join(' · '),
+                      ].join(' Â· '),
                       style: const TextStyle(color: _muted),
                     ),
                   ],
                 ),
                 const SizedBox(height: 18),
                 // Wrapped on a phone rather than a Row. Afspelen, Offline bewaren and Radio are
-                // 447 points side by side and a phone has 411 — the row hung 36 pixels off the
+                // 447 points side by side and a phone has 411 â€” the row hung 36 pixels off the
                 // right edge, with "Radio" half outside the screen.
                 Wrap(
                   spacing: narrow ? 8 : 0,
@@ -3327,7 +3328,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       ),
                       // Where the highlight lands when an album opens on a television. Flutter's
                       // default is the first focusable thing in the route, which here is the back
-                      // arrow — so opening a record put the highlight on "leave this record".
+                      // arrow â€” so opening a record put the highlight on "leave this record".
                       autofocus: isTv,
                       onPressed: () => player.playQueue(album.tracks, 0, cover: album.cover),
                       icon: const Icon(Icons.play_arrow_rounded),
@@ -3337,7 +3338,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                     // Only where the music lives somewhere else AND where carrying a copy makes
                     // sense. On the PC the files ARE the library. And a television is bolted to the
                     // wall next to the machine it streams from, on mains power, with a few gigabytes
-                    // of storage it needs for apps — filling that with lossless copies of records
+                    // of storage it needs for apps â€” filling that with lossless copies of records
                     // it can already play is all cost and no benefit.
                     if (context.watch<LibraryStore>().isRemote && !isTv) ...[
                       _OfflineAlbumButton(album: album),
@@ -3422,7 +3423,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
   bool _searching = false;
 
   /// What went wrong last time, if anything. Without this a failed lookup left the spinner turning
-  /// for ever — the await below had no catch, so `_searching` was never set back and the dialog
+  /// for ever â€” the await below had no catch, so `_searching` was never set back and the dialog
   /// looked frozen rather than broken.
   String? _searchError;
   bool _applying = false;
@@ -3501,7 +3502,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
       await _applyInner();
     } catch (e) {
       // Same trap as _search had: without this the button spins for ever and the dialog looks
-      // frozen, while what actually happened — the PC refused it, the network dropped — is thrown
+      // frozen, while what actually happened â€” the PC refused it, the network dropped â€” is thrown
       // away. On a Mac or an iPad this is the whole write path, so it must say what went wrong.
       if (!mounted) return;
       setState(() => _applying = false);
@@ -3521,15 +3522,15 @@ class _MetadataEditorState extends State<MetadataEditor> {
           mbid: _pickedMbid,
         );
     // Says out loud what was pinned. The pin went missing twice while every line of the path read
-    // correctly, so this is no longer something to reason about — it is something to see.
+    // correctly, so this is no longer something to reason about â€” it is something to see.
     if (mounted) {
       _srcToast(
           context,
           _pickedMbid != null
-              ? 'Aangepast — MusicBrainz-uitgave vastgezet'
+              ? 'Aangepast â€” MusicBrainz-uitgave vastgezet'
               : _pickedRelease == null
-                  ? 'Aangepast — geen uitgave vastgezet'
-                  : 'Aangepast — uitgave $_pickedRelease vastgezet');
+                  ? 'Aangepast â€” geen uitgave vastgezet'
+                  : 'Aangepast â€” uitgave $_pickedRelease vastgezet');
     }
     if (mounted) Navigator.of(context).pop(true);
   }
@@ -3576,7 +3577,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
                 ],
               ),
               const SizedBox(height: 14),
-              // Source, query and button. On a phone the query is what gets crushed — between a
+              // Source, query and button. On a phone the query is what gets crushed â€” between a
               // "Deezer" dropdown and a "Zoeken" button it came out about fifty points wide and
               // showed two characters of what you typed. So on a phone it gets its own line.
               Builder(builder: (context) {
@@ -3599,7 +3600,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
                   controller: _query,
                   focusNode: _editFocusFor(_query),
                   onSubmitted: (_) => _search(),
-                  decoration: _inputDeco('Zoeken…'),
+                  decoration: _inputDeco('Zoekenâ€¦'),
                 );
                 final button = FilledButton(
                   style: FilledButton.styleFrom(backgroundColor: _accent),
@@ -3672,9 +3673,9 @@ class _MetadataEditorState extends State<MetadataEditor> {
                                                 style: const TextStyle(fontWeight: FontWeight.w600)),
                                             Text(
                                                 // The pressing, where the provider knows it. Five
-                                                // rows reading "30 — Adele" give nothing to choose
+                                                // rows reading "30 â€” Adele" give nothing to choose
                                                 // between; a format and a catalogue number do.
-                                                m.detail ?? (m.artist.isEmpty ? '—' : m.artist),
+                                                m.detail ?? (m.artist.isEmpty ? 'â€”' : m.artist),
                                                 maxLines: 1,
                                                 overflow: TextOverflow.ellipsis,
                                                 style: const TextStyle(color: _muted, fontSize: 12)),
@@ -3719,7 +3720,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
 
   /// Same bargain as everywhere else on a television: skipped when arrowing, entered with OK.
   ///
-  /// Three fields here, and this dialog is the one place you correct a record by hand — so the
+  /// Three fields here, and this dialog is the one place you correct a record by hand â€” so the
   /// keyboard opening itself over the whole screen the moment the highlight passes by is worse
   /// than usual: you cannot see what you are correcting.
   final _editFocus = <TextEditingController, FocusNode>{};
@@ -3771,7 +3772,7 @@ class TrackRow extends StatefulWidget {
 
 /// What the hover icons offer, reachable by holding OK.
 ///
-/// The same two actions and the same dialogs — this is a way IN to them, not a second way of doing
+/// The same two actions and the same dialogs â€” this is a way IN to them, not a second way of doing
 /// them. The highlight starts on "Sluiten", because one of the two deletes a file.
 Future<void> _trackOptions(BuildContext context, Track t) async {
   final choice = await showDialog<String>(
@@ -3804,7 +3805,7 @@ Future<void> _trackOptions(BuildContext context, Track t) async {
     final from = context.read<LibraryStore>().albumForPath(t.path);
     await showDialog<bool>(context: context, builder: (_) => MoveTrackDialog(track: t, from: from));
   } else {
-    await _confirmDelete(context, '“${t.title}”', [t.path]);
+    await _confirmDelete(context, 'â€œ${t.title}â€', [t.path]);
   }
 }
 
@@ -3825,7 +3826,7 @@ class _TrackRowState extends State<TrackRow> {
         // Hold OK for what the mouse reaches by hovering.
         //
         // "Verplaatsen" and "Verwijderen" live INSIDE this row, and Flutter's directional traversal
-        // can never select a node whose rectangle lies within the focused one's — so with a remote
+        // can never select a node whose rectangle lies within the focused one's â€” so with a remote
         // those two were simply unreachable, and moving or deleting a single track could not be
         // done from the sofa at all. A held OK is the ordinary television gesture for "options".
         //
@@ -3860,7 +3861,7 @@ class _TrackRowState extends State<TrackRow> {
               Expanded(
                 child: Builder(builder: (context) {
                   // Guests named in this track's own tags, shown under the title. No catalogue
-                  // lookup here — that would be one network call per row of every album.
+                  // lookup here â€” that would be one network call per row of every album.
                   final guests = splitFeatured(t.artist, t.title).featured;
                   final title = Text(titleWithoutFeat(t.title),
                       maxLines: 1,
@@ -3872,7 +3873,7 @@ class _TrackRowState extends State<TrackRow> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       title,
-                      // Only the guests — the album already belongs to the main artist. Out of the
+                      // Only the guests â€” the album already belongs to the main artist. Out of the
                       // highlight's path on a television for the same reason as the track lists:
                       // this sits inside a row that is itself the thing you want to press.
                       _maybeFocusable(
@@ -3892,7 +3893,7 @@ class _TrackRowState extends State<TrackRow> {
                         icon: const Icon(Icons.drive_file_move_outline, size: 17),
                         color: _muted,
                         tooltip: 'Naar ander album verplaatsen',
-                        // A bare icon with no padding is a hit area the size of the glyph — hard to
+                        // A bare icon with no padding is a hit area the size of the glyph â€” hard to
                         // land on with a mouse, and the row underneath swallows every near miss and
                         // starts playing instead. Give it something to aim at.
                         padding: EdgeInsets.zero,
@@ -3900,7 +3901,7 @@ class _TrackRowState extends State<TrackRow> {
                         // The album comes from the library rather than a parameter: every caller
                         // of this row would otherwise have to thread it through.
                         onPressed: () {
-                          // No source album is not a reason to do nothing — see MoveTrackDialog.from.
+                          // No source album is not a reason to do nothing â€” see MoveTrackDialog.from.
                           final from = context.read<LibraryStore>().albumForPath(t.path);
                           showDialog<bool>(context: context, builder: (_) => MoveTrackDialog(track: t, from: from));
                         },
@@ -3914,12 +3915,12 @@ class _TrackRowState extends State<TrackRow> {
                         icon: const Icon(Icons.delete_outline_rounded, size: 17),
                         color: _muted,
                         tooltip: 'Nummer verwijderen',
-                        // A bare icon with no padding is a hit area the size of the glyph — hard to
+                        // A bare icon with no padding is a hit area the size of the glyph â€” hard to
                         // land on with a mouse, and the row underneath swallows every near miss and
                         // starts playing instead. Give it something to aim at.
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                        onPressed: () => _confirmDelete(context, '“${t.title}”', [t.path]),
+                        onPressed: () => _confirmDelete(context, 'â€œ${t.title}â€', [t.path]),
                       )
                     : null,
               ),
@@ -3940,7 +3941,7 @@ class MissingTrackRow extends StatefulWidget {
   final String jobKey;
   final VoidCallback onDownload;
 
-  /// What the chip says instead of "niet in bibliotheek" — for a track that is on another
+  /// What the chip says instead of "niet in bibliotheek" â€” for a track that is on another
   /// pressing, which pressing that is.
   final String? note;
   const MissingTrackRow(
@@ -4020,7 +4021,7 @@ class _MissingTrackRowState extends State<MissingTrackRow> {
   }
 }
 
-// ── Artists ──────────────────────────────────────────────────────────────────
+// â”€â”€ Artists â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class ArtistsView extends StatefulWidget {
   final LibraryStore lib;
 
@@ -4029,7 +4030,7 @@ class ArtistsView extends StatefulWidget {
 
   /// Vroeger: hoe deze weergave de schil vertelde dat er een eigen laag openstond.
   ///
-  /// Er ís hier geen eigen laag meer. Een artiest opent nu dezelfde route als overal elders, dus BACK
+  /// Er Ã­s hier geen eigen laag meer. Een artiest opent nu dezelfde route als overal elders, dus BACK
   /// wordt door de navigator afgehandeld en niet door de schil. De parameter blijft staan omdat de
   /// schil hem aan meerdere weergaves doorgeeft; hij wordt hier bewust nooit gevuld.
   final void Function(VoidCallback?)? onInnerLayer;
@@ -4055,7 +4056,7 @@ class _ArtistsViewState extends State<ArtistsView> {
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(24, 22, 24, 8),
           sliver: SliverToBoxAdapter(
-            child: Text('Artiesten${artists.length == widget.lib.artists.length ? "" : " · ${artists.length}"}',
+            child: Text('Artiesten${artists.length == widget.lib.artists.length ? "" : " Â· ${artists.length}"}',
                 style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
           ),
         ),
@@ -4075,7 +4076,7 @@ class _ArtistsViewState extends State<ArtistsView> {
                 name: name,
                 image: art,
                 // Dezelfde pagina als een aangeklikte naam elders in de app oplevert. Het was een
-                // ingewisselde laag met een eigen, magerdere artiestpagina — je kreeg dus een ander
+                // ingewisselde laag met een eigen, magerdere artiestpagina â€” je kreeg dus een ander
                 // scherm afhankelijk van waar je vandaan kwam.
                 onTap: () => openArtist(context, name),
               );
@@ -4092,7 +4093,7 @@ class _ArtistsViewState extends State<ArtistsView> {
 class CreditsPanel extends StatefulWidget {
   final String artist, album;
 
-  /// Het aantal nummers van de HELE plaat, als de aanroeper dat kent — zie
+  /// Het aantal nummers van de HELE plaat, als de aanroeper dat kent â€” zie
   /// [CreditsService.forAlbum]. Nul betekent "ik weet het niet", en dan wordt er niet op gewogen.
   final int volledigAantal;
   const CreditsPanel(
@@ -4250,7 +4251,7 @@ class _PersonPageState extends State<PersonPage> {
                 ArtistHero(
                   name: widget.name,
                   ownBackdrop: false,
-                  subtitle: widget.role == null ? null : '${widget.role} · ${_works.length} producties',
+                  subtitle: widget.role == null ? null : '${widget.role} Â· ${_works.length} producties',
                   actions: [
                     FilledButton.icon(
                       style: FilledButton.styleFrom(
@@ -4284,7 +4285,7 @@ class _PersonPageState extends State<PersonPage> {
                 padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
                 child: Text(
                     _failed
-                        ? 'De producties konden niet worden opgehaald. Wikidata antwoordde niet — '
+                        ? 'De producties konden niet worden opgehaald. Wikidata antwoordde niet â€” '
                             'probeer het straks nog eens.'
                         : 'Geen verdere producties gevonden voor deze naam.',
                     style: const TextStyle(color: _muted)),
@@ -4459,10 +4460,10 @@ class _ArtistCardState extends State<_ArtistCard> {
   }
 }
 
-// ── Artist credits ───────────────────────────────────────────────────────────
+// â”€â”€ Artist credits â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 /// Open an artist's discography. Goes to the catalogue rather than your own shelf on purpose:
-/// a guest like Beyoncé usually isn't in your library at all, and even for an artist you do own
-/// the interesting thing here is their whole catalogue — that's what tapping a name promises.
+/// a guest like BeyoncÃ© usually isn't in your library at all, and even for an artist you do own
+/// the interesting thing here is their whole catalogue â€” that's what tapping a name promises.
 Future<void> openArtist(BuildContext context, String name) async {
   final navigator = Navigator.of(context);
   final mb = context.read<MusicBrainzService>();
@@ -4489,7 +4490,7 @@ Future<void> openArtist(BuildContext context, String name) async {
   }
 
   // Still nothing: open the page regardless. It can show no discography, but it CAN show the
-  // records of theirs you already own — and refusing to open at all showed you neither.
+  // records of theirs you already own â€” and refusing to open at all showed you neither.
   artist ??= CatalogArtist(0, name, null, 0);
   navigator.push(MaterialPageRoute(builder: (_) => ArtistBrowsePage(artist!)));
 }
@@ -4497,7 +4498,7 @@ Future<void> openArtist(BuildContext context, String name) async {
 /// Minimise, maximise/restore and close, drawn by the app.
 ///
 /// The system title bar is switched off so the window is all app, which means these three have to
-/// exist here — without them a maximised window could not be shrunk or closed at all.
+/// exist here â€” without them a maximised window could not be shrunk or closed at all.
 class _WindowButtons extends StatefulWidget {
   const _WindowButtons();
   @override
@@ -4562,10 +4563,10 @@ class _WindowButtonsState extends State<_WindowButtons> with WindowListener {
       );
 }
 
-/// "Lady Gaga · Beyoncé" — every name tappable.
+/// "Lady Gaga Â· BeyoncÃ©" â€” every name tappable.
 ///
-/// The guest credit lives wherever the ripper put it: the artist tag, the title, or — for the
-/// Lady Gaga file on this machine — nowhere at all. So when the tags name nobody and [lookup] is
+/// The guest credit lives wherever the ripper put it: the artist tag, the title, or â€” for the
+/// Lady Gaga file on this machine â€” nowhere at all. So when the tags name nobody and [lookup] is
 /// on, the catalogue is asked who else played on it.
 class ArtistLine extends StatefulWidget {
   final String artist;
@@ -4628,7 +4629,7 @@ class _ArtistLineState extends State<ArtistLine> {
 ///
 /// Every track list in the app used to print the artist as plain text, so the one place a record's
 /// artist was reachable from was an album page. Wherever a name is shown it is now the way to that
-/// artist — and a "A feat. B" tag becomes two names, because a guest is an artist too.
+/// artist â€” and a "A feat. B" tag becomes two names, because a guest is an artist too.
 /// Clickable everywhere, but out of the remote's path on a television.
 ///
 /// For controls that sit INSIDE something you already press. A mouse can reach a small link within
@@ -4641,12 +4642,12 @@ Widget _artistLine(({String main, List<String> featured}) who, TextStyle style) 
   final line = ArtistNames(names: names, style: style);
   // Every name here is its own focus stop, and this line sits inside a row of a track list. On a
   // television that turns one press-down-to-the-next-track into three or four, all the way through
-  // a list that can be ten thousand rows long. The names stay clickable — ExcludeFocus takes them
+  // a list that can be ten thousand rows long. The names stay clickable â€” ExcludeFocus takes them
   // out of the highlight's path, not out of the app.
   return isTv ? ExcludeFocus(child: line) : line;
 }
 
-/// A row of artist names, each tappable. Takes the names as-is — the caller decides who's on it.
+/// A row of artist names, each tappable. Takes the names as-is â€” the caller decides who's on it.
 class ArtistNames extends StatefulWidget {
   final List<String> names;
   final TextStyle style;
@@ -4667,7 +4668,7 @@ class _ArtistNamesState extends State<ArtistNames> {
       children: [
         for (var i = 0; i < names.length; i++) ...[
           if (i > 0)
-            Text(' · ', style: widget.style.copyWith(color: widget.style.color?.withValues(alpha: .5))),
+            Text(' Â· ', style: widget.style.copyWith(color: widget.style.color?.withValues(alpha: .5))),
           Flexible(
             child: MouseRegion(
               cursor: SystemMouseCursors.click,
@@ -4713,7 +4714,7 @@ void _nudge(PlayerStore p, int seconds) {
 /// The transport, wherever the music actually is.
 ///
 /// Casting moves the remote. Every one of these controls used to speak to the local libmpv, which
-/// is deliberately silent while a speaker has the queue — so on a phone steering the KEF, pause,
+/// is deliberately silent while a speaker has the queue â€” so on a phone steering the KEF, pause,
 /// next, previous and the scrubber all appeared to do nothing while the music played on.
 ///
 /// One place, read by the desktop bar, the phone bar and the full player alike: three copies of
@@ -4729,7 +4730,7 @@ class _Transport {
   bool get casting => speaker.isCasting;
   Track? get track => player.current;
 
-  /// Position and length come from the SPEAKER while casting — it is the only one that knows.
+  /// Position and length come from the SPEAKER while casting â€” it is the only one that knows.
   Duration get position => casting ? (speaker.position ?? Duration.zero) : player.position;
   Duration get duration => casting ? (speaker.duration ?? Duration.zero) : player.duration;
   bool get playing => casting ? speaker.isPlaying : player.playing;
@@ -4748,7 +4749,7 @@ class _Transport {
   ///
   /// `hasNext` eist dat de speaker zowel zijn index als de lengte meldt, en `hasPrev` leest een
   /// ontbrekende index als nul. Zwijgt de status even -- een sessie die net is afgelopen, een speaker
-  /// die één poll niet antwoordt -- dan vielen beide knoppen dood terwijl de muziek gewoon doorliep.
+  /// die Ã©Ã©n poll niet antwoordt -- dan vielen beide knoppen dood terwijl de muziek gewoon doorliep.
   /// Dat is wat "de app verliest de controle" was.
   ///
   /// Sinds de overdracht teruggeeft welke nummers de speaker gekregen heeft, is de wachtrij hier
@@ -4765,7 +4766,7 @@ class _Transport {
       ? ((speaker.status?.hasPrev ?? player.hasPrev) ? () => unawaited(speaker.previous()) : null)
       : (player.hasPrev || player.position > const Duration(seconds: 3) ? player.prev : null);
 
-  /// While the finger moves. Carried locally when casting and sent once on release — a seek per
+  /// While the finger moves. Carried locally when casting and sent once on release â€” a seek per
   /// pixel would flood an embedded UPnP stack and land behind where you let go.
   void scrub(double fraction) =>
       casting ? speaker.scrubTo(duration * fraction) : player.seek(duration * fraction);
@@ -4774,7 +4775,7 @@ class _Transport {
     if (casting) unawaited(speaker.seekTo(duration * fraction));
   }
 
-  /// Ten seconds either way, for a remote — and for a speaker, the only seek that needs no slider.
+  /// Ten seconds either way, for a remote â€” and for a speaker, the only seek that needs no slider.
   void nudge(int seconds) {
     if (!casting) return _nudge(player, seconds);
     final total = duration;
@@ -4786,7 +4787,7 @@ class _Transport {
   }
 }
 
-// ── Now-playing bar ──────────────────────────────────────────────────────────
+// â”€â”€ Now-playing bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class PlayerBar extends StatelessWidget {
   const PlayerBar({super.key});
   @override
@@ -4798,15 +4799,15 @@ class PlayerBar extends StatelessWidget {
     // stop above the bar the system draws over everything.
     final bottomInset = _isTouch ? MediaQuery.viewPaddingOf(context).bottom : 0.0;
     // 280 a side in a desktop window, which is what centres the transport controls. Two of those
-    // plus the controls do not fit on an iPad in portrait — 596 of 834 points gone before the
-    // buttons start — so they give way instead of overflowing.
+    // plus the controls do not fit on an iPad in portrait â€” 596 of 834 points gone before the
+    // buttons start â€” so they give way instead of overflowing.
     final width = MediaQuery.sizeOf(context).width;
 
     // A phone gets a different bar entirely, not a squeezed one.
     //
     // The desktop bar reserves a side block for the track and centres the transport in what is
     // left. At 411 points that block bottoms out at its 96-point floor, of which the cover takes 54
-    // and the gap 12 — leaving thirty points for the title, which printed "Niets aan het spelen"
+    // and the gap 12 â€” leaving thirty points for the title, which printed "Niets aan het spelen"
     // one letter per line and overflowed the bar by 45 pixels.
     if (isCompact(context)) return _compactBar(context, x, bottomInset);
 
@@ -4846,12 +4847,12 @@ class PlayerBar extends StatelessWidget {
                       Row(
                         children: [
                           Flexible(
-                            child: Text(t?.title ?? '—',
+                            child: Text(t?.title ?? 'â€”',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(fontWeight: FontWeight.w600)),
                           ),
-                          // What quality am I actually hearing? (local files only — a streamed
+                          // What quality am I actually hearing? (local files only â€” a streamed
                           // source's real quality isn't known here.)
                           if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
                         ],
@@ -4865,7 +4866,7 @@ class PlayerBar extends StatelessWidget {
                         const Text('Niets aan het spelen',
                             style: TextStyle(color: _muted, fontSize: 12.5))
                       else
-                        // Everyone on the track, each name tappable — a guest artist is exactly
+                        // Everyone on the track, each name tappable â€” a guest artist is exactly
                         // who you want to look up while their verse is playing.
                         ArtistLine(
                           artist: t.artist,
@@ -4903,7 +4904,7 @@ class PlayerBar extends StatelessWidget {
                     // Seeking, for a remote.
                     //
                     // The progress bar below is a Slider, and a Slider binds all FOUR arrows to
-                    // changing its value — so the highlight goes in and cannot come out. It is
+                    // changing its value â€” so the highlight goes in and cannot come out. It is
                     // therefore skipped on a television, which left no way to seek at all. Two
                     // buttons are the honest answer: they are reachable, they say what they do,
                     // and they cost a mouse nothing because they are not built for it.
@@ -4987,8 +4988,8 @@ class PlayerBar extends StatelessWidget {
 
 }
 
-// ── Now playing (full screen, enlargeable art) ───────────────────────────────
-/// Where the music comes out — and, while it is somewhere else, a way back.
+// â”€â”€ Now playing (full screen, enlargeable art) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+/// Where the music comes out â€” and, while it is somewhere else, a way back.
 ///
 /// One button in both players. It carries the state rather than hiding it: cast to a speaker and it
 /// turns accent-coloured and names the speaker underneath, because "why is there no sound from this
@@ -5001,7 +5002,7 @@ class _SpeakerButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final target = context.watch<SpeakerTarget>();
     // Gekeken naar de client waarmee GESTUURD wordt, niet naar de bibliotheek. Dat scheelt: op de pc is
-    // library.remote null — de bibliotheek staat daar zelf — en daarmee was de knop er niet, ook niet
+    // library.remote null â€” de bibliotheek staat daar zelf â€” en daarmee was de knop er niet, ook niet
     // toen de pc zijn eigen server kon aanspreken. Wie de speakers kan bedienen mag ze kiezen.
     final client = target.client;
     if (client == null) return const SizedBox.shrink();
@@ -5013,7 +5014,7 @@ class _SpeakerButton extends StatelessWidget {
       child: IconButton(
         icon: Icon(casting ? Icons.speaker_rounded : Icons.speaker_group_outlined, size: iconSize),
         color: casting ? _accent : _muted,
-        tooltip: casting ? 'Speelt op ${target.device!.name}' : 'Afspelen op…',
+        tooltip: casting ? 'Speelt op ${target.device!.name}' : 'Afspelen opâ€¦',
         onPressed: () => showSpeakerPicker(
           context,
           client: client,
@@ -5030,7 +5031,7 @@ class _SpeakerButton extends StatelessWidget {
             // zijn eigen overdracht en sloeg [PlayerStore.handOverToSpeaker] over. Twee gevolgen, allebei
             // stil:
             //
-            // 1. de speler nam de AANGENOMEN lijst niet over, dus viel er één nummer weg dat de pc niet
+            // 1. de speler nam de AANGENOMEN lijst niet over, dus viel er Ã©Ã©n nummer weg dat de pc niet
             //    kan serveren, dan schoof alles erachter op bij de speaker terwijl het hier bleef staan --
             //    en telt elke index die de speaker terugmeldt vanaf dat moment verkeerd;
             // 2. de speler wist niet dat hij op een speaker stond, dus shuffle schudde alleen deze kant.
@@ -5064,7 +5065,7 @@ class _SpeakerButton extends StatelessWidget {
 /// The mini player a phone gets: the track, one button, and the whole thing opens the full player.
 ///
 /// Not the desktop bar with smaller numbers. On a phone there is room for a cover, a title and one
-/// control — shuffle, repeat, skip-back and the seek bar all live on the full player, which is now
+/// control â€” shuffle, repeat, skip-back and the seek bar all live on the full player, which is now
 /// one tap away because the entire bar is the tap target rather than the 54-point cover on the far
 /// left.
 Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
@@ -5113,14 +5114,14 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
                             mainAxisAlignment: MainAxisAlignment.center,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(t?.title ?? '—',
+                              Text(t?.title ?? 'â€”',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
                                       fontWeight: FontWeight.w600, fontSize: 14)),
                               // Alleen de artiesttak wordt een link; "Niets aan het spelen" en de
                               // radiostatus zijn geen naam. De brede speler doet dit al met
-                              // ArtistLine — deze smalle variant was als enige achtergebleven.
+                              // ArtistLine â€” deze smalle variant was als enige achtergebleven.
                               if (t == null || (p.radioMode && p.radioStatus.isNotEmpty))
                                 Text(
                                     t == null ? 'Niets aan het spelen' : p.radioStatus,
@@ -5161,7 +5162,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
 /// How big the sleeve on the now-playing screen may be.
 ///
 /// AlbumArt reserves size * 1.62 so the disc has somewhere to slide out to. At the old fixed 360
-/// that is 583 points — on a 412-point phone the disc came out into a part of the screen that is
+/// that is 583 points â€” on a 412-point phone the disc came out into a part of the screen that is
 /// not there, which is why it looked like the animation had been lost.
 ///
 /// Also capped by height: in landscape, or on a phone with the keyboard up, a sleeve sized from
@@ -5169,7 +5170,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
 double _sleeve(BuildContext context) {
   final size = MediaQuery.sizeOf(context);
   final narrow = isCompact(context);
-  // The sleeve plus the room the disc needs to slide into — less of that room in portrait, so the
+  // The sleeve plus the room the disc needs to slide into â€” less of that room in portrait, so the
   // sleeve is not paying for a stride nobody has space for.
   final byWidth = (size.width - 40) / (1 + discTravelFactor(context));
   // And a firm ceiling on height in portrait. Below the sleeve sit the title, the seek bar and the
@@ -5179,8 +5180,8 @@ double _sleeve(BuildContext context) {
   final byHeight = size.height * (narrow ? 0.34 : 0.46);
   final smaller = byWidth < byHeight ? byWidth : byHeight;
   // Het plafond hangt van de indeling af. Op een breed scherm was 360 de bindende grens en niet de
-  // ruimte: 0.46 van 1440 punten hoog is 662, teruggeklemd naar 360 — een postzegel midden op een groot
-  // scherm. Op een telefoon blijft 360 wél juist, want daar eisen de titel en de knoppenrij eronder hun
+  // ruimte: 0.46 van 1440 punten hoog is 662, teruggeklemd naar 360 â€” een postzegel midden op een groot
+  // scherm. Op een telefoon blijft 360 wÃ©l juist, want daar eisen de titel en de knoppenrij eronder hun
   // plek op.
   //
   // Hoger mag zonder gevaar: [byWidth] deelt de breedte al door de ruimte die de cd nodig heeft om uit
@@ -5199,7 +5200,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
   /// The sleeve the AlbumArt below settled on, so enlarging it shows THAT image.
   ///
   /// The zoom used to open the player's own cover, which is captured when a track starts and knows
-  /// nothing about the pressing this screen resolved — so clicking the art you were looking at
+  /// nothing about the pressing this screen resolved â€” so clicking the art you were looking at
   /// produced a different, older one.
   Uint8List? _shown;
 
@@ -5282,7 +5283,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                                     ? const {}
                                     : lib.albumArtRoles(al.artist, al.title),
                                 // Out and spinning while a speaker has it too. This device is
-                                // deliberately silent then, so p.playing is false — but the record
+                                // deliberately silent then, so p.playing is false â€” but the record
                                 // IS playing, just somewhere else, and that is what you came to
                                 // this screen to look at.
                                 playing: p.playing || context.watch<SpeakerTarget>().isCasting,
@@ -5297,7 +5298,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                   ),
                 ),
                 const SizedBox(height: 30),
-                Text(t?.title ?? '—',
+                Text(t?.title ?? 'â€”',
                     style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w800), textAlign: TextAlign.center),
                 const SizedBox(height: 6),
                 Row(
@@ -5495,7 +5496,7 @@ class _ZoomView extends StatelessWidget {
   }
 }
 
-// ── Online search (TorBox) ───────────────────────────────────────────────────
+// â”€â”€ Online search (TorBox) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 String _fmtBytes(int b) => b >= 1000000000
     ? '${(b / 1e9).toStringAsFixed(2)} GB'
     : b >= 1000000
@@ -5509,14 +5510,14 @@ void _srcToast(BuildContext context, String m) {
 
 /// A toast that offers a way out, for where the app REFUSES what was asked.
 ///
-/// Every refusal here rests on a guess about what you already own, and that guess can be wrong —
+/// Every refusal here rests on a guess about what you already own, and that guess can be wrong â€”
 /// two different takes can run equally long. A refusal you cannot overrule turns into a button that
 /// silently does nothing, which is worse than the duplicate it was avoiding. Longer on screen than
 /// a plain toast, because it asks something of the reader.
 /// A message with a way to overrule it.
 ///
 /// On a television this cannot be a toast. A SnackBarAction is technically focusable but the
-/// highlight never travels there, and it is gone after eight seconds — so the button sits on
+/// highlight never travels there, and it is gone after eight seconds â€” so the button sits on
 /// screen, plainly visible, and cannot be reached. That matters here more than it sounds: this is
 /// the ONLY way to overrule the app when it wrongly decides a download is a duplicate you already
 /// own. On a remote that whole branch of the app was dead.
@@ -5528,7 +5529,7 @@ void _srcToastAction(BuildContext context, String m, String label, VoidCallback 
         backgroundColor: _panel,
         content: Text(m, style: const TextStyle(height: 1.4)),
         actions: [
-          // The highlight starts on "leave it" — the action behind this dialog is a download the
+          // The highlight starts on "leave it" â€” the action behind this dialog is a download the
           // app has already advised against.
           TextButton(
             autofocus: true,
@@ -5554,9 +5555,9 @@ void _srcToastAction(BuildContext context, String m, String label, VoidCallback 
   ));
 }
 
-// ── Radio / Smart Shuffle ────────────────────────────────────────────────────
-// De normalisatie staat in recommend.dart als [recNorm]: hij beantwoordt overal dezelfde vraag — Radio,
-// Ontdek en "Aanbevolen voor jou" — en drie kopieën van die regel zouden drie antwoorden geven.
+// â”€â”€ Radio / Smart Shuffle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// De normalisatie staat in recommend.dart als [recNorm]: hij beantwoordt overal dezelfde vraag â€” Radio,
+// Ontdek en "Aanbevolen voor jou" â€” en drie kopieÃ«n van die regel zouden drie antwoorden geven.
 
 /// Build a Radio queue around [artist]: Deezer recommendations, matched against the
 /// local library (owned tracks play instantly; the rest resolve via TorBox on demand).
@@ -5596,7 +5597,7 @@ List<RadioItem> _smartShuffle(List<RadioItem> items) {
 Future<void> startRadio(BuildContext context, String artist) async {
   final player = context.read<PlayerStore>();
   final lib = context.read<LibraryStore>();
-  _srcToast(context, '📻 Radio starten voor $artist…');
+  _srcToast(context, 'ðŸ“» Radio starten voor $artistâ€¦');
   final rec = RecommendService();
   List<RecTrack> recs;
   try {
@@ -5627,7 +5628,7 @@ bool _genericArtist(String s) {
   return x.isEmpty || x == 'various' || x == 'various artists' || x == 'va' || x == 'onbekende artiest';
 }
 
-// ── Tracks (flat, all library songs) ─────────────────────────────────────────
+// â”€â”€ Tracks (flat, all library songs) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class TracksView extends StatelessWidget {
   /// Library search + quality filter from the shell (null = show everything).
   final bool Function(Track)? match;
@@ -5648,7 +5649,7 @@ class TracksView extends StatelessWidget {
     }
     if (tracks.isEmpty) {
       return Center(
-        child: Text(query.isEmpty ? 'Niets binnen dit filter.' : 'Niets gevonden voor “$query”.',
+        child: Text(query.isEmpty ? 'Niets binnen dit filter.' : 'Niets gevonden voor â€œ$queryâ€.',
             style: const TextStyle(color: _muted)),
       );
     }
@@ -5685,7 +5686,7 @@ class TracksView extends StatelessWidget {
           return Padding(
             padding: EdgeInsets.fromLTRB(narrow ? 18 : 28, 22, narrow ? 18 : 24, 10),
             // Title, count and two buttons. Three pixels too wide on a phone, and the count
-            // vanished under the first button — so on a phone the buttons drop to their own line.
+            // vanished under the first button â€” so on a phone the buttons drop to their own line.
             // The Row stays everywhere else, Spacer and all, because that is where it fits.
             child: narrow
                 ? Column(
@@ -5699,7 +5700,7 @@ class TracksView extends StatelessWidget {
           child: ListView.builder(
             padding: const EdgeInsets.only(bottom: 12),
             itemCount: tracks.length,
-            itemExtent: 56, // fixed height → smooth scrolling at 10k+ tracks
+            itemExtent: 56, // fixed height â†’ smooth scrolling at 10k+ tracks
             itemBuilder: (_, i) {
               final t = tracks[i];
               final isCurrent = !player.radioMode && player.current?.path == t.path;
@@ -5751,8 +5752,8 @@ class TracksView extends StatelessWidget {
   }
 }
 
-// ── Ontdek (discovery feed) ──────────────────────────────────────────────────
-// ── Start / welcome screen (TIDAL-style rows) ────────────────────────────────
+// â”€â”€ Ontdek (discovery feed) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â”€â”€ Start / welcome screen (TIDAL-style rows) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class HomeStartView extends StatefulWidget {
   const HomeStartView({super.key});
   @override
@@ -5772,7 +5773,7 @@ class _HomeStartViewState extends State<HomeStartView> {
   @override
   void initState() {
     super.initState();
-    // Charts need no library — load them right away.
+    // Charts need no library â€” load them right away.
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadCharts());
   }
 
@@ -5786,7 +5787,7 @@ class _HomeStartViewState extends State<HomeStartView> {
 
   /// The personal rows depend on the scanned library. On a cold start the scan is still running
   /// when this view first builds, so we load these ONCE the library actually has artists (driven
-  /// from build via context.watch) — not eagerly with an empty seed list.
+  /// from build via context.watch) â€” not eagerly with an empty seed list.
   Future<void> _loadSeeds(List<String> seeds) async {
     if (mounted) setState(() => _seedsLoading = true);
     final relF = _catalog.latestFromArtists(seeds);
@@ -5823,12 +5824,12 @@ class _HomeStartViewState extends State<HomeStartView> {
   Future<void> _playRec(RecTrack t) async {
     final online = context.read<OnlineService>();
     final player = context.read<PlayerStore>();
-    _srcToast(context, 'Bron voorbereiden voor ${t.title}…');
+    _srcToast(context, 'Bron voorbereiden voor ${t.title}â€¦');
     try {
       final url = await online.resolveRadio(t.artist, t.title, instantOnly: false);
       if (!mounted) return;
       if (url == null) {
-        _srcToast(context, 'Geen bron gevonden — zoek het op via Online zoeken.');
+        _srcToast(context, 'Geen bron gevonden â€” zoek het op via Online zoeken.');
         return;
       }
       player.playUrl(url, title: t.title, artist: t.artist);
@@ -5853,7 +5854,7 @@ class _HomeStartViewState extends State<HomeStartView> {
     // en 2016 omdat er nergens op jaar gefilterd werd: het nieuwste dat er van een artiest te vinden is,
     // is iets anders dan nieuw.
     //
-    // Eerst je eigen artiesten, dan de wereldwijde lijst — maar allebei door hetzelfde jaarfilter, want
+    // Eerst je eigen artiesten, dan de wereldwijde lijst â€” maar allebei door hetzelfde jaarfilter, want
     // een hitlijst vol evergreens hoort hier net zomin. Blijft er dan niets over, dan verdwijnt de balk;
     // dat is beter dan hem vullen met iets wat niet is wat het belooft.
     final ditJaar = DateTime.now().year;
@@ -5865,7 +5866,7 @@ class _HomeStartViewState extends State<HomeStartView> {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(28, 26, 28, 2),
-          child: Text('${_greeting()} 👋', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+          child: Text('${_greeting()} ðŸ‘‹', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
         ),
         const Padding(
           padding: EdgeInsets.fromLTRB(28, 0, 28, 6),
@@ -5890,7 +5891,7 @@ class _HomeStartViewState extends State<HomeStartView> {
         if (!anyLoading && _charts.isEmpty && _releases.isEmpty && _forYou.isEmpty && recent.isEmpty)
           const Padding(
             padding: EdgeInsets.fromLTRB(28, 40, 28, 0),
-            child: Text('Nog niks om te tonen — download wat muziek of ga naar Online zoeken.',
+            child: Text('Nog niks om te tonen â€” download wat muziek of ga naar Online zoeken.',
                 style: TextStyle(color: _muted)),
           ),
       ],
@@ -5926,7 +5927,7 @@ class _HomeStartViewState extends State<HomeStartView> {
   /// De artiestnaam onder een tegel, aanklikbaar.
   ///
   /// [openArtist] neemt een NAAM en zoekt de artiest zelf op, dus dit werkt net zo goed voor een naam
-  /// die van Deezer komt als voor een naam uit je eigen bibliotheek — er is nergens een id voor nodig.
+  /// die van Deezer komt als voor een naam uit je eigen bibliotheek â€” er is nergens een id voor nodig.
   /// Dat is precies waarom "overal klikbaar" haalbaar was: het enige dat ontbrak, was een plek om de
   /// widget neer te zetten.
   static Widget _naamLink(String naam) => ArtistNames(
@@ -5939,7 +5940,7 @@ class _HomeStartViewState extends State<HomeStartView> {
         padding: const EdgeInsets.symmetric(horizontal: 24),
         itemCount: hits.length,
         separatorBuilder: (_, __) => const SizedBox(width: 14),
-        // Deze builder voedt TWEE rijen — "Top van dit moment" en "Nieuw van jouw artiesten" — dus
+        // Deze builder voedt TWEE rijen â€” "Top van dit moment" en "Nieuw van jouw artiesten" â€” dus
         // deze ene regel maakt ze allebei klikbaar.
         itemBuilder: (_, i) => _card(
             _netCover(hits[i].album.cover, size: 140), hits[i].album.title, hits[i].artist,
@@ -5977,7 +5978,7 @@ class _HomeStartViewState extends State<HomeStartView> {
       unawaited(_playRec(t));
       return;
     }
-    // A positive id is a Deezer one — see CatalogAlbum.ref — and this hit came from Deezer. The
+    // A positive id is a Deezer one â€” see CatalogAlbum.ref â€” and this hit came from Deezer. The
     // tracklist and the year are fetched by the page itself, so nothing is invented here.
     final album = CatalogAlbum(t.albumId, t.album, t.cover, null, 0, 'album');
     Navigator.of(context)
@@ -6003,13 +6004,13 @@ class _HoverCard extends StatefulWidget {
 
   /// De ondertitel als WIDGET, voor waar de artiestnaam aanklikbaar moet zijn.
   ///
-  /// Naast de bestaande `String` en niet in plaats daarvan: dit is de tegel van álle vier de rijen op
-  /// het eerste scherm van de app, en die in één keer omzetten maakt een fout in de opmaak meteen
+  /// Naast de bestaande `String` en niet in plaats daarvan: dit is de tegel van Ã¡lle vier de rijen op
+  /// het eerste scherm van de app, en die in Ã©Ã©n keer omzetten maakt een fout in de opmaak meteen
   /// vier keer zichtbaar. Zo kan elke rij los mee.
   final Widget? subtitleWidget;
   final VoidCallback onTap;
 
-  /// The second thing this tile can do, where it has one — play a recommendation outright instead
+  /// The second thing this tile can do, where it has one â€” play a recommendation outright instead
   /// of opening the record it is on. Null everywhere else, and then nothing changes.
   final VoidCallback? onLongPress;
   const _HoverCard(
@@ -6076,7 +6077,7 @@ class _HoverCardState extends State<_HoverCard> {
                         fontWeight: FontWeight.w600, fontSize: 13.5, color: _hover ? Colors.white : null)),
                 // De widget wint als hij er is. Op een afstandsbediening moet de naam GEEN eigen
                 // focusstop worden: dan krijgt elke tegel in een rij er een tweede bij en pijl je
-                // twee keer zo lang. Klikken blijft werken — `_maybeFocusable` haalt hem uit het pad
+                // twee keer zo lang. Klikken blijft werken â€” `_maybeFocusable` haalt hem uit het pad
                 // van de highlight, niet uit de app. Dezelfde afweging als bij een tracklijstrij.
                 widget.subtitleWidget == null
                     ? Text(widget.subtitle,
@@ -6132,7 +6133,7 @@ class _OntdekViewState extends State<OntdekView> {
     List<RecTrack> recs;
     // "The lookup failed" and "your library already has everything it suggested" are different
     // answers, and they were both reported as the second one. Told that nothing new was found, the
-    // obvious conclusion is that there is nothing left to discover — not that the request never
+    // obvious conclusion is that there is nothing left to discover â€” not that the request never
     // arrived. Refreshing then looks pointless when it is exactly the thing that would help.
     var failed = false;
     try {
@@ -6150,7 +6151,7 @@ class _OntdekViewState extends State<OntdekView> {
             ? null
             : failed
                 ? 'De suggesties konden niet worden opgehaald. Zit je online? Probeer het nog eens.'
-                : 'Niets nieuws gevonden — ververs eens.';
+                : 'Niets nieuws gevonden â€” ververs eens.';
       });
     }
   }
@@ -6159,12 +6160,12 @@ class _OntdekViewState extends State<OntdekView> {
     final online = context.read<OnlineService>();
     final player = context.read<PlayerStore>();
     setState(() => _playing = i);
-    _srcToast(context, 'Bron voorbereiden voor ${t.title}…');
+    _srcToast(context, 'Bron voorbereiden voor ${t.title}â€¦');
     try {
       final url = await online.resolveRadio(t.artist, t.title, instantOnly: false);
       if (!mounted) return;
       if (url == null) {
-        _srcToast(context, 'Geen bron gevonden — open de bronnen (⬇) om te downloaden.');
+        _srcToast(context, 'Geen bron gevonden â€” open de bronnen (â¬‡) om te downloaden.');
         return;
       }
       player.playUrl(url, title: t.title, artist: t.artist);
@@ -6257,7 +6258,7 @@ class _OntdekViewState extends State<OntdekView> {
 }
 
 Future<void> _playTorrent(BuildContext context, SearchResult r) async {
-  _srcToast(context, 'Bron voorbereiden…');
+  _srcToast(context, 'Bron voorbereidenâ€¦');
   try {
     final url = await context.read<OnlineService>().resolveStreamUrl(r);
     if (context.mounted) context.read<PlayerStore>().playUrl(url, title: r.name, artist: r.source);
@@ -6269,8 +6270,8 @@ Future<void> _playTorrent(BuildContext context, SearchResult r) async {
 void _downloadTorrent(BuildContext context, SearchResult r) {
   context.read<DownloadManager>().enqueue(r);
   _srcToast(context, r.cached
-      ? 'Downloaden gestart — zie de downloadlijst.'
-      : 'Voorbereiden bij TorBox (kan even duren bij weinig seeders) — zie de downloadlijst.');
+      ? 'Downloaden gestart â€” zie de downloadlijst.'
+      : 'Voorbereiden bij TorBox (kan even duren bij weinig seeders) â€” zie de downloadlijst.');
 }
 
 void _pickTorrentTracks(BuildContext context, SearchResult r) {
@@ -6285,8 +6286,8 @@ List<SoulseekFile> _slskCandidates(List<SoulseekFile> all, SoulseekFile f) {
   return out.isEmpty ? [f] : out;
 }
 
-/// Ask what "delete" should mean, then do it. [what] names the thing ("het album “Bad”"), and
-/// [paths] are the files it covers. Deliberately two distinct choices — removing something from
+/// Ask what "delete" should mean, then do it. [what] names the thing ("het album â€œBadâ€"), and
+/// [paths] are the files it covers. Deliberately two distinct choices â€” removing something from
 /// the library must never silently wipe the files off disk.
 Future<void> _confirmDelete(BuildContext context, String what, List<String> paths) async {
   final n = paths.length;
@@ -6297,15 +6298,15 @@ Future<void> _confirmDelete(BuildContext context, String what, List<String> path
       title: Text('$what verwijderen?', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
       content: Text(
         'Dit gaat over $n bestand${n == 1 ? "" : "en"}.\n\n'
-        '• Alleen uit bibliotheek: het blijft op je pc staan, maar verdwijnt uit de app.\n'
-        '• Ook van pc: de bestanden worden definitief verwijderd.',
+        'â€¢ Alleen uit bibliotheek: het blijft op je pc staan, maar verdwijnt uit de app.\n'
+        'â€¢ Ook van pc: de bestanden worden definitief verwijderd.',
         style: const TextStyle(color: _muted, fontSize: 13, height: 1.45),
       ),
       actions: [
         // Where the highlight starts, said out loud rather than left to whatever Flutter picks.
         //
         // "Ook van pc" deletes files from the disk and cannot be undone, and it is the last action
-        // — which is exactly where a convention of "focus the primary button" would put it. On a
+        // â€” which is exactly where a convention of "focus the primary button" would put it. On a
         // remote, one stray press of OK on a dialog you had not read yet would be gone music. So
         // the highlight starts on Cancel, and reaching the red button takes two deliberate presses.
         TextButton(
@@ -6334,7 +6335,7 @@ Future<void> _confirmDelete(BuildContext context, String what, List<String> path
   _srcToast(
       context,
       fromDisk
-          ? '$what verwijderd — $deleted bestand${deleted == 1 ? "" : "en"} van je pc gewist.'
+          ? '$what verwijderd â€” $deleted bestand${deleted == 1 ? "" : "en"} van je pc gewist.'
           : '$what uit je bibliotheek gehaald (bestanden staan er nog).');
 }
 
@@ -6343,24 +6344,24 @@ String _slskKey(SoulseekFile f) => '${f.username}|${f.filename}';
 Future<void> _downloadSoulseek(BuildContext context, SoulseekFile f, List<SoulseekFile> all,
     {TrackTags? authority}) async {
   try {
-    // false means it was refused — this track is already downloading. Say so; a "started" message
+    // false means it was refused â€” this track is already downloading. Say so; a "started" message
     // for something that never started is worse than no message.
     final started = await context
         .read<DownloadManager>()
         .enqueueSoulseekBest(_slskCandidates(all, f), key: _slskKey(f), authority: authority);
     if (context.mounted) {
       _srcToast(context,
-          started ? '“${f.displayName}” via Soulseek…' : '“${f.displayName}” loopt al — zie Mijn downloads.');
+          started ? 'â€œ${f.displayName}â€ via Soulseekâ€¦' : 'â€œ${f.displayName}â€ loopt al â€” zie Mijn downloads.');
     }
   } catch (e) {
     if (context.mounted) _srcToast(context, 'Download mislukt: $e');
   }
 }
 
-/// A download button that turns into a live progress ring while THIS key's job runs — so the
+/// A download button that turns into a live progress ring while THIS key's job runs â€” so the
 /// user sees progress right on the tile/track row, without opening the download list. Shows a
 /// check when done and a retry (with the failure reason as tooltip) when it failed.
-/// Everything the app is downloading, in one place — the equivalent of the native Soulseek
+/// Everything the app is downloading, in one place â€” the equivalent of the native Soulseek
 /// transfer list. Split into what's still running and what's finished, because a track that is
 /// merely WAITING for an uploader's slot is not a failure and shouldn't look like one.
 class DownloadsView extends StatelessWidget {
@@ -6368,13 +6369,13 @@ class DownloadsView extends StatelessWidget {
 
   static String statusLabel(DownloadJob j) => switch (j.status) {
         'done' => 'Klaar',
-        // A download the user stopped themselves didn't fail — saying "Mislukt" makes it look
+        // A download the user stopped themselves didn't fail â€” saying "Mislukt" makes it look
         // like something went wrong with it.
         'failed' => j.cancelled ? 'Gestopt' : 'Mislukt',
-        'waiting' => j.queuePlace > 0 ? 'Wacht op peer · plaats ${j.queuePlace}' : 'Wacht op peer',
+        'waiting' => j.queuePlace > 0 ? 'Wacht op peer Â· plaats ${j.queuePlace}' : 'Wacht op peer',
         'queued' => 'In wachtrij',
         // Already on disk and playable; a better copy is still being chased.
-        'upgrading' => 'Speelbaar · upgrade',
+        'upgrading' => 'Speelbaar Â· upgrade',
         'preparing' => j.progress > 0 ? 'Voorbereiden ${(j.progress * 100).round()}%' : 'Voorbereiden',
         _ => 'Bezig ${(j.progress * 100).round()}%',
       };
@@ -6409,7 +6410,7 @@ class DownloadsView extends StatelessWidget {
             // things that both live under "downloads": one is music arriving into your library,
             // the other is a copy of your library travelling with you.
             const _OfflineSection(),
-            // Title, a running count and a clear button. Side by side that is wider than a phone —
+            // Title, a running count and a clear button. Side by side that is wider than a phone â€”
             // the count ran under the button and "Wis afgeronde" hung off the right edge. Wrapped,
             // so it stays one line where there is room and folds where there is not.
             Wrap(
@@ -6423,7 +6424,7 @@ class DownloadsView extends StatelessWidget {
                   // Counted from the jobs themselves: a download waiting in an uploader's queue has
                   // handed its parallel slot back, so the scheduler's counters would read 0 here.
                   Text('${active.where((j) => j.status == 'downloading' || j.status == 'preparing').length} bezig'
-                      ' · ${active.where((j) => j.status == 'waiting' || j.status == 'queued').length} wachtend',
+                      ' Â· ${active.where((j) => j.status == 'waiting' || j.status == 'queued').length} wachtend',
                       style: const TextStyle(color: _muted, fontSize: 12.5)),
                 if (finished.isNotEmpty)
                   TextButton.icon(
@@ -6519,7 +6520,7 @@ class _DlRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 14),
-          // Stop what you no longer want — a slot freed here is a slot another download gets.
+          // Stop what you no longer want â€” a slot freed here is a slot another download gets.
           SizedBox(
             width: 34,
             child: job.busy && job.canCancel
@@ -6537,7 +6538,7 @@ class _DlRow extends StatelessWidget {
           ),
           SizedBox(
             // 150 fixed was the last straw on a phone: a title, a bar, a cancel button and this all
-            // side by side ran off the right edge and "Speelbaar · upgrade" was cut mid-word. Half
+            // side by side ran off the right edge and "Speelbaar Â· upgrade" was cut mid-word. Half
             // that on a narrow screen, and the label ellipsises rather than the row overflowing.
             width: isCompact(context) ? 74 : 150,
             child: Text(DownloadsView.statusLabel(job),
@@ -6559,22 +6560,22 @@ Widget _downloadControl(BuildContext context,
       final job = dm.jobByKey(jobKey);
       final status = job?.status;
       if (status == 'queued') {
-        // Waiting for a download slot — show a queue clock, NOT a spinner (a spinning ring here
+        // Waiting for a download slot â€” show a queue clock, NOT a spinner (a spinning ring here
         // looked like a stuck download when several tracks were started at once).
         return const Padding(
           padding: EdgeInsets.all(9),
           child: Tooltip(
-            message: 'In wachtrij…',
+            message: 'In wachtrijâ€¦',
             child: Icon(Icons.schedule_rounded, color: _muted, size: 19),
           ),
         );
       }
       if (status == 'waiting') {
-        // The uploader has us in its queue and will start when a slot frees — exactly what the
+        // The uploader has us in its queue and will start when a slot frees â€” exactly what the
         // native client shows as "Queued". Not a failure, so no red: an hourglass plus the place.
         final place = job!.queuePlace;
         return Tooltip(
-          message: job.detail ?? 'Wachten op peer…',
+          message: job.detail ?? 'Wachten op peerâ€¦',
           child: SizedBox(
             width: 40,
             height: 40,
@@ -6593,7 +6594,7 @@ Widget _downloadControl(BuildContext context,
       if (status == 'downloading' || status == 'preparing') {
         final pct = (job!.progress * 100).round();
         return Tooltip(
-          message: job.detail ?? 'Bezig…',
+          message: job.detail ?? 'Bezigâ€¦',
           child: SizedBox(
             width: 40,
             height: 40,
@@ -6613,9 +6614,9 @@ Widget _downloadControl(BuildContext context,
         );
       }
       if (status == 'upgrading') {
-        // Downloaded and playable — the arrow says a better copy is still being fetched.
+        // Downloaded and playable â€” the arrow says a better copy is still being fetched.
         return Tooltip(
-          message: job?.detail ?? 'Speelbaar · betere kwaliteit onderweg',
+          message: job?.detail ?? 'Speelbaar Â· betere kwaliteit onderweg',
           child: const Padding(
             padding: EdgeInsets.all(9),
             child: Icon(Icons.upgrade_rounded, color: _accent2, size: 20),
@@ -6629,7 +6630,7 @@ Widget _downloadControl(BuildContext context,
         return IconButton(
             icon: const Icon(Icons.refresh_rounded),
             color: Colors.redAccent,
-            tooltip: job?.detail != null ? 'Mislukt: ${job!.detail} — opnieuw' : 'Mislukt — opnieuw proberen',
+            tooltip: job?.detail != null ? 'Mislukt: ${job!.detail} â€” opnieuw' : 'Mislukt â€” opnieuw proberen',
             onPressed: onDownload);
       }
       return IconButton(icon: const Icon(Icons.download_rounded), color: _accent, tooltip: tooltip, onPressed: onDownload);
@@ -6638,7 +6639,7 @@ Widget _downloadControl(BuildContext context,
 }
 
 /// The most complete album folder among Soulseek hits (most audio files from ONE peer's
-/// folder) — so "Download album" grabs a coherent album from a single source.
+/// folder) â€” so "Download album" grabs a coherent album from a single source.
 List<SoulseekFile> _bestSoulseekFolder(List<SoulseekFile> files) {
   final groups = <String, List<SoulseekFile>>{};
   for (final f in files) {
@@ -6658,7 +6659,7 @@ List<SoulseekFile> _bestSoulseekFolder(List<SoulseekFile> files) {
 Future<void> _downloadSoulseekAlbum(
     BuildContext context, List<SoulseekFile> folder, List<SoulseekFile> all,
     {ReleaseAuthority? authority}) async {
-  // Each folder track → its cross-peer candidates, so a busy peer for one track falls back
+  // Each folder track â†’ its cross-peer candidates, so a busy peer for one track falls back
   // to another peer offering the same song instead of failing the whole album.
   final tracks = [for (final f in folder) _slskCandidates(all, f)];
   // Which official track each file actually is, decided by name and running time rather than by
@@ -6670,12 +6671,12 @@ Future<void> _downloadSoulseekAlbum(
       .read<DownloadManager>()
       .enqueueSoulseekAlbum(tracks, authorities: authorities);
   if (context.mounted) {
-    _srcToast(context, '$n nummer(s) via Soulseek — volg de voortgang in de downloadlijst.');
+    _srcToast(context, '$n nummer(s) via Soulseek â€” volg de voortgang in de downloadlijst.');
   }
 }
 
 /// Soulseek section header with a "Download album" action for the best complete folder.
-/// [all] is the full (unfiltered) result set — used to find fallback peers per track.
+/// [all] is the full (unfiltered) result set â€” used to find fallback peers per track.
 Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy, List<SoulseekFile> all,
     {ReleaseAuthority? authority}) {
   final folder = _bestSoulseekFolder(slsk);
@@ -6683,7 +6684,7 @@ Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy,
     padding: const EdgeInsets.fromLTRB(24, 14, 18, 6),
     child: Row(
       children: [
-        const Text('SOULSEEK · P2P',
+        const Text('SOULSEEK Â· P2P',
             style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
         const SizedBox(width: 8),
         Text('${slsk.length}', style: const TextStyle(color: _muted, fontSize: 11.5)),
@@ -6694,7 +6695,7 @@ Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy,
           Icon(Icons.pause_circle_outline_rounded, size: 13, color: Colors.orange.shade300),
           const SizedBox(width: 4),
           // The reason comes from the client, which knows which of the five it is. This line used
-          // to say "login geweigerd" for all of them — including a login that had just worked and
+          // to say "login geweigerd" for all of them â€” including a login that had just worked and
           // was then kicked, and a server that never answered at all.
           Tooltip(
             message: context.read<SoulseekService>().whyNotLogin ?? '',
@@ -6703,8 +6704,8 @@ Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy,
                   final s = context.read<SoulseekService>();
                   final left = s.blockedFor;
                   return left == null
-                      ? 'gepauzeerd — ${s.pauseLabel}'
-                      : 'gepauzeerd — ${s.pauseLabel}, nog ${left.inMinutes + 1} min';
+                      ? 'gepauzeerd â€” ${s.pauseLabel}'
+                      : 'gepauzeerd â€” ${s.pauseLabel}, nog ${left.inMinutes + 1} min';
                 }(),
                 style: TextStyle(color: Colors.orange.shade300, fontSize: 11.5)),
           ),
@@ -6716,7 +6717,7 @@ Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy,
                 padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: const Size(0, 26)),
             onPressed: () {
               context.read<SoulseekService>().retryLoginNow();
-              _srcToast(context, 'Soulseek opnieuw proberen…');
+              _srcToast(context, 'Soulseek opnieuw proberenâ€¦');
             },
             child: const Text('nu opnieuw proberen', style: TextStyle(fontSize: 11.5)),
           ),
@@ -6741,22 +6742,22 @@ Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy,
 Widget _qualityBadge(Quality q) {
   Color fg, bg, border;
   switch (q.tier) {
-    case QTier.hires: // hi-res lossless (24-bit / >48kHz / DSD) — gold
+    case QTier.hires: // hi-res lossless (24-bit / >48kHz / DSD) â€” gold
       fg = const Color(0xFFF2C14E);
       bg = const Color(0xFF2A2413);
       border = const Color(0xFF5A4A1E);
       break;
-    case QTier.lossless: // CD-quality lossless — teal
+    case QTier.lossless: // CD-quality lossless â€” teal
       fg = _accent2;
       bg = const Color(0xFF0F2521);
       border = const Color(0xFF24493F);
       break;
-    case QTier.lossy: // MP3/AAC — blue-grey
+    case QTier.lossy: // MP3/AAC â€” blue-grey
       fg = const Color(0xFFA9B6E8);
       bg = const Color(0xFF161A2C);
       border = const Color(0xFF2A3350);
       break;
-    case QTier.unknown: // unclear — subtle grey
+    case QTier.unknown: // unclear â€” subtle grey
       fg = _muted;
       bg = const Color(0xFF1A1D29);
       border = _line;
@@ -6770,11 +6771,11 @@ Widget _qualityBadge(Quality q) {
   );
 }
 
-/// Quality of a LOCAL library track (real bitrate from size÷duration, so a 16/44 FLAC and a
+/// Quality of a LOCAL library track (real bitrate from sizeÃ·duration, so a 16/44 FLAC and a
 /// 24-bit hi-res FLAC read differently).
 /// De kwaliteit van een nummer uit de eigen bibliotheek.
 ///
-/// Het label komt uit de bitrate -- "FLAC · 2788k" zegt meer dan "FLAC" -- maar of het hi-res IS wordt
+/// Het label komt uit de bitrate -- "FLAC Â· 2788k" zegt meer dan "FLAC" -- maar of het hi-res IS wordt
 /// bepaald door de sample rate en de bitdiepte, want die staan in het bestand. De bitrate is daar maar
 /// een benadering van: een druk gemasterd nummer van 44,1 kHz haalt ook 1500 kbit/s.
 Quality _trackQuality(Track t) {
@@ -6787,15 +6788,15 @@ Quality _trackQuality(Track t) {
   );
   // Het formaat zelf in plaats van de bitrate, en bij ELKE lossless -- ook bij 16/44.1. Een bitrate is
   // de uitkomst van de muziek en de compressie samen en verschilt per nummer; dit zegt wat het bestand
-  // is. En één notatie voor de hele lijst leest rustiger dan de ene rij "1433k" en de volgende "24/96".
+  // is. En Ã©Ã©n notatie voor de hele lijst leest rustiger dan de ene rij "1433k" en de volgende "24/96".
   if (t.isFlac && t.sampleRate > 0 && t.bitsPerSample > 0) {
     return Quality(
-      'FLAC · ${depthRateLabel(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample)}',
+      'FLAC Â· ${depthRateLabel(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample)}',
       isHiRes(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample) ? QTier.hires : QTier.lossless,
     );
   }
-  // Bij een lossy bestand is bitdiepte betekenisloos en is de bitrate juist wél waar het om gaat. Toch
-  // met hetzelfde streepje ertussen, want anders staat er in dezelfde kolom één rij zonder enig getal
+  // Bij een lossy bestand is bitdiepte betekenisloos en is de bitrate juist wÃ©l waar het om gaat. Toch
+  // met hetzelfde streepje ertussen, want anders staat er in dezelfde kolom Ã©Ã©n rij zonder enig getal
   // en dat is precies waar de lijn breekt.
   //
   // Berekend uit grootte en duur, want de app leest geen MP3-framekop. Voor 320, 192 en 160 komt dat
@@ -6803,12 +6804,12 @@ Quality _trackQuality(Track t) {
   // paar procent boven schieten -- die telt mee in de grootte.
   final k = t.bitrateKbps;
   if (!t.isFlac && k != null && k > 0 && t.ext.isNotEmpty) {
-    return Quality('${t.ext.toUpperCase()} · ${k}k', QTier.lossy);
+    return Quality('${t.ext.toUpperCase()} Â· ${k}k', QTier.lossy);
   }
   return basis;
 }
 
-/// De hoeskleur uitrekenen in een isolate — en dit MOET buiten de klasse staan.
+/// De hoeskleur uitrekenen in een isolate â€” en dit MOET buiten de klasse staan.
 ///
 /// Een closure neemt zijn hele omgeving mee, en de omgeving van een instantiemethode bevat `this`. Zet
 /// je `Isolate.run(() => dominantColour(bytes))` in een State, dan gaat die State mee de isolate in, en
@@ -6819,8 +6820,8 @@ Quality _trackQuality(Track t) {
 ///      <- _AlbumDetailPageState._kleurUitHoes.<anonymous closure>
 ///
 /// Het venijnige is dat het van buiten niet te zien is: er verschijnt geen melding, de achtergrond
-/// blijft gewoon zwart, en de reparatie lijkt niet te werken terwijl elk onderdeel los wél werkt. Ik heb
-/// hem in een los Dart-programma getest — daar zit geen `this` omheen en daar wérkte het. Pas een
+/// blijft gewoon zwart, en de reparatie lijkt niet te werken terwijl elk onderdeel los wÃ©l werkt. Ik heb
+/// hem in een los Dart-programma getest â€” daar zit geen `this` omheen en daar wÃ©rkte het. Pas een
 /// logregel in de app zelf gaf de uitzondering te zien.
 ///
 /// Hier omheen zit geen klasse, dus vangt de closure alleen [bytes], en dat is een Uint8List: verzendbaar.
@@ -6830,7 +6831,7 @@ Future<int?> _kleurBuitenDeTekendraad(Uint8List bytes) =>
 /// Het beste bestand bovenaan.
 ///
 /// De resultaten stonden in de volgorde waarin de peers toevallig antwoordden, en dat is geen volgorde.
-/// Een bestand van 212 MB kon onder een van 30 MB staan — en dan zie je niet dat er iets tussen zit dat
+/// Een bestand van 212 MB kon onder een van 30 MB staan â€” en dan zie je niet dat er iets tussen zit dat
 /// veel beter is dan wat je al in de kast hebt.
 ///
 /// Lossless boven lossy, daarbinnen op bitrate; zie [kwaliteitsRang]. Bij gelijke kwaliteit wint de peer
@@ -6841,15 +6842,15 @@ int _besteEerst(SoulseekFile a, SoulseekFile b) {
     final lossless = f.isFlac || const {'alac', 'ape', 'wav', 'aiff'}.contains(f.ext);
     return kwaliteitsRang(
       lossless: lossless,
-      // Het formaat dat de peer meldt gaat vóór de gemeten bitrate. Twee ripjes van dezelfde 24/96
+      // Het formaat dat de peer meldt gaat vÃ³Ã³r de gemeten bitrate. Twee ripjes van dezelfde 24/96
       // verschillen een paar procent in bitrate zonder dat er iets beters aan is; hun sample rate maal
-      // bitdiepte is identiek, en dát is waar het om gaat. Meldt de peer niets, dan rekent
-      // [capaciteitOpEenSchaal] de gemeten bitrate terug naar diezelfde maat — anders vergelijk je een
+      // bitdiepte is identiek, en dÃ¡t is waar het om gaat. Meldt de peer niets, dan rekent
+      // [capaciteitOpEenSchaal] de gemeten bitrate terug naar diezelfde maat â€” anders vergelijk je een
       // ruwe capaciteit met een ingepakte en staat elk onbekend bestand een derde te hoog.
       kbps: capaciteitOpEenSchaal(
           sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: kbps, lossless: lossless),
       // Twee wegen: de som bewijst het, de naam vangt de peers die geen sample rate sturen. Op de hele
-      // naam en niet alleen het bestandsnaampje — uploaders zetten "5.1" net zo vaak in de mapnaam.
+      // naam en niet alleen het bestandsnaampje â€” uploaders zetten "5.1" net zo vaak in de mapnaam.
       stereo: !meerDanStereo(sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: kbps) &&
           surroundLabel(f.filename) == null,
     );
@@ -6862,7 +6863,7 @@ int _besteEerst(SoulseekFile a, SoulseekFile b) {
 
 /// Wat er als waarschuwing op de rij komt, of null bij gewoon stereo.
 ///
-/// De naam gaat vóór als hij iets zegt — "5.1" is duidelijker dan "meerkanaals". Zegt de naam niets,
+/// De naam gaat vÃ³Ã³r als hij iets zegt â€” "5.1" is duidelijker dan "meerkanaals". Zegt de naam niets,
 /// dan beslist de som: een bestand dat boven zijn eigen onbewerkte stereogrootte uitkomt heeft meer
 /// kanalen, en dat is precies het geval dat de naam laat lopen.
 String? _surroundMerk(SoulseekFile f) {
@@ -6874,10 +6875,10 @@ String? _surroundMerk(SoulseekFile f) {
       : null;
 }
 
-/// Het etiket op een zoekresultaat, met het formaat dat de peer zélf meldt.
+/// Het etiket op een zoekresultaat, met het formaat dat de peer zÃ©lf meldt.
 ///
-/// Sinds de sample rate en de bitdiepte bewaard worden, staat hier `FLAC · 24/192` in plaats van een
-/// bitrate die de app zelf uit grootte en duur moest afleiden. Dezelfde notatie als in de bibliotheek —
+/// Sinds de sample rate en de bitdiepte bewaard worden, staat hier `FLAC Â· 24/192` in plaats van een
+/// bitrate die de app zelf uit grootte en duur moest afleiden. Dezelfde notatie als in de bibliotheek â€”
 /// dan is een zoekresultaat rechtstreeks te vergelijken met wat je al hebt, en dat is de hele vraag.
 ///
 /// Zonder die twee getallen blijft het de oude weg: bij mp3 zegt bitdiepte niets, en een peer die niets
@@ -6886,7 +6887,7 @@ Quality _slskQuality(SoulseekFile f) {
   final sr = f.sampleRate, bits = f.bitDepth;
   if (f.isFlac && sr != null && bits != null && sr > 0 && bits > 0) {
     return Quality(
-      'FLAC · ${depthRateLabel(sampleRate: sr, bitsPerSample: bits)}',
+      'FLAC Â· ${depthRateLabel(sampleRate: sr, bitsPerSample: bits)}',
       isHiRes(sampleRate: sr, bitsPerSample: bits) ? QTier.hires : QTier.lossless,
     );
   }
@@ -6968,12 +6969,12 @@ Widget _torrentTile(BuildContext context, SearchResult r) {
               const SizedBox(height: 2),
               Row(
                 children: [
-                  Text('${r.source} · ${r.seeders} seeders · ${_fmtBytes(r.size)}',
+                  Text('${r.source} Â· ${r.seeders} seeders Â· ${_fmtBytes(r.size)}',
                       style: const TextStyle(color: _muted, fontSize: 12)),
                   if (r.cached)
                     const Padding(
                         padding: EdgeInsets.only(left: 8),
-                        child: Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12))),
+                        child: Text('âš¡ Instant', style: TextStyle(color: _accent2, fontSize: 12))),
                 ],
               ),
             ],
@@ -7006,14 +7007,14 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
               Text(f.displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 2),
               Text(
-                  '$status · ${f.username} · ${_fmtBytes(f.size)}'
-                  '${f.durationSec != null && f.durationSec! > 0 ? " · ${_fmt(Duration(seconds: f.durationSec!))}" : ""}',
+                  '$status Â· ${f.username} Â· ${_fmtBytes(f.size)}'
+                  '${f.durationSec != null && f.durationSec! > 0 ? " Â· ${_fmt(Duration(seconds: f.durationSec!))}" : ""}',
                   style: const TextStyle(color: _muted, fontSize: 12)),
             ],
           ),
         ),
         // Het kanaalaantal, als de naam het prijsgeeft. Zonder dit was een 5.1-bestand niet van een
-        // stereobestand te onderscheiden behalve aan zijn verdachte grootte — en die grootte leest
+        // stereobestand te onderscheiden behalve aan zijn verdachte grootte â€” en die grootte leest
         // juist als "beter", terwijl het op een stereo-installatie minder is.
         //
         // Oranje en niet groen: dit is een waarschuwing, geen keurmerk.
@@ -7068,7 +7069,7 @@ Widget _netCover(String? url, {double size = 160, double radius = 12, bool circl
   );
 }
 
-/// Combined torrent + Soulseek sources for one query — the "streams" list under a track/album.
+/// Combined torrent + Soulseek sources for one query â€” the "streams" list under a track/album.
 class SourcesView extends StatefulWidget {
   final String query;
 
@@ -7129,7 +7130,7 @@ class _SourcesViewState extends State<SourcesView> {
       children: [
         if (_torrents.isNotEmpty || _slsk.isNotEmpty)
           _filterChipsRow(_filter, (f) => setState(() => _filter = f)),
-        _sourceHeader('Torrents · TorBox', torrents.length, _tBusy),
+        _sourceHeader('Torrents Â· TorBox', torrents.length, _tBusy),
         if (torrents.isEmpty && !_tBusy)
           const Padding(
               padding: EdgeInsets.fromLTRB(24, 2, 24, 6),
@@ -7140,14 +7141,14 @@ class _SourcesViewState extends State<SourcesView> {
         else
           const Padding(
               padding: EdgeInsets.fromLTRB(24, 14, 24, 6),
-              child: Text('SOULSEEK · log in via Instellingen',
+              child: Text('SOULSEEK Â· log in via Instellingen',
                   style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6))),
         if (ready && slsk.isEmpty && !_sBusy)
           const Padding(
               padding: EdgeInsets.fromLTRB(24, 2, 24, 6),
               child: Text('Geen Soulseek-bronnen.', style: TextStyle(color: _muted, fontSize: 12.5))),
         // Whichever copy the user picks, the record decides what it is. That is the whole point:
-        // this same song is offered as "13 …", "19. …" and "…The Essential … - 01 - …".
+        // this same song is offered as "13 â€¦", "19. â€¦" and "â€¦The Essential â€¦ - 01 - â€¦".
         ..._slskTiles(context, slsk, authority: _trackAuthority),
       ],
     );
@@ -7158,7 +7159,7 @@ class _SourcesViewState extends State<SourcesView> {
     final a = widget.authority, t = widget.track;
     if (a == null || t == null) return null;
     // The position IS the number: this tracklist came from the official release. Never indexOf on
-    // the track — ChoiceTrack has no equality, so it would miss every time and fall back to
+    // the track â€” ChoiceTrack has no equality, so it would miss every time and fall back to
     // something that is not a track number at all.
     final stated = int.tryParse(t.position) ?? 0;
     if (stated > 0) return a.forTrack(t, stated);
@@ -7169,7 +7170,7 @@ class _SourcesViewState extends State<SourcesView> {
 
 /// Rows are built eagerly inside a plain ListView, so a broad query (3500+ hits is normal for a
 /// popular track) would build every one of them on every rebuild and lock the UI. Results are
-/// quality-sorted, so showing the head is no loss — and the full list is still handed to each
+/// quality-sorted, so showing the head is no loss â€” and the full list is still handed to each
 /// tile as its candidate pool, so downloading keeps every fallback peer.
 const _slskShown = 250;
 
@@ -7181,7 +7182,7 @@ List<Widget> _slskTiles(BuildContext context, List<SoulseekFile> slsk, {TrackTag
       Padding(
         padding: const EdgeInsets.fromLTRB(24, 10, 24, 16),
         child: Text(
-          'Nog ${slsk.length - _slskShown} bronnen niet getoond — de beste staan bovenaan. '
+          'Nog ${slsk.length - _slskShown} bronnen niet getoond â€” de beste staan bovenaan. '
           'Verfijn je zoekopdracht om ze te zien.',
           style: const TextStyle(color: _muted, fontSize: 12),
         ),
@@ -7199,7 +7200,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   final _c = TextEditingController();
 
   /// Skipped when arrowing on a television, for the same reason as the library search: focus opens
-  /// the leanback keyboard, and the keyboard then swallows every arrow press — so the whole tab
+  /// the leanback keyboard, and the keyboard then swallows every arrow press â€” so the whole tab
   /// below it becomes unreachable. OK on the field is what opens it.
   final _searchFocus = FocusNode(skipTraversal: isTv, debugLabel: 'online search');
   final _catalog = CatalogService();
@@ -7253,7 +7254,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     setState(() => _tidalConnecting = true);
     try {
       await tidal.login();
-      if (mounted) _srcToast(context, 'TIDAL verbonden ✓');
+      if (mounted) _srcToast(context, 'TIDAL verbonden âœ“');
     } catch (e) {
       if (mounted) _srcToast(context, 'TIDAL-login mislukt: $e');
     } finally {
@@ -7275,7 +7276,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Plak de volledige "debridmusic://…"-URL (of enkel de code) die je browser na het inloggen toonde.',
+              const Text('Plak de volledige "debridmusic://â€¦"-URL (of enkel de code) die je browser na het inloggen toonde.',
                   style: TextStyle(color: _muted, fontSize: 12.5)),
               const SizedBox(height: 10),
               TextField(
@@ -7307,7 +7308,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     setState(() => _tidalConnecting = true);
     try {
       await tidal.completeManual(pasted);
-      if (mounted) _srcToast(context, 'TIDAL verbonden ✓');
+      if (mounted) _srcToast(context, 'TIDAL verbonden âœ“');
     } catch (e) {
       if (mounted) _srcToast(context, 'Mislukt: $e');
     } finally {
@@ -7319,7 +7320,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   ///
   /// Deezer catalogues what streams and is the faster, cleaner search, so it stays first and the
   /// list is usable before Discogs answers at all. Discogs is where the editions, the promos and
-  /// the regional issues live — the versions Deezer has no entry for.
+  /// the regional issues live â€” the versions Deezer has no entry for.
   ///
   /// Deduped on artist + title, so the same record never appears twice; a different EDITION of it
   /// carries a different title and still comes through, which is the whole reason to add it.
@@ -7343,7 +7344,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
 
   /// Add what MusicBrainz knows: albums, tracks and artists.
   ///
-  /// Runs AFTER Deezer, never inside its Future.wait — MusicBrainz spaces its requests 1100 ms
+  /// Runs AFTER Deezer, never inside its Future.wait â€” MusicBrainz spaces its requests 1100 ms
   /// apart, and putting it in the same wait would hold the fast results hostage to the slow one.
   ///
   /// Every query is scoped to an artist first. MusicBrainz ranks on text alone with no popularity
@@ -7377,7 +7378,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         if (artist.isEmpty) artist = found.first.name;
       }
 
-      // Records, not pressings — otherwise twenty CDs of one album are twenty cards.
+      // Records, not pressings â€” otherwise twenty CDs of one album are twenty cards.
       final groups = await mb.searchReleaseGroups(rest, artist: artist);
       if (!mounted) return;
       if (groups.isNotEmpty) {
@@ -7390,7 +7391,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           add.add(CatalogAlbumHit(
             CatalogAlbum(0, g.title, null, g.firstDate, 0,
                 g.primaryType.toLowerCase().isEmpty ? 'album' : g.primaryType.toLowerCase(),
-                // A GROUP, not a release. Opening it resolves a pressing first — only a pressing
+                // A GROUP, not a release. Opening it resolves a pressing first â€” only a pressing
                 // has a tracklist, and handing a group id to the release endpoint loads nothing.
                 origin: CatalogRef.musicbrainzGroup(g.mbid)),
             g.artist,
@@ -7460,7 +7461,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       _slskBusy = soulseek.available;
       _torrents = [];
       _slsk = [];
-      _status = 'Zoeken…';
+      _status = 'Zoekenâ€¦';
     });
     if (soulseek.available) {
       soulseek.search(q, onPartial: (p) {
@@ -7528,8 +7529,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                   onSubmitted: (_) => _search(),
                   decoration: InputDecoration(
                     hintText: _mode == 0
-                        ? 'Zoek artiest, album of nummer…'
-                        : (_mode == 2 ? 'Zoek in TIDAL…' : 'Artiest, album of nummer…'),
+                        ? 'Zoek artiest, album of nummerâ€¦'
+                        : (_mode == 2 ? 'Zoek in TIDALâ€¦' : 'Artiest, album of nummerâ€¦'),
                     filled: true,
                     fillColor: _panel,
                     prefixIcon: const Icon(Icons.search_rounded, size: 20),
@@ -7547,7 +7548,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                     backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18)),
                 // Guarded on a television, disabled everywhere else.
                 //
-                // Disabling it is right under a mouse — the button greys out and the cursor says
+                // Disabling it is right under a mouse â€” the button greys out and the cursor says
                 // so. On a TV it is wrong: a disabled button leaves the traversal order, and while
                 // a search runs this was the only thing next to a field that is skipped, so the
                 // highlight had nowhere to be. Guarding it on BOTH would have quietly taken the
@@ -7667,7 +7668,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(24),
-          child: Text('Stel je TIDAL Client ID + Secret in via Instellingen (⚙) om TIDAL te gebruiken.',
+          child: Text('Stel je TIDAL Client ID + Secret in via Instellingen (âš™) om TIDAL te gebruiken.',
               textAlign: TextAlign.center, style: TextStyle(color: _muted)),
         ),
       );
@@ -7680,7 +7681,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 24),
               child: Text('Verbind je TIDAL-account om je muziek te doorzoeken.\n'
-                  'Je logt in op TIDAL zelf — DebridMusic ziet je wachtwoord niet.',
+                  'Je logt in op TIDAL zelf â€” DebridMusic ziet je wachtwoord niet.',
                   textAlign: TextAlign.center, style: TextStyle(color: _muted)),
             ),
             const SizedBox(height: 16),
@@ -7689,7 +7690,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
               icon: _tidalConnecting
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.link_rounded, size: 18),
-              label: Text(_tidalConnecting ? 'Bezig… (log in in je browser)' : 'Verbind TIDAL'),
+              label: Text(_tidalConnecting ? 'Bezigâ€¦ (log in in je browser)' : 'Verbind TIDAL'),
               onPressed: _tidalConnecting ? null : _connectTidal,
             ),
             const SizedBox(height: 6),
@@ -7707,7 +7708,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(24),
-          child: Text('Verbonden met TIDAL ✓  — zoek een nummer; de bronnen (torrent/Soulseek) verschijnen eronder.',
+          child: Text('Verbonden met TIDAL âœ“  â€” zoek een nummer; de bronnen (torrent/Soulseek) verschijnen eronder.',
               textAlign: TextAlign.center, style: TextStyle(color: _muted)),
         ),
       );
@@ -7776,7 +7777,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(24),
-          child: Text('Zoek een artiest, album of nummer — bronnen (torrent/Soulseek) verschijnen eronder.',
+          child: Text('Zoek een artiest, album of nummer â€” bronnen (torrent/Soulseek) verschijnen eronder.',
               textAlign: TextAlign.center, style: TextStyle(color: _muted)),
         ),
       );
@@ -7868,7 +7869,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
 
   Widget _browseHeader(String title, int count) => Padding(
         padding: const EdgeInsets.fromLTRB(24, 14, 24, 8),
-        child: Text('${title.toUpperCase()}  ·  $count',
+        child: Text('${title.toUpperCase()}  Â·  $count',
             style: const TextStyle(
                 color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
       );
@@ -7920,14 +7921,14 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       children: [
         if (_torrents.isNotEmpty || _slsk.isNotEmpty)
           _filterChipsRow(_filter, (f) => setState(() => _filter = f)),
-        if (torrents.isNotEmpty) _sourceHeader('Torrents · TorBox', torrents.length, _busy),
+        if (torrents.isNotEmpty) _sourceHeader('Torrents Â· TorBox', torrents.length, _busy),
         ...torrents.map((r) => _torrentTile(context, r)),
         if (_status == null || _slsk.isNotEmpty || _slskBusy)
           (soulseekReady
               ? _soulseekHeader(context, slsk, _slskBusy, slsk)
               : const Padding(
                   padding: EdgeInsets.fromLTRB(24, 16, 24, 6),
-                  child: Text('SOULSEEK · log in via Instellingen om P2P mee te zoeken',
+                  child: Text('SOULSEEK Â· log in via Instellingen om P2P mee te zoeken',
                       style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)))),
         ..._slskTiles(context, slsk),
       ],
@@ -7985,7 +7986,7 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
 
   void _download(TbFile f) {
     context.read<DownloadManager>().enqueue(widget.result, fileId: f.id);
-    _snack('“${f.label}” naar downloads');
+    _snack('â€œ${f.label}â€ naar downloads');
   }
 
   void _snack(String m) {
@@ -8021,8 +8022,8 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
                     const SizedBox(height: 16),
                     Text(
                         _prep > 0
-                            ? 'TorBox haalt de torrent op… ${(_prep * 100).round()}%'
-                            : 'Bron voorbereiden bij TorBox…',
+                            ? 'TorBox haalt de torrent opâ€¦ ${(_prep * 100).round()}%'
+                            : 'Bron voorbereiden bij TorBoxâ€¦',
                         style: const TextStyle(color: _muted, fontSize: 12.5)),
                     if (_prep > 0) ...[
                       const SizedBox(height: 10),
@@ -8061,7 +8062,7 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(f.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5)),
-                                Text('${_fmtBytes(f.size)}${f.isFlac ? " · FLAC" : ""}',
+                                Text('${_fmtBytes(f.size)}${f.isFlac ? " Â· FLAC" : ""}',
                                     style: const TextStyle(color: _muted, fontSize: 11.5)),
                               ],
                             ),
@@ -8103,11 +8104,11 @@ class BioText extends StatelessWidget {
   Widget build(BuildContext context) {
     // Capped where the long text actually lives, so artist bios and album blurbs both get it.
     // Align is load-bearing: a list hands its children a TIGHT width and a bare ConstrainedBox
-    // cannot shrink below that — without it the cap silently does nothing.
+    // cannot shrink below that â€” without it the cap silently does nothing.
     //
     // The Align sits OUTSIDE the Pressable, not inside it. Inside, the opaque hit test claimed the
     // Align's full row width, so on Windows a hand cursor appeared and a click landed hundreds of
-    // pixels to the right of any text — over empty background. The press target is the paragraph.
+    // pixels to the right of any text â€” over empty background. The press target is the paragraph.
     return Align(
       alignment: Alignment.topLeft,
       child: Pressable(
@@ -8149,7 +8150,7 @@ class BioText extends StatelessWidget {
 
 /// The banner at the top of the start page: the newest releases, one at a time, large.
 ///
-/// The cover doubles as the backdrop — blurred, darkened and bled to the edges — because an album
+/// The cover doubles as the backdrop â€” blurred, darkened and bled to the edges â€” because an album
 /// has no separate wide artwork the way a film has a still. Auto-advances, but stops the moment
 /// the pointer is on it so it can't slide away mid-read.
 class HeroCarousel extends StatefulWidget {
@@ -8206,7 +8207,7 @@ class _HeroCarouselState extends State<HeroCarousel> {
         child: SizedBox(
           // The banner lays a cover beside a title, a year and a button. On a phone that column is
           // narrow enough that the title takes two lines and the button fell one pixel past the
-          // bottom — so the banner is taller there, not shorter.
+          // bottom â€” so the banner is taller there, not shorter.
           height: isCompact(context) ? 300 : 260,
           child: Stack(
             children: [
@@ -8278,7 +8279,7 @@ class _HeroCarouselState extends State<HeroCarousel> {
     // So on a television the banner is not pressable and the button is. NOT ExcludeFocus, which was
     // the first attempt and was simply wrong: it excludes the whole subtree, so it took the
     // "Bekijken" button out of the highlight's path as well and left the entire carousel
-    // unreachable — the opposite of what the comment claimed.
+    // unreachable â€” the opposite of what the comment claimed.
     return Pressable(
       onPressed: isTv
           ? null
@@ -8309,7 +8310,7 @@ class _HeroCarouselState extends State<HeroCarousel> {
             ),
             Padding(
               // 28 a side plus a 168 cover plus a 24 gap is 248 of a phone's 411 points, and the
-              // 163 left over is not enough for the button beside it — "Bekijken" broke in half.
+              // 163 left over is not enough for the button beside it â€” "Bekijken" broke in half.
               padding: EdgeInsets.fromLTRB(
                   isCompact(context) ? 16 : 28, 24, isCompact(context) ? 16 : 28, 28),
               child: Row(
@@ -8374,8 +8375,8 @@ class _HeroCarouselState extends State<HeroCarousel> {
 /// A cinematic banner for an artist: wide backdrop, and the act's OWN wordmark rather than their
 /// name set in the app's typeface.
 ///
-/// The wordmark is the point. There is no way to render text in an artist's official lettering —
-/// those fonts aren't distributed — but the logo itself is an image of exactly that lettering, so
+/// The wordmark is the point. There is no way to render text in an artist's official lettering â€”
+/// those fonts aren't distributed â€” but the logo itself is an image of exactly that lettering, so
 /// showing it is the real thing instead of an imitation. Falls back to plain text for the acts
 /// that have no logo (about one in four).
 /// The artist's own photo, blurred, standing behind a WHOLE page rather than behind a banner.
@@ -8383,7 +8384,7 @@ class _HeroCarouselState extends State<HeroCarousel> {
 /// It does not scroll: the records and tracks move over a wash that stays put, so the page reads
 /// as one thing about one artist instead of a strip of atmosphere with a list bolted under it.
 /// The scrim is light at the top, where the portrait and wordmark are, and settles to near-solid
-/// below that — album titles and track rows have to stay readable over it.
+/// below that â€” album titles and track rows have to stay readable over it.
 class ArtistBackdrop extends StatefulWidget {
   final String name;
   final Uint8List? fallbackImage;
@@ -8488,7 +8489,7 @@ class ArtistHero extends StatefulWidget {
   final Uint8List? fallbackImage;
   final List<Widget> actions;
 
-  /// False when an [ArtistBackdrop] is already washing the whole page — the hero then contributes
+  /// False when an [ArtistBackdrop] is already washing the whole page â€” the hero then contributes
   /// only the portrait and the wordmark, and doesn't paint a second, differently-cropped copy.
   final bool ownBackdrop;
   const ArtistHero({
@@ -8526,7 +8527,7 @@ class _ArtistHeroState extends State<ArtistHero> {
   String? _loadedPortraitUrl, _loadedBackdropUrl;
 
   /// Re-fetch when the user picks a different photo. Without this the choice was saved and simply
-  /// not shown until you left the page and came back — a setting that appears to do nothing.
+  /// not shown until you left the page and came back â€” a setting that appears to do nothing.
   void _syncChoice() {
     final lib = context.watch<LibraryStore>();
     final p = lib.chosenArtistArt(widget.name, 'portrait');
@@ -8570,14 +8571,14 @@ class _ArtistHeroState extends State<ArtistHero> {
       // Room for a 270px portrait with the wordmark and buttons beside it. The backdrop is very
       // wide, so every extra pixel of height is another band of it that isn't cropped away.
       height: 400,
-      // A blur paints outside its child's bounds, and the overscan pushes it further still — without
+      // A blur paints outside its child's bounds, and the overscan pushes it further still â€” without
       // this the wash ran on down the page and the biography underneath was hard to read.
       child: ClipRect(
         child: Stack(
         fit: StackFit.expand,
         children: [
-          // Blurred on purpose. Every artist image any database has is 16:9 — fanart, widethumb,
-          // all of it — and a banner this wide can only show a quarter of one. Sharp, that quarter
+          // Blurred on purpose. Every artist image any database has is 16:9 â€” fanart, widethumb,
+          // all of it â€” and a banner this wide can only show a quarter of one. Sharp, that quarter
           // was a gamble: it framed Michael Jackson but gave Stromae a band of forehead, because his
           // photo is a close-up that no crop can survive. So the backdrop is atmosphere drawn from
           // the artist's own colours, and the portrait beside it is what you actually recognise.
@@ -8594,7 +8595,7 @@ class _ArtistHeroState extends State<ArtistHero> {
               ),
             ),
           // Dark enough at the bottom that the wordmark and buttons always read. Skipped when the
-          // page already carries the wash — a second gradient on top of it just muddies the top.
+          // page already carries the wash â€” a second gradient on top of it just muddies the top.
           if (widget.ownBackdrop)
             DecoratedBox(
               decoration: BoxDecoration(
@@ -8699,27 +8700,27 @@ class _ArtistHeroState extends State<ArtistHero> {
       style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w800, letterSpacing: -.5));
 }
 
-/// What this release IS: the official blurb plus year, genre, label and rating — the album
+/// What this release IS: the official blurb plus year, genre, label and rating â€” the album
 /// equivalent of a film's synopsis panel. Silent when nothing is known, so a page never shows
 /// an empty box.
 class AlbumInfoPanel extends StatefulWidget {
   final String artist, album;
 
-  /// How many tracks the library holds for this album — used to reject a Discogs pressing that
+  /// How many tracks the library holds for this album â€” used to reject a Discogs pressing that
   /// is really a single or a sampler filed under the same master.
   final int trackCount;
 
   /// Is [trackCount] de HELE plaat, of alleen wat de bibliotheek er toevallig van heeft?
   ///
   /// Dat verschil beslist of een uitgave mag afvallen omdat hij te LANG is. Alleen de bladerpagina
-  /// weet het zeker — die telt de tracklijst van precies deze uitgave. De albumpagina telt wat er op
+  /// weet het zeker â€” die telt de tracklijst van precies deze uitgave. De albumpagina telt wat er op
   /// schijf staat, en dat is routinematig een deel: vier nummers van Demon Days zijn nog steeds
   /// Demon Days, en een bovengrens op dat viertal zou elke echte persing van vijftien afwijzen. Dat
   /// is precies waarom [DiscogsService.edition] alleen op "te weinig" toetst.
   ///
-  /// Met een volledige tracklijst is de andere richting wél te vertrouwen, en die is nodig: Sia /
-  /// "Titans" is één nummer, en de tekstzoektocht bij Discogs leverde een soundtrack van Waxwork
-  /// Records met negenentwintig — jaartal, label, genres en credits van een plaat die niet van haar
+  /// Met een volledige tracklijst is de andere richting wÃ©l te vertrouwen, en die is nodig: Sia /
+  /// "Titans" is Ã©Ã©n nummer, en de tekstzoektocht bij Discogs leverde een soundtrack van Waxwork
+  /// Records met negenentwintig â€” jaartal, label, genres en credits van een plaat die niet van haar
   /// is, boven een tracklijst die dat wel is.
   final bool completeTracklist;
 
@@ -8729,7 +8730,7 @@ class AlbumInfoPanel extends StatefulWidget {
   /// Or the MusicBrainz one, when they pinned there instead.
   final String? pinnedMbid;
 
-  /// Images the user assigned by hand — the back cover shown here is one of them.
+  /// Images the user assigned by hand â€” the back cover shown here is one of them.
   final Map<String, String> roles;
   const AlbumInfoPanel(
       {super.key,
@@ -8753,7 +8754,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
   /// The pressing the user pinned on MusicBrainz, when that is where they pinned it.
   ///
   /// Without this the line below described a Discogs pressing nobody chose. Pick the French CD in
-  /// the gallery and it still read "Uitgave: cd · 88725453152 · Canada" — the pin was on disk and
+  /// the gallery and it still read "Uitgave: cd Â· 88725453152 Â· Canada" â€” the pin was on disk and
   /// correct, but this panel only ever asked Discogs, so the one sentence naming your copy of the
   /// record contradicted the choice you had just made.
   MbRelease? _mbEdition;
@@ -8768,8 +8769,8 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
   void didUpdateWidget(AlbumInfoPanel old) {
     super.didUpdateWidget(old);
     // The PIN counts as a change too. Without it, picking a different release of the same record
-    // changed nothing here: the name stays "Adele – 30", so this saw no difference and never
-    // refetched. The front cover did change, because that comes down a different path entirely —
+    // changed nothing here: the name stays "Adele â€“ 30", so this saw no difference and never
+    // refetched. The front cover did change, because that comes down a different path entirely â€”
     // which is exactly what it looked like from the outside.
     if (old.artist != widget.artist ||
         old.album != widget.album ||
@@ -8783,7 +8784,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     }
   }
 
-  /// Which load is current — see the same field on [_AlbumArtState].
+  /// Which load is current â€” see the same field on [_AlbumArtState].
   int _gen = 0;
 
   Future<void> _load() async {
@@ -8803,7 +8804,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     //
     // They used to be four awaits in a row, and the scans were last. Measured on ANTI: the pressing
     // line landed after thirteen seconds and the back and the disc were still not there after
-    // thirty, because their request had not been SENT yet — it was waiting behind TheAudioDB,
+    // thirty, because their request had not been SENT yet â€” it was waiting behind TheAudioDB,
     // MusicBrainz and the Discogs edition. Nothing in the artwork chain needs any of those three:
     // every argument it takes comes from the widget. See DiscogsService.edition's in-flight table
     // for why asking for the edition twice at once costs one fetch, not two.
@@ -8843,9 +8844,9 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     // Discogs knows what the record IS: which pressing, on whose label, under what catalogue number.
     unawaited(release.then((ed) {
       if (ed == null || !stillHere()) return;
-      // …maar alleen als het over DEZE plaat gaat. De zoektocht hierboven is op tekst en de laatste
+      // â€¦maar alleen als het over DEZE plaat gaat. De zoektocht hierboven is op tekst en de laatste
       // uitweg in `_editionFresh` geeft bewust de dichtstbijzijnde persing terug in plaats van
-      // niets — goed genoeg voor een album dat echt bestaat, fout voor een titel die Discogs niet
+      // niets â€” goed genoeg voor een album dat echt bestaat, fout voor een titel die Discogs niet
       // kent. Zie `completeTracklist` voor waarom alleen de bladerpagina dit mag toetsen.
       if (widget.completeTracklist &&
           widget.trackCount > 0 &&
@@ -8898,7 +8899,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     ];
     // The pressing itself, kept apart from the genre soup: this is the line that says WHICH copy
     // of the record the page is describing. The precedence rule lives in pressingFacts, where it
-    // can be held to it — see editions.dart.
+    // can be held to it â€” see editions.dart.
     final pressing = pressingFacts(
       pinned: mb == null
           ? null
@@ -8917,7 +8918,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
       // that long is genuinely hard to read back to the next line.
       //
       // Align first, and that is not decoration: a list hands its children a TIGHT width, and a
-      // bare ConstrainedBox cannot shrink below a tight constraint — the cap silently did nothing
+      // bare ConstrainedBox cannot shrink below a tight constraint â€” the cap silently did nothing
       // until this was added. Align loosens the constraint so the cap can take effect.
       child: Align(
         alignment: Alignment.topLeft,
@@ -8940,7 +8941,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
                 // a page and a way into the rest of the music that sounds like this.
                 child: Wrap(spacing: 5, runSpacing: 2, children: [
                   for (var i = 0; i < facts.length; i++) ...[
-                    if (i > 0) const Text('·', style: TextStyle(color: _muted, fontSize: 12.5)),
+                    if (i > 0) const Text('Â·', style: TextStyle(color: _muted, fontSize: 12.5)),
                     if (genres.contains(facts[i]))
                       InkWell(
                         onTap: () => Navigator.of(context)
@@ -8965,10 +8966,10 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
                 child: Text(
                     // Named, so it is always plain whether the page is describing the release YOU
                     // chose or the one the app picked for itself.
-                    // "Jouw" means the user pinned this, on EITHER catalogue — saying "Uitgave" after
+                    // "Jouw" means the user pinned this, on EITHER catalogue â€” saying "Uitgave" after
                     // they chose one reads as the app ignoring them, which is what it was doing.
                     '${widget.pinned != null || (widget.pinnedMbid ?? '').isNotEmpty ? "Jouw uitgave" : "Uitgave"}'
-                    ': ${pressing.join(' · ')}',
+                    ': ${pressing.join(' Â· ')}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: _muted, fontSize: 12)),
@@ -8976,7 +8977,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
             ]),
           ],
           // The back of the sleeve, next to the line describing the pressing it belongs to. Click
-          // to see it full size — the track list and the small print are the reason to look.
+          // to see it full size â€” the track list and the small print are the reason to look.
           if (_back != null) ...[
             const SizedBox(height: 10),
             InkWell(
@@ -8998,7 +8999,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
           ],
           if (text != null && text.isNotEmpty) ...[
             const SizedBox(height: 8),
-            BioText('${widget.artist} — ${widget.album}', text),
+            BioText('${widget.artist} â€” ${widget.album}', text),
           ],
         ],
         ),
@@ -9008,7 +9009,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
   }
 }
 
-// ── Stremio-style online browse: artist → albums → tracks → sources ──────────
+// â”€â”€ Stremio-style online browse: artist â†’ albums â†’ tracks â†’ sources â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class ArtistBrowsePage extends StatefulWidget {
   final CatalogArtist artist;
   const ArtistBrowsePage(this.artist, {super.key});
@@ -9021,8 +9022,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
 
   /// De drie bronnen APART, en pas samengevoegd bij het tekenen.
   ///
-  /// Eén gedeelde lijst zou betekenen dat de uitkomst afhangt van wie het eerst binnenkwam, en dan
-  /// verspringt de lijst terwijl je ernaar kijkt. Zo geeft elke hertekening hetzelfde antwoord — en is
+  /// EÃ©n gedeelde lijst zou betekenen dat de uitkomst afhangt van wie het eerst binnenkwam, en dan
+  /// verspringt de lijst terwijl je ernaar kijkt. Zo geeft elke hertekening hetzelfde antwoord â€” en is
   /// dat antwoord precies wat `mergeDiscography` in de test oplevert.
   List<DiscoRelease> _dz = const [], _mb = const [], _dg = const [];
   BronStatus? _dzStatus, _mbStatus, _dgStatus;
@@ -9033,19 +9034,19 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   /// De [discoKey]s van regels die in werkelijkheid andermans plaat zijn.
   ///
   /// Saber wees "Pavarotti & Friends for Cambodia and Tibet" aan tussen de albums van Enrique
-  /// Iglesias — een plaat van Luciano Pavarotti waar Enrique op één nummer meezingt. Komt na het
-  /// laden binnen, want het kost één verzoek per regel die alleen Deezer kent.
+  /// Iglesias â€” een plaat van Luciano Pavarotti waar Enrique op Ã©Ã©n nummer meezingt. Komt na het
+  /// laden binnen, want het kost Ã©Ã©n verzoek per regel die alleen Deezer kent.
   Set<String> _gasten = const {};
 
   DiscoSort _sort = DiscoSort.datum;
   String? _bio;
   bool _busy = true;
 
-  /// "Klinkt als" — overgenomen van de oude, tweede artiestpagina.
+  /// "Klinkt als" â€” overgenomen van de oude, tweede artiestpagina.
   ///
-  /// Die pagina kreeg je via Bibliotheek → Artiesten en had als enige dit blok én "Foto kiezen";
+  /// Die pagina kreeg je via Bibliotheek â†’ Artiesten en had als enige dit blok Ã©n "Foto kiezen";
   /// deze had als enige de biografie, MusicBrainz en Discogs. Welk scherm je zag hing dus af van
-  /// waar je vandaan kwam. Nu is er één pagina en staat alles erop.
+  /// waar je vandaan kwam. Nu is er Ã©Ã©n pagina en staat alles erop.
   List<CatalogArtist> _related = const [];
 
   @override
@@ -9066,10 +9067,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   ///
   /// Dit was een OF/OF: een MusicBrainz-artiest kreeg alleen MusicBrainz, alle anderen alleen Deezer.
   /// Daardoor miste je bij een gewone artiest elke regionale uitgave en elke compilatie die een
-  /// streamingcatalogus nooit heeft gekend, en bij een MusicBrainz-artiest élke hoes.
+  /// streamingcatalogus nooit heeft gekend, en bij een MusicBrainz-artiest Ã©lke hoes.
   ///
   /// Nu alle drie, in volgorde van snelheid: Deezer heeft geen rem en staat er meteen, MusicBrainz
-  /// kost één verzoek op een baan van 1100 ms, Discogs twee op een baan van zestig per minuut. De
+  /// kost Ã©Ã©n verzoek op een baan van 1100 ms, Discogs twee op een baan van zestig per minuut. De
   /// pagina is dus bruikbaar voordat de trage bronnen binnen zijn, en groeit daarna.
   Future<void> _load() async {
     final ref = widget.artist.ref;
@@ -9077,7 +9078,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     final svc = _disco;
 
     // De cache eerst, zodat een tweede bezoek niet leeg begint. Wat daarna binnenkomt overschrijft
-    // hem gewoon — samenvoegen is idempotent, dus dat kan geen kwaad.
+    // hem gewoon â€” samenvoegen is idempotent, dus dat kan geen kwaad.
     final bewaard = await svc.lees(naam);
     if (mounted && bewaard != null && bewaard.releases.isNotEmpty) {
       setState(() {
@@ -9095,7 +9096,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       });
     }
 
-    // Niet awaited op elkaar: de drie lopen naast elkaar en elke setState tekent wat er dán is.
+    // Niet awaited op elkaar: de drie lopen naast elkaar en elke setState tekent wat er dÃ¡n is.
     await Future.wait([
       pak(svc.vanDeezer(naam, bekendId: ref.isMb ? null : widget.artist.id),
           (u) { _dz = u.releases; _dzStatus = u.status; }),
@@ -9109,7 +9110,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     final alles = vulHoezenAan(mergeDiscography([_dz, _mb, _dg]), _hoezen);
     if (alles.isNotEmpty) unawaited(svc.schrijf(naam, alles));
 
-    // Pas NA de drie bronnen, want wat MusicBrainz of Discogs ook kent hoeft niet nagevraagd — die
+    // Pas NA de drie bronnen, want wat MusicBrainz of Discogs ook kent hoeft niet nagevraagd â€” die
     // twee laten een gastoptreden al vallen. En pas nadat de pagina staat: dit kost een verzoek per
     // regel die alleen Deezer kent, voor Enrique Iglesias zijn dat er 47.
     final gasten = await svc.gastoptredens(naam, alles);
@@ -9129,7 +9130,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   /// Verwante artiesten. Alleen Deezer kent die, en alleen op nummer.
   ///
   /// Een pagina die vanuit MusicBrainz of vanuit een kale naam is geopend draagt geen Deezer-id, dus
-  /// die wordt hier alsnog opgezocht — met dezelfde naamcontrole als de discografie, want een
+  /// die wordt hier alsnog opgezocht â€” met dezelfde naamcontrole als de discografie, want een
   /// naamgenoot levert een rij "klinkt als" op die nergens op slaat.
   Future<void> _loadRelated() async {
     try {
@@ -9156,12 +9157,12 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       ..sort((a, b) => (b.year ?? 0).compareTo(a.year ?? 0));
 
     // Samenvoegen gebeurt HIER, bij het tekenen, en niet in `_load`. Zo geeft elke hertekening
-    // hetzelfde antwoord ongeacht welke bron het eerst binnenkwam — zie de test daarop.
+    // hetzelfde antwoord ongeacht welke bron het eerst binnenkwam â€” zie de test daarop.
     //
     // Bezit langs dezelfde sleutel als de rest, want anders is "heb ik dit" een andere vraag dan "is
-    // dit dezelfde plaat" en vink je twee regels af voor één album.
+    // dit dezelfde plaat" en vink je twee regels af voor Ã©Ã©n album.
     final bezit = {for (final a in mine) discoKey(a.title)};
-    // Hoezen aanvullen vóór het sorteren, gastoptredens eruit: allebei op de samengevoegde lijst,
+    // Hoezen aanvullen vÃ³Ã³r het sorteren, gastoptredens eruit: allebei op de samengevoegde lijst,
     // zodat elke hertekening hetzelfde antwoord geeft ongeacht wat er wanneer binnenkwam.
     final alles = vulHoezenAan(mergeDiscography([_dz, _mb, _dg]), _hoezen)
         .where((r) => !_gasten.contains(r.key))
@@ -9174,7 +9175,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       body: ArtistBackdrop(
         name: widget.artist.name,
         // Same as the album browse page: this draws its own hero rather than an AppBar, so the
-        // status bar had nothing keeping it clear. The backdrop stays behind it — only the
+        // status bar had nothing keeping it clear. The backdrop stays behind it â€” only the
         // content is inset.
         child: SafeArea(
         bottom: false,
@@ -9187,11 +9188,11 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                   name: widget.artist.name,
                   ownBackdrop: false,
                   subtitle: _busy
-                      ? 'Albums laden…'
+                      ? 'Albums ladenâ€¦'
                       : [
                           if (mine.isNotEmpty) '${mine.length} in je bibliotheek',
                           '${rijen.length} albums',
-                        ].join(' · '),
+                        ].join(' Â· '),
                   actions: [
                     FilledButton.icon(
                       style: FilledButton.styleFrom(
@@ -9308,7 +9309,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                     return _RelatedArtistCard(
                       artist: r,
                       inLibrary: lib.hasArtist(r.name),
-                      // Eén bestemming, ook hier: iemand die je zelf hebt en iemand die je niet hebt
+                      // EÃ©n bestemming, ook hier: iemand die je zelf hebt en iemand die je niet hebt
                       // openen dezelfde pagina. Dat verschil was juist de reden dat er twee waren.
                       onTap: () => openArtist(
                           context, lib.hasArtist(r.name) ? lib.displayArtist(r.name) : r.name),
@@ -9350,10 +9351,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
         ),
       );
 
-  /// Wat de bronnen deden — alleen als er iets te melden valt.
+  /// Wat de bronnen deden â€” alleen als er iets te melden valt.
   ///
   /// "Geen token", "niet bereikbaar" en "niets gevonden" zien er op een lege lijst hetzelfde uit, en
-  /// zonder Discogs-token faalt daar élke aanroep stil. Dat verschil hoort op het scherm te staan.
+  /// zonder Discogs-token faalt daar Ã©lke aanroep stil. Dat verschil hoort op het scherm te staan.
   String? _bronRegel() {
     final meldingen = <String>[];
     if (_dgStatus == BronStatus.geenToken) meldingen.add('Discogs: geen token in Instellingen');
@@ -9366,23 +9367,23 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       'Discogs': _dgStatus,
     }.entries) {
       if (e.value == BronStatus.andereArtiest) {
-        meldingen.add('${e.key} kende alleen een naamgenoot — overgeslagen');
+        meldingen.add('${e.key} kende alleen een naamgenoot â€” overgeslagen');
       }
     }
-    return meldingen.isEmpty ? null : meldingen.join(' · ');
+    return meldingen.isEmpty ? null : meldingen.join(' Â· ');
   }
 
-  /// Eén plaat uit de samengevoegde discografie.
+  /// EÃ©n plaat uit de samengevoegde discografie.
   Widget _discoCard(DiscoRelease r, bool owned) {
     final al = r.toCatalogAlbum();
-    // Het merkje: welke catalogi deze plaat kennen. Alleen tonen als het iets toevoegt — bij één bron
+    // Het merkje: welke catalogi deze plaat kennen. Alleen tonen als het iets toevoegt â€” bij Ã©Ã©n bron
     // zegt het niets, en drie letters onder elke tegel is ruis.
     final merk = r.sources.length > 1
         ? r.sources.map((s) => switch (s) {
               DiscoSource.deezer => 'D',
               DiscoSource.musicbrainz => 'MB',
               DiscoSource.discogs => 'DG',
-            }).join('·')
+            }).join('Â·')
         : null;
     return Stack(children: [
       _albumCard(al, owned),
@@ -9406,7 +9407,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     final sub = [
       if (al.year != null) al.year!,
       if (al.isSingle) 'Single' else if (al.trackCount > 0) '${al.trackCount} nummers',
-    ].join(' · ');
+    ].join(' Â· ');
     return InkWell(
       onTap: () => Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => AlbumBrowsePage(widget.artist.name, al))),
@@ -9418,7 +9419,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
             child: LayoutBuilder(
               builder: (_, c) => Stack(children: [
                 _netCover(al.cover, size: c.maxWidth),
-                // Which of the discography you already hold — so the gap in the collection is the
+                // Which of the discography you already hold â€” so the gap in the collection is the
                 // thing you can see, rather than something to work out by comparing two lists.
                 if (owned)
                   Positioned(
@@ -9470,7 +9471,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   int? _expanded; // track index whose sources are shown; -1 = whole album
 
   // Soulseek sources for the WHOLE album, pre-loaded in the background with ONE search when the
-  // page opens — so tapping a track's download button is instant (no per-track search). Kept to
+  // page opens â€” so tapping a track's download button is instant (no per-track search). Kept to
   // one search per album-open on purpose (never a per-track burst) so we don't trip the login block.
   List<SoulseekFile> _albumSlsk = [];
   bool _slskBusy = false;
@@ -9484,7 +9485,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
 
   Future<void> _load() async {
     // Where this album came from decides who can describe it. The sign of the id used to say, and
-    // it had run out of values — it also meant two different things at once, since a negative id
+    // it had run out of values â€” it also meant two different things at once, since a negative id
     // was a Discogs RELEASE from search but a Discogs MASTER from a style page. Feeding a master
     // to the release endpoint is why an album opened from a style page had no tracklist at all.
     final ref = widget.album.ref;
@@ -9518,10 +9519,10 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     if (mounted) setState(() => _busy = false);
   }
 
-  /// A record, not a pressing — so resolve its best pressing first. Only a pressing has a
+  /// A record, not a pressing â€” so resolve its best pressing first. Only a pressing has a
   /// tracklist, and this is the single easiest way to ship a page that loads nothing.
   ///
-  /// Doorlopen tot er één persing nummers oplevert, in plaats van bij de best gerangschikte te
+  /// Doorlopen tot er Ã©Ã©n persing nummers oplevert, in plaats van bij de best gerangschikte te
   /// stoppen. GEMETEN op Sia / "Titans": de releasegroep heeft drie persingen, de best gerangschikte
   /// levert helemaal niets op en de twee erachter allebei het ene nummer dat erop staat. Stoppen bij
   /// de eerste gaf dus een lege pagina voor een plaat waarvan MusicBrainz de tracklijst gewoon heeft.
@@ -9538,7 +9539,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     _geenTracklijst();
   }
 
-  /// True zodra deze persing nummers opleverde. False betekent "vraag de volgende" — en dus
+  /// True zodra deze persing nummers opleverde. False betekent "vraag de volgende" â€” en dus
   /// nadrukkelijk NIET dat de pagina klaar is met laden.
   Future<bool> _loadMusicBrainzRelease(String mbid) async {
     if (!mounted) return false;
@@ -9573,7 +9574,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       final dg = DiscogsService(context.read<AppSettings>());
       final versions = DiscogsService.orderByPreference(await dg.versionsOf(masterId));
       // Zelfde reden als bij MusicBrainz: de best gerangschikte persing is niet gegarandeerd de
-      // persing die nummers oplevert, en dan is de pagina leeg terwijl de plaat wél beschreven is.
+      // persing die nummers oplevert, en dan is de pagina leeg terwijl de plaat wÃ©l beschreven is.
       // Drie, want elke persing kost een verzoek uit zestig per minuut.
       for (final v in versions.take(3)) {
         if (await _loadDiscogsRelease(v.id)) return;
@@ -9582,7 +9583,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     _geenTracklijst();
   }
 
-  /// True zodra deze persing nummers opleverde — zie [_loadMusicBrainzRelease].
+  /// True zodra deze persing nummers opleverde â€” zie [_loadMusicBrainzRelease].
   Future<bool> _loadDiscogsRelease(int releaseId) async {
     if (!mounted) return false;
     try {
@@ -9615,7 +9616,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// licensed: on *Off the Wall* it lists "Rock with You (Single Version)", while the record simply
   /// has "Rock with You". Discogs describes an actual pressing, so its tracklist is the album's.
   ///
-  /// Only swapped when the two agree about the SHAPE of the record — same number of tracks. A
+  /// Only swapped when the two agree about the SHAPE of the record â€” same number of tracks. A
   /// different count means a different edition, and renaming your tracks from the wrong one would
   /// be worse than leaving Deezer's names alone.
   Future<void> _preferOfficialTracklist() async {
@@ -9636,7 +9637,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         if (ts.length == _tracks.length) {
           titles = [for (final t in ts) t.title];
           secs = [for (final t in ts) t.seconds ?? 0];
-          // When the RECORD came out, not when this pressing did — a 2009 reissue of a 1996 album
+          // When the RECORD came out, not when this pressing did â€” a 2009 reissue of a 1996 album
           // is still a 1996 album. Kept because a download has to be stamped with it, and the
           // search hit this page was opened from carries no date at all.
           _officialYear = full?.albumYear ?? full?.year;
@@ -9712,14 +9713,14 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// What year the RECORD is from, according to whichever catalogue described it.
   ///
   /// Not from widget.album: a search hit carries no release date, so leaving it out meant DATE was
-  /// never written and each downloaded file kept whatever year its uploader had put in — one album
+  /// never written and each downloaded file kept whatever year its uploader had put in â€” one album
   /// came out of three peers stamped 1996, 1998 and 1999.
   int? _officialYear;
 
   /// This album, as the official release the sources should be judged against.
   ///
   /// The tracklist here has already been through [_preferOfficialTracklist], so it is MusicBrainz's
-  /// or Discogs's idea of the record rather than a streaming catalogue's — and emphatically rather
+  /// or Discogs's idea of the record rather than a streaming catalogue's â€” and emphatically rather
   /// than a Soulseek uploader's.
   ReleaseAuthority get _release => ReleaseAuthority(
         artist: widget.artistName,
@@ -9734,8 +9735,8 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
 
   /// This track's number on the record.
   ///
-  /// Deezer's album endpoint does not return `track_position` at all — it only exists on the
-  /// per-track endpoint — so every position here is 0 and the numbers on screen are really just row
+  /// Deezer's album endpoint does not return `track_position` at all â€” it only exists on the
+  /// per-track endpoint â€” so every position here is 0 and the numbers on screen are really just row
   /// indexes. Taking `position` at face value filed a download as "We've Got It Goin' On.flac"
   /// with no number in front of it. The list is in release order either way, so the index IS the
   /// number whenever the catalogue declines to say.
@@ -9744,9 +9745,9 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// What this track IS, from the page the user is looking at.
   ///
   /// This tracklist has already been through _preferOfficialTracklist, so its titles and order come
-  /// from MusicBrainz or Discogs rather than from a streaming catalogue — and certainly rather than
+  /// from MusicBrainz or Discogs rather than from a streaming catalogue â€” and certainly rather than
   /// from whichever peer serves the file. Soulseek offers this same song as "13 Anywhere for You",
-  /// "19. Backstreet Boys - Anywhere For You" and "…The Essential Backstreet Boys - 01 - …";
+  /// "19. Backstreet Boys - Anywhere For You" and "â€¦The Essential Backstreet Boys - 01 - â€¦";
   /// downloading any of them must still produce track 2 of this album.
   TrackTags _authorityFor(CatalogTrack t, int i) => TrackTags(
         title: t.title,
@@ -9758,12 +9759,12 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         year: _officialYear ?? int.tryParse(widget.album.year ?? ''),
       );
 
-  /// Every peer copy of this track worth trying — the preload's, plus a fresh targeted search.
+  /// Every peer copy of this track worth trying â€” the preload's, plus a fresh targeted search.
   ///
   /// The album-wide preload often lists a track's copies only from peers that are now offline, so
   /// a download built on it alone can report "no source" while a live copy plainly exists. A search
   /// aimed at this one track finds those live peers. Both sets are filtered to this exact title and
-  /// running time, so the pool can never fill with a different song from the same user — which is
+  /// running time, so the pool can never fill with a different song from the same user â€” which is
   /// what happened when the old path took every audio result the search returned and, after the
   /// query broadened to just the artist, would have downloaded the wrong song under this one's tags.
   Future<List<SoulseekFile>> _slskCandidatesForTrack(CatalogTrack t) async {
@@ -9788,25 +9789,25 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     final dm = context.read<DownloadManager>();
     final soulseek = context.read<SoulseekService>();
     if (_owned(t) != null) {
-      _srcToast(context, '“${t.title}” heb je al — niet opnieuw gedownload.');
+      _srcToast(context, 'â€œ${t.title}â€ heb je al â€” niet opnieuw gedownload.');
       return;
     }
     if (!soulseek.available) {
       _srcToast(context, 'Stel je Soulseek-login in (Instellingen).');
       return;
     }
-    if (mounted) _srcToast(context, 'Bron zoeken voor “${t.title}”…');
+    if (mounted) _srcToast(context, 'Bron zoeken voor â€œ${t.title}â€â€¦');
     final cands = await _slskCandidatesForTrack(t);
     if (!mounted) return;
     if (cands.isEmpty) {
-      _srcToast(context, 'Geen Soulseek-bron gevonden voor “${t.title}”.');
+      _srcToast(context, 'Geen Soulseek-bron gevonden voor â€œ${t.title}â€.');
       return;
     }
     try {
       final started = await dm.enqueueSoulseekBest(cands,
           key: 'alb:${widget.album.ref.keyPart}:$i', authority: _authorityFor(t, i));
       if (mounted) {
-        _srcToast(context, started ? '“${t.title}” via Soulseek…' : '“${t.title}” loopt al — zie Mijn downloads.');
+        _srcToast(context, started ? 'â€œ${t.title}â€ via Soulseekâ€¦' : 'â€œ${t.title}â€ loopt al â€” zie Mijn downloads.');
       }
     } catch (e) {
       if (mounted) _srcToast(context, 'Download mislukt: $e');
@@ -9820,7 +9821,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     final al = widget.album;
     return Scaffold(
       backgroundColor: _bg,
-      // Its own header rather than an AppBar, so nothing was adding the status bar's height —
+      // Its own header rather than an AppBar, so nothing was adding the status bar's height â€”
       // the cover and the title were drawn UNDER the clock and the wifi icons. The album page
       // escaped this only because a SliverAppBar puts that inset in by itself.
       body: SafeArea(
@@ -9853,8 +9854,8 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                                 style: const TextStyle(color: _muted, fontSize: 13))),
                         Flexible(
                           child: Text(
-                              '${al.year != null ? " · ${al.year}" : ""}'
-                              '${_tracks.isNotEmpty ? " · ${_tracks.length} nummers" : ""}',
+                              '${al.year != null ? " Â· ${al.year}" : ""}'
+                              '${_tracks.isNotEmpty ? " Â· ${_tracks.length} nummers" : ""}',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(color: _muted, fontSize: 13)),
@@ -9880,11 +9881,11 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
             ),
           // Geen beschrijving bij een plaat die deze pagina niet heeft kunnen identificeren.
           //
-          // Deze twee zoeken op TEKST — artiest plus titel — terwijl de tracklijst op verwijzing
+          // Deze twee zoeken op TEKST â€” artiest plus titel â€” terwijl de tracklijst op verwijzing
           // zoekt. Bij Sia / "Titans" leverde de verwijzing niets en de tekstzoektocht een
           // soundtrack van Waxwork Records: je kreeg een lege tracklijst met daarboven het jaartal,
           // het label en de filmcomponisten van een plaat die niet van haar is. Liever niets dan
-          // het verkeerde — dat was de klacht.
+          // het verkeerde â€” dat was de klacht.
           if (!_busy && _tracks.isNotEmpty) ...[
             AlbumInfoPanel(
                 artist: widget.artistName,
@@ -9892,7 +9893,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                 // Zonder dit stond de vormcontrole UIT: DiscogsService.edition weegt alleen op
                 // aantal als expectedTracks > 0, en deze pagina gaf altijd nul door.
                 trackCount: _tracks.length,
-                // En dit aantal is de HELE plaat — het is de tracklijst die hieronder staat, niet
+                // En dit aantal is de HELE plaat â€” het is de tracklijst die hieronder staat, niet
                 // wat er van op schijf staat. Alleen daarom mag een te lange uitgave hier afvallen.
                 completeTracklist: true),
             CreditsPanel(
@@ -9930,7 +9931,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                     width: 26,
                     child: Text('${_numberOf(t, i)}',
                         style: const TextStyle(color: _muted, fontSize: 13))),
-                // Which tracks of this record you already have — the gap in the album, at a glance.
+                // Which tracks of this record you already have â€” the gap in the album, at a glance.
                 Builder(builder: (context) {
                   final have = context.watch<LibraryStore>().ownedTrack(widget.artistName, t.title) != null;
                   return SizedBox(
@@ -9948,7 +9949,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                 if (soulseekReady && srcCount > 0)
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
-                    child: Text('$srcCount ⌄',
+                    child: Text('$srcCount âŒ„',
                         style: const TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
                   )
                 else if (soulseekReady && _slskBusy)
@@ -9990,12 +9991,12 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   }
 }
 
-// ── Settings dialog ──────────────────────────────────────────────────────────
+// â”€â”€ Settings dialog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 /// Which build is this, and where is it running from?
 ///
 /// Read from the RUNNING executable rather than a constant in the source: a hand-maintained
 /// number drifts the moment someone forgets to bump it, and the whole point here is to stop
-/// guessing. The install path is shown for the same reason — a second copy left behind
+/// guessing. The install path is shown for the same reason â€” a second copy left behind
 /// elsewhere on disk looks identical until you can see which one you actually opened.
 class _AboutSection extends StatefulWidget {
   const _AboutSection();
@@ -10005,7 +10006,7 @@ class _AboutSection extends StatefulWidget {
 }
 
 class _AboutSectionState extends State<_AboutSection> {
-  String _version = '…';
+  String _version = 'â€¦';
   String _path = '';
 
   @override
@@ -10050,7 +10051,7 @@ class _AboutSectionState extends State<_AboutSection> {
             IconButton(
               icon: const Icon(Icons.copy_rounded, size: 15),
               color: _muted,
-              tooltip: 'Versie kopiëren',
+              tooltip: 'Versie kopiÃ«ren',
               onPressed: () {
                 Clipboard.setData(ClipboardData(text: 'DebridMusic $_version'));
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -10075,7 +10076,7 @@ class _AboutSectionState extends State<_AboutSection> {
 /// Sharing this library with the Mac, the iPad and the Shield.
 ///
 /// The address and the token are the whole pairing story, so they are shown plainly and can be
-/// copied — and offered as a QR code, because typing a 32-character token on a TV remote is not
+/// copied â€” and offered as a QR code, because typing a 32-character token on a TV remote is not
 /// something anyone should be asked to do.
 class _SharingSection extends StatefulWidget {
   const _SharingSection();
@@ -10191,7 +10192,7 @@ class _SharingSectionState extends State<_SharingSection> {
               cloud.lastError != null
                   ? 'Deze pc kon zich niet aanmelden: ${cloud.lastError}'
                   : 'Deze pc meldt zich aan onder dit account. Log op je Mac, iPad of Shield in met '
-                      'hetzelfde account — dan vinden ze hem zonder code.',
+                      'hetzelfde account â€” dan vinden ze hem zonder code.',
               style: TextStyle(
                   color: cloud.lastError != null ? const Color(0xFFFF6B6B) : _muted,
                   fontSize: 11.5,
@@ -10226,7 +10227,7 @@ class _SharingSectionState extends State<_SharingSection> {
           title,
           const SizedBox(height: 4),
           const Text(
-            'Log in en je Mac, iPad en Shield vinden deze pc zonder code — ook op een netwerk '
+            'Log in en je Mac, iPad en Shield vinden deze pc zonder code â€” ook op een netwerk '
             'dat automatisch zoeken blokkeert. Begin hier: een apparaat kan pas verbinden als '
             'deze pc onder het account bekend is.',
             style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
@@ -10276,7 +10277,7 @@ class _SharingSectionState extends State<_SharingSection> {
                 style: FilledButton.styleFrom(backgroundColor: _accent),
                 onPressed: _cloudBusy ? null : _cloudSubmit,
                 child: Text(_cloudBusy
-                    ? 'Bezig…'
+                    ? 'Bezigâ€¦'
                     : (_cloudRegister ? 'Account aanmaken' : 'Inloggen')),
               ),
               const SizedBox(width: 8),
@@ -10332,7 +10333,7 @@ class _SharingSectionState extends State<_SharingSection> {
                   // "47.820" by whatever the device's locale thinks a thousands separator is.
                   endpoint == null
                       ? ''
-                      : '${endpoint.baseUrl.host}:${endpoint.baseUrl.port} · '
+                      : '${endpoint.baseUrl.host}:${endpoint.baseUrl.port} Â· '
                           '${session.library.tracks.length} nummers',
                   style: const TextStyle(color: _muted, fontSize: 12),
                 ),
@@ -10417,7 +10418,7 @@ class _SharingSectionState extends State<_SharingSection> {
           ],
         ),
         const Text(
-          'Zet dit aan en je Mac, iPad en Shield zien dezelfde bibliotheek — '
+          'Zet dit aan en je Mac, iPad en Shield zien dezelfde bibliotheek â€” '
           'inclusief je eigen covers en persingen.',
           style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
         ),
@@ -10441,8 +10442,8 @@ class _SharingSectionState extends State<_SharingSection> {
           ],
         ),
         const Text(
-          'Deze pc zoekt van elke plaat de persing en de officiële tracklijst op vóórdat je hem '
-          'opent, zodat een album nooit meer laat wachten. Eén keer per plaat, en elk toestel in '
+          'Deze pc zoekt van elke plaat de persing en de officiÃ«le tracklijst op vÃ³Ã³rdat je hem '
+          'opent, zodat een album nooit meer laat wachten. EÃ©n keer per plaat, en elk toestel in '
           'huis heeft er wat aan. Hij schrijft bij elk album een klein bestandje in die albummap, '
           'zodat je metadata meeverhuist met je muziek.',
           style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
@@ -10452,7 +10453,7 @@ class _SharingSectionState extends State<_SharingSection> {
           if (sharing.error != null)
             Text(sharing.error!, style: const TextStyle(color: Color(0xFFFF6B6B), fontSize: 12))
           else if (!sharing.running)
-            const Text('Starten…', style: TextStyle(color: _muted, fontSize: 12))
+            const Text('Startenâ€¦', style: TextStyle(color: _muted, fontSize: 12))
           else ...[
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -10484,7 +10485,7 @@ class _SharingSectionState extends State<_SharingSection> {
                         children: [
                           Flexible(
                             child: Text(
-                              _showToken ? sharing.token : '•' * 16,
+                              _showToken ? sharing.token : 'â€¢' * 16,
                               style: const TextStyle(fontSize: 13, fontFamily: 'monospace'),
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -10499,7 +10500,7 @@ class _SharingSectionState extends State<_SharingSection> {
                           IconButton(
                             icon: const Icon(Icons.copy_rounded, size: 15),
                             color: _muted,
-                            tooltip: 'Code kopiëren',
+                            tooltip: 'Code kopiÃ«ren',
                             onPressed: () => _copy(sharing.token, 'Toegangscode'),
                           ),
                         ],
@@ -10507,7 +10508,7 @@ class _SharingSectionState extends State<_SharingSection> {
                       Text(
                         sharing.discoverable
                             ? 'Je apparaten vinden deze pc vanzelf.'
-                            : 'Automatisch vinden lukt niet — vul het adres hierboven met de hand in.',
+                            : 'Automatisch vinden lukt niet â€” vul het adres hierboven met de hand in.',
                         style: const TextStyle(color: _muted, fontSize: 11, height: 1.35),
                       ),
                     ],
@@ -10725,14 +10726,14 @@ class _SettingsDialogState extends State<SettingsDialog> {
     if (!mounted) return;
     setState(() => _dupeBusy = false);
     if (paren.isEmpty && !Fingerprinter().available) {
-      setState(() => _dupeResult = 'fpcalc ontbreekt — herinstalleer de app om dit te gebruiken.');
+      setState(() => _dupeResult = 'fpcalc ontbreekt â€” herinstalleer de app om dit te gebruiken.');
       return;
     }
     final done = await showDialog<bool>(
         context: context, builder: (_) => SoundDuplicatesDialog(pairs: paren));
     if (!mounted) return;
     setState(() => _dupeResult = done == true
-        ? 'Opgeruimd — kijk in $dupeFolder als je iets terug wil.'
+        ? 'Opgeruimd â€” kijk in $dupeFolder als je iets terug wil.'
         : '${paren.length} ${paren.length == 1 ? 'paar' : 'paren'} gevonden');
   }
   bool _tidying = false;
@@ -10742,7 +10743,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
   /// One focus node per field, made on demand by [_field].
   ///
   /// Eight text fields on one screen, and on a television every one of them opens the leanback
-  /// keyboard the moment it takes focus — after which the keyboard owns all four arrows and the
+  /// keyboard the moment it takes focus â€” after which the keyboard owns all four arrows and the
   /// only way out is BACK, which closes the settings and discards everything typed. So they are
   /// skipped when arrowing and entered on purpose, and the nodes have to be kept somewhere.
   final _fieldFocus = <TextEditingController, FocusNode>{};
@@ -10776,7 +10777,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       final root = '${lib.rootPath}${Platform.pathSeparator}DebridMusic Downloads';
       final report = await tidyDownloads(root);
       await lib.scan();
-      if (mounted) setState(() => _tidyResult = 'Klaar — $report');
+      if (mounted) setState(() => _tidyResult = 'Klaar â€” $report');
     } catch (e) {
       if (mounted) setState(() => _tidyResult = 'Opruimen mislukt: $e');
     } finally {
@@ -10802,7 +10803,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       ..rutrackerCookie = real.rutrackerCookie; // RuTracker validity depends on the live session
     // Soulseek deliberately uses the app's REAL service, not a probe copy: a probe would have its
     // own client, so testing the connection would open a SECOND login on an account that allows
-    // one — kicking the live session and provoking a re-login. It also wouldn't see the app's
+    // one â€” kicking the live session and provoking a re-login. It also wouldn't see the app's
     // back-off, so "Test" could keep hammering an account that is already blocked.
     final checker = ConnectionChecker(probe, TorBox(() => probe.torboxToken),
         context.read<SoulseekService>(), RuTrackerService(probe));
@@ -10932,7 +10933,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       case ConnState.checking:
         icon = Icons.hourglass_top_rounded;
         color = _muted;
-        text = 'Testen…';
+        text = 'Testenâ€¦';
         break;
       default:
         icon = Icons.circle_outlined;
@@ -10994,7 +10995,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
   }
 
   /// The node for this field, made once and kept. Keyed by the controller because that is what
-  /// [_field] is handed — there is no id, and eight call sites should not have to invent one.
+  /// [_field] is handed â€” there is no id, and eight call sites should not have to invent one.
   FocusNode _focusFor(TextEditingController c) => _fieldFocus.putIfAbsent(
         c,
         () => FocusNode(skipTraversal: isTv),
@@ -11023,7 +11024,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
               style: const TextStyle(color: _muted, fontSize: 13),
             ),
             // The one thing that must not stay quiet. When settings.json cannot be read, the app
-            // now refuses to save over it — which is right, and which without a word here would
+            // now refuses to save over it â€” which is right, and which without a word here would
             // simply look like "my settings do not stick" with no reason given anywhere.
             if (context.watch<AppSettings>().loadFailed) ...[
               const SizedBox(height: 12),
@@ -11062,8 +11063,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     const Padding(
                       padding: EdgeInsets.only(bottom: 8),
                       child: Text(
-                          'Zonder open poort ziet de app alleen peers die zelf bereikbaar zijn — dat is waarom '
-                          'de native app soms méér vindt. Vul dezelfde poort in die SoulseekQt gebruikt (die '
+                          'Zonder open poort ziet de app alleen peers die zelf bereikbaar zijn â€” dat is waarom '
+                          'de native app soms mÃ©Ã©r vindt. Vul dezelfde poort in die SoulseekQt gebruikt (die '
                           'staat al doorgestuurd in je router) en zet er een Windows Firewall-uitzondering op.',
                           style: TextStyle(color: _muted, fontSize: 11.5)),
                     ),
@@ -11093,7 +11094,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               ? const SizedBox(
                                   width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
                               : const Icon(Icons.wifi_tethering_rounded, size: 16),
-                          label: Text(_testing ? 'Testen…' : 'Test verbindingen'),
+                          label: Text(_testing ? 'Testenâ€¦' : 'Test verbindingen'),
                         ),
                       ],
                     ),
@@ -11105,7 +11106,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         trailing: TextButton(
                           onPressed: _rtBusy ? null : _rtLogin,
                           style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8)),
-                          child: Text(_rtBusy ? 'Bezig…' : 'Inloggen', style: const TextStyle(fontSize: 12.5)),
+                          child: Text(_rtBusy ? 'Bezigâ€¦' : 'Inloggen', style: const TextStyle(fontSize: 12.5)),
                         )),
                     const SizedBox(height: 10),
                     const Divider(color: _line, height: 1),
@@ -11122,7 +11123,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               Text(
                                   'Sorteert je downloads in Albums / Singles / Compilaties per artiest en '
                                   'gooit dubbele nummers weg (beste kwaliteit blijft). Raakt alleen de map '
-                                  '“DebridMusic Downloads” aan — je eigen collectie blijft ongemoeid.',
+                                  'â€œDebridMusic Downloadsâ€ aan â€” je eigen collectie blijft ongemoeid.',
                                   style: TextStyle(color: _muted, fontSize: 11.5)),
                             ],
                           ),
@@ -11135,7 +11136,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               ? const SizedBox(
                                   width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
                               : const Icon(Icons.cleaning_services_rounded, size: 16),
-                          label: Text(_tidying ? 'Bezig…' : 'Opruimen'),
+                          label: Text(_tidying ? 'Bezigâ€¦' : 'Opruimen'),
                         ),
                       ],
                     ),
@@ -11145,7 +11146,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         child: Text(_tidyResult!, style: TextStyle(color: _accent2, fontSize: 12)),
                       ),
                     // Its own entry, next to the tidy-up rather than on an album page, because the
-                    // duplicates that cost the most disk do not share a record — one copy loose in
+                    // duplicates that cost the most disk do not share a record â€” one copy loose in
                     // the root and one filed away, or the same download in two Soulseek folders.
                     if (!context.read<LibraryStore>().isRemote) ...[
                       const SizedBox(height: 14),
@@ -11160,8 +11161,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 const SizedBox(height: 2),
                                 Text(
                                     _dupeDone > 0 && _dupeBusy
-                                        ? 'Luisteren… $_dupeDone van $_dupeTotal'
-                                        : 'Vergelijkt hoe je bestanden KLINKEN, niet hoe ze heten — zo komen '
+                                        ? 'Luisterenâ€¦ $_dupeDone van $_dupeTotal'
+                                        : 'Vergelijkt hoe je bestanden KLINKEN, niet hoe ze heten â€” zo komen '
                                             'twee rips van hetzelfde nummer boven, ook onder een andere titel of '
                                             'in een andere map. De eerste keer duurt dat ongeveer een minuut; '
                                             'daarna is het onmiddellijk.',
@@ -11180,7 +11181,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     height: 14,
                                     child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
                                 : const Icon(Icons.graphic_eq_rounded, size: 16),
-                            label: Text(_dupeBusy ? 'Bezig…' : 'Zoeken'),
+                            label: Text(_dupeBusy ? 'Bezigâ€¦' : 'Zoeken'),
                           ),
                         ],
                       ),
@@ -11191,7 +11192,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               Text(_dupeResult!, style: TextStyle(color: _accent2, fontSize: 12)),
                         ),
                     ],
-                    // Tracks removed "from library only" are still on disk — offer them back.
+                    // Tracks removed "from library only" are still on disk â€” offer them back.
                     Consumer<LibraryStore>(
                       builder: (_, lib, __) => lib.hiddenCount == 0
                           ? const SizedBox.shrink()
@@ -11277,14 +11278,14 @@ String _fmt(Duration? d) {
 
 /// The album sleeve, with the disc sliding out from behind it while the record plays.
 ///
-/// Both scans come from Discogs, which does not label them — see artwork.dart for how the disc is
+/// Both scans come from Discogs, which does not label them â€” see artwork.dart for how the disc is
 /// told apart from a back cover. When there is no disc scan the sleeve simply sits there, which is
 /// what every album looked like before.
 class AlbumArt extends StatefulWidget {
   final String artist, album;
   final Uint8List? fallback;
 
-  /// A sleeve the user picked by hand. It outranks anything Discogs offers — an automatic source
+  /// A sleeve the user picked by hand. It outranks anything Discogs offers â€” an automatic source
   /// correcting a deliberate choice is the app arguing with its owner.
   final Uint8List? chosen;
   final double size;
@@ -11297,10 +11298,10 @@ class AlbumArt extends StatefulWidget {
   final int trackCount;
   final bool playing;
 
-  /// The Discogs release the user pinned, if any — see LibraryStore.pinnedRelease.
+  /// The Discogs release the user pinned, if any â€” see LibraryStore.pinnedRelease.
   final int? pinned;
 
-  /// Or the MusicBrainz one — see LibraryStore.pinnedMbid.
+  /// Or the MusicBrainz one â€” see LibraryStore.pinnedMbid.
   final String? pinnedMbid;
 
   /// The sleeve this widget ended up drawing, handed back as it resolves.
@@ -11309,7 +11310,7 @@ class AlbumArt extends StatefulWidget {
   /// image as the thumbnail, and only this widget knows which pressing's scan won.
   final ValueChanged<Uint8List?>? onFront;
 
-  /// Images the user assigned by hand — see LibraryStore.albumArtRoles. They outrank every guess.
+  /// Images the user assigned by hand â€” see LibraryStore.albumArtRoles. They outrank every guess.
   final Map<String, String> roles;
   const AlbumArt({
     super.key,
@@ -11346,7 +11347,7 @@ const _discRest = 0.26;
 ///
 /// Still one clip, so the [RepaintBoundary] above it does its job exactly as before: the mask is
 /// rasterised once and each frame only turns an existing layer. Doing this with a second widget
-/// stacked on top — a hole painted in the background colour — would have looked right on the album
+/// stacked on top â€” a hole painted in the background colour â€” would have looked right on the album
 /// page and wrong everywhere the background is not that colour.
 class _DiscClipper extends CustomClipper<Path> {
   const _DiscClipper();
@@ -11376,9 +11377,16 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     duration: const Duration(milliseconds: 750),
     reverseDuration: const Duration(milliseconds: 450),
   );
-  // Roughly a third of an RPM on screen — enough to read as turning, slow enough not to nag.
+  // Roughly a third of an RPM on screen â€” enough to read as turning, slow enough not to nag.
   late final AnimationController _spin =
       AnimationController(vsync: this, duration: const Duration(seconds: 9));
+
+  /// Wat het scherm haalt zolang de plaat draait.
+  ///
+  /// Apart bestand, niet ui.log: die schrijft per hoes een paar regels en zou hierdoor binnen een
+  /// minuut zijn eigen kop afkappen. En niet weggelaten na de reparatie â€” dit is het enige punt waar
+  /// "de plaat hapert" van "de plaat is traag" te onderscheiden valt, en dat komt terug.
+  late final FpsProbe _fps = FpsProbe(WarmLog('$appDir${Platform.pathSeparator}fps.log'));
 
   @override
   void initState() {
@@ -11403,7 +11411,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
           old.identity != widget.identity) {
         setState(() => _art = null);
       }
-      // Otherwise the old scans stay up until the new ones arrive — renaming a record does not
+      // Otherwise the old scans stay up until the new ones arrive â€” renaming a record does not
       // change its sleeve. Clearing here left a gap the length of a network round trip, in which
       // the disc vanished and the sleeve fell back to the file's own cover, which read as the app
       // losing the choice that was just made.
@@ -11415,17 +11423,23 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
   void _sync() {
     if (widget.playing) {
       _slide.forward();
-      if (!_spin.isAnimating) _spin.repeat();
+      if (!_spin.isAnimating) {
+        _spin.repeat();
+        // Alleen meten zolang er iets te meten valt. Een stilstaande plaat vraagt geen frames aan,
+        // dus dan zou de teller alleen ruis van de rest van het scherm optellen.
+        _fps.start('draaiende cd ${widget.size.round()}px');
+      }
     } else {
       _slide.reverse();
       // Left where it stopped rather than snapped back to zero: a record that stops turning
       // stops where it is.
       _spin.stop();
+      _fps.stop();
     }
   }
 
   /// Which load is the current one. A pin can be changed twice before the first fetch returns, and
-  /// without this the slower answer would land last and win — showing scans nobody asked for.
+  /// without this the slower answer would land last and win â€” showing scans nobody asked for.
   int _gen = 0;
 
   Future<void> _load() async {
@@ -11464,6 +11478,9 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    // VÃ³Ã³r de controllers: de haak hangt aan de SchedulerBinding en die leeft door als deze widget
+    // weg is. Blijft hij hangen, dan telt hij het hele scherm mee en klopt de volgende meting niet.
+    _fps.stop();
     _slide.dispose();
     _spin.dispose();
     super.dispose();
@@ -11474,11 +11491,11 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     final s = widget.size;
     final front = widget.chosen ?? _art?.front ?? widget.fallback;
     final disc = _art?.disc;
-    // How far the disc comes out. Started at .42 — enough to see it, not enough to enjoy it — so
+    // How far the disc comes out. Started at .42 â€” enough to see it, not enough to enjoy it â€” so
     // it now clears the sleeve by a good margin while the label still sits behind the card.
     //
     // Less of it in portrait on a phone. The travel is reserved WIDTH, so on 411 points every
-    // percent of it is taken off the sleeve and off whatever sits beside it — and on the player
+    // percent of it is taken off the sleeve and off whatever sits beside it â€” and on the player
     // screen that is the row of transport buttons, which has to be there. Sideways and on the TV
     // there is width to spare, so the disc gets its full stride.
     final travel = s * discTravelFactor(context);
@@ -11495,8 +11512,8 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
 
     // Built once and handed to the animation as a child, so none of this is rebuilt per frame.
     //
-    // The order is load-bearing. ClipOval forces a saveLayer — Flutter renders into an offscreen
-    // buffer, masks it, then composites — which is the most expensive thing in the raster pipeline.
+    // The order is load-bearing. ClipOval forces a saveLayer â€” Flutter renders into an offscreen
+    // buffer, masks it, then composites â€” which is the most expensive thing in the raster pipeline.
     // Written the obvious way, that saveLayer sat INSIDE the rotation, so a ~660px disc was masked
     // and re-composited sixty times a second. That is the stutter, and it was mine, not the Shield's.
     //
@@ -11533,7 +11550,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
               // Translate rather than reposition: a Positioned inside a builder would relayout the
               // Stack every frame, where a transform only moves an already-painted layer.
               // A resting sliver, always. Standing still the disc used to sit entirely behind the
-              // sleeve, so an album page you were not playing showed no disc at all — and somebody
+              // sleeve, so an album page you were not playing showed no disc at all â€” and somebody
               // who had just chosen a disc scan had no way to look at it without pressing play.
               // The reveal is still the reveal: it comes the rest of the way out and starts turning.
               builder: (context, child) => Transform.translate(
@@ -11556,7 +11573,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
   }
 }
 
-/// Pick which pressing describes an album — showing, before you choose, what each one carries.
+/// Pick which pressing describes an album â€” showing, before you choose, what each one carries.
 ///
 /// The metadata editor could already pin a release, but it listed them as bare names and said
 /// nothing about their artwork. Choosing blind meant finding out afterwards that a pressing had no
@@ -11572,7 +11589,7 @@ class ReleaseGallery extends StatefulWidget {
 /// The three things a scan can be, and what to call each on screen.
 ///
 /// One list, read by the gallery and by the assign dialog: two copies would drift, and the role
-/// KEYS are what album_art_roles.json stores — a label changed in one place and not the other would
+/// KEYS are what album_art_roles.json stores â€” a label changed in one place and not the other would
 /// write a role nothing reads.
 const artRoles = [('front', 'hoes'), ('back', 'achter'), ('disc', 'cd')];
 
@@ -11591,7 +11608,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   /// so switching filters never costs another request.
   String _filter = 'Alles';
 
-  /// role → the scan picked for it, possibly from a DIFFERENT pressing than the others.
+  /// role â†’ the scan picked for it, possibly from a DIFFERENT pressing than the others.
   ///
   /// A record you own rarely matches one catalogue entry exactly: the sleeve is best photographed on
   /// the digital release, the tray inlay only exists on the CD, and the disc scan on a third. Held
@@ -11654,7 +11671,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     _load();
   }
 
-  /// MusicBrainz first, Discogs appended — which is the order the user asked for and also the
+  /// MusicBrainz first, Discogs appended â€” which is the order the user asked for and also the
   /// order the two can deliver in. One release-group browse names every pressing at once, so the
   /// dialog fills in about two seconds; Discogs needs a request per pressing and takes fifteen.
   ///
@@ -11668,7 +11685,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
 
     try {
       // Shown as it fills in: the pressings the moment they are named, then their scans as each
-      // arrives. Waiting for the whole answer is what made this dialog feel broken — the rows were
+      // arrives. Waiting for the whole answer is what made this dialog feel broken â€” the rows were
       // ready seconds before the artwork the spinner was actually waiting for.
       final mb = await context.read<MusicBrainzService>().editionChoices(
           widget.album.artist, widget.album.title,
@@ -11699,7 +11716,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     }
 
     try {
-      // The rows appear as soon as the versions listing lands — one request for a whole master.
+      // The rows appear as soon as the versions listing lands â€” one request for a whole master.
       // Their scans are fetched per row, as each is scrolled into view: see _wantDetail.
       await DiscogsService(settings).releaseChoices(widget.album.artist, widget.album.title,
           pinned: pinnedDg, onPartial: merge);
@@ -11720,7 +11737,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
 
   /// This row is on screen, so now it is worth knowing what it holds.
   ///
-  /// Called from the builder, which Flutter only runs for visible rows — that is the whole saving.
+  /// Called from the builder, which Flutter only runs for visible rows â€” that is the whole saving.
   /// Deferred by a frame because a builder must not setState while it is building.
   void _wantDetail(ReleaseChoice c) {
     if (c.isMb || c.detailed || c.releaseId <= 0 || !_asked.add(c.releaseId)) return;
@@ -11733,7 +11750,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       final i = list.indexWhere((x) => x.key == c.key);
       if (i < 0) return;
       // A failed lookup still ANSWERS the question. Returning here left the row saying "scans
-      // ophalen…" with its little spinner for as long as the dialog stayed open — and never again,
+      // ophalenâ€¦" with its little spinner for as long as the dialog stayed open â€” and never again,
       // because `_asked` already holds this id so it is not retried. The row promised something that
       // was no longer coming. Marked as looked-up instead: the three slots then read "asked, and
       // there was nothing", which is true and is what the crosses are for.
@@ -11763,7 +11780,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
             : await DiscogsService(settings).fetchImage(c.front!.uri);
       }
       if (!mounted) return;
-      // Choosing an EDITION means using its scans — all three of them. Any single scan picked
+      // Choosing an EDITION means using its scans â€” all three of them. Any single scan picked
       // earlier is an override that outranks the pressing, so leaving those in place made this
       // button look like it did nothing: you chose the CD and kept the digital sleeve.
       await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title);
@@ -11790,7 +11807,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     final lib = context.read<LibraryStore>();
     final mbSvc = context.read<MusicBrainzService>();
     var list = c.tracklist;
-    // A row arrives without a tracklist until something looks it up — the picker lists a whole
+    // A row arrives without a tracklist until something looks it up â€” the picker lists a whole
     // master off one request and fills the rest in as rows come into view. So ask, per catalogue,
     // rather than telling the user a pressing has no numbering when only nobody had asked yet.
     if (list.isEmpty && c.isMb && c.mbid != null) {
@@ -11839,7 +11856,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                 const Spacer(),
                 IconButton(icon: const Icon(Icons.close_rounded), onPressed: () => Navigator.of(context).pop(false)),
               ]),
-              Text('${widget.album.artist} — ${widget.album.title}',
+              Text('${widget.album.artist} â€” ${widget.album.title}',
                   style: const TextStyle(color: _muted, fontSize: 12.5)),
               const SizedBox(height: 14),
               // Filters over what was fetched, not another trip to Discogs.
@@ -11879,13 +11896,13 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                         height: 11,
                         child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
                     SizedBox(width: 8),
-                    Text('Discogs vult nog aan…', style: TextStyle(color: _muted, fontSize: 11.5)),
+                    Text('Discogs vult nog aanâ€¦', style: TextStyle(color: _muted, fontSize: 11.5)),
                   ]),
                 ),
               if (_dgDone && _dgFailed)
                 const Padding(
                   padding: EdgeInsets.only(top: 8),
-                  child: Text('Discogs was niet bereikbaar — dit zijn alleen de MusicBrainz-uitgaves.',
+                  child: Text('Discogs was niet bereikbaar â€” dit zijn alleen de MusicBrainz-uitgaves.',
                       style: TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               // Only once something is picked: an empty bar at the bottom of every gallery would be
@@ -11918,7 +11935,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                             height: 14,
                             child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                         : const Icon(Icons.check_rounded, size: 18),
-                    label: Text(_saving ? 'Opslaan…' : 'Opslaan'),
+                    label: Text(_saving ? 'Opslaanâ€¦' : 'Opslaan'),
                   ),
                 ]),
               ],
@@ -11939,7 +11956,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
           SizedBox(height: 14),
           // Honest about the wait: this is several Discogs calls plus their images, and Discogs
           // allows sixty a minute.
-          Text('Uitgaves en scans ophalen…', style: TextStyle(color: _muted, fontSize: 12.5)),
+          Text('Uitgaves en scans ophalenâ€¦', style: TextStyle(color: _muted, fontSize: 12.5)),
         ]),
       );
     }
@@ -11964,7 +11981,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (_, i) {
         final c = shown[i];
-        // Only rows that are actually built get looked up — that is what makes this cheap.
+        // Only rows that are actually built get looked up â€” that is what makes this cheap.
         _wantDetail(c);
         final isPinned = pinnedKey != null && pinnedKey == c.key;
         return InkWell(
@@ -11979,7 +11996,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
             ),
             child: Row(children: [
               // The three scans side by side, so what you get is visible rather than described.
-              // Clicking one opens every scan this pressing has, to say which is which — the roles
+              // Clicking one opens every scan this pressing has, to say which is which â€” the roles
               // below are inferred, and inference on a catalogue that never labels its images gets
               // the back and the disc the wrong way round often enough to need an answer.
               _thumb(c.front, 'hoes', role: 'front', row: c, onLongPress: () => _assign(c)),
@@ -12002,8 +12019,8 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                     _source(c.isMb),
                     const SizedBox(width: 6),
                     // Until this pressing has been looked up we do not know whether it has a back
-                    // or a disc, and saying "–" would be a claim we have not earned. A row you can
-                    // see is always on its way now — being visible is what starts the lookup — so
+                    // or a disc, and saying "â€“" would be a claim we have not earned. A row you can
+                    // see is always on its way now â€” being visible is what starts the lookup â€” so
                     // the spinner is always honest here.
                     if (!c.detailed) ...[
                       const SizedBox(
@@ -12011,7 +12028,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                           height: 10,
                           child: CircularProgressIndicator(strokeWidth: 1.4, color: _muted)),
                       const SizedBox(width: 6),
-                      const Text('scans ophalen…', style: TextStyle(color: _muted, fontSize: 10.5)),
+                      const Text('scans ophalenâ€¦', style: TextStyle(color: _muted, fontSize: 10.5)),
                     ] else ...[
                       _tag('achterkant', c.hasBack),
                       const SizedBox(width: 6),
@@ -12036,7 +12053,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
 
   /// One scan of one pressing, and a way to say "this one, for this role".
   ///
-  /// Tap picks it for [role] on the RECORD — the sleeve of the digital edition beside the disc of
+  /// Tap picks it for [role] on the RECORD â€” the sleeve of the digital edition beside the disc of
   /// the CD, which is the thing a record collector's own copy actually looks like. Long-press still
   /// opens every scan this pressing has, for the case where the roles within one pressing are simply
   /// swapped.
@@ -12044,7 +12061,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       {required String role, required ReleaseChoice row, VoidCallback? onLongPress}) {
     final staged = _staged[role];
     final chosen = img != null && staged != null && staged.uri == img.uri;
-    // Nothing here yet, and nobody has looked — as opposed to looked and found none.
+    // Nothing here yet, and nobody has looked â€” as opposed to looked and found none.
     final waiting = img == null && !row.detailed;
     return InkWell(
       onTap: img == null ? null : () => _stage(role, img),
@@ -12052,13 +12069,13 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       borderRadius: BorderRadius.circular(6),
       child: Tooltip(
         message: img != null
-            ? 'Klik: neem deze $label over · Lang indrukken: alle scans van deze uitgave'
+            ? 'Klik: neem deze $label over Â· Lang indrukken: alle scans van deze uitgave'
             // "Has none" and "nobody has asked yet" are different statements, and the row now
-            // appears before its scans do — so for a second or two the cross was claiming the
+            // appears before its scans do â€” so for a second or two the cross was claiming the
             // first while the second was true. The badges beside it already made that distinction;
             // the thumbnails were still saying it flatly.
             : waiting
-                ? 'De scans van deze uitgave worden opgehaald…'
+                ? 'De scans van deze uitgave worden opgehaaldâ€¦'
                 : 'Deze uitgave heeft geen $label',
         child: Column(children: [
           Container(
@@ -12109,7 +12126,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                 fontSize: 10.5, fontWeight: FontWeight.w600, color: isMb ? _accent : _accent2)),
       );
 
-  /// Present or absent, stated rather than implied — the reason this dialog exists.
+  /// Present or absent, stated rather than implied â€” the reason this dialog exists.
   Widget _tag(String text, bool on) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(
@@ -12126,7 +12143,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
 
 /// Say which scan is the sleeve, which is the back, and which is the disc.
 ///
-/// Discogs marks one image "primary" and calls the rest "secondary" — it never states what a
+/// Discogs marks one image "primary" and calls the rest "secondary" â€” it never states what a
 /// picture SHOWS. So the app infers: primary is the front, wider-than-tall is the rear inlay, and a
 /// punched hole in the middle means a disc. Measured on Random Access Memories, eight of its
 /// fourteen scans are wider than tall, so the back-cover rule picks whichever booklet spread comes
@@ -12278,8 +12295,8 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
 /// Choose an artist's portrait and the backdrop behind their page.
 ///
 /// Discogs holds dozens of photos per act (twenty-nine for Daft Punk) and TheAudioDB adds its own
-/// fanart and thumbs, but neither labels what a picture is FOR. The app guesses by shape — squarish
-/// reads as a portrait, wide as a backdrop — and a guess is exactly the thing worth overruling.
+/// fanart and thumbs, but neither labels what a picture is FOR. The app guesses by shape â€” squarish
+/// reads as a portrait, wide as a backdrop â€” and a guess is exactly the thing worth overruling.
 class ArtistArtGallery extends StatefulWidget {
   final String artist;
   const ArtistArtGallery(this.artist, {super.key});
@@ -12339,7 +12356,7 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
               ]),
               Text(widget.artist, style: const TextStyle(color: _muted, fontSize: 12.5)),
               const SizedBox(height: 4),
-              const Text('Klik een foto voor het portret · rechtsklik voor de achtergrond',
+              const Text('Klik een foto voor het portret Â· rechtsklik voor de achtergrond',
                   style: TextStyle(color: _muted, fontSize: 11.5)),
               const SizedBox(height: 14),
               Expanded(child: _body(portrait, backdrop)),
@@ -12368,7 +12385,7 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
         final lib = context.read<LibraryStore>();
         return Pressable(
           onPressed: () => lib.setArtistArt(widget.artist, 'portrait', img.uri),
-          // Right-click sets the backdrop, and a remote has no right button — so on a television
+          // Right-click sets the backdrop, and a remote has no right button â€” so on a television
           // holding OK does the same thing. Both, not one instead of the other: choosing a backdrop
           // was something you simply could not do from the sofa, and nothing on screen said why.
           //
@@ -12410,7 +12427,7 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
   }
 }
 
-/// Move a track into another album — showing, before anything is touched, what happens on disk.
+/// Move a track into another album â€” showing, before anything is touched, what happens on disk.
 ///
 /// The one operation here that rewrites the folder tree, so it states its plan first. A file that
 /// can't be moved still gets regrouped: the tags are what decide where a track lives, and leaving
@@ -12421,7 +12438,7 @@ class MoveTrackDialog extends StatefulWidget {
   /// The album the track is leaving, when it has one. Null for a track that no album page shows:
   /// a rip with no album tag sits in its own single, and a copy that lost a title collision is on
   /// no page at all. Those are precisely the tracks that need moving, so the dialog must open
-  /// without a source — it only ever used this to keep the current album out of the target list.
+  /// without a source â€” it only ever used this to keep the current album out of the target list.
   final Album? from;
   const MoveTrackDialog({super.key, required this.track, this.from});
 
@@ -12475,7 +12492,7 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
         .moveTracksToAlbum([widget.track], target, context.read<AppSettings>(),
             moveFiles: _moveFiles, plan: _plan);
     if (!mounted) return;
-    _srcToast(context, moved > 0 ? 'Verplaatst — $moved bestand mee verhuisd' : 'Verplaatst — bestand bleef staan');
+    _srcToast(context, moved > 0 ? 'Verplaatst â€” $moved bestand mee verhuisd' : 'Verplaatst â€” bestand bleef staan');
     Navigator.of(context).pop(true);
   }
 
@@ -12506,7 +12523,7 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
             TextField(
               controller: _query,
               onChanged: (_) => setState(() {}),
-              decoration: const InputDecoration(labelText: 'Zoek een album…', isDense: true),
+              decoration: const InputDecoration(labelText: 'Zoek een albumâ€¦', isDense: true),
             ),
             const SizedBox(height: 10),
             Expanded(
@@ -12535,7 +12552,7 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                            Text('${a.artist} · ${a.tracks.length} nummers',
+                            Text('${a.artist} Â· ${a.tracks.length} nummers',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(color: _muted, fontSize: 11.5)),
@@ -12561,7 +12578,7 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
                     ? 'Kies eerst een album.'
                     : plan.first.movesFile
                         ? 'Naar: ${File(plan.first.to!).parent.path}'
-                        : 'Doelmap onbekend — alleen de indeling verandert.',
+                        : 'Doelmap onbekend â€” alleen de indeling verandert.',
                 style: const TextStyle(color: _muted, fontSize: 11.5),
               ),
             ),
@@ -12588,7 +12605,7 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
   }
 }
 
-/// Take an official pressing's numbering for a mistagged album — showing every change first.
+/// Take an official pressing's numbering for a mistagged album â€” showing every change first.
 ///
 /// Rippers get this wrong constantly: one album here arrived with two number sixes, two number
 /// tens and a track with no number at all, so its tracklist could not be read or played in order.
@@ -12597,7 +12614,7 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
 /// Read the whole plan before a single byte is written.
 ///
 /// This is the one dialog in the app that changes files the user already owns, so it says exactly
-/// what it will do — per file, old beside new — and names what it will NOT touch instead of quietly
+/// what it will do â€” per file, old beside new â€” and names what it will NOT touch instead of quietly
 /// leaving it out.
 class NormaliseTagsDialog extends StatefulWidget {
   final Album album;
@@ -12624,7 +12641,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
   @override
   void initState() {
     super.initState();
-    // The title rule first, so the dialog has an answer immediately, and then the audio — which
+    // The title rule first, so the dialog has an answer immediately, and then the audio â€” which
     // takes a second or two the first time and can both ADD a pair the titles missed and take one
     // away that the titles got wrong.
     final lib = context.read<LibraryStore>();
@@ -12641,8 +12658,8 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
     _srcToast(
         context,
         n == 0
-            ? 'Kon de kopie niet verplaatsen — staat hij open in de speler?'
-            : '$n opzij gezet in $dupeFolder · niets gewist');
+            ? 'Kon de kopie niet verplaatsen â€” staat hij open in de speler?'
+            : '$n opzij gezet in $dupeFolder Â· niets gewist');
     Navigator.of(context).pop(n > 0);
   }
 
@@ -12651,7 +12668,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
     final r = await context.read<LibraryStore>().applyNormalise(widget.plan);
     if (!mounted) return;
     // Name what did not land. A bare count reads as success even when a file was missed, and the
-    // one that gets missed is usually the track you are listening to — the player holds it open.
+    // one that gets missed is usually the track you are listening to â€” the player holds it open.
     if (r.failed.isNotEmpty) {
       setState(() {
         _busy = false;
@@ -12682,7 +12699,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Tags gelijktrekken', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
-            Text('${widget.album.artist} — ${widget.album.title}',
+            Text('${widget.album.artist} â€” ${widget.album.title}',
                 style: const TextStyle(color: _muted, fontSize: 12.5)),
             const SizedBox(height: 12),
             // What is actually wrong today, in numbers. "Your files disagree" means nothing; "four
@@ -12717,8 +12734,8 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                 ]),
               ),
             const SizedBox(height: 12),
-            Text('Wordt: album "${plan.album}" · ${plan.total} nummers'
-                '${plan.year != null ? " · ${plan.year}" : ""}',
+            Text('Wordt: album "${plan.album}" Â· ${plan.total} nummers'
+                '${plan.year != null ? " Â· ${plan.year}" : ""}',
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
             const SizedBox(height: 10),
             Expanded(
@@ -12732,7 +12749,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                           child: Text(
                               s.trackNo == s.track.trackNo
                                   ? '${s.trackNo}'
-                                  : '${s.track.trackNo} → ${s.trackNo}',
+                                  : '${s.track.trackNo} â†’ ${s.trackNo}',
                               style: TextStyle(
                                   fontSize: 12.5,
                                   color: s.trackNo == s.track.trackNo ? _muted : _accent2))),
@@ -12741,13 +12758,13 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(fontSize: 13))),
-                      Text('${s.track.trackTotal == 0 ? "geen" : s.track.trackTotal} → ${plan.total}',
+                      Text('${s.track.trackTotal == 0 ? "geen" : s.track.trackTotal} â†’ ${plan.total}',
                           style: const TextStyle(fontSize: 11.5, color: _muted)),
                     ]),
                   ),
                 if (plan.albumOnly.isNotEmpty) ...[
                   const Divider(height: 22),
-                  const Text('Alleen album en aantal — titel en nummer blijven',
+                  const Text('Alleen album en aantal â€” titel en nummer blijven',
                       style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _muted)),
                   const SizedBox(height: 6),
                   for (final s in plan.albumOnly)
@@ -12763,7 +12780,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(fontSize: 13, color: _muted))),
-                        Text('${s.track.trackTotal == 0 ? "geen" : s.track.trackTotal} → ${plan.total}',
+                        Text('${s.track.trackTotal == 0 ? "geen" : s.track.trackTotal} â†’ ${plan.total}',
                             style: const TextStyle(fontSize: 11.5, color: _muted)),
                       ]),
                     ),
@@ -12776,7 +12793,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                   for (final s in plan.skipped)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 3),
-                      child: Text('${s.name} — ${s.skipped}',
+                      child: Text('${s.name} â€” ${s.skipped}',
                           style: const TextStyle(fontSize: 12, color: _muted)),
                     ),
                 ],
@@ -12788,7 +12805,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(
                       '$_written van de ${plan.writing.length} geschreven. '
-                      'Deze konden niet — een bestand dat de speler open heeft, kan niet vervangen worden:',
+                      'Deze konden niet â€” een bestand dat de speler open heeft, kan niet vervangen worden:',
                       style: const TextStyle(color: Colors.orangeAccent, fontSize: 12.5)),
                   for (final f in _failed)
                     Padding(
@@ -12800,7 +12817,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                     ),
                   const Padding(
                     padding: EdgeInsets.only(top: 2),
-                    child: Text('Stop het afspelen en klik opnieuw — de rest is al klaar.',
+                    child: Text('Stop het afspelen en klik opnieuw â€” de rest is al klaar.',
                         style: TextStyle(color: _muted, fontSize: 11.5)),
                   ),
                 ]),
@@ -12810,7 +12827,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                 padding: const EdgeInsets.only(top: 8),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   const Text(
-                      'Dit wordt niet geschreven — deze bestanden zouden op elkaar uitkomen:',
+                      'Dit wordt niet geschreven â€” deze bestanden zouden op elkaar uitkomen:',
                       style: TextStyle(color: Colors.orangeAccent, fontSize: 12.5)),
                   for (final c in plan.clashes)
                     Padding(
@@ -12821,7 +12838,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                           style: const TextStyle(color: Colors.orangeAccent, fontSize: 11.5)),
                     ),
                   // Almost always the same cause: two rips of one song that landed under different
-                  // names. Saying so is not enough — the way out belongs here too.
+                  // names. Saying so is not enough â€” the way out belongs here too.
                   if (_dupes.isEmpty)
                     const Padding(
                       padding: EdgeInsets.only(top: 2),
@@ -12833,7 +12850,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                     for (final d in _dupes)
                       Padding(
                         padding: const EdgeInsets.only(left: 8, top: 2),
-                        child: Text('Zelfde nummer, twee bestanden: ${d.drop.title} — '
+                        child: Text('Zelfde nummer, twee bestanden: ${d.drop.title} â€” '
                             'behouden ${_fileName(d.keep.path)} (${d.why})',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
@@ -12847,7 +12864,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                         icon: const Icon(Icons.inbox_rounded, size: 16),
                         label: Text(_dupes.length == 1
                             ? 'Mindere kopie opzij zetten'
-                            : '${_dupes.length} mindere kopieën opzij zetten'),
+                            : '${_dupes.length} mindere kopieÃ«n opzij zetten'),
                       ),
                     ),
                   ],
@@ -12872,7 +12889,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                         height: 14,
                         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                     : const Icon(Icons.check_rounded, size: 18),
-                label: Text(_busy ? 'Schrijven…' : 'Schrijf ${plan.writing.length} bestanden'),
+                label: Text(_busy ? 'Schrijvenâ€¦' : 'Schrijf ${plan.writing.length} bestanden'),
               ),
             ]),
           ]),
@@ -12918,7 +12935,7 @@ class _RenumberDialogState extends State<RenumberDialog> {
             const Text('Nummering overnemen',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 2),
-            Text('${widget.album.artist} · ${widget.album.title}',
+            Text('${widget.album.artist} Â· ${widget.album.title}',
                 style: const TextStyle(color: _muted, fontSize: 12.5)),
             const SizedBox(height: 14),
             Container(
@@ -12933,16 +12950,16 @@ class _RenumberDialogState extends State<RenumberDialog> {
                   plan.collides
                       ? 'Geweigerd: twee nummers zouden hetzelfde nummer krijgen.'
                       : plan.titleCollides
-                          ? 'Geweigerd: twee nummers zouden dezelfde titel krijgen — dan verdwijnt er één uit de lijst.'
+                          ? 'Geweigerd: twee nummers zouden dezelfde titel krijgen â€” dan verdwijnt er Ã©Ã©n uit de lijst.'
                           : plan.changing.isEmpty
                               ? 'De nummering klopt al.'
-                              : '${plan.changing.length} van de ${plan.steps.length} worden aangepast · ${plan.total} nummers',
+                              : '${plan.changing.length} van de ${plan.steps.length} worden aangepast Â· ${plan.total} nummers',
                   style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
                 ),
                 if (plan.unmatched.isNotEmpty) ...[
                   const SizedBox(height: 3),
                   Text(
-                      '${plan.unmatched.length} niet herkend op deze uitgave — die houden hun eigen tags.',
+                      '${plan.unmatched.length} niet herkend op deze uitgave â€” die houden hun eigen tags.',
                       style: const TextStyle(color: _muted, fontSize: 11.5)),
                 ],
               ]),
@@ -12953,13 +12970,13 @@ class _RenumberDialogState extends State<RenumberDialog> {
                 itemCount: plan.steps.length,
                 itemBuilder: (_, i) {
                   final st = plan.steps[i];
-                  final was = st.track.trackNo > 0 ? '${st.track.trackNo}' : '—';
+                  final was = st.track.trackNo > 0 ? '${st.track.trackNo}' : 'â€”';
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 6),
                     child: Row(children: [
                       SizedBox(
                         width: 62,
-                        child: Text(st.unmatched ? '$was  ·' : '$was → ${st.newNo}',
+                        child: Text(st.unmatched ? '$was  Â·' : '$was â†’ ${st.newNo}',
                             style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: st.changes ? FontWeight.w700 : FontWeight.w400,
@@ -12972,7 +12989,7 @@ class _RenumberDialogState extends State<RenumberDialog> {
                       Expanded(
                         child: Text(
                           st.official != null && st.official!.title != st.track.title
-                              ? '${st.track.title}  →  ${st.official!.title}'
+                              ? '${st.track.title}  â†’  ${st.official!.title}'
                               : st.track.title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -13011,7 +13028,7 @@ class _RenumberDialogState extends State<RenumberDialog> {
 
 /// Pick one album out of the library. Pops the chosen [Album], or null.
 class PickAlbumDialog extends StatefulWidget {
-  /// The album doing the asking — never offered as an answer to itself.
+  /// The album doing the asking â€” never offered as an answer to itself.
   final Album exclude;
   const PickAlbumDialog({super.key, required this.exclude});
 
@@ -13050,14 +13067,14 @@ class _PickAlbumDialogState extends State<PickAlbumDialog> {
             const Text('Welk album samenvoegen?',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 2),
-            Text('Dit album gaat op in “${widget.exclude.title}”.',
+            Text('Dit album gaat op in â€œ${widget.exclude.title}â€.',
                 style: const TextStyle(color: _muted, fontSize: 12.5)),
             const SizedBox(height: 14),
             TextField(
               controller: _query,
               autofocus: true,
               onChanged: (_) => setState(() {}),
-              decoration: const InputDecoration(labelText: 'Zoek een album…', isDense: true),
+              decoration: const InputDecoration(labelText: 'Zoek een albumâ€¦', isDense: true),
             ),
             const SizedBox(height: 10),
             Expanded(
@@ -13081,7 +13098,7 @@ class _PickAlbumDialogState extends State<PickAlbumDialog> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                            Text('${a.artist} · ${a.tracks.length} nummers',
+                            Text('${a.artist} Â· ${a.tracks.length} nummers',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(color: _muted, fontSize: 11.5)),
@@ -13107,7 +13124,7 @@ class _PickAlbumDialogState extends State<PickAlbumDialog> {
   }
 }
 
-/// What the AUDIO says each file is, next to what its tags claim — before anything is written.
+/// What the AUDIO says each file is, next to what its tags claim â€” before anything is written.
 ///
 /// For a loose file this is the only question worth asking. `13 - Various Artists - Jij Bent Zo
 /// Mooi.mp3` cannot be identified by its album, because "Various Artists" names nobody and the
@@ -13120,14 +13137,14 @@ class _PickAlbumDialogState extends State<PickAlbumDialog> {
 class RecogniseTracksDialog extends StatefulWidget {
   final Album album;
 
-  /// track → what the audio said, best match first. Only files with an answer are in here.
+  /// track â†’ what the audio said, best match first. Only files with an answer are in here.
   final Map<Track, AcoustIdMatch> found;
 
   /// What the FILE's own tags say right now, by path.
   ///
   /// Not [Track.artist], and that distinction is the whole reason this map exists. Measured on
   /// "Jij Bent Zo Mooi": the file's ARTIST already read "Petra", while the Track carried
-  /// "Various Artists" — which is the ALBUM artist, and a perfectly correct value for a
+  /// "Various Artists" â€” which is the ALBUM artist, and a perfectly correct value for a
   /// compilation. Comparing against the Track made a confirmation screen state the current value
   /// wrongly and offer a repair that was not one. A screen that asks "shall I change this to that"
   /// has to be right about "this".
@@ -13161,7 +13178,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
 
   late final Set<String> _chosen = {for (final e in _changes) e.key.path};
 
-  /// What the file says now — falling back to the Track only when the tags could not be read.
+  /// What the file says now â€” falling back to the Track only when the tags could not be read.
   ({String artist, String title}) _nu(Track t) =>
       widget.current[t.path] ?? (artist: t.artist, title: t.title);
 
@@ -13181,7 +13198,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
     });
     if (!mounted) return;
     if (r.failed.isEmpty) {
-      _srcToast(context, '${r.written} bijgewerkt · ongedaan maken kan met de terugknop');
+      _srcToast(context, '${r.written} bijgewerkt Â· ongedaan maken kan met de terugknop');
       Navigator.of(context).pop(true);
       return;
     }
@@ -13211,9 +13228,9 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
               _changes.isEmpty
                   ? widget.found.isEmpty
                       ? 'Geen van deze nummers is herkend.'
-                      : 'Alles herkend, en de tags kloppen al — er valt niets te wijzigen.'
+                      : 'Alles herkend, en de tags kloppen al â€” er valt niets te wijzigen.'
                   : '${_changes.length} ${_changes.length == 1 ? 'nummer wijkt' : 'nummers wijken'} af '
-                      '· alleen artiest en titel worden geschreven, album en nummering blijven',
+                      'Â· alleen artiest en titel worden geschreven, album en nummering blijven',
               style: const TextStyle(color: _muted, fontSize: 12.5),
             ),
             const SizedBox(height: 12),
@@ -13238,7 +13255,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
                       const SizedBox(width: 4),
                       Expanded(
                         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text('${_nu(e.key).artist} — ${_nu(e.key).title}',
+                          Text('${_nu(e.key).artist} â€” ${_nu(e.key).title}',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(color: _muted, fontSize: 12.5)),
@@ -13247,7 +13264,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
                             const Icon(Icons.arrow_forward_rounded, size: 14, color: _accent),
                             const SizedBox(width: 7),
                             Expanded(
-                              child: Text('${e.value.artist} — ${e.value.title}',
+                              child: Text('${e.value.artist} â€” ${e.value.title}',
                                   maxLines: 2,
                                   style: const TextStyle(
                                       fontSize: 13.5, fontWeight: FontWeight.w600)),
@@ -13312,7 +13329,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
   }
 }
 
-/// The same recording, twice, anywhere in the library — found by LISTENING, not by reading names.
+/// The same recording, twice, anywhere in the library â€” found by LISTENING, not by reading names.
 ///
 /// Deliberately its own screen rather than a line on an album page: the expensive duplicates do not
 /// share a record. Measured over 389 files, the five it finds are a track sitting loose in the root
@@ -13321,7 +13338,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
 /// song, and a 242 MB rip beside an 87 MB one. Not one of those is visible from inside a record.
 ///
 /// Nothing is deleted here either. The lesser copy of each pair goes to `_dubbel` beside the music,
-/// which the scan skips — so the library stops holding the song twice while the file is still there
+/// which the scan skips â€” so the library stops holding the song twice while the file is still there
 /// if the judgement was wrong.
 class SoundDuplicatesDialog extends StatefulWidget {
   final List<SameRecordingPair> pairs;
@@ -13335,7 +13352,7 @@ class _SoundDuplicatesDialogState extends State<SoundDuplicatesDialog> {
   bool _busy = false;
 
   /// Which pairs the user still wants acted on. Everything is ticked to begin with, because every
-  /// pair here cleared the strict threshold — but the choice has to be per pair, since "the better
+  /// pair here cleared the strict threshold â€” but the choice has to be per pair, since "the better
   /// copy" is a judgement about a file the app has never heard the user's opinion on.
   late final Set<String> _chosen = {for (final p in widget.pairs) p.drop.path};
 
@@ -13348,8 +13365,8 @@ class _SoundDuplicatesDialogState extends State<SoundDuplicatesDialog> {
     _srcToast(
         context,
         n == 0
-            ? 'Kon niets verplaatsen — staat er een bestand open in de speler?'
-            : '$n opzij gezet in $dupeFolder · niets gewist');
+            ? 'Kon niets verplaatsen â€” staat er een bestand open in de speler?'
+            : '$n opzij gezet in $dupeFolder Â· niets gewist');
     Navigator.of(context).pop(true);
   }
 
@@ -13375,8 +13392,8 @@ class _SoundDuplicatesDialogState extends State<SoundDuplicatesDialog> {
             const SizedBox(height: 2),
             Text(
               ps.isEmpty
-                  ? 'Niets gevonden — geen enkel bestand klinkt hetzelfde als een ander.'
-                  : '${ps.length} ${ps.length == 1 ? 'paar' : 'paren'} · herkend aan de audio, niet aan de naam · '
+                  ? 'Niets gevonden â€” geen enkel bestand klinkt hetzelfde als een ander.'
+                  : '${ps.length} ${ps.length == 1 ? 'paar' : 'paren'} Â· herkend aan de audio, niet aan de naam Â· '
                       'de mindere gaat naar $dupeFolder, er wordt niets gewist',
               style: const TextStyle(color: _muted, fontSize: 12.5),
             ),
@@ -13468,11 +13485,11 @@ class _SoundDuplicatesDialogState extends State<SoundDuplicatesDialog> {
   }
 }
 
-/// Clean up albums that are wholly duplicates of one you already own — the dry-run before it acts.
+/// Clean up albums that are wholly duplicates of one you already own â€” the dry-run before it acts.
 ///
 /// The stale fragments and junk singles the library found on its own: a "Special Edition" holding
 /// three tracks that are all in the real album, an unknown-artist WAV that is really track two.
-/// Nothing moves until Opruimen — and even then the loser of each pair goes to _dubbel, never the
+/// Nothing moves until Opruimen â€” and even then the loser of each pair goes to _dubbel, never the
 /// bin, because the better copy is sometimes the one in the fragment.
 class RedundantCleanupDialog extends StatefulWidget {
   final List<RedundantAlbum> found;
@@ -13513,7 +13530,7 @@ class _RedundantCleanupDialogState extends State<RedundantCleanupDialog> {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 2),
             Text(
-              '${found.length} ${found.length == 1 ? 'album gaat' : 'albums gaan'} op in een album dat je al hebt · '
+              '${found.length} ${found.length == 1 ? 'album gaat' : 'albums gaan'} op in een album dat je al hebt Â· '
               '$totalTracks ${totalTracks == 1 ? 'nummer' : 'nummers'}',
               style: const TextStyle(color: _muted, fontSize: 12.5),
             ),
@@ -13529,13 +13546,13 @@ class _RedundantCleanupDialogState extends State<RedundantCleanupDialog> {
                     decoration:
                         BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(9)),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text('${r.source.title}  →  ${r.target.title}',
+                      Text('${r.source.title}  â†’  ${r.target.title}',
                           style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
                       const SizedBox(height: 2),
                       Text(
                         r.upgrades > 0
-                            ? '${r.upgrades} van de ${r.pairs.length} ${r.upgrades == 1 ? 'is' : 'zijn'} beter en vervangt wat je hebt · de rest naar _dubbel'
-                            : 'alle ${r.pairs.length} zijn dubbel · naar _dubbel',
+                            ? '${r.upgrades} van de ${r.pairs.length} ${r.upgrades == 1 ? 'is' : 'zijn'} beter en vervangt wat je hebt Â· de rest naar _dubbel'
+                            : 'alle ${r.pairs.length} zijn dubbel Â· naar _dubbel',
                         style: const TextStyle(color: _muted, fontSize: 11.5),
                       ),
                       const SizedBox(height: 6),
@@ -13549,8 +13566,8 @@ class _RedundantCleanupDialogState extends State<RedundantCleanupDialog> {
                             Expanded(
                               child: Text(
                                 p.dupWins
-                                    ? '${p.owned.trackNo}. ${p.owned.title} — betere kopie behouden, oude naar _dubbel'
-                                    : '${p.owned.trackNo}. ${p.owned.title} — dubbel naar _dubbel',
+                                    ? '${p.owned.trackNo}. ${p.owned.title} â€” betere kopie behouden, oude naar _dubbel'
+                                    : '${p.owned.trackNo}. ${p.owned.title} â€” dubbel naar _dubbel',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(fontSize: 11.5),
@@ -13587,7 +13604,7 @@ class _RedundantCleanupDialogState extends State<RedundantCleanupDialog> {
   }
 }
 
-/// Put a record back together — showing, file by file, what that does on disk before it does it.
+/// Put a record back together â€” showing, file by file, what that does on disk before it does it.
 ///
 /// Two ways in. With no [absorb] it gathers the editions of ONE record that are scattered over
 /// several folders. With [absorb] it swallows another album whole, the way Roon does.
@@ -13612,7 +13629,7 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
 
   /// Worked out ONCE, when the dialog opens. Re-planning on every rebuild would read the folder
   /// again mid-run and could carry out something other than what was on screen when the user
-  /// pressed the button — and it walks the disk, which has no business happening per frame.
+  /// pressed the button â€” and it walks the disk, which has no business happening per frame.
   MergePlan _plan = const MergePlan(null, []);
 
   /// True while the PC is working out where the files would land. The confirm button waits for it:
@@ -13624,7 +13641,7 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
     super.initState();
     final lib = context.read<LibraryStore>();
     // Absorbing another record means moving its files, and only the machine holding them can say
-    // where they would land — so that plan is awaited. Merging editions of one record touches no
+    // where they would land â€” so that plan is awaited. Merging editions of one record touches no
     // files and stays immediate.
     _plan = widget.absorb != null ? const MergePlan(null, []) : lib.planMerge(widget.album);
     if (widget.absorb != null) {
@@ -13656,7 +13673,7 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
     }
     if (!mounted) return;
     _srcToast(context,
-        moved > 0 ? 'Samengevoegd — $moved ${moved == 1 ? 'bestand' : 'bestanden'} verhuisd' : 'Samengevoegd');
+        moved > 0 ? 'Samengevoegd â€” $moved ${moved == 1 ? 'bestand' : 'bestanden'} verhuisd' : 'Samengevoegd');
     Navigator.of(context).pop(true);
   }
 
@@ -13681,8 +13698,8 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
             const SizedBox(height: 2),
             Text(
               widget.absorb == null
-                  ? '${widget.album.artist} · ${widget.album.title}'
-                  : '${widget.absorb!.title} → ${widget.album.title}',
+                  ? '${widget.album.artist} Â· ${widget.album.title}'
+                  : '${widget.absorb!.title} â†’ ${widget.album.title}',
               style: const TextStyle(color: _muted, fontSize: 12.5),
             ),
             const SizedBox(height: 14),
@@ -13691,7 +13708,7 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
               padding: const EdgeInsets.all(11),
               decoration: BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(9)),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(plan.isNoop ? 'Alles staat al in één map' : plan.summary,
+                Text(plan.isNoop ? 'Alles staat al in Ã©Ã©n map' : plan.summary,
                     style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
                 if (plan.folder != null) ...[
                   const SizedBox(height: 3),
@@ -13734,9 +13751,9 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
                                 Text(
                                   // Where it comes from, and the folder it lands in. The full
                                   // target path is already in the header, so only the last part is
-                                  // repeated here — for a duplicate that is "_dubbel" itself.
-                                  '${File(p.from).parent.path}  →  '
-                                  '${p.to == null ? '—' : File(p.to!).parent.path.split(Platform.pathSeparator).last}',
+                                  // repeated here â€” for a duplicate that is "_dubbel" itself.
+                                  '${File(p.from).parent.path}  â†’  '
+                                  '${p.to == null ? 'â€”' : File(p.to!).parent.path.split(Platform.pathSeparator).last}',
                                   maxLines: 2,
                                   style: TextStyle(
                                       color: dupe ? _accent2.withValues(alpha: .85) : _muted,
@@ -13783,7 +13800,7 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
   }
 }
 
-/// Everything that sounds like one thing — your own records first, then more of it.
+/// Everything that sounds like one thing â€” your own records first, then more of it.
 ///
 /// A Discogs style is much finer than a genre: not "Electronic" but "Deep House", "Synth-pop",
 /// "Happy Hardcore". That granularity is what makes this browsing by feel rather than by category,
@@ -13823,7 +13840,7 @@ class _StylePageState extends State<StylePage> {
     final lib = context.watch<LibraryStore>();
     final mine = lib.albumsWithStyle(widget.style);
     final have = {for (final a in mine) '${artistKey(a.artist)}|${normKey(a.title)}'};
-    // Anything already owned is not a discovery — it is the shelf it came from.
+    // Anything already owned is not a discovery â€” it is the shelf it came from.
     final more = [
       for (final h in _more ?? const <CatalogAlbumHit>[])
         if (!have.contains('${artistKey(h.artist)}|${normKey(h.album.title)}')) h
@@ -13852,7 +13869,7 @@ class _StylePageState extends State<StylePage> {
         ],
         SliverToBoxAdapter(
           child: Row(children: [
-            _sectionTitle('Meer in deze stijl', _more == null ? '…' : '${more.length}'),
+            _sectionTitle('Meer in deze stijl', _more == null ? 'â€¦' : '${more.length}'),
             const Spacer(),
             // Two ways into a style: the records that define it, or everything behind them.
             Padding(
@@ -13930,7 +13947,7 @@ class _StylePageState extends State<StylePage> {
       );
 }
 
-/// An album that isn't yours yet — tapping it opens the sources for it.
+/// An album that isn't yours yet â€” tapping it opens the sources for it.
 class _OnlineAlbumCard extends StatelessWidget {
   final CatalogAlbumHit hit;
   const _OnlineAlbumCard(this.hit);
@@ -13960,7 +13977,7 @@ class _OnlineAlbumCard extends StatelessWidget {
                     names: [hit.artist], style: const TextStyle(color: _muted, fontSize: 12))),
             if (hit.album.year != null)
               Flexible(
-                  child: Text(' · ${hit.album.year}',
+                  child: Text(' Â· ${hit.album.year}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: _muted, fontSize: 12))),
