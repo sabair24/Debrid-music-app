@@ -34,6 +34,14 @@ class FpsProbe {
   int _traagsteAfstandUs = 0;
   int _beginMs = 0;
 
+  /// De tijd tussen de vsync-tik en het BEGIN van het bouwen.
+  ///
+  /// Dit getal beslist de hele diagnose. Bouwen en rasteren zeggen hoe duur een frame is; als die
+  /// allebei ruim binnen het budget vallen en er tóch frames wegvallen, is het frame niet te traag
+  /// maar te LAAT begonnen — en dan is de UI-draad bezig met iets anders op het moment dat de tik
+  /// komt. Zonder dit onderscheid kun je eindeloos aan de animatie sleutelen die het niet is.
+  int _vsyncUs = 0, _vsyncMaxUs = 0;
+
   /// Hoe lang er wordt opgeteld voor er een regel valt. Twee seconden is lang genoeg om een
   /// incidentele hapering te laten uitmiddelen en kort genoeg om te zien of het beter wordt.
   static const _vensterMs = 2000;
@@ -53,6 +61,9 @@ class FpsProbe {
         _rasterUs += r;
         if (b > _buildMaxUs) _buildMaxUs = b;
         if (r > _rasterMaxUs) _rasterMaxUs = r;
+        final v = f.vsyncOverhead.inMicroseconds;
+        _vsyncUs += v;
+        if (v > _vsyncMaxUs) _vsyncMaxUs = v;
         // De afstand tussen twee vsyncs is het echte budget; hij verraadt ook of er een frame is
         // OVERGESLAGEN, wat je aan build en raster los niet ziet.
         final afstand = f.totalSpan.inMicroseconds;
@@ -82,6 +93,8 @@ class FpsProbe {
     _buildMaxUs = 0;
     _rasterMaxUs = 0;
     _traagsteAfstandUs = 0;
+    _vsyncUs = 0;
+    _vsyncMaxUs = 0;
     _beginMs = DateTime.now().millisecondsSinceEpoch;
   }
 
@@ -94,7 +107,9 @@ class FpsProbe {
         '($_frames frames in ${ms}ms) | '
         'build gem ${d(_buildUs ~/ _frames)}ms max ${d(_buildMaxUs)}ms | '
         'raster gem ${d(_rasterUs ~/ _frames)}ms max ${d(_rasterMaxUs)}ms | '
-        'traagste frame ${d(_traagsteAfstandUs)}ms');
+        'WACHT OP START gem ${d(_vsyncUs ~/ _frames)}ms max ${d(_vsyncMaxUs)}ms | '
+        'traagste frame ${d(_traagsteAfstandUs)}ms | '
+        'UI-draad ${(100 * _buildUs / (ms * 1000)).toStringAsFixed(1)}% in build');
     _reset();
   }
 }
