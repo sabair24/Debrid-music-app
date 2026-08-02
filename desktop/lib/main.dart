@@ -116,6 +116,14 @@ Future<bool> _claimSingleInstance() async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, _instancePort);
     server.listen((s) async {
       s.destroy();
+      // Een tweede start laat GEEN spoor na: die kopie sluit zichzelf af voor er ook maar één store
+      // bestaat, en deze kopie haalt alleen het venster naar voren. Van buiten ziet dat eruit als een
+      // verse start terwijl de app misschien al uren draait -- en op precies die aanname liep een heel
+      // onderzoek naar vastlopen vast. Eén regel maakt het verschil zichtbaar.
+      try {
+        WarmLog('$appDir${Platform.pathSeparator}start.log')
+            .line('tweede start opgevangen — dit venster naar voren, geen nieuwe kopie');
+      } catch (_) {/* observing must never break the observed */}
       await windowManager.show();
       await windowManager.focus();
     });
@@ -557,6 +565,36 @@ Future<void> main() async {
     return;
   }
 
+  // Waar het opstarten is gebleven, regel voor regel, naar schijf.
+  //
+  // Dit blok is een rij van veertien awaits waarvan de meeste niets schrijven. Blijft er één hangen,
+  // dan stopt de app met werken zonder één spoor: het venster blijft staan met wat er toevallig op
+  // stond, de LAN-server blijft antwoorden (die start eerder, op regel 422), en van buiten is niet te
+  // zien of hij klaar is of vastzit.
+  //
+  // Gemeten op 02-08: de app schreef hoesmateriaal tot 09:55:04, stopte midden in één plaat -- `front`
+  // wél, `done` niet -- en deed daarna elf minuten niets. Wat daar hing is niet te achterhalen, want
+  // elke tak hier meldt zich hooguit via debugPrint en dat wordt in een release-build weggegooid.
+  //
+  // Eén regel per fase kost niets en maakt het verschil tussen "hij was klaar" en "hij bleef op fase
+  // vier staan" meteen leesbaar. Apart bestand, niet warm.log: die kapt zichzelf halverwege af zodra
+  // hij 256 KB haalt, en juist de eerste regels zijn dan het interessantst.
+  final startLog = WarmLog('$appDir${Platform.pathSeparator}start.log');
+  startLog.line('--- opstarten begint ---');
+  Future<T> fase<T>(String naam, Future<T> Function() werk) async {
+    final klok = Stopwatch()..start();
+    startLog.line('$naam ...');
+    try {
+      final uit = await werk();
+      startLog.line('$naam klaar in ${klok.elapsed.inMilliseconds}ms');
+      return uit;
+    } catch (e) {
+      // De melding gaat naar schijf en de fout gaat door: dit logboek mag nooit iets opslokken.
+      startLog.line('$naam MISLUKT na ${klok.elapsed.inMilliseconds}ms: $e');
+      rethrow;
+    }
+  }
+
   // Scan, then fill in missing covers + artist photos (cache-first, then web).
   // Wrapped so a scan hiccup can never prevent enrichment from running.
   () async {
@@ -569,20 +607,21 @@ Future<void> main() async {
     await library.loadArtistArtChoice(); // portraits and backdrops the user picked
     await library.loadAlbumArtRoles(); // which scan is the sleeve, the back, the disc
     await library.loadStyles(); // what each record sounds like, for discovery
+    startLog.line('bestanden geladen');
     try {
-      await library.scan();
+      await fase('scan', library.scan);
     } catch (_) {}
     // Folders that emptied out before this ran — a merge in an older build, a rip the user pulled
     // out by hand. From now on each move sweeps up after itself (see [pruneVacated]); this clears
     // what is already there. Once per launch, not per scan: it walks every folder.
     unawaited(sweepEmptyFolders(library.rootPath));
-    await library.enrich(settings);
+    await fase('enrich', () => library.enrich(settings));
     // Reopen the last queue where you left off (paused) — covers are loaded by now.
-    await player.restore(library.trackByPath);
+    await fase('player.restore', () => player.restore(library.trackByPath));
     // Downloads that were still running when the app (or the PC) went down. After the scan, so
     // anything that did finish is already in the library and won't be fetched twice.
     try {
-      await downloads.resumePending();
+      await fase('resumePending', downloads.resumePending);
     } catch (_) {}
     // FLAC is koning, en dat vraagt om volhouden. De wens naar een lossless kopie staat op schijf en
     // wordt hier weer opgepakt: na de scan, zodat een FLAC die inmiddels van buiten de app is
@@ -598,11 +637,20 @@ Future<void> main() async {
     downloads.mapVanBestaande = library.fileOfRecording;
     unawaited(downloads.sweepLosslessWants());
     Timer.periodic(const Duration(minutes: 20), (_) => unawaited(downloads.sweepLosslessWants()));
-    await library.enrichArtists(settings);
+    await fase('enrichArtists', () => library.enrichArtists(settings));
     // Last, deliberately. Everything above this either draws the first screen or fetches something
     // you can see; this is the only part nobody is waiting for. Not awaited either — it runs for as
     // long as there are records it has not looked up yet.
-    unawaited(warmer.start());
+    // Niet awaited, dus `fase` past hier niet: dit loopt zolang er platen zijn die hij nog niet kent.
+    // Wel een begin- en eindregel, want juist HIER stopte het op 02-08 — midden in het ophalen van
+    // hoesmateriaal, met `front` geschreven en `done` niet. Zonder deze twee regels is "hij is nog
+    // bezig" niet te onderscheiden van "hij is blijven hangen".
+    startLog.line('warmer ... (loopt door op de achtergrond)');
+    unawaited(warmer.start().then(
+      (_) => startLog.line('warmer klaar'),
+      onError: (Object e) => startLog.line('warmer MISLUKT: $e'),
+    ));
+    startLog.line('--- opstarten af ---');
   }();
 }
 
