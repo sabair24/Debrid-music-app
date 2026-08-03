@@ -596,7 +596,29 @@ class SoulseekClient {
 
   void markClosed() {
     _afgemeldOp = DateTime.now();
+    logboek('afgemeld en afgesloten');
     unawaited(_saveGuard());
+  }
+
+  /// Wat er met de verbinding gebeurde, op schijf.
+  ///
+  /// Bestond niet, en dat is precies waarom dit onderzoek zo lang duurde: de app kon melden dat de
+  /// login geweigerd was zonder dat er ergens stond wát de server zei of wanneer. Elke verklaring was
+  /// daardoor een gok. Eén regel per gebeurtenis kost niets en maakt het verschil tussen weten en
+  /// vermoeden.
+  ///
+  /// Apart bestand (`soulseek_login.log`), niet soulseek.log: die staat vol met bestandskenmerken en
+  /// zou deze paar regels binnen een minuut onvindbaar maken.
+  void logboek(String s) {
+    try {
+      final f = File('$appDir${Platform.pathSeparator}soulseek_login.log');
+      if (f.existsSync() && f.lengthSync() > 128 * 1024) {
+        final houden = f.readAsStringSync();
+        f.writeAsStringSync(houden.substring(houden.length ~/ 2), flush: true);
+      }
+      final t = DateTime.now().toIso8601String().substring(0, 19).replaceFirst('T', ' ');
+      f.writeAsStringSync('$t  $s\n', mode: FileMode.append, flush: true);
+    } catch (_) {/* een logboek mag nooit de zaak breken die het observeert */}
   }
 
   /// Is dit de eerste login sinds het starten, en wel meteen erna? Dan is een INVALIDPASS vrijwel
@@ -1350,6 +1372,12 @@ class SlskSession {
       // Wélke gegevens er zojuist geprobeerd zijn. Zonder dit kan de client niet zien of een
       // INVALIDPASS over hetzelfde wachtwoord gaat dat gisteren nog werkte, of over een nieuw.
       final wie = SoulseekClient.credId(user, pass);
+      // WAT DE SERVER LETTERLIJK ZEI, naar schijf. Dit ontbrak, en daardoor stond de hele diagnose
+      // op los zand: de app kon melden dat de login geweigerd was zonder dat ergens vastlag waarom.
+      // Een release-build strijkt print weg, dus zonder bestand is dit onzichtbaar — dezelfde reden
+      // dat start.log en fps.log bestaan.
+      client.logboek('login als "$user" poort=${client.boundPort} '
+          '${ok ? "GELUKT" : "GEWEIGERD: \"$said\""}');
       if (!ok) {
         if (said == _noAnswer) {
           client.noteLoginNoAnswer();

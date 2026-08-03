@@ -285,12 +285,45 @@ class SoulseekService {
     } finally {
       _users--;
       if (_users == 0) _scheduleClose();
+      // Liep het mis op een botsing met de vorige sessie, dan lost de app dat vanaf nu zélf op in
+      // plaats van te wachten tot de gebruiker op "nu opnieuw proberen" drukt.
+      _plaatsHerkansing();
     }
   }
 
   /// Wordt één keer aangeroepen zodra er echt een sessie nodig is — de haak waarmee onderbroken
   /// downloads alsnog op gang komen zonder dat het opstarten zelf inlogt.
   void Function()? bijEersteGebruik;
+
+  /// Na een botsing met de vorige sessie: zelf opnieuw proberen, zonder dat de gebruiker iets doet.
+  ///
+  /// Dit was het gat waar Saber terecht op wees — "die knop moet zijn wat jij doet om de blokkade weg
+  /// te halen". De pauze liep na anderhalve minuut af, maar er gebeurde daarna niets: pas als je
+  /// tóevallig weer iets aanklikte werd het opnieuw geprobeerd, en anders bleef de melding staan.
+  ///
+  /// Alleen voor [SlskPause.herstart], en hoogstens twee keer. Een echte weigering hoort NIET
+  /// automatisch herhaald te worden: dan is doorgaan met kloppen precies wat het erger maakt.
+  Timer? _herkans;
+  int _herkansingen = 0;
+
+  void _plaatsHerkansing() {
+    if (client.pause != SlskPause.herstart) return;
+    if (_herkansingen >= 2) return;
+    final wacht = client.blockedFor;
+    if (wacht == null) return;
+    _herkans?.cancel();
+    _herkans = Timer(wacht + const Duration(seconds: 3), () async {
+      _herkansingen++;
+      client.logboek('herkansing $_herkansingen na een botsing — zelf opnieuw proberen');
+      client.allowOneRetry();
+      _session?.allowRetry();
+      try {
+        final ok = await verify();
+        client.logboek(ok ? 'herkansing gelukt' : 'herkansing mislukt');
+        if (!ok) _plaatsHerkansing();
+      } catch (_) {/* de volgende gebruikersactie probeert het toch weer */}
+    });
+  }
 
   /// Let go of the connection when nothing needs it, so the native client can log in again.
   ///
