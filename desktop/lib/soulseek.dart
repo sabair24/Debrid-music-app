@@ -1320,6 +1320,18 @@ class SlskSession {
     _lastLoginAttempt = now;
     _loginTries++;
     try {
+      // EERST de poort binden, dan pas inloggen.
+      //
+      // Het loginbericht draagt geen poort, maar het SetWaitPort dat er direct achteraan gaat wel — en
+      // dat las `boundPort` terwijl er nog niets gebonden was. Gemeten met het nieuwe logboek:
+      // `login als "leedagair" poort=0 GELUKT`, terwijl netstat de app wel degelijk op 10422 zag
+      // luisteren. Nul betekent voor Soulseek "ik ben onbereikbaar", en dan kan een peer achter een
+      // firewall ons niet bellen: minder zoekresultaten en meer mislukte overdrachten.
+      //
+      // De zoekfunctie repareerde dat een paar regels later met een tweede SetWaitPort, maar een
+      // sessie die alleen downloadt kwam daar nooit langs. Hier hoort het, want elke weg loopt hier
+      // voorbij. Mislukt het binden, dan is 0 nog steeds het eerlijke antwoord.
+      await client.ensureListening();
       final s = await Socket.connect(SoulseekClient._host, SoulseekClient._port, timeout: const Duration(seconds: 8));
       _server = s; // own the socket NOW so _drop() closes it on ANY failure path (no leak)
       final c = _Conn(s);
