@@ -1338,6 +1338,46 @@ bool sameRecording(String pathA, int? durA, String pathB, int? durB) {
   return true;
 }
 
+/// Bieden twee peers hetzelfde BESTAND aan — niet dezelfde opname, hetzelfde bestand?
+///
+/// Nadrukkelijk strenger dan [sameRecording], en met een andere opdracht. Die functie is bewust ruim:
+/// hij zoekt kopieën van hetzelfde nummer, want voor een automatische download geldt hoe meer peers
+/// hoe beter. Deze is er juist voor het geval dat de gebruiker ZELF een regel heeft aangeklikt. Dan is
+/// "een andere rip van hetzelfde nummer" geen bruikbaar alternatief maar precies de overrule die hij
+/// wilde wegnemen — bij Joe Dassin leverde de ruime regel een ánder nummer op.
+///
+/// Vier eisen, en elk van de vier is een keer nodig geweest:
+/// * dezelfde basisnaam MET extensie — mapnamen verschillen per peer, de bestandsnaam niet;
+/// * dezelfde extensie — een mp3 en een flac met dezelfde naam zijn niet hetzelfde bestand;
+/// * grootte binnen 2% of 1 MB, wat het ruimst is — tags en een ingesloten hoes schelen makkelijk een
+///   halve megabyte, dus byte-gelijkheid eisen zou elke echte kopie afwijzen;
+/// * speelduur binnen 2 seconden als beide hem melden. Niet de twaalf van [sameRecording]: die marge
+///   bestaat juist om verschillende rips te overbruggen, en dat is hier het tegenovergestelde.
+///
+/// Meldt een peer niets (grootte 0, duur onbekend), dan blijft alleen naam en extensie over. Liever
+/// een korte terugvallijst dan een verkeerd bestand: als er niets overblijft hoort de app dat te
+/// zeggen, niet iets anders te halen.
+bool zelfdeBestand(String pathA, int sizeA, int? durA, String pathB, int sizeB, int? durB) {
+  final a = baseName(pathA).trim().toLowerCase();
+  final b = baseName(pathB).trim().toLowerCase();
+  if (a.isEmpty || b.isEmpty) return false;
+  if (normKey(a) != normKey(b)) return false;
+  if (_ext(a) != _ext(b)) return false;
+  if (sizeA > 0 && sizeB > 0) {
+    final tweeProcent = (sizeA * 0.02).round();
+    final speling = tweeProcent > 1024 * 1024 ? tweeProcent : 1024 * 1024;
+    if ((sizeA - sizeB).abs() > speling) return false;
+  }
+  final da = durA ?? 0, db = durB ?? 0;
+  if (da > 0 && db > 0 && (da - db).abs() > 2) return false;
+  return true;
+}
+
+String _ext(String name) {
+  final i = name.lastIndexOf('.');
+  return i <= 0 || i == name.length - 1 ? '' : name.substring(i + 1);
+}
+
 /// Does [path] offer the track called [title] by [artist]?
 ///
 /// Unlike [sameRecording] this compares a bare catalogue title against a peer's path, so there is

@@ -206,6 +206,20 @@ enum SlskPause {
   /// one session per user, so this is the native client (or a phone) doing exactly what it should.
   kicked,
 
+  /// Onze eigen botsing: de vorige sessie van DEZE app staat bij Soulseek nog open.
+  ///
+  /// Dit was het geval waarvoor de zachte back-off op [SoulseekClient._backoff] geschreven is — de
+  /// opmerking daar beschrijft hem woordelijk — maar het werd nooit bereikt. De server stuurt
+  /// namelijk INVALIDPASS, en dat woord stuurde de code langs die tak heen naar [badLogin]: tien
+  /// minuten wachten plus de raad om een wachtwoord te wijzigen dat nergens fout was. Elke pc-herstart
+  /// leverde die melding op.
+  ///
+  /// De app meldt zich bij het afsluiten niet af, dus houdt de server de oude sessie nog even vast.
+  /// Dat lost zichzelf in een minuut of twee op — en sinds het venster netjes wordt afgemeld hoort dit
+  /// helemaal niet meer voor te komen. Blijft staan voor de gevallen waarin afmelden niet lukt: een
+  /// stroomstoring, een taakbeheer-kill, een blauw scherm.
+  herstart,
+
   /// Our own budget, not the server's: too many logins in too short a window.
   tooMany,
 }
@@ -550,12 +564,71 @@ class SoulseekClient {
         r.contains('PASSWORD');
   }
 
+  /// Wanneer deze app begon te draaien, en of er al een login geprobeerd is.
+  ///
+  /// Samen maken ze het verschil tussen "het wachtwoord deugt niet" en "onze vorige sessie staat nog
+  /// open". Beide leveren INVALIDPASS; alleen de omstandigheid scheidt ze.
+  DateTime? _gestart;
+  bool _eersteLoginGedaan = false;
+
+  /// Hoe lang na het starten een INVALIDPASS nog als botsing telt.
+  ///
+  /// De server laat een verweesde sessie binnen een minuut of twee los. Drie minuten is daar ruim
+  /// boven en nog steeds ver onder de tien minuten die een echt fout wachtwoord opleverde.
+  static const _herstartVenster = Duration(minutes: 3);
+
+  void markStart() {
+    _gestart = DateTime.now();
+    _eersteLoginGedaan = false;
+  }
+
+  /// Wanneer de app zich voor het laatst netjes heeft afgemeld.
+  ///
+  /// Verandert bewust GEEN enkele beslissing. Het staat er om de vraag te kunnen beantwoorden die dit
+  /// hele probleem opriep: kon de app afscheid nemen, of is hij weggevallen? Zonder dat veld is een
+  /// stroomstoring van een nette afsluiting niet te onderscheiden, en dan onderzoek je het de
+  /// volgende keer weer van voren af aan.
+  ///
+  /// De genadeperiode hangt er expres níét van af: ook na een nette afmelding kan de server de
+  /// sessie nog even vasthouden, en dan is "de vorige sessie staat nog open" nog steeds het ware
+  /// antwoord — en "sluit de officiële Soulseek-app" het verkeerde.
+  DateTime? _afgemeldOp;
+
+  void markClosed() {
+    _afgemeldOp = DateTime.now();
+    unawaited(_saveGuard());
+  }
+
+  /// Is dit de eerste login sinds het starten, en wel meteen erna? Dan is een INVALIDPASS vrijwel
+  /// zeker onze eigen vorige sessie en niet het wachtwoord.
+  bool get _ruiktNaarHerstart {
+    final t = _gestart;
+    return t != null && !_eersteLoginGedaan && DateTime.now().difference(t) < _herstartVenster;
+  }
+
   /// The server answered and said no. [reason] is its own text; pass it through unchanged.
-  void noteLoginRefused(String reason) {
+  /// [credId] is de vingerafdruk van de gegevens waarmee geprobeerd is — zie [_werkteEerderMet].
+  void noteLoginRefused(String reason, {String? credId}) {
     _decayRefusals();
     _serverSaid = reason.trim();
+    // Vóór elke beslissing, want ook een geweigerde poging is een poging: de tweede INVALIDPASS in
+    // dezelfde sessie mag niet nóg een keer als "herstart" wegwuiven wat dan echt fout kan zijn.
+    final herstart = _ruiktNaarHerstart;
+    _eersteLoginGedaan = true;
     if (_namesCredentials(_serverSaid)) {
-      if (_werkteEerder) {
+      // Zijn de gegevens VERANDERD sinds de laatste geslaagde login, dan is er niets te verzachten:
+      // dan gaat deze weigering vrijwel zeker wél over het wachtwoord. Deze test staat vóór de
+      // herstart-verklaring, anders zou een typefout in een nieuw wachtwoord anderhalve minuut lang
+      // als botsing worden weggewuifd.
+      final andereGegevens =
+          credId != null && _laatstGoedId != null && credId != _laatstGoedId;
+      if (herstart && !andereGegevens) {
+        // Zie [SlskPause.herstart]. Kort wachten en zelf opnieuw proberen: de gebruiker heeft hier
+        // niets te beslissen, en hem naar Instellingen sturen voor een wachtwoord dat klopt is de
+        // slechtste van alle antwoorden.
+        _pause = SlskPause.herstart;
+        _blockedUntil = DateTime.now().add(const Duration(seconds: 90));
+      } else if (!andereGegevens && _werkteEerderMet(credId)) {
         // Ditzelfde INVALIDPASS betekent hier iets heel anders: het account is elders in gebruik.
         // Zie [SlskPause.inUse]. Kort wachten, want het lost zichzelf op zodra de andere app dicht
         // gaat — en géén advies om een login te wijzigen die aantoonbaar werkte.
@@ -591,19 +664,42 @@ class SoulseekClient {
   /// want juist dan is de vraag "was dit ooit goed" niet meer uit het geheugen te beantwoorden.
   DateTime? _laatstGoed;
 
-  /// Een geslaagde login van niet te lang geleden. Ruim genomen: iemand die zijn wachtwoord wijzigt
-  /// merkt dat binnen een week, en tot die tijd is "elders in gebruik" de veel waarschijnlijkere
-  /// verklaring — het is de enige die vanzelf overgaat.
-  bool get _werkteEerder =>
-      _laatstGoed != null && DateTime.now().difference(_laatstGoed!) < const Duration(days: 7);
+  /// Een vingerafdruk van de inloggegevens die het laatst wérkten.
+  ///
+  /// Dicht het gat in [_werkteEerder]: die vroeg "werkte er ooit iets", niet "werkte dít". Wie zijn
+  /// wachtwoord wijzigt en het verkeerd overtikt kreeg daardoor twee minuten "account is elders in
+  /// gebruik" te zien — een verklaring die vanzelf overgaat, terwijl er juist iets te doen viel.
+  ///
+  /// Een hash en niet de gegevens zelf: dit bestand staat naast de rest van de app-toestand en er
+  /// hoort geen wachtwoord in, ook niet in stukjes.
+  static String credId(String user, String pass) =>
+      sha1.convert(utf8.encode('slsk|$user\n$pass')).toString();
 
-  void noteLoginOk() {
+  String? _laatstGoedId;
+
+  /// Een geslaagde login van niet te lang geleden, MET dezelfde gegevens. Ruim genomen in tijd: wie
+  /// zijn wachtwoord wijzigt merkt dat binnen een week, en tot die tijd is "elders in gebruik" de veel
+  /// waarschijnlijkere verklaring — het is de enige die vanzelf overgaat.
+  ///
+  /// [nu] is de vingerafdruk van de gegevens waarmee zojuist geprobeerd is; is die bekend en ANDERS
+  /// dan wat werkte, dan is het bewijs juist tegen ons en telt het niet mee.
+  bool _werkteEerderMet(String? nu) {
+    final t = _laatstGoed;
+    if (t == null || DateTime.now().difference(t) >= const Duration(days: 7)) return false;
+    if (nu == null || _laatstGoedId == null) return true;
+    return nu == _laatstGoedId;
+  }
+
+  void noteLoginOk({String? credId}) {
     _blockedUntil = null;
     _refusals = 0;
     _lastRefusalAt = null;
     _pause = SlskPause.none;
     _serverSaid = '';
     _laatstGoed = DateTime.now();
+    if (credId != null) _laatstGoedId = credId;
+    // Het herstartvenster is hiermee voorbij: wie eenmaal binnen is, botst niet meer met zichzelf.
+    _eersteLoginGedaan = true;
     unawaited(_saveGuard());
   }
 
@@ -618,29 +714,57 @@ class SoulseekClient {
   // fire-and-forget because a guard that cannot be saved must not stop a login from happening.
   File get _guardFile => appFile('soulseek_guard.json');
 
+  /// Pauzes die een herstart NIET mogen overleven.
+  ///
+  /// Allebei gaan ze over de vorige sessie, en die is er niet meer. Een [herstart]-pauze terugleggen
+  /// is dubbelop: hij bestaat juist om het opstarten te overbruggen. En een [badLogin] terugleggen was
+  /// de wrangste — die kwam er meestal doordat een botsing verkeerd werd uitgelegd, en dan begon de
+  /// volgende start meteen weer op tien minuten "wachtwoord klopt niet" zonder dat er iets geprobeerd
+  /// was. Wat een échte weigering is, blijkt vanzelf bij de eerstvolgende poging.
+  static const _nietOverHerstart = {SlskPause.herstart, SlskPause.badLogin};
+
   Future<void> loadGuard() async {
+    // Voordat er iets misgaan kan: het herstartvenster loopt vanaf hier, ook als het guard-bestand
+    // ontbreekt of onleesbaar is. Juist dan is er geen `laatstGoed` en zou een botsing als fout
+    // wachtwoord gelezen worden.
+    markStart();
     try {
       final f = _guardFile;
       if (!await f.exists()) return;
       final j = jsonDecode(await f.readAsString());
       if (j is! Map) return;
       final until = DateTime.tryParse('${j['blockedUntil'] ?? ''}');
+      final naam = '${j['pause'] ?? ''}';
+      final soort =
+          SlskPause.values.firstWhere((p) => p.name == naam, orElse: () => SlskPause.refused);
       // A wait that has already run out is not carried forward, and a clock that moved backwards
       // must not lock the account out for a day.
-      if (until != null && until.isAfter(DateTime.now()) &&
-          until.difference(DateTime.now()) <= const Duration(hours: 1)) {
+      if (until != null &&
+          until.isAfter(DateTime.now()) &&
+          until.difference(DateTime.now()) <= const Duration(hours: 1) &&
+          !_nietOverHerstart.contains(soort)) {
         _blockedUntil = until;
         // Only meaningful alongside a live wait; a stale reason with no wait would label a pause
         // that is not happening.
-        final name = '${j['pause'] ?? ''}';
-        _pause = SlskPause.values.firstWhere((p) => p.name == name, orElse: () => SlskPause.refused);
+        _pause = soort;
         _serverSaid = '${j['serverSaid'] ?? ''}';
       }
       _refusals = (j['refusals'] as num?)?.toInt() ?? 0;
       _lastRefusalAt = DateTime.tryParse('${j['lastRefusalAt'] ?? ''}');
       _laatstGoed = DateTime.tryParse('${j['laatstGoed'] ?? ''}');
+      _laatstGoedId = (j['laatstGoedId'] as String?)?.trim().isNotEmpty == true
+          ? j['laatstGoedId'] as String
+          : null;
+      _afgemeldOp = DateTime.tryParse('${j['afgemeldOp'] ?? ''}');
       // A file written yesterday must not start today on a half-hour wait.
       _decayRefusals();
+      // De loginteller komt WEL terug over een herstart, en dat blijft zo.
+      //
+      // Overwogen om hem te wissen: vier keer opstarten is vier keer één login, en dat voelt niet als
+      // een burst. Maar precies dat gat is ooit gerepareerd — zie de opmerking boven dit blok — en
+      // Soulseek telt onze herstarts nu eenmaal niet mee. Wat dit probleem oplost is dat de app zich
+      // netjes afmeldt en bij het starten niet meer ongevraagd inlogt; de teller hoeft daar niet voor
+      // te wijken.
       final times = (j['logins'] as List?) ?? const [];
       final cut = DateTime.now().subtract(_loginWindow);
       _loginTimes
@@ -678,6 +802,10 @@ class SoulseekClient {
       // van een geslaagde login, en dan zou het eerstvolgende INVALIDPASS weer als "wachtwoord fout"
       // gelezen worden — met tien minuten wachten en het verkeerde advies erbij. Zie [_werkteEerder].
       'laatstGoed': _laatstGoed?.toIso8601String(),
+      // Wélke gegevens dat waren. Een hash, nooit het wachtwoord zelf — zie [credId].
+      'laatstGoedId': _laatstGoedId,
+      // Alleen om achteraf te kunnen zien of de app afscheid heeft kunnen nemen. Zie [markClosed].
+      'afgemeldOp': _afgemeldOp?.toIso8601String(),
     });
     // The destination is fixed HERE, with the payload, not when the write's turn comes round. The
     // path is read from the app folder, and a queued write that resolves it later would land
@@ -749,6 +877,10 @@ class SoulseekClient {
         SlskPause.kicked =>
           'Je was ingelogd en bent er afgegooid: een andere Soulseek-app gebruikt dit account. '
               'Soulseek staat er één tegelijk toe. Sluit de officiële app, dan blijft deze verbonden.',
+        SlskPause.herstart =>
+          'De vorige sessie staat bij Soulseek nog open — dat gebeurt als de app niet netjes kon '
+              'afsluiten. Er is niets mis met je login; de app probeert het over anderhalve minuut '
+              'vanzelf opnieuw.',
         SlskPause.tooMany =>
           'Te vaak opnieuw ingelogd. Draait de officiële Soulseek-app? Sluit die — jullie kicken '
               'elkaar er dan om beurten uit. De app probeert het straks vanzelf opnieuw.',
@@ -762,6 +894,7 @@ class SoulseekClient {
         SlskPause.refused => 'Soulseek weigerde de login',
         SlskPause.noAnswer => 'Soulseek antwoordde niet',
         SlskPause.kicked => 'andere Soulseek-app heeft het account overgenomen',
+        SlskPause.herstart => 'vorige sessie staat nog open — probeert zo opnieuw',
         SlskPause.tooMany => 'te vaak ingelogd, even rustig aan',
       };
 
@@ -788,9 +921,9 @@ class SoulseekClient {
     }
   }
 
-  void noteLoggedIn() {
+  void noteLoggedIn({String? credId}) {
     _lastLoginOk = DateTime.now();
-    noteLoginOk();
+    noteLoginOk(credId: credId);
   }
 
 
@@ -1214,16 +1347,20 @@ class SlskSession {
       // silence means something is wrong with the connection, not with the account.
       final (ok, said) = await login.future
           .timeout(const Duration(seconds: 12), onTimeout: () => (false, _noAnswer));
+      // Wélke gegevens er zojuist geprobeerd zijn. Zonder dit kan de client niet zien of een
+      // INVALIDPASS over hetzelfde wachtwoord gaat dat gisteren nog werkte, of over een nieuw.
+      final wie = SoulseekClient.credId(user, pass);
       if (!ok) {
         if (said == _noAnswer) {
           client.noteLoginNoAnswer();
         } else {
-          client.noteLoginRefused(said); // trip the breaker — stop all Soulseek traffic for a while
+          // trip the breaker — stop all Soulseek traffic for a while
+          client.noteLoginRefused(said, credId: wie);
         }
         _drop();
         return false;
       }
-      client.noteLoggedIn();
+      client.noteLoggedIn(credId: wie);
       c.send(_message(2, (_W()..u32(client.boundPort)).bytes())); // SetWaitPort (real port if listening)
       _conn = c;
       _loginTries = 0; // healthy login → reset the consecutive-failure counter
@@ -1248,6 +1385,33 @@ class SlskSession {
     _server?.destroy();
     _server = null;
     _conn = null;
+  }
+
+  /// Afmelden op de enige manier die Soulseek kent: de verbinding netjes dichtdoen.
+  ///
+  /// Het protocol heeft GEEN logout-bericht — er valt niets te sturen. Wat wél verschil maakt is hoe
+  /// de socket weggaat: [_drop] gebruikt `destroy()`, dat de verbinding wegsmijt zonder af te ronden,
+  /// en dan blijft de sessie aan de serverkant nog even geregistreerd staan. Precies daarom botste de
+  /// eerstvolgende start met zichzelf. `close()` rondt af en stuurt een FIN.
+  ///
+  /// De VOLGORDE is het halve werk. `_sub` hangt aan `onDone`, en die vuurt bij een nette sluiting —
+  /// dan zou [_lost] denken dat we eraf gegooid zijn en de afmelding als [SlskPause.kicked] op schijf
+  /// zetten, compleet met vijf minuten blokkade. Eerst de lezer opzeggen, dan pas dichtdoen.
+  Future<void> signOff({Duration limit = const Duration(seconds: 2)}) async {
+    final s = _server;
+    await _sub?.cancel();
+    _sub = null;
+    _conn = null;
+    _server = null;
+    if (s == null) return;
+    try {
+      await s.close().timeout(limit);
+    } catch (_) {
+      // Een afmelding die niet lukt mag het afsluiten niet ophouden; de server laat de sessie dan
+      // vanzelf los, alleen wat trager.
+    } finally {
+      s.destroy();
+    }
   }
 
   /// Close the session's server connection (frees Soulseek's single connection slot).

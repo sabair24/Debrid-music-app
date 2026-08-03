@@ -712,8 +712,12 @@ class LanServer {
       if (f != null) candidates.add(f);
     }
     if (candidates.isEmpty) return false;
+    // De handmatige keuze van een Mac of iPad hoort hier net zo hard te gelden als op de pc zelf.
+    final gekozen = body['exact'];
     return manager.enqueueSoulseekBest(candidates,
-        key: body['key'] as String?, authority: _authorityOf(body));
+        key: body['key'] as String?,
+        authority: _authorityOf(body),
+        exact: gekozen is Map<String, dynamic> ? SoulseekFile.fromJson(gekozen) : null);
   }
 
   /// The body of `POST /api/soulseek/download-album`. How many tracks were started.

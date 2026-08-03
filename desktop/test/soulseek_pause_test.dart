@@ -145,17 +145,36 @@ void main() {
     expect(c.whyNotLogin, isNull);
   });
 
-  test('closing the app keeps the reason, not just the wait', () async {
+  test('een wachtwoordfout begint NIET opnieuw na een herstart', () async {
+    // Dit legde eerst het omgekeerde vast: `badLogin` overleefde een herstart. Dat leek zorgvuldig,
+    // maar het was de helft van de klacht "elke ochtend weer die fout". Zo'n pauze ontstond meestal
+    // doordat een BOTSING met de eigen vorige sessie als fout wachtwoord werd gelezen, en dan begon
+    // de volgende start meteen weer op tien minuten wachten zonder dat er iets geprobeerd was.
+    //
+    // Is het wachtwoord écht fout, dan blijkt dat bij de eerstvolgende poging opnieuw — en dan staat
+    // de melding er weer. Wat verdwijnt is alleen het wachten vóór die poging.
     final a = SoulseekClient()..noteLoginRefused('INVALIDPASS');
     await a.guardSaved();
-    expect(readGuard()['pause'], 'badLogin');
+    expect(readGuard()['pause'], 'badLogin', reason: 'op schijf blijft het wel genoteerd');
 
     // A new process, same folder.
     final b = SoulseekClient();
     await b.loadGuard();
+    expect(b.blocked, isFalse, reason: 'de nieuwe start mag meteen proberen');
+    expect(b.pause, SlskPause.none);
+  });
+
+  test('een kick of een gewone weigering overleeft de herstart nog steeds', () async {
+    // De tegenhanger van de test hierboven: alleen de twee pauzes die over de VORIGE sessie gaan
+    // vervallen. Een weigering die Soulseek zelf oplegde blijft staan, anders loopt de volgende start
+    // er meteen weer in en verdient hij een langere.
+    final a = SoulseekClient()..noteLoginRefused('busy, try later');
+    await a.guardSaved();
+    final b = SoulseekClient();
+    await b.loadGuard();
     expect(b.blocked, isTrue);
-    expect(b.pause, SlskPause.badLogin, reason: 'it came back knowing only that it had to wait');
-    expect(b.serverSaid, 'INVALIDPASS');
+    expect(b.pause, SlskPause.refused);
+    expect(b.serverSaid, 'busy, try later');
   });
 
   test('a kick survives a restart as a kick', () async {
@@ -208,6 +227,11 @@ void main() {
           c
             ..noteLoggedIn()
             ..noteConnectionLost();
+        case SlskPause.herstart:
+          // De botsing met onze eigen vorige sessie: net gestart, eerste login, en INVALIDPASS.
+          c
+            ..markStart()
+            ..noteLoginRefused('INVALIDPASS');
         case SlskPause.tooMany:
           for (var i = 0; i < 4; i++) {
             c.noteLoginAttempt();

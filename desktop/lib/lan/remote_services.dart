@@ -289,7 +289,7 @@ class RemoteDownloadManager extends DownloadManager {
 
   @override
   Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,
-      {String? key, TrackTags? authority}) async {
+      {String? key, TrackTags? authority, SoulseekFile? exact}) async {
     final payload = <String, dynamic>{
       'candidates': [for (final c in candidates) c.toJson()],
       'key': key,
@@ -298,6 +298,8 @@ class RemoteDownloadManager extends DownloadManager {
         // one the album already uses, and a collision is what the library reads as two pressings —
         // which is how a single album ends up as four tiles.
       if (authority != null) 'authority': authority.toJson(),
+      // Reist mee, anders zou de pc een handmatige keuze van de iPad alsnog herrangschikken.
+      if (exact != null) 'exact': exact.toJson(),
     };
     try {
       final res = await _rpc.post('/api/soulseek/download', payload);
@@ -369,7 +371,7 @@ class RemoteDownloadManager extends DownloadManager {
   /// Nothing to resume here — whatever was running is running on the PC, and the next poll shows
   /// it. Returning 0 keeps the startup path identical on both.
   @override
-  Future<int> resumePending() async => 0;
+  Future<int> resumePending({bool start = true}) async => 0;
 
   @override
   void dispose() {

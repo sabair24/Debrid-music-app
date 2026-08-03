@@ -273,12 +273,24 @@ class SoulseekService {
         _session = null;
       }
       final s = _session ??= client.newSession(settings.soulseekUser, settings.soulseekPass);
+      // Er gaat nú iets naar Soulseek, dus dit is het moment waarop uitgestelde taken alsnog mogen.
+      // Zie [DownloadManager.resumePending]: die start bij het opstarten niets meer, want een login
+      // vóór de eerste gebruikersactie is precies wat met de vorige sessie botste.
+      final wacht = bijEersteGebruik;
+      if (wacht != null) {
+        bijEersteGebruik = null;
+        wacht();
+      }
       return await body(s);
     } finally {
       _users--;
       if (_users == 0) _scheduleClose();
     }
   }
+
+  /// Wordt één keer aangeroepen zodra er echt een sessie nodig is — de haak waarmee onderbroken
+  /// downloads alsnog op gang komen zonder dat het opstarten zelf inlogt.
+  void Function()? bijEersteGebruik;
 
   /// Let go of the connection when nothing needs it, so the native client can log in again.
   void _scheduleClose() {
@@ -298,6 +310,21 @@ class SoulseekService {
     _idle?.cancel();
     _session?.close();
     _session = null;
+  }
+
+  /// Afmelden bij Soulseek omdat het venster dichtgaat.
+  ///
+  /// Bewust NIET afbreken op [_users], zoals [disposeSession] doet. Die terughoudendheid klopt tijdens
+  /// het draaien — een sessie wegnemen onder een lopende download vandaan levert een weesverbinding op
+  /// die zichzelf opnieuw aanmeldt. Maar bij het sluiten gaat het proces hoe dan ook weg, en dan is
+  /// vasthouden juist hoe het spook ontstaat waar de volgende start mee botst.
+  ///
+  /// Wachten hoort hier wél: zie [SlskSession.signOff] voor waarom de volgorde ertoe doet.
+  Future<void> signOff() async {
+    _idle?.cancel();
+    final s = _session;
+    _session = null;
+    await s?.signOff();
   }
 
   /// Confirm the Soulseek login works (used by the connection-status check).
@@ -368,6 +395,13 @@ class DownloadJob {
   /// Every peer copy this job may fall back on — kept so the job can be written down and picked
   /// up again after a restart.
   List<SoulseekFile> candidates = const [];
+
+  /// Het bestand dat de gebruiker ZELF aanwees, als hij dat deed.
+  ///
+  /// Gevuld betekent: haal dit, niet iets wat er volgens de rangschikking op lijkt. Alles wat de
+  /// kwaliteitsjacht doet staat dan uit — sorteren, poolsplitsing, opwaarderen achteraf. Zie
+  /// [DownloadManager.enqueueSoulseekBest].
+  SoulseekFile? exact;
 
   /// What this track IS, according to the official release the user was looking at — not according
   /// to whichever peer happened to serve it. Soulseek delivers the audio; this decides the name,
@@ -598,8 +632,17 @@ class DownloadManager extends ChangeNotifier {
   /// Download one track, trying its candidate peers best-first until one succeeds.
   /// [candidates] are copies of the SAME track from different peers. [key] lets the UI show
   /// this job's live progress inline on the tile/track row that started it.
+  /// [exact] is het bestand waar de gebruiker ZELF op klikte in de Soulseek-lijst.
+  ///
+  /// Staat het gevuld, dan is de opdracht een andere: niet "haal dit nummer" maar "haal dit bestand".
+  /// De hele kwaliteitsjacht gaat dan uit — zie [_soulseekBest]. Aanleiding: bij Joe Dassin is de
+  /// best gerangschikte kopie een ánder nummer, en de gebruiker kon de juiste versie daardoor niet
+  /// binnenhalen, hoe vaak hij er ook op klikte.
+  ///
+  /// Een [SoulseekFile] en geen `bool`: de aanroeper verbreedt één klik naar een kandidatenlijst, dus
+  /// de manager moet weten wélk element het was. Bovendien overleeft het zo de notitie op schijf.
   Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,
-      {String? key, TrackTags? authority}) async {
+      {String? key, TrackTags? authority, SoulseekFile? exact}) async {
     if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
     if (candidates.isEmpty) return false;
     // Don't start a duplicate if this exact key is already in progress.
@@ -616,14 +659,21 @@ class DownloadManager extends ChangeNotifier {
     // The key carries the DURATION as well as the name: on name alone, "Intro" from one album
     // blocked "Intro" from another, and refusing a download the user actually wanted is worse
     // than allowing a duplicate.
-    final track = _trackIdOf(candidates.first);
+    //
+    // Bij een handmatige keuze geldt dat NIET. Juist dat blokkeerde de gebruiker: de automatische
+    // keuze had het "nummer" al te pakken (de verkeerde opname), en elke poging om er zelf een andere
+    // kopie bij te halen werd geweigerd met "loopt al". De sleutel `username|filename` beschermt hier
+    // nog steeds tegen twee keer klikken op dezelfde regel.
+    final track = exact == null ? _trackIdOf(candidates.first) : '';
     if (track.isNotEmpty && jobs.any((j) => j.busy && j.trackKey == track)) return false;
     // Starts as 'queued': with parallel downloads a job can sit waiting for a slot, and showing a
     // spinning progress ring for it looked like a stuck download. _soulseekBest flips it to
     // 'downloading' once it actually starts.
-    final job = DownloadJob(candidates.first.displayName, key: key, status: 'queued')..trackKey = track
+    final job = DownloadJob((exact ?? candidates.first).displayName, key: key, status: 'queued')
+      ..trackKey = track
       ..canCancel = true
       ..authority = authority
+      ..exact = exact
       ..candidates = candidates;
     jobs.insert(0, job);
     notifyListeners();
@@ -659,17 +709,31 @@ class DownloadManager extends ChangeNotifier {
             'key': j.key,
             'candidates': [for (final c in j.candidates) c.toJson()],
             if (j.authority != null) 'authority': j.authority!.toJson(),
+            // Een pc die middenin uitviel hervat de GEKOZEN kopie, niet de best gerangschikte.
+            if (j.exact != null) 'exact': j.exact!.toJson(),
           }
       ]));
     } catch (_) {/* losing the note is not worth failing a download over */}
   }
+
+  /// Hoeveel onderbroken downloads er klaarstaan, zonder er één te starten.
+  ///
+  /// Gevuld door [resumePending] bij het opstarten. Ze beginnen pas als er om een ándere reden een
+  /// Soulseek-sessie opengaat, of als de gebruiker op "nu hervatten" drukt.
+  int wachtendeHervattingen = 0;
 
   /// Pick up where we left off. Called once at startup, after the library is loaded.
   ///
   /// Restarted from scratch rather than continued byte-for-byte: the half-file in staging came
   /// from one particular peer that may well be gone, and the race will find whoever is fastest
   /// right now anyway. Staging is cleared first — nothing in there can be live at startup.
-  Future<int> resumePending() async {
+  ///
+  /// [start] staat bij het opstarten op false, en dat is de hele reparatie van "elke pc-herstart een
+  /// wachtwoordfout". Dit was het eerste wat na een herstart inlogde — vóór enige gebruikersactie, en
+  /// dus precies op het moment dat de vorige sessie bij Soulseek nog geregistreerd stond. De taken
+  /// worden wel gelezen en geteld; ze gaan lopen zodra er toch een sessie nodig is (zie
+  /// [SoulseekService.bijEersteGebruik]) of op de knop in Mijn downloads.
+  Future<int> resumePending({bool start = true}) async {
     List<dynamic> saved;
     try {
       if (!await _pendingFile.exists()) return 0;
@@ -687,15 +751,31 @@ class DownloadManager extends ChangeNotifier {
       ].whereType<SoulseekFile>().toList();
       if (cands.isEmpty) continue;
       n++;
+      if (!start) continue;
       // Not awaited: they run in parallel under the usual slot cap, and startup mustn't block.
       // A row written before this existed simply has no authority and behaves as it always did.
       final auth = e['authority'];
+      final exact = e['exact'];
       unawaited(enqueueSoulseekBest(cands,
               key: e['key'] as String?,
-              authority: auth is Map<String, dynamic> ? TrackTags.fromJson(auth) : null)
+              authority: auth is Map<String, dynamic> ? TrackTags.fromJson(auth) : null,
+              exact: exact is Map<String, dynamic> ? SoulseekFile.fromJson(exact) : null)
           .catchError((_) => false));
     }
+    wachtendeHervattingen = start ? 0 : n;
+    if (!start && n > 0) notifyListeners();
     return n;
+  }
+
+  /// De uitgestelde hervattingen alsnog starten.
+  ///
+  /// Eén keer: daarna is de notitie op schijf leidend en zou een tweede ronde dezelfde downloads
+  /// dubbel opstarten.
+  Future<int> hervatWachtende() async {
+    if (wachtendeHervattingen == 0) return 0;
+    wachtendeHervattingen = 0;
+    notifyListeners();
+    return resumePending();
   }
 
   /// Everything in staging at startup is a leftover from a session that ended mid-transfer.
@@ -711,7 +791,13 @@ class DownloadManager extends ChangeNotifier {
   /// new server login.
   Future<bool> _soulseekBest(
       List<SoulseekFile> candidates, DownloadJob job, SlskSession session, void Function() releaseSlot) async {
-    final ranked = [...candidates]..sort(_rankSlsk);
+    // Koos de gebruiker zelf, dan is er niets te rangschikken: elke kandidaat is per definitie
+    // hetzelfde bestand, en zijn keuze hoort vooraan. Sorteren op kwaliteit is precies wat hem het
+    // verkeerde nummer bezorgde.
+    final keuze = job.exact;
+    final ranked = keuze == null
+        ? ([...candidates]..sort(_rankSlsk))
+        : [keuze, ...candidates.where((c) => c.username != keuze.username || c.filename != keuze.filename)];
 
     /// Shared success path: file the track away tidily (Albums/Singles/Compilaties per artist)
     /// before the rescan picks it up, so the library never sees the loose landing-zone copy.
@@ -756,16 +842,25 @@ class DownloadManager extends ChangeNotifier {
     // best, so quality has to be decided by which pool runs — not by sorting inside one. Racing
     // surround alongside stereo did exactly what it sounds like: a free 5.1 rip beat every stereo
     // peer, landed 103 MB, and the upgrade chase then fetched the 32 MB stereo copy anyway.
-    final stereo = ranked.where((f) => isLossless(f) && !isMultichannel(f)).toList();
-    final surround = ranked.where((f) => isLossless(f) && isMultichannel(f)).toList();
+    //
+    // Bij een handmatige keuze vervalt de hele indeling: één bak, één ronde. Anders zou een bewust
+    // aangeklikte MP3 pas in de derde ronde aan bod komen, nadat elke lossless kopie van iets anders
+    // geprobeerd is — en dat is de overrule die weg moest.
+    final stereo = keuze != null
+        ? ranked
+        : ranked.where((f) => isLossless(f) && !isMultichannel(f)).toList();
+    final surround =
+        keuze != null ? <SoulseekFile>[] : ranked.where((f) => isLossless(f) && isMultichannel(f)).toList();
     // An MP3 stays what it has always been here: an absolute last resort, never a shortcut — so a
     // free MP3 does NOT beat waiting for a FLAC.
-    final lossy = ranked.where((f) => !isLossless(f)).toList();
+    final lossy = keuze != null ? <SoulseekFile>[] : ranked.where((f) => !isLossless(f)).toList();
 
     // De eerste vraag bij "hij kwam niet binnen" is of er überhaupt iets te halen was. Zonder deze
     // regel is "geen kandidaat gevonden" niet te onderscheiden van "wel gevonden, maar afgebroken".
-    _log.line('"${job.name}": ${ranked.length} kandidaten '
-        '(stereo ${stereo.length}, surround ${surround.length}, lossy ${lossy.length})');
+    _log.line(keuze != null
+        ? '"${job.name}": VASTE KEUZE van ${keuze.username}, ${ranked.length} peers met exact dit bestand'
+        : '"${job.name}": ${ranked.length} kandidaten '
+            '(stereo ${stereo.length}, surround ${surround.length}, lossy ${lossy.length})');
     for (final f in ranked.take(3)) {
       _log.line('   beste: ${f.username}  ${f.displayName}  '
           '${isLossless(f) ? "lossless" : "lossy"}  wachtrij=${f.queueLength} vrij=${f.freeSlots}');
@@ -785,7 +880,7 @@ class DownloadManager extends ChangeNotifier {
     /// sockets, zero extra logins.
     Future<(SlskDone, SoulseekFile)?> race(List<SoulseekFile> pool, String label) async {
       final cap = identical(pool, lossy) ? _maxLossyTries : _maxLosslessTries;
-      final order = sweepOrderFor(pool);
+      final order = sweepOrderFor(pool, first: keuze);
       final n = order.length < cap ? order.length : cap;
 
       SlskDone? winner;
@@ -902,6 +997,10 @@ class DownloadManager extends ChangeNotifier {
     /// we only took because no lossless could be had.
     Future<bool> finish(SlskDone res, SoulseekFile from) async {
       final ok = await succeed(res);
+      // Bij een handmatige keuze: niets van dit alles. "Beter" is hier een ánder bestand, en de
+      // gebruiker heeft juist gezegd dat hij DIT wil. Dagen later alsnog vervangen door een kopie die
+      // hoger scoort is dezelfde overrule, alleen trager.
+      if (keuze != null) return ok;
       final better = ranked.where((f) => clearlyBetter(f, from)).toList();
       if (ok && better.isNotEmpty) _queueUpgrade(better, job);
       // FLAC is koning. Landde er lossy, dan blijft de FLAC gewenst -- ook als er vandaag geen enkele
@@ -942,7 +1041,12 @@ class DownloadManager extends ChangeNotifier {
     job.queuePlace = 0;
     // Don't rewrite the user's own stop as an uploader failure and invite them to retry.
     if (!job.cancelled) {
-      job.detail = 'geen enkele bron leverde — probeer later opnieuw';
+      // Bij een vaste keuze is "geen enkele bron leverde" misleidend: er is niet gezocht, er is
+      // precies één bestand geprobeerd. De gebruiker moet weten dat zijn keuze gerespecteerd is en
+      // dat de volgende stap bij hem ligt.
+      job.detail = keuze != null
+          ? 'deze kopie kwam niet binnen — kies een andere regel in de lijst'
+          : 'geen enkele bron leverde — probeer later opnieuw';
     }
     notifyListeners();
     return false;
@@ -1287,18 +1391,30 @@ class DownloadManager extends ChangeNotifier {
   /// * FREE SLOTS FIRST. A peer that says it has a slot open is the whole point of this pass.
   ///   Quality still decides between two free peers, and the background upgrade goes after the
   ///   hi-res copy afterwards — so nothing is given up, it just plays sooner.
-  static List<SoulseekFile> sweepOrderFor(List<SoulseekFile> pool) {
+  ///
+  /// [first] is het bestand dat de gebruiker zélf aanwees. Dat moet vooraan blijven, en het mag
+  /// bovenal niet door `bestPerPeer` verdwijnen: bood diezelfde peer ook een hoger scorende kopie
+  /// aan, dan viel juist de aangeklikte weg — en dat was, samen met de sortering, waarom een
+  /// handmatige keuze niet aankwam.
+  static List<SoulseekFile> sweepOrderFor(List<SoulseekFile> pool, {SoulseekFile? first}) {
     final bestPerPeer = <String, SoulseekFile>{};
     for (final f in pool) {
       final cur = bestPerPeer[f.username];
       if (cur == null || _slskScore(f) > _slskScore(cur)) bestPerPeer[f.username] = f;
     }
+    // De keuze van de gebruiker wint van "de beste van deze peer" — anders wordt hij hier alsnog
+    // weggestreept door een kopie die hij niet vroeg.
+    if (first != null) bestPerPeer[first.username] = first;
     final out = bestPerPeer.values.toList();
     out.sort((a, b) {
       if (a.freeSlots != b.freeSlots) return a.freeSlots ? -1 : 1;
       if (a.queueLength != b.queueLength) return a.queueLength.compareTo(b.queueLength);
       return _slskScore(b) - _slskScore(a);
     });
+    if (first != null) {
+      out.removeWhere((f) => f.username == first.username && f.filename == first.filename);
+      out.insert(0, first);
+    }
     return out;
   }
 

@@ -162,6 +162,64 @@ Future<void> _flushStores(LibraryStore library) async {
   }
 }
 
+/// Alles wat af moet zijn voordat het proces weggaat.
+///
+/// Soulseek staat hier om één reden: de app meldde zich NOOIT af. `disposeSession()` bestond wel maar
+/// werd nergens bereikt — de manager hangt met `.value` in de wortel van de boom, en die wordt bij het
+/// sluiten niet afgebroken, dus `dispose()` draaide nooit. Het gevolg was een sessie die aan de
+/// serverkant bleef staan, en een volgende start die met zijn eigen spook botste: INVALIDPASS, en de
+/// app las dat als "gebruikersnaam of wachtwoord klopt niet". Elke pc-herstart opnieuw.
+///
+/// `guardSaved()` wordt hier als enige plek AFGEWACHT. Overal elders is het schrijven bewust
+/// fire-and-forget, want een guard die niet kan schrijven mag geen login tegenhouden — maar juist bij
+/// het afsluiten is dat de reden dat `laatstGoed` kon verdwijnen, en dat veld beslist welke verklaring
+/// de volgende start kiest.
+///
+/// Vastgehouden zolang het proces leeft, net als [_saveOnLeaving].
+// ignore: unused_element
+_NetjesAfsluiten? _sluiter;
+
+/// Houdt het venster één tel tegen om af te melden, en laat het dan hoe dan ook gaan.
+///
+/// `setPreventClose(true)` is een scherp mes: gaat er hierna iets mis of blijft er iets hangen, dan
+/// sluit de app helemaal niet meer. Vandaar de tijdslimiet én `destroy()` in een `finally` — niet als
+/// nettigheid maar als vangnet. Twee seconden is ruim voor een socket die dichtgaat en een klein
+/// JSON-bestand, en kort genoeg om niet als vastloper te voelen.
+class _NetjesAfsluiten with WindowListener {
+  _NetjesAfsluiten(this.library, this.soulseek);
+  final LibraryStore library;
+  final SoulseekService soulseek;
+  bool _bezig = false;
+
+  @override
+  void onWindowClose() async {
+    // Twee keer op het kruisje is geen reden om twee keer af te melden.
+    if (_bezig) return;
+    _bezig = true;
+    try {
+      await afsluiten(library, soulseek).timeout(const Duration(seconds: 3));
+    } catch (_) {/* een afscheid dat niet lukt mag het venster niet gijzelen */}
+    try {
+      await windowManager.setPreventClose(false);
+    } catch (_) {}
+    await windowManager.destroy();
+  }
+}
+
+/// Vrije functie en geen methode: zo is hij te testen zonder venster.
+Future<void> afsluiten(LibraryStore library, SoulseekService soulseek) async {
+  try {
+    await _flushStores(library);
+  } catch (_) {}
+  try {
+    await soulseek.signOff();
+  } catch (_) {}
+  try {
+    soulseek.client.markClosed();
+    await soulseek.client.guardSaved();
+  } catch (_) {}
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
@@ -454,8 +512,17 @@ Future<void> main() async {
   _saveOnLeaving = AppLifecycleListener(
     onHide: () => unawaited(_flushStores(library)),
     onPause: () => unawaited(_flushStores(library)),
-    onDetach: () => unawaited(_flushStores(library)),
+    onDetach: () => unawaited(afsluiten(library, soulseek)),
   );
+
+  // Het venster mag pas dicht als we ons hebben afgemeld — anders blijft de sessie aan de serverkant
+  // staan en botst de volgende start ermee. Alleen op de pc: op Android is er geen venster om te
+  // sluiten en wordt het proces gewoon weggehaald.
+  if (mode.owner && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
+    _sluiter = _NetjesAfsluiten(library, soulseek);
+    await windowManager.setPreventClose(true);
+    windowManager.addListener(_sluiter!);
+  }
 
   runApp(
     MultiProvider(
@@ -623,9 +690,14 @@ Future<void> main() async {
     await fase('player.restore', () => player.restore(library.trackByPath));
     // Downloads that were still running when the app (or the PC) went down. After the scan, so
     // anything that did finish is already in the library and won't be fetched twice.
+    // Wel INLEZEN, niet starten. Dit was het eerste dat na een pc-herstart inlogde bij Soulseek —
+    // vóór de gebruiker iets deed, en dus precies op het moment dat de vorige sessie daar nog
+    // geregistreerd stond. Het gevolg was elke ochtend "gebruikersnaam of wachtwoord klopt niet".
+    // Ze gaan alsnog lopen zodra er om een andere reden een sessie nodig is, of op de knop.
     try {
-      await fase('resumePending', downloads.resumePending);
+      await fase('resumePending', () => downloads.resumePending(start: false));
     } catch (_) {}
+    soulseek.bijEersteGebruik = () => unawaited(downloads.hervatWachtende());
     // FLAC is koning, en dat vraagt om volhouden. De wens naar een lossless kopie staat op schijf en
     // wordt hier weer opgepakt: na de scan, zodat een FLAC die inmiddels van buiten de app is
     // binnengekomen de wens laat vervallen in plaats van hem opnieuw te laten halen.
@@ -638,7 +710,9 @@ Future<void> main() async {
     // zijn eigen albumtag volgt en ook niet ernaast onder een andere naam. Zie
     // [LibraryStore.fileOfRecording].
     downloads.mapVanBestaande = library.fileOfRecording;
-    unawaited(downloads.sweepLosslessWants());
+    // Niet meteen: dit logde bij het opstarten in zonder dat iemand erom vroeg, en botste dan met de
+    // sessie die de vorige keer nooit is afgemeld. Een wens die dagen loopt kan drie minuten wachten.
+    Timer(const Duration(minutes: 3), () => unawaited(downloads.sweepLosslessWants()));
     Timer.periodic(const Duration(minutes: 20), (_) => unawaited(downloads.sweepLosslessWants()));
     await fase('enrichArtists', () => library.enrichArtists(settings));
     // Last, deliberately. Everything above this either draws the first screen or fetches something
@@ -6341,17 +6415,38 @@ Future<void> _confirmDelete(BuildContext context, String what, List<String> path
 
 String _slskKey(SoulseekFile f) => '${f.username}|${f.filename}';
 
+/// Een regel uit de Soulseek-lijst downloaden — precies díé, en geen andere.
+///
+/// Klikken op een regel betekende tot nu toe "haal dit nummer": de klik werd verbreed tot elke kopie
+/// die erop leek, en daarna won de best gerangschikte. Bij Joe Dassin was dat een ánder nummer, en
+/// omdat de dubbelcontrole daarna elke tweede poging weigerde met "loopt al" viel er niets meer te
+/// kiezen. De regel ís het bestand — dat was altijd al het mentale model, alleen niet de code.
+///
+/// Terugvallen mag nog steeds, maar alleen op peers die exact hetzelfde bestand aanbieden
+/// ([zelfdeBestand]). De automatische kant blijft ongemoeid: de pijl op een nummerregel van de
+/// albumpagina zoekt nog gewoon de beste kopie.
 Future<void> _downloadSoulseek(BuildContext context, SoulseekFile f, List<SoulseekFile> all,
     {TrackTags? authority}) async {
   try {
+    final zelfde = [
+      f,
+      for (final o in all)
+        if (o.isAudio &&
+            (o.username != f.username || o.filename != f.filename) &&
+            zelfdeBestand(f.filename, f.size, f.durationSec, o.filename, o.size, o.durationSec))
+          o,
+    ];
     // false means it was refused — this track is already downloading. Say so; a "started" message
     // for something that never started is worse than no message.
     final started = await context
         .read<DownloadManager>()
-        .enqueueSoulseekBest(_slskCandidates(all, f), key: _slskKey(f), authority: authority);
+        .enqueueSoulseekBest(zelfde, key: _slskKey(f), authority: authority, exact: f);
     if (context.mounted) {
-      _srcToast(context,
-          started ? '“${f.displayName}” via Soulseek…' : '“${f.displayName}” loopt al — zie Mijn downloads.');
+      _srcToast(
+          context,
+          started
+              ? '“${f.displayName}” van ${f.username} — precies dit bestand…'
+              : '“${f.displayName}” loopt al — zie Mijn downloads.');
     }
   } catch (e) {
     if (context.mounted) _srcToast(context, 'Download mislukt: $e');
@@ -6435,6 +6530,31 @@ class DownloadsView extends StatelessWidget {
                   ),
               ],
             ),
+            // Downloads die door het afsluiten zijn afgebroken. Ze starten niet meer vanzelf bij het
+            // opstarten — dat is juist wat de valse wachtwoordfout veroorzaakte — dus hier staat wat
+            // er klaarligt en waarom het wacht.
+            if (dm.wachtendeHervattingen > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Row(
+                  children: [
+                    const Icon(Icons.history_rounded, size: 16, color: _muted),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${dm.wachtendeHervattingen} onderbroken download'
+                        '${dm.wachtendeHervattingen == 1 ? "" : "s"} — gaan vanzelf verder zodra je '
+                        'Soulseek gebruikt',
+                        style: const TextStyle(color: _muted, fontSize: 12.5),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => unawaited(dm.hervatWachtende()),
+                      child: const Text('nu hervatten'),
+                    ),
+                  ],
+                ),
+              ),
             const SizedBox(height: 18),
             if (dm.jobs.isEmpty)
               const Padding(
