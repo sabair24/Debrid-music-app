@@ -293,12 +293,20 @@ class SoulseekService {
   void Function()? bijEersteGebruik;
 
   /// Let go of the connection when nothing needs it, so the native client can log in again.
+  ///
+  /// Netjes afmelden, net als bij het afsluiten. Dit is namelijk de weg die in de praktijk ALTIJD
+  /// wordt gelopen: wie om 19:23 iets downloadt is om 19:25 klaar, en dan sluit deze klok de
+  /// verbinding — lang voordat het venster dichtgaat. Zolang hier `close()` stond (en dus
+  /// `Socket.destroy()`, wegsmijten zonder af te ronden) bleef de sessie aan de serverkant staan, en
+  /// botste de vólgende start ermee. De nette afmelding bij het sluiten van het venster vond dan al
+  /// niets meer om af te melden; gemeten op drie seconden verschil.
   void _scheduleClose() {
     _idle?.cancel();
     _idle = Timer(const Duration(seconds: 120), () {
       if (_users > 0) return;
-      _session?.close();
+      final s = _session;
       _session = null;
+      unawaited(s?.signOff() ?? Future.value());
     });
   }
 
@@ -308,8 +316,11 @@ class SoulseekService {
   void disposeSession() {
     if (_users > 0) return;
     _idle?.cancel();
-    _session?.close();
+    final s = _session;
     _session = null;
+    // Ook hier afmelden en niet wegsmijten — zie [_scheduleClose]. Niet afgewacht, want deze weg
+    // loopt via `dispose()` en dat mag niet blokkeren; [signOff] doet het werk toch af.
+    unawaited(s?.signOff() ?? Future.value());
   }
 
   /// Afmelden bij Soulseek omdat het venster dichtgaat.

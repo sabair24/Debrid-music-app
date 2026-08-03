@@ -8,6 +8,9 @@ import 'dart:ui' show ImageFilter;
 // with the player's. Ours is the one this app means everywhere.
 import 'package:flutter/material.dart' hide RepeatMode;
 import 'package:flutter/foundation.dart' show mapEquals;
+// AppExitResponse hoort bij de haak die Windows gebruikt als het de app wil beëindigen — zie
+// _saveOnLeaving. Hij woont in dart:ui; material.dart exporteert hem niet.
+import 'dart:ui' show AppExitResponse;
 // For PointerDeviceKind: the nav chip is drag-scrolled with a mouse, which Flutter leaves out of
 // the default set on purpose.
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
@@ -513,6 +516,16 @@ Future<void> main() async {
     onHide: () => unawaited(_flushStores(library)),
     onPause: () => unawaited(_flushStores(library)),
     onDetach: () => unawaited(afsluiten(library, soulseek)),
+    // Windows afsluiten stuurt GEEN vensterklik. Wie de pc uitzet met de app open kreeg dus nooit de
+    // afmelding uit [_NetjesAfsluiten] — en juist dat is het geval waar de klacht over ging, want
+    // daarna botste de volgende start met de sessie die was blijven staan. Dit is de haak die het
+    // systeem wél aanbiedt als het de app wil beëindigen.
+    onExitRequested: () async {
+      try {
+        await afsluiten(library, soulseek).timeout(const Duration(seconds: 3));
+      } catch (_) {/* nooit het afsluiten van de pc ophouden */}
+      return AppExitResponse.exit;
+    },
   );
 
   // Het venster mag pas dicht als we ons hebben afgemeld — anders blijft de sessie aan de serverkant
