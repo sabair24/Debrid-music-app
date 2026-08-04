@@ -629,17 +629,13 @@ class SoulseekClient {
   ///
   /// Apart bestand (`soulseek_login.log`), niet soulseek.log: die staat vol met bestandskenmerken en
   /// zou deze paar regels binnen een minuut onvindbaar maken.
-  void logboek(String s) {
-    try {
-      final f = File('$appDir${Platform.pathSeparator}soulseek_login.log');
-      if (f.existsSync() && f.lengthSync() > 128 * 1024) {
-        final houden = f.readAsStringSync();
-        f.writeAsStringSync(houden.substring(houden.length ~/ 2), flush: true);
-      }
-      final t = DateTime.now().toIso8601String().substring(0, 19).replaceFirst('T', ' ');
-      f.writeAsStringSync('$t  $s\n', mode: FileMode.append, flush: true);
-    } catch (_) {/* een logboek mag nooit de zaak breken die het observeert */}
-  }
+  /// Schrijft via [WarmLog], zodat er nog maar ÉÉN manier van logboek schrijven in de app is.
+  ///
+  /// Dit bestand had zijn eigen kopie met `FileMode.append`, en dat is precies de vorm die op Sabers
+  /// pc geruisloos niets deed terwijl de app in dezelfde map wél tientallen andere bestanden schreef.
+  /// Twee kopieën van dezelfde functie betekende ook twee keer dezelfde fout repareren.
+  void logboek(String s) =>
+      WarmLog('$appDir${Platform.pathSeparator}soulseek_login.log').line(s);
 
   /// Is dit de eerste login sinds het starten, en wel meteen erna? Dan is een INVALIDPASS vrijwel
   /// zeker onze eigen vorige sessie en niet het wachtwoord.
@@ -918,7 +914,23 @@ class SoulseekClient {
         await tmp.writeAsString(payload);
         await tmp.rename(dest.path);
       } catch (e) {
+        // NIET alleen debugPrint: dat wordt in een release-build weggegooid, en dan is een guard die
+        // niet bewaart precies zo onzichtbaar als een logboek dat niet schrijft. Op 04-08-2026 bleef
+        // dit bestand een hele avond op 21:22:08 staan terwijl de app in dezelfde map vrolijk
+        // hoezen wegschreef — en dat was nergens te zien.
+        //
+        // Tweede kans langs de weg die daar aantoonbaar wél werkte: gewoon het bestand schrijven,
+        // zonder tijdelijk bestand en zonder hernoemen. Minder netjes bij een stroomstoring, maar een
+        // guard die niets bewaart is erger dan een guard die ooit half geschreven wordt.
         debugPrint('Could not save soulseek_guard.json: $e');
+        WarmLog('$appDir${Platform.pathSeparator}soulseek_login.log')
+            .line('guard NIET bewaard via tmp+rename: $e — tweede poging rechtstreeks');
+        try {
+          await dest.writeAsString(payload, flush: true);
+        } catch (e2) {
+          WarmLog('$appDir${Platform.pathSeparator}soulseek_login.log')
+              .line('guard ook rechtstreeks NIET bewaard: $e2');
+        }
       }
     });
   }
