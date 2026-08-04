@@ -183,11 +183,29 @@ const _variousArtists = 'Various Artists';
 final _variousRe = RegExp(r'^(various|various artists|va|verschillende|diverse)', caseSensitive: false);
 
 /// Classify one downloaded track's release from its tags.
-RelKind classifyRelease({required String album, required String artist, int trackCount = 0}) {
+/// [trackCount] is het aantal volgens een OFFICIËLE uitgave; [totaalVolgensTags] is wat het bestand
+/// zelf beweert. Bewust twee dingen: de regel "één of twee nummers is een single" mag alleen op het
+/// eerste af. Ze in één parameter gooien maakte van een opwaardering met TRACKTOTAL=2 in de tags
+/// ineens een single, en dat brak een bestaande test — terecht.
+RelKind classifyRelease(
+    {required String album,
+    required String artist,
+    String? albumArtist,
+    int trackCount = 0,
+    int totaalVolgensTags = 0}) {
   if (album.trim().isEmpty) return RelKind.single;
   final a = normKey(album);
   if (_compilationRe.hasMatch(a)) return RelKind.compilation;
   if (_variousRe.hasMatch(artist.trim())) return RelKind.compilation;
+  // DE ALBUMARTIEST TELT OOK, en dat ontbrak. Hierboven staat alleen de artiest van het NUMMER, en die
+  // is bij een greep uit een verzamelbox gewoon de echte zanger. Gemeten geval: zoeken op "Khaled Didi"
+  // leverde een bestand met ARTIST=Khaled maar ALBUMARTIST=Various Artists, TRACKTOTAL=1001 en
+  // ALBUM="1001 Songs You Must Hear Before You Die". Dat werd een ALBUM van Khaled met één nummer 779
+  // erin. Precies wat Saber bedoelde met "de tags die met Soulseek meekomen zijn meestal niet de goeie".
+  if (_variousRe.hasMatch((albumArtist ?? '').trim())) return RelKind.compilation;
+  // Geen enkele plaat heeft honderden nummers; zo'n getal komt uit een box. Ruim boven een dubbel- of
+  // driedubbelalbum gelegd, want die bestaan wél en horen album te blijven.
+  if (trackCount > 60 || totaalVolgensTags > 60) return RelKind.compilation;
   // A "release" of one or two tracks is a single/EP, not an album.
   if (trackCount > 0 && trackCount <= 2) return RelKind.single;
   return RelKind.album;
@@ -227,6 +245,15 @@ class TrackTags {
   final int trackTotal;
   final int? year;
 
+  /// Komen deze tags uit het BESTAND zelf in plaats van uit een officiële uitgave?
+  ///
+  /// Dit onderscheid was er niet, en werd afgeleid uit "draagt hij albumartiest/totaal/jaar?" — wat
+  /// klopte zolang [readTags] die drie velden niet las. Zodra dat wél nodig werd (een greep uit een
+  /// verzamelbox is alleen aan ALBUMARTIST te herkennen) viel die afleiding om: een bestand van een
+  /// uploader zou ineens "gezaghebbend" heten en [stampTags] zou zijn eigen tags over zichzelf heen
+  /// gaan schrijven. Daarom nu een expliciet vlaggetje in plaats van een gok.
+  final bool vanBestand;
+
   const TrackTags({
     required this.title,
     required this.artist,
@@ -235,10 +262,11 @@ class TrackTags {
     this.albumArtist,
     this.trackTotal = 0,
     this.year,
+    this.vanBestand = false,
   });
 
   /// True when this came from an official release rather than from a downloaded file's own tags.
-  bool get isAuthoritative => trackTotal > 0 || year != null || albumArtist != null;
+  bool get isAuthoritative => !vanBestand && (trackTotal > 0 || year != null || albumArtist != null);
 
   Map<String, dynamic> toJson() => {
         'title': title,
@@ -362,6 +390,22 @@ TrackTags? readTags(File f) {
   final base = f.uri.pathSegments.last;
   final noExt = base.contains('.') ? base.substring(0, base.lastIndexOf('.')) : base;
 
+  // De ALBUMARTIEST hoort erbij, en dat is geen detail: een greep uit een verzamelbox is aan niets
+  // anders te herkennen. De artiest van het nummer is dan gewoon de echte zanger (Khaled), en pas
+  // ALBUMARTIST verraadt "Various Artists". Zonder dit veld werd zo'n bestand een album van Khaled met
+  // één nummer 779 erin. [vanBestand] houdt intussen overeind dat dit géén officiële uitgave is.
+  String? albumArtistVan(File g) {
+    try {
+      final rauw = g.path.toLowerCase().endsWith('.flac')
+          ? readFlacRawFields(g)
+          : readMp3RawFields(g).map((k, v) => MapEntry(k, v ?? ''));
+      final v = (rauw['albumartist'] ?? '').trim();
+      return v.isEmpty ? null : v;
+    } catch (_) {
+      return null;
+    }
+  }
+
   if (base.toLowerCase().endsWith('.flac')) {
     final v = readFlacTags(f);
     if (v != null && (v.title != null || v.artist != null || v.album != null)) {
@@ -370,6 +414,9 @@ TrackTags? readTags(File f) {
         artist: v.artist ?? '',
         album: v.album ?? '',
         trackNo: v.trackNo,
+        albumArtist: albumArtistVan(f),
+        trackTotal: v.trackTotal,
+        vanBestand: true,
       );
     }
   }
@@ -396,6 +443,9 @@ TrackTags? readTags(File f) {
       artist: artiest,
       album: album,
       trackNo: int.tryParse(raw['tracknumber'] ?? '') ?? 0,
+      albumArtist: (raw['albumartist'] ?? '').trim().isEmpty ? null : raw['albumartist']!.trim(),
+      trackTotal: int.tryParse(raw['tracktotal'] ?? '') ?? 0,
+      vanBestand: true,
     );
   }
 
@@ -409,6 +459,9 @@ TrackTags? readTags(File f) {
       artist: (m.artist?.trim().isNotEmpty ?? false) ? m.artist!.trim() : '',
       album: m.album?.trim() ?? '',
       trackNo: m.trackNumber ?? 0,
+      albumArtist: albumArtistVan(f),
+      trackTotal: m.trackTotal ?? 0,
+      vanBestand: true,
     );
   } catch (_) {
     return viaEigenId3();
@@ -419,7 +472,12 @@ TrackTags? readTags(File f) {
 /// Compilations by many artists are grouped under one "Various Artists" tree so the release
 /// stays together instead of being scattered over every guest artist.
 String relativePathFor(TrackTags t, {RelKind? kind, required String ext}) {
-  final k = kind ?? classifyRelease(album: t.album, artist: t.artist);
+  final k = kind ??
+      classifyRelease(
+          album: t.album,
+          artist: t.artist,
+          albumArtist: t.albumArtist,
+          totaalVolgensTags: t.trackTotal);
   final artist = t.artist.trim().isEmpty ? 'Onbekende artiest' : t.artist.trim();
   final num = t.trackNo > 0 ? t.trackNo.toString().padLeft(2, '0') : null;
   final sep = Platform.pathSeparator;
