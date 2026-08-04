@@ -462,7 +462,15 @@ class SoulseekClient {
   /// Bind the listening port once. Returns the port actually advertised (0 = not listening, e.g.
   /// the port is taken because the native client is running — then we simply behave as before).
   Future<int> ensureListening() async {
-    if (_listener != null) return _listener!.port;
+    // Een gewijzigde poort moet ook echt gaan gelden.
+    //
+    // De eerste regel was `if (_listener != null) return _listener!.port;` — daarna werd `listenPort`
+    // nooit meer gelezen. `online.dart` zet dat veld bij élke sessie uit de instellingen, dus het is
+    // duidelijk de bedoeling dat het telt, maar wie de poort in Instellingen wijzigde bleef de oude
+    // adverteren tot hij de app herstartte. Zette hij hem op 0 ("niet luisteren"), dan bleef de socket
+    // zelfs gewoon open. `stopListening()` had in de hele app geen enkele aanroeper.
+    if (_listener != null && _listener!.port == listenPort) return _listener!.port;
+    if (_listener != null) stopListening();
     if (listenPort <= 0) return 0;
     try {
       final s = await ServerSocket.bind(InternetAddress.anyIPv4, listenPort);
@@ -865,7 +873,21 @@ class SoulseekClient {
   /// one attempt straight through. If Soulseek refuses it, the wait comes back (longer).
   void allowOneRetry() {
     _blockedUntil = null;
-    _loginTimes.clear();
+    // PLAATS MAKEN VOOR PRECIES ÉÉN poging, niet het hele venster wissen.
+    //
+    // Hier stond `_loginTimes.clear()`, en dat gaf geen enkele poging door maar VIER — het budget is
+    // 4 per tien minuten. Precies de burst waar dit budget voor gebouwd is, en waar Soulseek zelf op
+    // blokkeert met een langere opgelegde wachttijd.
+    //
+    // Eén tijdstip weghalen is niet genoeg: de teller kan boven het budget staan (niets kapt hem af),
+    // en dan zou de knop niets doen. Daarom terugsnoeien tot één onder de grens — de OUDSTE eruit, die
+    // vervalt toch als eerste. Wat overblijft remt de poging daarna weer.
+    final cut = DateTime.now().subtract(_loginWindow);
+    _loginTimes.removeWhere((t) => t.isBefore(cut));
+    _loginTimes.sort();
+    while (_loginTimes.length >= _loginsPerWindow) {
+      _loginTimes.removeAt(0);
+    }
     unawaited(_saveGuard());
   }
 
@@ -967,7 +989,7 @@ class SoulseekClient {
       if (!await _netwerkVeranderd()) return;
       if (_pause != SlskPause.kicked) return; // er is intussen iets anders gebeurd
       logboek('verbinding weg en de adressen zijn veranderd '
-          '(${_adressenBijLogin.join(", ")} -> ${(await eigenAdressen()).join(", ")}) '
+          '(${_adressenBijLogin.join(", ")} -> ${(await eigenAdressen() ?? const {}).join(", ")}) '
           '— netwerk verlegd, geen kick');
       _pause = SlskPause.netwerkGewisseld;
       // Tien seconden, niet vijf minuten: een route die net verlegd is, is zo weer bruikbaar, en er
@@ -989,18 +1011,23 @@ class SoulseekClient {
   /// niets veranderd en is een kick de betere verklaring.
   Set<String> _adressenBijLogin = const {};
 
-  static Future<Set<String>> eigenAdressen() async {
+  /// `null` betekent "niet kunnen vaststellen", een LEGE set betekent "geen enkel adres meer".
+  ///
+  /// Die twee door elkaar halen was de vorige versie van deze fout: beide gaven `{}` terug, en dan
+  /// moet de beller kiezen tussen twee kwaden. Nu draagt het antwoord zijn eigen betekenis. Dart
+  /// laat 169.254.x en 127.0.0.1 zelf al weg (`includeLinkLocal`/`includeLoopback` staan standaard
+  /// uit), dus er hoeft hier niets gefilterd te worden.
+  static Future<Set<String>?> eigenAdressen() async {
     try {
       final uit = <String>{};
       for (final nic in await NetworkInterface.list(type: InternetAddressType.IPv4)) {
         for (final a in nic.addresses) {
-          // Link-local (169.254.x) komt en gaat op ongebruikte adapters en zegt niets over de route.
-          if (!a.address.startsWith('169.254.')) uit.add(a.address);
+          uit.add(a.address);
         }
       }
       return uit;
     } catch (_) {
-      return const {};
+      return null;
     }
   }
 
@@ -1017,7 +1044,10 @@ class SoulseekClient {
   Future<bool> _netwerkVeranderd() async {
     if (_adressenBijLogin.isEmpty) return false; // niets om aan af te meten
     final nu = await eigenAdressen();
-    if (nu.isEmpty) return false; // niet vast te stellen, dus niets beweren
+    if (nu == null) return false; // niet kunnen opvragen, dus niets beweren
+    // Leeg is GEEN twijfel maar het hardste bewijs dat er is: er is helemaal geen netwerk meer. Dat
+    // las de vorige versie als "niet vast te stellen", waardoor juist het duidelijkste geval — kabel
+    // eruit, wifi weg — als kick op het scherm kwam met het advies een app te sluiten die niet draait.
     return nu.length != _adressenBijLogin.length || !nu.containsAll(_adressenBijLogin);
   }
 
@@ -1385,8 +1415,24 @@ class SlskSession {
     // Covers both a refused login AND simply having logged in too often lately — the latter is
     // what a kick-war looks like, and it is invisible to a consecutive-failure counter.
     if (client.mustNotLogin) return false;
-    if (_loginTries >= 2) return false;
     final now = DateTime.now();
+    // De teller moet ook vanzélf terug kunnen lopen.
+    //
+    // Hij ging alleen op nul bij een geslaagde login of als de gebruiker op "nu opnieuw proberen"
+    // drukte — en die knop is in deze toestand niet eens zichtbaar, want de strook hangt aan
+    // `mustNotLogin` en die is hier onwaar. Twee mislukte pogingen (netwerk even weg is genoeg: dan
+    // gooit Socket.connect en registreert de kale catch niets) zetten hem op 2, en daarna gaf `_login`
+    // meteen false terug zonder een spoor. Wat de gebruiker dan ziet is "geen bronnen gevonden",
+    // terwijl er in het geheel niet is ingelogd. Doorzoeken houdt die dode sessie ook nog in leven,
+    // want de opruimtimer van twee minuten begint pas na het láátste gebruik.
+    //
+    // Vijf minuten stilte is genoeg bewijs dat de vorige reeks voorbij is. De rem van tien seconden
+    // hieronder blijft de burst tegenhouden waar de teller eigenlijk voor bedoeld was.
+    if (_lastLoginAttempt != null &&
+        now.difference(_lastLoginAttempt!) >= const Duration(minutes: 5)) {
+      _loginTries = 0;
+    }
+    if (_loginTries >= 2) return false;
     if (_lastLoginAttempt != null && now.difference(_lastLoginAttempt!) < const Duration(seconds: 10)) {
       return false;
     }
@@ -1446,8 +1492,27 @@ class SlskSession {
           }
         }
       }, onError: (_) => _lost(), onDone: _lost);
+      // ONZE EIGEN ADRESSEN NU OPHALEN, niet straks.
+      //
+      // Dit stond eerst ná `await login.future`, en dat was een gat waar een hele sessie in verdween.
+      // `NetworkInterface.list()` is een echte IO-reis (geen microtaak), dus tussen het antwoord van de
+      // server en de regel `_conn = c` paste een volledige slag van de event-lus. Sluit de server ons
+      // in díé slag af — precies wat een kick doet — dan vuurt `onDone` terwijl `_conn` nog null is:
+      // `_lost()` slaat `noteConnectionLost()` over (de kick wordt nooit geteld) en `_drop()` ruimt
+      // alles op. Daarna hervat deze functie en zet `_conn = c` op een vernietigde socket. De sessie
+      // heet dan voor altijd "ingelogd", `_ensure()` logt nooit meer in, elke zoekopdracht levert nul
+      // bronnen en elke download strandt op "uploader niet bereikbaar".
+      //
+      // Nagespeeld met de echte Dart-VM: 12 van de 12 keer een zombie. Hier opgehaald loopt er tussen
+      // het antwoord en `_conn = c` geen enkele await meer, en dan wint de microtaak van de
+      // done-gebeurtenis — `_lost()` ziet een gevulde `_conn` en doet wél zijn werk.
+      final onze = await SoulseekClient.eigenAdressen();
       client.noteLoginAttempt();
-      c.send(_message(1, (_W()..str(user)..str(pass)..u32(160)..str(_md5hex(pass))..u32(17)).bytes()));
+      // Het vierde veld is volgens het protocol md5(gebruikersnaam + wachtwoord). Hier stond
+      // md5(wachtwoord): dezelfde soort fout als `Socket.address` — een veld met de juiste vorm en de
+      // verkeerde inhoud. De server accepteerde het, dus het viel nooit op.
+      c.send(_message(
+          1, (_W()..str(user)..str(pass)..u32(160)..str(_md5hex('$user$pass'))..u32(17)).bytes()));
       // Silence and a refusal are different events with different answers, and folding them into
       // one boolean is what put "login geweigerd" on screen for a server that never replied. The
       // probe that found this logged in with these exact bytes in 251 ms, so a twelve-second
@@ -1465,9 +1530,8 @@ class SlskSession {
       // de route van 192.168.0.117 naar 10.5.0.2; zonder die verzameling is een weggevallen
       // verbinding niet van een kick te onderscheiden, en dat verschil is precies waar dit onderzoek
       // op vastliep. NIET `s.address` gebruiken — dat is de server, niet wij.
-      final onze = await SoulseekClient.eigenAdressen();
-      client.logboek('login als "$user" vanaf ${onze.join(", ")} poort=${client.boundPort} '
-          '${ok ? "GELUKT" : "GEWEIGERD: \"$said\""}');
+      client.logboek('login als "$user" vanaf ${(onze ?? const {}).join(", ")} '
+          'poort=${client.boundPort} ${ok ? "GELUKT" : "GEWEIGERD: \"$said\""}');
       if (!ok) {
         if (said == _noAnswer) {
           client.noteLoginNoAnswer();
@@ -1478,6 +1542,10 @@ class SlskSession {
         _drop();
         return false;
       }
+      // Is er tussendoor tóch iets opgeruimd, dan is deze socket niet meer van ons en mag hij niet
+      // alsnog als levende verbinding geadopteerd worden. Vanaf hier staat geen await meer, dus dit
+      // kan strikt genomen niet meer gebeuren — het is de rem die de bovenstaande fout had gestopt.
+      if (_server != s) return false;
       client.noteLoggedIn(credId: wie, adressen: onze);
       c.send(_message(2, (_W()..u32(client.boundPort)).bytes())); // SetWaitPort (real port if listening)
       _conn = c;

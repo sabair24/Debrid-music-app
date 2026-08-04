@@ -246,6 +246,11 @@ class SoulseekService {
   /// The session's own counters go too. Without them the button cleared the client's back-off and
   /// the session refused anyway, so nothing happened and the notice stayed on screen.
   void retryLoginNow() {
+    // Een geplande herkansing hoort hier te vervallen: de gebruiker doet nu zelf wat die timer straks
+    // zou doen, en anders vuurt hij later alsnog op een toestand die niets meer met zijn aanleiding
+    // te maken heeft.
+    _herkans?.cancel();
+    _herkans = null;
     client.allowOneRetry();
     _session?.allowRetry();
   }
@@ -316,6 +321,19 @@ class SoulseekService {
     if (wacht == null) return;
     _herkans?.cancel();
     _herkans = Timer(wacht + const Duration(seconds: 3), () async {
+      // NOG EENS KIJKEN of de pauze waarvoor deze timer gepland werd er überhaupt nog is.
+      //
+      // De controle stond alleen bovenaan, op het moment van plannen. In de anderhalve minuut die
+      // ertussen zit kan er van alles gebeuren, en `allowOneRetry()` wist blind élke blokkade. Twee
+      // gemeten gevolgen: een tikfout in het wachtwoord levert tien minuten `badLogin` met "wachten
+      // helpt hier niet" — en die werd door de oude timer weggegooid, waarna er nóg een login met dat
+      // foute wachtwoord vertrok. En lukt de herkansing terwijl de officiële app ons daarna kickt, dan
+      // wiste diezelfde timer de kick-terugval en logde meteen weer in: de kickoorlog waar het
+      // commentaar hierboven juist tegen beschermt.
+      if (!_zelfOplosbaar.contains(client.pause)) {
+        client.logboek('herkansing overgeslagen — de pauze is intussen ${client.pause.name}');
+        return;
+      }
       _herkansingen++;
       client.logboek('herkansing $_herkansingen na een botsing — zelf opnieuw proberen');
       client.allowOneRetry();
