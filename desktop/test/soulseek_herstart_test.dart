@@ -121,6 +121,58 @@ void main() {
     });
   });
 
+  group('een netwerk dat van route wisselt is geen kick', () {
+    // Op Sabers pc komt NordVPN vijftien seconden na het opstarten op en verlegt de route van de
+    // netwerkkaart (192.168.0.117) naar de tunnel (10.5.0.2). Wie de app in die eerste minuut opent
+    // — en dat doet hij — verliest de verbinding zodra de tunnel het overneemt. De app noemde dat
+    // "een andere Soulseek-app heeft je account overgenomen", vijf minuten wachten, en het advies om
+    // een app te sluiten die niet eens draait.
+
+    test('een verdwenen IP levert de juiste verklaring en een korte wachttijd', () async {
+      final c = SoulseekClient()
+        // Een adres dat op geen enkele machine bestaat: precies wat een verlegde route achterlaat.
+        ..noteLoggedIn(lokaalIp: '203.0.113.99')
+        ..noteConnectionLost();
+      expect(c.pause, SlskPause.kicked, reason: 'de kick wordt meteen gezet, dat is de veilige kant');
+
+      // De controle op de netwerkkaarten is async.
+      for (var i = 0; i < 40 && c.pause == SlskPause.kicked; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+      expect(c.pause, SlskPause.netwerkGewisseld);
+      expect(c.blockedFor!.inMinutes, lessThan(1), reason: 'tien seconden, geen vijf minuten');
+      expect(c.pauseLabel, isNotEmpty);
+      expect(c.whyNotLogin, isNotNull);
+      // De kern: hem niet naar een andere Soulseek-app sturen die helemaal niet draait.
+      expect(c.whyNotLogin, isNot(contains('Sluit de officiële app')));
+      expect(c.whyNotLogin, contains('route'),
+          reason: 'de uitleg hoort te benoemen wat er wél aan de hand is');
+    });
+
+    test('een IP dat nog bestaat blijft gewoon een kick', () async {
+      // De tegenhanger: gaat de verbinding stuk terwijl onze kant ongewijzigd is, dan is de oude
+      // verklaring de juiste en moet die blijven staan.
+      final eigen = await NetworkInterface.list(type: InternetAddressType.IPv4);
+      final adres = eigen.expand((n) => n.addresses).map((a) => a.address).firstOrNull;
+      if (adres == null) return; // geen netwerk op deze machine, niets te toetsen
+
+      final c = SoulseekClient()
+        ..noteLoggedIn(lokaalIp: adres)
+        ..noteConnectionLost();
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(c.pause, SlskPause.kicked);
+      expect(c.whyNotLogin, contains('andere Soulseek-app'));
+    });
+
+    test('zonder bekend IP verandert er niets aan het oude gedrag', () async {
+      final c = SoulseekClient()
+        ..noteLoggedIn()
+        ..noteConnectionLost();
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(c.pause, SlskPause.kicked, reason: 'niets om aan af te meten, dus niets beweren');
+    });
+  });
+
   group('wat een herstart wel en niet meeneemt', () {
     test('een botsingspauze komt niet terug', () async {
       final a = SoulseekClient()

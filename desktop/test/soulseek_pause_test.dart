@@ -232,6 +232,11 @@ void main() {
           c
             ..markStart()
             ..noteLoginRefused('INVALIDPASS');
+        case SlskPause.netwerkGewisseld:
+          // Deze overgang is ASYNC — de app vraagt eerst de netwerkkaarten op om te zien of het IP
+          // waarmee hij inlogde nog bestaat. Dat past niet in deze synchrone lus; hij heeft zijn
+          // eigen test hieronder, die label én uitleg net zo hard afdwingt.
+          continue;
         case SlskPause.tooMany:
           for (var i = 0; i < 4; i++) {
             c.noteLoginAttempt();

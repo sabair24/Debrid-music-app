@@ -206,6 +206,18 @@ enum SlskPause {
   /// one session per user, so this is the native client (or a phone) doing exactly what it should.
   kicked,
 
+  /// Het netwerk onder ons vandaan: de verbinding brak omdat het IP waarmee we inlogden verdween.
+  ///
+  /// Op deze pc komt NordVPN vijftien seconden na het opstarten op, en dan verspringt de route van de
+  /// gewone netwerkkaart (192.168.0.117) naar de tunnel (10.5.0.2). Wie de app in die eerste minuut
+  /// opent, logt in over de ene weg en verliest de verbinding zodra de andere het overneemt.
+  ///
+  /// Dat zag de app aan voor [kicked] — "een andere Soulseek-app heeft je account overgenomen" — met
+  /// vijf minuten wachten en het advies om een app te sluiten die helemaal niet draait. Het verschil
+  /// is wél vast te stellen: bestaat het IP waarmee we inlogden niet meer op deze machine, dan is er
+  /// geen tweede client maar een andere route.
+  netwerkGewisseld,
+
   /// Onze eigen botsing: de vorige sessie van DEZE app staat bij Soulseek nog open.
   ///
   /// Dit was het geval waarvoor de zachte back-off op [SoulseekClient._backoff] geschreven is — de
@@ -903,6 +915,10 @@ class SoulseekClient {
           'De vorige sessie staat bij Soulseek nog open — dat gebeurt als de app niet netjes kon '
               'afsluiten. Er is niets mis met je login; de app probeert het over anderhalve minuut '
               'vanzelf opnieuw.',
+        SlskPause.netwerkGewisseld =>
+          'De verbinding viel weg omdat je netwerk van route wisselde — dat gebeurt bijvoorbeeld als '
+              'een VPN opkomt vlak na het opstarten. Niemand heeft je account overgenomen; de app '
+              'verbindt zo vanzelf opnieuw.',
         SlskPause.tooMany =>
           'Te vaak opnieuw ingelogd. Draait de officiële Soulseek-app? Sluit die — jullie kicken '
               'elkaar er dan om beurten uit. De app probeert het straks vanzelf opnieuw.',
@@ -917,6 +933,7 @@ class SoulseekClient {
         SlskPause.noAnswer => 'Soulseek antwoordde niet',
         SlskPause.kicked => 'andere Soulseek-app heeft het account overgenomen',
         SlskPause.herstart => 'vorige sessie staat nog open — probeert zo opnieuw',
+        SlskPause.netwerkGewisseld => 'netwerk wisselde van route — verbindt zo opnieuw',
         SlskPause.tooMany => 'te vaak ingelogd, even rustig aan',
       };
 
@@ -930,22 +947,64 @@ class SoulseekClient {
   /// down for a while and let the other client have it.
   void noteConnectionLost() {
     final ok = _lastLoginOk;
-    if (ok != null && DateTime.now().difference(ok) < const Duration(minutes: 1)) {
-      // NOT a refusal: the login worked and something took the account off us afterwards. Saying
-      // "login geweigerd" here sent the user to check a password that was never wrong.
-      _pause = SlskPause.kicked;
-      _serverSaid = '';
-      _blockedUntil = DateTime.now().add(const Duration(minutes: 5));
-      // Saved, like every other way the guard changes. Without this the screen said "wait 6 more
-      // minutes" while soulseek_guard.json said nothing was wrong — and a restart walked straight
-      // back into the kick that caused it.
+    if (ok == null || DateTime.now().difference(ok) >= const Duration(minutes: 1)) return;
+    // NOT a refusal: the login worked and something took the account off us afterwards. Saying
+    // "login geweigerd" here sent the user to check a password that was never wrong.
+    //
+    // Maar het is ook niet altijd een kick. Eerst kijken of ONZE kant nog bestaat: verdween het IP
+    // waarmee we inlogden, dan is de route verlegd en heeft niemand iets overgenomen. Zie
+    // [SlskPause.netwerkGewisseld]. De controle is async, dus de kick wordt meteen gezet en alleen
+    // teruggedraaid als blijkt dat het netwerk het was — andersom zou een echte kick een gat van een
+    // paar milliseconden krijgen waarin nog een login vertrekt.
+    _pause = SlskPause.kicked;
+    _serverSaid = '';
+    _blockedUntil = DateTime.now().add(const Duration(minutes: 5));
+    // Saved, like every other way the guard changes. Without this the screen said "wait 6 more
+    // minutes" while soulseek_guard.json said nothing was wrong — and a restart walked straight
+    // back into the kick that caused it.
+    unawaited(_saveGuard());
+    unawaited(() async {
+      if (await _ipBestaatNog()) return;
+      if (_pause != SlskPause.kicked) return; // er is intussen iets anders gebeurd
+      logboek('verbinding weg en $_ipBijLogin bestaat niet meer — netwerk verlegd, geen kick');
+      _pause = SlskPause.netwerkGewisseld;
+      // Tien seconden, niet vijf minuten: een route die net verlegd is, is zo weer bruikbaar, en er
+      // valt hier niets uit te zitten. De herkansing in DownloadManager pakt het daarna op.
+      _blockedUntil = DateTime.now().add(const Duration(seconds: 10));
       unawaited(_saveGuard());
-    }
+    }());
   }
 
-  void noteLoggedIn({String? credId}) {
+  /// Het lokale IP waarmee de huidige verbinding is opgezet.
+  ///
+  /// Het bewijsstuk waarmee een netwerkwissel van een kick te onderscheiden is. Zie
+  /// [SlskPause.netwerkGewisseld].
+  String? _ipBijLogin;
+
+  void noteLoggedIn({String? credId, String? lokaalIp}) {
     _lastLoginOk = DateTime.now();
+    _ipBijLogin = lokaalIp;
     noteLoginOk(credId: credId);
+  }
+
+  /// Bestaat het IP waarmee we inlogden nog op deze machine?
+  ///
+  /// Zo niet, dan is de route verlegd — een VPN die opkomt, een kabel eruit, een wifi-wissel — en is
+  /// de verbroken verbinding geen kick maar een verhuizing. Bewust een vraag over ONZE kant: van de
+  /// andere kant valt niets te zien, en gokken is precies wat hier fout ging.
+  Future<bool> _ipBestaatNog() async {
+    final ip = _ipBijLogin;
+    if (ip == null) return true; // niets om aan af te meten
+    try {
+      for (final nic in await NetworkInterface.list(type: InternetAddressType.IPv4)) {
+        for (final a in nic.addresses) {
+          if (a.address == ip) return true;
+        }
+      }
+      return false;
+    } catch (_) {
+      return true; // kunnen we het niet vaststellen, dan niets beweren
+    }
   }
 
 
@@ -1388,7 +1447,11 @@ class SlskSession {
       // op los zand: de app kon melden dat de login geweigerd was zonder dat ergens vastlag waarom.
       // Een release-build strijkt print weg, dus zonder bestand is dit onzichtbaar — dezelfde reden
       // dat start.log en fps.log bestaan.
-      client.logboek('login als "$user" poort=${client.boundPort} '
+      // Het lokale IP hoort erbij. Op deze pc komt NordVPN vlak na het opstarten op en verlegt de
+      // route van 192.168.0.117 naar 10.5.0.2; zonder dit getal is een weggevallen verbinding niet
+      // van een kick te onderscheiden, en dat verschil is precies waar dit onderzoek op vastliep.
+      final lokaal = s.address.address;
+      client.logboek('login als "$user" via $lokaal poort=${client.boundPort} '
           '${ok ? "GELUKT" : "GEWEIGERD: \"$said\""}');
       if (!ok) {
         if (said == _noAnswer) {
@@ -1400,7 +1463,7 @@ class SlskSession {
         _drop();
         return false;
       }
-      client.noteLoggedIn(credId: wie);
+      client.noteLoggedIn(credId: wie, lokaalIp: lokaal);
       c.send(_message(2, (_W()..u32(client.boundPort)).bytes())); // SetWaitPort (real port if listening)
       _conn = c;
       _loginTries = 0; // healthy login → reset the consecutive-failure counter

@@ -301,13 +301,16 @@ class SoulseekService {
   /// te halen". De pauze liep na anderhalve minuut af, maar er gebeurde daarna niets: pas als je
   /// tóevallig weer iets aanklikte werd het opnieuw geprobeerd, en anders bleef de melding staan.
   ///
-  /// Alleen voor [SlskPause.herstart], en hoogstens twee keer. Een echte weigering hoort NIET
+  /// Alleen voor de twee pauzes die over ONZE kant gaan — een botsing met de vorige sessie en een
+  /// netwerk dat van route wisselde — en hoogstens twee keer. Een echte weigering hoort NIET
   /// automatisch herhaald te worden: dan is doorgaan met kloppen precies wat het erger maakt.
+  static const _zelfOplosbaar = {SlskPause.herstart, SlskPause.netwerkGewisseld};
+
   Timer? _herkans;
   int _herkansingen = 0;
 
   void _plaatsHerkansing() {
-    if (client.pause != SlskPause.herstart) return;
+    if (!_zelfOplosbaar.contains(client.pause)) return;
     if (_herkansingen >= 2) return;
     final wacht = client.blockedFor;
     if (wacht == null) return;
