@@ -964,9 +964,11 @@ class SoulseekClient {
     // back into the kick that caused it.
     unawaited(_saveGuard());
     unawaited(() async {
-      if (await _ipBestaatNog()) return;
+      if (!await _netwerkVeranderd()) return;
       if (_pause != SlskPause.kicked) return; // er is intussen iets anders gebeurd
-      logboek('verbinding weg en $_ipBijLogin bestaat niet meer — netwerk verlegd, geen kick');
+      logboek('verbinding weg en de adressen zijn veranderd '
+          '(${_adressenBijLogin.join(", ")} -> ${(await eigenAdressen()).join(", ")}) '
+          '— netwerk verlegd, geen kick');
       _pause = SlskPause.netwerkGewisseld;
       // Tien seconden, niet vijf minuten: een route die net verlegd is, is zo weer bruikbaar, en er
       // valt hier niets uit te zitten. De herkansing in DownloadManager pakt het daarna op.
@@ -975,36 +977,48 @@ class SoulseekClient {
     }());
   }
 
-  /// Het lokale IP waarmee de huidige verbinding is opgezet.
+  /// Welke IPv4-adressen deze machine had op het moment van inloggen.
   ///
-  /// Het bewijsstuk waarmee een netwerkwissel van een kick te onderscheiden is. Zie
-  /// [SlskPause.netwerkGewisseld].
-  String? _ipBijLogin;
+  /// Een SET en niet het adres van de socket zelf. Dart geeft namelijk geen lokaal adres terug:
+  /// `Socket.address` is de kant waarnáár je verbindt. Dat had ik verkeerd, en het logboek betrapte
+  /// het binnen een minuut — er stond `via 208.76.170.59`, en dat is de Soulseek-server. Met dat
+  /// adres als maatstaf zou élke wegvallende verbinding "netwerk gewisseld" heten, ook een echte kick.
+  ///
+  /// De set doet het werk net zo goed en is eerlijker: komt er een VPN op, dan verschijnt 10.5.0.2 en
+  /// verandert de verzameling. Verdwijnt een kabel, idem. Blijft alles gelijk, dan is er aan onze kant
+  /// niets veranderd en is een kick de betere verklaring.
+  Set<String> _adressenBijLogin = const {};
 
-  void noteLoggedIn({String? credId, String? lokaalIp}) {
+  static Future<Set<String>> eigenAdressen() async {
+    try {
+      final uit = <String>{};
+      for (final nic in await NetworkInterface.list(type: InternetAddressType.IPv4)) {
+        for (final a in nic.addresses) {
+          // Link-local (169.254.x) komt en gaat op ongebruikte adapters en zegt niets over de route.
+          if (!a.address.startsWith('169.254.')) uit.add(a.address);
+        }
+      }
+      return uit;
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  void noteLoggedIn({String? credId, Set<String>? adressen}) {
     _lastLoginOk = DateTime.now();
-    _ipBijLogin = lokaalIp;
+    if (adressen != null) _adressenBijLogin = adressen;
     noteLoginOk(credId: credId);
   }
 
-  /// Bestaat het IP waarmee we inlogden nog op deze machine?
+  /// Is het netwerk onder ons vandaan veranderd sinds we inlogden?
   ///
-  /// Zo niet, dan is de route verlegd — een VPN die opkomt, een kabel eruit, een wifi-wissel — en is
-  /// de verbroken verbinding geen kick maar een verhuizing. Bewust een vraag over ONZE kant: van de
-  /// andere kant valt niets te zien, en gokken is precies wat hier fout ging.
-  Future<bool> _ipBestaatNog() async {
-    final ip = _ipBijLogin;
-    if (ip == null) return true; // niets om aan af te meten
-    try {
-      for (final nic in await NetworkInterface.list(type: InternetAddressType.IPv4)) {
-        for (final a in nic.addresses) {
-          if (a.address == ip) return true;
-        }
-      }
-      return false;
-    } catch (_) {
-      return true; // kunnen we het niet vaststellen, dan niets beweren
-    }
+  /// Bewust een vraag over ONZE kant: van de andere kant valt niets te zien, en gokken daarover is
+  /// precies waar dit onderzoek drie keer op vastliep.
+  Future<bool> _netwerkVeranderd() async {
+    if (_adressenBijLogin.isEmpty) return false; // niets om aan af te meten
+    final nu = await eigenAdressen();
+    if (nu.isEmpty) return false; // niet vast te stellen, dus niets beweren
+    return nu.length != _adressenBijLogin.length || !nu.containsAll(_adressenBijLogin);
   }
 
 
@@ -1447,11 +1461,12 @@ class SlskSession {
       // op los zand: de app kon melden dat de login geweigerd was zonder dat ergens vastlag waarom.
       // Een release-build strijkt print weg, dus zonder bestand is dit onzichtbaar — dezelfde reden
       // dat start.log en fps.log bestaan.
-      // Het lokale IP hoort erbij. Op deze pc komt NordVPN vlak na het opstarten op en verlegt de
-      // route van 192.168.0.117 naar 10.5.0.2; zonder dit getal is een weggevallen verbinding niet
-      // van een kick te onderscheiden, en dat verschil is precies waar dit onderzoek op vastliep.
-      final lokaal = s.address.address;
-      client.logboek('login als "$user" via $lokaal poort=${client.boundPort} '
+      // Onze eigen adressen horen erbij. Op deze pc komt NordVPN vlak na het opstarten op en verlegt
+      // de route van 192.168.0.117 naar 10.5.0.2; zonder die verzameling is een weggevallen
+      // verbinding niet van een kick te onderscheiden, en dat verschil is precies waar dit onderzoek
+      // op vastliep. NIET `s.address` gebruiken — dat is de server, niet wij.
+      final onze = await SoulseekClient.eigenAdressen();
+      client.logboek('login als "$user" vanaf ${onze.join(", ")} poort=${client.boundPort} '
           '${ok ? "GELUKT" : "GEWEIGERD: \"$said\""}');
       if (!ok) {
         if (said == _noAnswer) {
@@ -1463,7 +1478,7 @@ class SlskSession {
         _drop();
         return false;
       }
-      client.noteLoggedIn(credId: wie, lokaalIp: lokaal);
+      client.noteLoggedIn(credId: wie, adressen: onze);
       c.send(_message(2, (_W()..u32(client.boundPort)).bytes())); // SetWaitPort (real port if listening)
       _conn = c;
       _loginTries = 0; // healthy login → reset the consecutive-failure counter

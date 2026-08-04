@@ -128,10 +128,14 @@ void main() {
     // "een andere Soulseek-app heeft je account overgenomen", vijf minuten wachten, en het advies om
     // een app te sluiten die niet eens draait.
 
-    test('een verdwenen IP levert de juiste verklaring en een korte wachttijd', () async {
+    test('veranderde adressen leveren de juiste verklaring en een korte wachttijd', () async {
       final c = SoulseekClient()
-        // Een adres dat op geen enkele machine bestaat: precies wat een verlegde route achterlaat.
-        ..noteLoggedIn(lokaalIp: '203.0.113.99')
+        // Een verzameling die op geen enkele machine zo bestaat: precies wat een verlegde route
+        // achterlaat. Bewust een SET en niet het adres van de socket — `Socket.address` geeft de kant
+        // waarnáár je verbindt, en die vergissing stond één versie lang in de code: het logboek meldde
+        // `via 208.76.170.59`, en dat is de Soulseek-server. Met dat adres als maatstaf zou élke
+        // wegvallende verbinding hier terechtkomen, ook een echte kick.
+        ..noteLoggedIn(adressen: const {'203.0.113.99'})
         ..noteConnectionLost();
       expect(c.pause, SlskPause.kicked, reason: 'de kick wordt meteen gezet, dat is de veilige kant');
 
@@ -149,22 +153,32 @@ void main() {
           reason: 'de uitleg hoort te benoemen wat er wél aan de hand is');
     });
 
-    test('een IP dat nog bestaat blijft gewoon een kick', () async {
-      // De tegenhanger: gaat de verbinding stuk terwijl onze kant ongewijzigd is, dan is de oude
-      // verklaring de juiste en moet die blijven staan.
-      final eigen = await NetworkInterface.list(type: InternetAddressType.IPv4);
-      final adres = eigen.expand((n) => n.addresses).map((a) => a.address).firstOrNull;
-      if (adres == null) return; // geen netwerk op deze machine, niets te toetsen
+    test('een netwerk dat gelijk gebleven is blijft gewoon een kick', () async {
+      // De tegenhanger, en de belangrijkste van de drie: gaat de verbinding stuk terwijl onze kant
+      // ongewijzigd is, dan is de oude verklaring de juiste en moet die blijven staan. Deze test zou
+      // de socket-vergissing hierboven gevangen hebben — met het serveradres als maatstaf komt hier
+      // altijd "netwerk gewisseld" uit.
+      final nu = await SoulseekClient.eigenAdressen();
+      if (nu.isEmpty) return; // geen netwerk op deze machine, niets te toetsen
 
       final c = SoulseekClient()
-        ..noteLoggedIn(lokaalIp: adres)
+        ..noteLoggedIn(adressen: nu)
         ..noteConnectionLost();
       await Future<void>.delayed(const Duration(milliseconds: 300));
       expect(c.pause, SlskPause.kicked);
       expect(c.whyNotLogin, contains('andere Soulseek-app'));
     });
 
-    test('zonder bekend IP verandert er niets aan het oude gedrag', () async {
+    test('eigenAdressen levert onze kant, niet die van de tegenpartij', () async {
+      final nu = await SoulseekClient.eigenAdressen();
+      if (nu.isEmpty) return;
+      for (final a in nu) {
+        expect(a, isNot('208.76.170.59'), reason: 'dat is de Soulseek-server');
+        expect(a, isNot(startsWith('169.254.')), reason: 'link-local zegt niets over de route');
+      }
+    });
+
+    test('zonder bekende adressen verandert er niets aan het oude gedrag', () async {
       final c = SoulseekClient()
         ..noteLoggedIn()
         ..noteConnectionLost();
