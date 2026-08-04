@@ -648,6 +648,36 @@ class SoulseekClient {
     return t != null && !_eersteLoginGedaan && DateTime.now().difference(t) < _herstartVenster;
   }
 
+  /// Hebben WIJ ons kortgeleden afgemeld? Dan houdt Soulseek onze vorige sessie nog vast.
+  ///
+  /// Dit was het ontbrekende stuk. `_ruiktNaarHerstart` geldt alleen voor de EERSTE poging na het
+  /// starten; de tweede viel door naar `badLogin` — tien minuten en "gebruikersnaam of wachtwoord
+  /// klopt niet" — terwijl het nog steeds dezelfde vastzittende sessie was.
+  ///
+  /// Gemeten op 04-08-2026: afmelden om 21:02:24, de app elf seconden later weer open, en dan eerst
+  /// "vorige sessie staat nog open, nog 2 min" en daarna "wachtwoord klopt niet, nog 10 min". Saber
+  /// zei het vanaf het begin: "als ik de app sluit, sluit hij niet echt, en blijft Soulseek open in de
+  /// andere sessie". Niet het proces — dat was echt weg — maar de sessie aan de SERVERKANT.
+  ///
+  /// `afgemeldOp` staat al in het guard-bestand en overleeft een herstart; er was alleen nooit iets
+  /// dat hem las. Een kwartier is ruim: Soulseek laat een verlaten sessie doorgaans binnen enkele
+  /// minuten los, en langer wachten kost hier niets omdat de herkansing vanzelf doorgaat.
+  static const _sessieBlijftHangen = Duration(minutes: 15);
+
+  /// Hoe lang te wachten bij de eerste, tweede, derde botsing. Oplopend, want anderhalve minuut is
+  /// soms te kort en dan viel de volgende poging vroeger door naar "wachtwoord klopt niet".
+  static const _botsingWacht = [
+    Duration(seconds: 90),
+    Duration(minutes: 3),
+    Duration(minutes: 5),
+  ];
+  int _botsingen = 0;
+
+  bool get _netAfgemeld {
+    final t = _afgemeldOp;
+    return t != null && DateTime.now().difference(t) < _sessieBlijftHangen;
+  }
+
   /// The server answered and said no. [reason] is its own text; pass it through unchanged.
   /// [credId] is de vingerafdruk van de gegevens waarmee geprobeerd is — zie [_werkteEerderMet].
   void noteLoginRefused(String reason, {String? credId}) {
@@ -664,12 +694,18 @@ class SoulseekClient {
       // als botsing worden weggewuifd.
       final andereGegevens =
           credId != null && _laatstGoedId != null && credId != _laatstGoedId;
-      if (herstart && !andereGegevens) {
+      if ((herstart || _netAfgemeld) && !andereGegevens) {
         // Zie [SlskPause.herstart]. Kort wachten en zelf opnieuw proberen: de gebruiker heeft hier
         // niets te beslissen, en hem naar Instellingen sturen voor een wachtwoord dat klopt is de
         // slechtste van alle antwoorden.
+        //
+        // De wachttijd LOOPT OP zolang het dezelfde botsing blijft, want één keer anderhalve minuut is
+        // soms te kort en dan viel hij daarna door naar "wachtwoord klopt niet". Nooit naar badLogin:
+        // we weten dat wij ons zojuist hebben afgemeld, dus over het wachtwoord valt hier niets te
+        // beweren. Het account is niet in gevaar — dit is onze eigen vorige sessie.
+        _botsingen++;
         _pause = SlskPause.herstart;
-        _blockedUntil = DateTime.now().add(const Duration(seconds: 90));
+        _blockedUntil = DateTime.now().add(_botsingWacht[_botsingen.clamp(1, _botsingWacht.length) - 1]);
       } else if (!andereGegevens && _werkteEerderMet(credId)) {
         // Ditzelfde INVALIDPASS betekent hier iets heel anders: het account is elders in gebruik.
         // Zie [SlskPause.inUse]. Kort wachten, want het lost zichzelf op zodra de andere app dicht
@@ -742,6 +778,10 @@ class SoulseekClient {
     if (credId != null) _laatstGoedId = credId;
     // Het herstartvenster is hiermee voorbij: wie eenmaal binnen is, botst niet meer met zichzelf.
     _eersteLoginGedaan = true;
+    // De botsing is voorbij, dus de oplopende wachttijd begint weer bij anderhalve minuut. Ook
+    // `afgemeldOp` mag weg: we zijn binnen, dus er staat niets ouds meer open.
+    _botsingen = 0;
+    _afgemeldOp = null;
     unawaited(_saveGuard());
   }
 
