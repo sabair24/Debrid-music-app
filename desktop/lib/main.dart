@@ -10,7 +10,7 @@ import 'package:flutter/material.dart' hide RepeatMode;
 import 'package:flutter/foundation.dart' show mapEquals;
 // AppExitResponse hoort bij de haak die Windows gebruikt als het de app wil beëindigen — zie
 // _saveOnLeaving. Hij woont in dart:ui; material.dart exporteert hem niet.
-import 'dart:ui' show AppExitResponse;
+import 'dart:ui' show AppExitResponse, PlatformDispatcher;
 // For PointerDeviceKind: the nav chip is drag-scrolled with a mouse, which Flutter leaves out of
 // the default set on purpose.
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
@@ -259,6 +259,32 @@ Future<void> main() async {
     );
   }
 
+  // HET LOGBOEK ALS EERSTE, want een start die vóór regel 671 omvalt liet tot nu toe geen enkel spoor
+  // na — en precies dat is twee keer gebeurd.
+  //
+  // Gemeten op 04-08-2026: de app draaide (proces 23572, gestart 20:11:49), toonde de bibliotheek, en
+  // `start.log` had geen énkele regel voor die instantie; de laatste was van 19:56:32. Het scherm zei
+  // "Scannen... 0" en de Soulseek-strook meldde een pauze die nergens in de gegevens stond. Vanochtend
+  // hetzelfde beeld, en toen bleek `loadCorrections()` niet gelopen te zijn — waardoor een handmatig
+  // gezette tag "verdwenen" leek. Beide keren viel er niets te lezen, alleen te gissen.
+  //
+  // `startLog` werd pas aangemaakt ná veertien awaits. Alles wat dáárvoor omviel was per definitie
+  // onzichtbaar: `runApp` staat op regel 545, dus het venster blijft gewoon staan met een halfgevulde
+  // app terwijl de rest van het opstarten nooit is gebeurd.
+  final startLog = WarmLog('$appDir${Platform.pathSeparator}start.log');
+  startLog.line('--- proces gestart (pid $pid) ---');
+  // En elke fout die daarna nog ontsnapt gaat naar hetzelfde bestand. `debugPrint` wordt in een
+  // release-build weggegooid, dus zonder dit verdwijnt een uitzondering spoorloos en blijft alleen het
+  // symptoom over.
+  FlutterError.onError = (details) {
+    startLog.line('FLUTTERFOUT: ${details.exceptionAsString()}');
+    FlutterError.presentError(details);
+  };
+  PlatformDispatcher.instance.onError = (fout, stapel) {
+    startLog.line('ONGEVANGEN: $fout');
+    return false;
+  };
+
   final settings = AppSettings();
   await settings.load();
   final library = LibraryStore();
@@ -281,6 +307,7 @@ Future<void> main() async {
   // Which of the two this is: the machine that holds the music, or one reading it. Decided once,
   // here, and everything below branches on the answer rather than on the platform.
   final mode = await resolveMode(settings);
+  startLog.line('modus: ${mode.owner ? "eigenaar" : "cliënt"} (root=${settings.musicRoot})');
 
   late final PlayerStore player;
 
@@ -324,6 +351,10 @@ Future<void> main() async {
   // before anything can search — the guard exists to survive a restart, and a restart is precisely
   // when it used to be blind. Only here: a client never logs in, it asks the pc to.
   if (mode.owner) await soulseek.client.loadGuard();
+  // Wát er uit het guard-bestand kwam. Twee keer stond er een pauze op het scherm die in dat bestand
+  // niet bestond; dan hoort hier te staan wat de app werkelijk heeft ingelezen.
+  startLog.line('guard gelezen: pauze=${soulseek.client.pause.name} '
+      'blocked=${soulseek.client.blocked} mustNotLogin=${soulseek.client.mustNotLogin}');
   // Welke bestanden de gebruiker zelf uit de Soulseek-lijst koos. Vóór de eerste scan, want elke
   // opruimweg vraagt hier bij het vergelijken naar — en een lijst die nog niet is ingelezen beschermt
   // niets. Op een client verhuist er niets, dus daar valt er ook niets te beschermen.
@@ -542,6 +573,7 @@ Future<void> main() async {
     windowManager.addListener(_sluiter!);
   }
 
+  startLog.line('venster klaar, runApp');
   runApp(
     MultiProvider(
       providers: [
@@ -667,7 +699,6 @@ Future<void> main() async {
   // Eén regel per fase kost niets en maakt het verschil tussen "hij was klaar" en "hij bleef op fase
   // vier staan" meteen leesbaar. Apart bestand, niet warm.log: die kapt zichzelf halverwege af zodra
   // hij 256 KB haalt, en juist de eerste regels zijn dan het interessantst.
-  final startLog = WarmLog('$appDir${Platform.pathSeparator}start.log');
   startLog.line('--- opstarten begint ---');
   Future<T> fase<T>(String naam, Future<T> Function() werk) async {
     final klok = Stopwatch()..start();
