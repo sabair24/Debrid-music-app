@@ -65,6 +65,7 @@ import 'musicbrainz.dart';
 import 'offline.dart';
 import 'online.dart';
 import 'organize.dart';
+import 'vaste_keuze.dart';
 import 'player.dart';
 import 'quality.dart';
 import 'recommend.dart';
@@ -323,6 +324,10 @@ Future<void> main() async {
   // before anything can search — the guard exists to survive a restart, and a restart is precisely
   // when it used to be blind. Only here: a client never logs in, it asks the pc to.
   if (mode.owner) await soulseek.client.loadGuard();
+  // Welke bestanden de gebruiker zelf uit de Soulseek-lijst koos. Vóór de eerste scan, want elke
+  // opruimweg vraagt hier bij het vergelijken naar — en een lijst die nog niet is ingelezen beschermt
+  // niets. Op een client verhuist er niets, dus daar valt er ook niets te beschermen.
+  if (mode.owner) await laadVasteKeuzes();
 
   player = PlayerStore()
     ..resolver = online.resolveRadio

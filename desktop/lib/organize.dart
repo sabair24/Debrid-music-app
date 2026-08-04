@@ -6,6 +6,7 @@ import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'editions.dart';
 import 'flac_tags.dart';
 import 'mp3_tags.dart';
+import 'vaste_keuze.dart';
 
 /// Where a downloaded release belongs in the folder tree.
 enum RelKind { album, single, compilation }
@@ -467,6 +468,17 @@ int formatRank(String path) {
 /// evict a proper stereo master, both here and when tidying the downloads folder — the exact
 /// opposite of "best quality" on a stereo system.
 bool firstIsBetter(File a, File b) {
+  // WAT DE GEBRUIKER ZELF KOOS VERLIEST NIET. Boven alle drie de gronden hieronder, want die gaan
+  // over kwaliteit en dit gaat over iets anders: bij Joe Dassin / L'été indien is de beste kopie een
+  // ánder nummer, en de handmatig gekozen 3:37 verloor van een 4:16 op de laatste grond — grootte.
+  //
+  // Hier en niet bij de aanroepers, want dit is het enige punt waar élke opruimweg langskomt: het
+  // filen van een download, Opruimen, de dubbelveger per album en die over de hele bibliotheek. Vijf
+  // plekken kun je vergeten, één niet.
+  //
+  // Koos hij ze allebéi, dan valt er geen voorkeur af te lezen en beslist de gewone regel.
+  final va = isVasteKeuze(a.path), vb = isVasteKeuze(b.path);
+  if (va != vb) return va;
   final ra = formatRank(a.path), rb = formatRank(b.path);
   if (ra != rb) return ra > rb;
   final ma = _isMultichannelFile(a), mb = _isMultichannelFile(b);
@@ -483,6 +495,11 @@ String whyBetter(File keep, File drop) {
     return i < 0 ? '?' : n.substring(i + 1).toUpperCase();
   }
 
+  // In dezelfde volgorde als [firstIsBetter] beslist, dus ook deze grond hoort vooraan te staan —
+  // anders zegt het scherm "32.4 MB tegen 29.1 MB" terwijl de grootte er niets mee te maken had.
+  if (isVasteKeuze(keep.path) != isVasteKeuze(drop.path)) {
+    return isVasteKeuze(keep.path) ? 'door jou zelf gekozen' : 'jouw eigen keuze blijft staan';
+  }
   final rk = formatRank(keep.path), rd = formatRank(drop.path);
   if (rk != rd) return '${ext(keep)} boven ${ext(drop)}';
   if (_isMultichannelFile(keep) != _isMultichannelFile(drop)) return 'stereo boven surround';
@@ -1088,7 +1105,12 @@ Future<String> _install(File src, File dest, List<File> losers, {String? parkeer
     } catch (_) {/* couldn't remove the old copy — the new one still lands */}
   }
   try {
-    return (await File(landed).rename(dest.path)).path;
+    final at = (await File(landed).rename(dest.path)).path;
+    // Deze hernoeming loopt NIET langs [_move] — het is de laatste stap van "eerst ernaast landen, dan
+    // pas op zijn plek". De markering van een handmatige keuze hangt aan het pad en zou anders op het
+    // tijdelijke `.incoming` blijven staan, waar hij niets meer beschermt.
+    herNoemVasteKeuze(landed, at);
+    return at;
   } catch (_) {
     return landed; // still on disk under .incoming; the scan picks it up
   }
@@ -1105,9 +1127,18 @@ Future<String> _install(File src, File dest, List<File> losers, {String? parkeer
 Future<String> moveWithRetry(File src, File dest) => _move(src, dest);
 
 Future<String> _move(File src, File dest) async {
+  // De bescherming van een handmatige keuze hangt aan het PAD, en dit is de enige plek in de app waar
+  // een muziekbestand van pad verandert. Zonder deze regel gold zo'n keuze precies één keer: het filen
+  // van een download verplaatst het bestand van de landingsmap naar `Albums/…`, en daarna wees de
+  // lijst naar iets wat er niet meer is. Dezelfde reden dat de bescherming zelf in [firstIsBetter]
+  // zit: één doorgang die niet te vergeten is.
+  void volgMee(String naar) => herNoemVasteKeuze(src.path, naar);
+
   for (var attempt = 0; attempt < 3; attempt++) {
     try {
-      return (await src.rename(dest.path)).path;
+      final at = (await src.rename(dest.path)).path;
+      volgMee(at);
+      return at;
     } catch (_) {
       if (attempt < 2) await Future.delayed(Duration(milliseconds: 250 * (attempt + 1)));
     }
@@ -1117,6 +1148,7 @@ Future<String> _move(File src, File dest) async {
   try {
     await src.delete();
   } catch (_) {/* copy stands; the staging leftover gets cleaned up later */}
+  volgMee(dest.path);
   return dest.path;
 }
 

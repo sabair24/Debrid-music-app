@@ -14,6 +14,7 @@ import 'soulseek.dart';
 import 'torbox.dart';
 import 'warm_log.dart';
 import 'paths.dart';
+import 'vaste_keuze.dart';
 
 /// TorBox search + resolve + download, ported from the server's OnlineService.
 class OnlineService {
@@ -870,7 +871,18 @@ class DownloadManager extends ChangeNotifier {
       final staged = File(res.path);
       var how = Placement.stuck;
       try {
-        how = (await placeFileDetailed(staged, _downloadsRoot, tags: job.authority, staatAl: mapVanBestaande)).how;
+        // Koos de gebruiker dit bestand zelf, dan wordt het NU al onthouden — vóór het filen, want
+        // tijdens het filen wordt er al vergeleken. Andersom kwam het net te laat: `placeFileDetailed`
+        // zet de nieuwe kopie tegen wat er ligt, en zonder bescherming besliste de grootte. Zo belandde
+        // de handmatig gekozen L'été indien in `_dubbel`.
+        if (keuze != null) await onthoudVasteKeuze(staged.path);
+        final uit =
+            await placeFileDetailed(staged, _downloadsRoot, tags: job.authority, staatAl: mapVanBestaande);
+        how = uit.how;
+        // En na afloop op het pad waar hij écht ligt. `_move` verhuist de markering mee, maar bij
+        // `Placement.duplicate` is de bron verwijderd en is `uit.path` de kopie die bleef staan — die
+        // hoort de bescherming niet zomaar te erven.
+        if (keuze != null && how == Placement.moved) await onthoudVasteKeuze(uit.path);
       } catch (_) {/* leave it where it landed — the scan still finds it */}
       job.progress = 1;
       job.status = 'done';
