@@ -6813,6 +6813,87 @@ Future<void> _downloadSoulseekAlbum(
   }
 }
 
+/// De pauzemelding, en waarom dit een eigen widget is.
+///
+/// Saber: "altijd als ik de app open heb ik dit voor, ik wordt het echt wel beu". Terecht, en de
+/// oorzaak stond hier: de melding werd getekend met `context.read<SoulseekService>()`. `read` LUISTERT
+/// NIET. Deze regel kon zichzelf dus nooit opruimen — hij bleef staan tot er toevallig om een andere
+/// reden hertekend werd, ook als de wachttijd allang verstreken was. En de knop "nu opnieuw proberen"
+/// leek niets te doen, want er veranderde niets op het scherm.
+///
+/// Gemeten op 04-08-2026 om 19:25: het scherm zei "te vaak ingelogd", even later "wachtwoord klopt
+/// niet, nog 10 min", terwijl `soulseek_login.log` geen enkele loginregel had en
+/// `soulseek_guard.json` `blockedUntil: null`, `logins: []`, `pause: "none"` bevatte. Een herstart
+/// maakte het weg. Precies wat een vastgevroren momentopname doet.
+///
+/// `watch` in plaats van `read` helpt hier NIET, en dat is het venijn: `SoulseekService` wordt geleverd
+/// met een gewone `Provider.value` (main.dart) en is geen `ChangeNotifier`. Er is dus geen enkel
+/// mechanisme waarmee een wijziging het scherm kan bereiken — luisteren kan niet naar iets wat nooit
+/// iets zegt. Daarom klokt deze widget zichzelf: elke twee seconden opnieuw kijken zolang hij in beeld
+/// is. Dat is goedkoop (hij bestaat alleen op de zoekpagina) en het is de enige vorm die óók klopt
+/// wanneer de wachttijd vanzelf verloopt — dat is namelijk geen gebeurtenis maar een vergelijking met
+/// de klok.
+class _SlskPauzeStrook extends StatefulWidget {
+  const _SlskPauzeStrook();
+
+  @override
+  State<_SlskPauzeStrook> createState() => _SlskPauzeStrookState();
+}
+
+class _SlskPauzeStrookState extends State<_SlskPauzeStrook> {
+  Timer? _tik;
+
+  @override
+  void initState() {
+    super.initState();
+    _tik = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tik?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.read<SoulseekService>();
+    if (!s.blocked) return const SizedBox.shrink();
+
+    final left = s.blockedFor;
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      const SizedBox(width: 10),
+      Icon(Icons.pause_circle_outline_rounded, size: 13, color: Colors.orange.shade300),
+      const SizedBox(width: 4),
+      // The reason comes from the client, which knows which of the five it is. This line used
+      // to say "login geweigerd" for all of them — including a login that had just worked and
+      // was then kicked, and a server that never answered at all.
+      Tooltip(
+        message: s.whyNotLogin ?? '',
+        child: Text(
+            left == null
+                ? 'gepauzeerd — ${s.pauseLabel}'
+                : 'gepauzeerd — ${s.pauseLabel}, nog ${left.inMinutes + 1} min',
+            style: TextStyle(color: Colors.orange.shade300, fontSize: 11.5)),
+      ),
+      const SizedBox(width: 6),
+      // This wait is OUR guard, not Soulseek's. When the official client is logged in fine,
+      // the account clearly isn't blocked and the user should never be stuck behind it.
+      TextButton(
+        style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: const Size(0, 26)),
+        onPressed: () {
+          context.read<SoulseekService>().retryLoginNow();
+          _srcToast(context, 'Soulseek opnieuw proberen…');
+        },
+        child: const Text('nu opnieuw proberen', style: TextStyle(fontSize: 11.5)),
+      ),
+    ]);
+  }
+}
+
 /// Soulseek section header with a "Download album" action for the best complete folder.
 /// [all] is the full (unfiltered) result set — used to find fallback peers per track.
 Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy, List<SoulseekFile> all,
@@ -6828,38 +6909,7 @@ Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy,
         Text('${slsk.length}', style: const TextStyle(color: _muted, fontSize: 11.5)),
         // Back-off notice: after a refused login the app stops touching Soulseek entirely, so the
         // user knows WHY there are no results (instead of thinking the search is just empty).
-        if (context.read<SoulseekService>().blocked) ...[
-          const SizedBox(width: 10),
-          Icon(Icons.pause_circle_outline_rounded, size: 13, color: Colors.orange.shade300),
-          const SizedBox(width: 4),
-          // The reason comes from the client, which knows which of the five it is. This line used
-          // to say "login geweigerd" for all of them — including a login that had just worked and
-          // was then kicked, and a server that never answered at all.
-          Tooltip(
-            message: context.read<SoulseekService>().whyNotLogin ?? '',
-            child: Text(
-                () {
-                  final s = context.read<SoulseekService>();
-                  final left = s.blockedFor;
-                  return left == null
-                      ? 'gepauzeerd — ${s.pauseLabel}'
-                      : 'gepauzeerd — ${s.pauseLabel}, nog ${left.inMinutes + 1} min';
-                }(),
-                style: TextStyle(color: Colors.orange.shade300, fontSize: 11.5)),
-          ),
-          const SizedBox(width: 6),
-          // This wait is OUR guard, not Soulseek's. When the official client is logged in fine,
-          // the account clearly isn't blocked and the user should never be stuck behind it.
-          TextButton(
-            style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: const Size(0, 26)),
-            onPressed: () {
-              context.read<SoulseekService>().retryLoginNow();
-              _srcToast(context, 'Soulseek opnieuw proberen…');
-            },
-            child: const Text('nu opnieuw proberen', style: TextStyle(fontSize: 11.5)),
-          ),
-        ],
+        const _SlskPauzeStrook(),
         if (busy) ...const [
           SizedBox(width: 8),
           SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),

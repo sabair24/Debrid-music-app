@@ -829,7 +829,25 @@ class SoulseekClient {
   /// guard at all, which is precisely the state this is here to prevent.
   Future<void> _saving = Future.value();
 
+  /// De laatst gemelde toestand, om alleen bij een ECHTE wijziging te loggen. Zonder dit zou elke
+  /// loginpoging een regel opleveren en werd het logboek onleesbaar.
+  String _laatstGemeld = '';
+
+  void _meldWijziging() {
+    final nu = '${_pause.name}|${_blockedUntil?.toIso8601String() ?? "-"}|${_loginTimes.length}';
+    if (nu == _laatstGemeld) return;
+    _laatstGemeld = nu;
+    // WAT DE STROOK LAAT ZIEN, en waarom. Dit ontbrak, en daardoor stond op het scherm "wachtwoord
+    // klopt niet, nog 10 min" terwijl het logboek geen enkele login kende en het guard-bestand niets
+    // geblokkeerds bevatte. Er viel toen alleen te beredeneren waar dat vandaan kwam, en dat is
+    // precies waar dit onderzoek al drie keer op is vastgelopen.
+    logboek('toestand: pauze=${_pause.name} blokkade tot '
+        '${_blockedUntil?.toIso8601String() ?? "-"} logins=${_loginTimes.length} '
+        'blocked=$blocked mustNotLogin=$mustNotLogin');
+  }
+
   Future<void> _saveGuard() {
+    _meldWijziging();
     final payload = jsonEncode({
       'blockedUntil': _blockedUntil?.toIso8601String(),
       'refusals': _refusals,
