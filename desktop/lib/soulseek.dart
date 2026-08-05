@@ -1581,8 +1581,19 @@ class SlskSession {
       // Het vierde veld is volgens het protocol md5(gebruikersnaam + wachtwoord). Hier stond
       // md5(wachtwoord): dezelfde soort fout als `Socket.address` — een veld met de juiste vorm en de
       // verkeerde inhoud. De server accepteerde het, dus het viel nooit op.
-      c.send(_message(
-          1, (_W()..str(user)..str(pass)..u32(160)..str(_md5hex('$user$pass'))..u32(17)).bytes()));
+      final bericht =
+          _message(1, (_W()..str(user)..str(pass)..u32(160)..str(_md5hex('$user$pass'))..u32(17)).bytes());
+      // DE BYTES ZELF, als vingerafdruk. Nooit de inhoud: het wachtwoord zit erin.
+      //
+      // Op 05-08-2026 liep dit onderzoek hierop vast. Een los proefprogramma met wat volgens de
+      // broncode dezelfde bytes zijn kreeg GELUKT — drie keer achter elkaar, met en zonder gebonden
+      // poort, met en zonder een andere sessie actief — terwijl de app op datzelfde moment
+      // INVALIDPASS terugkreeg. Zelfde gegevens (de vingerafdruk in soulseek_guard.json komt overeen
+      // met settings.json), zelfde server en poort, zelfde framing. Dan is de aanname "het zijn
+      // dezelfde bytes" het enige wat nog niet gemeten was.
+      client.logboek('loginbericht: ${bericht.length} bytes, sha1 '
+          '${sha1.convert(bericht).toString().substring(0, 24)}');
+      c.send(bericht);
       // Silence and a refusal are different events with different answers, and folding them into
       // one boolean is what put "login geweigerd" on screen for a server that never replied. The
       // probe that found this logged in with these exact bytes in 251 ms, so a twelve-second
