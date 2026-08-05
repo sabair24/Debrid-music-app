@@ -878,6 +878,7 @@ class LibraryStore extends ChangeNotifier {
         if (v is! Map) continue;
         _corrections[e.key] = v.map((k, val) => MapEntry(k.toString(), val.toString()));
       }
+      _voegHoofdletterDubbelsSamen();
       _correctionsUnreadable = false;
     } catch (e) {
       // The file is there and unreadable. Say so, and refuse to write over it — see
@@ -885,6 +886,64 @@ class LibraryStore extends ChangeNotifier {
       // next edit wrote an almost-empty map over months of work without a word.
       debugPrint('corrections.json unreadable, refusing to overwrite it: $e');
       _correctionsUnreadable = true;
+    }
+  }
+
+  /// Op Windows en macOS is `Foo.flac` hetzelfde bestand als `foo.flac`; in een tekstvergelijking niet.
+  ///
+  /// Dat verschil kostte bijna een vastgezette persing. Gemeten in Sabers corrections.json stonden
+  /// twee regels voor één bestand — `09 - The Lady in My Life.flac` en `… In My Life.flac` — en de
+  /// tweede droeg `release: 2911293`. De eerste was een wees van een hernoeming, en [_sweepCorrections]
+  /// vergeleek letterlijk (`live.contains(e.key)`), zag hem niet in de scan en zette er een
+  /// `_gone`-stempel op. Negentig dagen later was hij weg geweest. Was de wees toevallig degene met de
+  /// pin geweest, dan was díé verdwenen.
+  static bool get _padenZijnHoofdletterOngevoelig => Platform.isWindows || Platform.isMacOS;
+
+  static String _padSleutel(String p) => _padenZijnHoofdletterOngevoelig ? p.toLowerCase() : p;
+
+  /// Twee regels voor hetzelfde bestand samenvoegen tot één, onder de naam die op schijf staat.
+  ///
+  /// Bij het inlezen, want dan is het één keer werk in plaats van bij elke opzoeking. De schijf beslist
+  /// welke schrijfwijze wint: alleen die komt in de scan terug, en een sleutel die de scan nooit ziet
+  /// wordt vroeg of laat opgeruimd. Is het bestand er niet meer, dan wint de regel met de meeste
+  /// inhoud — dan valt er niets beters te kiezen.
+  void _voegHoofdletterDubbelsSamen() {
+    if (!_padenZijnHoofdletterOngevoelig) return;
+    final perSleutel = <String, List<String>>{};
+    for (final p in _corrections.keys) {
+      perSleutel.putIfAbsent(_padSleutel(p), () => []).add(p);
+    }
+    for (final groep in perSleutel.values) {
+      if (groep.length < 2) continue;
+      // Welke schrijfwijze staat er werkelijk op schijf? `File.existsSync` antwoordt hier op beide
+      // ja, dus dat helpt niet — de map opsommen wel.
+      String? echt;
+      try {
+        final map = Directory(File(groep.first).parent.path);
+        for (final f in map.listSync()) {
+          if (_padSleutel(f.path) == _padSleutel(groep.first)) {
+            echt = f.path;
+            break;
+          }
+        }
+      } catch (_) {/* map weg: dan beslist de inhoud hieronder */}
+      final winnaar = groep.firstWhere((p) => p == echt,
+          orElse: () => groep.reduce((a, b) =>
+              _corrections[a]!.length >= _corrections[b]!.length ? a : b));
+      final samen = <String, String>{};
+      for (final p in groep) {
+        // De winnaar als laatste, zodat zijn waarden bovenliggen bij een botsing.
+        if (p != winnaar) samen.addAll(_corrections[p]!);
+      }
+      samen.addAll(_corrections[winnaar]!);
+      // Het stempel "dit bestand is weg" hoort niet mee te verhuizen: hij stond er juist omdát de
+      // andere schrijfwijze niet gevonden werd.
+      if (echt != null) samen.remove(_goneKey);
+      for (final p in groep) {
+        _corrections.remove(p);
+      }
+      _corrections[winnaar] = samen;
+      debugPrint('corrections: ${groep.length} regels samengevoegd tot $winnaar');
     }
   }
 
@@ -907,11 +966,16 @@ class LibraryStore extends ChangeNotifier {
     final now = DateTime.now().millisecondsSinceEpoch;
     // Hidden tracks are excluded from `tracks` but their files are still there — "remove from
     // library only" must not quietly become "forget what I typed about it".
-    final live = <String>{for (final t in tracks) t.path, ..._hidden};
+    // Hoofdletterongevoelig op Windows en macOS: daar is één verschil in schrijfwijze geen ander
+    // bestand, en een letterlijke vergelijking zou een levend bestand als verdwenen bestempelen.
+    final live = <String>{
+      for (final t in tracks) _padSleutel(t.path),
+      for (final p in _hidden) _padSleutel(p),
+    };
     final drop = <String>[];
     var changed = false;
     for (final e in _corrections.entries) {
-      if (live.contains(e.key)) {
+      if (live.contains(_padSleutel(e.key))) {
         if (e.value.remove(_goneKey) != null) changed = true; // it came back
         continue;
       }
@@ -940,7 +1004,19 @@ class LibraryStore extends ChangeNotifier {
   }
 
   /// The correction map for a path, created on demand — so an extension can add to it.
-  Map<String, String> _correctionsFor(String path) => _corrections.putIfAbsent(path, () => {});
+  ///
+  /// Bestaat er al een regel die alleen in schrijfwijze verschilt, dan is dat DEZELFDE regel: op
+  /// Windows en macOS wijzen ze naar één bestand. Zonder deze controle groeit er bij elke hernoeming
+  /// een tweede regel aan, en dan hangt het van het toeval af welke van de twee je pin draagt.
+  Map<String, String> _correctionsFor(String path) {
+    if (_padenZijnHoofdletterOngevoelig && !_corrections.containsKey(path)) {
+      final sleutel = _padSleutel(path);
+      for (final bestaand in _corrections.keys) {
+        if (_padSleutel(bestaand) == sleutel) return _corrections[bestaand]!;
+      }
+    }
+    return _corrections.putIfAbsent(path, () => {});
+  }
 
   /// Carry a file's corrections to where the file now is.
   ///
