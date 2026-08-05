@@ -878,8 +878,12 @@ class LibraryStore extends ChangeNotifier {
         if (v is! Map) continue;
         _corrections[e.key] = v.map((k, val) => MapEntry(k.toString(), val.toString()));
       }
-      _voegHoofdletterDubbelsSamen();
+      final samengevoegd = _voegHoofdletterDubbelsSamen();
       _correctionsUnreadable = false;
+      // Ook wegschrijven, anders staat de dubbele regel er bij de volgende start gewoon weer en is
+      // hij alleen in het geheugen opgeruimd. Ná het vrijgeven van [_correctionsUnreadable], want
+      // [_saveCorrections] weigert te schrijven zolang die vlag staat — en terecht.
+      if (samengevoegd) await _saveCorrections();
     } catch (e) {
       // The file is there and unreadable. Say so, and refuse to write over it — see
       // [_correctionsUnreadable]. Swallowing this is what turned one bad read into total loss: the
@@ -907,8 +911,10 @@ class LibraryStore extends ChangeNotifier {
   /// welke schrijfwijze wint: alleen die komt in de scan terug, en een sleutel die de scan nooit ziet
   /// wordt vroeg of laat opgeruimd. Is het bestand er niet meer, dan wint de regel met de meeste
   /// inhoud — dan valt er niets beters te kiezen.
-  void _voegHoofdletterDubbelsSamen() {
-    if (!_padenZijnHoofdletterOngevoelig) return;
+  /// Geeft terug of er iets veranderd is, zodat de aanroeper het ook kan bewaren.
+  bool _voegHoofdletterDubbelsSamen() {
+    if (!_padenZijnHoofdletterOngevoelig) return false;
+    var veranderd = false;
     final perSleutel = <String, List<String>>{};
     for (final p in _corrections.keys) {
       perSleutel.putIfAbsent(_padSleutel(p), () => []).add(p);
@@ -943,8 +949,10 @@ class LibraryStore extends ChangeNotifier {
         _corrections.remove(p);
       }
       _corrections[winnaar] = samen;
+      veranderd = true;
       debugPrint('corrections: ${groep.length} regels samengevoegd tot $winnaar');
     }
+    return veranderd;
   }
 
   /// How long a file may be missing before its correction is forgotten.

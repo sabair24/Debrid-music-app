@@ -72,6 +72,15 @@ void main() {
     expect(c['artist'], 'Michael Jackson');
     expect(c['_gone'], isNull,
         reason: 'het stempel stond er omdát de andere schrijfwijze niet gevonden werd');
+
+    // En het moet ook op schijf staan, anders is het bij de volgende start weer twee regels.
+    await store.saveCorrectionsNow();
+    final opSchijf =
+        jsonDecode(File('${scratch.path}${Platform.pathSeparator}corrections.json').readAsStringSync())
+            as Map<String, dynamic>;
+    expect(opSchijf.keys.where((k) => k.toLowerCase() == wees.toLowerCase()).length, 1,
+        reason: 'één regel voor één bestand');
+    expect((opSchijf[echt.path] as Map)['release'], '2911293');
   });
 
   test('de pin overleeft ook als hij op de WEES-regel stond', () async {
