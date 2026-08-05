@@ -65,6 +65,8 @@ import 'musicbrainz.dart';
 import 'offline.dart';
 import 'online.dart';
 import 'organize.dart';
+import 'echtheid.dart';
+import 'echtheid_oordelen.dart';
 import 'vaste_keuze.dart';
 import 'player.dart';
 import 'quality.dart';
@@ -359,6 +361,9 @@ Future<void> main() async {
   // opruimweg vraagt hier bij het vergelijken naar — en een lijst die nog niet is ingelezen beschermt
   // niets. Op een client verhuist er niets, dus daar valt er ook niets te beschermen.
   if (mode.owner) await laadVasteKeuzes();
+  // Wat er van elk bestand gemeten is. Vóór de eerste scan, want `firstIsBetter` vraagt hier bij elke
+  // vergelijking naar — en een lijst die nog niet is ingelezen beschermt niets.
+  if (mode.owner) await laadEchtheid();
 
   player = PlayerStore()
     ..resolver = online.resolveRadio
@@ -4018,6 +4023,7 @@ class _TrackRowState extends State<TrackRow> {
                   );
                 }),
               ),
+              _echtheidMerk(t.path),
               _qualityBadge(_trackQuality(t)),
               Text(_fmt(t.duration), style: const TextStyle(color: _muted, fontSize: 13)),
               // Both appear on hover, so neither can be hit by accident.
@@ -4989,6 +4995,7 @@ class PlayerBar extends StatelessWidget {
                           ),
                           // What quality am I actually hearing? (local files only — a streamed
                           // source's real quality isn't known here.)
+                          if (t != null) _echtheidMerk(t.path),
                           if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
                         ],
                       ),
@@ -5446,7 +5453,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                         lookup: true,
                         style: const TextStyle(color: _muted, fontSize: 15),
                       ),
-                    if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
+                    if (t != null) _echtheidMerk(t.path),
+                          if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
                   ],
                 ),
                 const SizedBox(height: 26),
@@ -5869,7 +5877,8 @@ class TracksView extends StatelessWidget {
                           ],
                         ),
                       ),
-                      _qualityBadge(_trackQuality(t)),
+                      _echtheidMerk(t.path),
+              _qualityBadge(_trackQuality(t)),
                       const SizedBox(width: 4),
                       Text(_fmt(t.duration), style: const TextStyle(color: _muted, fontSize: 12)),
                       const SizedBox(width: 10),
@@ -7002,6 +7011,38 @@ Widget _qualityBadge(Quality q) {
   );
 }
 
+/// Is dit bestand écht wat de badge ernaast beweert?
+///
+/// Saber: "hoe weet ik dat ik echt lossless of hi-res binnenhaal?" De kwaliteitsbadge hiernaast toont
+/// wat het BESTAND zegt — dat is een bewering, geen feit. Deze toont wat er gemeten is.
+///
+/// Alleen zichtbaar als er iets te melden valt: een bestand dat de proef doorstaat krijgt niets, want
+/// een vinkje bij 536 van de 672 nummers is ruis. Een ongemeten bestand krijgt óók niets — zwijgen is
+/// hier eerlijker dan een vraagteken bij alles wat nog niet aan de beurt is geweest.
+Widget _echtheidMerk(String? pad) {
+  if (pad == null || pad.isEmpty) return const SizedBox.shrink();
+  final o = gemeten(pad);
+  if (o == null || !o.isNep) return const SizedBox.shrink();
+  return Tooltip(
+    message: waarom(o),
+    child: Container(
+      margin: const EdgeInsets.only(right: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0x33FF9800),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.orange.shade300),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.warning_amber_rounded, size: 11, color: Colors.orange.shade300),
+        const SizedBox(width: 3),
+        Text(o.band == Bandbreedte.afgekapt ? 'uit mp3' : 'niet echt hi-res',
+            style: TextStyle(color: Colors.orange.shade300, fontSize: 10.5, fontWeight: FontWeight.w600)),
+      ]),
+    ),
+  );
+}
+
 /// Quality of a LOCAL library track (real bitrate from size÷duration, so a 16/44 FLAC and a
 /// 24-bit hi-res FLAC read differently).
 /// De kwaliteit van een nummer uit de eigen bibliotheek.
@@ -7261,6 +7302,33 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
             child: Text(_surroundMerk(f)!,
                 style: const TextStyle(
                     fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFFE8913A))),
+          ),
+        ],
+        // TE KLEIN VOOR WAT HET BEWEERT. Meten kan hier niet: je kunt niet in het bestand van een
+        // vreemde kijken zonder het eerst binnen te halen. Wat wél kan is de getallen tegen elkaar
+        // wegstrepen die de peer zelf meestuurt — een 24/96 die uit een 44,1-bron is opgetild pakt veel
+        // kleiner in dan een echte. Zie [verdachtKleinVoorHiRes].
+        //
+        // Bewust dezelfde oranje vorm als het surroundmerk, en om dezelfde reden: dit is een
+        // waarschuwing, geen keurmerk en geen oordeel. Het staat ook NIET in de rangschikking — een
+        // vermoeden hoort de gebruiker te informeren, niet voor hem te beslissen.
+        if (verdachtKleinVoorHiRes(
+            sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: f.bitrate ?? 0)) ...[
+          Tooltip(
+            message: 'Zegt ${f.bitDepth}/${f.sampleRate} maar is daar veel te klein voor — '
+                'waarschijnlijk opgeschaald. Zeker weten kan pas na het binnenhalen.',
+            child: Container(
+              margin: const EdgeInsets.only(right: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE8913A).withValues(alpha: .16),
+                borderRadius: BorderRadius.circular(5),
+                border: Border.all(color: const Color(0xFFE8913A).withValues(alpha: .45)),
+              ),
+              child: const Text('verdacht klein',
+                  style: TextStyle(
+                      fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFFE8913A))),
+            ),
           ),
         ],
         _qualityBadge(q),

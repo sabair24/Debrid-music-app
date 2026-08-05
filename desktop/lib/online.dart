@@ -14,6 +14,9 @@ import 'soulseek.dart';
 import 'torbox.dart';
 import 'warm_log.dart';
 import 'paths.dart';
+import 'echtheid_meter.dart';
+import 'echtheid_oordelen.dart';
+import 'flac_tags.dart';
 import 'vaste_keuze.dart';
 
 /// TorBox search + resolve + download, ported from the server's OnlineService.
@@ -844,6 +847,25 @@ class DownloadManager extends ChangeNotifier {
     return resumePending();
   }
 
+  /// Is dit bestand écht wat het zegt? Gemeten zodra het binnen is, nooit ervoor.
+  ///
+  /// Bij een zoekresultaat kan dit niet: je kunt niet in het bestand van een vreemde kijken zonder het
+  /// eerst binnen te halen. Daar blijft het bij de verhoudingswaarschuwing uit
+  /// [verdachtKleinVoorHiRes] — een aanwijzing, geen oordeel.
+  Future<void> _meetEchtheid(File f) async {
+    try {
+      final tags = readFlacTags(f);
+      if (tags == null || tags.sampleRate <= 0) return;
+      final meter = Echtheidsmeter(cacheMap: '$appDir${Platform.pathSeparator}echtheid');
+      if (!meter.available) return;
+      final o = await meter.van(f.path,
+          kopSampleRate: tags.sampleRate,
+          kopBits: tags.bitsPerSample,
+          duurSeconden: (tags.duration?.inSeconds ?? 0).toDouble());
+      if (o != null) await onthoudOordeel(f.path, o);
+    } catch (_) {/* een meting is een verrijking; hij mag een download nooit breken */}
+  }
+
   /// Everything in staging at startup is a leftover from a session that ended mid-transfer.
   Future<void> _clearStaging() async {
     final root = Directory('$_downloadsRoot${Platform.pathSeparator}_inkomend');
@@ -876,6 +898,14 @@ class DownloadManager extends ChangeNotifier {
         // zet de nieuwe kopie tegen wat er ligt, en zonder bescherming besliste de grootte. Zo belandde
         // de handmatig gekozen L'été indien in `_dubbel`.
         if (keuze != null) await onthoudVasteKeuze(staged.path);
+        // METEN VÓÓR HET FILEN, om exact dezelfde reden als de regel hierboven: `placeFileDetailed`
+        // vergelijkt tijdens het landen, en `firstIsBetter` kijkt dan al naar het oordeel. Een mp3 die
+        // naar FLAC is omgezet is vaak GROTER dan het origineel — gemeten 76 MB tegen 34 MB — en zou
+        // zonder deze meting winnen op grootte.
+        //
+        // Een halve seconde op een download die seconden tot minuten duurde is onzichtbaar, en een
+        // mislukte meting kost niets: dan is er simpelweg geen oordeel.
+        await _meetEchtheid(staged);
         final uit =
             await placeFileDetailed(staged, _downloadsRoot, tags: job.authority, staatAl: mapVanBestaande);
         how = uit.how;

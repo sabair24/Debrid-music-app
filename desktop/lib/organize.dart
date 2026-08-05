@@ -6,6 +6,8 @@ import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'editions.dart';
 import 'flac_tags.dart';
 import 'mp3_tags.dart';
+import 'echtheid.dart';
+import 'echtheid_oordelen.dart';
 import 'vaste_keuze.dart';
 
 /// Where a downloaded release belongs in the folder tree.
@@ -541,6 +543,17 @@ bool firstIsBetter(File a, File b) {
   if (ra != rb) return ra > rb;
   final ma = _isMultichannelFile(a), mb = _isMultichannelFile(b);
   if (ma != mb) return mb; // the stereo one wins
+  // WAT GEMETEN IS ALS NEP VERLIEST — vlak boven de grootte, want dáár gaat het mis.
+  //
+  // Een mp3 die naar FLAC is omgezet is vaak GROTER dan het origineel: mp3-artefacten comprimeren
+  // slecht. Gemeten met een eigen proef: origineel 34 MB, dezelfde muziek via 320 kbps terug naar FLAC
+  // 76 MB. De regel hieronder koos dus stelselmatig de nep-kopie, en precies dat was Sabers vraag.
+  //
+  // Alleen wat BEWEZEN is telt; een ongemeten bestand mag nooit verliezen van een gemeten, anders
+  // herordent het draaien van een veegbeurt de halve bibliotheek. En vlak boven de grootte, zodat deze
+  // regel uitsluitend vuurt in het geval waar de grootte anders zou beslissen — niets daarbuiten.
+  final na = bewezenNep(a.path), nb = bewezenNep(b.path);
+  if (na != nb) return nb;
   return a.lengthSync() > b.lengthSync();
 }
 
@@ -561,6 +574,12 @@ String whyBetter(File keep, File drop) {
   final rk = formatRank(keep.path), rd = formatRank(drop.path);
   if (rk != rd) return '${ext(keep)} boven ${ext(drop)}';
   if (_isMultichannelFile(keep) != _isMultichannelFile(drop)) return 'stereo boven surround';
+  // Zelfde gronden, zelfde volgorde als [firstIsBetter] — anders zegt het scherm "32,4 MB tegen
+  // 29,1 MB" terwijl de grootte er niets mee te maken had.
+  if (bewezenNep(keep.path) != bewezenNep(drop.path)) {
+    final o = gemeten(drop.path);
+    return o == null ? 'de echte boven de nagemaakte' : 'de echte — de andere: ${waarom(o)}';
+  }
   try {
     String mb(File f) => '${(f.lengthSync() / 1024 / 1024).toStringAsFixed(1)} MB';
     return '${mb(keep)} tegen ${mb(drop)}';
@@ -1166,8 +1185,9 @@ Future<String> _install(File src, File dest, List<File> losers, {String? parkeer
     final at = (await File(landed).rename(dest.path)).path;
     // Deze hernoeming loopt NIET langs [_move] — het is de laatste stap van "eerst ernaast landen, dan
     // pas op zijn plek". De markering van een handmatige keuze hangt aan het pad en zou anders op het
-    // tijdelijke `.incoming` blijven staan, waar hij niets meer beschermt.
+    // tijdelijke `.incoming` blijven staan, waar hij niets meer beschermt. Zelfde voor de meting.
     herNoemVasteKeuze(landed, at);
+    herNoemOordeel(landed, at);
     return at;
   } catch (_) {
     return landed; // still on disk under .incoming; the scan picks it up
@@ -1190,7 +1210,12 @@ Future<String> _move(File src, File dest) async {
   // van een download verplaatst het bestand van de landingsmap naar `Albums/…`, en daarna wees de
   // lijst naar iets wat er niet meer is. Dezelfde reden dat de bescherming zelf in [firstIsBetter]
   // zit: één doorgang die niet te vergeten is.
-  void volgMee(String naar) => herNoemVasteKeuze(src.path, naar);
+  void volgMee(String naar) {
+    herNoemVasteKeuze(src.path, naar);
+    // De meting hangt ook aan het pad, en om precies dezelfde reden: zonder dit geldt een
+    // echtheidsmeting maar één keer, want het filen verplaatst het bestand.
+    herNoemOordeel(src.path, naar);
+  }
 
   for (var attempt = 0; attempt < 3; attempt++) {
     try {

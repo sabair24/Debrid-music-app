@@ -71,6 +71,33 @@ bool meerDanStereo({int? sampleRate, int? bitDepth, required int kbps}) {
   return kbps > onbewerktStereo;
 }
 
+/// Verdacht klein voor wat het bewéért — een AANWIJZING, geen tegenspraak.
+///
+/// Bij een zoekresultaat is meten onmogelijk: je kunt niet in het bestand van een vreemde kijken zonder
+/// het eerst binnen te halen. Wat wél kan is de getallen tegen elkaar wegstrepen die de peer zelf
+/// meestuurt. Een 24/96 die uit een 44,1 kHz-bron is opgetild draagt alleen de inhoud van die bron, en
+/// pakt dus veel kleiner in dan een echte 24/96.
+///
+/// De verhouding is aan echte bestanden uit deze bibliotheek gemeten en staat hierboven bij
+/// [capaciteitOpEenSchaal]: een echte lossless zit rond .65 van onbewerkt stereo (.69, .70, .59, .69).
+/// Een opgeblazen bestand zakt naar .25 à .35. De drempel ligt op **.40**, ruim onder de laagste echte
+/// meting van .59 — een stille solopiano op 24/96 comprimeert ook goed, en die mag hier niet in vallen.
+///
+/// ALLEEN bij geclaimde hi-res. Bij 16/44,1 zegt de verhouding niets: een transcode van 320 kbps terug
+/// naar 16-bit FLAC pakt ongeveer even goed in als het origineel, soms zelfs slechter — gemeten kwam een
+/// transcode op 76 MB uit waar het origineel 34 MB was. Daar helpt alleen de spectrale meting ná
+/// binnenkomst.
+///
+/// Dit hoort NIET in de rangschikking. [meerDanStereo] zit daar wel in omdat het een bewijs is; dit is
+/// een vermoeden, en een vermoeden hoort de gebruiker te informeren, niet voor hem te beslissen.
+bool verdachtKleinVoorHiRes({int? sampleRate, int? bitDepth, required int kbps}) {
+  if (sampleRate == null || bitDepth == null || kbps <= 0) return false;
+  if (!isHiRes(sampleRate: sampleRate, bitsPerSample: bitDepth)) return false;
+  final onbewerktStereo = sampleRate * bitDepth * 2 / 1000;
+  if (onbewerktStereo <= 0) return false;
+  return kbps / onbewerktStereo < 0.40;
+}
+
 /// Eén getal voor "hoeveel muziek zit hierin", ook als de peer het formaat niet meldt.
 ///
 /// Zonder dit worden twee verschillende dingen met elkaar vergeleken. Meldt de peer 24/192, dan wordt er
