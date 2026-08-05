@@ -1046,7 +1046,56 @@ class LibraryStore extends ChangeNotifier {
 
   /// Apply a manual correction to [target] (artist/album for an album, title for a
   /// single) and optionally a user-picked cover. Persisted + reflected immediately.
-  Future<void> applyCorrection(
+  /// Wat de gebruiker typte ook IN HET BESTAND zetten, niet alleen in corrections.json.
+  ///
+  /// Saber: "ik heb de tag bewerkt, maar toch blijven de originele tags erin." Dat klopte letterlijk.
+  /// Het potlood schreef uitsluitend naar `corrections.json`; de app tóónde zijn tekst en het bestand
+  /// hield die van de uploader. Zet je de map in Roon of op een telefoon, dan was zijn werk onzichtbaar.
+  ///
+  /// Alleen de velden die hij daadwerkelijk invulde, en langs dezelfde weg als [applyNormalise] — dus
+  /// mét [_tagUndo], zodat de undo-knop ook hier werkt. De correctie blijft óók staan: schrijven kan
+  /// mislukken (bestand op slot, of geen `.flac`/`.mp3` — [writeTagFields] weigert de rest), en dan is
+  /// de correctie het enige vangnet. Aanvulling, geen vervanging.
+  Future<({int written, List<String> failed})> _schrijfBewerking(
+    Album target, {
+    String? artist,
+    String? albumTitle,
+    String? title,
+  }) async {
+    final gedeeld = <String, String?>{};
+    if (artist != null && artist.trim().isNotEmpty) gedeeld['ARTIST'] = cleanArtistName(artist);
+    if (albumTitle != null && albumTitle.trim().isNotEmpty && !target.isSingle) {
+      gedeeld['ALBUM'] = albumTitle.trim();
+    }
+    // TITLE alleen bij een single, precies zoals de correctie hierboven. Bij een meersporig album zou
+    // dezelfde titel op elk nummer landen, en dat is geen bewerking maar schade.
+    final losseTitel = title != null && title.trim().isNotEmpty && target.isSingle;
+    var written = 0;
+    final failed = <String>[];
+    if (gedeeld.isEmpty && !losseTitel) return (written: 0, failed: failed);
+
+    for (final t in target.tracks) {
+      final velden = {...gedeeld, if (losseTitel) 'TITLE': title.trim()};
+      final f = File(t.path);
+      // Uit de container die het bestand écht is: een mp3 met de FLAC-lezer komt leeg terug, en "leeg"
+      // betekent "dit veld was er niet" — dan zou undo de tags WISSEN in plaats van terugzetten.
+      final raw =
+          t.path.toLowerCase().endsWith('.mp3') ? readMp3RawFields(f) : readFlacRawFields(f);
+      final voor = {for (final k in velden.keys) k: raw[k.toLowerCase()]};
+      if (!await writeTagFields(f, velden)) {
+        failed.add(t.title);
+        continue;
+      }
+      written++;
+      // Een al bestaande undo-regel WINT: die is ouder en wijst dus naar de oorspronkelijke waarde.
+      // Overschrijven zou de weg terug inkorten tot "zoals het een bewerking geleden was".
+      _tagUndo[t.path] = {...voor, ...?_tagUndo[t.path]};
+    }
+    if (written > 0) await _saveTagUndo();
+    return (written: written, failed: failed);
+  }
+
+  Future<({int written, List<String> failed})> applyCorrection(
     Album target,
     AppSettings settings, {
     String? artist,
@@ -1057,7 +1106,7 @@ class LibraryStore extends ChangeNotifier {
     String? mbid,
   }) async {
     if (isRemote) {
-      return _editOnPc({
+      await _editOnPc({
         'op': 'correction',
         'albumId': remoteAlbumId(target),
         'artist': artist,
@@ -1067,7 +1116,14 @@ class LibraryStore extends ChangeNotifier {
         'discogsRelease': discogsRelease,
         'mbid': mbid,
       });
+      // De pc doet het echte werk en meldt niets terug over geschreven bestanden; op een telefoon valt
+      // er dus niets te tellen.
+      return (written: 0, failed: const <String>[]);
     }
+    // Eerst naar de bestanden, dán de correctie. Andersom zou een mislukte schrijfbeurt onzichtbaar
+    // blijven achter een correctie die het scherm tóch goed laat lijken.
+    final uit = await _schrijfBewerking(target,
+        artist: artist, albumTitle: albumTitle, title: title);
     for (final t in target.tracks) {
       final c = _corrections.putIfAbsent(t.path, () => {});
       // Discogs numbers artists who share a name and asterisks name variants; neither belongs in
@@ -1129,6 +1185,7 @@ class LibraryStore extends ChangeNotifier {
     await _carryAlbumKeys(settings, target.artist, target.title, newArtist, newTitle);
     _bumpMeta();
     notifyListeners();
+    return uit;
   }
 
   /// Move everything filed under an album's NAME to its new name.

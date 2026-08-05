@@ -3634,7 +3634,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
   }
 
   Future<void> _applyInner() async {
-    await context.read<LibraryStore>().applyCorrection(
+    final geschreven = await context.read<LibraryStore>().applyCorrection(
           widget.album,
           context.read<AppSettings>(),
           artist: _artist.text,
@@ -3644,6 +3644,18 @@ class _MetadataEditorState extends State<MetadataEditor> {
           discogsRelease: _pickedRelease,
           mbid: _pickedMbid,
         );
+    // Een bewerking gaat nu ook IN de bestanden, en dat hoort zichtbaar te zijn — anders blijft de app
+    // het enige wat de nieuwe naam kent en is het werk buiten de app onvindbaar. Mislukt het schrijven
+    // (bestand op slot, of geen flac/mp3), dan staat dat er ook: de correctie vangt het op, maar dan
+    // weet je waaróm het bestand zelf niet mee is.
+    if (mounted && (geschreven.written > 0 || geschreven.failed.isNotEmpty)) {
+      _srcToast(
+          context,
+          geschreven.failed.isEmpty
+              ? '${geschreven.written} bestand(en) opnieuw getagd'
+              : '${geschreven.written} getagd · ${geschreven.failed.length} niet gelukt '
+                  '(de wijziging staat wel in de app)');
+    }
     // Says out loud what was pinned. The pin went missing twice while every line of the path read
     // correctly, so this is no longer something to reason about — it is something to see.
     if (mounted) {
