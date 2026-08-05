@@ -2562,9 +2562,26 @@ extension LibraryNormalise on LibraryStore {
       }
       _tagUndo.remove(t.path);
       restored++;
+      // DE CORRECTIE MOET MEE TERUG, anders klopt het scherm niet meer met het bestand.
+      //
+      // Gemeten meteen na het uitleveren van het potlood-schrijven: het bestand ging netjes terug naar
+      // ALBUM=Hafla, maar de app bleef "Hafla (Live)" tonen — want die naam stond óók nog in
+      // corrections.json, en die wint bij het inlezen. Dan lopen bestand en scherm weer uiteen, en dat
+      // is precies de klacht waarvoor dit alles gebouwd is.
+      //
+      // Alleen de velden die dit terugzetten daadwerkelijk raakte. Een vastgezette persing, een
+      // gekozen hoes of een gecorrigeerde artiest die hier niet in zat blijft van de gebruiker.
+      final c = _corrections[t.path];
+      if (c != null) {
+        for (final veld in before.keys) {
+          c.remove(const {'ARTIST': 'artist', 'ALBUM': 'album', 'TITLE': 'title'}[veld] ?? veld);
+        }
+        if (c.isEmpty) _corrections.remove(t.path);
+      }
     }
     if (restored > 0) {
       await _saveTagUndo();
+      await saveCorrectionsNow();
       await scan();
     }
     return (restored: restored, failed: failed);
