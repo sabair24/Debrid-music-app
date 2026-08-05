@@ -16,6 +16,9 @@ import 'lan/dtos.dart';
 import 'lan/ids.dart';
 import 'models.dart';
 import 'mp3_tags.dart';
+import 'echtheid.dart';
+import 'echtheid_meter.dart';
+import 'echtheid_oordelen.dart';
 import 'organize.dart';
 import 'settings.dart';
 import 'paths.dart';
@@ -2573,6 +2576,60 @@ extension LibraryNormalise on LibraryStore {
       }
     }
     return out;
+  }
+
+  /// Meet elk FLAC-bestand door: is het écht wat het zegt te zijn?
+  ///
+  /// Saber's vraag: "hoe weet ik dat een FLAC echt een FLAC is en niet een mp3 die naar FLAC is
+  /// omgezet?" Drie proeven — de onderste bits, inhoud boven 22 kHz, en een harde afkap in het
+  /// spectrum. Zie `echtheid.dart`; daar staat ook waarom alleen de derde vals alarm kan geven en welke
+  /// vier vangnetten daaromheen zitten.
+  ///
+  /// Gemeten over deze bibliotheek: 676 bestanden in ruim een minuut, 124 ms per stuk. Daarna komt het
+  /// uit de cache en is het onmiddellijk.
+  ///
+  /// Alleen FLAC. Bij een mp3 is een afkap de definitie en geen bevinding, en voor ALAC/APE/WAV zijn er
+  /// geen betrouwbare kopgetallen om iets tegen te spreken.
+  Future<({int onderzocht, int betrapt, int onbeoordeelbaar})> meetEchtheid({
+    void Function(int done, int total)? onProgress,
+  }) async {
+    final meter = Echtheidsmeter(cacheMap: '$_appDir${Platform.pathSeparator}echtheid');
+    final lijst = tracks.where((t) => t.isFlac && t.path.isNotEmpty).toList();
+    var betrapt = 0, onbeoordeelbaar = 0;
+    if (!meter.available) {
+      return (onderzocht: 0, betrapt: 0, onbeoordeelbaar: lijst.length);
+    }
+    for (var i = 0; i < lijst.length; i++) {
+      final t = lijst[i];
+      final o = await meter.van(t.path,
+          kopSampleRate: t.sampleRate,
+          kopBits: t.bitsPerSample,
+          duurSeconden: (t.duration?.inSeconds ?? 0).toDouble());
+      if (o == null || o.isOnbekend) {
+        onbeoordeelbaar++;
+      } else {
+        await onthoudOordeel(t.path, o);
+        if (o.isNep) betrapt++;
+      }
+      onProgress?.call(i + 1, lijst.length);
+    }
+    // Publiek en het meldt zich — `notifyListeners` is beschermd en deze functie woont in een
+    // uitbreiding. Zonder deze regel blijven de merkjes in de spelerbalk en de lijsten weg tot er
+    // toevallig om een andere reden hertekend wordt.
+    refreshFromCorrections();
+    return (onderzocht: lijst.length, betrapt: betrapt, onbeoordeelbaar: onbeoordeelbaar);
+  }
+
+  /// Alles wat de proef niet doorstond, met de reden erbij — voor het overzicht na de veegbeurt.
+  List<({Track track, Echtheidsoordeel oordeel})> betrapteBestanden() {
+    final uit = <({Track track, Echtheidsoordeel oordeel})>[];
+    for (final t in tracks) {
+      final o = gemeten(t.path);
+      if (o != null && o.isNep) uit.add((track: t, oordeel: o));
+    }
+    uit.sort((a, b) => '${a.track.artist}${a.track.album}${a.track.trackNo}'
+        .compareTo('${b.track.artist}${b.track.album}${b.track.trackNo}'));
+    return uit;
   }
 
   /// How far two lengths may differ before they cannot be the same recording. Twelve seconds is the

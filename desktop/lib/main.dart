@@ -7011,6 +7011,57 @@ Widget _qualityBadge(Quality q) {
   );
 }
 
+/// Alles wat de echtheidsproef niet doorstond, op een rij.
+///
+/// Zelfde vorm als [SoundDuplicatesDialog]: per regel wat het is en waaróm, in de bewoording van
+/// [waarom] zodat het scherm nooit iets anders zegt dan de meting. Alleen de betrapten — een vinkje bij
+/// de vijfhonderd die in orde zijn is ruis, en het totaal staat al onder de knop.
+class EchtheidDialog extends StatelessWidget {
+  const EchtheidDialog({super.key, required this.items});
+  final List<({Track track, Echtheidsoordeel oordeel})> items;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: _panel,
+      title: Text('${items.length} bestand(en) zijn niet wat ze zeggen'),
+      content: SizedBox(
+        width: dialogWidth(context, 720),
+        height: 460,
+        child: items.isEmpty
+            ? const Center(child: Text('Niets gevonden.', style: TextStyle(color: _muted)))
+            : ListView.separated(
+                itemCount: items.length,
+                separatorBuilder: (_, __) => const Divider(height: 1, color: _line),
+                itemBuilder: (_, i) {
+                  final it = items[i];
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('${it.track.artist} — ${it.track.title}',
+                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                        const SizedBox(height: 2),
+                        Text(it.track.album, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                        const SizedBox(height: 3),
+                        Text(waarom(it.oordeel),
+                            style: TextStyle(color: Colors.orange.shade300, fontSize: 11.5)),
+                      ],
+                    ),
+                  );
+                },
+              ),
+      ),
+      actions: [
+        // Bewust geen knop die iets weggooit. Zelfs de dubbelveger, die op 10.231 gemeten paren werkt,
+        // wist niets — deze meting is aantoonbaar zwakker en verdient dus zeker niet meer bevoegdheid.
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Sluiten')),
+      ],
+    );
+  }
+}
+
 /// Is dit bestand écht wat de badge ernaast beweert?
 ///
 /// Saber: "hoe weet ik dat ik echt lossless of hi-res binnenhaal?" De kwaliteitsbadge hiernaast toont
@@ -10990,6 +11041,56 @@ class _SettingsDialogState extends State<SettingsDialog> {
   bool _testing = false;
   bool _rtBusy = false;
 
+  /// De echtheidsveegbeurt: draait hij, hoe ver, en wat kwam eruit.
+  bool _echtBusy = false;
+  int _echtDone = 0, _echtTotal = 0;
+  String? _echtResult;
+
+  Future<void> _meetEchtheid() async {
+    final lib = context.read<LibraryStore>();
+    setState(() {
+      _echtBusy = true;
+      _echtResult = null;
+      _echtDone = 0;
+      _echtTotal = lib.tracks.where((t) => t.isFlac).length;
+    });
+    ({int betrapt, int onbeoordeelbaar, int onderzocht}) uit;
+    try {
+      uit = await lib.meetEchtheid(onProgress: (done, total) {
+        // Eén hertekening per bestand zou de lijst laten stotteren; elke twintig is genoeg om het
+        // getal te laten lopen. Zelfde afweging als bij de dubbelveger hierboven.
+        if (!mounted || (done % 20 != 0 && done != total)) return;
+        setState(() {
+          _echtDone = done;
+          _echtTotal = total;
+        });
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _echtBusy = false;
+        _echtResult = 'Meten mislukt: $e';
+      });
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _echtBusy = false);
+    if (uit.onderzocht == 0) {
+      setState(() => _echtResult =
+          'ffmpeg ontbreekt — zet ffmpeg.exe in C:\\ffmpeg\\bin of naast de app om dit te gebruiken.');
+      return;
+    }
+    // Het totaal hoort erbij, ook het deel dat niet te beoordelen was. Alleen de betrapten tonen zou
+    // suggereren dat de rest onderzocht én goedgekeurd is, en dat is niet hetzelfde.
+    setState(() => _echtResult = '${uit.onderzocht} onderzocht · ${uit.betrapt} betrapt · '
+        '${uit.onbeoordeelbaar} niet te beoordelen (te kort, te stil of geen 44,1 kHz)');
+    if (uit.betrapt > 0 && mounted) {
+      await showDialog<void>(
+          context: context,
+          builder: (_) => EchtheidDialog(items: context.read<LibraryStore>().betrapteBestanden()));
+    }
+  }
+
   /// The listen-for-duplicates pass: whether it is running, how far, and what it came to.
   bool _dupeBusy = false;
   int _dupeDone = 0, _dupeTotal = 0;
@@ -11449,6 +11550,49 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // the root and one filed away, or the same download in two Soulseek folders.
                     if (!context.read<LibraryStore>().isRemote) ...[
                       const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('Is het écht wat het zegt?',
+                                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                                const SizedBox(height: 2),
+                                Text(
+                                    _echtDone > 0 && _echtBusy
+                                        ? 'Luisteren… $_echtDone van $_echtTotal'
+                                        : 'Meet of een FLAC écht lossless is, of stiekem uit een mp3 komt, en of '
+                                            'hi-res echt hi-res is in plaats van opgeschaald. Kijkt naar de onderste '
+                                            'bits, naar wat er boven 22 kHz zit, en naar een harde afkap in het '
+                                            'spectrum. Ongeveer een minuut voor de hele bibliotheek; daarna uit het '
+                                            'geheugen.',
+                                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          FilledButton.icon(
+                            style: FilledButton.styleFrom(
+                                backgroundColor: _panel2, foregroundColor: Colors.white),
+                            onPressed: _echtBusy ? null : _meetEchtheid,
+                            icon: _echtBusy
+                                ? const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
+                                : const Icon(Icons.verified_outlined, size: 16),
+                            label: Text(_echtBusy ? 'Bezig…' : 'Meten'),
+                          ),
+                        ],
+                      ),
+                      if (_echtResult != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(_echtResult!,
+                              style: const TextStyle(color: _accent2, fontSize: 12)),
+                        ),
+                      const SizedBox(height: 18),
                       Row(
                         children: [
                           Expanded(
