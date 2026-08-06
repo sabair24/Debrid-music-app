@@ -627,26 +627,34 @@ class DownloadManager extends ChangeNotifier {
   /// available (24-bit hi-res FLAC → CD FLAC → … → MP3 only as an absolute last resort). The
   /// peer-fallback then falls through if the top pick won't actually download, so availability
   /// only breaks ties between EQUAL-quality copies.
-  /// De rangschikking voor DEZE verzameling kandidaten.
+  /// Rangschik peers die HETZELFDE nummer aanbieden, op kwaliteit eerst.
   ///
-  /// Waarom dit geen vaste comparator meer is: of "24/96" beter is dan "24/44,1" valt niet aan één
-  /// bestand te zien, alleen aan het gezelschap waarin het staat. Bieden 580 peers 44,1 aan en 14
-  /// een 96, dan bestaat die 96 niet — dat zijn veertien mensen die zelf hebben opgeschaald. Zie
-  /// [hiResClaimTeltNiet] voor de gemeten getallen waarop dat rust.
+  /// GEMETEN EN VERWORPEN op 06-08-2026 — hier stond een regel die een hi-res-claim wegzette als
+  /// maar een klein deel van het netwerk hem aanbood. Het idee: bestaat een plaat echt in hi-res,
+  /// dan heeft een flink deel van de peers hem. Op twee albums leek dat te kloppen. Op negen
+  /// nummers waarvan de spectrumproef bewijst dat ze écht hi-res zijn, klopt het niet:
   ///
-  /// Dit is de reparatie van precies de weg waarlangs de 98 opgeschaalde bestanden zijn
-  /// binnengekomen: `_slskScore` zette meer bits altijd bovenaan, en opgeschaald heeft per definitie
-  /// meer bits.
-  static int Function(SoulseekFile, SoulseekFile) rangschikkingVoor(List<SoulseekFile> kandidaten) {
-    final negeer = hiResClaimTeltNiet([
-      for (final f in kandidaten)
-        if (isLossless(f)) f.sampleRate,
-    ]);
-    return (a, b) => _rangschik(a, b, negeer);
-  }
-
-  static int _rangschik(SoulseekFile a, SoulseekFile b, bool negeerHiRes) {
-    final qa = _slskScore(a, negeerHiRes: negeerHiRes), qb = _slskScore(b, negeerHiRes: negeerHiRes);
+  /// | bewezen echt (inhoud boven 22 kHz) | aandeel >48 kHz |
+  /// |---|---|
+  /// | Adele — Don't You Remember | 0,105 |
+  /// | Adele — Rolling in the Deep | 0,080 |
+  /// | Daft Punk — Aerodynamic | 0,074 |
+  /// | George Michael — Careless Whisper | 0,039 |
+  /// | Dua Lipa — Love Again | 0,017 |
+  /// | George Michael — Jesus to a Child | 0,017 |
+  /// | Beyoncé — Cuff It | 0,006 |
+  /// | Alicia Keys — If I Ain't Got You | 0,001 |
+  /// | Céline Dion — Falling Into You (24/192!) | 0,000 |
+  ///
+  /// De opgeschaalde Stromae-nummers zaten op 0,017–0,024 — middenin die reeks. Er is geen drempel
+  /// die 0,017 van 0,017 scheidt, en een regel op 0,05 zou vijf van deze negen echte hi-res-platen
+  /// hebben gedegradeerd. Van Céline Dion biedt het netwerk er zelfs GEEN ENKELE aan terwijl haar
+  /// bestand aantoonbaar 24/192 met echte inhoud daarboven is.
+  ///
+  /// Wat het netwerk aanbiedt zegt dus iets over hoe populair een uitgave is, niet over of hij
+  /// bestaat. Deze aantekening staat hier zodat niemand — ik incluis — dit een tweede keer probeert.
+  static int _rankSlsk(SoulseekFile a, SoulseekFile b) {
+    final qa = _slskScore(a), qb = _slskScore(b);
     if (qa != qb) return qb - qa; // higher quality first
     if (a.freeSlots != b.freeSlots) return a.freeSlots ? -1 : 1;
     if (a.queueLength != b.queueLength) return a.queueLength.compareTo(b.queueLength);
@@ -656,15 +664,7 @@ class DownloadManager extends ChangeNotifier {
 
   /// A comparable quality score: format tier dominates (lossless ≫ lossy), then effective
   /// bitrate distinguishes hi-res (24/192 ≈ 4000k) from CD (16/44 ≈ 900k) within a tier.
-  static int _slskScore(SoulseekFile f, {bool negeerHiRes = false}) {
-    // De claim telt niet mee: dit bestand zakt naar de gewone lossless-trap en verslaat dus geen
-    // 44,1 meer op bits alleen. Het wordt NIET uitgesloten — als er niets anders te halen valt is
-    // een opgeschaalde FLAC nog altijd beter dan een mp3, en de spectrumproef bij het landen zegt
-    // daarna alsnog wat het is.
-    if (negeerHiRes && (f.sampleRate ?? 0) > 48000) {
-      final tier = isMultichannel(f) ? 2 : 3;
-      return tier * 1000000 + effectiveKbps(f).clamp(0, 999999);
-    }
+  static int _slskScore(SoulseekFile f) {
     final q = qualityFromFile(
       name: f.displayName,
       ext: f.ext,
@@ -910,7 +910,7 @@ class DownloadManager extends ChangeNotifier {
     // verkeerde nummer bezorgde.
     final keuze = job.exact;
     final ranked = keuze == null
-        ? ([...candidates]..sort(rangschikkingVoor(candidates)))
+        ? ([...candidates]..sort(_rankSlsk))
         : [keuze, ...candidates.where((c) => c.username != keuze.username || c.filename != keuze.filename)];
 
     /// Shared success path: file the track away tidily (Albums/Singles/Compilaties per artist)
@@ -1327,11 +1327,7 @@ class DownloadManager extends ChangeNotifier {
         .where((f) => isLossless(f) && !isMultichannel(f))
         .where((f) => !w.refused.containsKey(f.username))
         .toList()
-      // Op ALLE treffers en niet op de overgebleven lijst: het aandeel dat "bestaat deze plaat in
-      // hi-res" beantwoordt, moet uit het hele netwerk komen. Peers die deze wens al geweigerd
-      // hebben zijn hier weggefilterd, en die eruit laten zou het aandeel laten verschuiven op
-      // grond van wie er toevallig eerder niet thuis gaf.
-      ..sort(rangschikkingVoor(hits.where(isLossless).toList()));
+      ..sort(_rankSlsk);
     _log.line('wens "${w.artist} — ${w.title}": ${hits.length} treffers, '
         '${lossless.length} bruikbaar lossless (poging ${w.tries + 1}'
         '${w.refused.isEmpty ? "" : ", ${w.refused.length} peers overgeslagen"})');
