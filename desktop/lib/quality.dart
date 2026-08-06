@@ -90,6 +90,65 @@ bool meerDanStereo({int? sampleRate, int? bitDepth, required int kbps}) {
 ///
 /// Dit hoort NIET in de rangschikking. [meerDanStereo] zit daar wel in omdat het een bewijs is; dit is
 /// een vermoeden, en een vermoeden hoort de gebruiker te informeren, niet voor hem te beslissen.
+/// Onder de kandidaten voor ÉÉN nummer: is de hi-res-claim een minderheidsclaim?
+///
+/// Dit lost het probleem op dat de halve bibliotheek heeft opgeschaald. De rangschikking zette
+/// "meer bits" altijd bovenaan, en een opgeschaald bestand heeft per definitie meer bits dan het
+/// origineel — dus won de nep, altijd, bij elke automatische download. Precies dezelfde val als
+/// [firstIsBetter] op grootte, één laag eerder.
+///
+/// Meten kan hier niet: je kunt niet in het bestand van een vreemde kijken. Maar er is één ding dat
+/// je wél gratis krijgt, en dat is wat ÁLLE peers samen aanbieden. Bestaat een plaat echt in hi-res,
+/// dan heeft een flink deel van het netwerk hem; bestaat hij niet, dan zijn de paar 96 kHz-aanbieders
+/// mensen die zelf hebben opgeschaald.
+///
+/// Gemeten op 06-08-2026, met de waarheid erbij uit de spectrumproef:
+///
+/// | nummer | 44,1–48 kHz | >48 kHz | aandeel | wat het is |
+/// |---|---|---|---|---|
+/// | Stromae — Ta fête | 258 | 5 | 0,019 | opgeschaald |
+/// | Stromae — Formidable | 475 | 8 | 0,017 | opgeschaald |
+/// | Stromae — Papaoutai | 580 | 14 | 0,024 | opgeschaald |
+/// | Adele — Rolling in the Deep | 808 | 76 | 0,094 | ECHT 24/96 |
+/// | Michael Jackson — The Way You Make Me Feel | 1627 | 585 | 0,360 | ECHT 24/96 |
+///
+/// De drempel ligt op [hiResMinderheidsDeel] = 0,05: een factor twee onder de laagste echte en een
+/// factor twee boven de hoogste neppe. Geen van beide kanten zit er dicht tegenaan.
+///
+/// [minimumCdRate] bestaat omdat een aandeel op kleine getallen niets zegt: bij drie kandidaten is
+/// "één op drie" geen meerderheid maar toeval. Een zeldzame plaat waar maar een handvol peers voor
+/// is, wordt dus met rust gelaten — liever een gemiste opschaling dan een echte hi-res die
+/// weggezet wordt op grond van te weinig bewijs.
+bool hiResIsMinderheidsclaim({required int hiRes, required int cdRate}) {
+  if (hiRes == 0) return false; // niets te betwisten
+  if (cdRate < minimumCdRate) return false; // te weinig om iets uit af te leiden
+  return hiRes / cdRate < hiResMinderheidsDeel;
+}
+
+const double hiResMinderheidsDeel = 0.05;
+const int minimumCdRate = 20;
+
+/// Hetzelfde oordeel, maar gevoed met de sample rates van de LOSSLESS kandidaten voor één nummer.
+///
+/// Neemt losse getallen en geen bestandsobjecten, zodat deze regel getest kan worden zonder een
+/// halve Soulseek-laag op te tuigen — en zodat zowel de automatische keuze als de lijst op het
+/// scherm hem kunnen gebruiken zonder dat er één van de twee zijn eigen versie krijgt.
+///
+/// Onbekende of ongeldige rates tellen niet mee: die zeggen niets, en ze meerekenen zou het aandeel
+/// naar de kant van "geen hi-res" duwen op grond van niets.
+bool hiResClaimTeltNiet(Iterable<int?> sampleRates) {
+  var hi = 0, cd = 0;
+  for (final s in sampleRates) {
+    if (s == null || s < 44100) continue;
+    if (s > 48000) {
+      hi++;
+    } else {
+      cd++;
+    }
+  }
+  return hiResIsMinderheidsclaim(hiRes: hi, cdRate: cd);
+}
+
 bool verdachtKleinVoorHiRes({int? sampleRate, int? bitDepth, required int kbps}) {
   if (sampleRate == null || bitDepth == null || kbps <= 0) return false;
   if (!isHiRes(sampleRate: sampleRate, bitsPerSample: bitDepth)) return false;

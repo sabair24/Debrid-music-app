@@ -7360,7 +7360,23 @@ Future<int?> _kleurBuitenDeTekendraad(Uint8List bytes) =>
 ///
 /// Lossless boven lossy, daarbinnen op bitrate; zie [kwaliteitsRang]. Bij gelijke kwaliteit wint de peer
 /// met een vrije plek, want het beste bestand van iemand die niets uitdeelt heb je nog steeds niet.
-int _besteEerst(SoulseekFile a, SoulseekFile b) {
+/// De volgorde voor DEZE verzameling bronnen.
+///
+/// Dezelfde regel als de automatische keuze gebruikt, en om dezelfde reden: of "24/96" beter is dan
+/// "24/44,1" valt niet aan één bestand te zien, alleen aan het gezelschap. Zie [hiResClaimTeltNiet].
+///
+/// Eén regel voor allebei is hier geen nettigheid maar noodzaak. Zou de lijst op het scherm de
+/// opgeschaalde kopie bovenaan zetten terwijl de automaat hem juist wegzet, dan wijst de app twee
+/// verschillende bestanden aan als "de beste" — en dan klopt er één van de twee niet.
+int Function(SoulseekFile, SoulseekFile) besteEerstVoor(List<SoulseekFile> bronnen) {
+  final negeer = hiResClaimTeltNiet([
+    for (final f in bronnen)
+      if (f.isFlac || const {'alac', 'ape', 'wav', 'aiff'}.contains(f.ext)) f.sampleRate,
+  ]);
+  return (a, b) => _besteEerst(a, b, negeerHiRes: negeer);
+}
+
+int _besteEerst(SoulseekFile a, SoulseekFile b, {bool negeerHiRes = false}) {
   int rang(SoulseekFile f) {
     final kbps = effectieveBitrate(bitrate: f.bitrate, durationSec: f.durationSec, size: f.size);
     final lossless = f.isFlac || const {'alac', 'ape', 'wav', 'aiff'}.contains(f.ext);
@@ -7371,8 +7387,13 @@ int _besteEerst(SoulseekFile a, SoulseekFile b) {
       // bitdiepte is identiek, en dát is waar het om gaat. Meldt de peer niets, dan rekent
       // [capaciteitOpEenSchaal] de gemeten bitrate terug naar diezelfde maat — anders vergelijk je een
       // ruwe capaciteit met een ingepakte en staat elk onbekend bestand een derde te hoog.
+      // Telt de hi-res-claim niet mee, dan rekenen we dit bestand op 44,1 door. Niet uitsluiten:
+      // het blijft lossless en dus beter dan elke mp3 — het wint alleen niet meer op bits alleen.
       kbps: capaciteitOpEenSchaal(
-          sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: kbps, lossless: lossless),
+          sampleRate: negeerHiRes && (f.sampleRate ?? 0) > 48000 ? 44100 : f.sampleRate,
+          bitDepth: f.bitDepth,
+          kbps: kbps,
+          lossless: lossless),
       // Twee wegen: de som bewijst het, de naam vangt de peers die geen sample rate sturen. Op de hele
       // naam en niet alleen het bestandsnaampje — uploaders zetten "5.1" net zo vaak in de mapnaam.
       stereo: !meerDanStereo(sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: kbps) &&
@@ -7686,7 +7707,7 @@ class _SourcesViewState extends State<SourcesView> {
     final ready = context.read<SoulseekService>().available;
     final torrents = _torrents.where((r) => _filter.matches(qualityFromName(r.name))).toList();
     final slsk = _slsk.where((f) => _filter.matches(_slskQuality(f))).toList()
-      ..sort(_besteEerst);
+      ..sort(besteEerstVoor(_slsk));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -8479,7 +8500,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   Widget _directResults(bool soulseekReady) {
     final torrents = _torrents.where((r) => _filter.matches(qualityFromName(r.name))).toList();
     final slsk = _slsk.where((f) => _filter.matches(_slskQuality(f))).toList()
-      ..sort(_besteEerst);
+      ..sort(besteEerstVoor(_slsk));
     return ListView(
       padding: const EdgeInsets.only(bottom: 24),
       children: [
