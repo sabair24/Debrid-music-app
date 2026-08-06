@@ -7157,7 +7157,9 @@ class _KwaliteitViewState extends State<KwaliteitView> {
                         const SizedBox(height: 2),
                         Text(t.album, style: const TextStyle(color: _muted, fontSize: 11.5)),
                         const SizedBox(height: 3),
-                        Text(waarom(r.oordeel),
+                        // `waaromAfkap` en niet `waarom`: op deze lijst staat een rij ALTIJD om
+                        // zijn afkap, en die hoort dus vooraan te staan. Zie de docstring daar.
+                        Text(waaromAfkap(r.oordeel),
                             style: TextStyle(color: Colors.orange.shade300, fontSize: 11.5)),
                         if (nogSteeds) ...[
                           const SizedBox(height: 3),

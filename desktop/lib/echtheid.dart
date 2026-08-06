@@ -287,6 +287,27 @@ Echtheidsoordeel oordeel({
 
 /// Waarom, in dezelfde volgorde als [oordeel] beslist — zodat het scherm nooit iets anders zegt dan de
 /// meting. Zelfde afspraak als `whyBetter` in organize.dart.
+/// Waarom dit bestand op de Kwaliteit-lijst staat: de afkap, altijd.
+///
+/// [waarom] noemt de EERSTE grond die het vindt, en dat is de goede volgorde voor een merkje bij een
+/// nummer: "je 24 bits zijn er 16" is een hardere uitspraak dan een muur in het spectrum. Maar op een
+/// lijst die alléén afgekapte bestanden toont las dat verkeerd — er stond "opgeschaald, geen echte
+/// hi-res" naast een chipje met 17,2 kHz erin, en dan lijkt de rij over iets anders te gaan dan
+/// waarom hij daar staat. Gezien op Stromae en Christina Aguilera, allebei tegelijk opgeblazen én
+/// afgekapt.
+///
+/// De tweede bevinding gaat niet verloren, hij komt erachter. Beide zijn waar.
+String waaromAfkap(Echtheidsoordeel o) {
+  final hz = o.afkapHz;
+  if (o.band != Bandbreedte.afgekapt || hz == null) return waarom(o);
+  final zin = 'harde afkap op ${(hz / 1000).toStringAsFixed(1)} kHz — dit kwam uit een mp3';
+  if (o.bits == Bitdiepte.opgeblazen) {
+    return '$zin · en het zegt meer dan ${o.gebruikteBits} bits';
+  }
+  if (o.boven == Bovenband.leeg) return '$zin · en het is bovendien opgeschaald';
+  return zin;
+}
+
 String waarom(Echtheidsoordeel o) {
   if (o.bits == Bitdiepte.opgeblazen) {
     return 'zegt meer dan 16 bits, maar gebruikt er ${o.gebruikteBits} — opgeblazen';

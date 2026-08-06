@@ -131,6 +131,44 @@ void main() {
     });
   });
 
+  group('waarom een rij op deze lijst staat', () {
+    test('de afkap staat vooraan, ook als het bestand OOK opgeblazen is', () {
+      // Precies wat er misging op het scherm: naast een chipje met 17,2 kHz stond "opgeschaald,
+      // geen echte hi-res", en dan lijkt de rij over iets anders te gaan dan waarom hij er staat.
+      const beide = Echtheidsoordeel(
+        bits: Bitdiepte.opgeblazen,
+        boven: Bovenband.leeg,
+        band: Bandbreedte.afgekapt,
+        gebruikteBits: 16,
+        afkapHz: 17200,
+        wandDb: 45,
+        vensters: 32,
+      );
+      expect(waarom(beide), startsWith('zegt meer dan 16 bits'));
+      expect(waaromAfkap(beide), startsWith('harde afkap op 17.2 kHz'));
+      // en de tweede bevinding gaat niet verloren
+      expect(waaromAfkap(beide), contains('16 bits'));
+    });
+
+    test('opgeschaald én afgekapt noemt allebei, afkap eerst', () {
+      const o = Echtheidsoordeel(
+        bits: Bitdiepte.spreektNietTegen,
+        boven: Bovenband.leeg,
+        band: Bandbreedte.afgekapt,
+        afkapHz: 19100,
+        wandDb: 45,
+        vensters: 32,
+      );
+      expect(waaromAfkap(o), startsWith('harde afkap op 19.1 kHz'));
+      expect(waaromAfkap(o), contains('opgeschaald'));
+    });
+
+    test('zonder afkap valt hij terug op de gewone uitleg', () {
+      expect(waaromAfkap(_opgeblazen), waarom(_opgeblazen));
+      expect(waaromAfkap(_schoon), waarom(_schoon));
+    });
+  });
+
   group('welke tags de vervanger erft', () {
     test('de tags komen van het bestand dat vervangen wordt, niet van de peer', () {
       final t = _t(r'D:\m\x.flac',
