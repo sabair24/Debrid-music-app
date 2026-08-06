@@ -57,20 +57,39 @@ class LanSharing extends ChangeNotifier {
   LanServer? _server;
   LanDiscovery? _discovery;
   String? _error;
-  List<String> _addresses = const [];
+  List<String> _home = const [];
   bool _stateLoaded = false;
   bool _adoptLegacy = false;
   String version = '';
 
   bool get running => _server?.running ?? false;
   String? get error => _error;
-  List<String> get addresses => _addresses;
+
+  /// Every address this PC answers on, the ones that survive leaving the house first. That order
+  /// is what makes [primaryUrl] and the cloud relay hand out the useful one without either of them
+  /// having to know what Tailscale is.
+  List<String> get addresses => [..._remote, ..._home];
+
+  /// Only the ones that stop at the front door — so the settings panel can label them honestly.
+  List<String> get homeAddresses => _home;
   String get token => settings.lanToken;
   int get port => settings.lanPort;
   LanServer? get server => _server;
 
+  /// The addresses that also answer when the device is not on this network. See [isRemoteReachable]
+  /// — in practice, Tailscale.
+  List<String> _remote = const [];
+
+  /// The one to give a phone that leaves the house, or null when there is no such address.
+  String? get remoteUrl => _remote.isEmpty ? null : _remote.first;
+
   /// The line to type into the Mac, iPad or Shield when discovery can't find us.
-  String? get primaryUrl => _addresses.isEmpty ? null : _addresses.first;
+  ///
+  /// Prefers an address that works everywhere. A phone paired with `192.168.0.117` works until it
+  /// walks out the door and then simply stops, with nothing on screen explaining why — while the
+  /// address that survives the walk works at home too, direct over the same network. So when there
+  /// is one, it is the answer to "which address" in every case, not only the away case.
+  String? get primaryUrl => remoteUrl ?? (_home.isEmpty ? null : _home.first);
 
   /// Everything a device needs, in one string — what the QR code in settings encodes.
   String? get pairingCode {
@@ -120,7 +139,8 @@ class LanSharing extends ChangeNotifier {
     }
     if (!wanted) {
       _error = null;
-      _addresses = const [];
+      _home = const [];
+      _remote = const [];
       notifyListeners();
       return;
     }
@@ -158,9 +178,16 @@ class LanSharing extends ChangeNotifier {
   bool get discoverable => _discovery?.advertising ?? false;
 
   Future<void> _refreshAddresses() async {
-    _addresses = _server == null
-        ? const []
-        : [for (final ip in await lanAddresses()) 'http://$ip:${_server!.port}'];
+    if (_server == null) {
+      _home = const [];
+      _remote = const [];
+      notifyListeners();
+      return;
+    }
+    final port = _server!.port;
+    final split = await addressesByReach();
+    _remote = [for (final ip in split.overal) 'http://$ip:$port'];
+    _home = [for (final ip in split.thuis) 'http://$ip:$port'];
     notifyListeners();
   }
 

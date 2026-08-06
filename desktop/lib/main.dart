@@ -10733,6 +10733,37 @@ class _SharingSectionState extends State<_SharingSection> {
     );
   }
 
+  /// Een adres met erbij waar het toe dient. De uitleg staat er altijd, ook bij het thuisadres:
+  /// "192.168.0.117" zegt uit zichzelf niets over of je gsm er onderweg mee verder kan.
+  Widget _adresRegel(String url, String uitleg, {bool hoofdzaak = false}) => InkWell(
+        onTap: () => _copy(url, 'Adres'),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 3),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (hoofdzaak) ...[
+                    const Icon(Icons.public_rounded, size: 13, color: Color(0xFF6BCB8B)),
+                    const SizedBox(width: 5),
+                  ],
+                  Text(url,
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: hoofdzaak ? const Color(0xFF6BCB8B) : null)),
+                  const SizedBox(width: 6),
+                  const Icon(Icons.copy_rounded, size: 13, color: _muted),
+                ],
+              ),
+              Text(uitleg, style: const TextStyle(color: _muted, fontSize: 10.5)),
+            ],
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final sharing = context.watch<LanSharing>();
@@ -10813,20 +10844,21 @@ class _SharingSectionState extends State<_SharingSection> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text('Adres', style: TextStyle(color: _muted, fontSize: 11.5)),
-                      for (final url in sharing.addresses)
-                        InkWell(
-                          onTap: () => _copy(url, 'Adres'),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 2),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(url,
-                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                                const SizedBox(width: 6),
-                                const Icon(Icons.copy_rounded, size: 13, color: _muted),
-                              ],
-                            ),
+                      // Twee soorten adres, en het verschil is niet klein: het ene stopt aan de
+                      // voordeur, het andere gaat mee op 5G. Ze door elkaar in een lijstje zetten
+                      // is precies hoe je een gsm koppelt aan een adres dat buitenshuis zwijgt.
+                      if (sharing.remoteUrl != null)
+                        _adresRegel(sharing.remoteUrl!, 'werkt overal, ook op mobiele data',
+                            hoofdzaak: true),
+                      for (final url in sharing.homeAddresses)
+                        _adresRegel(url, 'alleen thuis op dit netwerk'),
+                      if (sharing.remoteUrl == null)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 4),
+                          child: Text(
+                            'Van buitenshuis is deze pc nu niet bereikbaar. Zet Tailscale aan op '
+                            'de pc én op je gsm — dan verschijnt hier het adres dat overal werkt.',
+                            style: TextStyle(color: Color(0xFFE0A44A), fontSize: 11, height: 1.35),
                           ),
                         ),
                       const SizedBox(height: 8),
