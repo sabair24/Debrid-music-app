@@ -2620,6 +2620,57 @@ extension LibraryNormalise on LibraryStore {
     return (onderzocht: lijst.length, betrapt: betrapt, onbeoordeelbaar: onbeoordeelbaar);
   }
 
+  /// Wat een vervanger van [t] moet gaan heten — de tags van het bestand dat vervangen wordt.
+  ///
+  /// Saber, eerder: *"ik heb de tag bewerkt, maar toch blijven de originele tags erin, mijn tags
+  /// moeten overwriten. De tags die met Soulseek worden meegegeven zijn meestal niet de goeie."*
+  /// Dat is hier de hele bedoeling: de peer levert het geluid, dit bestand levert de identiteit. Wat
+  /// jij met de hand hebt rechtgezet blijft dus staan, ook als de vervanger van een uploader komt
+  /// die er "13 - track13.flac" van maakt.
+  ///
+  /// De albumartiest komt van de plaat waar het nummer onder ligt en niet uit het bestand: bij een
+  /// duet is ARTIST beide namen en ALBUMARTIST van wie de plaat is, en dat verschil is precies wat
+  /// een gastbijdrage anders over een halve bibliotheek uitsmeert.
+  ///
+  /// LET OP — [TrackTags.isAuthoritative] is pas waar met `trackTotal > 0` of een jaartal. Een
+  /// bestand dat geen van beide draagt levert een niet-gezaghebbende tagset, en dan valt
+  /// `placeFileDetailed` terug op zijn gewone gelijkenistoets in plaats van "dit pad ÍS de
+  /// identiteit". Dat is geen achteruitgang — zo gedraagt elke andere download zich ook — maar het
+  /// betekent dat de vervanging dan naast het origineel kan landen in plaats van erop.
+  TrackTags tagsVoorVervanger(Track t) => TrackTags(
+        title: t.title,
+        artist: t.artist,
+        album: t.album,
+        trackNo: t.trackNo,
+        albumArtist: albumForPath(t.path)?.artist.trim(),
+        trackTotal: t.trackTotal,
+        year: t.year,
+      );
+
+  /// Alleen de bestanden die uit een MP3 komen, het ergste eerst.
+  ///
+  /// Dit is een andere vraag dan [betrapteBestanden], en het verschil is precies wat de gebruiker
+  /// wilde weten: "zijn die dan ten minste cd-kwaliteit?" Een opgeblazen bestand — 16 bits in een
+  /// 24-bits jasje, of 44,1 opgetild naar 96 — IS cd-kwaliteit; daar is niets aan te winnen door het
+  /// opnieuw te halen, je krijgt exact hetzelfde geluid terug in een kleiner pak. Een afgekapt
+  /// bestand is dat níét: daar staat een muur in het spectrum en wat erboven zat is weg.
+  ///
+  /// Gesorteerd op de plaats van die muur, oplopend. Hoe lager de muur, hoe minder er nog over is —
+  /// gemeten liep dat op deze bibliotheek van 15,6 kHz (ongeveer 128 kbps) tot 21 kHz (320 of hoger),
+  /// en dat is het verschil tussen "dat hoor je" en "dat hoor je niet". Het ergste hoort bovenaan.
+  List<({Track track, Echtheidsoordeel oordeel})> uitMp3Bestanden() {
+    final uit = <({Track track, Echtheidsoordeel oordeel})>[];
+    for (final t in tracks) {
+      final o = gemeten(t.path);
+      if (o != null && o.band == Bandbreedte.afgekapt) uit.add((track: t, oordeel: o));
+    }
+    // `afkapHz` kan bij een afgekapt oordeel niet null zijn — de afkap IS wat het oordeel maakt —
+    // maar sorteren mag daar niet op vertrouwen: een oud bestand op schijf uit een vorige versie
+    // zou de hele lijst laten crashen in plaats van één rij verkeerd te zetten.
+    uit.sort((a, b) => (a.oordeel.afkapHz ?? 0).compareTo(b.oordeel.afkapHz ?? 0));
+    return uit;
+  }
+
   /// Alles wat de proef niet doorstond, met de reden erbij — voor het overzicht na de veegbeurt.
   List<({Track track, Echtheidsoordeel oordeel})> betrapteBestanden() {
     final uit = <({Track track, Echtheidsoordeel oordeel})>[];

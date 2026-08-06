@@ -1582,6 +1582,7 @@ class _HomeShellState extends State<HomeShell> {
   Widget _content() {
     if (_view == 5) return const HomeStartView();
     if (_view == 6) return const DownloadsView();
+    if (_view == 7) return const KwaliteitView();
     if (_view == 2) return const OnlineSearchScreen();
     if (_view == 3) return const OntdekView();
     if (_view == 4) return TracksView(match: _matches, query: _q);
@@ -1719,6 +1720,7 @@ class NavSections {
     (2, 'Online zoeken'),
     (3, 'Ontdek'),
     (6, 'Mijn downloads'),
+    (7, 'Kwaliteit'),
   ];
 }
 
@@ -7011,6 +7013,203 @@ Widget _qualityBadge(Quality q) {
   );
 }
 
+/// De nummers die uit een mp3 komen, met de bronnenlijst om er zelf een betere voor te kiezen.
+///
+/// Waarom dit een eigen pagina is en geen venster in Instellingen: hier ga je tijd doorbrengen. Per
+/// nummer een zoekopdracht, een lijst met honderden peers en een keuze. Een dialoogvenster sluit bij
+/// de eerste misklik en dan ben je je plaats kwijt.
+///
+/// Alleen de AFGEKAPTE bestanden staan hier, niet alle betrapte. Een opgeblazen bestand is gewoon
+/// cd-kwaliteit in een te grote jas — opnieuw downloaden levert exact hetzelfde geluid en die rijen
+/// zouden dus alleen maar werk beloven dat niets oplevert. Zie [LibraryStore.uitMp3Bestanden].
+class KwaliteitView extends StatefulWidget {
+  const KwaliteitView({super.key});
+  @override
+  State<KwaliteitView> createState() => _KwaliteitViewState();
+}
+
+class _KwaliteitViewState extends State<KwaliteitView> {
+  int? _open;
+  bool _bezig = false;
+  int _done = 0, _total = 0;
+  String? _uitslag;
+
+  /// Waar een nummer lag toen je zijn bronnen openklapte.
+  ///
+  /// Dit is hoe de rij weet dat er een nieuwe kopie geland is die het probleem NIET oplost: staat de
+  /// opname er nog steeds, maar op een ander pad, dan is er iets vervangen en is de vervanger ook
+  /// afgekapt. Zonder dit zou zo'n rij er precies hetzelfde uitzien als een rij waar nog niets mee
+  /// gebeurd is, en zou je dezelfde slechte bron een tweede keer kunnen kiezen.
+  final Map<String, String> _padBijOpenen = {};
+
+  static String _sleutel(Track t) => '${normKey(t.artist)}|${normKey(t.title)}';
+
+  Future<void> _meet() async {
+    final lib = context.read<LibraryStore>();
+    setState(() {
+      _bezig = true;
+      _uitslag = null;
+      _done = 0;
+      _total = lib.tracks.where((t) => t.isFlac).length;
+    });
+    try {
+      final uit = await lib.meetEchtheid(onProgress: (done, total) {
+        if (!mounted || (done % 20 != 0 && done != total)) return;
+        setState(() {
+          _done = done;
+          _total = total;
+        });
+      });
+      if (!mounted) return;
+      setState(() {
+        _bezig = false;
+        _uitslag = '${uit.onderzocht} onderzocht · ${uit.betrapt} betrapt';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _bezig = false;
+        _uitslag = 'Meten mislukt: $e';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Beide, en om verschillende redenen. De bibliotheek verandert als een vervanger geland is (de
+    // oude kopie staat dan in `_dubbel` en de scan slaat die map over, dus de rij verdwijnt vanzelf);
+    // de downloadlijst verandert al tijdens het binnenhalen, en dat is wat de voortgangsringetjes op
+    // de bronregels laat lopen.
+    final lib = context.watch<LibraryStore>();
+    context.watch<DownloadManager>();
+    final rijen = lib.uitMp3Bestanden();
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(28, 22, 28, 30),
+      children: [
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 14,
+          runSpacing: 4,
+          children: [
+            const Text('Kwaliteit',
+                style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
+            if (_bezig)
+              Text('Luisteren… $_done van $_total', style: const TextStyle(color: _muted, fontSize: 12.5))
+            else
+              TextButton.icon(
+                onPressed: _meet,
+                icon: const Icon(Icons.verified_outlined, size: 16),
+                label: const Text('Opnieuw meten'),
+                style: TextButton.styleFrom(foregroundColor: _muted),
+              ),
+            if (_uitslag != null)
+              Text(_uitslag!, style: const TextStyle(color: _muted, fontSize: 12.5)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          rijen.isEmpty
+              ? 'Niets afgekapt gevonden — of er is nog niet gemeten.'
+              : '${rijen.length} nummer(s) komen uit een mp3 en zitten dus ónder cd-kwaliteit. '
+                  'Het ergste staat bovenaan. Klap er een open om te zien wat er te halen valt, en '
+                  'kies zelf een vervanger — de oude kopie gaat naar _dubbel, nooit weg.',
+          style: const TextStyle(color: _muted, fontSize: 12.5, height: 1.4),
+        ),
+        const SizedBox(height: 16),
+        for (var i = 0; i < rijen.length; i++) _rij(rijen[i], i),
+      ],
+    );
+  }
+
+  Widget _rij(({Track track, Echtheidsoordeel oordeel}) r, int i) {
+    final t = r.track;
+    final open = _open == i;
+    final sleutel = _sleutel(t);
+    final vorig = _padBijOpenen[sleutel];
+    final nogSteeds = vorig != null && vorig != t.path;
+    final hz = r.oordeel.afkapHz;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(10)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: () => setState(() {
+              _open = open ? null : i;
+              if (!open) _padBijOpenen[sleutel] = t.path;
+            }),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('${t.artist} — ${t.title}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+                        const SizedBox(height: 2),
+                        Text(t.album, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                        const SizedBox(height: 3),
+                        Text(waarom(r.oordeel),
+                            style: TextStyle(color: Colors.orange.shade300, fontSize: 11.5)),
+                        if (nogSteeds) ...[
+                          const SizedBox(height: 3),
+                          const Text('de nieuwe kopie is óók afgekapt — probeer een andere bron',
+                              style: TextStyle(
+                                  color: Color(0xFFE8913A), fontSize: 11.5, fontWeight: FontWeight.w600)),
+                        ],
+                      ],
+                    ),
+                  ),
+                  if (hz != null) ...[
+                    // De hoogte van de muur in één getal, want dat is wat de rijen onderling
+                    // ordent: 15,6k is een heel ander bestand dan 21,0k.
+                    Container(
+                      margin: const EdgeInsets.only(right: 10),
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0x33FF9800),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: Colors.orange.shade300),
+                      ),
+                      child: Text('${(hz / 1000).toStringAsFixed(1)} kHz',
+                          style: TextStyle(
+                              color: Colors.orange.shade300, fontSize: 10.5, fontWeight: FontWeight.w600)),
+                    ),
+                  ],
+                  Icon(open ? Icons.expand_less_rounded : Icons.travel_explore_rounded,
+                      size: 18, color: open ? _accent : _muted),
+                ],
+              ),
+            ),
+          ),
+          // Dezelfde bronnenlijst als op de albumpagina — torrents en Soulseek, met per regel een
+          // downloadknop. Wat jij daar aanklikt gaat als `exact` de wachtrij in en wint dus van wat
+          // er ligt, ook als het kleiner is.
+          //
+          // De tags komen van het bestand dat vervangen wordt en niet van de peer. Zie
+          // [LibraryStore.tagsVoorVervanger].
+          if (open)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: SourcesView(
+                query: '${t.artist} ${t.title}',
+                tags: context.read<LibraryStore>().tagsVoorVervanger(t),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Alles wat de echtheidsproef niet doorstond, op een rij.
 ///
 /// Zelfde vorm als [SoundDuplicatesDialog]: per regel wat het is en waaróm, in de bewoording van
@@ -7432,7 +7631,18 @@ class SourcesView extends StatefulWidget {
 
   /// The one track these sources are for, when this list is under a track row.
   final ChoiceTrack? track;
-  const SourcesView({super.key, required this.query, this.authority, this.track});
+
+  /// De tags die de binnengehaalde kopie moet krijgen, al klaar.
+  ///
+  /// [authority] + [track] leiden ze af uit een officiële uitgave, en dat is de juiste weg zolang je
+  /// van een albumpagina komt. Vanuit de Kwaliteit-lijst is er geen uitgave: daar staat een bestand
+  /// dat AL in de bibliotheek ligt, met de tags die de gebruiker er zelf op heeft gezet. Die zijn
+  /// beter dan wat een nieuwe opzoeking zou opleveren, en ze per rij ophalen zou bovendien een
+  /// MusicBrainz-zoekopdracht per nummer kosten. Zie [LibraryStore.tagsVoorVervanger].
+  ///
+  /// Gaat vóór op [authority] + [track] wanneer beide gegeven zijn.
+  final TrackTags? tags;
+  const SourcesView({super.key, required this.query, this.authority, this.track, this.tags});
   @override
   State<SourcesView> createState() => _SourcesViewState();
 }
@@ -7506,6 +7716,8 @@ class _SourcesViewState extends State<SourcesView> {
 
   /// What the track under this list IS, when it was opened from an album page.
   TrackTags? get _trackAuthority {
+    // Al klaargelegd door de aanroeper — dan valt er niets af te leiden. Zie [SourcesView.tags].
+    if (widget.tags != null) return widget.tags;
     final a = widget.authority, t = widget.track;
     if (a == null || t == null) return null;
     // The position IS the number: this tracklist came from the official release. Never indexOf on
