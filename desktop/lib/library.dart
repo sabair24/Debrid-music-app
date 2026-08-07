@@ -847,6 +847,10 @@ class LibraryStore extends ChangeNotifier {
           if (await f.exists()) {
             await f.delete();
             deleted++;
+            // Het bestand is weg, dus de meting slaat nergens meer op. Zonder dit blijft ze staan
+            // en telt "701 onderzocht" spoken mee — en erger: een pad dat later opnieuw gebruikt
+            // wordt zou het oordeel van een héél ander bestand erven.
+            vergeetOordeel(p);
           }
         } catch (_) {/* locked/permission — leave it, it stays visible */}
       }

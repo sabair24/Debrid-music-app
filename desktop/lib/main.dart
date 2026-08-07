@@ -5880,10 +5880,31 @@ class TracksView extends StatelessWidget {
                         ),
                       ),
                       _echtheidMerk(t.path),
-              _qualityBadge(_trackQuality(t)),
+                      _qualityBadge(_trackQuality(t)),
                       const SizedBox(width: 4),
                       Text(_fmt(t.duration), style: const TextStyle(color: _muted, fontSize: 12)),
-                      const SizedBox(width: 10),
+                      const SizedBox(width: 6),
+                      // Verwijderen wáár je zoekt. De prullenbak stond alleen op de albumpagina, en
+                      // een los nummer terugvinden via zijn album is precies de omweg die dit scherm
+                      // moet wegnemen — je filtert hier op "uit mp3" of op een naam en wil er dan
+                      // meteen iets mee kunnen.
+                      //
+                      // Geen hover-voorwaarde zoals daar: dit is ook het scherm dat op een tablet en
+                      // op de televisie draait, en daar bestaat zweven niet. Wel dezelfde bevestiging
+                      // met dezelfde twee keuzes — uit de bibliotheek halen en van schijf wissen
+                      // horen nooit hetzelfde te betekenen.
+                      SizedBox(
+                        width: 34,
+                        child: IconButton(
+                          icon: const Icon(Icons.delete_outline_rounded, size: 17),
+                          color: _muted,
+                          tooltip: 'Nummer verwijderen',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                          onPressed: () => _confirmDelete(context, '“${t.title}”', [t.path]),
+                        ),
+                      ),
+                      const SizedBox(width: 2),
                       Icon(isCurrent && player.playing ? Icons.volume_up_rounded : Icons.play_arrow_rounded,
                           color: isCurrent ? _accent : _muted, size: 19),
                     ],
