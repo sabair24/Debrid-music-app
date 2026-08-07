@@ -13,6 +13,7 @@ import 'settings.dart';
 import 'soulseek.dart';
 import 'torbox.dart';
 import 'warm_log.dart';
+import 'werkrij.dart';
 import 'paths.dart';
 import 'echtheid.dart';
 import 'echtheid_meter.dart';
@@ -519,7 +520,29 @@ class DownloadManager extends ChangeNotifier {
   // ONE logged-in session and run in PARALLEL on it, up to [_slskMaxParallel] at a time; the rest
   // queue. The session auto-closes ~2 min after the last download, freeing Soulseek's single
   // connection so the native client can be used again.
-  static const _slskMaxParallel = 6;
+  /// GEMETEN op 07-08-2026, want zes was een gok en dit is te meten.
+  ///
+  /// Wat de lijn hier aankan, met stromen die elk apart traag zijn:
+  ///
+  /// | stromen | samen | |
+  /// |---|---|---|
+  /// | 1 | 0,80 MB/s | 6 Mbit/s |
+  /// | 4 | 2,34 MB/s | 19 Mbit/s |
+  /// | 8 | 3,68 MB/s | 29 Mbit/s |
+  /// | 16 | 5,31 MB/s | 42 Mbit/s |
+  /// | 24 | 7,49 MB/s | 60 Mbit/s |
+  ///
+  /// Bij 24 was hij nog steeds niet vol. Eén verbinding blijft op 0,8 MB/s hangen — de rem zit dus
+  /// niet in de lijn maar in de losse verbinding, en dat is precies het geval waarin meer tegelijk
+  /// helpt. Een Soulseek-peer levert hier gemeten ~1,2 MB/s (35 MB in 28 s).
+  ///
+  /// Waarom twaalf en niet vierentwintig: dit getal begrenst **zoekende** jobs, niet lopende
+  /// overdrachten. Een nummer houdt zijn slot vast terwijl het twintig peers afgaat zonder één byte
+  /// te ontvangen, dus het werkelijke aantal stromende overdrachten ligt altijd lager dan dit getal.
+  /// Twaalf zoekende jobs leveren realistisch een stuk of zes tot acht lopende overdrachten — rond
+  /// de 8 MB/s, waar de lijn nog meegroeit. Hoger opendraaien vergroot vooral het aantal
+  /// peer-verbindingen (twintig per job) en niet de doorvoer.
+  static const _slskMaxParallel = 12;
 
   /// How many peers a sweep walks looking for "someone free right now". Lossless gets a much
   /// deeper sweep: settling for an MP3 while an untried FLAC was sitting at position 7 would
@@ -548,10 +571,18 @@ class DownloadManager extends ChangeNotifier {
   /// een uur is er niets meer om naar te kijken. Precies de les die warm.log zelf al opschreef.
   late final WarmLog _log = WarmLog('$appDir${Platform.pathSeparator}downloads.log');
 
-  /// Upgrades run one at a time and take NO download slot, so they can never delay a track you
-  /// have nothing of yet. Queued rather than dropped, so a whole album still gets upgraded.
-  final List<Future<void> Function()> _upgradeQueue = [];
-  bool _upgradeRunning = false;
+  /// Upgrades take NO download slot, so ze kunnen nooit een nummer ophouden waar je nog niets van
+  /// hebt. Queued rather than dropped, so a whole album still gets upgraded.
+  ///
+  /// Niet meer strikt één tegelijk. Gemeten op het Sade-album van 14:44: negen nummers waren na twee
+  /// minuten binnen, en daarna rekten de jachten het tot 14:51 — met "er loopt al een jacht, 2
+  /// wachtend" in het logboek. Zeven minuten voor een album dat in twee binnen was, puur omdat de
+  /// staart serieel liep. Drie tegelijk maakt die staart korter zonder de lijn te overvragen: elke
+  /// jacht is één overdracht, en drie erbij past ruim in wat de lijn aankan (zie
+  /// [_slskMaxParallel]).
+  static const _maxParallelleJachten = 3;
+
+  final Werkrij _jachten = Werkrij(_maxParallelleJachten);
   int _slskActive = 0; // downloads holding a PARALLEL SLOT (a queued one gives its slot back)
   final List<Completer<void>> _slskWaiting = [];
 
@@ -984,7 +1015,8 @@ class DownloadManager extends ChangeNotifier {
       } catch (_) {
         uit = SlskFail('Downloadfout'); // unexpected throw → a failed attempt, keep going
       }
-      _log.line('   ${f.username}: ${_uitkomst(uit)}  na ${_kort(DateTime.now().difference(t0))}');
+      final duur = DateTime.now().difference(t0);
+      _log.line('   ${f.username}: ${_uitkomst(uit)}  na ${_kort(duur)}${_tempo(uit, duur)}');
       return uit;
     }
 
@@ -1265,6 +1297,29 @@ class DownloadManager extends ChangeNotifier {
         SlskFail(reason: final w) => 'mislukt: $w',
       };
 
+  /// Hoeveel megabytes er per seconde binnenkwamen — het getal dat er tot nu toe niet was.
+  ///
+  /// Het logboek noteerde alleen "GELEVERD na 30s", zonder bytes, en dan valt er geen tempo uit af te
+  /// leiden. Daarmee is de vraag "helpt parallel downloaden?" onbeantwoordbaar: je ziet niet of de
+  /// lijn vol zit of dat één peer gewoon traag is. Gemeten op deze lijn: één stroom haalt 0,73 MB/s
+  /// en acht stromen samen 3,96 MB/s — dus de lijn is niet de rem, de losse verbinding wel. Zonder
+  /// dit getal in het logboek is dat achteraf niet na te rekenen op een échte download.
+  ///
+  /// Alleen bij een geslaagde overdracht: bij een afgebroken poging is er geen bestand om te wegen,
+  /// en een tempo over nul bytes zegt niets.
+  static String _tempo(SlskResult r, Duration d) {
+    if (r is! SlskDone || d.inMilliseconds <= 0) return '';
+    int bytes;
+    try {
+      bytes = File(r.path).lengthSync();
+    } catch (_) {
+      return '';
+    }
+    if (bytes <= 0) return '';
+    final mb = bytes / 1048576;
+    return '  ${mb.toStringAsFixed(1)} MB, ${(mb / (d.inMilliseconds / 1000)).toStringAsFixed(2)} MB/s';
+  }
+
   static String _kort(Duration d) =>
       d.inMinutes >= 1 ? '${d.inMinutes}m${d.inSeconds % 60}s' : '${d.inSeconds}s';
 
@@ -1388,7 +1443,8 @@ class DownloadManager extends ChangeNotifier {
           } catch (_) {
             continue;
           }
-          _log.line('   ${f.username}: ${_uitkomst(res)}  na ${_kort(DateTime.now().difference(t0))}');
+          final duur = DateTime.now().difference(t0);
+          _log.line('   ${f.username}: ${_uitkomst(res)}  na ${_kort(duur)}${_tempo(res, duur)}');
           if (res is SlskFail) {
             final reden = res.reason.toLowerCase();
             // Onthouden, want de enige lossless bron voor een nummer kan er één zijn. Zonder dit
@@ -1440,22 +1496,11 @@ class DownloadManager extends ChangeNotifier {
     // Of hij meteen begint of achter een andere jacht staat, is een van de vier verklaringen voor
     // "hij kwam niet binnen" -- en de enige die je nooit op het scherm ziet.
     _log.line('"${job.name}": ${better.length} betere kandidaten, opwaarderen in de rij'
-        '${_upgradeRunning ? " (er loopt al een jacht, ${_upgradeQueue.length + 1} wachtend)" : ""}');
-    _upgradeQueue.add(() => _chaseUpgrade(better, job));
-    unawaited(_drainUpgrades());
+        ' (${_jachten.lopend} van $_maxParallelleJachten jachten bezig'
+        '${_jachten.wachtend > 0 ? ", ${_jachten.wachtend} wachtend" : ""})');
+    _jachten.voegToe(() => _chaseUpgrade(better, job));
   }
 
-  Future<void> _drainUpgrades() async {
-    if (_upgradeRunning) return;
-    _upgradeRunning = true;
-    try {
-      while (_upgradeQueue.isNotEmpty) {
-        await _upgradeQueue.removeAt(0)();
-      }
-    } finally {
-      _upgradeRunning = false;
-    }
-  }
 
   /// Chase a BETTER copy of a track that already landed.
   ///
@@ -1511,7 +1556,8 @@ class DownloadManager extends ChangeNotifier {
           }
           // De looptijd naast het resterende budget: zo zie je of een peer nog aan de gang was toen
           // het budget hem afkapte, of dat hij zelf niets deed.
-          _log.line('   ${f.username}: ${_uitkomst(res)}  na ${_kort(DateTime.now().difference(t0))}'
+          final duur = DateTime.now().difference(t0);
+          _log.line('   ${f.username}: ${_uitkomst(res)}  na ${_kort(duur)}${_tempo(res, duur)}'
               '  (${_kort(left)} budget over bij de start)');
           if (res is SlskCancelled) return;
           if (res is! SlskDone) continue;

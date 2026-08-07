@@ -19,7 +19,7 @@ Future<void> main(List<String> args) async {
 
   final body = {
     'candidates': mee,
-    'key': 'proef:tousllesmemes',
+    'key': 'proef2:tousllesmemes',
     'authority': {
       'title': 'Tous les mêmes',
       'artist': 'Stromae',
