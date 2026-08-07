@@ -76,7 +76,7 @@ class FakeDownloads extends DownloadManager {
 
   @override
   Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,
-      {String? key, TrackTags? authority, SoulseekFile? exact}) async {
+      {String? key, TrackTags? authority, SoulseekFile? exact, bool wachtOpAfloop = true}) async {
     slskEnqueued.add(candidates);
     jobs.insert(0, DownloadJob(candidates.first.filename, key: key)..status = 'queued');
     notifyListeners();

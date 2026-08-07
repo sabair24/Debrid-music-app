@@ -73,7 +73,7 @@ class FakeDownloads extends DownloadManager {
 
   @override
   Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,
-      {String? key, TrackTags? authority, SoulseekFile? exact}) async {
+      {String? key, TrackTags? authority, SoulseekFile? exact, bool wachtOpAfloop = true}) async {
     if (candidates.isEmpty) return false;
     // Mirrors the real guard: the same recording, already running, is not started twice.
     final track = authority == null ? '' : '${authority.artist}|${authority.title}';

@@ -714,10 +714,15 @@ class LanServer {
     if (candidates.isEmpty) return false;
     // De handmatige keuze van een Mac of iPad hoort hier net zo hard te gelden als op de pc zelf.
     final gekozen = body['exact'];
+    // Niet wachten op de afloop: dit antwoord gaat naar een gsm of iPad, en die stond anders per
+    // nummer minuten op een open HTTP-verzoek te wachten. Gemeten: zeven nummers achter elkaar
+    // aangevraagd startten twintig tot veertig seconden na elkaar in plaats van tegelijk. De taak
+    // staat meteen in `/api/jobs`, dus de aanvrager kan gewoon kijken hoe het loopt.
     return manager.enqueueSoulseekBest(candidates,
         key: body['key'] as String?,
         authority: _authorityOf(body),
-        exact: gekozen is Map<String, dynamic> ? SoulseekFile.fromJson(gekozen) : null);
+        exact: gekozen is Map<String, dynamic> ? SoulseekFile.fromJson(gekozen) : null,
+        wachtOpAfloop: false);
   }
 
   /// The body of `POST /api/soulseek/download-album`. How many tracks were started.

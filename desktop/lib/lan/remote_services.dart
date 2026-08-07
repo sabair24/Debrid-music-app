@@ -289,7 +289,7 @@ class RemoteDownloadManager extends DownloadManager {
 
   @override
   Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,
-      {String? key, TrackTags? authority, SoulseekFile? exact}) async {
+      {String? key, TrackTags? authority, SoulseekFile? exact, bool wachtOpAfloop = true}) async {
     final payload = <String, dynamic>{
       'candidates': [for (final c in candidates) c.toJson()],
       'key': key,

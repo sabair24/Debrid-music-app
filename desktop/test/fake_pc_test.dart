@@ -144,7 +144,7 @@ class _FakeDownloads extends DownloadManager {
 
   @override
   Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,
-      {String? key, TrackTags? authority, SoulseekFile? exact}) async {
+      {String? key, TrackTags? authority, SoulseekFile? exact, bool wachtOpAfloop = true}) async {
     _run(candidates.first.filename, key: key);
     return true;
   }

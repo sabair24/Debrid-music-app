@@ -776,6 +776,16 @@ void _downloadTests() {
     expect(pc.lastKey, 'own:x:11');
   });
 
+  test('de pc laat de vrager niet op de download staan wachten', () async {
+    // Anders houdt een gsm of iPad per nummer een HTTP-verzoek minutenlang open, en start hij het
+    // volgende nummer pas als het vorige binnen is. Gemeten op 07-08-2026: zeven nummers achter
+    // elkaar aangevraagd startten twintig tot veertig seconden na elkaar, keurig serieel, terwijl
+    // er twaalf tegelijk hadden gekund. De app kon het wel; de vrager stond te wachten.
+    await mac.enqueueSoulseekBest([file('b.flac')], key: 'own:x:12');
+    expect(pc.lastWacht, isFalse,
+        reason: 'de route moet antwoorden zodra de taak is aangenomen, niet als hij klaar is');
+  });
+
   test('and arrives still authoritative — the property that steers where it lands', () async {
     await mac.enqueueSoulseekBest([file('a.flac')], authority: authority);
     // isAuthoritative is derived from trackTotal/year/albumArtist, so losing any of the three in
@@ -815,15 +825,17 @@ class _RecordingDownloads extends DownloadManager {
   int calls = 0;
   String? lastKey;
   TrackTags? lastAuthority;
+  bool? lastWacht;
   List<List<SoulseekFile>>? albumTracks;
   List<TrackTags?>? albumAuthorities;
 
   @override
   Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,
-      {String? key, TrackTags? authority, SoulseekFile? exact}) async {
+      {String? key, TrackTags? authority, SoulseekFile? exact, bool wachtOpAfloop = true}) async {
     calls++;
     lastKey = key;
     lastAuthority = authority;
+    lastWacht = wachtOpAfloop;
     return true;
   }
 

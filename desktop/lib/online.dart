@@ -522,26 +522,27 @@ class DownloadManager extends ChangeNotifier {
   // connection so the native client can be used again.
   /// GEMETEN op 07-08-2026, want zes was een gok en dit is te meten.
   ///
-  /// Wat de lijn hier aankan, met stromen die elk apart traag zijn:
+  /// **De lijn**, met wisselende hosts zodat één trage server niet als plafond doorgaat — die fout
+  /// zat in de eerste meting en gaf een lijn van 60 Mbit/s die in werkelijkheid 540 blijkt:
   ///
-  /// | stromen | samen | |
-  /// |---|---|---|
-  /// | 1 | 0,80 MB/s | 6 Mbit/s |
-  /// | 4 | 2,34 MB/s | 19 Mbit/s |
-  /// | 8 | 3,68 MB/s | 29 Mbit/s |
-  /// | 16 | 5,31 MB/s | 42 Mbit/s |
-  /// | 24 | 7,49 MB/s | 60 Mbit/s |
+  /// | stromen | samen |
+  /// |---|---|
+  /// | 4 | 36,3 MB/s (304 Mbit/s) |
+  /// | 8 | **64,4 MB/s (540 Mbit/s)** |
+  /// | 16 | 62,6 MB/s — geen winst meer |
   ///
-  /// Bij 24 was hij nog steeds niet vol. Eén verbinding blijft op 0,8 MB/s hangen — de rem zit dus
-  /// niet in de lijn maar in de losse verbinding, en dat is precies het geval waarin meer tegelijk
-  /// helpt. Een Soulseek-peer levert hier gemeten ~1,2 MB/s (35 MB in 28 s).
+  /// De lijn zit dus vol rond acht gelijktijdige stromen.
   ///
-  /// Waarom twaalf en niet vierentwintig: dit getal begrenst **zoekende** jobs, niet lopende
-  /// overdrachten. Een nummer houdt zijn slot vast terwijl het twintig peers afgaat zonder één byte
-  /// te ontvangen, dus het werkelijke aantal stromende overdrachten ligt altijd lager dan dit getal.
-  /// Twaalf zoekende jobs leveren realistisch een stuk of zes tot acht lopende overdrachten — rond
-  /// de 8 MB/s, waar de lijn nog meegroeit. Hoger opendraaien vergroot vooral het aantal
-  /// peer-verbindingen (twintig per job) en niet de doorvoer.
+  /// **Eén peer**, gemeten aan echte Soulseek-overdrachten in diezelfde sessie: 2,59 · 3,22 · 3,23 ·
+  /// 3,72 · 7,67 · 7,81 MB/s, en drie uitschieters van 35 tot 47. Mediaan rond 3,7 MB/s. Eén peer
+  /// haalt de lijn dus bij lange na niet vol, en dat is precies het geval waarin meer tegelijk helpt.
+  ///
+  /// **Waarom twaalf.** Twaalf keer de mediaan is ~44 MB/s, onder het plafond van 64. En dit getal
+  /// begrenst **zoekende** jobs, niet lopende overdrachten: een nummer houdt zijn slot vast terwijl
+  /// het twintig peers afgaat zonder één byte te ontvangen, dus het werkelijke aantal stromende
+  /// overdrachten ligt altijd lager. Hoger opendraaien koopt vooral peer-verbindingen (twintig per
+  /// job) en geen doorvoer — en een Soulseek-netwerk waar honderden sockets vandaan komen is geen
+  /// nette gast.
   static const _slskMaxParallel = 12;
 
   /// How many peers a sweep walks looking for "someone free right now". Lossless gets a much
@@ -768,8 +769,18 @@ class DownloadManager extends ChangeNotifier {
   ///
   /// Een [SoulseekFile] en geen `bool`: de aanroeper verbreedt één klik naar een kandidatenlijst, dus
   /// de manager moet weten wélk element het was. Bovendien overleeft het zo de notitie op schijf.
+  /// [wachtOpAfloop] false = antwoord zodra de taak is aangenomen, en laat hem daarna zelf lopen.
+  ///
+  /// Standaard true, want de albumweg telt met `Future.wait` hoeveel er geland zijn en zou anders
+  /// meteen "klaar" melden terwijl er nog niets binnen is.
+  ///
+  /// Maar over de LAN-route is true verkeerd: daar houdt het HTTP-verzoek van een gsm of iPad de
+  /// hele download lang open. Gemeten op 07-08-2026 — zeven nummers achter elkaar aangevraagd
+  /// startten twintig tot veertig seconden na elkaar, netjes serieel, terwijl er twaalf tegelijk
+  /// hadden gekund. Niet omdat de app het niet kon, maar omdat de aanvrager per stuk stond te
+  /// wachten op een antwoord dat pas na afloop kwam.
   Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,
-      {String? key, TrackTags? authority, SoulseekFile? exact}) async {
+      {String? key, TrackTags? authority, SoulseekFile? exact, bool wachtOpAfloop = true}) async {
     if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
     if (candidates.isEmpty) return false;
     // Don't start a duplicate if this exact key is already in progress.
@@ -808,10 +819,19 @@ class DownloadManager extends ChangeNotifier {
     // finish — a PC shut down mid-download is exactly the case this is for.
     unawaited(_savePending());
     // Runs on the shared session → reuses the one login (no new login per click).
-    final ok = await _withSlsk((s, release) => _soulseekBest(candidates, job, s, release));
-    await _pruneStaging();
-    unawaited(_savePending());
-    return ok;
+    Future<bool> draai() async {
+      final ok = await _withSlsk((s, release) => _soulseekBest(candidates, job, s, release));
+      await _pruneStaging();
+      unawaited(_savePending());
+      return ok;
+    }
+
+    if (!wachtOpAfloop) {
+      // De taak staat in de lijst en is zichtbaar; wie het startte hoeft er niet op te blijven staan.
+      unawaited(draai());
+      return true;
+    }
+    return draai();
   }
 
   // ── Surviving a restart ───────────────────────────────────────────────────
