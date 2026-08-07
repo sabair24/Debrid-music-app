@@ -80,6 +80,18 @@ Future<void> onthoudOordeel(String pad, Echtheidsoordeel o) async {
   await _bewaar();
 }
 
+/// Een oordeel dat van de PC komt, alleen voor deze sessie.
+///
+/// Op een iPad of een gsm staan de bestanden niet; daar heet een nummer
+/// `http://100.97.101.113:47820/stream/<id>.flac` in plaats van `D:\...\track.flac`. De meting is op
+/// het pad gesleuteld, dus zonder dit vindt zo'n toestel nooit iets — en dan toont de Kwaliteit-lijst
+/// daar "0 nummers" terwijl er achtentwintig staan. Erger dan leeg: het liegt.
+///
+/// Nadrukkelijk NIET bewaren. De pc is de eigenaar van deze getallen en meet opnieuw zodra er iets
+/// verandert; een kopie op de schijf van een client zou stilletjes verouderen en dan zou een tablet
+/// een nummer blijven beschuldigen dat de pc allang vervangen heeft.
+void onthoudOordeelVanPc(String pad, Echtheidsoordeel o) => _oordelen[_sleutel(pad)] = o;
+
 /// Het bestand is verplaatst; de meting hoort mee te verhuizen. Uit dezelfde `_move` als
 /// [herNoemVasteKeuze], en om dezelfde reden: zonder dit geldt een meting precies één keer.
 void herNoemOordeel(String van, String naar) {

@@ -1642,8 +1642,18 @@ class LibraryStore extends ChangeNotifier {
   /// the identity key for favourites, playlists and resume, and those must survive re-pairing —
   /// the token is added at the moment of playback instead. The extension is kept because that is
   /// how a player types the stream.
-  Track _trackFromDto(TrackDto d, RemoteClient client) => Track(
-        path: client.endpoint.baseUrl.replace(path: d.streamPath).toString(),
+  Track _trackFromDto(TrackDto d, RemoteClient client) {
+    final pad = client.endpoint.baseUrl.replace(path: d.streamPath).toString();
+    // Het oordeel van de pc onder de naam die het nummer HIER heeft. Zonder deze regel reist de
+    // meting wel mee maar vindt niemand haar terug: `gemeten()` sleutelt op pad, en dat pad is op
+    // een iPad een stream-URL en geen bestandsnaam.
+    final o = d.echt == null ? null : Echtheidsoordeel.fromJson(d.echt!);
+    if (o != null) onthoudOordeelVanPc(pad, o);
+    return _trackFromDtoMet(d, pad);
+  }
+
+  Track _trackFromDtoMet(TrackDto d, String pad) => Track(
+        path: pad,
         title: d.title,
         artist: d.artistName,
         album: d.albumTitle,

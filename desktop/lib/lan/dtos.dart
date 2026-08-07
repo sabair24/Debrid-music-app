@@ -181,6 +181,16 @@ class TrackDto {
   final String ext;
   final int addedMs;
 
+  /// Wat de spectrumproef op de PC van dit bestand vond, als hij gemeten is.
+  ///
+  /// Reist mee zodat een iPad of een gsm hetzelfde ziet als de pc. Daar staan de bestanden niet, dus
+  /// meten kan er niet — en zonder dit veld toont de Kwaliteit-lijst op die toestellen "0 nummers"
+  /// terwijl er achtentwintig staan. Dat is erger dan leeg: het liegt.
+  ///
+  /// Null voor alles wat nooit gemeten is, en de vorm is die van [Echtheidsoordeel.toJson] — hier
+  /// als kale map, zodat deze laag niets van de meetlogica hoeft te weten.
+  final Map<String, dynamic>? echt;
+
   const TrackDto({
     required this.id,
     required this.albumId,
@@ -204,6 +214,7 @@ class TrackDto {
     this.mime,
     this.artworkRef,
     this.addedMs = 0,
+    this.echt,
   });
 
   /// True when the file is beyond what Sonos will accept (it plays FLAC/ALAC up to 24-bit but
@@ -234,6 +245,7 @@ class TrackDto {
         mime: j['mime'] as String?,
         artworkRef: j['artworkRef'] as String?,
         addedMs: _int(j['addedMs']),
+        echt: j['echt'] is Map ? Map<String, dynamic>.from(j['echt'] as Map) : null,
       );
 
   Map<String, dynamic> toJson() => {
@@ -259,6 +271,9 @@ class TrackDto {
         'artworkRef': artworkRef,
         'ext': ext,
         'addedMs': addedMs,
+        // Alleen als er iets te melden valt. Bij een verse bibliotheek is dit veld voor bijna elk
+        // nummer null, en een null per nummer meesturen kost bytes zonder iets te zeggen.
+        if (echt != null) 'echt': echt,
       };
 }
 

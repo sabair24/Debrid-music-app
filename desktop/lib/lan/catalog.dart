@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import '../library.dart';
+import '../echtheid_oordelen.dart';
 import '../models.dart';
 import '../organize.dart';
 import 'dtos.dart';
@@ -170,6 +171,10 @@ class LanCatalog {
           artworkRef: albId,
           ext: ext,
           addedMs: t.addedMs,
+          // De meting gaat mee de lijn over. Alleen hier is `t.path` nog een echt bestandspad; op
+          // een iPad heet ditzelfde nummer straks een stream-URL, en dan valt er niets meer te
+          // meten of op te zoeken.
+          echt: gemeten(t.path)?.toJson(),
         ));
       }
     }
