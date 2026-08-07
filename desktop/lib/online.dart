@@ -14,6 +14,7 @@ import 'soulseek.dart';
 import 'torbox.dart';
 import 'warm_log.dart';
 import 'paths.dart';
+import 'echtheid.dart';
 import 'echtheid_meter.dart';
 import 'echtheid_oordelen.dart';
 import 'flac_tags.dart';
@@ -913,6 +914,13 @@ class DownloadManager extends ChangeNotifier {
         ? ([...candidates]..sort(_rankSlsk))
         : [keuze, ...candidates.where((c) => c.username != keuze.username || c.filename != keuze.filename)];
 
+    /// Wat de spectrumproef van de binnengekomen kopie vond, of null als er niets te meten viel.
+    ///
+    /// Dit is het enige harde gegeven dat er in deze hele keten bestaat. Vóór het binnenhalen valt er
+    /// niets te weten — dat is op 06-08-2026 gemeten en staat bij [_rankSlsk] — maar zodra het
+    /// bestand er ligt, is het geen vermoeden meer.
+    Echtheidsoordeel? oordeelVanDeLanding;
+
     /// Shared success path: file the track away tidily (Albums/Singles/Compilaties per artist)
     /// before the rescan picks it up, so the library never sees the loose landing-zone copy.
     Future<bool> succeed(SlskDone res) async {
@@ -932,6 +940,7 @@ class DownloadManager extends ChangeNotifier {
         // Een halve seconde op een download die seconden tot minuten duurde is onzichtbaar, en een
         // mislukte meting kost niets: dan is er simpelweg geen oordeel.
         await _meetEchtheid(staged);
+        oordeelVanDeLanding = gemeten(staged.path);
         final uit =
             await placeFileDetailed(staged, _downloadsRoot, tags: job.authority, staatAl: mapVanBestaande);
         how = uit.how;
@@ -1134,7 +1143,26 @@ class DownloadManager extends ChangeNotifier {
       // gebruiker heeft juist gezegd dat hij DIT wil. Dagen later alsnog vervangen door een kopie die
       // hoger scoort is dezelfde overrule, alleen trager.
       if (keuze != null) return ok;
-      final better = ranked.where((f) => clearlyBetter(f, from)).toList();
+      var better = ranked.where((f) => clearlyBetter(f, from)).toList();
+      // BETRAPT BIJ HET LANDEN. Dan deugt "beter" niet meer als maatstaf, want de kopie die we
+      // namen had juist de MEESTE bits — dat is precies waarom hij won. `clearlyBetter` vindt hier
+      // dus niets en de jacht bleef achterwege, terwijl er honderden andere kandidaten klaarstonden.
+      //
+      // Wat vóór het binnenhalen niet kon, kan nu wel: er ligt een gemeten oordeel. Elke ANDERE
+      // kandidaat is het proberen waard — niet omdat hij beter scoort, maar omdat deze aantoonbaar
+      // niet is wat hij beweert. Wie wint beslist `firstIsBetter` als de tweede kopie landt, en die
+      // kent `bewezenNep`: de betrapte verliest daar ook als hij groter is.
+      //
+      // Kandidaten die hetzelfde bestand zijn vallen af. Dezelfde upload nog eens halen levert
+      // hetzelfde oordeel op, en dat is de bandbreedte niet waard.
+      if (ok && (oordeelVanDeLanding?.isNep ?? false)) {
+        final anders = andereKopieDan(ranked, from);
+        if (anders.isNotEmpty) {
+          _log.line('"${job.name}": binnengekomen kopie is betrapt (${waarom(oordeelVanDeLanding!)}) — '
+              '${anders.length} andere kandidaten, jacht op een echte');
+          better = anders;
+        }
+      }
       if (ok && better.isNotEmpty) _queueUpgrade(better, job);
       // FLAC is koning. Landde er lossy, dan blijft de FLAC gewenst -- ook als er vandaag geen enkele
       // lossless bron was, want morgen staat er een andere peer online. Dat is niet theoretisch:
@@ -1484,6 +1512,12 @@ class DownloadManager extends ChangeNotifier {
           Placement how = Placement.stuck;
           try {
             final staged = File(res.path);
+            // Meten vóór het filen, net als op de gewone landingsweg — en dit ontbrak hier.
+            // `placeFileDetailed` laat `firstIsBetter` beslissen, en die kijkt naar het oordeel;
+            // zonder meting was er geen oordeel en besliste de grootte. Uitgerekend op deze weg is
+            // dat verkeerd om: een opgeschaalde of uit mp3 omgezette kopie is juist GROTER dan het
+            // origineel, dus de jacht op iets beters kon de betere kopie weggooien.
+            await _meetEchtheid(staged);
             // The SAME authority as the first landing. Without it the sweep would quietly undo the
             // numbering a quarter of an hour later, using whatever this new peer's tags happen to say.
             how = (await placeFileDetailed(staged, _downloadsRoot, tags: job.authority, staatAl: mapVanBestaande)).how;
@@ -1559,6 +1593,27 @@ class DownloadManager extends ChangeNotifier {
   /// Two rips of the same CD differ by a few kbps as a matter of course, so a plain "higher
   /// score" would start a chase after almost every download — and then swap a perfectly good
   /// FLAC for an equally good one. Only a better TIER, or a clearly higher bitrate, counts.
+  /// De kandidaten die een ÁNDERE kopie zijn dan [genomen] — waar het nog zin heeft te kijken.
+  ///
+  /// Nodig zodra de binnengekomen kopie betrapt is. "Beter" bestaat dan niet meer als maatstaf: die
+  /// kopie won juist omdat hij de meeste bits had. Wat overblijft is: probeer iets ánders.
+  ///
+  /// Wat eruit valt, en waarom:
+  ///  - **dezelfde upload.** Honderd peers delen hetzelfde bestand; dat nog eens halen levert
+  ///    hetzelfde oordeel op en kost alleen bandbreedte. [zelfdeBestand] kijkt naar naam, grootte
+  ///    en speelduur samen.
+  ///  - **lossy.** Een mp3 halen omdat de FLAC uit een mp3 bleek te komen is geen vooruitgang.
+  ///  - **meerkanaals.** Wordt op een stereo-installatie teruggemengd en kost tien keer de ruimte —
+  ///    dezelfde afweging die de gewone rangschikking al maakt.
+  static List<SoulseekFile> andereKopieDan(List<SoulseekFile> kandidaten, SoulseekFile genomen) =>
+      kandidaten
+          .where((f) =>
+              isLossless(f) &&
+              !isMultichannel(f) &&
+              !zelfdeBestand(
+                  f.filename, f.size, f.durationSec, genomen.filename, genomen.size, genomen.durationSec))
+          .toList();
+
   static bool clearlyBetter(SoulseekFile candidate, SoulseekFile settled) {
     final a = _slskScore(candidate), b = _slskScore(settled);
     final tierA = a ~/ 1000000, tierB = b ~/ 1000000;
