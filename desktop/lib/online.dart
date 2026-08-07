@@ -914,12 +914,18 @@ class DownloadManager extends ChangeNotifier {
         ? ([...candidates]..sort(_rankSlsk))
         : [keuze, ...candidates.where((c) => c.username != keuze.username || c.filename != keuze.filename)];
 
-    /// Wat de spectrumproef van de binnengekomen kopie vond, of null als er niets te meten viel.
+    /// Wat de spectrumproef vindt van het bestand dat er ná dit alles LIGT.
     ///
-    /// Dit is het enige harde gegeven dat er in deze hele keten bestaat. Vóór het binnenhalen valt er
-    /// niets te weten — dat is op 06-08-2026 gemeten en staat bij [_rankSlsk] — maar zodra het
-    /// bestand er ligt, is het geen vermoeden meer.
-    Echtheidsoordeel? oordeelVanDeLanding;
+    /// Dit is het enige harde gegeven in deze hele keten. Vóór het binnenhalen valt er niets te
+    /// weten — dat is op 06-08-2026 gemeten en staat bij [_rankSlsk] — maar zodra het bestand er
+    /// ligt is het geen vermoeden meer.
+    ///
+    /// Nadrukkelijk het bestand dat BLIJFT, niet het bestand dat binnenkwam. Die twee lopen uiteen
+    /// zodra er al een kopie lag: dan gooit `placeFileDetailed` de zwakste weg, en dat kan de
+    /// binnengekomene zijn. Gemeten op 06-08 met Stromae — Tous les mêmes: er kwam een opgeblazen
+    /// kopie binnen, die verloor meteen van het schone bestand dat er lag, en toch begon de jacht.
+    /// Vijfenveertig peers afgegaan om iets te vervangen wat al in orde was.
+    Echtheidsoordeel? oordeelVanWatErLigt;
 
     /// Shared success path: file the track away tidily (Albums/Singles/Compilaties per artist)
     /// before the rescan picks it up, so the library never sees the loose landing-zone copy.
@@ -940,10 +946,12 @@ class DownloadManager extends ChangeNotifier {
         // Een halve seconde op een download die seconden tot minuten duurde is onzichtbaar, en een
         // mislukte meting kost niets: dan is er simpelweg geen oordeel.
         await _meetEchtheid(staged);
-        oordeelVanDeLanding = gemeten(staged.path);
         final uit =
             await placeFileDetailed(staged, _downloadsRoot, tags: job.authority, staatAl: mapVanBestaande);
         how = uit.how;
+        // Pas HIER, want `uit.path` is het bestand dat blijft — bij `moved` de nieuwe kopie (het
+        // oordeel is meeverhuisd), bij `duplicate` de kopie die er al lag en gewonnen heeft.
+        oordeelVanWatErLigt = gemeten(uit.path);
         // En na afloop op het pad waar hij écht ligt. `_move` verhuist de markering mee, maar bij
         // `Placement.duplicate` is de bron verwijderd en is `uit.path` de kopie die bleef staan — die
         // hoort de bescherming niet zomaar te erven.
@@ -1155,10 +1163,10 @@ class DownloadManager extends ChangeNotifier {
       //
       // Kandidaten die hetzelfde bestand zijn vallen af. Dezelfde upload nog eens halen levert
       // hetzelfde oordeel op, en dat is de bandbreedte niet waard.
-      if (ok && (oordeelVanDeLanding?.isNep ?? false)) {
+      if (ok && (oordeelVanWatErLigt?.isNep ?? false)) {
         final anders = andereKopieDan(ranked, from);
         if (anders.isNotEmpty) {
-          _log.line('"${job.name}": binnengekomen kopie is betrapt (${waarom(oordeelVanDeLanding!)}) — '
+          _log.line('"${job.name}": wat er nu ligt is betrapt (${waarom(oordeelVanWatErLigt!)}) — '
               '${anders.length} andere kandidaten, jacht op een echte');
           better = anders;
         }
