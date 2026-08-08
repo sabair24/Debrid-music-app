@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'models.dart';
 import 'paths.dart';
+import 'tv.dart';
 
 enum RepeatMode { off, all, one }
 
@@ -305,7 +306,42 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       : (_index < _order.length - 1 || (repeat == RepeatMode.all && _order.isNotEmpty));
   bool get hasPrev => radioMode ? _radioIndex > 0 : _index > 0;
 
+
+  /// Ask Android for the audio path that can carry the record as it is.
+  ///
+  /// media_kit hardcodes `ao=opensles` for every physical Android device
+  /// (media_kit-1.2.6 real.dart:2409). OpenSL ES only ever offers 16-bit PCM at the mixer's own
+  /// rate, so a 24/96 FLAC is dithered and resampled before it leaves the app — measured, not
+  /// assumed: `dumpsys audio` on the Shield reports our stream as
+  /// "type:OpenSL ES AudioPlayer (Buffer Queue)".
+  ///
+  /// The device can do better. `dumpsys media.audio_policy` lists an output called `multichannel`
+  /// on AUX Digital with AUDIO_OUTPUT_FLAG_DIRECT, PCM_24_BIT_PACKED, and rates up to 192000 —
+  /// a path straight past the mixer. OpenSL ES cannot reach it; mpv's `audiotrack` output uses
+  /// Android's AudioTrack and asks for the source's own rate and depth, which is what makes
+  /// AudioFlinger pick a direct output. That AO is compiled into the libmpv this app ships
+  /// (checked in the built APK: libmpv.so carries both "audiotrack" and "opensles").
+  ///
+  /// Set here rather than at construction because media_kit writes `ao` while it creates the
+  /// instance; [NativePlayer.setProperty] waits for that to finish, so this lands after it and
+  /// before mpv initialises the output, which happens at the first play.
+  ///
+  /// Television only, for now. It is the device with a receiver on the other end of the cable and
+  /// the only one where the result can be measured; a phone's speaker cannot tell the difference
+  /// and would carry the risk for nothing. Failure is never fatal — mpv falls back to its own
+  /// default and the music plays exactly as it did before.
+  Future<void> _kiesAudioUitgang() async {
+    if (!Platform.isAndroid || !isTv) return;
+    try {
+      final p = _player.platform;
+      if (p is NativePlayer) await p.setProperty('ao', 'audiotrack');
+    } catch (e) {
+      debugPrint('Audio-uitgang niet omgezet: $e');
+    }
+  }
+
   PlayerStore() {
+    unawaited(_kiesAudioUitgang());
     _player.stream.playing.listen((p) {
       playing = p;
       if (p) resumedPaused = false;
