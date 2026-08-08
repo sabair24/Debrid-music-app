@@ -2635,17 +2635,24 @@ List<Widget> _albumRowSlivers(List<Album> albums, AlbumSort? sort) {
         ),
       ),
       SliverToBoxAdapter(
-        // 300, and the tile is 200 wide: the cover takes 180, the two lines of scaled text about 53,
-        // and what is left pays for the 14% a focused tile grows. A horizontal list hands its
-        // children a tight height and clips whatever exceeds it.
+        // The row is taller than the tile, on purpose, and that is the whole trick.
+        //
+        // AlbumCard lays its sleeve out in an Expanded, so it takes exactly the height it is given
+        // — which means a tile sized to the row can never grow inside it: the 14% goes straight
+        // over the edge and the list clips it. On the Shield that cut the artist's name off the
+        // focused tile and shaved the first sleeve against the rail. So the tile gets a fixed 253
+        // (180 of sleeve, 20 of padding, two lines of scaled text) and the row gets 300, which is
+        // 253 x 1.14 plus room for the shadow. Same reason the side padding is 40 rather than 24.
         child: SizedBox(
           height: 300,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 24),
+            padding: const EdgeInsets.symmetric(horizontal: 40),
             itemCount: g.$2.length,
             separatorBuilder: (_, __) => const SizedBox(width: 16),
-            itemBuilder: (_, i) => SizedBox(width: 200, child: AlbumCard(album: g.$2[i])),
+            itemBuilder: (_, i) => Center(
+              child: SizedBox(width: 200, height: 253, child: AlbumCard(album: g.$2[i])),
+            ),
           ),
         ),
       ),
