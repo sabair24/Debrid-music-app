@@ -6912,6 +6912,24 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                 Builder(builder: (context) {
                   final target = context.watch<SpeakerTarget>();
                   if (!target.isCasting) return const SizedBox(height: 8);
+                  // Een reden gaat vóór de geruststelling. "Speelt op Huiskamer" boven een stille
+                  // kamer is precies de melding die je een half uur laat zoeken; als de pc weet
+                  // waarom er niets klinkt, hoort dat hier te staan en niet in een logbestand.
+                  final probleem = target.probleem;
+                  if (probleem != null) {
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 4, bottom: 4),
+                      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        const Icon(Icons.volume_off_rounded, size: 16, color: Colors.orangeAccent),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(probleem,
+                              maxLines: 3,
+                              style: const TextStyle(color: Colors.orangeAccent, fontSize: 13.5)),
+                        ),
+                      ]),
+                    );
+                  }
                   return Padding(
                     padding: const EdgeInsets.only(top: 4, bottom: 4),
                     child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [

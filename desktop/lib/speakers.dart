@@ -118,6 +118,13 @@ class SpeakerTarget extends ChangeNotifier {
 
   bool get hasVolume => _status?.volume != null;
 
+  /// Waarom de speaker stil blijft, als de pc dat weet — anders null.
+  ///
+  /// Doorgegeven en niet zelf bedacht: alleen de machine die het bestand opstuurt weet hoe hoog de
+  /// plaat is en of er iets is om hem mee te verlagen. Zonder dit was een mislukte cast niet van een
+  /// stille kamer te onderscheiden.
+  String? get probleem => _status?.probleem;
+
   void select(CastDevice? d) {
     if (_device?.id == d?.id) return;
     _device = d;

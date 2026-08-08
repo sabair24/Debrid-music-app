@@ -18,6 +18,7 @@ import 'package:debridmusic/player.dart';
 import 'package:debridmusic/speakers.dart';
 
 void main() {
+  extraCastTests();
   group('the time format a renderer speaks', () {
     test('a request always carries hours, because UPnP requires them', () {
       expect(UpnpControlPoint.upnpTime(const Duration(seconds: 5)), '0:00:05');
@@ -334,6 +335,30 @@ void main() {
       // tenslotte wél de volgende-URL, en dat is nog altijd een aanwijzing.
       final o = muziekIsGewisseld(top: Duration.zero, positie: null, gespeeld: const Duration(seconds: 9));
       expect(o.ja, isTrue);
+    });
+  });
+}
+
+/// Een cast die stil blijft, hoort dat te zeggen.
+///
+/// Dit is het gat waar "streamen lukt niet naar sonos" in viel: een Sonos gaat tot 48 kHz en slaat
+/// alles daarboven over zónder foutmelding. Zonder ffmpeg op de pc stuurde de app dus een bestand
+/// waarvan ze wist dat het niets zou opleveren, en er was in de hele castlaag geen enkel foutveld —
+/// dus kón de app het niet vertellen. Eén stille kamer, geen enkel spoor op het scherm.
+void extraCastTests() {
+  group('een stille speaker krijgt een reden', () {
+    test('de reden reist mee in de status en komt er heel uit', () {
+      const reden = 'Deze speaker gaat tot 48 kHz en dit nummer is 192 kHz.';
+      final status = CastStatus.fromJson({'casting': true, 'probleem': reden});
+      expect(status.probleem, reden);
+      expect(status.casting, isTrue,
+          reason: 'de speaker is wél gekozen — dat is juist waarom zwijgen zo verwarrend was');
+    });
+
+    test('zonder probleem staat het veld leeg en niet op een lege string', () {
+      final status = CastStatus.fromJson({'casting': true});
+      expect(status.probleem, isNull,
+          reason: 'anders toont het scherm een waarschuwing voor iets dat in orde is');
     });
   });
 }

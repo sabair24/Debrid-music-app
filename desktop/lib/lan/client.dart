@@ -132,6 +132,7 @@ class CastStatus {
     this.volume,
     this.index,
     this.queueLength,
+    this.probleem,
   });
 
   /// True when this speaker is playing a queue THIS pc started. A speaker someone else in the house
@@ -143,6 +144,9 @@ class CastStatus {
   final int? volume;
   final int? index;
   final int? queueLength;
+
+  /// Waarom er niets klinkt, als de pc dat weet. Null als er niets aan de hand is.
+  final String? probleem;
 
   bool get hasPrev => (index ?? 0) > 0;
   bool get hasNext => index != null && queueLength != null && index! + 1 < queueLength!;
@@ -158,6 +162,7 @@ class CastStatus {
         volume: (j['volume'] as num?)?.toInt(),
         index: (j['index'] as num?)?.toInt(),
         queueLength: (j['queueLength'] as num?)?.toInt(),
+        probleem: j['probleem'] as String?,
       );
 }
 

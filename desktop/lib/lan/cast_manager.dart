@@ -141,6 +141,14 @@ class CastManager {
   final int port;
   String token;
 
+  /// Waarom de speaker stil bleef, als hij stil bleef.
+  ///
+  /// Casten faalt bij uitstek zonder klap: de app zet een album op het scherm, de speaker haalt het
+  /// bestand op, kan er niets mee, en zwijgt. Tot nu toe stond er in de hele castlaag geen enkel
+  /// foutveld — de app KON het je dus niet vertellen, en het enige spoor was `cast.log` op de pc.
+  /// Deze reis mee in de status, zodat de speakerkiezer het gewoon kan zeggen.
+  String? probleem;
+
   /// Wat er tussen de app en de speaker gebeurt, in `cast.log` naast de andere staatbestanden.
   ///
   /// Bestaat omdat casten precies het soort fout heeft waar redeneren op stukloopt: alles speelt door,
@@ -466,8 +474,21 @@ class CastManager {
     final ceiling = renderer.maxSampleRate;
     // Sonos stops at 48 kHz and SKIPS anything higher — no error, no sound, just nothing. Send
     // it through the converter rather than let a hi-res album play as silence.
-    if (ceiling > 0 && sampleRate > ceiling && _transcoder.available) {
-      return 'http://$base:$port/stream/$id.flac?token=$token&maxRate=$ceiling';
+    if (ceiling > 0 && sampleRate > ceiling) {
+      if (_transcoder.available) {
+        probleem = null;
+        return 'http://$base:$port/stream/$id.flac?token=$token&maxRate=$ceiling';
+      }
+      // Hier ging het mis en zei niemand iets. Een Sonos slaat alles boven 48 kHz over zonder
+      // foutmelding, dus zonder omzetter stuurden we een bestand waarvan we wisten dat het stil
+      // zou blijven. Nu wordt het gezegd — dit is de enige plek die beide helften kent: hoe hoog
+      // de plaat is, en dat er niets is om hem mee te verlagen.
+      probleem = 'Deze speaker gaat tot ${ceiling ~/ 1000} kHz en dit nummer is '
+          '${(sampleRate / 1000).round()} kHz. Zonder ffmpeg op de pc kan ik het niet omzetten, '
+          'en dan blijft de speaker stil.';
+      _log?.line('GEEN OMZETTER: ${sampleRate}Hz > ${ceiling}Hz en ffmpeg ontbreekt — $id');
+    } else {
+      probleem = null;
     }
     return 'http://$base:$port/stream/$id.$ext?token=$token';
   }
@@ -600,7 +621,7 @@ class CastManager {
   /// not a web server. Volume almost never changes on its own, so asking for it every two seconds
   /// is a third more traffic to the speaker for an answer that is nearly always the same one.
   Future<Map<String, dynamic>> status(String deviceId, {bool withVolume = false}) async {
-    final out = <String, dynamic>{'casting': false};
+    final out = <String, dynamic>{'casting': false, if (probleem != null) 'probleem': probleem};
     // A Shield runs our own receiver and reports through the shared state, not through UPnP.
     if (_shields.any((s) => s.id == deviceId)) return out;
 
