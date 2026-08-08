@@ -82,6 +82,13 @@ class Transcoder {
         '-sample_fmt', 's32',
         '-c:a', 'flac',
         '-compression_level', '0',
+        // `-f flac` is NOT optional here, en dat is precies waar dit een release lang op stukliep.
+        // ffmpeg kiest de container op de EXTENSIE van het uitvoerbestand, en die is hier `.tmp` —
+        // een naam die hij niet kent. Zonder deze regel stopt hij met "Unable to choose an output
+        // format", schrijft niets, en valt deze hele weg terug op de pijp die de Sonos stil houdt.
+        // `-c:a flac` zegt alleen wat de codec is, niet in welke doos hij moet. Gemeten op deze pc:
+        // exitcode 127 op `….flac.tmp`, exitcode 0 op `….flac`.
+        '-f', 'flac',
         tijdelijk.path,
       ]);
       if (result.exitCode != 0 || !tijdelijk.existsSync()) {
