@@ -2025,19 +2025,21 @@ class _TvNavRailState extends State<TvNavRail> {
   Widget _railItem(IconData icoon, String label, bool selected, VoidCallback onTap,
       {int badge = 0}) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 3, right: 8),
+      padding: const EdgeInsets.only(bottom: 2, right: 8),
       child: Pressable(
         onPressed: onTap,
         borderRadius: BorderRadius.circular(10),
         scaleOnFocus: false,
         child: Container(
-          // 34, and that number is the whole screen's arithmetic, not a taste.
+          // 26, and that number is measured rather than reasoned.
           //
-          // The canvas is 540 points tall. Take the overscan off both ends and about 470 are left
-          // for twelve rows: search, ten sections, settings. At 46 they needed 600 and five of them
-          // fell below the fold — reachable by scrolling, invisible until you went looking, which is
-          // the exact fault the horizontal strip had and the reason the rail exists.
-          height: 34,
+          // My first arithmetic said 470 points were available and picked 34. On the Shield two
+          // sections still fell below the fold, because the rail does not get the whole 540: the
+          // player bar ends it at about 435, and the overscan, the search row and the settings row
+          // take another 145. What is left for the ten sections is 289. Twelve rows of 28 need 336
+          // of the 381 the rail actually has, so everything is on screen at once — which is the
+          // entire point of moving the navigation here.
+          height: 26,
           padding: const EdgeInsets.symmetric(horizontal: 8),
           decoration: BoxDecoration(
             color: selected ? _accent.withValues(alpha: .18) : Colors.transparent,
@@ -2045,7 +2047,7 @@ class _TvNavRailState extends State<TvNavRail> {
           ),
           child: Row(
             children: [
-              Icon(icoon, size: 20, color: selected ? Colors.white : _muted),
+              Icon(icoon, size: 18, color: selected ? Colors.white : _muted),
               if (badge > 0 && !_open)
                 // Collapsed there is no room for the count beside the word, and "something is
                 // downloading" is exactly what you want to see from the couch without opening it.
