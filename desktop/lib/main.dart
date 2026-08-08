@@ -38,7 +38,9 @@ import 'facts_warmer.dart';
 import 'fingerprint.dart';
 import 'flac_tags.dart';
 import 'mp3_tags.dart';
+import 'afspeellijsten.dart';
 import 'favorieten.dart';
+import 'lan/ids.dart';
 import 'lan/sharing.dart';
 import 'lan/tokens.dart';
 import 'cloud/catalog_mirror.dart';
@@ -488,6 +490,8 @@ Future<void> main() async {
       ..winkel = sharing.state
       ..wortel = () => library.rootPath;
   }
+  final lijsten = Afspeellijsten();
+  if (mode.owner) lijsten.winkel = sharing.state;
 
   // Signing in. Restoring a saved session is deliberately NOT awaited before the first frame: a
   // slow network would otherwise hold the whole app on a blank screen, and on the PC it would delay
@@ -598,6 +602,7 @@ Future<void> main() async {
         ChangeNotifierProvider<PlayerStore>.value(value: player),
         ChangeNotifierProvider<WachtrijPaneel>(create: (_) => WachtrijPaneel()),
         ChangeNotifierProvider<Favorieten>.value(value: favorieten),
+        ChangeNotifierProvider<Afspeellijsten>.value(value: lijsten),
         ChangeNotifierProvider<OfflineStore>.value(value: offline),
         ChangeNotifierProvider<SpeakerTarget>.value(value: speakers),
         Provider<OnlineService>.value(value: online),
@@ -680,10 +685,11 @@ Future<void> main() async {
             [for (final x in (s['favoriteTracks'] as List? ?? const [])) x.toString()],
             [for (final x in (s['favoriteAlbums'] as List? ?? const [])) x.toString()],
           );
+          lijsten.vanServer((s['playlists'] as List? ?? const []));
         } catch (_) {/* geen pc; het hartje blijft staan zoals het stond */}
       }
 
-      favorieten.duwOps = (ops) async {
+      Future<void> duw(List<Map<String, dynamic>> ops) async {
         final c = library.remote;
         if (c == null) throw 'Geen verbinding met de pc.';
         await c.ask('/api/state/ops', {
@@ -691,7 +697,10 @@ Future<void> main() async {
           'deviceId': settings.serverId,
           'deviceName': deviceName(),
         });
-      };
+      }
+
+      favorieten.duwOps = duw;
+      lijsten.duwOps = duw;
       session.addListener(() {
         if (session.ready) unawaited(haalFavorieten());
       });
@@ -1641,6 +1650,7 @@ class _HomeShellState extends State<HomeShell> {
     if (_view == 6) return const DownloadsView();
     if (_view == 7) return const KwaliteitView();
     if (_view == 8) return const FavorietenView();
+    if (_view == 9) return const AfspeellijstenView();
     if (_view == 2) return const OnlineSearchScreen();
     if (_view == 3) return const OntdekView();
     if (_view == 4) return TracksView(match: _matches, query: _q);
@@ -1779,6 +1789,7 @@ class NavSections {
     (3, 'Ontdek'),
     (6, 'Mijn downloads'),
     (8, 'Favorieten'),
+    (9, 'Afspeellijsten'),
     (7, 'Kwaliteit'),
   ];
 }
@@ -5160,6 +5171,334 @@ class PlayerBar extends StatelessWidget {
 
 }
 
+/// Kies een afspeellijst om [nummers] in te zetten — of maak er ter plekke een.
+///
+/// Eén dialoog voor beide, want "welke lijst" en "een nieuwe" zijn dezelfde vraag: bij de eerste
+/// keer is er nog niets om uit te kiezen, en een apart scherm om eerst een lege lijst te maken zou
+/// dat moment onnodig in tweeën knippen.
+Future<void> _kiesAfspeellijst(BuildContext context, List<String> nummers) async {
+  if (nummers.isEmpty) return;
+  final lijsten = context.read<Afspeellijsten>();
+  final gekozen = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: _panel,
+      title: Text(
+          nummers.length == 1 ? 'In welke afspeellijst?' : '${nummers.length} nummers — waarin?',
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+      contentPadding: const EdgeInsets.fromLTRB(0, 12, 0, 0),
+      content: SizedBox(
+        width: dialogWidth(context, 420),
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            ListTile(
+              autofocus: true,
+              leading: const Icon(Icons.add_rounded, color: _accent),
+              title: const Text('Nieuwe afspeellijst…', style: TextStyle(color: _accent)),
+              onTap: () => Navigator.pop(ctx, ''),
+            ),
+            if (lijsten.leeg)
+              const Padding(
+                padding: EdgeInsets.fromLTRB(24, 8, 24, 16),
+                child: Text('Je hebt er nog geen.',
+                    style: TextStyle(color: _muted, fontSize: 12.5)),
+              ),
+            for (final p in lijsten.lijsten)
+              ListTile(
+                leading: const Icon(Icons.queue_music_rounded, color: _muted),
+                title: Text(p.name),
+                subtitle: Text('${p.trackIds.length} nummers',
+                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+                onTap: () => Navigator.pop(ctx, p.id),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Annuleren')),
+      ],
+    ),
+  );
+  if (gekozen == null || !context.mounted) return;
+
+  if (gekozen.isEmpty) {
+    final naam = await _vraagNaam(context, 'Nieuwe afspeellijst', '');
+    if (naam == null || naam.trim().isEmpty) return;
+    await lijsten.maak(naam.trim(), nummers: nummers);
+    if (context.mounted) _srcToast(context, '“${naam.trim()}” aangemaakt met ${nummers.length} nummer(s).');
+    return;
+  }
+  await lijsten.voegToe(gekozen, nummers);
+  if (context.mounted) {
+    _srcToast(context, '${nummers.length} nummer(s) toegevoegd aan “${lijsten.byId(gekozen)?.name ?? ""}”.');
+  }
+}
+
+Future<String?> _vraagNaam(BuildContext context, String titel, String begin) {
+  final c = TextEditingController(text: begin);
+  return showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: _panel,
+      title: Text(titel, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+      content: TextField(
+        controller: c,
+        autofocus: true,
+        decoration: const InputDecoration(hintText: 'Naam'),
+        onSubmitted: (v) => Navigator.pop(ctx, v),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Annuleren')),
+        FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _accent),
+            onPressed: () => Navigator.pop(ctx, c.text),
+            child: const Text('Bewaren')),
+      ],
+    ),
+  );
+}
+
+/// Je eigen lijsten.
+class AfspeellijstenView extends StatelessWidget {
+  const AfspeellijstenView({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final lijsten = context.watch<Afspeellijsten>();
+    final narrow = isCompact(context);
+    return ListView(
+      padding: EdgeInsets.fromLTRB(narrow ? 18 : 28, 22, narrow ? 18 : 24, 30),
+      children: [
+        Row(
+          children: [
+            const Text('Afspeellijsten',
+                style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
+            const SizedBox(width: 12),
+            Text('${lijsten.lijsten.length}',
+                style: const TextStyle(color: _muted, fontSize: 12.5)),
+            const Spacer(),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: _accent),
+              onPressed: () async {
+                final naam = await _vraagNaam(context, 'Nieuwe afspeellijst', '');
+                if (naam != null && naam.trim().isNotEmpty) await lijsten.maak(naam.trim());
+              },
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: const Text('Nieuwe'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        if (lijsten.leeg)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 40),
+            child: Text(
+              'Nog geen afspeellijsten.\n\nMaak er een met de knop hierboven, of kies "Toevoegen aan '
+              'afspeellijst" in het menu van een nummer of album.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: _muted, fontSize: 13, height: 1.6),
+            ),
+          ),
+        for (final p in lijsten.lijsten) _AfspeellijstRij(id: p.id),
+      ],
+    );
+  }
+}
+
+class _AfspeellijstRij extends StatelessWidget {
+  const _AfspeellijstRij({required this.id});
+
+  /// Het id en niet de lijst zelf: het type `Playlist` bestaat óók in media_kit, en dat hier
+  /// binnenhalen zou een prefix door heel main.dart vragen voor een waarde die toch uit de winkel
+  /// komt. Meelezen met de winkel houdt de rij bovendien vanzelf actueel na een hernoeming.
+  final String id;
+
+  @override
+  Widget build(BuildContext context) {
+    final lijsten = context.watch<Afspeellijsten>();
+    final lijst = lijsten.byId(id);
+    if (lijst == null) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(10)),
+      child: ListTile(
+        leading: const Icon(Icons.queue_music_rounded, color: _accent),
+        title: Text(lijst.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: Text('${lijst.trackIds.length} nummers',
+            style: const TextStyle(color: _muted, fontSize: 12)),
+        onTap: () => Navigator.of(context)
+            .push(MaterialPageRoute(builder: (_) => AfspeellijstPagina(id: lijst.id))),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.edit_outlined, size: 17),
+              color: _muted,
+              tooltip: 'Hernoemen',
+              onPressed: () async {
+                final naam = await _vraagNaam(context, 'Hernoemen', lijst.name);
+                if (naam != null && naam.trim().isNotEmpty) {
+                  await lijsten.hernoem(lijst.id, naam.trim());
+                }
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_outline_rounded, size: 17),
+              color: _muted,
+              tooltip: 'Afspeellijst verwijderen',
+              onPressed: () async {
+                // Alleen de lijst, nooit de bestanden. Dat onderscheid staat er met zoveel woorden
+                // bij, want "verwijderen" betekent elders in deze app wél iets van je schijf halen.
+                final ja = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    backgroundColor: _panel,
+                    title: Text('“${lijst.name}” verwijderen?',
+                        style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                    content: const Text('Alleen de lijst verdwijnt. Je nummers blijven staan.',
+                        style: TextStyle(color: _muted, height: 1.4)),
+                    actions: [
+                      TextButton(
+                          autofocus: true,
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('Annuleren')),
+                      FilledButton(
+                          style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('Verwijderen')),
+                    ],
+                  ),
+                );
+                if (ja == true) await lijsten.wis(lijst.id);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Eén afspeellijst, met zijn nummers.
+class AfspeellijstPagina extends StatelessWidget {
+  const AfspeellijstPagina({super.key, required this.id});
+  final String id;
+
+  @override
+  Widget build(BuildContext context) {
+    final lijsten = context.watch<Afspeellijsten>();
+    final lib = context.watch<LibraryStore>();
+    final p = context.read<PlayerStore>();
+    final lijst = lijsten.byId(id);
+    if (lijst == null) {
+      return const Scaffold(
+          backgroundColor: _bg,
+          body: Center(child: Text('Deze afspeellijst bestaat niet meer.',
+              style: TextStyle(color: _muted))));
+    }
+    // Van id naar nummer via de catalogus van de pc — hetzelfde id dat de lijst bewaart.
+    final wortel = lib.rootPath;
+    final perId = <String, Track>{
+      for (final t in lib.tracks)
+        if (wortel.isNotEmpty) trackIdFor(t.path, wortel): t,
+    };
+    final nummers = lijsten.nummersVan(lijst, (i) => perId[i]);
+
+    return Scaffold(
+      backgroundColor: _bg,
+      appBar: AppBar(
+        backgroundColor: _bg,
+        title: Text(lijst.name),
+        actions: [
+          if (nummers.isNotEmpty) ...[
+            IconButton(
+              icon: const Icon(Icons.play_arrow_rounded),
+              tooltip: 'Afspelen',
+              onPressed: () => p.playQueue(nummers, 0),
+            ),
+            IconButton(
+              icon: const Icon(Icons.shuffle_rounded),
+              tooltip: 'Shuffle',
+              onPressed: () => p.shuffleAll(nummers),
+            ),
+          ],
+        ],
+      ),
+      body: nummers.isEmpty
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Text('Nog leeg.\n\nKies "Toevoegen aan afspeellijst" in het menu van een '
+                    'nummer of album.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: _muted, fontSize: 13, height: 1.6)),
+              ),
+            )
+          : ReorderableListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              itemCount: nummers.length,
+              onReorder: (van, naar) {
+                final doel = van < naar ? naar - 1 : naar;
+                final ids = [...lijst.trackIds];
+                // Op de id-lijst en niet op de gevonden nummers: een id waarvan het bestand weg is
+                // staat niet in `nummers` maar wél in de lijst, en herschikken mag zo'n regel niet
+                // stilletjes wegpoetsen.
+                if (van < ids.length) {
+                  final x = ids.removeAt(van);
+                  ids.insert(doel.clamp(0, ids.length), x);
+                  lijsten.zetNummers(id, ids);
+                }
+              },
+              itemBuilder: (_, i) => ListTile(
+                key: ValueKey('${nummers[i].path}#$i'),
+                contentPadding: EdgeInsets.zero,
+                leading: cover(lib.coverForTrack(nummers[i]), size: 40, radius: 6),
+                title: Text(nummers[i].title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                subtitle: Text(lib.displayArtist(nummers[i].artist),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, color: _muted)),
+                onTap: () => p.playQueue(nummers, i),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _echtheidMerk(nummers[i].path),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, size: 16),
+                      color: _muted,
+                      tooltip: 'Uit deze lijst halen',
+                      onPressed: () {
+                        // setTracks en niet remove: `remove` gooit ELKE kopie van dat id eruit, en
+                        // hetzelfde nummer twee keer in een lijst is een echte wens.
+                        final ids = [...lijst.trackIds];
+                        if (i < ids.length) {
+                          ids.removeAt(i);
+                          lijsten.zetNummers(id, ids);
+                        }
+                      },
+                    ),
+                    ReorderableDragStartListener(
+                      index: i,
+                      child: Container(
+                        width: 34,
+                        height: 40,
+                        alignment: Alignment.center,
+                        color: Colors.transparent,
+                        child: const Icon(Icons.drag_indicator_rounded, size: 16, color: _muted),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+    );
+  }
+}
+
 /// Wat je mooi vindt, op één plek.
 ///
 /// Albums bovenaan en dan de losse nummers: een favoriet album is een grovere keuze dan een favoriet
@@ -5346,6 +5685,8 @@ List<PopupMenuEntry<VoidCallback>> _nummerMenu(BuildContext context, Track t) {
     const PopupMenuDivider(),
     _menuRegel(Icons.playlist_play_rounded, 'Hierna spelen', () => p.speelHierna([t])),
     _menuRegel(Icons.playlist_add_rounded, 'Toevoegen aan de wachtrij', () => p.zetAchteraan([t])),
+    _menuRegel(Icons.library_add_outlined, 'Toevoegen aan afspeellijst…',
+        () => _kiesAfspeellijst(context, [if (fav.idVanTrack(t) case final i?) i])),
     const PopupMenuDivider(),
     if (album != null)
       _menuRegel(Icons.album_rounded, 'Ga naar album',
@@ -5379,6 +5720,8 @@ List<PopupMenuEntry<VoidCallback>> _albumMenu(BuildContext context, Album a) {
     _menuRegel(Icons.play_arrow_rounded, 'Afspelen', () => p.playQueue(nummers, 0, cover: a.cover)),
     _menuRegel(Icons.playlist_play_rounded, 'Hierna spelen', () => p.speelHierna(nummers)),
     _menuRegel(Icons.playlist_add_rounded, 'Toevoegen aan de wachtrij', () => p.zetAchteraan(nummers)),
+    _menuRegel(Icons.library_add_outlined, 'Toevoegen aan afspeellijst…',
+        () => _kiesAfspeellijst(context, [for (final t in nummers) if (fav.idVanTrack(t) case final i?) i])),
     const PopupMenuDivider(),
     _menuRegel(Icons.open_in_new_rounded, 'Album openen',
         () => nav.push(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: a)))),

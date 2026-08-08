@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'gedeelde_ops.dart';
 import 'lan/ids.dart';
 import 'lan/state_store.dart';
 import 'models.dart';
@@ -21,14 +22,8 @@ import 'organize.dart';
 /// **Waarom id's en geen paden.** De gedeelde staat wordt gelezen door toestellen waar jouw
 /// `D:\Flac music 2024\...` niet bestaat. Een pad zou daar nergens op slaan; het id dat de catalogus
 /// uitgeeft wél. Zie [trackIdFor] en [albumIdFor].
-class Favorieten extends ChangeNotifier {
+class Favorieten extends GedeeldeOps {
   Favorieten();
-
-  /// Op de pc: de echte winkel. Op een client: null, en dan loopt alles via [duwOps].
-  LanStateStore? winkel;
-
-  /// Op een client: de weg naar de pc. Krijgt de ops die de winkel hier niet kan verwerken.
-  Future<void> Function(List<Map<String, dynamic>> ops)? duwOps;
 
   /// De wortel van de bibliotheek — nodig om van een pad een id te maken. Leeg op een client, waar
   /// de id's al uit de catalogus komen.
@@ -46,8 +41,6 @@ class Favorieten extends ChangeNotifier {
       ..addAll(nieuw);
     notifyListeners();
   }
-
-  bool get _isClient => winkel == null;
 
   String? idVanTrack(Track t) {
     final r = wortel?.call() ?? '';
@@ -70,33 +63,19 @@ class Favorieten extends ChangeNotifier {
   /// Zet het hartje aan of uit. Geeft terug wat de nieuwe stand is.
   Future<bool> wissel({required String id, required bool album}) async {
     final aan = !isFavoriet(id);
-    final op = <String, dynamic>{
-      'type': 'favorite',
-      'kind': album ? 'album' : 'track',
-      'id': id,
-      'on': aan,
-      'at': DateTime.now().millisecondsSinceEpoch,
-    };
-
-    if (_isClient) {
-      // Meteen tonen, niet pas als de pc geantwoord heeft. Een hartje dat een halve seconde niets
-      // doet leest als een knop die het niet deed, en dan drukt iemand nog eens — en zet het
-      // daarmee weer uit.
-      aan ? _vanPc.add(id) : _vanPc.remove(id);
-      notifyListeners();
-      try {
-        await duwOps?.call([op]);
-      } catch (_) {
-        // De pc nam het niet aan; draai het scherm terug in plaats van een leugen te laten staan.
-        aan ? _vanPc.remove(id) : _vanPc.add(id);
-        notifyListeners();
-        rethrow;
-      }
-      return aan;
-    }
-
-    winkel!.applyOps([op]);
-    notifyListeners();
+    await pasToe(
+      [
+        {
+          'type': 'favorite',
+          'kind': album ? 'album' : 'track',
+          'id': id,
+          'on': aan,
+          'at': nu,
+        }
+      ],
+      vooruit: () => aan ? _vanPc.add(id) : _vanPc.remove(id),
+      terug: () => aan ? _vanPc.remove(id) : _vanPc.add(id),
+    );
     return aan;
   }
 
