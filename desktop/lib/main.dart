@@ -586,6 +586,7 @@ Future<void> main() async {
         ChangeNotifierProvider<LibraryStore>.value(value: library),
         ChangeNotifierProvider<FactsWarmer>.value(value: warmer),
         ChangeNotifierProvider<PlayerStore>.value(value: player),
+        ChangeNotifierProvider<WachtrijPaneel>(create: (_) => WachtrijPaneel()),
         ChangeNotifierProvider<OfflineStore>.value(value: offline),
         ChangeNotifierProvider<SpeakerTarget>.value(value: speakers),
         Provider<OnlineService>.value(value: online),
@@ -1365,14 +1366,27 @@ class _HomeShellState extends State<HomeShell> {
             _topBar(),
             const _OfflineBanner(),
             Expanded(
-              child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: tvOverscan.left),
-                child: Column(
-                  children: [
-                    if (_searchable) _searchBar(context),
-                    Expanded(child: _content()),
-                  ],
-                ),
+              // De wachtrij staat NAAST de inhoud en niet erboven: een venster zou dichtgaan zodra
+              // je iets aanklikt, en juist bladeren terwijl je de rij ziet is waar hij voor is.
+              //
+              // Op een telefoon zou 340 punten naast een scherm van 411 niets overlaten; daar opent
+              // dezelfde lijst als een blad van onderen (zie de knop in `_compactBar`).
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(horizontal: tvOverscan.left),
+                      child: Column(
+                        children: [
+                          if (_searchable) _searchBar(context),
+                          Expanded(child: _content()),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (!isCompact(context) && context.watch<WachtrijPaneel>().open)
+                    const WachtrijPaneelView(),
+                ],
               ),
             ),
             const PlayerBar(),
@@ -5094,6 +5108,7 @@ class PlayerBar extends StatelessWidget {
                       // would take effect on whatever is sent next and look like it did nothing.
                       onPressed: x.casting ? null : p.cycleRepeat,
                     ),
+                    const _WachtrijKnop(),
                     const _SpeakerButton(),
                   ],
                 ),
@@ -5130,6 +5145,227 @@ class PlayerBar extends StatelessWidget {
     );
   }
 
+}
+
+/// De knop die de wachtrij laat zien.
+///
+/// Op een breed scherm schuift het paneel naast de inhoud; op een telefoon zou 340 punten naast een
+/// scherm van 411 niets overlaten, dus komt daar dezelfde lijst als een blad van onderen. Eén knop,
+/// twee vormen — dat is beter dan een knop die op een telefoon niets doet.
+class _WachtrijKnop extends StatelessWidget {
+  const _WachtrijKnop();
+
+  @override
+  Widget build(BuildContext context) {
+    final paneel = context.watch<WachtrijPaneel>();
+    final compact = isCompact(context);
+    return TvLabelled(
+      label: 'Wachtrij',
+      child: IconButton(
+        icon: const Icon(Icons.queue_music_rounded, size: 20),
+        color: !compact && paneel.open ? _accent : _muted,
+        tooltip: 'Wachtrij',
+        onPressed: () {
+          if (!compact) {
+            paneel.wissel();
+            return;
+          }
+          showModalBottomSheet<void>(
+            context: context,
+            backgroundColor: _panel,
+            isScrollControlled: true,
+            shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+            builder: (_) => SizedBox(
+              height: MediaQuery.sizeOf(context).height * .7,
+              child: const WachtrijPaneelView(inBlad: true),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Wat er straks komt — en de mogelijkheid er iets aan te doen.
+///
+/// Tot nu toe kon deze app precies één ding met een wachtrij: hem vervangen. Elke klik in de hele
+/// app riep `playQueue` aan, en `queueTracks` had één lezer: een leegtecheck vóór het overdragen aan
+/// een speaker. Je kon dus nooit zien wat er hierna kwam.
+///
+/// Een paneel naast de inhoud en geen venster erboven, zodat het open kan blijven terwijl je door je
+/// bibliotheek bladert — dat is het hele verschil met een scherm.
+class WachtrijPaneelView extends StatelessWidget {
+  const WachtrijPaneelView({super.key, this.inBlad = false});
+
+  /// True als hij als blad van onderen komt (telefoon). Dan geen vaste breedte en geen linkerrand,
+  /// en sluiten gaat via de bladbeweging in plaats van via het kruisje.
+  final bool inBlad;
+
+  static const breedte = 340.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.watch<PlayerStore>();
+    final lib = context.watch<LibraryStore>();
+    final paneel = context.read<WachtrijPaneel>();
+    final rij = p.queueTracks;
+    final nu = p.currentIndex;
+
+    return Container(
+      width: inBlad ? null : breedte,
+      decoration: BoxDecoration(
+        color: _panel,
+        border: inBlad ? null : const Border(left: BorderSide(color: _line)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
+            child: Row(
+              children: [
+                const Text('Wachtrij',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                const SizedBox(width: 8),
+                Text(
+                    rij.isEmpty
+                        ? ''
+                        : '${rij.length - nu - 1} hierna',
+                    style: const TextStyle(color: _muted, fontSize: 12)),
+                const Spacer(),
+                if (!inBlad)
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    color: _muted,
+                    tooltip: 'Sluiten',
+                    onPressed: paneel.sluit,
+                  ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: rij.isEmpty
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text('Nog niets in de wachtrij.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: _muted, fontSize: 12.5)),
+                    ),
+                  )
+                : ReorderableListView.builder(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    buildDefaultDragHandles: false,
+                    itemCount: rij.length,
+                    onReorder: (van, naar) {
+                      // ReorderableListView telt de doelplek alsof het gesleepte item er nog staat;
+                      // één eraf zodra je naar beneden sleept, anders landt alles één te ver.
+                      p.verplaatsInWachtrij(van, van < naar ? naar - 1 : naar);
+                    },
+                    itemBuilder: (_, i) => _WachtrijRij(
+                      key: ValueKey('${rij[i].path}#$i'),
+                      track: rij[i],
+                      plek: i,
+                      speeltNu: i == nu,
+                      cover: lib.coverForTrack(rij[i]),
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WachtrijRij extends StatelessWidget {
+  const _WachtrijRij({
+    super.key,
+    required this.track,
+    required this.plek,
+    required this.speeltNu,
+    required this.cover,
+  });
+
+  final Track track;
+  final int plek;
+  final bool speeltNu;
+  final Uint8List? cover;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.read<PlayerStore>();
+    return Container(
+      color: speeltNu ? _panel2 : Colors.transparent,
+      child: InkWell(
+        onTap: () => p.playQueue(p.queueTracks, plek),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          child: Row(
+            children: [
+              // De greep is een eigen doelwit en niet de hele rij: anders begint elke poging om een
+              // nummer aan te tikken met een sleep van een paar pixels, en dan speelt er niets af.
+              ReorderableDragStartListener(
+                index: plek,
+                child: const Padding(
+                  padding: EdgeInsets.only(right: 6),
+                  child: Icon(Icons.drag_indicator_rounded, size: 16, color: _muted),
+                ),
+              ),
+              cover != null
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: Image.memory(cover!, width: 34, height: 34, fit: BoxFit.cover),
+                    )
+                  : Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                          color: _panel2, borderRadius: BorderRadius.circular(4)),
+                      child: const Icon(Icons.music_note_rounded, size: 15, color: _muted),
+                    ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(track.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                            color: speeltNu ? _accent : _text)),
+                    Text(track.artist,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 11, color: _muted)),
+                  ],
+                ),
+              ),
+              _echtheidMerk(track.path),
+              // Het lopende nummer heeft geen kruisje: eruit halen zou "stop" of "volgende" moeten
+              // betekenen, en die knoppen staan al onderaan. Zie [PlayerStore.haalUitWachtrij].
+              SizedBox(
+                width: 28,
+                child: speeltNu
+                    ? const Icon(Icons.volume_up_rounded, size: 15, color: _accent)
+                    : IconButton(
+                        icon: const Icon(Icons.close_rounded, size: 15),
+                        color: _muted,
+                        tooltip: 'Uit de wachtrij halen',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+                        onPressed: () => p.haalUitWachtrij(plek),
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 // ── Now playing (full screen, enlargeable art) ───────────────────────────────
@@ -5293,6 +5529,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
                 color: _muted,
                 onPressed: x.next,
               ),
+              const _WachtrijKnop(),
               const _SpeakerButton(iconSize: 22),
               const SizedBox(width: 2),
             ],
@@ -7292,10 +7529,38 @@ class EchtheidDialog extends StatelessWidget {
 /// Alleen zichtbaar als er iets te melden valt: een bestand dat de proef doorstaat krijgt niets, want
 /// een vinkje bij 536 van de 672 nummers is ruis. Een ongemeten bestand krijgt óók niets — zwijgen is
 /// hier eerlijker dan een vraagteken bij alles wat nog niet aan de beurt is geweest.
+/// Twee bevindingen, twee heel verschillende gewichten — en dus twee vormen.
+///
+/// **Uit een mp3** is een verlies dat je niet terugkrijgt: die bestanden moeten eruit. Dat merkje mag
+/// in de weg zitten, en blijft daarom precies zoals het was.
+///
+/// **Opgeschaald** is iets anders. Zo'n bestand IS cd-kwaliteit; het draagt alleen een te grote jas.
+/// Er valt niets aan te verbeteren door het opnieuw te halen — je krijgt exact hetzelfde geluid terug.
+/// Een even luide waarschuwing als bij een echte transcode zette 89 nummers in het rood voor iets wat
+/// alleen ruimte kost. Vandaar een bolletje: aanwezig, maar het schreeuwt niet.
+///
+/// De uitleg gaat niet verloren, want de tooltip blijft eronder hangen — één beweging ver, met
+/// dezelfde zin uit [waarom] die de badge ook toonde.
 Widget _echtheidMerk(String? pad) {
   if (pad == null || pad.isEmpty) return const SizedBox.shrink();
   final o = gemeten(pad);
   if (o == null || !o.isNep) return const SizedBox.shrink();
+
+  if (o.band != Bandbreedte.afgekapt) {
+    return Tooltip(
+      message: waarom(o),
+      child: Container(
+        margin: const EdgeInsets.only(right: 8),
+        width: 7,
+        height: 7,
+        decoration: BoxDecoration(
+          color: const Color(0xFFB98A4A), // gedempt amber: zichtbaar, niet alarmerend
+          shape: BoxShape.circle,
+        ),
+      ),
+    );
+  }
+
   return Tooltip(
     message: waarom(o),
     child: Container(
@@ -7309,7 +7574,7 @@ Widget _echtheidMerk(String? pad) {
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(Icons.warning_amber_rounded, size: 11, color: Colors.orange.shade300),
         const SizedBox(width: 3),
-        Text(o.band == Bandbreedte.afgekapt ? 'uit mp3' : 'niet echt hi-res',
+        Text('uit mp3',
             style: TextStyle(color: Colors.orange.shade300, fontSize: 10.5, fontWeight: FontWeight.w600)),
       ]),
     ),

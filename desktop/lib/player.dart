@@ -93,6 +93,116 @@ abstract interface class NowPlayingSource implements Listenable {
   );
 }
 
+/// Staat het wachtrijpaneel open?
+///
+/// Een eigen notifier omdat de knop en het paneel ver uit elkaar liggen: de knop zit in de
+/// spelerbalk onderaan, het paneel hangt naast de inhoud daarboven. Ze delen geen ouder waar een
+/// `setState` bij allebei aankomt, en de hele boom laten hertekenen voor één schakelaar zou elke
+/// albumhoes op het scherm opnieuw laten bouwen.
+class WachtrijPaneel extends ChangeNotifier {
+  bool _open = false;
+  bool get open => _open;
+
+  void wissel() {
+    _open = !_open;
+    notifyListeners();
+  }
+
+  void sluit() {
+    if (!_open) return;
+    _open = false;
+    notifyListeners();
+  }
+}
+
+/// De hele wachtrij in één waarde: de aangeleverde volgorde, de speelvolgorde, en waar we zijn.
+typedef Wachtrij = ({List<Track> origineel, List<Track> volgorde, int index});
+
+/// [nieuw] erbij — achter het lopende nummer, of achteraan.
+///
+/// Los van [PlayerStore] om dezelfde reden als [ordenVoor]: die klasse bouwt een libmpv-speler in
+/// een veld en is in geen enkele test te maken, terwijl juist dit rekenwerk moet kloppen.
+///
+/// Beide lijsten, altijd. [_rebuildOrder] bouwt de speelvolgorde opnieuw uit het origineel zodra
+/// iemand shuffle aantikt — wat alleen in de speelvolgorde staat is dan weg, zonder foutmelding.
+///
+/// In het origineel achter hetzelfde NUMMER en niet achter dezelfde index: bij shuffle staan de twee
+/// lijsten in een andere volgorde, en dan wijst een index in de verkeerde lijst.
+Wachtrij voegInWachtrij(Wachtrij w, List<Track> nieuw, {required bool hierna}) {
+  if (nieuw.isEmpty) return w;
+  final volgorde = List.of(w.volgorde), origineel = List.of(w.origineel);
+  if (hierna) {
+    final huidig = w.index >= 0 && w.index < volgorde.length ? volgorde[w.index] : null;
+    volgorde.insertAll((w.index + 1).clamp(0, volgorde.length), nieuw);
+    final na = huidig == null ? -1 : origineel.indexWhere((t) => t.path == huidig.path);
+    origineel.insertAll((na + 1).clamp(0, origineel.length), nieuw);
+  } else {
+    volgorde.addAll(nieuw);
+    origineel.addAll(nieuw);
+  }
+  return (origineel: origineel, volgorde: volgorde, index: w.index);
+}
+
+/// Het nummer op [plek] eruit. Raakt geen bestand aan.
+///
+/// Het lopende nummer kan er niet uit: dat is geen "deze hoef ik straks niet" maar "stop" of
+/// "volgende", en die knoppen bestaan al. Het hier stilzwijgend als iets anders uitvoeren maakt van
+/// één druk een onvoorspelbare handeling.
+Wachtrij haalUitWachtrijLijst(Wachtrij w, int plek) {
+  if (plek < 0 || plek >= w.volgorde.length || plek == w.index) return w;
+  final volgorde = List.of(w.volgorde), origineel = List.of(w.origineel);
+  final weg = volgorde.removeAt(plek);
+  // Op instantie, met het pad als terugval: staat hetzelfde nummer twee keer in de wachtrij — en dat
+  // mag — dan moet precies díé eruit en niet de eerste die erop lijkt.
+  var oi = origineel.indexWhere((t) => identical(t, weg));
+  if (oi < 0) oi = origineel.indexWhere((t) => t.path == weg.path);
+  if (oi >= 0) origineel.removeAt(oi);
+  return (
+    origineel: origineel,
+    volgorde: volgorde,
+    index: plek < w.index ? w.index - 1 : w.index,
+  );
+}
+
+/// Van [van] naar [naar] slepen.
+///
+/// Bij shuffle UIT lopen beide lijsten gelijk en verhuist het in allebei. Bij shuffle AAN is het
+/// origineel de albumvolgorde en de speelvolgorde die van jou — dan verhuist alleen die laatste, en
+/// gaat het handwerk verloren zodra je shuffle uit en weer aan tikt. Dat is inherent aan een
+/// geschudde lijst die uit het origineel wordt herbouwd; de schudvolgorde als nieuw origineel
+/// opslaan zou de albumvolgorde voorgoed weggooien.
+Wachtrij verplaatsInWachtrijLijst(Wachtrij w, int van, int naar, {required bool shuffle}) {
+  if (van < 0 || van >= w.volgorde.length || w.volgorde.isEmpty) return w;
+  final doel = naar.clamp(0, w.volgorde.length - 1);
+  if (van == doel) return w;
+
+  final volgorde = List.of(w.volgorde);
+  final t = volgorde.removeAt(van);
+  volgorde.insert(doel, t);
+
+  var origineel = w.origineel;
+  if (!shuffle) {
+    origineel = List.of(w.origineel);
+    var oi = origineel.indexWhere((x) => identical(x, t));
+    if (oi < 0) oi = origineel.indexWhere((x) => x.path == t.path);
+    if (oi >= 0) {
+      origineel.removeAt(oi);
+      origineel.insert(doel.clamp(0, origineel.length), t);
+    }
+  }
+
+  // De index volgt het nummer dat klinkt, niet zijn oude plaatsnummer.
+  var index = w.index;
+  if (van == w.index) {
+    index = doel;
+  } else if (van < w.index && doel >= w.index) {
+    index--;
+  } else if (van > w.index && doel <= w.index) {
+    index++;
+  }
+  return (origineel: origineel, volgorde: volgorde, index: index);
+}
+
 /// Native (libmpv) player with a queue, shuffle, repeat and a Radio mode.
 class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   final Player _player = Player();
@@ -162,6 +272,10 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
 
   /// The queue as it will actually play, shuffle applied.
   List<Track> get queueTracks => List.unmodifiable(_order);
+
+  /// Waar we in [queueTracks] staan, of -1. Nodig zodra iemand die lijst tóónt: `current` zegt wél
+  /// wat er klinkt maar niet wélke van twee gelijke regels het is.
+  int get currentIndex => radioMode ? _radioIndex : _index;
 
   // Resume: persist the library queue + position so the app reopens where you left off.
   bool _resumable = false;
@@ -571,6 +685,77 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   void cycleRepeat() {
     repeat = RepeatMode.values[(repeat.index + 1) % RepeatMode.values.length];
     notifyListeners();
+  }
+
+  // ── De wachtrij bijwerken ──────────────────────────────────────────────────
+  //
+  // Tot nu toe kon deze app precies één ding met een wachtrij: hem vervangen. Elke klik in de hele
+  // app roept [playQueue] aan.
+  //
+  // DE VAL, en die is stil. Er zijn TWEE lijsten: [_original] is de verzameling zoals aangeleverd,
+  // [_order] is hoe hij echt speelt. [toggleShuffle] bouwt `_order` opnieuw op uit `_original`
+  // (zie [_rebuildOrder]). Wat alleen in `_order` wordt gezet, verdwijnt dus zodra iemand shuffle
+  // aantikt — zonder foutmelding, zonder crash, gewoon weg. Daarom raakt elke methode hieronder
+  // beide lijsten, behalve waar het uitdrukkelijk anders hoort.
+  //
+  // Radio blijft ongemoeid: dat is een oneindige stroom die zichzelf aanvult ([_maybeExtend]), geen
+  // lijst die je samenstelt. Iets invoegen tussen items die nog gegenereerd moeten worden betekent
+  // niets.
+
+  /// Wat er na elke wijziging moet gebeuren — dezelfde drie dingen als bij [toggleShuffle].
+  ///
+  /// De speaker hoort erbij: heeft een KEF of Sonos de wachtrij, dan moet DIE dezelfde volgorde
+  /// krijgen, anders wijst de index die hij elke twee seconden terugmeldt in een andere lijst dan
+  /// die op het scherm. [CastManager.requeue] heropent het lopende nummer niet, dus de muziek slaat
+  /// nergens over.
+  void _naWijziging() {
+    unawaited(_saveQueue());
+    unawaited(castReorder?.call(_order, _index) ?? Future<void>.value());
+    notifyListeners();
+  }
+
+  /// Zet [nieuw] direct achter het nummer dat nu klinkt.
+  void speelHierna(List<Track> nieuw) => _voegIn(nieuw, hierna: true);
+
+  /// Hang [nieuw] achteraan de wachtrij.
+  void zetAchteraan(List<Track> nieuw) => _voegIn(nieuw, hierna: false);
+
+  void _voegIn(List<Track> nieuw, {required bool hierna}) {
+    if (nieuw.isEmpty || radioMode) return;
+    // Niets om achter te zetten: dan is dit gewoon "speel dit". Anders zou de eerste klik op
+    // "toevoegen aan de wachtrij" bij een stille app niets hoorbaars doen.
+    if (_order.isEmpty) {
+      playQueue(nieuw, 0);
+      return;
+    }
+    _pas(voegInWachtrij(_nu, nieuw, hierna: hierna));
+  }
+
+  /// Haal het nummer op [plek] in de speelvolgorde uit de wachtrij. Raakt geen bestand aan.
+  bool haalUitWachtrij(int plek) {
+    if (radioMode) return false;
+    final uit = haalUitWachtrijLijst(_nu, plek);
+    if (identical(uit.volgorde, _order)) return false; // niets veranderd
+    _pas(uit);
+    return true;
+  }
+
+  /// Versleep het nummer van [van] naar [naar] in de speelvolgorde.
+  bool verplaatsInWachtrij(int van, int naar) {
+    if (radioMode) return false;
+    final uit = verplaatsInWachtrijLijst(_nu, van, naar, shuffle: shuffle);
+    if (identical(uit.volgorde, _order)) return false;
+    _pas(uit);
+    return true;
+  }
+
+  Wachtrij get _nu => (origineel: _original, volgorde: _order, index: _index);
+
+  void _pas(Wachtrij w) {
+    _original = w.origineel;
+    _order = w.volgorde;
+    _index = w.index;
+    _naWijziging();
   }
 
   // ── Resume (persist the library queue + position) ──────────────────────────

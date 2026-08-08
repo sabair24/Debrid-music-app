@@ -688,7 +688,16 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
     // track's identity — a file already there can only be the same song, a better copy the sweep
     // found. Fuzzy-matching the peer's raw staging name against the clean filed name is what wrongly
     // read the two as different takes and dropped the upgrade beside the original as a "(2)".
-    bool same(File a, File b) => t.isAuthoritative || _sameRecording(a, b);
+    //
+    // `elders != null` doet hetzelfde voor de tweede weg hierheen, en dát was het overgebleven gat.
+    // Het staat er wanneer [staatAl] een bestaand bestand aanwees en `dest` daarnaartoe is gebogen
+    // (zie hierboven): de bibliotheek heeft dan al gezegd dat dit die opname IS. Wie daarna alsnog de
+    // bestandsnamen laat beslissen, laat een uploader beslissen — en die schrijft "(Remastered 2011)"
+    // of "(Single Version)" waar jouw gefilede kopie kaal "02 - Titel.flac" heet. [_sameRecording]
+    // leest dat als een andere opname, en dan gebeurt er iets ergers dan naast elkaar zetten: in die
+    // tak blijft `losers` leeg, dus de oude kopie wordt NIET geparkeerd. Gemeld en nagegaan op
+    // Rihanna — Where Have You Been, waar de slechte gewoon bleef staan met de goede ernaast als "(2)".
+    bool same(File a, File b) => t.isAuthoritative || elders != null || _sameRecording(a, b);
 
     final losers = <File>[];
     if (await dest.exists()) {
