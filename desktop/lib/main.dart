@@ -1590,12 +1590,7 @@ class _HomeShellState extends State<HomeShell> {
               // decoration (the wordmark, the counts) and lets the sections scroll.
               child: LayoutBuilder(
                 builder: (context, box) {
-                  // A television is 960 points wide, so `compact` is ALWAYS true there — which
-                  // quietly hid the only line that says what the app is doing ("Scannen… 1234",
-                  // "Covers ophalen…", the warmer's status). That line matters most on the device
-                  // that has no window title and no other feedback, so a TV keeps it: what it
-                  // drops instead is the wordmark, which says nothing you did not already know.
-                  final compact = box.maxWidth < 1040 && !isTv;
+                  final compact = box.maxWidth < 1040;
                   return Row(
                     children: [
                       // The app's real icon, not an impression of it. This used to be a gradient
@@ -1606,7 +1601,7 @@ class _HomeShellState extends State<HomeShell> {
                         child: Image.asset('assets/icon/app_icon.png',
                             width: 28, height: 28, filterQuality: FilterQuality.medium),
                       ),
-                      if (!compact && !isTv) ...[
+                      if (!compact) ...[
                         const SizedBox(width: 9),
                         const Text('DebridMusic',
                             style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5)),
@@ -1646,9 +1641,22 @@ class _HomeShellState extends State<HomeShell> {
                         ),
                       ),
                       const SizedBox(width: 10),
-                      if (!compact)
+                      // On a television this line is conditional on there being NEWS.
+                      //
+                      // `compact` is always true at 960 points, so the line was simply never shown
+                      // there — and it is the only thing that says "Scannen… 1234" or that the PC is
+                      // working through records nobody has opened. But showing the idle count as
+                      // well ate 200 points of a strip that already does not fit ten sections, and
+                      // cut "Online zoeken" off mid-word. So: on a TV, speak only when there is
+                      // something to say.
+                      if (!compact || isTv)
                         Consumer2<LibraryStore, FactsWarmer>(
-                          builder: (_, lib, warmer, __) => Text(
+                          builder: (_, lib, warmer, __) => (isTv &&
+                                  !lib.scanning &&
+                                  !lib.enriching &&
+                                  warmer.status.isEmpty)
+                              ? const SizedBox.shrink()
+                              : Text(
                             lib.scanning
                                 ? 'Scannen… ${lib.scanned}'
                                 : (lib.enriching
@@ -1664,7 +1672,7 @@ class _HomeShellState extends State<HomeShell> {
                             style: TextStyle(color: _muted, fontSize: isTv ? 14 : 11.5),
                           ),
                         ),
-                      if (!compact) const SizedBox(width: 12),
+                      if (!compact || isTv) const SizedBox(width: 12),
                       TvLabelled(
                         label: 'Instellingen',
                         child: IconButton(
