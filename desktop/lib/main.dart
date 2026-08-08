@@ -38,6 +38,7 @@ import 'facts_warmer.dart';
 import 'fingerprint.dart';
 import 'flac_tags.dart';
 import 'mp3_tags.dart';
+import 'favorieten.dart';
 import 'lan/sharing.dart';
 import 'lan/tokens.dart';
 import 'cloud/catalog_mirror.dart';
@@ -479,6 +480,15 @@ Future<void> main() async {
     // And so it can say what a record IS, once, for every device that asks.
     musicbrainz: mode.owner ? musicbrainz : null,
   );
+  // Favorieten. Op de pc rechtstreeks in de gedeelde staat; op een Mac of iPad gaat dezelfde op over
+  // de lijn (zie waar `duwOps` gezet wordt). Eén weg, dus geen tweede waarheid die kan afwijken.
+  final favorieten = Favorieten();
+  if (mode.owner) {
+    favorieten
+      ..winkel = sharing.state
+      ..wortel = () => library.rootPath;
+  }
+
   // Signing in. Restoring a saved session is deliberately NOT awaited before the first frame: a
   // slow network would otherwise hold the whole app on a blank screen, and on the PC it would delay
   // serving music for something that has nothing to do with serving music.
@@ -587,6 +597,7 @@ Future<void> main() async {
         ChangeNotifierProvider<FactsWarmer>.value(value: warmer),
         ChangeNotifierProvider<PlayerStore>.value(value: player),
         ChangeNotifierProvider<WachtrijPaneel>(create: (_) => WachtrijPaneel()),
+        ChangeNotifierProvider<Favorieten>.value(value: favorieten),
         ChangeNotifierProvider<OfflineStore>.value(value: offline),
         ChangeNotifierProvider<SpeakerTarget>.value(value: speakers),
         Provider<OnlineService>.value(value: online),
@@ -653,6 +664,38 @@ Future<void> main() async {
         speakers.client = library.remote;
       });
       speakers.client = library.remote;
+      // Favorieten van een toestel dat de muziek niet bezit. Dezelfde op als de pc lokaal toepast,
+      // alleen over de lijn — zo is er één waarheid en synchroniseert een hartje op de iPad vanzelf
+      // naar de pc en de gsm. Zie [Favorieten].
+      //
+      // Lezen en schrijven hangen allebei aan de koppeling: vóór het koppelen is er geen pc om iets
+      // aan te vragen, en een hartje dat dan in het niets verdwijnt is erger dan een hartje dat er
+      // nog niet is.
+      Future<void> haalFavorieten() async {
+        final c = library.remote;
+        if (c == null) return;
+        try {
+          final s = await c.gedeeldeStaat();
+          favorieten.vanServer(
+            [for (final x in (s['favoriteTracks'] as List? ?? const [])) x.toString()],
+            [for (final x in (s['favoriteAlbums'] as List? ?? const [])) x.toString()],
+          );
+        } catch (_) {/* geen pc; het hartje blijft staan zoals het stond */}
+      }
+
+      favorieten.duwOps = (ops) async {
+        final c = library.remote;
+        if (c == null) throw 'Geen verbinding met de pc.';
+        await c.ask('/api/state/ops', {
+          'ops': ops,
+          'deviceId': settings.serverId,
+          'deviceName': deviceName(),
+        });
+      };
+      session.addListener(() {
+        if (session.ready) unawaited(haalFavorieten());
+      });
+      unawaited(haalFavorieten());
       // Where a download goes when the PC does not answer: into the queue, for the PC to pick up
       // when it comes back. Re-read whenever the sign-in changes, so signing out takes the queue
       // with it rather than writing to an account nobody is using.
@@ -1597,6 +1640,7 @@ class _HomeShellState extends State<HomeShell> {
     if (_view == 5) return const HomeStartView();
     if (_view == 6) return const DownloadsView();
     if (_view == 7) return const KwaliteitView();
+    if (_view == 8) return const FavorietenView();
     if (_view == 2) return const OnlineSearchScreen();
     if (_view == 3) return const OntdekView();
     if (_view == 4) return TracksView(match: _matches, query: _q);
@@ -1734,6 +1778,7 @@ class NavSections {
     (2, 'Online zoeken'),
     (3, 'Ontdek'),
     (6, 'Mijn downloads'),
+    (8, 'Favorieten'),
     (7, 'Kwaliteit'),
   ];
 }
@@ -5115,6 +5160,132 @@ class PlayerBar extends StatelessWidget {
 
 }
 
+/// Wat je mooi vindt, op één plek.
+///
+/// Albums bovenaan en dan de losse nummers: een favoriet album is een grovere keuze dan een favoriet
+/// nummer, en er zijn er altijd minder. Andersom zou de kop van de lijst vollopen met losse nummers
+/// en zou je voor je platen moeten scrollen.
+class FavorietenView extends StatelessWidget {
+  const FavorietenView({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final fav = context.watch<Favorieten>();
+    final lib = context.watch<LibraryStore>();
+    final p = context.read<PlayerStore>();
+    final albums = fav.albums(lib.albums);
+    final nummers = fav.nummers(lib.tracks);
+    final narrow = isCompact(context);
+
+    if (albums.isEmpty && nummers.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: Text(
+            'Nog geen favorieten.\n\nRechtermuisknop op een nummer of een album — of lang indrukken '
+            'op je tablet — en kies "Favoriet".',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: _muted, fontSize: 13, height: 1.6),
+          ),
+        ),
+      );
+    }
+
+    return ListView(
+      padding: EdgeInsets.fromLTRB(narrow ? 18 : 28, 22, narrow ? 18 : 24, 30),
+      children: [
+        Row(
+          children: [
+            const Text('Favorieten',
+                style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
+            const SizedBox(width: 12),
+            Text('${albums.length} albums · ${nummers.length} nummers',
+                style: const TextStyle(color: _muted, fontSize: 12.5)),
+            const Spacer(),
+            if (nummers.isNotEmpty)
+              FilledButton.icon(
+                style: FilledButton.styleFrom(backgroundColor: _accent),
+                onPressed: () => p.shuffleAll(nummers),
+                icon: const Icon(Icons.shuffle_rounded, size: 18),
+                label: const Text('Shuffle alles'),
+              ),
+          ],
+        ),
+        if (albums.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          const Text('Albums', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 10),
+          AlbumsGrid(albums: albums),
+        ],
+        if (nummers.isNotEmpty) ...[
+          const SizedBox(height: 24),
+          const Text('Nummers', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          for (var i = 0; i < nummers.length; i++)
+            _FavorietRij(track: nummers[i], alles: nummers, plek: i),
+        ],
+      ],
+    );
+  }
+}
+
+class _FavorietRij extends StatelessWidget {
+  const _FavorietRij({required this.track, required this.alles, required this.plek});
+  final Track track;
+  final List<Track> alles;
+  final int plek;
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    final p = context.read<PlayerStore>();
+    final fav = context.read<Favorieten>();
+    return InkWell(
+      onTap: () => p.playQueue(alles, plek),
+      onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _nummerMenu(context, track)) : null,
+      onSecondaryTap: () => _toonItemMenu(context, _nummerMenu(context, track)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        child: Row(
+          children: [
+            cover(lib.coverForTrack(track), size: 40, radius: 6),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(track.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                  Text(lib.displayArtist(track.artist),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12, color: _muted)),
+                ],
+              ),
+            ),
+            _echtheidMerk(track.path),
+            _qualityBadge(_trackQuality(track)),
+            const SizedBox(width: 4),
+            Text(_fmt(track.duration), style: const TextStyle(color: _muted, fontSize: 12)),
+            const SizedBox(width: 6),
+            // Het hartje is hier gevuld — je kijkt naar je favorieten — en dus de weg eruit.
+            IconButton(
+              icon: const Icon(Icons.favorite_rounded, size: 17),
+              color: _accent,
+              tooltip: 'Uit favorieten',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              onPressed: () => fav.wisselTrack(track),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ── Eén menu, overal hetzelfde ───────────────────────────────────────────────
 //
 // Deze app had nergens een contextmenu — op geen enkel item, op geen enkel platform. De twee
@@ -5167,7 +5338,12 @@ List<PopupMenuEntry<VoidCallback>> _nummerMenu(BuildContext context, Track t) {
   final lib = context.read<LibraryStore>();
   final nav = Navigator.of(context);
   final album = lib.albumForPath(t.path);
+  final fav = context.read<Favorieten>();
+  final isFav = fav.isFavorietTrack(t);
   return [
+    _menuRegel(isFav ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+        isFav ? 'Uit favorieten' : 'Favoriet', () => fav.wisselTrack(t)),
+    const PopupMenuDivider(),
     _menuRegel(Icons.playlist_play_rounded, 'Hierna spelen', () => p.speelHierna([t])),
     _menuRegel(Icons.playlist_add_rounded, 'Toevoegen aan de wachtrij', () => p.zetAchteraan([t])),
     const PopupMenuDivider(),
@@ -5194,7 +5370,12 @@ List<PopupMenuEntry<VoidCallback>> _albumMenu(BuildContext context, Album a) {
   final p = context.read<PlayerStore>();
   final nav = Navigator.of(context);
   final nummers = a.tracks;
+  final fav = context.read<Favorieten>();
+  final isFav = fav.isFavorietAlbum(a);
   return [
+    _menuRegel(isFav ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+        isFav ? 'Uit favorieten' : 'Favoriet', () => fav.wisselAlbum(a)),
+    const PopupMenuDivider(),
     _menuRegel(Icons.play_arrow_rounded, 'Afspelen', () => p.playQueue(nummers, 0, cover: a.cover)),
     _menuRegel(Icons.playlist_play_rounded, 'Hierna spelen', () => p.speelHierna(nummers)),
     _menuRegel(Icons.playlist_add_rounded, 'Toevoegen aan de wachtrij', () => p.zetAchteraan(nummers)),

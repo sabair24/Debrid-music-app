@@ -384,6 +384,20 @@ class RemoteClient {
     );
   }
 
+  /// De gedeelde staat van de pc: favorieten, afspeellijsten, telling en positie.
+  ///
+  /// Een GET en geen [ask], want er valt niets te vragen — dit is gewoon wat er ligt. `since`
+  /// bewust weggelaten: dit toestel houdt geen revisie bij, en een volledige momentopname is een
+  /// paar kilobytes.
+  Future<Map<String, dynamic>> gedeeldeStaat() async {
+    final res = await _get('/api/state');
+    if (res.statusCode != 200) {
+      throw RemoteException('De pc antwoordde met ${res.statusCode}.', statusCode: res.statusCode);
+    }
+    final decoded = res.body.isEmpty ? null : jsonDecode(utf8.decode(res.bodyBytes));
+    return decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+  }
+
   /// Ask the PC a question whose answer is a JSON object. Same shape as [edit], but the body
   /// matters — a move plan is the whole point of the call.
   Future<Map<String, dynamic>> ask(String path, Map<String, dynamic> body) async {
