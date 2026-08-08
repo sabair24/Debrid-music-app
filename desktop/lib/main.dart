@@ -1167,11 +1167,12 @@ class _HomeShellState extends State<HomeShell> {
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 children: [
-                  for (final (id, label) in NavSections.items)
+                  for (final (id, label, icoon) in NavSections.items)
                     ListTile(
                       selected: _view == id,
                       selectedTileColor: _accent.withValues(alpha: .16),
                       selectedColor: Colors.white,
+                      leading: Icon(icoon, size: 20),
                       title: Text(label),
                       trailing: id == 6 && badge > 0
                           ? Container(
@@ -1230,6 +1231,57 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   bool get _searchable => _view == 0 || _view == 1 || _view == 4;
+
+  /// Searching, on a television.
+  ///
+  /// A dialog rather than a bar that is always there. The on-screen keyboard covers most of the
+  /// screen the moment a field takes focus, so a permanent field is 75 points of height spent on
+  /// something that can only ever be used by covering everything else anyway. This asks once, hands
+  /// the words to the same `_q` the bar would have set, and closes.
+  ///
+  /// It lands you on Albums when you were somewhere that does not search, because a result you
+  /// cannot see is not a result.
+  Future<void> _tvSearch() async {
+    final ctl = TextEditingController(text: _q);
+    final woorden = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _panel,
+        title: const Text('Zoeken', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+        content: SizedBox(
+          width: dialogWidth(ctx, 560),
+          child: TextField(
+            controller: ctl,
+            autofocus: true,
+            style: const TextStyle(fontSize: 16),
+            decoration: const InputDecoration(
+              hintText: 'Artiest, album of nummer…',
+              hintStyle: TextStyle(color: _muted),
+            ),
+            // The remote's "done" key closes the keyboard AND the dialog, which is the whole
+            // gesture: type, done, results. Without it you have to find a button behind a keyboard.
+            textInputAction: TextInputAction.search,
+            onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+          ),
+        ),
+        actions: [
+          if (_q.isNotEmpty)
+            TextButton(onPressed: () => Navigator.pop(ctx, ''), child: const Text('Wissen')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Annuleren')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, ctl.text.trim()), child: const Text('Zoeken')),
+        ],
+      ),
+    );
+    ctl.dispose();
+    if (woorden == null || !mounted) return;
+    setState(() {
+      _q = woorden;
+      _searchCtl.text = woorden;
+      if (!_searchable) _view = 0;
+    });
+  }
+
 
   /// Does this track match the current search box + quality filter?
   bool _matches(Track t) {
@@ -1444,8 +1496,15 @@ class _HomeShellState extends State<HomeShell> {
             // re-recorded many times a second while nothing moves. That includes the top bar's
             // BackdropFilter, which cannot be raster-cached: it reads the backdrop and blurs it
             // again, every time. On a Tegra X1 that is the single most expensive thing on screen.
-            RepaintBoundary(child: _topBar()),
+            // No top bar on a television: the sections live in the rail on the left instead.
+            //
+            // That is 64 points of height back, and height is the scarce dimension on a 540-point
+            // canvas — the whole reason the album grid could never show more than one row. The rail
+            // also fits all ten sections, which the horizontal strip never did: two of them sat off
+            // the right edge with nothing to say so.
+            if (!isTv) RepaintBoundary(child: _topBar()),
             const _OfflineBanner(),
+            const _TvStatusStrip(),
             Expanded(
               // De wachtrij staat NAAST de inhoud en niet erboven: een venster zou dichtgaan zodra
               // je iets aanklikt, en juist bladeren terwijl je de rij ziet is waar hij voor is.
@@ -1454,12 +1513,24 @@ class _HomeShellState extends State<HomeShell> {
               // dezelfde lijst als een blad van onderen (zie de knop in `_compactBar`).
               child: Row(
                 children: [
+                  if (isTv)
+                    TvNavRail(
+                      view: _view,
+                      onPick: (id) => setState(() => _view = id),
+                      onSearch: _tvSearch,
+                      onSettings: () =>
+                          showDialog(context: context, builder: (_) => const SettingsDialog()),
+                    ),
                   Expanded(
                     child: Padding(
-                      padding: EdgeInsets.symmetric(horizontal: tvOverscan.left),
+                      padding: EdgeInsets.symmetric(horizontal: isTv ? 0 : tvOverscan.left),
                       child: Column(
                         children: [
-                          if (_searchable) _searchBar(context),
+                          // No permanent search field on a television. It cost 75 points of height
+                          // for a control you cannot type into without the on-screen keyboard
+                          // taking over the screen — and the rail has a "Zoeken" entry that asks
+                          // for the words once and then gets out of the way.
+                          if (_searchable && !isTv) _searchBar(context),
                           Expanded(child: _content()),
                         ],
                       ),
@@ -1503,7 +1574,7 @@ class _HomeShellState extends State<HomeShell> {
 
   /// The section name and a way into the drawer — what a phone gets instead of the pill strip.
   Widget _compactTopBar() {
-    final label = NavSections.items.firstWhere((e) => e.$1 == _view, orElse: () => (5, 'Start')).$2;
+    final label = NavSections.items.firstWhere((e) => e.$1 == _view, orElse: () => (5, 'Start', Icons.home_rounded)).$2;
     final badge = context.watch<DownloadManager>().jobs.where((j) => j.busy).length;
     return SizedBox(
       height: 56 + MediaQuery.viewPaddingOf(context).top,
@@ -1738,7 +1809,10 @@ class _HomeShellState extends State<HomeShell> {
           );
         }
         return _view == 0
-            ? AlbumsGrid(albums: _sortAlbums(albums), title: _q.isEmpty ? null : '${albums.length} resultaten')
+            ? AlbumsGrid(
+                albums: _sortAlbums(albums),
+                sort: _sort,
+                title: _q.isEmpty ? null : '${albums.length} resultaten')
             : ArtistsView(lib: lib, albums: albums, onInnerLayer: _setInnerLayer);
       },
     );
@@ -1820,6 +1894,195 @@ class _OfflineBanner extends StatelessWidget {
   }
 }
 
+
+/// The navigation, on a television.
+///
+/// Ten sections do not fit across a 960-point screen — two of them sat off the edge, and nothing
+/// said so. Stacked on the left they all fit, and the screen gets its 64 points of height back for
+/// the records, which on a 540-point canvas is the scarce dimension.
+///
+/// Collapsed it is a strip of icons and takes 76 points. Focused it grows to 240 and shows the
+/// words — but it grows OVER the content rather than pushing it: on a Shield, relaying out a grid
+/// of covers every time the highlight enters the rail is exactly the kind of hitch this whole
+/// change is trying to remove.
+
+/// What the app is doing, on a television.
+///
+/// The top bar carried this line, and a television no longer has one — the sections moved to the
+/// rail. Putting it in the rail would hide it behind a highlight you have to walk into, and this is
+/// exactly the thing you want to see without going looking: the PC scanning, covers arriving, the
+/// warmer working through records nobody has opened yet.
+///
+/// So a strip, full width, and only when there is something to say. Silent the rest of the time,
+/// which is most of the time.
+class _TvStatusStrip extends StatelessWidget {
+  const _TvStatusStrip();
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isTv) return const SizedBox.shrink();
+    return Consumer2<LibraryStore, FactsWarmer>(
+      builder: (_, lib, warmer, __) {
+        final tekst = lib.scanning
+            ? 'Scannen… ${lib.scanned}'
+            : lib.enriching
+                ? 'Covers ophalen…'
+                : warmer.status;
+        if (tekst.isEmpty) return const SizedBox.shrink();
+        return Padding(
+          padding: EdgeInsets.fromLTRB(tvOverscan.left, 6, tvOverscan.right, 0),
+          child: Row(children: [
+            const SizedBox(
+              width: 13,
+              height: 13,
+              child: CircularProgressIndicator(strokeWidth: 2, color: _accent),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(tekst,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: _muted, fontSize: 14)),
+            ),
+          ]),
+        );
+      },
+    );
+  }
+}
+
+
+class TvNavRail extends StatefulWidget {
+  const TvNavRail({
+    super.key,
+    required this.view,
+    required this.onPick,
+    required this.onSearch,
+    required this.onSettings,
+  });
+
+  final int view;
+  final ValueChanged<int> onPick;
+  final VoidCallback onSearch;
+  final VoidCallback onSettings;
+
+  /// What the rail occupies in the layout, always — the expansion is drawn on top of the content.
+  static const double collapsedWidth = 76;
+  static const double expandedWidth = 240;
+
+  @override
+  State<TvNavRail> createState() => _TvNavRailState();
+}
+
+class _TvNavRailState extends State<TvNavRail> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final badge = context.watch<DownloadManager>().jobs.where((j) => j.busy).length;
+    return FocusTraversalGroup(
+      child: Focus(
+        // Watching, not taking. The buttons inside hold the highlight; this only needs to know
+        // whether any of them does, so the rail can open and close with the highlight instead of
+        // needing a button of its own to toggle it.
+        canRequestFocus: false,
+        skipTraversal: true,
+        onFocusChange: (v) => v == _open ? null : setState(() => _open = v),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOut,
+          width: _open ? TvNavRail.expandedWidth : TvNavRail.collapsedWidth,
+          padding: EdgeInsets.only(top: tvOverscan.top, bottom: tvOverscan.bottom, left: 12),
+          decoration: BoxDecoration(
+            color: _open ? _panel : Colors.transparent,
+            border: Border(right: BorderSide(color: _open ? _line : Colors.transparent)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 4),
+              _railItem(Icons.search_rounded, 'Zoeken', false, widget.onSearch),
+              const SizedBox(height: 10),
+              Expanded(
+                child: ListView(
+                  padding: EdgeInsets.zero,
+                  children: [
+                    for (final (id, label, icoon) in NavSections.items)
+                      _railItem(icoon, label, widget.view == id, () => widget.onPick(id),
+                          badge: id == 6 ? badge : 0),
+                  ],
+                ),
+              ),
+              _railItem(Icons.settings_rounded, 'Instellingen', false, widget.onSettings),
+              const SizedBox(height: 4),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _railItem(IconData icoon, String label, bool selected, VoidCallback onTap,
+      {int badge = 0}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4, right: 8),
+      child: Pressable(
+        onPressed: onTap,
+        borderRadius: BorderRadius.circular(10),
+        scaleOnFocus: false,
+        child: Container(
+          height: 46,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: selected ? _accent.withValues(alpha: .18) : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              Icon(icoon, size: 22, color: selected ? Colors.white : _muted),
+              if (badge > 0 && !_open)
+                // Collapsed there is no room for the count beside the word, and "something is
+                // downloading" is exactly what you want to see from the couch without opening it.
+                Transform.translate(
+                  offset: const Offset(-6, -8),
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(color: _accent, shape: BoxShape.circle),
+                  ),
+                ),
+              if (_open) ...[
+                const SizedBox(width: 12),
+                // Clipped rather than wrapped: mid-animation the box is narrower than the word, and
+                // a Text that wraps would jump to two lines and back on every open.
+                Expanded(
+                  child: Text(label,
+                      maxLines: 1,
+                      overflow: TextOverflow.clip,
+                      softWrap: false,
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                          color: selected ? Colors.white : _muted)),
+                ),
+                if (badge > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration:
+                        BoxDecoration(color: _accent, borderRadius: BorderRadius.circular(9)),
+                    child: Text('$badge',
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
+                  ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
 class _NavPills extends StatefulWidget {
   final int active;
   final ValueChanged<int> onSelect;
@@ -1837,17 +2100,19 @@ class _NavPills extends StatefulWidget {
 class NavSections {
   const NavSections._();
 
-  static const items = <(int, String)>[
-    (5, 'Start'),
-    (0, 'Albums'),
-    (4, 'Tracks'),
-    (1, 'Artiesten'),
-    (2, 'Online zoeken'),
-    (3, 'Ontdek'),
-    (6, 'Mijn downloads'),
-    (8, 'Favorieten'),
-    (9, 'Afspeellijsten'),
-    (7, 'Kwaliteit'),
+  /// The third field is for the television rail, where ten words stacked vertically is a wall of
+  /// text and an icon is what you actually aim at. The pill bar ignores it.
+  static const items = <(int, String, IconData)>[
+    (5, 'Start', Icons.home_rounded),
+    (0, 'Albums', Icons.album_rounded),
+    (4, 'Tracks', Icons.music_note_rounded),
+    (1, 'Artiesten', Icons.person_rounded),
+    (2, 'Online zoeken', Icons.travel_explore_rounded),
+    (3, 'Ontdek', Icons.explore_rounded),
+    (6, 'Mijn downloads', Icons.download_rounded),
+    (8, 'Favorieten', Icons.favorite_rounded),
+    (9, 'Afspeellijsten', Icons.queue_music_rounded),
+    (7, 'Kwaliteit', Icons.high_quality_rounded),
   ];
 }
 
@@ -2253,7 +2518,15 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
 class AlbumsGrid extends StatelessWidget {
   final List<Album> albums;
   final String? title;
-  const AlbumsGrid({super.key, required this.albums, this.title});
+
+  /// How the list was ordered, so the television layout can head its rows with something true.
+  ///
+  /// A grid needs no headings — you scan it. Rows do: a row without a name is just a horizontal
+  /// slice of an arbitrary cut. So the grouping follows the sort, and changing the sort changes
+  /// what the rows mean rather than only what order they come in.
+  final AlbumSort? sort;
+
+  const AlbumsGrid({super.key, required this.albums, this.title, this.sort});
 
   @override
   Widget build(BuildContext context) {
@@ -2307,28 +2580,125 @@ class AlbumsGrid extends StatelessWidget {
               ),
             ),
           ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-          sliver: SliverGrid(
-            // Bigger tiles and a taller cell on a television. The text under a cover is now scaled
-            // 1.35x, and .78 left it about 43 points for two lines that want 41 — one long title
-            // away from clipping. A 960-point-wide screen also has room for fewer, larger tiles
-            // than a desktop window does: four across reads from the couch, five does not.
-            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: isTv ? 230 : 190,
-              mainAxisSpacing: 20,
-              crossAxisSpacing: 20,
-              childAspectRatio: isTv ? .66 : .78,
-            ),
-            delegate: SliverChildBuilderDelegate(
-              (_, i) => AlbumCard(album: albums[i]),
-              childCount: albums.length,
+        if (isTv)
+          // A television gets rows, not a grid, and the reason is arithmetic rather than taste.
+          //
+          // The Shield lays out on 960x540 points. Take the player bar and a section heading off
+          // that and about 370 points of height are left, while one row of album tiles with a title
+          // and an artist under it needs close to 300. A grid can therefore never show more than
+          // one and a bit rows however you size the tiles: every press of DOWN scrolls. Rows use the
+          // width instead, which is the dimension a television actually has.
+          ..._albumRowSlivers(albums, sort)
+        else
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+            sliver: SliverGrid(
+              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 190,
+                mainAxisSpacing: 20,
+                crossAxisSpacing: 20,
+                childAspectRatio: .78,
+              ),
+              delegate: SliverChildBuilderDelegate(
+                (_, i) => AlbumCard(album: albums[i]),
+                childCount: albums.length,
+              ),
             ),
           ),
-        ),
       ],
     );
   }
+}
+
+/// The album library as named rows, for a television.
+///
+/// One row per group, headed with what the group is. The grouping follows the sort — by initial
+/// when sorted by title or artist, by decade when sorted by year, by how long ago when sorted by
+/// what arrived last — so the heading always says something true about why those records are
+/// together. Sorting differently reshapes the page instead of only reordering it.
+List<Widget> _albumRowSlivers(List<Album> albums, AlbumSort? sort) {
+  final groups = _groupAlbums(albums, sort ?? AlbumSort.artiest);
+  return [
+    for (final g in groups) ...[
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(24, 10, 24, 8),
+        sliver: SliverToBoxAdapter(
+          child: Text(g.$1, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+        ),
+      ),
+      SliverToBoxAdapter(
+        // 300, and the tile is 200 wide: the cover takes 180, the two lines of scaled text about 53,
+        // and what is left pays for the 14% a focused tile grows. A horizontal list hands its
+        // children a tight height and clips whatever exceeds it.
+        child: SizedBox(
+          height: 300,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            itemCount: g.$2.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 16),
+            itemBuilder: (_, i) => SizedBox(width: 200, child: AlbumCard(album: g.$2[i])),
+          ),
+        ),
+      ),
+    ],
+    const SliverToBoxAdapter(child: SizedBox(height: 16)),
+  ];
+}
+
+/// Which row each album belongs in, and what that row is called.
+///
+/// Order is preserved from the incoming list, which is already sorted — so the groups come out in
+/// the sort's own order and no second sort is needed.
+@visibleForTesting
+List<(String, List<Album>)> groupAlbumsForTv(List<Album> albums, AlbumSort sort) =>
+    _groupAlbums(albums, sort);
+
+List<(String, List<Album>)> _groupAlbums(List<Album> albums, AlbumSort sort) {
+  final out = <(String, List<Album>)>[];
+  String? open;
+  for (final a in albums) {
+    final key = _groupKey(a, sort);
+    if (key != open) {
+      out.add((key, <Album>[]));
+      open = key;
+    }
+    out.last.$2.add(a);
+  }
+  return out;
+}
+
+String _groupKey(Album a, AlbumSort sort) {
+  switch (sort) {
+    case AlbumSort.titel:
+      return _initial(a.title);
+    case AlbumSort.artiest:
+      return _initial(a.artist);
+    case AlbumSort.jaarNieuw:
+    case AlbumSort.jaarOud:
+      final y = a.year ?? 0;
+      // Everything without a year lands together rather than in a decade it does not belong to.
+      return y == 0 ? 'Jaar onbekend' : "${(y ~/ 10) * 10}'s";
+    case AlbumSort.toegevoegd:
+      // Buckets rather than dates: "toegevoegd op 14 maart" is not why you are looking, "deze week"
+      // is. The boundaries are generous on purpose — a row of one album is not worth a heading.
+      final days = DateTime.now()
+          .difference(DateTime.fromMillisecondsSinceEpoch(a.addedMs))
+          .inDays;
+      if (days <= 7) return 'Deze week';
+      if (days <= 31) return 'Deze maand';
+      if (days <= 365) return 'Dit jaar';
+      return 'Langer geleden';
+  }
+}
+
+/// The letter a title or a name files under. Anything that is not a letter files under "#", which
+/// is what a record shelf does with "10cc" and "!!!".
+String _initial(String s) {
+  final t = s.trim();
+  if (t.isEmpty) return '#';
+  final c = t[0].toUpperCase();
+  return RegExp(r'[A-Z]').hasMatch(c) ? c : '#';
 }
 
 /// Two pixels that say "something is on its way for this record", and nothing when it is not.
