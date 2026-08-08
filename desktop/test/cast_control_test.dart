@@ -355,6 +355,24 @@ void extraCastTests() {
           reason: 'de speaker is wél gekozen — dat is juist waarom zwijgen zo verwarrend was');
     });
 
+    test('de lengte gaat mee in de metadata, want daar leest de speaker hem', () {
+      // Gemeten op de Sonos Amp: met een omgezet bestand liep de positie wél maar bleef
+      // TrackDuration op 0:00:00 staan. Een renderer leest de lengte uit `res@duration`, en dat
+      // attribuut stond er niet — dus geen voortgangsbalk en geen "hoe lang nog".
+      final met = UpnpControlPoint.didlForTest('http://pc/stream/x.flac',
+          title: 'Chandelier',
+          artist: 'Sia',
+          album: '1000 Forms Of Fear',
+          mime: 'audio/flac',
+          duration: const Duration(minutes: 3, seconds: 36));
+      expect(met, contains('duration="0:03:36.000"'));
+
+      final zonder = UpnpControlPoint.didlForTest('http://pc/stream/x.flac',
+          title: 'x', artist: 'y', album: 'z', mime: 'audio/flac');
+      expect(zonder, isNot(contains('duration=')),
+          reason: 'een verzonnen lengte is erger dan geen lengte');
+    });
+
     test('zonder probleem staat het veld leeg en niet op een lege string', () {
       final status = CastStatus.fromJson({'casting': true});
       expect(status.probleem, isNull,

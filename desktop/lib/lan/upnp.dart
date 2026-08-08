@@ -225,8 +225,15 @@ class UpnpControlPoint {
     required String album,
     required String mime,
     String? artUrl,
+    Duration? duration,
   }) =>
-      _didl(url, title: title, artist: artist, album: album, mime: mime, artUrl: artUrl);
+      _didl(url,
+          title: title,
+          artist: artist,
+          album: album,
+          mime: mime,
+          artUrl: artUrl,
+          duration: duration);
 
   static String _tidyName(String raw) {
     final trimmed = raw
@@ -246,8 +253,10 @@ class UpnpControlPoint {
     required String album,
     required String mime,
     String? artUrl,
+    Duration? duration,
   }) async {
-    final metadata = _didl(url, title: title, artist: artist, album: album, mime: mime, artUrl: artUrl);
+    final metadata = _didl(url,
+        title: title, artist: artist, album: album, mime: mime, artUrl: artUrl, duration: duration);
     await _soap(renderer.avTransportUrl, 'AVTransport', 'SetAVTransportURI',
         '<InstanceID>0</InstanceID><CurrentURI>${_escape(url)}</CurrentURI>'
         '<CurrentURIMetaData>${_escape(metadata)}</CurrentURIMetaData>');
@@ -264,8 +273,10 @@ class UpnpControlPoint {
     required String album,
     required String mime,
     String? artUrl,
+    Duration? duration,
   }) async {
-    final metadata = _didl(url, title: title, artist: artist, album: album, mime: mime, artUrl: artUrl);
+    final metadata = _didl(url,
+        title: title, artist: artist, album: album, mime: mime, artUrl: artUrl, duration: duration);
     await _soap(renderer.avTransportUrl, 'AVTransport', 'SetNextAVTransportURI',
         '<InstanceID>0</InstanceID><NextURI>${_escape(url)}</NextURI>'
         '<NextURIMetaData>${_escape(metadata)}</NextURIMetaData>');
@@ -446,6 +457,7 @@ class UpnpControlPoint {
     required String album,
     required String mime,
     String? artUrl,
+    Duration? duration,
   }) =>
       '<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" '
       'xmlns:dc="http://purl.org/dc/elements/1.1/" '
@@ -457,7 +469,15 @@ class UpnpControlPoint {
       '<upnp:album>${_escape(album)}</upnp:album>'
       '${artUrl == null ? '' : '<upnp:albumArtURI>${_escape(artUrl)}</upnp:albumArtURI>'}'
       '<upnp:class>object.item.audioItem.musicTrack</upnp:class>'
-      '<res protocolInfo="http-get:*:$mime:*">${_escape(url)}</res>'
+      // De lengte hoort in het `res`-element, niet in de stream.
+      //
+      // Gemeten op de Sonos Amp: met een omgezet bestand loopt de positie netjes, maar
+      // TrackDuration blijft 0:00:00 — de renderer leest de lengte hiervandaan, en dit attribuut
+      // stond er niet. Zonder lengte is er geen voortgangsbalk en geen "hoe lang nog", en de app
+      // moet zelf raden wanneer een nummer klaar is.
+      '<res protocolInfo="http-get:*:$mime:*"'
+      '${duration == null ? '' : ' duration="${upnpTime(duration)}.000"'}'
+      '>${_escape(url)}</res>'
       '</item></DIDL-Lite>';
 
   static String _escape(String value) => value

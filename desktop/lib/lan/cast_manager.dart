@@ -296,6 +296,7 @@ class CastManager {
       album: track.album,
       mime: mimeForExt(track.ext),
       artUrl: await _artUrlFor(id, session.renderer),
+      duration: track.duration,
     );
     session.startedAt = DateTime.now();
     session.currentUrl = url;
@@ -327,6 +328,7 @@ class CastManager {
       artist: nextTrack.artist,
       album: nextTrack.album,
       mime: mimeForExt(nextTrack.ext),
+      duration: nextTrack.duration,
     );
     session.nextUrl = nextUrl;
     _log?.line('    volgende meegegeven: ${_naam(nextId)}  (${_idVanUrl(nextUrl)})');
