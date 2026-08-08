@@ -2280,6 +2280,10 @@ class _AlbumCardState extends State<AlbumCard> {
       child: Pressable(
         onPressed: () => Navigator.of(context)
             .push(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: a))),
+        // Tot nu toe kon een albumtegel precies één ding: opengaan. Afspelen, in de wachtrij zetten,
+        // radio en verwijderen zaten allemaal een navigatiestap dieper.
+        onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _albumMenu(context, a)) : null,
+        onSecondaryTap: () => _toonItemMenu(context, _albumMenu(context, a)),
         borderRadius: BorderRadius.circular(14),
         // The card already grows and lights up on hover, so focus drives that same state rather
         // than adding a second, different animation on top of it. A remote then gets exactly the
@@ -3928,43 +3932,6 @@ class TrackRow extends StatefulWidget {
 
 /// What the hover icons offer, reachable by holding OK.
 ///
-/// The same two actions and the same dialogs — this is a way IN to them, not a second way of doing
-/// them. The highlight starts on "Sluiten", because one of the two deletes a file.
-Future<void> _trackOptions(BuildContext context, Track t) async {
-  final choice = await showDialog<String>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      backgroundColor: _panel,
-      title: Text(titleWithoutFeat(t.title),
-          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-      content: const Text('Wat wil je met dit nummer doen?',
-          style: TextStyle(color: _muted, height: 1.4)),
-      actions: [
-        TextButton(
-          autofocus: true,
-          onPressed: () => Navigator.pop(ctx),
-          child: const Text('Sluiten'),
-        ),
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, 'move'),
-          child: const Text('Naar ander album'),
-        ),
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, 'delete'),
-          child: const Text('Verwijderen'),
-        ),
-      ],
-    ),
-  );
-  if (choice == null || !context.mounted) return;
-  if (choice == 'move') {
-    final from = context.read<LibraryStore>().albumForPath(t.path);
-    await showDialog<bool>(context: context, builder: (_) => MoveTrackDialog(track: t, from: from));
-  } else {
-    await _confirmDelete(context, '“${t.title}”', [t.path]);
-  }
-}
-
 class _TrackRowState extends State<TrackRow> {
   bool _hover = false;
   @override
@@ -3986,9 +3953,10 @@ class _TrackRowState extends State<TrackRow> {
         // those two were simply unreachable, and moving or deleting a single track could not be
         // done from the sofa at all. A held OK is the ordinary television gesture for "options".
         //
-        // Television only: on a desktop a long press is a held mouse button, which nobody means as
-        // "open a menu", and the hover icons are already right there.
-        onLongPress: isTv ? () => _trackOptions(context, t) : null,
+        // Bewust NIET met een muis: daar betekent een ingehouden knop niets, en dan gooit een trage
+        // klik ineens een menu open. De muis heeft de rechterknop hieronder.
+        onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _nummerMenu(context, t)) : null,
+        onSecondaryTap: () => _toonItemMenu(context, _nummerMenu(context, t)),
         borderRadius: BorderRadius.circular(10),
         // A list of rows: one growing would push every row under it down as the highlight runs
         // through the album. The row already lights up on hover, and focus drives that.
@@ -5147,6 +5115,101 @@ class PlayerBar extends StatelessWidget {
 
 }
 
+// ── Eén menu, overal hetzelfde ───────────────────────────────────────────────
+//
+// Deze app had nergens een contextmenu — op geen enkel item, op geen enkel platform. De twee
+// `PopupMenuButton`s die bestonden zijn sorteerkiezers. Gevolg: elke klik op een nummer verving de
+// hele wachtrij, en de enige twee acties die er wél waren (verplaatsen, verwijderen) zaten achter
+// `_hover` en waren op telefoon en tablet dus onbereikbaar.
+//
+// Drie ingangen naar hetzelfde menu, want drie manieren om iets aan te wijzen:
+//   * rechtermuisknop op de pc en de Mac      → `onSecondaryTap`
+//   * lang indrukken op telefoon en tablet    → `onLongPress`
+//   * OK ingehouden op de afstandsbediening   → ook `onLongPress`, via Pressables eigen toetsafhandeling
+//
+// Bewust NIET lang indrukken met een muis: daar betekent een ingehouden knop niets, en dan zou een
+// trage klik ineens een menu opengooien.
+bool get _menuOpHouden => isTv || _isTouch;
+
+/// Toon [items] naast het aangewezen ding, en voer uit wat gekozen wordt.
+///
+/// Verankerd aan de rij zelf en niet aan de muispositie: `onSecondaryTap` levert geen coördinaat, en
+/// een menu dat op een vaste plek verschijnt terwijl je op de derde rij klikte leest als een fout.
+Future<void> _toonItemMenu(BuildContext context, List<PopupMenuEntry<VoidCallback>> items) async {
+  final box = context.findRenderObject() as RenderBox?;
+  final laag = Overlay.of(context).context.findRenderObject() as RenderBox?;
+  if (box == null || laag == null || !box.attached) return;
+  final rechts = box.localToGlobal(box.size.centerRight(Offset.zero), ancestor: laag);
+  final keuze = await showMenu<VoidCallback>(
+    context: context,
+    color: _panel2,
+    position: RelativeRect.fromLTRB(
+        rechts.dx, rechts.dy, laag.size.width - rechts.dx, laag.size.height - rechts.dy),
+    items: items,
+  );
+  keuze?.call();
+}
+
+PopupMenuItem<VoidCallback> _menuRegel(IconData icoon, String tekst, VoidCallback doen) =>
+    PopupMenuItem<VoidCallback>(
+      value: doen,
+      height: 40,
+      child: Row(children: [
+        Icon(icoon, size: 17, color: _muted),
+        const SizedBox(width: 10),
+        Text(tekst, style: const TextStyle(fontSize: 13.5)),
+      ]),
+    );
+
+/// Het menu voor één nummer.
+List<PopupMenuEntry<VoidCallback>> _nummerMenu(BuildContext context, Track t) {
+  final p = context.read<PlayerStore>();
+  final lib = context.read<LibraryStore>();
+  final nav = Navigator.of(context);
+  final album = lib.albumForPath(t.path);
+  return [
+    _menuRegel(Icons.playlist_play_rounded, 'Hierna spelen', () => p.speelHierna([t])),
+    _menuRegel(Icons.playlist_add_rounded, 'Toevoegen aan de wachtrij', () => p.zetAchteraan([t])),
+    const PopupMenuDivider(),
+    if (album != null)
+      _menuRegel(Icons.album_rounded, 'Ga naar album',
+          () => nav.push(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: album)))),
+    _menuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, t.artist)),
+    _menuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, t.artist)),
+    const PopupMenuDivider(),
+    // Stond in het oude tv-dialoogvenster dat dit menu vervangt. Hem hier weglaten zou die actie
+    // stilletjes van de afstandsbediening halen — en op de albumpagina zit hij achter `_hover`, dus
+    // op een tablet was dit meteen de enige weg ernaartoe.
+    _menuRegel(Icons.drive_file_move_outline, 'Naar ander album…', () {
+      final van = lib.albumForPath(t.path);
+      showDialog<bool>(context: context, builder: (_) => MoveTrackDialog(track: t, from: van));
+    }),
+    _menuRegel(Icons.delete_outline_rounded, 'Verwijderen…',
+        () => _confirmDelete(context, '“${t.title}”', [t.path])),
+  ];
+}
+
+/// Het menu voor een heel album. Dezelfde acties, alleen met alle nummers tegelijk.
+List<PopupMenuEntry<VoidCallback>> _albumMenu(BuildContext context, Album a) {
+  final p = context.read<PlayerStore>();
+  final nav = Navigator.of(context);
+  final nummers = a.tracks;
+  return [
+    _menuRegel(Icons.play_arrow_rounded, 'Afspelen', () => p.playQueue(nummers, 0, cover: a.cover)),
+    _menuRegel(Icons.playlist_play_rounded, 'Hierna spelen', () => p.speelHierna(nummers)),
+    _menuRegel(Icons.playlist_add_rounded, 'Toevoegen aan de wachtrij', () => p.zetAchteraan(nummers)),
+    const PopupMenuDivider(),
+    _menuRegel(Icons.open_in_new_rounded, 'Album openen',
+        () => nav.push(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: a)))),
+    _menuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, a.artist)),
+    _menuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, a.artist)),
+    const PopupMenuDivider(),
+    _menuRegel(Icons.delete_outline_rounded, 'Verwijderen…',
+        () => _confirmDelete(context, a.isSingle ? '“${a.title}”' : 'het album “${a.title}”',
+            [for (final t in nummers) t.path])),
+  ];
+}
+
 /// De knop die de wachtrij laat zien.
 ///
 /// Op een breed scherm schuift het paneel naast de inhoud; op een telefoon zou 340 punten naast een
@@ -5299,17 +5362,32 @@ class _WachtrijRij extends StatelessWidget {
       color: speeltNu ? _panel2 : Colors.transparent,
       child: InkWell(
         onTap: () => p.playQueue(p.queueTracks, plek),
+        onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _nummerMenu(context, track)) : null,
+        onSecondaryTap: () => _toonItemMenu(context, _nummerMenu(context, track)),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 7),
           child: Row(
             children: [
               // De greep is een eigen doelwit en niet de hele rij: anders begint elke poging om een
               // nummer aan te tikken met een sleep van een paar pixels, en dan speelt er niets af.
+              //
+              // Het ICOON is smal, het DOELWIT niet. Zestien pixels vraagt om een muis en een vaste
+              // hand — ik had er zelf drie pogingen voor nodig — en op een tablet is een vinger daar
+              // gewoon te grof voor. De streepjes blijven dus even klein, maar wat je kunt raken is
+              // 34 breed en de volle rijhoogte.
               ReorderableDragStartListener(
                 index: plek,
-                child: const Padding(
-                  padding: EdgeInsets.only(right: 6),
-                  child: Icon(Icons.drag_indicator_rounded, size: 16, color: _muted),
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.grab,
+                  child: Container(
+                    width: 34,
+                    height: 40,
+                    alignment: Alignment.center,
+                    // Zonder kleur vangt een Container geen aanwijzer, en dan is alleen het icoon
+                    // zelf het doelwit — precies wat hier weg moest.
+                    color: Colors.transparent,
+                    child: const Icon(Icons.drag_indicator_rounded, size: 16, color: _muted),
+                  ),
                 ),
               ),
               cover != null
@@ -6088,6 +6166,9 @@ class TracksView extends StatelessWidget {
               final isCurrent = !player.radioMode && player.current?.path == t.path;
               return InkWell(
                 onTap: () => player.playQueue(tracks, i),
+                onLongPress:
+                    _menuOpHouden ? () => _toonItemMenu(context, _nummerMenu(context, t)) : null,
+                onSecondaryTap: () => _toonItemMenu(context, _nummerMenu(context, t)),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
                   color: isCurrent ? _panel : Colors.transparent,
