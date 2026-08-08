@@ -13,6 +13,7 @@ import '../models.dart';
 import '../musicbrainz.dart';
 import '../online.dart';
 import '../organize.dart';
+import '../paths.dart';
 import '../settings.dart';
 import '../soulseek.dart';
 import '../torbox.dart';
@@ -563,6 +564,16 @@ class LanServer {
   /// accept a chunked audio stream — the cost is that you cannot seek within a cast hi-res
   /// track, which beats it not playing at all.
   Future<void> _streamResampled(HttpRequest req, File file, int maxRate) async {
+    // Converted to a FILE and then served like any other, rather than piped.
+    //
+    // Measured against the Sonos Amp: a piped conversion is sent chunked, without a Content-Length,
+    // and the FLAC in it has an unknown sample count. The speaker takes the URL, says PLAYING, lets
+    // its reported length creep upward, and never leaves 0:00:00 — it treats it as an endless
+    // stream. A file has a length, a real header and Range support, and it simply plays. That is
+    // also why this goes through serveFile: the seeking half comes for free.
+    final klaar = await transcoder.resampleToFile(file,
+        maxSampleRate: maxRate, cacheDir: Directory('$appDir${Platform.pathSeparator}cast_cache'));
+    if (klaar != null) return serveFile(req, klaar, contentType: 'audio/flac');
     final process = await transcoder.resample(file, maxSampleRate: maxRate);
     if (process == null) {
       // No ffmpeg — send the original and let the speaker decide. On a Sonos that means the
