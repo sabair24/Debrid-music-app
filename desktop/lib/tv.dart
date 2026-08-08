@@ -104,8 +104,16 @@ double dialogHeight(BuildContext context, double preferred) {
 /// Televisions overscan: a part of the picture falls off the edge of the screen, and how much
 /// differs per set. Every TV interface leaves a margin for it, and one that does not gets its
 /// top row of covers cut in half on somebody's screen.
+///
+/// 48 by 27 is Google's 5% on the canvas this app actually gets: the Shield reports 1920x1080 at
+/// density 320, so Flutter lays out on 960x540 points. The 32 by 20 it used to be is 3.3%, which
+/// is inside the 5% an older set can swallow — and the back arrow of every pushed page sits in
+/// exactly that strip.
+///
+/// [SafeArea] is not an alternative here. A television reports no display cutout and no system
+/// insets, so its padding is zero and it does nothing at all on this device.
 EdgeInsets get tvOverscan =>
-    isTv ? const EdgeInsets.symmetric(horizontal: 32, vertical: 20) : EdgeInsets.zero;
+    isTv ? const EdgeInsets.symmetric(horizontal: 48, vertical: 27) : EdgeInsets.zero;
 
 /// A control that can be reached with a remote, clicked with a mouse and tapped with a finger.
 ///
@@ -122,6 +130,7 @@ class Pressable extends StatefulWidget {
     this.autofocus = false,
     this.focusNode,
     this.scaleOnFocus = true,
+    this.ringOnFocus = true,
     this.cursor = SystemMouseCursors.click,
     this.onFocusChange,
   });
@@ -145,6 +154,13 @@ class Pressable extends StatefulWidget {
   /// The gentle lift a focused tile gets. Off for things that sit in a tight row, where a growing
   /// neighbour would push the row around.
   final bool scaleOnFocus;
+
+  /// Whether to draw the ring at all.
+  ///
+  /// Off for anything that answers "where am I" by growing instead — a cover tile. A ring around an
+  /// album is a frame around the artwork, and it competes with the very thing you are looking at.
+  /// On for everything that cannot grow: buttons, list rows, chips in a tight row.
+  final bool ringOnFocus;
 
   final MouseCursor cursor;
   final ValueChanged<bool>? onFocusChange;
@@ -197,9 +213,13 @@ class _PressableState extends State<Pressable> {
 
     // Only on a TV. Under a mouse the hover state already says where you are, and a ring around
     // everything the pointer touches is noise.
-    if (isTv) {
+    // `scaleOnFocus` in the condition, not only inside it: without that every Pressable that has
+    // explicitly opted OUT of growing still built an AnimatedScale, which carries its own
+    // AnimationController and Ticker. They never animate, so they cost no frame time — but they are
+    // created and disposed for every tile you scroll past, and that is most of the app.
+    if (isTv && widget.scaleOnFocus) {
       content = AnimatedScale(
-        scale: _focused && widget.scaleOnFocus ? 1.06 : 1.0,
+        scale: _focused ? tileFocusScale : 1.0,
         duration: const Duration(milliseconds: 130),
         curve: Curves.easeOut,
         child: content,
@@ -245,10 +265,10 @@ class _PressableState extends State<Pressable> {
             border: Border.all(
               // Transparent rather than absent, so the ring appearing does not change the widget's
               // size and shift everything around it by two pixels.
-              color: _focused ? _ring : Colors.transparent,
+              color: _focused && widget.ringOnFocus ? _ring : Colors.transparent,
               width: _ringWidth,
             ),
-            boxShadow: _focused
+            boxShadow: _focused && widget.ringOnFocus
                 ? [BoxShadow(color: _ring.withValues(alpha: .45), blurRadius: 18, spreadRadius: 1)]
                 : null,
           ),
@@ -353,13 +373,17 @@ class _TvLabelledState extends State<TvLabelled> {
           // Reserved whether or not it is shown, so a row of icons does not jump in height as the
           // highlight runs along it.
           SizedBox(
-            height: 14,
+            // 16, not the 11 it started at: this label exists BECAUSE a tooltip cannot be read from
+            // a couch, and 11 points on a 960-wide canvas cannot be read from a couch either. It
+            // would have been the smallest text on the screen while being the only thing explaining
+            // what the icon above it does.
+            height: 20,
             child: _focused
                 ? Text(
                     widget.label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 11, height: 1.1, color: _ring),
+                    style: const TextStyle(fontSize: 16, height: 1.1, color: _ring),
                   )
                 : null,
           ),
@@ -407,6 +431,17 @@ const _ring = Color(0xFF7C5CFF);
 
 double get _ringWidth => isTv ? 3 : 2;
 
+/// How much a cover tile grows while it holds the highlight.
+///
+/// On a television this IS the answer to "which one is selected": there is no pointer, and a tile
+/// that carries artwork gets no ring, because a frame around a record sleeve competes with the
+/// sleeve. From three metres 1.06 reads as a rendering artefact; 1.14 reads as a choice. With a
+/// mouse the pointer already answers the question, so hovering keeps the gentle lift it had.
+///
+/// Anything that uses this must leave room for it — a horizontal list hands its children a tight
+/// height and clips whatever grows past it. See the row height in `_section`.
+double get tileFocusScale => isTv ? 1.14 : 1.06;
+
 /// What counts as "press this".
 ///
 /// Flutter maps Enter and Space by default. A remote sends neither: the OK button is
@@ -419,3 +454,63 @@ const Map<ShortcutActivator, Intent> _activateShortcuts = <ShortcutActivator, In
   SingleActivator(LogicalKeyboardKey.select): ActivateIntent(),
   SingleActivator(LogicalKeyboardKey.gameButtonA): ActivateIntent(),
 };
+
+/// BACK leaves the text field first, and only then the screen.
+///
+/// A television has no Escape key and no way to tap somewhere else, and a focused text field claims
+/// all four arrows: `DirectionalFocusAction.forTextField` deliberately ignores directional intents
+/// so that the arrows can move the caret. So once the highlight is inside a field, BACK is the only
+/// key left — and BACK popped the whole route. Type a TorBox key into Settings, press BACK to get
+/// out of the field, and the dialog closes with the key unsaved. The app never called `unfocus()`
+/// anywhere, so there was no way out that kept your typing.
+///
+/// One listener at the root rather than a PopScope in every dialog: this is a property of the
+/// remote, not of any one screen. Off a television it does nothing at all — there Escape and the
+/// pointer both already work, and swallowing a back gesture would be wrong.
+class TvTextFieldEscape extends StatefulWidget {
+  const TvTextFieldEscape({super.key, required this.child});
+
+  final Widget child;
+
+  /// True when the highlight is inside something that edits text.
+  ///
+  /// Asked of the focused node's own context rather than of a flag, because `SelectableText` builds
+  /// an `EditableText` too — and that one is the worse trap of the two: it takes the arrows without
+  /// even opening a keyboard to explain why nothing moves.
+  static bool editingText() {
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    return ctx != null && ctx.findAncestorWidgetOfExactType<EditableText>() != null;
+  }
+
+  @override
+  State<TvTextFieldEscape> createState() => _TvTextFieldEscapeState();
+}
+
+/// Not [BackButtonListener], which needs a [Router] ancestor — this app is built on `MaterialApp`
+/// with a `home:` and a plain [Navigator], so that widget throws here. A binding observer is the
+/// mechanism that matches: [WidgetsBinding.handlePopRoute] walks its observers in reverse
+/// registration order, and this one registers inside the app, hence after `WidgetsApp`'s — so it is
+/// asked first and can decline by returning false.
+class _TvTextFieldEscapeState extends State<TvTextFieldEscape> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    if (isTv) WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    if (isTv) WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  Future<bool> didPopRoute() async {
+    if (!isTv || !TvTextFieldEscape.editingText()) return false;
+    FocusManager.instance.primaryFocus?.unfocus();
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}

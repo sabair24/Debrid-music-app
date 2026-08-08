@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'tv.dart';
 import 'package:provider/provider.dart';
 
+import 'artwork.dart' show decodeWidth;
 import 'booklet.dart';
 import 'discogs.dart';
 import 'settings.dart';
@@ -365,6 +366,18 @@ class _BookletViewState extends State<BookletView> with TickerProviderStateMixin
 
   KeyEventResult _onKey(FocusNode _, KeyEvent e) {
     if (e is! KeyDownEvent) return KeyEventResult.ignored;
+    // While the page overview is open, the arrows belong to the grid.
+    //
+    // Keys bubble from the focused thumbnail up through this Focus, so taking left and right here
+    // meant the highlight could only ever walk one column: every sideways press turned a page of a
+    // book you were not looking at. OK already made this exception below; the arrows need it too.
+    if (_grid &&
+        (e.logicalKey == LogicalKeyboardKey.arrowRight ||
+            e.logicalKey == LogicalKeyboardKey.arrowLeft ||
+            e.logicalKey == LogicalKeyboardKey.arrowUp ||
+            e.logicalKey == LogicalKeyboardKey.arrowDown)) {
+      return KeyEventResult.ignored;
+    }
     switch (e.logicalKey) {
       case LogicalKeyboardKey.arrowRight:
       case LogicalKeyboardKey.pageDown:
@@ -563,10 +576,14 @@ class _BookletViewState extends State<BookletView> with TickerProviderStateMixin
     final f = _file[sheet];
     if (f == null) return const ColoredBox(color: _paper);
 
+    // Booklet scans are routinely 2000-3000 px. Decoded whole, twelve pages is roughly 190 MB of
+    // ARGB — against an image cache of 100 MB, which means guaranteed evict-and-decode-again on
+    // every turn of the page. The zoom view below is the one place that still gets the full scan.
     final img = Image.file(
       f,
       fit: BoxFit.fill,
       gaplessPlayback: true,
+      cacheWidth: decodeWidth(pw * 2),
       filterQuality: FilterQuality.medium,
     );
 
@@ -581,7 +598,7 @@ class _BookletViewState extends State<BookletView> with TickerProviderStateMixin
             decoration: const BoxDecoration(
               boxShadow: [BoxShadow(color: Colors.black54, blurRadius: 28, offset: Offset(0, 12))],
             ),
-            child: Image.file(f, fit: BoxFit.contain, gaplessPlayback: true),
+            child: Image.file(f, fit: BoxFit.contain, gaplessPlayback: true, cacheWidth: decodeWidth(pw * 2)),
           ),
         ),
       );
@@ -676,7 +693,8 @@ class _BookletViewState extends State<BookletView> with TickerProviderStateMixin
                         Expanded(
                           child: f == null
                               ? const ColoredBox(color: _paper)
-                              : Image.file(f, fit: BoxFit.contain),
+                              // Thumbnails in the overview grid — about 260 points wide.
+                              : Image.file(f, fit: BoxFit.contain, cacheWidth: decodeWidth(260)),
                         ),
                         const SizedBox(height: 4),
                         Text(

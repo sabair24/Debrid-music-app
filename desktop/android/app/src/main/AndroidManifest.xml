@@ -15,6 +15,12 @@
          default — would hide the app from its store and its launcher entirely. -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
     <uses-feature android:name="android.software.leanback" android:required="false"/>
+    <!-- Declared only to say it is NOT required. Asking for CHANGE_WIFI_MULTICAST_STATE above makes
+         Android imply `android.hardware.wifi required="true"` on your behalf — confirmed in the
+         built APK's badging as "uses-implied-feature". That would hide the app from every television
+         that is on ethernet only, for a permission this app uses to find a PC that is usually on the
+         same cable. -->
+    <uses-feature android:name="android.hardware.wifi" android:required="false"/>
 
     <application
         android:label="DebridMusic"
@@ -23,13 +29,23 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:banner="@drawable/tv_banner"
         android:usesCleartextTraffic="true">
+        <!-- android:banner is here as well as on <application>. PackageManager does fall back to the
+             application's banner, but a leanback launcher reads the activity's first, and the built
+             APK reported `leanback-launchable-activity: banner=''`.
+
+             navigation|touchscreen|colorMode in configChanges are for the television. A remote or a
+             controller pairing or dropping changes `navigation`; an AVR waking up or the set
+             switching input changes `colorMode`. Without them Android destroys and rebuilds the
+             activity: the music keeps playing from the service, but the screen jumps back to the
+             start and the page you were on is gone — which reads as a crash. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:taskAffinity=""
+            android:banner="@drawable/tv_banner"
             android:theme="@style/LaunchTheme"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:configChanges="orientation|keyboardHidden|keyboard|navigation|touchscreen|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode|colorMode"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
             <!-- Specifies an Android theme to apply to this Activity as soon as

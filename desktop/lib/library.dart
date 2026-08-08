@@ -1717,7 +1717,14 @@ class LibraryStore extends ChangeNotifier {
       if (bytes == null || bytes.isEmpty) continue;
       album.embeddedCover = bytes;
       await enricher.putCached(album, bytes);
-      notifyListeners();
+      // Batched exactly like the cached branch above, and for the same reason. Every notify rebuilds
+      // the home page, and that page sorts the whole library by `Album.addedMs` — a getter that walks
+      // every track of every album. One notify per arriving cover meant hundreds of full rebuilds
+      // during the first minute on the Shield, which is precisely when you want to start browsing.
+      if (++since >= 24) {
+        since = 0;
+        notifyListeners();
+      }
     }
     enriching = false;
     notifyListeners();

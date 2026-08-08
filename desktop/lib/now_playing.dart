@@ -12,6 +12,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
@@ -35,12 +36,50 @@ Future<void> initNowPlaying(NowPlayingSource player, {Uint8List? Function(Track)
         androidNotificationChannelId: 'com.debridmusic.app.playback',
         androidNotificationChannelName: 'Afspelen',
         androidNotificationOngoing: true,
+        // The adaptive launcher icon is the default here, and as a status-bar glyph it renders as a
+        // white blob. The monochrome layer of that same icon is what the shape was drawn for.
+        androidNotificationIcon: 'drawable/ic_launcher_monochrome',
+        // Artwork goes to the system as a decoded Bitmap over Binder. An embedded FLAC cover is
+        // routinely 1500x1500, which is about 9 MB as ARGB_8888 — parcelled on every track change.
+        // That is how you get a TransactionTooLargeException and a now-playing card that vanishes.
+        // Both dimensions are required together; audio_service asserts on it.
+        artDownscaleWidth: 512,
+        artDownscaleHeight: 512,
       ),
     );
+    await _claimAudioFocus(player);
   } catch (e) {
     // A missing platform implementation, or a second init during a hot restart. The app plays
     // either way; only the lockscreen goes quiet.
     debugPrint('Now Playing unavailable: $e');
+  }
+}
+
+/// Tell Android that this app is the one making sound, and listen for being told otherwise.
+///
+/// Nothing in this app asked for audio focus before. media_kit plays through libmpv's OpenSL ES
+/// output, which never requests it, and `audio_service` does not either — it publishes what is
+/// playing, it does not arbitrate who may play. On a phone that is merely impolite. On a television
+/// it is wrong in a way you notice every day: start Netflix from the Android TV home screen while a
+/// record is on and both come out of the same HDMI cable at once, and nothing pauses for the
+/// Assistant either.
+///
+/// `becomingNoisy` is the other half — on a TV that is the AVR being switched off or the input
+/// changing, which should stop the music rather than leave it playing to nobody.
+Future<void> _claimAudioFocus(NowPlayingSource player) async {
+  try {
+    final session = await AudioSession.instance;
+    await session.configure(const AudioSessionConfiguration.music());
+    session.interruptionEventStream.listen((event) {
+      if (event.begin && player.playing) player.playPause();
+    });
+    session.becomingNoisyEventStream.listen((_) {
+      if (player.playing) player.playPause();
+    });
+    await session.setActive(true);
+  } catch (e) {
+    // Never a reason not to play. Without focus the old behaviour is what you get back.
+    debugPrint('Audio focus unavailable: $e');
   }
 }
 

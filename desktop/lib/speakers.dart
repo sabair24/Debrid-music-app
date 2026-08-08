@@ -16,6 +16,7 @@ import 'package:flutter/material.dart';
 
 import 'lan/client.dart';
 import 'models.dart';
+import 'tv.dart';
 
 const _panel = Color(0xFF181B26);
 const _line = Color(0xFF272B3A);
@@ -293,6 +294,9 @@ class _SpeakerPickerState extends State<SpeakerPicker> {
   Widget build(BuildContext context) {
     final here = widget.target.device == null;
     return SafeArea(
+        // A television reports no insets, so SafeArea alone is a no-op there; this is the
+        // margin that keeps the back arrow off the part of the picture a set cuts away.
+        minimum: tvOverscan,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [

@@ -1,6 +1,8 @@
 /// Wat het scherm werkelijk haalt, gemeten in plaats van aangenomen.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/scheduler.dart';
 
 import 'warm_log.dart';
@@ -103,13 +105,24 @@ class FpsProbe {
     if (ms <= 0 || _frames == 0) return _reset();
     final fps = _frames * 1000 / ms;
     String d(int us) => (us / 1000).toStringAsFixed(1);
-    _log.line('fps: $_wat — ${fps.toStringAsFixed(1)}/s '
+    // Off the UI thread, always.
+    //
+    // This runs from addTimingsCallback, which fires on the UI thread immediately after a frame.
+    // WarmLog.line does an existsSync plus a FLUSHED synchronous write, and on failure sleeps up to
+    // 80 ms — on the thread that is supposed to be drawing. A meter that measures jank must not be
+    // able to cause it. scheduleMicrotask alone would still be on this thread; a zero Timer hands it
+    // to the event loop, after the frame is done.
+    //
+    // The line is FORMATTED here and only written there: [_reset] runs on the next statement, so a
+    // closure that read the counters later would divide by a zeroed _frames.
+    final regel = 'fps: $_wat — ${fps.toStringAsFixed(1)}/s '
         '($_frames frames in ${ms}ms) | '
         'build gem ${d(_buildUs ~/ _frames)}ms max ${d(_buildMaxUs)}ms | '
         'raster gem ${d(_rasterUs ~/ _frames)}ms max ${d(_rasterMaxUs)}ms | '
         'WACHT OP START gem ${d(_vsyncUs ~/ _frames)}ms max ${d(_vsyncMaxUs)}ms | '
         'traagste frame ${d(_traagsteAfstandUs)}ms | '
-        'UI-draad ${(100 * _buildUs / (ms * 1000)).toStringAsFixed(1)}% in build');
+        'UI-draad ${(100 * _buildUs / (ms * 1000)).toStringAsFixed(1)}% in build';
+    Timer.run(() => _log.line(regel));
     _reset();
   }
 }

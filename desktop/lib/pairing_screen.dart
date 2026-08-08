@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 
 import 'lan/client.dart';
 import 'lan/discovery.dart';
+import 'tv.dart';
 
 const _bg = Color(0xFF0C0D12);
 const _panel = Color(0xFF181B26);
@@ -260,7 +261,7 @@ class _PairingScreenState extends State<PairingScreen> {
         const SizedBox(height: 20),
         TextField(
           controller: _codeController,
-          autofocus: true,
+          autofocus: !isTv,
           enabled: !_pairing,
           keyboardType: TextInputType.number,
           textAlign: TextAlign.center,

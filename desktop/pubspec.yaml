@@ -39,6 +39,9 @@ dependencies:
   # Lockscreen / Control Center / media keys. libmpv plays the audio; this is only what tells
   # the system what is playing and takes the buttons back.
   audio_service: ^0.18.15
+  # Explicit, though audio_service already pulls it in transitively: this app now USES it
+  # (initNowPlaying claims audio focus), and a dependency you call belongs in your own list.
+  audio_session: ^0.2.4
   # Read tags + embedded cover art from local files.
   audio_metadata_reader: ^1.4.0
   # Infra.

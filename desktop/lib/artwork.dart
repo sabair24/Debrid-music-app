@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:flutter/widgets.dart';
 import 'package:image/image.dart' as img;
 
 /// De kleur waar een hoes naar neigt, als ARGB — of null als er niets uitspringt.
@@ -277,4 +278,29 @@ double _sin(double a) {
   var x = a % 6.2831853;
   if (x > 3.1415927) return -_sin(x - 3.1415927);
   return 16 * x * (3.1415927 - x) / (49.348022 - 4 * x * (3.1415927 - x));
+}
+
+/// How many pixels wide this artwork actually needs to be decoded at.
+///
+/// Every Image in this file decoded at the source resolution, and the sources are big: the covers
+/// this app stores are 1200x1200, some originals over 3000. Decoded, a 1200px sleeve is 1200 x 1200 x
+/// 4 bytes — 5.8 MB of bitmap — and a 120px grid tile needs 57 KB of that. A hundred and twenty-five
+/// albums on screen therefore ask for far more than Flutter's image cache holds, so it evicts and
+/// re-decodes while you scroll: the work is done again and again for pictures that were already
+/// there.
+///
+/// A hint, not a resize: `cacheWidth` tells the decoder how small it may go, and BoxFit still does
+/// the layout. Multiplied by the screen's pixel ratio so a 2x display gets a sharp image rather than
+/// a soft one, and clamped because a hint derived from a wrong ratio should cost a little sharpness,
+/// never correctness.
+int decodeWidth(double logicalSize) {
+  var dpr = 1.0;
+  try {
+    dpr = WidgetsBinding.instance.platformDispatcher.views.first.devicePixelRatio;
+  } catch (_) {/* no view yet — the default is fine for a hint */}
+  if (!dpr.isFinite || dpr < 1) dpr = 1;
+  if (dpr > 4) dpr = 4;
+  // Never below 64: a hint smaller than that makes even a list thumbnail visibly mushy.
+  final w = (logicalSize * dpr).round();
+  return w < 64 ? 64 : w;
 }

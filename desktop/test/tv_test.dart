@@ -132,6 +132,104 @@ void main() {
       expect(tester.getSize(find.byType(Pressable)), focused,
           reason: 'anders schuift de hele rij op zodra de markering erlangs gaat');
     });
+
+    testWidgets('a cover tile answers by growing, not by wearing a frame', (tester) async {
+      // A record sleeve is the one thing on the screen you are actually looking at, and a ring
+      // around it is a frame around the artwork. Those tiles say "this one" by growing instead, so
+      // they ask for the ring to be left off — and then it really must be off, or you get both.
+      await tester.pumpWidget(_app(Pressable(
+        autofocus: true,
+        onPressed: () {},
+        ringOnFocus: false,
+        scaleOnFocus: false,
+        child: const SizedBox(width: 140, height: 140),
+      )));
+      await tester.pumpAndSettle();
+
+      final box = tester.widget<DecoratedBox>(find
+          .descendant(of: find.byType(Pressable), matching: find.byType(DecoratedBox))
+          .first);
+      final decoration = box.decoration as BoxDecoration;
+      expect(decoration.border?.top.color, Colors.transparent,
+          reason: 'geen kader rond de hoes');
+      expect(decoration.boxShadow, anyOf(isNull, isEmpty),
+          reason: 'ook de gloed hoort bij het kader — anders staat het kader er alsnog, waziger');
+    });
+
+    test('growing is visible from the couch, gentle under a pointer', () {
+      // The whole cue on a television, so it has to survive three metres. 1.06 does not.
+      setTvModeForTest(true);
+      expect(tileFocusScale, greaterThanOrEqualTo(1.12));
+      setTvModeForTest(false);
+      expect(tileFocusScale, lessThan(1.12),
+          reason: 'met een muis zegt de aanwijzer het al; een tegel die opspringt is dan onrustig');
+    });
+  });
+
+  group('BACK laat het tekstveld los voordat het het scherm sluit', () {
+    /// What Android does when the remote's BACK is pressed.
+    Future<void> pressBack(WidgetTester tester) async {
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a focused field is left, and the screen stays', (tester) async {
+      final node = FocusNode();
+      var popped = false;
+      await tester.pumpWidget(TvTextFieldEscape(
+        child: MaterialApp(
+          home: PopScope(
+            canPop: false,
+            onPopInvokedWithResult: (_, __) => popped = true,
+            child: Scaffold(body: TextField(focusNode: node, autofocus: true)),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(node.hasFocus, isTrue, reason: 'de opzet klopt niet als het veld de focus niet heeft');
+
+      await pressBack(tester);
+
+      expect(node.hasFocus, isFalse, reason: 'BACK hoort je uit het veld te halen');
+      expect(popped, isFalse,
+          reason: 'en niet ook meteen het scherm te sluiten — daar gaat je getypte sleutel');
+    });
+
+    testWidgets('with the highlight anywhere else, BACK is BACK again', (tester) async {
+      // The escape must not swallow every back press, or a remote could never leave a screen.
+      var reached = false;
+      await tester.pumpWidget(TvTextFieldEscape(
+        child: MaterialApp(
+          home: _BackSpy(
+            onBack: () => reached = true,
+            child: Scaffold(body: Pressable(autofocus: true, onPressed: () {}, child: const Text('Start'))),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await pressBack(tester);
+      expect(reached, isTrue, reason: 'BACK moet gewoon doorgaan als er geen veld in de weg staat');
+    });
+
+    testWidgets('off a television nothing is intercepted', (tester) async {
+      setTvModeForTest(false);
+      final node = FocusNode();
+      var reached = false;
+      await tester.pumpWidget(TvTextFieldEscape(
+        child: MaterialApp(
+          home: _BackSpy(
+            onBack: () => reached = true,
+            child: Scaffold(body: TextField(focusNode: node, autofocus: true)),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await pressBack(tester);
+      expect(reached, isTrue,
+          reason: 'op een telefoon en een pc bestaat dit probleem niet; daar is BACK gewoon BACK');
+    });
   });
 
   group('what cannot be pressed cannot be reached', () {
@@ -255,4 +353,39 @@ void main() {
       expect(held, 1, reason: 'een toetsenbord dat herhaalt is geen lang indrukken op een pc');
     });
   });
+}
+
+/// Stands in for whatever would otherwise handle BACK — the Navigator in the real app.
+///
+/// Registered as a binding observer like [TvTextFieldEscape] is, but from OUTSIDE it, so the
+/// binding asks the escape first. If the escape declines, this one hears it.
+class _BackSpy extends StatefulWidget {
+  const _BackSpy({required this.onBack, required this.child});
+  final VoidCallback onBack;
+  final Widget child;
+  @override
+  State<_BackSpy> createState() => _BackSpyState();
+}
+
+class _BackSpyState extends State<_BackSpy> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  Future<bool> didPopRoute() async {
+    widget.onBack();
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

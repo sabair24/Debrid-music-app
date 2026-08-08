@@ -57,7 +57,7 @@ import 'lan/remote_services.dart';
 import 'now_playing.dart';
 import 'login_screen.dart';
 import 'pairing_screen.dart';
-import 'artwork.dart' show dominantColour;
+import 'artwork.dart' show decodeWidth, dominantColour;
 import 'fps_probe.dart';
 import 'warm_log.dart' show WarmLog;
 import 'library.dart';
@@ -842,9 +842,29 @@ class DebridApp extends StatelessWidget {
   const DebridApp({super.key});
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    // Above the MaterialApp, not inside it. WidgetsBinding.handlePopRoute walks its observers in
+    // REGISTRATION order and stops at the first that handles the press, and WidgetsApp registers its
+    // own — the one that pops the navigator — from its initState. A parent's initState runs first,
+    // so this has to be the parent to be asked first. Inside `home:` it registered second and never
+    // saw a single back press.
+    return TvTextFieldEscape(
+        child: MaterialApp(
       title: 'DebridMusic',
       debugShowCheckedModeBanner: false,
+      // Everything on a television is read from three metres away, and this app was sized for a
+      // desktop window at arm's length: of its 375 explicit font sizes, 286 are 13.5 or smaller and
+      // the most common value is 11.5. The Shield lays out on 960x540 points, so 11.5 there is about
+      // what 6pt is on a laptop — you can see that text exists, you cannot read it.
+      //
+      // One scaler rather than 375 edits, and applied in `builder` so it covers dialogs and pushed
+      // routes too. 1.35 lands the body text between Material 3's TV minimums (Body Small 16, Body
+      // Medium 18) without the 1.45 that would push two-line titles out of every tile.
+      builder: (context, child) => isTv
+          ? MediaQuery(
+              data: MediaQuery.of(context).copyWith(textScaler: const TextScaler.linear(1.35)),
+              child: child ?? const SizedBox.shrink(),
+            )
+          : (child ?? const SizedBox.shrink()),
       theme: ThemeData(
         useMaterial3: true,
         brightness: Brightness.dark,
@@ -900,9 +920,10 @@ class DebridApp extends StatelessWidget {
           );
         },
       ),
-    );
+    ));
   }
 }
+
 
 /// Publish where this PC is, and hand a token to any device that asked.
 ///
@@ -976,30 +997,6 @@ QueueWorker? _worker;
 
 // ── Cover helpers ────────────────────────────────────────────────────────────
 
-/// How many pixels wide this artwork actually needs to be decoded at.
-///
-/// Every Image in this file decoded at the source resolution, and the sources are big: the covers
-/// this app stores are 1200x1200, some originals over 3000. Decoded, a 1200px sleeve is 1200 x 1200 x
-/// 4 bytes — 5.8 MB of bitmap — and a 120px grid tile needs 57 KB of that. A hundred and twenty-five
-/// albums on screen therefore ask for far more than Flutter's image cache holds, so it evicts and
-/// re-decodes while you scroll: the work is done again and again for pictures that were already
-/// there.
-///
-/// A hint, not a resize: `cacheWidth` tells the decoder how small it may go, and BoxFit still does
-/// the layout. Multiplied by the screen's pixel ratio so a 2x display gets a sharp image rather than
-/// a soft one, and clamped because a hint derived from a wrong ratio should cost a little sharpness,
-/// never correctness.
-int _decodeWidth(double logicalSize) {
-  var dpr = 1.0;
-  try {
-    dpr = WidgetsBinding.instance.platformDispatcher.views.first.devicePixelRatio;
-  } catch (_) {/* no view yet — the default is fine for a hint */}
-  if (!dpr.isFinite || dpr < 1) dpr = 1;
-  if (dpr > 4) dpr = 4;
-  // Never below 64: a hint smaller than that makes even a list thumbnail visibly mushy.
-  final w = (logicalSize * dpr).round();
-  return w < 64 ? 64 : w;
-}
 
 Widget cover(Uint8List? bytes, {double size = 160, double radius = 12, bool circle = false}) {
   final shape = circle ? BoxShape.circle : BoxShape.rectangle;
@@ -1011,7 +1008,7 @@ Widget cover(Uint8List? bytes, {double size = 160, double radius = 12, bool circ
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(shape: shape, borderRadius: br),
       child: Image.memory(bytes,
-          fit: BoxFit.cover, gaplessPlayback: true, cacheWidth: _decodeWidth(size)),
+          fit: BoxFit.cover, gaplessPlayback: true, cacheWidth: decodeWidth(size)),
     );
   }
   return Container(
@@ -1057,36 +1054,54 @@ Widget glassSurface({
   double shadow = .34,
   double shadowBlur = 26,
   Offset shadowOffset = const Offset(0, 9),
-}) =>
-    ClipRRect(
+}) {
+  // A television gets the shape without the blur, and a stronger fill to pay for it.
+  //
+  // Two reasons, and they point the same way. A BackdropFilter reads the backdrop back and blurs it
+  // again on every repaint — it is the one layer Flutter cannot raster-cache, and on the Shield's
+  // Tegra X1 it is the most expensive thing on the screen. And it buys nothing here: the glass sits
+  // over a flat, still panel, so from three metres a 26-sigma blur of near-nothing is indistinguish-
+  // able from a plain fill.
+  //
+  // The alphas go up on TV for a different reason: .085 fill over .10 edge is a 1.34:1 contrast
+  // ratio. On a monitor at arm's length that reads as a subtle pane. On a television, after the
+  // set's own gamma handling, it reads as nothing at all — the search field and the navigation
+  // strip lose their outline and you are left with labels floating in the dark.
+  final surface = Container(
+    padding: padding,
+    decoration: BoxDecoration(
       borderRadius: BorderRadius.circular(999),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-        child: Container(
-          padding: padding,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(999),
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Colors.white.withValues(alpha: fillTop),
-                Colors.white.withValues(alpha: fillBottom),
-              ],
-            ),
-            border: Border.all(color: Colors.white.withValues(alpha: edge)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: shadow),
-                blurRadius: shadowBlur,
-                offset: shadowOffset,
-              ),
-            ],
-          ),
-          child: child,
-        ),
+      gradient: LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Colors.white.withValues(alpha: isTv ? fillTop + .055 : fillTop),
+          Colors.white.withValues(alpha: isTv ? fillBottom + .032 : fillBottom),
+        ],
       ),
-    );
+      border: Border.all(color: Colors.white.withValues(alpha: isTv ? edge + .12 : edge)),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: shadow),
+          blurRadius: shadowBlur,
+          offset: shadowOffset,
+        ),
+      ],
+    ),
+    child: child,
+  );
+
+  if (isTv) {
+    return ClipRRect(borderRadius: BorderRadius.circular(999), child: surface);
+  }
+  return ClipRRect(
+    borderRadius: BorderRadius.circular(999),
+    child: BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+      child: surface,
+    ),
+  );
+}
 
 // ── Home shell ───────────────────────────────────────────────────────────────
 class HomeShell extends StatefulWidget {
@@ -1124,6 +1139,9 @@ class _HomeShellState extends State<HomeShell> {
     return Drawer(
       backgroundColor: _panel,
       child: SafeArea(
+          // A television reports no insets, so SafeArea alone is a no-op there; this is the
+          // margin that keeps the back arrow off the part of the picture a set cuts away.
+          minimum: tvOverscan,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1302,13 +1320,16 @@ class _HomeShellState extends State<HomeShell> {
                   prefixIcon: const Icon(Icons.search_rounded, size: 19, color: _muted),
                   suffixIcon: _q.isEmpty
                       ? null
-                      : IconButton(
+                      : TvLabelled(
+                          label: 'Wissen',
+                          child: IconButton(
                           icon: const Icon(Icons.close_rounded, size: 17, color: _muted),
                           tooltip: 'Wissen',
                           onPressed: () => setState(() {
                             _q = '';
                             _searchCtl.clear();
                           }),
+                        ),
                         ),
                   // No box of its own: the pill IS the field's surface.
                   filled: false,
@@ -1415,7 +1436,15 @@ class _HomeShellState extends State<HomeShell> {
         // was only to keep the things you read and press away from the edge.
         body: Column(
           children: [
-            _topBar(),
+            // Both bars get their own repaint boundary, and the reason is the position ticker.
+            //
+            // PlayerStore.notifyListeners() fires on every mpv time-pos event — unthrottled — and
+            // the player bar watches it. Without a boundary between them, markNeedsPaint walks all
+            // the way up to the route, so everything on the page that is not itself a boundary gets
+            // re-recorded many times a second while nothing moves. That includes the top bar's
+            // BackdropFilter, which cannot be raster-cached: it reads the backdrop and blurs it
+            // again, every time. On a Tegra X1 that is the single most expensive thing on screen.
+            RepaintBoundary(child: _topBar()),
             const _OfflineBanner(),
             Expanded(
               // De wachtrij staat NAAST de inhoud en niet erboven: een venster zou dichtgaan zodra
@@ -1441,7 +1470,7 @@ class _HomeShellState extends State<HomeShell> {
                 ],
               ),
             ),
-            const PlayerBar(),
+            const RepaintBoundary(child: PlayerBar()),
           ],
         ),
       ),
@@ -1482,10 +1511,13 @@ class _HomeShellState extends State<HomeShell> {
         padding: EdgeInsets.only(top: MediaQuery.viewPaddingOf(context).top, left: 4, right: 8),
         child: Row(
           children: [
-            IconButton(
+            TvLabelled(
+              label: 'Secties',
+              child: IconButton(
               icon: const Icon(Icons.menu_rounded),
               tooltip: 'Secties',
               onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+            ),
             ),
             Expanded(
               child: Text(label,
@@ -1506,11 +1538,14 @@ class _HomeShellState extends State<HomeShell> {
                       style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800)),
                 ),
               ),
-            IconButton(
+            TvLabelled(
+              label: 'Instellingen',
+              child: IconButton(
               icon: const Icon(Icons.settings_rounded, size: 22),
               tooltip: 'Instellingen',
               onPressed: () =>
                   showDialog(context: context, builder: (_) => const SettingsDialog()),
+            ),
             ),
           ],
         ),
@@ -1521,7 +1556,7 @@ class _HomeShellState extends State<HomeShell> {
   Widget _topBarBody() => SizedBox(
         // The glow keeps running behind the status bar; only the contents move down, so the top of
         // the screen still looks like one piece rather than a black strip above the app.
-        height: 64 + (_isTouch ? MediaQuery.viewPaddingOf(context).top : 0),
+        height: 64 + tvOverscan.top + (_isTouch ? MediaQuery.viewPaddingOf(context).top : 0),
         child: Stack(
           children: [
             Positioned(
@@ -1541,15 +1576,26 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ),
             Padding(
+              // The glow behind runs to the edge; the contents come in by tvOverscan. 11 points of
+              // top inset on a set that overscans 5% puts the navigation strip's top edge off the
+              // screen, and this bar is how you reach every section of the app.
               padding: EdgeInsets.fromLTRB(
-                  18, 11 + (_isTouch ? MediaQuery.viewPaddingOf(context).top : 0), 18, 8),
+                  18 + tvOverscan.left,
+                  11 + tvOverscan.top + (_isTouch ? MediaQuery.viewPaddingOf(context).top : 0),
+                  18 + tvOverscan.right,
+                  8),
               // The bar was built for a 1240-point window. An iPad in portrait is 834, and there
               // it would simply overflow. Rather than a second navigation for touch — which is
               // exactly the divergence this whole change is removing — the same bar drops what is
               // decoration (the wordmark, the counts) and lets the sections scroll.
               child: LayoutBuilder(
                 builder: (context, box) {
-                  final compact = box.maxWidth < 1040;
+                  // A television is 960 points wide, so `compact` is ALWAYS true there — which
+                  // quietly hid the only line that says what the app is doing ("Scannen… 1234",
+                  // "Covers ophalen…", the warmer's status). That line matters most on the device
+                  // that has no window title and no other feedback, so a TV keeps it: what it
+                  // drops instead is the wordmark, which says nothing you did not already know.
+                  final compact = box.maxWidth < 1040 && !isTv;
                   return Row(
                     children: [
                       // The app's real icon, not an impression of it. This used to be a gradient
@@ -1560,7 +1606,7 @@ class _HomeShellState extends State<HomeShell> {
                         child: Image.asset('assets/icon/app_icon.png',
                             width: 28, height: 28, filterQuality: FilterQuality.medium),
                       ),
-                      if (!compact) ...[
+                      if (!compact && !isTv) ...[
                         const SizedBox(width: 9),
                         const Text('DebridMusic',
                             style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5)),
@@ -1615,11 +1661,13 @@ class _HomeShellState extends State<HomeShell> {
                                     : (warmer.status.isNotEmpty
                                         ? warmer.status
                                         : '${lib.albums.length} albums · ${lib.tracks.length} nummers')),
-                            style: const TextStyle(color: _muted, fontSize: 11.5),
+                            style: TextStyle(color: _muted, fontSize: isTv ? 14 : 11.5),
                           ),
                         ),
                       if (!compact) const SizedBox(width: 12),
-                      IconButton(
+                      TvLabelled(
+                        label: 'Instellingen',
+                        child: IconButton(
                         icon: const Icon(Icons.settings_rounded, size: 19),
                         color: _muted,
                         tooltip: 'Instellingen',
@@ -1628,6 +1676,7 @@ class _HomeShellState extends State<HomeShell> {
                         constraints: _isTouch ? const BoxConstraints.tightFor(width: 44, height: 44) : null,
                         onPressed: () =>
                             showDialog(context: context, builder: (_) => const SettingsDialog()),
+                      ),
                       ),
                       // Only where there is a window to close: on the iPad these would be three
                       // buttons wired to a plugin that does not exist there.
@@ -2253,11 +2302,15 @@ class AlbumsGrid extends StatelessWidget {
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
           sliver: SliverGrid(
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 190,
+            // Bigger tiles and a taller cell on a television. The text under a cover is now scaled
+            // 1.35x, and .78 left it about 43 points for two lines that want 41 — one long title
+            // away from clipping. A 960-point-wide screen also has room for fewer, larger tiles
+            // than a desktop window does: four across reads from the couch, five does not.
+            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: isTv ? 230 : 190,
               mainAxisSpacing: 20,
               crossAxisSpacing: 20,
-              childAspectRatio: .78,
+              childAspectRatio: isTv ? .66 : .78,
             ),
             delegate: SliverChildBuilderDelegate(
               (_, i) => AlbumCard(album: albums[i]),
@@ -2345,12 +2398,13 @@ class _AlbumCardState extends State<AlbumCard> {
         // than adding a second, different animation on top of it. A remote then gets exactly the
         // look a mouse gets, plus the ring that says which card it is.
         scaleOnFocus: false,
+        ringOnFocus: false,
         onFocusChange: (v) => setState(() => _hover = v),
         // Grows on hover, like the TV app. 1.06 is deliberate: the grid's 20px gap is wider than
         // the ~6px a card gains per side, so a raised card never collides with its neighbours
         // (grid children paint in order, so an overlap would be drawn OVER the raised card).
         child: AnimatedScale(
-          scale: _hover ? 1.06 : 1,
+          scale: _hover ? tileFocusScale : 1,
           duration: const Duration(milliseconds: 170),
           curve: Curves.easeOut,
           child: AnimatedContainer(
@@ -3095,7 +3149,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                   ),
                   actions: [
                     if (!album.isSingle)
-                      IconButton(
+                      TvLabelled(
+                        label: 'Boekje doorbladeren',
+                        child: IconButton(
                         icon: const Icon(Icons.auto_stories_outlined),
                         tooltip: 'Boekje doorbladeren',
                         onPressed: () {
@@ -3112,8 +3168,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                           ));
                         },
                       ),
+                      ),
                     if (!album.isSingle)
-                      IconButton(
+                      TvLabelled(
+                        label: 'Uitgave kiezen — met hoes, achterkant en cd',
+                        child: IconButton(
                         icon: const Icon(Icons.photo_library_outlined),
                         tooltip: 'Uitgave kiezen — met hoes, achterkant en cd',
                         onPressed: () async {
@@ -3122,20 +3181,26 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                           if (picked == true && mounted) _refresh();
                         },
                       ),
+                      ),
                     // The only button here that changes the FILES rather than working around them.
                     // Everything else on this page paints over disagreeing tags; this pulls them
                     // into line, so anything else reading the folder sees one record too.
                     if (!album.isSingle && !context.read<LibraryStore>().isRemote)
-                      IconButton(
+                      TvLabelled(
+                        label: 'Tags gelijktrekken — één album, één nummering, in de bestanden',
+                        child: IconButton(
                         icon: const Icon(Icons.label_outline_rounded),
                         tooltip: 'Tags gelijktrekken — één album, één nummering, in de bestanden',
                         onPressed: _official.isEmpty ? null : _normaliseTags,
+                      ),
                       ),
                     // Deliberately NOT gated on a tracklist: this is what to reach for exactly when
                     // there isn't one. A file whose album is a compilation nobody can find is the
                     // case the catalogues cannot answer and the audio can.
                     if (!context.read<LibraryStore>().isRemote)
-                      IconButton(
+                      TvLabelled(
+                        label: 'Herkennen op geluid — wat zegt de audio dat dit is?',
+                        child: IconButton(
                         icon: _recognising
                             ? const SizedBox(
                                 width: 18,
@@ -3146,18 +3211,24 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                         tooltip: 'Herkennen op geluid — wat zegt de audio dat dit is?',
                         onPressed: _recognising ? null : _recogniseTracks,
                       ),
+                      ),
                     // Only appears once there is something to undo. A button that is there but does
                     // nothing teaches you not to trust it.
                     if (!album.isSingle &&
                         !context.read<LibraryStore>().isRemote &&
                         context.read<LibraryStore>().undoableTagWrites(album) > 0)
-                      IconButton(
+                      TvLabelled(
+                        label: 'Tags terugzetten zoals ze waren voor het gelijktrekken',
+                        child: IconButton(
                         icon: const Icon(Icons.undo_rounded),
                         tooltip: 'Tags terugzetten zoals ze waren voor het gelijktrekken',
                         onPressed: _undoTagWrites,
                       ),
+                      ),
                     if (!album.isSingle)
-                      IconButton(
+                      TvLabelled(
+                        label: 'Een ander album hierin samenvoegen',
+                        child: IconButton(
                         icon: const Icon(Icons.merge_rounded),
                         tooltip: 'Een ander album hierin samenvoegen',
                         onPressed: () async {
@@ -3170,12 +3241,18 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                           if (done == true && mounted) _refresh();
                         },
                       ),
-                    IconButton(
+                      ),
+                    TvLabelled(
+                      label: 'Metadata corrigeren',
+                      child: IconButton(
                       icon: const Icon(Icons.edit_rounded),
                       tooltip: 'Metadata corrigeren',
                       onPressed: _edit,
                     ),
-                    IconButton(
+                    ),
+                    TvLabelled(
+                      label: album.isSingle ? 'Nummer verwijderen' : 'Album verwijderen',
+                      child: IconButton(
                       icon: const Icon(Icons.delete_outline_rounded),
                       tooltip: album.isSingle ? 'Nummer verwijderen' : 'Album verwijderen',
                       onPressed: () async {
@@ -3183,6 +3260,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                             album.tracks.map((t) => t.path).toList());
                         if (context.mounted) Navigator.of(context).maybePop();
                       },
+                    ),
                     ),
                     const SizedBox(width: 8),
                   ],
@@ -3993,8 +4071,12 @@ class _TrackRowState extends State<TrackRow> {
   @override
   Widget build(BuildContext context) {
     final t = widget.track;
-    final current = context.watch<PlayerStore>().current;
-    final isCurrent = current?.path == t.path;
+    // `select`, not `watch`. PlayerStore notifies on every mpv position event — unthrottled — and
+    // watching it rebuilt every visible row of the album, each one re-running _trackQuality with
+    // its two regexes. All this row actually needs to know is whether it is the one playing, and
+    // that answer changes twice per record instead of dozens of times per second.
+    final isCurrent =
+        context.select<PlayerStore, bool>((p) => p.current?.path == t.path);
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -4070,7 +4152,9 @@ class _TrackRowState extends State<TrackRow> {
               SizedBox(
                 width: 36,
                 child: _hover
-                    ? IconButton(
+                    ? TvLabelled(
+                        label: 'Naar ander album verplaatsen',
+                        child: IconButton(
                         icon: const Icon(Icons.drive_file_move_outline, size: 17),
                         color: _muted,
                         tooltip: 'Naar ander album verplaatsen',
@@ -4086,13 +4170,16 @@ class _TrackRowState extends State<TrackRow> {
                           final from = context.read<LibraryStore>().albumForPath(t.path);
                           showDialog<bool>(context: context, builder: (_) => MoveTrackDialog(track: t, from: from));
                         },
+                      ),
                       )
                     : null,
               ),
               SizedBox(
                 width: 36,
                 child: _hover
-                    ? IconButton(
+                    ? TvLabelled(
+                        label: 'Nummer verwijderen',
+                        child: IconButton(
                         icon: const Icon(Icons.delete_outline_rounded, size: 17),
                         color: _muted,
                         tooltip: 'Nummer verwijderen',
@@ -4102,6 +4189,7 @@ class _TrackRowState extends State<TrackRow> {
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                         onPressed: () => _confirmDelete(context, '“${t.title}”', [t.path]),
+                      ),
                       )
                     : null,
               ),
@@ -4145,7 +4233,15 @@ class _MissingTrackRowState extends State<MissingTrackRow> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
-      child: Container(
+      // Unlike TrackRow next to it, this row was not pressable at all — so on a remote the only
+      // thing reachable in it was the download button at the far end, and the row itself could not
+      // hold the highlight. Same gesture as everywhere else: OK downloads the missing track.
+      child: Pressable(
+        onPressed: widget.onDownload,
+        borderRadius: BorderRadius.circular(8),
+        scaleOnFocus: false,
+        onFocusChange: (v) => setState(() => _hover = v),
+        child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         decoration: BoxDecoration(
@@ -4197,7 +4293,7 @@ class _MissingTrackRowState extends State<MissingTrackRow> {
             ),
           ],
         ),
-      ),
+      )),
     );
   }
 }
@@ -4535,9 +4631,10 @@ class _RelatedArtistCardState extends State<_RelatedArtistCard> {
           onPressed: widget.onTap,
           borderRadius: BorderRadius.circular(14),
           scaleOnFocus: false,
+          ringOnFocus: false,
           onFocusChange: (v) => setState(() => _hover = v),
           child: AnimatedScale(
-            scale: _hover ? 1.06 : 1,
+            scale: _hover ? tileFocusScale : 1,
             duration: const Duration(milliseconds: 170),
             curve: Curves.easeOut,
             child: Column(
@@ -4598,9 +4695,10 @@ class _ArtistCardState extends State<_ArtistCard> {
         onPressed: widget.onTap,
         borderRadius: BorderRadius.circular(14),
         scaleOnFocus: false,
+        ringOnFocus: false,
         onFocusChange: (v) => setState(() => _hover = v),
         child: AnimatedScale(
-          scale: _hover ? 1.06 : 1,
+          scale: _hover ? tileFocusScale : 1,
           duration: const Duration(milliseconds: 170),
           curve: Curves.easeOut,
           child: Column(
@@ -4892,6 +4990,26 @@ void _nudge(PlayerStore p, int seconds) {
   p.seek(target);
 }
 
+/// Whether the ten-second buttons on the Now Playing screen have anything to act on.
+///
+/// The same condition the seek bar next to them uses: a length, and either a local track or a
+/// speaker that reports where it is.
+bool _canSeekHere(Duration duration, bool casting, Track? track) =>
+    duration.inMilliseconds > 0 && (casting || track != null);
+
+/// Ten seconds, wherever the music is coming out.
+///
+/// Clamped here rather than in the player for the same reason [_nudge] clamps: seeking past the end
+/// restarts the queue on some backends and stalls on others.
+void _seekBy(PlayerStore p, SpeakerTarget cast, bool casting, Duration position, Duration duration,
+    int seconds) {
+  if (!casting) return _nudge(p, seconds);
+  var target = position + Duration(seconds: seconds);
+  if (target < Duration.zero) target = Duration.zero;
+  if (target > duration) target = duration;
+  cast.seekTo(target);
+}
+
 /// The transport, wherever the music actually is.
 ///
 /// Casting moves the remote. Every one of these controls used to speak to the local libmpv, which
@@ -4994,12 +5112,18 @@ class PlayerBar extends StatelessWidget {
 
     final side = math.min(280.0, math.max(96.0, (width - 336) / 2));
     return Container(
-      height: 84 + bottomInset,
+      // Taller on a television: the text is scaled there, and the bottom row (position, slider,
+      // duration) sat flush against the panel edge — the first strip a set overscans away.
+      height: (isTv ? 104 : 84) + bottomInset,
       decoration: const BoxDecoration(
         color: Color(0xFF12141D),
         border: Border(top: BorderSide(color: _line)),
       ),
-      padding: EdgeInsets.fromLTRB(18, 0, 18, bottomInset),
+      // The panel runs to the edge; only what you read and press comes in. On a television the
+      // bottom row of this bar is the first thing a set overscans away, so it gets tvOverscan
+      // rather than the 0 it had — SafeArea is no help here, a TV reports no insets at all.
+      padding: EdgeInsets.fromLTRB(
+          18 + tvOverscan.left, 0, 18 + tvOverscan.right, bottomInset + tvOverscan.bottom),
       child: Row(
         children: [
           SizedBox(
@@ -5094,11 +5218,14 @@ class PlayerBar extends StatelessWidget {
                     // overflowed it by three pixels. These two glyphs carry a "10" on their face,
                     // which is the label.
                     if (isTv)
-                      IconButton(
+                      TvLabelled(
+                        label: '10 seconden terug',
+                        child: IconButton(
                         icon: const Icon(Icons.replay_10_rounded, size: 22),
                         color: _muted,
                         tooltip: '10 seconden terug',
                         onPressed: x.canSeek ? () => x.nudge(-10) : null,
+                      ),
                       ),
                     const SizedBox(width: 2),
                     Container(
@@ -5112,11 +5239,14 @@ class PlayerBar extends StatelessWidget {
                     ),
                     const SizedBox(width: 2),
                     if (isTv)
-                      IconButton(
+                      TvLabelled(
+                        label: '10 seconden vooruit',
+                        child: IconButton(
                         icon: const Icon(Icons.forward_10_rounded, size: 22),
                         color: _muted,
                         tooltip: '10 seconden vooruit',
                         onPressed: x.canSeek ? () => x.nudge(10) : null,
+                      ),
                       ),
                     IconButton(
                       icon: const Icon(Icons.skip_next_rounded),
@@ -5244,7 +5374,7 @@ Future<String?> _vraagNaam(BuildContext context, String titel, String begin) {
       title: Text(titel, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
       content: TextField(
         controller: c,
-        autofocus: true,
+        autofocus: !isTv,
         decoration: const InputDecoration(hintText: 'Naam'),
         onSubmitted: (v) => Navigator.pop(ctx, v),
       ),
@@ -5332,7 +5462,9 @@ class _AfspeellijstRij extends StatelessWidget {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            IconButton(
+            TvLabelled(
+              label: 'Hernoemen',
+              child: IconButton(
               icon: const Icon(Icons.edit_outlined, size: 17),
               color: _muted,
               tooltip: 'Hernoemen',
@@ -5343,7 +5475,10 @@ class _AfspeellijstRij extends StatelessWidget {
                 }
               },
             ),
-            IconButton(
+            ),
+            TvLabelled(
+              label: 'Afspeellijst verwijderen',
+              child: IconButton(
               icon: const Icon(Icons.delete_outline_rounded, size: 17),
               color: _muted,
               tooltip: 'Afspeellijst verwijderen',
@@ -5372,6 +5507,7 @@ class _AfspeellijstRij extends StatelessWidget {
                 );
                 if (ja == true) await lijsten.wis(lijst.id);
               },
+            ),
             ),
           ],
         ),
@@ -5412,15 +5548,21 @@ class AfspeellijstPagina extends StatelessWidget {
         title: Text(lijst.name),
         actions: [
           if (nummers.isNotEmpty) ...[
-            IconButton(
+            TvLabelled(
+              label: 'Afspelen',
+              child: IconButton(
               icon: const Icon(Icons.play_arrow_rounded),
               tooltip: 'Afspelen',
               onPressed: () => p.playQueue(nummers, 0),
             ),
-            IconButton(
+            ),
+            TvLabelled(
+              label: 'Shuffle',
+              child: IconButton(
               icon: const Icon(Icons.shuffle_rounded),
               tooltip: 'Shuffle',
               onPressed: () => p.shuffleAll(nummers),
+            ),
             ),
           ],
         ],
@@ -5467,7 +5609,9 @@ class AfspeellijstPagina extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     _echtheidMerk(nummers[i].path),
-                    IconButton(
+                    TvLabelled(
+                      label: 'Uit deze lijst halen',
+                      child: IconButton(
                       icon: const Icon(Icons.close_rounded, size: 16),
                       color: _muted,
                       tooltip: 'Uit deze lijst halen',
@@ -5480,6 +5624,7 @@ class AfspeellijstPagina extends StatelessWidget {
                           lijsten.zetNummers(id, ids);
                         }
                       },
+                    ),
                     ),
                     ReorderableDragStartListener(
                       index: i,
@@ -5610,13 +5755,16 @@ class _FavorietRij extends StatelessWidget {
             Text(_fmt(track.duration), style: const TextStyle(color: _muted, fontSize: 12)),
             const SizedBox(width: 6),
             // Het hartje is hier gevuld — je kijkt naar je favorieten — en dus de weg eruit.
-            IconButton(
+            TvLabelled(
+              label: 'Uit favorieten',
+              child: IconButton(
               icon: const Icon(Icons.favorite_rounded, size: 17),
               color: _accent,
               tooltip: 'Uit favorieten',
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
               onPressed: () => fav.wisselTrack(track),
+            ),
             ),
           ],
         ),
@@ -5822,11 +5970,14 @@ class WachtrijPaneelView extends StatelessWidget {
                     style: const TextStyle(color: _muted, fontSize: 12)),
                 const Spacer(),
                 if (!inBlad)
-                  IconButton(
+                  TvLabelled(
+                    label: 'Sluiten',
+                    child: IconButton(
                     icon: const Icon(Icons.close_rounded, size: 18),
                     color: _muted,
                     tooltip: 'Sluiten',
                     onPressed: paneel.sluit,
+                  ),
                   ),
               ],
             ),
@@ -5953,13 +6104,16 @@ class _WachtrijRij extends StatelessWidget {
                 width: 28,
                 child: speeltNu
                     ? const Icon(Icons.volume_up_rounded, size: 15, color: _accent)
-                    : IconButton(
+                    : TvLabelled(
+                        label: 'Uit de wachtrij halen',
+                        child: IconButton(
                         icon: const Icon(Icons.close_rounded, size: 15),
                         color: _muted,
                         tooltip: 'Uit de wachtrij halen',
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
                         onPressed: () => p.haalUitWachtrij(plek),
+                      ),
                       ),
               ),
             ],
@@ -6211,6 +6365,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
             ),
           Positioned.fill(child: Container(color: _bg.withValues(alpha: .5))),
           SafeArea(
+              // A television reports no insets, so SafeArea alone is a no-op there; this is the
+              // margin that keeps the back arrow off the part of the picture a set cuts away.
+              minimum: tvOverscan,
             child: Column(
               children: [
                 Align(
@@ -6304,6 +6461,19 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                   child: Row(
                     children: [
                       Text(_fmt(position), style: const TextStyle(color: _muted, fontSize: 12)),
+                      // The seek bar below is ExcludeFocus on a television, and unlike the player
+                      // bar this screen offered nothing in its place: you could open Now Playing
+                      // from the bar and then have no way to move through the record at all.
+                      if (isTv)
+                        TvLabelled(
+                          label: '10 seconden terug',
+                          child: IconButton(
+                          icon: const Icon(Icons.replay_10_rounded, size: 22),
+                          color: _muted,
+                          tooltip: '10 seconden terug',
+                          onPressed: _canSeekHere(duration, casting, t) ? () => _seekBy(p, cast, casting, position, duration, -10) : null,
+                        ),
+                        ),
                       Expanded(
                         child: SliderTheme(
                           data: SliderTheme.of(context).copyWith(
@@ -6329,6 +6499,16 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                           )),
                         ),
                       ),
+                      if (isTv)
+                        TvLabelled(
+                          label: '10 seconden vooruit',
+                          child: IconButton(
+                          icon: const Icon(Icons.forward_10_rounded, size: 22),
+                          color: _muted,
+                          tooltip: '10 seconden vooruit',
+                          onPressed: _canSeekHere(duration, casting, t) ? () => _seekBy(p, cast, casting, position, duration, 10) : null,
+                        ),
+                        ),
                       Text(_fmt(duration), style: const TextStyle(color: _muted, fontSize: 12)),
                     ],
                   ),
@@ -6373,6 +6553,11 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                     Container(
                       decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
                       child: IconButton(
+                        // Where the highlight lands when Now Playing opens on a television. Without
+                        // it the route opens with nothing marked, so the first press of OK does
+                        // nothing at all and the first arrow press picks whatever happens to sit
+                        // top-left — here the collapse arrow, which closes the screen again.
+                        autofocus: isTv,
                         icon: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
                         color: _bg,
                         iconSize: 40,
@@ -6410,7 +6595,22 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                       width: dialogWidth(context, 320),
                       child: Row(
                         children: [
-                          const Icon(Icons.volume_down_rounded, size: 19, color: _muted),
+                          // The slider is ExcludeFocus on a television — left and right would be
+                          // eaten by it — so without these two the speaker's volume cannot be
+                          // touched at all from the couch. The TV remote's own volume keys go to
+                          // the television, not to a UPnP speaker in another room.
+                          if (isTv)
+                            TvLabelled(
+                              label: 'Zachter',
+                              child: IconButton(
+                              icon: const Icon(Icons.volume_down_rounded, size: 22),
+                              color: _muted,
+                              tooltip: 'Zachter',
+                              onPressed: () => cast.setVolume((cast.volume - 5).clamp(0, 100)),
+                            ),
+                            )
+                          else
+                            const Icon(Icons.volume_down_rounded, size: 19, color: _muted),
                           Expanded(
                             child: SliderTheme(
                               data: SliderTheme.of(context).copyWith(
@@ -6427,7 +6627,18 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                               )),
                             ),
                           ),
-                          const Icon(Icons.volume_up_rounded, size: 19, color: _muted),
+                          if (isTv)
+                            TvLabelled(
+                              label: 'Harder',
+                              child: IconButton(
+                              icon: const Icon(Icons.volume_up_rounded, size: 22),
+                              color: _muted,
+                              tooltip: 'Harder',
+                              onPressed: () => cast.setVolume((cast.volume + 5).clamp(0, 100)),
+                            ),
+                            )
+                          else
+                            const Icon(Icons.volume_up_rounded, size: 19, color: _muted),
                           const SizedBox(width: 6),
                           SizedBox(
                             width: 30,
@@ -6684,7 +6895,9 @@ class TracksView extends StatelessWidget {
           child: ListView.builder(
             padding: const EdgeInsets.only(bottom: 12),
             itemCount: tracks.length,
-            itemExtent: 56, // fixed height → smooth scrolling at 10k+ tracks
+            // Fixed height → smooth scrolling at 10k+ tracks. Taller on a television because the
+            // text in the row is scaled 1.35x there and 56 would cut the second line off.
+            itemExtent: isTv ? 76 : 56,
             itemBuilder: (_, i) {
               final t = tracks[i];
               final isCurrent = !player.radioMode && player.current?.path == t.path;
@@ -6737,7 +6950,9 @@ class TracksView extends StatelessWidget {
                       // horen nooit hetzelfde te betekenen.
                       SizedBox(
                         width: 34,
-                        child: IconButton(
+                        child: TvLabelled(
+                                 label: 'Nummer verwijderen',
+                                 child: IconButton(
                           icon: const Icon(Icons.delete_outline_rounded, size: 17),
                           color: _muted,
                           tooltip: 'Nummer verwijderen',
@@ -6745,6 +6960,7 @@ class TracksView extends StatelessWidget {
                           constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                           onPressed: () => _confirmDelete(context, '“${t.title}”', [t.path]),
                         ),
+                               ),
                       ),
                       const SizedBox(width: 2),
                       Icon(isCurrent && player.playing ? Icons.volume_up_rounded : Icons.play_arrow_rounded,
@@ -6916,7 +7132,12 @@ class _HomeStartViewState extends State<HomeStartView> {
           ),
           // Taller than the tile itself: a horizontal ListView gives its children a TIGHT height
           // and clips them, so without slack the hover growth would be sliced off top and bottom.
-          SizedBox(height: 204, child: row),
+          //
+          // A television needs more slack than a mouse does. The tile is about 179 tall; growing it
+          // by [tileFocusScale] adds roughly 25, and its drop shadow reaches further still. At 204
+          // the focused tile on the Shield would touch the ceiling of its own row and lose the
+          // shadow that lifts it off the background — which, with the ring gone, is half the cue.
+          SizedBox(height: isTv ? 236 : 204, child: row),
         ],
       );
 
@@ -7050,9 +7271,10 @@ class _HoverCardState extends State<_HoverCard> {
           onLongPress: widget.onLongPress,
           borderRadius: BorderRadius.circular(14),
           scaleOnFocus: false,
+          ringOnFocus: false,
           onFocusChange: (v) => setState(() => _hover = v),
           child: AnimatedScale(
-            scale: _hover ? 1.06 : 1,
+            scale: _hover ? tileFocusScale : 1,
             duration: const Duration(milliseconds: 170),
             curve: Curves.easeOut,
             // min + centred: the row hands out a tight height, and a Column that fills it would
@@ -7199,11 +7421,14 @@ class _OntdekViewState extends State<OntdekView> {
               const Expanded(
                   child: Text('Nieuwe muziek op basis van je bibliotheek',
                       style: TextStyle(color: _muted, fontSize: 13))),
-              IconButton(
+              TvLabelled(
+                label: 'Ververs',
+                child: IconButton(
                   onPressed: _busy ? null : _load,
                   icon: const Icon(Icons.refresh_rounded),
                   color: _muted,
                   tooltip: 'Ververs'),
+              ),
             ],
           ),
         ),
@@ -7252,11 +7477,14 @@ class _OntdekViewState extends State<OntdekView> {
                       child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))))
                   : TvLabelled(label: 'Afspelen', child: IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, tooltip: 'Afspelen', onPressed: () => _play(i, t))),
               TvLabelled(label: 'Radio', child: IconButton(icon: const Icon(Icons.radio_rounded, size: 20), color: _muted, tooltip: 'Radio hieruit', onPressed: () => startRadio(context, t.artist))),
-              IconButton(
+              TvLabelled(
+                label: 'Bronnen / download',
+                child: IconButton(
                   icon: Icon(open ? Icons.expand_less_rounded : Icons.download_rounded, size: 20),
                   color: _muted,
                   tooltip: 'Bronnen / download',
                   onPressed: () => setState(() => _expanded = open ? null : i)),
+              ),
             ],
           ),
         ),
@@ -7580,7 +7808,9 @@ class _DlRow extends StatelessWidget {
             width: 34,
             child: job.busy && job.canCancel
                 ? Consumer<DownloadManager>(
-                    builder: (_, dm, __) => IconButton(
+                    builder: (_, dm, __) => TvLabelled(
+                                              label: 'Download stoppen',
+                                              child: IconButton(
                       icon: const Icon(Icons.close_rounded, size: 16),
                       color: _muted,
                       tooltip: 'Download stoppen',
@@ -7588,6 +7818,7 @@ class _DlRow extends StatelessWidget {
                       constraints: const BoxConstraints(),
                       onPressed: () => dm.cancelJob(job),
                     ),
+                                            ),
                   )
                 : null,
           ),
@@ -7682,13 +7913,19 @@ Widget _downloadControl(BuildContext context,
         return const Padding(padding: EdgeInsets.all(9), child: Icon(Icons.check_circle_rounded, color: _accent2, size: 20));
       }
       if (status == 'failed') {
-        return IconButton(
+        return TvLabelled(
+                 label: job?.detail != null ? 'Mislukt: ${job!.detail} — opnieuw' : 'Mislukt — opnieuw proberen',
+                 child: IconButton(
             icon: const Icon(Icons.refresh_rounded),
             color: Colors.redAccent,
             tooltip: job?.detail != null ? 'Mislukt: ${job!.detail} — opnieuw' : 'Mislukt — opnieuw proberen',
-            onPressed: onDownload);
+            onPressed: onDownload),
+               );
       }
-      return IconButton(icon: const Icon(Icons.download_rounded), color: _accent, tooltip: tooltip, onPressed: onDownload);
+      return TvLabelled(
+               label: tooltip,
+               child: IconButton(icon: const Icon(Icons.download_rounded), color: _accent, tooltip: tooltip, onPressed: onDownload),
+             );
     },
   );
 }
@@ -8505,7 +8742,7 @@ Widget _netCover(String? url, {double size = 160, double radius = 12, bool circl
     decoration: BoxDecoration(shape: shape, borderRadius: br),
     child: Image.network(url,
         fit: BoxFit.cover,
-        cacheWidth: _decodeWidth(size),
+        cacheWidth: decodeWidth(size),
         errorBuilder: (_, __, ___) => placeholder,
         loadingBuilder: (c, w, p) => p == null ? w : placeholder),
   );
@@ -8736,7 +8973,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
               const SizedBox(height: 10),
               TextField(
                 controller: ctrl,
-                autofocus: true,
+                autofocus: !isTv,
                 style: const TextStyle(fontSize: 13),
                 decoration: InputDecoration(
                   isDense: true,
@@ -9522,16 +9759,22 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
                               ],
                             ),
                           ),
-                          IconButton(
+                          TvLabelled(
+                            label: 'Afspelen',
+                            child: IconButton(
                               icon: const Icon(Icons.play_arrow_rounded, size: 22),
                               color: _accent,
                               tooltip: 'Afspelen',
                               onPressed: () => _play(f)),
-                          IconButton(
+                          ),
+                          TvLabelled(
+                            label: 'Download dit nummer',
+                            child: IconButton(
                               icon: const Icon(Icons.download_rounded, size: 20),
                               color: _muted,
                               tooltip: 'Download dit nummer',
                               onPressed: () => _download(f)),
+                          ),
                         ],
                       ),
                     );
@@ -9638,6 +9881,16 @@ class _HeroCarouselState extends State<HeroCarousel> {
   void _restart() {
     _timer?.cancel();
     if (widget.hits.length < 2) return;
+    // Never on a television, and this is not a performance decision — it is a correctness one.
+    //
+    // A PageView builds only the visible page. When the slide changes, the button you had the
+    // highlight on is unmounted: the ring vanishes and OK does nothing, mid-read, on the first
+    // screen the app shows. The mouse escape hatch does not apply, because `_hover` is only ever
+    // set by a MouseRegion and a remote has no pointer.
+    //
+    // It happens to also stop two full-screen 28-sigma blurs sliding across a Tegra X1 every seven
+    // seconds, which is the most expensive thing the home screen does. But the reason is the focus.
+    if (isTv) return;
     _timer = Timer.periodic(const Duration(seconds: 7), (_) {
       if (!mounted || _hover || !_page.hasClients) return;
       _page.animateToPage((_index + 1) % widget.hits.length,
@@ -9707,7 +9960,13 @@ class _HeroCarouselState extends State<HeroCarousel> {
 
   Widget _arrow(Alignment side, IconData icon, int delta) => Align(
         alignment: side,
-        child: AnimatedOpacity(
+        // Invisible is not the same as absent. Opacity 0 leaves the InkWell in the traversal, and
+        // the focus ring is drawn inside that same Opacity — so on a television pressing right from
+        // "Bekijken" sent the highlight into a transparent circle and OK then paged the carousel
+        // for no visible reason. Nothing to see, nothing to land on.
+        child: ExcludeFocus(
+          excluding: !_hover,
+          child: AnimatedOpacity(
           opacity: _hover ? 1 : 0,
           duration: const Duration(milliseconds: 180),
           child: Padding(
@@ -9722,7 +9981,7 @@ class _HeroCarouselState extends State<HeroCarousel> {
               ),
             ),
           ),
-        ),
+        )),
       );
 
   Widget _slide(CatalogAlbumHit hit) {
@@ -9750,7 +10009,14 @@ class _HeroCarouselState extends State<HeroCarousel> {
             if (cover != null)
               ImageFiltered(
                 imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-                child: Image.network(cover, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox()),
+                // Decoded at 64 and blown up, not decoded at 1000 and blurred. At sigma 28 the two
+                // are indistinguishable — the blur throws away everything a bigger decode bought —
+                // but one costs 16 kB and the other 4 MB, seven slides at a time.
+                child: Image.network(cover,
+                    fit: BoxFit.cover,
+                    cacheWidth: 64,
+                    filterQuality: FilterQuality.low,
+                    errorBuilder: (_, __, ___) => const SizedBox()),
               ),
             // Without this the blurred art is too busy to read white text on. Kept dark even at
             // the far edge: a mostly-white sleeve blurs to near-white and washed the banner out.
@@ -9777,7 +10043,10 @@ class _HeroCarouselState extends State<HeroCarousel> {
                       height: isCompact(context) ? 118 : 168,
                       child: cover == null
                           ? Container(color: _panel2)
-                          : Image.network(cover, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(color: _panel2)),
+                          : Image.network(cover,
+                              fit: BoxFit.cover,
+                              cacheWidth: decodeWidth(isCompact(context) ? 118 : 168),
+                              errorBuilder: (_, __, ___) => Container(color: _panel2)),
                     ),
                   ),
                   SizedBox(width: isCompact(context) ? 14 : 24),
@@ -9910,8 +10179,15 @@ class _ArtistBackdropState extends State<ArtistBackdrop> {
               // Overscanned, or the blur samples past the image and the edges fade to nothing.
               child: Transform.scale(
                 scale: 1.25,
+                // Same argument as the hero backdrop: at sigma 60 nothing survives that a 96-point
+                // decode did not already have, and a full-resolution artist portrait behind a
+                // screen-filling blur is the most expensive thing on this page.
                 child: Image.memory(img,
-                    fit: BoxFit.cover, alignment: Alignment.topCenter, errorBuilder: (_, __, ___) => const SizedBox()),
+                    fit: BoxFit.cover,
+                    cacheWidth: 96,
+                    filterQuality: FilterQuality.low,
+                    alignment: Alignment.topCenter,
+                    errorBuilder: (_, __, ___) => const SizedBox()),
               ),
             ),
           ),
@@ -10448,7 +10724,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(6),
                 child: Image.memory(_back!,
-                    height: 116, fit: BoxFit.contain, cacheWidth: _decodeWidth(200)),
+                    height: 116, fit: BoxFit.contain, cacheWidth: decodeWidth(200)),
               ),
             ),
           ],
@@ -10633,6 +10909,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
         // status bar had nothing keeping it clear. The backdrop stays behind it — only the
         // content is inset.
         child: SafeArea(
+            // A television reports no insets, so SafeArea alone is a no-op there; this is the
+            // margin that keeps the back arrow off the part of the picture a set cuts away.
+            minimum: tvOverscan,
         bottom: false,
         child: CustomScrollView(
         slivers: [
@@ -11280,6 +11559,9 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       // the cover and the title were drawn UNDER the clock and the wifi icons. The album page
       // escaped this only because a SliverAppBar puts that inset in by itself.
       body: SafeArea(
+          // A television reports no insets, so SafeArea alone is a no-op there; this is the
+          // margin that keeps the back arrow off the part of the picture a set cuts away.
+          minimum: tvOverscan,
         bottom: false,
         child: ListView(
         padding: const EdgeInsets.only(bottom: 40),
@@ -11318,6 +11600,10 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                       ])),
                       const SizedBox(height: 12),
                       FilledButton.icon(
+                        // The one action of this page, and where the highlight starts on a
+                        // television — otherwise the first arrow press finds the back arrow and OK
+                        // leaves the record you just opened.
+                        autofocus: isTv,
                         style: FilledButton.styleFrom(backgroundColor: _panel2, foregroundColor: Colors.white),
                         icon: Icon(_expanded == _albumLevel ? Icons.expand_less_rounded : Icons.travel_explore_rounded, size: 18),
                         label: const Text('Bronnen voor album'),
@@ -11503,7 +11789,9 @@ class _AboutSectionState extends State<_AboutSection> {
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
             ),
             const SizedBox(width: 10),
-            IconButton(
+            TvLabelled(
+              label: 'Versie kopiëren',
+              child: IconButton(
               icon: const Icon(Icons.copy_rounded, size: 15),
               color: _muted,
               tooltip: 'Versie kopiëren',
@@ -11514,14 +11802,22 @@ class _AboutSectionState extends State<_AboutSection> {
                 );
               },
             ),
+            ),
           ],
         ),
         if (_path.isNotEmpty) ...[
           const SizedBox(height: 6),
           // Zero-width spaces after each separator: a path has no spaces, so Flutter would
           // otherwise break it after the "C:" and the rest reads as if it started at \Users.
-          SelectableText(_path.replaceAll(r'\', '\\\u200B'),
-              style: const TextStyle(color: _muted, fontSize: 11, height: 1.35)),
+          // Plain Text on a television. SelectableText builds an EditableText, and that takes the
+          // four arrows for selection without opening a keyboard to explain why the highlight
+          // stopped moving — the worst kind of dead end, at the bottom of Settings where you were
+          // heading for "Opslaan". There is nothing to copy a path to on a TV anyway.
+          isTv
+              ? Text(_path.replaceAll(r'\', '\\\u200B'),
+                  style: const TextStyle(color: _muted, fontSize: 11, height: 1.35))
+              : SelectableText(_path.replaceAll(r'\', '\\\u200B'),
+                  style: const TextStyle(color: _muted, fontSize: 11, height: 1.35)),
         ],
       ],
     );
@@ -11977,18 +12273,24 @@ class _SharingSectionState extends State<_SharingSection> {
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          IconButton(
+                          TvLabelled(
+                            label: _showToken ? 'Verbergen' : 'Tonen',
+                            child: IconButton(
                             icon: Icon(_showToken ? Icons.visibility_off_rounded : Icons.visibility_rounded,
                                 size: 15),
                             color: _muted,
                             tooltip: _showToken ? 'Verbergen' : 'Tonen',
                             onPressed: () => setState(() => _showToken = !_showToken),
                           ),
-                          IconButton(
+                          ),
+                          TvLabelled(
+                            label: 'Code kopiëren',
+                            child: IconButton(
                             icon: const Icon(Icons.copy_rounded, size: 15),
                             color: _muted,
                             tooltip: 'Code kopiëren',
                             onPressed: () => _copy(sharing.token, 'Toegangscode'),
+                          ),
                           ),
                         ],
                       ),
@@ -12421,7 +12723,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
               const SizedBox(height: 10),
               TextField(
                 controller: ctrl,
-                autofocus: true,
+                autofocus: !isTv,
                 onSubmitted: (v) => Navigator.pop(context, v.trim()),
                 decoration: InputDecoration(
                   isDense: true,
@@ -13085,7 +13387,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
       child: front == null
           ? Container(width: s, height: s, color: _panel2, child: const Icon(Icons.album, color: _muted))
           : Image.memory(front,
-              width: s, height: s, fit: BoxFit.cover, cacheWidth: _decodeWidth(s)),
+              width: s, height: s, fit: BoxFit.cover, cacheWidth: decodeWidth(s)),
     );
 
     if (disc == null) return sleeve;
@@ -13110,7 +13412,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
               fit: BoxFit.cover,
               // This one rotates sixty times a second. Decoding it at 1200px to spin it inside a
               // 600px circle is the most expensive picture in the app.
-              cacheWidth: _decodeWidth(s * .92)),
+              cacheWidth: decodeWidth(s * .92)),
         ),
       ),
     );
@@ -13125,7 +13427,12 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
           Positioned(
             left: 0,
             top: s * .04,
-            child: AnimatedBuilder(
+            // The disc's own clip is cached below; this boundary is about everything ABOVE it.
+            // RenderTransform is not a repaint boundary, so a moving disc marked the nearest one
+            // above — the route — and the whole screen was re-recorded every frame, including the
+            // full-bleed cover behind it and its 44-blur shadow. Now the frame stops here.
+            child: RepaintBoundary(
+                child: AnimatedBuilder(
               animation: _slide,
               // Translate rather than reposition: a Positioned inside a builder would relayout the
               // Stack every frame, where a transform only moves an already-painted layer.
@@ -13142,7 +13449,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
                 child: child,
               ),
               child: spinningDisc,
-            ),
+            )),
           ),
           // Never rebuilt: it is outside the builder entirely, and it never changes while a record
           // plays.
@@ -13617,11 +13924,14 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                   ]),
                 ]),
               ),
-              IconButton(
+              TvLabelled(
+                label: 'Nummering van deze uitgave overnemen',
+                child: IconButton(
                 icon: const Icon(Icons.format_list_numbered_rounded, size: 19),
                 tooltip: 'Nummering van deze uitgave overnemen',
                 constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
                 onPressed: () => _renumber(c),
+              ),
               ),
               if (isPinned) const Icon(Icons.check_circle_rounded, color: _accent, size: 20),
             ]),
@@ -14652,7 +14962,7 @@ class _PickAlbumDialogState extends State<PickAlbumDialog> {
             const SizedBox(height: 14),
             TextField(
               controller: _query,
-              autofocus: true,
+              autofocus: !isTv,
               onChanged: (_) => setState(() {}),
               decoration: const InputDecoration(labelText: 'Zoek een album…', isDense: true),
             ),
