@@ -2025,21 +2025,27 @@ class _TvNavRailState extends State<TvNavRail> {
   Widget _railItem(IconData icoon, String label, bool selected, VoidCallback onTap,
       {int badge = 0}) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 4, right: 8),
+      padding: const EdgeInsets.only(bottom: 3, right: 8),
       child: Pressable(
         onPressed: onTap,
         borderRadius: BorderRadius.circular(10),
         scaleOnFocus: false,
         child: Container(
-          height: 46,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
+          // 34, and that number is the whole screen's arithmetic, not a taste.
+          //
+          // The canvas is 540 points tall. Take the overscan off both ends and about 470 are left
+          // for twelve rows: search, ten sections, settings. At 46 they needed 600 and five of them
+          // fell below the fold — reachable by scrolling, invisible until you went looking, which is
+          // the exact fault the horizontal strip had and the reason the rail exists.
+          height: 34,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
           decoration: BoxDecoration(
             color: selected ? _accent.withValues(alpha: .18) : Colors.transparent,
             borderRadius: BorderRadius.circular(10),
           ),
           child: Row(
             children: [
-              Icon(icoon, size: 22, color: selected ? Colors.white : _muted),
+              Icon(icoon, size: 20, color: selected ? Colors.white : _muted),
               if (badge > 0 && !_open)
                 // Collapsed there is no room for the count beside the word, and "something is
                 // downloading" is exactly what you want to see from the couch without opening it.
