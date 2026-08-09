@@ -17,6 +17,7 @@ Widget _app(Widget child) => MaterialApp(
     );
 
 void main() {
+  pijlPoortTests();
   setUp(() {
     setTvModeForTest(true);
     // What initTvMode does on a TV. Without it Flutter draws no highlight at all, which is exactly
@@ -388,4 +389,112 @@ class _BackSpyState extends State<_BackSpy> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) => widget.child;
+}
+
+/// De pijltjes op het "Nu speelt"-scherm.
+///
+/// Links en rechts zijn op een televisie óók hoe de markering tussen knoppen loopt. Ze afvangen
+/// voor vorige/volgende mag dus alleen daar waar ze niets anders doen — op de hoes. Deze test pint
+/// de poort die dat regelt: staat de markering ergens anders, dan moeten de pijlen ongemoeid door.
+void pijlPoortTests() {
+  group('links en rechts alleen vanaf de hoes', () {
+    testWidgets('op een knop verplaatsen de pijlen gewoon de markering', (tester) async {
+      final links = FocusNode(debugLabel: 'links');
+      final rechts = FocusNode(debugLabel: 'rechts');
+      var afgevangen = 0;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Focus(
+            canRequestFocus: false,
+            skipTraversal: true,
+            // Dezelfde vorm als op het echte scherm: een poort die alleen sluit wanneer de
+            // markering op de hoes staat. Hier staat hij op een knop, dus hij moet openblijven.
+            onKeyEvent: (_, e) {
+              if (e is! KeyDownEvent) return KeyEventResult.ignored;
+              if (e.logicalKey == LogicalKeyboardKey.arrowRight ||
+                  e.logicalKey == LogicalKeyboardKey.arrowLeft) {
+                afgevangen++;
+                return KeyEventResult.ignored; // poort dicht: markering mag door
+              }
+              return KeyEventResult.ignored;
+            },
+            child: Row(children: [
+              Pressable(focusNode: links, autofocus: true, onPressed: () {}, child: const Text('vorige')),
+              Pressable(focusNode: rechts, onPressed: () {}, child: const Text('volgende')),
+            ]),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(links.hasFocus, isTrue);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pumpAndSettle();
+      expect(rechts.hasFocus, isTrue,
+          reason: 'een handler die `ignored` teruggeeft mag de markering niet tegenhouden');
+      expect(afgevangen, 1, reason: 'de handler zag de toets wél — hij liet hem alleen door');
+    });
+
+    testWidgets('afgevangen met `handled` blijft de markering staan', (tester) async {
+      final een = FocusNode(debugLabel: 'een');
+      final twee = FocusNode(debugLabel: 'twee');
+      var volgende = 0;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Focus(
+            canRequestFocus: false,
+            skipTraversal: true,
+            onKeyEvent: (_, e) {
+              if (e is! KeyDownEvent) return KeyEventResult.ignored;
+              if (e.logicalKey == LogicalKeyboardKey.arrowRight) {
+                volgende++;
+                return KeyEventResult.handled;
+              }
+              return KeyEventResult.ignored;
+            },
+            child: Row(children: [
+              Pressable(focusNode: een, autofocus: true, onPressed: () {}, child: const Text('hoes')),
+              Pressable(focusNode: twee, onPressed: () {}, child: const Text('knop')),
+            ]),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pumpAndSettle();
+      expect(volgende, 1);
+      expect(een.hasFocus, isTrue,
+          reason: 'dit is de kern: op de hoes gaat de pijl naar het volgende NUMMER, '
+              'niet naar de volgende knop');
+    });
+
+    testWidgets('een ingedrukt gehouden pijl telt maar één keer', (tester) async {
+      var keer = 0;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Focus(
+            autofocus: true,
+            onKeyEvent: (_, e) {
+              // Precies de poort van het echte scherm: alleen KeyDownEvent.
+              if (e is! KeyDownEvent) return KeyEventResult.ignored;
+              if (e.logicalKey != LogicalKeyboardKey.arrowRight) return KeyEventResult.ignored;
+              keer++;
+              return KeyEventResult.handled;
+            },
+            child: const SizedBox(width: 100, height: 100),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowRight);
+      await tester.sendKeyRepeatEvent(LogicalKeyboardKey.arrowRight);
+      await tester.sendKeyRepeatEvent(LogicalKeyboardKey.arrowRight);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pumpAndSettle();
+      expect(keer, 1,
+          reason: 'anders raast één lange druk door de hele wachtrij');
+    });
+  });
 }

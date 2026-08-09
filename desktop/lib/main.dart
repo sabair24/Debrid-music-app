@@ -849,6 +849,7 @@ class DebridApp extends StatelessWidget {
     // saw a single back press.
     return TvTextFieldEscape(
         child: MaterialApp(
+      navigatorKey: appNavigator,
       title: 'DebridMusic',
       debugShowCheckedModeBanner: false,
       // Everything on a television is read from three metres away, and this app was sized for a
@@ -859,12 +860,43 @@ class DebridApp extends StatelessWidget {
       // One scaler rather than 375 edits, and applied in `builder` so it covers dialogs and pushed
       // routes too. 1.35 lands the body text between Material 3's TV minimums (Body Small 16, Body
       // Medium 18) without the 1.45 that would push two-line titles out of every tile.
-      builder: (context, child) => isTv
-          ? MediaQuery(
-              data: MediaQuery.of(context).copyWith(textScaler: const TextScaler.linear(1.35)),
-              child: child ?? const SizedBox.shrink(),
-            )
-          : (child ?? const SizedBox.shrink()),
+      builder: (context, child) {
+        var inhoud = child ?? const SizedBox.shrink();
+        if (isTv) {
+          inhoud = MediaQuery(
+            data: MediaQuery.of(context).copyWith(textScaler: const TextScaler.linear(1.35)),
+            child: inhoud,
+          );
+        }
+        // De eerste sneltoetslaag van deze app, en hij staat hier omdat `builder` BOVEN de
+        // Navigator zit: daardoor werkt hij ook terwijl een dialoog openstaat.
+        //
+        // Ctrl/Cmd+P is vrij (de app kent geen printen en geen snelzoeken), en `gameButtonY` is
+        // vrij op een controller — `Pressable` claimt alleen `gameButtonA`. Voor de Shield-
+        // afstandsbediening is er geen vrije toets: cijfers heeft hij niet, de mediatoetsen horen
+        // bij de MediaSession, en lang-OK is al bezet. Daar is de spelerbalk de weg, en die staat
+        // sinds deze wijziging op élke pagina.
+        //
+        // Niet vuren terwijl je typt: anders steelt de sneltoets een aanslag uit een tekstveld.
+        return Shortcuts(
+          shortcuts: const <ShortcutActivator, Intent>{
+            SingleActivator(LogicalKeyboardKey.keyP, control: true): NaarNuSpeeltIntent(),
+            SingleActivator(LogicalKeyboardKey.keyP, meta: true): NaarNuSpeeltIntent(),
+            SingleActivator(LogicalKeyboardKey.gameButtonY): NaarNuSpeeltIntent(),
+          },
+          child: Actions(
+            actions: <Type, Action<Intent>>{
+              NaarNuSpeeltIntent: CallbackAction<NaarNuSpeeltIntent>(onInvoke: (_) {
+                if (TvTextFieldEscape.editingText()) return null;
+                final ctx = appNavigator.currentContext;
+                if (ctx != null) naarNuSpeelt(ctx);
+                return null;
+              }),
+            },
+            child: inhoud,
+          ),
+        );
+      },
       theme: ThemeData(
         useMaterial3: true,
         brightness: Brightness.dark,
@@ -4911,6 +4943,18 @@ class _PersonPageState extends State<PersonPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _bg,
+      // De spelerbalk hoort op ELKE pagina, niet alleen in de shell.
+      //
+      // Hij stond op precies twee plekken: het hoofdscherm en de albumpagina. Op de artiest-,
+      // persoon-, afspeellijst-, stijl- en online-albumpagina was er dus geen speler in beeld —
+      // en omdat de hoes in die balk de ENIGE ingang naar "Nu speelt" is, was dat scherm daar
+      // helemaal onbereikbaar. Op de Shield gemeten: negen drukken vanaf Start, en vanaf een
+      // gepushte pagina geen enkele weg.
+      //
+      // In de `bottomNavigationBar`-sleuf en niet als Column: Scaffold legt de body er dan
+      // vanzelf boven, en de balk blijft binnen deze route — dus `Navigator.of(context)` in de
+      // wachtrij- en speakerknop wijst nog naar de goede plek.
+      bottomNavigationBar: const PlayerBar(),
       body: ArtistBackdrop(
         name: widget.name,
         child: CustomScrollView(
@@ -5529,7 +5573,9 @@ class PlayerBar extends StatelessWidget {
                   onPressed: t == null
                       ? null
                       : () => Navigator.of(context)
-                          .push(MaterialPageRoute(builder: (_) => const NowPlayingScreen())),
+                          .push(MaterialPageRoute(
+                              builder: (_) => const NowPlayingScreen(),
+                              settings: const RouteSettings(name: _nuSpeeltRoute))),
                   borderRadius: BorderRadius.circular(8),
                   child: MouseRegion(
                     cursor: t == null ? MouseCursor.defer : SystemMouseCursors.click,
@@ -5936,6 +5982,18 @@ class AfspeellijstPagina extends StatelessWidget {
 
     return Scaffold(
       backgroundColor: _bg,
+      // De spelerbalk hoort op ELKE pagina, niet alleen in de shell.
+      //
+      // Hij stond op precies twee plekken: het hoofdscherm en de albumpagina. Op de artiest-,
+      // persoon-, afspeellijst-, stijl- en online-albumpagina was er dus geen speler in beeld —
+      // en omdat de hoes in die balk de ENIGE ingang naar "Nu speelt" is, was dat scherm daar
+      // helemaal onbereikbaar. Op de Shield gemeten: negen drukken vanaf Start, en vanaf een
+      // gepushte pagina geen enkele weg.
+      //
+      // In de `bottomNavigationBar`-sleuf en niet als Column: Scaffold legt de body er dan
+      // vanzelf boven, en de balk blijft binnen deze route — dus `Navigator.of(context)` in de
+      // wachtrij- en speakerknop wijst nog naar de goede plek.
+      bottomNavigationBar: const PlayerBar(),
       appBar: AppBar(
         backgroundColor: _bg,
         title: Text(lijst.name),
@@ -6603,7 +6661,9 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
   final open = t == null
       ? null
       : () => Navigator.of(context)
-          .push(MaterialPageRoute(builder: (_) => const NowPlayingScreen()));
+          .push(MaterialPageRoute(
+              builder: (_) => const NowPlayingScreen(),
+              settings: const RouteSettings(name: _nuSpeeltRoute)));
 
   return Container(
     height: 66 + bottomInset,
@@ -6707,7 +6767,16 @@ double _sleeve(BuildContext context) {
   // five transport buttons, and those are the reason the screen exists: a sleeve sized from width
   // alone pushes them under the fold on a tall, narrow screen. Sideways the height is the binding
   // constraint anyway, so the looser factor there costs nothing.
-  final byHeight = size.height * (narrow ? 0.34 : 0.46);
+  //
+  // Op een televisie is die verhouding te gulzig. Nagerekend op de Shield (960x540 punten, minus 54
+  // overscan = 486 bruikbaar): 0.46 geeft een hoes van 248, en met de titel, de artiestregel, de
+  // spoelbalk en de transportrij erbij komt de kolom op 566. Dat is 80 punten te veel, en die 80
+  // vallen onderaan weg — precies de rij met vorige, afspelen en volgende. Op het toestel gezien:
+  // van de witte speelknop blijft een randje over, van vorige en volgende niets.
+  //
+  // 0.34 is wat een telefoon al gebruikt om diezelfde reden, en op 540 punten geeft dat 184 —
+  // ruim binnen wat er overblijft nadat de rest zijn deel heeft.
+  final byHeight = size.height * (narrow || isTv ? 0.34 : 0.46);
   final smaller = byWidth < byHeight ? byWidth : byHeight;
   // Het plafond hangt van de indeling af. Op een breed scherm was 360 de bindende grens en niet de
   // ruimte: 0.46 van 1440 punten hoog is 662, teruggeklemd naar 360 — een postzegel midden op een groot
@@ -6727,6 +6796,17 @@ class NowPlayingScreen extends StatefulWidget {
 }
 
 class _NowPlayingScreenState extends State<NowPlayingScreen> {
+  /// Staat de markering op de hoes? Dan — en alleen dan — zijn links en rechts vorige en volgende.
+  ///
+  /// De voorwaarde is de hele reparatie. Links en rechts zijn op een televisie óók hoe Flutter de
+  /// markering tussen knoppen verplaatst, en op dit scherm staan shuffle, spoelen, vorige, spelen,
+  /// volgende, herhalen en de speakerkeuze allemaal naast elkaar in één rij. Ze onvoorwaardelijk
+  /// afvangen zou zeven van de acht knoppen onbereikbaar maken — waaronder de speakerkeuze, en die
+  /// is de enige weg om de muziek terug te halen als hij eenmaal in een andere kamer speelt.
+  ///
+  /// Op de hoes staan links en rechts alleen: daar heeft de markering geen buren, dus daar doen ze
+  /// vandaag aantoonbaar niets. Er wordt dus niets afgenomen.
+  bool _opHoes = false;
   /// The sleeve the AlbumArt below settled on, so enlarging it shows THAT image.
   ///
   /// The zoom used to open the player's own cover, which is captured when a track starts and knows
@@ -6747,7 +6827,14 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
     final prog = x.progress;
     return Scaffold(
       backgroundColor: _bg,
-      body: Stack(
+      // Toetsen bubbelen vanaf de gefocuste knop hierheen. `canRequestFocus: false` en
+      // `skipTraversal: true`, want dit mag géén extra stop in de markering worden — het kijkt
+      // alleen mee. Deze route ligt bovenop, dus lijsten, rasters en de rail eronder zien hem nooit.
+      body: Focus(
+        canRequestFocus: false,
+        skipTraversal: true,
+        onKeyEvent: (_, e) => _pijlAlsNummerknop(e, x),
+        child: Stack(
         children: [
           if (p.currentCover != null)
             Positioned.fill(
@@ -6763,21 +6850,38 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
               minimum: tvOverscan,
             child: Column(
               children: [
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: IconButton(
-                    icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 30),
-                    onPressed: () => Navigator.pop(context),
+                // Geen chevron op een televisie: 48 punten hoogte voor iets dat de BACK-toets van de
+                // afstandsbediening al doet, op een scherm waar elke punt telt.
+                if (!isTv)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: IconButton(
+                      icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 30),
+                      onPressed: () => Navigator.pop(context),
+                    ),
                   ),
-                ),
                 const Spacer(),
                 Pressable(
+                  // Op tv is de hoes de rustplek: hier landt de markering bij openen, OK pauzeert,
+                  // en links/rechts zijn vorige en volgende. Uitvergroten is een muisgebaar — er
+                  // hoort een vergrootglas-cursor bij — en verhuist daarom naar een lange druk.
+                  autofocus: isTv,
+                  onFocusChange: (v) {
+                    if (v != _opHoes) setState(() => _opHoes = v);
+                  },
                   // What the sleeve is actually drawing wins; the player's snapshot is only the
                   // fallback for a track whose art has not resolved yet.
-                  onPressed: (_shown ?? p.currentCover) == null
-                      ? null
-                      : () => showDialog(
-                          context: context, builder: (_) => _ZoomView((_shown ?? p.currentCover)!)),
+                  onPressed: isTv
+                      ? (t == null ? null : (casting ? cast.playPause : p.playPause))
+                      : ((_shown ?? p.currentCover) == null
+                          ? null
+                          : () => showDialog(
+                              context: context,
+                              builder: (_) => _ZoomView((_shown ?? p.currentCover)!))),
+                  onLongPress: isTv && (_shown ?? p.currentCover) != null
+                      ? () => showDialog(
+                          context: context, builder: (_) => _ZoomView((_shown ?? p.currentCover)!))
+                      : null,
                   borderRadius: BorderRadius.circular(10),
                   child: MouseRegion(
                     cursor: (_shown ?? p.currentCover) == null
@@ -6830,8 +6934,12 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 30),
+                SizedBox(height: isTv ? 16 : 30),
+                // Eén regel op tv, met puntjes. Een titel die naar twee regels loopt kost er 40
+                // bij, en dat is precies wat er niet is — op 540 punten is dit scherm 80 te lang.
                 Text(t?.title ?? '—',
+                    maxLines: isTv ? 1 : null,
+                    overflow: isTv ? TextOverflow.ellipsis : null,
                     style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w800), textAlign: TextAlign.center),
                 const SizedBox(height: 6),
                 Row(
@@ -6848,25 +6956,13 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                           if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
                   ],
                 ),
-                const SizedBox(height: 26),
+                SizedBox(height: isTv ? 14 : 26),
                 SizedBox(
                   width: dialogWidth(context, 540),
                   child: Row(
                     children: [
                       Text(_fmt(position), style: const TextStyle(color: _muted, fontSize: 12)),
-                      // The seek bar below is ExcludeFocus on a television, and unlike the player
-                      // bar this screen offered nothing in its place: you could open Now Playing
-                      // from the bar and then have no way to move through the record at all.
-                      if (isTv)
-                        TvLabelled(
-                          label: '10 seconden terug',
-                          child: IconButton(
-                          icon: const Icon(Icons.replay_10_rounded, size: 22),
-                          color: _muted,
-                          tooltip: '10 seconden terug',
-                          onPressed: _canSeekHere(duration, casting, t) ? () => _seekBy(p, cast, casting, position, duration, -10) : null,
-                        ),
-                        ),
+
                       Expanded(
                         child: SliderTheme(
                           data: SliderTheme.of(context).copyWith(
@@ -6892,16 +6988,6 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                           )),
                         ),
                       ),
-                      if (isTv)
-                        TvLabelled(
-                          label: '10 seconden vooruit',
-                          child: IconButton(
-                          icon: const Icon(Icons.forward_10_rounded, size: 22),
-                          color: _muted,
-                          tooltip: '10 seconden vooruit',
-                          onPressed: _canSeekHere(duration, casting, t) ? () => _seekBy(p, cast, casting, position, duration, 10) : null,
-                        ),
-                        ),
                       Text(_fmt(duration), style: const TextStyle(color: _muted, fontSize: 12)),
                     ],
                   ),
@@ -6952,23 +7038,42 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                         iconSize: 24,
                         color: p.shuffle ? _accent : _muted,
                         onPressed: p.toggleShuffle),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 8),
+                    // Spoelen staat hier, naast vorige en volgende, en niet meer bij de schuifbalk.
+                    //
+                    // Daar zat het in een `TvLabelled`, en dat reserveert altijd 20 punten voor zijn
+                    // bijschrift — ook als er niets getoond wordt. Die 20 punten waren precies wat
+                    // deze rij van het scherm duwde. Naast de andere transportknoppen kost het niets
+                    // extra en staat het bovendien waar je het zoekt.
+                    if (isTv)
+                      IconButton(
+                          icon: const Icon(Icons.replay_10_rounded),
+                          iconSize: 24,
+                          color: _muted,
+                          tooltip: '10 seconden terug',
+                          onPressed: _canSeekHere(duration, casting, t)
+                              ? () => _seekBy(p, cast, casting, position, duration, -10)
+                              : null),
+                    if (isTv) const SizedBox(width: 6),
                     IconButton(
                         icon: const Icon(Icons.skip_previous_rounded),
                         iconSize: 34,
                         color: _text,
-                        onPressed: casting
-                            ? (cast.status?.hasPrev ?? false ? cast.previous : null)
-                            : (p.hasPrev || p.position > const Duration(seconds: 3) ? p.prev : null)),
+                        // Door `_Transport` en niet met een eigen `?? false`.
+                        //
+                        // Deze twee knoppen herhaalden de oude logica die grijs werd zodra de
+                        // speaker één poll zweeg — terwijl de muziek doorliep en dezelfde knop in de
+                        // spelerbalk het wél deed. `x.previous` valt terug op de eigen wachtrij; dat
+                        // is precies waar die helper voor gemaakt is.
+                        onPressed: x.previous),
                     const SizedBox(width: 8),
                     Container(
                       decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
                       child: IconButton(
-                        // Where the highlight lands when Now Playing opens on a television. Without
-                        // it the route opens with nothing marked, so the first press of OK does
-                        // nothing at all and the first arrow press picks whatever happens to sit
-                        // top-left — here the collapse arrow, which closes the screen again.
-                        autofocus: isTv,
+                        // De markering start op tv niet hier maar op de HOES. Dat was ooit deze
+                        // knop, maar die stond op de Shield 80 punten onder de schermrand — dus
+                        // begon het scherm met een ring die je niet kon zien. De hoes staat altijd
+                        // in beeld, en van daaruit zijn links en rechts vorige en volgende.
                         icon: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
                         color: _bg,
                         iconSize: 40,
@@ -6980,10 +7085,18 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                         icon: const Icon(Icons.skip_next_rounded),
                         iconSize: 34,
                         color: _text,
-                        onPressed: casting
-                            ? (cast.status?.hasNext ?? false ? cast.next : null)
-                            : (p.hasNext ? p.next : null)),
-                    const SizedBox(width: 12),
+                        onPressed: x.next),
+                    if (isTv) const SizedBox(width: 6),
+                    if (isTv)
+                      IconButton(
+                          icon: const Icon(Icons.forward_10_rounded),
+                          iconSize: 24,
+                          color: _muted,
+                          tooltip: '10 seconden vooruit',
+                          onPressed: _canSeekHere(duration, casting, t)
+                              ? () => _seekBy(p, cast, casting, position, duration, 10)
+                              : null),
+                    const SizedBox(width: 8),
                     // Shuffle and repeat stay local on purpose: the speaker plays the queue the PC
                     // hands it one track at a time, so changing the order here would take effect on
                     // whatever is sent NEXT and look like it did nothing now.
@@ -7066,9 +7179,66 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
             ),
           ),
         ],
-      ),
+      )),
     );
   }
+
+  /// Links en rechts als vorige en volgende — maar alléén vanaf de hoes.
+  ///
+  /// Overal elders op dit scherm zijn het de pijlen waarmee je tussen de knoppen loopt, en die
+  /// mag je niet afnemen: dan is de speakerkeuze niet meer te bereiken en kun je de muziek niet
+  /// meer terughalen uit een andere kamer.
+  ///
+  /// `KeyRepeatEvent` telt niet mee: een pijl ingedrukt houden zou anders door de hele wachtrij
+  /// razen. En is er geen volgende (of geen vorige), dan gaat de toets terug naar de markering in
+  /// plaats van opgeslokt te worden — een dode toets voelt kapot.
+  KeyEventResult _pijlAlsNummerknop(KeyEvent e, _Transport x) {
+    if (!isTv || !_opHoes || e is! KeyDownEvent) return KeyEventResult.ignored;
+    final actie = e.logicalKey == LogicalKeyboardKey.arrowRight
+        ? x.next
+        : e.logicalKey == LogicalKeyboardKey.arrowLeft
+            ? x.previous
+            : null;
+    if (actie == null) return KeyEventResult.ignored;
+    actie();
+    return KeyEventResult.handled;
+  }
+}
+
+
+/// De sleutel naar de Navigator, zodat "ga naar Nu speelt" van buiten de boom kan.
+final appNavigator = GlobalKey<NavigatorState>();
+
+/// Naar "Nu speelt", vanaf waar je ook bent.
+///
+/// Eén plek, want er waren er twee — allebei in de spelerbalk, en die balk stond op maar twee van
+/// de acht pagina's. Vanaf een artiestpagina of een afspeellijst was er dus geen enkele weg.
+///
+/// Springt terug in plaats van te stapelen: de route krijgt een naam, en staat hij er al, dan
+/// popt hij tot daar. Anders zou tweemaal drukken twee schermen op elkaar leggen en moest je ook
+/// tweemaal terug.
+void naarNuSpeelt(BuildContext context) {
+  final nav = Navigator.of(context);
+  var bestaat = false;
+  nav.popUntil((r) {
+    if (r.settings.name == _nuSpeeltRoute) bestaat = true;
+    return true; // alleen kijken, niets poppen
+  });
+  if (bestaat) {
+    nav.popUntil((r) => r.settings.name == _nuSpeeltRoute);
+    return;
+  }
+  nav.push(MaterialPageRoute(
+    builder: (_) => const NowPlayingScreen(),
+    settings: const RouteSettings(name: _nuSpeeltRoute),
+  ));
+}
+
+const _nuSpeeltRoute = 'nu-speelt';
+
+/// Wat de sneltoets vraagt.
+class NaarNuSpeeltIntent extends Intent {
+  const NaarNuSpeeltIntent();
 }
 
 class _ZoomView extends StatelessWidget {
@@ -11314,6 +11484,18 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
 
     return Scaffold(
       backgroundColor: _bg,
+      // De spelerbalk hoort op ELKE pagina, niet alleen in de shell.
+      //
+      // Hij stond op precies twee plekken: het hoofdscherm en de albumpagina. Op de artiest-,
+      // persoon-, afspeellijst-, stijl- en online-albumpagina was er dus geen speler in beeld —
+      // en omdat de hoes in die balk de ENIGE ingang naar "Nu speelt" is, was dat scherm daar
+      // helemaal onbereikbaar. Op de Shield gemeten: negen drukken vanaf Start, en vanaf een
+      // gepushte pagina geen enkele weg.
+      //
+      // In de `bottomNavigationBar`-sleuf en niet als Column: Scaffold legt de body er dan
+      // vanzelf boven, en de balk blijft binnen deze route — dus `Navigator.of(context)` in de
+      // wachtrij- en speakerknop wijst nog naar de goede plek.
+      bottomNavigationBar: const PlayerBar(),
       body: ArtistBackdrop(
         name: widget.artist.name,
         // Same as the album browse page: this draws its own hero rather than an AppBar, so the
@@ -11966,6 +12148,18 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     final al = widget.album;
     return Scaffold(
       backgroundColor: _bg,
+      // De spelerbalk hoort op ELKE pagina, niet alleen in de shell.
+      //
+      // Hij stond op precies twee plekken: het hoofdscherm en de albumpagina. Op de artiest-,
+      // persoon-, afspeellijst-, stijl- en online-albumpagina was er dus geen speler in beeld —
+      // en omdat de hoes in die balk de ENIGE ingang naar "Nu speelt" is, was dat scherm daar
+      // helemaal onbereikbaar. Op de Shield gemeten: negen drukken vanaf Start, en vanaf een
+      // gepushte pagina geen enkele weg.
+      //
+      // In de `bottomNavigationBar`-sleuf en niet als Column: Scaffold legt de body er dan
+      // vanzelf boven, en de balk blijft binnen deze route — dus `Navigator.of(context)` in de
+      // wachtrij- en speakerknop wijst nog naar de goede plek.
+      bottomNavigationBar: const PlayerBar(),
       // Its own header rather than an AppBar, so nothing was adding the status bar's height —
       // the cover and the title were drawn UNDER the clock and the wifi icons. The album page
       // escaped this only because a SliverAppBar puts that inset in by itself.
@@ -16149,6 +16343,18 @@ class _StylePageState extends State<StylePage> {
 
     return Scaffold(
       backgroundColor: _bg,
+      // De spelerbalk hoort op ELKE pagina, niet alleen in de shell.
+      //
+      // Hij stond op precies twee plekken: het hoofdscherm en de albumpagina. Op de artiest-,
+      // persoon-, afspeellijst-, stijl- en online-albumpagina was er dus geen speler in beeld —
+      // en omdat de hoes in die balk de ENIGE ingang naar "Nu speelt" is, was dat scherm daar
+      // helemaal onbereikbaar. Op de Shield gemeten: negen drukken vanaf Start, en vanaf een
+      // gepushte pagina geen enkele weg.
+      //
+      // In de `bottomNavigationBar`-sleuf en niet als Column: Scaffold legt de body er dan
+      // vanzelf boven, en de balk blijft binnen deze route — dus `Navigator.of(context)` in de
+      // wachtrij- en speakerknop wijst nog naar de goede plek.
+      bottomNavigationBar: const PlayerBar(),
       body: CustomScrollView(slivers: [
         SliverAppBar(
           backgroundColor: _bg,
