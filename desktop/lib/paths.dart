@@ -53,6 +53,23 @@ File appFile(String name) => File('$appDir${Platform.pathSeparator}$name');
 Directory appSubdir(String name) =>
     Directory('$appDir${Platform.pathSeparator}$name')..createSync(recursive: true);
 
+/// Op Windows en macOS is één verschil in schrijfwijze geen ander bestand. Op Linux wel.
+bool get padenZijnHoofdletterOngevoelig => Platform.isWindows || Platform.isMacOS;
+
+/// Eén sleutel voor één bestand, ook als de schrijfwijze verschilt.
+///
+/// **Staat hier omdat het misging toen hij op één plek stond.** [LibraryStore] vouwde zijn levende
+/// paden naar kleine letters en gaf ze zo door aan `AlbumUids.prune`, die ze vergeleek met de
+/// ONGEVOUWEN sleutels van zijn eigen register. Op een wortel met hoofdletters — `D:\Flac music 2024`
+/// — matchte daardoor geen enkel pad, en werd het hele pad→uid-register bij ÉLKE scan leeggegooid.
+///
+/// Gemeten op 09-08-2026: `album_uids.json` had `"paths":{}` naast 33.826 gemunte uids, en
+/// `warm.log` meldde `overgeslagen=228 van 234 albums`. Gevolg: `album_facts.json` was 10 MB die
+/// nooit gelezen werd, en elke albumpagina ging opnieuw het net op.
+///
+/// Wie twee paden vergelijkt vouwt met DEZE functie — beide kanten, altijd.
+String padSleutel(String p) => padenZijnHoofdletterOngevoelig ? p.toLowerCase() : p;
+
 String _fallback() {
   final appData = Platform.environment['APPDATA'];
   if (appData != null && appData.isNotEmpty) {

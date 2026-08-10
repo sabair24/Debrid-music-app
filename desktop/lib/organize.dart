@@ -16,14 +16,27 @@ enum RelKind { album, single, compilation }
 /// Album/artist/track names as the user typed them differ in punctuation ("Backstreet's Back"
 /// with a curly ’ vs a straight ') — which used to split ONE album into two. Normalise for
 /// COMPARISON only (never for display): unify quotes/dashes, drop punctuation, fold whitespace.
+/// De patronen als top-level `final`, niet in de body van [normKey].
+///
+/// Ze stonden binnenin, en dan bouwt Dart bij ELKE aanroep vijf nieuwe RegExp-objecten en compileert
+/// het patroon opnieuw. Deze functie draait per toetsaanslag over de hele bibliotheek en zit ook in
+/// de binnenlus van [redundantAlbums] — dat werd zo een paar duizend verse regexen per letter.
+/// De rest van dit bestand deed het al goed (`_featRe`, `_compilationRe`, `_variousRe`); deze vijf
+/// waren over het hoofd gezien.
+final _krulQuote = RegExp(r'[‘’ʼ´`]');
+final _dubbelQuote = RegExp(r'[“”]');
+final _langStreepje = RegExp(r'[‐-―−]');
+final _nietAlfanumeriek = RegExp(r'[^a-z0-9]+');
+final _spaties = RegExp(r'\s+');
+
 String normKey(String s) {
   final unified = _fold(s
       .toLowerCase()
-      .replaceAll(RegExp(r'[‘’ʼ´`]'), "'")
-      .replaceAll(RegExp(r'[“”]'), '"')
-      .replaceAll(RegExp(r'[‐-―−]'), '-'));
-  final stripped = unified.replaceAll(RegExp(r'[^a-z0-9]+'), ' ');
-  return stripped.trim().replaceAll(RegExp(r'\s+'), ' ');
+      .replaceAll(_krulQuote, "'")
+      .replaceAll(_dubbelQuote, '"')
+      .replaceAll(_langStreepje, '-'));
+  final stripped = unified.replaceAll(_nietAlfanumeriek, ' ');
+  return stripped.trim().replaceAll(_spaties, ' ');
 }
 
 /// Accented letters folded to their plain form, so "Beyoncé" and "Beyonce" are one name.
@@ -170,7 +183,9 @@ int _shapeScore(String s) {
 /// Even looser key, for SEARCH only: drop every non-alphanumeric character entirely (instead of
 /// turning it into a space). normKey("Backstreet's Back") is "backstreet s back", so someone
 /// typing "backstreets back" would find nothing; squashed, both become "backstreetsback".
-String searchKey(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+final _nietAlfanumeriekLos = RegExp(r'[^a-z0-9]');
+
+String searchKey(String s) => s.toLowerCase().replaceAll(_nietAlfanumeriekLos, '');
 
 /// Album names that mean "this is a compilation", not a studio album. Deliberately narrow — a
 /// wrong guess only misfiles, and the user explicitly wants Live/Best-of/compilations KEPT as

@@ -161,6 +161,39 @@ void main() {
       expect(uids.count, 2);
       expect(uids.uidOfPath('/m/6.flac'), isNull);
     });
+
+    test('een wortel MET hoofdletters overleeft de veegbeurt', () {
+      // Dit is de fout die een release lang meeliep, en de reden dat de bestaande toetsen hierboven
+      // hem niet konden zien: die gebruiken `/m/1.flac`, al kleine letters, dus daar viel niets te
+      // vouwen. Sabers wortel is `D:\Flac music 2024` — hoofdletters in élk pad.
+      //
+      // LibraryStore geeft zijn levende paden GEVOUWEN door (library.dart, `_padSleutel`); prune
+      // vergeleek ze met de ongevouwen sleutels van zijn eigen register. Resultaat: geen enkele
+      // treffer, alles als verdwenen bestempeld. Gemeten op de echte pc: `album_uids.json` had
+      // `"paths":{}` naast 33.826 gemunte uids, en de feitencache van 10 MB werd nooit meer gelezen.
+      final paden = [
+        r'D:\Flac music 2024\Adele\21\01 - Rolling in the Deep.flac',
+        r'D:\Flac music 2024\Adele\21\02 - Rumour Has It.flac',
+      ];
+      final a = _album(
+        [
+          for (final p in paden)
+            Track(path: p, title: p, artist: 'Adele', album: '21', trackNo: 1, isFlac: true),
+        ],
+        artist: 'Adele',
+        title: '21',
+      );
+      uids.reconcile([a]);
+      expect(uids.count, 2);
+      final uid = uids.uidOf(a);
+      expect(uid, isNotEmpty);
+
+      // Zoals LibraryStore het aanlevert: gevouwen.
+      uids.prune({for (final p in paden) padSleutel(p)});
+
+      expect(uids.count, 2, reason: 'deze bestanden stáán er nog — er mag niets vergeten worden');
+      expect(uids.uidOf(a), uid, reason: 'en het album houdt dezelfde naam');
+    });
   });
 
   /// The other half: what cannot be keyed on the uid, because two split pressings deliberately

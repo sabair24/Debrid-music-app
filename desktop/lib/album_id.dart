@@ -27,6 +27,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import 'paths.dart';
 import 'models.dart';
 
 /// Path → uid, with enough bookkeeping to survive splits, merges and moves.
@@ -156,7 +157,11 @@ class AlbumUids {
   /// actually found music, and an empty set is ignored.
   void prune(Set<String> livePaths) {
     if (livePaths.isEmpty) return;
-    final dead = [for (final p in _byPath.keys) if (!livePaths.contains(p)) p];
+    // Vouwen, met dezelfde vouw als de aanroeper. Dit ontbrak, en daardoor overleefde op Windows
+    // geen enkel pad: `livePaths` kwam er kleingemaakt in, `_byPath` houdt de schrijfwijze van de
+    // schijf, en op een wortel als `D:\Flac music 2024` matcht dat nooit. Elke scan gooide het hele
+    // register leeg — zie [padSleutel] voor de meting.
+    final dead = [for (final p in _byPath.keys) if (!livePaths.contains(padSleutel(p))) p];
     if (dead.isEmpty) return;
     for (final p in dead) {
       _byPath.remove(p);

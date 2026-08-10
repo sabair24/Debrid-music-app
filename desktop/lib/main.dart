@@ -1257,6 +1257,7 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   void dispose() {
+    _zoekPauze?.cancel();
     _searchCtl.dispose();
     _searchFocus.dispose();
     super.dispose();
@@ -1308,7 +1309,7 @@ class _HomeShellState extends State<HomeShell> {
     ctl.dispose();
     if (woorden == null || !mounted) return;
     setState(() {
-      _q = woorden;
+      _leggenZoekterm(woorden);
       _searchCtl.text = woorden;
       if (!_searchable) _view = 0;
     });
@@ -1316,23 +1317,79 @@ class _HomeShellState extends State<HomeShell> {
 
 
   /// Does this track match the current search box + quality filter?
+  /// De genormaliseerde zoekterm, één keer per zoekterm in plaats van één keer per nummer.
+  ///
+  /// Stonden binnen [_matches], en die draait over alle 707 nummers — dus dezelfde vier tekens
+  /// werden 707 keer opnieuw genormaliseerd, elke toetsaanslag. Bijgewerkt op precies één plek:
+  /// [_zetZoekterm].
+  String _nq = '';
+  String _nqs = '';
+
+  /// De zoekterm en zijn twee afgeleide sleutels, altijd in één beweging.
+  ///
+  /// Los zetten is precies hoe dit stil kapot gaat: [_matches] zou dan blijven filteren op de vórige
+  /// term, zonder foutmelding, met een lijst die er plausibel uitziet. Er zijn drie plekken die de
+  /// zoekterm zetten — de balk, het kruisje, en de zoekdialoog van de tv — en die moeten alle drie
+  /// hierlangs.
+  void _leggenZoekterm(String v) {
+    _q = v;
+    _nq = v.isEmpty ? '' : normKey(v);
+    _nqs = v.isEmpty ? '' : searchKey(v);
+  }
+
   bool _matches(Track t) {
     // Dezelfde functie als het badge naast het nummer, en dat is de reparatie. Hier stond een eigen
     // aanroep die de grootte NIET meegaf, dus kwam er nooit een bitrate uit en nooit "hi-res": het
     // Hi-Res-filter meldde "niets binnen dit filter" terwijl er in dezelfde lijst gouden badges stonden.
     // Twee antwoorden op één vraag; nu één.
-    if (!_qFilter.matches(_trackQuality(t))) return false;
+    //
+    // De uitgang vóór het rekenwerk, want `QFilter.all` — de stand waarin de app staat — zegt
+    // onvoorwaardelijk ja. Zonder deze regel bouwde hij per nummer per toetsaanslag twee
+    // Quality-objecten en draaide hij twee regexen, om het antwoord daarna weg te gooien.
+    if (_qFilter != QFilter.all && !_qFilter.matches(_trackQuality(t))) return false;
     if (_q.isEmpty) return true;
-    final q = normKey(_q);
-    if (normKey(t.title).contains(q) || normKey(t.artist).contains(q) || normKey(t.album).contains(q)) {
+    if (normKey(t.title).contains(_nq) ||
+        normKey(t.artist).contains(_nq) ||
+        normKey(t.album).contains(_nq)) {
       return true;
     }
     // Second pass with punctuation squashed out, so "backstreets back" finds "Backstreet's Back".
-    final qs = searchKey(_q);
-    if (qs.isEmpty) return false;
-    return searchKey(t.title).contains(qs) ||
-        searchKey(t.artist).contains(qs) ||
-        searchKey(t.album).contains(qs);
+    if (_nqs.isEmpty) return false;
+    return searchKey(t.title).contains(_nqs) ||
+        searchKey(t.artist).contains(_nqs) ||
+        searchKey(t.album).contains(_nqs);
+  }
+
+  Timer? _zoekPauze;
+
+  /// Wat er gebeurt als je een letter typt.
+  ///
+  /// **Met een korte pauze ertussen, en dat is de hele reparatie.** Er zat er geen: elke letter deed
+  /// een `setState` op de shell, en die hertekent alles — de gefilterde lijst over 707 nummers, de
+  /// sortering over alle albums, de bovenbalk met zijn blur, de navigatiepillen. "backstreet" is tien
+  /// letters, dus tien keer dat hele feest, waarvan negen resultaten die je nooit te zien krijgt
+  /// omdat de volgende letter er al is.
+  ///
+  /// Gemeten: het filteren zelf is 4,5 ms per pass, tien passes 37,7 ms — en dat is alléén het
+  /// vergelijken, zonder het hertekenen eromheen.
+  ///
+  /// 140 ms is korter dan de pauze tussen twee aanslagen van een doorsnee typist, dus wie doortypt
+  /// krijgt één pass in plaats van tien, en wie stopt ziet het resultaat zonder te wachten. De
+  /// letters zelf verschijnen sowieso meteen: die komen uit de controller, niet uit [_q].
+  void _zetZoekterm(String v) {
+    final nieuw = v.trim();
+    if (nieuw == _q) return;
+    _zoekPauze?.cancel();
+    // Leegmaken (het kruisje, of alles wissen) mag nooit wachten — dan hoort de hele lijst er
+    // meteen weer te staan.
+    if (nieuw.isEmpty) {
+      setState(() => _leggenZoekterm(''));
+      return;
+    }
+    _zoekPauze = Timer(const Duration(milliseconds: 140), () {
+      if (!mounted) return;
+      setState(() => _leggenZoekterm(nieuw));
+    });
   }
 
   /// Frosted pill that sits at the top of every screen. It really does blur what's behind it —
@@ -1395,7 +1452,7 @@ class _HomeShellState extends State<HomeShell> {
                 child: TextField(
                   controller: _searchCtl,
                   focusNode: _searchFocus,
-                  onChanged: (v) => setState(() => _q = v.trim()),
+                  onChanged: _zetZoekterm,
                   style: const TextStyle(fontSize: 14),
                 decoration: InputDecoration(
                   isDense: true,
@@ -1410,7 +1467,8 @@ class _HomeShellState extends State<HomeShell> {
                           icon: const Icon(Icons.close_rounded, size: 17, color: _muted),
                           tooltip: 'Wissen',
                           onPressed: () => setState(() {
-                            _q = '';
+                            _zoekPauze?.cancel();
+                            _leggenZoekterm('');
                             _searchCtl.clear();
                           }),
                         ),

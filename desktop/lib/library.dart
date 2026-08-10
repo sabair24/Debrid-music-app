@@ -59,10 +59,74 @@ class _Covers {
   }
 }
 
-List<Map<String, dynamic>> _scanTags(String root) {
+/// Wat de vorige scan uit elk bestand haalde, zodat het niet elke start opnieuw hoeft.
+///
+/// **Waarom dit er moest komen.** Gemeten op Sabers pc, 775 audiobestanden op een gewone harde
+/// schijf (ST1000DM010):
+///
+///     scan/tags   koud 16877 ms      warm 9246 ms
+///     scan/hoezen koud 11169 ms      warm  686 ms
+///
+/// Terwijl de schijf zélf, met de hand gemeten, alle 775 koppen warm in **163 ms** levert (koud
+/// 6535 ms). Er ging dus negen seconden in het parseren zitten waar niets aan veranderd was: titel,
+/// artiest, album, jaar, duur, samplerate en bitdiepte kwamen elke start opnieuw uit dezelfde
+/// ongewijzigde bytes.
+///
+/// De sleutel is `(pad, mtime, grootte)`, en die drie lagen al klaar — de scan doet toch al een
+/// `statSync` per bestand (dat kost warm 14 ms voor alle 775). Verandert een bestand, dan verandert
+/// mtime of grootte en wordt het gewoon opnieuw gelezen; schrijft de app zelf tags, idem.
+///
+/// De cache wordt geschreven uit wat DEZE scan zag, dus een verwijderd bestand valt er vanzelf uit
+/// en het bestand kan niet ongelimiteerd groeien — anders dan `album_facts.json`, dat op 10 MB stond
+/// voor 233 albums.
+const _tagCacheVersie = 1;
+
+Map<String, Map<String, dynamic>> _laadTagCache(String? pad) {
+  if (pad == null) return const {};
+  try {
+    final f = File(pad);
+    if (!f.existsSync()) return const {};
+    final j = jsonDecode(f.readAsStringSync());
+    // Een oudere versie wordt weggegooid in plaats van gelezen: de rij heeft er in het verleden
+    // velden bij gekregen (bitsPerSample, sampleRate), en een rij van vóór die tijd zou stilletjes
+    // nullen opleveren voor nummers die er wél degelijk hebben.
+    if (j is! Map || j['v'] != _tagCacheVersie) return const {};
+    final rijen = j['rijen'];
+    if (rijen is! List) return const {};
+    return {
+      for (final r in rijen)
+        if (r is Map<String, dynamic> && r['path'] is String) r['path'] as String: r,
+    };
+  } catch (_) {
+    return const {}; // een onleesbare cache kost één trage start, geen klap
+  }
+}
+
+void _schrijfTagCache(String? pad, List<Map<String, dynamic>> rijen) {
+  if (pad == null) return;
+  try {
+    // De map eerst, want die hoeft er nog niet te zijn. Gemeten: bij een verse start bestond
+    // `%APPDATA%\DebridMusic` nog niet op het moment dat de scan klaar was — hij wordt pas even
+    // later aangemaakt door de eerste bewaaractie met vertraging. Zonder deze regel sloeg de cache
+    // de allereerste keer stil over, en dan is precies de start ná een installatie nog traag.
+    final map = File(pad).parent;
+    if (!map.existsSync()) map.createSync(recursive: true);
+    // Via een tijdelijk bestand en een hernoeming: een klap halverwege mag geen half bestand
+    // achterlaten dat de volgende start als geldig leest.
+    final tmp = File('$pad.tmp');
+    tmp.writeAsStringSync(jsonEncode({'v': _tagCacheVersie, 'rijen': rijen}));
+    tmp.renameSync(pad);
+  } catch (_) {/* niet kunnen bewaren kost snelheid, nooit correctheid */}
+}
+
+typedef ScanUitslag = ({List<Map<String, dynamic>> rijen, int uitCache, int gelezen});
+
+ScanUitslag _scanTags(String root, String? cachePad) {
   final out = <Map<String, dynamic>>[];
+  final cache = _laadTagCache(cachePad);
+  var uitCache = 0, gelezen = 0;
   final dir = Directory(root);
-  if (!dir.existsSync()) return out;
+  if (!dir.existsSync()) return (rijen: out, uitCache: 0, gelezen: 0);
   for (final e in dir.listSync(recursive: true, followLinks: false)) {
     if (e is! File || !_audioExt.contains(_ext(e.path))) continue;
     // Skip the download staging folder. Files in there are still arriving — a half-finished 2 MB
@@ -78,6 +142,22 @@ List<Map<String, dynamic>> _scanTags(String root) {
       addedMs = st.modified.millisecondsSinceEpoch;
       sizeBytes = st.size;
     } catch (_) {}
+
+    // Onveranderd sinds de vorige scan? Dan hoeft het bestand niet open. Dit is de hele winst.
+    //
+    // `sizeBytes > 0` als voorwaarde, want een mislukte stat geeft 0/0 terug en zou dan matchen met
+    // een even mislukte vorige keer — dan zou een onleesbaar bestand voor eeuwig zijn oude rij
+    // houden in plaats van opnieuw geprobeerd te worden.
+    if (sizeBytes > 0) {
+      final bewaard = cache[e.path];
+      if (bewaard != null && bewaard['addedMs'] == addedMs && bewaard['sizeBytes'] == sizeBytes) {
+        out.add(bewaard);
+        uitCache++;
+        continue;
+      }
+    }
+    gelezen++;
+
     // FLAC goes through our own parser first: the package throws on tags it can't parse (a vinyl
     // "A3" track number is enough) and LEAKS THE FILE HANDLE when it does, which would leave that
     // track unmovable and undeletable for the rest of the session. See readTags().
@@ -129,7 +209,8 @@ List<Map<String, dynamic>> _scanTags(String root) {
       });
     } catch (_) {}
   }
-  return out;
+  _schrijfTagCache(cachePad, out);
+  return (rijen: out, uitCache: uitCache, gelezen: gelezen);
 }
 
 /// Run pass 1 on another isolate.
@@ -143,26 +224,112 @@ List<Map<String, dynamic>> _scanTags(String root) {
 /// it — only moving the closure out of the method is.
 ///
 /// Covered by `test/library_isolate_test.dart`, which scans with a listener attached.
-Future<List<Map<String, dynamic>>> scanTagsInIsolate(String root) =>
-    Isolate.run(() => _scanTags(root));
+/// [cachePad] wordt MEEGEGEVEN in plaats van uit [appDir] gehaald: een isolate krijgt een verse kopie
+/// van die globale, dus `setAppDirForTest` geldt daar niet en een test zou in de echte `%APPDATA%`
+/// gaan schrijven.
+Future<ScanUitslag> scanTagsInIsolate(String root, String? cachePad) =>
+    Isolate.run(() => _scanTags(root, cachePad));
 
 /// Pass 2 on another isolate — same reasoning as [scanTagsInIsolate].
-Future<Map<String, Uint8List>> readCoversInIsolate(List<String> paths) =>
-    Isolate.run(() => _readCovers(paths));
+Future<Map<String, Uint8List>> readCoversInIsolate(List<String> paths, String? cacheMap) =>
+    Isolate.run(() => _readCovers(paths, cacheMap));
 
 /// Pass 2 (background isolate): read one embedded cover per album.
-Map<String, Uint8List> _readCovers(List<String> paths) {
+/// De ingebedde hoezen, bewaard naast de andere staat in plaats van elke start opnieuw opgediept.
+///
+/// **Waarom een aparte map en niet bij de tags in.** Gemeten: 236 hoezen, gemiddeld 211 KB, samen
+/// zo'n 50 MB. Dat door `jsonEncode`/`jsonDecode` halen op de UI-isolate zou erger zijn dan de kwaal
+/// — `album_facts.json` doet dat met 10 MB en kost daarmee al 100-250 ms jank. Losse bestanden
+/// worden gelezen wat er nodig is, en verder niets.
+///
+/// **Waarom het toch moet.** De tagpass sláát het PICTURE-blok over (`setPositionSync`), dus die
+/// bytes zitten na pass 1 niet in de bestandscache van Windows. Elke hoes is daarna een verse
+/// zoekbeweging op een draaiende schijf: gemeten 9066 ms voor 236 albums, oftewel 38 ms per stuk, en
+/// dat betaalt de app bij ÉLKE start opnieuw omdat `embeddedCover` na een herstart voor elk album
+/// leeg is. De staatmap staat op de SSD; daar kost hetzelfde een fractie.
+///
+/// De sleutel is dezelfde als bij de tags — `(pad, mtime, grootte)` — dus een bewerkt bestand levert
+/// vanzelf een nieuwe lezing op. Een album zónder ingebedde plaat krijgt een leeg merkbestand: dat
+/// is 53% van de bibliotheek, en zonder merk zou juist die helft elke start opnieuw opengaan.
+String _hoesSleutel(String pad, int mtime, int grootte) {
+  // Geen hash-pakket nodig: pad + mtime + grootte is al uniek, en dit moet alleen een geldige
+  // bestandsnaam opleveren.
+  final h = Object.hash(pad, mtime, grootte).toUnsigned(32).toRadixString(16);
+  return '${grootte.toRadixString(36)}_$h';
+}
+
+Map<String, Uint8List> _readCovers(List<String> paths, String? cacheMap) {
   final out = <String, Uint8List>{};
-  for (final p in paths) {
-    // Same guard as pass 1. This pass has no FLAC fast path in front of it, so it is the one that
-    // would lock a perfectly good album the day its track number reads "A3".
-    if (!tagParserWouldClaim(File(p))) continue;
+  final map = cacheMap == null ? null : Directory(cacheMap);
+  final levend = <String>{};
+  if (map != null && !map.existsSync()) {
     try {
-      final m = readMetadata(File(p), getImage: true);
-      if (m.pictures.isNotEmpty) out[p] = m.pictures.first.bytes;
+      map.createSync(recursive: true);
     } catch (_) {}
   }
+
+  for (final p in paths) {
+    String? sleutel;
+    if (map != null) {
+      try {
+        final st = File(p).statSync();
+        sleutel = _hoesSleutel(p, st.modified.millisecondsSinceEpoch, st.size);
+      } catch (_) {}
+    }
+    if (sleutel != null) {
+      levend..add(sleutel)..add('$sleutel.geen');
+      final bewaard = File('${map!.path}${Platform.pathSeparator}$sleutel');
+      if (bewaard.existsSync()) {
+        try {
+          final b = bewaard.readAsBytesSync();
+          if (b.isNotEmpty) out[p] = b;
+          continue;
+        } catch (_) {}
+      }
+      // Het merk "hier zit er geen in" telt net zo goed als een antwoord.
+      if (File('${map.path}${Platform.pathSeparator}$sleutel.geen').existsSync()) continue;
+    }
+
+    final gevonden = _leesHoes(p);
+    if (gevonden != null && gevonden.isNotEmpty) out[p] = gevonden;
+    if (sleutel != null) {
+      try {
+        final naam = gevonden != null && gevonden.isNotEmpty ? sleutel : '$sleutel.geen';
+        File('${map!.path}${Platform.pathSeparator}$naam')
+            .writeAsBytesSync(gevonden ?? Uint8List(0));
+      } catch (_) {}
+    }
+  }
+
+  // Opruimen wat bij geen enkel huidig bestand meer hoort — een hernoemd of bewerkt nummer laat
+  // anders zijn oude hoes voorgoed staan.
+  if (map != null && levend.isNotEmpty) {
+    try {
+      for (final f in map.listSync().whereType<File>()) {
+        final naam = f.path.split(Platform.pathSeparator).last;
+        if (!levend.contains(naam)) f.deleteSync();
+      }
+    } catch (_) {/* opruimen mag nooit het opstarten breken */}
+  }
   return out;
+}
+
+/// De hoes uit één bestand halen. Null betekent "geen ingebedde plaat", en dat is een antwoord.
+Uint8List? _leesHoes(String p) {
+  // FLAC eerst door onze eigen lezer, net als in pass 1: één open, vooruit door de blokken, geen
+  // sprongen naar het einde. Zie [readFlacPicture] voor wat het pakket eronder anders zou doen.
+  if (_ext(p) == '.flac') {
+    final r = readFlacPicture(File(p));
+    if (r.gelezen) return r.hoes; // ook null telt — dan zit er gewoon geen plaat in
+  }
+  // Same guard as pass 1. This pass has no FLAC fast path in front of it, so it is the one that
+  // would lock a perfectly good album the day its track number reads "A3".
+  if (!tagParserWouldClaim(File(p))) return null;
+  try {
+    final m = readMetadata(File(p), getImage: true);
+    if (m.pictures.isNotEmpty) return m.pictures.first.bytes;
+  } catch (_) {}
+  return null;
 }
 
 /// Scans the music folder, groups into albums/singles, reads covers, and enriches.
@@ -429,6 +596,12 @@ class LibraryStore extends ChangeNotifier {
   /// something outside this class (the warmer's log) can write beside them and honour a test's
   /// override rather than scribbling in the real app directory.
   String get configDir => _appDir;
+
+  /// Waar de tagcache van de scan staat. Zie [_laadTagCache] voor het waarom en de meting.
+  String get tagCachePad => '$configDir${Platform.pathSeparator}tag_cache.json';
+
+  /// Waar de ingebedde hoezen bewaard blijven. Zie [_hoesSleutel] voor het waarom en de meting.
+  String get hoesCacheMap => '$configDir${Platform.pathSeparator}hoescache';
 
   /// What is recorded against a file, or null. For tests.
   @visibleForTesting
@@ -908,9 +1081,12 @@ class LibraryStore extends ChangeNotifier {
   /// vergeleek letterlijk (`live.contains(e.key)`), zag hem niet in de scan en zette er een
   /// `_gone`-stempel op. Negentig dagen later was hij weg geweest. Was de wees toevallig degene met de
   /// pin geweest, dan was díé verdwenen.
-  static bool get _padenZijnHoofdletterOngevoelig => Platform.isWindows || Platform.isMacOS;
+  // Eén vouw voor de hele app, in paths.dart. Stond hier als privékopie, en toen [AlbumUids.prune]
+  // de andere kant van diezelfde vergelijking werd, had die er geen weet van — dat wiste het hele
+  // pad→uid-register bij elke scan.
+  static bool get _padenZijnHoofdletterOngevoelig => padenZijnHoofdletterOngevoelig;
 
-  static String _padSleutel(String p) => _padenZijnHoofdletterOngevoelig ? p.toLowerCase() : p;
+  static String _padSleutel(String p) => padSleutel(p);
 
   /// Twee regels voor hetzelfde bestand samenvoegen tot één, onder de naam die op schijf staat.
   ///
@@ -1317,6 +1493,34 @@ class LibraryStore extends ChangeNotifier {
     await CoverEnricher(settings).reKeyFixedCover(oldArtist, oldTitle, newArtist, newTitle);
   }
 
+  /// Waar [scan] zijn tussentijden kwijt kan. Null = niets meten, geen kosten.
+  ///
+  /// Bestaat omdat `start.log` van de scan één getal wist — "scan klaar in 15034ms" — en dat getal
+  /// zegt niet WELKE van de zes stappen die tijd opeet. Gemeten op deze pc: de schijf zelf levert de
+  /// koppen van alle 775 bestanden in 163 ms warm (6535 ms koud, want D: is een harde schijf). De
+  /// rest van die 15 seconden is dus rekenwerk, en zonder deze uitgang is niet te zien welk.
+  ///
+  /// Dezelfde vorm als `fase()` in main.dart, zodat `start.log` doorzoekbaar blijft.
+  void Function(String)? meetlog;
+
+  Future<T> _stap<T>(String naam, Future<T> Function() werk) async {
+    final m = meetlog;
+    if (m == null) return werk();
+    final klok = Stopwatch()..start();
+    final uit = await werk();
+    m('  scan/$naam klaar in ${klok.elapsed.inMilliseconds}ms');
+    return uit;
+  }
+
+  T _stapNu<T>(String naam, T Function() werk) {
+    final m = meetlog;
+    if (m == null) return werk();
+    final klok = Stopwatch()..start();
+    final uit = werk();
+    m('  scan/$naam klaar in ${klok.elapsed.inMilliseconds}ms');
+    return uit;
+  }
+
   Future<void> scan() async {
     // Never run two scans at once (a rescan after a download must not race the
     // startup scan over `tracks`). Coalesce concurrent requests into one re-run.
@@ -1334,7 +1538,12 @@ class LibraryStore extends ChangeNotifier {
     // new scan succeeds, so a rescan never blanks the UI — the app stays usable.
     List<Map<String, dynamic>> raw;
     try {
-      raw = await scanTagsInIsolate(rootPath).timeout(const Duration(seconds: 120));
+      final uitslag = await _stap(
+          'tags',
+          () => scanTagsInIsolate(rootPath, tagCachePad)
+              .timeout(const Duration(seconds: 120)));
+      raw = uitslag.rijen;
+      meetlog?.call('  scan/tags: ${uitslag.uitCache} uit cache, ${uitslag.gelezen} gelezen');
     } catch (e) {
       // Timed out or failed — keep whatever library we already have loaded. Reported rather
       // than swallowed: this exact failure was silent for a long time, and a silent scan
@@ -1344,24 +1553,26 @@ class LibraryStore extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    tracks
-      ..clear()
-      ..addAll(raw
-          .map(_trackFromMap)
-          .where((t) => !_hidden.contains(t.path)) // "removed from library only" stays removed
-          .map(_applyCorrection));
+    _stapNu('omzetten', () {
+      tracks
+        ..clear()
+        ..addAll(raw
+            .map(_trackFromMap)
+            .where((t) => !_hidden.contains(t.path)) // "removed from library only" stays removed
+            .map(_applyCorrection));
+    });
     scanned = tracks.length;
-    rebuildAlbums();
+    _stapNu('groeperen', rebuildAlbums);
     _bumpMeta();
     scanning = false;
     // Look for albums that are wholly duplicates of one you already own. Only after a full scan —
     // it reads file sizes and headers, too heavy to redo on every regroup.
-    _recomputeDuplicates();
+    _stapNu('dubbels', _recomputeDuplicates);
     notifyListeners();
 
     // Only now may anything be forgotten: this scan saw the music, so a path it did not see is
     // genuinely absent rather than merely unreachable.
-    await _sweepCorrections();
+    await _stap('correcties', _sweepCorrections);
 
     // And pick up what previous installs left next to the music.
     unawaited(_adoptSidecars());
@@ -1385,7 +1596,8 @@ class LibraryStore extends ChangeNotifier {
         if (a.embeddedCover == null && a.tracks.isNotEmpty) a.tracks.first.path,
     ];
     try {
-      final covers = await readCoversInIsolate(firstPaths).timeout(const Duration(seconds: 30));
+      final covers = await _stap('hoezen (${firstPaths.length})',
+          () => readCoversInIsolate(firstPaths, hoesCacheMap).timeout(const Duration(seconds: 30)));
       for (final a in albums) {
         final c = covers[a.tracks.first.path];
         if (c != null && c.isNotEmpty) a.embeddedCover = c;
