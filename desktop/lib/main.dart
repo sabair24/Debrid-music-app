@@ -785,6 +785,9 @@ Future<void> main() async {
     await library.loadAlbumArtRoles(); // which scan is the sleeve, the back, the disc
     await library.loadStyles(); // what each record sounds like, for discovery
     startLog.line('bestanden geladen');
+    // De scan schrijft voortaan zijn eigen tussentijden. Eén regel "scan klaar in 15034ms" wist niet
+    // WELKE van de zes stappen die tijd opat, en dat kostte een hele ronde raden.
+    library.meetlog = startLog.line;
     try {
       await fase('scan', library.scan);
     } catch (_) {}

@@ -251,11 +251,25 @@ Future<Map<String, Uint8List>> readCoversInIsolate(List<String> paths, String? c
 /// De sleutel is dezelfde als bij de tags — `(pad, mtime, grootte)` — dus een bewerkt bestand levert
 /// vanzelf een nieuwe lezing op. Een album zónder ingebedde plaat krijgt een leeg merkbestand: dat
 /// is 53% van de bibliotheek, en zonder merk zou juist die helft elke start opnieuw opengaan.
-String _hoesSleutel(String pad, int mtime, int grootte) {
-  // Geen hash-pakket nodig: pad + mtime + grootte is al uniek, en dit moet alleen een geldige
-  // bestandsnaam opleveren.
-  final h = Object.hash(pad, mtime, grootte).toUnsigned(32).toRadixString(16);
-  return '${grootte.toRadixString(36)}_$h';
+String hoesSleutel(String pad, int mtime, int grootte) {
+  // FNV-1a met de hand, en NIET `Object.hash`. Die is per proces geseed, dus dezelfde invoer geeft
+  // bij de volgende start een andere naam — gemeten met drie processen achter elkaar:
+  //
+  //     Object.hash  ->  1c67de33 / 1ec744fb / 106b7271     (zelfde pad, mtime en grootte)
+  //     hashCode van het pad ->  28c5c741 / 28c5c741 / 28c5c741
+  //
+  // Met de eerste sloeg deze cache dus alleen binnen één proces aan. Op de meetbank was dat
+  // onzichtbaar (drie scans in hetzelfde proces, dus dezelfde seed); de app zelf las bij elke start
+  // 238 bestanden opnieuw én schreef er 238 nieuwe, en ruimde de oude daarna op — 17,4 seconden.
+  // Zie [groen-is-niet-goed]: de bank was groen en klopte niet.
+  //
+  // Mtime en grootte hoeven niet gehasht: dat zijn gewoon getallen.
+  var h = 0x811c9dc5;
+  for (final c in pad.codeUnits) {
+    h ^= c;
+    h = (h * 0x01000193) & 0xFFFFFFFF;
+  }
+  return '${h.toRadixString(16)}_${grootte.toRadixString(36)}_${mtime.toRadixString(36)}';
 }
 
 Map<String, Uint8List> _readCovers(List<String> paths, String? cacheMap) {
@@ -273,7 +287,7 @@ Map<String, Uint8List> _readCovers(List<String> paths, String? cacheMap) {
     if (map != null) {
       try {
         final st = File(p).statSync();
-        sleutel = _hoesSleutel(p, st.modified.millisecondsSinceEpoch, st.size);
+        sleutel = hoesSleutel(p, st.modified.millisecondsSinceEpoch, st.size);
       } catch (_) {}
     }
     if (sleutel != null) {
