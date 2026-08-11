@@ -21,6 +21,7 @@ import 'echtheid_meter.dart';
 import 'echtheid_oordelen.dart';
 import 'organize.dart';
 import 'settings.dart';
+import 'vaste_keuze.dart';
 import 'paths.dart';
 
 const _audioExt = {'.flac', '.mp3', '.m4a', '.wav', '.ogg', '.opus', '.aac', '.wma', '.alac'};
@@ -120,6 +121,92 @@ void _schrijfTagCache(String? pad, List<Map<String, dynamic>> rijen) {
 }
 
 typedef ScanUitslag = ({List<Map<String, dynamic>> rijen, int uitCache, int gelezen});
+
+/// Een album en zijn nummers, plat genoeg om naar een isolate te sturen.
+typedef _PlatTrack = ({String title, String artist, String path, int? durationSec});
+typedef _PlatAlbum = ({bool isSingle, String title, String artist, List<_PlatTrack> tracks});
+typedef _PlatPaar = ({int bronTrack, int doelTrack, bool dupWint});
+typedef _PlatTreffer = ({int bron, int doel, List<_PlatPaar> paren});
+
+/// De dubbelzoeker, los van [LibraryStore] zodat hij op een isolate kan draaien.
+///
+/// Woord voor woord dezelfde afweging als [LibraryStore.redundantAlbums] — dat is met opzet: er is
+/// een toets die beide over de ECHTE bibliotheek draait en eist dat er hetzelfde uit komt. Wijkt er
+/// hier iets af, dan valt die om.
+///
+/// [kennis] draagt wat `firstIsBetter` normaal uit het geheugen leest. Zie [Voorkennis] voor waarom
+/// dat mee moet.
+List<_PlatTreffer> _zoekDubbels(List<_PlatAlbum> albums, Voorkennis kennis) {
+  final doelen = <int>[
+    for (var i = 0; i < albums.length; i++)
+      if (!albums[i].isSingle &&
+          albums[i].tracks.length >= 2 &&
+          classifyRelease(album: albums[i].title, artist: albums[i].artist) == RelKind.album)
+        i,
+  ];
+  if (doelen.isEmpty) return const [];
+
+  int? bezitIn(_PlatAlbum doel, _PlatTrack x, {required bool junk}) {
+    final xDur = x.durationSec ?? 0;
+    if (!junk && normKey(x.title).isNotEmpty) {
+      for (var j = 0; j < doel.tracks.length; j++) {
+        final y = doel.tracks[j];
+        if (normKey(x.title) != normKey(y.title)) continue;
+        final yDur = y.durationSec ?? 0;
+        if (xDur == 0 || yDur == 0 || (xDur - yDur).abs() <= 12) return j;
+      }
+    }
+    for (var j = 0; j < doel.tracks.length; j++) {
+      final y = doel.tracks[j];
+      if (fileOffersTitle(y.title, y.durationSec, y.artist, x.path, xDur)) return j;
+    }
+    return null;
+  }
+
+  final uit = <_PlatTreffer>[];
+  for (var xi = 0; xi < albums.length; xi++) {
+    final x = albums[xi];
+    if (!x.isSingle &&
+        (classifyRelease(album: x.title, artist: x.artist) == RelKind.compilation ||
+            _distinctPerformanceRe.hasMatch(normKey(x.title)))) {
+      continue;
+    }
+    final junk = x.isSingle && (x.artist.trim().isEmpty || artistKey(x.artist) == _unknownArtistKey);
+
+    int? beste;
+    List<_PlatPaar>? besteParen;
+    for (final yi in doelen) {
+      if (yi == xi) continue;
+      final y = albums[yi];
+      if (y.tracks.length < x.tracks.length) continue;
+      if (!junk && artistKey(x.artist) != artistKey(y.artist)) continue;
+
+      final paren = <_PlatPaar>[];
+      var heel = true;
+      for (var ti = 0; ti < x.tracks.length; ti++) {
+        final bezit = bezitIn(y, x.tracks[ti], junk: junk);
+        if (bezit == null) {
+          heel = false;
+          break;
+        }
+        paren.add((
+          bronTrack: ti,
+          doelTrack: bezit,
+          dupWint: firstIsBetter(File(x.tracks[ti].path), File(y.tracks[bezit].path), kennis: kennis),
+        ));
+      }
+      if (!heel) continue;
+      if (beste == null || y.tracks.length > albums[beste].tracks.length) {
+        beste = yi;
+        besteParen = paren;
+      }
+    }
+    if (beste != null && besteParen != null && besteParen.isNotEmpty) {
+      uit.add((bron: xi, doel: beste, paren: besteParen));
+    }
+  }
+  return uit;
+}
 
 ScanUitslag _scanTags(String root, String? cachePad) {
   final out = <Map<String, dynamic>>[];
@@ -392,14 +479,8 @@ class LibraryStore extends ChangeNotifier {
   /// scan has run. See the [LibraryDuplicates] extension.
   List<RedundantAlbum> duplicates = const [];
 
-  /// Recompute [duplicates]. In its own method so the extension can be reached from [scan].
-  void _recomputeDuplicates() {
-    try {
-      duplicates = redundantAlbums();
-    } catch (_) {
-      duplicates = const []; // never let duplicate-hunting break a scan
-    }
-  }
+  // [duplicates] wordt gevuld vanuit [scan], via [redundantAlbumsAsync] — op een andere isolate, want
+  // deze afweging leest de FLAC-kop en de grootte van beide bestanden van elk kandidaatpaar.
 
   // Fast lookups for the flat Tracks view (covers) and playback resume (path → track).
   final Map<String, Album> _albumByPath = {};
@@ -1613,7 +1694,16 @@ class LibraryStore extends ChangeNotifier {
     scanning = false;
     // Look for albums that are wholly duplicates of one you already own. Only after a full scan —
     // it reads file sizes and headers, too heavy to redo on every regroup.
-    _stapNu('dubbels', _recomputeDuplicates);
+    //
+    // Op een andere isolate: dit leest de FLAC-kop en de grootte van beide bestanden van élk
+    // kandidaatpaar, en dat stond op de tekendraad. Zie [redundantAlbumsAsync].
+    await _stap('dubbels', () async {
+      try {
+        duplicates = await redundantAlbumsAsync();
+      } catch (_) {
+        duplicates = const []; // never let duplicate-hunting break a scan
+      }
+    });
     notifyListeners();
 
     // Only now may anything be forgotten: this scan saw the music, so a path it did not see is
@@ -3392,6 +3482,66 @@ extension LibraryDuplicates on LibraryStore {
   /// already in ONE proper studio album. A real greatest-hits spans several studio albums, so it
   /// can never be wholly contained in one and is never touched — which is what keeps a compilation
   /// you actually wanted from being swept away.
+  /// Hetzelfde als [redundantAlbums], maar het rekenwerk gebeurt op een andere isolate.
+  ///
+  /// **Waarom.** [redundantAlbums] draait bij elke scan en doet per kandidaatpaar bestands-I/O:
+  /// `firstIsBetter` leest de FLAC-kop van beide bestanden en hun grootte. Dat stond op de tekendraad,
+  /// dus terwijl het liep tekende de app niet. Gemeten is het hier 50 ms — geen pijn vandaag, maar het
+  /// schaalt met het aantal kandidaatparen en niet met je bibliotheek.
+  ///
+  /// **Wat er heen moet.** Alleen platte gegevens: albums en nummers als velden, plus de twee
+  /// verzamelingen die [firstIsBetter] uit het geheugen leest — wat de gebruiker zelf koos en wat
+  /// bewezen nep is. Zonder die twee zou de isolate ze als leeg lezen en stilzwijgend andere winnaars
+  /// kiezen; zie [Voorkennis].
+  ///
+  /// **Wat er terug komt zijn INDICES**, geen objecten. De UI hangt aan de echte [Album]- en
+  /// [Track]-instanties uit deze winkel — `consolidate` verplaatst hun bestanden en `identical(x, y)`
+  /// moet blijven kloppen. Kopieën die er hetzelfde uitzien zouden dat allebei breken.
+  Future<List<RedundantAlbum>> redundantAlbumsAsync() async {
+    if (albums.isEmpty) return const [];
+    final plat = <_PlatAlbum>[
+      for (final a in albums)
+        (
+          isSingle: a.isSingle,
+          title: a.title,
+          artist: a.artist,
+          tracks: [
+            for (final t in a.tracks)
+              (
+                title: t.title,
+                artist: t.artist,
+                path: t.path,
+                durationSec: t.duration?.inSeconds,
+              ),
+          ],
+        ),
+    ];
+    final kennis = (vast: vasteKeuzeSleutels(), nep: nepSleutels());
+
+    List<_PlatTreffer> gevonden;
+    try {
+      gevonden = await Isolate.run(() => _zoekDubbels(plat, kennis));
+    } catch (e) {
+      debugPrint('dubbels op de achtergrond mislukt, terug naar de hoofddraad: $e');
+      return redundantAlbums();
+    }
+
+    // Indices terug naar de echte objecten. Buiten bereik betekent dat de bibliotheek onder de
+    // berekening is veranderd — dan is dit antwoord verouderd en gooien we het weg.
+    final uit = <RedundantAlbum>[];
+    for (final g in gevonden) {
+      if (g.bron >= albums.length || g.doel >= albums.length) return const [];
+      final x = albums[g.bron], y = albums[g.doel];
+      final paren = <DuplicatePair>[];
+      for (final p in g.paren) {
+        if (p.bronTrack >= x.tracks.length || p.doelTrack >= y.tracks.length) return const [];
+        paren.add(DuplicatePair(x.tracks[p.bronTrack], y.tracks[p.doelTrack], p.dupWint));
+      }
+      if (paren.isNotEmpty) uit.add(RedundantAlbum(x, y, paren));
+    }
+    return uit;
+  }
+
   List<RedundantAlbum> redundantAlbums() {
     // The real records a duplicate can fold back into: studio albums (not compilations, not
     // singles), with more than a token of tracks.

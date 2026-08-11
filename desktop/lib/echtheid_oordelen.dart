@@ -72,6 +72,19 @@ Echtheidsoordeel? gemeten(String pad) => _oordelen[_sleutel(pad)];
 /// zou het draaien van een veegbeurt de halve bibliotheek herordenen.
 bool bewezenNep(String pad) => _oordelen[_sleutel(pad)]?.isNep ?? false;
 
+/// De sleutels van alles wat BEWEZEN nep is, om mee te geven aan een isolate.
+///
+/// Zelfde reden als bij `vasteKeuzeSleutels()`: een isolate begint met lege globale staat, dus daar
+/// zou [bewezenNep] overal `false` zeggen en verdwijnt de regel "wat gemeten is als nep verliest"
+/// zonder een kik. Alleen de bewezen gevallen, want een ongemeten bestand is nadrukkelijk niet nep.
+Set<String> nepSleutels() => {
+      for (final e in _oordelen.entries)
+        if (e.value.isNep) e.key,
+    };
+
+/// Dezelfde normalisatie als [bewezenNep] gebruikt, voor wie de verzameling zelf raadpleegt.
+String echtheidSleutelVoor(String pad) => _sleutel(pad);
+
 int get aantalGemeten => _oordelen.length;
 bool get isGeladen => _geladen;
 

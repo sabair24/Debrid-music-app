@@ -72,6 +72,20 @@ bool isVasteKeuze(String pad) => _keuzes.contains(_sleutel(pad));
 /// anders bij elk paar naar deze lijst zou vragen.
 bool get erZijnVasteKeuzes => _keuzes.isNotEmpty;
 
+/// De hele lijst, om mee te geven aan een isolate.
+///
+/// Deze lijst staat in het geheugen van het proces dat hem inlas. Een isolate begint met een LEGE
+/// kopie van alle globale staat, dus daar zou [isVasteKeuze] voor élk bestand `false` teruggeven —
+/// en dan valt stilzwijgend de regel weg die boven alle kwaliteitsgronden staat: wat jij zelf koos
+/// verliest niet. Geen foutmelding, alleen een andere winnaar.
+///
+/// De sleutels zitten er al genormaliseerd in, dus wie ze aan de overkant gebruikt moet [sleutelVoor]
+/// nemen en niet het rauwe pad.
+Set<String> vasteKeuzeSleutels() => Set<String>.of(_keuzes);
+
+/// Dezelfde normalisatie als [isVasteKeuze] gebruikt, voor wie de verzameling zelf raadpleegt.
+String sleutelVoor(String pad) => _sleutel(pad);
+
 Future<void> onthoudVasteKeuze(String pad) async {
   if (!_keuzes.add(_sleutel(pad))) return;
   await _bewaar();

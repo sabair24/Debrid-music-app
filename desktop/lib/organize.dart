@@ -542,7 +542,19 @@ int formatRank(String path) {
 /// The stereo rule matters because a 5.1 rip is always the bigger file: on size alone it would
 /// evict a proper stereo master, both here and when tidying the downloads folder — the exact
 /// opposite of "best quality" on a stereo system.
-bool firstIsBetter(File a, File b) {
+/// Wat [firstIsBetter] moet weten en niet uit een bestand kan lezen: welke bestanden de gebruiker
+/// zelf koos, en welke bewezen nep zijn.
+///
+/// Bestaat om deze afweging in een ISOLATE te kunnen draaien. Allebei die feiten staan in een kaart
+/// in het geheugen (`vaste_keuze.dart`, `echtheid_oordelen.dart`), en een isolate begint met een lege
+/// kopie van alle globale staat. Zonder dit zou daar élk bestand lezen als "niet gekozen, niet nep",
+/// en dan vallen de twee regels weg die bóven de kwaliteitsgronden staan — stil, met een andere
+/// winnaar als enig spoor.
+///
+/// Null betekent "vraag het de winkels zelf", en dat is wat elke aanroeper op de hoofdisolate doet.
+typedef Voorkennis = ({Set<String> vast, Set<String> nep});
+
+bool firstIsBetter(File a, File b, {Voorkennis? kennis}) {
   // WAT DE GEBRUIKER ZELF KOOS VERLIEST NIET. Boven alle drie de gronden hieronder, want die gaan
   // over kwaliteit en dit gaat over iets anders: bij Joe Dassin / L'été indien is de beste kopie een
   // ánder nummer, en de handmatig gekozen 3:37 verloor van een 4:16 op de laatste grond — grootte.
@@ -552,7 +564,8 @@ bool firstIsBetter(File a, File b) {
   // plekken kun je vergeten, één niet.
   //
   // Koos hij ze allebéi, dan valt er geen voorkeur af te lezen en beslist de gewone regel.
-  final va = isVasteKeuze(a.path), vb = isVasteKeuze(b.path);
+  final va = kennis == null ? isVasteKeuze(a.path) : kennis.vast.contains(sleutelVoor(a.path));
+  final vb = kennis == null ? isVasteKeuze(b.path) : kennis.vast.contains(sleutelVoor(b.path));
   if (va != vb) return va;
   final ra = formatRank(a.path), rb = formatRank(b.path);
   if (ra != rb) return ra > rb;
@@ -567,7 +580,8 @@ bool firstIsBetter(File a, File b) {
   // Alleen wat BEWEZEN is telt; een ongemeten bestand mag nooit verliezen van een gemeten, anders
   // herordent het draaien van een veegbeurt de halve bibliotheek. En vlak boven de grootte, zodat deze
   // regel uitsluitend vuurt in het geval waar de grootte anders zou beslissen — niets daarbuiten.
-  final na = bewezenNep(a.path), nb = bewezenNep(b.path);
+  final na = kennis == null ? bewezenNep(a.path) : kennis.nep.contains(echtheidSleutelVoor(a.path));
+  final nb = kennis == null ? bewezenNep(b.path) : kennis.nep.contains(echtheidSleutelVoor(b.path));
   if (na != nb) return nb;
   return a.lengthSync() > b.lengthSync();
 }
