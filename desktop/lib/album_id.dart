@@ -162,10 +162,22 @@ class AlbumUids {
     // schijf, en op een wortel als `D:\Flac music 2024` matcht dat nooit. Elke scan gooide het hele
     // register leeg — zie [padSleutel] voor de meting.
     final dead = [for (final p in _byPath.keys) if (!livePaths.contains(padSleutel(p))) p];
-    if (dead.isEmpty) return;
     for (final p in dead) {
       _byPath.remove(p);
     }
+
+    // Het muntboek mee opruimen. Het bestond alleen om een gelijkspel tussen twee uid's altijd
+    // dezelfde kant op te laten vallen, dus een uid die nergens meer geclaimd wordt heeft er niets
+    // te zoeken. Er ging nooit iets uit: gemeten stonden er 33.826 regels in voor 236 albums, goed
+    // voor 1,43 MB die elke start ingelezen wordt. Dat kwam door de hoofdletterfout hierboven — elke
+    // scan muntte een verse lichting — maar ook zonder die fout groeit het bij elke verhuizing door.
+    final geclaimd = _byPath.values.toSet();
+    final losseMunten = [for (final u in _minted.keys) if (!geclaimd.contains(u)) u];
+    for (final u in losseMunten) {
+      _minted.remove(u);
+    }
+
+    if (dead.isEmpty && losseMunten.isEmpty) return;
     _scheduleSave();
   }
 

@@ -627,10 +627,35 @@ String? surroundLabel(String naam) {
 }
 
 /// Surround by its own header, or by a release name that says so (covers non-FLAC too).
+/// Onthouden wat er in een bestand stond, want dit kost een volledige FLAC-kopparse.
+///
+/// [firstIsBetter] roept dit voor BEIDE bestanden aan, en die draait in de binnenlus van
+/// [redundantAlbums] — dat is elk kandidaat-albumpaar maal elk nummer, op de tekendraad, tijdens de
+/// scan. `explainWinner` vraagt het daarna nog eens voor hetzelfde paar.
+///
+/// De sleutel is `(pad, mtime, grootte)` en niet alleen het pad: bij het opruimen wordt op hetzelfde
+/// pad een ander bestand neergezet, en dan zou een geheugen op alleen het pad het oude antwoord
+/// blijven geven — precies bij de beslissing welke kopie je houdt.
+final Map<String, bool> _surroundGeheugen = {};
+
 bool _isMultichannelFile(File f) {
+  String? sleutel;
+  try {
+    final st = f.statSync();
+    sleutel = '${f.path}|${st.modified.millisecondsSinceEpoch}|${st.size}';
+    final bewaard = _surroundGeheugen[sleutel];
+    if (bewaard != null) return bewaard;
+  } catch (_) {/* niet te statten: gewoon lezen, en niets onthouden */}
+
   final tags = readFlacTags(f);
-  if (tags != null && tags.channels > 0) return tags.multichannel;
-  return surroundLabel(f.path) != null;
+  final uit = tags != null && tags.channels > 0 ? tags.multichannel : surroundLabel(f.path) != null;
+  if (sleutel != null) {
+    // Een bovengrens, want dit is een geheugen voor de duur van de sessie en een opruimbeurt over een
+    // grote bibliotheek mag geen map van tienduizenden regels achterlaten.
+    if (_surroundGeheugen.length > 4000) _surroundGeheugen.clear();
+    _surroundGeheugen[sleutel] = uit;
+  }
+  return uit;
 }
 
 /// What happened to a file we tried to file away.

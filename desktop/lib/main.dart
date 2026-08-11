@@ -22,6 +22,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'acoustid.dart';
+import 'cache_snoei.dart';
 import 'album_facts.dart';
 import 'album_facts_resolver.dart';
 import 'booklet_view.dart';
@@ -795,6 +796,15 @@ Future<void> main() async {
     // out by hand. From now on each move sweeps up after itself (see [pruneVacated]); this clears
     // what is already there. Once per launch, not per scan: it walks every folder.
     unawaited(sweepEmptyFolders(library.rootPath));
+    // En de cachemappen binnen hun grenzen houden. Geen van deze had er een; samen stonden ze op
+    // ruim 1 GB, waarvan `releaseart` alleen al 590 MB. Op de achtergrond en ná de scan, want dit
+    // mag nooit tussen jou en je muziek staan — zie [cacheGrenzen] voor wat er wél en niet in zit.
+    unawaited(() async {
+      for (final e in cacheGrenzen.entries) {
+        await snoeiMap(Directory('${library.configDir}${Platform.pathSeparator}${e.key}'),
+            maxBytes: e.value);
+      }
+    }());
     await fase('enrich', () => library.enrich(settings));
     // Reopen the last queue where you left off (paused) — covers are loaded by now.
     await fase('player.restore', () => player.restore(library.trackByPath));

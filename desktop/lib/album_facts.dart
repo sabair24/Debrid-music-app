@@ -387,6 +387,33 @@ class AlbumFactsStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Vergeet wat bij geen enkel album meer hoort. Geeft terug hoeveel er weg ging.
+  ///
+  /// **Waarom dit er moest komen.** Er ging nooit iets uit: [forget] had in de hele repo geen enkele
+  /// aanroeper. Gemeten op 10-08-2026 stond `album_facts.json` op 9,9 MB met ruim 7000 regels — voor
+  /// een bibliotheek van 236 albums. Dat bestand wordt bij élke start in één keer geparsed op de
+  /// UI-isolate, dus die wezen kostten jank bij het opstarten en verder niets.
+  ///
+  /// Dat het zo uit de hand liep had één oorzaak: [AlbumUids.prune] vergeleek paden met de verkeerde
+  /// schrijfwijze en gooide daardoor bij élke scan het hele pad→uid-register leeg, waarna elke
+  /// regroep 236 verse uids muntte. Zie [padSleutel]. **Deze opruimer mag dus pas draaien nu die
+  /// reparatie erin zit** — daarvóór had hij precies weggegooid wat je wilde houden.
+  ///
+  /// Dezelfde veiligheidsklep als bij `corrections.json` en [AlbumUids.prune]: een LEGE verzameling
+  /// betekent "ik weet het niet" (de schijf hing er niet, de scan mislukte) en dan gaat er niets weg.
+  int prune(Set<String> levendeUids) {
+    if (levendeUids.isEmpty) return 0;
+    final dood = [for (final u in _byUid.keys) if (!levendeUids.contains(u)) u];
+    if (dood.isEmpty) return 0;
+    for (final u in dood) {
+      _byUid.remove(u);
+      _folders.remove(u);
+    }
+    _dirty = true;
+    _scheduleSave();
+    return dood.length;
+  }
+
   /// The one read on the startup path.
   Future<void> load() async {
     try {

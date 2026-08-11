@@ -1206,6 +1206,17 @@ class LibraryStore extends ChangeNotifier {
     // Same moment, same evidence: this scan saw the music, so a path it did not see is gone rather
     // than merely unreachable. Hidden tracks count as present here too.
     uids.prune(live);
+
+    // En dan de feiten die bij geen enkel album meer horen. NA `uids.prune`, want de uid's van de
+    // albums die er nog zijn moeten eerst vaststaan; en alleen als er albums zijn, want een lege
+    // lijst is "ik weet het niet", niet "er is niets".
+    if (albums.isNotEmpty) {
+      final levend = {for (final a in albums) uids.uidOf(a)}..removeWhere((u) => u.isEmpty);
+      if (levend.isNotEmpty) {
+        final weg = facts.prune(levend);
+        if (weg > 0) meetlog?.call('  scan/feiten: $weg wezen opgeruimd, ${levend.length} albums over');
+      }
+    }
   }
 
   /// The correction map for a path, created on demand — so an extension can add to it.
