@@ -1700,9 +1700,13 @@ class LibraryStore extends ChangeNotifier {
     await _stap('dubbels', () async {
       try {
         duplicates = await redundantAlbumsAsync();
-      } catch (_) {
+      } catch (e) {
+        meetlog?.call('  scan/dubbels MISLUKT: $e');
         duplicates = const []; // never let duplicate-hunting break a scan
       }
+      // Het AANTAL erbij, want anders is "klaar in 61ms" niet te onderscheiden van "klaar, en niets
+      // gevonden omdat er onderweg iets stilviel". De melding op de albumpagina hangt hieraan.
+      meetlog?.call('  scan/dubbels: ${duplicates.length} gevonden');
     });
     notifyListeners();
 
@@ -3518,12 +3522,20 @@ extension LibraryDuplicates on LibraryStore {
     ];
     final kennis = (vast: vasteKeuzeSleutels(), nep: nepSleutels());
 
+    final aantalBij = albums.length;
     List<_PlatTreffer> gevonden;
     try {
       gevonden = await Isolate.run(() => _zoekDubbels(plat, kennis));
     } catch (e) {
-      debugPrint('dubbels op de achtergrond mislukt, terug naar de hoofddraad: $e');
+      meetlog?.call('  scan/dubbels: isolate mislukt ($e) — terug naar de hoofddraad');
       return redundantAlbums();
+    }
+    // De bibliotheek mag onder de berekening niet veranderd zijn: de indices verwijzen naar de lijst
+    // zoals hij was. Dit gebeurt echt — `_adoptSidecars` en een herscan na een download draaien er
+    // omheen — en zonder deze controle zou een index naar een ANDER album wijzen.
+    if (albums.length != aantalBij) {
+      meetlog?.call('  scan/dubbels: bibliotheek veranderde tijdens de berekening — overgeslagen');
+      return const [];
     }
 
     // Indices terug naar de echte objecten. Buiten bereik betekent dat de bibliotheek onder de
