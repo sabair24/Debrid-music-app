@@ -91,29 +91,75 @@ class GrantStore {
 
   bool get isEmpty => _byDevice.isEmpty;
 
+  /// Waar het inlezen zijn uitkomst kwijt kan. Null = niets melden.
+  ///
+  /// **Waarom dit er moest komen.** Als dit stil mislukt, weigert de pc voor de rest van de sessie
+  /// ÉLK gekoppeld toestel — en het enige spoor was een [debugPrint], die een release-build weggooit.
+  /// Op 11-08-2026 kostte precies dat een avond zoeken: negentien koppelingen stonden keurig op
+  /// schijf, de app weigerde ze allemaal, en na een herstart werkte dezelfde sleutel meteen weer.
+  /// Van buitenaf is dat niet te onderscheiden van een ingetrokken koppeling.
+  void Function(String)? meldlog;
+
   Future<void> load() async {
     try {
-      if (!await _file.exists()) return;
+      if (!await _file.exists()) {
+        meldlog?.call('koppelingen: bestand bestaat niet — 0 geladen');
+        return;
+      }
       final decoded = jsonDecode(await _file.readAsString());
-      if (decoded is! List) return;
+      if (decoded is! List) {
+        meldlog?.call('koppelingen: bestand is geen lijst — 0 geladen, ALLE toestellen worden geweigerd');
+        return;
+      }
       _byDevice.clear();
       _byToken.clear();
+      var overgeslagen = 0;
       for (final e in decoded) {
-        if (e is! Map<String, dynamic>) continue;
+        if (e is! Map<String, dynamic>) {
+          overgeslagen++;
+          continue;
+        }
         final g = DeviceGrant.fromJson(e);
-        if (g == null) continue;
+        if (g == null) {
+          overgeslagen++;
+          continue;
+        }
         _byDevice[g.deviceId] = g;
         _byToken[g.token] = g.deviceId;
       }
+      meldlog?.call('koppelingen geladen: ${_byDevice.length} van ${decoded.length}'
+          '${overgeslagen == 0 ? '' : ' ($overgeslagen onleesbaar)'}');
     } catch (e) {
       // A corrupt file must not lock you out of your own library — the legacy token below still
       // works, and a device can simply be granted again.
+      meldlog?.call('koppelingen NIET geladen: $e — alle toestellen worden geweigerd tot de app herstart');
       debugPrint('grants.json unreadable: $e');
     }
   }
 
   Future<void> save() async {
     try {
+      // LEEG SCHRIJFT NOOIT OVER NIET-LEEG. Dezelfde klep als bij corrections.json en de
+      // feitencache: een lege verzameling betekent "ik weet het niet", niet "er is niets".
+      //
+      // Gemeten op 11-08-2026: alle 19 gekoppelde toestellen kregen opeens 401, terwijl er in de
+      // hele code geen enkel pad is dat deze kaarten binnen één proces leegt. Wat er WEL kan: een
+      // tweede kopie van de app die niet aan de poort kwam (10048) maar wel naar dezelfde map
+      // schrijft, met een winkel die nooit geladen is. Eén `save()` daaruit zet een lege lijst — of
+      // één verse regel — over de negentien heen, en dan is elk toestel zijn toegang kwijt zonder
+      // dat iemand iets ingetrokken heeft.
+      //
+      // De kosten van deze regel zijn precies één geval: "ik heb zojuist mijn laatste toestel
+      // ontkoppeld" wordt niet weggeschreven. Dat is te overzien — [revoke] schrijft zelf, en één
+      // regel te veel is oneindig veel beter dan een huis vol toestellen dat er niet meer in kan.
+      if (_byDevice.isEmpty && await _file.exists()) {
+        final bestaand = await _file.readAsString();
+        final oud = jsonDecode(bestaand);
+        if (oud is List && oud.isNotEmpty) {
+          debugPrint('grants.json NIET overschreven: geheugen leeg, schijf heeft ${oud.length}');
+          return;
+        }
+      }
       // Same tmp-then-rename as the rest of this app's state: a power cut halfway through a write
       // must not leave a truncated file that reads as "no devices".
       final tmp = File('${_file.path}.tmp');

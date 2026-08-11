@@ -14,6 +14,7 @@ import '../musicbrainz.dart';
 import '../online.dart';
 import '../organize.dart';
 import '../paths.dart';
+import '../warm_log.dart';
 import '../settings.dart';
 import '../soulseek.dart';
 import '../torbox.dart';
@@ -60,7 +61,26 @@ class LanServer {
       port: port,
       logPath: dir.isEmpty ? null : '$dir${Platform.pathSeparator}cast.log',
     );
+    _koppelLog = dir.isEmpty ? null : WarmLog('$dir${Platform.pathSeparator}koppeling.log');
   }
+
+  /// Waarom een verzoek geweigerd werd. Alleen bij een WEIGERING, nooit bij een geslaagd verzoek.
+  ///
+  /// **Waarom dit er moest komen.** Gemeten op 11-08-2026: met de app onafgebroken draaiend gaf
+  /// `/api/catalog` opeens 401 voor ALLE 19 koppelingen uit `grants.json` én voor de gedeelde sleutel
+  /// — op localhost, op het LAN-adres en via Tailscale. Na de app te herstarten werkte dezelfde
+  /// sleutel meteen weer. Op de telefoon las dat als "je pc staat uit", want die kant kent alleen
+  /// "het lukte niet".
+  ///
+  /// Van buitenaf is een 401 één symptoom voor drie heel verschillende oorzaken: het geheugen is
+  /// leeggelopen, de gedeelde sleutel is opnieuw verzonnen, of dit toestel is echt nooit gekoppeld.
+  /// Zonder deze regel zijn die niet te scheiden en blijft het gissen.
+  ///
+  /// Van de aangeboden sleutel gaan alleen de eerste vier tekens mee — genoeg om te zien of het
+  /// telkens hetzelfde toestel is, te weinig om er iets mee te kunnen.
+  WarmLog? _koppelLog;
+  int _geweigerd = 0;
+  DateTime _laatsteWeigerRegel = DateTime.fromMillisecondsSinceEpoch(0);
 
   final LibraryStore library;
   final LanCatalog catalog;
@@ -274,7 +294,23 @@ class LanServer {
       if (grants.touch(offered)) unawaited(grants.save());
       return true;
     }
-    return token.isNotEmpty && _constantTimeEquals(offered, token);
+    if (token.isNotEmpty && _constantTimeEquals(offered, token)) return true;
+    _noteerWeigering(req, offered);
+    return false;
+  }
+
+  /// Eén regel per weigering, hoogstens één per tien seconden — een client die blijft pollen mag geen
+  /// logboek van megabytes maken, en WarmLog schrijft synchroon met een flush per regel.
+  void _noteerWeigering(HttpRequest req, String offered) {
+    _geweigerd++;
+    final nu = DateTime.now();
+    if (nu.difference(_laatsteWeigerRegel).inSeconds < 10) return;
+    _laatsteWeigerRegel = nu;
+    _koppelLog?.line('GEWEIGERD ${req.uri.path}  van ${req.connectionInfo?.remoteAddress.address}'
+        '  sleutel ${offered.length < 8 ? "(kort)" : "${offered.substring(0, 4)}…"}'
+        '  koppelingen in geheugen: ${grants.all.length}'
+        '  gedeelde sleutel: ${token.isEmpty ? "LEEG" : "${token.substring(0, 4)}… (${token.length})"}'
+        '  totaal geweigerd deze sessie: $_geweigerd');
   }
 
   /// Not `==`. Comparing a secret with an early-exit comparison leaks, through timing, how much of

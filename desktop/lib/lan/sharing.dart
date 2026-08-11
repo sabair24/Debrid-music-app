@@ -7,6 +7,7 @@ import '../library.dart';
 import '../musicbrainz.dart';
 import '../online.dart';
 import '../settings.dart';
+import '../warm_log.dart';
 import 'discovery.dart';
 import 'ids.dart';
 import 'net.dart';
@@ -58,7 +59,8 @@ class LanSharing extends ChangeNotifier {
   LanDiscovery? _discovery;
   String? _error;
   List<String> _home = const [];
-  bool _stateLoaded = false;
+  /// De eenmalige laadbeurt van state + grants. Een tweede aanroep wacht hierop.
+  Future<void>? _laden;
   bool _adoptLegacy = false;
   String version = '';
 
@@ -99,15 +101,29 @@ class LanSharing extends ChangeNotifier {
 
   /// Bring the server in line with the current settings. Safe to call repeatedly.
   Future<void> applySettings() async {
-    if (!_stateLoaded) {
-      _stateLoaded = true;
-      await state.load();
-      // The grants too. Without this the PC starts with an empty set of device tokens, so every
-      // device that had been given access is refused after a restart — and does not recover by
-      // itself, because the cloud only answers requests that are still pending.
-      await grants.load();
-      _adoptLegacy = true;
-    }
+    // Eén keer laden, maar een tweede aanroep WACHT erop in plaats van het over te slaan.
+    //
+    // De vlag stond hiervoor omhoog vóór de twee awaits. Wie tijdens het opstarten de schakelaar
+    // "Delen" omzette — main.dart roept dit dan opnieuw aan — liet die tweede aanroep het laden
+    // overslaan en even verderop een server starten met een LEGE koppelingenwinkel. Elk toestel
+    // krijgt dan 401, en er is geen enkel pad dat dat later nog herstelt: `load()` staat achter
+    // precies deze vlag.
+    _laden ??= () async {
+        // Waar het inlezen van de koppelingen zijn uitkomst kwijt kan — naast start.log, want een
+        // stille mislukking hier weigert de rest van de sessie élk toestel.
+        final dir = library.configDir;
+        if (dir.isNotEmpty) {
+          final log = WarmLog('$dir${Platform.pathSeparator}koppeling.log');
+          grants.meldlog = log.line;
+        }
+        await state.load();
+        // The grants too. Without this the PC starts with an empty set of device tokens, so every
+        // device that had been given access is refused after a restart — and does not recover by
+        // itself, because the cloud only answers requests that are still pending.
+        await grants.load();
+        _adoptLegacy = true;
+      }();
+    await _laden;
     if (settings.lanToken.isEmpty) {
       settings.lanToken = generateLanToken();
       await settings.save();
