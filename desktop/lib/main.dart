@@ -163,6 +163,20 @@ AppLifecycleListener? _saveOnLeaving;
 ///
 /// Deliberately not throwing: this runs while the app is being taken away, and a failure here is a
 /// slower next start, not something anyone can act on.
+/// De app komt weer op de voorgrond — vraag de pc meteen hoe het ervoor staat.
+///
+/// Op een telefoon is dit het verschil tussen werken en niet werken. Android bevriest het proces bij
+/// het wegleggen, dus de poll-timer van vijftien seconden telt niet door; bij het ontgrendelen zie je
+/// de toestand van uren geleden, met een melding die toen klopte en nu niet meer. Wachten tot de
+/// eerstvolgende tik van de timer is niet genoeg: die tik komt pas ná het frame dat je leest.
+///
+/// Stil bij een fout: dit is een verversing die je niet gevraagd hebt, en de banner zegt het al.
+Future<void> _naVoorgrond(ClientSession session) async {
+  try {
+    await session.refreshNow();
+  } catch (_) {/* de banner vertelt het verhaal al */}
+}
+
 Future<void> _flushStores(LibraryStore library) async {
   try {
     await library.facts.flush();
@@ -569,6 +583,12 @@ Future<void> main() async {
   // `hidden` and `paused` rather than only `detached`: detached is not reliably delivered on
   // Android, and a backgrounded app that never comes back has simply ended.
   _saveOnLeaving = AppLifecycleListener(
+    // Terugkomen uit de achtergrond. Android bevriest het proces, dus de poll-timer van vijftien
+    // seconden staat stil; wat je bij het ontgrendelen ziet is de toestand van het moment waarop de
+    // telefoon in slaap viel — inclusief een melding dat de pc niet reageert terwijl hij dat allang
+    // weer doet. Dit is de enige haak die daar iets aan doet, en hij was er niet.
+    onRestart: () => unawaited(_naVoorgrond(session)),
+    onShow: () => unawaited(_naVoorgrond(session)),
     onHide: () => unawaited(_flushStores(library)),
     onPause: () => unawaited(_flushStores(library)),
     onDetach: () => unawaited(afsluiten(library, soulseek)),
@@ -1969,20 +1989,45 @@ class _OfflineBanner extends StatelessWidget {
     final lib = context.watch<LibraryStore>();
     if (!lib.fromCloudMirror) return const SizedBox.shrink();
     final when = lib.mirrorUpdatedAt;
+
+    // Twee gevallen, twee kleuren, twee zinnen — want ze vragen iets heel anders van je.
+    //
+    // Hier stond één hardgecodeerde zin: "Je pc staat uit". Gemeten op een telefoon terwijl de pc
+    // ANTWOORDDE (ping 13 ms, /health 200): de sleutel was geweigerd. Die zin stuurt je dan naar je
+    // router terwijl er niets met je netwerk aan de hand is.
+    final geweigerd = lib.geenVerbinding == GeenVerbinding.sleutelGeweigerd;
+    final kleur = geweigerd ? const Color(0xFFE89A6A) : const Color(0xFFE8C36A);
     return Container(
       width: double.infinity,
-      color: const Color(0xFF2A2416),
+      color: geweigerd ? const Color(0xFF2E1F16) : const Color(0xFF2A2416),
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
       child: Row(children: [
-        const Icon(Icons.cloud_off_rounded, size: 17, color: Color(0xFFE8C36A)),
+        Icon(geweigerd ? Icons.lock_outline_rounded : Icons.cloud_off_rounded, size: 17, color: kleur),
         const SizedBox(width: 10),
         Expanded(
           child: Text(
-            'Je pc staat uit — dit is de kopie van je bibliotheek'
-            '${when == null ? '' : ' van ${_ago(when)}'}. '
-            'Bladeren en downloads klaarzetten kan; afspelen niet.',
-            style: const TextStyle(color: Color(0xFFE8C36A), fontSize: 12.5),
+            geweigerd
+                ? 'Je pc is bereikbaar, maar dit toestel heeft geen toegang meer. '
+                    'Je ziet de kopie van je bibliotheek'
+                    '${when == null ? '' : ' van ${_ago(when)}'}; afspelen kan niet.'
+                : 'Je pc reageert niet — dit is de kopie van je bibliotheek'
+                    '${when == null ? '' : ' van ${_ago(when)}'}. '
+                    'Bladeren en downloads klaarzetten kan; afspelen niet.',
+            style: TextStyle(color: kleur, fontSize: 12.5),
           ),
+        ),
+        const SizedBox(width: 10),
+        // Bewust "opnieuw proberen" en niet "opnieuw koppelen", ook bij een geweigerde sleutel.
+        //
+        // Gemeten: de sleutel was niet ingetrokken maar uit het geheugen van de pc verdwenen, en na
+        // een herstart van de pc-app werkte diezelfde sleutel meteen weer. Herkoppelen zou dat
+        // maskeren — en het is de enige handeling die je koppeling écht weggooit. Eerst kijken of
+        // hij er gewoon weer is; pas als `koppeling.log` zegt dat hij echt ingetrokken is, hoort
+        // hier een tweede knop.
+        _BannerKnop(
+          label: 'Opnieuw proberen',
+          kleur: kleur,
+          onTap: () => unawaited(context.read<ClientSession>().refreshNow()),
         ),
       ]),
     );
@@ -1995,6 +2040,34 @@ class _OfflineBanner extends StatelessWidget {
     if (d.inDays < 1) return '${d.inHours} uur geleden';
     return '${d.inDays} dagen geleden';
   }
+}
+
+/// Het knopje in de balk hierboven. Klein, in de kleur van de melding, en met genoeg raakvlak voor
+/// een duim — een balk op een telefoon is de plek waar je met één hand langskomt.
+class _BannerKnop extends StatelessWidget {
+  const _BannerKnop({required this.label, required this.kleur, required this.onTap});
+
+  final String label;
+  final Color kleur;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(999),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              border: Border.all(color: kleur.withValues(alpha: .55)),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(label,
+                style: TextStyle(color: kleur, fontSize: 12, fontWeight: FontWeight.w600)),
+          ),
+        ),
+      );
 }
 
 

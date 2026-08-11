@@ -122,12 +122,24 @@ class ClientSession extends ChangeNotifier {
   Future<void> _refresh({bool first = false}) async {
     try {
       final changed = await library.loadRemote(quiet: !first);
-      lastError = null;
+      // Alleen wissen als het ECHT lukte. `loadRemote` gooit niet — hij geeft `false` terug en zet
+      // de reden op de winkel. Dit stond er onvoorwaardelijk, dus `lastError` was altijd null en het
+      // instellingenscherm bleef groen terwijl elke poll een 401 kreeg.
+      if (library.geenVerbinding == null) {
+        lastError = null;
+      } else {
+        lastError = library.geenVerbinding == GeenVerbinding.sleutelGeweigerd
+            ? 'De pc antwoordt, maar weigert de sleutel van dit toestel.'
+            : 'De pc antwoordde niet.';
+      }
       if (changed && !first) {
         // New records may have arrived; only the ones without a cover are fetched.
         unawaited(library.loadRemoteCovers(settings));
       }
-      if (library.tracks.isEmpty) await _fillFromMirror();
+      // Ook de kopie tonen als de pc weigert. "Er staan geen nummers in de lijst" was de vervanger
+      // voor "de pc doet het niet", en die twee lopen uiteen zodra er ooit iets geladen is: dan blijft
+      // een lijst staan waar je op kunt tikken en die stil niets doet.
+      if (library.tracks.isEmpty || library.geenVerbinding != null) await _fillFromMirror();
     } catch (e) {
       lastError = e.toString();
       // The PC did not answer. Show the cloud copy rather than nothing — you can browse, and put

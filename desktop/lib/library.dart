@@ -454,6 +454,15 @@ Uint8List? _leesHoes(String p) {
   return null;
 }
 
+/// Waarom de bibliotheek op het scherm niet live is. Zie [LibraryStore.geenVerbinding].
+enum GeenVerbinding {
+  /// De pc antwoordt niet: hij slaapt, staat uit, of er is geen netwerk.
+  pcStil,
+
+  /// De pc antwoordt WEL, maar weigert deze sleutel (401/403).
+  sleutelGeweigerd,
+}
+
 /// Scans the music folder, groups into albums/singles, reads covers, and enriches.
 class LibraryStore extends ChangeNotifier {
   final List<Track> tracks = [];
@@ -1783,6 +1792,18 @@ class LibraryStore extends ChangeNotifier {
   /// True when what is on screen came from the cloud copy rather than from the PC. Everything is
   /// browsable; nothing is playable, because the files are on a machine that is not answering.
   /// Screens read this to say so, rather than letting a tap on play do nothing.
+  /// Waarom de pc niet antwoordde. Null zodra hij het weer doet.
+  ///
+  /// Twee gevallen die de gebruiker totaal verschillende dingen laten doen, en die tot nu toe als
+  /// één melding op het scherm kwamen:
+  ///
+  /// * [pcStil] — hij slaapt, hij staat uit, of er is geen netwerk. Wachten helpt; de app pikt het
+  ///   binnen vijftien seconden vanzelf weer op.
+  /// * [sleutelGeweigerd] — de pc ANTWOORDT, maar dit toestel mag er niet meer in. Wachten hielp
+  ///   hier nooit: er was geen enkel pad terug naar het koppelscherm, en zelfs een herstart deed
+  ///   niets omdat de sleutel gewoon weer van schijf gelezen werd.
+  GeenVerbinding? geenVerbinding;
+
   bool fromCloudMirror = false;
 
   /// When the PC last copied its library up. Only meaningful while [fromCloudMirror].
@@ -1818,11 +1839,20 @@ class LibraryStore extends ChangeNotifier {
     } catch (e) {
       // Keep the library we already have. A Mac that loses the PC mid-song should keep showing the
       // record it is playing, not blank the screen — the same reasoning as a failed disk scan.
+      //
+      // WAAROM het niet lukte wordt nu bewaard. Dit was een kale `catch (e)` met een `return false`,
+      // en vanaf hier was er geen 401 meer in het systeem — alleen een bool die óók "niets veranderd"
+      // en "er loopt al een scan" betekent. Gevolg op de telefoon: een geweigerde sleutel kwam op het
+      // scherm als "je pc staat uit", en dan zoek je een uur naar je netwerk terwijl de pc antwoordt.
+      // `RemoteException.isUnauthorized` bestond al en werd nergens uitgelezen.
+      geenVerbinding =
+          e is RemoteException && e.isUnauthorized ? GeenVerbinding.sleutelGeweigerd : GeenVerbinding.pcStil;
       debugPrint('Remote catalog failed: $e');
       scanning = false;
       notifyListeners();
       return false;
     }
+    geenVerbinding = null;
     _catalogEtag = res.etag;
     final catalog = res.catalog;
     if (catalog == null) {
