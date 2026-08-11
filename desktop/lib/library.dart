@@ -231,8 +231,9 @@ Future<ScanUitslag> scanTagsInIsolate(String root, String? cachePad) =>
     Isolate.run(() => _scanTags(root, cachePad));
 
 /// Pass 2 on another isolate — same reasoning as [scanTagsInIsolate].
-Future<Map<String, Uint8List>> readCoversInIsolate(List<String> paths, String? cacheMap) =>
-    Isolate.run(() => _readCovers(paths, cacheMap));
+Future<Map<String, Uint8List>> readCoversInIsolate(
+        List<String> teLezen, String? cacheMap, List<String> alleEerste) =>
+    Isolate.run(() => _readCovers(teLezen, cacheMap, alleEerste));
 
 /// Pass 2 (background isolate): read one embedded cover per album.
 /// De ingebedde hoezen, bewaard naast de andere staat in plaats van elke start opnieuw opgediept.
@@ -272,10 +273,30 @@ String hoesSleutel(String pad, int mtime, int grootte) {
   return '${h.toRadixString(16)}_${grootte.toRadixString(36)}_${mtime.toRadixString(36)}';
 }
 
-Map<String, Uint8List> _readCovers(List<String> paths, String? cacheMap) {
+/// [teLezen] zijn de albums die nog geen hoes hebben; [alleEerste] is het eerste nummer van ÉLK
+/// album, en dat is een andere lijst.
+///
+/// **Waarom die twee uit elkaar moeten.** Het opruimen ging eerst op [teLezen], en dat is bijna altijd
+/// een handjevol: bij een herscan — en die volgt op elke voltooide download — dragen de albums hun
+/// hoes al in het geheugen mee, dus wordt er alleen naar de nieuwe gevraagd. De opruimregel gooide dan
+/// alles weg wat niet in dat handjevol zat. Gemeten op de echte pc: van 236 bestanden en 125 MB naar
+/// 76 lege merkbestanden en 0 MB — de hele cache leeg, en de eerstvolgende start weer traag.
+Map<String, Uint8List> _readCovers(List<String> teLezen, String? cacheMap, List<String> alleEerste) {
+  final paths = teLezen;
   final out = <String, Uint8List>{};
   final map = cacheMap == null ? null : Directory(cacheMap);
   final levend = <String>{};
+
+  // Wat er mag blijven staan wordt bepaald door ALLE albums, niet door wat deze ronde gelezen wordt.
+  if (map != null) {
+    for (final p in alleEerste) {
+      try {
+        final st = File(p).statSync();
+        final s = hoesSleutel(p, st.modified.millisecondsSinceEpoch, st.size);
+        levend..add(s)..add('$s.geen');
+      } catch (_) {/* net weg; dan mag zijn hoes ook weg */}
+    }
+  }
   if (map != null && !map.existsSync()) {
     try {
       map.createSync(recursive: true);
@@ -291,7 +312,7 @@ Map<String, Uint8List> _readCovers(List<String> paths, String? cacheMap) {
       } catch (_) {}
     }
     if (sleutel != null) {
-      levend..add(sleutel)..add('$sleutel.geen');
+      // `levend` is hierboven al uit ALLE albums gevuld; dit pad zit daar per definitie ook in.
       final bewaard = File('${map!.path}${Platform.pathSeparator}$sleutel');
       if (bewaard.existsSync()) {
         try {
@@ -1620,9 +1641,16 @@ class LibraryStore extends ChangeNotifier {
       for (final a in albums)
         if (a.embeddedCover == null && a.tracks.isNotEmpty) a.tracks.first.path,
     ];
+    // Élk album, ook die zijn hoes al in het geheugen heeft. Alleen hiermee mag de cache opgeruimd
+    // worden — zie [_readCovers]; op [firstPaths] opruimen wiste hem bij elke herscan bijna leeg.
+    final alleEerste = [
+      for (final a in albums)
+        if (a.tracks.isNotEmpty) a.tracks.first.path,
+    ];
     try {
       final covers = await _stap('hoezen (${firstPaths.length})',
-          () => readCoversInIsolate(firstPaths, hoesCacheMap).timeout(const Duration(seconds: 30)));
+          () => readCoversInIsolate(firstPaths, hoesCacheMap, alleEerste)
+              .timeout(const Duration(seconds: 30)));
       for (final a in albums) {
         final c = covers[a.tracks.first.path];
         if (c != null && c.isNotEmpty) a.embeddedCover = c;

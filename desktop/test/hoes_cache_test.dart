@@ -18,6 +18,8 @@
 /// die van een seed afhangt kan het per definitie niet halen.
 library;
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/library.dart';
@@ -46,5 +48,42 @@ void main() {
   test('de naam is bruikbaar als bestandsnaam', () {
     final s = hoesSleutel(pad, mtime, grootte);
     expect(RegExp(r'^[a-z0-9_]+$').hasMatch(s), isTrue, reason: 'geen \\ / : * ? " < > |');
+  });
+
+  test('een herscan die maar één album vraagt, wist de rest van de cache NIET', () async {
+    // Dit ging mis en het was aan de code niet te zien. Het opruimen ging op de lijst die GELEZEN
+    // moest worden, en die is bij een herscan bijna leeg: de albums dragen hun hoes al in het
+    // geheugen mee, dus wordt er alleen naar de nieuwe gevraagd. Alles wat er niet in zat vloog eruit.
+    //
+    // Een herscan volgt op elke voltooide download, dus in de praktijk sloopte één binnengehaald
+    // nummer de hele cache. Gemeten op de echte pc: van 236 bestanden en 125 MB naar 76 lege
+    // merkbestanden en 0 MB, waarna de eerstvolgende start weer 9 seconden hoezen las.
+    final krab = Directory.systemTemp.createTempSync('dm_hoes_');
+    addTearDown(() {
+      try {
+        krab.deleteSync(recursive: true);
+      } catch (_) {}
+    });
+    final cache = '${krab.path}${Platform.pathSeparator}hoescache';
+
+    File nummer(String naam) => File('${krab.path}${Platform.pathSeparator}$naam')
+      ..writeAsBytesSync(List<int>.filled(64, 0));
+
+    final a = nummer('a.flac').path;
+    final b = nummer('b.flac').path;
+
+    // Ronde 1: allebei gevraagd. Geen van beide is een echte FLAC, dus er komt geen hoes uit — maar
+    // er hoort wel voor allebei een merk "hier zit er geen in" te staan.
+    await readCoversInIsolate([a, b], cache, [a, b]);
+    expect(Directory(cache).listSync().length, 2);
+
+    // Ronde 2: alleen a gevraagd (b had zijn hoes al), maar beide albums bestaan nog.
+    await readCoversInIsolate([a], cache, [a, b]);
+    expect(Directory(cache).listSync().length, 2,
+        reason: 'b staat nog in de bibliotheek, dus zijn regel hoort te blijven');
+
+    // En wat er ECHT niet meer is, gaat wel weg.
+    await readCoversInIsolate([a], cache, [a]);
+    expect(Directory(cache).listSync().length, 1);
   });
 }
