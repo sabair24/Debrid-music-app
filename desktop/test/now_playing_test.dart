@@ -25,6 +25,22 @@ class FakePlayer extends ChangeNotifier implements NowPlayingSource {
   Duration duration = const Duration(seconds: 200);
   @override
   Uint8List? currentCover;
+  @override
+  bool shuffle = false;
+  @override
+  RepeatMode repeat = RepeatMode.off;
+
+  @override
+  void zetShuffle(bool aan) {
+    shuffle = aan;
+    notifyListeners();
+  }
+
+  @override
+  void zetHerhaal(RepeatMode m) {
+    repeat = m;
+    notifyListeners();
+  }
 
   int nexts = 0, prevs = 0, toggles = 0;
   Duration? sought;
@@ -106,6 +122,49 @@ void main() {
     expect(player.nexts, 1);
     expect(player.prevs, 1);
     expect(player.sought, const Duration(seconds: 42));
+  });
+
+  group('shuffle en herhalen vanuit de auto', () {
+    // Android Auto tekent zijn eigen shuffle- en herhaalknop, maar alleen als de sessie zegt dat ze
+    // bestaan — en het is de VERTALING tussen zijn standen en de onze die makkelijk verwisselt.
+    test('de standen komen aan bij de speler', () async {
+      final player = FakePlayer()..current = _track('/muziek/01.flac');
+      final handler = NowPlayingHandler(player, null);
+
+      await handler.setShuffleMode(AudioServiceShuffleMode.all);
+      expect(player.shuffle, isTrue);
+      await handler.setShuffleMode(AudioServiceShuffleMode.none);
+      expect(player.shuffle, isFalse);
+
+      await handler.setRepeatMode(AudioServiceRepeatMode.one);
+      expect(player.repeat, RepeatMode.one);
+      await handler.setRepeatMode(AudioServiceRepeatMode.all);
+      expect(player.repeat, RepeatMode.all);
+      await handler.setRepeatMode(AudioServiceRepeatMode.none);
+      expect(player.repeat, RepeatMode.off);
+    });
+
+    test('"group" is geen stilte, maar hetzelfde als alles', () {
+      // Auto stuurt group bij een wachtrij. Viel die door de mazen, dan deed de knop niets.
+      final player = FakePlayer()..current = _track('/muziek/01.flac');
+      NowPlayingHandler(player, null).setRepeatMode(AudioServiceRepeatMode.group);
+      expect(player.repeat, RepeatMode.all);
+    });
+
+    test('de sessie meldt dat ze bestaan, anders tekent Auto de knoppen niet', () async {
+      final player = FakePlayer()..current = _track('/muziek/01.flac');
+      final handler = NowPlayingHandler(player, null);
+      player.shuffle = true;
+      player.repeat = RepeatMode.one;
+      player.notifyListeners();
+      await Future<void>.delayed(Duration.zero);
+
+      final s = handler.playbackState.value;
+      expect(s.systemActions, contains(MediaAction.setShuffleMode));
+      expect(s.systemActions, contains(MediaAction.setRepeatMode));
+      expect(s.shuffleMode, AudioServiceShuffleMode.all);
+      expect(s.repeatMode, AudioServiceRepeatMode.one);
+    });
   });
 
   test('a cover is written once, and named after itself', () async {

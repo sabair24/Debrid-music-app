@@ -31,6 +31,12 @@ class AutoId {
   static const favorieten = 'favorieten';
   static const afspeellijsten = 'afspeellijsten';
 
+  /// Alle nummers, los van hun album.
+  static const nummers = 'nummers';
+
+  /// De hele bibliotheek, geschud. Speelbaar, geen knoop.
+  static const schudAlles = 'schud-alles';
+
   /// `album:<artiest><scheider><titel>`
   static const albumVoorvoegsel = 'album:';
 
@@ -65,6 +71,9 @@ typedef AutoBron = ({
   List<Track> Function() verder,
   List<({String id, String naam})> Function() afspeellijsten,
   List<Track> Function(String lijstId) nummersVanLijst,
+
+  /// Alle nummers, los van hun album — dezelfde lijst als het Tracks-scherm in de app.
+  List<Track> Function() alleNummers,
 
   /// De hoes van een nummer of album, als URI die Android Auto kan openen. Null = geen hoes.
   ///
@@ -141,14 +150,31 @@ List<MediaItem> autoKinderen(String parentIdRuw, AutoBron bron) {
 
   switch (parentId) {
     case AutoId.wortel:
-      // Deze volgorde IS de navigatie: alles daaronder is één tik dieper.
+      // Deze volgorde IS de navigatie, en niet zomaar. Android Auto zet de eerste drie als tabblad
+      // bovenaan en propt de rest onder "Meer" — wat op de vierde plek staat kost dus een tik
+      // extra. Nummers staat daarom vóór Favorieten en Afspeellijsten.
       return [
         _map(AutoId.verder, 'Verder waar je was'),
         _map(AutoId.recent, 'Recent toegevoegd'),
+        _map(AutoId.nummers, 'Nummers'),
         _map(AutoId.favorieten, 'Favorieten'),
         _map(AutoId.afspeellijsten, 'Afspeellijsten'),
         _map(AutoId.albums, 'Albums'),
         _map(AutoId.artiesten, 'Artiesten'),
+      ];
+    case AutoId.nummers:
+      // "Alles schudden" bovenaan, want dat is waar een lijst van honderden nummers achter het
+      // stuur voor gebruikt wordt. Doorbladeren kan daarna nog steeds.
+      final alle = bron.alleNummers();
+      if (alle.isEmpty) return const [];
+      return [
+        MediaItem(
+          id: AutoId.schudAlles,
+          title: 'Alles schudden',
+          artist: '${alle.length} nummers',
+          playable: true,
+        ),
+        ...nummers(alle),
       ];
     case AutoId.verder:
       return nummers(bron.verder());
@@ -221,7 +247,15 @@ List<Track> autoSpeellijstVoor(String mediaId, AutoBron bron) {
       final i = a.tracks.indexWhere((t) => t.path == pad);
       if (i >= 0) return [...a.tracks.skip(i), ...a.tracks.take(i)];
     }
-    for (final lijst in [bron.verder(), bron.recent(), bron.favorieten()]) {
+    // Zijn album eerst, want daar hoort "volgende" bij. Daarna de lijsten waar hij uit aangetikt kan
+    // zijn — [alleNummers] hoort daar ook bij, anders doet een tik in de nummerlijst niets voor elk
+    // nummer waarvan het album niet (meer) in de bibliotheek staat.
+    for (final lijst in [
+      bron.verder(),
+      bron.recent(),
+      bron.favorieten(),
+      bron.alleNummers(),
+    ]) {
       final i = lijst.indexWhere((t) => t.path == pad);
       if (i >= 0) return [...lijst.skip(i), ...lijst.take(i)];
     }
@@ -244,6 +278,11 @@ List<Track> autoSpeellijstVoor(String mediaId, AutoBron bron) {
     AutoId.verder => bron.verder(),
     AutoId.recent => bron.recent(),
     AutoId.favorieten => bron.favorieten(),
+    // Beide de hele bibliotheek. Het schudden zelf gebeurt niet hier: deze functie is puur en moet
+    // bij dezelfde invoer hetzelfde teruggeven, anders is er niets aan te toetsen. Wie
+    // [AutoId.schudAlles] aantikt zet shuffle aan in de speler — zie de afhandeling in
+    // now_playing.dart.
+    AutoId.nummers || AutoId.schudAlles => bron.alleNummers(),
     _ => const [],
   };
 }

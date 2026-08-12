@@ -123,6 +123,14 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
   bool _lastPlaying = false;
   Duration _lastPosition = Duration.zero;
 
+  /// Ook shuffle en herhalen, anders loopt de auto achter op de app.
+  ///
+  /// De poort hieronder publiceert alleen bij een sprong in de positie of bij play/pauze — dat is
+  /// met opzet, want deze luisteraar vuurt bij elke tik. Maar wie in de app op shuffle drukt
+  /// verandert geen van beide, en dan blijft de knop in de auto in de oude stand staan.
+  bool _lastShuffle = false;
+  RepeatMode _lastRepeat = RepeatMode.off;
+
   /// Joined on a NUL, which cannot occur in any of the four. A printable separator would let a
   /// title that ends where an artist begins produce the signature of a different pair.
   static String _sigOf(Track t) => [t.path, t.title, t.artist, t.album].join('\u0000');
@@ -147,9 +155,14 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
     // Position moves constantly; the system only needs it when it jumps or when play/pause flips.
     // Publishing every tick makes the lockscreen scrubber stutter and wakes the OS needlessly.
     final drift = (player.position - _lastPosition).inMilliseconds.abs();
-    if (player.playing != _lastPlaying || drift > 1200) {
+    if (player.playing != _lastPlaying ||
+        drift > 1200 ||
+        player.shuffle != _lastShuffle ||
+        player.repeat != _lastRepeat) {
       _lastPlaying = player.playing;
       _lastPosition = player.position;
+      _lastShuffle = player.shuffle;
+      _lastRepeat = player.repeat;
       _publishState();
     }
   }
@@ -161,7 +174,15 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
         if (player.playing) MediaControl.pause else MediaControl.play,
         MediaControl.skipToNext,
       ],
-      systemActions: const {MediaAction.seek},
+      // setShuffleMode en setRepeatMode zijn geen extra knoppen van ons: ze vertellen de hoofdunit
+      // dat deze sessie ze KENT, en dán pas tekent Android Auto zijn eigen shuffle- en
+      // herhaalknoppen op het speelscherm. Zonder deze twee blijft het bij vorige/play/volgende, en
+      // is er in de auto geen enkele manier om te schudden of te herhalen.
+      systemActions: const {
+        MediaAction.seek,
+        MediaAction.setShuffleMode,
+        MediaAction.setRepeatMode,
+      },
       androidCompactActionIndices: const [0, 1, 2],
       processingState: AudioProcessingState.ready,
       playing: player.playing,
@@ -169,7 +190,37 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
       bufferedPosition: player.duration,
       speed: player.playing ? 1.0 : 0.0,
       queueIndex: null,
+      shuffleMode: player.shuffle
+          ? AudioServiceShuffleMode.all
+          : AudioServiceShuffleMode.none,
+      repeatMode: switch (player.repeat) {
+        RepeatMode.one => AudioServiceRepeatMode.one,
+        RepeatMode.all => AudioServiceRepeatMode.all,
+        RepeatMode.off => AudioServiceRepeatMode.none,
+      },
     ));
+  }
+
+  /// Shuffle vanuit de auto.
+  ///
+  /// Een stand en geen omschakeling: zie [NowPlayingSource.zetShuffle] voor waarom dat verschil
+  /// hier telt. `group` bestaat in de norm maar niet in deze app — alles wat niet "geen" is, is
+  /// gewoon schudden.
+  @override
+  Future<void> setShuffleMode(AudioServiceShuffleMode shuffleMode) async {
+    player.zetShuffle(shuffleMode != AudioServiceShuffleMode.none);
+    _publishState();
+  }
+
+  @override
+  Future<void> setRepeatMode(AudioServiceRepeatMode repeatMode) async {
+    player.zetHerhaal(switch (repeatMode) {
+      AudioServiceRepeatMode.none => RepeatMode.off,
+      AudioServiceRepeatMode.one => RepeatMode.one,
+      // `group` hoort bij wachtrijen die deze app niet kent; hetzelfde als "alles".
+      AudioServiceRepeatMode.all || AudioServiceRepeatMode.group => RepeatMode.all,
+    });
+    _publishState();
   }
 
   Future<void> _publishItem(Track track) async {
@@ -278,6 +329,9 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
     // Leeg betekent "hier valt niets te spelen". Dan hoort er NIETS te gebeuren — de vorige wachtrij
     // laten doorlopen leest achter het stuur als "hij speelt iets anders dan ik koos".
     if (rij.isEmpty) return;
+    // "Alles schudden" is hetzelfde nummerlijstje met shuffle aan. Vóór het spelen, zodat de
+    // wachtrij meteen geschud opgebouwd wordt in plaats van eerst op alfabet te beginnen.
+    if (mediaId == AutoId.schudAlles) player.zetShuffle(true);
     await autoSpeel?.call(rij);
   }
 }

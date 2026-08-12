@@ -34,6 +34,17 @@ abstract interface class NowPlayingSource implements Listenable {
   Future<void> next();
   Future<void> prev();
   void seek(Duration d);
+
+  /// Shuffle en herhalen, als STAND en niet als schakelaar.
+  ///
+  /// De app zelf heeft genoeg aan `toggleShuffle`/`cycleRepeat` — daar is één knop die rondloopt.
+  /// Een hoofdunit werkt andersom: Android Auto stuurt "zet shuffle op aan" of "zet herhalen op
+  /// één", en met alleen een omschakelaar wordt dat een gok over wat de huidige stand is. Zit die
+  /// gok ernaast, dan zet je in de auto shuffle aan en gaat hij uit.
+  bool get shuffle;
+  RepeatMode get repeat;
+  void zetShuffle(bool aan);
+  void zetHerhaal(RepeatMode m);
 }
 
 /// Re-resolve a queue against the library, or null when nothing anyone can see has changed.
@@ -274,7 +285,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
 
   @override
   Uint8List? currentCover;
+  @override
   bool shuffle = false;
+  @override
   RepeatMode repeat = RepeatMode.off;
 
   @override
@@ -769,6 +782,19 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
 
   void cycleRepeat() {
     repeat = RepeatMode.values[(repeat.index + 1) % RepeatMode.values.length];
+    notifyListeners();
+  }
+
+  /// Shuffle op een stand zetten. Via [toggleShuffle], want daar zit de speaker-afhandeling in.
+  @override
+  void zetShuffle(bool aan) {
+    if (shuffle != aan) toggleShuffle();
+  }
+
+  @override
+  void zetHerhaal(RepeatMode m) {
+    if (repeat == m) return;
+    repeat = m;
     notifyListeners();
   }
 

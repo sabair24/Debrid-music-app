@@ -29,6 +29,7 @@ AutoBron bron({
   List<Track> recent = const [],
   List<Track> favorieten = const [],
   List<Track> verder = const [],
+  List<Track> alle = const [],
   List<({String id, String naam})> lijsten = const [],
   Map<String, List<Track>> lijstInhoud = const {},
   Uri? Function(Track) hoesN = _geenHoesN,
@@ -39,6 +40,7 @@ AutoBron bron({
       recent: () => recent,
       favorieten: () => favorieten,
       verder: () => verder,
+      alleNummers: () => alle,
       afspeellijsten: () => lijsten,
       nummersVanLijst: (id) => lijstInhoud[id] ?? const [],
       hoesVanNummer: hoesN,
@@ -65,10 +67,53 @@ void main() {
 
     test('is kort, en het meest gebruikte staat bovenaan', () {
       final k = autoKinderen(AutoId.wortel, bron());
-      expect(k.length, lessThanOrEqualTo(6), reason: 'achter het stuur telt elke regel');
+      expect(k.length, lessThanOrEqualTo(7), reason: 'achter het stuur telt elke regel');
       expect(k.first.title, 'Verder waar je was');
       expect([for (final i in k) i.title], containsAllInOrder(['Verder waar je was', 'Albums']));
       expect(k.every((i) => i.playable == false), isTrue, reason: 'de wortel bladert, hij speelt niet');
+    });
+
+    test('Nummers staat vóór de vierde plek', () {
+      // Auto maakt van de eerste drie een tabblad en stopt de rest onder "Meer". Zakt Nummers naar
+      // plek vier, dan kost je hele nummerlijst er een tik bij zonder dat er iets aan te zien is.
+      final titels = [for (final i in autoKinderen(AutoId.wortel, bron())) i.title];
+      expect(titels.indexOf('Nummers'), lessThan(3));
+    });
+  });
+
+  group('de nummerlijst', () {
+    final ts = [tr('een'), tr('twee'), tr('drie')];
+
+    test('toont alle nummers, met "Alles schudden" bovenaan', () {
+      final k = autoKinderen(AutoId.nummers, bron(alle: ts));
+      expect(k.first.title, 'Alles schudden');
+      expect(k.first.playable, isTrue);
+      expect(k.first.artist, '3 nummers');
+      expect([for (final i in k.skip(1)) i.title], ['een', 'twee', 'drie']);
+    });
+
+    test('"Alles schudden" speelt de hele bibliotheek', () {
+      // De volgorde is hier gewoon de lijst: schudden gebeurt in de speler, niet in deze pure
+      // functie — anders geeft dezelfde invoer elke keer iets anders terug en valt er niets vast te
+      // leggen.
+      expect([for (final t in autoSpeellijstVoor(AutoId.schudAlles, bron(alle: ts))) t.title],
+          ['een', 'twee', 'drie']);
+    });
+
+    test('de knoop zelf speelt ook alles', () {
+      expect(autoSpeellijstVoor(AutoId.nummers, bron(alle: ts)).length, 3);
+    });
+
+    test('een leeg bibliotheek geeft geen losse schudknop', () {
+      // Anders staat er in de auto één regel "Alles schudden · 0 nummers" die niets doet.
+      expect(autoKinderen(AutoId.nummers, bron()), isEmpty);
+      expect(autoKinderenMetLeegmelding(AutoId.nummers, bron()).single.title, 'Niets gevonden');
+    });
+
+    test('een nummer uit de lijst speelt de lijst verder, vanaf daar', () {
+      final b = bron(alle: ts);
+      final id = '${AutoId.nummerVoorvoegsel}${ts[1].path}';
+      expect([for (final t in autoSpeellijstVoor(id, b)) t.title], ['twee', 'drie', 'een']);
     });
   });
 

@@ -529,6 +529,8 @@ Future<void> main() async {
         return [for (final a in gesorteerd.take(25)) ...a.tracks];
       },
       favorieten: () => favorieten.nummers(library.tracks),
+      // Dezelfde lijst als het Tracks-scherm in de app.
+      alleNummers: () => library.tracks,
       // "Verder waar je was" is letterlijk de wachtrij die er nog staat — inclusief de plek waar je
       // gebleven was, want die wordt bij het afsluiten bewaard.
       verder: () => player.queueTracks,
