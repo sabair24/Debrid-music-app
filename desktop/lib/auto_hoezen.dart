@@ -6,49 +6,48 @@
 /// `file:`-URI, want dáár laadt `audio_service` de bytes binnen ons eigen proces en geeft het een
 /// Bitmap door. Twee verschillende wegen, en die tweede was er niet.
 ///
-/// Dus: de bytes naar een bestand in een map die een `FileProvider` deelt, en een `content:`-URI
-/// terug. Zie `android/app/src/main/res/xml/auto_hoezen.xml` voor de map en de afweging eromheen.
+/// **En waarom het er nog niet is.** De weg leek: bytes naar een bestand in een map die een
+/// `FileProvider` deelt, en een `content:`-URI terug. Dat kan niet met de provider van androidx.
+/// Die weigert geëxporteerd te worden, en niet met een waarschuwing maar met een crash van het hele
+/// proces, bij élke start van de app:
 ///
-/// **Genoemd naar de inhoud.** Dezelfde hoes levert hetzelfde bestand: een album dat twee keer
-/// langskomt schrijft de tweede keer niets, en de map kan niet groeien voorbij één bestand per
-/// unieke hoes. Precies de truc die `_artFile` in now_playing.dart al gebruikt.
+/// ```
+/// java.lang.RuntimeException: Unable to get provider androidx.core.content.FileProvider
+/// Caused by: java.lang.SecurityException: Provider must not be exported
+///     at androidx.core.content.FileProvider.attachInfo
+/// ```
+///
+/// Het bouwen was groen, de toetsen waren groen, de APK installeerde. Pas de telefoon zei het, en
+/// pas nadat hij al geïnstalleerd stond. De uitgeleverde versie was daarmee stukker dan de versie
+/// zónder hoezen: geen muziek in plaats van tegels zonder plaatje.
+///
+/// **Wat er wél kan**, allebei platformcode en allebei nog te doen:
+///
+/// 1. `exported="false"` houden en Gearhead per URI toestemming geven met `grantUriPermission()`,
+///    op het moment dat Auto bladert. Netjes, maar het moet lopen in het proces van de
+///    `MediaBrowserService` — en die is van `audio_service`, niet van ons.
+/// 2. Een eigen `ContentProvider` in Kotlin. Die kent de controle van androidx niet, dus mag hij
+///    wél geëxporteerd zijn, en hij werkt ook als de app zelf niet draait.
+///
+/// Tot een van die twee er is geeft [autoHoesUri] `null` terug: grijze tegels met de juiste titels,
+/// en een app die start.
 library;
 
 import 'dart:io';
 
-import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart';
-
 import 'paths.dart';
 
-/// De authority uit het manifest. Moet gelijk blijven aan `${applicationId}.hoezen`.
-const _authority = 'com.debridmusic.app.hoezen';
-
-/// De naam van het pad uit auto_hoezen.xml. Het eerste segment van de content-URI.
-const _padNaam = 'hoezen';
-
-/// De submap onder [appDir]. Moet overeenkomen met `path=` in auto_hoezen.xml.
+/// De submap waar de hoezen zouden komen te staan.
 const _map = 'autohoezen';
 
 /// Waar de hoezen staan. Publiek zodat een opruimer hem kan vinden.
 Directory autoHoesMap() => appSubdir(_map);
 
-/// Schrijf [bytes] weg en geef de content-URI die Auto kan openen. Null als er niets te schrijven is.
+/// De hoes van een bladeritem, als URI die Android Auto kan openen. Voorlopig altijd `null`.
 ///
-/// Alleen op Android: op de pc en op iOS bestaat deze provider niet, en een content-URI die nergens
-/// heen wijst is erger dan geen hoes — dan toont het systeem een gebroken plaatje in plaats van een
-/// nette lege tegel.
-Uri? autoHoesUri(Uint8List? bytes) {
-  if (bytes == null || bytes.length < 100 || !Platform.isAndroid) return null;
-  try {
-    final naam = '${md5.convert(bytes).toString().substring(0, 16)}.jpg';
-    final f = File('${autoHoesMap().path}${Platform.pathSeparator}$naam');
-    if (!f.existsSync()) f.writeAsBytesSync(bytes);
-    return Uri.parse('content://$_authority/$_padNaam/$naam');
-  } catch (e) {
-    // Geen hoes is een schoonheidsfout; de titel staat er nog. Nooit een reden om het bladeren te
-    // laten mislukken — dan zie je in de auto een lege lijst in plaats van een grijze tegel.
-    debugPrint('autohoes niet weggeschreven: $e');
-    return null;
-  }
-}
+/// Null en niet "schrijf hem toch maar weg": een `content:`-URI zonder provider erachter is érger
+/// dan geen hoes — dan toont het systeem een gebroken plaatje in plaats van een nette lege tegel.
+/// En bestanden wegschrijven die niemand kan lezen is alleen maar schijfruimte.
+///
+/// Zie de uitleg boven aan dit bestand voor wat hier moet komen.
+Uri? autoHoesUri(List<int>? bytes) => null;

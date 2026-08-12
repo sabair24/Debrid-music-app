@@ -69,26 +69,26 @@
             </intent-filter>
         </activity>
 
-        <!-- De albumhoezen voor Android Auto.
+        <!-- HIER STOND EEN FileProvider VOOR DE ALBUMHOEZEN IN ANDROID AUTO. WEG, EN DIT IS WAAROM.
 
-             Auto draait in een ánder proces en kan geen `file:`-pad in de privémap van deze app
-             lezen; zonder dit krijg je grijze vlakken in plaats van je platenkast. Een content-URI
-             kan hij wél openen.
+             Auto draait in een ánder proces en laadt de artUri zélf; een `file:`-pad in onze
+             privémap kan hij niet openen. Een gedeelde content-URI leek de weg, dus stond hier een
+             `androidx.core.content.FileProvider` met `exported="true"`.
 
-             `exported` staat op true en dat is een bewuste afweging, uitgeschreven in
-             res/xml/auto_hoezen.xml: de provider deelt precies één submap met uitsluitend
-             albumhoezen. Netter zou een toekenning per URI zijn, maar die moet vanuit platformcode
-             gebeuren op het moment dat Auto bladert — en die MediaBrowserService is van
-             `audio_service`, niet van ons. -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.hoezen"
-            android:exported="true"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/auto_hoezen"/>
-        </provider>
+             Die afweging bestaat niet. De bibliotheek weigert het zelf, bij het opstarten van het
+             hele proces:
+
+                 java.lang.RuntimeException: Unable to get provider FileProvider
+                 Caused by: java.lang.SecurityException: Provider must not be exported
+                     at androidx.core.content.FileProvider.attachInfo
+
+             Geen waarschuwing bij het bouwen, geen rode toets — de APK installeerde prima en de app
+             crashte daarna bij élke start, ook gewoon op de telefoon. Erger dan grijze vlakken.
+
+             De echte weg is `exported="false"` plus `grantUriPermission()` per URI naar Gearhead op
+             het moment dat Auto bladert, óf een eigen provider in Kotlin (die kent deze controle
+             niet). Allebei platformcode; tot dan blijven de tegels grijs en werkt de app. Zie
+             auto_hoezen.dart. -->
 
         <!-- Android Auto. Dit is wat de app ZICHTBAAR maakt in de auto.
 
