@@ -40,6 +40,22 @@ AutoBron bron({
 
 void main() {
   group('de wortel', () {
+    test('Auto vraagt hem op als "root" — en krijgt de echte lijst', () {
+      // Dit ging de eerste keer mis, en geen enkele toets ving het: `audio_service` geeft de wortel
+      // uit als 'root' (AudioService.browsableRootId), niet onder onze eigen naam. De app stond in
+      // de app-lijst van de auto, opende, en toonde "Niets gevonden" — mijn eigen leegmelding.
+      final via = autoKinderen(autoWortelVanHetSysteem, bron());
+      final eigen = autoKinderen(AutoId.wortel, bron());
+      expect([for (final i in via) i.title], [for (final i in eigen) i.title]);
+      expect(via, isNotEmpty);
+    });
+
+    test('en de leegmelding slaat er ook niet op aan', () {
+      final k = autoKinderenMetLeegmelding(autoWortelVanHetSysteem, bron());
+      expect(k.length, greaterThan(1), reason: 'de wortel is nooit "leeg"');
+      expect(k.first.title, 'Verder waar je was');
+    });
+
     test('is kort, en het meest gebruikte staat bovenaan', () {
       final k = autoKinderen(AutoId.wortel, bron());
       expect(k.length, lessThanOrEqualTo(6), reason: 'achter het stuur telt elke regel');

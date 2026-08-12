@@ -110,8 +110,23 @@ MediaItem _album(Album a) => MediaItem(
       playable: true,
     );
 
+/// De naam waaronder Android Auto de wortel opvraagt.
+///
+/// **Dit kostte de eerste poging.** `audio_service` geeft de wortel uit als `'root'`
+/// (`AudioService.browsableRootId`), en dát is wat Auto terugvraagt — niet onze eigen naam. De app
+/// stond keurig in de app-lijst van de auto, opende, en toonde "Niets gevonden": mijn eigen
+/// leegmelding, omdat `'root'` door de hele switch viel. Dertien groene toetsen en een leeg scherm in
+/// de auto.
+///
+/// Hier en niet in de handler, zodat er een toets op kan staan.
+const autoWortelVanHetSysteem = 'root';
+
+String _alsWortel(String id) =>
+    id == autoWortelVanHetSysteem || id == AutoId.wortel ? AutoId.wortel : id;
+
 /// De kinderen van een knoop. Lege lijst als het id niets betekent.
-List<MediaItem> autoKinderen(String parentId, AutoBron bron) {
+List<MediaItem> autoKinderen(String parentIdRuw, AutoBron bron) {
+  final parentId = _alsWortel(parentIdRuw);
   List<MediaItem> nummers(List<Track> ts) =>
       [for (final t in ts.take(autoMaxPerLijst)) _nummer(t)];
 
@@ -178,7 +193,8 @@ List<MediaItem> autoKinderen(String parentId, AutoBron bron) {
 ///
 /// Een lege lijst leest in een auto als "kapot": je hebt aangetikt, er gebeurde niets, en je kijkt
 /// nog een keer terwijl je zou moeten rijden.
-List<MediaItem> autoKinderenMetLeegmelding(String parentId, AutoBron bron) {
+List<MediaItem> autoKinderenMetLeegmelding(String parentIdRuw, AutoBron bron) {
+  final parentId = _alsWortel(parentIdRuw);
   final kinderen = autoKinderen(parentId, bron);
   if (kinderen.isNotEmpty || parentId == AutoId.wortel) return kinderen;
   return [MediaItem(id: 'leeg:$parentId', title: _leegLabel(parentId), playable: false)];
