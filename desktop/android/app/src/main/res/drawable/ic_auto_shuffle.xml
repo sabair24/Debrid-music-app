@@ -1,8 +1,12 @@
 <!-- Shuffle, uit. Voor de knop die Android Auto op het speelscherm tekent.
 
      Eigen tekening en geen pictogram uit een bibliotheek: audio_service levert er geen mee, en een
-     custom action zonder geldig icoon krijgt van Auto helemaal geen knop -- geen foutmelding, hij
-     is er gewoon niet.
+     custom action zonder geldig icoon krijgt van Auto helemaal geen knop. Geen foutmelding, hij is
+     er gewoon niet.
+
+     LET OP bij het bijwerken van dit commentaar: twee streepjes achter elkaar maken een
+     XML-commentaar ongeldig. Dat kostte een hele APK-bouw, en het viel nergens eerder op: noch
+     `flutter analyze` noch de toetsen kijken ooit naar een Android-resource.
 
      Wit, want de hoofdunit kleurt hem zelf naar zijn eigen thema. 24dp is de maat die Auto
      verwacht. -->
