@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Zonder dit bestand bestaat DebridMusic niet voor Android Auto.
+
+  Gemeten op 11-08-2026: de app had `audio_service` met een MediaBrowserService, mediaknoppen en een
+  audiosessie — alles wat nodig is om muziek in de auto te spelen. Maar Auto kijkt eerst naar deze
+  declaratie, en zonder die staat de app simpelweg niet in de lijst. Geen foutmelding, geen aanwijzing;
+  hij is er gewoon niet.
+
+  `media` is het enige gebruik dat we claimen. Niet `notification`, want een muziekspeler hoort in de
+  auto geen meldingen te tonen — dat is precies het soort ding waar Google een review op afkeurt en
+  wat achter het stuur ook nergens op slaat.
+-->
+<automotiveApp>
+    <uses name="media"/>
+</automotiveApp>

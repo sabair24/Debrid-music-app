@@ -16,9 +16,25 @@ import 'package:audio_session/audio_session.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
+import 'auto_bladeren.dart';
 import 'models.dart';
 import 'paths.dart';
 import 'player.dart';
+
+/// Waar de boom voor Android Auto vandaan komt. Null = geen bladeren; de app is dan zichtbaar in de
+/// auto maar leeg — precies de toestand van vóór 11-08-2026.
+///
+/// Een functie en geen momentopname: een scan of een download verandert de bibliotheek onder de app
+/// door, en Auto vraagt telkens opnieuw. Een kopie zou je door de bibliotheek van gisteren laten
+/// bladeren.
+///
+/// Als losse haak in deze module en niet als veld op de handler: die wordt binnen `AudioService.init`
+/// gebouwd, dus `main` heeft er nooit een verwijzing naar — en de handler is met opzet alleen voor
+/// tests zichtbaar.
+AutoBron Function()? autoBladerBron;
+
+/// Wat er moet gebeuren als iemand in de auto iets aantikt.
+Future<void> Function(List<Track>)? autoSpeel;
 
 bool get _wantsSystemControls => Platform.isIOS || Platform.isMacOS || Platform.isAndroid;
 
@@ -94,6 +110,7 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
 
   final NowPlayingSource player;
   final Uint8List? Function(Track)? coverFor;
+
 
   /// What was last published, so the artwork is only written to disk when something the lockscreen
   /// SHOWS has changed — this listener fires on every position tick.
@@ -210,5 +227,46 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
   Future<void> stop() async {
     if (player.playing) player.playPause();
     await super.stop();
+  }
+
+  // ── Android Auto ───────────────────────────────────────────────────────────
+  //
+  // Auto praat met de MediaBrowserService die audio_service al draait, en vraagt maar twee dingen:
+  // "wat zit er onder deze knoop" en "speel dit id". De boom zelf staat in auto_bladeren.dart, als
+  // pure functie, zodat hij te toetsen is zonder auto, telefoon of speler. Hier alleen de aansluiting.
+  //
+  // Zonder [autoBron] gebeurt er niets bijzonders: dan is de app in de auto zichtbaar maar leeg, en
+  // dat is precies de toestand van vóór vandaag.
+
+  @override
+  Future<List<MediaItem>> getChildren(String parentMediaId, [Map<String, dynamic>? options]) async {
+    final bron = autoBladerBron?.call();
+    if (bron == null) return const [];
+    return autoKinderenMetLeegmelding(parentMediaId, bron);
+  }
+
+  @override
+  Future<MediaItem?> getMediaItem(String mediaId) async {
+    final bron = autoBladerBron?.call();
+    if (bron == null) return null;
+    // Het item zelf komt uit de lijst waar het in staat; Auto vraagt hier bijvoorbeeld naar om een
+    // hoes te tonen bij wat er speelt.
+    for (final knoop in [AutoId.verder, AutoId.recent, AutoId.favorieten, AutoId.albums]) {
+      for (final i in autoKinderen(knoop, bron)) {
+        if (i.id == mediaId) return i;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Future<void> playFromMediaId(String mediaId, [Map<String, dynamic>? extras]) async {
+    final bron = autoBladerBron?.call();
+    if (bron == null) return;
+    final rij = autoSpeellijstVoor(mediaId, bron);
+    // Leeg betekent "hier valt niets te spelen". Dan hoort er NIETS te gebeuren — de vorige wachtrij
+    // laten doorlopen leest achter het stuur als "hij speelt iets anders dan ik koos".
+    if (rij.isEmpty) return;
+    await autoSpeel?.call(rij);
   }
 }

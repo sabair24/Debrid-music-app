@@ -439,6 +439,8 @@ Future<void> main() async {
     final at = speakers.status?.index;
     if (at != null) player.followSpeaker(at);
   });
+
+
   // The lockscreen, Control Center and the media keys. Not awaited on the critical path — the
   // window should not wait on a system service to come up.
   unawaited(initNowPlaying(player, cover: library.coverForTrack));
@@ -506,6 +508,38 @@ Future<void> main() async {
       ..wortel = () => library.rootPath;
   }
   final lijsten = Afspeellijsten();
+
+  // Wat er in de AUTO te bladeren valt. Dit is de enige plek waar de boom aan de echte bibliotheek
+  // hangt; de boom zelf staat in auto_bladeren.dart en weet van niets.
+  //
+  // Een functie en geen momentopname: een scan of een download verandert de bibliotheek onder de app
+  // door, en Auto vraagt telkens opnieuw. Een kopie zou je door de bibliotheek van gisteren laten
+  // bladeren.
+  autoBladerBron = () {
+    final wortel = library.rootPath;
+    return (
+      albums: () => library.albums,
+      recent: () {
+        final gesorteerd = [...library.albums.where((a) => a.addedMs > 0)]
+          ..sort((a, b) => b.addedMs.compareTo(a.addedMs));
+        return [for (final a in gesorteerd.take(25)) ...a.tracks];
+      },
+      favorieten: () => favorieten.nummers(library.tracks),
+      // "Verder waar je was" is letterlijk de wachtrij die er nog staat — inclusief de plek waar je
+      // gebleven was, want die wordt bij het afsluiten bewaard.
+      verder: () => player.queueTracks,
+      afspeellijsten: () => [
+        for (final l in lijsten.lijsten) (id: l.id, naam: l.name),
+      ],
+      nummersVanLijst: (id) {
+        final lijst = lijsten.byId(id);
+        if (lijst == null || wortel.isEmpty) return const <Track>[];
+        final perId = {for (final t in library.tracks) trackIdFor(t.path, wortel): t};
+        return lijsten.nummersVan(lijst, (i) => perId[i]);
+      },
+    );
+  };
+  autoSpeel = (rij) async => player.playQueue(rij, 0);
   if (mode.owner) lijsten.winkel = sharing.state;
 
   // Signing in. Restoring a saved session is deliberately NOT awaited before the first frame: a

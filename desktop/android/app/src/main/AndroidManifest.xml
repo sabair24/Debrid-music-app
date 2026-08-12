@@ -69,9 +69,20 @@
             </intent-filter>
         </activity>
 
+        <!-- Android Auto. Dit is wat de app ZICHTBAAR maakt in de auto.
+
+             Alles wat nodig is om te spelen zat er al — de MediaBrowserService hieronder, de
+             mediaknoppen, de audiosessie. Alleen keek Auto eerst hiernaar, vond niets, en toonde de
+             app dus nergens: geen foutmelding, geen aanwijzing, gewoon afwezig. Zie
+             res/xml/automotive_app_desc.xml. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc"/>
+
         <!-- audio_service: what the lockscreen, the notification and the media keys talk to.
              libmpv still plays the audio; this only publishes what is playing and hands the
-             buttons back. -->
+             buttons back. Dit is ook de service waarmee Android Auto praat: hij bladert erin via
+             MediaBrowserService en start nummers via playFromMediaId. -->
         <service
             android:name="com.ryanheise.audioservice.AudioService"
             android:foregroundServiceType="mediaPlayback"
