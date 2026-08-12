@@ -104,6 +104,32 @@ void main() {
       expect(autoSpeellijstVoor(AutoId.nummers, bron(alle: ts)).length, 3);
     });
 
+    group('waar het schudden begint', () {
+      // playQueue zet het aangewezen nummer VOORAAN en schudt de rest daarachter. Met index 0 begon
+      // een geschudde bibliotheek van 762 nummers dus elke keer bij hetzelfde liedje — gemeten in de
+      // auto, waar "Alles schudden" driemaal op Chandelier uitkwam.
+      test('"Alles schudden" begint ergens, niet vooraan', () {
+        expect(autoStartIndex(AutoId.schudAlles, 762, (n) => 415), 415);
+      });
+
+      test('al het andere begint gewoon vooraan', () {
+        expect(autoStartIndex(AutoId.nummers, 762, (n) => 415), 0);
+        expect(autoStartIndex('${AutoId.albumVoorvoegsel}A${AutoId.scheider}X', 12, (n) => 5), 0);
+      });
+
+      test('één nummer wordt niet geschud', () {
+        // Random().nextInt(1) is altijd 0, maar nextInt(0) gooit — en dat zou de tik laten mislukken
+        // in plaats van muziek te geven.
+        expect(autoStartIndex(AutoId.schudAlles, 1, (n) => throw StateError('niet aanroepen')), 0);
+        expect(autoStartIndex(AutoId.schudAlles, 0, (n) => throw StateError('niet aanroepen')), 0);
+      });
+
+      test('de gekozen plek ligt altijd in de lijst', () {
+        // De grens: nextInt(n) geeft 0..n-1, dus de laatste index moet nog passen.
+        expect(autoStartIndex(AutoId.schudAlles, 3, (n) => n - 1), 2);
+      });
+    });
+
     test('een leeg bibliotheek geeft geen losse schudknop', () {
       // Anders staat er in de auto één regel "Alles schudden · 0 nummers" die niets doet.
       expect(autoKinderen(AutoId.nummers, bron()), isEmpty);

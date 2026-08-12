@@ -10,6 +10,7 @@ library;
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
@@ -34,8 +35,13 @@ import 'player.dart';
 /// tests zichtbaar.
 AutoBron Function()? autoBladerBron;
 
+/// Voor het beginpunt van "Alles schudden". Zie [autoStartIndex].
+final _rnd = Random();
+
 /// Wat er moet gebeuren als iemand in de auto iets aantikt.
-Future<void> Function(List<Track>)? autoSpeel;
+///
+/// De index hoort erbij en is niet altijd 0: zie [autoStartIndex].
+Future<void> Function(List<Track> rij, int start)? autoSpeel;
 
 bool get _wantsSystemControls => Platform.isIOS || Platform.isMacOS || Platform.isAndroid;
 
@@ -173,11 +179,18 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
         MediaControl.skipToPrevious,
         if (player.playing) MediaControl.pause else MediaControl.play,
         MediaControl.skipToNext,
+        _shuffleKnop(),
+        _herhaalKnop(),
       ],
-      // setShuffleMode en setRepeatMode zijn geen extra knoppen van ons: ze vertellen de hoofdunit
-      // dat deze sessie ze KENT, en dán pas tekent Android Auto zijn eigen shuffle- en
-      // herhaalknoppen op het speelscherm. Zonder deze twee blijft het bij vorige/play/volgende, en
-      // is er in de auto geen enkele manier om te schudden of te herhalen.
+      // setShuffleMode/setRepeatMode zeggen dat deze sessie de STANDEN kent. Dat is wat een
+      // Automotive-hoofdunit (het scherm dat in de auto zelf zit) gebruikt om zijn eigen knoppen te
+      // tekenen.
+      //
+      // Het is NIET wat Android Auto op een telefoon doet. Daar bleven de knoppen weg, gemeten in
+      // de DHU: alleen vorige/play/volgende. Auto tekent op dat scherm custom actions — precies wat
+      // Tidal op deze telefoon doet, te zien in `dumpsys media_session`: zijn sessie draagt
+      // "Shuffle in-/uitschakelen" en "Beginnen met alle nummers herhalen" als custom action.
+      // Vandaar allebei: de standen hierboven én de twee knoppen in [controls].
       systemActions: const {
         MediaAction.seek,
         MediaAction.setShuffleMode,
@@ -199,6 +212,57 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
         RepeatMode.off => AudioServiceRepeatMode.none,
       },
     ));
+  }
+
+  /// De namen waaronder de twee knoppen terugkomen in [customAction].
+  static const knopShuffle = 'debridmusic.shuffle';
+  static const knopHerhaal = 'debridmusic.herhaal';
+
+  /// De shuffleknop, met de huidige stand in de tekening.
+  ///
+  /// Aan het pictogram te zien, want Auto tekent bij een custom action geen aan/uit-toestand: druk
+  /// je erop zonder dat het plaatje verandert, dan weet je achter het stuur niet of je hem net aan
+  /// of uit gezet hebt.
+  MediaControl _shuffleKnop() => MediaControl.custom(
+        androidIcon:
+            player.shuffle ? 'drawable/ic_auto_shuffle_aan' : 'drawable/ic_auto_shuffle',
+        label: player.shuffle ? 'Shuffle uit' : 'Shuffle aan',
+        name: knopShuffle,
+      );
+
+  MediaControl _herhaalKnop() => MediaControl.custom(
+        androidIcon: switch (player.repeat) {
+          RepeatMode.one => 'drawable/ic_auto_herhaal_een',
+          RepeatMode.all => 'drawable/ic_auto_herhaal_alles',
+          RepeatMode.off => 'drawable/ic_auto_herhaal',
+        },
+        label: switch (player.repeat) {
+          RepeatMode.one => 'Herhalen: dit nummer',
+          RepeatMode.all => 'Herhalen: alles',
+          RepeatMode.off => 'Herhalen uit',
+        },
+        name: knopHerhaal,
+      );
+
+  /// Een tik op een van die twee knoppen in de auto.
+  @override
+  Future<void> customAction(String name, [Map<String, dynamic>? extras]) async {
+    switch (name) {
+      case knopShuffle:
+        player.zetShuffle(!player.shuffle);
+      case knopHerhaal:
+        // Dezelfde ronde als de knop in de app: uit → alles → één → uit.
+        player.zetHerhaal(switch (player.repeat) {
+          RepeatMode.off => RepeatMode.all,
+          RepeatMode.all => RepeatMode.one,
+          RepeatMode.one => RepeatMode.off,
+        });
+      default:
+        return super.customAction(name, extras);
+    }
+    // Meteen opnieuw publiceren, anders blijft het pictogram in de auto in de oude stand staan tot
+    // er toevallig iets anders verandert.
+    _publishState();
   }
 
   /// Shuffle vanuit de auto.
@@ -332,6 +396,6 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
     // "Alles schudden" is hetzelfde nummerlijstje met shuffle aan. Vóór het spelen, zodat de
     // wachtrij meteen geschud opgebouwd wordt in plaats van eerst op alfabet te beginnen.
     if (mediaId == AutoId.schudAlles) player.zetShuffle(true);
-    await autoSpeel?.call(rij);
+    await autoSpeel?.call(rij, autoStartIndex(mediaId, rij.length, _rnd.nextInt));
   }
 }

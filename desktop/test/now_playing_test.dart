@@ -151,6 +151,37 @@ void main() {
       expect(player.repeat, RepeatMode.all);
     });
 
+    test('de twee knoppen staan in de sessie, met hun stand in het pictogram', () async {
+      // Android Auto op een TELEFOON tekent geen eigen shuffle-/herhaalknop; het doet dat met
+      // custom actions. Gemeten in de DHU: met alleen de standen bleef het bij vorige/play/volgende.
+      final player = FakePlayer()..current = _track('/muziek/01.flac');
+      final handler = NowPlayingHandler(player, null);
+      player.notifyListeners();
+      await Future<void>.delayed(Duration.zero);
+
+      List<MediaControl> knoppen() => handler.playbackState.value.controls
+          .where((c) => c.customAction != null)
+          .toList();
+
+      expect([for (final k in knoppen()) k.customAction!.name],
+          [NowPlayingHandler.knopShuffle, NowPlayingHandler.knopHerhaal]);
+      expect(knoppen().first.androidIcon, endsWith('ic_auto_shuffle'));
+
+      await handler.customAction(NowPlayingHandler.knopShuffle);
+      expect(player.shuffle, isTrue);
+      expect(knoppen().first.androidIcon, endsWith('ic_auto_shuffle_aan'),
+          reason: 'zonder verschil in de tekening zie je in de auto niet wat je net deed');
+    });
+
+    test('de herhaalknop loopt dezelfde ronde als in de app', () async {
+      final player = FakePlayer()..current = _track('/muziek/01.flac');
+      final handler = NowPlayingHandler(player, null);
+      for (final verwacht in [RepeatMode.all, RepeatMode.one, RepeatMode.off]) {
+        await handler.customAction(NowPlayingHandler.knopHerhaal);
+        expect(player.repeat, verwacht);
+      }
+    });
+
     test('de sessie meldt dat ze bestaan, anders tekent Auto de knoppen niet', () async {
       final player = FakePlayer()..current = _track('/muziek/01.flac');
       final handler = NowPlayingHandler(player, null);

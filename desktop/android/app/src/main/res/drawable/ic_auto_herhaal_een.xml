@@ -1,0 +1,14 @@
+<!-- Herhalen, dit ene nummer. De "1" in de lus is het verschil met "alles". -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFFFF">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M7,7h10v3l4,-4 -4,-4v3L5,5v6h2L7,7zM17,17L7,17v-3l-4,4 4,4v-3h12v-6h-2v4z"/>
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M11.2,15.5v-4.3h-1.5v-1.1c0.8,0 1.5,-0.3 1.7,-1.1h1.2v6.5z"/>
+</vector>

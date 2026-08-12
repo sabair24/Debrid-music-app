@@ -235,6 +235,17 @@ List<MediaItem> autoKinderenMetLeegmelding(String parentIdRuw, AutoBron bron) {
   return [MediaItem(id: 'leeg:$parentId', title: _leegLabel(parentId), playable: false)];
 }
 
+/// Waar in zijn eigen lijst een aangetikt id moet beginnen.
+///
+/// **Alleen "Alles schudden" begint ergens anders dan vooraan**, en dat is geen detail: `playQueue`
+/// zet het aangewezen nummer vóóraan en schudt de rest daarachter. Met index 0 begint een geschudde
+/// bibliotheek van 762 nummers dus élke keer bij hetzelfde liedje — gemeten in de auto, en dat is
+/// niet wat iemand met "schudden" bedoelt.
+///
+/// [kies] komt van buiten zodat hier een toets op past; in de app is dat `Random().nextInt`.
+int autoStartIndex(String mediaId, int lengte, int Function(int) kies) =>
+    mediaId == AutoId.schudAlles && lengte > 1 ? kies(lengte) : 0;
+
 /// Wat er moet spelen als iemand dit id aantikt, in de volgorde waarin het moet spelen.
 ///
 /// Leeg betekent "hier valt niets te spelen" — dan hoort er niets te gebeuren, in plaats van dat de

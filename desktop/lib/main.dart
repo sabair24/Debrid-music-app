@@ -549,7 +549,7 @@ Future<void> main() async {
       },
     );
   };
-  autoSpeel = (rij) async => player.playQueue(rij, 0);
+  autoSpeel = (rij, start) async => player.playQueue(rij, start);
   if (mode.owner) lijsten.winkel = sharing.state;
 
   // Signing in. Restoring a saved session is deliberately NOT awaited before the first frame: a
