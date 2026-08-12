@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Houdt de pictogrammen van de shuffle- en herhaalknop in de APK.
+
+    WAAROM DIT BESTAAT. De vijf ic_auto_*-tekeningen worden nergens in XML of Kotlin genoemd:
+    audio_service zoekt ze op NAAM op, met getIdentifier(), op het moment dat de mediasessie wordt
+    gepubliceerd. De resourceverkleiner ziet dat niet, en in een RELEASE-bouw gooit hij ze weg. In
+    een debug-bouw niet, en daar zit de val.
+
+    Gemeten op 12-08-2026:
+
+      lokale debug-APK   : ic_auto = 5 treffers in resources.arsc
+      lokale release-APK : ic_auto = 0
+      uitgeleverde APK   : ic_auto = 0
+
+    En in build/app/outputs/mapping/release/resources.txt stond het letterlijk:
+
+      @com.debridmusic.app:drawable/ic_auto_shuffle : reachable=false
+
+    HET GEVOLG WAS VEEL GROTER DAN EEN ONTBREKEND PLAATJE. PlaybackStateCompat.CustomAction eist
+    een geldig icoon; met resource-id 0 gooit hij, en dan wordt de HELE afspeeltoestand nooit
+    gepubliceerd. Op de telefoon speelde de muziek gewoon door terwijl de mediasessie op state=NONE
+    bleef: geen bediening op het vergrendelscherm, en in de auto een app die niets meldt. Eén
+    ontbrekend pictogram legde dus de hele mediasessie plat.
+
+    EERSTE POGING, EN WAAROM DIE NIET WERKTE. Een array in res/values die naar de vijf tekeningen
+    verwijst. De verkleiner merkte die array zelf als onbereikbaar aan, en daarmee telden zijn
+    verwijzingen niet mee:
+
+      @com.debridmusic.app:array/auto_knop_pictogrammen : reachable=false
+
+    tools:keep is het enige dat de verkleiner echt leest.
+
+    Deze lijst moet meelopen met de pictogrammen in now_playing.dart (_shuffleKnop, _herhaalKnop).
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_auto_shuffle,@drawable/ic_auto_shuffle_aan,@drawable/ic_auto_herhaal,@drawable/ic_auto_herhaal_alles,@drawable/ic_auto_herhaal_een"/>
