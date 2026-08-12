@@ -69,26 +69,28 @@
             </intent-filter>
         </activity>
 
-        <!-- HIER STOND EEN FileProvider VOOR DE ALBUMHOEZEN IN ANDROID AUTO. WEG, EN DIT IS WAAROM.
+        <!-- De albumhoezen voor Android Auto.
 
              Auto draait in een ánder proces en laadt de artUri zélf; een `file:`-pad in onze
-             privémap kan hij niet openen. Een gedeelde content-URI leek de weg, dus stond hier een
-             `androidx.core.content.FileProvider` met `exported="true"`.
+             privémap kan hij niet openen, en dat gaf grijze vlakken in plaats van je platenkast.
 
-             Die afweging bestaat niet. De bibliotheek weigert het zelf, bij het opstarten van het
-             hele proces:
+             HIER STOND EERST `androidx.core.content.FileProvider` MET exported="true". Dat kan
+             niet, en het faalt op de duurste manier die er is — niet bij het bouwen maar bij élke
+             start van de app, op de telefoon, ná het installeren:
 
                  java.lang.RuntimeException: Unable to get provider FileProvider
                  Caused by: java.lang.SecurityException: Provider must not be exported
                      at androidx.core.content.FileProvider.attachInfo
 
-             Geen waarschuwing bij het bouwen, geen rode toets — de APK installeerde prima en de app
-             crashte daarna bij élke start, ook gewoon op de telefoon. Erger dan grijze vlakken.
+             Vandaar HoesProvider.kt, van onszelf: die kent die controle niet. Wat hij deelt staat
+             daar uitgeschreven — één map, alleen lezen, alleen namen van zestien hexcijfers.
 
-             De echte weg is `exported="false"` plus `grantUriPermission()` per URI naar Gearhead op
-             het moment dat Auto bladert, óf een eigen provider in Kotlin (die kent deze controle
-             niet). Allebei platformcode; tot dan blijven de tegels grijs en werkt de app. Zie
-             auto_hoezen.dart. -->
+             grantUriPermissions is niet nodig en staat er daarom niet: de provider is geëxporteerd,
+             dus er valt niets toe te kennen. -->
+        <provider
+            android:name=".HoesProvider"
+            android:authorities="${applicationId}.hoezen"
+            android:exported="true"/>
 
         <!-- Android Auto. Dit is wat de app ZICHTBAAR maakt in de auto.
 

@@ -257,6 +257,9 @@ Future<void> main() async {
   // And what this device is called, before it publishes that name anywhere. Same channel, same
   // race — and on Android the alternative is a device list in which every phone reads "localhost".
   await initDeviceName();
+  // De authority van de hoezenprovider, vóór Android Auto voor het eerst kan bladeren. Zonder dit
+  // geeft autoHoesUri null terug en zijn de tegels in de auto grijs — zonder ergens een fout.
+  await initAutoHoezen();
   if (_isDesktop) await windowManager.ensureInitialized();
   if (!await _claimSingleInstance()) {
     exit(0);
@@ -544,7 +547,7 @@ Future<void> main() async {
       },
     );
   };
-  autoSpeel = (rij) async => player.playQueue(rij, 0);
+  autoSpeel = (rij) async => player.playQueue(rij, 0);
   if (mode.owner) lijsten.winkel = sharing.state;
 
   // Signing in. Restoring a saved session is deliberately NOT awaited before the first frame: a
