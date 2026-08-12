@@ -69,6 +69,27 @@
             </intent-filter>
         </activity>
 
+        <!-- De albumhoezen voor Android Auto.
+
+             Auto draait in een ánder proces en kan geen `file:`-pad in de privémap van deze app
+             lezen; zonder dit krijg je grijze vlakken in plaats van je platenkast. Een content-URI
+             kan hij wél openen.
+
+             `exported` staat op true en dat is een bewuste afweging, uitgeschreven in
+             res/xml/auto_hoezen.xml: de provider deelt precies één submap met uitsluitend
+             albumhoezen. Netter zou een toekenning per URI zijn, maar die moet vanuit platformcode
+             gebeuren op het moment dat Auto bladert — en die MediaBrowserService is van
+             `audio_service`, niet van ons. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.hoezen"
+            android:exported="true"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/auto_hoezen"/>
+        </provider>
+
         <!-- Android Auto. Dit is wat de app ZICHTBAAR maakt in de auto.
 
              Alles wat nodig is om te spelen zat er al — de MediaBrowserService hieronder, de

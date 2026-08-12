@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Welke map de hoezenprovider deelt — en verder niets.
+
+  Precies één submap, en daar staan uitsluitend JPEG's van albumhoezen in. Dat is met opzet zo smal:
+  de provider hieronder is exported, want Android Auto draait in een ander proces (Google's Gearhead)
+  en kan een `file:`-pad in de privémap van deze app niet lezen. Een per-URI-toekenning zou netter
+  zijn, maar die vraagt een `grantUriPermission` vanuit platformcode op het moment dat Auto bladert,
+  en dat moment heeft deze app niet in handen — de MediaBrowserService is van `audio_service`.
+
+  De afweging staat dus hier, expliciet: een andere app op de telefoon die deze authority kent kan de
+  albumhoezen lezen. Dat zijn plaatjes van je platenkast, geen sleutels en geen muziek. Alles wat wél
+  gevoelig is — je bibliotheek, je koppelingen, je instellingen — staat een niveau hoger en valt
+  buiten dit pad.
+-->
+<paths>
+    <files-path name="hoezen" path="DebridMusic/autohoezen/"/>
+</paths>

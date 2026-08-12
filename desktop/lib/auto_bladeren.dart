@@ -65,6 +65,13 @@ typedef AutoBron = ({
   List<Track> Function() verder,
   List<({String id, String naam})> Function() afspeellijsten,
   List<Track> Function(String lijstId) nummersVanLijst,
+
+  /// De hoes van een nummer of album, als URI die Android Auto kan openen. Null = geen hoes.
+  ///
+  /// Een functie en geen veld op [Track]: het maken van die URI schrijft een bestand, en dat hoort
+  /// niet in een model te zitten. Zie auto_hoezen.dart voor waarom een `file:`-pad hier niet werkt.
+  Uri? Function(Track) hoesVanNummer,
+  Uri? Function(Album) hoesVanAlbum,
 });
 
 /// Een album-id terug uit elkaar halen, op het EERSTE stuurteken.
@@ -89,12 +96,13 @@ String _leegLabel(String id) => switch (id) {
 
 MediaItem _map(String id, String titel) => MediaItem(id: id, title: titel, playable: false);
 
-MediaItem _nummer(Track t) => MediaItem(
+MediaItem _nummer(Track t, AutoBron bron) => MediaItem(
       id: '${AutoId.nummerVoorvoegsel}${t.path}',
       title: t.title,
       album: t.album,
       artist: t.artist,
       duration: t.duration,
+      artUri: bron.hoesVanNummer(t),
       playable: true,
     );
 
@@ -102,11 +110,12 @@ MediaItem _nummer(Track t) => MediaItem(
 ///
 /// Auto laat er maar één van de twee toe per item. Wie in de auto een album aantikt wil dat het gaat
 /// spelen; het losse nummer zoeken is een thuisbezigheid, en die kan nog via Artiesten.
-MediaItem _album(Album a) => MediaItem(
+MediaItem _album(Album a, AutoBron bron) => MediaItem(
       id: '${AutoId.albumVoorvoegsel}${a.artist}${AutoId.scheider}${a.title}',
       title: a.title,
       album: a.title,
       artist: a.artist,
+      artUri: bron.hoesVanAlbum(a),
       playable: true,
     );
 
@@ -128,7 +137,7 @@ String _alsWortel(String id) =>
 List<MediaItem> autoKinderen(String parentIdRuw, AutoBron bron) {
   final parentId = _alsWortel(parentIdRuw);
   List<MediaItem> nummers(List<Track> ts) =>
-      [for (final t in ts.take(autoMaxPerLijst)) _nummer(t)];
+      [for (final t in ts.take(autoMaxPerLijst)) _nummer(t, bron)];
 
   switch (parentId) {
     case AutoId.wortel:
@@ -153,7 +162,7 @@ List<MediaItem> autoKinderen(String parentIdRuw, AutoBron bron) {
           _map('${AutoId.lijstVoorvoegsel}${l.id}', l.naam),
       ];
     case AutoId.albums:
-      return [for (final a in bron.albums().take(autoMaxPerLijst)) _album(a)];
+      return [for (final a in bron.albums().take(autoMaxPerLijst)) _album(a, bron)];
     case AutoId.artiesten:
       // Uit de albums, zodat er geen tweede waarheid over "welke artiesten heb ik" ontstaat.
       final gezien = <String>{};
@@ -170,7 +179,7 @@ List<MediaItem> autoKinderen(String parentIdRuw, AutoBron bron) {
     final naam = parentId.substring(AutoId.artiestVoorvoegsel.length);
     return [
       for (final a in bron.albums())
-        if (a.artist == naam) _album(a),
+        if (a.artist == naam) _album(a, bron),
     ].take(autoMaxPerLijst).toList();
   }
 

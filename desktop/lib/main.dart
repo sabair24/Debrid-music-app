@@ -22,6 +22,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'acoustid.dart';
+import 'auto_hoezen.dart';
 import 'cache_snoei.dart';
 import 'album_facts.dart';
 import 'album_facts_resolver.dart';
@@ -531,6 +532,10 @@ Future<void> main() async {
       afspeellijsten: () => [
         for (final l in lijsten.lijsten) (id: l.id, naam: l.name),
       ],
+      // De hoezen. Die gaan als content-URI mee zodat Auto ze kan openen -- een file:-pad in onze
+      // privemap kan hij niet lezen. Zie auto_hoezen.dart.
+      hoesVanNummer: (t) => autoHoesUri(library.coverForTrack(t)),
+      hoesVanAlbum: (a) => autoHoesUri(a.tracks.isEmpty ? null : library.coverForTrack(a.tracks.first)),
       nummersVanLijst: (id) {
         final lijst = lijsten.byId(id);
         if (lijst == null || wortel.isEmpty) return const <Track>[];

@@ -21,6 +21,9 @@ Track tr(String titel, {String album = 'Alb', String artiest = 'A', String? pad}
 
 Album alb(String artiest, String titel, List<Track> ts) => Album(titel, artiest, ts);
 
+Uri? _geenHoesN(Track t) => null;
+Uri? _geenHoesA(Album a) => null;
+
 AutoBron bron({
   List<Album> albums = const [],
   List<Track> recent = const [],
@@ -28,6 +31,8 @@ AutoBron bron({
   List<Track> verder = const [],
   List<({String id, String naam})> lijsten = const [],
   Map<String, List<Track>> lijstInhoud = const {},
+  Uri? Function(Track) hoesN = _geenHoesN,
+  Uri? Function(Album) hoesA = _geenHoesA,
 }) =>
     (
       albums: () => albums,
@@ -36,6 +41,8 @@ AutoBron bron({
       verder: () => verder,
       afspeellijsten: () => lijsten,
       nummersVanLijst: (id) => lijstInhoud[id] ?? const [],
+      hoesVanNummer: hoesN,
+      hoesVanAlbum: hoesA,
     );
 
 void main() {
@@ -129,6 +136,33 @@ void main() {
     final lijst = autoKinderen(AutoId.afspeellijsten, b).single;
     expect(lijst.title, 'Zaterdagavond');
     expect([for (final t in autoSpeellijstVoor(lijst.id, b)) t.title], ['een', 'twee']);
+  });
+
+  group('de hoezen', () {
+    // Auto laadt de artUri ZELF, in een ander proces. Een file:-pad in onze privémap kan hij niet
+    // openen — dat gaf grijze vlakken waar de platenkast hoort te staan.
+    test('een nummer en een album dragen hun hoes mee', () {
+      final a = alb('A', 'X', [tr('een')]);
+      final b = bron(
+        albums: [a],
+        recent: a.tracks,
+        hoesN: (t) => Uri.parse('content://com.debridmusic.app.hoezen/hoezen/${t.title}.jpg'),
+        hoesA: (x) => Uri.parse('content://com.debridmusic.app.hoezen/hoezen/${x.title}.jpg'),
+      );
+      expect(autoKinderen(AutoId.albums, b).single.artUri.toString(),
+          'content://com.debridmusic.app.hoezen/hoezen/X.jpg');
+      expect(autoKinderen(AutoId.recent, b).single.artUri.toString(),
+          'content://com.debridmusic.app.hoezen/hoezen/een.jpg');
+    });
+
+    test('geen hoes is geen fout — de rij blijft gewoon staan', () {
+      // Belangrijker dan het lijkt: als het opvragen van een hoes de lijst kon laten omvallen, zag je
+      // in de auto een leeg scherm in plaats van een tegel zonder plaatje.
+      final b = bron(albums: [alb('A', 'X', [tr('een')])]);
+      final item = autoKinderen(AutoId.albums, b).single;
+      expect(item.artUri, isNull);
+      expect(item.title, 'X');
+    });
   });
 
   group('grenzen en lege gevallen', () {
