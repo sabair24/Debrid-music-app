@@ -17,6 +17,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
 import 'auto_bladeren.dart';
+import 'auto_hoezen.dart';
 import 'models.dart';
 import 'paths.dart';
 import 'player.dart';
@@ -175,7 +176,17 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
     Uri? art;
     try {
       final bytes = coverFor?.call(track) ?? player.currentCover;
-      if (bytes != null && bytes.length > 100) art = await _artFile(bytes);
+      if (bytes != null && bytes.length > 100) {
+        // Op Android via de eigen provider, en niet als `file:`-pad. Dit is geen voorkeur maar een
+        // eis van `audio_service`: zijn `setMetadata` laadt de hoes alléén als de URI met `content:`
+        // begint (of als er een `artCacheFile` meekomt) — in élk ander geval zet hij `artBitmap` op
+        // null en gaat er geen plaatje mee de mediasessie in.
+        //
+        // Gevolg zolang dit een file:-URI was: een grijs vlak op het nu-speelt-scherm in Android
+        // Auto, en om precies dezelfde reden ook geen hoes op het vergrendelscherm. Het viel niet op
+        // omdat de app in zijn eigen schermen wél een hoes toont — die leest de bytes rechtstreeks.
+        art = autoHoesUri(bytes) ?? await _artFile(bytes);
+      }
     } catch (_) {
       // No cover is a cosmetic loss; the title still shows.
     }

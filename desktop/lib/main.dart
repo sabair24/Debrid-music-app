@@ -5788,7 +5788,14 @@ class PlayerBar extends StatelessWidget {
                           if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
                         ],
                       ),
-                      if (p.radioMode && p.radioStatus.isNotEmpty)
+                      // Een klacht gaat vóór de artiestnaam. Wie hier kijkt omdat er geen geluid
+                      // komt, wil weten waaróm — de naam staat er toch al boven.
+                      if (p.speelFout != null)
+                        Text(p.speelFout!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Color(0xFFE0A33A), fontSize: 12.5))
+                      else if (p.radioMode && p.radioStatus.isNotEmpty)
                         Text(p.radioStatus,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -6894,10 +6901,17 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
                                       fontWeight: FontWeight.w600, fontSize: 14)),
+                              // Een klacht gaat vóór de artiestnaam. Wie hier kijkt omdat er geen
+                              // geluid komt, wil weten waaróm — de naam staat er toch al boven.
+                              if (p.speelFout != null)
+                                Text(p.speelFout!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(color: Color(0xFFE0A33A), fontSize: 12))
                               // Alleen de artiesttak wordt een link; "Niets aan het spelen" en de
                               // radiostatus zijn geen naam. De brede speler doet dit al met
                               // ArtistLine — deze smalle variant was als enige achtergebleven.
-                              if (t == null || (p.radioMode && p.radioStatus.isNotEmpty))
+                              else if (t == null || (p.radioMode && p.radioStatus.isNotEmpty))
                                 Text(
                                     t == null ? 'Niets aan het spelen' : p.radioStatus,
                                     maxLines: 1,

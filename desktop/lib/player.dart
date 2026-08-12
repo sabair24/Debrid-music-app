@@ -203,6 +203,55 @@ Wachtrij verplaatsInWachtrijLijst(Wachtrij w, int van, int naar, {required bool 
   return (origineel: origineel, volgorde: volgorde, index: index);
 }
 
+/// Bewaakt of "speelt" ook betekent dat er iets speelt.
+///
+/// **Gemeten op 12-08-2026, en het is precies hoe een app kapot aanvoelt terwijl er niets kapot is.**
+/// De pc stond uit. De telefoon haalt zijn muziek daarvandaan, dus mpv wachtte op een verbinding die
+/// niet kwam — maar hij meldde geen fout. De mediasessie zei achttien seconden lang
+/// `state=PLAYING(3), position=0`, de knop toonde een pauzestreep, en er was geen enkele audiostroom.
+/// Geen melding, geen uitleg, niets om op te reageren.
+///
+/// Een fout van mpv opvangen is niet genoeg: die komt alleen als de bron actief geweigerd wordt. Een
+/// bron die simpelweg nooit antwoordt, of een pc die midden in een nummer verdwijnt, geeft dit beeld
+/// — en dat is nu juist het geval dat thuis het vaakst voorkomt.
+///
+/// Los van [PlayerStore] om dezelfde reden als [ordenVoor] en [voegInWachtrij]: die klasse bouwt een
+/// libmpv-speler in een veld en is in geen enkele toets te maken, terwijl juist deze regel moet
+/// kloppen. De klok komt van buiten, zodat een toets geen tien seconden hoeft te duren.
+class Stilstandwacht {
+  Stilstandwacht({this.geduld = const Duration(seconds: 10)});
+
+  /// Hoe lang de teller stil mag staan voordat er iets te melden valt.
+  ///
+  /// Ruim genomen: bij het openen van een nummer over het netwerk staat de teller even stil terwijl
+  /// er gebufferd wordt, en een melding die daar al op afgaat is erger dan geen melding.
+  final Duration geduld;
+
+  Duration? _positie;
+  DateTime? _sinds;
+
+  /// Voer de laatst bekende toestand in. Geeft true zodra het te lang stilstaat.
+  bool voeden({required bool speelt, required Duration positie, required DateTime nu}) {
+    // Pauze is geen stilstand. Wie zelf op pauze drukt hoort geen klacht te krijgen.
+    if (!speelt) {
+      reset();
+      return false;
+    }
+    if (_positie != positie || _sinds == null) {
+      _positie = positie;
+      _sinds = nu;
+      return false;
+    }
+    return nu.difference(_sinds!) >= geduld;
+  }
+
+  /// Vergeten wat er stilstond. Bij een nieuw nummer, of zodra er weer iets beweegt.
+  void reset() {
+    _positie = null;
+    _sinds = null;
+  }
+}
+
 /// Native (libmpv) player with a queue, shuffle, repeat and a Radio mode.
 class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   final Player _player = Player();
@@ -306,6 +355,20 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   bool get hasPrev => radioMode ? _radioIndex > 0 : _index > 0;
 
 
+  /// Wat er mis is met wat er nu zou moeten spelen, of null als er niets mis is.
+  ///
+  /// Voor de spelerbalk. Zie [Stilstandwacht] voor het geval dat dit veld bestaat.
+  String? speelFout;
+
+  final _wacht = Stilstandwacht();
+  Timer? _stilstandTikker;
+
+  void _meldStilstand(String? wat) {
+    if (speelFout == wat) return;
+    speelFout = wat;
+    notifyListeners();
+  }
+
   PlayerStore() {
     _player.stream.playing.listen((p) {
       playing = p;
@@ -317,6 +380,24 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       position = p;
       _saveProgress(); // throttled
       notifyListeners();
+    });
+    // De foutstroom van media_kit. Die bestond al en werd door niemand beluisterd — dezelfde soort
+    // stilte als `RemoteException.isUnauthorized`, dat een comment had die het probleem exact
+    // beschreef en nergens werd aangeroepen.
+    _player.stream.error.listen((e) {
+      if (e.trim().isEmpty) return;
+      _meldStilstand('Dit nummer kan niet worden geopend');
+    });
+    // Twee seconden: vaak genoeg om binnen het geduld van de wacht te vallen, zeldzaam genoeg om
+    // niets te kosten. Een timer en niet de positiestroom, want het geval dát dit moet vangen is nu
+    // juist dat er geen positie meer binnenkomt.
+    _stilstandTikker = Timer.periodic(const Duration(seconds: 2), (_) {
+      final vast = _wacht.voeden(speelt: playing, positie: position, nu: DateTime.now());
+      if (vast) {
+        _meldStilstand('Er komt geen geluid — staat de pc aan?');
+      } else if (playing && position > Duration.zero) {
+        _meldStilstand(null);
+      }
     });
     _player.stream.duration.listen((d) {
       duration = d;
@@ -596,6 +677,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   Future<void> _openCurrent() async {
     final t = current;
     if (t == null) return;
+    // Een nieuw nummer verdient zijn eigen geduld: de klacht van het vorige zegt niets over dit.
+    _wacht.reset();
+    _meldStilstand(null);
     if (coverResolver != null) currentCover = coverResolver!(t);
     await _player.open(Media(mediaResolver(t.path)), play: true);
     _saveProgress(force: true); // track changed → persist the new spot
@@ -838,6 +922,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
 
   @override
   void dispose() {
+    _stilstandTikker?.cancel();
     _player.dispose();
     super.dispose();
   }
