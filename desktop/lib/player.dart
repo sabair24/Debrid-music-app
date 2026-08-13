@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'models.dart';
 import 'paths.dart';
+import 'warm_log.dart';
 
 enum RepeatMode { off, all, one }
 
@@ -220,6 +221,53 @@ Wachtrij verplaatsInWachtrijLijst(Wachtrij w, int van, int naar, {required bool 
   return (origineel: origineel, volgorde: volgorde, index: index);
 }
 
+/// Wat er moet gebeuren als de speler zegt dat een nummer afgelopen is.
+enum NaHetEinde {
+  /// Gewoon door naar het volgende.
+  volgende,
+
+  /// Herhaalstand "dit nummer": nog een keer van voren af aan.
+  ditNummerOpnieuw,
+
+  /// Dit was geen einde maar een breuk. Opnieuw openen, op dezelfde plek.
+  stroomHervatten,
+}
+
+/// Hoeveel er nog te spelen moet zijn voordat "afgelopen" een breuk heet.
+///
+/// Ruim genomen. Een nummer dat een halve seconde eerder ophoudt dan zijn looptijd zegt is gewoon
+/// afgelopen — dat verschil zit in afrondingen en in de stilte aan het eind. Tien seconden is
+/// onmiskenbaar: dat is geen afronding meer.
+const _breukMarge = Duration(seconds: 10);
+
+/// Hoe vaak we een afgebroken stroom opnieuw proberen voordat we doorgaan.
+///
+/// Niet oneindig: staat de pc echt uit, dan zou de app op één nummer blijven hangen zonder ooit iets
+/// te zeggen. Na drie pogingen gaat hij verder, en het logboek vertelt waarom.
+const _maxHervatpogingen = 3;
+
+/// **Het geval waarvoor dit bestaat, gemeld op 13-08-2026 uit de auto:** "ik hoor de muziek wel,
+/// maar hij skipt naar het volgende midden in een track."
+///
+/// De telefoon streamt van de pc. Valt die verbinding onderweg even weg, dan ziet mpv het einde van
+/// het bestand en meldt netjes "afgelopen" — en de app deed precies wat haar gevraagd werd: door
+/// naar het volgende nummer. Onderweg op mobiel internet gebeurt dat om de haverklap, en van buiten
+/// lijkt het alsof de app zelf staat te springen.
+///
+/// Een einde ver voor de looptijd is geen einde. De positie en de looptijd staan er allebei; er
+/// keek alleen niemand naar.
+NaHetEinde watNaHetEinde({
+  required Duration positie,
+  required Duration duur,
+  required RepeatMode herhaal,
+  required int mislukt,
+}) {
+  // Zonder looptijd valt er niets te vergelijken. Dan maar het oude gedrag: doorgaan.
+  final gebroken = duur > Duration.zero && duur - positie > _breukMarge;
+  if (gebroken && mislukt < _maxHervatpogingen) return NaHetEinde.stroomHervatten;
+  return herhaal == RepeatMode.one ? NaHetEinde.ditNummerOpnieuw : NaHetEinde.volgende;
+}
+
 /// Bewaakt of "speelt" ook betekent dat er iets speelt.
 ///
 /// **Gemeten op 12-08-2026, en het is precies hoe een app kapot aanvoelt terwijl er niets kapot is.**
@@ -427,11 +475,62 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     });
   }
 
+  /// Hoe vaak deze stroom al afgebroken is. Nul bij elk nieuw nummer.
+  int _hervatpogingen = 0;
+
+  /// Wat de speler onderweg besluit, in `speler.log` naast de andere staat.
+  ///
+  /// Een release-build slikt [debugPrint], dus zonder dit is de speler in een rijdende auto een
+  /// zwarte doos: je hoort alleen dát hij springt, nooit waarom. Zie ook `warm.log`, dat om precies
+  /// dezelfde reden bestaat.
+  late final WarmLog? _log = () {
+    try {
+      return WarmLog('$appDir${Platform.pathSeparator}speler.log');
+    } catch (_) {
+      return null;
+    }
+  }();
+
   void _onCompleted() {
-    if (repeat == RepeatMode.one) {
-      radioMode ? _openRadioCurrent() : _openCurrent();
-    } else {
-      next();
+    switch (watNaHetEinde(
+      positie: position,
+      duur: duration,
+      herhaal: repeat,
+      mislukt: _hervatpogingen,
+    )) {
+      case NaHetEinde.stroomHervatten:
+        _hervatpogingen++;
+        _log?.line('AFGEBROKEN op $position van $duration — poging $_hervatpogingen'
+            ' — ${current?.title ?? "?"}');
+        unawaited(_hervatOpDezelfdePlek());
+      case NaHetEinde.ditNummerOpnieuw:
+        _hervatpogingen = 0;
+        radioMode ? _openRadioCurrent() : _openCurrent();
+      case NaHetEinde.volgende:
+        // Alleen melden als we het écht opgeven. Een nummer dat na één hik gewoon uitspeelt komt
+        // hier ook langs, en dat is geen nieuws.
+        if (_hervatpogingen >= _maxHervatpogingen) {
+          _log?.line('OPGEGEVEN na $_hervatpogingen pogingen — door naar het volgende');
+        }
+        _hervatpogingen = 0;
+        next();
+    }
+  }
+
+  /// Hetzelfde nummer opnieuw openen en terugspringen naar waar het afbrak.
+  ///
+  /// Niet [_openCurrent], want die zet de teller terug naar nul en meldt het nummer opnieuw als
+  /// "nu gestart" — dan zou een hik onderweg je plek in het nummer kosten én de geschiedenis
+  /// vervuilen met een tweede keer hetzelfde liedje.
+  Future<void> _hervatOpDezelfdePlek() async {
+    final t = current;
+    if (t == null) return;
+    final plek = position;
+    try {
+      await _player.open(Media(mediaResolver(t.path)), play: true);
+      if (plek > Duration.zero) await _player.seek(plek);
+    } catch (e) {
+      _log?.line('HERVATTEN MISLUKT: $e');
     }
   }
 
@@ -699,6 +798,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     // Een nieuw nummer verdient zijn eigen geduld: de klacht van het vorige zegt niets over dit.
     _wacht.reset();
     _meldStilstand(null);
+    _hervatpogingen = 0;
     if (coverResolver != null) currentCover = coverResolver!(t);
     await _player.open(Media(mediaResolver(t.path)), play: true);
     _saveProgress(force: true); // track changed → persist the new spot
