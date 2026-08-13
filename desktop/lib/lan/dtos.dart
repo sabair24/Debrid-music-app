@@ -98,6 +98,20 @@ class AlbumDto {
   /// simply empty on a device that has none.
   final List<String> styles;
 
+  /// Welke hoes de eigenaar voor dit album GEKOZEN heeft, als merkteken.
+  ///
+  /// **Zonder dit blijft een verkeerde hoes op een telefoon voor altijd staan.** De hoescache daar
+  /// heet naar `artiest|titel`, en die naam verandert niet als je een andere afbeelding kiest — dus
+  /// het oude bestand ligt er nog, met de goede naam en de foute inhoud. Gemeten op 13-08-2026: op
+  /// de pc de juiste hoes, op de telefoon het logo van een verzamelaar, en na elke herstart weer.
+  ///
+  /// Alleen voor een BEWUSTE keuze (een gecorrigeerde of opgeloste hoes), niet voor de automatische
+  /// verrijking. Dat onderscheid is met opzet: de vingerafdruk van de catalogus telt dit veld mee,
+  /// en als elke automatisch gevonden hoes hem liet bewegen zou het verrijken van een verse
+  /// bibliotheek de hele catalogus honderden keren naar elk toestel duwen. Zie de uitleg boven die
+  /// vingerafdruk in catalog.dart, die daar al voor waarschuwde.
+  final String? artTag;
+
   const AlbumDto({
     required this.id,
     required this.artistId,
@@ -113,6 +127,7 @@ class AlbumDto {
     this.mbid,
     this.merged = false,
     this.styles = const [],
+    this.artTag,
   });
 
   factory AlbumDto.fromJson(Map<String, dynamic> j) => AlbumDto(
@@ -133,6 +148,7 @@ class AlbumDto {
           for (final v in (j['styles'] as List? ?? const []))
             if (v is String) v,
         ],
+        artTag: j['artTag'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -150,6 +166,7 @@ class AlbumDto {
         'mbid': mbid,
         'merged': merged,
         'styles': styles,
+        'artTag': artTag,
       };
 }
 

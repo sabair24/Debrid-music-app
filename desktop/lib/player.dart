@@ -430,6 +430,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   final _wacht = Stilstandwacht();
   Timer? _stilstandTikker;
 
+  /// Welk kwart seconde er het laatst gemeld is. Zie de positiestroom hieronder.
+  int _laatsteMeldvak = -1;
+
   void _meldStilstand(String? wat) {
     if (speelFout == wat) return;
     speelFout = wat;
@@ -446,6 +449,21 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _player.stream.position.listen((p) {
       position = p;
       _saveProgress(); // throttled
+      // **De melding wél afgeremd, de waarde niet.**
+      //
+      // media_kit stuurt elke `time-pos`-wijziging van mpv door, ongethrottled — tien tot dertig
+      // keer per seconde. Elke melding liet ÉLKE `context.watch<PlayerStore>()` hertekenen, en dat
+      // zijn er veel: de spelerbalk, het wachtrijpaneel, het hele nu-speelt-scherm, en het
+      // nummerscherm — dat bij elke hertekening ook nog eens zijn hele lijst van 770 nummers
+      // opnieuw filtert. Zolang er muziek speelde gebeurde dat dus meerdere keren per seconde, voor
+      // niets: op het scherm staat een seconde-teller en een balk.
+      //
+      // Vier keer per seconde is ruim genoeg om vloeiend te ogen. [position] zelf wordt nog steeds
+      // bij elke tik bijgewerkt, zodat alles wat hem uitleest (het bewaren van je plek, de
+      // stilstandwacht, het einde-of-breuk-oordeel) de exacte waarde ziet.
+      final vak = p.inMilliseconds ~/ 250;
+      if (vak == _laatsteMeldvak) return;
+      _laatsteMeldvak = vak;
       notifyListeners();
     });
     // De foutstroom van media_kit. Die bestond al en werd door niemand beluisterd — dezelfde soort

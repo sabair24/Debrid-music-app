@@ -1944,6 +1944,7 @@ class LibraryStore extends ChangeNotifier {
       _remoteAlbums[al] = (
         id: dto.id,
         artRef: dto.artworkRef ?? dto.id,
+        artTag: dto.artTag ?? '',
         release: dto.discogsRelease,
         mbid: dto.mbid,
         merged: dto.merged,
@@ -1967,7 +1968,15 @@ class LibraryStore extends ChangeNotifier {
   /// reference to ask `/art/` for. Keyed by object identity — [Album] has no value equality, and a
   /// refreshed catalogue makes new ones, so this is cleared and refilled with them.
   final Map<Album,
-          ({String id, String artRef, int? release, String? mbid, bool merged, List<String> styles})>
+          ({
+    String id,
+    String artRef,
+    String artTag,
+    int? release,
+    String? mbid,
+    bool merged,
+    List<String> styles
+  })>
       _remoteAlbums = {};
 
   /// Portraits and backdrops the user picked, by artist key — the same key [chosenArtistArt] uses,
@@ -2092,7 +2101,17 @@ class LibraryStore extends ChangeNotifier {
     var since = 0;
     for (final album in albums) {
       if (album.cover != null) continue;
-      final cached = await enricher.cached(album);
+      // Het merkteken van de hoes die de eigenaar op de pc GEKOZEN heeft. Wijkt dat af van wat hier
+      // in de cache ligt, dan is die cache achterhaald en moet hij wijken.
+      //
+      // **Dit was het gat.** De cache heet naar `artiest|titel`, en die naam beweegt niet als je een
+      // andere afbeelding kiest. Het bestand lag er dus nog, met de goede naam en de foute inhoud,
+      // en werd bij élke start opnieuw als waarheid genomen. Gemeten op 13-08-2026: op de pc de
+      // juiste Whitney-hoes, op de telefoon het logo van een verzamelaar — telkens weer, hoe vaak de
+      // eigenaar het ook corrigeerde.
+      final merk = _remoteAlbums[album]?.artTag ?? '';
+      final verouderd = merk.isNotEmpty && await enricher.bewaardMerk(album) != merk;
+      final cached = verouderd ? null : await enricher.cached(album);
       if (cached != null) {
         album.enriched = cached;
         if (++since >= 24) {
@@ -2106,6 +2125,9 @@ class LibraryStore extends ChangeNotifier {
       if (bytes == null || bytes.isEmpty) continue;
       album.embeddedCover = bytes;
       await enricher.putCached(album, bytes);
+      // Pas ná het wegschrijven, zodat een afgebroken download geen merkteken achterlaat dat zegt
+      // "deze is bij" terwijl er iets ouds op schijf staat.
+      if (merk.isNotEmpty) await enricher.schrijfMerk(album, merk);
       // Batched exactly like the cached branch above, and for the same reason. Every notify rebuilds
       // the home page, and that page sorts the whole library by `Album.addedMs` — a getter that walks
       // every track of every album. One notify per arriving cover meant hundreds of full rebuilds

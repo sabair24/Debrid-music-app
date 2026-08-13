@@ -142,6 +142,36 @@ class CoverEnricher {
   /// wrong one. The fix looked like it worked every time you checked it.
   Directory get resolvedDir => Directory(_dir('resolved'));
 
+  /// Een kort merkteken voor precies déze hoes.
+  ///
+  /// **Waarom dit bestaat.** De cachesleutel van een hoes is `fnv(artiest|titel)` — die verandert
+  /// niet als je een ándere hoes voor hetzelfde album kiest. Een telefoon die de verkeerde hoes ooit
+  /// heeft opgehaald houdt hem dus voor altijd: het bestand ligt er, de naam klopt, en niemand kan
+  /// zien dat de inhoud achterhaald is. Gemeld op 13-08-2026 en precies zo gemeten: op de pc de
+  /// juiste Whitney-hoes, op de telefoon het logo van een verzamelaar, en na élke herstart weer.
+  ///
+  /// Over ÁLLE bytes, en niet over een greep hier en daar. De eerste versie nam er 64 verspreid over
+  /// het bestand, "want een hoes is honderden kilobytes". De toets `een hoes van dezelfde lengte
+  /// maar andere inhoud ook` viel daar meteen over: één gewijzigde byte op plek 4000 zat net tussen
+  /// twee grepen in, en dan zou een toestel een nieuwe hoes voor de oude houden. Precies de fout die
+  /// dit merk moet vóórkomen.
+  ///
+  /// De kosten vallen mee: FNV over een paar honderd kilobyte is een kwestie van microseconden, en
+  /// dit gebeurt alleen bij het bouwen van een catalogusmomentopname — niet per verzoek.
+  static String hoesMerk(List<int>? bytes) {
+    if (bytes == null || bytes.length < 100) return '';
+    var h = 0x811c9dc5;
+    for (final c in bytes.length.toString().codeUnits) {
+      h ^= c;
+      h = (h * 0x01000193) & 0xFFFFFFFF;
+    }
+    for (final b in bytes) {
+      h ^= b & 0xff;
+      h = (h * 0x01000193) & 0xFFFFFFFF;
+    }
+    return h.toRadixString(16);
+  }
+
   // Stable FNV-1a hash (Dart's String.hashCode is randomized per run, so it can't
   // be used for a persistent on-disk cache key).
   static String _fnv(String s) {
@@ -154,6 +184,29 @@ class CoverEnricher {
   }
 
   String keyFor(Album a) => _fnv('${a.artist.toLowerCase()}|${a.title.toLowerCase()}');
+
+  /// Het merkteken van de hoes die op de telefoon in [cacheDir] ligt.
+  File _merkFile(Album a) => File('${cacheDir.path}${Platform.pathSeparator}${keyFor(a)}.merk');
+
+  /// Welke hoes hier bewaard is, volgens de pc. Leeg als we het niet weten.
+  Future<String> bewaardMerk(Album a) async {
+    try {
+      final f = _merkFile(a);
+      return await f.exists() ? (await f.readAsString()).trim() : '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  Future<void> schrijfMerk(Album a, String merk) async {
+    try {
+      await cacheDir.create(recursive: true);
+      await _merkFile(a).writeAsString(merk, flush: true);
+    } catch (_) {
+      // Zonder merkteken valt de cache terug op het oude gedrag: hij blijft staan. Nooit een reden
+      // om het binnenhalen van een hoes te laten mislukken.
+    }
+  }
   File _cacheFile(Album a) => File('${cacheDir.path}${Platform.pathSeparator}${keyFor(a)}.jpg');
   File _fixFile(Album a) => File('${fixDir.path}${Platform.pathSeparator}${keyFor(a)}.jpg');
 

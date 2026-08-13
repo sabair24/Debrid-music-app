@@ -1111,13 +1111,25 @@ Widget cover(Uint8List? bytes, {double size = 160, double radius = 12, bool circ
   final shape = circle ? BoxShape.circle : BoxShape.rectangle;
   final br = circle ? null : BorderRadius.circular(radius);
   if (bytes != null) {
-    return Container(
+    // Uitsnijden met ClipRRect/ClipOval en NIET met `Container(clipBehavior:)`.
+    //
+    // Dat laatste ziet eruit als een goedkope afronding, maar `Container` maakt er altijd een
+    // `ClipPath` met een eigen vormbepaler van — nooit een `ClipRRect`. Een algemeen pad kan de
+    // snelle route voor afgeronde rechthoeken niet gebruiken, en dit is de meest gebruikte widget
+    // van de hele app: elke tegel in elk raster en elke rij in elke lijst. Bij een lijst met
+    // itemExtent 56 staan er zo'n zestien tegelijk te scrollen.
+    final beeld = Image.memory(bytes,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        cacheWidth: decodeWidth(size));
+    return SizedBox(
       width: size,
       height: size,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(shape: shape, borderRadius: br),
-      child: Image.memory(bytes,
-          fit: BoxFit.cover, gaplessPlayback: true, cacheWidth: decodeWidth(size)),
+      child: circle
+          ? ClipOval(child: beeld)
+          : ClipRRect(borderRadius: br!, child: beeld),
     );
   }
   return Container(
@@ -6714,7 +6726,18 @@ class _WachtrijRij extends StatelessWidget {
               cover != null
                   ? ClipRRect(
                       borderRadius: BorderRadius.circular(4),
-                      child: Image.memory(cover!, width: 34, height: 34, fit: BoxFit.cover),
+                      // cacheWidth, want dit is een lijstitem. Zonder deze regel decodeert elke
+                      // wachtrijrij de volledige hoes — een plaatje van 1000x1000 is 4 MB als
+                      // bitmap, voor een vierkantje van 34 punten dat er 41 kB nodig heeft. Met
+                      // vijftien zichtbare rijen loopt dat op tot tientallen megabytes, en dan gaat
+                      // Flutters plaatjescache (100 MB) rondpompen: telkens weggooien en opnieuw
+                      // decoderen tijdens het scrollen. Een geschudde wachtrij kan je hele
+                      // bibliotheek zijn.
+                      child: Image.memory(cover!,
+                          width: 34,
+                          height: 34,
+                          cacheWidth: decodeWidth(34),
+                          fit: BoxFit.cover),
                     )
                   : Container(
                       width: 34,
@@ -9518,16 +9541,30 @@ Widget _netCover(String? url, {double size = 160, double radius = 12, bool circl
     child: Icon(circle ? Icons.person_rounded : Icons.album_rounded, color: _muted.withValues(alpha: .4), size: size * .34),
   );
   if (url == null || url.isEmpty) return placeholder;
-  return Container(
+  final beeld = Image.network(url,
+      width: size,
+      height: size,
+      fit: BoxFit.cover,
+      cacheWidth: decodeWidth(size),
+      errorBuilder: (_, __, ___) => placeholder,
+      loadingBuilder: (c, w, p) => p == null ? w : placeholder,
+      // Invaden in plaats van inploppen. Zonder dit springt een tegel in één beeld van de grijze
+      // verloop naar het volle plaatje; met vier rijen op het startscherm is dat een minutenlang
+      // mozaïek dat staat te knipperen. `wasSynchronouslyLoaded` sluit de tweede keer uit: een
+      // plaatje dat al in de cache zat hoort er meteen te staan, niet opnieuw te komen opzetten.
+      frameBuilder: (c, kind, frame, gesynchroniseerd) => gesynchroniseerd
+          ? kind
+          : AnimatedOpacity(
+              opacity: frame == null ? 0 : 1,
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOut,
+              child: kind,
+            ));
+  // ClipRRect/ClipOval en niet `Container(clipBehavior:)` — zie de uitleg bij `cover()`.
+  return SizedBox(
     width: size,
     height: size,
-    clipBehavior: Clip.antiAlias,
-    decoration: BoxDecoration(shape: shape, borderRadius: br),
-    child: Image.network(url,
-        fit: BoxFit.cover,
-        cacheWidth: decodeWidth(size),
-        errorBuilder: (_, __, ___) => placeholder,
-        loadingBuilder: (c, w, p) => p == null ? w : placeholder),
+    child: circle ? ClipOval(child: beeld) : ClipRRect(borderRadius: br!, child: beeld),
   );
 }
 
@@ -11102,8 +11139,14 @@ class _ArtistHeroState extends State<ArtistHero> {
               // Overscanned: a blur samples past the edges, and at 1.0 the sides faded out.
               child: Transform.scale(
                 scale: 1.15,
+                // Klein gedecodeerd en dan uitvergroot. Deze gaat er tóch doorheen met een blur van
+                // sigma 26 — er is geen enkel detail dat de decodeergrootte rechtvaardigt, en een
+                // artiestachtergrond van 1920x1080 is 8,3 MB als bitmap. Dezelfde afweging staat
+                // 300 regels hierboven al uitgeschreven bij de andere achtergrond; deze was
+                // overgeslagen.
                 child: Image.memory(backdrop,
                     fit: BoxFit.cover,
+                    cacheWidth: 64,
                     alignment: const Alignment(0, -.3),
                     errorBuilder: (_, __, ___) => const SizedBox()),
               ),

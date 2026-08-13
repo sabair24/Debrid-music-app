@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import '../library.dart';
 import '../echtheid_oordelen.dart';
+import '../enrichment.dart';
 import '../models.dart';
 import '../organize.dart';
 import 'dtos.dart';
@@ -141,6 +142,10 @@ class LanCatalog {
         mbid: library.pinnedMbid(album),
         merged: library.isMerged(album),
         styles: library.stylesOf(album),
+        // Alleen een BEWUSTE keuze krijgt een merkteken: een hoes die de eigenaar zelf gecorrigeerd
+        // heeft, of die bij een geïdentificeerde persing hoort. De automatisch verrijkte hoes
+        // (`enriched`) niet — zie de uitleg bij [AlbumDto.artTag] en bij de vingerafdruk hieronder.
+        artTag: CoverEnricher.hoesMerk(album.correctedCover ?? album.resolvedCover),
       ));
 
       for (final t in album.tracks) {
@@ -228,7 +233,12 @@ class LanCatalog {
         ..add(a.mbid ?? '')
         // Merging, and what a record sounds like, change no track either.
         ..add(a.merged ? 'm' : '')
-        ..add(a.styles.join(','));
+        ..add(a.styles.join(','))
+        // En de hoes die de eigenaar zelf koos. De waarschuwing hierboven blijft staan — daarom
+        // draagt dit veld ALLEEN een bewuste keuze en niet de automatische verrijking. Zonder deze
+        // regel beweegt de vingerafdruk niet, krijgt een toestel een 304, en hoort het nooit dat de
+        // hoes veranderd is: precies de bug die op 13-08-2026 gemeten werd.
+        ..add(a.artTag ?? '');
     }
     for (final t in tracks) {
       fingerprint..add(t.id)..add(t.title)..add('${t.trackNo}')..add('${t.sizeBytes}');
