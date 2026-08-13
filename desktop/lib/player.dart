@@ -485,7 +485,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// dezelfde reden bestaat.
   late final WarmLog? _log = () {
     try {
-      return WarmLog('$appDir${Platform.pathSeparator}speler.log');
+      return WarmLog('$logDir${Platform.pathSeparator}speler.log');
     } catch (_) {
       return null;
     }
@@ -528,7 +528,23 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     final plek = position;
     try {
       await _player.open(Media(mediaResolver(t.path)), play: true);
-      if (plek > Duration.zero) await _player.seek(plek);
+      if (plek <= Duration.zero) return;
+
+      // **Een seek vlak na open() wordt stil genegeerd** zolang libmpv het bestand nog niet geladen
+      // heeft. Dat stond al uitgeschreven boven de lus in [restore] — en ik liep er recht in: de
+      // eerste versie hiervan sprong terug naar nul, en in het logboek zag je alleen dat het nummer
+      // niet oversloeg, niet dát je je plek kwijt was.
+      //
+      // Daar kan op `duration` gewacht worden omdat die bij een koude start nog nul is. Hier niet:
+      // het is hetzelfde nummer, dus die waarde staat er al. Vandaar proberen tot de teller er
+      // werkelijk staat, en het opschrijven als dat niet lukt. Een reparatie die zichzelf niet kan
+      // controleren is de vorige fout nog een keer.
+      for (var poging = 0; poging < 20; poging++) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        if ((position - plek).abs() < const Duration(seconds: 2)) return;
+        await _player.seek(plek);
+      }
+      _log?.line('HERVAT maar NIET teruggesprongen naar $plek — staat op $position');
     } catch (e) {
       _log?.line('HERVATTEN MISLUKT: $e');
     }

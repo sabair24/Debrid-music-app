@@ -34,10 +34,36 @@ Future<void> initAppPaths() async {
     _resolved = _fallback();
   }
   await Directory(_resolved!).create(recursive: true);
+
+  // En de plek voor logboeken, die op Android een andere is. Zie [logDir].
+  if (Platform.isAndroid) {
+    try {
+      final ext = await getExternalStorageDirectory();
+      if (ext != null) {
+        await ext.create(recursive: true);
+        _logMap = ext.path;
+      }
+    } catch (_) {
+      // Dan maar in appDir. Onleesbaar is nog altijd beter dan een app die niet start.
+    }
+  }
 }
 
 /// The folder to write to. Safe to read before [initAppPaths] has finished.
 String get appDir => _resolved ??= _fallback();
+
+/// Waar diagnostische logboeken heen gaan.
+///
+/// Op Android met opzet NIET [appDir]. Die map is op een release-build met `adb` niet te lezen:
+///
+///     ls /data/data/com.debridmusic.app/files/DebridMusic/
+///     ls: Permission denied
+///
+/// En een logboek dat niemand kan lezen bewijst niets — precies waar `WarmLog` zelf voor
+/// waarschuwt. `getExternalStorageDirectory()` geeft `/sdcard/Android/data/<pakket>/files`, en dáár
+/// komt na een rit wél een bestand uit dat te lezen valt. Overal elders is dit gewoon [appDir].
+String? _logMap;
+String get logDir => _logMap ?? appDir;
 
 /// Point everything at a scratch folder for the duration of a test.
 ///
