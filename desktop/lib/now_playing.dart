@@ -160,7 +160,38 @@ Future<void> _claimAudioFocus(NowPlayingSource player) async {
       zelfGepauzeerd = false;
       if (player.playing) player.playPause();
     });
-    await session.setActive(true);
+
+    // DE FOCUS OPVRAGEN OP HET MOMENT DAT ER IETS GAAT SPELEN, en niet één keer bij het opstarten.
+    //
+    // Dat laatste stond er, en het werkte niet: `setActive(true)` liep vóór er ooit een noot klonk.
+    // Gemeten op 13-08-2026 met muziek aan: `dumpsys audio` toonde een LEGE focusstapel, en Samsung
+    // zette er zelf een waarschuwing bij:
+    //
+    //   AudioHardening background playback would be muted for com.debridmusic.app, level: full
+    //
+    // Twee gevolgen. Andere apps weten niet dat ze moeten wijken. En wij krijgen nooit een
+    // onderbreking, want je kunt niet verliezen wat je niet hebt -- de hele afhandeling hierboven
+    // kwam dus nooit aan bod.
+    //
+    // De uitkomst wordt gelogd en niet weggegooid: focus kán geweigerd worden, en dan wil je dat
+    // ergens kunnen zien in plaats van te moeten raden.
+    var speeldeAl = false;
+    Future<void> vraagFocus() async {
+      final gekregen = await session.setActive(true);
+      if (!gekregen) debugPrint('Audiofocus geweigerd; muziek speelt zonder voorrang.');
+    }
+
+    player.addListener(() {
+      if (player.playing && !speeldeAl) {
+        speeldeAl = true;
+        unawaited(vraagFocus());
+      } else if (!player.playing) {
+        // Bij pauze houden we de focus vast. Hem teruggeven zou de auto laten denken dat er niets
+        // meer speelt, en dan komt er na een gesprek geen weg terug.
+        speeldeAl = false;
+      }
+    });
+    if (player.playing) await vraagFocus();
   } catch (e) {
     // Never a reason not to play. Without focus the old behaviour is what you get back.
     debugPrint('Audio focus unavailable: $e');
