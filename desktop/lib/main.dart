@@ -2822,13 +2822,16 @@ class AlbumsGrid extends StatelessWidget {
       shrinkWrap: ingebed,
       physics: ingebed ? const NeverScrollableScrollPhysics() : null,
       slivers: [
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(24, 22, 24, 8),
-          sliver: SliverToBoxAdapter(
-            child: Text(title ?? 'Albums',
-                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+        // En ingebed ook geen eigen kop: het scherm eromheen zet er al een. Anders staat er twee
+        // keer "Albums" onder elkaar, in twee verschillende maten — gezien op Favorieten.
+        if (!ingebed)
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(24, 22, 24, 8),
+            sliver: SliverToBoxAdapter(
+              child: Text(title ?? 'Albums',
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+            ),
           ),
-        ),
         if (dupes.isNotEmpty)
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),

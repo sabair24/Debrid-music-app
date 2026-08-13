@@ -49,6 +49,9 @@ void main() {
 
     expect(tester.takeException(), isNull, reason: 'dit is precies waar Favorieten op stukliep');
     expect(find.text('Een'), findsOneWidget);
+    // En geen eigen kop: het scherm eromheen zet er al een. Anders stond er twee keer "Albums"
+    // onder elkaar, in twee verschillende maten.
+    expect(find.text('Albums'), findsNothing);
   });
 
   testWidgets('en op zichzelf scrollt hij nog gewoon', (tester) async {
