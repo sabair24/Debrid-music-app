@@ -1175,6 +1175,9 @@ Widget glassSurface({
   double shadow = .34,
   double shadowBlur = 26,
   Offset shadowOffset = const Offset(0, 9),
+
+  /// De vorm zonder de blur. Zie de uitleg bij de terugkeer onderaan.
+  bool zonderBlur = false,
 }) {
   // A television gets the shape without the blur, and a stronger fill to pay for it.
   //
@@ -1212,7 +1215,14 @@ Widget glassSurface({
     child: child,
   );
 
-  if (isTv) {
+  // Een telefoon krijgt hem ook zonder blur, en om dezelfde reden als de televisie hierboven.
+  //
+  // De zoekbalk staat op Albums, Artiesten én Nummers permanent bovenaan — dus lag er over de volle
+  // breedte van die drie schermen doorlopend een BackdropFilter van sigma 26. Dat is de enige laag
+  // die Flutter niet mag raster-cachen: hij leest de achtergrond terug en blurt hem opnieuw bij élke
+  // hertekening, en op een telefoon is dat precies tijdens het scrollen. De uitweg voor de televisie
+  // stond er al; die voor een telefoon ontbrak.
+  if (isTv || zonderBlur) {
     return ClipRRect(borderRadius: BorderRadius.circular(999), child: surface);
   }
   return ClipRRect(
@@ -1484,10 +1494,13 @@ class _HomeShellState extends State<HomeShell> {
   /// Frosted pill that sits at the top of every screen. It really does blur what's behind it —
   /// the ambient glow in [_contentArea] gives the glass something to pick up, so it reads as a
   /// pane of glass rather than a flat rounded box.
-  Widget _glassPill({required Widget child}) => Padding(
+  Widget _glassPill({required BuildContext context, required Widget child}) => Padding(
         padding: const EdgeInsets.fromLTRB(18, 14, 18, 6),
         child: glassSurface(
           padding: const EdgeInsets.fromLTRB(8, 7, 10, 7),
+          // Op een telefoon zonder blur: deze balk staat permanent boven drie schermen, en een
+          // BackdropFilter is de enige laag die niet raster-gecachet kan worden.
+          zonderBlur: isCompact(context),
           child: child,
         ),
       );
@@ -1499,10 +1512,10 @@ class _HomeShellState extends State<HomeShell> {
   /// the album header, in the one place that is on screen the whole time.
   Widget _searchBar(BuildContext context) {
     final narrow = isCompact(context);
-    if (!narrow) return _searchBarRow();
+    if (!narrow) return _searchBarRow(context);
     return Column(
       children: [
-        _glassPill(child: Row(children: [Expanded(child: _searchField())])),
+        _glassPill(context: context, child: Row(children: [Expanded(child: _searchField())])),
         const SizedBox(height: 8),
         SizedBox(
           height: 38,
@@ -1518,7 +1531,8 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
-  Widget _searchBarRow() => _glassPill(
+  Widget _searchBarRow(BuildContext context) => _glassPill(
+        context: context,
         child: Row(
           children: [
             Expanded(child: _searchField()),
@@ -2780,7 +2794,22 @@ class AlbumsGrid extends StatelessWidget {
   /// what the rows mean rather than only what order they come in.
   final AlbumSort? sort;
 
-  const AlbumsGrid({super.key, required this.albums, this.title, this.sort});
+  /// Staat dit raster ergens IN een andere lijst?
+  ///
+  /// **Zonder dit valt het Favorieten-scherm om.** Dat scherm zet dit raster als kind in een
+  /// `ListView`, en dit is een `CustomScrollView` — een verticale viewport in een verticale lijst
+  /// krijgt een onbegrensde hoogte en gooit meteen `Vertical viewport was given unbounded height`.
+  /// Een rode pagina, zodra je één album favoriet maakt. Er stond geen enkele widgettoets op dat
+  /// scherm; die is er nu wel.
+  final bool ingebed;
+
+  const AlbumsGrid({
+    super.key,
+    required this.albums,
+    this.title,
+    this.sort,
+    this.ingebed = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -2789,6 +2818,9 @@ class AlbumsGrid extends StatelessWidget {
     // dry-run.
     final dupes = title == null ? context.watch<LibraryStore>().duplicates : const <RedundantAlbum>[];
     return CustomScrollView(
+      // Ingebed: zo hoog als zijn inhoud, en niet zelf scrollen — de lijst eromheen doet dat.
+      shrinkWrap: ingebed,
+      physics: ingebed ? const NeverScrollableScrollPhysics() : null,
       slivers: [
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(24, 22, 24, 8),
@@ -3061,7 +3093,25 @@ class _AlbumCardState extends State<AlbumCard> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(child: LayoutBuilder(builder: (_, c) => cover(a.cover, size: c.maxWidth))),
+              // De hoes VLIEGT naar de albumpagina in plaats van te knippen.
+              //
+              // Er stond nergens in de app een Hero. Dit is de plek waar hij het meeste doet: je
+              // tikt een tegel aan en dezelfde hoes groeit door naar de kop van de albumpagina, in
+              // plaats van dat het ene scherm hard door het andere vervangen wordt. Het label is
+              // wat de app zelf als vaste naam voor een album gebruikt, zodat twee persingen van
+              // dezelfde plaat niet met elkaar verwisseld worden.
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (_, c) => Hero(
+                    tag: 'hoes:${context.read<LibraryStore>().uidOf(a)}',
+                    // Tijdens de vlucht alleen de hoes tekenen, zonder het kaartje eromheen: anders
+                    // zweeft er een paneel met tekst door het scherm.
+                    flightShuttleBuilder: (_, __, ___, ____, _____) =>
+                        cover(a.cover, size: c.maxWidth),
+                    child: cover(a.cover, size: c.maxWidth),
+                  ),
+                ),
+              ),
               // Directly under the sleeve, where the eye already is when it wonders whether the
               // cover is the final one.
               WarmingLine(uid: context.read<LibraryStore>().uidOf(a)),
@@ -4192,6 +4242,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             artist: album.artist,
             album: album.title,
             identity: context.watch<LibraryStore>().uidOf(album),
+            // Het label van de tegel waar je vandaan kwam: de hoes groeit door in plaats van dat
+            // het ene scherm hard door het andere vervangen wordt. Zelfde uid als in AlbumCard.
+            heroTag: 'hoes:${context.watch<LibraryStore>().uidOf(album)}',
             size: artSize,
             fallback: album.cover,
             chosen: album.correctedCover,
@@ -4964,6 +5017,15 @@ class _ArtistsViewState extends State<ArtistsView> {
     // Only artists that still have a matching album after the shell's search/filter.
     final visible = {for (final a in _source) a.artist};
     final artists = widget.lib.artists.where(visible.contains).toList();
+    // Eén hoes per artiest, hier één keer opgezocht in plaats van per tegel.
+    //
+    // De rasterbouwer deed `_source.firstWhere((a) => a.artist == name)` — een lineaire zoektocht
+    // over ruim 260 albums, PER CEL. Met een stuk of twintig zichtbare cellen zijn dat vijfduizend
+    // vergelijkingen per scrollbeeld, en op 120 Hz gebeurt dat honderdtwintig keer per seconde.
+    final hoesVanArtiest = <String, Uint8List?>{};
+    for (final a in _source) {
+      hoesVanArtiest.putIfAbsent(a.artist, () => a.cover);
+    }
     if (artists.isEmpty) {
       return const Center(child: Text('Geen artiesten gevonden.', style: TextStyle(color: _muted)));
     }
@@ -4986,8 +5048,7 @@ class _ArtistsViewState extends State<ArtistsView> {
                 childAspectRatio: .82),
             delegate: SliverChildBuilderDelegate((_, i) {
               final name = artists[i];
-              final art = widget.lib.artistImages[name] ??
-                  _source.firstWhere((a) => a.artist == name).cover;
+              final art = widget.lib.artistImages[name] ?? hoesVanArtiest[name];
               return _ArtistCard(
                 name: name,
                 image: art,
@@ -6350,28 +6411,35 @@ class FavorietenView extends StatelessWidget {
     return ListView(
       padding: EdgeInsets.fromLTRB(narrow ? 18 : 28, 22, narrow ? 18 : 24, 30),
       children: [
-        Row(
+        // Op een telefoon onder elkaar. Titel (25 punten, vet), telling en een knop naast elkaar
+        // vragen samen ruim meer dan de 375 punten die er zijn — het nummerscherm had die
+        // behandeling al, dit scherm was overgeslagen.
+        Flex(
+          direction: narrow ? Axis.vertical : Axis.horizontal,
+          crossAxisAlignment: narrow ? CrossAxisAlignment.start : CrossAxisAlignment.center,
           children: [
             const Text('Favorieten',
                 style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
-            const SizedBox(width: 12),
+            SizedBox(width: narrow ? 0 : 12, height: narrow ? 4 : 0),
             Text('${albums.length} albums · ${nummers.length} nummers',
                 style: const TextStyle(color: _muted, fontSize: 12.5)),
-            const Spacer(),
-            if (nummers.isNotEmpty)
+            if (!narrow) const Spacer(),
+            if (nummers.isNotEmpty) ...[
+              SizedBox(height: narrow ? 12 : 0),
               FilledButton.icon(
                 style: FilledButton.styleFrom(backgroundColor: _accent),
                 onPressed: () => p.shuffleAll(nummers),
                 icon: const Icon(Icons.shuffle_rounded, size: 18),
                 label: const Text('Shuffle alles'),
               ),
+            ],
           ],
         ),
         if (albums.isNotEmpty) ...[
           const SizedBox(height: 18),
           const Text('Albums', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
           const SizedBox(height: 10),
-          AlbumsGrid(albums: albums),
+          AlbumsGrid(albums: albums, ingebed: true),
         ],
         if (nummers.isNotEmpty) ...[
           const SizedBox(height: 24),
@@ -7078,9 +7146,15 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
           if (p.currentCover != null)
             Positioned.fill(
               // Blurred to almost nothing behind the player, so it never needed the full picture.
-              child: Opacity(
-                  opacity: .22,
-                  child: Image.memory(p.currentCover!, fit: BoxFit.cover, cacheWidth: 480)),
+              //
+              // De doorzichtigheid via `Image` en NIET via een `Opacity`-widget. Die laatste zet een
+              // schermvullende `saveLayer` op — de duurste soort laag die er is — en uitgerekend op
+              // dít scherm, waar de draaiende plaat 120 beelden per seconde afdwingt zolang er
+              // muziek speelt. `Image` heeft een ingebouwde dekking die geen laag nodig heeft.
+              child: Image.memory(p.currentCover!,
+                  fit: BoxFit.cover,
+                  cacheWidth: 480,
+                  opacity: const AlwaysStoppedAnimation(.22)),
             ),
           Positioned.fill(child: Container(color: _bg.withValues(alpha: .5))),
           SafeArea(
@@ -11303,6 +11377,7 @@ class AlbumInfoPanel extends StatefulWidget {
 
   /// Images the user assigned by hand — the back cover shown here is one of them.
   final Map<String, String> roles;
+
   const AlbumInfoPanel(
       {super.key,
       required this.artist,
@@ -14056,6 +14131,12 @@ class AlbumArt extends StatefulWidget {
   /// image as the thumbnail, and only this widget knows which pressing's scan won.
   final ValueChanged<Uint8List?>? onFront;
 
+  /// Het label waarmee de hoes van de tegel hierheen vliegt. Null = geen vlucht.
+  ///
+  /// Alleen om de SLEEVE heen, niet om het geheel: staat er een cd naast, dan is deze widget
+  /// `s + travel` breed en zou er een rechthoek met lege ruimte door het scherm zweven.
+  final String? heroTag;
+
   /// Images the user assigned by hand — see LibraryStore.albumArtRoles. They outrank every guess.
   final Map<String, String> roles;
   const AlbumArt({
@@ -14072,6 +14153,7 @@ class AlbumArt extends StatefulWidget {
     this.pinnedMbid,
     this.onFront,
     this.roles = const {},
+    this.heroTag,
   });
 
   @override
@@ -14254,7 +14336,10 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
               width: s, height: s, fit: BoxFit.cover, cacheWidth: decodeWidth(s)),
     );
 
-    if (disc == null) return sleeve;
+    final vliegend =
+        widget.heroTag == null ? sleeve : Hero(tag: widget.heroTag!, child: sleeve);
+
+    if (disc == null) return vliegend;
 
     // Built once and handed to the animation as a child, so none of this is rebuilt per frame.
     //
