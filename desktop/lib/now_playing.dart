@@ -89,14 +89,75 @@ Future<void> initNowPlaying(NowPlayingSource player, {Uint8List? Function(Track)
 ///
 /// `becomingNoisy` is the other half — on a TV that is the AVR being switched off or the input
 /// changing, which should stop the music rather than leave it playing to nobody.
+/// Wat er met de muziek moet gebeuren als iets anders geluid wil maken.
+enum Onderbreking { niets, pauzeren, hervatten, dempen, ontdempen }
+
+/// De regel, als pure functie zodat er een toets op past zonder auto, telefoon of speler.
+///
+/// **Wat er hiervoor stond: pauzeren bij álles, en nooit meer hervatten.** In een auto is dat
+/// precies de ergernis die je elke rit hebt: Waze zegt "sla rechtsaf", de muziek valt stil en komt
+/// niet terug. Terwijl het systeem het onderscheid gewoon meestuurt en niemand ernaar keek.
+///
+/// De drie soorten betekenen elk iets anders:
+///
+/// * [AudioInterruptionType.duck] — iets korts praat er even doorheen. Zachter zetten is beleefd;
+///   pauzeren is te veel, want het duurt twee seconden.
+/// * [AudioInterruptionType.pause] — een gesprek of een andere speler. Pauzeren, en achteraf weer
+///   verder waar je was.
+/// * [AudioInterruptionType.unknown] — we weten niet waaróm het stopte. Dan achteraf uit zichzelf
+///   weer beginnen is erger dan stil blijven: dat is muziek die opeens aangaat in een stille auto.
+///
+/// [zelfGepauzeerd] is de tweede helft van dezelfde voorzichtigheid: alleen hervatten wat wíj hebben
+/// stilgezet. Wie zelf op pauze drukte terwijl er een gesprek binnenkwam, wil niet dat het daarna
+/// alsnog begint te spelen.
+Onderbreking bijOnderbreking({
+  required bool begint,
+  required AudioInterruptionType soort,
+  required bool speelt,
+  required bool zelfGepauzeerd,
+}) {
+  if (begint) {
+    if (!speelt) return Onderbreking.niets;
+    return soort == AudioInterruptionType.duck ? Onderbreking.dempen : Onderbreking.pauzeren;
+  }
+  return switch (soort) {
+    AudioInterruptionType.duck => Onderbreking.ontdempen,
+    AudioInterruptionType.pause =>
+      zelfGepauzeerd ? Onderbreking.hervatten : Onderbreking.niets,
+    AudioInterruptionType.unknown => Onderbreking.niets,
+  };
+}
+
 Future<void> _claimAudioFocus(NowPlayingSource player) async {
   try {
     final session = await AudioSession.instance;
     await session.configure(const AudioSessionConfiguration.music());
+    var zelfGepauzeerd = false;
     session.interruptionEventStream.listen((event) {
-      if (event.begin && player.playing) player.playPause();
+      switch (bijOnderbreking(
+        begint: event.begin,
+        soort: event.type,
+        speelt: player.playing,
+        zelfGepauzeerd: zelfGepauzeerd,
+      )) {
+        case Onderbreking.pauzeren:
+          zelfGepauzeerd = true;
+          player.playPause();
+        case Onderbreking.hervatten:
+          zelfGepauzeerd = false;
+          player.playPause();
+        case Onderbreking.dempen:
+          player.zetDemping(true);
+        case Onderbreking.ontdempen:
+          player.zetDemping(false);
+        case Onderbreking.niets:
+          break;
+      }
     });
     session.becomingNoisyEventStream.listen((_) {
+      // De koptelefoon of de bluetoothspeaker viel weg. Niet hervatten als hij terugkomt: dan
+      // begint de muziek uit de telefoonluidspreker in een stille kamer.
+      zelfGepauzeerd = false;
       if (player.playing) player.playPause();
     });
     await session.setActive(true);

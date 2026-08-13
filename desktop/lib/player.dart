@@ -45,6 +45,12 @@ abstract interface class NowPlayingSource implements Listenable {
   RepeatMode get repeat;
   void zetShuffle(bool aan);
   void zetHerhaal(RepeatMode m);
+
+  /// Even zachter, zonder de ingestelde stand te vergeten.
+  ///
+  /// Voor het geval dat een navigatiestem er doorheen praat: pauzeren is dan te veel, want het duurt
+  /// twee seconden. Zie `bijOnderbreking` in now_playing.dart.
+  void zetDemping(bool aan);
 }
 
 /// Re-resolve a queue against the library, or null when nothing anyone can see has changed.
@@ -748,7 +754,28 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
 
   @override
   void seek(Duration d) => _player.seek(d);
-  void setVolume(double v) => _player.setVolume(v);
+
+  /// Het volume dat de gebruiker heeft ingesteld, los van wat er nu klinkt.
+  ///
+  /// Twee getallen omdat er twee dingen zijn: wat jij gekozen hebt, en wat er op dit moment uit de
+  /// speakers komt. Zonder dat onderscheid komt een navigatiestem die halverwege afgebroken wordt
+  /// nooit meer terug op je eigen stand — of erger, hij bewaart de gedempte stand als de jouwe.
+  double _volume = 100;
+  bool _gedempt = false;
+
+  void setVolume(double v) {
+    _volume = v;
+    if (!_gedempt) _player.setVolume(v);
+  }
+
+  /// Een kwart van de ingestelde stand. Zacht genoeg om overheen te praten, hard genoeg om te horen
+  /// dat de muziek niet gestopt is.
+  @override
+  void zetDemping(bool aan) {
+    if (_gedempt == aan) return;
+    _gedempt = aan;
+    _player.setVolume(aan ? _volume * 0.25 : _volume);
+  }
 
   /// De speaker dezelfde nieuwe volgorde geven, zonder het lopende nummer opnieuw te beginnen.
   ///

@@ -42,6 +42,10 @@ class FakePlayer extends ChangeNotifier implements NowPlayingSource {
     notifyListeners();
   }
 
+  bool gedempt = false;
+  @override
+  void zetDemping(bool aan) => gedempt = aan;
+
   int nexts = 0, prevs = 0, toggles = 0;
   Duration? sought;
 
