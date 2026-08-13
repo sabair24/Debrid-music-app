@@ -265,13 +265,55 @@ void main() {
       )));
       await tester.pumpAndSettle();
 
-      // The scale animation exists to be seen from a sofa. Under a thumb it would just wobble.
-      expect(find.byType(AnimatedScale), findsNothing);
+      // GEEN GROEI BIJ FOCUS. Dat is wat hier stond, en dat blijft: een tegel die opzwelt omdat de
+      // aanwijzer erop staat is voor een bank op vijf meter, niet voor een duim.
+      //
+      // De regel was eerst "geen AnimatedScale op een telefoon, punt". Dat gooide twee dingen op één
+      // hoop. Er is nu wél een AnimatedScale, maar die staat op 1.0 tot je hem indrukt — zie de
+      // toets hieronder. Zonder dat onderscheid had de app op een telefoon nergens een reactie op
+      // een aanraking, en dat was het grootste gebrek dat een beoordeling van de telefoonkant
+      // opleverde: je tikt een album aan, er gebeurt drie tienden van een seconde niets, en dan
+      // verschijnt de pagina.
+      expect(tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale, 1.0,
+          reason: 'focus alleen mag niets laten groeien');
 
       final box = tester.widget<DecoratedBox>(find
           .descendant(of: find.byType(Pressable), matching: find.byType(DecoratedBox))
           .first);
       expect((box.decoration as BoxDecoration).border?.top.width, 2);
+    });
+
+    testWidgets('maar onder een duim veert hij wél even in', (tester) async {
+      // Aanraakfeedback. Alles wat je in deze app kunt aantikken loopt door Pressable, en er was
+      // geen enkele zichtbare reactie op een vinger: de bestaande animaties hingen aan `hover` en
+      // `focus`, en die vuren op een telefoon nooit.
+      setTvModeForTest(false);
+      await tester.pumpWidget(_app(Pressable(onPressed: () {}, child: const Text('Afspelen'))));
+      await tester.pumpAndSettle();
+      expect(tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale, 1.0);
+
+      final gebaar = await tester.startGesture(tester.getCenter(find.text('Afspelen')));
+      await tester.pump();
+      expect(tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale, lessThan(1.0),
+          reason: 'ingedrukt hoort te voelen');
+
+      await gebaar.up();
+      await tester.pumpAndSettle();
+      expect(tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale, 1.0,
+          reason: 'en weer terug als je loslaat');
+    });
+
+    testWidgets('een afgebroken tik laat hem niet ingedrukt staan', (tester) async {
+      // Wie met zijn vinger op een tegel begint te scrollen moet die tegel zien opveren. Zonder
+      // onTapCancel blijft hij ingedrukt staan terwijl de lijst onder je vinger wegschuift.
+      setTvModeForTest(false);
+      await tester.pumpWidget(_app(Pressable(onPressed: () {}, child: const Text('Afspelen'))));
+      final gebaar = await tester.startGesture(tester.getCenter(find.text('Afspelen')));
+      await tester.pump();
+      expect(tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale, lessThan(1.0));
+      await gebaar.cancel();
+      await tester.pumpAndSettle();
+      expect(tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale, 1.0);
     });
 
     testWidgets('overscan margin is a TV thing only', (tester) async {

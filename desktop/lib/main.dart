@@ -2061,14 +2061,28 @@ class _OfflineBanner extends StatelessWidget {
         Icon(geweigerd ? Icons.lock_outline_rounded : Icons.cloud_off_rounded, size: 17, color: kleur),
         const SizedBox(width: 10),
         Expanded(
+          // Op een telefoon een korte zin, elders de volledige uitleg.
+          //
+          // Gemeten op 411 punten breed: na de marges, het icoon en de knop blijft er ~209 punten
+          // over voor een zin van rond de 130 tekens op 12,5 punt — vijf regels, ruim honderd punten
+          // hoog, boven élk scherm. De uitleg is goed, maar hij hoort niet een achtste van je scherm
+          // te kosten zolang hij er staat.
           child: Text(
-            geweigerd
-                ? 'Je pc is bereikbaar, maar dit toestel heeft geen toegang meer. '
-                    'Je ziet de kopie van je bibliotheek'
-                    '${when == null ? '' : ' van ${_ago(when)}'}; afspelen kan niet.'
-                : 'Je pc reageert niet — dit is de kopie van je bibliotheek'
-                    '${when == null ? '' : ' van ${_ago(when)}'}. '
-                    'Bladeren en downloads klaarzetten kan; afspelen niet.',
+            isCompact(context)
+                ? (geweigerd
+                    ? 'Geen toegang tot je pc — je ziet een kopie'
+                        '${when == null ? '' : ' van ${_ago(when)}'}'
+                    : 'Pc offline — je ziet een kopie'
+                        '${when == null ? '' : ' van ${_ago(when)}'}')
+                : (geweigerd
+                    ? 'Je pc is bereikbaar, maar dit toestel heeft geen toegang meer. '
+                        'Je ziet de kopie van je bibliotheek'
+                        '${when == null ? '' : ' van ${_ago(when)}'}; afspelen kan niet.'
+                    : 'Je pc reageert niet — dit is de kopie van je bibliotheek'
+                        '${when == null ? '' : ' van ${_ago(when)}'}. '
+                        'Bladeren en downloads klaarzetten kan; afspelen niet.'),
+            maxLines: isCompact(context) ? 2 : null,
+            overflow: isCompact(context) ? TextOverflow.ellipsis : null,
             style: TextStyle(color: kleur, fontSize: 12.5),
           ),
         ),

@@ -22,13 +22,18 @@
          same cable. -->
     <uses-feature android:name="android.hardware.wifi" android:required="false"/>
 
+    <!-- android:enableOnBackInvokedCallback zet terugvegen mét voorvertoning aan: je ziet het vorige
+         scherm al terwijl je veegt, in plaats van een harde knip als je loslaat. Vanaf Android 13
+         alleen als een app het zelf aanzet. De app was er al klaar voor (PopScope met
+         onPopInvokedWithResult); dit attribuut ontbrak. -->
     <application
         android:label="DebridMusic"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:banner="@drawable/tv_banner"
-        android:usesCleartextTraffic="true">
+        android:usesCleartextTraffic="true"
+        android:enableOnBackInvokedCallback="true">
         <!-- android:banner is here as well as on <application>. PackageManager does fall back to the
              application's banner, but a leanback launcher reads the activity's first, and the built
              APK reported `leanback-launchable-activity: banner=''`.

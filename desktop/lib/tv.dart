@@ -173,6 +173,14 @@ class _PressableState extends State<Pressable> {
   bool _focused = false;
   bool _hovered = false;
 
+  /// Ligt er nu een vinger op? Voedt de indrukbeweging; zie [build].
+  bool _ingedrukt = false;
+
+  void _zetIngedrukt(bool v) {
+    if (_ingedrukt == v || !mounted) return;
+    setState(() => _ingedrukt = v);
+  }
+
   void _activate() {
     final action = widget.onPressed;
     if (action != null) action();
@@ -224,6 +232,24 @@ class _PressableState extends State<Pressable> {
         curve: Curves.easeOut,
         child: content,
       );
+    } else if (!isTv && widget.onPressed != null) {
+      // **Aanraakfeedback, en dit was het grootste gat op een telefoon.**
+      //
+      // Alles wat je kunt aantikken loopt door deze widget: elke albumtegel, elke nummerrij, elke
+      // starttegel. De enige zichtbare reactie zat op `hover` (een `MouseRegion`) en op `focus` —
+      // en die vuren op een telefoon nooit. Je tikte een album aan, er gebeurde twee tot vier
+      // tienden van een seconde niets, en dan verscheen de pagina. Dat is de reden dat de app traag
+      // aanvoelde terwijl hij dat niet was.
+      //
+      // Bewust een indrukbeweging en geen inktvlek: deze app tekent tegels met eigen hoeken en
+      // schaduwen, en een ripple die daar overheen loopt ziet er verkeerd uit. Klein en kort — je
+      // moet het voelen, niet zien.
+      content = AnimatedScale(
+        scale: _ingedrukt ? .97 : 1.0,
+        duration: const Duration(milliseconds: 90),
+        curve: Curves.easeOut,
+        child: content,
+      );
     }
 
     // Holding OK is a real gesture on a remote, and Flutter does not give it to you.
@@ -259,6 +285,12 @@ class _PressableState extends State<Pressable> {
         onTap: widget.onPressed,
         onLongPress: widget.onLongPress,
         onSecondaryTap: widget.onSecondaryTap,
+        // De drie haken die de indrukbeweging hierboven voeden. `onTapCancel` hoort erbij: wie
+        // begint te scrollen met zijn vinger op een tegel moet die tegel weer zien opveren, anders
+        // blijft hij ingedrukt staan terwijl de lijst wegschuift.
+        onTapDown: isTv || widget.onPressed == null ? null : (_) => _zetIngedrukt(true),
+        onTapUp: isTv || widget.onPressed == null ? null : (_) => _zetIngedrukt(false),
+        onTapCancel: isTv || widget.onPressed == null ? null : () => _zetIngedrukt(false),
         child: DecoratedBox(
           decoration: BoxDecoration(
             borderRadius: widget.borderRadius,
