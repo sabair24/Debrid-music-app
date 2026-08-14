@@ -27,8 +27,16 @@ jobs:
       # lower than the one already on the device. The Kotlin app's own pipeline reached 10281 on
       # this same counter, so the offset must stay well above that or every phone and Shield that
       # has the old app would reject the update as a downgrade.
+      #
+      # 13-08-2026: van 10300 naar 10400. Reden: een reeks APK's is op de pc zelf gebouwd (met de
+      # nummers 10830 t/m 10844) omdat een CI-bouw nog een kwartier duurde en de telefoon meteen
+      # nagekeken moest worden. Die lokale nummers liepen vóór op de teller hier, en daarmee bood de
+      # ingebouwde updater niets meer aan: elke CI-bouw was voor het toestel een stap terug.
+      #
+      # Zelfde val als hierboven, alleen andersom. Bouw je lokaal, kies dan een nummer dat ONDER
+      # deze teller ligt, of til deze offset er meteen overheen -- de teller kan alleen omhoog.
       - name: Compute build number
-        run: echo "BUILD_NUMBER=$(( ${{ github.run_number }} + 10300 ))" >> "$GITHUB_ENV"
+        run: echo "BUILD_NUMBER=$(( ${{ github.run_number }} + 10400 ))" >> "$GITHUB_ENV"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
