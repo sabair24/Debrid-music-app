@@ -1724,7 +1724,29 @@ class _HomeShellState extends State<HomeShell> {
                           // taking over the screen — and the rail has a "Zoeken" entry that asks
                           // for the words once and then gets out of the way.
                           if (_searchable && !isTv) _searchBar(context),
-                          Expanded(child: _content()),
+                          // Een korte overvloeier in plaats van een harde knip.
+                          //
+                          // De navigatiepil schuift al 300 ms naar zijn nieuwe plek terwijl de
+                          // inhoud eronder al gewisseld wás — die mismatch zie je. Kort en met een
+                          // klein zetje omhoog, zodat het als een wissel leest en niet als een
+                          // aarzeling.
+                          Expanded(
+                            child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 160),
+                              switchInCurve: Curves.easeOut,
+                              transitionBuilder: (kind, animatie) => FadeTransition(
+                                opacity: animatie,
+                                child: SlideTransition(
+                                  position: Tween(
+                                    begin: const Offset(0, .012),
+                                    end: Offset.zero,
+                                  ).animate(animatie),
+                                  child: kind,
+                                ),
+                              ),
+                              child: KeyedSubtree(key: ValueKey(_view), child: _content()),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -2818,6 +2840,13 @@ class AlbumsGrid extends StatelessWidget {
     // dry-run.
     final dupes = title == null ? context.watch<LibraryStore>().duplicates : const <RedundantAlbum>[];
     return CustomScrollView(
+      // De scrollpositie overleeft een wissel naar een ander scherm en terug.
+      //
+      // Zonder deze sleutel begon je bij elke terugkeer weer bovenaan: het scherm wordt opnieuw
+      // opgebouwd, en dan is er niets dat weet waar je was. PageStorage onthoudt de plek zonder dat
+      // de hele boom in leven gehouden hoeft te worden — dat laatste zou verborgen schermen laten
+      // meeluisteren en hertekenen, en dat is precies wat we net weggehaald hebben.
+      key: const PageStorageKey('albumraster'),
       // Ingebed: zo hoog als zijn inhoud, en niet zelf scrollen — de lijst eromheen doet dat.
       shrinkWrap: ingebed,
       physics: ingebed ? const NeverScrollableScrollPhysics() : null,
@@ -5033,6 +5062,8 @@ class _ArtistsViewState extends State<ArtistsView> {
       return const Center(child: Text('Geen artiesten gevonden.', style: TextStyle(color: _muted)));
     }
     return CustomScrollView(
+      // Zie het albumraster: de plek waar je was overleeft een wissel naar een ander scherm.
+      key: const PageStorageKey('artiestenraster'),
       slivers: [
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(24, 22, 24, 8),
@@ -7790,6 +7821,8 @@ class TracksView extends StatelessWidget {
         }),
         Expanded(
           child: ListView.builder(
+            // Zie het albumraster: waar je was blijft staan bij een wissel naar een ander scherm.
+            key: const PageStorageKey('nummerlijst'),
             padding: const EdgeInsets.only(bottom: 12),
             itemCount: tracks.length,
             // Fixed height → smooth scrolling at 10k+ tracks. Taller on a television because the
@@ -7882,28 +7915,50 @@ class HomeStartView extends StatefulWidget {
   State<HomeStartView> createState() => _HomeStartViewState();
 }
 
+/// Wat het startscherm al opgehaald had, over een schermwissel heen.
+///
+/// **Zonder dit begon dit scherm elke keer opnieuw.** Wissel naar Albums en terug, en de widget
+/// wordt van de grond af opgebouwd: spinner, nieuw netwerkverkeer, en een andere volgorde dan je
+/// net zag. Op een telefoon is dat de hele tijd, want elke sectie zit achter de hamburgerla.
+///
+/// Bewust alleen de opgehaalde lijsten en niet de hele widgetboom. Dat laatste (een IndexedStack)
+/// houdt verborgen schermen in de boom, en dan blijven ze meeluisteren en hertekenen — precies wat
+/// er net uitgehaald is.
+class _StartCache {
+  static List<CatalogAlbumHit> charts = [];
+  static List<CatalogAlbumHit> releases = [];
+  static List<RecTrack> forYou = [];
+  static bool geladen = false;
+}
+
 class _HomeStartViewState extends State<HomeStartView> {
   final _catalog = CatalogService();
   final _rec = RecommendService();
-  List<CatalogAlbumHit> _charts = [];
-  List<CatalogAlbumHit> _releases = [];
-  List<RecTrack> _forYou = [];
-  bool _chartsLoading = true;
+  List<CatalogAlbumHit> _charts = _StartCache.charts;
+  List<CatalogAlbumHit> _releases = _StartCache.releases;
+  List<RecTrack> _forYou = _StartCache.forYou;
+  bool _chartsLoading = !_StartCache.geladen;
   bool _seedsRequested = false; // the library's artists have been used to load the personal rows
   bool _seedsLoading = false;
 
   @override
   void initState() {
     super.initState();
-    // Charts need no library — load them right away.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadCharts());
+    // Charts need no library — load them right away. Maar niet opnieuw als ze er al zijn: zie
+    // [_StartCache]. Anders haalt elke terugkeer naar Start dezelfde lijst nog een keer op, met een
+    // spinner en een andere volgorde dan je net zag.
+    if (!_StartCache.geladen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadCharts());
+    }
   }
 
   Future<void> _loadCharts() async {
     try {
       final c = await _catalog.chartAlbums();
+      _StartCache.charts = c;
       if (mounted) setState(() => _charts = c);
     } catch (_) {}
+    _StartCache.geladen = true;
     if (mounted) setState(() => _chartsLoading = false);
   }
 
@@ -7928,9 +7983,11 @@ class _HomeStartViewState extends State<HomeStartView> {
     // Dezelfde functie als Ontdek gebruikt, zodat de twee schermen niet elk hun eigen antwoord op
     // "heb ik dit al?" krijgen.
     final bezit = bezitSleutels(context.read<LibraryStore>().tracks);
+    _StartCache.releases = rel;
+    _StartCache.forYou = nogNietInBezit(fy, bezit);
     setState(() {
-      _releases = rel;
-      _forYou = nogNietInBezit(fy, bezit);
+      _releases = _StartCache.releases;
+      _forYou = _StartCache.forYou;
       _seedsLoading = false;
     });
   }
@@ -7965,7 +8022,8 @@ class _HomeStartViewState extends State<HomeStartView> {
     final lib = context.watch<LibraryStore>();
     final artists = lib.artists.where((a) => !_genericArtist(a)).toList();
     // Fire the personal rows the first time the library actually has artists.
-    if (!_seedsRequested && artists.isNotEmpty) {
+    // Alleen als ze er nog niet zijn — een terugkeer naar Start hoeft ze niet opnieuw te halen.
+    if (!_seedsRequested && artists.isNotEmpty && _StartCache.releases.isEmpty && _StartCache.forYou.isEmpty) {
       _seedsRequested = true;
       final seeds = [...artists]..shuffle();
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadSeeds(seeds));
