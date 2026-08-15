@@ -11,13 +11,14 @@ import 'artwork.dart' show decodeWidth;
 import 'booklet.dart';
 import 'discogs.dart';
 import 'settings.dart';
+import 'ui/kleuren.dart';
 
 // Same four values as the album pages use. Duplicated rather than imported: main.dart already
 // imports this file, and a theme constant is not worth a cycle.
-const _bg = Color(0xFF0C0D12);
-const _panel = Color(0xFF181B26);
-const _muted = Color(0xFF9AA0B4);
-const _accent = Color(0xFF7C5CFF);
+const _bg = kAchtergrond;
+const _panel = kPaneel;
+const _muted = kGedempt;
+const _accent = kAccent;
 
 /// Paper showing where a page hasn't loaded yet.
 const _paper = Color(0xFF15161C);

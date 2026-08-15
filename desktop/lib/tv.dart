@@ -14,6 +14,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'ui/kleuren.dart';
 
 /// Is this a television? Read once at startup by [initTvMode].
 ///
@@ -459,7 +460,7 @@ class MaybePressable extends StatelessWidget {
 
 /// The app's own accent, not Flutter's default focus colour. From three metres away a thin grey
 /// outline on a dark panel is invisible, and "where am I" is the only question a remote asks.
-const _ring = Color(0xFF7C5CFF);
+const _ring = kAccent;
 
 double get _ringWidth => isTv ? 3 : 2;
 

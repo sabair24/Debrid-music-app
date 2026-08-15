@@ -14,12 +14,13 @@ import 'package:flutter/material.dart';
 import 'cloud/cloud_session.dart';
 import 'lan/client.dart';
 import 'tv.dart';
+import 'ui/kleuren.dart';
 
-const _bg = Color(0xFF0C0D12);
-const _panel2 = Color(0xFF1F2331);
-const _text = Color(0xFFE8EAF2);
-const _muted = Color(0xFF9AA0B4);
-const _accent = Color(0xFF7C5CFF);
+const _bg = kAchtergrond;
+const _panel2 = kPaneelHoog;
+const _text = kTekst;
+const _muted = kGedempt;
+const _accent = kAccent;
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({

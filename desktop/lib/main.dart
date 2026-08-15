@@ -84,6 +84,7 @@ import 'soulseek.dart';
 import 'tidal.dart';
 import 'torbox.dart';
 import 'tv.dart';
+import 'ui/kleuren.dart';
 
 /// What a focused Material button looks like: the same ring the rest of the app draws.
 ///
@@ -97,14 +98,14 @@ final ButtonStyle _focusOutline = ButtonStyle(
       states.contains(WidgetState.focused) ? _accent.withValues(alpha: .22) : null),
 );
 
-const _bg = Color(0xFF0C0D12);
-const _panel = Color(0xFF181B26);
-const _panel2 = Color(0xFF1F2331);
-const _line = Color(0xFF272B3A);
-const _text = Color(0xFFE8EAF2);
-const _muted = Color(0xFF9AA0B4);
-const _accent = Color(0xFF7C5CFF);
-const _accent2 = Color(0xFF00D4C8);
+const _bg = kAchtergrond;
+const _panel = kPaneel;
+const _panel2 = kPaneelHoog;
+const _line = kLijn;
+const _text = kTekst;
+const _muted = kGedempt;
+const _accent = kAccent;
+const _accent2 = kAccent2;
 
 /// Windows and macOS have windows to manage and one app instance per machine; iOS and Android
 /// have neither. Everything below that touches window_manager or the instance lock asks this

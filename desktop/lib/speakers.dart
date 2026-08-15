@@ -17,12 +17,13 @@ import 'package:flutter/material.dart';
 import 'lan/client.dart';
 import 'models.dart';
 import 'tv.dart';
+import 'ui/kleuren.dart';
 
-const _panel = Color(0xFF181B26);
-const _line = Color(0xFF272B3A);
-const _muted = Color(0xFF9AA0B4);
-const _accent = Color(0xFF7C5CFF);
-const _accent2 = Color(0xFF00D4C8);
+const _panel = kPaneel;
+const _line = kLijn;
+const _muted = kGedempt;
+const _accent = kAccent;
+const _accent2 = kAccent2;
 
 /// Wat er naar de speaker gaat, en waar het gevraagde nummer in die lijst staat.
 class Handover {
