@@ -602,10 +602,24 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       // het is hetzelfde nummer, dus die waarde staat er al. Vandaar proberen tot de teller er
       // werkelijk staat, en het opschrijven als dat niet lukt. Een reparatie die zichzelf niet kan
       // controleren is de vorige fout nog een keer.
-      for (var poging = 0; poging < 20; poging++) {
+      // EERST wachten tot het bestand echt loopt, dan pas springen.
+      //
+      // De vorige versie begon meteen te seeken en probeerde het twintig keer. Het logboek van een
+      // echte rit liet zien dat dat niet genoeg is:
+      //
+      //   HERVAT maar NIET teruggesprongen naar 0:03:47 — staat op 0:00:00
+      //
+      // Het nummer begon dus gewoon opnieuw. Zolang libmpv het bestand nog aan het openen is wordt
+      // een seek stil weggegooid, en twee seconden proberen was te kort voor een stroom die net
+      // afgebroken was en opnieuw moest verbinden. Een teller die loopt is het bewijs dat hij er
+      // klaar voor is.
+      for (var i = 0; i < 100 && position <= Duration.zero && duration <= Duration.zero; i++) {
         await Future.delayed(const Duration(milliseconds: 100));
-        if ((position - plek).abs() < const Duration(seconds: 2)) return;
+      }
+      for (var poging = 0; poging < 60; poging++) {
         await _player.seek(plek);
+        await Future.delayed(const Duration(milliseconds: 150));
+        if ((position - plek).abs() < const Duration(seconds: 3)) return;
       }
       _log?.line('HERVAT maar NIET teruggesprongen naar $plek — staat op $position');
     } catch (e) {
