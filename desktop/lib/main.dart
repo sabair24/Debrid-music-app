@@ -5882,10 +5882,7 @@ class PlayerBar extends StatelessWidget {
                   // cover that opens nothing.
                   onPressed: t == null
                       ? null
-                      : () => Navigator.of(context)
-                          .push(MaterialPageRoute(
-                              builder: (_) => const NowPlayingScreen(),
-                              settings: const RouteSettings(name: _nuSpeeltRoute))),
+                      : () => Navigator.of(context).push(nuSpeeltRoute()),
                   borderRadius: BorderRadius.circular(8),
                   child: MouseRegion(
                     cursor: t == null ? MouseCursor.defer : SystemMouseCursors.click,
@@ -6995,10 +6992,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
   final t = x.track;
   final open = t == null
       ? null
-      : () => Navigator.of(context)
-          .push(MaterialPageRoute(
-              builder: (_) => const NowPlayingScreen(),
-              settings: const RouteSettings(name: _nuSpeeltRoute)));
+      : () => Navigator.of(context).push(nuSpeeltRoute());
 
   return Container(
     height: 66 + bottomInset,
@@ -7172,7 +7166,22 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
       // Toetsen bubbelen vanaf de gefocuste knop hierheen. `canRequestFocus: false` en
       // `skipTraversal: true`, want dit mag géén extra stop in de markering worden — het kijkt
       // alleen mee. Deze route ligt bovenop, dus lijsten, rasters en de rail eronder zien hem nooit.
-      body: Focus(
+      // NAAR BENEDEN VEGEN SLUIT HET SCHERM.
+      //
+      // De sluitknop hierboven is een pijl naar beneden, en tot nu toe deed alleen die knop iets:
+      // er was geen enkel gebaar om dit scherm weg te vegen, terwijl dat de gebarentaal is die
+      // iedereen van een muziekapp kent. De route komt nu ook van onderen, dus het gebaar en de
+      // beweging horen bij elkaar.
+      //
+      // Op de snelheid en niet op de afstand: een korte, besliste veeg moet net zo goed werken als
+      // een lange trage. Niet op een televisie — daar is geen vinger, en daar doet BACK dit al.
+      body: GestureDetector(
+        onVerticalDragEnd: isTv
+            ? null
+            : (d) {
+                if ((d.primaryVelocity ?? 0) > 320) Navigator.of(context).maybePop();
+              },
+        child: Focus(
         canRequestFocus: false,
         skipTraversal: true,
         onKeyEvent: (_, e) => _pijlAlsNummerknop(e, x),
@@ -7528,6 +7537,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
           ),
         ],
       )),
+      ),
     );
   }
 
@@ -7576,13 +7586,34 @@ void naarNuSpeelt(BuildContext context) {
     nav.popUntil((r) => r.settings.name == _nuSpeeltRoute);
     return;
   }
-  nav.push(MaterialPageRoute(
-    builder: (_) => const NowPlayingScreen(),
-    settings: const RouteSettings(name: _nuSpeeltRoute),
-  ));
+  nav.push(nuSpeeltRoute());
 }
 
 const _nuSpeeltRoute = 'nu-speelt';
+
+/// Het nu-speelt-scherm, van onderen.
+///
+/// **Waarom niet gewoon een MaterialPageRoute.** Die schuift van rechts in, terwijl de sluitknop van
+/// dat scherm een pijl naar BENEDEN is. Die twee spraken elkaar tegen: de knop belooft een beweging
+/// die de route niet maakt, en er was geen enkel gebaar om het scherm weg te vegen — terwijl dat de
+/// gebarentaal is die iedereen van een muziekapp kent.
+///
+/// 320 ms met easeOutCubic: lang genoeg om te zien dat het één beweging is, kort genoeg om niet in
+/// de weg te zitten als je het scherm tien keer per rit opent.
+Route<void> nuSpeeltRoute() => PageRouteBuilder<void>(
+      settings: const RouteSettings(name: _nuSpeeltRoute),
+      transitionDuration: const Duration(milliseconds: 320),
+      reverseTransitionDuration: const Duration(milliseconds: 260),
+      // Doorzichtig, zodat het scherm eronder blijft staan terwijl dit omhoog schuift.
+      opaque: false,
+      barrierColor: Colors.transparent,
+      pageBuilder: (_, __, ___) => const NowPlayingScreen(),
+      transitionsBuilder: (_, animatie, __, kind) => SlideTransition(
+        position: Tween(begin: const Offset(0, 1), end: Offset.zero)
+            .animate(CurvedAnimation(parent: animatie, curve: Curves.easeOutCubic)),
+        child: kind,
+      ),
+    );
 
 /// Wat de sneltoets vraagt.
 class NaarNuSpeeltIntent extends Intent {
