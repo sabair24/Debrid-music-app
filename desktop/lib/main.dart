@@ -85,6 +85,7 @@ import 'tidal.dart';
 import 'torbox.dart';
 import 'tv.dart';
 import 'ui/kleuren.dart';
+import 'ui/skelet.dart';
 
 /// What a focused Material button looks like: the same ring the rest of the app draws.
 ///
@@ -8150,7 +8151,12 @@ class _HomeStartViewState extends State<HomeStartView> {
         ],
       );
 
-  Widget _loadingRow() => const Center(child: CircularProgressIndicator(color: _accent, strokeWidth: 2.4));
+  /// Een rij skelettegels in plaats van een wieltje in het midden.
+  ///
+  /// Het wieltje zei alleen dát er iets kwam, en het nam een andere hoogte in dan de rij die erna
+  /// verscheen — dus schoof bij elke binnenkomende sectie alles eronder omlaag. Vier rijen die elk
+  /// op hun eigen moment landen, en het startscherm stond te springen terwijl je las.
+  Widget _loadingRow() => const SkeletRij();
 
   Widget _localRow(List<Album> albums) => ListView.separated(
         scrollDirection: Axis.horizontal,
