@@ -7907,8 +7907,18 @@ class TracksView extends StatelessWidget {
                       _echtheidMerk(t.path),
                       _qualityBadge(_trackQuality(t)),
                       const SizedBox(width: 4),
-                      Text(_fmt(t.duration), style: const TextStyle(color: _muted, fontSize: 12)),
-                      const SizedBox(width: 6),
+                      // De looptijd valt weg op een telefoon.
+                      //
+                      // Gezien op het toestel: "Chande…", "Elastic …", "Rolling in …" — de titels
+                      // waren tot een woord teruggesnoeid terwijl er rechts een kwaliteitsmerkje van
+                      // 110 punten stond, een looptijd, en twee knoppen. De looptijd is het minst
+                      // dringende van die vier: hij staat op het speelscherm, op de albumpagina en
+                      // in de wachtrij. Op een breder scherm blijft hij gewoon staan.
+                      if (!isCompact(context)) ...[
+                        Text(_fmt(t.duration),
+                            style: const TextStyle(color: _muted, fontSize: 12)),
+                        const SizedBox(width: 6),
+                      ],
                       // Verwijderen wáár je zoekt. De prullenbak stond alleen op de albumpagina, en
                       // een los nummer terugvinden via zijn album is precies de omweg die dit scherm
                       // moet wegnemen — je filtert hier op "uit mp3" of op een naam en wil er dan
