@@ -4874,6 +4874,13 @@ class _TrackRowState extends State<TrackRow> {
               _qualityBadge(_trackQuality(t)),
               Text(_fmt(t.duration), style: const TextStyle(color: _muted, fontSize: 13)),
               // Both appear on hover, so neither can be hit by accident.
+              //
+              // OP EEN TELEFOON HELEMAAL NIET. `_hover` komt van een MouseRegion en vuurt daar
+              // nooit, dus deze twee vakjes stonden 72 punten breed leeg te zijn — op het smalste
+              // scherm dat de app heeft, en dat voor élke nummerrij. Die ruimte gaat nu naar de
+              // titel, waar hij te zien is. De functies zelf blijven bereikbaar: lang indrukken
+              // opent hetzelfde menu, en dat staat op touch al aan.
+              if (!isCompact(context)) ...[
               SizedBox(
                 width: 36,
                 child: _hover
@@ -4918,6 +4925,7 @@ class _TrackRowState extends State<TrackRow> {
                       )
                     : null,
               ),
+              ],
             ],
           ),
         ),
@@ -6534,7 +6542,7 @@ class _FavorietRij extends StatelessWidget {
               color: _accent,
               tooltip: 'Uit favorieten',
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
               onPressed: () => fav.wisselTrack(track),
             ),
             ),
@@ -7919,7 +7927,11 @@ class TracksView extends StatelessWidget {
                           color: _muted,
                           tooltip: 'Nummer verwijderen',
                           padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                          // 48 en niet 32. Android houdt 48 aan als ondergrens voor iets dat met
+                          // een vinger geraakt moet worden, en dit is een VERWIJDERKNOP die twee
+                          // punten naast de afspeel-aanduiding staat in een rij van 56 hoog. Een
+                          // misser hier start niet alleen het verkeerde nummer.
+                          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
                           onPressed: () => _confirmDelete(context, '“${t.title}”', [t.path]),
                         ),
                                ),
