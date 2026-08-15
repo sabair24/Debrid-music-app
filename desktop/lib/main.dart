@@ -86,6 +86,7 @@ import 'torbox.dart';
 import 'tv.dart';
 import 'ui/kleuren.dart';
 import 'ui/skelet.dart';
+import 'ui/typografie.dart';
 
 /// What a focused Material button looks like: the same ring the rest of the app draws.
 ///
@@ -980,6 +981,11 @@ class DebridApp extends StatelessWidget {
         useMaterial3: true,
         brightness: Brightness.dark,
         scaffoldBackgroundColor: _bg,
+        // De tekstrollen van de app. Hiervoor stond hier NIETS, en dus gaf
+        // `Theme.of(context).textTheme` het standaardpalet van Material terug — 14 punten in een
+        // kleur die niet in dit palet staat. Precies daarom bouwde elke widget zijn eigen
+        // TextStyle: er was niets om op terug te vallen. Zie ui/typografie.dart voor de telling.
+        textTheme: kTekstThema,
         colorScheme: const ColorScheme.dark(
           primary: _accent,
           secondary: _accent2,
