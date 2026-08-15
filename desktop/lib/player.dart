@@ -319,7 +319,51 @@ class Stilstandwacht {
 
 /// Native (libmpv) player with a queue, shuffle, repeat and a Radio mode.
 class PlayerStore extends ChangeNotifier implements NowPlayingSource {
-  final Player _player = Player();
+  /// **Ruim vooruit lezen, want de muziek komt over het netwerk.**
+  ///
+  /// Gemeld op 15-08-2026 na een rit: draadloos Android Auto verloor geregeld de verbinding, "zeker
+  /// bij hi-res", en met de bluetooth-oordopjes haperde het op dezelfde bestanden. Aan de kabel was
+  /// alles vlekkeloos — en dat is precies de aanwijzing: het ligt niet aan het decoderen maar aan de
+  /// aanvoer.
+  ///
+  /// Wat er gebeurt: de telefoon haalt een FLAC van de pc (een 24/192 is al gauw 5 à 6 Mbit/s) over
+  /// dezelfde wifi die tegelijk de draadloze Android Auto-verbinding draagt. Elke keer dat die twee
+  /// om de lucht vechten valt de aanvoer even stil.
+  ///
+  /// media_kit zet uit zichzelf alleen `demuxer-max-bytes` — hoe GROOT de buffer mag worden. Hoe VER
+  /// mpv vooruit leest staat daarmee nog op zijn standaard van een paar seconden, en dan is elke
+  /// hapering van meer dan dat meteen een gat in de muziek. De grens hieronder is met opzet ruim: bij
+  /// audio kost vooruitlezen bijna niets, en een heel nummer vooruit hebben maakt een wifi-dip
+  /// onhoorbaar.
+  ///
+  /// De uitgang van het toestel is gemeten op 48 kHz / 16 bit — een hi-res bestand wordt dus hoe dan
+  /// ook omgerekend, ook aan de kabel. Dat is niet waar het misging.
+  final Player _player = Player(
+    configuration: const PlayerConfiguration(bufferSize: 64 * 1024 * 1024),
+  );
+
+  /// De vooruitleesinstellingen die media_kit niet zelf zet.
+  ///
+  /// Achteraf en niet via [PlayerConfiguration], want die kent ze niet. Alles in een `try`: mislukt
+  /// dit, dan speelt de app precies zoals daarvoor — een instelling die het afspelen kan breken is
+  /// erger dan geen instelling.
+  Future<void> _zetVooruitlezen() async {
+    final p = _player.platform;
+    if (p is! NativePlayer) return;
+    try {
+      // Aanzetten in plaats van 'auto': auto laat het van de bron afhangen, en een LAN-stream ziet
+      // er voor mpv uit als een lokaal bestand dat geen cache nodig heeft.
+      await p.setProperty('cache', 'yes');
+      // Vijf minuten vooruit. Bij audio is dat een handvol megabytes.
+      await p.setProperty('cache-secs', '300');
+      await p.setProperty('demuxer-readahead-secs', '300');
+      // En de leesbuffer van de stroom zelf omhoog (standaard 128 kB): op een schokkerige
+      // verbinding scheelt dat het aantal keren dat er helemaal niets binnenkomt.
+      await p.setProperty('stream-buffer-size', '4MiB');
+    } catch (e) {
+      _log?.line('vooruitlezen niet ingesteld: $e');
+    }
+  }
   List<Track> _original = [];
   List<Track> _order = [];
   int _index = -1;
@@ -440,6 +484,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   }
 
   PlayerStore() {
+    unawaited(_zetVooruitlezen());
     _player.stream.playing.listen((p) {
       playing = p;
       if (p) resumedPaused = false;
