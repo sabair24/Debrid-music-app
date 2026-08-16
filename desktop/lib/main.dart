@@ -8002,6 +8002,14 @@ class _HomeStartViewState extends State<HomeStartView> {
   bool _seedsRequested = false; // the library's artists have been used to load the personal rows
   bool _seedsLoading = false;
 
+  /// Komen de persoonlijke rijen nog?
+  ///
+  /// Ze wachten op de bibliotheek: zolang die nog scant zijn er geen artiesten om mee te zoeken.
+  /// Maar "nog niet aangevraagd" is iets anders dan "er komt niets" — en die twee waren hier
+  /// hetzelfde, waardoor de secties pas verschenen op het moment dat ze gingen laden en alles
+  /// eronder omlaag duwden.
+  bool get _komtNog => _seedsLoading || (!_seedsRequested && _forYou.isEmpty);
+
   @override
   void initState() {
     super.initState();
@@ -8120,13 +8128,17 @@ class _HomeStartViewState extends State<HomeStartView> {
             child: HeroCarousel(hits: hero.take(7).toList()),
           ),
         if (recent.isNotEmpty) _section('Recent toegevoegd', _localRow(recent.take(15).toList())),
-        if (_forYou.isNotEmpty || _seedsLoading)
+        // [_komtNog] en niet alleen _seedsLoading: die laatste gaat pas omhoog zodra de bibliotheek
+        // artiesten heeft, en tot dat moment stond deze sectie er HELEMAAL NIET. Ze verscheen dus
+        // midden in het lezen en duwde alles eronder omlaag — de rij is 204 punten plus zijn kop.
+        // Nu staat het skelet er meteen, en het vult zich in plaats van in te schuiven.
+        if (_forYou.isNotEmpty || _komtNog)
           _section('Aanbevolen voor jou',
               _forYou.isEmpty ? _loadingRow() : _recRow(_forYou.take(15).toList())),
         if (_charts.isNotEmpty || _chartsLoading)
           _section('Top van dit moment',
               _charts.isEmpty ? _loadingRow() : _catalogRow(_charts.take(20).toList())),
-        if (_releases.isNotEmpty || _seedsLoading)
+        if (_releases.isNotEmpty || _komtNog)
           _section('Nieuw van jouw artiesten',
               _releases.isEmpty ? _loadingRow() : _catalogRow(_releases.take(20).toList())),
         if (!anyLoading && _charts.isEmpty && _releases.isEmpty && _forYou.isEmpty && recent.isEmpty)
