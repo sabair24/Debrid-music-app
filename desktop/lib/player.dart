@@ -86,6 +86,23 @@ abstract interface class NowPlayingSource implements Listenable {
   );
 }
 
+/// Welke hoes er op het scherm hoort, gegeven wat de bibliotheek op dit moment weet.
+///
+/// Los van [PlayerStore] om dezelfde reden als [ordenVoor]: die bouwt een libmpv-speler in een veld
+/// en is daardoor in geen enkele test te maken -- terwijl dit nu juist de regel is die bepaalt of je
+/// het album ziet dat klinkt. Zie player_cover_test.dart.
+///
+/// [zelfdeNummer] is het hele verschil, en het stond er eerst niet in.
+///
+/// * Dezelfde plaat, opnieuw opgezocht omdat de bibliotheek iets gecorrigeerd heeft: een leeg
+///   antwoord is geen antwoord. Het album wordt op dat moment hergroepeerd en de hoes die het krijgt
+///   is nog niet bekend; de balk blanco maken is dan erger dan hem laten staan.
+/// * De SPEAKER schuift door naar een ander nummer: precies andersom. Wat er staat hoort dan bij een
+///   album dat niet meer speelt, en dat liegt harder dan een leeg vakje. Zonder dit onderscheid bleef
+///   op de Mac de hoes hangen van het album waar het casten mee begon.
+Uint8List? hoesOpScherm(Uint8List? staatEr, Uint8List? gevonden, {required bool zelfdeNummer}) =>
+    gevonden ?? (zelfdeNummer ? staatEr : null);
+
 /// De speelvolgorde, met [anker] als het nummer dat blijft klinken.
 ///
 /// Los van [PlayerStore] omdat die een libmpv-speler in een veld bouwt en dus in geen enkele test te
@@ -705,7 +722,10 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     if (index < 0 || index >= _order.length || index == _index) return;
     _index = index;
     position = Duration.zero;
-    refreshCover();
+    // Een ANDER nummer, dus niet via refreshCover: die houdt bij een leeg antwoord vast wat er
+    // staat, en dat is hier de hoes van het album waarmee de overdracht begon. Op de Mac naar de
+    // Sonos stond zo Whitney Houston boven een nummer van Michael Jackson, hele wachtrij lang.
+    _zetHoes(zelfdeNummer: false);
     notifyListeners();
   }
 
@@ -840,14 +860,15 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// the tap-to-zoom all read. The album page showed the new sleeve, the zoom showed the old one,
   /// on the same screen.
   ///
-  /// A resolver that answers null is not an answer: the album is mid-regroup and the cover it will
-  /// have is not known yet. Keeping what we have beats blanking the bar.
-  void refreshCover() {
+  /// Dezelfde plaat, opnieuw opgezocht: een leeg antwoord telt niet mee. Zie [hoesOpScherm].
+  void refreshCover() => _zetHoes(zelfdeNummer: true);
+
+  void _zetHoes({required bool zelfdeNummer}) {
     final t = current;
     if (t == null || coverResolver == null) return;
-    final fresh = coverResolver!(t);
-    if (fresh == null || identical(fresh, currentCover)) return;
-    currentCover = fresh;
+    final nieuw = hoesOpScherm(currentCover, coverResolver!(t), zelfdeNummer: zelfdeNummer);
+    if (identical(nieuw, currentCover)) return;
+    currentCover = nieuw;
     notifyListeners();
   }
 
