@@ -12,6 +12,8 @@ library;
 
 import 'dart:async';
 
+import 'player.dart' show Speakerbediening;
+
 import 'package:flutter/material.dart';
 
 import 'lan/client.dart';
@@ -67,12 +69,13 @@ Handover buildHandover(List<Track> tracks, int index, String? Function(Track) id
 ///
 /// Held here rather than in the player: the player plays on THIS device, and casting is precisely
 /// the case where it does not. Nothing about libmpv changes when a speaker is chosen.
-class SpeakerTarget extends ChangeNotifier {
+class SpeakerTarget extends ChangeNotifier implements Speakerbediening {
   CastDevice? _device;
 
   /// Null means this device's own output — the ordinary case, and the one you return to.
   CastDevice? get device => _device;
 
+  @override
   bool get isCasting => _device != null;
 
   /// The client to steer through, set once by main. Null on the machine that holds the music, which
@@ -113,6 +116,7 @@ class SpeakerTarget extends ChangeNotifier {
 
   /// Whether the SPEAKER is playing. The local player is deliberately silent while casting, so its
   /// own flag says nothing about the record you are listening to.
+  @override
   bool get isPlaying => _status?.playing ?? false;
 
   int get volume => _status?.volume ?? 50;
@@ -200,10 +204,13 @@ class SpeakerTarget extends ChangeNotifier {
     await refresh();
   }
 
+  @override
   Future<void> playPause() => _send(isPlaying ? 'pause' : 'play');
 
+  @override
   Future<void> next() => _send('next');
 
+  @override
   Future<void> previous() => _send('previous');
 
   /// While a finger is on the scrubber. Nothing is sent yet — a seek per pixel would flood the
@@ -213,6 +220,7 @@ class SpeakerTarget extends ChangeNotifier {
     notifyListeners();
   }
 
+  @override
   Future<void> seekTo(Duration to) async {
     _scrubbing = to;
     // Carry the handle at the new spot immediately, so it does not snap back for one poll.

@@ -423,14 +423,10 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
   // not a nicety: a "play" arriving while already playing would otherwise pause the music, which
   // is exactly what happens when a headset reconnects and asks for playback.
   @override
-  Future<void> play() async {
-    if (!player.playing) player.playPause();
-  }
+  Future<void> play() async => player.speelAf();
 
   @override
-  Future<void> pause() async {
-    if (player.playing) player.playPause();
-  }
+  Future<void> pause() async => player.pauzeer();
 
   @override
   Future<void> skipToNext() => player.next();
@@ -443,7 +439,7 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
 
   @override
   Future<void> stop() async {
-    if (player.playing) player.playPause();
+    player.pauzeer();
     await super.stop();
   }
 

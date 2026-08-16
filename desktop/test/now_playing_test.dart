@@ -55,6 +55,19 @@ class FakePlayer extends ChangeNotifier implements NowPlayingSource {
     playing = !playing;
   }
 
+  /// Play en pause als opdracht. In de echte speler is dit het paar dat naar de SPEAKER gaat als er
+  /// gecast wordt; hier telt het gewoon mee als een schakeling, zodat bestaande verwachtingen over
+  /// `toggles` blijven kloppen.
+  @override
+  void speelAf() {
+    if (!playing) playPause();
+  }
+
+  @override
+  void pauzeer() {
+    if (playing) playPause();
+  }
+
   @override
   Future<void> next() async => nexts++;
 

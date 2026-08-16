@@ -392,6 +392,10 @@ Future<void> main() async {
 
   player = PlayerStore()
     ..resolver = online.resolveRadio
+    // De speaker, zodat bediening die NIET van het scherm komt ook bij hem uitkomt: de mediatoetsen
+    // op de afstandsbediening, het vergrendelscherm, een bluetoothknop, Android Auto. Die lopen via
+    // NowPlayingSource rechtstreeks de speler in en zagen de castcontrole van het scherm nooit.
+    ..speaker = speakers
     ..coverResolver = library.coverForTrack
     ..trackResolver = library.trackByPath
     // Tapping a track while a speaker has the music sends the queue THERE. Without this the phone

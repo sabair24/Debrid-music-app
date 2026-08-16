@@ -32,6 +32,10 @@ abstract interface class NowPlayingSource implements Listenable {
   Duration get duration;
   Uint8List? get currentCover;
   void playPause();
+
+  /// Play en pause los van elkaar, want een schakelaar kent de stand van een SPEAKER niet.
+  void speelAf();
+  void pauzeer();
   Future<void> next();
   Future<void> prev();
   void seek(Duration d);
@@ -84,6 +88,38 @@ abstract interface class NowPlayingSource implements Listenable {
     original: [for (final t in original) fresh[t.path] ?? t],
     order: [for (final t in order) fresh[t.path] ?? t],
   );
+}
+
+/// De speaker die de wachtrij op dit moment heeft, voor zover de SPELER het moet weten.
+///
+/// Klein met opzet: de speler hoeft niet te weten wat daar staat te spelen, alleen dat er een
+/// speaker is en hoe je hem bedient. `SpeakerTarget` voldoet hier al aan.
+///
+/// Dit bestaat omdat de bediening van buiten de app -- de mediatoetsen op je afstandsbediening, het
+/// vergrendelscherm, een bluetoothknop, Android Auto -- via `NowPlayingSource` rechtstreeks bij
+/// [PlayerStore] uitkomt en dus niet langs de castcontrole van het scherm loopt. Gemeten op de
+/// Shield op 16-08-2026: één druk op de mediatoets "volgende" liet libmpv hier beginnen, waarop de
+/// Sonos Amp terugviel op zijn tv-ingang en de muziek stopte -- terwijl het scherm "Speelt op Sonos
+/// Amp" bleef tonen met een balk die gewoon doorliep. De knoppen op het scherm gingen wél goed, en
+/// dat is precies waarom het zo lang onopgemerkt bleef.
+/// Wie de bediening moet krijgen: de speaker, of niemand (en dan doet de speler het zelf).
+///
+/// Los van [PlayerStore] om dezelfde reden als [ordenVoor] en [hoesOpScherm]: die klasse bouwt een
+/// libmpv-speler in een veld en is in geen enkele test te maken. Zie media_keys_cast_test.dart.
+///
+/// Het onderscheid tussen "geen speaker" en "wel een speaker, maar hij heeft de muziek niet" is de
+/// hele grap: op een pc of Mac staat er altijd een [Speakerbediening] klaar, en zolang je niet cast
+/// hoort de bediening gewoon lokaal te blijven.
+Speakerbediening? bedienVia(Speakerbediening? speaker) =>
+    speaker != null && speaker.isCasting ? speaker : null;
+
+abstract class Speakerbediening {
+  bool get isCasting;
+  bool get isPlaying;
+  Future<void> playPause();
+  Future<void> next();
+  Future<void> previous();
+  Future<void> seekTo(Duration to);
 }
 
 /// Welke hoes er op het scherm hoort, gegeven wat de bibliotheek op dit moment weet.
@@ -411,6 +447,15 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   Duration position = Duration.zero;
   @override
   Duration duration = Duration.zero;
+
+  /// De speaker die de muziek heeft, gezet door main. Zie [Speakerbediening].
+  ///
+  /// Null op een toestel dat nooit cast; niet-null maar `isCasting == false` zodra er een speaker
+  /// gekozen KAN worden. Alleen dat tweede geval leidt bediening om.
+  Speakerbediening? speaker;
+
+  /// De speaker als hij de muziek op dit moment ook echt heeft.
+  Speakerbediening? get _bijSpeaker => bedienVia(speaker);
 
   /// Resolves an album cover for a track (set by main to LibraryStore.coverForTrack)
   /// so the flat Tracks queue shows the right cover per song.
@@ -920,11 +965,44 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     notifyListeners();
   }
 
+  /// De schakelaar van DIT toestel, met opzet niet omgeleid naar de speaker.
+  ///
+  /// Zijn andere aanroepers gaan namelijk over de audio hier: een telefoongesprek dat erdoorheen
+  /// komt, een koptelefoon die eruit wordt getrokken, een zender die stopt met casten naar deze tv.
+  /// Zou dit meelopen met de speaker, dan pauzeerde een melding op de Shield de muziek in een andere
+  /// kamer. Wat de gebruiker zelf indrukt gaat via [speelAf] en [pauzeer].
   @override
   void playPause() => _player.playOrPause();
 
+  /// "Speel af" en "pauzeer" als OPDRACHT, op de plek waar de muziek is.
+  ///
+  /// Het vergrendelscherm, de mediatoetsen en Android Auto sturen play óf pause -- geen schakelaar.
+  /// Een schakelaar heeft een stand nodig, en tijdens het casten staat de stand hier op stil terwijl
+  /// er in de kamer muziek speelt. Zo werd "afspelen" op de afstandsbediening een pauze op de Sonos.
+  @override
+  void speelAf() {
+    final s = _bijSpeaker;
+    if (s != null) {
+      if (!s.isPlaying) unawaited(s.playPause());
+      return;
+    }
+    if (!playing) _player.playOrPause();
+  }
+
+  @override
+  void pauzeer() {
+    final s = _bijSpeaker;
+    if (s != null) {
+      if (s.isPlaying) unawaited(s.playPause());
+      return;
+    }
+    if (playing) _player.playOrPause();
+  }
+
   @override
   Future<void> next() async {
+    final s = _bijSpeaker;
+    if (s != null) return s.next();
     if (radioMode) {
       if (_radioIndex < _radio.length - 1) {
         _radioIndex++;
@@ -943,6 +1021,10 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
 
   @override
   Future<void> prev() async {
+    // Vóór de drie-secondenregel: die leest `position` van libmpv, en die staat tijdens het casten
+    // stil op nul. De speaker krijgt gewoon te horen dat hij een nummer terug moet.
+    final s = _bijSpeaker;
+    if (s != null) return s.previous();
     if (position > const Duration(seconds: 3)) {
       await _player.seek(Duration.zero);
       return;
@@ -967,7 +1049,11 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   }
 
   @override
-  void seek(Duration d) => _player.seek(d);
+  void seek(Duration d) {
+    final s = _bijSpeaker;
+    if (s != null) return unawaited(s.seekTo(d));
+    _player.seek(d);
+  }
 
   /// Het volume dat de gebruiker heeft ingesteld, los van wat er nu klinkt.
   ///
