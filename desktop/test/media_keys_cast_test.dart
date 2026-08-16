@@ -124,6 +124,14 @@ void main() {
   });
 
   group('de mediasessie blijft via de speler praten', () {
+    test('de poort die BEPAALT wanneer er gepubliceerd wordt leest hetzelfde', () {
+      // Anders staat die poort tijdens het casten op slot: libmpv meldt "stil, op nul" en dus
+      // verandert er nooit iets. Eén druk op pauze werkte dan, en daarna geen enkele meer.
+      final bron = File('lib/now_playing.dart').readAsStringSync();
+      expect(bron, contains('player.speeltErgens != _lastPlaying'));
+      expect(bron, isNot(contains('player.playing != _lastPlaying')));
+    });
+
     test('NowPlayingHandler kent geen speaker', () {
       // Als de handler zelf een SpeakerTarget zou vasthouden, hadden we twee plekken die beslissen
       // waar de muziek heen gaat — precies de splitsing die deze bug veroorzaakte.

@@ -252,13 +252,19 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
 
     // Position moves constantly; the system only needs it when it jumps or when play/pause flips.
     // Publishing every tick makes the lockscreen scrubber stutter and wakes the OS needlessly.
-    final drift = (player.position - _lastPosition).inMilliseconds.abs();
-    if (player.playing != _lastPlaying ||
+    //
+    // Wat er KLINKT, niet wat libmpv doet -- anders staat deze poort tijdens het casten op slot.
+    // Beide waarden stonden dan stil (stil, en op nul), dus er werd na de overdracht niets meer
+    // gepubliceerd. Gemeten op de Shield: één druk op play/pauze pauzeerde de Sonos keurig, en
+    // daarna deed geen enkele druk meer iets -- het systeem geloofde nog steeds dat er gespeeld
+    // werd en stuurde dus telkens opnieuw "pauzeer", op een speaker die al stil was.
+    final drift = (player.positieErgens - _lastPosition).inMilliseconds.abs();
+    if (player.speeltErgens != _lastPlaying ||
         drift > 1200 ||
         player.shuffle != _lastShuffle ||
         player.repeat != _lastRepeat) {
-      _lastPlaying = player.playing;
-      _lastPosition = player.position;
+      _lastPlaying = player.speeltErgens;
+      _lastPosition = player.positieErgens;
       _lastShuffle = player.shuffle;
       _lastRepeat = player.repeat;
       _publishState();
