@@ -1765,9 +1765,53 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ),
             const RepaintBoundary(child: PlayerBar()),
+            // Een balk onderaan voor de vijf die je constant gebruikt.
+            //
+            // Alle tien de secties zaten achter de hamburgerla, dus elke wissel was: la openen, de
+            // la in laten schuiven, kiezen, de la uit laten schuiven. Voor Start, Albums, Tracks,
+            // Zoeken en Ontdek is dat vier handelingen voor iets wat er één hoort te zijn.
+            //
+            // DE LA BLIJFT. De andere vijf secties (Downloads, Kwaliteit, Favorieten,
+            // Afspeellijsten, Artiesten) zijn beheer en horen daar thuis — er verdwijnt dus niets,
+            // en er is geen scherm dat alleen nog via de balk bereikbaar is. Dat is met opzet: een
+            // navigatie half omzetten levert een app op met twee navigaties waarvan er één gaten
+            // heeft.
+            if (isCompact(context)) _onderbalk(context),
           ],
         ),
       ),
+    );
+  }
+
+  /// De vijf secties die het meest gebruikt worden, als balk onderaan.
+  ///
+  /// De nummers zijn dezelfde `_view`-waarden als in [NavSections], zodat er geen tweede waarheid
+  /// ontstaat over welk scherm welk nummer heeft.
+  Widget _onderbalk(BuildContext context) {
+    const snel = <(int, String, IconData)>[
+      (5, 'Start', Icons.home_rounded),
+      (0, 'Albums', Icons.album_rounded),
+      (4, 'Tracks', Icons.music_note_rounded),
+      (2, 'Zoeken', Icons.travel_explore_rounded),
+      (3, 'Ontdek', Icons.explore_rounded),
+    ];
+    final huidig = snel.indexWhere((s) => s.$1 == _view);
+    return NavigationBar(
+      backgroundColor: _panel,
+      indicatorColor: _accent.withValues(alpha: .22),
+      height: 62,
+      labelBehavior: NavigationDestinationLabelBehavior.onlyShowSelected,
+      // -1 mag niet: staat je op een sectie uit de la, dan wijst de balk nergens naar. Dan maar
+      // geen aanwijzing in plaats van de verkeerde.
+      selectedIndex: huidig < 0 ? 0 : huidig,
+      onDestinationSelected: (i) => setState(() => _view = snel[i].$1),
+      destinations: [
+        for (final s in snel)
+          NavigationDestination(
+            icon: Icon(s.$3, color: huidig >= 0 && snel[huidig].$1 == s.$1 ? _accent : _muted),
+            label: s.$2,
+          ),
+      ],
     );
   }
 
