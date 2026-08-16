@@ -36,6 +36,11 @@ abstract interface class NowPlayingSource implements Listenable {
   /// Play en pause los van elkaar, want een schakelaar kent de stand van een SPEAKER niet.
   void speelAf();
   void pauzeer();
+
+  /// Wat er klinkt, waar dan ook. Zie de gelijknamige leden in PlayerStore.
+  bool get speeltErgens;
+  Duration get positieErgens;
+  Duration get duurErgens;
   Future<void> next();
   Future<void> prev();
   void seek(Duration d);
@@ -116,6 +121,8 @@ Speakerbediening? bedienVia(Speakerbediening? speaker) =>
 abstract class Speakerbediening {
   bool get isCasting;
   bool get isPlaying;
+  Duration? get position;
+  Duration? get duration;
   Future<void> playPause();
   Future<void> next();
   Future<void> previous();
@@ -763,6 +770,13 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// verder loopt -- de balk, de hoes en het album op het scherm horen dan bij iets wat niet klinkt.
   /// Alleen de index verschuift: er wordt hier niets geopend of gespeeld, want het geluid komt daar
   /// vandaan.
+  /// De speaker heeft iets nieuws gemeld -- desnoods alleen dat hij nog steeds speelt.
+  ///
+  /// Zonder dit ververst de mediasessie alleen als libmpv iets doet, en die staat tijdens het casten
+  /// stil. De melding en het vergrendelscherm bleven dan hangen op de stand van de overdracht: pauze
+  /// je op de Sonos, dan bleef de knop een pauzeknop.
+  void speakerMeldde() => notifyListeners();
+
   void followSpeaker(int index) {
     if (index < 0 || index >= _order.length || index == _index) return;
     _index = index;
@@ -973,6 +987,20 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// kamer. Wat de gebruiker zelf indrukt gaat via [speelAf] en [pauzeer].
   @override
   void playPause() => _player.playOrPause();
+
+  /// Wat er klinkt, en waar het staat -- niet wat libmpv doet.
+  ///
+  /// Tijdens het casten staat libmpv hier stil, en dat is precies wat er aan het systeem gemeld
+  /// werd. Android geloofde dus dat de app gepauzeerd was terwijl de Sonos speelde: de melding
+  /// toonde een play-knop bij een lopend nummer, de positie bevroor, en de play/pauzetoets van de
+  /// afstandsbediening loste daardoor altijd op naar "afspelen" -- wat al speelde. Eén druk deed
+  /// dus niets, en pauzeren op afstand bestond niet.
+  @override
+  bool get speeltErgens => _bijSpeaker?.isPlaying ?? playing;
+  @override
+  Duration get positieErgens => _bijSpeaker?.position ?? position;
+  @override
+  Duration get duurErgens => _bijSpeaker?.duration ?? duration;
 
   /// "Speel af" en "pauzeer" als OPDRACHT, op de plek waar de muziek is.
   ///

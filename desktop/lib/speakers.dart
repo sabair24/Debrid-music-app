@@ -101,6 +101,7 @@ class SpeakerTarget extends ChangeNotifier implements Speakerbediening {
   Duration? _scrubbing;
 
   /// Where to draw the handle: what the finger is doing, else the anchor carried forward.
+  @override
   Duration? get position {
     final scrubbing = _scrubbing;
     if (scrubbing != null) return scrubbing;
@@ -112,6 +113,7 @@ class SpeakerTarget extends ChangeNotifier implements Speakerbediening {
     return total != null && total > Duration.zero && ahead > total ? total : ahead;
   }
 
+  @override
   Duration? get duration => _status?.duration;
 
   /// Whether the SPEAKER is playing. The local player is deliberately silent while casting, so its

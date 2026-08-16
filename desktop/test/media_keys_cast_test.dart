@@ -22,11 +22,15 @@ import 'package:debridmusic/player.dart';
 
 /// Een speaker die alleen onthoudt wat hem gevraagd is.
 class _Speaker implements Speakerbediening {
-  _Speaker(this.isCasting, {this.isPlaying = true});
+  _Speaker(this.isCasting, {this.isPlaying = true, this.position, this.duration});
   @override
   final bool isCasting;
   @override
   final bool isPlaying;
+  @override
+  final Duration? position;
+  @override
+  final Duration? duration;
   final gevraagd = <String>[];
   @override
   Future<void> playPause() async => gevraagd.add('playPause');
@@ -89,6 +93,16 @@ void main() {
             reason: 'deze actie gaat langs de speaker heen en speelt lokaal af');
       });
     }
+
+    test('wat de mediasessie MELDT komt ook van de speaker', () {
+      // De helft die het pauzeren op afstand kapotmaakte: de app meldde libmpv's stand, dus Android
+      // dacht "gepauzeerd" terwijl de Sonos speelde. Een druk op play/pauze loste daardoor altijd op
+      // naar "afspelen", en dat speelde al.
+      for (final r in ['speeltErgens', 'positieErgens', 'duurErgens']) {
+        final regel = bron.split('\n').firstWhere((l) => l.contains('get $r =>'), orElse: () => '');
+        expect(regel, contains('_bijSpeaker'), reason: '$r leest alleen de lokale speler');
+      }
+    });
 
     test('playPause blijft juist WEL lokaal', () {
       // Met opzet: die schakelaar wordt ook gebruikt als er een telefoongesprek doorheen komt of de

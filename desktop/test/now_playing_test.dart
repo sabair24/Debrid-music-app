@@ -68,6 +68,14 @@ class FakePlayer extends ChangeNotifier implements NowPlayingSource {
     if (playing) playPause();
   }
 
+  /// Deze nepspeler cast nooit, dus wat er klinkt is gewoon wat hier speelt.
+  @override
+  bool get speeltErgens => playing;
+  @override
+  Duration get positieErgens => position;
+  @override
+  Duration get duurErgens => duration;
+
   @override
   Future<void> next() async => nexts++;
 

@@ -449,6 +449,9 @@ Future<void> main() async {
     if (!speakers.isCasting) return;
     final at = speakers.status?.index;
     if (at != null) player.followSpeaker(at);
+    // Ook als de index NIET veranderde: de melding en het vergrendelscherm lezen "speelt er iets" en
+    // "waar staat het" bij de speler, en die weet dat tijdens het casten alleen van de speaker.
+    player.speakerMeldde();
   });
 
 

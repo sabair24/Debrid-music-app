@@ -269,7 +269,7 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
     playbackState.add(PlaybackState(
       controls: [
         MediaControl.skipToPrevious,
-        if (player.playing) MediaControl.pause else MediaControl.play,
+        if (player.speeltErgens) MediaControl.pause else MediaControl.play,
         MediaControl.skipToNext,
         _shuffleKnop(),
         _herhaalKnop(),
@@ -290,10 +290,10 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
       },
       androidCompactActionIndices: const [0, 1, 2],
       processingState: AudioProcessingState.ready,
-      playing: player.playing,
-      updatePosition: player.position,
-      bufferedPosition: player.duration,
-      speed: player.playing ? 1.0 : 0.0,
+      playing: player.speeltErgens,
+      updatePosition: player.positieErgens,
+      bufferedPosition: player.duurErgens,
+      speed: player.speeltErgens ? 1.0 : 0.0,
       queueIndex: null,
       shuffleMode: player.shuffle
           ? AudioServiceShuffleMode.all
