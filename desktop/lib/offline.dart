@@ -80,6 +80,33 @@ class OfflineJob {
   double? progress;
   String? error;
   bool done = false;
+
+  /// Staat dit nummer nog in de rij, of loopt het al?
+  ///
+  /// Het verschil hoort op het scherm: een wieltje dat draait voor iets wat nog niet begonnen is
+  /// leest als een download die vastzit.
+  bool wacht = false;
+}
+
+/// Eén nummer dat opgehaald moet worden, met alles wat [OfflineStore.download] ervoor nodig heeft.
+///
+/// Bestaat omdat een album als GEHEEL wordt gevraagd. Zonder zoiets moest de aanvrager de nummers
+/// zelf één voor één afwachten, en dat is precies waar het misging: die lus stond in de knop op de
+/// albumpagina en stopte zodra je die pagina verliet.
+class OfflineRequest {
+  const OfflineRequest({
+    required this.libraryPath,
+    required this.url,
+    required this.title,
+    required this.artist,
+    required this.album,
+  });
+
+  final String libraryPath;
+  final String url;
+  final String title;
+  final String artist;
+  final String album;
 }
 
 /// What this device is holding, and what is on its way.
@@ -107,6 +134,59 @@ class OfflineStore extends ChangeNotifier {
 
   bool has(String path) => _tracks.containsKey(path);
   bool isBusy(String path) => _jobs.containsKey(path);
+
+  /// Nummers die nog opgehaald moeten worden, in de volgorde waarin ze gevraagd zijn.
+  ///
+  /// **Waarom deze rij hier staat en niet in de knop.** Een album werd opgehaald door een lus in
+  /// `_OfflineAlbumButtonState`, met `if (!mounted) return;` per nummer. Verliet je de albumpagina,
+  /// dan viel die lus stil: gemeten op 17-08-2026 met Discovery (14 nummers) — tikken, vier
+  /// seconden later terug naar de lijst, en er stonden er 3 op het toestel. Geen melding, geen
+  /// mislukte download, niets in de lijst. Later in de auto zijn dat elf nummers die er niet zijn.
+  ///
+  /// Een winkel leeft langer dan een scherm, dus hier hoort het thuis.
+  final List<OfflineRequest> _wachtrij = [];
+  bool _pompt = false;
+
+  /// Hoeveel er nog te gaan zijn, voor een scherm dat dat wil zeggen.
+  int get wachtend => _wachtrij.length;
+
+  /// Zet deze nummers op het toestel. Keert meteen terug; het ophalen loopt door.
+  ///
+  /// Eén tegelijk, net als voorheen: een telefoonradio wordt er niet sneller van om vijf bestanden
+  /// van honderd megabyte door elkaar te trekken, en zo blijft de volgorde die van de plaat.
+  void bewaarAlles(Iterable<OfflineRequest> items) {
+    var toegevoegd = 0;
+    for (final r in items) {
+      if (_tracks.containsKey(r.libraryPath)) continue;
+      if (_jobs.containsKey(r.libraryPath)) continue;
+      _jobs[r.libraryPath] = OfflineJob(r.libraryPath, r.title)..wacht = true;
+      _wachtrij.add(r);
+      toegevoegd++;
+    }
+    if (toegevoegd == 0) return;
+    notifyListeners();
+    unawaited(_pomp());
+  }
+
+  Future<void> _pomp() async {
+    if (_pompt) return;
+    _pompt = true;
+    try {
+      while (_wachtrij.isNotEmpty) {
+        final r = _wachtrij.removeAt(0);
+        // Nooit gooien: één nummer dat niet lukt mag de rest van de plaat niet meenemen.
+        await download(
+          libraryPath: r.libraryPath,
+          url: r.url,
+          title: r.title,
+          artist: r.artist,
+          album: r.album,
+        );
+      }
+    } finally {
+      _pompt = false;
+    }
+  }
 
   /// The file on this device for a library path, or null.
   ///
@@ -178,9 +258,15 @@ class OfflineStore extends ChangeNotifier {
     required String artist,
     required String album,
   }) async {
-    if (_tracks.containsKey(libraryPath) || _jobs.containsKey(libraryPath)) return true;
+    if (_tracks.containsKey(libraryPath)) return true;
 
-    final job = OfflineJob(libraryPath, title);
+    // Een taak die al WACHT is er eentje uit [_wachtrij] en wordt hier overgenomen; een taak die al
+    // LOOPT is een tweede klik op hetzelfde nummer en hoort niets te doen.
+    final bestaand = _jobs[libraryPath];
+    if (bestaand != null && !bestaand.wacht) return true;
+
+    final job = bestaand ?? OfflineJob(libraryPath, title);
+    job.wacht = false;
     _jobs[libraryPath] = job;
     _cancelled.remove(libraryPath);
     notifyListeners();
@@ -279,6 +365,14 @@ class OfflineStore extends ChangeNotifier {
   void cancel(String libraryPath) {
     if (!_jobs.containsKey(libraryPath)) return;
     _cancelled.add(libraryPath);
+    // Ook uit de rij halen, anders begint hij alsnog zodra hij aan de beurt is — met een vlag die
+    // zegt dat hij geannuleerd was. Dan zou "weghalen" een nummer terugbrengen.
+    final wachtte = _wachtrij.indexWhere((r) => r.libraryPath == libraryPath);
+    if (wachtte >= 0) {
+      _wachtrij.removeAt(wachtte);
+      _jobs.remove(libraryPath);
+      notifyListeners();
+    }
   }
 
   /// Take a track off this device. The PC's copy is untouched — this is the whole difference

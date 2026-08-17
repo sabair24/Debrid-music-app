@@ -176,6 +176,80 @@ void main() {
     });
   });
 
+  group('een hele plaat in de rij', () {
+    // Waarom deze groep bestaat: het ophalen van een album zat als lus IN de knop op de
+    // albumpagina, met een `mounted`-toets per nummer. Verliet je die pagina, dan stopte het
+    // stilletjes. Gemeten op 17-08-2026 met Discovery: 3 van de 14 nummers, geen melding.
+    // De rij hoort in de winkel, want die leeft langer dan een scherm.
+    List<OfflineRequest> plaat(int n) => [
+          for (var i = 1; i <= n; i++)
+            OfflineRequest(
+              libraryPath: 'D:\\m\\Daft Punk\\Discovery\\$i.flac',
+              url: url.toString(),
+              title: 'Nummer $i',
+              artist: 'Daft Punk',
+              album: 'Discovery',
+            ),
+        ];
+
+    test('alle nummers komen binnen, ook al wacht niemand erop', () async {
+      store.bewaarAlles(plaat(5));
+
+      // Precies wat de knop deed: aanvragen en weglopen. Niemand awaitet hier iets.
+      for (var i = 0; i < 200 && store.tracks.length < 5; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+
+      expect(store.tracks.length, 5, reason: 'de rij hoort door te lopen zonder scherm');
+      expect(server.requests, 5);
+      expect(store.jobs, isEmpty);
+    });
+
+    test('wat al op het toestel staat wordt niet opnieuw gehaald', () async {
+      await download();
+      final voor = server.requests;
+
+      store.bewaarAlles([
+        OfflineRequest(
+            libraryPath: path, url: url.toString(), title: 'x', artist: 'y', album: 'z'),
+      ]);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+
+      expect(server.requests, voor);
+    });
+
+    test('een nummer dat nog wacht is zichtbaar als wachtend, niet als bezig', () async {
+      server.chunkDelay = const Duration(milliseconds: 2);
+      store.bewaarAlles(plaat(3));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      final wachtend = store.jobs.where((j) => j.wacht).length;
+      expect(store.jobs.length, 3);
+      expect(wachtend, 2, reason: 'er loopt er één; de andere twee staan in de rij');
+      expect(store.wachtend, 2);
+
+      for (var i = 0; i < 300 && store.tracks.length < 3; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(store.tracks.length, 3);
+    });
+
+    test('uit de rij halen betekent dat hij ook niet alsnog begint', () async {
+      server.chunkDelay = const Duration(milliseconds: 2);
+      final wensen = plaat(3);
+      store.bewaarAlles(wensen);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      store.cancel(wensen.last.libraryPath);
+
+      for (var i = 0; i < 300 && store.jobs.isNotEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(store.tracks.length, 2);
+      expect(store.has(wensen.last.libraryPath), isFalse);
+    });
+  });
+
   group('removing a copy is not deleting the track', () {
     test('remove takes the bytes and leaves the index consistent', () async {
       await download();

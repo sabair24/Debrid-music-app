@@ -2804,37 +2804,29 @@ class _OfflineAlbumButton extends StatefulWidget {
 }
 
 class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
-  bool _working = false;
-  int _done = 0;
-
-  Future<void> _fetch(OfflineStore offline, RemoteClient client) async {
-    final tracks = widget.album.tracks;
-    setState(() {
-      _working = true;
-      _done = 0;
-    });
-    var failed = 0;
-    for (final t in tracks) {
-      if (!mounted) return;
-      final ok = await offline.download(
-        libraryPath: t.path,
-        // The path IS the URL in client mode — the catalogue hands out stream URLs — but it is
-        // stored without the token, which is added at the moment of use and never written down.
-        url: client.authorized(t.path),
-        title: t.title,
-        artist: t.artist,
-        album: widget.album.title,
-      );
-      if (!ok) failed++;
-      if (mounted) setState(() => _done++);
-    }
-    if (!mounted) return;
-    setState(() => _working = false);
-    if (failed > 0) {
-      _srcToast(context, failed == 1
-          ? 'Eén nummer is niet opgehaald. Probeer het opnieuw.'
-          : '$failed nummers zijn niet opgehaald. Probeer het opnieuw.');
-    }
+  /// Zet de hele plaat in de rij van de winkel, en laat het daar.
+  ///
+  /// **Hier stond de lus zelf**, met `if (!mounted) return;` per nummer. Verliet je deze pagina
+  /// terwijl hij liep, dan viel het ophalen stil — gemeten op 17-08-2026 met Discovery: tikken,
+  /// vier seconden later terug naar de albumlijst, en er stonden 3 van de 14 nummers op het
+  /// toestel. Zonder melding, want die `return` sloeg ook de mislukt-melding over. In de auto merk
+  /// je dat pas bij nummer vier.
+  ///
+  /// Een download hoort niet aan een scherm te hangen. De winkel leeft langer, dus de rij zit daar;
+  /// deze knop leest hem alleen nog uit.
+  void _fetch(OfflineStore offline, RemoteClient client) {
+    offline.bewaarAlles([
+      for (final t in widget.album.tracks)
+        OfflineRequest(
+          libraryPath: t.path,
+          // The path IS the URL in client mode — the catalogue hands out stream URLs — but it is
+          // stored without the token, which is added at the moment of use and never written down.
+          url: client.authorized(t.path),
+          title: t.title,
+          artist: t.artist,
+          album: widget.album.title,
+        ),
+    ]);
   }
 
   @override
@@ -2846,6 +2838,9 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
     final tracks = widget.album.tracks;
     final here = tracks.where((t) => offline.has(t.path)).length;
     final all = here == tracks.length && tracks.isNotEmpty;
+    // Loopt er nog iets van DEZE plaat? De rij zit in de winkel, dus dit is de vraag "staat er nog
+    // een nummer van dit album in de wacht of onder handen".
+    final bezig = tracks.any((t) => offline.isBusy(t.path));
 
     return FilledButton.icon(
       style: FilledButton.styleFrom(
@@ -2853,7 +2848,7 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
         foregroundColor: all ? _accent2 : Colors.white,
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
       ),
-      onPressed: _working
+      onPressed: bezig
           ? null
           : () async {
               if (all) {
@@ -2862,18 +2857,21 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
                 }
                 return;
               }
-              await _fetch(offline, client);
+              _fetch(offline, client);
             },
       icon: Icon(
-        _working
+        bezig
             ? Icons.downloading_rounded
             : all
                 ? Icons.offline_pin_rounded
                 : Icons.download_for_offline_outlined,
         size: 20,
       ),
-      label: Text(_working
-          ? 'Ophalen $_done/${tracks.length}'
+      // De stand komt uit de winkel en niet uit deze widget: de rij loopt door als je weggaat, dus
+      // moet je bij terugkomst zien hoe ver hij is in plaats van "Offline bewaren" alsof er niets
+      // gebeurt.
+      label: Text(bezig
+          ? 'Ophalen $here/${tracks.length}'
           : all
               ? 'Op dit toestel'
               // Partly here is worth saying: it is the state a failed or cancelled run leaves
