@@ -84,6 +84,7 @@ import 'soulseek.dart';
 import 'tidal.dart';
 import 'torbox.dart';
 import 'tv.dart';
+import 'hartslag.dart';
 import 'ui/kleuren.dart';
 import 'ui/skelet.dart';
 import 'ui/typografie.dart';
@@ -263,6 +264,9 @@ Future<void> main() async {
   // De authority van de hoezenprovider, vóór Android Auto voor het eerst kan bladeren. Zonder dit
   // geeft autoHoesUri null terug en zijn de tegels in de auto grijs — zonder ergens een fout.
   await initAutoHoezen();
+  // Eén regel per minuut in hartslag.log. Zie hartslag.dart: de pc-app viel zes keer om zonder dat
+  // er in enig logboek iets stond over het uur ervóór, en dat gat is waar het onderzoek op vastliep.
+  startHartslag(appDir);
   if (_isDesktop) await windowManager.ensureInitialized();
   if (!await _claimSingleInstance()) {
     exit(0);
@@ -560,6 +564,16 @@ Future<void> main() async {
     );
   };
   autoSpeel = (rij, start) async => player.playQueue(rij, start);
+
+  // Wat de hartslag elke minuut opschrijft. Genoeg om te zien wat de app omhanden had toen hij
+  // omviel, en niet meer dan dat — een hartslag die de halve toestand uitschrijft wordt zelf een
+  // last, en een die niets zegt is een lege regel.
+  meldAanBijHartslag(() => player.playing
+      ? 'speelt "${player.current?.title ?? '?'}" op ${player.position.inSeconds}s'
+      : 'stil');
+  meldAanBijHartslag(() =>
+      'bib ${library.albums.length}a/${library.tracks.length}n'
+      '${library.scanning ? ' SCANT' : ''}${library.enriching ? ' VERRIJKT' : ''}');
   if (mode.owner) lijsten.winkel = sharing.state;
 
   // Signing in. Restoring a saved session is deliberately NOT awaited before the first frame: a
