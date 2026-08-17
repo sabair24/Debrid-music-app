@@ -1785,7 +1785,9 @@ class _HomeShellState extends State<HomeShell> {
                 ],
               ),
             ),
-            const RepaintBoundary(child: PlayerBar()),
+            // De inzet voor de systeembalk hoort bij de ONDERSTE balk. Staat de navigatiebalk
+            // eronder (alleen op een telefoon), dan rekent die hem al mee.
+            RepaintBoundary(child: PlayerBar(metSysteeminzet: !isCompact(context))),
             // Een balk onderaan voor de vijf die je constant gebruikt.
             //
             // Alle tien de secties zaten achter de hamburgerla, dus elke wissel was: la openen, de
@@ -5921,7 +5923,17 @@ class _Transport {
 
 // ── Now-playing bar ──────────────────────────────────────────────────────────
 class PlayerBar extends StatelessWidget {
-  const PlayerBar({super.key});
+  const PlayerBar({super.key, this.metSysteeminzet = true});
+
+  /// Houdt deze balk zélf ruimte vrij voor de systeembalk onderaan?
+  ///
+  /// Alleen de ONDERSTE widget van een scherm hoort dat te doen. Op de albumpagina, de
+  /// artiestpagina en de wachtrij is deze balk dat, dus daar blijft het aan. In het hoofdscherm
+  /// staat er sinds de navigatiebalk iets ONDER hem, en `NavigationBar` telt die inzet zelf al mee
+  /// — hij stond er dus twee keer op. Dat is de lege band tussen de speler en de pictogrammen, en
+  /// de reden dat de onderbalk te hoog aanvoelde.
+  final bool metSysteeminzet;
+
   @override
   Widget build(BuildContext context) {
     final x = _Transport(context);
@@ -5929,7 +5941,8 @@ class PlayerBar extends StatelessWidget {
     final t = x.track;
     // Under the home indicator on an iPad: the bar's colour runs to the bottom edge, its contents
     // stop above the bar the system draws over everything.
-    final bottomInset = _isTouch ? MediaQuery.viewPaddingOf(context).bottom : 0.0;
+    final bottomInset =
+        _isTouch && metSysteeminzet ? MediaQuery.viewPaddingOf(context).bottom : 0.0;
     // 280 a side in a desktop window, which is what centres the transport controls. Two of those
     // plus the controls do not fit on an iPad in portrait — 596 of 834 points gone before the
     // buttons start — so they give way instead of overflowing.
@@ -7296,12 +7309,34 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                 // Geen chevron op een televisie: 48 punten hoogte voor iets dat de BACK-toets van de
                 // afstandsbediening al doet, op een scherm waar elke punt telt.
                 if (!isTv)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: IconButton(
-                      icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 30),
-                      onPressed: () => Navigator.pop(context),
-                    ),
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 30),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                      const Spacer(),
+                      // Hetzelfde menu als op een albumtegel en een nummerrij, op het enige scherm
+                      // waar het niet zat.
+                      //
+                      // Van "ik hoor dit" naar "laat me de rest van deze artiest zien" was hier
+                      // doodlopend: dit scherm sluiten, terug naar waar je vandaan kwam, en zelf
+                      // zoeken. Terwijl elke rij in de app dat menu al heeft — met ga naar album,
+                      // ga naar artiest, radio, favoriet en de wachtrij erin. Eén knop, geen nieuw
+                      // menu: een tweede lijst met dezelfde acties gaat vroeg of laat uiteenlopen.
+                      if (t != null)
+                        Builder(
+                          builder: (knopContext) => TvLabelled(
+                            label: 'Meer',
+                            child: IconButton(
+                              icon: const Icon(Icons.more_horiz_rounded, size: 26),
+                              tooltip: 'Meer',
+                              onPressed: () =>
+                                  _toonItemMenu(knopContext, _nummerMenu(knopContext, t)),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 const Spacer(),
                 Pressable(
