@@ -331,6 +331,42 @@ void main() {
       expect(c.edits.single['url'], 'https://ergens/portret.jpg');
     });
 
+    test('de pc komt terug terwijl er niets veranderde: de offlinemelding gaat weg', () async {
+      // Zo bleef die balk hangen. De ETag is van vóór de storing en de pc heeft in de tussentijd
+      // niets aan zijn bibliotheek veranderd, dus antwoordt hij 304 — en op dat pad stond niets dat
+      // fromCloudMirror uitzette. Het scherm bleef de kopie tonen met "Pc offline" erboven terwijl
+      // de pc net geantwoord had.
+      final pc = _pc();
+      final c = _client(pc.library);
+      await c.library.loadRemote();
+      final naEerste = c.requests.where((r) => r.startsWith('/api/catalog')).length;
+
+      // De toestand waarin de app staat na een storing: het beeld komt uit de kopie.
+      c.library.fromCloudMirror = true;
+      c.library.mirrorUpdatedAt = DateTime(2026, 8, 17, 12);
+
+      final veranderd = await c.library.loadRemote();
+
+      expect(c.library.fromCloudMirror, isFalse,
+          reason: 'de pc antwoordde — dan hoort die balk weg te zijn');
+      expect(c.library.mirrorUpdatedAt, isNull);
+      expect(veranderd, isTrue);
+      // Twee verzoeken erbij: de 304, en daarna één zonder ETag om de levende catalogus te halen.
+      expect(c.requests.where((r) => r.startsWith('/api/catalog')).length, naEerste + 2);
+    });
+
+    test('en zonder die kopie blijft een 304 gewoon een 304', () async {
+      // Het normale geval mag niet duurder worden: staat de app live, dan is "niets veranderd"
+      // klaar na één verzoek.
+      final pc = _pc();
+      final c = _client(pc.library);
+      await c.library.loadRemote();
+      final naEerste = c.requests.where((r) => r.startsWith('/api/catalog')).length;
+
+      expect(await c.library.loadRemote(), isFalse);
+      expect(c.requests.where((r) => r.startsWith('/api/catalog')).length, naEerste + 1);
+    });
+
     test('removing a track sends the id the PC issued', () async {
       final pc = _pc();
       final c = _client(pc.library);

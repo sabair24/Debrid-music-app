@@ -22,6 +22,7 @@ import 'auto_hoezen.dart';
 import 'models.dart';
 import 'paths.dart';
 import 'player.dart';
+import 'warm_log.dart';
 
 /// Waar de boom voor Android Auto vandaan komt. Null = geen bladeren; de app is dan zichtbaar in de
 /// auto maar leeg — precies de toestand van vóór 11-08-2026.
@@ -37,6 +38,20 @@ AutoBron Function()? autoBladerBron;
 
 /// Voor het beginpunt van "Alles schudden". Zie [autoStartIndex].
 final _rnd = Random();
+
+/// De onderbrekingen, in hetzelfde logboek als wat de speler onderweg besluit.
+///
+/// Naast `AFGEBROKEN` in speler.log, want in de auto horen ze bij elkaar: de vraag is telkens
+/// "waarom klonk het anders dan ik verwachtte". Een release-build slikt [debugPrint], dus zonder
+/// dit is er van een demping die blijft hangen niets terug te vinden — alleen muziek die zachter
+/// staat dan je hem gezet hebt.
+final WarmLog? _audioLog = () {
+  try {
+    return WarmLog('$logDir${Platform.pathSeparator}speler.log');
+  } catch (_) {
+    return null;
+  }
+}();
 
 /// Wat er moet gebeuren als iemand in de auto iets aantikt.
 ///
@@ -133,13 +148,33 @@ Future<void> _claimAudioFocus(NowPlayingSource player) async {
     final session = await AudioSession.instance;
     await session.configure(const AudioSessionConfiguration.music());
     var zelfGepauzeerd = false;
+
+    /// Vangnet voor een demping die nooit meer opgeheven wordt.
+    ///
+    /// Het dempen hangt aan twee berichten: één als er iets doorheen komt praten, en één als het
+    /// klaar is. Blijft dat tweede bericht weg — de oordopjes vallen weg terwijl de navigatiestem
+    /// praat, de andere app wordt afgeschoten — dan blijft de muziek op een kwart staan tot de app
+    /// opnieuw start. Dat is precies het beeld van "het volume verandert soms vanzelf", en er is
+    /// niets op het scherm dat het verklaart.
+    ///
+    /// 45 seconden: een navigatie-instructie duurt seconden, dus wie hier aankomt is een bericht
+    /// kwijt. Erger dan te vroeg ontdempen (iemand praat even door je muziek heen) is te laat: een
+    /// hele rit op een kwart volume.
+    Timer? dempingVangnet;
+
     session.interruptionEventStream.listen((event) {
-      switch (bijOnderbreking(
+      final besluit = bijOnderbreking(
         begint: event.begin,
         soort: event.type,
         speelt: player.playing,
         zelfGepauzeerd: zelfGepauzeerd,
-      )) {
+      );
+      // Elke onderbreking op een regel. Zonder dit is "het volume verandert soms" niet te scheiden
+      // van "de oordopjes doen iets": beide zie je alleen aan het resultaat. Zie speler.log.
+      _audioLog?.line('ONDERBREKING ${event.begin ? "begint" : "eindigt"}'
+          ' soort=${event.type.name} speelt=${player.playing}'
+          ' zelfGepauzeerd=$zelfGepauzeerd → ${besluit.name}');
+      switch (besluit) {
         case Onderbreking.pauzeren:
           zelfGepauzeerd = true;
           player.playPause();
@@ -148,7 +183,14 @@ Future<void> _claimAudioFocus(NowPlayingSource player) async {
           player.playPause();
         case Onderbreking.dempen:
           player.zetDemping(true);
+          dempingVangnet?.cancel();
+          dempingVangnet = Timer(const Duration(seconds: 45), () {
+            _audioLog?.line('DEMPING stond 45s aan zonder eindbericht — zelf opgeheven');
+            player.zetDemping(false);
+          });
         case Onderbreking.ontdempen:
+          dempingVangnet?.cancel();
+          dempingVangnet = null;
           player.zetDemping(false);
         case Onderbreking.niets:
           break;

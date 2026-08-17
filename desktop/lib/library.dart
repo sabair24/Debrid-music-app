@@ -1866,6 +1866,23 @@ class LibraryStore extends ChangeNotifier {
     _catalogEtag = res.etag;
     final catalog = res.catalog;
     if (catalog == null) {
+      // 304: niets veranderd. Meestal is dat het einde van het verhaal — behalve als we op de
+      // kopie uit de cloud stonden.
+      //
+      // **Dit is waarom de offlinemelding bleef hangen als de pc terugkwam.** De ETag is van vóór
+      // de storing, en de pc heeft in de tussentijd niets aan zijn bibliotheek veranderd, dus komt
+      // hier precies het antwoord "hetzelfde als je al had" — en dan viel de afhandeling stil op de
+      // regel hieronder. Het scherm bleef de kopie tonen met de balk "Pc offline" erboven, terwijl
+      // de pc net had ANTWOORD. Alleen een herstart hielp.
+      //
+      // Eén keer opnieuw vragen zonder ETag is genoeg: dan komt de levende catalogus terug en zet
+      // de gewone weg hieronder [fromCloudMirror] uit. `scanning` moet eerst weer los, anders zet
+      // de aanroep zichzelf in de wachtrij in plaats van te lopen.
+      if (fromCloudMirror) {
+        _catalogEtag = null;
+        scanning = false;
+        return loadRemote(quiet: quiet);
+      }
       scanning = false;
       if (!quiet) notifyListeners();
       return false;
