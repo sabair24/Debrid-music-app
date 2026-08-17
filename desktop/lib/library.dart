@@ -989,7 +989,17 @@ class LibraryStore extends ChangeNotifier {
     return choice?[kind];
   }
 
+  /// Wie deze artiest IS, in beeld. [url] leeg laat de app weer zelf kiezen.
+  ///
+  /// **Op een telefoon moet dit naar de pc.** [chosenArtistArt] leest op een client uit
+  /// `_remoteArtistArt` — dat komt met de catalogus mee — terwijl dit hier lokaal wegschreef. Een
+  /// keuze die je op het toestel maakte belandde dus in een bestandje dat niemand meer las: de foto
+  /// sprong meteen terug en het leek alsof de knop niets deed. Precies dezelfde vorm als de
+  /// albumhoes, die daarom al over [_editOnPc] gaat.
   Future<void> setArtistArt(String artist, String kind, String url) async {
+    if (isRemote) {
+      return _editOnPc({'op': 'artistArt', 'artist': artist, 'kind': kind, 'url': url});
+    }
     _artistArtChoice.putIfAbsent(artistKey(artist), () => {})[kind] = url;
     await _writeJson(_artistArtChoiceFile, _artistArtChoice);
     notifyListeners();

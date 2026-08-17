@@ -314,6 +314,23 @@ void main() {
       expect(c.edits.first['artist'], 'Iets anders');
     });
 
+    test('een gekozen artiestfoto gaat naar de pc, niet naar een bestandje hier', () async {
+      // Waarom dit er staat: de foto lezen gebeurt op een client uit de catalogus van de pc
+      // (chosenArtistArt → _remoteArtistArt), maar het schrijven bleef hier lokaal. De keuze
+      // verdween dus in een bestand dat niemand meer las: op de telefoon sprong de foto meteen
+      // terug en leek de knop stuk.
+      final pc = _pc();
+      final c = _client(pc.library);
+      await c.library.loadRemote();
+
+      await c.library.setArtistArt('Portishead', 'portrait', 'https://ergens/portret.jpg');
+
+      expect(c.edits.single['op'], 'artistArt');
+      expect(c.edits.single['artist'], 'Portishead');
+      expect(c.edits.single['kind'], 'portrait');
+      expect(c.edits.single['url'], 'https://ergens/portret.jpg');
+    });
+
     test('removing a track sends the id the PC issued', () async {
       final pc = _pc();
       final c = _client(pc.library);

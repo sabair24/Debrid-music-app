@@ -904,7 +904,10 @@ class LanServer {
 
     final op = (body['op'] ?? '') as String;
     final album = body['albumId'] is String ? catalog.album(body['albumId'] as String) : null;
-    if (op != 'removeTracks' && album == null) {
+    // Twee bewerkingen gaan niet OVER een album: nummers weghalen noemt losse nummers, en een
+    // artiestfoto hoort bij de artiest. Zonder deze uitzondering kreeg de telefoon hier "Dat album
+    // staat hier niet (meer)" terug op iets waar ze nooit een album bij gestuurd heeft.
+    if (op != 'removeTracks' && op != 'artistArt' && album == null) {
       // The client is looking at a catalogue this PC has moved on from — say so, rather than
       // silently editing the wrong record.
       return _json(req.response, {'error': 'Dat album staat hier niet (meer).'},
@@ -929,6 +932,14 @@ class LanServer {
           await library.mergeEditions(album!);
         case 'unmerge':
           await library.unmergeEditions(album!);
+        case 'artistArt':
+          final artist = (body['artist'] ?? '') as String;
+          if (artist.isEmpty) {
+            return _json(req.response, {'error': 'Geen artiest opgegeven.'},
+                status: HttpStatus.badRequest);
+          }
+          await library.setArtistArt(
+              artist, (body['kind'] ?? 'portrait') as String, (body['url'] ?? '') as String);
         case 'removeTracks':
           final paths = <String>[];
           for (final id in (body['trackIds'] as List? ?? const [])) {
