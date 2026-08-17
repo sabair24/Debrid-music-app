@@ -355,6 +355,21 @@ void main() {
       expect(c.requests.where((r) => r.startsWith('/api/catalog')).length, naEerste + 2);
     });
 
+    test('en een pc die 304 blijft antwoorden krijgt geen lus', () async {
+      // De herkansing hierboven mag hoogstens één keer. Deze nep-pc antwoordt ALTIJD 304, ook
+      // zonder ETag — precies het geval waarin een lus de telefoon aan de gang zou houden zolang
+      // de app open staat.
+      final pc = _pc();
+      final c = _client(pc.library, catalogStatus: 304);
+      c.library.fromCloudMirror = true;
+
+      await c.library.loadRemote();
+
+      expect(c.requests.where((r) => r.startsWith('/api/catalog')).length, 2,
+          reason: 'één poging plus één herkansing, en dan klaar');
+      expect(c.library.fromCloudMirror, isTrue, reason: 'er is niets nieuws binnengekomen');
+    });
+
     test('en zonder die kopie blijft een 304 gewoon een 304', () async {
       // Het normale geval mag niet duurder worden: staat de app live, dan is "niets veranderd"
       // klaar na één verzoek.

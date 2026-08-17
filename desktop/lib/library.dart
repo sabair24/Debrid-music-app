@@ -1833,7 +1833,7 @@ class LibraryStore extends ChangeNotifier {
   /// PC has already split editions, applied the corrections you typed and honoured the pressings
   /// you pinned, and re-deriving any of that from tags would be a second implementation that
   /// drifts. Whatever you see on the PC is what lands here, including next year's grouping rule.
-  Future<bool> loadRemote({bool quiet = false}) async {
+  Future<bool> loadRemote({bool quiet = false, bool naEen304 = false}) async {
     final client = _remote;
     if (client == null) return false;
     if (scanning) {
@@ -1878,10 +1878,14 @@ class LibraryStore extends ChangeNotifier {
       // Eén keer opnieuw vragen zonder ETag is genoeg: dan komt de levende catalogus terug en zet
       // de gewone weg hieronder [fromCloudMirror] uit. `scanning` moet eerst weer los, anders zet
       // de aanroep zichzelf in de wachtrij in plaats van te lopen.
-      if (fromCloudMirror) {
+      // Precies één keer, en dat is [naEen304]. Zonder die rem hangt hier een lus aan een pc die om
+      // wat voor reden dan ook 304 blijft antwoorden ook zónder ETag — en dan blijft de telefoon
+      // hem bevragen zolang de app open staat. Eén herkansing lost het echte geval op; blijft het
+      // daarna 304, dan is er iets anders aan de hand dan een pc die net terugkwam.
+      if (fromCloudMirror && !naEen304) {
         _catalogEtag = null;
         scanning = false;
-        return loadRemote(quiet: quiet);
+        return loadRemote(quiet: quiet, naEen304: true);
       }
       scanning = false;
       if (!quiet) notifyListeners();
