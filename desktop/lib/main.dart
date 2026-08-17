@@ -2675,44 +2675,50 @@ class _OfflineSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(children: [
-          const Text('Op dit toestel',
-              style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
-          const SizedBox(width: 14),
-          Text('${tracks.length} nummers · ${_size(offline.bytes)}',
-              style: const TextStyle(color: _muted, fontSize: 12.5)),
-          const Spacer(),
-          if (tracks.isNotEmpty)
-            TextButton.icon(
-              onPressed: () async {
-                final sure = await showDialog<bool>(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    backgroundColor: _panel,
-                    title: const Text('Alles van dit toestel halen?',
-                        style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-                    content: const Text(
-                        'Je muziek blijft gewoon op je pc staan. Alleen de kopieën op dit '
-                        'toestel gaan weg.',
-                        style: TextStyle(color: _muted, height: 1.4)),
-                    actions: [
-                      TextButton(
-                        autofocus: isTv,
-                        onPressed: () => Navigator.pop(ctx, false),
-                        child: const Text('Annuleren'),
-                      ),
-                      TextButton(
-                          onPressed: () => Navigator.pop(ctx, true),
-                          child: const Text('Alles weghalen')),
-                    ],
-                  ),
-                );
-                if (sure == true) await offline.clear();
-              },
-              icon: const Icon(Icons.delete_sweep_outlined, size: 17),
-              label: const Text('Alles weghalen'),
-            ),
-        ]),
+        // Kop, telling en knop. Precies dezelfde rekensom als bij de kop van "Mijn downloads"
+        // eronder: naast elkaar is dit breder dan een telefoon, en dan hangt "Alles weghalen" over
+        // de rechterrand. Gevouwen blijft het één regel waar het past en valt het door waar niet.
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 14,
+          runSpacing: 4,
+          children: [
+            const Text('Op dit toestel',
+                style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
+            Text('${tracks.length} nummers · ${_size(offline.bytes)}',
+                style: const TextStyle(color: _muted, fontSize: 12.5)),
+            if (tracks.isNotEmpty)
+              TextButton.icon(
+                onPressed: () async {
+                  final sure = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      backgroundColor: _panel,
+                      title: const Text('Alles van dit toestel halen?',
+                          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                      content: const Text(
+                          'Je muziek blijft gewoon op je pc staan. Alleen de kopieën op dit '
+                          'toestel gaan weg.',
+                          style: TextStyle(color: _muted, height: 1.4)),
+                      actions: [
+                        TextButton(
+                          autofocus: isTv,
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('Annuleren'),
+                        ),
+                        TextButton(
+                            onPressed: () => Navigator.pop(ctx, true),
+                            child: const Text('Alles weghalen')),
+                      ],
+                    ),
+                  );
+                  if (sure == true) await offline.clear();
+                },
+                icon: const Icon(Icons.delete_sweep_outlined, size: 17),
+                label: const Text('Alles weghalen'),
+              ),
+          ],
+        ),
         const SizedBox(height: 12),
         for (final job in jobs)
           Padding(
