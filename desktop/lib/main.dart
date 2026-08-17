@@ -11566,10 +11566,27 @@ class _ArtistHeroState extends State<ArtistHero> {
     final portrait = _chosenPortrait ?? _art?.thumbBytes ?? widget.fallbackImage;
     final backdrop = _chosenBackdrop ?? _art?.backdropBytes ?? widget.fallbackImage;
 
+    // Op een telefoon staat de portretfoto BOVEN de naam en de knoppen, niet ernaast. Die vaste
+    // 400 is de hoogte voor naast elkaar, en onder elkaar past het er niet in.
+    //
+    // **Dit is waarom "Foto kiezen" en "Radio" op de telefoon niets deden.** De knoppenrij viel
+    // ~30 dp buiten dat vak, en wat buiten zijn eigen vak getekend wordt, tekent in Flutter nog wél
+    // maar vángt geen tik: `RenderBox.hitTest` slaat een positie buiten `size` over. Je zag dus
+    // twee knoppen staan die aantoonbaar niets deden — ook de Radio-knop ernaast niet. Gemeten op
+    // de S26: de rij eindigde 12 px onder de onderrand van de kop.
+    //
+    // Uit de foto zelf gerekend en niet op een nieuw vast getal gegokt: de foto is het enige stuk
+    // dat met de schermbreedte meegroeit. Wat eronder komt is de naam (hoogstens 96), de telling en
+    // de knoppen — samen ruim binnen 230.
+    final smal = isCompact(context);
+    final marge = smal ? 18.0 : 28.0;
+    final portretMaat =
+        smal ? (MediaQuery.sizeOf(context).width - marge * 2).clamp(120.0, 220.0) : 270.0;
+
     return SizedBox(
       // Room for a 270px portrait with the wordmark and buttons beside it. The backdrop is very
       // wide, so every extra pixel of height is another band of it that isn't cropped away.
-      height: 400,
+      height: smal ? portretMaat + 230 : 400,
       // A blur paints outside its child's bounds, and the overscan pushes it further still — without
       // this the wash ran on down the page and the biography underneath was hard to read.
       child: ClipRect(
@@ -11618,14 +11635,15 @@ class _ArtistHeroState extends State<ArtistHero> {
               ),
             ),
           Builder(builder: (context) {
-            final narrow = isCompact(context);
-            final pad = narrow ? 18.0 : 28.0;
+            // Dezelfde drie waarden als waarmee de hoogte hierboven gerekend is. Eén bron, want
+            // gingen die uit elkaar lopen, dan is de kop precies weer te klein voor wat erin staat
+            // — en dat is de fout die de knoppen onaanraakbaar maakte.
             // 270 points of portrait plus a 26 gap leaves about ninety of a phone's 411 for the
             // column beside it, and "61 albums" came out one word per line. Stacked there, and the
             // portrait sized from the width that exists.
-            final portraitSize = narrow
-                ? (MediaQuery.sizeOf(context).width - pad * 2).clamp(120.0, 220.0)
-                : 270.0;
+            final narrow = smal;
+            final pad = marge;
+            final portraitSize = portretMaat;
 
             final photo = portrait == null
                 ? null
