@@ -73,6 +73,32 @@ void main() {
       expect(tester.getSize(find.text(_naam)).width, greaterThan(150));
     });
 
+    testWidgets('een download die je zelf stopte heet "Gestopt" en is niet rood', (tester) async {
+      // De pc weet dit onderscheid al ('failed' + cancelled). Het ging alleen niet over de lijn
+      // naar de telefoon, en daar stond dus "Mislukt" in het rood boven een download die de
+      // gebruiker net zelf had afgezet. Gemeten op 17-08 door hem op het toestel te stoppen.
+      final job = DownloadJob(_naam, status: 'failed')
+        ..cancelled = true
+        ..detail = 'geannuleerd';
+      await pompTelefoon(tester, job);
+
+      expect(find.text('Gestopt'), findsOneWidget);
+      expect(find.text('Mislukt'), findsNothing);
+      final stand = tester.widget<Text>(find.text('Gestopt'));
+      expect(stand.style?.color, isNot(Colors.redAccent),
+          reason: 'rood is voor iets wat misging, niet voor een knop die jij indrukte');
+      expect(find.byIcon(Icons.error_rounded), findsNothing);
+    });
+
+    testWidgets('en een echte mislukking blijft wél rood', (tester) async {
+      final job = DownloadJob(_naam, status: 'failed')..detail = 'Uploader reageert niet';
+      await pompTelefoon(tester, job);
+
+      expect(find.text('Mislukt'), findsOneWidget);
+      expect(tester.widget<Text>(find.text('Mislukt')).style?.color, Colors.redAccent);
+      expect(find.byIcon(Icons.error_rounded), findsOneWidget);
+    });
+
     testWidgets('en een lange stand duwt de titel niet weg', (tester) async {
       // "Wacht op peer · plaats 369" is het langste dat hier kan staan. Mag krap worden, mag niet
       // hetzelfde doen als de balk deed.

@@ -8744,7 +8744,9 @@ class DownloadsView extends StatelessWidget {
 
   static Color statusColor(DownloadJob j) => switch (j.status) {
         'done' => _accent2,
-        'failed' => Colors.redAccent,
+        // Rood is voor iets wat misging. Een download die jij zelf hebt afgezet ging niet mis, en
+        // een rode balk met een uitroepteken erboven leest als een probleem dat je moet oplossen.
+        'failed' => j.cancelled ? _muted : Colors.redAccent,
         'waiting' => const Color(0xFFE0B341),
         'upgrading' => _accent2, // green: you can play it, this is a bonus not a problem
         _ => _accent,
@@ -8752,7 +8754,7 @@ class DownloadsView extends StatelessWidget {
 
   static IconData statusIcon(DownloadJob j) => switch (j.status) {
         'done' => Icons.check_circle_rounded,
-        'failed' => Icons.error_rounded,
+        'failed' => j.cancelled ? Icons.do_not_disturb_on_outlined : Icons.error_rounded,
         'waiting' => Icons.hourglass_top_rounded,
         'queued' => Icons.schedule_rounded,
         'upgrading' => Icons.upgrade_rounded,
@@ -9795,18 +9797,31 @@ Widget _torrentTile(BuildContext context, SearchResult r) {
               const SizedBox(height: 2),
               Row(
                 children: [
-                  Text('${r.source} · ${r.seeders} seeders · ${_fmtBytes(r.size)}',
-                      style: const TextStyle(color: _muted, fontSize: 12)),
+                  // Ingesnoerd, want deze regel liep ONDER de badge door.
+                  //
+                  // Een `Text` los in een `Row` krijgt geen bovengrens en tekent gewoon door tot
+                  // buiten zijn vak. Op een telefoon houdt deze kolom nog geen 100 dp over, dus
+                  // stond er "BitSearch · 4 seeders · 31 MB" met het FLAC-plaatje bovenop de laatste
+                  // woorden. Geen overloopstreep, geen fout — twee stukken tekst over elkaar.
+                  Flexible(
+                    child: Text('${r.source} · ${r.seeders} seeders · ${_fmtBytes(r.size)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: _muted, fontSize: 12)),
+                  ),
                   if (r.cached)
                     const Padding(
                         padding: EdgeInsets.only(left: 8),
                         child: Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12))),
+                  // Op een smal scherm staat het keurmerk hier, op de tweede regel: naast de titel
+                  // vrat het de laatste ruimte op die de naam nog had.
+                  if (isCompact(context)) ...[const SizedBox(width: 8), _qualityBadge(q)],
                 ],
               ),
             ],
           ),
         ),
-        _qualityBadge(q),
+        if (!isCompact(context)) _qualityBadge(q),
         TvLabelled(label: 'Beste nummer', child: IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, tooltip: 'Beste nummer afspelen', onPressed: () => _playTorrent(context, r))),
         TvLabelled(label: 'Kies nummer', child: IconButton(icon: const Icon(Icons.queue_music_rounded), color: _muted, tooltip: 'Kies nummer', onPressed: () => _pickTorrentTracks(context, r))),
         TvLabelled(label: 'Alles', child: IconButton(icon: const Icon(Icons.download_rounded), color: _muted, tooltip: 'Alles downloaden', onPressed: () => _downloadTorrent(context, r))),
@@ -10447,7 +10462,16 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ),
         Consumer<DownloadManager>(
           builder: (_, dm, __) {
-            final recent = dm.jobs.take(5).toList();
+            // Wat lóópt eerst, en niet meer dan een handvol.
+            //
+            // Deze strook stond boven de zoekresultaten en toonde gewoon de eerste vijf uit de
+            // lijst. Op een telefoon waren dat vier afgeronde downloads van gisteren, samen een
+            // half scherm, en de resultaten begonnen pas daaronder. Draait er niets, dan zijn twee
+            // regels genoeg als bewijs dat het gelukt is; de volledige lijst staat in "Mijn
+            // downloads".
+            final actief = dm.jobs.where((j) => j.busy).toList();
+            final rest = dm.jobs.where((j) => !j.busy).toList();
+            final recent = [...actief, ...rest].take(actief.isEmpty ? 2 : 5).toList();
             if (recent.isEmpty) return const SizedBox.shrink();
             final hasFinished = dm.jobs.any((j) => j.status == 'done' || j.status == 'failed');
             return Padding(

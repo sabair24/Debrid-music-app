@@ -259,6 +259,9 @@ class RemoteDownloadManager extends DownloadManager {
         ..detail = j['detail'] as String?
         ..queuePlace = (j['queuePlace'] as num?)?.toInt() ?? 0
         ..canCancel = j['canCancel'] == true
+        // Zie de opmerking bij LanServer.jobsSnapshot: hiermee leest een gestopte download als
+        // "Gestopt" en niet als "Mislukt".
+        ..cancelled = j['cancelled'] == true
         ..trackKey = j['trackKey'] as String?);
     }
     // Only notify when something actually moved. This polls every two seconds, and rebuilding the

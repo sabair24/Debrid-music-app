@@ -655,6 +655,11 @@ class LanServer {
             'detail': j.detail,
             'queuePlace': j.queuePlace,
             'canCancel': j.canCancel,
+            // Zonder dit staat op de telefoon "Mislukt" in het rood boven een download die de
+            // gebruiker zelf net heeft gestopt. Hier is dat onderscheid er wel — 'failed' plus
+            // [DownloadJob.cancelled] — en het is het verschil tussen "er ging iets mis" en "ik
+            // heb hem afgezet". Gemeten op 17-08 door hem op de telefoon te stoppen.
+            'cancelled': j.cancelled,
             'trackKey': j.trackKey,
           },
       ];
