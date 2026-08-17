@@ -8827,12 +8827,12 @@ class DownloadsView extends StatelessWidget {
               ),
             if (active.isNotEmpty) ...[
               const _DlHeader('BEZIG'),
-              ...active.map((j) => _DlRow(job: j)),
+              ...active.map((j) => DlRow(job: j)),
               const SizedBox(height: 22),
             ],
             if (finished.isNotEmpty) ...[
               const _DlHeader('AFGEROND'),
-              ...finished.map((j) => _DlRow(job: j)),
+              ...finished.map((j) => DlRow(job: j)),
             ],
           ],
         );
@@ -8852,9 +8852,14 @@ class _DlHeader extends StatelessWidget {
       );
 }
 
-class _DlRow extends StatelessWidget {
+/// Eén regel in de downloadlijst: pictogram, naam, voortgang, stand.
+///
+/// Niet privé, omdat er een toets op staat die hem op telefoonbreedte pompt — zie
+/// `test/download_regel_test.dart`. Een `_`-klasse is per bestand afgeschermd en dan kan geen enkele
+/// toets erbij; die afscherming was hier het verschil tussen "gemeten" en "het lijkt te kloppen".
+class DlRow extends StatelessWidget {
   final DownloadJob job;
-  const _DlRow({required this.job});
+  const DlRow({super.key, required this.job});
 
   @override
   Widget build(BuildContext context) {
@@ -8862,6 +8867,52 @@ class _DlRow extends StatelessWidget {
     final indeterminate = job.status == 'queued' || job.status == 'waiting';
     // Playable already: show the bar full, whatever is still running for it is a bonus.
     final filled = job.status == 'done' || job.status == 'upgrading';
+
+    final naam = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(job.name,
+            maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5)),
+        if (job.detail != null && job.detail!.isNotEmpty) ...[
+          const SizedBox(height: 2),
+          Text(job.detail!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 11, color: job.status == 'failed' ? Colors.red.shade300 : _muted)),
+        ],
+      ],
+    );
+
+    final balk = LinearProgressIndicator(
+      value: filled ? 1 : (indeterminate || job.progress <= 0 ? null : job.progress),
+      backgroundColor: const Color(0xFF2A2F42),
+      color: color,
+    );
+
+    // Stop what you no longer want — a slot freed here is a slot another download gets.
+    final stoppen = job.busy && job.canCancel
+        ? Consumer<DownloadManager>(
+            builder: (_, dm, __) => TvLabelled(
+              label: 'Download stoppen',
+              child: IconButton(
+                icon: const Icon(Icons.close_rounded, size: 16),
+                color: _muted,
+                tooltip: 'Download stoppen',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: () => dm.cancelJob(job),
+              ),
+            ),
+          )
+        : null;
+
+    final stand = Text(DownloadsView.statusLabel(job),
+        textAlign: TextAlign.right,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(fontSize: 11.5, color: color, fontWeight: FontWeight.w600));
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -8870,69 +8921,56 @@ class _DlRow extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: _line),
       ),
-      child: Row(
-        children: [
-          Icon(DownloadsView.statusIcon(job), size: 19, color: color),
-          const SizedBox(width: 13),
-          Expanded(
-            child: Column(
+      // Op een telefoon gaat de balk ONDER de titel staan, niet ernaast.
+      //
+      // Naast elkaar past het daar niet, en dat viel niet op als "te krap" maar als een LEGE regel:
+      // een groene balk en verder niets. Gemeten op de S26 (1440 px bij dichtheid 600 = 384 dp
+      // breed): de lijst neemt 2×28 dp, de kaart 2×14 dp, en wat daarna vaststaat is
+      // 19+13+16+190+14+34+74 = 360 dp — meer dan de 300 dp die overblijft. De titel kreeg dus
+      // NUL breedte en "Klaar" werd het scherm afgeduwd. Een `Expanded` die op nul uitkomt geeft
+      // geen overloopstreep en geen fout; hij toont gewoon niets.
+      //
+      // Eerder is hier het statuslabel gehalveerd (150 → 74) voor precies deze klacht. Dat hielp
+      // niet, want de 190 dp brede balk was de echte vreter. Vandaar: op een smal scherm eerst de
+      // regel die je wilt lezen — pictogram, titel, stand — en de balk op een eigen regel eronder.
+      child: isCompact(context)
+          ? Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(job.name,
-                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5)),
-                if (job.detail != null && job.detail!.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(job.detail!,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 11, color: job.status == 'failed' ? Colors.red.shade300 : _muted)),
-                ],
+                Row(
+                  children: [
+                    Icon(DownloadsView.statusIcon(job), size: 19, color: color),
+                    const SizedBox(width: 13),
+                    Expanded(child: naam),
+                    const SizedBox(width: 10),
+                    // Vast noch flexibel: hij mag zo breed worden als hij nodig heeft, tot een
+                    // grens. Zou dit een `Flexible` zijn, dan deelde hij de ruimte half om half met
+                    // de titel — ook voor het woord "Klaar".
+                    ConstrainedBox(constraints: const BoxConstraints(maxWidth: 132), child: stand),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(child: balk),
+                    if (stoppen != null) ...[const SizedBox(width: 12), stoppen],
+                  ],
+                ),
+              ],
+            )
+          : Row(
+              children: [
+                Icon(DownloadsView.statusIcon(job), size: 19, color: color),
+                const SizedBox(width: 13),
+                Expanded(child: naam),
+                const SizedBox(width: 16),
+                SizedBox(width: 190, child: balk),
+                const SizedBox(width: 14),
+                SizedBox(width: 34, child: stoppen),
+                SizedBox(width: 150, child: stand),
               ],
             ),
-          ),
-          const SizedBox(width: 16),
-          SizedBox(
-            width: 190,
-            child: LinearProgressIndicator(
-              value: filled ? 1 : (indeterminate || job.progress <= 0 ? null : job.progress),
-              backgroundColor: const Color(0xFF2A2F42),
-              color: color,
-            ),
-          ),
-          const SizedBox(width: 14),
-          // Stop what you no longer want — a slot freed here is a slot another download gets.
-          SizedBox(
-            width: 34,
-            child: job.busy && job.canCancel
-                ? Consumer<DownloadManager>(
-                    builder: (_, dm, __) => TvLabelled(
-                                              label: 'Download stoppen',
-                                              child: IconButton(
-                      icon: const Icon(Icons.close_rounded, size: 16),
-                      color: _muted,
-                      tooltip: 'Download stoppen',
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      onPressed: () => dm.cancelJob(job),
-                    ),
-                                            ),
-                  )
-                : null,
-          ),
-          SizedBox(
-            // 150 fixed was the last straw on a phone: a title, a bar, a cancel button and this all
-            // side by side ran off the right edge and "Speelbaar · upgrade" was cut mid-word. Half
-            // that on a narrow screen, and the label ellipsises rather than the row overflowing.
-            width: isCompact(context) ? 74 : 150,
-            child: Text(DownloadsView.statusLabel(job),
-                textAlign: TextAlign.right,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 11.5, color: color, fontWeight: FontWeight.w600)),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -10452,7 +10490,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                                     ],
                                   )),
                               SizedBox(
-                                width: 160,
+                                // Zelfde rekensom als bij _DlRow: op 384 dp vreet een balk van 160
+                                // plus een label van 70 de titel weg. Hier past het stapelen niet
+                                // (dit zijn vijf regels in een zoekscherm), dus krimpt de balk.
+                                width: isCompact(context) ? 80 : 160,
                                 child: LinearProgressIndicator(
                                   value: j.status == 'done'
                                       ? 1
@@ -10465,7 +10506,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                               ),
                               const SizedBox(width: 10),
                               SizedBox(
-                                width: 70,
+                                width: isCompact(context) ? 62 : 70,
                                 child: Text(
                                   j.status == 'done'
                                       ? 'klaar'
