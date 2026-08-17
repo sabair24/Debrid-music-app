@@ -1327,7 +1327,15 @@ class _HomeShellState extends State<HomeShell> {
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 children: [
-                  for (final (id, label, icoon) in NavSections.items)
+                  // Op een telefoon staat hier NIET wat al onderaan in de balk staat.
+                  //
+                  // De la had tien regels waarvan er vijf letterlijk dezelfde sectie openden als de
+                  // knop die er op datzelfde scherm onder staat — en die balk laat ook nog zien
+                  // waar je bent. Wat overblijft is precies waar de la voor is: het beheer dat niet
+                  // in vijf knoppen past. Op een pc en een televisie is er geen balk, dus daar
+                  // blijft de la de volledige kaart van de app.
+                  for (final (id, label, icoon)
+                      in NavSections.voorLa(metBalk: isCompact(context)))
                     ListTile(
                       selected: _view == id,
                       selectedTileColor: _accent.withValues(alpha: .16),
@@ -1811,12 +1819,14 @@ class _HomeShellState extends State<HomeShell> {
   /// De nummers zijn dezelfde `_view`-waarden als in [NavSections], zodat er geen tweede waarheid
   /// ontstaat over welk scherm welk nummer heeft.
   Widget _onderbalk(BuildContext context) {
-    const snel = <(int, String, IconData)>[
-      (5, 'Start', Icons.home_rounded),
-      (0, 'Albums', Icons.album_rounded),
-      (4, 'Tracks', Icons.music_note_rounded),
-      (2, 'Zoeken', Icons.travel_explore_rounded),
-      (3, 'Ontdek', Icons.explore_rounded),
+    // De namen zijn korter dan in de la ("Zoeken" tegen "Online zoeken"): onder een pictogram van
+    // 62 punten past geen zin. De nummers komen uit [NavSections.balk], zodat de la weet wat hij
+    // hier niet hoeft te herhalen.
+    const kort = {5: 'Start', 0: 'Albums', 4: 'Tracks', 2: 'Zoeken', 3: 'Ontdek'};
+    final snel = <(int, String, IconData)>[
+      for (final id in NavSections.balk)
+        if (NavSections.items.firstWhere((s) => s.$1 == id) case final s)
+          (id, kort[id] ?? s.$2, s.$3),
     ];
     final huidig = snel.indexWhere((s) => s.$1 == _view);
     return NavigationBar(
@@ -2479,6 +2489,16 @@ class NavSections {
     (9, 'Afspeellijsten', Icons.queue_music_rounded),
     (7, 'Kwaliteit', Icons.high_quality_rounded),
   ];
+
+  /// De vijf die op een telefoon onderaan in de balk staan.
+  ///
+  /// Eén lijst, want de balk en de la moeten het niet oneens kunnen worden over wie waar hoort:
+  /// de la toont juist alles wat híer niet in staat.
+  static const balk = <int>[5, 0, 4, 2, 3];
+
+  /// Wat er in de la hoort. Op een telefoon dus zonder de vijf uit de balk.
+  static List<(int, String, IconData)> voorLa({required bool metBalk}) =>
+      [for (final s in items) if (!metBalk || !balk.contains(s.$1)) s];
 }
 
 class _NavPillsState extends State<_NavPills> {
