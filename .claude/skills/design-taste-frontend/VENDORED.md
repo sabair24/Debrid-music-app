@@ -3,23 +3,17 @@
 Not written here. Copied from **[Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill)**,
 commit `dfb6f9f` (2026-08-18). MIT, licence alongside this file.
 
-Thirteen skills, all plain Markdown — no scripts, no data, nothing that reaches the network:
+Five of its thirteen skills are here — see *What was left behind* below:
 
 | Directory | Upstream folder |
 |---|---|
 | `design-taste-frontend` | `skills/taste-skill` |
-| `design-taste-frontend-v1` | `skills/taste-skill-v1` |
-| `gpt-taste` | `skills/gpt-tasteskill` |
 | `high-end-visual-design` | `skills/soft-skill` |
 | `minimalist-ui` | `skills/minimalist-skill` |
-| `industrial-brutalist-ui` | `skills/brutalist-skill` |
 | `redesign-existing-projects` | `skills/redesign-skill` |
-| `full-output-enforcement` | `skills/output-skill` |
-| `image-to-code` | `skills/image-to-code-skill` |
-| `imagegen-frontend-web` | `skills/imagegen-frontend-web` |
 | `imagegen-frontend-mobile` | `skills/imagegen-frontend-mobile` |
-| `brandkit` | `skills/brandkit` |
-| `stitch-design-taste` | `skills/stitch-skill` |
+
+All plain Markdown — no scripts, no data, nothing that reaches the network.
 
 ## What was changed
 
@@ -30,6 +24,17 @@ up silently not loading. Not a byte of any `SKILL.md` was touched.
 
 The repository's assets, examples, README and research notes were left behind; only `skills/` is
 here.
+
+## What was left behind
+
+Eight of the thirteen were installed and then removed again, because every skill's description is
+loaded into every session that opens this repository — a cost paid forever for something that can
+never apply here. Gone: `brandkit` and `stitch-design-taste` (brand boards, Google Stitch),
+`imagegen-frontend-web` and `image-to-code` (landing-page imagery), `gpt-taste` and
+`industrial-brutalist-ui` (web aesthetics built on GSAP and CSS), `design-taste-frontend-v1`
+(superseded by v2, kept upstream only for backward compatibility) and `full-output-enforcement`.
+
+`git log` has them if that judgement turns out wrong.
 
 ## Read this before reaching for one
 
