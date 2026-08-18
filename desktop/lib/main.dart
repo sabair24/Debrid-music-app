@@ -5195,6 +5195,12 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
                         tooltip: 'Wachtrij',
                         onPressed: () => _openQueue(context),
                       ),
+                    if (t != null)
+                      IconButton(
+                        icon: const Icon(Icons.more_vert_rounded, size: 24),
+                        tooltip: 'Meer',
+                        onPressed: () => _openTrackMenu(context, t),
+                      ),
                     const SizedBox(width: 4),
                   ],
                 ),
@@ -5424,6 +5430,99 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
       )),
     );
   }
+}
+
+/// The record this song is on, and the person who made it.
+///
+/// Every music player has this menu, and it is the one thing the now-playing screen was missing:
+/// you are looking at a sleeve and an artist's name with no way to open either of them. The album
+/// comes from the library by path rather than from the track's own tags — the same lookup the
+/// sleeve above it already uses, so the two can never disagree about which record this is.
+void _openTrackMenu(BuildContext context, Track t) {
+  final lib = context.read<LibraryStore>();
+  final album = lib.albumForPath(t.path);
+  showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: _panel,
+    showDragHandle: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+    ),
+    builder: (sheet) => SafeArea(
+      top: false,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 2, 20, 12),
+            child: Row(
+              children: [
+                cover(album?.cover, size: 44, radius: 6),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(t.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                      Text(t.artist,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: _muted, fontSize: 12.5)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(color: _line, height: 1),
+          // Only when there is a record here to open. A radio track that is not in the library
+          // has no album page, and an entry that goes nowhere is worse than no entry.
+          if (album != null)
+            ListTile(
+              leading: const Icon(Icons.album_rounded, size: 21),
+              title: const Text('Naar het album'),
+              subtitle: Text(album.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: _muted, fontSize: 12)),
+              onTap: () {
+                Navigator.pop(sheet);
+                Navigator.of(context)
+                    .push(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: album)));
+              },
+            ),
+          if (t.artist.trim().isNotEmpty && !_genericArtist(t.artist))
+            ListTile(
+              leading: const Icon(Icons.person_rounded, size: 21),
+              title: const Text('Naar de artiest'),
+              subtitle: Text(t.artist,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: _muted, fontSize: 12)),
+              onTap: () {
+                Navigator.pop(sheet);
+                openArtist(context, t.artist);
+              },
+            ),
+          ListTile(
+            leading: const Icon(Icons.radio_rounded, size: 21),
+            title: const Text('Radio hieruit'),
+            subtitle: const Text('Meer in deze richting',
+                style: TextStyle(color: _muted, fontSize: 12)),
+            onTap: () {
+              Navigator.pop(sheet);
+              startRadio(context, t.artist);
+            },
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 /// What is coming, and a way to jump to any of it.
@@ -8381,23 +8480,29 @@ class _ArtistBackdropState extends State<ArtistBackdrop> {
               ),
             ),
           ),
-        DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              // The hero fills roughly the top third, so the scrim stays light that far down and
-              // only closes in below it, where the records and tracks have to stay readable.
-              colors: [
-                Colors.black.withValues(alpha: .26),
-                Colors.black.withValues(alpha: .40),
-                const Color(0xFF0B0D14).withValues(alpha: .86),
-                const Color(0xFF0B0D14).withValues(alpha: .92),
-              ],
-              stops: const [0, .30, .58, 1],
+        // The hero fills roughly the top third of a WINDOW, and the scrim was drawn for that: dark
+        // from 58% down. Stacked on a phone the hero reaches nearly half the page, so those same
+        // stops closed the wash in right across the artist's own colours and left a flat grey
+        // rectangle — the backdrop was there, you simply could not see it. On a phone it stays
+        // light further down and closes below the buttons instead.
+        Builder(builder: (context) {
+          final narrow = isCompact(context);
+          return DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.black.withValues(alpha: narrow ? .18 : .26),
+                  Colors.black.withValues(alpha: narrow ? .26 : .40),
+                  const Color(0xFF0B0D14).withValues(alpha: .86),
+                  const Color(0xFF0B0D14).withValues(alpha: .92),
+                ],
+                stops: narrow ? const [0, .42, .78, 1] : const [0, .30, .58, 1],
+              ),
             ),
-          ),
-        ),
+          );
+        }),
         widget.child,
       ],
     );
@@ -8490,15 +8595,20 @@ class _ArtistHeroState extends State<ArtistHero> {
 
     final narrow = isCompact(context);
     final pad = narrow ? 18.0 : 28.0;
-    // 270 points of portrait plus a 26 gap leaves about ninety of a phone's 411 for the column
-    // beside it, and "61 albums" came out one word per line. Stacked there, and the portrait sized
-    // from the width that exists.
-    final portraitSize =
-        narrow ? (MediaQuery.sizeOf(context).width - pad * 2).clamp(120.0, 220.0) : 270.0;
+    // Beside the wordmark a square is right: it is a slot, and the face goes in the middle of it.
+    //
+    // Stacked, a square is what was cutting the photo in half. This file's own comment two hundred
+    // lines up says it: every artist image any database has is 16:9. Cropping one into a square
+    // throws away nearly half its width, and for a group photo — five people standing in a row —
+    // that is the two on the outside. Full width and a shallower frame, with the picture set
+    // INSIDE it whole on a blurred blow-up of itself, so a 16:9 press shot and a squarer portrait
+    // both arrive complete.
+    final photoW = narrow ? (MediaQuery.sizeOf(context).width - pad * 2) : 270.0;
+    final photoH = narrow ? photoW * .70 : 270.0;
     // Wide enough for the wordmark to sit beside the portrait, so a fixed 400 fits it. Stacked, it
-    // does not: the portrait alone is 220, and everything below it — wordmark, count, two buttons —
-    // was being squeezed into what a number chosen for a different layout left over.
-    final heroHeight = narrow ? portraitSize + 196 : 400.0;
+    // does not: everything below the photo — wordmark, count, two buttons — was being squeezed into
+    // what a number chosen for a different layout left over.
+    final heroHeight = narrow ? photoH + 208 : 400.0;
 
     return SizedBox(
       // Room for a 270px portrait with the wordmark and buttons beside it. The backdrop is very
@@ -8556,12 +8666,32 @@ class _ArtistHeroState extends State<ArtistHero> {
                     ),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(14),
-                      child: Image.memory(portrait,
-                          width: portraitSize,
-                          height: portraitSize,
-                          fit: BoxFit.cover,
-                          alignment: const Alignment(0, -.25),
-                          errorBuilder: (_, __, ___) => const SizedBox()),
+                      child: SizedBox(
+                        width: photoW,
+                        height: photoH,
+                        child: narrow
+                            ? Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  ImageFiltered(
+                                    imageFilter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+                                    child: Image.memory(portrait,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, __, ___) => const SizedBox()),
+                                  ),
+                                  DecoratedBox(
+                                      decoration: BoxDecoration(
+                                          color: Colors.black.withValues(alpha: .3))),
+                                  Image.memory(portrait,
+                                      fit: BoxFit.contain,
+                                      errorBuilder: (_, __, ___) => const SizedBox()),
+                                ],
+                              )
+                            : Image.memory(portrait,
+                                fit: BoxFit.cover,
+                                alignment: const Alignment(0, -.25),
+                                errorBuilder: (_, __, ___) => const SizedBox()),
+                      ),
                     ),
                   );
 
@@ -8608,6 +8738,9 @@ class _ArtistHeroState extends State<ArtistHero> {
                   ? Column(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
+                        // The photo used to start where the title bar stopped, edge to edge, so it
+                        // read as a banner that had been cut off rather than as a picture.
+                        const SizedBox(height: 14),
                         if (photo != null) ...[photo, const SizedBox(height: 16)],
                         details,
                       ],

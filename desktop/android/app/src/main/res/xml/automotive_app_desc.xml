@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What Android Auto reads to decide whether this app belongs on a car screen.
+
+  Without this file and the meta-data that points at it, Auto never lists the app — no matter that
+  the MediaBrowserService below it is running and the lockscreen controls work. It is a declaration,
+  not an implementation: it says "this is a media app", and Auto then talks to audio_service.
+-->
+<automotiveApp>
+    <uses name="media"/>
+</automotiveApp>
