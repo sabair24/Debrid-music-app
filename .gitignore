@@ -19,3 +19,9 @@ local.properties
 *.keystore
 # …except the project's stable app-signing key (private repo, needed by CI)
 !app/debridmusic.keystore
+
+# Signing keys. Never in the repository — this one publishes its builds in public, and the key is
+# the one thing that proves an APK is this app.
+*.jks
+*.keystore
+key.properties
