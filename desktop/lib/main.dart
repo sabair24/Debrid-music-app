@@ -63,6 +63,12 @@ import 'tidal.dart';
 import 'torbox.dart';
 import 'tv.dart';
 
+// The phone's chrome — the bar along the bottom, the “Meer” sheet, the top bar that goes with
+// them. A part rather than its own library: it re-arranges the frame around the sections
+// _HomeShellState already builds, and reads the same private colours as every other screen here.
+// Making all of that public for one caller would be a bigger change than the chrome itself.
+part 'phone_shell.dart';
+
 /// What a focused Material button looks like: the same ring the rest of the app draws.
 ///
 /// Only `side` and `overlayColor`, so a button that sets its own colour, padding or shape keeps
@@ -747,83 +753,6 @@ class _HomeShellState extends State<HomeShell> {
   QFilter _qFilter = QFilter.all;
   AlbumSort _sort = AlbumSort.titel;
 
-  final _scaffoldKey = GlobalKey<ScaffoldState>();
-
-  /// The sections, listed rather than squeezed into a strip.
-  ///
-  /// Same seven entries and the same [_NavPills] source of truth, so a section added there appears
-  /// here without anything else being touched.
-  Widget _sectionsDrawer(BuildContext context) {
-    final lib = context.watch<LibraryStore>();
-    final badge = context.watch<DownloadManager>().jobs.where((j) => j.busy).length;
-    return Drawer(
-      backgroundColor: _panel,
-      child: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 18, 18, 6),
-              child: Row(children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.asset('assets/icon/app_icon.png', width: 30, height: 30),
-                ),
-                const SizedBox(width: 10),
-                const Text('DebridMusic',
-                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-              ]),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-              child: Text('${lib.albums.length} albums · ${lib.tracks.length} nummers',
-                  style: const TextStyle(color: _muted, fontSize: 12.5)),
-            ),
-            const Divider(color: _line, height: 1),
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                children: [
-                  for (final (id, label) in NavSections.items)
-                    ListTile(
-                      selected: _view == id,
-                      selectedTileColor: _accent.withValues(alpha: .16),
-                      selectedColor: Colors.white,
-                      title: Text(label),
-                      trailing: id == 6 && badge > 0
-                          ? Container(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                              decoration: BoxDecoration(
-                                  color: _accent, borderRadius: BorderRadius.circular(9)),
-                              child: Text('$badge',
-                                  style: const TextStyle(
-                                      fontSize: 11, fontWeight: FontWeight.w800)),
-                            )
-                          : null,
-                      onTap: () {
-                        setState(() => _view = id);
-                        Navigator.pop(context);
-                      },
-                    ),
-                ],
-              ),
-            ),
-            const Divider(color: _line, height: 1),
-            ListTile(
-              leading: const Icon(Icons.settings_rounded, size: 20),
-              title: const Text('Instellingen'),
-              onTap: () {
-                Navigator.pop(context);
-                showDialog(context: context, builder: (_) => const SettingsDialog());
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   /// A layer inside the current section that BACK must close before the section itself.
   ///
   /// Null when there is none. Held here rather than solved with a second PopScope inside the
@@ -1034,6 +963,19 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
+    // Two chromes, one shell.
+    //
+    // Below 600 points the frame is rebuilt around a thumb: the sections move to a bar along the
+    // bottom edge, where a hand holding the phone can reach them without crossing the screen.
+    // Everything INSIDE that frame stays what the window and the television show — the same seven
+    // sections, the same search, the same detail pages, the same player.
+    //
+    // The branch is here and not at the one place HomeShell is created, because swapping the
+    // widget TYPE up there destroys this subtree every time the phone turns: Start would re-fetch
+    // its charts, the online results would empty and the search box would lose what you typed, on
+    // every rotation. One State with a branch in build keeps your place.
+    final phone = isCompact(context);
+
     // BACK, on a television, must go back.
     //
     // The seven sections are a number in this state, not routes, so Flutter's navigator has
@@ -1057,16 +999,13 @@ class _HomeShellState extends State<HomeShell> {
         }
         setState(() => _view = 5);
       },
-      child: Scaffold(
-        key: _scaffoldKey,
-        // A phone gets the sections in a drawer instead of a strip of pills across the top.
-        //
-        // Seven pills do not fit across 411 points: four of them sat off-screen behind a scroll
-        // with nothing to show it was scrollable, so half the app was effectively hidden. A drawer
-        // shows all seven at once, says which one you are on, and gives the content back its full
-        // width. Only on a phone — a television has 960 points and a desktop has more, and the
-        // strip is the better thing there.
-        drawer: isCompact(context) ? _sectionsDrawer(context) : null,
+      child: phone ? _phoneScaffold(context) : _wideScaffold(context),
+    );
+  }
+
+  /// The window, the tablet and the television: the pill strip across the top, the section under
+  /// it, the player along the bottom.
+  Widget _wideScaffold(BuildContext context) => Scaffold(
         // Televisions overscan: a strip around the edge of the picture falls off the screen, and
         // how much differs per set. The margin goes on the CONTENTS of the bars rather than around
         // the whole app, so the top bar's glass and the player bar's surface still reach the panel
@@ -1090,9 +1029,21 @@ class _HomeShellState extends State<HomeShell> {
             const PlayerBar(),
           ],
         ),
-      ),
-    );
-  }
+      );
+
+  /// The phone: the sections along the bottom, everything else unchanged.
+  ///
+  /// The frame itself lives in phone_shell.dart; what goes inside it is built here, by the same
+  /// methods the wide layout uses, so the two can never drift into showing different things.
+  Widget _phoneScaffold(BuildContext context) => _PhoneShell(
+        view: _view,
+        searchBar: _searchable ? _searchBar(context) : null,
+        content: _content(),
+        onSelect: (id) {
+          if (id == _view) return;
+          setState(() => _view = id);
+        },
+      );
 
   /// Brand, the navigation pill bar, and the library count — the old left rail, laid out
   /// horizontally. The soft glow behind it is what the glass has to blur; on a flat panel
@@ -1104,9 +1055,7 @@ class _HomeShellState extends State<HomeShell> {
   /// controls sitting on it keep working: DragToMoveArea only claims what no child handled.
   /// On an iPad there is no window to drag and no `window_manager` behind these calls — the bar is
   /// just a bar there.
-  Widget _topBar() => isCompact(context)
-      ? _compactTopBar()
-      : _isDesktop
+  Widget _topBar() => _isDesktop
       ? DragToMoveArea(
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
@@ -1117,52 +1066,6 @@ class _HomeShellState extends State<HomeShell> {
           ),
         )
       : _topBarBody();
-
-  /// The section name and a way into the drawer — what a phone gets instead of the pill strip.
-  Widget _compactTopBar() {
-    final label = NavSections.items.firstWhere((e) => e.$1 == _view, orElse: () => (5, 'Start')).$2;
-    final badge = context.watch<DownloadManager>().jobs.where((j) => j.busy).length;
-    return SizedBox(
-      height: 56 + MediaQuery.viewPaddingOf(context).top,
-      child: Padding(
-        padding: EdgeInsets.only(top: MediaQuery.viewPaddingOf(context).top, left: 4, right: 8),
-        child: Row(
-          children: [
-            IconButton(
-              icon: const Icon(Icons.menu_rounded),
-              tooltip: 'Secties',
-              onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-            ),
-            Expanded(
-              child: Text(label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
-            ),
-            // The one badge worth carrying out of the drawer: a download running while you are
-            // somewhere else is the thing you would otherwise have to go looking for.
-            if (badge > 0)
-              Padding(
-                padding: const EdgeInsets.only(right: 4),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration:
-                      BoxDecoration(color: _accent, borderRadius: BorderRadius.circular(10)),
-                  child: Text('$badge',
-                      style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800)),
-                ),
-              ),
-            IconButton(
-              icon: const Icon(Icons.settings_rounded, size: 22),
-              tooltip: 'Instellingen',
-              onPressed: () =>
-                  showDialog(context: context, builder: (_) => const SettingsDialog()),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   Widget _topBarBody() => SizedBox(
         // The glow keeps running behind the status bar; only the contents move down, so the top of
@@ -1418,8 +1321,9 @@ class _NavPills extends StatefulWidget {
 
 /// The seven sections, in one place.
 ///
-/// A phone lists them in a drawer and everything wider lays them out as pills; both read from here
-/// so a section cannot exist in one and not the other.
+/// A phone puts four of them on a bar along the bottom and the rest behind “Meer”; everything
+/// wider lays all seven out as pills. All of it reads from here, so a section cannot exist in one
+/// navigation and not the other.
 class NavSections {
   const NavSections._();
 
@@ -1432,6 +1336,35 @@ class NavSections {
     (3, 'Ontdek'),
     (6, 'Mijn downloads'),
   ];
+
+  /// The four that get a place of their own on a phone's bottom bar.
+  ///
+  /// Your own shelf first — a phone is what you browse with while the PC does the work — and then
+  /// downloads, which is the one section that changes while you are not looking at it, and
+  /// therefore the one that carries the badge.
+  ///
+  /// A SELECTION over [items] rather than a second list: a section added above turns up under
+  /// “Meer” by itself.
+  static const phonePrimary = <int>[5, 0, 1, 6];
+
+  /// Everything [phonePrimary] does not carry, by construction — the half that cannot go stale.
+  static Iterable<(int, String)> get phoneMore =>
+      items.where((e) => !phonePrimary.contains(e.$1));
+
+  /// A section's label, falling back to Start's for an id that is not one of the seven.
+  static String labelOf(int id) =>
+      items.firstWhere((e) => e.$1 == id, orElse: () => (5, 'Start')).$2;
+
+  /// The same label, shortened to what fits under an icon on the phone's bottom bar.
+  ///
+  /// A fifth of a 320-point screen is 64 points; “Mijn downloads” is about 85 at this size and
+  /// would come out as “Mijn down…”. Falls through to [labelOf], so a section added to [items]
+  /// still appears — a missing entry here costs an ellipsis, not a place in the navigation.
+  static String shortLabelOf(int id) => switch (id) {
+        6 => 'Downloads',
+        2 => 'Zoeken',
+        _ => labelOf(id),
+      };
 }
 
 class _NavPillsState extends State<_NavPills> {
@@ -4586,7 +4519,15 @@ class _Transport {
 
 // ── Now-playing bar ──────────────────────────────────────────────────────────
 class PlayerBar extends StatelessWidget {
-  const PlayerBar({super.key});
+  const PlayerBar({super.key, this.bottomSafeArea = true});
+
+  /// Whether this bar is the last thing above the bottom of the screen.
+  ///
+  /// False when the phone's section bar sits underneath it. Both reserve the gesture inset
+  /// otherwise, and the two reservations stack into 34 points of empty surface between two bars
+  /// that are meant to read as one block.
+  final bool bottomSafeArea;
+
   @override
   Widget build(BuildContext context) {
     final x = _Transport(context);
@@ -4594,7 +4535,8 @@ class PlayerBar extends StatelessWidget {
     final t = x.track;
     // Under the home indicator on an iPad: the bar's colour runs to the bottom edge, its contents
     // stop above the bar the system draws over everything.
-    final bottomInset = _isTouch ? MediaQuery.viewPaddingOf(context).bottom : 0.0;
+    final bottomInset =
+        (_isTouch && bottomSafeArea) ? MediaQuery.viewPaddingOf(context).bottom : 0.0;
     // 280 a side in a desktop window, which is what centres the transport controls. Two of those
     // plus the controls do not fit on an iPad in portrait — 596 of 834 points gone before the
     // buttons start — so they give way instead of overflowing.
