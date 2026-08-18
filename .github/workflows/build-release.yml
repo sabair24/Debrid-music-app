@@ -119,3 +119,41 @@ jobs:
           draft: false
           prerelease: false
           files: desktop/build/app/outputs/flutter-apk/${{ env.APK_NAME }}
+
+      # The same APK off a working branch, published so it can be installed from a phone.
+      #
+      # The artifact above is the honest place for a test build, but downloading one needs a GitHub
+      # login, and typing that on the phone you are trying to test is the reason branch builds went
+      # untried. A release is a plain link.
+      #
+      # Tagged apart and marked prerelease so it can never be taken for a real one. Nothing reads
+      # these — there is no in-app updater in this codebase; that went with the Kotlin app — so the
+      # only person who ever sees a test build is the one who went looking for it.
+      - name: Publish a test build to the public releases repo
+        if: startsWith(github.ref, 'refs/heads/claude/') && env.RELEASES_TOKEN != ''
+        env:
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: sabair24/Debrid-music-app-releases
+          token: ${{ secrets.RELEASES_TOKEN }}
+          tag_name: test-v${{ env.VERSION }}-build${{ env.BUILD_NUMBER }}
+          name: "Testbouw ${{ github.ref_name }} (build ${{ env.BUILD_NUMBER }})"
+          body: |
+            ## Testbouw — nog niet af
+
+            Van de tak `${{ github.ref_name }}`, build ${{ env.BUILD_NUMBER }}. Dit is werk in
+            uitvoering, geen uitgave: hij is er om uitgeprobeerd te worden en om er screenshots
+            van te sturen.
+
+            ### Installeren
+            Download de APK hieronder. Hij heeft dezelfde naam als de app die je gebruikt en
+            **vervangt hem dus** — je gewone app is terug zodra je een echte uitgave installeert.
+            Je blijft ingelogd.
+
+            > Mogelijk moet je "Installeren uit onbekende bronnen" aanzetten.
+
+            Alleen arm64.
+          draft: false
+          prerelease: true
+          files: desktop/build/app/outputs/flutter-apk/${{ env.APK_NAME }}
