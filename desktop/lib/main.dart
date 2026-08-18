@@ -753,6 +753,29 @@ class _HomeShellState extends State<HomeShell> {
   QFilter _qFilter = QFilter.all;
   AlbumSort _sort = AlbumSort.titel;
 
+  /// Where BACK goes on a phone.
+  ///
+  /// A remote gets "anywhere → Start, then out", which is right for a device whose BACK button is
+  /// pressed constantly. A phone is not that: the sections sit on a bar you tap between, and a
+  /// rule that throws away where you were on every tap makes BACK useless.
+  ///
+  /// A section appears at most once. Without that, tapping between two sections all evening
+  /// builds a list that takes as many presses to leave the app as you made taps — which is the
+  /// other half of the mistake the comment in [build] warns about. Distinct entries bound it to
+  /// six, one short of the number of sections.
+  final _history = <int>[];
+
+  /// Every section change on a phone goes through here, so nothing can move [_view] behind the
+  /// history's back. The wide layout feeds it too — it simply never reads it, and keeps the
+  /// straight-to-Start rule the television was tested with.
+  void _go(int id) {
+    if (id == _view) return;
+    _history
+      ..remove(_view)
+      ..add(_view);
+    setState(() => _view = id);
+  }
+
   /// A layer inside the current section that BACK must close before the section itself.
   ///
   /// Null when there is none. Held here rather than solved with a second PopScope inside the
@@ -986,7 +1009,7 @@ class _HomeShellState extends State<HomeShell> {
     // canPop stays true on Start, so a second BACK still leaves. An app you cannot get out of is
     // the other half of this mistake.
     return PopScope(
-      canPop: _view == 5 && _popInner == null,
+      canPop: _popInner == null && (phone ? _history.isEmpty : _view == 5),
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         // The innermost layer first. A section can have one of its own — the artist page is a
@@ -995,6 +1018,10 @@ class _HomeShellState extends State<HomeShell> {
         final inner = _popInner;
         if (inner != null) {
           inner();
+          return;
+        }
+        if (phone && _history.isNotEmpty) {
+          setState(() => _view = _history.removeLast());
           return;
         }
         setState(() => _view = 5);
@@ -1039,10 +1066,7 @@ class _HomeShellState extends State<HomeShell> {
         view: _view,
         searchBar: _searchable ? _searchBar(context) : null,
         content: _content(),
-        onSelect: (id) {
-          if (id == _view) return;
-          setState(() => _view = id);
-        },
+        onSelect: _go,
       );
 
   /// Brand, the navigation pill bar, and the library count — the old left rail, laid out
@@ -1140,7 +1164,7 @@ class _HomeShellState extends State<HomeShell> {
                               child: Consumer<DownloadManager>(
                                 builder: (_, dm, __) => _NavPills(
                                   active: _view,
-                                  onSelect: (i) => setState(() => _view = i),
+                                  onSelect: _go,
                                   badge: dm.jobs.where((j) => j.busy).length,
                                 ),
                               ),
@@ -1176,7 +1200,7 @@ class _HomeShellState extends State<HomeShell> {
                         // to hit, and a 19-point icon with default padding is under it.
                         constraints: _isTouch ? const BoxConstraints.tightFor(width: 44, height: 44) : null,
                         onPressed: () =>
-                            showDialog(context: context, builder: (_) => const SettingsDialog()),
+                            openSettings(context),
                       ),
                       // Only where there is a window to close: on the iPad these would be three
                       // buttons wired to a plugin that does not exist there.
@@ -9796,6 +9820,20 @@ class _SharingSectionState extends State<_SharingSection> {
   }
 }
 
+/// Opening the settings: a page on a phone, a dialog in a window.
+///
+/// One helper rather than a showDialog at each of the three places that offer it — a Scaffold
+/// inside a dialog is what you get otherwise, and only on a phone, which is exactly the kind of
+/// thing that reaches a build.
+Future<void> openSettings(BuildContext context) {
+  if (isCompact(context)) {
+    return Navigator.of(context).push<void>(
+      MaterialPageRoute(builder: (_) => const SettingsDialog(), fullscreenDialog: true),
+    );
+  }
+  return showDialog<void>(context: context, builder: (_) => const SettingsDialog());
+}
+
 class SettingsDialog extends StatefulWidget {
   const SettingsDialog({super.key});
   @override
@@ -10087,6 +10125,41 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
   @override
   Widget build(BuildContext context) {
+    // A page on a phone, a dialog in a window.
+    //
+    // This was always a settings PAGE wearing a dialog: 480 points wide, 640 tall, scrolling
+    // inside itself. dialogWidth already kept it from overflowing a 412-point screen, but what was
+    // left was a panel with a strip of dimmed app around it and a scroll of its own — a window
+    // drawn on a phone. Full screen it is simply the screen you are on, and the fields get the
+    // width back.
+    if (isCompact(context)) {
+      return Scaffold(
+        backgroundColor: _panel,
+        body: SafeArea(
+          child: Column(
+            children: [
+              // The way out, top left, where a phone looks for it. “Annuleren” at the bottom does
+              // the same thing and stays in view, but a full screen with an empty top-left corner
+              // reads as a dead end.
+              Align(
+                alignment: Alignment.centerLeft,
+                child: IconButton(
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  tooltip: 'Terug',
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+                  child: _body(context),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     return Dialog(
       backgroundColor: _panel,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -10094,211 +10167,218 @@ class _SettingsDialogState extends State<SettingsDialog> {
         width: dialogWidth(context, 480),
         constraints: const BoxConstraints(maxHeight: 640),
         padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Instellingen', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 4),
-            Text(
-              context.watch<CloudSession>().isSignedIn
-                  ? 'Je sleutels reizen mee met je account, zodat een nieuwe installatie ze '
-                      'terugkrijgt.'
-                  : 'Sleutels blijven op dit apparaat. Log in en ze reizen mee met je account.',
-              style: const TextStyle(color: _muted, fontSize: 13),
-            ),
-            // The one thing that must not stay quiet. When settings.json cannot be read, the app
-            // now refuses to save over it — which is right, and which without a word here would
-            // simply look like "my settings do not stick" with no reason given anywhere.
-            if (context.watch<AppSettings>().loadFailed) ...[
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFF6B6B).withValues(alpha: .12),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFFFF6B6B).withValues(alpha: .4)),
-                ),
-                child: const Text(
-                  'Je instellingenbestand is beschadigd en kon niet worden gelezen. De app bewaart '
-                  'nu niets, expres: dat bestand is het enige waar je wachtwoorden in staan, en er '
-                  'lege velden overheen schrijven zou ze definitief wissen. Vul ze hieronder '
-                  'opnieuw in en druk op Opslaan, dan is het hersteld.',
-                  style: TextStyle(color: Color(0xFFFF6B6B), fontSize: 12, height: 1.4),
-                ),
-              ),
-            ],
-            const SizedBox(height: 18),
-            Flexible(
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _field('TorBox API-sleutel', _torbox),
-                    _field('Discogs token', _discogs),
-                    Row(
-                      children: [
-                        Expanded(child: _field('Soulseek gebruiker', _slskUser)),
-                        const SizedBox(width: 12),
-                        Expanded(child: _field('Soulseek wachtwoord', _slskPass, obscure: true)),
-                      ],
-                    ),
-                    _field('Soulseek luisterpoort (zelfde als de native app)', _slskPort),
-                    const Padding(
-                      padding: EdgeInsets.only(bottom: 8),
-                      child: Text(
-                          'Zonder open poort ziet de app alleen peers die zelf bereikbaar zijn — dat is waarom '
-                          'de native app soms méér vindt. Vul dezelfde poort in die SoulseekQt gebruikt (die '
-                          'staat al doorgestuurd in je router) en zet er een Windows Firewall-uitzondering op.',
-                          style: TextStyle(color: _muted, fontSize: 11.5)),
-                    ),
-                    Row(
-                      children: [
-                        Expanded(child: _field('RuTracker gebruiker', _rtUser)),
-                        const SizedBox(width: 12),
-                        Expanded(child: _field('RuTracker wachtwoord', _rtPass, obscure: true)),
-                      ],
-                    ),
-                    _field('Last.fm API-sleutel', _lastfm),
-                    const SizedBox(height: 4),
-                    const Divider(color: _line, height: 1),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        const Text('Verbindingen',
-                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-                        const Spacer(),
-                        TextButton.icon(
-                          onPressed: _testing ? null : _testAll,
-                          icon: _testing
-                              ? const SizedBox(
-                                  width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
-                              : const Icon(Icons.wifi_tethering_rounded, size: 16),
-                          label: Text(_testing ? 'Testen…' : 'Test verbindingen'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    _statusRow('TorBox', 'torbox'),
-                    _statusRow('Discogs', 'discogs'),
-                    _statusRow('Soulseek', 'soulseek'),
-                    _statusRow('RuTracker', 'rutracker',
-                        trailing: TextButton(
-                          onPressed: _rtBusy ? null : _rtLogin,
-                          style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8)),
-                          child: Text(_rtBusy ? 'Bezig…' : 'Inloggen', style: const TextStyle(fontSize: 12.5)),
-                        )),
-                    const SizedBox(height: 10),
-                    const Divider(color: _line, height: 1),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('Downloads opruimen',
-                                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-                              SizedBox(height: 2),
-                              Text(
-                                  'Sorteert je downloads in Albums / Singles / Compilaties per artiest en '
-                                  'gooit dubbele nummers weg (beste kwaliteit blijft). Raakt alleen de map '
-                                  '“DebridMusic Downloads” aan — je eigen collectie blijft ongemoeid.',
-                                  style: TextStyle(color: _muted, fontSize: 11.5)),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        FilledButton.icon(
-                          style: FilledButton.styleFrom(backgroundColor: _panel2, foregroundColor: Colors.white),
-                          onPressed: _tidying ? null : _tidyDownloads,
-                          icon: _tidying
-                              ? const SizedBox(
-                                  width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
-                              : const Icon(Icons.cleaning_services_rounded, size: 16),
-                          label: Text(_tidying ? 'Bezig…' : 'Opruimen'),
-                        ),
-                      ],
-                    ),
-                    if (_tidyResult != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Text(_tidyResult!, style: TextStyle(color: _accent2, fontSize: 12)),
-                      ),
-                    // Tracks removed "from library only" are still on disk — offer them back.
-                    Consumer<LibraryStore>(
-                      builder: (_, lib, __) => lib.hiddenCount == 0
-                          ? const SizedBox.shrink()
-                          : Padding(
-                              padding: const EdgeInsets.only(top: 12),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                        '${lib.hiddenCount} nummer(s) verborgen uit je bibliotheek '
-                                        '(staan nog wel op je pc).',
-                                        style: const TextStyle(color: _muted, fontSize: 11.5)),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  TextButton.icon(
-                                    onPressed: () => lib.restoreHidden(),
-                                    icon: const Icon(Icons.undo_rounded, size: 15),
-                                    label: const Text('Terugzetten'),
-                                    style: TextButton.styleFrom(
-                                        foregroundColor: _accent, textStyle: const TextStyle(fontSize: 12)),
-                                  ),
-                                ],
-                              ),
-                            ),
-                    ),
-                    const SizedBox(height: 14),
-                    const Divider(color: _line, height: 1),
-                    const SizedBox(height: 12),
-                    const _SharingSection(),
-                    const SizedBox(height: 14),
-                    const Divider(color: _line, height: 1),
-                    const SizedBox(height: 12),
-                    const _AboutSection(),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuleren')),
-                const SizedBox(width: 8),
-                FilledButton(
-                  style: FilledButton.styleFrom(backgroundColor: _accent),
-                  onPressed: () async {
-                    final s = context.read<AppSettings>();
-                    final lib = context.read<LibraryStore>();
-                    s.discogsToken = _discogs.text.trim();
-                    s.torboxToken = _torbox.text.trim();
-                    s.soulseekUser = _slskUser.text.trim();
-                    s.soulseekPass = _slskPass.text.trim();
-                    s.soulseekPort = int.tryParse(_slskPort.text.trim()) ?? 0;
-                    s.rutrackerUser = _rtUser.text.trim();
-                    s.rutrackerPass = _rtPass.text;
-                    s.lastfmKey = _lastfm.text.trim();
-                    // Pressing Save here is the deliberate override of the refuse-to-write guard:
-                    // these values came from the fields, not from a failed load, so writing them
-                    // over a broken file is a repair rather than the loss the guard exists for.
-                    s.forgetLoadFailure();
-                    await s.save();
-                    if (context.mounted) Navigator.pop(context);
-                    lib.enrich(s); // pick up covers that need the (new) Discogs token
-                  },
-                  child: const Text('Opslaan'),
-                ),
-              ],
-            ),
-          ],
-        ),
+        child: _body(context),
       ),
     );
   }
+
+  /// Two fields that sit side by side in a window and stack on a phone.
+  ///
+  /// Two Expandeds share 380 points minus the padding on a phone, which leaves about 170 each —
+  /// the width at which a label like “Soulseek wachtwoord” prints on two lines above a field you
+  /// cannot read what you typed into.
+  Widget _pair(BuildContext context, Widget a, Widget b) => isCompact(context)
+      ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [a, b])
+      : Row(children: [Expanded(child: a), const SizedBox(width: 12), Expanded(child: b)]);
+
+  Widget _body(BuildContext context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Instellingen', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          Text(
+            context.watch<CloudSession>().isSignedIn
+                ? 'Je sleutels reizen mee met je account, zodat een nieuwe installatie ze '
+                    'terugkrijgt.'
+                : 'Sleutels blijven op dit apparaat. Log in en ze reizen mee met je account.',
+            style: const TextStyle(color: _muted, fontSize: 13),
+          ),
+          // The one thing that must not stay quiet. When settings.json cannot be read, the app
+          // now refuses to save over it — which is right, and which without a word here would
+          // simply look like "my settings do not stick" with no reason given anywhere.
+          if (context.watch<AppSettings>().loadFailed) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFF6B6B).withValues(alpha: .12),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFFF6B6B).withValues(alpha: .4)),
+              ),
+              child: const Text(
+                'Je instellingenbestand is beschadigd en kon niet worden gelezen. De app bewaart '
+                'nu niets, expres: dat bestand is het enige waar je wachtwoorden in staan, en er '
+                'lege velden overheen schrijven zou ze definitief wissen. Vul ze hieronder '
+                'opnieuw in en druk op Opslaan, dan is het hersteld.',
+                style: TextStyle(color: Color(0xFFFF6B6B), fontSize: 12, height: 1.4),
+              ),
+            ),
+          ],
+          const SizedBox(height: 18),
+          Flexible(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _field('TorBox API-sleutel', _torbox),
+                  _field('Discogs token', _discogs),
+                  _pair(
+                    context,
+                    _field('Soulseek gebruiker', _slskUser),
+                    _field('Soulseek wachtwoord', _slskPass, obscure: true),
+                  ),
+                  _field('Soulseek luisterpoort (zelfde als de native app)', _slskPort),
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: Text(
+                        'Zonder open poort ziet de app alleen peers die zelf bereikbaar zijn — dat is waarom '
+                        'de native app soms méér vindt. Vul dezelfde poort in die SoulseekQt gebruikt (die '
+                        'staat al doorgestuurd in je router) en zet er een Windows Firewall-uitzondering op.',
+                        style: TextStyle(color: _muted, fontSize: 11.5)),
+                  ),
+                  _pair(
+                    context,
+                    _field('RuTracker gebruiker', _rtUser),
+                    _field('RuTracker wachtwoord', _rtPass, obscure: true),
+                  ),
+                  _field('Last.fm API-sleutel', _lastfm),
+                  const SizedBox(height: 4),
+                  const Divider(color: _line, height: 1),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Text('Verbindingen',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                      const Spacer(),
+                      TextButton.icon(
+                        onPressed: _testing ? null : _testAll,
+                        icon: _testing
+                            ? const SizedBox(
+                                width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
+                            : const Icon(Icons.wifi_tethering_rounded, size: 16),
+                        label: Text(_testing ? 'Testen…' : 'Test verbindingen'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  _statusRow('TorBox', 'torbox'),
+                  _statusRow('Discogs', 'discogs'),
+                  _statusRow('Soulseek', 'soulseek'),
+                  _statusRow('RuTracker', 'rutracker',
+                      trailing: TextButton(
+                        onPressed: _rtBusy ? null : _rtLogin,
+                        style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8)),
+                        child: Text(_rtBusy ? 'Bezig…' : 'Inloggen', style: const TextStyle(fontSize: 12.5)),
+                      )),
+                  const SizedBox(height: 10),
+                  const Divider(color: _line, height: 1),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Downloads opruimen',
+                                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                            SizedBox(height: 2),
+                            Text(
+                                'Sorteert je downloads in Albums / Singles / Compilaties per artiest en '
+                                'gooit dubbele nummers weg (beste kwaliteit blijft). Raakt alleen de map '
+                                '“DebridMusic Downloads” aan — je eigen collectie blijft ongemoeid.',
+                                style: TextStyle(color: _muted, fontSize: 11.5)),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      FilledButton.icon(
+                        style: FilledButton.styleFrom(backgroundColor: _panel2, foregroundColor: Colors.white),
+                        onPressed: _tidying ? null : _tidyDownloads,
+                        icon: _tidying
+                            ? const SizedBox(
+                                width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
+                            : const Icon(Icons.cleaning_services_rounded, size: 16),
+                        label: Text(_tidying ? 'Bezig…' : 'Opruimen'),
+                      ),
+                    ],
+                  ),
+                  if (_tidyResult != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(_tidyResult!, style: TextStyle(color: _accent2, fontSize: 12)),
+                    ),
+                  // Tracks removed "from library only" are still on disk — offer them back.
+                  Consumer<LibraryStore>(
+                    builder: (_, lib, __) => lib.hiddenCount == 0
+                        ? const SizedBox.shrink()
+                        : Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                      '${lib.hiddenCount} nummer(s) verborgen uit je bibliotheek '
+                                      '(staan nog wel op je pc).',
+                                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                ),
+                                const SizedBox(width: 10),
+                                TextButton.icon(
+                                  onPressed: () => lib.restoreHidden(),
+                                  icon: const Icon(Icons.undo_rounded, size: 15),
+                                  label: const Text('Terugzetten'),
+                                  style: TextButton.styleFrom(
+                                      foregroundColor: _accent, textStyle: const TextStyle(fontSize: 12)),
+                                ),
+                              ],
+                            ),
+                          ),
+                  ),
+                  const SizedBox(height: 14),
+                  const Divider(color: _line, height: 1),
+                  const SizedBox(height: 12),
+                  const _SharingSection(),
+                  const SizedBox(height: 14),
+                  const Divider(color: _line, height: 1),
+                  const SizedBox(height: 12),
+                  const _AboutSection(),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuleren')),
+              const SizedBox(width: 8),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: _accent),
+                onPressed: () async {
+                  final s = context.read<AppSettings>();
+                  final lib = context.read<LibraryStore>();
+                  s.discogsToken = _discogs.text.trim();
+                  s.torboxToken = _torbox.text.trim();
+                  s.soulseekUser = _slskUser.text.trim();
+                  s.soulseekPass = _slskPass.text.trim();
+                  s.soulseekPort = int.tryParse(_slskPort.text.trim()) ?? 0;
+                  s.rutrackerUser = _rtUser.text.trim();
+                  s.rutrackerPass = _rtPass.text;
+                  s.lastfmKey = _lastfm.text.trim();
+                  // Pressing Save here is the deliberate override of the refuse-to-write guard:
+                  // these values came from the fields, not from a failed load, so writing them
+                  // over a broken file is a repair rather than the loss the guard exists for.
+                  s.forgetLoadFailure();
+                  await s.save();
+                  if (context.mounted) Navigator.pop(context);
+                  lib.enrich(s); // pick up covers that need the (new) Discogs token
+                },
+                child: const Text('Opslaan'),
+              ),
+            ],
+          ),
+        ],
+      );
 }
 
 String _fmt(Duration? d) {

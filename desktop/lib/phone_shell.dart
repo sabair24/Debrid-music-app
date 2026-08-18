@@ -118,8 +118,7 @@ class _PhoneTopBar extends StatelessWidget {
               tooltip: 'Instellingen',
               // 44 points on a touch screen — the smallest thing Apple expects a finger to find.
               constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-              onPressed: () =>
-                  showDialog(context: context, builder: (_) => const SettingsDialog()),
+              onPressed: () => openSettings(context),
             ),
           ],
         ),
@@ -286,7 +285,7 @@ Future<void> _openMoreSheet(
             title: const Text('Instellingen'),
             onTap: () {
               Navigator.pop(sheet);
-              showDialog(context: context, builder: (_) => const SettingsDialog());
+              openSettings(context);
             },
           ),
         ],
