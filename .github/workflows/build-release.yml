@@ -103,6 +103,34 @@ jobs:
           echo "APK_NAME=DebridMusic-v${VERSION}-build${BUILD_NUMBER}.apk" >> "$GITHUB_ENV"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
+      # Which key actually signed this, in the log and in the release notes.
+      #
+      # Otherwise the only way to find out is to install the thing and see whether Android refuses.
+      # The fingerprint is the whole answer: two builds that share it can update each other, two
+      # that do not never will, and a fingerprint that changes between runs means the build is
+      # still falling back to a debug key that every runner generates for itself.
+      - name: Say which key signed it
+        working-directory: desktop
+        continue-on-error: true
+        run: |
+          APK="build/app/outputs/flutter-apk/${APK_NAME}"
+          SIGNER=$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -name apksigner 2>/dev/null | sort | tail -1)
+          if [ -n "$SIGNER" ]; then
+            CERTS=$("$SIGNER" verify --print-certs "$APK" 2>/dev/null || true)
+          else
+            CERTS=$(keytool -printcert -jarfile "$APK" 2>/dev/null || true)
+          fi
+          FP=$(printf '%s' "$CERTS" | grep -i -m1 'SHA-256' | tr -d ' ' | cut -d: -f2- || true)
+          if [ -n "${DEBRIDMUSIC_KEYSTORE:-}" ]; then
+            KEY="de vaste release-sleutel"
+          else
+            KEY="de DEBUG-sleutel (elke runner maakt zijn eigen — bijwerken kan niet)"
+          fi
+          echo "Ondertekend met: $KEY"
+          echo "SHA-256: ${FP:-onbekend}"
+          echo "SIGNED_WITH=$KEY" >> "$GITHUB_ENV"
+          echo "SIGNED_FP=${FP:-onbekend}" >> "$GITHUB_ENV"
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -173,6 +201,10 @@ jobs:
             > Mogelijk moet je "Installeren uit onbekende bronnen" aanzetten.
 
             Alleen arm64.
+
+            <sub>Ondertekend met ${{ env.SIGNED_WITH }} · SHA-256 <code>${{ env.SIGNED_FP }}</code><br>
+            Blijft die vingerafdruk tussen twee builds gelijk, dan kun je de ene over de andere
+            installeren. Verandert hij, dan niet.</sub>
           draft: false
           prerelease: true
           files: desktop/build/app/outputs/flutter-apk/${{ env.APK_NAME }}

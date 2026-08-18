@@ -67,6 +67,33 @@ De waarschuwing bij het installeren zelf. Die komt doordat je buiten de Play Sto
 en die blijft — Play Protect kent deze app niet en gaat hem ook niet leren kennen zolang hij niet
 in de Play Store staat. Ondertekenen lost het *bijwerken* op, niet het *waarschuwen*.
 
+## Controleren of het gelukt is
+
+Elke build zegt het nu zelf, onderaan de release-notities van de testbouw en in de stap **"Say
+which key signed it"**:
+
+```
+Ondertekend met: de vaste release-sleutel
+SHA-256: A1:B2:…
+```
+
+Die vingerafdruk is het hele antwoord. **Blijft hij tussen twee builds gelijk, dan kun je de ene
+over de andere installeren.** Verandert hij per build, dan pakt de build de secrets niet en valt
+hij terug op debug.
+
+Gebeurt dat terwijl je de secrets wel hebt ingesteld, dan is het bijna altijd de naam. Ze zijn
+hoofdlettergevoelig en moeten exact zo heten:
+
+```
+ANDROID_KEYSTORE_BASE64
+ANDROID_KEYSTORE_PASSWORD
+ANDROID_KEY_ALIAS
+ANDROID_KEY_PASSWORD
+```
+
+Staan ze onder de **repository**-secrets van `sabair24/Debrid-music-app` en niet onder een
+environment of een organisatie? Alleen de eerste soort ziet deze workflow zonder extra regels.
+
 ## Zonder de secrets
 
 Dan valt de build terug op de debug-sleutel en zegt dat in het buildlogboek:
