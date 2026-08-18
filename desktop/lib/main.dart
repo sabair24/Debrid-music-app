@@ -5215,11 +5215,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
       backgroundColor: _bg,
       body: _dismissable(Stack(
         children: [
-          if (p.currentCover != null)
-            Positioned.fill(
-              child: Opacity(opacity: .22, child: Image.memory(p.currentCover!, fit: BoxFit.cover)),
-            ),
-          Positioned.fill(child: Container(color: _bg.withValues(alpha: .5))),
+          Positioned.fill(
+            child: _NowPlayingBackdrop(artist: t?.artist ?? '', fallback: p.currentCover),
+          ),
           SafeArea(
             child: Column(
               children: [
@@ -5472,6 +5470,124 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
           ),
         ],
       )),
+    );
+  }
+}
+
+/// What stands behind the now-playing screen: the ARTIST, not another copy of the sleeve.
+///
+/// The sleeve is already the largest thing on this screen, and a blurred copy of it behind itself
+/// tells you nothing you are not looking straight at. Tidal puts the person there instead, and
+/// this is the one screen in the app you leave open for three minutes at a time — long enough for
+/// it to be worth having someone in it.
+///
+/// Falls back to the sleeve when the artist has no picture, which is the old behaviour exactly, so
+/// nothing gets worse for the acts no database has ever heard of.
+class _NowPlayingBackdrop extends StatefulWidget {
+  const _NowPlayingBackdrop({required this.artist, this.fallback});
+
+  /// Empty while nothing is playing — then this is only the sleeve and the scrim.
+  final String artist;
+  final Uint8List? fallback;
+
+  @override
+  State<_NowPlayingBackdrop> createState() => _NowPlayingBackdropState();
+}
+
+class _NowPlayingBackdropState extends State<_NowPlayingBackdrop> {
+  Uint8List? _photo;
+
+  /// The name [_photo] belongs to, so a picture cannot be left standing behind the next song by
+  /// an artist who has none of their own.
+  String? _for;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(_NowPlayingBackdrop old) {
+    super.didUpdateWidget(old);
+    if (old.artist != widget.artist) _load();
+  }
+
+  Future<void> _load() async {
+    final name = widget.artist;
+    if (name.isEmpty) {
+      if (mounted) setState(() { _photo = null; _for = ''; });
+      return;
+    }
+    final settings = context.read<AppSettings>();
+    final art = await CoverEnricher(settings).artistArt(name);
+    if (!mounted || name != widget.artist) return;
+    // The wide one first: this is a full screen, and a square thumb blown up to fill it is soft in
+    // a way the blur cannot hide.
+    var bytes = art?.backdropBytes ?? art?.thumbBytes;
+    final url = context.read<LibraryStore>().chosenArtistArt(name, 'backdrop');
+    if (url != null) {
+      final picked = await CoverEnricher(settings).downloadImage(url);
+      if (!mounted || name != widget.artist) return;
+      if (picked != null) bytes = picked;
+    }
+    setState(() {
+      _photo = bytes;
+      _for = name;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Only once it belongs to the song that is playing now. In between it is the sleeve, which is
+    // the right colour by definition and never the wrong person.
+    final photo = _for == widget.artist ? _photo : null;
+    final img = photo ?? widget.fallback;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        AnimatedSwitcher(
+          // A background, so it may take its time — but it changes on a track change, and the
+          // title above it has already changed by then. 240 is as long as that can lag.
+          duration: const Duration(milliseconds: 240),
+          child: img == null
+              ? const SizedBox.shrink()
+              : ImageFiltered(
+                  key: ValueKey(img),
+                  // Heavier than the artist page's: there is a slider, two rows of buttons and a
+                  // song title over this, and a face with features in it competes with all three.
+                  imageFilter: ImageFilter.blur(sigmaX: 34, sigmaY: 34),
+                  // Overscanned, or the blur samples past the picture and the edges wash out.
+                  child: Transform.scale(
+                    scale: 1.2,
+                    child: Image.memory(img,
+                        fit: BoxFit.cover,
+                        // Faces sit above the middle of a press shot; the controls are at the
+                        // bottom of this screen anyway.
+                        alignment: const Alignment(0, -.25),
+                        errorBuilder: (_, __, ___) => const SizedBox()),
+                  ),
+                ),
+        ),
+        // Not a flat 50% any more. Flat, the title sat over whatever the picture happened to put
+        // there, and a light shoulder in the photo took the text with it. This settles to nearly
+        // solid at the bottom, where every control is.
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                _bg.withValues(alpha: .58),
+                _bg.withValues(alpha: .66),
+                _bg.withValues(alpha: .88),
+                _bg.withValues(alpha: .96),
+              ],
+              stops: const [0, .34, .78, 1],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
