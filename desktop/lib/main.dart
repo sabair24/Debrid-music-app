@@ -3909,9 +3909,14 @@ class _ArtistRenameDialogState extends State<ArtistRenameDialog> {
     return AlertDialog(
       backgroundColor: _panel,
       title: const Text('Artiestnaam corrigeren'),
+      // Scrollable, and that is not a nicety. An AlertDialog does not scroll its content by
+      // itself: with the keyboard up the dialog is a few hundred points tall, the chips end up
+      // below its bottom edge — and a widget painted outside its parent's box still draws, but
+      // takes no taps. The chips were there and did nothing.
       content: SizedBox(
         width: dialogWidth(context, 460),
-        child: Column(
+        child: SingleChildScrollView(
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -3924,7 +3929,8 @@ class _ArtistRenameDialogState extends State<ArtistRenameDialog> {
             const SizedBox(height: 16),
             TextField(
               controller: _to,
-              autofocus: true,
+              // No autofocus. The keyboard would come up over the suggestions underneath, and
+              // tapping one of those is the whole point — typing the name yourself is the fallback.
               enabled: !_busy,
               textInputAction: TextInputAction.done,
               onSubmitted: (_) => _apply(),
@@ -3956,6 +3962,7 @@ class _ArtistRenameDialogState extends State<ArtistRenameDialog> {
               ),
             ],
           ],
+          ),
         ),
       ),
       actions: [
@@ -11203,8 +11210,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
           const SizedBox(height: 4),
           Text(
             context.watch<CloudSession>().isSignedIn
+                // The exception belongs in the promise. Without it the empty Soulseek fields on a
+                // second device read as “my keys did not travel” rather than as the one deliberate
+                // omission — which is exactly how it was reported.
                 ? 'Je sleutels reizen mee met je account, zodat een nieuwe installatie ze '
-                    'terugkrijgt.'
+                    'terugkrijgt — op de Soulseek-login na.'
                 : 'Sleutels blijven op dit apparaat. Log in en ze reizen mee met je account.',
             style: const TextStyle(color: _muted, fontSize: 13),
           ),
@@ -11237,20 +11247,40 @@ class _SettingsDialogState extends State<SettingsDialog> {
                 children: [
                   _field('TorBox API-sleutel', _torbox),
                   _field('Discogs token', _discogs),
-                  _pair(
-                    context,
-                    _field('Soulseek gebruiker', _slskUser),
-                    _field('Soulseek wachtwoord', _slskPass, obscure: true),
-                  ),
-                  _field('Soulseek luisterpoort (zelfde als de native app)', _slskPort),
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 8),
-                    child: Text(
-                        'Zonder open poort ziet de app alleen peers die zelf bereikbaar zijn — dat is waarom '
-                        'de native app soms méér vindt. Vul dezelfde poort in die SoulseekQt gebruikt (die '
-                        'staat al doorgestuurd in je router) en zet er een Windows Firewall-uitzondering op.',
-                        style: TextStyle(color: _muted, fontSize: 11.5)),
-                  ),
+                  // Only on the machine that HAS the music. Everywhere else these three fields
+                  // stood empty while Soulseek plainly worked, which reads as a bug and is the
+                  // opposite: this device searches and downloads through the PC, with the login
+                  // that is typed there. Filling them in here would not help and would hurt —
+                  // Soulseek allows one session per account, so a second login kicks the first.
+                  // `ownsTheMusic`, not `LibraryStore.isRemote`: a phone that has not reached the
+                  // PC yet is still a phone, and Soulseek is still not going to run on it.
+                  if (ownsTheMusic(context.watch<AppSettings>())) ...[
+                    _pair(
+                      context,
+                      _field('Soulseek gebruiker', _slskUser),
+                      _field('Soulseek wachtwoord', _slskPass, obscure: true),
+                    ),
+                    _field('Soulseek luisterpoort (zelfde als de native app)', _slskPort),
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 8),
+                      child: Text(
+                          'Zonder open poort ziet de app alleen peers die zelf bereikbaar zijn — dat is waarom '
+                          'de native app soms méér vindt. Vul dezelfde poort in die SoulseekQt gebruikt (die '
+                          'staat al doorgestuurd in je router) en zet er een Windows Firewall-uitzondering op.\n'
+                          'Deze login reist als enige niet mee met je account: Soulseek staat één sessie per '
+                          'account toe, en alleen de machine met de muziek praat ermee.',
+                          style: TextStyle(color: _muted, fontSize: 11.5)),
+                    ),
+                  ] else
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 12),
+                      child: Text(
+                          'Soulseek staat op de pc. Dit toestel zoekt en downloadt via de pc, met de login '
+                          'die daar is ingevuld — daarom staat hier niets en werkt het toch. Soulseek staat '
+                          'één sessie per account toe, dus een tweede login hier zou de pc er telkens '
+                          'uitgooien.',
+                          style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4)),
+                    ),
                   _pair(
                     context,
                     _field('RuTracker gebruiker', _rtUser),
