@@ -76,6 +76,13 @@ void setTvModeForTest(bool value) => _isTv = value;
 /// narrow layout actually works.
 bool isCompact(BuildContext context) => MediaQuery.sizeOf(context).width < 600;
 
+/// The margin down both sides of a page.
+///
+/// One number, because a phone notices when it is not: the search pill sat 18 points in and the
+/// grid below it 24, so every screen had two left edges six points apart. 24 is also a lot to give
+/// away twice over on a 411-point screen — it is a column of cover that isn't there.
+double pagePad(BuildContext context) => isCompact(context) ? 18 : 24;
+
 /// How far the disc slides out from behind the sleeve, as a fraction of the sleeve's width.
 ///
 /// This is reserved WIDTH: [AlbumArt] lays out `size * (1 + factor)`, so on a phone in portrait

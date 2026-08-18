@@ -1816,18 +1816,27 @@ class AlbumsGrid extends StatelessWidget {
     // duplicates of one you already own. It never moves anything on its own — this just opens the
     // dry-run.
     final dupes = title == null ? context.watch<LibraryStore>().duplicates : const <RedundantAlbum>[];
+    final pad = pagePad(context);
+    // A heading that repeats the bar directly above it.
+    //
+    // On a phone the top bar already says which section this is, in the same words. Printing
+    // “Albums” again cost 22 points of padding and a 22-point line — sixty points of a 915-point
+    // screen, spent saying nothing that was not already on screen. A search result still gets its
+    // line, because “134 resultaten” is not a repeat of anything.
+    final heading = title ?? (isCompact(context) ? null : 'Albums');
     return CustomScrollView(
       slivers: [
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(24, 22, 24, 8),
-          sliver: SliverToBoxAdapter(
-            child: Text(title ?? 'Albums',
-                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+        if (heading != null)
+          SliverPadding(
+            padding: EdgeInsets.fromLTRB(pad, 22, pad, 8),
+            sliver: SliverToBoxAdapter(
+              child: Text(heading,
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+            ),
           ),
-        ),
         if (dupes.isNotEmpty)
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+            padding: EdgeInsets.fromLTRB(pad, heading == null ? 14 : 0, pad, 8),
             sliver: SliverToBoxAdapter(
               child: InkWell(
                 onTap: () async {
@@ -1863,7 +1872,7 @@ class AlbumsGrid extends StatelessWidget {
             ),
           ),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+          padding: EdgeInsets.fromLTRB(pad, heading == null && dupes.isEmpty ? 12 : 0, pad, 24),
           sliver: SliverGrid(
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
               maxCrossAxisExtent: 190,
@@ -3534,17 +3543,25 @@ class _ArtistsViewState extends State<ArtistsView> {
     if (artists.isEmpty) {
       return const Center(child: Text('Geen artiesten gevonden.', style: TextStyle(color: _muted)));
     }
+    final pad = pagePad(context);
+    final filtered = artists.length != widget.lib.artists.length;
+    // Same as the album grid: the bar above says “Artiesten” already. What it cannot say is that
+    // you are looking at a filtered list, so that line stays.
+    final heading = isCompact(context)
+        ? (filtered ? '${artists.length} artiesten' : null)
+        : 'Artiesten${filtered ? " · ${artists.length}" : ""}';
     return CustomScrollView(
       slivers: [
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(24, 22, 24, 8),
-          sliver: SliverToBoxAdapter(
-            child: Text('Artiesten${artists.length == widget.lib.artists.length ? "" : " · ${artists.length}"}',
-                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+        if (heading != null)
+          SliverPadding(
+            padding: EdgeInsets.fromLTRB(pad, 22, pad, 8),
+            sliver: SliverToBoxAdapter(
+              child: Text(heading,
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+            ),
           ),
-        ),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+          padding: EdgeInsets.fromLTRB(pad, heading == null ? 12 : 0, pad, 24),
           sliver: SliverGrid(
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                 maxCrossAxisExtent: 180,
@@ -5743,11 +5760,18 @@ class TracksView extends StatelessWidget {
       children: [
         Builder(builder: (context) {
           final narrow = isCompact(context);
-          final title = Row(mainAxisSize: MainAxisSize.min, children: [
-            const Text('Tracks', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-            const SizedBox(width: 10),
-            Text('${tracks.length}', style: const TextStyle(color: _muted, fontSize: 14)),
-          ]);
+          // “Tracks” is what the bar at the top of a phone already says. The number is not, and
+          // it is the half of this line worth keeping — it is how you tell a filtered list from
+          // the whole library at a glance.
+          final title = narrow
+              ? Text('${tracks.length} nummers',
+                  style: const TextStyle(color: _muted, fontSize: 13.5))
+              : Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Text('Tracks',
+                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                  const SizedBox(width: 10),
+                  Text('${tracks.length}', style: const TextStyle(color: _muted, fontSize: 14)),
+                ]);
           final buttons = [
             FilledButton.icon(
               style: FilledButton.styleFrom(
@@ -5769,14 +5793,15 @@ class TracksView extends StatelessWidget {
             ),
           ];
           return Padding(
-            padding: EdgeInsets.fromLTRB(narrow ? 18 : 28, 22, narrow ? 18 : 24, 10),
+            padding: EdgeInsets.fromLTRB(
+                narrow ? pagePad(context) : 28, narrow ? 12 : 22, narrow ? pagePad(context) : 24, 10),
             // Title, count and two buttons. Three pixels too wide on a phone, and the count
             // vanished under the first button — so on a phone the buttons drop to their own line.
             // The Row stays everywhere else, Spacer and all, because that is where it fits.
             child: narrow
                 ? Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [title, const SizedBox(height: 10), Row(children: buttons)],
+                    children: [title, const SizedBox(height: 8), Row(children: buttons)],
                   )
                 : Row(children: [title, const Spacer(), ...buttons]),
           );
@@ -5846,6 +5871,13 @@ class HomeStartView extends StatefulWidget {
 }
 
 class _HomeStartViewState extends State<HomeStartView> {
+  /// The margin every row on this screen hangs off.
+  ///
+  /// One number, used by the headings AND by the rows of covers under them. They were 28 and 24,
+  /// which is not a difference you can name but is one you can see: every cover on the screen sat
+  /// four points to the left of the heading it belonged to.
+  double get _pad => isCompact(context) ? 18.0 : 28.0;
+
   final _catalog = CatalogService();
   final _rec = RecommendService();
   List<CatalogAlbumHit> _charts = [];
@@ -5938,17 +5970,17 @@ class _HomeStartViewState extends State<HomeStartView> {
       padding: const EdgeInsets.only(bottom: 32),
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(28, 26, 28, 2),
+          padding: EdgeInsets.fromLTRB(_pad, 22, _pad, 2),
           child: Text('${_greeting()} 👋', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
         ),
-        const Padding(
-          padding: EdgeInsets.fromLTRB(28, 0, 28, 6),
-          child: Text('Ontdek nieuwe muziek en pak op waar je gebleven was',
+        Padding(
+          padding: EdgeInsets.fromLTRB(_pad, 0, _pad, 6),
+          child: const Text('Ontdek nieuwe muziek en pak op waar je gebleven was',
               style: TextStyle(color: _muted, fontSize: 13.5)),
         ),
         if (hero.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.fromLTRB(28, 14, 28, 4),
+            padding: EdgeInsets.fromLTRB(_pad, 14, _pad, 4),
             child: HeroCarousel(hits: hero.take(7).toList()),
           ),
         if (recent.isNotEmpty) _section('Recent toegevoegd', _localRow(recent.take(15).toList())),
@@ -5962,9 +5994,9 @@ class _HomeStartViewState extends State<HomeStartView> {
           _section('Nieuw van jouw artiesten',
               _releases.isEmpty ? _loadingRow() : _catalogRow(_releases.take(20).toList())),
         if (!anyLoading && _charts.isEmpty && _releases.isEmpty && _forYou.isEmpty && recent.isEmpty)
-          const Padding(
-            padding: EdgeInsets.fromLTRB(28, 40, 28, 0),
-            child: Text('Nog niks om te tonen — download wat muziek of ga naar Online zoeken.',
+          Padding(
+            padding: EdgeInsets.fromLTRB(_pad, 40, _pad, 0),
+            child: const Text('Nog niks om te tonen — download wat muziek of ga naar Online zoeken.',
                 style: TextStyle(color: _muted)),
           ),
       ],
@@ -5975,7 +6007,7 @@ class _HomeStartViewState extends State<HomeStartView> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(28, 22, 28, 12),
+            padding: EdgeInsets.fromLTRB(_pad, 22, _pad, 12),
             child: Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
           ),
           // Taller than the tile itself: a horizontal ListView gives its children a TIGHT height
@@ -5988,7 +6020,7 @@ class _HomeStartViewState extends State<HomeStartView> {
 
   Widget _localRow(List<Album> albums) => ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 24),
+        padding: EdgeInsets.symmetric(horizontal: _pad),
         itemCount: albums.length,
         separatorBuilder: (_, __) => const SizedBox(width: 14),
         itemBuilder: (_, i) => _card(
@@ -5998,7 +6030,7 @@ class _HomeStartViewState extends State<HomeStartView> {
 
   Widget _catalogRow(List<CatalogAlbumHit> hits) => ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 24),
+        padding: EdgeInsets.symmetric(horizontal: _pad),
         itemCount: hits.length,
         separatorBuilder: (_, __) => const SizedBox(width: 14),
         itemBuilder: (_, i) => _card(
@@ -6009,7 +6041,7 @@ class _HomeStartViewState extends State<HomeStartView> {
 
   Widget _recRow(List<RecTrack> ts) => ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 24),
+        padding: EdgeInsets.symmetric(horizontal: _pad),
         itemCount: ts.length,
         separatorBuilder: (_, __) => const SizedBox(width: 14),
         // To the album, the same as every other row here. A tile that started playing instead was
