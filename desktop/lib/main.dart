@@ -7070,29 +7070,102 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
 }
 
 /// Network cover with a graceful placeholder (album browse / artist photos from Deezer).
-Widget _netCover(String? url, {double size = 160, double radius = 12, bool circle = false}) {
-  final shape = circle ? BoxShape.circle : BoxShape.rectangle;
-  final br = circle ? null : BorderRadius.circular(radius);
-  final placeholder = Container(
-    width: size,
-    height: size,
-    decoration: BoxDecoration(
-      shape: shape,
-      borderRadius: br,
-      gradient: const LinearGradient(colors: [Color(0xFF242838), Color(0xFF1A1D29)]),
-    ),
-    child: Icon(circle ? Icons.person_rounded : Icons.album_rounded, color: _muted.withValues(alpha: .4), size: size * .34),
-  );
-  if (url == null || url.isEmpty) return placeholder;
-  return Container(
-    width: size,
-    height: size,
-    clipBehavior: Clip.antiAlias,
-    decoration: BoxDecoration(shape: shape, borderRadius: br),
-    child: Image.network(url, fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => placeholder,
-        loadingBuilder: (c, w, p) => p == null ? w : placeholder),
-  );
+Widget _netCover(String? url, {double size = 160, double radius = 12, bool circle = false}) =>
+    _NetCover(url: url, size: size, radius: radius, circle: circle);
+
+/// A cover that lives at a URL, drawn from disk the second time you see it.
+///
+/// `Image.network` caches in memory and nothing else, so every launch of Start, Ontdek or Online
+/// zoeken downloaded every cover on the page again — which is what "everything comes in very
+/// slowly" was. The bytes go through [CoverEnricher.netImage], which keeps them on disk, and
+/// through the map below, which keeps the last few hundred in memory so scrolling a row does not
+/// go back to the disk for a picture that is two tiles away.
+class _NetCover extends StatefulWidget {
+  const _NetCover({required this.url, required this.size, required this.radius, required this.circle});
+
+  final String? url;
+  final double size;
+  final double radius;
+  final bool circle;
+
+  @override
+  State<_NetCover> createState() => _NetCoverState();
+}
+
+class _NetCoverState extends State<_NetCover> {
+  /// Insertion-ordered, so the oldest entry is the first one out. Bounded because a long scroll
+  /// through search results would otherwise hold every cover it passed for as long as the app runs.
+  static final _mem = <String, Uint8List>{};
+  static const _memMax = 300;
+
+  Uint8List? _bytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolve();
+  }
+
+  @override
+  void didUpdateWidget(_NetCover old) {
+    super.didUpdateWidget(old);
+    if (old.url != widget.url) {
+      _bytes = null;
+      _resolve();
+    }
+  }
+
+  Future<void> _resolve() async {
+    final url = widget.url;
+    if (url == null || url.isEmpty) return;
+    final hit = _mem[url];
+    if (hit != null) {
+      // Synchronously during initState would be a setState before the first build.
+      if (mounted) setState(() => _bytes = hit);
+      return;
+    }
+    final settings = context.read<AppSettings>();
+    final bytes = await CoverEnricher(settings).netImage(url);
+    if (bytes == null || !mounted || widget.url != url) return;
+    _mem[url] = bytes;
+    if (_mem.length > _memMax) _mem.remove(_mem.keys.first);
+    setState(() => _bytes = bytes);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final shape = widget.circle ? BoxShape.circle : BoxShape.rectangle;
+    final br = widget.circle ? null : BorderRadius.circular(widget.radius);
+    final b = _bytes;
+    if (b == null) {
+      return Container(
+        width: widget.size,
+        height: widget.size,
+        decoration: BoxDecoration(
+          shape: shape,
+          borderRadius: br,
+          gradient: const LinearGradient(colors: [Color(0xFF242838), Color(0xFF1A1D29)]),
+        ),
+        child: Icon(widget.circle ? Icons.person_rounded : Icons.album_rounded,
+            color: _muted.withValues(alpha: .4), size: widget.size * .34),
+      );
+    }
+    return Container(
+      width: widget.size,
+      height: widget.size,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(shape: shape, borderRadius: br),
+      // A cover arriving is the page filling in, not an effect: it fades rather than snapping,
+      // because a grid where twenty tiles pop in at slightly different moments reads as flicker.
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 180),
+        child: Image.memory(b,
+            key: ValueKey(widget.url),
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => const SizedBox()),
+      ),
+    );
+  }
 }
 
 /// Combined torrent + Soulseek sources for one query — the "streams" list under a track/album.

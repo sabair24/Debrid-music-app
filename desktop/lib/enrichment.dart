@@ -102,6 +102,13 @@ class CoverEnricher {
   Directory get bioDir => Directory(_dir('bios'));
   Directory get fixDir => Directory(_dir('fixcovers'));
 
+  /// Pictures fetched by URL — chart covers, recommendations, search results.
+  ///
+  /// These have no album and no artist to key on; the URL is all there is. Kept apart from
+  /// `covers/` for exactly that reason: that folder is your library, this one is the internet, and
+  /// throwing the second away must never touch the first.
+  Directory get netDir => Directory(_dir('netcovers'));
+
   // Stable FNV-1a hash (Dart's String.hashCode is randomized per run, so it can't
   // be used for a persistent on-disk cache key).
   static String _fnv(String s) {
@@ -151,6 +158,65 @@ class CoverEnricher {
 
   /// Download raw image bytes for a chosen cover URL (with the right User-Agent).
   Future<Uint8List?> downloadImage(String url) => _download(url);
+
+  /// A picture from the web, from disk the second time you ask.
+  ///
+  /// Start, Ontdek and Online zoeken draw dozens of covers straight from a URL, and `Image.network`
+  /// keeps them in memory only — so every launch re-downloaded every one of them, and the page sat
+  /// there filling in for as long as that took. The bytes are the same bytes tomorrow.
+  ///
+  /// Every failure falls through to a plain download, and a download that fails returns null: a
+  /// cache that cannot be read or written costs a page nothing but the speed it never had.
+  Future<Uint8List?> netImage(String url) async {
+    final f = _netFile(url);
+    try {
+      if (await f.exists()) return await f.readAsBytes();
+    } catch (_) {}
+    final bytes = await _download(url);
+    if (bytes == null) return null;
+    try {
+      await netDir.create(recursive: true);
+      await f.writeAsBytes(bytes);
+      await _pruneNet();
+    } catch (_) {
+      // A full disk must not cost you the cover you are looking at.
+    }
+    return bytes;
+  }
+
+  File _netFile(String url) => File('${netDir.path}${Platform.pathSeparator}${_fnv(url)}.img');
+
+  /// Keep the folder from growing forever.
+  ///
+  /// Every search you run adds covers you will never look at again — unlike `covers/`, which is
+  /// bounded by the size of your library. A thousand of them is a few tens of megabytes and more
+  /// than any session needs; past that the oldest go.
+  static const _netMax = 1000;
+  static bool _pruning = false;
+
+  Future<void> _pruneNet() async {
+    if (_pruning) return;
+    _pruning = true;
+    try {
+      final all = await netDir.list().where((e) => e is File).cast<File>().toList();
+      if (all.length <= _netMax) return;
+      final stamped = <(DateTime, File)>[];
+      for (final f in all) {
+        try {
+          stamped.add((await f.lastModified(), f));
+        } catch (_) {}
+      }
+      stamped.sort((a, b) => a.$1.compareTo(b.$1));
+      for (final (_, f) in stamped.take(stamped.length - _netMax)) {
+        try {
+          await f.delete();
+        } catch (_) {}
+      }
+    } catch (_) {
+    } finally {
+      _pruning = false;
+    }
+  }
   File _artistFile(String name) => File('${artistDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.jpg');
   File _bioFile(String name) => File('${bioDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.txt');
 
