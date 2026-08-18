@@ -72,17 +72,20 @@ jobs:
 
           if [ ! -s "$KS" ]; then
             echo "::warning title=Ondertekenen overgeslagen::ANDROID_KEYSTORE_BASE64 leverde geen bestand op. Is het echt de base64 van de .jks, in één stuk geplakt?"
+            echo "SIGNING_NOTE=ANDROID_KEYSTORE_BASE64 leverde geen bestand op — geen geldige base64, of bij het plakken afgekapt." >> "$GITHUB_ENV"
             exit 0
           fi
 
           if ! keytool -list -keystore "$KS" -storepass "$KEYSTORE_PASSWORD" >/dev/null 2>&1; then
             echo "::warning title=Ondertekenen overgeslagen::De keystore gaat niet open met ANDROID_KEYSTORE_PASSWORD. Of dat wachtwoord klopt niet, of de base64 is onderweg afgekapt."
+            echo "SIGNING_NOTE=De keystore gaat niet open met ANDROID_KEYSTORE_PASSWORD — dat wachtwoord klopt niet, of de base64 is afgekapt." >> "$GITHUB_ENV"
             exit 0
           fi
 
           if ! keytool -list -keystore "$KS" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null 2>&1; then
             echo "::warning title=Ondertekenen overgeslagen::ANDROID_KEY_ALIAS staat niet in deze keystore. Wat er wel in zit staat hieronder."
             keytool -list -keystore "$KS" -storepass "$KEYSTORE_PASSWORD" 2>/dev/null | grep -i 'PrivateKeyEntry' || true
+            echo "SIGNING_NOTE=ANDROID_KEY_ALIAS staat niet in deze keystore — de aanwezige aliassen staan in het buildlogboek." >> "$GITHUB_ENV"
             exit 0
           fi
 
@@ -91,6 +94,7 @@ jobs:
           if ! keytool -certreq -keystore "$KS" -storepass "$KEYSTORE_PASSWORD" \
                  -alias "$KEY_ALIAS" -keypass "$KEY_PASSWORD" >/dev/null 2>&1; then
             echo "::warning title=Ondertekenen overgeslagen::De keystore gaat open, maar ANDROID_KEY_PASSWORD hoort niet bij deze alias. Bij keytool is dat meestal hetzelfde wachtwoord als dat van de keystore."
+            echo "SIGNING_NOTE=De keystore gaat open, maar ANDROID_KEY_PASSWORD hoort niet bij deze alias." >> "$GITHUB_ENV"
             exit 0
           fi
 
@@ -155,7 +159,9 @@ jobs:
           else
             CERTS=$(keytool -printcert -jarfile "$APK" 2>/dev/null || true)
           fi
-          FP=$(printf '%s' "$CERTS" | grep -i -m1 'SHA-256' | tr -d ' ' | cut -d: -f2- || true)
+          # Alleen de hex. apksigner schrijft "Signer #1 certificate SHA-256 digest: <hex>", en
+          # dat label meenemen maakt de regel onleesbaar precies waar hij vergeleken moet worden.
+          FP=$(printf '%s' "$CERTS" | grep -io '[0-9a-f]\{64\}' | head -1 || true)
           if [ -n "${DEBRIDMUSIC_KEYSTORE:-}" ]; then
             KEY="de vaste release-sleutel"
           else
@@ -239,7 +245,8 @@ jobs:
 
             <sub>Ondertekend met ${{ env.SIGNED_WITH }} · SHA-256 <code>${{ env.SIGNED_FP }}</code><br>
             Blijft die vingerafdruk tussen twee builds gelijk, dan kun je de ene over de andere
-            installeren. Verandert hij, dan niet.</sub>
+            installeren. Verandert hij, dan niet.<br>
+            ${{ env.SIGNING_NOTE }}</sub>
           draft: false
           prerelease: true
           files: desktop/build/app/outputs/flutter-apk/${{ env.APK_NAME }}
