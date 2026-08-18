@@ -137,6 +137,32 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// The queue as it will actually play, shuffle applied.
   List<Track> get queueTracks => List.unmodifiable(_order);
 
+  /// Where in [queueTracks] the cursor is. -1 when nothing is queued.
+  int get queueIndex => _index;
+
+  /// Play the queue item at [i], leaving the queue itself alone.
+  ///
+  /// Not `playQueue(queueTracks, i)`. That hands the ORDER back in as the original and calls
+  /// _rebuildOrder, so with shuffle on the queue is shuffled again — you tap the fifth song and
+  /// the sixth one plays. Here only the cursor moves.
+  Future<void> jumpTo(int i) async {
+    if (radioMode || i < 0 || i >= _order.length || i == _index) return;
+    // The same seam every other queue change goes through: while a speaker has the music, this
+    // device stays silent and only follows along.
+    final hand = castQueue;
+    if (hand != null && await hand(_order, i)) {
+      if (playing) await _player.pause();
+      _index = i;
+      playing = false;
+      position = Duration.zero;
+      notifyListeners();
+      _saveQueue();
+      return;
+    }
+    _index = i;
+    await _openCurrent();
+  }
+
   // Resume: persist the library queue + position so the app reopens where you left off.
   bool _resumable = false;
   bool _restoring = false; // block saves while restore() opens+seeks (position blips to 0)

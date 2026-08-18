@@ -116,8 +116,9 @@ class _PhoneTopBar extends StatelessWidget {
             IconButton(
               icon: const Icon(Icons.settings_rounded, size: 22),
               tooltip: 'Instellingen',
-              // 44 points on a touch screen — the smallest thing Apple expects a finger to find.
-              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+              // 48, not the 44 the rest of this app uses. 44 is Apple's figure; Android asks for
+              // 48dp, and this bar is on an Android phone far more often than on an iPad.
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
               onPressed: () => openSettings(context),
             ),
           ],

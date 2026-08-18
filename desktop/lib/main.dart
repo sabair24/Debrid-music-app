@@ -10,6 +10,8 @@ import 'package:flutter/foundation.dart' show mapEquals;
 // the default set on purpose.
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/services.dart';
+// SpringDescription and SpringSimulation, for the pull-to-close on the now-playing screen.
+import 'package:flutter/physics.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'package:provider/provider.dart';
@@ -4936,13 +4938,84 @@ class NowPlayingScreen extends StatefulWidget {
   State<NowPlayingScreen> createState() => _NowPlayingScreenState();
 }
 
-class _NowPlayingScreenState extends State<NowPlayingScreen> {
+class _NowPlayingScreenState extends State<NowPlayingScreen>
+    with SingleTickerProviderStateMixin {
   /// The sleeve the AlbumArt below settled on, so enlarging it shows THAT image.
   ///
   /// The zoom used to open the player's own cover, which is captured when a track starts and knows
   /// nothing about the pressing this screen resolved — so clicking the art you were looking at
   /// produced a different, older one.
   Uint8List? _shown;
+
+  /// How far the screen has been pulled down, in points.
+  ///
+  /// Unbounded because it is not a 0..1 progress: while a finger is down this IS the offset, set
+  /// straight from the drag, and when the finger lifts a spring carries the same number back to
+  /// zero. One value for both halves is what makes the hand-off seamless — the spring starts from
+  /// where the finger actually left it, at the speed it left at, rather than from a fresh zero.
+  late final AnimationController _pull = AnimationController.unbounded(vsync: this);
+
+  /// Critically damped: a screen coming back to rest should not bounce. Overshoot belongs to
+  /// something you threw, and a pull that did not travel far enough to dismiss was not a throw.
+  static final _settle = SpringDescription.withDampingRatio(
+    mass: 1,
+    stiffness: 500,
+    ratio: 1,
+  );
+
+  @override
+  void dispose() {
+    _pull.dispose();
+    super.dispose();
+  }
+
+  /// Where a flick is heading, not where the finger stopped.
+  ///
+  /// The exponential decay a scroll view uses, so a small fast flick dismisses and a long slow
+  /// drag that stalls halfway does not.
+  static double _project(double velocity) => (velocity / 1000) * 0.998 / (1 - 0.998);
+
+  void _onPull(DragUpdateDetails d) {
+    // 1:1 with the finger, and never above the top — there is nothing up there to reveal.
+    final next = _pull.value + d.delta.dy;
+    _pull.value = next < 0 ? 0 : next;
+  }
+
+  void _onPullEnd(DragEndDetails d) {
+    final v = d.primaryVelocity ?? 0;
+    final height = MediaQuery.sizeOf(context).height;
+    // Velocity decides, not the position it happens to have reached: a short sharp flick means
+    // "away" just as clearly as a slow drag past the halfway mark.
+    if (v > 700 || _pull.value + _project(v) > height * .28) {
+      Navigator.pop(context);
+      return;
+    }
+    _pull.animateWith(SpringSimulation(_settle, _pull.value, 0, v));
+  }
+
+  /// The player, pullable downwards to close it.
+  ///
+  /// Only where there is a finger. A window has the chevron, and a mouse dragging a screen off
+  /// the bottom is not a gesture anyone reaches for.
+  ///
+  /// The gesture sits around everything rather than only the sleeve: the two sliders below it are
+  /// horizontal, so they never contend for a vertical drag, and a bigger target is the difference
+  /// between a gesture you can use without looking and one you have to aim at.
+  Widget _dismissable(Widget child) {
+    if (!_isTouch) return child;
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onVerticalDragUpdate: _onPull,
+      onVerticalDragEnd: _onPullEnd,
+      child: AnimatedBuilder(
+        animation: _pull,
+        builder: (_, inner) => Transform.translate(offset: Offset(0, _pull.value), child: inner),
+        // Built once and carried through every frame of the drag: the sleeve, the disc and the
+        // blurred backdrop are expensive, and none of them changes because the screen moved.
+        child: child,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -4957,7 +5030,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
     final prog = x.progress;
     return Scaffold(
       backgroundColor: _bg,
-      body: Stack(
+      body: _dismissable(Stack(
         children: [
           if (p.currentCover != null)
             Positioned.fill(
@@ -4967,12 +5040,24 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
           SafeArea(
             child: Column(
               children: [
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: IconButton(
-                    icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 30),
-                    onPressed: () => Navigator.pop(context),
-                  ),
+                Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 30),
+                      tooltip: 'Terug',
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                    const Spacer(),
+                    // Only where there is a queue to look at. On the radio the list is built as it
+                    // goes, and a button onto a list that is one item long says nothing.
+                    if (!p.radioMode && p.queueTracks.length > 1)
+                      IconButton(
+                        icon: const Icon(Icons.queue_music_rounded, size: 26),
+                        tooltip: 'Wachtrij',
+                        onPressed: () => _openQueue(context),
+                      ),
+                    const SizedBox(width: 4),
+                  ],
                 ),
                 const Spacer(),
                 Pressable(
@@ -5197,10 +5282,143 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
             ),
           ),
         ],
-      ),
+      )),
     );
   }
 }
+
+/// What is coming, and a way to jump to any of it.
+///
+/// Opened from the now-playing screen rather than sitting on it: the queue is what you consult,
+/// the record is what you look at, and a list of four hundred songs under the sleeve would make
+/// the second one the smaller half of the screen.
+void _openQueue(BuildContext context) {
+  showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: _panel,
+    showDragHandle: true,
+    // The sheet sets its own height below; without this it is capped at half the screen.
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+    ),
+    builder: (_) => const _QueueSheet(),
+  );
+}
+
+class _QueueSheet extends StatefulWidget {
+  const _QueueSheet();
+
+  @override
+  State<_QueueSheet> createState() => _QueueSheetState();
+}
+
+class _QueueSheetState extends State<_QueueSheet> {
+  /// Every row the same height, which is what lets the list open on the right one without
+  /// measuring anything: the offset is simply the index times this.
+  static const _rowHeight = 58.0;
+
+  late final ScrollController _scroll;
+
+  @override
+  void initState() {
+    super.initState();
+    // Open where you are, not at the top. A queue of four hundred songs otherwise opens three
+    // hundred rows away from the only one you came to see. Half a row up so it is clear the list
+    // continues above.
+    final at = context.read<PlayerStore>().queueIndex;
+    _scroll = ScrollController(
+        initialScrollOffset: at <= 0 ? 0 : (at * _rowHeight) - (_rowHeight / 2));
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.watch<PlayerStore>();
+    final queue = p.queueTracks;
+    final at = p.queueIndex;
+    return SizedBox(
+      height: MediaQuery.sizeOf(context).height * .7,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 2, 18, 10),
+            child: Row(
+              children: [
+                const Text('Wachtrij',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                const SizedBox(width: 8),
+                Text('${queue.length} nummers',
+                    style: const TextStyle(color: _muted, fontSize: 12.5)),
+              ],
+            ),
+          ),
+          const Divider(color: _line, height: 1),
+          Expanded(
+            child: ListView.builder(
+              controller: _scroll,
+              itemExtent: _rowHeight,
+              itemCount: queue.length,
+              padding: EdgeInsets.only(bottom: MediaQuery.viewPaddingOf(context).bottom),
+              itemBuilder: (_, i) => _queueRow(context, queue[i], i, i == at),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _queueRow(BuildContext context, Track t, int i, bool playing) => InkWell(
+        // Straight to PlayerStore.jumpTo, which moves the cursor and nothing else. Handing the
+        // queue back through playQueue would reshuffle it and play the wrong song.
+        onTap: playing ? null : () => context.read<PlayerStore>().jumpTo(i),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 26,
+                child: playing
+                    ? const Icon(Icons.equalizer_rounded, size: 17, color: _accent2)
+                    : Text('${i + 1}',
+                        style: const TextStyle(color: _muted, fontSize: 12.5)),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(t.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: playing ? FontWeight.w700 : FontWeight.w600,
+                          color: playing ? _accent2 : _text,
+                        )),
+                    Text(t.artist,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: _muted, fontSize: 12)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(_fmt(t.duration),
+                  style: const TextStyle(color: _muted, fontSize: 12.5)),
+            ],
+          ),
+        ),
+      );
+}
+
 
 class _ZoomView extends StatelessWidget {
   final Uint8List bytes;
