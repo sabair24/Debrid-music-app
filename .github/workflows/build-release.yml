@@ -47,20 +47,55 @@ jobs:
         working-directory: desktop
         run: flutter pub get
 
-      # The signing key, for the length of this run.
+      # The signing key, checked before it is used.
       #
-      # Without it the build falls back to the debug key, and a debug key is generated fresh on
+      # Without one the build falls back to the debug key, and a debug key is generated fresh on
       # every runner — so every APK was signed by a different key and Android refused to install
-      # one over another. Skipped rather than failed when the secret is absent: a fork, or this
-      # repository before the key was added, still gets a build.
+      # one over another.
+      #
+      # Everything here is verified up front rather than discovered by Gradle five minutes later,
+      # because "keystore password was incorrect" at the packaging step costs a whole build to say
+      # something keytool can say in a second. A key that does not check out is not fatal: the
+      # keystore is simply not handed on, the build signs with debug as it always did, and the
+      # warning says which of the four secrets to look at.
       - name: Unlock the signing key
         # env and not secrets: the two publish steps below already prove this form works here.
         if: env.KEYSTORE_BASE64 != ''
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/debridmusic.jks"
-          echo "DEBRIDMUSIC_KEYSTORE=$RUNNER_TEMP/debridmusic.jks" >> "$GITHUB_ENV"
+          KS="$RUNNER_TEMP/debridmusic.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$KS" 2>/dev/null || true
+
+          if [ ! -s "$KS" ]; then
+            echo "::warning title=Ondertekenen overgeslagen::ANDROID_KEYSTORE_BASE64 leverde geen bestand op. Is het echt de base64 van de .jks, in één stuk geplakt?"
+            exit 0
+          fi
+
+          if ! keytool -list -keystore "$KS" -storepass "$KEYSTORE_PASSWORD" >/dev/null 2>&1; then
+            echo "::warning title=Ondertekenen overgeslagen::De keystore gaat niet open met ANDROID_KEYSTORE_PASSWORD. Of dat wachtwoord klopt niet, of de base64 is onderweg afgekapt."
+            exit 0
+          fi
+
+          if ! keytool -list -keystore "$KS" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null 2>&1; then
+            echo "::warning title=Ondertekenen overgeslagen::ANDROID_KEY_ALIAS staat niet in deze keystore. Wat er wel in zit staat hieronder."
+            keytool -list -keystore "$KS" -storepass "$KEYSTORE_PASSWORD" 2>/dev/null | grep -i 'PrivateKeyEntry' || true
+            exit 0
+          fi
+
+          # -certreq raakt niets aan en is het enige dat het SLEUTELwachtwoord echt probeert;
+          # -list komt niet verder dan de keystore zelf.
+          if ! keytool -certreq -keystore "$KS" -storepass "$KEYSTORE_PASSWORD" \
+                 -alias "$KEY_ALIAS" -keypass "$KEY_PASSWORD" >/dev/null 2>&1; then
+            echo "::warning title=Ondertekenen overgeslagen::De keystore gaat open, maar ANDROID_KEY_PASSWORD hoort niet bij deze alias. Bij keytool is dat meestal hetzelfde wachtwoord als dat van de keystore."
+            exit 0
+          fi
+
+          echo "Sleutel in orde."
+          echo "DEBRIDMUSIC_KEYSTORE=$KS" >> "$GITHUB_ENV"
 
       # This workflow is the only one that runs on an ordinary push, so it is the only place a
       # change to the app is checked before it lands on a phone. The Apple workflow runs the full

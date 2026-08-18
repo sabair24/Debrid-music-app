@@ -81,8 +81,18 @@ Die vingerafdruk is het hele antwoord. **Blijft hij tussen twee builds gelijk, d
 over de andere installeren.** Verandert hij per build, dan pakt de build de secrets niet en valt
 hij terug op debug.
 
-Gebeurt dat terwijl je de secrets wel hebt ingesteld, dan is het bijna altijd de naam. Ze zijn
-hoofdlettergevoelig en moeten exact zo heten:
+Gaat er iets mis, dan zegt de stap **"Unlock the signing key"** welke van de vier het is. Hij
+controleert ze op volgorde en gaat verder met de debug-sleutel in plaats van de build te laten
+vallen — je krijgt dus altijd een APK, met een waarschuwing erbij:
+
+| Waarschuwing | Wat eraan mankeert |
+|---|---|
+| leverde geen bestand op | `ANDROID_KEYSTORE_BASE64` is geen base64, of is bij het plakken afgekapt |
+| gaat niet open met ANDROID_KEYSTORE_PASSWORD | dat wachtwoord klopt niet bij deze keystore |
+| ANDROID_KEY_ALIAS staat niet in deze keystore | verkeerde alias — de aliassen die er wél in zitten worden eronder afgedrukt |
+| ANDROID_KEY_PASSWORD hoort niet bij deze alias | bij `keytool` is dat meestal hetzelfde wachtwoord als dat van de keystore |
+
+De namen zijn hoofdlettergevoelig en moeten exact zo heten:
 
 ```
 ANDROID_KEYSTORE_BASE64
@@ -93,6 +103,18 @@ ANDROID_KEY_PASSWORD
 
 Staan ze onder de **repository**-secrets van `sabair24/Debrid-music-app` en niet onder een
 environment of een organisatie? Alleen de eerste soort ziet deze workflow zonder extra regels.
+
+### De base64 in één stuk
+
+De meest voorkomende oorzaak van "gaat niet open" is niet het wachtwoord maar het plakken. Doe het
+via het klembord in plaats van via een editor:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("debridmusic.jks")) | Set-Clipboard
+```
+
+Dat geeft één lange regel zonder afbrekingen. Een editor die regels afbreekt of een stuk weglaat
+levert een bestand op dat wél een keystore lijkt en niet opengaat.
 
 ## Zonder de secrets
 
