@@ -2765,7 +2765,12 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                 const SizedBox(height: 6),
                 // The artist is a link: from a record you're holding, the obvious next question is
                 // "what else did they make".
-                Row(
+                // A Wrap and not a Row. “Sophie Ellis-Bextor · 2001 · Dance-pop · 12 nummers”
+                // is wider than a phone, and a Row that wide does not shrink or ellipsize — it
+                // overflows, and Flutter paints the yellow-and-black bar over the record you were
+                // looking at. Here the year and the rest simply drop to a second line.
+                Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     ArtistNames(names: [album.artist], style: const TextStyle(color: _muted)),
                     Text(
