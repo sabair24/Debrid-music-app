@@ -31,12 +31,21 @@ IconData sectionIcon(int id) => switch (id) {
 class _PhoneShell extends StatelessWidget {
   const _PhoneShell({
     required this.view,
+    required this.innerTitle,
+    required this.onBack,
     required this.searchBar,
     required this.content,
     required this.onSelect,
   });
 
   final int view;
+
+  /// The name of the layer inside the section, when one is open — an artist, today. Null the rest
+  /// of the time, and then the bar says which section you are in.
+  final String? innerTitle;
+
+  /// Closes that layer. Null when there is none.
+  final VoidCallback? onBack;
 
   /// Null on the sections that have nothing to search — the shell decides, not this file.
   final Widget? searchBar;
@@ -57,14 +66,43 @@ class _PhoneShell extends StatelessWidget {
       resizeToAvoidBottomInset: false,
       body: Column(
         children: [
-          _PhoneTopBar(title: NavSections.labelOf(view)),
+          _PhoneTopBar(title: innerTitle ?? NavSections.labelOf(view), onBack: onBack),
           const _OfflineBanner(),
           // No tvOverscan here: a television is 960 points wide and never reaches this frame.
           Expanded(
             child: Column(
               children: [
                 if (search != null) search,
-                Expanded(child: content),
+                Expanded(
+                  child: Stack(
+                    children: [
+                      Positioned.fill(child: content),
+                      // Where the list runs out from under the chrome above it.
+                      //
+                      // A row of covers scrolling up used to end on a hard horizontal cut halfway
+                      // through a sleeve, which reads as clipping rather than as scrolling. Twenty
+                      // points of the page's own colour fading out is enough to say "there is more
+                      // above this" without drawing a line that would say something stronger.
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        height: 20,
+                        child: IgnorePointer(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [_bg, _bg.withValues(alpha: 0)],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -84,33 +122,51 @@ class _PhoneShell extends StatelessWidget {
   }
 }
 
-/// The section you are in, and the way into the settings.
+/// Where you are, the way back out of it, and the way into the settings.
 ///
 /// No download badge here even though the compact bar this replaces carried one: downloads now
 /// have a place of their own on the bottom bar, and it carries the count. Saying it twice on one
 /// screen is noise.
 class _PhoneTopBar extends StatelessWidget {
-  const _PhoneTopBar({required this.title});
+  const _PhoneTopBar({required this.title, this.onBack});
 
   final String title;
+
+  /// Non-null while a layer is open inside the section. Then this bar is what closes it, rather
+  /// than an arrow drawn over whatever the page happens to be showing.
+  final VoidCallback? onBack;
 
   @override
   Widget build(BuildContext context) {
     // The status bar keeps the panel colour; only the contents move down, so the top of the screen
     // still reads as one piece rather than a black strip above the app.
     final top = MediaQuery.viewPaddingOf(context).top;
+    final back = onBack;
     return SizedBox(
       height: 52 + top,
       child: Padding(
-        padding: EdgeInsets.only(top: top, left: 18, right: 6),
+        padding: EdgeInsets.only(top: top, left: back == null ? 18 : 4, right: 6),
         child: Row(
           children: [
+            if (back != null)
+              IconButton(
+                icon: const Icon(Icons.arrow_back_rounded, size: 24),
+                tooltip: 'Terug',
+                constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                onPressed: back,
+              ),
             Expanded(
               child: Text(
                 title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800),
+                // A shade smaller with an arrow beside it: an artist name is long, and “Sophie
+                // Ellis-Bextor” at 21 was three characters from the ellipsis before the arrow
+                // took its 48 points.
+                style: TextStyle(
+                  fontSize: back == null ? 21 : 19,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
             ),
             IconButton(

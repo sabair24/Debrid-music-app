@@ -812,7 +812,9 @@ class LanServer {
 
     final op = (body['op'] ?? '') as String;
     final album = body['albumId'] is String ? catalog.album(body['albumId'] as String) : null;
-    if (op != 'removeTracks' && album == null) {
+    // Both of these name something other than an album — tracks by id, an artist by name — so
+    // demanding an albumId would reject them for missing a field they never had.
+    if (op != 'removeTracks' && op != 'artistArt' && album == null) {
       // The client is looking at a catalogue this PC has moved on from — say so, rather than
       // silently editing the wrong record.
       return _json(req.response, {'error': 'Dat album staat hier niet (meer).'},
@@ -833,6 +835,17 @@ class LanServer {
             discogsRelease: (body['discogsRelease'] as num?)?.toInt(),
             mbid: body['mbid'] as String?,
           );
+        case 'artistArt':
+          final artist = (body['artist'] as String? ?? '').trim();
+          final kind = (body['kind'] as String? ?? '').trim();
+          final url = (body['url'] as String? ?? '').trim();
+          if (artist.isEmpty || url.isEmpty || !const ['portrait', 'backdrop', 'logo'].contains(kind)) {
+            return _json(req.response, {'error': 'Artiest, soort of foto ontbreekt.'},
+                status: HttpStatus.badRequest);
+          }
+          // The catalogue folds every artist's choice into its fingerprint, so this alone moves the
+          // ETag and the device that asked sees its own pick come back.
+          await library.setArtistArt(artist, kind, url);
         case 'merge':
           await library.mergeEditions(album!);
         case 'unmerge':

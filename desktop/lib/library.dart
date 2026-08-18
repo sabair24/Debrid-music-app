@@ -630,6 +630,14 @@ class LibraryStore extends ChangeNotifier {
   }
 
   Future<void> setArtistArt(String artist, String kind, String url) async {
+    // On a client this file is not the one anybody reads back: [chosenArtistArt] takes the PC's
+    // answer out of the catalogue. Writing here saved the pick into a map with no readers, which
+    // is exactly why choosing a photo on a phone appeared to do nothing at all — no error, no
+    // change, the old picture still there.
+    if (isRemote) {
+      await _editOnPc({'op': 'artistArt', 'artist': artist, 'kind': kind, 'url': url});
+      return;
+    }
     _artistArtChoice.putIfAbsent(artistKey(artist), () => {})[kind] = url;
     try {
       await Directory(_appDir).create(recursive: true);

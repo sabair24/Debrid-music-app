@@ -784,12 +784,24 @@ class _HomeShellState extends State<HomeShell> {
   /// section: both would be registered on the same route and BOTH fire on one press of BACK.
   VoidCallback? _popInner;
 
-  void _setInnerLayer(VoidCallback? pop) {
-    if (_popInner == pop) return;
+  /// What that layer is called, for the bar at the top of a phone.
+  ///
+  /// An artist page reached from Artiesten used to leave the bar saying “Artiesten”, so the one
+  /// place on the screen that says where you are said the wrong thing, and the only way back was
+  /// an arrow drawn over the photo.
+  String? _innerTitle;
+
+  void _setInnerLayer(VoidCallback? pop, {String? title}) {
+    if (_popInner == pop && _innerTitle == title) return;
     // During the child's build, so not inside setState — the flag only feeds canPop, which is
     // read on the next frame anyway.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) setState(() => _popInner = pop);
+      if (mounted) {
+        setState(() {
+          _popInner = pop;
+          _innerTitle = title;
+        });
+      }
     });
   }
 
@@ -800,7 +812,12 @@ class _HomeShellState extends State<HomeShell> {
     super.dispose();
   }
 
-  bool get _searchable => _view == 0 || _view == 1 || _view == 4;
+  /// The section's own search box — and only while you are looking at the section.
+  ///
+  /// An artist page is not a place to search your library from: the box and the four quality
+  /// chips took 180 of a phone's 915 points off a page that was already having to fit a portrait,
+  /// a name, two buttons and a discography.
+  bool get _searchable => (_view == 0 || _view == 1 || _view == 4) && _popInner == null;
 
   /// Does this track match the current search box + quality filter?
   bool _matches(Track t) {
@@ -1066,6 +1083,8 @@ class _HomeShellState extends State<HomeShell> {
   /// methods the wide layout uses, so the two can never drift into showing different things.
   Widget _phoneScaffold(BuildContext context) => _PhoneShell(
         view: _view,
+        innerTitle: _innerTitle,
+        onBack: _popInner,
         searchBar: _searchable ? _searchBar(context) : null,
         content: _content(),
         onSelect: _go,
@@ -3472,7 +3491,9 @@ class ArtistsView extends StatefulWidget {
   /// SAME route — this view is a swapped-in body, not a route — so one press of BACK fires both:
   /// the shell would jump to Start while this cleared its selection, and you would lose your place
   /// in the artist list. Measured on the Shield, not guessed.
-  final void Function(VoidCallback?)? onInnerLayer;
+  /// Told when an artist page opens or closes, and what that page is called — the shell puts
+  /// the name in the bar at the top and the arrow beside it.
+  final void Function(VoidCallback? pop, {String? title})? onInnerLayer;
 
   const ArtistsView({super.key, required this.lib, this.albums, this.onInnerLayer});
   @override
@@ -3487,7 +3508,7 @@ class _ArtistsViewState extends State<ArtistsView> {
   /// Select an artist, or go back to the grid, and tell the shell either way.
   void _select(String? name) {
     setState(() => _selected = name);
-    widget.onInnerLayer?.call(name == null ? null : () => _select(null));
+    widget.onInnerLayer?.call(name == null ? null : () => _select(null), title: name);
   }
 
   @override
@@ -3532,11 +3553,14 @@ class _ArtistsViewState extends State<ArtistsView> {
                 childAspectRatio: .82),
             delegate: SliverChildBuilderDelegate((_, i) {
               final name = artists[i];
-              final art = widget.lib.artistImages[name] ??
-                  _source.firstWhere((a) => a.artist == name).cover;
+              // Most artists have no photo, and then this is one of their record sleeves. Which of
+              // the two it is decides how the tile draws it, so it is passed on rather than
+              // guessed at further down.
+              final photo = widget.lib.artistImages[name];
               return _ArtistCard(
                 name: name,
-                image: art,
+                image: photo ?? _source.firstWhere((a) => a.artist == name).cover,
+                isPhoto: photo != null,
                 onTap: () => _select(name),
               );
             }, childCount: artists.length),
@@ -3896,14 +3920,19 @@ class _ArtistDetailViewState extends State<ArtistDetailView> {
                   ),
                 ],
               ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 0, 0),
-                child: TextButton.icon(
-                  onPressed: widget.onBack,
-                  icon: const Icon(Icons.arrow_back_rounded, size: 18),
-                  label: const Text('Artiesten'),
+              // Only where nothing else offers the way back. On a phone the bar at the top of
+              // the screen carries the artist's name and an arrow, and a second arrow drawn over
+              // the photo — in accent purple, on whatever colours that photo happens to have — was
+              // both unreadable and redundant.
+              if (!isCompact(context))
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 8, 0, 0),
+                  child: TextButton.icon(
+                    onPressed: widget.onBack,
+                    icon: const Icon(Icons.arrow_back_rounded, size: 18),
+                    label: const Text('Artiesten'),
+                  ),
                 ),
-              ),
             ],
           ),
         ),
@@ -4164,8 +4193,15 @@ class _RelatedArtistCardState extends State<_RelatedArtistCard> {
 class _ArtistCard extends StatefulWidget {
   final String name;
   final Uint8List? image;
+
+  /// True when [image] is a picture OF the artist, false when it is one of their record sleeves.
+  final bool isPhoto;
   final VoidCallback onTap;
-  const _ArtistCard({required this.name, required this.image, required this.onTap});
+  const _ArtistCard(
+      {required this.name,
+      required this.image,
+      required this.onTap,
+      this.isPhoto = false});
 
   @override
   State<_ArtistCard> createState() => _ArtistCardState();
@@ -4173,6 +4209,51 @@ class _ArtistCard extends StatefulWidget {
 
 class _ArtistCardState extends State<_ArtistCard> {
   bool _hover = false;
+
+  /// A round tile that does not eat the picture inside it.
+  ///
+  /// A photo of a person survives a circle — that is what circles are for, and the face is in the
+  /// middle. A record sleeve does not: it is a square with the title printed to its edges, and a
+  /// circle cuts all four corners off. Adele's own name, "take me home", "ONEREPUBLIC" — every one
+  /// of them was sliced through in the grid, because most artists have no photo and it is a sleeve
+  /// that gets drawn.
+  ///
+  /// So the sleeve is set INSIDE the circle whole, on a blurred blow-up of itself. The same trick
+  /// the artist page uses behind its portrait, and for the same reason: colours the picture
+  /// already has, rather than a crop that is luck.
+  Widget _tile(double size) {
+    final img = widget.image;
+    if (img == null || widget.isPhoto) return cover(img, size: size, circle: true);
+    // A square inside a circle of diameter d has sides d/√2, which leaves 0.146·d of margin.
+    final inset = size * .145;
+    return ClipOval(
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+              child: Image.memory(img,
+                  fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox()),
+            ),
+            // The blur alone is still the sleeve's own brightness; this is what the sleeve on top
+            // has to stand out against.
+            DecoratedBox(decoration: BoxDecoration(color: Colors.black.withValues(alpha: .28))),
+            Padding(
+              padding: EdgeInsets.all(inset),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: Image.memory(img,
+                    fit: BoxFit.contain, errorBuilder: (_, __, ___) => const SizedBox()),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -4207,7 +4288,7 @@ class _ArtistCardState extends State<_ArtistCard> {
                             ]
                           : const [],
                     ),
-                    child: cover(widget.image, size: c.maxWidth, circle: true),
+                    child: _tile(c.maxWidth),
                   ),
                 ),
               ),
@@ -4596,7 +4677,7 @@ class PlayerBar extends StatelessWidget {
                   onPressed: t == null
                       ? null
                       : () => Navigator.of(context)
-                          .push(MaterialPageRoute(builder: (_) => const NowPlayingScreen())),
+                          .push(nowPlayingRoute()),
                   borderRadius: BorderRadius.circular(8),
                   child: MouseRegion(
                     cursor: t == null ? MouseCursor.defer : SystemMouseCursors.click,
@@ -4826,7 +4907,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
   final open = t == null
       ? null
       : () => Navigator.of(context)
-          .push(MaterialPageRoute(builder: (_) => const NowPlayingScreen()));
+          .push(nowPlayingRoute());
 
   return Container(
     height: 66 + bottomInset,
@@ -4930,6 +5011,31 @@ double _sleeve(BuildContext context) {
   final smaller = byWidth < byHeight ? byWidth : byHeight;
   return smaller.clamp(140.0, 360.0);
 }
+
+/// The now-playing screen, and the way it arrives and leaves: up from the bar, down off the
+/// bottom.
+///
+/// A MaterialPageRoute takes the platform's own transition, which on Android is a sideways slide.
+/// So pulling the screen down with a finger ended with it leaving to the RIGHT — the gesture and
+/// the animation disagreed about which way "away" was, and the seam between them was the most
+/// visible thing on the screen. Enter and exit along the same path, and the drag simply continues
+/// into the exit.
+Route<void> nowPlayingRoute() => PageRouteBuilder<void>(
+      transitionDuration: const Duration(milliseconds: 320),
+      // Out faster than in. Arriving is worth watching; leaving is not.
+      reverseTransitionDuration: const Duration(milliseconds: 240),
+      pageBuilder: (_, __, ___) => const NowPlayingScreen(),
+      transitionsBuilder: (_, animation, __, child) => SlideTransition(
+        position: Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero).animate(
+          CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
+          ),
+        ),
+        child: child,
+      ),
+    );
 
 class NowPlayingScreen extends StatefulWidget {
   const NowPlayingScreen({super.key});
@@ -5573,11 +5679,28 @@ Future<void> startRadio(BuildContext context, String artist) async {
     return;
   }
   // Library-forward smart shuffle: lead with owned tracks (instant), mix in discovery.
-  final items = _smartShuffle(_radioItemsFor(recs, lib));
+  var items = _smartShuffle(_radioItemsFor(recs, lib));
+
+  // Away from the PC, discovery is not on the menu.
+  //
+  // Every track the radio suggests that you do not own has to be resolved to an online stream, and
+  // a client cannot do that — playing an online source is the one thing that stays on the PC. The
+  // queue then filled with items that were skipped one by one, silently, which from where you are
+  // sitting is a Radio button that does nothing. So the queue is what this device can actually
+  // play, and when that is nothing it says so rather than starting.
+  if (lib.isRemote) {
+    items = items.where((i) => i.isLocal).toList();
+    if (items.isEmpty) {
+      _srcToast(context,
+          'Radio voor $artist vindt niets uit je eigen bibliotheek. Op de pc speelt hij ook wat je nog niet hebt.');
+      return;
+    }
+  }
   // Keep it endless: fetch a fresh (also library-forward) batch when the queue runs low.
   player.radioExtend = () async {
     try {
-      return _smartShuffle(_radioItemsFor(await rec.mixRadio(artist), lib));
+      final more = _smartShuffle(_radioItemsFor(await rec.mixRadio(artist), lib));
+      return lib.isRemote ? more.where((i) => i.isLocal).toList() : more;
     } catch (_) {
       return <RadioItem>[];
     }
@@ -8317,10 +8440,22 @@ class _ArtistHeroState extends State<ArtistHero> {
     final portrait = _chosenPortrait ?? _art?.thumbBytes ?? widget.fallbackImage;
     final backdrop = _chosenBackdrop ?? _art?.backdropBytes ?? widget.fallbackImage;
 
+    final narrow = isCompact(context);
+    final pad = narrow ? 18.0 : 28.0;
+    // 270 points of portrait plus a 26 gap leaves about ninety of a phone's 411 for the column
+    // beside it, and "61 albums" came out one word per line. Stacked there, and the portrait sized
+    // from the width that exists.
+    final portraitSize =
+        narrow ? (MediaQuery.sizeOf(context).width - pad * 2).clamp(120.0, 220.0) : 270.0;
+    // Wide enough for the wordmark to sit beside the portrait, so a fixed 400 fits it. Stacked, it
+    // does not: the portrait alone is 220, and everything below it — wordmark, count, two buttons —
+    // was being squeezed into what a number chosen for a different layout left over.
+    final heroHeight = narrow ? portraitSize + 196 : 400.0;
+
     return SizedBox(
       // Room for a 270px portrait with the wordmark and buttons beside it. The backdrop is very
       // wide, so every extra pixel of height is another band of it that isn't cropped away.
-      height: 400,
+      height: heroHeight,
       // A blur paints outside its child's bounds, and the overscan pushes it further still — without
       // this the wash ran on down the page and the biography underneath was hard to read.
       child: ClipRect(
@@ -8363,15 +8498,6 @@ class _ArtistHeroState extends State<ArtistHero> {
               ),
             ),
           Builder(builder: (context) {
-            final narrow = isCompact(context);
-            final pad = narrow ? 18.0 : 28.0;
-            // 270 points of portrait plus a 26 gap leaves about ninety of a phone's 411 for the
-            // column beside it, and "61 albums" came out one word per line. Stacked there, and the
-            // portrait sized from the width that exists.
-            final portraitSize = narrow
-                ? (MediaQuery.sizeOf(context).width - pad * 2).clamp(120.0, 220.0)
-                : 270.0;
-
             final photo = portrait == null
                 ? null
                 : DecoratedBox(
@@ -8393,25 +8519,37 @@ class _ArtistHeroState extends State<ArtistHero> {
 
             final details = Column(
                     mainAxisAlignment: MainAxisAlignment.end,
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    // Beside the portrait everything hangs off the same left edge. Under it, that
+                    // same left edge leaves the whole right half of a phone empty and the page
+                    // looks broken rather than composed.
+                    crossAxisAlignment:
+                        narrow ? CrossAxisAlignment.center : CrossAxisAlignment.start,
                     children: [
                       if (logo != null)
                         ConstrainedBox(
-                          constraints: const BoxConstraints(maxHeight: 96, maxWidth: 460),
+                          // A wordmark is decoration; on a phone it must not cost more height than
+                          // the name it replaces.
+                          constraints: BoxConstraints(maxHeight: narrow ? 62 : 96, maxWidth: 460),
                           child: Image.memory(logo,
                               fit: BoxFit.contain,
-                              alignment: Alignment.centerLeft,
-                              errorBuilder: (_, __, ___) => _plainName()),
+                              alignment: narrow ? Alignment.center : Alignment.centerLeft,
+                              errorBuilder: (_, __, ___) => _plainName(narrow)),
                         )
                       else
-                        _plainName(),
+                        _plainName(narrow),
                       if (widget.subtitle != null) ...[
                         const SizedBox(height: 8),
-                        Text(widget.subtitle!, style: const TextStyle(color: Color(0xFFC7CBDA), fontSize: 13.5)),
+                        Text(widget.subtitle!,
+                            textAlign: narrow ? TextAlign.center : TextAlign.start,
+                            style: const TextStyle(color: Color(0xFFC7CBDA), fontSize: 13.5)),
                       ],
                       if (widget.actions.isNotEmpty) ...[
-                        const SizedBox(height: 12),
-                        Row(children: widget.actions),
+                        const SizedBox(height: 14),
+                        Row(
+                          mainAxisAlignment:
+                              narrow ? MainAxisAlignment.center : MainAxisAlignment.start,
+                          children: widget.actions,
+                        ),
                       ],
                     ],
                   );
@@ -8420,9 +8558,9 @@ class _ArtistHeroState extends State<ArtistHero> {
               padding: EdgeInsets.fromLTRB(pad, 0, pad, 22),
               child: narrow
                   ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        if (photo != null) ...[photo, const SizedBox(height: 14)],
+                        if (photo != null) ...[photo, const SizedBox(height: 16)],
                         details,
                       ],
                     )
@@ -8444,10 +8582,17 @@ class _ArtistHeroState extends State<ArtistHero> {
     );
   }
 
-  Widget _plainName() => Text(widget.name,
+  /// Tighter tracking the bigger it gets — letters read as further apart the larger they are, so
+  /// a single letter-spacing value is wrong at one of the two sizes.
+  Widget _plainName(bool narrow) => Text(widget.name,
       maxLines: 2,
       overflow: TextOverflow.ellipsis,
-      style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w800, letterSpacing: -.5));
+      textAlign: narrow ? TextAlign.center : TextAlign.start,
+      style: TextStyle(
+          fontSize: narrow ? 27 : 34,
+          fontWeight: FontWeight.w800,
+          height: 1.1,
+          letterSpacing: narrow ? -.3 : -.5));
 }
 
 /// What this release IS: the official blurb plus year, genre, label and rating — the album
@@ -11576,6 +11721,42 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
 /// Discogs holds dozens of photos per act (twenty-nine for Daft Punk) and TheAudioDB adds its own
 /// fanart and thumbs, but neither labels what a picture is FOR. The app guesses by shape — squarish
 /// reads as a portrait, wide as a backdrop — and a guess is exactly the thing worth overruling.
+/// Portrait or backdrop, asked of a device that has only one kind of tap.
+Future<void> _pickArtKind(BuildContext context, String artist, String url) async {
+  final lib = context.read<LibraryStore>();
+  final kind = await showModalBottomSheet<String>(
+    context: context,
+    backgroundColor: _panel,
+    showDragHandle: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+    ),
+    builder: (sheet) => SafeArea(
+      top: false,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.person_rounded, size: 21),
+            title: const Text('Als portret'),
+            subtitle: const Text('De foto bij de naam',
+                style: TextStyle(color: _muted, fontSize: 12)),
+            onTap: () => Navigator.pop(sheet, 'portrait'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.wallpaper_rounded, size: 21),
+            title: const Text('Als achtergrond'),
+            subtitle: const Text('De wazige kleuren achter de pagina',
+                style: TextStyle(color: _muted, fontSize: 12)),
+            onTap: () => Navigator.pop(sheet, 'backdrop'),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (kind != null) await lib.setArtistArt(artist, kind, url);
+}
+
 class ArtistArtGallery extends StatefulWidget {
   final String artist;
   const ArtistArtGallery(this.artist, {super.key});
@@ -11663,7 +11844,12 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
         final isBackdrop = backdrop == img.uri;
         final lib = context.read<LibraryStore>();
         return Pressable(
-          onPressed: () => lib.setArtistArt(widget.artist, 'portrait', img.uri),
+          // A finger has no right button and no OK to hold. On touch a tap therefore asks which of
+          // the two this picture is for — until now choosing a backdrop from a phone was simply
+          // not possible, and nothing on screen said so.
+          onPressed: _isTouch
+              ? () => _pickArtKind(context, widget.artist, img.uri)
+              : () => lib.setArtistArt(widget.artist, 'portrait', img.uri),
           // Right-click sets the backdrop, and a remote has no right button — so on a television
           // holding OK does the same thing. Both, not one instead of the other: choosing a backdrop
           // was something you simply could not do from the sofa, and nothing on screen said why.
