@@ -1998,7 +1998,13 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   /// (which hands this page a NEW Album object for the same record) does not.
   String _officialFor = '';
 
-  bool _showMissing = true;
+  /// Whether the tracklist also shows the numbers this pressing has and you do not.
+  ///
+  /// Off to begin with. On, a record you own one song from is fourteen greyed-out rows and one
+  /// real one — you have to hunt for your own music on a page about your own library. What is
+  /// missing is already counted in the panel above, with a button to go and get it, so nothing is
+  /// hidden from you; it just isn't the list any more.
+  bool _showMissing = false;
 
   /// One album-wide Soulseek search, kept for the whole visit. Fifteen missing tracks is fifteen
   /// searches otherwise, on a login that allows exactly one session.
