@@ -8703,12 +8703,45 @@ class _ArtistHeroState extends State<ArtistHero> {
 
   Uint8List? _chosenPortrait, _chosenBackdrop;
 
+  /// Height ÷ width of the portrait that is loaded, once that is actually known.
+  double? _portraitRatio;
+
+  /// The bytes [_measure] is already waiting on, so build doesn't start a listener a frame.
+  Object? _measuring;
+
+  /// Reads the picture's real shape off the frame [Image.memory] is going to decode anyway.
+  ///
+  /// Artist pictures are not one shape: fanart's `artistthumb` is square, TheAudioDB's is 16:9,
+  /// and a picture picked by hand is whatever the user picked. A box of one guessed shape filled
+  /// with [BoxFit.cover] therefore cut the top off every square one — hats, heads and all — which
+  /// is the one thing a header photo may not do. This costs a cache lookup, not a second decode.
+  void _measure(Uint8List bytes) {
+    if (identical(_measuring, bytes)) return;
+    _measuring = bytes;
+    final stream = MemoryImage(bytes).resolve(const ImageConfiguration());
+    late final ImageStreamListener listener;
+    listener = ImageStreamListener(
+      (info, _) {
+        final ratio = info.image.height / info.image.width;
+        // Fires synchronously when the frame is already in the cache — and this is called from
+        // build, so the state change has to wait for the frame to be over.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          stream.removeListener(listener);
+          if (mounted && ratio != _portraitRatio) setState(() => _portraitRatio = ratio);
+        });
+      },
+      onError: (_, __) => stream.removeListener(listener),
+    );
+    stream.addListener(listener);
+  }
+
   @override
   Widget build(BuildContext context) {
     _syncChoice();
     final logo = _art?.logoBytes;
     final portrait = _chosenPortrait ?? _art?.thumbBytes ?? widget.fallbackImage;
     final backdrop = _chosenBackdrop ?? _art?.backdropBytes ?? widget.fallbackImage;
+    if (portrait != null) _measure(portrait);
 
     final narrow = isCompact(context);
     final pad = narrow ? 18.0 : 28.0;
@@ -8720,154 +8753,172 @@ class _ArtistHeroState extends State<ArtistHero> {
     // the photo where the mount shows through.
     //
     // So on a phone the picture runs the full width, corner to corner, and dissolves into the page
-    // at the bottom instead of ending on an edge. 0.62 is just deeper than the 16:9 every artist
-    // photo turns out to be, so filling it crops almost nothing — no frame, and nothing cut.
+    // at the bottom instead of ending on an edge.
     final photoW = narrow ? MediaQuery.sizeOf(context).width : 270.0;
-    final photoH = narrow ? photoW * .62 : 270.0;
-    // Wide enough for the wordmark to sit beside the portrait, so a fixed 400 fits it. Stacked, it
-    // does not: everything below the photo — wordmark, count, two buttons — was being squeezed into
-    // what a number chosen for a different layout left over.
-    final heroHeight = narrow ? photoH + 200 : 400.0;
+    // And it keeps its OWN shape, within what a phone header may cost. A 16:9 press shot is .56
+    // and gets exactly that; a square one is 1.0 and gives up its lowest eighth — the part the
+    // fade below dissolves anyway, so nothing you would look at is lost. .62 while the picture is
+    // still decoding, which is the shape most of them turn out to have.
+    final ratio = (_portraitRatio ?? .62).clamp(.56, .88);
+    final photoH = narrow ? photoW * ratio : 270.0;
+
+    final photo = portrait == null
+        ? null
+        : narrow
+            // Its own alpha runs out towards the bottom, so the picture ends in the page rather
+            // than on a line. A gradient painted OVER it would only work against a known colour,
+            // and what is behind here is the artist's own blurred backdrop.
+            ? ShaderMask(
+                blendMode: BlendMode.dstIn,
+                shaderCallback: (r) => const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Colors.white, Colors.white, Colors.transparent],
+                  stops: [0, .58, 1],
+                ).createShader(r),
+                child: Image.memory(portrait,
+                    width: photoW,
+                    height: photoH,
+                    fit: BoxFit.cover,
+                    // Hard against the top. Whatever the clamp above still has to crop is taken
+                    // off the bottom, where the fade is already dissolving it — so a head can no
+                    // longer be cut off no matter what shape the picture arrives in.
+                    alignment: const Alignment(0, -1),
+                    errorBuilder: (_, __, ___) => const SizedBox()),
+              )
+            : DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  // Lifts it off a backdrop that is, by design, the same photo's colours.
+                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: .55), blurRadius: 28, offset: const Offset(0, 10))],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Image.memory(portrait,
+                      width: photoW,
+                      height: photoH,
+                      fit: BoxFit.cover,
+                      alignment: const Alignment(0, -.25),
+                      errorBuilder: (_, __, ___) => const SizedBox()),
+                ),
+              );
+
+    final details = Column(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.end,
+      // Beside the portrait everything hangs off the same left edge. Under it, that same left edge
+      // leaves the whole right half of a phone empty and the page looks broken rather than composed.
+      crossAxisAlignment: narrow ? CrossAxisAlignment.center : CrossAxisAlignment.start,
+      children: [
+        if (logo != null)
+          ConstrainedBox(
+            // A wordmark is decoration; on a phone it must not cost more height than the name it
+            // replaces.
+            constraints: BoxConstraints(maxHeight: narrow ? 62 : 96, maxWidth: 460),
+            child: Image.memory(logo,
+                fit: BoxFit.contain,
+                alignment: narrow ? Alignment.center : Alignment.centerLeft,
+                errorBuilder: (_, __, ___) => _plainName(narrow)),
+          )
+        else
+          _plainName(narrow),
+        if (widget.subtitle != null) ...[
+          const SizedBox(height: 8),
+          Text(widget.subtitle!,
+              textAlign: narrow ? TextAlign.center : TextAlign.start,
+              style: const TextStyle(color: Color(0xFFC7CBDA), fontSize: 13.5)),
+        ],
+        if (widget.actions.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          Row(
+            mainAxisAlignment: narrow ? MainAxisAlignment.center : MainAxisAlignment.start,
+            children: widget.actions,
+          ),
+        ],
+      ],
+    );
+
+    // Blurred on purpose. Every artist image any database has is 16:9 — fanart, widethumb, all of
+    // it — and a banner this wide can only show a quarter of one. Sharp, that quarter was a
+    // gamble: it framed Michael Jackson but gave Stromae a band of forehead, because his photo is
+    // a close-up that no crop can survive. So the backdrop is atmosphere drawn from the artist's
+    // own colours, and the portrait in front of it is what you actually recognise.
+    //
+    // Skipped entirely when an [ArtistBackdrop] is already washing the page: a second, differently
+    // cropped copy of the same picture only muddies it.
+    final wash = <Widget>[
+      if (backdrop != null && widget.ownBackdrop)
+        ImageFiltered(
+          imageFilter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+          // Overscanned: a blur samples past the edges, and at 1.0 the sides faded out.
+          child: Transform.scale(
+            scale: 1.15,
+            child: Image.memory(backdrop,
+                fit: BoxFit.cover,
+                alignment: const Alignment(0, -.3),
+                errorBuilder: (_, __, ___) => const SizedBox()),
+          ),
+        ),
+      // Dark enough at the bottom that the wordmark and buttons always read.
+      if (widget.ownBackdrop)
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.black.withValues(alpha: .30),
+                Colors.black.withValues(alpha: .38),
+                Colors.black.withValues(alpha: .82),
+                const Color(0xFF0B0D14),
+              ],
+              stops: const [0, .40, .82, 1],
+            ),
+          ),
+        ),
+    ];
+
+    if (narrow) {
+      final column = Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // Outside the page margin on purpose: a header picture that stops 18 points short of
+          // both edges is a picture ON the page, and this one is meant to BE the top of it.
+          if (photo != null) photo,
+          Padding(
+            padding: EdgeInsets.fromLTRB(pad, photo == null ? 0 : 2, pad, 22),
+            child: details,
+          ),
+        ],
+      );
+      // No fixed height on a phone. It was `photoH + 200`, and for every artist whose wordmark and
+      // buttons came in under 200 the leftover ended up ABOVE the picture — the column is
+      // bottom-aligned — as a band of scrimmed backdrop with nothing in it: a grey bar between the
+      // title bar and the photo. Sized by its contents there is nothing left over to show.
+      if (wash.isEmpty) return column;
+      return ClipRect(
+        child: Stack(
+          children: [
+            for (final layer in wash) Positioned.fill(child: layer),
+            column,
+          ],
+        ),
+      );
+    }
 
     return SizedBox(
       // Room for a 270px portrait with the wordmark and buttons beside it. The backdrop is very
       // wide, so every extra pixel of height is another band of it that isn't cropped away.
-      height: heroHeight,
-      // A blur paints outside its child's bounds, and the overscan pushes it further still — without
-      // this the wash ran on down the page and the biography underneath was hard to read.
+      height: 400,
+      // A blur paints outside its child's bounds, and the overscan pushes it further still —
+      // without this the wash ran on down the page and the biography underneath was hard to read.
       child: ClipRect(
         child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // Blurred on purpose. Every artist image any database has is 16:9 — fanart, widethumb,
-          // all of it — and a banner this wide can only show a quarter of one. Sharp, that quarter
-          // was a gamble: it framed Michael Jackson but gave Stromae a band of forehead, because his
-          // photo is a close-up that no crop can survive. So the backdrop is atmosphere drawn from
-          // the artist's own colours, and the portrait beside it is what you actually recognise.
-          if (backdrop != null && widget.ownBackdrop)
-            ImageFiltered(
-              imageFilter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-              // Overscanned: a blur samples past the edges, and at 1.0 the sides faded out.
-              child: Transform.scale(
-                scale: 1.15,
-                child: Image.memory(backdrop,
-                    fit: BoxFit.cover,
-                    alignment: const Alignment(0, -.3),
-                    errorBuilder: (_, __, ___) => const SizedBox()),
-              ),
-            ),
-          // Dark enough at the bottom that the wordmark and buttons always read. Skipped when the
-          // page already carries the wash — a second gradient on top of it just muddies the top.
-          if (widget.ownBackdrop)
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: .30),
-                    Colors.black.withValues(alpha: .38),
-                    Colors.black.withValues(alpha: .82),
-                    const Color(0xFF0B0D14),
-                  ],
-                  stops: const [0, .40, .82, 1],
-                ),
-              ),
-            ),
-          Builder(builder: (context) {
-            final photo = portrait == null
-                ? null
-                : narrow
-                    // Its own alpha runs out towards the bottom, so the picture ends in the page
-                    // rather than on a line. A gradient painted OVER it would only work against a
-                    // known colour, and what is behind here is the artist's own blurred backdrop.
-                    ? ShaderMask(
-                        blendMode: BlendMode.dstIn,
-                        shaderCallback: (r) => const LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [Colors.white, Colors.white, Colors.transparent],
-                          stops: [0, .58, 1],
-                        ).createShader(r),
-                        child: Image.memory(portrait,
-                            width: photoW,
-                            height: photoH,
-                            fit: BoxFit.cover,
-                            // Faces sit above the middle of a press shot far more often than below.
-                            alignment: const Alignment(0, -.18),
-                            errorBuilder: (_, __, ___) => const SizedBox()),
-                      )
-                    : DecoratedBox(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(14),
-                          // Lifts it off a backdrop that is, by design, the same photo's colours.
-                          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: .55), blurRadius: 28, offset: const Offset(0, 10))],
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(14),
-                          child: Image.memory(portrait,
-                              width: photoW,
-                              height: photoH,
-                              fit: BoxFit.cover,
-                              alignment: const Alignment(0, -.25),
-                              errorBuilder: (_, __, ___) => const SizedBox()),
-                        ),
-                      );
-
-            final details = Column(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    // Beside the portrait everything hangs off the same left edge. Under it, that
-                    // same left edge leaves the whole right half of a phone empty and the page
-                    // looks broken rather than composed.
-                    crossAxisAlignment:
-                        narrow ? CrossAxisAlignment.center : CrossAxisAlignment.start,
-                    children: [
-                      if (logo != null)
-                        ConstrainedBox(
-                          // A wordmark is decoration; on a phone it must not cost more height than
-                          // the name it replaces.
-                          constraints: BoxConstraints(maxHeight: narrow ? 62 : 96, maxWidth: 460),
-                          child: Image.memory(logo,
-                              fit: BoxFit.contain,
-                              alignment: narrow ? Alignment.center : Alignment.centerLeft,
-                              errorBuilder: (_, __, ___) => _plainName(narrow)),
-                        )
-                      else
-                        _plainName(narrow),
-                      if (widget.subtitle != null) ...[
-                        const SizedBox(height: 8),
-                        Text(widget.subtitle!,
-                            textAlign: narrow ? TextAlign.center : TextAlign.start,
-                            style: const TextStyle(color: Color(0xFFC7CBDA), fontSize: 13.5)),
-                      ],
-                      if (widget.actions.isNotEmpty) ...[
-                        const SizedBox(height: 14),
-                        Row(
-                          mainAxisAlignment:
-                              narrow ? MainAxisAlignment.center : MainAxisAlignment.start,
-                          children: widget.actions,
-                        ),
-                      ],
-                    ],
-                  );
-
-            if (narrow) {
-              return Column(
-                mainAxisAlignment: MainAxisAlignment.end,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  // Outside the page margin on purpose: a header picture that stops 18 points short
-                  // of both edges is a picture ON the page, and this one is meant to BE the top of
-                  // it.
-                  if (photo != null) photo,
-                  Padding(
-                    padding: EdgeInsets.fromLTRB(pad, photo == null ? 0 : 2, pad, 22),
-                    child: details,
-                  ),
-                ],
-              );
-            }
-            return Padding(
+          fit: StackFit.expand,
+          children: [
+            ...wash,
+            Padding(
               padding: EdgeInsets.fromLTRB(pad, 0, pad, 22),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
@@ -8878,9 +8929,8 @@ class _ArtistHeroState extends State<ArtistHero> {
                   Expanded(child: details),
                 ],
               ),
-            );
-          }),
-        ],
+            ),
+          ],
         ),
       ),
     );

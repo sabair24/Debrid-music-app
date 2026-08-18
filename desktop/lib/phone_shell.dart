@@ -80,21 +80,28 @@ class _PhoneShell extends StatelessWidget {
                       // Where the list runs out from under the chrome above it.
                       //
                       // A row of covers scrolling up used to end on a hard horizontal cut halfway
-                      // through a sleeve, which reads as clipping rather than as scrolling. Twenty
+                      // through a sleeve, which reads as clipping rather than as scrolling. A few
                       // points of the page's own colour fading out is enough to say "there is more
                       // above this" without drawing a line that would say something stronger.
+                      //
+                      // Fourteen points, and gone by the sixth. It used to be twenty, spread evenly
+                      // — which is fine over a list, whose background is this colour anyway, and
+                      // wrong over the artist page, whose first pixel is a full-width photo: half
+                      // the page colour still sat over the top ten points of it as a dark smear.
+                      // The cut it hides is at the very edge, so that is where it belongs.
                       Positioned(
                         top: 0,
                         left: 0,
                         right: 0,
-                        height: 20,
+                        height: 14,
                         child: IgnorePointer(
                           child: DecoratedBox(
                             decoration: BoxDecoration(
                               gradient: LinearGradient(
                                 begin: Alignment.topCenter,
                                 end: Alignment.bottomCenter,
-                                colors: [_bg, _bg.withValues(alpha: 0)],
+                                colors: [_bg, _bg.withValues(alpha: .35), _bg.withValues(alpha: 0)],
+                                stops: const [0, .42, 1],
                               ),
                             ),
                           ),
