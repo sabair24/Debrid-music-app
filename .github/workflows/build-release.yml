@@ -47,6 +47,24 @@ jobs:
         working-directory: desktop
         run: flutter pub get
 
+      # This workflow is the only one that runs on an ordinary push, so it is the only place a
+      # change to the app is checked before it lands on a phone. The Apple workflow runs the full
+      # twenty-file list, but only on a release tag — by then the APK has been installed for days.
+      - name: Analyze
+        working-directory: desktop
+        # --no-fatal-infos matches the Apple workflow: two style infos in discogs.dart predate both.
+        # Warnings and errors still stop the build.
+        run: flutter analyze --no-fatal-infos lib/
+
+      # The layout tests, named rather than the whole suite: five tests here scan a Windows music
+      # folder or call out to the network and would fail for reasons that have nothing to do with
+      # the build. These two cover what a phone build can silently get wrong — a section that is in
+      # one navigation and not the other, and a bar that fits the emulator but not a 320-point
+      # screen.
+      - name: Test the layout
+        working-directory: desktop
+        run: flutter test test/nav_sections_test.dart test/phone_layout_test.dart
+
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
       # the app you actually use while the TV work is in progress — shipping that would install a
       # second icon rather than update the first. It is also 103MB against release's 40.
