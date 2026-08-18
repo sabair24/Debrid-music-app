@@ -3829,6 +3829,156 @@ class _PersonPageState extends State<PersonPage> {
 /// The split is the point — "in mijn bibliotheek" answers "what can I play", "discografie"
 /// answers "what else is there", and a release you already own is marked as such so the gap in a
 /// collection is obvious at a glance.
+/// Give every record filed under one artist a different artist name.
+///
+/// One album whose tags say “Enrique” where the rest say “Enrique Iglesias” is enough to split a
+/// discography down the middle: the library groups on the name, so two spellings are two artists —
+/// two tiles, two pages, and half a catalogue on each. The metadata editor could already fix it,
+/// but one album at a time, and the same edit typed once per record is not a fix, it is a chore.
+///
+/// Renaming to a name that is already in the library is not a special case here, it is the point:
+/// both halves end up under one name, and grouping does the merging by itself.
+class ArtistRenameDialog extends StatefulWidget {
+  const ArtistRenameDialog(this.name, {super.key});
+
+  final String name;
+
+  @override
+  State<ArtistRenameDialog> createState() => _ArtistRenameDialogState();
+}
+
+class _ArtistRenameDialogState extends State<ArtistRenameDialog> {
+  late final TextEditingController _to = TextEditingController(text: widget.name);
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _to.dispose();
+    super.dispose();
+  }
+
+  Future<void> _apply() async {
+    final target = _to.text.trim();
+    if (target.isEmpty || target == widget.name) return;
+    setState(() => _busy = true);
+    final lib = context.read<LibraryStore>();
+    final settings = context.read<AppSettings>();
+    // Titles rather than Album objects. Each correction regroups the library, which hands out new
+    // Album objects for the same records — and on a phone the id a correction is sent to the PC
+    // with is looked up by object identity, so a list captured up front would go stale after the
+    // first record and quietly send nothing for the rest.
+    final titles = [for (final a in lib.albums) if (a.artist == widget.name) a.title];
+    try {
+      for (final title in titles) {
+        Album? album;
+        for (final a in lib.albums) {
+          if (a.artist == widget.name && a.title == title) {
+            album = a;
+            break;
+          }
+        }
+        if (album == null) continue;
+        await lib.applyCorrection(album, settings, artist: target);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _srcToast(context, 'Hernoemen mislukte: $e');
+      return;
+    }
+    if (!mounted) return;
+    Navigator.pop(context, target);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    final mine = lib.albums.where((a) => a.artist == widget.name).length;
+    // Names already in the library that this one is part of, or that are part of this one — which
+    // is exactly the shape a truncated tag has. “Enrique” offers “Enrique Iglesias”, so the fix is
+    // a tap rather than something to type without a typo.
+    final me = widget.name.toLowerCase();
+    final near = <String>{
+      for (final a in lib.albums)
+        if (a.artist != widget.name &&
+            (a.artist.toLowerCase().contains(me) || me.contains(a.artist.toLowerCase())))
+          a.artist,
+    }.toList()
+      ..sort((a, b) => a.length.compareTo(b.length));
+
+    return AlertDialog(
+      backgroundColor: _panel,
+      title: const Text('Artiestnaam corrigeren'),
+      content: SizedBox(
+        width: dialogWidth(context, 460),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '$mine ${mine == 1 ? 'plaat staat' : 'platen staan'} onder “${widget.name}”. '
+              'Ze gaan allemaal over naar de naam die je hier zet. Staat die naam al in je '
+              'bibliotheek, dan worden de twee één artiest.',
+              style: const TextStyle(color: _muted, fontSize: 13, height: 1.35),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _to,
+              autofocus: true,
+              enabled: !_busy,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _apply(),
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(labelText: 'Nieuwe naam'),
+            ),
+            if (near.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              const Text('Staat al in je bibliotheek',
+                  style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final n in near)
+                    ActionChip(
+                      label: Text(n),
+                      backgroundColor: _panel2,
+                      side: const BorderSide(color: _line),
+                      onPressed: _busy
+                          ? null
+                          : () => setState(() {
+                                _to.text = n;
+                                _to.selection = TextSelection.collapsed(offset: n.length);
+                              }),
+                    ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.pop(context),
+          child: const Text('Annuleren'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: _accent),
+          onPressed:
+              _busy || _to.text.trim().isEmpty || _to.text.trim() == widget.name ? null : _apply,
+          child: _busy
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white))
+              : const Text('Hernoemen'),
+        ),
+      ],
+    );
+  }
+}
+
 class ArtistDetailView extends StatefulWidget {
   final String name;
   final List<Album> libraryAlbums;
@@ -3933,7 +4083,6 @@ class _ArtistDetailViewState extends State<ArtistDetailView> {
                     icon: const Icon(Icons.radio_rounded, size: 18),
                     label: const Text('Radio'),
                   ),
-                  const SizedBox(width: 10),
                   // The app guesses portrait-vs-backdrop from the shape of a picture; a guess is
                   // exactly the thing worth being able to overrule.
                   FilledButton.icon(
@@ -3945,6 +4094,27 @@ class _ArtistDetailViewState extends State<ArtistDetailView> {
                         showDialog<void>(context: context, builder: (_) => ArtistArtGallery(widget.name)),
                     icon: const Icon(Icons.photo_library_outlined, size: 18),
                     label: const Text('Foto kiezen'),
+                  ),
+                  // Where a split discography gets put back together. The name is the only thing
+                  // grouping has to go on, so one album tagged “Enrique” among a shelf of “Enrique
+                  // Iglesias” is two artists as far as this app is concerned — and this page, the
+                  // one showing half a catalogue, is where you notice it.
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                        backgroundColor: _panel2,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+                    onPressed: () async {
+                      final to = await showDialog<String>(
+                          context: context, builder: (_) => ArtistRenameDialog(widget.name));
+                      if (to == null || !context.mounted) return;
+                      // This page is about a name that no longer has any records under it, so it
+                      // cannot stay open. Back to the list, where the merged artist now stands.
+                      _srcToast(context, 'Staat nu onder “$to”');
+                      widget.onBack();
+                    },
+                    icon: const Icon(Icons.drive_file_rename_outline_rounded, size: 18),
+                    label: const Text('Naam corrigeren'),
                   ),
                 ],
               ),
@@ -8952,8 +9122,13 @@ class _ArtistHeroState extends State<ArtistHero> {
         ],
         if (widget.actions.isNotEmpty) ...[
           const SizedBox(height: 14),
-          Row(
-            mainAxisAlignment: narrow ? MainAxisAlignment.center : MainAxisAlignment.start,
+          // A Wrap, not a Row. Three buttons beside each other need about 420 points and a phone
+          // has 411 to give, so the third one used to overflow off the right edge; now it drops to
+          // a line of its own.
+          Wrap(
+            alignment: narrow ? WrapAlignment.center : WrapAlignment.start,
+            spacing: 10,
+            runSpacing: 10,
             children: widget.actions,
           ),
         ],
