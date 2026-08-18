@@ -4232,6 +4232,47 @@ class _ArtistCard extends StatefulWidget {
 class _ArtistCardState extends State<_ArtistCard> {
   bool _hover = false;
 
+  /// A picture of the artist, once one has been found.
+  ///
+  /// The grid hands over a record sleeve when the library has no photo, and for an artist whose
+  /// only album is a compilation that sleeve is a picture of the compilation: *NSYNC's tile was a
+  /// BRAVO Hits cover, because the one record of theirs in the library is a BRAVO Hits. The artist
+  /// page has always gone and looked up a real photo — this is the same lookup, so the two agree.
+  ///
+  /// Cached on disk by CoverEnricher, and only asked for by tiles that are actually built, so
+  /// scrolling a library of hundreds does not fetch hundreds of photos at once.
+  Uint8List? _photo;
+
+  @override
+  void initState() {
+    super.initState();
+    _findPhoto();
+  }
+
+  @override
+  void didUpdateWidget(_ArtistCard old) {
+    super.didUpdateWidget(old);
+    if (old.name != widget.name) {
+      _photo = null;
+      _findPhoto();
+    }
+  }
+
+  Future<void> _findPhoto() async {
+    if (widget.isPhoto) return; // the grid already handed over a real one
+    final name = widget.name;
+    final settings = context.read<AppSettings>();
+    final enricher = CoverEnricher(settings);
+    // A picture you picked yourself outranks whatever the databases offer, exactly as on the
+    // artist's own page.
+    final chosen = context.read<LibraryStore>().chosenArtistArt(name, 'portrait');
+    final bytes = chosen != null
+        ? await enricher.netImage(chosen)
+        : (await enricher.artistArt(name))?.thumbBytes;
+    if (bytes == null || !mounted || widget.name != name) return;
+    setState(() => _photo = bytes);
+  }
+
   /// A round tile that does not eat the picture inside it.
   ///
   /// A photo of a person survives a circle — that is what circles are for, and the face is in the
@@ -4244,6 +4285,9 @@ class _ArtistCardState extends State<_ArtistCard> {
   /// the artist page uses behind its portrait, and for the same reason: colours the picture
   /// already has, rather than a crop that is luck.
   Widget _tile(double size) {
+    // A face fills a circle without losing anything, so it simply fills it.
+    final found = _photo;
+    if (found != null) return cover(found, size: size, circle: true);
     final img = widget.image;
     if (img == null || widget.isPhoto) return cover(img, size: size, circle: true);
     // A square inside a circle of diameter d has sides d/√2, which leaves 0.146·d of margin.
@@ -8670,18 +8714,20 @@ class _ArtistHeroState extends State<ArtistHero> {
     final pad = narrow ? 18.0 : 28.0;
     // Beside the wordmark a square is right: it is a slot, and the face goes in the middle of it.
     //
-    // Stacked, a square is what was cutting the photo in half. This file's own comment two hundred
-    // lines up says it: every artist image any database has is 16:9. Cropping one into a square
-    // throws away nearly half its width, and for a group photo — five people standing in a row —
-    // that is the two on the outside. Full width and a shallower frame, with the picture set
-    // INSIDE it whole on a blurred blow-up of itself, so a 16:9 press shot and a squarer portrait
-    // both arrive complete.
-    final photoW = narrow ? (MediaQuery.sizeOf(context).width - pad * 2) : 270.0;
-    final photoH = narrow ? photoW * .70 : 270.0;
+    // Stacked it is not a slot, it is the top of the page, and it should read as ONE picture — not
+    // as a photo mounted on something. A rounded card with the picture set inside it made a frame,
+    // and a frame is a second object: you see the mount, the shadow under it, and the bands beside
+    // the photo where the mount shows through.
+    //
+    // So on a phone the picture runs the full width, corner to corner, and dissolves into the page
+    // at the bottom instead of ending on an edge. 0.62 is just deeper than the 16:9 every artist
+    // photo turns out to be, so filling it crops almost nothing — no frame, and nothing cut.
+    final photoW = narrow ? MediaQuery.sizeOf(context).width : 270.0;
+    final photoH = narrow ? photoW * .62 : 270.0;
     // Wide enough for the wordmark to sit beside the portrait, so a fixed 400 fits it. Stacked, it
     // does not: everything below the photo — wordmark, count, two buttons — was being squeezed into
     // what a number chosen for a different layout left over.
-    final heroHeight = narrow ? photoH + 208 : 400.0;
+    final heroHeight = narrow ? photoH + 200 : 400.0;
 
     return SizedBox(
       // Room for a 270px portrait with the wordmark and buttons beside it. The backdrop is very
@@ -8731,42 +8777,42 @@ class _ArtistHeroState extends State<ArtistHero> {
           Builder(builder: (context) {
             final photo = portrait == null
                 ? null
-                : DecoratedBox(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(14),
-                      // Lifts it off a backdrop that is, by design, the same photo's colours.
-                      boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: .55), blurRadius: 28, offset: const Offset(0, 10))],
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(14),
-                      child: SizedBox(
-                        width: photoW,
-                        height: photoH,
-                        child: narrow
-                            ? Stack(
-                                fit: StackFit.expand,
-                                children: [
-                                  ImageFiltered(
-                                    imageFilter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-                                    child: Image.memory(portrait,
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (_, __, ___) => const SizedBox()),
-                                  ),
-                                  DecoratedBox(
-                                      decoration: BoxDecoration(
-                                          color: Colors.black.withValues(alpha: .3))),
-                                  Image.memory(portrait,
-                                      fit: BoxFit.contain,
-                                      errorBuilder: (_, __, ___) => const SizedBox()),
-                                ],
-                              )
-                            : Image.memory(portrait,
-                                fit: BoxFit.cover,
-                                alignment: const Alignment(0, -.25),
-                                errorBuilder: (_, __, ___) => const SizedBox()),
-                      ),
-                    ),
-                  );
+                : narrow
+                    // Its own alpha runs out towards the bottom, so the picture ends in the page
+                    // rather than on a line. A gradient painted OVER it would only work against a
+                    // known colour, and what is behind here is the artist's own blurred backdrop.
+                    ? ShaderMask(
+                        blendMode: BlendMode.dstIn,
+                        shaderCallback: (r) => const LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Colors.white, Colors.white, Colors.transparent],
+                          stops: [0, .58, 1],
+                        ).createShader(r),
+                        child: Image.memory(portrait,
+                            width: photoW,
+                            height: photoH,
+                            fit: BoxFit.cover,
+                            // Faces sit above the middle of a press shot far more often than below.
+                            alignment: const Alignment(0, -.18),
+                            errorBuilder: (_, __, ___) => const SizedBox()),
+                      )
+                    : DecoratedBox(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          // Lifts it off a backdrop that is, by design, the same photo's colours.
+                          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: .55), blurRadius: 28, offset: const Offset(0, 10))],
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(14),
+                          child: Image.memory(portrait,
+                              width: photoW,
+                              height: photoH,
+                              fit: BoxFit.cover,
+                              alignment: const Alignment(0, -.25),
+                              errorBuilder: (_, __, ___) => const SizedBox()),
+                        ),
+                      );
 
             final details = Column(
                     mainAxisAlignment: MainAxisAlignment.end,
@@ -8805,29 +8851,33 @@ class _ArtistHeroState extends State<ArtistHero> {
                     ],
                   );
 
+            if (narrow) {
+              return Column(
+                mainAxisAlignment: MainAxisAlignment.end,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // Outside the page margin on purpose: a header picture that stops 18 points short
+                  // of both edges is a picture ON the page, and this one is meant to BE the top of
+                  // it.
+                  if (photo != null) photo,
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(pad, photo == null ? 0 : 2, pad, 22),
+                    child: details,
+                  ),
+                ],
+              );
+            }
             return Padding(
               padding: EdgeInsets.fromLTRB(pad, 0, pad, 22),
-              child: narrow
-                  ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        // The photo used to start where the title bar stopped, edge to edge, so it
-                        // read as a banner that had been cut off rather than as a picture.
-                        const SizedBox(height: 14),
-                        if (photo != null) ...[photo, const SizedBox(height: 16)],
-                        details,
-                      ],
-                    )
-                  : Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        // The portrait is what makes this a page about a PERSON. A wide backdrop
-                        // cropped to a banner shows a horizontal slice, and whether the face is in
-                        // it is luck.
-                        if (photo != null) ...[photo, const SizedBox(width: 26)],
-                        Expanded(child: details),
-                      ],
-                    ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  // The portrait is what makes this a page about a PERSON. A wide backdrop cropped
+                  // to a banner shows a horizontal slice, and whether the face is in it is luck.
+                  if (photo != null) ...[photo, const SizedBox(width: 26)],
+                  Expanded(child: details),
+                ],
+              ),
             );
           }),
         ],
