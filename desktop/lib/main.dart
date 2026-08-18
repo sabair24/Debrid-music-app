@@ -5043,16 +5043,20 @@ double _sleeve(BuildContext context) {
 /// visible thing on the screen. Enter and exit along the same path, and the drag simply continues
 /// into the exit.
 Route<void> nowPlayingRoute() => PageRouteBuilder<void>(
-      transitionDuration: const Duration(milliseconds: 320),
+      transitionDuration: const Duration(milliseconds: 280),
       // Out faster than in. Arriving is worth watching; leaving is not.
-      reverseTransitionDuration: const Duration(milliseconds: 240),
+      reverseTransitionDuration: const Duration(milliseconds: 200),
       pageBuilder: (_, __, ___) => const NowPlayingScreen(),
       transitionsBuilder: (_, animation, __, child) => SlideTransition(
         position: Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero).animate(
           CurvedAnimation(
             parent: animation,
             curve: Curves.easeOutCubic,
-            reverseCurve: Curves.easeInCubic,
+            // Out fast too, and NOT the mirrored ease-in that symmetry argues for. This exit is
+            // usually the end of a drag: the finger was already carrying the screen down, and a
+            // curve that starts slow stops it dead at the exact moment the hand says keep going.
+            // The seam between the gesture and the animation is the thing worth protecting.
+            reverseCurve: Curves.easeOutCubic,
           ),
         ),
         child: child,
@@ -5116,6 +5120,13 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
     // "away" just as clearly as a slow drag past the halfway mark.
     if (v > 700 || _pull.value + _project(v) > height * .28) {
       Navigator.pop(context);
+      return;
+    }
+    // Reduced motion is not no feedback — the screen still goes back where it belongs, it simply
+    // does not travel there. Someone who gets motion sick from a full-screen surface sliding
+    // around is exactly who this spring would catch.
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _pull.value = 0;
       return;
     }
     _pull.animateWith(SpringSimulation(_settle, _pull.value, 0, v));
