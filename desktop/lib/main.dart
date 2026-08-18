@@ -3247,45 +3247,6 @@ class TrackRow extends StatefulWidget {
   State<TrackRow> createState() => _TrackRowState();
 }
 
-/// What the hover icons offer, reachable by holding OK.
-///
-/// The same two actions and the same dialogs — this is a way IN to them, not a second way of doing
-/// them. The highlight starts on "Sluiten", because one of the two deletes a file.
-Future<void> _trackOptions(BuildContext context, Track t) async {
-  final choice = await showDialog<String>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      backgroundColor: _panel,
-      title: Text(titleWithoutFeat(t.title),
-          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-      content: const Text('Wat wil je met dit nummer doen?',
-          style: TextStyle(color: _muted, height: 1.4)),
-      actions: [
-        TextButton(
-          autofocus: true,
-          onPressed: () => Navigator.pop(ctx),
-          child: const Text('Sluiten'),
-        ),
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, 'move'),
-          child: const Text('Naar ander album'),
-        ),
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, 'delete'),
-          child: const Text('Verwijderen'),
-        ),
-      ],
-    ),
-  );
-  if (choice == null || !context.mounted) return;
-  if (choice == 'move') {
-    final from = context.read<LibraryStore>().albumForPath(t.path);
-    await showDialog<bool>(context: context, builder: (_) => MoveTrackDialog(track: t, from: from));
-  } else {
-    await _confirmDelete(context, '“${t.title}”', [t.path]);
-  }
-}
-
 class _TrackRowState extends State<TrackRow> {
   bool _hover = false;
   @override
@@ -3300,16 +3261,17 @@ class _TrackRowState extends State<TrackRow> {
         onPressed: () => context
             .read<PlayerStore>()
             .playQueue(widget.queue, widget.index, cover: widget.albumCover),
-        // Hold OK for what the mouse reaches by hovering.
+        // Hold OK, or hold a thumb, for what the mouse reaches by hovering.
         //
-        // "Verplaatsen" and "Verwijderen" live INSIDE this row, and Flutter's directional traversal
-        // can never select a node whose rectangle lies within the focused one's — so with a remote
-        // those two were simply unreachable, and moving or deleting a single track could not be
-        // done from the sofa at all. A held OK is the ordinary television gesture for "options".
+        // "Verplaatsen" and "Verwijderen" live INSIDE this row. Flutter's directional traversal can
+        // never select a node whose rectangle lies within the focused one's, so with a remote they
+        // were unreachable — and a finger has no hover at all, so on a phone they did not exist.
+        // Same menu for both: a held press is what "options" means on either device.
         //
-        // Television only: on a desktop a long press is a held mouse button, which nobody means as
-        // "open a menu", and the hover icons are already right there.
-        onLongPress: isTv ? () => _trackOptions(context, t) : null,
+        // Still not on a desktop: there a long press is a held mouse button, which nobody means as
+        // "open a menu". A mouse gets the right-click below, and the hover icons are already there.
+        onLongPress: (isTv || _isTouch) ? () => _openTrackMenu(context, t) : null,
+        onSecondaryTap: () => _openTrackMenu(context, t),
         borderRadius: BorderRadius.circular(10),
         // A list of rows: one growing would push every row under it down as the highlight runs
         // through the album. The row already lights up on hover, and focus drives that.
@@ -5781,17 +5743,76 @@ class _NowPlayingBackdropState extends State<_NowPlayingBackdrop> {
 /// you are looking at a sleeve and an artist's name with no way to open either of them. The album
 /// comes from the library by path rather than from the track's own tags — the same lookup the
 /// sleeve above it already uses, so the two can never disagree about which record this is.
-void _openTrackMenu(BuildContext context, Track t) {
-  final lib = context.read<LibraryStore>();
-  final album = lib.albumForPath(t.path);
-  showModalBottomSheet<void>(
-    context: context,
-    backgroundColor: _panel,
-    showDragHandle: true,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-    ),
-    builder: (sheet) => SafeArea(
+/// One thing this app can do to one track.
+enum TrackAction { close, album, artist, radio, move, delete }
+
+/// What the track menu offers, and in what order.
+///
+/// Pure, and public, for one reason. [_openTrackMenu] itself cannot be reached by a test — building
+/// anything from this file needs fourteen providers and a libmpv that a test run does not have —
+/// while the part worth pinning down is not the pixels but the RULE. Above all this one:
+/// **[TrackAction.delete] is last, always**, so nothing a stray thumb or a stray press of OK can
+/// reach ever sits underneath it.
+abstract final class TrackMenu {
+  static List<TrackAction> itemsFor({
+    required bool hasAlbum,
+    required bool namedArtist,
+    required bool inLibrary,
+    bool onTv = false,
+  }) =>
+      [
+        // A remote has no way off a bottom sheet: the drag handle cannot be grabbed and nothing on
+        // screen advertises the Back key. It is also where the highlight parks, so the first thing
+        // a directional press lands on is the one item that cannot cost you anything.
+        if (onTv) TrackAction.close,
+        if (hasAlbum) TrackAction.album,
+        // Both of these are the artist's name used as a key, so “Onbekende artiest” gets neither.
+        // Radio in particular used to be offered unconditionally and then failed on an empty name.
+        if (namedArtist) ...[TrackAction.artist, TrackAction.radio],
+        // Editing a file you do not have is not a thing. This is false for a radio track, whose
+        // “path” is a stream URL, and for every catalogue row — which is why it is the gate rather
+        // than “does this have an album”.
+        if (inLibrary) ...[TrackAction.move, TrackAction.delete],
+      ];
+}
+
+/// The track menu as a widget, knowing nothing about stores or navigation.
+///
+/// It is handed a list of [TrackAction]s and reports back which one was tapped; every `context`
+/// and `Navigator` decision stays in [_openTrackMenu], where the traps are. That split is also
+/// what lets a widget test pump this on a 320-point screen without a single provider.
+class TrackMenuSheet extends StatelessWidget {
+  const TrackMenuSheet({
+    super.key,
+    required this.title,
+    required this.artist,
+    required this.actions,
+    required this.onPick,
+    this.art,
+    this.albumTitle,
+  });
+
+  final String title;
+  final String artist;
+
+  /// The album's sleeve, for the header. Null while it has not resolved.
+  final Uint8List? art;
+
+  /// Shown under “Naar het album”, so you can see which record before you go there.
+  final String? albumTitle;
+
+  final List<TrackAction> actions;
+  final ValueChanged<TrackAction> onPick;
+
+  /// Editing a file starts here, and gets a line above it. Everything before it only navigates —
+  /// tap it and you can walk straight back; from here on you cannot.
+  static bool _edits(TrackAction a) => a == TrackAction.move || a == TrackAction.delete;
+
+  @override
+  Widget build(BuildContext context) {
+    // -1 when there is nothing to separate, which no index can equal.
+    final firstEdit = actions.indexWhere(_edits);
+    return SafeArea(
       top: false,
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -5801,18 +5822,18 @@ void _openTrackMenu(BuildContext context, Track t) {
             padding: const EdgeInsets.fromLTRB(20, 2, 20, 12),
             child: Row(
               children: [
-                cover(album?.cover, size: 44, radius: 6),
+                cover(art, size: 44, radius: 6),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(t.title,
+                      Text(title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-                      Text(t.artist,
+                      Text(artist,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(color: _muted, fontSize: 12.5)),
@@ -5823,47 +5844,109 @@ void _openTrackMenu(BuildContext context, Track t) {
             ),
           ),
           const Divider(color: _line, height: 1),
-          // Only when there is a record here to open. A radio track that is not in the library
-          // has no album page, and an entry that goes nowhere is worse than no entry.
-          if (album != null)
-            ListTile(
-              leading: const Icon(Icons.album_rounded, size: 21),
-              title: const Text('Naar het album'),
-              subtitle: Text(album.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: _muted, fontSize: 12)),
-              onTap: () {
-                Navigator.pop(sheet);
-                Navigator.of(context)
-                    .push(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: album)));
-              },
-            ),
-          if (t.artist.trim().isNotEmpty && !_genericArtist(t.artist))
-            ListTile(
-              leading: const Icon(Icons.person_rounded, size: 21),
-              title: const Text('Naar de artiest'),
-              subtitle: Text(t.artist,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: _muted, fontSize: 12)),
-              onTap: () {
-                Navigator.pop(sheet);
-                openArtist(context, t.artist);
-              },
-            ),
-          ListTile(
-            leading: const Icon(Icons.radio_rounded, size: 21),
-            title: const Text('Radio hieruit'),
-            subtitle: const Text('Meer in deze richting',
-                style: TextStyle(color: _muted, fontSize: 12)),
-            onTap: () {
-              Navigator.pop(sheet);
-              startRadio(context, t.artist);
-            },
-          ),
+          for (var i = 0; i < actions.length; i++) ...[
+            if (i == firstEdit) const Divider(color: _line, height: 1, indent: 20, endIndent: 20),
+            _tile(actions[i], first: i == 0),
+          ],
         ],
       ),
+    );
+  }
+
+  Widget _tile(TrackAction a, {required bool first}) {
+    final (IconData icon, String label, String? sub) = switch (a) {
+      TrackAction.close => (Icons.close_rounded, 'Sluiten', null),
+      TrackAction.album => (Icons.album_rounded, 'Naar het album', albumTitle),
+      TrackAction.artist => (Icons.person_rounded, 'Naar de artiest', artist),
+      TrackAction.radio => (Icons.radio_rounded, 'Radio hieruit', 'Meer in deze richting'),
+      TrackAction.move => (Icons.drive_file_move_outline, 'Naar ander album', null),
+      // The ellipsis is a promise: this asks first. `_confirmDelete` is what actually decides
+      // between the library and the disk.
+      TrackAction.delete => (Icons.delete_outline_rounded, 'Verwijderen…', null),
+    };
+    final colour = a == TrackAction.delete ? const Color(0xFFFF6B6B) : null;
+    // A Pressable around it, not ListTile's own onTap: a bare ListTile draws Material's splash
+    // and not this app's focus ring, which would make the menu the one focusable place in the app
+    // that does not look focusable. ListTile.onTap therefore stays null — two handlers over one
+    // rectangle is one too many.
+    return Pressable(
+      onPressed: () => onPick(a),
+      autofocus: first,
+      // A list of rows: one growing on focus shoves every row under it down.
+      scaleOnFocus: false,
+      borderRadius: BorderRadius.circular(8),
+      child: ListTile(
+        leading: Icon(icon, size: 21, color: colour),
+        title: Text(label, style: TextStyle(color: colour)),
+        subtitle: sub == null || sub.isEmpty
+            ? null
+            : Text(sub,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: _muted, fontSize: 12)),
+      ),
+    );
+  }
+}
+
+/// The one menu a track has, wherever you opened it from.
+///
+/// [closeHost] says this menu is stacked on top of ANOTHER sheet — the queue. Pushing a page from
+/// there without closing that sheet first puts the page underneath it, and the app then looks
+/// frozen: you are staring at a queue with a screen behind it that you cannot reach.
+Future<void> _openTrackMenu(BuildContext context, Track t, {bool closeHost = false}) async {
+  final lib = context.read<LibraryStore>();
+  final album = lib.albumForPath(t.path);
+  // Taken before anything pops. A NavigatorState outlives the sheet that is about to close; the
+  // BuildContext that found it does not.
+  final nav = Navigator.of(context);
+  final actions = TrackMenu.itemsFor(
+    hasAlbum: album != null,
+    namedArtist: t.artist.trim().isNotEmpty && !_genericArtist(t.artist),
+    // The gate: this menu takes a Track, and a Track this app may edit is one the library knows
+    // by path. Everything else is somebody else's file.
+    inLibrary: lib.trackByPath(t.path) != null,
+    onTv: isTv,
+  );
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: _panel,
+    showDragHandle: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+    ),
+    builder: (sheet) => TrackMenuSheet(
+      title: t.title,
+      artist: t.artist,
+      art: album?.cover,
+      albumTitle: album?.title,
+      actions: actions,
+      onPick: (a) {
+        Navigator.pop(sheet);
+        switch (a) {
+          case TrackAction.close:
+            break;
+          case TrackAction.album:
+            // Close the queue BEFORE pushing, or the pop would take the page back off again.
+            if (closeHost) nav.pop();
+            nav.push(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: album!)));
+          case TrackAction.artist:
+            // The other way round here: openArtist reads its navigator and its service off this
+            // context synchronously, before its first await, so it has to run while the context
+            // is still alive.
+            openArtist(context, t.artist);
+            if (closeHost) nav.pop();
+          // The three below leave the queue open on purpose — a dialog floats above it, and you
+          // come back to the list you were working through.
+          case TrackAction.radio:
+            startRadio(context, t.artist);
+          case TrackAction.move:
+            showDialog<bool>(
+                context: context, builder: (_) => MoveTrackDialog(track: t, from: album));
+          case TrackAction.delete:
+            _confirmDelete(context, '“${t.title}”', [t.path]);
+        }
+      },
     ),
   );
 }
@@ -5959,6 +6042,11 @@ class _QueueSheetState extends State<_QueueSheet> {
         // Straight to PlayerStore.jumpTo, which moves the cursor and nothing else. Handing the
         // queue back through playQueue would reshuffle it and play the wrong song.
         onTap: playing ? null : () => context.read<PlayerStore>().jumpTo(i),
+        // Not gated on `playing` the way the tap is: the song that is playing is exactly the one
+        // you are most likely to want a menu for. `closeHost` because this row lives INSIDE a
+        // sheet, and a page pushed from here would otherwise open behind it.
+        onLongPress: () => _openTrackMenu(context, t, closeHost: true),
+        onSecondaryTap: () => _openTrackMenu(context, t, closeHost: true),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 18),
           child: Row(
@@ -6274,6 +6362,11 @@ class TracksView extends StatelessWidget {
               final isCurrent = !player.radioMode && player.current?.path == t.path;
               return InkWell(
                 onTap: () => player.playQueue(tracks, i),
+                // The same menu the album page gives. This list is where you land after searching
+                // your library, so it is the likeliest place to want to fix or remove something —
+                // and until now a row here offered nothing but "play".
+                onLongPress: () => _openTrackMenu(context, t),
+                onSecondaryTap: () => _openTrackMenu(context, t),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
                   color: isCurrent ? _panel : Colors.transparent,
@@ -6507,6 +6600,10 @@ class _HomeStartViewState extends State<HomeStartView> {
         //
         // Long-press still plays it: the quickest way to hear a recommendation should not disappear
         // because the tap now goes somewhere better.
+        //
+        // Rows elsewhere open a menu on a long press, and this card does not — deliberately. A
+        // recommendation is a catalogue entry: no file to move, nothing to delete, no album page in
+        // your own library. There is nothing for that menu to hold.
         itemBuilder: (_, i) => _HoverCard(
           art: _netCover(ts[i].cover, size: 140),
           title: ts[i].title,
@@ -6842,6 +6939,25 @@ Future<void> _confirmDelete(BuildContext context, String what, List<String> path
     ),
   );
   if (choice == null || !context.mounted) return;
+
+  // Get off it before it goes.
+  //
+  // The player holds an open handle to the file it is playing. On Windows the delete then fails
+  // and says nothing — removeTracks swallows a locked file on purpose — and everywhere else the
+  // bar keeps showing a song that is no longer there until something tries to read it. So the
+  // player moves on first: to the next track, or to a stop if this was the last one.
+  //
+  // After the choice, never before it: cancelling must not have skipped your music.
+  final player = context.read<PlayerStore>();
+  final playing = player.current?.path;
+  if (playing != null && paths.contains(playing)) {
+    if (player.hasNext) {
+      await player.next();
+    } else if (player.playing) {
+      player.playPause();
+    }
+    if (!context.mounted) return;
+  }
 
   final lib = context.read<LibraryStore>();
   final fromDisk = choice == 'disk';
