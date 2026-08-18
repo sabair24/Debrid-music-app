@@ -52,7 +52,18 @@ Quality qualityFromName(String name) {
   return const Quality('?', QTier.unknown);
 }
 
+/// A sample rate in Hz as the kHz figure people actually say: 44100 → “44.1”, 96000 → “96”.
+String _khz(int hz) {
+  final k = hz / 1000;
+  return k == k.roundToDouble() ? '${k.round()}' : k.toStringAsFixed(1);
+}
+
 /// Quality from a Soulseek file's real metadata (falls back to name tokens).
+///
+/// [sampleRate] and [bitsPerSample] are what a file on your own shelf can tell you and a search
+/// result cannot: they come out of the FLAC STREAMINFO block. Where they are known they decide
+/// both the label and the tier, because “24/192” is the fact and bytes-per-second is a guess at
+/// it — a quiet 24-bit recording and a loud 16-bit one can land on the same bitrate.
 Quality qualityFromFile({
   required String name,
   required String ext,
@@ -61,6 +72,8 @@ Quality qualityFromFile({
   int? durationSec,
   int? size,
   bool isVbr = false,
+  int? sampleRate,
+  int? bitsPerSample,
 }) {
   const losslessExt = {'flac', 'alac', 'ape', 'wav', 'wavpack', 'aiff', 'tak', 'tta'};
   if (isFlac || losslessExt.contains(ext)) {
@@ -69,7 +82,19 @@ Quality qualityFromFile({
       kbps = (size * 8 / durationSec / 1000).round(); // effective bitrate → 16-bit vs hi-res
     }
     final fmt = isFlac ? 'FLAC' : ext.toUpperCase();
+    final depth = bitsPerSample ?? 0;
+    final rate = sampleRate ?? 0;
+    if (depth > 0 && rate > 0) {
+      // The definition rather than a threshold: more than 16 bits, or more than a CD's 48 kHz.
+      final tier = depth > 16 || rate > 48000 ? QTier.hires : QTier.lossless;
+      return Quality('$fmt $depth/${_khz(rate)}', tier);
+    }
     final hires = kbps > 1500 || _hiresTokens.hasMatch(name) || (_depthRate.firstMatch(name)?.group(1) == '24');
+    // Rate without depth — everything except the FLAC reader is like this. Still worth saying:
+    // 96 kHz is the half of the pair that tells you this is not a CD rip.
+    if (rate > 0) {
+      return Quality('$fmt ${_khz(rate)} kHz', rate > 48000 || hires ? QTier.hires : QTier.lossless);
+    }
     if (kbps > 0) return Quality('$fmt · ${kbps}k', hires ? QTier.hires : QTier.lossless);
     return Quality(fmt, hires ? QTier.hires : QTier.lossless);
   }

@@ -7274,14 +7274,20 @@ Widget _qualityBadge(Quality q) {
   );
 }
 
-/// Quality of a LOCAL library track (real bitrate from size÷duration, so a 16/44 FLAC and a
-/// 24-bit hi-res FLAC read differently).
+/// Quality of a LOCAL library track.
+///
+/// Depth and sample rate first — a file on your own shelf knows them, and “24/192” is the thing
+/// you actually wanted to see. The badge used to read “FLAC · 3079k”, which is that same fact
+/// divided by the running time and rounded: true, and not what anybody sorts their music by.
+/// Bytes-per-second stays as the fallback for the files whose reader never reported the rest.
 Quality _trackQuality(Track t) => qualityFromFile(
       name: t.title,
       ext: t.ext,
       isFlac: t.isFlac,
       durationSec: t.duration?.inSeconds,
       size: t.sizeBytes,
+      sampleRate: t.sampleRate > 0 ? t.sampleRate : null,
+      bitsPerSample: t.bitsPerSample > 0 ? t.bitsPerSample : null,
     );
 
 Quality _slskQuality(SoulseekFile f) => qualityFromFile(
