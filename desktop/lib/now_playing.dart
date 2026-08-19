@@ -36,6 +36,13 @@ Future<void> initNowPlaying(NowPlayingSource player, {Uint8List? Function(Track)
         androidNotificationChannelId: 'com.debridmusic.app.playback',
         androidNotificationChannelName: 'Afspelen',
         androidNotificationOngoing: true,
+        // The cover goes to the car as a BITMAP, not as a path — a head unit is another process
+        // and cannot read this app's private folder. That bitmap is parcelled across, and a
+        // parcel has about a megabyte to work with, while an embedded sleeve out of a FLAC is
+        // routinely 3000×3000: as ARGB that is thirty-six. 512 is more than any dashboard shows
+        // and comfortably under the limit.
+        artDownscaleWidth: 512,
+        artDownscaleHeight: 512,
       ),
     );
   } catch (e) {
@@ -126,6 +133,20 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
   /// path, so this used to suppress the republish and Control Center kept the old name until the
   /// next song. The signature covers exactly the four fields [_publishItem] puts on screen.
   String? _publishedSig;
+
+  /// Whether the artwork belonging to [_publishedSig] actually made it out.
+  ///
+  /// A cover is not there when a track starts. On a phone it comes over the network seconds later,
+  /// and on any machine the enrichment fills it in behind the playback. Publishing once, at the
+  /// instant the track changes, therefore published NO picture — and since the signature had not
+  /// changed by the time the bytes arrived, it never published one again. The car showed its own
+  /// grey square for the whole song, every song.
+  bool _artPublished = false;
+
+  /// One republish at a time. Writing the art to disk is asynchronous and this listener fires
+  /// several times a second.
+  bool _publishing = false;
+
   bool _lastPlaying = false;
   bool _lastBuffering = false;
   Duration _lastPosition = Duration.zero;
@@ -148,6 +169,11 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
     final sig = _sigOf(track);
     if (sig != _publishedSig) {
       _publishedSig = sig;
+      _artPublished = false;
+      unawaited(_publishItem(track));
+    } else if (!_artPublished && !_publishing && _artBytes(track) != null) {
+      // Same song, second publish — this time with a picture. A map lookup per tick is what this
+      // costs, against a cover that otherwise never appears anywhere outside the app itself.
       unawaited(_publishItem(track));
     }
 
@@ -188,14 +214,28 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
     ));
   }
 
+  /// The sleeve for this track, from the library if it has resolved and otherwise whatever the
+  /// player is holding.
+  Uint8List? _artBytes(Track t) {
+    final bytes = coverFor?.call(t) ?? player.currentCover;
+    // A handful of bytes is a broken or placeholder image, not a cover.
+    return bytes != null && bytes.length > 100 ? bytes : null;
+  }
+
   Future<void> _publishItem(Track track) async {
+    _publishing = true;
     Uri? art;
     try {
-      final bytes = coverFor?.call(track) ?? player.currentCover;
-      if (bytes != null && bytes.length > 100) art = await _artFile(bytes);
+      final bytes = _artBytes(track);
+      if (bytes != null) art = await _artFile(bytes);
     } catch (_) {
       // No cover is a cosmetic loss; the title still shows.
     }
+    _publishing = false;
+    // The song may have changed while the art was being written. Publishing now would put the
+    // previous one on the lock screen and in the car.
+    if (_sigOf(track) != _publishedSig) return;
+    _artPublished = art != null;
     mediaItem.add(MediaItem(
       id: track.path,
       title: track.title,

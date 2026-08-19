@@ -128,6 +128,26 @@ void main() {
     expect(Directory('${scratch.path}/nowplaying').listSync().length, 1);
   });
 
+  test('een hoes die pas later binnenkomt haalt het scherm alsnog', () async {
+    // The Android Auto bug. A cover is not there at the moment a track starts — on a phone it
+    // comes over the network seconds later — and publishing only on the track change therefore
+    // published no picture, then never came back to it. The car showed its grey square for the
+    // whole song, every song, while the app's own screen had the sleeve.
+    Uint8List? art;
+    final player = FakePlayer()..current = _track('/muziek/01.flac');
+    final handler = NowPlayingHandler(player, (_) => art);
+
+    expect((await _item(handler, '/muziek/01.flac'))?.artUri, isNull,
+        reason: 'de hoes is er op dat moment nog niet');
+
+    art = Uint8List.fromList(List.generate(2048, (i) => (i * 13) % 256));
+    player.tick();
+
+    final later = await _until(handler, (i) => i.artUri != null);
+    expect(later?.artUri, isNotNull, reason: 'de hoes kwam binnen en werd niet opnieuw gepubliceerd');
+    expect(later?.id, '/muziek/01.flac', reason: 'zelfde nummer, nu mét hoes');
+  });
+
   test('a track with no cover still shows its title', () async {
     final player = FakePlayer()..current = _track('/muziek/01.flac');
     final handler = NowPlayingHandler(player, (_) => null);
