@@ -20,6 +20,8 @@ class FakePlayer extends ChangeNotifier implements NowPlayingSource {
   @override
   bool playing = false;
   @override
+  bool buffering = false;
+  @override
   Duration position = Duration.zero;
   @override
   Duration duration = const Duration(seconds: 200);

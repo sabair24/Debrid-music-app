@@ -26,6 +26,10 @@ class RadioItem {
 abstract interface class NowPlayingSource implements Listenable {
   Track? get current;
   bool get playing;
+
+  /// Waiting for bytes rather than playing them. A car acts on this: told “ready” through a stall
+  /// it assumes the silence is the music.
+  bool get buffering;
   Duration get position;
   Duration get duration;
   Uint8List? get currentCover;
@@ -191,7 +195,18 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       : (_index < _order.length - 1 || (repeat == RepeatMode.all && _order.isNotEmpty));
   bool get hasPrev => radioMode ? _radioIndex > 0 : _index > 0;
 
+  /// True while libmpv is waiting for bytes rather than playing them.
+  ///
+  /// Published to the car and the lock screen. Without it those two were told “ready, playing” all
+  /// the way through a stall, which is the state a head unit acts on.
+  bool buffering = false;
+
   PlayerStore() {
+    _capOutputRate();
+    _player.stream.buffering.listen((b) {
+      buffering = b;
+      notifyListeners();
+    });
     _player.stream.playing.listen((p) {
       playing = p;
       if (p) resumedPaused = false;
@@ -210,6 +225,33 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _player.stream.completed.listen((done) {
       if (done) _onCompleted();
     });
+  }
+
+  /// Hand a phone's audio out at 48 kHz, whatever the file is.
+  ///
+  /// A 24/192 FLAC cannot leave a phone at 192 kHz: SBC and AAC top out at 48, LDAC at 96, and a
+  /// car takes 48. Something has to resample, and the choice is only WHERE. Left alone, libmpv
+  /// opens an AudioTrack at the file's rate and Android's audio path converts it further down the
+  /// line under a real-time deadline — which is what a dropout on a hi-res track sounds like,
+  /// while a CD rip at 44.1 sails through. Doing it here instead means libswresample does it once,
+  /// ahead of time, off the deadline.
+  ///
+  /// Not on the desktop: there the output really can be the file's own rate, and this app's whole
+  /// point is that it plays a FLAC as it is.
+  /// Android only, for now: that is where it was reported, and one platform at a time is how you
+  /// find out whether it was the cause.
+  Future<void> _capOutputRate() async {
+    if (!Platform.isAndroid) return;
+    final p = _player.platform;
+    // Null until the platform is up, and never a NativePlayer on the web. setProperty waits for
+    // initialisation by itself, so this does not have to.
+    if (p is! NativePlayer) return;
+    try {
+      await p.setProperty('audio-samplerate', '48000');
+    } catch (e) {
+      // Worth knowing, never worth failing over: without it playback is what it was yesterday.
+      debugPrint('Could not cap the output sample rate: $e');
+    }
   }
 
   void _onCompleted() {

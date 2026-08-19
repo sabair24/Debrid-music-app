@@ -36,7 +36,9 @@ Everything is in **`desktop/`**. One Flutter project, every platform:
 | `server/` | a small helper service, built separately |
 
 Playback is libmpv through `media_kit`, so a FLAC plays bit-perfect on every platform including
-Android TV over HDMI.
+Android TV over HDMI. A phone is the exception: its output is fixed at 48 kHz, because nothing a
+phone can reach — SBC, AAC, a car — takes more, and letting Android convert it under a real-time
+deadline is what a hi-res track stuttering on Bluetooth sounds like.
 
 ## Building
 

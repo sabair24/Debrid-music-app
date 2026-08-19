@@ -112,13 +112,17 @@ jobs:
 
       # The layout tests, named rather than the whole suite: five tests here scan a Windows music
       # folder or call out to the network and would fail for reasons that have nothing to do with
-      # the build. These four cover what a build can silently get wrong without anything failing —
+      # the build. These five cover what a build can silently get wrong without anything failing —
       # a section that is in one navigation and not the other, a bar that fits the emulator but not
-      # a 320-point screen, a quality badge that quietly stops saying 24/192, and an item that ends
-      # up underneath the one that deletes a file.
+      # a 320-point screen, a quality badge that quietly stops saying 24/192, an item that ends up
+      # underneath the one that deletes a file, and what the car and the lock screen are told. That
+      # last one ran only on the Apple workflow, which fires on a tag — so on the branch where the
+      # phone is actually built it had never run at all.
       - name: Test the layout
         working-directory: desktop
-        run: flutter test test/nav_sections_test.dart test/phone_layout_test.dart test/quality_test.dart test/track_menu_test.dart
+        run: |
+          flutter test test/nav_sections_test.dart test/phone_layout_test.dart \
+            test/quality_test.dart test/track_menu_test.dart test/now_playing_test.dart
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
       # the app you actually use while the TV work is in progress — shipping that would install a
