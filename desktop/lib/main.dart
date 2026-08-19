@@ -119,6 +119,19 @@ bool get _isDesktop => Platform.isWindows || Platform.isMacOS || Platform.isLinu
 /// but sizes are not: a control comfortable under a mouse is one you miss with a thumb.
 bool get _isTouch => Platform.isIOS || Platform.isAndroid;
 
+/// Hoeveel regels de titel van een nummer mag innemen.
+///
+/// Op een telefoon houdt een nummerrij ongeveer 175 punten over voor de titel — de rest gaat naar
+/// het nummer, de duur en de knoppen. Dat is bij 14 punten zo'n 25 tekens, en daar past de helft
+/// van de nummers van vandaag niet in: "Immortal Queen (feat. …", "Gimme Love (Reasona…",
+/// "Champion (feat. Tierra…". Precies het stuk dat je wilt lezen — wie meespeelt en welke versie
+/// het is — viel weg achter de puntjes.
+///
+/// Drie regels is geen willekeurig getal: dat is waar zelfs een titel met gast én versie in past,
+/// terwijl een lijst nog een lijst blijft. Op een breed scherm blijft het één regel — daar past het
+/// ruim, en rijen van gelijke hoogte lezen daar sneller.
+int titelRegels(BuildContext context) => isCompact(context) ? 3 : 1;
+
 /// A loopback port this app holds while it runs. Binding it is the lock; connecting to it is how
 /// a second copy says "you're already running, come to the front".
 const _instancePort = 47821;
@@ -4949,7 +4962,7 @@ class _TrackRowState extends State<TrackRow> {
                   // lookup here — that would be one network call per row of every album.
                   final guests = splitFeatured(t.artist, t.title).featured;
                   final title = Text(titleWithoutFeat(t.title),
-                      maxLines: 1,
+                      maxLines: titelRegels(context),
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(fontWeight: FontWeight.w600, color: isCurrent ? _accent2 : _text));
                   if (guests.isEmpty) return title;
@@ -6479,7 +6492,7 @@ class AfspeellijstPagina extends StatelessWidget {
                 contentPadding: EdgeInsets.zero,
                 leading: cover(lib.coverForTrack(nummers[i]), size: 40, radius: 6),
                 title: Text(nummers[i].title,
-                    maxLines: 1,
+                    maxLines: titelRegels(context),
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                 subtitle: Text(lib.displayArtist(nummers[i].artist),
@@ -6628,7 +6641,7 @@ class _FavorietRij extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(track.title,
-                      maxLines: 1,
+                      maxLines: titelRegels(context),
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                   Text(lib.displayArtist(track.artist),
@@ -6984,7 +6997,7 @@ class _WachtrijRij extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Text(track.title,
-                        maxLines: 1,
+                        maxLines: titelRegels(context),
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                             fontSize: 12.5,
@@ -7998,7 +8011,11 @@ class TracksView extends StatelessWidget {
             itemCount: tracks.length,
             // Fixed height → smooth scrolling at 10k+ tracks. Taller on a television because the
             // text in the row is scaled 1.35x there and 56 would cut the second line off.
-            itemExtent: isTv ? 76 : 56,
+            //
+            // En hoger op een telefoon, om dezelfde reden als daar: de titel mag er over twee
+            // regels, want op 411 punten paste de helft van de titels niet op één. 56 draagt één
+            // titelregel plus de artiest; de tweede regel kost er 20 bij.
+            itemExtent: isTv || isCompact(context) ? 76 : 56,
             itemBuilder: (_, i) {
               final t = tracks[i];
               final isCurrent = !player.radioMode && player.current?.path == t.path;
@@ -8021,7 +8038,11 @@ class TracksView extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(t.title,
-                                maxLines: 1,
+                                // TWEE hier en niet drie, anders dan in de andere nummerlijsten:
+                                // deze lijst heeft een vaste rijhoogte (zie `itemExtent` hieronder)
+                                // en die twee getallen horen bij elkaar. Een derde regel zonder een
+                                // hogere rij loopt er gewoon uit.
+                                maxLines: isCompact(context) ? 2 : 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
                                     fontSize: 14,
@@ -10696,7 +10717,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                      Text(t.title,
+                          maxLines: titelRegels(context),
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w600)),
                       if (t.artist.isNotEmpty)
                         _artistLine(splitFeatured(t.artist, t.title),
                             const TextStyle(color: _muted, fontSize: 12)),
@@ -13076,7 +13100,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                 }),
                 Expanded(
                     child: Text(t.title,
-                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                        maxLines: titelRegels(context), overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500))),
                 // "N bronnen klaar" hint (or a tiny spinner while the album search is still running).
                 if (soulseekReady && srcCount > 0)
@@ -13979,8 +14003,13 @@ class _SettingsDialogState extends State<SettingsDialog> {
   /// skipped when arrowing and entered on purpose, and the nodes have to be kept somewhere.
   final _fieldFocus = <TextEditingController, FocusNode>{};
 
+  /// De scroller van het middenstuk, alleen zodat de balk ernaast altijd te zien is — en daarvoor
+  /// wil `Scrollbar` een controller die hij zeker kent.
+  final _rol = ScrollController();
+
   @override
   void dispose() {
+    _rol.dispose();
     _discogs.dispose();
     _torbox.dispose();
     _slskUser.dispose();
@@ -14277,8 +14306,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
             ],
             const SizedBox(height: 18),
             Flexible(
-              child: SingleChildScrollView(
-                child: Column(
+              // Het middenstuk scrolt en de kop en de knoppen blijven staan. Op een telefoon past er
+              // een derde van in beeld, en dan houdt de bovenrand een halve zin over — dat ziet er
+              // uit als een venster dat kapot is, niet als een lijst die verder gaat. Een balk die
+              // altijd staat is het enige dat dat verschil vertelt; zonder `thumbVisibility`
+              // verschijnt hij pas als je al aan het slepen bent, en dan is de vraag al gesteld.
+              child: Scrollbar(
+                controller: _rol,
+                thumbVisibility: true,
+                child: SingleChildScrollView(
+                  controller: _rol,
+                  child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _field('TorBox API-sleutel', _torbox),
@@ -14501,6 +14539,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     const SizedBox(height: 12),
                     const _AboutSection(),
                   ],
+                ),
                 ),
               ),
             ),
