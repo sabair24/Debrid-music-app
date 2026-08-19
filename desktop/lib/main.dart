@@ -11684,7 +11684,11 @@ class _ArtistHeroState extends State<ArtistHero> {
                       ],
                       if (widget.actions.isNotEmpty) ...[
                         const SizedBox(height: 12),
-                        Row(children: widget.actions),
+                        // Een Wrap en geen Row. Drie knoppen naast elkaar vragen zo'n 445 punten en
+                        // een telefoon heeft er 411, dus de derde liep van het scherm af; nu zakt
+                        // hij naar een eigen regel. De tussenruimte zit in `spacing`, dus de
+                        // aanroepers geven geen SizedBox meer mee.
+                        Wrap(spacing: 10, runSpacing: 10, children: widget.actions),
                       ],
                     ],
                   );
@@ -12241,7 +12245,6 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                       icon: const Icon(Icons.radio_rounded, size: 18),
                       label: const Text('Radio'),
                     ),
-                    const SizedBox(width: 10),
                     // De app raadt portret-of-achtergrond uit de vorm van een plaatje, en juist een
                     // gok hoor je te kunnen overrulen.
                     FilledButton.icon(
@@ -12254,6 +12257,36 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                       icon: const Icon(Icons.photo_library_outlined, size: 18),
                       label: const Text('Foto kiezen'),
                     ),
+                    // Alleen waar er iets te hernoemen valt: een artiest uit de catalogus waarvan
+                    // je niets hebt, heeft geen tags om te corrigeren.
+                    if (mine.isNotEmpty) ...[
+                      // Waar een in tweeën gevallen discografie weer één wordt. De naam is het
+                      // enige waar groeperen op af kan gaan, dus één album getagd als “Enrique”
+                      // tussen een plank “Enrique Iglesias” zijn twee artiesten wat deze app
+                      // betreft — en deze pagina, die er dan de helft van toont, is waar je het ziet.
+                      FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                            backgroundColor: _panel2,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+                        onPressed: () async {
+                          final r = await showDialog<({String naam, int geschreven, int mislukt})>(
+                              context: context,
+                              builder: (_) => ArtistRenameDialog(widget.artist.name));
+                          if (r == null || !context.mounted) return;
+                          _srcToast(
+                              context,
+                              r.mislukt > 0
+                                  ? 'Staat nu onder “${r.naam}” — ${r.mislukt} bestand'
+                                      '${r.mislukt == 1 ? '' : 'en'} kon niet geschreven worden.'
+                                  : 'Staat nu onder “${r.naam}”.');
+                          // Deze pagina gaat over een naam waar niets meer onder staat.
+                          Navigator.pop(context);
+                        },
+                        icon: const Icon(Icons.drive_file_rename_outline_rounded, size: 18),
+                        label: const Text('Naam corrigeren'),
+                      ),
+                    ],
                   ],
                 ),
                 Padding(
@@ -15507,6 +15540,170 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
                   fontWeight: on ? FontWeight.w600 : FontWeight.w400)),
         ),
       );
+}
+
+/// Elke plaat die onder één artiestnaam staat, in één keer onder een andere naam zetten.
+///
+/// Groeperen gaat op de naam. Eén album waarvan de tags "Enrique" zeggen terwijl de rest "Enrique
+/// Iglesias" zegt, is daarmee een tweede artiest: twee tegels, twee pagina's, en op elke pagina de
+/// helft van een catalogus. De metadata-editor kon dat al rechtzetten, maar per album — en dezelfde
+/// correctie een keer per plaat typen is geen oplossing, dat is werk.
+///
+/// Hernoemen naar een naam die al in je bibliotheek staat is niet een randgeval maar de bedoeling:
+/// beide helften komen onder één naam, en groeperen voegt ze daarna vanzelf samen.
+class ArtistRenameDialog extends StatefulWidget {
+  const ArtistRenameDialog(this.name, {super.key});
+
+  final String name;
+
+  @override
+  State<ArtistRenameDialog> createState() => _ArtistRenameDialogState();
+}
+
+class _ArtistRenameDialogState extends State<ArtistRenameDialog> {
+  late final TextEditingController _naar = TextEditingController(text: widget.name);
+  bool _bezig = false;
+
+  @override
+  void dispose() {
+    _naar.dispose();
+    super.dispose();
+  }
+
+  Future<void> _toepassen() async {
+    final doel = _naar.text.trim();
+    if (doel.isEmpty || doel == widget.name) return;
+    setState(() => _bezig = true);
+    final lib = context.read<LibraryStore>();
+    final settings = context.read<AppSettings>();
+    // Titels, geen Album-objecten. Elke correctie hergroepeert de bibliotheek en levert nieuwe
+    // Album-objecten voor dezelfde platen op — en op een telefoon wordt het id waarmee een
+    // correctie naar de pc gaat op objectidentiteit opgezocht. Een vooraf verzamelde lijst zou na
+    // de eerste plaat stil niets meer versturen.
+    final titels = [for (final a in lib.albums) if (a.artist == widget.name) a.title];
+    var geschreven = 0;
+    final mislukt = <String>[];
+    try {
+      for (final titel in titels) {
+        Album? album;
+        for (final a in lib.albums) {
+          if (a.artist == widget.name && a.title == titel) {
+            album = a;
+            break;
+          }
+        }
+        if (album == null) continue;
+        final r = await lib.applyCorrection(album, settings, artist: doel);
+        geschreven += r.written;
+        mislukt.addAll(r.failed);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _bezig = false);
+      _srcToast(context, 'Hernoemen mislukte: $e');
+      return;
+    }
+    if (!mounted) return;
+    Navigator.pop(context, (naam: doel, geschreven: geschreven, mislukt: mislukt.length));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    final aantal = lib.albums.where((a) => a.artist == widget.name).length;
+    // Namen die al in de bibliotheek staan en waar deze in zit, of die in deze zitten — precies de
+    // vorm die een afgekapte tag heeft. "Enrique" biedt zo "Enrique Iglesias" aan, en dan is de
+    // correctie een tik in plaats van iets om foutloos over te typen.
+    final ik = widget.name.toLowerCase();
+    final buren = <String>{
+      for (final a in lib.albums)
+        if (a.artist != widget.name &&
+            (a.artist.toLowerCase().contains(ik) || ik.contains(a.artist.toLowerCase())))
+          a.artist,
+    }.toList()
+      ..sort((a, b) => a.length.compareTo(b.length));
+
+    return AlertDialog(
+      backgroundColor: _panel,
+      title: const Text('Artiestnaam corrigeren'),
+      // Scrollbaar, en dat is geen franje: een AlertDialog scrolt zijn inhoud niet uit zichzelf.
+      // Met het toetsenbord open vallen de suggesties onder de onderrand — en wat buiten de doos
+      // van zijn ouder getekend wordt, tekent wel maar vangt geen tik.
+      content: SizedBox(
+        width: dialogWidth(context, 460),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '$aantal ${aantal == 1 ? 'plaat staat' : 'platen staan'} onder “${widget.name}”. '
+                'Ze gaan allemaal over naar de naam die je hier zet. Staat die naam al in je '
+                'bibliotheek, dan worden de twee één artiest.',
+                style: const TextStyle(color: _muted, fontSize: 13, height: 1.35),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _naar,
+                // Geen autofocus: het toetsenbord zou over de suggesties heen komen, en daar een
+                // van aantikken is juist de bedoeling.
+                enabled: !_bezig,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => _toepassen(),
+                onChanged: (_) => setState(() {}),
+                decoration: const InputDecoration(labelText: 'Nieuwe naam'),
+              ),
+              if (buren.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                const Text('Staat al in je bibliotheek',
+                    style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final n in buren)
+                      ActionChip(
+                        label: Text(n),
+                        backgroundColor: _panel2,
+                        side: const BorderSide(color: _line),
+                        onPressed: _bezig
+                            ? null
+                            : () => setState(() {
+                                  _naar.text = n;
+                                  _naar.selection = TextSelection.collapsed(offset: n.length);
+                                }),
+                      ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          // Waar de highlight begint op een televisie: dit verandert de tags van elk bestand van
+          // een artiest, en dat is niet iets om per ongeluk met OK te bevestigen.
+          autofocus: isTv,
+          onPressed: _bezig ? null : () => Navigator.pop(context),
+          child: const Text('Annuleren'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: _accent),
+          onPressed: _bezig || _naar.text.trim().isEmpty || _naar.text.trim() == widget.name
+              ? null
+              : _toepassen,
+          child: _bezig
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white))
+              : const Text('Hernoemen'),
+        ),
+      ],
+    );
+  }
 }
 
 /// Choose an artist's portrait and the backdrop behind their page.
