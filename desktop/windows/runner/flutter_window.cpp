@@ -40,6 +40,8 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  // Eerst de vlag, dan pas opruimen: het opruimen zelf brengt ons hieronder terug.
+  tearing_down_ = true;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -51,8 +53,29 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
-  // Give Flutter, including plugins, an opportunity to handle window messages.
-  if (flutter_controller_) {
+  // ELKE keer dat deze app afsloot, crashte hij. Gemeten, niet vermoed.
+  //
+  // Vier crashdumps van 15 t/m 18-08 plus een naspeling op 19-08 om 06:24 wijzen allemaal naar
+  // dezelfde instructie: `flutter_windows.dll+0x1cda0`, `mov rax,[rcx+10h]`, met rcx = 0 — een
+  // leesfout op adres 0x10. De stack eronder is elke keer dezelfde:
+  //
+  //     flutter_windows!FlutterDesktopViewControllerHandleTopLevelWindowProc+0x32
+  //     debridmusic!FlutterWindow::MessageHandler            <- deze regels
+  //     user32!UserCallWinProcCheckWow
+  //     user32!_fnDWORD                                      <- door de kernel bezorgd
+  //
+  // En het bericht dat het afvuurt is 0x210, WM_PARENTNOTIFY: dat stuurt Windows naar het
+  // hoofdvenster zodra een KINDvenster verdwijnt. Bij het afsluiten is dat precies de Flutter-view.
+  // Het bericht komt synchroon terug terwijl de controller aan het verdwijnen is, en dan geeft de
+  // regel hieronder hem door aan iets wat er niet meer is.
+  //
+  // De `if (flutter_controller_)` die hier stond dekt dat niet: hij is niet leeg, hij is stervende.
+  // Vandaar een vlag die vanaf het eerste opruimmoment ALLES tegenhoudt.
+  //
+  // Waarom dit zeven keer "willekeurig" leek: er is niets mis vóór de crash, dus in de logboeken
+  // staat niets, en het gebeurt op het moment dat je de app toch al wegklikt.
+  if (!tearing_down_ && flutter_controller_) {
+    // Give Flutter, including plugins, an opportunity to handle window messages.
     std::optional<LRESULT> result =
         flutter_controller_->HandleTopLevelWindowProc(hwnd, message, wparam,
                                                       lparam);
@@ -63,7 +86,11 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 
   switch (message) {
     case WM_FONTCHANGE:
-      flutter_controller_->engine()->ReloadSystemFonts();
+      // Deze stond ONgeschermd: een lettertypewissel tijdens of na het opruimen liep hier zo een
+      // lege controller in. Dezelfde fout als hierboven, alleen zeldzamer.
+      if (!tearing_down_ && flutter_controller_) {
+        flutter_controller_->engine()->ReloadSystemFonts();
+      }
       break;
   }
 

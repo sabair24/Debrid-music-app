@@ -28,6 +28,14 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  // Is het opruimen al begonnen?
+  //
+  // Vanaf dat moment gaat er geen enkel vensterbericht meer naar Flutter. Het opruimen van de
+  // Flutter-view laat Windows namelijk zelf nog berichten sturen -- WM_PARENTNOTIFY komt synchroon
+  // uit de kernel terug naar dit venster -- en die kwamen terecht bij een controller die al aan het
+  // verdwijnen was. De meting staat in flutter_window.cpp.
+  bool tearing_down_ = false;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_
