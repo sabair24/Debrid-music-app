@@ -15,12 +15,17 @@ import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show MethodChannel;
 
 import 'models.dart';
 import 'paths.dart';
 import 'player.dart';
 
 bool get _wantsSystemControls => Platform.isIOS || Platform.isMacOS || Platform.isAndroid;
+
+/// The same channel `tv.dart` asks about the device on — one platform channel for this app rather
+/// than one per question.
+const _platform = MethodChannel('debridmusic/device');
 
 /// Start publishing. Safe to call anywhere: it does nothing where there is nothing to publish to,
 /// and a failure to register is never a reason for the app not to start.
@@ -260,7 +265,28 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
     final file = File('${dir.path}${Platform.pathSeparator}'
         '${md5.convert(bytes).toString().substring(0, 16)}.jpg');
     if (!await file.exists()) await file.writeAsBytes(bytes);
-    return Uri.file(file.path);
+    return await _shareable(file.path) ?? Uri.file(file.path);
+  }
+
+  /// The same file as something another PROCESS may open.
+  ///
+  /// Android Auto's full playback screen does not use the bitmap in the session metadata: it takes
+  /// the artwork URI and loads it itself. A `file://` path inside this app's private folder is
+  /// unreadable from there — which is why the small media card on the navigation screen, which
+  /// does use the bitmap, showed the cover while the big screen showed a grey square.
+  ///
+  /// Null off Android and null if the platform refuses the path, and then the file:// URI stands.
+  /// That is the behaviour of every other system this app publishes to, and it was never the
+  /// broken half.
+  Future<Uri?> _shareable(String path) async {
+    if (!Platform.isAndroid) return null;
+    try {
+      final uri = await _platform.invokeMethod<String>('artContentUri', {'path': path});
+      return uri == null ? null : Uri.parse(uri);
+    } catch (e) {
+      debugPrint('No content URI for the cover: $e');
+      return null;
+    }
   }
 
   // The store has one toggle, the system sends two distinct commands. Checking the state first is

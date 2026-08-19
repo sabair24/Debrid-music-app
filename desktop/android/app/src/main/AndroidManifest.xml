@@ -80,6 +80,20 @@
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc"/>
 
+        <!-- The cover, as something another process may open.
+             Auto's full playback screen loads the artwork URI itself rather than using the bitmap
+             in the session metadata, and a file:// path in this app's private folder is unreadable
+             there — which is why the small card on the navigation screen had a cover and the big
+             screen had a grey square.
+             Exported because there is no reliable list of the packages a head unit, an assistant
+             or a watch will come from, so granting per consumer is not an option. Bounded in
+             ArtProvider: one folder, read-only, album covers and nothing else. -->
+        <provider
+            android:name=".ArtProvider"
+            android:authorities="${applicationId}.art"
+            android:exported="true"
+            android:grantUriPermissions="false" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

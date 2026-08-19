@@ -1,8 +1,10 @@
 package com.debridmusic.app
 
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import java.io.File
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -46,6 +48,31 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
+    /**
+     * A `content://` URI for a cover this app has written, or null if [path] is not one.
+     *
+     * The check is on the canonical path, not on the string: this is what decides whether another
+     * process gets to open a file, and `…/nowplaying/../../settings.json` is a string that starts
+     * with the right prefix and is not in the right folder.
+     */
+    private fun artContentUri(path: String?): String? {
+        if (path.isNullOrBlank()) return null
+        return try {
+            val dir = ArtProvider.artDir(applicationContext)
+            val file = File(path)
+            if (!file.canonicalPath.startsWith(dir.canonicalPath + File.separator)) return null
+            if (!file.isFile) return null
+            Uri.Builder()
+                .scheme("content")
+                .authority(ArtProvider.authority(applicationContext))
+                .appendPath(file.name)
+                .build()
+                .toString()
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -63,6 +90,12 @@ class MainActivity : AudioServiceActivity() {
                             packageManager.hasSystemFeature("android.hardware.type.television")
                     )
                     "deviceName" -> result.success(deviceName())
+                    // The cover, as something another app is allowed to open. See [ArtProvider].
+                    //
+                    // Null for anything outside the one folder that provider serves — and Dart
+                    // then keeps the file:// URI it already had. So if the app's data layout ever
+                    // moves, this degrades to what it did before rather than breaking silently.
+                    "artContentUri" -> result.success(artContentUri(call.argument<String>("path")))
                     else -> result.notImplemented()
                 }
             }
