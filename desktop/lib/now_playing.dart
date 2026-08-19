@@ -37,12 +37,17 @@ Future<void> initNowPlaying(NowPlayingSource player, {Uint8List? Function(Track)
         androidNotificationChannelName: 'Afspelen',
         androidNotificationOngoing: true,
         // The cover goes to the car as a BITMAP, not as a path — a head unit is another process
-        // and cannot read this app's private folder. That bitmap is parcelled across, and a
-        // parcel has about a megabyte to work with, while an embedded sleeve out of a FLAC is
-        // routinely 3000×3000: as ARGB that is thirty-six. 512 is more than any dashboard shows
-        // and comfortably under the limit.
-        artDownscaleWidth: 512,
-        artDownscaleHeight: 512,
+        // and cannot read this app's private folder. That bitmap is parcelled across, and a parcel
+        // has about a megabyte, while an embedded sleeve out of a FLAC is routinely 3000×3000: as
+        // ARGB that is thirty-six.
+        //
+        // 192 rather than the 512 that looks like it would fit. The downscale is `inSampleSize`,
+        // which only halves — ask for 512 and a 3000-pixel sleeve comes back at 750, which is
+        // 2.2 MB and over the limit again. Halving lands somewhere between the number you ask for
+        // and twice it, so the figure to pick is the one whose DOUBLE still fits: 384² is 590 kB.
+        // It is also audio_service's own default for a thumbnail, and a dashboard is not a print.
+        artDownscaleWidth: 192,
+        artDownscaleHeight: 192,
       ),
     );
   } catch (e) {
