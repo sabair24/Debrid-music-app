@@ -119,6 +119,19 @@ bool get _isDesktop => Platform.isWindows || Platform.isMacOS || Platform.isLinu
 /// but sizes are not: a control comfortable under a mouse is one you miss with a thumb.
 bool get _isTouch => Platform.isIOS || Platform.isAndroid;
 
+/// Hoeveel regels de titel van een nummer mag innemen.
+///
+/// Op een telefoon houdt een nummerrij ongeveer 175 punten over voor de titel — de rest gaat naar
+/// het nummer, de duur en de knoppen. Dat is bij 14 punten zo'n 25 tekens, en daar past de helft
+/// van de nummers van vandaag niet in: "Immortal Queen (feat. …", "Gimme Love (Reasona…",
+/// "Champion (feat. Tierra…". Precies het stuk dat je wilt lezen — wie meespeelt en welke versie
+/// het is — viel weg achter de puntjes.
+///
+/// Drie regels is geen willekeurig getal: dat is waar zelfs een titel met gast én versie in past,
+/// terwijl een lijst nog een lijst blijft. Op een breed scherm blijft het één regel — daar past het
+/// ruim, en rijen van gelijke hoogte lezen daar sneller.
+int titelRegels(BuildContext context) => isCompact(context) ? 3 : 1;
+
 /// A loopback port this app holds while it runs. Binding it is the lock; connecting to it is how
 /// a second copy says "you're already running, come to the front".
 const _instancePort = 47821;
@@ -4949,7 +4962,7 @@ class _TrackRowState extends State<TrackRow> {
                   // lookup here — that would be one network call per row of every album.
                   final guests = splitFeatured(t.artist, t.title).featured;
                   final title = Text(titleWithoutFeat(t.title),
-                      maxLines: 1,
+                      maxLines: titelRegels(context),
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(fontWeight: FontWeight.w600, color: isCurrent ? _accent2 : _text));
                   if (guests.isEmpty) return title;
@@ -6479,7 +6492,7 @@ class AfspeellijstPagina extends StatelessWidget {
                 contentPadding: EdgeInsets.zero,
                 leading: cover(lib.coverForTrack(nummers[i]), size: 40, radius: 6),
                 title: Text(nummers[i].title,
-                    maxLines: 1,
+                    maxLines: titelRegels(context),
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                 subtitle: Text(lib.displayArtist(nummers[i].artist),
@@ -6628,7 +6641,7 @@ class _FavorietRij extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(track.title,
-                      maxLines: 1,
+                      maxLines: titelRegels(context),
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                   Text(lib.displayArtist(track.artist),
@@ -6984,7 +6997,7 @@ class _WachtrijRij extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Text(track.title,
-                        maxLines: 1,
+                        maxLines: titelRegels(context),
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                             fontSize: 12.5,
@@ -7998,7 +8011,11 @@ class TracksView extends StatelessWidget {
             itemCount: tracks.length,
             // Fixed height → smooth scrolling at 10k+ tracks. Taller on a television because the
             // text in the row is scaled 1.35x there and 56 would cut the second line off.
-            itemExtent: isTv ? 76 : 56,
+            //
+            // En hoger op een telefoon, om dezelfde reden als daar: de titel mag er over twee
+            // regels, want op 411 punten paste de helft van de titels niet op één. 56 draagt één
+            // titelregel plus de artiest; de tweede regel kost er 20 bij.
+            itemExtent: isTv || isCompact(context) ? 76 : 56,
             itemBuilder: (_, i) {
               final t = tracks[i];
               final isCurrent = !player.radioMode && player.current?.path == t.path;
@@ -8021,7 +8038,11 @@ class TracksView extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(t.title,
-                                maxLines: 1,
+                                // TWEE hier en niet drie, anders dan in de andere nummerlijsten:
+                                // deze lijst heeft een vaste rijhoogte (zie `itemExtent` hieronder)
+                                // en die twee getallen horen bij elkaar. Een derde regel zonder een
+                                // hogere rij loopt er gewoon uit.
+                                maxLines: isCompact(context) ? 2 : 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
                                     fontSize: 14,
@@ -10696,7 +10717,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                      Text(t.title,
+                          maxLines: titelRegels(context),
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w600)),
                       if (t.artist.isNotEmpty)
                         _artistLine(splitFeatured(t.artist, t.title),
                             const TextStyle(color: _muted, fontSize: 12)),
@@ -11575,23 +11599,22 @@ class _ArtistHeroState extends State<ArtistHero> {
     // twee knoppen staan die aantoonbaar niets deden — ook de Radio-knop ernaast niet. Gemeten op
     // de S26: de rij eindigde 12 px onder de onderrand van de kop.
     //
-    // Uit de foto zelf gerekend en niet op een nieuw vast getal gegokt: de foto is het enige stuk
-    // dat met de schermbreedte meegroeit. Wat eronder komt is de naam (hoogstens 96), de telling en
-    // de knoppen — samen ruim binnen 230.
+    // Op een telefoon wordt die hoogte niet meer BEGROOT maar GEMETEN. De vorige versie rekende
+    // `portret + 230`, en 230 was precies genoeg voor de naam, de telling en ÉÉN regel knoppen.
+    // Toen er een derde knop bij kwam zakte die naar een tweede regel, en stond hij weer buiten het
+    // vak: half afgesneden en niet aan te tikken — exact dezelfde fout, één knop later. Elk vast
+    // getal hier is een fout die op zijn volgende knop wacht, dus de inhoud bepaalt de hoogte nu
+    // zelf en er valt niets meer te schatten.
     final smal = isCompact(context);
     final marge = smal ? 18.0 : 28.0;
     final portretMaat =
         smal ? (MediaQuery.sizeOf(context).width - marge * 2).clamp(120.0, 220.0) : 270.0;
 
-    return SizedBox(
-      // Room for a 270px portrait with the wordmark and buttons beside it. The backdrop is very
-      // wide, so every extra pixel of height is another band of it that isn't cropped away.
-      height: smal ? portretMaat + 230 : 400,
-      // A blur paints outside its child's bounds, and the overscan pushes it further still — without
-      // this the wash ran on down the page and the biography underneath was hard to read.
-      child: ClipRect(
-        child: Stack(
-        fit: StackFit.expand,
+    // De achtergrond en de waas zijn `Positioned.fill`: zo vullen ze het vak zonder het te MAKEN.
+    // Op een telefoon (`StackFit.loose`) is de inhoud het enige kind dat de hoogte bepaalt; op een
+    // groot scherm blijft het vaste vak van 400 eromheen staan.
+    final vak = Stack(
+        fit: smal ? StackFit.loose : StackFit.expand,
         children: [
           // Blurred on purpose. Every artist image any database has is 16:9 — fanart, widethumb,
           // all of it — and a banner this wide can only show a quarter of one. Sharp, that quarter
@@ -11599,38 +11622,42 @@ class _ArtistHeroState extends State<ArtistHero> {
           // photo is a close-up that no crop can survive. So the backdrop is atmosphere drawn from
           // the artist's own colours, and the portrait beside it is what you actually recognise.
           if (backdrop != null && widget.ownBackdrop)
-            ImageFiltered(
-              imageFilter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-              // Overscanned: a blur samples past the edges, and at 1.0 the sides faded out.
-              child: Transform.scale(
-                scale: 1.15,
-                // Klein gedecodeerd en dan uitvergroot. Deze gaat er tóch doorheen met een blur van
-                // sigma 26 — er is geen enkel detail dat de decodeergrootte rechtvaardigt, en een
-                // artiestachtergrond van 1920x1080 is 8,3 MB als bitmap. Dezelfde afweging staat
-                // 300 regels hierboven al uitgeschreven bij de andere achtergrond; deze was
-                // overgeslagen.
-                child: Image.memory(backdrop,
-                    fit: BoxFit.cover,
-                    cacheWidth: 64,
-                    alignment: const Alignment(0, -.3),
-                    errorBuilder: (_, __, ___) => const SizedBox()),
+            Positioned.fill(
+              child: ImageFiltered(
+                imageFilter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+                // Overscanned: a blur samples past the edges, and at 1.0 the sides faded out.
+                child: Transform.scale(
+                  scale: 1.15,
+                  // Klein gedecodeerd en dan uitvergroot. Deze gaat er tóch doorheen met een blur van
+                  // sigma 26 — er is geen enkel detail dat de decodeergrootte rechtvaardigt, en een
+                  // artiestachtergrond van 1920x1080 is 8,3 MB als bitmap. Dezelfde afweging staat
+                  // 300 regels hierboven al uitgeschreven bij de andere achtergrond; deze was
+                  // overgeslagen.
+                  child: Image.memory(backdrop,
+                      fit: BoxFit.cover,
+                      cacheWidth: 64,
+                      alignment: const Alignment(0, -.3),
+                      errorBuilder: (_, __, ___) => const SizedBox()),
+                ),
               ),
             ),
           // Dark enough at the bottom that the wordmark and buttons always read. Skipped when the
           // page already carries the wash — a second gradient on top of it just muddies the top.
           if (widget.ownBackdrop)
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: .30),
-                    Colors.black.withValues(alpha: .38),
-                    Colors.black.withValues(alpha: .82),
-                    const Color(0xFF0B0D14),
-                  ],
-                  stops: const [0, .40, .82, 1],
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: .30),
+                      Colors.black.withValues(alpha: .38),
+                      Colors.black.withValues(alpha: .82),
+                      const Color(0xFF0B0D14),
+                    ],
+                    stops: const [0, .40, .82, 1],
+                  ),
                 ),
               ),
             ),
@@ -11665,6 +11692,11 @@ class _ArtistHeroState extends State<ArtistHero> {
                   );
 
             final details = Column(
+                    // Op een telefoon MEET deze kolom de kop op; dan mag hij niet naar de volle
+                    // hoogte willen rekken, want de kop staat in een scroller en die is naar
+                    // beneden onbegrensd. Naast de foto (groot scherm) blijft hij wél rekken —
+                    // daar duwt `end` de naam en de knoppen naar de onderrand van het vak.
+                    mainAxisSize: smal ? MainAxisSize.min : MainAxisSize.max,
                     mainAxisAlignment: MainAxisAlignment.end,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -11697,6 +11729,7 @@ class _ArtistHeroState extends State<ArtistHero> {
               padding: EdgeInsets.fromLTRB(pad, 0, pad, 22),
               child: narrow
                   ? Column(
+                      mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (photo != null) ...[photo, const SizedBox(height: 14)],
@@ -11716,8 +11749,15 @@ class _ArtistHeroState extends State<ArtistHero> {
             );
           }),
         ],
-        ),
-      ),
+    );
+
+    // A blur paints outside its child's bounds, and the overscan pushes it further still — without
+    // this the wash ran on down the page and the biography underneath was hard to read.
+    return ClipRect(
+      // Room for a 270px portrait with the wordmark and buttons beside it. The backdrop is very
+      // wide, so every extra pixel of height is another band of it that isn't cropped away. Alleen
+      // op een groot scherm: op een telefoon meet de inhoud zichzelf op.
+      child: smal ? vak : SizedBox(height: 400, child: vak),
     );
   }
 
@@ -12326,18 +12366,36 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                 child: Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator(color: _accent))))
           else ...[
             SliverToBoxAdapter(
-              child: Row(
-                children: [
-                  Expanded(
-                      child: _sectionTitle(
-                          mine.isEmpty ? 'Discografie' : 'Volledige discografie',
-                          '${rijen.length} in ${blokken.length} blokken')),
-                  Padding(
-                    padding: const EdgeInsets.only(right: 20),
-                    child: _sorteerPil(),
-                  ),
-                ],
-              ),
+              child: Builder(builder: (context) {
+                final kop = _sectionTitle(
+                    mine.isEmpty ? 'Discografie' : 'Volledige discografie',
+                    '${rijen.length} in ${blokken.length} blokken');
+                // Op een telefoon gaat de sorteerpil ONDER de kop staan. Samen vragen ze zo'n 500
+                // punten en een telefoon heeft er 411; naast elkaar bleef er voor de kop te weinig
+                // over en liep hij dwars door de pil heen. Een eigen regel kost 30 punten en is het
+                // enige dat de twee uit elkaar houdt.
+                if (isCompact(context)) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      kop,
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(24, 0, 20, 10),
+                        child: _sorteerPil(),
+                      ),
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    Expanded(child: kop),
+                    Padding(
+                      padding: const EdgeInsets.only(right: 20),
+                      child: _sorteerPil(),
+                    ),
+                  ],
+                );
+              }),
             ),
             if (_bronRegel() case final regel?)
               SliverToBoxAdapter(
@@ -12520,7 +12578,15 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   Widget _sectionTitle(String title, String count) => Padding(
         padding: const EdgeInsets.fromLTRB(24, 10, 24, 10),
         child: Row(children: [
-          Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+          // Flexible, want een Row die niet past tekent gewoon door over wat ernaast staat — geen
+          // melding, geen streepjes, in een release-bouw alleen twee teksten over elkaar heen.
+          // Zo stond "Volledige discografie" op een telefoon dwars door de sorteerpil.
+          Flexible(
+            child: Text(title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+          ),
           const SizedBox(width: 8),
           Text(count, style: const TextStyle(color: _muted, fontSize: 13)),
         ]),
@@ -13034,7 +13100,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                 }),
                 Expanded(
                     child: Text(t.title,
-                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                        maxLines: titelRegels(context), overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500))),
                 // "N bronnen klaar" hint (or a tiny spinner while the album search is still running).
                 if (soulseekReady && srcCount > 0)
@@ -13937,8 +14003,13 @@ class _SettingsDialogState extends State<SettingsDialog> {
   /// skipped when arrowing and entered on purpose, and the nodes have to be kept somewhere.
   final _fieldFocus = <TextEditingController, FocusNode>{};
 
+  /// De scroller van het middenstuk, alleen zodat de balk ernaast altijd te zien is — en daarvoor
+  /// wil `Scrollbar` een controller die hij zeker kent.
+  final _rol = ScrollController();
+
   @override
   void dispose() {
+    _rol.dispose();
     _discogs.dispose();
     _torbox.dispose();
     _slskUser.dispose();
@@ -14235,8 +14306,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
             ],
             const SizedBox(height: 18),
             Flexible(
-              child: SingleChildScrollView(
-                child: Column(
+              // Het middenstuk scrolt en de kop en de knoppen blijven staan. Op een telefoon past er
+              // een derde van in beeld, en dan houdt de bovenrand een halve zin over — dat ziet er
+              // uit als een venster dat kapot is, niet als een lijst die verder gaat. Een balk die
+              // altijd staat is het enige dat dat verschil vertelt; zonder `thumbVisibility`
+              // verschijnt hij pas als je al aan het slepen bent, en dan is de vraag al gesteld.
+              child: Scrollbar(
+                controller: _rol,
+                thumbVisibility: true,
+                child: SingleChildScrollView(
+                  controller: _rol,
+                  child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _field('TorBox API-sleutel', _torbox),
@@ -14459,6 +14539,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     const SizedBox(height: 12),
                     const _AboutSection(),
                   ],
+                ),
                 ),
               ),
             ),
