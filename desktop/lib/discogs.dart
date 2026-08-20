@@ -1760,7 +1760,7 @@ extension DiscogsChoices on DiscogsService {
     int maxPaginas = 6,
     int? pinned,
     void Function(List<ReleaseChoice>)? onPartial,
-    void Function(int totaal, bool meer)? onEinde,
+    void Function(int totaal, bool meer, int andereMasters)? onEinde,
     bool Function()? gestopt,
   }) async {
     final rows = <ReleaseChoice>[];
@@ -1768,13 +1768,6 @@ extension DiscogsChoices on DiscogsService {
 
     var vol = false;
     void addVersion(DiscogsVersion v) {
-      if (rows.length >= max) {
-        // De lijst zit vol MIDDEN in een pagina. `stop` kijkt alleen tussen pagina's door, dus
-        // zonder deze regel vielen die laatste vijftig persingen weg terwijl de lus daarna netjes
-        // meldde dat alles binnen was.
-        vol = true;
-        return;
-      }
       if (v.id <= 0) return;
       // A tape scan is not what anyone is choosing to describe their FLACs with.
       //
@@ -1783,6 +1776,16 @@ extension DiscogsChoices on DiscogsService {
       // cassette als vaste keuze zag zijn eigen keuze dan nergens meer staan.
       if (v.major.toLowerCase().contains('cassette')) return;
       if (!seen.add(v.id)) return;
+      if (rows.length >= max) {
+        // De lijst zit vol MIDDEN in een pagina. `stop` kijkt alleen tussen pagina's door, dus
+        // zonder deze regel vielen die laatste vijftig persingen weg terwijl de lus daarna netjes
+        // meldde dat alles binnen was.
+        //
+        // Ná de drie tests hierboven, zodat een pagina die op de valreep alleen nog cassettes en
+        // dubbelen bevat geen waarschuwing geeft over rijen die niemand had kunnen kiezen.
+        vol = true;
+        return;
+      }
       rows.add(rijVanVersie(v));
     }
 
@@ -1854,7 +1857,11 @@ extension DiscogsChoices on DiscogsService {
         onPartial?.call([...rows]);
       }
     }
-    onEinde?.call(totaal, meer);
+    // Hoeveel kandidaat-masters er ONGELEZEN bleven. Niet als waarschuwing — zie hierboven waarom
+    // die bijna altijd zou afgaan — maar als mededeling, want dit is wél het plafond waarachter een
+    // gezochte persing zich het makkelijkst verstopt: het zoeken kiest op naam, en de promo hangt
+    // net onder de vierde gelijknamige plaat.
+    onEinde?.call(totaal, meer, masters.length - teLopen.length);
     return rows;
   }
 

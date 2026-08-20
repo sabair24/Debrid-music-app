@@ -15115,6 +15115,9 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   int _dgTotaal = 0;
   bool _dgMeer = false;
 
+  /// Hoeveel gelijknamige albums op Discogs er niet doorlopen zijn.
+  int _andereMasters = 0;
+
   /// De sleutel van de vastgezette uitgave, als er één is.
   ///
   /// Nodig in [_merge], want juist die ene rij mag nooit sneuvelen op het ontdubbelen: kent
@@ -15246,11 +15249,12 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
         // De dialoog is dicht. Doorgaan kost requests op een baan van zestig per minuut voor een
         // venster dat er niet meer is — en die requests gaan af van wat de rest van de app krijgt.
         gestopt: () => !mounted,
-        onEinde: (totaal, meer) {
+        onEinde: (totaal, meer, andereMasters) {
           if (!mounted) return;
           setState(() {
             _dgTotaal = totaal;
             _dgMeer = meer;
+            _andereMasters = andereMasters;
           });
         },
       );
@@ -15693,7 +15697,20 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
               // De enige eerlijke regel over een afgekapte lijst. Precies dit — een lijst die
               // ophoudt zonder het te zeggen — is wat deze hele wijziging kwam repareren, dus een
               // nieuw plafond mag niet opnieuw stil zijn.
-              if (_dgDone && _dgMeer)
+              // Zonder sleutel is de halve catalogus nooit gevraagd, en dat mag niet als "dit is
+              // wat er is" doorgaan. Los van de lege-lijst-melding: juist mét MusicBrainz-rijen
+              // erop lijkt de lijst compleet.
+              if (!DiscogsService(context.read<AppSettings>()).available)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text(
+                      'Er is geen Discogs-sleutel ingesteld — dit zijn alleen de '
+                      'MusicBrainz-uitgaves.',
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
+                ),
+              // Niet achter `_dgDone`: het nummerveld kan dit óók zetten, en dan zou de melding
+              // wachten op een lijst waar je niet op zit te wachten.
+              if (_dgMeer)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: Text(
@@ -15707,6 +15724,20 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                           ? 'Niet alles staat hier: Discogs kent er minstens $_dgTotaal.'
                           : 'Niet alles staat hier — er zijn er meer dan er nu in de lijst passen.',
                       style: const TextStyle(color: Color(0xFFE0A33A), fontSize: 11.5)),
+                ),
+              // Het stilste plafond van allemaal, en uitgerekend degene waar een gezochte persing
+              // zich het makkelijkst achter verstopt: het zoeken kiest op naam, loopt de drie
+              // best scorende albums af, en de promo hangt net onder de vierde. Grijs en niet
+              // oranje — het is geen waarschuwing dat er iets misging, het is waar de volgende
+              // stap ligt.
+              if (_dgDone && _andereMasters > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                      'Discogs heeft nog $_andereMasters ${_andereMasters == 1 ? 'ander album' : 'andere albums'} '
+                      'met deze naam. Staat je uitgave er niet bij, plak dan hierboven het '
+                      'masternummer van het juiste album.',
+                      style: const TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               // Only once something is picked: an empty bar at the bottom of every gallery would be
               // a control that does nothing, most of the time.
