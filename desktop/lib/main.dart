@@ -15738,9 +15738,19 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
               // Over het OPHALEN en niet over de lijst: onder deze zes kunnen twee persingen samen
               // op één regel staan (zelfde catalogusnummer en land), en cassettes vallen weg. Wat
               // hier wél waar is: Discogs had er niet meer.
+              //
+              // `_dgTotaal > 0` is de voorwaarde die het waar HOUDT, en die is niet vanzelfsprekend.
+              // Er staan Discogs-rijen is niet hetzelfde als: we hebben Discogs afgezocht. Vindt het
+              // zoeken geen enkel master, dan komt er via de vastgezette uitgave — of via een nummer
+              // dat je zelf intypt — tóch een Discogs-rij op het scherm, terwijl er nooit een
+              // versielijst is gelezen. Zonder deze voorwaarde staat er dan "meer heeft Discogs er
+              // niet" onder precies het bewijs dat Discogs de plaat wél kent. Dit getal komt uit het
+              // pagineringsblok van een echt gelezen pagina, en is dus alleen gevuld als er ook echt
+              // iets is afgezocht.
               if (_dgDone &&
                   !_dgMeer &&
                   !_dgFailed &&
+                  _dgTotaal > 0 &&
                   (_choices ?? const <ReleaseChoice>[]).any((c) => !c.isMb))
                 const Padding(
                   padding: EdgeInsets.only(top: 8),
