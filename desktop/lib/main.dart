@@ -16033,9 +16033,14 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   /// gewoon buiten de rij, waar ze te zien zijn noch aan te tikken. Precies wat er gebeurde toen de
   /// scan-knop erbij kwam: de nummering-knop viel eraf.
   ///
-  /// Op een telefoon staan de knoppen daarom op een eigen regel eronder, rechts uitgelijnd. Dat
-  /// kost veertig punten hoogte en levert twee knoppen op die je kunt raken. Draaien hoefde
-  /// daarvoor niet meer te zijn — en in liggende stand is het één regel, want daar past het wel.
+  /// Op een telefoon staat daarom álles onder elkaar: de drie scans, dan de beschrijving over de
+  /// volle breedte, dan de knoppen rechts. De eerste poging zette alleen de knoppen op een eigen
+  /// regel en liet de tekst naast de scans staan — dat maakte de knoppen bereikbaar en de rest
+  /// niet: er bleven vijfentachtig punten over voor een titel, een label en vier bordjes, dus de
+  /// titel was na drie letters op en elk bordje viel afzonderlijk over de rand. Naast elkaar zetten
+  /// wat allebei de volle breedte nodig heeft, is het probleem — niet hoe het wordt afgekapt.
+  ///
+  /// In liggende stand blijft het één regel, want daar is die breedte er wel.
   Widget _rij(ReleaseChoice c, bool isPinned) {
     // The three scans side by side, so what you get is visible rather than described.
     // Clicking one opens every scan this pressing has, to say which is which — the roles
@@ -16043,18 +16048,15 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     // the back and the disc the wrong way round often enough to need an answer.
     // Wat de gebruiker zelf aanwees gaat vóór de gok van de app — zie [_rolOverride].
     final eigen = _rolOverride[c.key];
-    // Kleiner op een telefoon. Drie vakjes van 58 plus hun randen is 192 van de 269 die er zijn, en
-    // wat overblijft moet de hele beschrijving dragen; op 46 is dat 156 en heeft de tekst lucht.
-    final maat = isCompact(context) ? 46.0 : 58.0;
     final scans = <Widget>[
       _thumb(eigen?['front'] ?? c.front, 'hoes',
-          role: 'front', row: c, maat: maat, onLongPress: () => _assign(c)),
+          role: 'front', row: c, onLongPress: () => _assign(c)),
       const SizedBox(width: 8),
       _thumb(eigen?['back'] ?? c.back, 'achter',
-          role: 'back', row: c, maat: maat, onLongPress: () => _assign(c)),
+          role: 'back', row: c, onLongPress: () => _assign(c)),
       const SizedBox(width: 8),
       _thumb(eigen?['disc'] ?? c.disc, 'cd',
-          role: 'disc', row: c, maat: maat, onLongPress: () => _assign(c)),
+          role: 'disc', row: c, onLongPress: () => _assign(c)),
     ];
     final knoppen = <Widget>[
       // Alle scans van deze uitgave, als KNOP.
@@ -16090,7 +16092,9 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
 
     if (isCompact(context)) {
       return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [...scans, const SizedBox(width: 12), Expanded(child: tekst)]),
+        Row(children: scans),
+        const SizedBox(height: 8),
+        tekst,
         Row(mainAxisAlignment: MainAxisAlignment.end, children: knoppen),
       ]);
     }
@@ -16168,10 +16172,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   /// opens every scan this pressing has, for the case where the roles within one pressing are simply
   /// swapped.
   Widget _thumb(ChoiceImage? img, String label,
-      {required String role,
-      required ReleaseChoice row,
-      double maat = 58,
-      VoidCallback? onLongPress}) {
+      {required String role, required ReleaseChoice row, VoidCallback? onLongPress}) {
     final staged = _staged[role];
     final chosen = img != null && staged != null && staged.uri == img.uri;
     // Nothing here yet, and nobody has looked — as opposed to looked and found none.
@@ -16203,10 +16204,10 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(6),
               child: img != null
-                  ? _netCover(img.thumb, size: maat, radius: 6)
+                  ? _netCover(img.thumb, size: 58, radius: 6)
                   : Container(
-                      width: maat,
-                      height: maat,
+                      width: 58,
+                      height: 58,
                       color: Colors.white.withValues(alpha: .04),
                       // Nothing at all while we wait: an empty frame reads as "not yet", where any
                       // mark at this size reads as an answer.
