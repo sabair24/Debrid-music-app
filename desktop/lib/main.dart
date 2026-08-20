@@ -1861,48 +1861,10 @@ class _HomeShellState extends State<HomeShell> {
             // heeft.
             // Ook deze weg als het toetsenbord op is — zie de uitleg bij de spelerbalk hierboven.
             if (isCompact(context) && MediaQuery.viewInsetsOf(context).bottom == 0)
-              _onderbalk(context),
+              Onderbalk(view: _view, onPick: (id) => setState(() => _view = id)),
           ],
         ),
       ),
-    );
-  }
-
-  /// De vijf secties die het meest gebruikt worden, als balk onderaan.
-  ///
-  /// De nummers zijn dezelfde `_view`-waarden als in [NavSections], zodat er geen tweede waarheid
-  /// ontstaat over welk scherm welk nummer heeft.
-  Widget _onderbalk(BuildContext context) {
-    // De namen zijn korter dan in de la ("Zoeken" tegen "Online zoeken"): onder een pictogram van
-    // 62 punten past geen zin. De nummers komen uit [NavSections.balk], zodat de la weet wat hij
-    // hier niet hoeft te herhalen.
-    const kort = {5: 'Start', 0: 'Albums', 4: 'Tracks', 2: 'Zoeken', 3: 'Ontdek'};
-    final snel = <(int, String, IconData)>[
-      for (final id in NavSections.balk)
-        if (NavSections.items.firstWhere((s) => s.$1 == id) case final s)
-          (id, kort[id] ?? s.$2, s.$3),
-    ];
-    final huidig = snel.indexWhere((s) => s.$1 == _view);
-    return NavigationBar(
-      backgroundColor: _panel,
-      indicatorColor: _accent.withValues(alpha: .22),
-      // 56 en niet 62, en zeker niet de 80 die Material voorstelt. Deze balk staat niet alleen: de
-      // spelerbalk ligt erboven en de systeeminzet eronder, en die drie samen aten een vijfde van
-      // het scherm. Het pictogram is 24 en de aanwijspil eromheen 32; met 56 blijft er twaalf punten
-      // over voor het bijschrift van de gekozen sectie, en dat is precies wat het nodig heeft.
-      height: 56,
-      labelBehavior: NavigationDestinationLabelBehavior.onlyShowSelected,
-      // -1 mag niet: staat je op een sectie uit de la, dan wijst de balk nergens naar. Dan maar
-      // geen aanwijzing in plaats van de verkeerde.
-      selectedIndex: huidig < 0 ? 0 : huidig,
-      onDestinationSelected: (i) => setState(() => _view = snel[i].$1),
-      destinations: [
-        for (final s in snel)
-          NavigationDestination(
-            icon: Icon(s.$3, color: huidig >= 0 && snel[huidig].$1 == s.$1 ? _accent : _muted),
-            label: s.$2,
-          ),
-      ],
     );
   }
 
@@ -2557,6 +2519,122 @@ class NavSections {
   /// Wat er in de la hoort. Op een telefoon dus zonder de vijf uit de balk.
   static List<(int, String, IconData)> voorLa({required bool metBalk}) =>
       [for (final s in items) if (!metBalk || !balk.contains(s.$1)) s];
+}
+
+/// De vijf snelle secties als balk onderaan een telefoonscherm.
+///
+/// **Waarom dit met de hand getekend is en niet Material's [NavigationBar].** Onderaan een
+/// telefoonscherm stapelen drie dingen op elkaar: de spelerbalk, deze balk, en daaronder de
+/// systeeminzet van Android. Samen was dat bijna een vijfde van het scherm, en dat is wat er van
+/// de albumlijst afging.
+///
+/// Aan Material viel dat maar half te vragen. `NavigationBar` stelt 80 punten voor, gaat met een
+/// `height` wel omlaag, maar houdt daarbinnen zijn eigen maten aan: een aanwijspil van 32 om een
+/// pictogram van 24, en een bijschrift op de gewone tekstgrootte. Van 66+62 naar 56+56 was
+/// daardoor het laatste wat er te halen viel — op het toestel gemeten en met het blote oog niet
+/// van de oude te onderscheiden. Zelf tekenen maakt de pil 26, het pictogram 21 en het bijschrift
+/// 10, en dan telt de balk 48 in plaats van 56 zonder dat er iets van wegvalt.
+///
+/// Los van de shell om precies één reden: deze hoogte is met de hand niet te controleren zonder
+/// een release te draaien en die op een telefoon te zetten. Als losse widget past hij wél in een
+/// toets die hem opmeet — zie test/onderbalk_test.dart.
+class Onderbalk extends StatelessWidget {
+  const Onderbalk({super.key, required this.view, required this.onPick});
+
+  /// Het `_view`-nummer van de sectie die nu open staat. Staat die niet in [NavSections.balk] —
+  /// je komt uit de la — dan licht er hier niets op. Dat is met opzet: geen aanwijzing is beter
+  /// dan een aanwijzing die naar het verkeerde scherm wijst.
+  final int view;
+
+  final ValueChanged<int> onPick;
+
+  /// De rij zelf, zonder de systeeminzet die er onder komt.
+  static const hoogte = 48.0;
+
+  /// Korter dan in de la ("Zoeken" tegen "Online zoeken"): onder een pictogram van veertig punten
+  /// breed past geen zin.
+  static const _kort = {5: 'Start', 0: 'Albums', 4: 'Tracks', 2: 'Zoeken', 3: 'Ontdek'};
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: _panel,
+      // De systeeminzet hoort bij de ONDERSTE balk, en dat is deze. `SafeArea` en geen eigen
+      // rekensom: op een toestel met drie knoppen is die inzet twee keer zo hoog als op een met
+      // veegbediening, en een vast getal zou de knoppen daar half onder de systeembalk zetten.
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          height: hoogte,
+          child: Row(
+            // `stretch`, en dat is geen opmaak maar het aanraakdoel. Zonder krijgt elke knop losse
+            // hoogtebeperkingen en wordt hij zo hoog als zijn pictogram — 26 punten voor een
+            // gekozen sectie, en de rest van de balk vangt dan geen tik. Zo is elk vak de volle 48
+            // hoog en de hele breedte van zijn vijfde.
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final id in NavSections.balk)
+                if (NavSections.items.firstWhere((s) => s.$1 == id) case final s)
+                  Expanded(child: _knop(id, _kort[id] ?? s.$2, s.$3)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _knop(int id, String label, IconData icoon) {
+    final gekozen = id == view;
+    return Pressable(
+      onPressed: () => onPick(id),
+      borderRadius: BorderRadius.circular(12),
+      // Niet groeien bij focus: vijf knoppen in een strakke rij duwen elkaar dan opzij.
+      scaleOnFocus: false,
+      // Het vangnet onder de vaste hoogte. Zet iemand de systeemletters groter, dan wordt het
+      // bijschrift hoger dan de 48 die hier staat en tekent Flutter gele strepen over de balk.
+      // Meeschalen tot het niet meer past en dán pas krimpen is beter dan niet meeschalen (de
+      // instelling negeren) of overlopen (een kapotte balk).
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // De pil om het pictogram: 26 hoog en 40 breed. Hij hoeft de 21 van het pictogram maar
+            // net te omsluiten — Material's 32 was ruimte om de ruimte.
+            Container(
+              height: 26,
+              width: 40,
+              alignment: Alignment.center,
+              decoration: gekozen
+                  ? BoxDecoration(
+                      color: _accent.withValues(alpha: .22),
+                      borderRadius: BorderRadius.circular(999),
+                    )
+                  : null,
+              child: Icon(icoon, size: 21, color: gekozen ? _accent : _muted),
+            ),
+            // Alleen onder de gekozen sectie een naam. Vijf bijschriften vragen vier punten hoogte
+            // extra om te vertellen wat de pictogrammen al zeggen; die ene vertelt waar je bent.
+            if (gekozen)
+              Padding(
+                padding: const EdgeInsets.only(top: 1),
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    height: 1.1,
+                    fontWeight: FontWeight.w600,
+                    color: _accent,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _NavPillsState extends State<_NavPills> {
@@ -6005,7 +6083,7 @@ class PlayerBar extends StatelessWidget {
   ///
   /// Alleen de ONDERSTE widget van een scherm hoort dat te doen. Op de albumpagina, de
   /// artiestpagina en de wachtrij is deze balk dat, dus daar blijft het aan. In het hoofdscherm
-  /// staat er sinds de navigatiebalk iets ONDER hem, en `NavigationBar` telt die inzet zelf al mee
+  /// staat er sinds de navigatiebalk iets ONDER hem, en [Onderbalk] houdt die ruimte zelf al vrij
   /// — hij stond er dus twee keer op. Dat is de lege band tussen de speler en de pictogrammen, en
   /// de reden dat de onderbalk te hoog aanvoelde.
   final bool metSysteeminzet;
@@ -7170,13 +7248,15 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
       : () => Navigator.of(context).push(nuSpeeltRoute());
 
   return Container(
-    // 56, en dat is gemeten en niet gevoeld: de hoes is 44 en de rij eromheen had elf punten lucht
-    // boven en onder. Met de navigatiebalk eronder én de systeeminzet daar weer onder stapelt dat
-    // op tot bijna een vijfde van een telefoonscherm, en dan valt elke punt op.
+    // 52, en dat is gemeten en niet gevoeld. Er zat 66 en daarna 56; met de balk eronder én de
+    // systeeminzet daar weer onder was dat samen bijna een vijfde van een telefoonscherm.
     //
-    // Onder de 56 kan niet zomaar: de hoes van 44 plus de streep van 2 laat dan zes punten over, en
-    // daaronder raken de knoppen (48 hoog als aanraakdoel) elkaar.
-    height: 56 + bottomInset,
+    // Hoe die 52 opgaat: twee punten voortgangsstreep, en de 50 die overblijft is precies het
+    // aanraakdoel van 48 voor de knoppen rechts plus een punt lucht erboven en eronder. Daar kan
+    // niets meer af zonder dat de speelknop een kleiner doel wordt dan een vinger groot is.
+    //
+    // De hoes zakt mee van 44 naar 40 — anders raakt hij de randen en leest de rij als propvol.
+    height: 52 + bottomInset,
     decoration: const BoxDecoration(
       color: Color(0xFF12141D),
       border: Border(top: BorderSide(color: _line)),
@@ -7206,7 +7286,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
                     padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
                     child: Row(
                       children: [
-                        cover(p.currentCover, size: 44, radius: 6),
+                        cover(p.currentCover, size: 40, radius: 6),
                         const SizedBox(width: 12),
                         Expanded(
                           child: Column(
