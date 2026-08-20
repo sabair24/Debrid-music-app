@@ -36,6 +36,15 @@ on:
         description: 'Versienummer, bv. 3.9.141 — leeg laten = automatisch één hoger'
         required: false
         default: ''
+  # Tweede ingang, en de reden dat hij bestaat: een assistent die in deze repo werkt mag branches
+  # onder `claude/` pushen, maar géén tag zetten en géén workflow starten — allebei 403. Dat is
+  # precies de grens waar "hup, en ik krijg de release" op stukliep.
+  #
+  # Een push naar deze ene tak is dus het commando. Wat erop staat doet niet ter zake: er wordt
+  # niets van gebouwd en niets van getagd. Het is een belknop, geen tak met werk erop — gebouwd
+  # wordt altijd de tip van TAK hieronder.
+  push:
+    branches: [ 'claude/release' ]
 
 permissions:
   # De tag zetten.
