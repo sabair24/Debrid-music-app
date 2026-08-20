@@ -15555,7 +15555,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     Map<String, String> lees() =>
         {...lib.albumArtRoles(widget.album.artist, widget.album.title)};
     final voor = lees();
-    await showDialog<void>(
+    final gekozen = await showDialog<Map<String, ChoiceImage>>(
         context: context, builder: (_) => AssignScansDialog(album: widget.album, choice: c));
     if (!mounted) return;
     // Alleen wat hier veranderde. Rollen die al op schijf stonden horen wél weg te vallen bij het
@@ -15576,6 +15576,24 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
         _eigenRollen[sleutel] = nu;
       }
     }
+    // En de rij laten zien wat je gekozen hebt.
+    //
+    // Zonder dit sluit het venster en staat de rij er precies zo bij als ervoor: de scan die je net
+    // als cd aanwees zit nog in het vak "achter", want die drie vakjes tonen wat DISCOGS ervan
+    // dacht. Dan heb je iets opgeslagen en zie je er niets van — en of het gelukt is blijft een
+    // kwestie van vertrouwen. Een lege rol laat de gok staan, want dat is precies wat leeglaten
+    // betekent.
+    if (gekozen == null || gekozen.isEmpty) return;
+    final lijst = _choices;
+    if (lijst == null) return;
+    final i = lijst.indexWhere((x) => x.key == c.key);
+    if (i < 0) return;
+    setState(() => _choices = [...lijst]
+      ..[i] = lijst[i].withArt(
+        front: gekozen['front'] ?? lijst[i].front,
+        back: gekozen['back'] ?? lijst[i].back,
+        disc: gekozen['disc'] ?? lijst[i].disc,
+      ));
   }
 
   Future<void> _choose(ReleaseChoice c) async {
@@ -15997,19 +16015,83 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                           ? _accent2
                           : Colors.transparent),
             ),
-            child: Row(children: [
-              // The three scans side by side, so what you get is visible rather than described.
-              // Clicking one opens every scan this pressing has, to say which is which — the roles
-              // below are inferred, and inference on a catalogue that never labels its images gets
-              // the back and the disc the wrong way round often enough to need an answer.
-              _thumb(c.front, 'hoes', role: 'front', row: c, onLongPress: () => _assign(c)),
-              const SizedBox(width: 8),
-              _thumb(c.back, 'achter', role: 'back', row: c, onLongPress: () => _assign(c)),
-              const SizedBox(width: 8),
-              _thumb(c.disc, 'cd', role: 'disc', row: c, onLongPress: () => _assign(c)),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            child: _rij(c, isPinned),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Eén uitgave als rij — op een breed scherm op één regel, op een telefoon op twee.
+  ///
+  /// **Waarom twee vormen.** Alles op één regel is 300 punten breed op een staande telefoon: drie
+  /// scans van 58 plus hun randen is al 204, en wat er overblijft moet de tekst én twee knoppen én
+  /// het vinkje dragen. Dat past niet, en Flutter lost dat niet op — het duwt de laatste dingen
+  /// gewoon buiten de rij, waar ze te zien zijn noch aan te tikken. Precies wat er gebeurde toen de
+  /// scan-knop erbij kwam: de nummering-knop viel eraf.
+  ///
+  /// Op een telefoon staan de knoppen daarom op een eigen regel eronder, rechts uitgelijnd. Dat
+  /// kost veertig punten hoogte en levert twee knoppen op die je kunt raken. Draaien hoefde
+  /// daarvoor niet meer te zijn — en in liggende stand is het één regel, want daar past het wel.
+  Widget _rij(ReleaseChoice c, bool isPinned) {
+    // The three scans side by side, so what you get is visible rather than described.
+    // Clicking one opens every scan this pressing has, to say which is which — the roles
+    // below are inferred, and inference on a catalogue that never labels its images gets
+    // the back and the disc the wrong way round often enough to need an answer.
+    final scans = <Widget>[
+      _thumb(c.front, 'hoes', role: 'front', row: c, onLongPress: () => _assign(c)),
+      const SizedBox(width: 8),
+      _thumb(c.back, 'achter', role: 'back', row: c, onLongPress: () => _assign(c)),
+      const SizedBox(width: 8),
+      _thumb(c.disc, 'cd', role: 'disc', row: c, onLongPress: () => _assign(c)),
+    ];
+    final knoppen = <Widget>[
+      // Alle scans van deze uitgave, als KNOP.
+      //
+      // Dit zat alleen op lang indrukken van een van de drie plaatjes, en dat is op een
+      // telefoon onvindbaar: je drukt lang op de RIJ (waar die handeling niet op zit), er
+      // gebeurt niets, en je concludeert dat het niet kan. En juist deze weg is de enige
+      // die werkt als de app een scan in het verkeerde vak zet — wat bij een wit cd-label
+      // op een witte achtergrond gebeurt, want daar valt aan helderheid niets te meten.
+      // Een uitweg die je moet raden is geen uitweg.
+      TvLabelled(
+        label: 'Alle scans van deze uitgave',
+        child: IconButton(
+          icon: const Icon(Icons.photo_library_outlined, size: 18),
+          tooltip: 'Alle scans van deze uitgave — zelf kiezen wat de hoes, de achterkant '
+              'en de cd is',
+          constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+          onPressed: () => _assign(c),
+        ),
+      ),
+      TvLabelled(
+        label: 'Nummering van deze uitgave overnemen',
+        child: IconButton(
+          icon: const Icon(Icons.format_list_numbered_rounded, size: 19),
+          tooltip: 'Nummering van deze uitgave overnemen',
+          constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+          onPressed: () => _renumber(c),
+        ),
+      ),
+      if (isPinned) const Icon(Icons.check_circle_rounded, color: _accent, size: 20),
+    ];
+    final tekst = _rijTekst(c);
+
+    if (isCompact(context)) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [...scans, const SizedBox(width: 12), Expanded(child: tekst)]),
+        Row(mainAxisAlignment: MainAxisAlignment.end, children: knoppen),
+      ]);
+    }
+    return Row(children: [
+      ...scans,
+      const SizedBox(width: 14),
+      Expanded(child: tekst),
+      ...knoppen,
+    ]);
+  }
+
+  Widget _rijTekst(ReleaseChoice c) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(c.line, maxLines: 1, overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
                   if ((c.label ?? '').isNotEmpty)
@@ -16046,42 +16128,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                       _tag('cd-scan', c.hasDisc),
                     ],
                   ]),
-                ]),
-              ),
-              // Alle scans van deze uitgave, als KNOP.
-              //
-              // Dit zat alleen op lang indrukken van een van de drie plaatjes, en dat is op een
-              // telefoon onvindbaar: je drukt lang op de RIJ (waar die handeling niet op zit), er
-              // gebeurt niets, en je concludeert dat het niet kan. En juist deze weg is de enige
-              // die werkt als de app een scan in het verkeerde vak zet — wat bij een wit cd-label
-              // op een witte achtergrond gebeurt, want daar valt aan helderheid niets te meten.
-              // Een uitweg die je moet raden is geen uitweg.
-              TvLabelled(
-                label: 'Alle scans van deze uitgave',
-                child: IconButton(
-                  icon: const Icon(Icons.photo_library_outlined, size: 18),
-                  tooltip: 'Alle scans van deze uitgave — zelf kiezen wat de hoes, de achterkant '
-                      'en de cd is',
-                  constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-                  onPressed: () => _assign(c),
-                ),
-              ),
-              TvLabelled(
-                label: 'Nummering van deze uitgave overnemen',
-                child: IconButton(
-                icon: const Icon(Icons.format_list_numbered_rounded, size: 19),
-                tooltip: 'Nummering van deze uitgave overnemen',
-                constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-                onPressed: () => _renumber(c),
-              ),
-              ),
-              if (isPinned) const Icon(Icons.check_circle_rounded, color: _accent, size: 20),
-            ]),
-          ),
-        );
-      },
-    );
-  }
+                ]);
 
   /// One scan of one pressing, and a way to say "this one, for this role".
   ///
@@ -16195,10 +16242,67 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
 
   static const _roles = artRoles;
 
+  /// De keuze zoals hij HIER staat, nog niet op schijf.
+  ///
+  /// **Waarom dit niet meer meteen wegschrijft.** Elke tik ging rechtstreeks naar de bibliotheek.
+  /// Dat werkt, maar er is niets aan te zien: geen knop die indrukt, geen melding, en de rij
+  /// eronder verandert pas als je het venster sluit. "Ik weet nooit of het iets gedaan heeft" is
+  /// dan een terechte klacht en niet een kwestie van beter kijken.
+  ///
+  /// Nu is het een keuze die je maakt en dan opslaat: je ziet bovenaan meteen wat het wordt, de
+  /// opslaanknop kleurt op zodra er iets te bewaren valt, en sluiten zonder opslaan laat alles
+  /// zoals het was.
+  final Map<String, String> _rollen = {};
+
+  /// Wat er op schijf stond toen dit venster openging — om te weten of er iets veranderd is.
+  Map<String, String> _begin = const {};
+  bool _opslaan = false;
+
+  bool get _gewijzigd {
+    if (_rollen.length != _begin.length) return true;
+    for (final e in _rollen.entries) {
+      if (_begin[e.key] != e.value) return true;
+    }
+    return false;
+  }
+
   @override
   void initState() {
     super.initState();
+    final lib = context.read<LibraryStore>();
+    _begin = {...lib.albumArtRoles(widget.album.artist, widget.album.title)};
+    _rollen.addAll(_begin);
     _load();
+  }
+
+  /// Schrijft de keuze weg en geeft hem terug aan de kiezer, zodat de rij daar meteen meeverandert.
+  Future<void> _bewaar() async {
+    if (_opslaan) return;
+    setState(() => _opslaan = true);
+    final lib = context.read<LibraryStore>();
+    try {
+      // Wissen en opnieuw zetten: wat hier staat IS de keuze, inclusief wat je weghaalde.
+      await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title);
+      for (final e in _rollen.entries) {
+        await lib.setAlbumArtRole(widget.album.artist, widget.album.title, e.key, e.value);
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _opslaan = false);
+      _srcToast(context, 'Kon de keuze niet opslaan.');
+      return;
+    }
+    if (!mounted) return;
+    final beelden = <String, ChoiceImage>{};
+    for (final e in _rollen.entries) {
+      for (final i in _images ?? const <ChoiceImage>[]) {
+        if (i.uri == e.value) {
+          beelden[e.key] = i;
+          break;
+        }
+      }
+    }
+    Navigator.of(context).pop(beelden);
   }
 
   Future<void> _load() async {
@@ -16223,8 +16327,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final lib = context.watch<LibraryStore>();
-    final roles = lib.albumArtRoles(widget.album.artist, widget.album.title);
+    final roles = _rollen;
     final images = _images;
     return Dialog(
       backgroundColor: _panel,
@@ -16247,7 +16350,14 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
               ]),
               const Text('Klik onder een scan om te zeggen wat het is. Jouw keuze wint van wat de app zelf denkt.',
                   style: TextStyle(color: _muted, fontSize: 12.5)),
-              const SizedBox(height: 14),
+              const SizedBox(height: 10),
+              // Wat het WORDT, boven de keuze zelf.
+              //
+              // Zonder dit is toewijzen blind: je tikt een chipje aan onder een plaatje ergens in
+              // een raster, en nergens staat wat de hoes nu eigenlijk is. Deze drie vakjes zijn het
+              // antwoord, en ze veranderen onder je vinger mee.
+              _voorbeeld(roles),
+              const SizedBox(height: 12),
               Expanded(
                 child: _error != null
                     ? Center(child: Text(_error!, style: const TextStyle(color: _muted)))
@@ -16274,13 +16384,16 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
                                         child: _roleChip(
                                           label,
                                           on: roles[role] == img.uri,
-                                          onTap: () => lib.setAlbumArtRole(
-                                              widget.album.artist,
-                                              widget.album.title,
-                                              role,
-                                              // Clicking the role it already has clears it, so a
-                                              // wrong assignment can be undone without a reset.
-                                              roles[role] == img.uri ? '' : img.uri),
+                                          onTap: () => setState(() {
+                                            // Nog een keer op dezelfde rol tikken haalt hem weg, zodat
+                                            // een verkeerde toewijzing terug te draaien is zonder het
+                                            // hele venster te resetten.
+                                            if (roles[role] == img.uri) {
+                                              roles.remove(role);
+                                            } else {
+                                              roles[role] = img.uri;
+                                            }
+                                          }),
                                         ),
                                       ),
                                   ],
@@ -16289,22 +16402,78 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
                             },
                           ),
               ),
-              if (roles.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 10),
-                  child: TextButton(
-                    onPressed: () =>
-                        lib.clearAlbumArtRoles(widget.album.artist, widget.album.title),
-                    child: const Text('Alles weer laten raden',
-                        style: TextStyle(color: _muted, fontSize: 12)),
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Row(children: [
+                  if (roles.isNotEmpty)
+                    TextButton(
+                      onPressed: _opslaan ? null : () => setState(roles.clear),
+                      child: const Text('Alles weer laten raden',
+                          style: TextStyle(color: _muted, fontSize: 12)),
+                    ),
+                  const Spacer(),
+                  // De knop die er niet was. Hij zegt ook of er iets te bewaren valt: staat hij uit,
+                  // dan is er niets veranderd — en dat is een antwoord op "heeft het iets gedaan?"
+                  // nog vóór je hem indrukt.
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(backgroundColor: _accent),
+                    onPressed: !_gewijzigd || _opslaan ? null : _bewaar,
+                    icon: _opslaan
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.check_rounded, size: 18),
+                    label: Text(_opslaan
+                        ? 'Opslaan…'
+                        : _gewijzigd
+                            ? 'Opslaan'
+                            : 'Niets gewijzigd'),
                   ),
-                ),
+                ]),
+              ),
             ],
           ),
         ),
       ),
     );
   }
+
+  /// De drie rollen zoals ze er NU voor staan, met het gekozen plaatje erin.
+  Widget _voorbeeld(Map<String, String> roles) => Row(
+        children: [
+          for (final (role, label) in _roles)
+            Padding(
+              padding: const EdgeInsets.only(right: 10),
+              child: Column(children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: roles[role] == null
+                      ? Container(
+                          width: 52,
+                          height: 52,
+                          color: Colors.white.withValues(alpha: .04),
+                          child: const Icon(Icons.close_rounded, size: 15, color: _muted),
+                        )
+                      : _netCover(roles[role]!, size: 52, radius: 6),
+                ),
+                const SizedBox(height: 3),
+                Text(label,
+                    style: TextStyle(
+                        color: roles[role] == null ? _muted : _accent,
+                        fontSize: 10,
+                        fontWeight: roles[role] == null ? FontWeight.w400 : FontWeight.w700)),
+              ]),
+            ),
+          const Expanded(
+            child: Text(
+              'Zo komt deze plaat eruit te zien. Een leeg vak betekent: de app mag het zelf blijven '
+              'raden.',
+              style: TextStyle(color: _muted, fontSize: 11.5),
+            ),
+          ),
+        ],
+      );
 
   Widget _roleChip(String text, {required bool on, required VoidCallback onTap}) => InkWell(
         onTap: onTap,
