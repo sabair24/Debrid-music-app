@@ -10372,6 +10372,9 @@ class SourcesView extends StatefulWidget {
 class _SourcesViewState extends State<SourcesView> {
   List<SearchResult> _torrents = [];
   List<SoulseekFile> _slsk = [];
+
+  /// Hoeveel bronnen er nu getoond worden. Groeit met [_slskStap] per tik op "Nog N tonen".
+  int _slskLimiet = _slskStap;
   bool _tBusy = true, _sBusy = false;
   QFilter _filter = QFilter.all;
 
@@ -10384,7 +10387,16 @@ class _SourcesViewState extends State<SourcesView> {
   Future<void> _run() async {
     final online = context.read<OnlineService>();
     final soulseek = context.read<SoulseekService>();
-    if (mounted) setState(() { _tBusy = true; _sBusy = soulseek.available; });
+    // Een NIEUWE zoekopdracht begint weer bij het begin. Bewust hier en niet bij elk deelresultaat:
+    // die stromen binnen terwijl je kijkt, en een lijst die dan terugklapt naar tweehonderd zou het
+    // scherm onder je vinger wegtrekken.
+    if (mounted) {
+      setState(() {
+        _tBusy = true;
+        _sBusy = soulseek.available;
+        _slskLimiet = _slskStap;
+      });
+    }
     if (soulseek.available) {
       soulseek.search(widget.query, onPartial: (p) {
         if (mounted) setState(() => _slsk = p);
@@ -10431,7 +10443,10 @@ class _SourcesViewState extends State<SourcesView> {
               child: Text('Geen Soulseek-bronnen.', style: TextStyle(color: _muted, fontSize: 12.5))),
         // Whichever copy the user picks, the record decides what it is. That is the whole point:
         // this same song is offered as "13 …", "19. …" and "…The Essential … - 01 - …".
-        ..._slskTiles(context, slsk, authority: _trackAuthority),
+        ..._slskTiles(context, slsk,
+            authority: _trackAuthority,
+            limiet: _slskLimiet,
+            onMeer: () => setState(() => _slskLimiet += _slskStap)),
       ],
     );
   }
@@ -10452,23 +10467,76 @@ class _SourcesViewState extends State<SourcesView> {
   }
 }
 
+/// Hoeveel bronnen er in één keer op het scherm komen, en hoeveel erbij per tik.
+///
 /// Rows are built eagerly inside a plain ListView, so a broad query (3500+ hits is normal for a
-/// popular track) would build every one of them on every rebuild and lock the UI. Results are
-/// quality-sorted, so showing the head is no loss — and the full list is still handed to each
-/// tile as its candidate pool, so downloading keeps every fallback peer.
-const _slskShown = 250;
+/// popular track) would build every one of them on every rebuild and lock the UI. Vandaar een
+/// venster in plaats van alles — maar het is nu een venster dat OPENGAAT.
+const _slskStap = 200;
 
-List<Widget> _slskTiles(BuildContext context, List<SoulseekFile> slsk, {TrackTags? authority}) {
-  final shown = slsk.length <= _slskShown ? slsk : slsk.sublist(0, _slskShown);
+/// Wat er van een gerangschikte bronnenlijst getoond wordt, en wat er nog wacht.
+///
+/// Apart en zuiver omdat dit precies het soort rekensom is dat er goed uitziet en er één naast
+/// zit: een [limiet] die groter is dan de lijst mag niet uit `sublist` vallen, en de laatste tik
+/// moet "Nog 35 tonen" zeggen en niet "Nog 200 tonen".
+({int tot, int rest, int volgende}) bronVenster(int aantal, int limiet) {
+  final tot = limiet < 0
+      ? 0
+      : limiet > aantal
+          ? aantal
+          : limiet;
+  final rest = aantal - tot;
+  return (tot: tot, rest: rest, volgende: rest < _slskStap ? rest : _slskStap);
+}
+
+/// De lijst met bronnen, tot [limiet], met een knop eronder om er meer bij te halen.
+///
+/// **Waarom er een knop staat waar advies stond.** Er stond "verfijn je zoekopdracht om ze te
+/// zien", en dat was onuitvoerbaar advies: bij "men at work down under" heb je artiest én titel al
+/// getypt en is er niets meer te verfijnen — er ZIJN gewoon zeventienhonderd mensen die dat nummer
+/// delen. De grens was bovendien nooit een grens van de zoekopdracht maar van het tekenen: alle
+/// treffers zaten al in het geheugen en werden alleen niet getoond.
+///
+/// De volgorde verandert niet als het venster opengaat. [slsk] is al gerangschikt (kwaliteit,
+/// grootte, vrije slots — zie `_besteEerst`) voordat er gesneden wordt, dus wat erbij komt is
+/// precies de volgende in dezelfde rij. Nooit een tweede sortering op een halve lijst.
+List<Widget> _slskTiles(
+  BuildContext context,
+  List<SoulseekFile> slsk, {
+  TrackTags? authority,
+  required int limiet,
+  required void Function() onMeer,
+}) {
+  final venster = bronVenster(slsk.length, limiet);
+  final shown = slsk.sublist(0, venster.tot);
+  final rest = venster.rest;
+  final volgende = venster.volgende;
   return [
+    // De volledige lijst gaat als kandidatenpoel mee, ook wat niet getoond wordt: een download die
+    // bij de eerste peer strandt valt terug op alle andere, niet alleen op de zichtbare.
     ...shown.map((f) => _soulseekTile(context, f, slsk, authority: authority)),
-    if (slsk.length > _slskShown)
+    if (rest > 0)
       Padding(
         padding: const EdgeInsets.fromLTRB(24, 10, 24, 16),
-        child: Text(
-          'Nog ${slsk.length - _slskShown} bronnen niet getoond — de beste staan bovenaan. '
-          'Verfijn je zoekopdracht om ze te zien.',
-          style: const TextStyle(color: _muted, fontSize: 12),
+        // Gevouwen, want naast elkaar is dit breder dan een telefoon.
+        child: Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 12,
+          runSpacing: 8,
+          children: [
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: _panel2,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              ),
+              onPressed: onMeer,
+              icon: const Icon(Icons.expand_more_rounded, size: 19),
+              label: Text('Nog $volgende tonen'),
+            ),
+            Text('nog $rest bronnen · de beste staan bovenaan',
+                style: const TextStyle(color: _muted, fontSize: 12)),
+          ],
         ),
       ),
   ];
@@ -10498,6 +10566,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   // direct
   List<SearchResult> _torrents = [];
   List<SoulseekFile> _slsk = [];
+
+  /// Hoeveel bronnen er nu getoond worden. Groeit met [_slskStap] per tik op "Nog N tonen".
+  int _slskLimiet = _slskStap;
   bool _busy = false, _slskBusy = false;
   String? _status;
   QFilter _filter = QFilter.all;
@@ -10745,6 +10816,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       _slskBusy = soulseek.available;
       _torrents = [];
       _slsk = [];
+      // Een nieuwe zoekopdracht begint weer bij tweehonderd.
+      _slskLimiet = _slskStap;
       _status = 'Zoeken…';
     });
     if (soulseek.available) {
@@ -11230,7 +11303,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                   padding: EdgeInsets.fromLTRB(24, 16, 24, 6),
                   child: Text('SOULSEEK · log in via Instellingen om P2P mee te zoeken',
                       style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)))),
-        ..._slskTiles(context, slsk),
+        ..._slskTiles(context, slsk,
+            limiet: _slskLimiet,
+            onMeer: () => setState(() => _slskLimiet += _slskStap)),
       ],
     );
   }
