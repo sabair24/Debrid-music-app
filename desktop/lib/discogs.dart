@@ -635,12 +635,6 @@ class DiscogsService {
   /// Hoeveel uitgaves dit master er in totaal heeft, volgens Discogs zelf. Null als het niet staat.
   static int? itemAantal(Map<String, dynamic>? body) => _getal(body, 'items');
 
-  /// Een getal uit het pagineringsblok, zonder cast die kan gooien.
-  ///
-  /// `as num?` gooit op een tekst — het levert geen null op — en deze twee functies bestaan juist
-  /// om een uitgekleed of afwijkend antwoord te overleven. Gooien ze wél, dan valt die fout tot in
-  /// `_load`, die er "Discogs was niet bereikbaar" van maakt terwijl er net een pagina met uitgaves
-  /// binnenkwam.
   /// Een jaartal uit een zoekresultaat, zonder cast die kan gooien.
   ///
   /// Discogs stuurt dit vandaag als tekst ("2010"), maar `as String?` GOOIT op alles wat geen tekst
@@ -653,6 +647,12 @@ class DiscogsService {
     return null;
   }
 
+  /// Een getal uit het pagineringsblok, zonder cast die kan gooien.
+  ///
+  /// `as num?` gooit op een tekst — het levert geen null op — en deze functies bestaan juist om een
+  /// uitgekleed of afwijkend antwoord te overleven. Gooien ze wél, dan valt die fout tot in
+  /// `_load`, die er "Discogs was niet bereikbaar" van maakt terwijl er net een pagina met uitgaves
+  /// binnenkwam.
   static int? _getal(Map<String, dynamic>? body, String sleutel) {
     final p = body?['pagination'];
     if (p is! Map) return null;
@@ -1742,6 +1742,10 @@ extension DiscogsArtwork on DiscogsService {
   }
 }
 
+/// Hoeveel treffers één zoekpagina geeft. Ook de maat waaraan [DiscogsChoices.losseReleases]
+/// afmeet of die pagina hélemaal bruikbaar was, dus die twee mogen niet uit elkaar lopen.
+const _zoekPagina = 100;
+
 extension DiscogsChoices on DiscogsService {
   /// Every pressing Discogs lists, offered at once, with the scans filled in as they are found.
   ///
@@ -1916,7 +1920,7 @@ extension DiscogsChoices on DiscogsService {
     final who = cleanArtistName(artist);
     final titel = DiscogsService.plainTitle(album);
     final body = await _get(
-      'https://api.discogs.com/database/search?type=release&per_page=100'
+      'https://api.discogs.com/database/search?type=release&per_page=$_zoekPagina'
       '${who.isEmpty ? '' : '&artist=${_q(who)}'}&release_title=${_q(titel)}',
     );
     final out = <ReleaseChoice>[];
@@ -1944,12 +1948,22 @@ extension DiscogsChoices on DiscogsService {
         detailed: false,
       ));
     }
-    // Honderd is het maximum van één zoekpagina, en verder pagineren doet dit bewust niet: dit is
-    // de AANVULLING op de masters, niet de hoofdlijst, en elke pagina is een request uit een budget
-    // van zestig per minuut. Maar dat het ophoudt moet gezegd worden — een lijst die stilletjes
-    // stopt is precies waar deze hele reeks over ging, en de melding "meer heeft Discogs er niet"
-    // zou hier anders hardop liegen.
-    return (rijen: out, meer: DiscogsService.paginaAantal(body) > 1 || out.length >= max);
+    // Eén zoekpagina, en verder pagineren doet dit bewust niet: dit is de AANVULLING op de masters,
+    // niet de hoofdlijst, en elke pagina is een request uit een budget van zestig per minuut.
+    //
+    // "Er zijn meer pagina's" is hier GEEN reden tot waarschuwen, en dat is de val waar dit bijna
+    // in liep. Het zoeken op releases telt rauwe treffers — vóór de titelscore hieronder en vóór
+    // het ontdubbelen. Een plaat met honderdtwintig persingen die de masters allang compleet hebben
+    // opgehaald levert twee pagina's zoekresultaten op, en een korte titel als "30" duizenden die
+    // hier stuk voor stuk afvallen. Op "meer pagina's" alarm slaan zet de oranje regel dus
+    // permanent aan — precies waarom `masters.length > 3` er eerder uit is gehaald, en het zou de
+    // grijze "alles opgehaald" op de andere tak voorgoed het zwijgen opleggen.
+    //
+    // Wat hier wél iets zegt: deze pagina was HELEMAAL bruikbaar. Viel geen enkele treffer af, dan
+    // is de kans reëel dat de volgende er ook nog van dit album heeft. Dat is zeldzaam, en dat is
+    // precies wat een waarschuwing hoort te zijn.
+    final helePaginaBruikbaar = out.length >= _zoekPagina;
+    return (rijen: out, meer: helePaginaBruikbaar && DiscogsService.paginaAantal(body) > 1);
   }
 
   /// Eén regel uit de versielijst, als rij voor de kiezer.
