@@ -16275,11 +16275,24 @@ class UitgaveRij extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 3),
-          Text(label,
-              style: TextStyle(
-                  color: chosen ? _accent : _muted,
-                  fontSize: 10,
-                  fontWeight: chosen ? FontWeight.w700 : FontWeight.w400)),
+          // Het bijschrift mag het vakje niet BREDER maken dan het plaatje.
+          //
+          // Zonder deze breedte bepaalt het woord de kolom: zet iemand de systeemletters op 150%,
+          // dan wordt "achter" breder dan de 58 van de scan erboven, en dan passen drie vakjes niet
+          // meer naast elkaar op een smal toestel. De toets ving dat op 360 punten — achttien
+          // pixels eroverheen — en op het toestel is dat precies weer een rij die stilletjes
+          // buiten zijn kader tekent.
+          SizedBox(
+            width: 58,
+            child: Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: chosen ? _accent : _muted,
+                    fontSize: 10,
+                    fontWeight: chosen ? FontWeight.w700 : FontWeight.w400)),
+          ),
         ]),
       ),
     );

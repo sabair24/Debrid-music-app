@@ -48,11 +48,18 @@ ReleaseChoice rij({bool volledig = true}) => ReleaseChoice(
 /// 411 − 80 − 40 = 291; 360 − 80 − 40 = 240.
 double lijstbreedte(double scherm) => scherm - 80 - 40;
 
+/// In een ListView, want dat is waar de rij in het echt staat.
+///
+/// Dat is geen decor. Een ListView geeft zijn kind een VASTE breedte en een onbegrensde hoogte; een
+/// Center geeft allebei los, en dan rekt de tekstkolom (een Column met mainAxisSize.max) zich uit
+/// tot de volle schermhoogte en staan de knoppen ergens halverwege het niets. De eerste versie van
+/// deze toets deed dat, en meldde daardoor een fout in de app die in de TOETS zat.
 Widget omhulsel(Widget kind, double scherm) => MaterialApp(
       home: Material(
         color: const Color(0xFF0B0D14),
-        child: Center(
-          child: SizedBox(width: lijstbreedte(scherm), child: kind),
+        child: SizedBox(
+          width: lijstbreedte(scherm),
+          child: ListView(children: [kind]),
         ),
       ),
     );
