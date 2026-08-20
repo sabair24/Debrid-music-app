@@ -91,7 +91,17 @@ jobs:
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ]; then
+          # WELK geheim ontbreekt, bij naam. De oude regel zei alleen "geen
+          # ANDROID_KEYSTORE_BASE64" en noemde de andere twee niet eens, terwijl elk van de drie deze
+          # `if` laat omslaan. Er stonden geheimen in de repo en de APK werd tóch met de debug-sleutel
+          # ondertekend, en uit deze stap was met geen mogelijkheid op te maken welke van de drie het
+          # was. Nooit de WAARDE, alleen of hij er is.
+          ONTBREEKT=""
+          [ -n "$KEYSTORE_B64" ]   || ONTBREEKT="$ONTBREEKT ANDROID_KEYSTORE_BASE64"
+          [ -n "$STORE_PASSWORD" ] || ONTBREEKT="$ONTBREEKT ANDROID_STORE_PASSWORD"
+          [ -n "$KEY_ALIAS" ]      || ONTBREEKT="$ONTBREEKT ANDROID_KEY_ALIAS"
+
+          if [ -z "$ONTBREEKT" ]; then
             echo "$KEYSTORE_B64" | base64 -d > release.jks
             {
               echo "storeFile=release.jks"
@@ -101,9 +111,13 @@ jobs:
             } > key.properties
             echo "SIGNED=ja" >> "$GITHUB_ENV"
             echo "Release-sleutel geschreven; de APK wordt echt gesigneerd."
+            # Alleen of hij er is, niet hoe lang of wat erin staat.
+            [ -n "$KEY_PASSWORD" ] || echo "ANDROID_KEY_PASSWORD is leeg; dan geldt het store-wachtwoord ook voor de sleutel."
           else
             echo "SIGNED=nee" >> "$GITHUB_ENV"
-            echo "Geen ANDROID_KEYSTORE_BASE64 in de secrets — de APK wordt met de DEBUG-sleutel gesigneerd."
+            echo "::warning::Deze geheimen ontbreken of zijn leeg:${ONTBREEKT}. De APK krijgt de DEBUG-sleutel."
+            echo "Staan ze er wél, kijk dan of ze onder Settings → Secrets and variables → ACTIONS staan"
+            echo "(en niet onder Dependabot of Codespaces), in DEZE repo, en of de naam exact klopt."
           fi
 
       - name: Build release APK
@@ -165,7 +179,11 @@ jobs:
             exit 0
           fi
 
-          echo "$CERTS" | grep -iE "owner|Signer #1 certificate (DN|SHA-256)" || echo "$CERTS" | head -20
+          # De VINGERAFDRUK hoort in het log, want dat is het enige getal waarmee twee bouwen te
+          # vergelijken zijn. Het oude patroon zocht op "Signer #1 certificate", en apksigner schrijft
+          # "V2 Signer: certificate SHA-256 digest:" — dus viel het altijd terug op `head -20` en was
+          # het toeval dat de afdruk er toch bij stond.
+          echo "$CERTS" | grep -iE "owner|Signer.*certificate (DN|SHA-256)" || echo "$CERTS" | head -20
 
           if echo "$CERTS" | grep -qi "Android Debug"; then
             echo "Dit is de DEBUG-sleutel."
@@ -173,6 +191,27 @@ jobs:
               echo "::error::De sleutel is geschreven maar de APK draagt nog het debug-certificaat."
               exit 1
             fi
+            # EEN RELEASE MAG DIT NIET ZIJN.
+            #
+            # De debug-sleutel wordt door de bouwmachine ter plekke aangemaakt als hij er niet staat,
+            # en elke draai is een verse machine. Gemeten: build 11028 droeg publieke sleutel
+            # 5c95d117…, build 11037 droeg eb08ef40… — twee verschillende sleutels, twee dagen na
+            # elkaar. Android weigert een APK over een app te zetten die met een ANDERE sleutel
+            # ondertekend is, dus elke nieuwe versie vroeg om eerst verwijderen en opnieuw
+            # installeren. Al je instellingen weg, elke keer.
+            #
+            # Dat is maandenlang gebeurd zonder dat iets het zei: deze stap zette een groen vinkje
+            # omdat "debug" bij een proefbouw normaal is, en publiceerde daarna gewoon door. Precies
+            # de val die in het commentaar hierboven al beschreven staat -- een groen vinkje boven een
+            # onbeantwoorde vraag -- alleen een stap verderop.
+            #
+            # Op een tag is het dus fataal. Op een claude/-tak blijft het gewoon een proefbouw.
+            case "$GITHUB_REF" in
+              refs/tags/win-v*)
+                echo "::error::Een release met de DEBUG-sleutel. Die installeert niet over de app die op het toestel staat, en de volgende bouw krijgt weer een andere sleutel. Er wordt niets gepubliceerd."
+                exit 1
+                ;;
+            esac
           else
             echo "Dit is NIET de debug-sleutel."
             if [ "$SIGNED" != "ja" ]; then
