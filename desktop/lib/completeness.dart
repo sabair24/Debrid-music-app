@@ -51,6 +51,18 @@ class AlbumSlot {
 
   String get title => official?.title ?? track?.title ?? '';
 
+  /// Staat hier een kopie die duidelijk een ANDERE lengte heeft dan de uitgave opgeeft?
+  ///
+  /// Bijna altijd een andere snit van hetzelfde nummer: de single-edit naast de albumversie. Dat mag
+  /// deze plaats vullen — je hébt dat nummer — maar het hoort niet weggemoffeld te worden, want het
+  /// is precies de reden om alsnog de albumversie te halen als je die wilt.
+  bool get andereLengte {
+    final o = official?.seconds ?? 0;
+    final f = track?.duration?.inSeconds ?? 0;
+    if (o <= 0 || f <= 0) return false;
+    return (o - f).abs() > _slack;
+  }
+
   int? get seconds => official?.seconds ?? track?.duration?.inSeconds;
 }
 
@@ -118,18 +130,33 @@ AlbumCompleteness matchAlbumTracks(
 
   bool durationsAgree(int? a, int? b) => a == null || b == null || a <= 0 || b <= 0 || (a - b).abs() <= _slack;
 
-  /// Wide enough for a wrong printed time, far too narrow for a different performance.
+  /// Wide enough for a wrong printed time AND for a single edit, far too narrow for a different
+  /// performance.
   ///
-  /// Only the last pass uses this, and only on an exact title with a single candidate. Two numbers,
-  /// both earned: Petra's "Laat Je Gaan" is 24 seconds off a catalogue that says 3:10 — a rounded or
-  /// mistyped time — and RENAISSANCE's "Cozy" has a live take six minutes longer than the studio
-  /// cut, which must stay a MISSING track or the download that would fetch it never appears.
+  /// Only the last pass uses this, and only on an exact title with a single candidate. Drie getallen,
+  /// alle drie verdiend:
   ///
-  /// A quarter as well as a minute, because a minute means nothing to a thirty-second interlude.
+  /// * Petra's "Laat Je Gaan" ligt 24 seconden naast een catalogus die 3:10 zegt — een afgeronde of
+  ///   verkeerd overgetypte tijd. Die moet erdoor.
+  /// * Barry White's "You're The First, The Last, My Everything" staat op *Can't Get Enough* als
+  ///   nummer 2 en duurt daar 4:33; wie de single-edit van 3:25 heeft, heeft dat nummer. Achtenzestig
+  ///   seconden. Onder de oude grens van zestig viel dat buiten de uitgave — en dan meldde de
+  ///   albumpagina "niet op deze uitgave" terwijl de nummeringsdialoog van hetzelfde bestand zei
+  ///   "staat op plaats 2". Twee antwoorden op één vraag, en de gebruiker zag ze allebei.
+  /// * RENAISSANCE's "Cozy" heeft een live-opname die zes minuten langer is dan de studioversie. Die
+  ///   moet ONTBREKEND blijven, anders verschijnt de download die het echte nummer haalt nooit.
+  ///
+  /// Een derde én anderhalve minuut: het deel is wat een andere uitvoering verraadt (een live-versie
+  /// of een extended mix scheelt bijna altijd meer dan een derde), en de seconden beschermen het
+  /// lange nummer waar een derde alsnog minuten zou zijn.
+  ///
+  /// Dat een gevonden kopie een andere lengte heeft blijft wel zichtbaar — zie [AlbumSlot.andereLengte].
+  /// "Je hebt dit nummer, maar niet deze versie" is iets anders dan "je hebt dit nummer niet", en het
+  /// is ook iets anders dan stilzwijgend doen alsof het dezelfde opname is.
   bool looseEnough(int? off, int? file) {
     if (off == null || file == null || off <= 0 || file <= 0) return false;
     final gap = (off - file).abs();
-    return gap <= 60 && gap <= off * 0.25;
+    return gap <= 90 && gap <= off / 3;
   }
 
   // Exact title first, across the whole list, so a looser match can never steal a file from the

@@ -55,6 +55,57 @@ String? performerFromFilename(String filename, String title) {
   return uitvoerder;
 }
 
+/// Eén bepaald bestand bij één bepaalde peer.
+///
+/// **Waarom een wens dit moet kunnen onthouden.** Wie zelf een regel uit de lijst aanklikt, doet dat
+/// omdat de automatische keuze de verkeerde was — een andere opname, een andere persing. Kwam die
+/// kopie niet binnen, dan is "dan zoeken we morgen wel iets anders van dat nummer" precies de
+/// overrule die de gebruiker net had weggeklikt. Dus wordt de bron zelf bewaard en morgen opnieuw
+/// gevraagd, bij dezelfde peer.
+///
+/// Genoeg velden om er weer een zoekresultaat van te maken: de overdracht vraagt om naam, pad en
+/// grootte, en de rest is wat het scherm erover zei.
+class VasteBron {
+  const VasteBron({
+    required this.username,
+    required this.filename,
+    required this.size,
+    this.bitrate,
+    this.durationSec,
+    this.sampleRate,
+    this.bitDepth,
+  });
+
+  final String username, filename;
+  final int size;
+  final int? bitrate, durationSec, sampleRate, bitDepth;
+
+  Map<String, dynamic> toJson() => {
+        'username': username,
+        'filename': filename,
+        'size': size,
+        if (bitrate != null) 'bitrate': bitrate,
+        if (durationSec != null) 'durationSec': durationSec,
+        if (sampleRate != null) 'sampleRate': sampleRate,
+        if (bitDepth != null) 'bitDepth': bitDepth,
+      };
+
+  static VasteBron? fromJson(Map<String, dynamic> j) {
+    final u = (j['username'] ?? '').toString();
+    final f = (j['filename'] ?? '').toString();
+    if (u.isEmpty || f.isEmpty) return null;
+    return VasteBron(
+      username: u,
+      filename: f,
+      size: (j['size'] as num?)?.toInt() ?? 0,
+      bitrate: (j['bitrate'] as num?)?.toInt(),
+      durationSec: (j['durationSec'] as num?)?.toInt(),
+      sampleRate: (j['sampleRate'] as num?)?.toInt(),
+      bitDepth: (j['bitDepth'] as num?)?.toInt(),
+    );
+  }
+}
+
 /// Eén openstaande wens.
 class LosslessWant {
   const LosslessWant({
@@ -67,7 +118,14 @@ class LosslessWant {
     this.refused = const {},
     this.authority,
     this.performer,
+    this.exact,
   });
+
+  /// Precies dit bestand bij precies deze peer, of null voor "zoek het beste dat je vindt".
+  ///
+  /// Is dit gevuld, dan wordt er NIET gezocht en NIETS vervangen: er wordt opnieuw bij die ene peer
+  /// aangeklopt. Zie [VasteBron].
+  final VasteBron? exact;
 
   final String artist, title, album;
 
@@ -96,7 +154,12 @@ class LosslessWant {
   final Map<String, String> refused;
 
   /// Stabiele naam van de wens. Niet het pad: het bestand verhuist zodra de tags kloppen.
-  String get key => '${normKey(artist)}|${normKey(title)}';
+  ///
+  /// Een wens om één bepaald bestand heet naar dat bestand. Anders zou hij botsen met de gewone wens
+  /// om hetzelfde nummer — en dan zou de ene de andere overschrijven, wat afhankelijk van de
+  /// volgorde ofwel de eigen keuze ofwel de jacht op een FLAC laat verdwijnen.
+  String get key =>
+      exact != null ? 'bron|${exact!.username}|${normKey(exact!.filename)}' : '${normKey(artist)}|${normKey(title)}';
 
   /// Waar de app naar zoekt. Dezelfde vorm als wat de gebruiker zelf zou typen.
   ///
@@ -125,6 +188,7 @@ class LosslessWant {
         refused: refused ?? this.refused,
         authority: authority,
         performer: performer,
+        exact: exact,
       );
 
   Map<String, dynamic> toJson() => {
@@ -137,14 +201,21 @@ class LosslessWant {
         if (refused.isNotEmpty) 'refused': refused,
         if (authority != null) 'authority': authority!.toJson(),
         if (performer != null && performer!.isNotEmpty) 'performer': performer,
+        if (exact != null) 'exact': exact!.toJson(),
       };
 
   static LosslessWant? fromJson(Map<String, dynamic> j) {
     final a = (j['artist'] ?? '').toString().trim();
     final t = (j['title'] ?? '').toString().trim();
-    if (a.isEmpty || t.isEmpty) return null; // zonder naam valt er niets te zoeken
+    final ex = j['exact'];
+    final bron = ex is Map ? VasteBron.fromJson(Map<String, dynamic>.from(ex)) : null;
+    // Zonder naam valt er niets te ZOEKEN — maar een wens om één bepaald bestand zoekt niet: die
+    // klopt opnieuw aan bij een peer, en daar is genoeg aan een naam en een pad. Een download die
+    // mislukte voordat er ook maar één tag gelezen kon worden heeft vaak niets anders.
+    if (bron == null && (a.isEmpty || t.isEmpty)) return null;
     final auth = j['authority'];
     return LosslessWant(
+      exact: bron,
       artist: a,
       title: t,
       album: (j['album'] ?? '').toString(),
@@ -245,6 +316,9 @@ class LosslessWants {
   List<String> forgetWhatWeHave(bool Function(String artist, String title) haveLossless) {
     final weg = <String>[];
     for (final w in _byKey.values.toList()) {
+      // Zonder naam valt er niets op te zoeken in de bibliotheek, en twee lege namen matchen van
+      // alles. Een wens om één bepaald bestand zonder tags blijft dus gewoon staan.
+      if (w.artist.trim().isEmpty || w.title.trim().isEmpty) continue;
       if (haveLossless(w.artist, w.title)) {
         _byKey.remove(w.key);
         weg.add(w.key);

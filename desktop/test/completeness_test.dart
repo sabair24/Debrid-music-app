@@ -66,6 +66,51 @@ void main() {
       expect(r.slots.first.missing, isTrue);
     });
 
+    test('de single-edit van een lang nummer telt als dat nummer', () {
+      // Het gemelde geval. "You're The First, The Last, My Everything" is nummer 2 op Barry Whites
+      // Can't Get Enough en duurt daar 4:33; het bestand is de single-edit van 3:25. Achtenzestig
+      // seconden — onder de oude grens van zestig viel dat buiten de uitgave, en dan meldde de
+      // albumpagina "niet op deze uitgave" terwijl de nummeringsdialoog van datzelfde bestand zei
+      // "staat op plaats 2". Twee antwoorden op één vraag, en allebei zichtbaar op één scherm.
+      final r = matchAlbumTracks(
+        [
+          _o(1, 'Mellow Mood (Part I)', 176),
+          _o(2, "You're The First, The Last, My Everything", 273),
+          _o(3, "I Can't Believe You Love Me", 620),
+          _o(4, "Can't Get Enough Of Your Love, Babe", 245),
+        ],
+        [
+          _t("You're The First, The Last, My Everything", 205, artist: 'Barry White', no: 0),
+          _t("Can't Get Enough Of Your Love, Babe", 245, artist: 'Barry White', no: 4),
+        ],
+        'Barry White',
+      );
+      expect(r.slots[1].track, isNotNull, reason: 'dit nummer staat op deze plaat, punt');
+      expect(r.namesEverything, isTrue,
+          reason: 'niets hoort nog onder "Niet op deze uitgave" te staan');
+    });
+
+    test('maar dat je een andere snit hebt blijft zichtbaar', () {
+      // Want dat is precies de reden om alsnog de albumversie te halen. Stilzwijgend doen alsof het
+      // dezelfde opname is zou een tweede leugen zijn, alleen een vriendelijkere.
+      final r = matchAlbumTracks(
+        [_o(1, "You're The First, The Last, My Everything", 273)],
+        [_t("You're The First, The Last, My Everything", 205, artist: 'Barry White')],
+        'Barry White',
+      );
+      expect(r.slots.first.andereLengte, isTrue);
+      expect(r.slots.first.official!.seconds, 273, reason: 'en de lengte van de uitgave is te tonen');
+    });
+
+    test('een gelijke lengte meldt niets', () {
+      final r = matchAlbumTracks(
+        [_o(1, "Can't Get Enough Of Your Love, Babe", 245)],
+        [_t("Can't Get Enough Of Your Love, Babe", 245, artist: 'Barry White')],
+        'Barry White',
+      );
+      expect(r.slots.first.andereLengte, isFalse);
+    });
+
     test('een radio-edit komt hier niet eens langs', () {
       // Zijn titel draagt een versiemarkering, dus hij matchte nooit exact -- de bescherming waar de
       // looptijdregel voor bedoeld was blijft dus staan.

@@ -216,4 +216,60 @@ void main() {
           isNull, reason: 'dat is nog steeds geen artiest');
     });
   });
+
+  group('een wens om PRECIES dit bestand', () {
+    // Waarom dit bestaat: wie zelf een regel aanklikt doet dat omdat de automaat de verkeerde
+    // opname pakte. Kwam die kopie niet binnen, dan is "dan halen we morgen wel iets anders van dat
+    // nummer" diezelfde overrule, alleen een dag later.
+    const bron = VasteBron(
+      username: 'SoundInvestment',
+      filename: r'@@abc\2 belgen\trop petit [1985]\01. lena.flac',
+      size: 53 * 1000 * 1000,
+      sampleRate: 48000,
+      bitDepth: 24,
+    );
+
+    LosslessWant vast({String artist = '', String title = ''}) =>
+        LosslessWant(artist: artist, title: title, exact: bron);
+
+    test('hij overleeft een herstart met bron en al', () {
+      final terug = LosslessWant.fromJson(vast(artist: '2 Belgen', title: 'Lena').toJson())!;
+      expect(terug.exact, isNotNull);
+      expect(terug.exact!.username, 'SoundInvestment');
+      expect(terug.exact!.filename, bron.filename);
+      expect(terug.exact!.size, bron.size);
+      expect(terug.exact!.bitDepth, 24);
+      expect(terug.exact!.sampleRate, 48000);
+    });
+
+    test('zonder artiest en titel blijft hij bestaan — er valt niets te ZOEKEN, wel aan te kloppen', () {
+      // Een download die misging voordat er ook maar één tag gelezen kon worden heeft niets anders
+      // dan een naam en een pad. Dat is genoeg om dezelfde peer morgen opnieuw te vragen.
+      expect(LosslessWant.fromJson(vast().toJson()), isNotNull);
+      // En de gewone wens blijft wél weigeren: zoeken zonder zoekvraag levert rommel op.
+      expect(LosslessWant.fromJson(_w('', '').toJson()), isNull);
+    });
+
+    test('hij botst niet met de gewone wens om hetzelfde nummer', () {
+      final lijst = LosslessWants('${Directory.systemTemp.path}${Platform.pathSeparator}x.json');
+      expect(lijst.want(_w('2 Belgen', 'Lena')), isTrue);
+      expect(lijst.want(vast(artist: '2 Belgen', title: 'Lena')), isTrue,
+          reason: 'anders overschrijft de een de ander, en verdwijnt of de keuze of de jacht');
+      expect(lijst.count, 2);
+    });
+
+    test('twee keer dezelfde bron blijft één wens', () {
+      final lijst = LosslessWants('${Directory.systemTemp.path}${Platform.pathSeparator}y.json');
+      expect(lijst.want(vast(artist: '2 Belgen', title: 'Lena')), isTrue);
+      expect(lijst.want(vast(artist: 'iets anders', title: 'Lena')), isFalse);
+    });
+
+    test('een naamloze wens wordt niet weggegooid door "die heb je al"', () {
+      final lijst = LosslessWants('${Directory.systemTemp.path}${Platform.pathSeparator}z.json');
+      lijst.want(vast());
+      // Twee lege namen matchen anders van alles, en dan verdwijnt de wens meteen weer.
+      expect(lijst.forgetWhatWeHave((a, t) => true), isEmpty);
+      expect(lijst.count, 1);
+    });
+  });
 }
