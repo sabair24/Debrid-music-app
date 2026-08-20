@@ -6,6 +6,7 @@
 /// than no copy at all — it sounds like the track is broken.
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -57,14 +58,39 @@ class FakeServer {
         return;
       }
 
+      final kop = 'HTTP/1.1 ${vanaf > 0 ? '206 Partial Content' : '200 OK'}\r\n'
+          'Content-Type: audio/flac\r\n'
+          'Accept-Ranges: bytes\r\n'
+          '${vanaf > 0 ? 'Content-Range: bytes $vanaf-${bytes.length - 1}/${bytes.length}\r\n' : ''}'
+          // Promised in full even when the connection is about to drop — that is what a real server
+          // does, and it is the only thing that makes a truncated download detectable.
+          'Content-Length: ${bytes.length - vanaf}\r\n\r\n';
+
+      if (cut != null) {
+        // Wat een afgebroken download écht is: de bytes zijn aangekomen, en dán valt de verbinding
+        // weg.
+        //
+        // **Waarom dit langs de sokkel gaat en niet langs HttpResponse.** `close()` op een antwoord
+        // dat zijn beloofde lengte niet haalt breekt de verbinding HARD af -- een RST -- en dan
+        // gooit de kernel aan de andere kant weg wat er nog ongelezen in de ontvangstbuffer staat.
+        // De client kreeg zo NUL bytes en meteen een fout: dat is een mislukte verbinding, niet een
+        // afgebroken download, en er viel dus ook niets te hervatten. Vier toetsen maten daardoor
+        // iets anders dan ze dachten. Een nette FIN levert wél eerst de bytes af.
+        final socket = await req.response.detachSocket(writeHeaders: false);
+        socket
+          ..add(utf8.encode(kop))
+          ..add(bytes.sublist(vanaf, (vanaf + cut).clamp(0, bytes.length)));
+        await socket.flush();
+        await socket.close();
+        return;
+      }
+
       req.response.statusCode = vanaf > 0 ? HttpStatus.partialContent : HttpStatus.ok;
       req.response.headers.contentType = ContentType('audio', 'flac');
       if (vanaf > 0) {
         req.response.headers
             .set(HttpHeaders.contentRangeHeader, 'bytes $vanaf-${bytes.length - 1}/${bytes.length}');
       }
-      // Promised in full even when the connection is about to drop — that is what a real server
-      // does, and it is the only thing that makes a truncated download detectable.
       req.response.contentLength = bytes.length - vanaf;
 
       if (zwijgNaKoppen) {
@@ -72,24 +98,10 @@ class FakeServer {
         return; // en verder niets: de verbinding blijft open en zwijgt
       }
 
-      var sent = 0;
       for (var i = vanaf; i < bytes.length; i += 64) {
         final end = (i + 64).clamp(0, bytes.length);
-        if (cut != null && sent >= cut) break;
         req.response.add(bytes.sublist(i, end));
-        sent += end - i;
         if (chunkDelay > Duration.zero) await Future<void>.delayed(chunkDelay);
-      }
-      if (cut != null) {
-        // What a dropped connection looks like: bytes, then nothing.
-        //
-        // De `flush` is niet kosmetisch. Zonder hem blijven die bytes in de bufferruimte staan, en
-        // een `close()` die struikelt over de beloofde lengte gooit ze wég: de client kreeg dan
-        // NUL bytes en meteen een fout. Dat is geen afgebroken download maar een mislukte, en het
-        // liet drie toetsen hierover iets anders meten dan ze dachten.
-        await req.response.flush().catchError((_) {});
-        await req.response.close().catchError((_) {});
-        return;
       }
       await req.response.close();
     });
