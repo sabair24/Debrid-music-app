@@ -2096,6 +2096,7 @@ class _HomeShellState extends State<HomeShell> {
   Widget _content() {
     if (_view == 5) return const HomeStartView();
     if (_view == 6) return const DownloadsView();
+    if (_view == 10) return const OpDitToestelView();
     if (_view == 7) return const KwaliteitView();
     if (_view == 8) return const FavorietenView();
     if (_view == 9) return const AfspeellijstenView();
@@ -2219,9 +2220,13 @@ class _OfflineBanner extends StatelessWidget {
                     ? 'Je pc is bereikbaar, maar dit toestel heeft geen toegang meer. '
                         'Je ziet de kopie van je bibliotheek'
                         '${when == null ? '' : ' van ${_ago(when)}'}; afspelen kan niet.'
+                    // "Afspelen niet" was te stellig, en op precies het verkeerde moment: wat je
+                    // offline bewaarde speelt hier wél, want de speler pakt de kopie op dit toestel
+                    // voordat hij het de pc vraagt. Dat is de hele reden dat offline bewaren bestaat
+                    // en het stond hier als onmogelijk aangekondigd.
                     : 'Je pc reageert niet — dit is de kopie van je bibliotheek'
                         '${when == null ? '' : ' van ${_ago(when)}'}. '
-                        'Bladeren en downloads klaarzetten kan; afspelen niet.'),
+                        'Wat je offline bewaarde speelt gewoon; de rest staat op de pc.'),
             maxLines: isCompact(context) ? 2 : null,
             overflow: isCompact(context) ? TextOverflow.ellipsis : null,
             style: TextStyle(color: kleur, fontSize: 12.5),
@@ -2505,6 +2510,7 @@ class NavSections {
     (2, 'Online zoeken', Icons.travel_explore_rounded),
     (3, 'Ontdek', Icons.explore_rounded),
     (6, 'Mijn downloads', Icons.download_rounded),
+    (10, 'Op dit toestel', Icons.offline_pin_rounded),
     (8, 'Favorieten', Icons.favorite_rounded),
     (9, 'Afspeellijsten', Icons.queue_music_rounded),
     (7, 'Kwaliteit', Icons.high_quality_rounded),
@@ -3135,6 +3141,62 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
                   : here > 0
                       ? 'Offline ($here/${tracks.length})'
                       : 'Offline bewaren'),
+    );
+  }
+}
+
+/// De platen die op dit toestel staan, als raster.
+///
+/// **Waarom dit een eigen sectie is.** Wat offline bewaard was, stond alleen als tekstregels
+/// bovenaan "Mijn downloads" — een pagina die op een telefoon achter de la zit en die over iets
+/// anders gaat: nummers die naar je pc onderweg zijn. Gemeld op 20-08-2026, met een plaat die
+/// aantoonbaar opgehaald was: *"ok op toestel, maar waar?? ik vind niet op mijn toestel"*.
+///
+/// Een raster met hoezen waar je op tikt is waar je naar muziek zoekt. Een lijst met bestandsnamen
+/// achter een menu is waar je naar een probleem zoekt.
+class OpDitToestelView extends StatelessWidget {
+  const OpDitToestelView({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final offline = context.watch<OfflineStore>();
+    final lib = context.watch<LibraryStore>();
+
+    // Minstens één nummer, niet per se de hele plaat: een album waarvan de helft is opgehaald hoort
+    // hier te staan, want die helft speelt.
+    final hier = [
+      for (final a in lib.albums)
+        if (a.tracks.any((t) => offline.has(t.path))) a,
+    ];
+
+    if (hier.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 34),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.offline_pin_outlined, size: 44, color: _muted),
+              const SizedBox(height: 16),
+              const Text('Nog niets op dit toestel',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              Text(
+                'Open een album en tik op "Offline bewaren". Wat je zo ophaalt speelt ook '
+                'zonder je pc en zonder bereik — in de auto, in de trein.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: _muted, fontSize: 13.5, height: 1.45),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return AlbumsGrid(
+      albums: hier,
+      title: '${hier.length} ${hier.length == 1 ? 'plaat' : 'platen'} op dit toestel',
     );
   }
 }

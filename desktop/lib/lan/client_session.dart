@@ -8,6 +8,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../catalogus_kopie.dart';
 import '../library.dart';
 import '../settings.dart';
 import 'client.dart';
@@ -21,6 +22,7 @@ class ClientSession extends ChangeNotifier {
     required this.owner,
     required this.applyMediaResolver,
     RemoteEndpoint? endpoint,
+    this.kopie = const CatalogusKopie(),
   }) : _endpoint = endpoint;
 
   final LibraryStore library;
@@ -59,6 +61,13 @@ class ClientSession extends ChangeNotifier {
   /// The cloud copy of the library, for when the PC does not answer. Null when not signed in, and
   /// then an unreachable PC means an empty screen exactly as it did before.
   CatalogMirror? mirror;
+
+  /// De kopie op dit toestel zelf, voor als er ook geen internet is.
+  ///
+  /// De cloudkopie hierboven dekt "pc uit". Deze dekt "pc uit én geen bereik" — de auto, de metro,
+  /// het vliegtuig, precies waar offline bewaren voor bedoeld is. Zonder hem stond de muziek wel op
+  /// het toestel maar was er geen lijst om hem mee te vinden.
+  final CatalogusKopie kopie;
 
   Timer? _poll;
 
@@ -112,6 +121,10 @@ class ClientSession extends ChangeNotifier {
     settings.discogsToken = '';
     settings.lastfmKey = '';
     await settings.save();
+    // En de inhoudsopgave van die pc gaat mee. Wie zegt "vergeet die pc" bedoelt niet "maar hou de
+    // lijst van mijn muziek nog even".
+    await kopie.wis();
+    library.laatsteCatalogus = null;
     library.remote = null;
     applyMediaResolver((p) => p);
     _endpoint = null;
@@ -136,6 +149,11 @@ class ClientSession extends ChangeNotifier {
         // New records may have arrived; only the ones without a cover are fetched.
         unawaited(library.loadRemoteCovers(settings));
       }
+      // Vers van de pc: leg hem vast op dit toestel. Alleen als er ECHT iets veranderd is — een
+      // poll die 304 krijgt hoeft geen bestand van megabytes opnieuw weg te schrijven, en dat
+      // gebeurt hier elke vijftien seconden.
+      final vers = library.laatsteCatalogus;
+      if (changed && vers != null) unawaited(kopie.bewaar(vers));
       // Ook de kopie tonen als de pc weigert. "Er staan geen nummers in de lijst" was de vervanger
       // voor "de pc doet het niet", en die twee lopen uiteen zodra er ooit iets geladen is: dan blijft
       // een lijst staan waar je op kunt tikken en die stil niets doet.
@@ -148,9 +166,25 @@ class ClientSession extends ChangeNotifier {
     }
   }
 
-  /// Fall back to the copy the PC published. Only ever fills an empty screen: [adoptMirror]
-  /// refuses to replace a live library, so this cannot turn a playable one unplayable.
+  /// Fall back to a copy. Only ever fills an empty screen: [adoptMirror] refuses to replace a live
+  /// library, so this cannot turn a playable one unplayable.
+  ///
+  /// **Eerst wat op dit toestel ligt, dan pas de cloud.** Die volgorde is de hele reden dat dit
+  /// bestaat. De kopie op het toestel kost geen netwerk en is er dus ook in de auto; de cloudkopie
+  /// is vaak verser maar vraagt internet, en juist als dat er niet is heb je die lijst nodig. Wat
+  /// hier ligt wordt zo nodig meteen daarna overschreven door de cloud — `adoptMirror` staat dat
+  /// toe zolang wat er staat zelf een kopie is.
   Future<void> _fillFromMirror() async {
+    final eigen = await kopie.lees();
+    if (eigen != null &&
+        library.adoptMirror(eigen.json, updatedAt: eigen.bijgewerkt, vanToestel: true)) {
+      // Ook hier de hoezen, want die staan in de cache op dit toestel. Zonder deze aanroep is het
+      // een raster van lege vakjes, en dat leest als een kapotte bibliotheek in plaats van als een
+      // pc die uit staat.
+      unawaited(library.loadRemoteCovers(settings));
+      notifyListeners();
+    }
+
     final m = mirror;
     if (m == null) return;
     try {

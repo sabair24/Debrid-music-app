@@ -70,7 +70,15 @@ class RemoteEndpoint {
 class CatalogResponse {
   final CatalogDto? catalog;
   final String? etag;
-  const CatalogResponse(this.catalog, this.etag);
+
+  /// Wat de pc letterlijk stuurde, onbewerkt.
+  ///
+  /// Bestaat zodat het toestel de bibliotheek op zijn eigen schijf kan bewaren zonder hem eerst
+  /// terug te vertalen naar JSON. Terugvertalen zou een tweede schrijfwijze zijn die van de echte
+  /// af kan drijven — en dan leest een volgende versie een kopie die net niet meer klopt.
+  final Map<String, dynamic>? raw;
+
+  const CatalogResponse(this.catalog, this.etag, {this.raw});
 
   bool get unchanged => catalog == null;
 }
@@ -209,6 +217,7 @@ class RemoteClient {
     return CatalogResponse(
       CatalogDto.fromJson(decoded),
       res.headers['etag'],
+      raw: decoded,
     );
   }
 

@@ -1819,6 +1819,19 @@ class LibraryStore extends ChangeNotifier {
   /// When the PC last copied its library up. Only meaningful while [fromCloudMirror].
   DateTime? mirrorUpdatedAt;
 
+  /// Komt de kopie op het scherm van dit toestel zelf, in plaats van uit de cloud?
+  ///
+  /// Alleen betekenisvol zolang [fromCloudMirror]. Het verschil zit niet in wat je ziet — het is
+  /// dezelfde catalogus — maar in wat je eraan hebt: de kopie op het toestel is er ook zonder
+  /// internet, en dan is wat offline bewaard is gewoon te spelen.
+  bool kopieVanToestel = false;
+
+  /// De laatste catalogus die van de pc kwam, onbewerkt.
+  ///
+  /// Staat hier zodat wie hem wil bewaren niet zelf terug hoeft te vertalen naar JSON — zie
+  /// `CatalogusKopie`. In het geheugen, niet op schijf: schrijven is de keuze van de aanroeper.
+  Map<String, dynamic>? laatsteCatalogus;
+
   set remote(RemoteClient? client) {
     _remote = client;
     _catalogEtag = null;
@@ -1893,9 +1906,11 @@ class LibraryStore extends ChangeNotifier {
     }
 
     _adoptCatalog(catalog, client);
+    laatsteCatalogus = res.raw;
     // Live again: what is on screen is playable, whatever it was a moment ago.
     fromCloudMirror = false;
     mirrorUpdatedAt = null;
+    kopieVanToestel = false;
     scanned = tracks.length;
     scanning = false;
     notifyListeners();
@@ -1916,7 +1931,7 @@ class LibraryStore extends ChangeNotifier {
   /// Refuses to overwrite a live catalogue. Coming back from a lock screen can land this after the
   /// PC has already answered, and replacing a playable library with an unplayable copy of itself
   /// is the one outcome nobody wants.
-  bool adoptMirror(Map<String, dynamic> json, {DateTime? updatedAt}) {
+  bool adoptMirror(Map<String, dynamic> json, {DateTime? updatedAt, bool vanToestel = false}) {
     if (!isRemote) return false;
     if (!fromCloudMirror && tracks.isNotEmpty) return false;
     final client = _remote;
@@ -1928,6 +1943,7 @@ class LibraryStore extends ChangeNotifier {
       return false;
     }
     fromCloudMirror = true;
+    kopieVanToestel = vanToestel;
     mirrorUpdatedAt = updatedAt;
     scanned = tracks.length;
     notifyListeners();
