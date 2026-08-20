@@ -1775,17 +1775,23 @@ extension DiscogsChoices on DiscogsService {
       // vastgezette uitgave hieronder als "staat er al" en werd hij niet opgehaald. Iemand met een
       // cassette als vaste keuze zag zijn eigen keuze dan nergens meer staan.
       if (v.major.toLowerCase().contains('cassette')) return;
-      if (!seen.add(v.id)) return;
+      // KIJKEN of hij al gezien is, nog niet BIJSCHRIJVEN. Die volgorde draagt twee dingen die
+      // allebei fout gingen toen ze door elkaar liepen:
+      //
+      //  - Een dubbele mag geen "de lijst is afgekapt" opleveren; er gaat niets verloren.
+      //  - Maar een persing die wegvalt OMDAT de lijst vol is, mag niet als gezien te boek staan.
+      //    De vastgezette uitgave hieronder wordt namelijk alleen apart opgehaald als hij níet in
+      //    deze verzameling zit — en dan verdwijnt precies de uitgave die de gebruiker zelf koos
+      //    uit de lijst met keuzes, zonder een woord.
+      if (seen.contains(v.id)) return;
       if (rows.length >= max) {
         // De lijst zit vol MIDDEN in een pagina. `stop` kijkt alleen tussen pagina's door, dus
         // zonder deze regel vielen die laatste vijftig persingen weg terwijl de lus daarna netjes
         // meldde dat alles binnen was.
-        //
-        // Ná de drie tests hierboven, zodat een pagina die op de valreep alleen nog cassettes en
-        // dubbelen bevat geen waarschuwing geeft over rijen die niemand had kunnen kiezen.
         vol = true;
         return;
       }
+      seen.add(v.id);
       rows.add(rijVanVersie(v));
     }
 

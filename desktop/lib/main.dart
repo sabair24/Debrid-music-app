@@ -15249,11 +15249,14 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
         // De dialoog is dicht. Doorgaan kost requests op een baan van zestig per minuut voor een
         // venster dat er niet meer is — en die requests gaan af van wat de rest van de app krijgt.
         gestopt: () => !mounted,
+        // Opgeteld en niet overschreven, net als bij het nummerveld. Vraag je een master op terwijl
+        // de gewone lijst nog binnenkomt, dan zou dit anders "niet alles staat hier" weer uitzetten
+        // op grond van een lijst die daar niets over te zeggen heeft.
         onEinde: (totaal, meer, andereMasters) {
           if (!mounted) return;
           setState(() {
-            _dgTotaal = totaal;
-            _dgMeer = meer;
+            if (totaal > _dgTotaal) _dgTotaal = totaal;
+            _dgMeer = _dgMeer || meer;
             _andereMasters = andereMasters;
           });
         },
@@ -15271,14 +15274,11 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       _dgFailed = _dgFailed || DiscogsService.transportErrors > foutenVoor;
     });
     if (_choices?.isEmpty ?? true) {
-      setState(() => _error = !DiscogsService(settings).available
-          // De app weet dit van zichzelf. "Geen uitgaves gevonden" is dan een uitspraak over de
-          // plaat, terwijl de helft van de catalogus nooit gevraagd is.
-          ? 'Geen uitgaves gevonden. Er is geen Discogs-sleutel ingesteld, dus alleen MusicBrainz '
-              'is geraadpleegd.'
-          : _dgFailed
-              ? 'Geen uitgaves gevonden. Discogs was niet bereikbaar, dus de aanvulling ontbreekt.'
-              : 'Geen uitgaves gevonden.');
+      // Over de ontbrekende sleutel staat hier niets: die regel staat altijd onder de lijst, ook
+      // als er wél rijen zijn. Hem hier herhalen zou hetzelfde twee keer op één scherm zetten.
+      setState(() => _error = _dgFailed
+          ? 'Geen uitgaves gevonden. Discogs was niet bereikbaar, dus de aanvulling ontbreekt.'
+          : 'Geen uitgaves gevonden.');
     }
   }
 
@@ -15532,10 +15532,29 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   }
 
   /// Open the assign panel for one pressing, fetching its scans first if that hasn't happened.
+  /// Rollen die de gebruiker in DEZE dialoog met de hand heeft toegewezen.
+  ///
+  /// Zie [_choose]: het kiezen van een uitgave wist met opzet alle rollen, want anders blijft de
+  /// hoes van de digitale uitgave staan boven de cd die je net koos. Maar dat wist óók wat je een
+  /// tel eerder in dit venster zelf aanwees, en dat is de enige weg die er is als de app de
+  /// schijf-scan in het verkeerde vak zet. Deze worden na het wissen teruggezet.
+  final Map<String, String> _eigenRollen = {};
+
   Future<void> _assign(ReleaseChoice c) async {
     if (!mounted) return;
+    final lib = context.read<LibraryStore>();
+    Map<String, String> lees() =>
+        {...lib.albumArtRoles(widget.album.artist, widget.album.title)};
+    final voor = lees();
     await showDialog<void>(
         context: context, builder: (_) => AssignScansDialog(album: widget.album, choice: c));
+    if (!mounted) return;
+    // Alleen wat hier veranderde. Rollen die al op schijf stonden horen wél weg te vallen bij het
+    // kiezen van een andere uitgave — dat is juist waar dat wissen voor is.
+    final na = lees();
+    for (final e in na.entries) {
+      if (voor[e.key] != e.value) _eigenRollen[e.key] = e.value;
+    }
   }
 
   Future<void> _choose(ReleaseChoice c) async {
@@ -15557,6 +15576,12 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       // earlier is an override that outranks the pressing, so leaving those in place made this
       // button look like it did nothing: you chose the CD and kept the digital sleeve.
       await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title);
+      // Behalve wat je in ditzelfde venster net zelf hebt aangewezen. Anders is "zoek de scan op,
+      // wijs hem toe, kies dan deze uitgave" een handeling die zichzelf ongedaan maakt — en dat is
+      // precies de weg die openstaat als de app de schijf-scan in het verkeerde vak zette.
+      for (final e in _eigenRollen.entries) {
+        await lib.setAlbumArtRole(widget.album.artist, widget.album.title, e.key, e.value);
+      }
       await lib.applyCorrection(widget.album, settings,
           coverBytes: front,
           discogsRelease: c.isMb ? null : c.releaseId,
