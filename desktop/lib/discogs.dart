@@ -635,10 +635,22 @@ class DiscogsService {
   /// Hoeveel uitgaves dit master er in totaal heeft, volgens Discogs zelf. Null als het niet staat.
   static int? itemAantal(Map<String, dynamic>? body) => _getal(body, 'items');
 
+  /// Een jaartal uit een zoekresultaat, zonder cast die kan gooien.
+  ///
+  /// Discogs stuurt dit vandaag als tekst ("2010"), maar `as String?` GOOIT op alles wat geen tekst
+  /// is in plaats van null te geven — en die fout valt tot in de dialoog, die er "Discogs was niet
+  /// bereikbaar" van maakt boven een lijst die keurig was aangekomen. Zelfde val als bij het
+  /// pagineringsblok hierboven, en dezelfde oplossing.
+  static int? jaarUit(dynamic v) {
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v.trim().split('-').first);
+    return null;
+  }
+
   /// Een getal uit het pagineringsblok, zonder cast die kan gooien.
   ///
-  /// `as num?` gooit op een tekst — het levert geen null op — en deze twee functies bestaan juist
-  /// om een uitgekleed of afwijkend antwoord te overleven. Gooien ze wél, dan valt die fout tot in
+  /// `as num?` gooit op een tekst — het levert geen null op — en deze functies bestaan juist om een
+  /// uitgekleed of afwijkend antwoord te overleven. Gooien ze wél, dan valt die fout tot in
   /// `_load`, die er "Discogs was niet bereikbaar" van maakt terwijl er net een pagina met uitgaves
   /// binnenkwam.
   static int? _getal(Map<String, dynamic>? body, String sleutel) {
@@ -1730,6 +1742,10 @@ extension DiscogsArtwork on DiscogsService {
   }
 }
 
+/// Hoeveel treffers één zoekpagina geeft. Ook de maat waaraan [DiscogsChoices.losseReleases]
+/// afmeet of die pagina hélemaal bruikbaar was, dus die twee mogen niet uit elkaar lopen.
+const _zoekPagina = 100;
+
 extension DiscogsChoices on DiscogsService {
   /// Every pressing Discogs lists, offered at once, with the scans filled in as they are found.
   ///
@@ -1852,6 +1868,22 @@ extension DiscogsChoices on DiscogsService {
     // het juist wegscoorde. Voor een doorsnee album zijn dat er meer dan drie, dus die waarschuwing
     // zou bijna altijd aan staan — en een waarschuwing die altijd aan staat leest niemand meer,
     // precies wanneer de lijst wél echt afgekapt is.
+    // En wat onder geen enkel gelopen master hing — zie [losseReleases]. Ná de masters, want die
+    // leveren de volledige en best beschreven lijst; dit is de aanvulling erop.
+    if (rows.length < max && !(gestopt?.call() ?? false)) {
+      final losse = await losseReleases(artist, album, max: max);
+      meer = meer || losse.meer;
+      for (final r in losse.rijen) {
+        if (r.releaseId <= 0 || seen.contains(r.releaseId)) continue;
+        if (rows.length >= max) {
+          vol = true;
+          break;
+        }
+        seen.add(r.releaseId);
+        rows.add(r);
+      }
+      onPartial?.call([...rows]);
+    }
     meer = meer || vol;
     if (pinned != null && pinned > 0 && !seen.contains(pinned)) {
       final rij = await keuzeVanRelease(pinned);
@@ -1869,6 +1901,69 @@ extension DiscogsChoices on DiscogsService {
     // net onder de vierde gelijknamige plaat.
     onEinde?.call(totaal, meer, masters.length - teLopen.length);
     return rows;
+  }
+
+  /// Uitgaves die onder GEEN van de gelopen masters hangen.
+  ///
+  /// **Waarom dit er los naast staat.** De kiezer werkt van master naar persingen: zoek het album,
+  /// pak de drie best scorende, en haal daar alle versies van op. Dat vindt alles wat netjes onder
+  /// een master hangt — en niets anders. Op Discogs mag een uitgave ook helemaal los bestaan: een
+  /// promo die niemand aan een master heeft geknoopt, een heruitgave die onder een vierde master
+  /// zit, een persing die als los item is ingevoerd. Die stonden nergens, en er was geen manier om
+  /// erachter te komen dat ze bestonden.
+  ///
+  /// Eén request, dezelfde zoekmachine die het master vond. Losser dan een master, dus dezelfde
+  /// titelscore beslist die ook een master zou hebben afgewezen — anders komt hier de gelijknamige
+  /// plaat van iemand anders bij.
+  Future<({List<ReleaseChoice> rijen, bool meer})> losseReleases(String artist, String album,
+      {int max = 100}) async {
+    final who = cleanArtistName(artist);
+    final titel = DiscogsService.plainTitle(album);
+    final body = await _get(
+      'https://api.discogs.com/database/search?type=release&per_page=$_zoekPagina'
+      '${who.isEmpty ? '' : '&artist=${_q(who)}'}&release_title=${_q(titel)}',
+    );
+    final out = <ReleaseChoice>[];
+    for (final it in (body?['results'] as List<dynamic>? ?? const [])) {
+      if (out.length >= max) break;
+      if (it is! Map<String, dynamic>) continue;
+      final id = (it['id'] as num?)?.toInt() ?? 0;
+      if (id <= 0) continue;
+      if (DiscogsService.titleScore(it['title'] as String? ?? '', artist, album) < 4) continue;
+      final formats = [for (final f in (it['format'] as List<dynamic>? ?? const [])) f.toString()];
+      if (formats.any((f) => f.toLowerCase().contains('cassette'))) continue;
+      final labels = [for (final l in (it['label'] as List<dynamic>? ?? const [])) l.toString()];
+      // Discogs serveert een doorzichtige stip waar een uitgave geen afbeelding heeft; die als hoes
+      // tonen is erger dan een leeg vak, want dan lijkt de rij een hoes te hebben.
+      final thumb = (it['thumb'] as String?)?.trim() ?? '';
+      out.add(ReleaseChoice(
+        source: EditionSource.discogs,
+        releaseId: id,
+        format: formats.isEmpty ? '' : formats.first,
+        label: labels.isEmpty ? null : labels.first,
+        catno: (it['catno'] as String?)?.trim(),
+        country: (it['country'] as String?)?.trim(),
+        year: DiscogsService.jaarUit(it['year']),
+        front: thumb.isEmpty || thumb.contains('spacer') ? null : ChoiceImage(thumb, thumb),
+        detailed: false,
+      ));
+    }
+    // Eén zoekpagina, en verder pagineren doet dit bewust niet: dit is de AANVULLING op de masters,
+    // niet de hoofdlijst, en elke pagina is een request uit een budget van zestig per minuut.
+    //
+    // "Er zijn meer pagina's" is hier GEEN reden tot waarschuwen, en dat is de val waar dit bijna
+    // in liep. Het zoeken op releases telt rauwe treffers — vóór de titelscore hieronder en vóór
+    // het ontdubbelen. Een plaat met honderdtwintig persingen die de masters allang compleet hebben
+    // opgehaald levert twee pagina's zoekresultaten op, en een korte titel als "30" duizenden die
+    // hier stuk voor stuk afvallen. Op "meer pagina's" alarm slaan zet de oranje regel dus
+    // permanent aan — precies waarom `masters.length > 3` er eerder uit is gehaald, en het zou de
+    // grijze "alles opgehaald" op de andere tak voorgoed het zwijgen opleggen.
+    //
+    // Wat hier wél iets zegt: deze pagina was HELEMAAL bruikbaar. Viel geen enkele treffer af, dan
+    // is de kans reëel dat de volgende er ook nog van dit album heeft. Dat is zeldzaam, en dat is
+    // precies wat een waarschuwing hoort te zijn.
+    final helePaginaBruikbaar = out.length >= _zoekPagina;
+    return (rijen: out, meer: helePaginaBruikbaar && DiscogsService.paginaAantal(body) > 1);
   }
 
   /// Eén regel uit de versielijst, als rij voor de kiezer.
