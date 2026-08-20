@@ -87,7 +87,18 @@ jobs:
         working-directory: desktop/android
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          # TWEE namen, en de tweede is geen luxe.
+          #
+          # Het wachtwoord van de keystore staat in deze repo onder ANDROID_KEYSTORE_PASSWORD; deze
+          # werkstroom zocht alleen ANDROID_STORE_PASSWORD. Eén woordje verschil, en het gevolg was
+          # dat de APK's vier dagen lang met de DEBUG-sleutel ondertekend werden -- waardoor geen
+          # enkele update over de app op het toestel heen kon en er telkens eerst verwijderd moest
+          # worden.
+          #
+          # Er is geen "juiste" naam van de twee; dat is precies het punt. Een keystore-wachtwoord
+          # heet in de ene handleiding zo en in de andere zo, en de bouw hoort niet stuk te gaan aan
+          # welke van de twee je toevallig getypt hebt. `||` neemt de eerste die gevuld is.
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD || secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
@@ -98,7 +109,7 @@ jobs:
           # was. Nooit de WAARDE, alleen of hij er is.
           ONTBREEKT=""
           [ -n "$KEYSTORE_B64" ]   || ONTBREEKT="$ONTBREEKT ANDROID_KEYSTORE_BASE64"
-          [ -n "$STORE_PASSWORD" ] || ONTBREEKT="$ONTBREEKT ANDROID_STORE_PASSWORD"
+          [ -n "$STORE_PASSWORD" ] || ONTBREEKT="$ONTBREEKT ANDROID_STORE_PASSWORD(_of_ANDROID_KEYSTORE_PASSWORD)"
           [ -n "$KEY_ALIAS" ]      || ONTBREEKT="$ONTBREEKT ANDROID_KEY_ALIAS"
 
           if [ -z "$ONTBREEKT" ]; then
