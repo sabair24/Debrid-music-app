@@ -2,7 +2,10 @@ name: Build & Release APK
 
 on:
   push:
-    branches: [ "main", "claude/**" ]
+    # `!claude/release` is geen tak met werk erop maar de belknop van release.yml. Zonder deze
+    # uitzondering bouwt elke release eerst nog een APK die nergens heen gaat: het publiceren hangt
+    # aan main of aan een tag, dus die bouw levert zes minuten en niets.
+    branches: [ "main", "claude/**", "!claude/release" ]
     # The release tag builds every platform. Without this the APK only ever came from a push to
     # main or a claude/** branch, so work living on a feature branch shipped to Windows, the Mac and
     # the iPad while Android silently stayed weeks behind — which is exactly what happened.
