@@ -95,8 +95,15 @@ double dialogWidth(BuildContext context, double preferred) {
 }
 
 /// The same for height, for the dialogs that fix both.
+///
+/// De marge is niet vast, en dat is op een LIGGENDE telefoon het verschil tussen bruikbaar en niet.
+/// Honderdtwintig punten is op een staand scherm van 890 een randje; op datzelfde toestel gedraaid
+/// is het scherm 411 hoog en is dezelfde marge bijna een derde ervan. De uitgavekiezer hield daar
+/// negentig punten lijst over onder zijn eigen kop — twee halve rijen, en scrollen door acht
+/// uitgaves in een spleet.
 double dialogHeight(BuildContext context, double preferred) {
-  final available = MediaQuery.sizeOf(context).height - 120;
+  final h = MediaQuery.sizeOf(context).height;
+  final available = h - (h < 520 ? 24 : 120);
   return preferred < available ? preferred : available;
 }
 
