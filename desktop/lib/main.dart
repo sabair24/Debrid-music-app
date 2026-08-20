@@ -15549,6 +15549,13 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   /// schijf-scan in het verkeerde vak zet. Deze worden na het wissen teruggezet.
   final Map<String, String> _eigenRollen = {};
 
+  /// Wat je per rij zelf hebt aangewezen: rijsleutel → rol → scan.
+  ///
+  /// Een laagje óver de drie vakjes van een rij heen, zodat je meteen ziet wat je koos zonder dat
+  /// de rij zelf herschreven hoeft te worden. Weggehaalde rollen staan er niet in, en dan komt de
+  /// gok van de app er vanzelf weer onderuit.
+  final Map<String, Map<String, ChoiceImage>> _rolOverride = {};
+
   Future<void> _assign(ReleaseChoice c) async {
     if (!mounted) return;
     final lib = context.read<LibraryStore>();
@@ -15580,20 +15587,16 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     //
     // Zonder dit sluit het venster en staat de rij er precies zo bij als ervoor: de scan die je net
     // als cd aanwees zit nog in het vak "achter", want die drie vakjes tonen wat DISCOGS ervan
-    // dacht. Dan heb je iets opgeslagen en zie je er niets van — en of het gelukt is blijft een
-    // kwestie van vertrouwen. Een lege rol laat de gok staan, want dat is precies wat leeglaten
-    // betekent.
-    if (gekozen == null || gekozen.isEmpty) return;
-    final lijst = _choices;
-    if (lijst == null) return;
-    final i = lijst.indexWhere((x) => x.key == c.key);
-    if (i < 0) return;
-    setState(() => _choices = [...lijst]
-      ..[i] = lijst[i].withArt(
-        front: gekozen['front'] ?? lijst[i].front,
-        back: gekozen['back'] ?? lijst[i].back,
-        disc: gekozen['disc'] ?? lijst[i].disc,
-      ));
+    // dacht. Dan heb je iets opgeslagen en zie je er niets van.
+    //
+    // NAAST de rij en niet erin. De verleiding is om de rij zelf te herschrijven met `withArt`,
+    // maar die zet `detailed` onvoorwaardelijk op waar — en dan beweert een rij die nog nooit is
+    // opgezocht dat hij geen achterkant en geen cd-scan heeft, en wordt hij ook nooit meer
+    // opgezocht. Precies de leugen waar de rest van dit scherm van af moest. Bovendien is een los
+    // laagje omkeerbaar: haal je een rol weer weg, dan valt de gok van de app er vanzelf onder
+    // vandaan, waar een overschreven rij hem kwijt was.
+    if (gekozen == null) return;
+    setState(() => _rolOverride[c.key] = gekozen);
   }
 
   Future<void> _choose(ReleaseChoice c) async {
@@ -16038,12 +16041,20 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     // Clicking one opens every scan this pressing has, to say which is which — the roles
     // below are inferred, and inference on a catalogue that never labels its images gets
     // the back and the disc the wrong way round often enough to need an answer.
+    // Wat de gebruiker zelf aanwees gaat vóór de gok van de app — zie [_rolOverride].
+    final eigen = _rolOverride[c.key];
+    // Kleiner op een telefoon. Drie vakjes van 58 plus hun randen is 192 van de 269 die er zijn, en
+    // wat overblijft moet de hele beschrijving dragen; op 46 is dat 156 en heeft de tekst lucht.
+    final maat = isCompact(context) ? 46.0 : 58.0;
     final scans = <Widget>[
-      _thumb(c.front, 'hoes', role: 'front', row: c, onLongPress: () => _assign(c)),
+      _thumb(eigen?['front'] ?? c.front, 'hoes',
+          role: 'front', row: c, maat: maat, onLongPress: () => _assign(c)),
       const SizedBox(width: 8),
-      _thumb(c.back, 'achter', role: 'back', row: c, onLongPress: () => _assign(c)),
+      _thumb(eigen?['back'] ?? c.back, 'achter',
+          role: 'back', row: c, maat: maat, onLongPress: () => _assign(c)),
       const SizedBox(width: 8),
-      _thumb(c.disc, 'cd', role: 'disc', row: c, onLongPress: () => _assign(c)),
+      _thumb(eigen?['disc'] ?? c.disc, 'cd',
+          role: 'disc', row: c, maat: maat, onLongPress: () => _assign(c)),
     ];
     final knoppen = <Widget>[
       // Alle scans van deze uitgave, als KNOP.
@@ -16098,36 +16109,46 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                     Text(c.label!, maxLines: 1, overflow: TextOverflow.ellipsis,
                         style: const TextStyle(color: _muted, fontSize: 12)),
                   const SizedBox(height: 6),
-                  Row(children: [
-                    // Which catalogue this row came from. The user asked to choose the source, so
-                    // it has to be visible rather than inferred from the row's shape.
-                    _source(c.isMb),
-                    const SizedBox(width: 6),
-                    // Het nummer van deze uitgave, zichtbaar. Dit is de tegenhanger van het veld
-                    // bovenaan: daar type je een nummer in, hier lees je hem af — zo kun je een rij
-                    // die je hier vindt terugzoeken op Discogs zelf, en andersom.
-                    if (!c.isMb && c.releaseId > 0) ...[
-                      Text('r${c.releaseId}',
-                          style: const TextStyle(color: _muted, fontSize: 10.5)),
-                      const SizedBox(width: 6),
+                  // `Wrap` en geen `Row`, en dat is geen opmaakvoorkeur. Deze vier plaatjes zijn
+                  // samen ruim tweehonderd punten breed en op een staande telefoon houdt de tekst
+                  // er nog geen negentig over. Een Row buigt daar niet voor: hij tekent door en
+                  // laat Flutter er gele strepen overheen zetten, met het laatste bordje half
+                  // buiten beeld. Wrap zet ze op een tweede regeltje en klaar.
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      // Which catalogue this row came from. The user asked to choose the source, so
+                      // it has to be visible rather than inferred from the row's shape.
+                      _source(c.isMb),
+                      // Het nummer van deze uitgave, zichtbaar. Dit is de tegenhanger van het veld
+                      // bovenaan: daar type je een nummer in, hier lees je hem af — zo kun je een
+                      // rij die je hier vindt terugzoeken op Discogs zelf, en andersom.
+                      if (!c.isMb && c.releaseId > 0)
+                        Text('r${c.releaseId}',
+                            style: const TextStyle(color: _muted, fontSize: 10.5)),
+                      // Until this pressing has been looked up we do not know whether it has a back
+                      // or a disc, and saying "–" would be a claim we have not earned. A row you can
+                      // see is always on its way now — being visible is what starts the lookup — so
+                      // the spinner is always honest here.
+                      if (!c.detailed)
+                        // Het molentje en zijn tekst horen bij elkaar; los in de Wrap zouden ze op
+                        // twee regels kunnen belanden.
+                        const Row(mainAxisSize: MainAxisSize.min, children: [
+                          SizedBox(
+                              width: 10,
+                              height: 10,
+                              child: CircularProgressIndicator(strokeWidth: 1.4, color: _muted)),
+                          SizedBox(width: 6),
+                          Text('scans ophalen…', style: TextStyle(color: _muted, fontSize: 10.5)),
+                        ])
+                      else ...[
+                        _tag('achterkant', c.hasBack),
+                        _tag('cd-scan', c.hasDisc),
+                      ],
                     ],
-                    // Until this pressing has been looked up we do not know whether it has a back
-                    // or a disc, and saying "–" would be a claim we have not earned. A row you can
-                    // see is always on its way now — being visible is what starts the lookup — so
-                    // the spinner is always honest here.
-                    if (!c.detailed) ...[
-                      const SizedBox(
-                          width: 10,
-                          height: 10,
-                          child: CircularProgressIndicator(strokeWidth: 1.4, color: _muted)),
-                      const SizedBox(width: 6),
-                      const Text('scans ophalen…', style: TextStyle(color: _muted, fontSize: 10.5)),
-                    ] else ...[
-                      _tag('achterkant', c.hasBack),
-                      const SizedBox(width: 6),
-                      _tag('cd-scan', c.hasDisc),
-                    ],
-                  ]),
+                  ),
                 ]);
 
   /// One scan of one pressing, and a way to say "this one, for this role".
@@ -16137,7 +16158,10 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   /// opens every scan this pressing has, for the case where the roles within one pressing are simply
   /// swapped.
   Widget _thumb(ChoiceImage? img, String label,
-      {required String role, required ReleaseChoice row, VoidCallback? onLongPress}) {
+      {required String role,
+      required ReleaseChoice row,
+      double maat = 58,
+      VoidCallback? onLongPress}) {
     final staged = _staged[role];
     final chosen = img != null && staged != null && staged.uri == img.uri;
     // Nothing here yet, and nobody has looked — as opposed to looked and found none.
@@ -16169,10 +16193,10 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(6),
               child: img != null
-                  ? _netCover(img.thumb, size: 58, radius: 6)
+                  ? _netCover(img.thumb, size: maat, radius: 6)
                   : Container(
-                      width: 58,
-                      height: 58,
+                      width: maat,
+                      height: maat,
                       color: Colors.white.withValues(alpha: .04),
                       // Nothing at all while we wait: an empty frame reads as "not yet", where any
                       // mark at this size reads as an answer.
