@@ -2,17 +2,27 @@ name: Build & Release APK
 
 on:
   push:
+    # `claude/**` zijn proefbouwen: compileert het, en draagt de APK de goede handtekening. Ze
+    # publiceren niets — dat hangt alleen aan de tag hieronder.
+    #
     # `!claude/release` is geen tak met werk erop maar de belknop van release.yml. Zonder deze
-    # uitzondering bouwt elke release eerst nog een APK die nergens heen gaat: het publiceren hangt
-    # aan main of aan een tag, dus die bouw levert zes minuten en niets.
-    branches: [ "main", "claude/**", "!claude/release" ]
+    # uitzondering bouwt elke release eerst nog een APK die nergens heen gaat.
+    #
+    # `main` stond hier ook, en dat was de fout: een duw daarheen BOUWDE niet alleen, hij
+    # publiceerde ook. Main lag sinds 27 juli stil terwijl het werk elders doorging, dus die weg
+    # naar buiten leverde alleen nog een app van juli. Sinds release.yml loopt elke release over
+    # een tag; main hoeft hier niet meer in te staan en hoort er niet meer in.
+    branches: [ "claude/**", "!claude/release" ]
     # The release tag builds every platform. Without this the APK only ever came from a push to
     # main or a claude/** branch, so work living on a feature branch shipped to Windows, the Mac and
     # the iPad while Android silently stayed weeks behind — which is exactly what happened.
     tags:
       - 'win-v*'
   pull_request:
-    branches: [ "main" ]
+    # De tak waar de app op staat, niet main. Dit vuurde na de wissel van standaardtak nooit meer,
+    # en een regel die niets bewaakt leest als een regel die iets bewaakt. Zo krijgt ELKE PR naar de
+    # app-tak zijn bouw, ook eentje die niet van een `claude/`-tak komt.
+    branches: [ "feat/windows-desktop-app" ]
   workflow_dispatch:
 
 permissions:
@@ -194,10 +204,14 @@ jobs:
       # The tag has to be here too. Adding win-v* to this workflow made the APK BUILD on a release
       # tag, and it went green — but this step still only fired for main, so the artifact was built
       # and never published. A green Android build that no phone can see is the same as no build.
+      #
+      # Alleen de tag nog, main niet meer. Een duw naar main publiceerde hier een APK naar de
+      # openbare repo, en dat is precies hoe er op 19-08 een app van 27 juli op een telefoon
+      # terechtkwam: main lag sinds die datum stil, en niets zei dat. Een release loopt sinds
+      # release.yml altijd over een tag, dus deze tweede weg naar buiten kon alleen nog per
+      # ongeluk gebruikt worden.
       - name: Publish APK to public releases repo
-        if: >-
-          (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/win-v'))
-          && env.RELEASES_TOKEN != ''
+        if: startsWith(github.ref, 'refs/tags/win-v') && env.RELEASES_TOKEN != ''
         env:
           RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
         uses: softprops/action-gh-release@v2
