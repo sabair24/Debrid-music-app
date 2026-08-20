@@ -10,6 +10,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Bijwerken vanuit de app zelf. Zonder dit recht opent het installatiescherm en sluit het
+         meteen weer, zonder een woord — wat leest als een update die stuk is. Het is bovendien een
+         recht dat de gebruiker per app moet aanzetten; de app vraagt er zelf om, één keer. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
 
     <!-- One APK for the phone and the TV. A Shield has no touchscreen, and required="true" — the
          default — would hide the app from its store and its launcher entirely. -->
@@ -96,6 +100,29 @@
             android:name=".HoesProvider"
             android:authorities="${applicationId}.hoezen"
             android:exported="true"/>
+
+        <!-- De TWEEDE provider, en met opzet precies andersom ingesteld dan die hierboven.
+
+             Deze bestaat voor het installatiescherm: een `file://`-URI mag sinds Android 7 niet meer
+             buiten de app (FileUriExposedException), dus de APK moet als `content://` doorgegeven
+             worden. Dat is precies waar androidx' FileProvider voor is.
+
+             exported="false" is HIER GEEN DETAIL. Diezelfde klasse crasht de app bij elke start als
+             hij wél geëxporteerd wordt — dat staat hierboven uitgeschreven. Het installatiescherm
+             heeft die export ook niet nodig: het krijgt eenmalig leesrecht mee via
+             FLAG_GRANT_READ_URI_PERMISSION, en daarvoor moet grantUriPermissions juist wél aan.
+
+             Twee providers, twee tegengestelde instellingen, twee verschillende redenen. Wie ze
+             gelijk probeert te trekken, breekt er één van. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.apk"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/apk_paden"/>
+        </provider>
 
         <!-- Android Auto. Dit is wat de app ZICHTBAAR maakt in de auto.
 

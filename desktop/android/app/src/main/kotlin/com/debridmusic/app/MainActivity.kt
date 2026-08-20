@@ -1,11 +1,15 @@
 package com.debridmusic.app
 
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.core.content.FileProvider
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 /**
  * AudioServiceActivity, not FlutterActivity.
@@ -66,5 +70,82 @@ class MainActivity : AudioServiceActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // Bijwerken vanuit de app. Zie lib/updater.dart voor de kant die de APK binnenhaalt.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "debridmusic/updater")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "magInstalleren" -> result.success(magInstalleren())
+                    "vraagToestemming" -> {
+                        vraagToestemming()
+                        result.success(null)
+                    }
+                    "installeer" -> {
+                        val pad = call.argument<String>("pad")
+                        if (pad.isNullOrBlank()) {
+                            result.error("geen-pad", "Geen pad naar de APK meegegeven.", null)
+                        } else {
+                            try {
+                                installeer(File(pad))
+                                result.success(null)
+                            } catch (e: Exception) {
+                                result.error("installeren-mislukt", e.message, null)
+                            }
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    /**
+     * Mag deze app een andere app installeren?
+     *
+     * Sinds Android 8 is dat een recht PER APP en niet meer één schakelaar voor het hele toestel.
+     * Zonder dit vooraf te vragen opent het installatiescherm en sluit het meteen weer, zonder een
+     * woord — wat leest als een update die stuk is in plaats van als een ontbrekend vinkje.
+     */
+    private fun magInstalleren(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            packageManager.canRequestPackageInstalls()
+        } else {
+            // Daaronder is het één systeeminstelling die standaard aan kan staan; er valt hier niets
+            // te vragen. minSdk is 24, dus dit pad bestaat echt.
+            true
+        }
+
+    private fun vraagToestemming() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        startActivity(
+            Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                .setData(Uri.parse("package:$packageName"))
+        )
+    }
+
+    /**
+     * Geeft de APK aan het installatiescherm van het toestel.
+     *
+     * **De valkuil, en waarom hier een TWEEDE provider staat naast HoesProvider.** Een `file://`-URI
+     * mag sinds Android 7 niet meer buiten de app: dat gooit `FileUriExposedException`. Er moet dus
+     * een `content://` overheen, en daarvoor is `FileProvider` gemaakt.
+     *
+     * HoesProvider kan dat hier niet doen. Die is `exported="true"` omdat Android Auto in een ANDER
+     * proces zijn hoesjes ophaalt, en juist daarom kan hij geen androidx-FileProvider zijn — die
+     * weigert geëxporteerd te worden en laat de app bij élke start crashen. Zie het commentaar in
+     * AndroidManifest.xml.
+     *
+     * Het installatiescherm werkt precies andersom: die provider moet NIET geëxporteerd zijn, en
+     * krijgt eenmalig leesrecht mee via FLAG_GRANT_READ_URI_PERMISSION. Twee providers dus, met
+     * tegengestelde instellingen, om twee verschillende redenen. Ze verwisselen is een app die niet
+     * meer start.
+     */
+    private fun installeer(apk: File) {
+        val uri = FileProvider.getUriForFile(this, "$packageName.apk", apk)
+        startActivity(
+            Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
     }
 }

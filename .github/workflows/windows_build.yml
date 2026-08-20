@@ -177,6 +177,21 @@ jobs:
           $L.Add("[Run]")
           $L.Add('Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Visual C++ Runtime installeren..."; Flags: waituntilterminated')
           $L.Add('Filename: "{app}\debridmusic.exe"; Description: "{cm:LaunchProgram,DebridMusic}"; Flags: nowait postinstall skipifsilent')
+          # Bij een STILLE installatie start de regel hierboven de app niet: `postinstall` is het
+          # vinkje op het slotscherm, en dat scherm bestaat daar niet. Precies dat gebeurt bij
+          # bijwerken vanuit de app -- die roept de installer aan met /SILENT.
+          #
+          # /RESTARTAPPLICATIONS hoort de app al terug te zetten via de Restart Manager, maar dat
+          # hangt ervan af of Windows hem daar herkend heeft. Deze regel is het vangnet, en dubbel
+          # starten is onschadelijk: de app houdt een poort vast als eenmalige grendel en een tweede
+          # kopie meldt zich bij de eerste en sluit zichzelf (zie _instancePort in main.dart).
+          $L.Add('Filename: "{app}\debridmusic.exe"; Flags: nowait; Check: StilleInstallatie')
+          $L.Add("")
+          $L.Add("[Code]")
+          $L.Add("function StilleInstallatie: Boolean;")
+          $L.Add("begin")
+          $L.Add("  Result := WizardSilent;")
+          $L.Add("end;")
           $L | Out-File -FilePath "installer.iss" -Encoding UTF8
 
       - name: Build installer
