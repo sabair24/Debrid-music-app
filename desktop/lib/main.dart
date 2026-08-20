@@ -15999,31 +15999,88 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
         // De rij die zojuist op nummer is opgehaald. Een andere kleur dan de vastgezette rij, want
         // het zijn twee verschillende dingen: "dit is je keuze" tegenover "dit is wat je opvroeg".
         final gevraagd = !isPinned && _gemarkeerd != null && _gemarkeerd == c.key;
-        return InkWell(
-          onTap: () => _choose(c),
-          borderRadius: BorderRadius.circular(10),
-          child: Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: isPinned
-                  ? _accent.withValues(alpha: .16)
-                  : gevraagd
-                      ? _accent2.withValues(alpha: .10)
-                      : _panel2,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                  color: isPinned
-                      ? _accent
-                      : gevraagd
-                          ? _accent2
-                          : Colors.transparent),
-            ),
-            child: _rij(c, isPinned),
-          ),
+        return UitgaveRij(
+          uitgave: c,
+          vastgezet: isPinned,
+          opgevraagd: gevraagd,
+          eigenScans: _rolOverride[c.key],
+          klaargezet: _staged,
+          onKiezen: () => _choose(c),
+          onScans: () => _assign(c),
+          onNummering: () => _renumber(c),
+          onKlaarzetten: _stage,
         );
       },
     );
   }
+
+}
+
+/// Eén uitgave als rij in de uitgavekiezer.
+///
+/// **Los van de dialoog, en dat is de reden dat deze er staat.** De kiezer zelf leunt op veertien
+/// providers, op het netwerk en op een libmpv die in een toetsrun niet bestaat; hij is hier niet te
+/// bouwen en dus ook niet op te meten. Deze rij krijgt alleen feiten en terugroepen, en is daarmee
+/// wél te pompen op precies de breedte van een telefoon — zie test/uitgave_rij_test.dart.
+///
+/// Dat is geen luxe achteraf. Deze ene rij is vier keer op rij op dezelfde manier misgegaan: er
+/// stonden dingen naast elkaar die niet naast elkaar pasten, en Flutter meldt dat niet — het duwt
+/// wat er niet bij kan buiten de rij, waar het te zien is noch aan te tikken. Elke keer was een
+/// schermafbeelding van het toestel nodig om het te merken. Een toets die de rij bouwt en omvalt
+/// bij overloop had elk van die vier keren meteen gevonden.
+class UitgaveRij extends StatelessWidget {
+  const UitgaveRij({
+    super.key,
+    required this.uitgave,
+    required this.onKiezen,
+    required this.onScans,
+    required this.onNummering,
+    required this.onKlaarzetten,
+    this.vastgezet = false,
+    this.opgevraagd = false,
+    this.eigenScans,
+    this.klaargezet = const {},
+  });
+
+  final ReleaseChoice uitgave;
+
+  /// De uitgave waar dit album aan vastzit, en de uitgave die zojuist op nummer is opgehaald.
+  /// Twee verschillende dingen, dus twee kleuren: "dit is je keuze" tegenover "dit is wat je vroeg".
+  final bool vastgezet, opgevraagd;
+
+  /// Wat de gebruiker voor DEZE uitgave zelf aanwees: rol → scan. Gaat voor op de gok van de app.
+  final Map<String, ChoiceImage>? eigenScans;
+
+  /// Wat er in de kiezer klaarstaat om overgenomen te worden: rol → scan. Alleen om de rand om het
+  /// gekozen plaatje te tekenen.
+  final Map<String, ChoiceImage> klaargezet;
+
+  final VoidCallback onKiezen, onScans, onNummering;
+  final void Function(String rol, ChoiceImage scan) onKlaarzetten;
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+        onTap: onKiezen,
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: vastgezet
+                ? _accent.withValues(alpha: .16)
+                : opgevraagd
+                    ? _accent2.withValues(alpha: .10)
+                    : _panel2,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+                color: vastgezet
+                    ? _accent
+                    : opgevraagd
+                        ? _accent2
+                        : Colors.transparent),
+          ),
+          child: _binnenkant(context),
+        ),
+      );
 
   /// Eén uitgave als rij — op een breed scherm op één regel, op een telefoon op twee.
   ///
@@ -16041,22 +16098,23 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   /// wat allebei de volle breedte nodig heeft, is het probleem — niet hoe het wordt afgekapt.
   ///
   /// In liggende stand blijft het één regel, want daar is die breedte er wel.
-  Widget _rij(ReleaseChoice c, bool isPinned) {
+  Widget _binnenkant(BuildContext context) {
+    final c = uitgave;
     // The three scans side by side, so what you get is visible rather than described.
     // Clicking one opens every scan this pressing has, to say which is which — the roles
     // below are inferred, and inference on a catalogue that never labels its images gets
     // the back and the disc the wrong way round often enough to need an answer.
-    // Wat de gebruiker zelf aanwees gaat vóór de gok van de app — zie [_rolOverride].
-    final eigen = _rolOverride[c.key];
+    // Wat de gebruiker zelf aanwees gaat vóór de gok van de app — zie [eigenScans].
+    final eigen = eigenScans;
     final scans = <Widget>[
       _thumb(eigen?['front'] ?? c.front, 'hoes',
-          role: 'front', row: c, onLongPress: () => _assign(c)),
+          role: 'front', row: c, onLongPress: onScans),
       const SizedBox(width: 8),
       _thumb(eigen?['back'] ?? c.back, 'achter',
-          role: 'back', row: c, onLongPress: () => _assign(c)),
+          role: 'back', row: c, onLongPress: onScans),
       const SizedBox(width: 8),
       _thumb(eigen?['disc'] ?? c.disc, 'cd',
-          role: 'disc', row: c, onLongPress: () => _assign(c)),
+          role: 'disc', row: c, onLongPress: onScans),
     ];
     final knoppen = <Widget>[
       // Alle scans van deze uitgave, als KNOP.
@@ -16074,7 +16132,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
           tooltip: 'Alle scans van deze uitgave — zelf kiezen wat de hoes, de achterkant '
               'en de cd is',
           constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-          onPressed: () => _assign(c),
+          onPressed: onScans,
         ),
       ),
       TvLabelled(
@@ -16083,12 +16141,12 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
           icon: const Icon(Icons.format_list_numbered_rounded, size: 19),
           tooltip: 'Nummering van deze uitgave overnemen',
           constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-          onPressed: () => _renumber(c),
+          onPressed: onNummering,
         ),
       ),
-      if (isPinned) const Icon(Icons.check_circle_rounded, color: _accent, size: 20),
+      if (vastgezet) const Icon(Icons.check_circle_rounded, color: _accent, size: 20),
     ];
-    final tekst = _rijTekst(c);
+    final tekst = _tekst(c);
 
     if (isCompact(context)) {
       return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -16106,7 +16164,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     ]);
   }
 
-  Widget _rijTekst(ReleaseChoice c) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+  Widget _tekst(ReleaseChoice c) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(c.line, maxLines: 1, overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
                   if ((c.label ?? '').isNotEmpty)
@@ -16173,12 +16231,12 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   /// swapped.
   Widget _thumb(ChoiceImage? img, String label,
       {required String role, required ReleaseChoice row, VoidCallback? onLongPress}) {
-    final staged = _staged[role];
+    final staged = klaargezet[role];
     final chosen = img != null && staged != null && staged.uri == img.uri;
     // Nothing here yet, and nobody has looked — as opposed to looked and found none.
     final waiting = img == null && !row.detailed;
     return InkWell(
-      onTap: img == null ? null : () => _stage(role, img),
+      onTap: img == null ? null : () => onKlaarzetten(role, img),
       onLongPress: onLongPress,
       borderRadius: BorderRadius.circular(6),
       child: Tooltip(

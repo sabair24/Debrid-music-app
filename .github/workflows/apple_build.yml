@@ -114,7 +114,8 @@ jobs:
             test/settings_durability_test.dart test/mb_browse_recordings_test.dart \
             test/facts_warmer_test.dart test/cast_discovery_test.dart \
             test/artiestkop_knoppen_test.dart test/updater_test.dart \
-            test/onderbalk_test.dart test/discogs_verwijzing_test.dart
+            test/onderbalk_test.dart test/discogs_verwijzing_test.dart \
+            test/uitgave_rij_test.dart
 
       - name: Build for the iPad (unsigned)
         # Proves the iOS build compiles even with no App Store Connect key configured.
