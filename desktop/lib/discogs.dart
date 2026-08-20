@@ -641,6 +641,18 @@ class DiscogsService {
   /// om een uitgekleed of afwijkend antwoord te overleven. Gooien ze wél, dan valt die fout tot in
   /// `_load`, die er "Discogs was niet bereikbaar" van maakt terwijl er net een pagina met uitgaves
   /// binnenkwam.
+  /// Een jaartal uit een zoekresultaat, zonder cast die kan gooien.
+  ///
+  /// Discogs stuurt dit vandaag als tekst ("2010"), maar `as String?` GOOIT op alles wat geen tekst
+  /// is in plaats van null te geven — en die fout valt tot in de dialoog, die er "Discogs was niet
+  /// bereikbaar" van maakt boven een lijst die keurig was aangekomen. Zelfde val als bij het
+  /// pagineringsblok hierboven, en dezelfde oplossing.
+  static int? jaarUit(dynamic v) {
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v.trim().split('-').first);
+    return null;
+  }
+
   static int? _getal(Map<String, dynamic>? body, String sleutel) {
     final p = body?['pagination'];
     if (p is! Map) return null;
@@ -1855,7 +1867,9 @@ extension DiscogsChoices on DiscogsService {
     // En wat onder geen enkel gelopen master hing — zie [losseReleases]. Ná de masters, want die
     // leveren de volledige en best beschreven lijst; dit is de aanvulling erop.
     if (rows.length < max && !(gestopt?.call() ?? false)) {
-      for (final r in await losseReleases(artist, album, max: max)) {
+      final losse = await losseReleases(artist, album, max: max);
+      meer = meer || losse.meer;
+      for (final r in losse.rijen) {
         if (r.releaseId <= 0 || seen.contains(r.releaseId)) continue;
         if (rows.length >= max) {
           vol = true;
@@ -1897,7 +1911,8 @@ extension DiscogsChoices on DiscogsService {
   /// Eén request, dezelfde zoekmachine die het master vond. Losser dan een master, dus dezelfde
   /// titelscore beslist die ook een master zou hebben afgewezen — anders komt hier de gelijknamige
   /// plaat van iemand anders bij.
-  Future<List<ReleaseChoice>> losseReleases(String artist, String album, {int max = 100}) async {
+  Future<({List<ReleaseChoice> rijen, bool meer})> losseReleases(String artist, String album,
+      {int max = 100}) async {
     final who = cleanArtistName(artist);
     final titel = DiscogsService.plainTitle(album);
     final body = await _get(
@@ -1924,12 +1939,17 @@ extension DiscogsChoices on DiscogsService {
         label: labels.isEmpty ? null : labels.first,
         catno: (it['catno'] as String?)?.trim(),
         country: (it['country'] as String?)?.trim(),
-        year: int.tryParse((it['year'] as String? ?? '').split('-').first),
+        year: DiscogsService.jaarUit(it['year']),
         front: thumb.isEmpty || thumb.contains('spacer') ? null : ChoiceImage(thumb, thumb),
         detailed: false,
       ));
     }
-    return out;
+    // Honderd is het maximum van één zoekpagina, en verder pagineren doet dit bewust niet: dit is
+    // de AANVULLING op de masters, niet de hoofdlijst, en elke pagina is een request uit een budget
+    // van zestig per minuut. Maar dat het ophoudt moet gezegd worden — een lijst die stilletjes
+    // stopt is precies waar deze hele reeks over ging, en de melding "meer heeft Discogs er niet"
+    // zou hier anders hardop liegen.
+    return (rijen: out, meer: DiscogsService.paginaAantal(body) > 1 || out.length >= max);
   }
 
   /// Eén regel uit de versielijst, als rij voor de kiezer.
