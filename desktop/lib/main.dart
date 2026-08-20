@@ -15551,9 +15551,21 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     if (!mounted) return;
     // Alleen wat hier veranderde. Rollen die al op schijf stonden horen wél weg te vallen bij het
     // kiezen van een andere uitgave — dat is juist waar dat wissen voor is.
+    //
+    // Beide RICHTINGEN, en dat is niet vanzelfsprekend: in het venster hiernaast haal je een rol
+    // weg door hem nog een keer aan te tikken, en "Alles weer laten raden" wist ze allemaal. Keek
+    // dit alleen naar wat erbij kwam, dan zou [_choose] straks netjes terugzetten wat je zojuist
+    // met opzet had weggehaald — en een handmatige rol wint van de uitgave die je kiest, dus je
+    // zou hem er niet meer af krijgen.
     final na = lees();
-    for (final e in na.entries) {
-      if (voor[e.key] != e.value) _eigenRollen[e.key] = e.value;
+    for (final sleutel in {...voor.keys, ...na.keys}) {
+      final nu = na[sleutel];
+      if (nu == voor[sleutel]) continue;
+      if (nu == null) {
+        _eigenRollen.remove(sleutel);
+      } else {
+        _eigenRollen[sleutel] = nu;
+      }
     }
   }
 
