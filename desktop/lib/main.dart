@@ -6001,6 +6001,30 @@ class PlayerBar extends StatelessWidget {
     // buttons start — so they give way instead of overflowing.
     final width = MediaQuery.sizeOf(context).width;
 
+    // Op een telefoon is deze balk er alleen als er iets te tonen valt.
+    //
+    // Onderaan stonden er twee boven elkaar — de speler 66 punten, de navigatiebalk 62, plus de
+    // inzet die het systeem eronder opeist. Op een scherm van zo'n 640 punten is dat een vijfde,
+    // en de bovenste van de twee zei dan "Niets aan het spelen". Zoveel ruimte voor de mededeling
+    // dat er niets is.
+    //
+    // Wat het kost, want het is niet gratis: de speakerknop staat op een telefoon alleen in deze
+    // balk en op het nu-speelt-scherm, en dat scherm bereik je via deze balk. Met een lege wachtrij
+    // valt er ook niets naar een speaker te sturen, dus dit is precies de stand waarin die knop
+    // niets te doen heeft — maar wie eerst een speaker wil kiezen en dán muziek, moet nu andersom.
+    //
+    // Op een pc blijft hij staan: daar is de balk deel van het raamwerk en is 66 punten van een
+    // veel hoger venster geen kwart scherm.
+    //
+    // NIET nul, maar [bottomInset]. Op de albumpagina, de artiestpagina en de wachtrij is deze balk
+    // de ONDERSTE widget en houdt hij de ruimte voor de systeembalk vrij — dat is waar
+    // `metSysteeminzet` over gaat, hierboven. Zou hij daar helemaal verdwijnen, dan liep de lijst
+    // onder de Android-balk door. In het hoofdscherm staat de navigatiebalk eronder en is die inzet
+    // nul, dus daar blijft er ook werkelijk niets van over.
+    if (isCompact(context) && t == null) {
+      return Container(height: bottomInset, color: const Color(0xFF12141D));
+    }
+
     // A phone gets a different bar entirely, not a squeezed one.
     //
     // The desktop bar reserves a side block for the track and centres the transport in what is
