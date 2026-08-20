@@ -1,0 +1,52 @@
+name: Proef — onder welke naam staat het wachtwoord
+
+# TIJDELIJK, ALLEEN OP DE TAK `claude/handtekening-proef`. Hoort nooit naar de app-tak.
+#
+# Dezelfde vraag als in build-release.yml, maar los: daar staat het antwoord na twintig seconden op
+# het scherm en daarna komen er duizend regels bouwlog overheen. Hier niet — dit bouwt niets.
+#
+# Waarom de vraag bestaat: op 16-08 was de APK goed ondertekend (SIGNED=ja, v3-handtekening), sinds
+# 19-08 draagt elke bouw de debug-sleutel. De geheimen staan er volgens de eigenaar gewoon, en de
+# bouw ziet er drie van de vier. Dan is de enige overgebleven verklaring dat de vierde een andere
+# naam draagt dan wij denken — en dat is van buitenaf niet te zien.
+#
+# NOOIT een waarde. Alleen of er iets staat.
+
+on:
+  push:
+    branches: [ 'claude/handtekening-proef' ]
+
+jobs:
+  kijken:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Welke namen bestaan er
+        env:
+          A: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          B: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          C: ${{ secrets.ANDROID_STOREPASSWORD }}
+          D: ${{ secrets.ANDROID_STORE_PASS }}
+          E: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          F: ${{ secrets.KEYSTORE_PASSWORD }}
+          G: ${{ secrets.STORE_PASSWORD }}
+          H: ${{ secrets.ANDROID_KEY_STORE_PASSWORD }}
+          # De drie die het wél doen, ter controle dat deze bouw ze überhaupt kan zien.
+          I: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          J: ${{ secrets.ANDROID_KEY_ALIAS }}
+          K: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          zeg() { [ -n "$2" ] && echo "  GEVONDEN  $1" || echo "  leeg      $1"; }
+          echo "Gezocht naar het store-wachtwoord:"
+          zeg ANDROID_STORE_PASSWORD      "$A"
+          zeg ANDROID_KEYSTORE_PASSWORD   "$B"
+          zeg ANDROID_STOREPASSWORD       "$C"
+          zeg ANDROID_STORE_PASS          "$D"
+          zeg ANDROID_KEYSTORE_PASS       "$E"
+          zeg KEYSTORE_PASSWORD           "$F"
+          zeg STORE_PASSWORD              "$G"
+          zeg ANDROID_KEY_STORE_PASSWORD  "$H"
+          echo
+          echo "Ter controle, de drie die wel aankomen:"
+          zeg ANDROID_KEYSTORE_BASE64     "$I"
+          zeg ANDROID_KEY_ALIAS           "$J"
+          zeg ANDROID_KEY_PASSWORD        "$K"
