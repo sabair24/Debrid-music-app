@@ -83,8 +83,14 @@ int? buildnummerUit(String tag) {
 
 /// De versienaam uit dezelfde tag: `v3.9.74-build11037` → `3.9.74`.
 String versieUit(String tag) {
-  final m = RegExp(r'^v?([\d.]+)').firstMatch(tag.trim());
-  return m?.group(1) ?? tag.trim();
+  // Het EERSTE getal met punten, waar het ook staat — en niet "vanaf het begin, hooguit een v
+  // ervoor". Dat laatste stond hier, en het brak op de tag die Windows draagt: `win-v3.9.141` gaf
+  // `win-v3.9.141` terug, wat [vergelijkVersies] leest als 0.9.141. Nul is lager dan alles, dus de
+  // pc bood nooit een update aan — stil, want er valt niets te zien aan een venster dat niet komt.
+  //
+  // Twee vormen moeten er allebei door: `v3.9.74-build11037` (Android) en `win-v3.9.141` (Windows).
+  final m = RegExp(r'\d+(?:\.\d+)*').firstMatch(tag.trim());
+  return m?.group(0) ?? tag.trim();
 }
 
 /// Welk bestand uit een release de APK is.

@@ -29,8 +29,15 @@ void main() {
 
     test('de versienaam komt uit dezelfde tag', () {
       expect(versieUit('v3.9.74-build11037'), '3.9.74');
+      // DEZE regel heeft zijn werk al gedaan. Hij zakte bij de eerste echte uitvoering: de functie
+      // haalde wel een `v` weg maar niet het `win-` ervoor, en gaf `win-v3.9.141` terug. Dat leest
+      // [vergelijkVersies] als 0.9.141 — nul is lager dan alles, dus de pc had nooit een update
+      // aangeboden. Stil, want aan een venster dat niet komt valt niets te zien.
       expect(versieUit('win-v3.9.141'), '3.9.141');
       expect(versieUit('3.9.141'), '3.9.141');
+      // De Apple-tag heeft weer een ander voorvoegsel; hij komt hier niet langs, maar de vorm mag
+      // geen derde geval worden waar iemand later achterkomt.
+      expect(versieUit('apple-v1.0.2'), '1.0.2');
     });
   });
 
