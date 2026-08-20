@@ -1852,6 +1852,20 @@ extension DiscogsChoices on DiscogsService {
     // het juist wegscoorde. Voor een doorsnee album zijn dat er meer dan drie, dus die waarschuwing
     // zou bijna altijd aan staan — en een waarschuwing die altijd aan staat leest niemand meer,
     // precies wanneer de lijst wél echt afgekapt is.
+    // En wat onder geen enkel gelopen master hing — zie [losseReleases]. Ná de masters, want die
+    // leveren de volledige en best beschreven lijst; dit is de aanvulling erop.
+    if (rows.length < max && !(gestopt?.call() ?? false)) {
+      for (final r in await losseReleases(artist, album, max: max)) {
+        if (r.releaseId <= 0 || seen.contains(r.releaseId)) continue;
+        if (rows.length >= max) {
+          vol = true;
+          break;
+        }
+        seen.add(r.releaseId);
+        rows.add(r);
+      }
+      onPartial?.call([...rows]);
+    }
     meer = meer || vol;
     if (pinned != null && pinned > 0 && !seen.contains(pinned)) {
       final rij = await keuzeVanRelease(pinned);
@@ -1869,6 +1883,53 @@ extension DiscogsChoices on DiscogsService {
     // net onder de vierde gelijknamige plaat.
     onEinde?.call(totaal, meer, masters.length - teLopen.length);
     return rows;
+  }
+
+  /// Uitgaves die onder GEEN van de gelopen masters hangen.
+  ///
+  /// **Waarom dit er los naast staat.** De kiezer werkt van master naar persingen: zoek het album,
+  /// pak de drie best scorende, en haal daar alle versies van op. Dat vindt alles wat netjes onder
+  /// een master hangt — en niets anders. Op Discogs mag een uitgave ook helemaal los bestaan: een
+  /// promo die niemand aan een master heeft geknoopt, een heruitgave die onder een vierde master
+  /// zit, een persing die als los item is ingevoerd. Die stonden nergens, en er was geen manier om
+  /// erachter te komen dat ze bestonden.
+  ///
+  /// Eén request, dezelfde zoekmachine die het master vond. Losser dan een master, dus dezelfde
+  /// titelscore beslist die ook een master zou hebben afgewezen — anders komt hier de gelijknamige
+  /// plaat van iemand anders bij.
+  Future<List<ReleaseChoice>> losseReleases(String artist, String album, {int max = 100}) async {
+    final who = cleanArtistName(artist);
+    final titel = DiscogsService.plainTitle(album);
+    final body = await _get(
+      'https://api.discogs.com/database/search?type=release&per_page=100'
+      '${who.isEmpty ? '' : '&artist=${_q(who)}'}&release_title=${_q(titel)}',
+    );
+    final out = <ReleaseChoice>[];
+    for (final it in (body?['results'] as List<dynamic>? ?? const [])) {
+      if (out.length >= max) break;
+      if (it is! Map<String, dynamic>) continue;
+      final id = (it['id'] as num?)?.toInt() ?? 0;
+      if (id <= 0) continue;
+      if (DiscogsService.titleScore(it['title'] as String? ?? '', artist, album) < 4) continue;
+      final formats = [for (final f in (it['format'] as List<dynamic>? ?? const [])) f.toString()];
+      if (formats.any((f) => f.toLowerCase().contains('cassette'))) continue;
+      final labels = [for (final l in (it['label'] as List<dynamic>? ?? const [])) l.toString()];
+      // Discogs serveert een doorzichtige stip waar een uitgave geen afbeelding heeft; die als hoes
+      // tonen is erger dan een leeg vak, want dan lijkt de rij een hoes te hebben.
+      final thumb = (it['thumb'] as String?)?.trim() ?? '';
+      out.add(ReleaseChoice(
+        source: EditionSource.discogs,
+        releaseId: id,
+        format: formats.isEmpty ? '' : formats.first,
+        label: labels.isEmpty ? null : labels.first,
+        catno: (it['catno'] as String?)?.trim(),
+        country: (it['country'] as String?)?.trim(),
+        year: int.tryParse((it['year'] as String? ?? '').split('-').first),
+        front: thumb.isEmpty || thumb.contains('spacer') ? null : ChoiceImage(thumb, thumb),
+        detailed: false,
+      ));
+    }
+    return out;
   }
 
   /// Eén regel uit de versielijst, als rij voor de kiezer.

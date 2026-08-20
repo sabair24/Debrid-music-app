@@ -16010,6 +16010,24 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                   ]),
                 ]),
               ),
+              // Alle scans van deze uitgave, als KNOP.
+              //
+              // Dit zat alleen op lang indrukken van een van de drie plaatjes, en dat is op een
+              // telefoon onvindbaar: je drukt lang op de RIJ (waar die handeling niet op zit), er
+              // gebeurt niets, en je concludeert dat het niet kan. En juist deze weg is de enige
+              // die werkt als de app een scan in het verkeerde vak zet — wat bij een wit cd-label
+              // op een witte achtergrond gebeurt, want daar valt aan helderheid niets te meten.
+              // Een uitweg die je moet raden is geen uitweg.
+              TvLabelled(
+                label: 'Alle scans van deze uitgave',
+                child: IconButton(
+                  icon: const Icon(Icons.photo_library_outlined, size: 18),
+                  tooltip: 'Alle scans van deze uitgave — zelf kiezen wat de hoes, de achterkant '
+                      'en de cd is',
+                  constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                  onPressed: () => _assign(c),
+                ),
+              ),
               TvLabelled(
                 label: 'Nummering van deze uitgave overnemen',
                 child: IconButton(
