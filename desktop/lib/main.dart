@@ -1828,9 +1828,26 @@ class _HomeShellState extends State<HomeShell> {
                 ],
               ),
             ),
-            // De inzet voor de systeembalk hoort bij de ONDERSTE balk. Staat de navigatiebalk
-            // eronder (alleen op een telefoon), dan rekent die hem al mee.
-            RepaintBoundary(child: PlayerBar(metSysteeminzet: !isCompact(context))),
+            // ALLEBEI WEG ZODRA HET TOETSENBORD OPEN IS.
+            //
+            // Op het toestel gezien bij "Online zoeken": je tikt in het zoekveld, het toetsenbord
+            // komt op, en Android verkleint het venster (adjustResize). Deze twee balken zitten
+            // onderaan dat venster, dus ze schuiven mee omhoog — en komen dan pal over het zoekveld
+            // te staan waar je net in aan het typen bent. Je typt in een vak dat je niet ziet, met
+            // "Niets aan het spelen" eroverheen.
+            //
+            // Een balk die met het toetsenbord meeschuift heeft ook geen werk: tijdens het typen ga
+            // je niet naar een andere sectie, en de speelknop staat in de melding en op je
+            // vergrendelscherm. Weg is dus niet alleen kleiner maar ook juister.
+            //
+            // `viewInsets` en niet `viewPadding`: de eerste is wat er nú over het venster ligt (het
+            // toetsenbord), de tweede is wat er permanent onderaan zit (de systeembalk). Ze
+            // verwisselen zou de balken voorgoed verbergen.
+            if (MediaQuery.viewInsetsOf(context).bottom == 0) ...[
+              // De inzet voor de systeembalk hoort bij de ONDERSTE balk. Staat de navigatiebalk
+              // eronder (alleen op een telefoon), dan rekent die hem al mee.
+              RepaintBoundary(child: PlayerBar(metSysteeminzet: !isCompact(context))),
+            ],
             // Een balk onderaan voor de vijf die je constant gebruikt.
             //
             // Alle tien de secties zaten achter de hamburgerla, dus elke wissel was: la openen, de
@@ -1842,7 +1859,9 @@ class _HomeShellState extends State<HomeShell> {
             // en er is geen scherm dat alleen nog via de balk bereikbaar is. Dat is met opzet: een
             // navigatie half omzetten levert een app op met twee navigaties waarvan er één gaten
             // heeft.
-            if (isCompact(context)) _onderbalk(context),
+            // Ook deze weg als het toetsenbord op is — zie de uitleg bij de spelerbalk hierboven.
+            if (isCompact(context) && MediaQuery.viewInsetsOf(context).bottom == 0)
+              _onderbalk(context),
           ],
         ),
       ),
@@ -1867,7 +1886,11 @@ class _HomeShellState extends State<HomeShell> {
     return NavigationBar(
       backgroundColor: _panel,
       indicatorColor: _accent.withValues(alpha: .22),
-      height: 62,
+      // 56 en niet 62, en zeker niet de 80 die Material voorstelt. Deze balk staat niet alleen: de
+      // spelerbalk ligt erboven en de systeeminzet eronder, en die drie samen aten een vijfde van
+      // het scherm. Het pictogram is 24 en de aanwijspil eromheen 32; met 56 blijft er twaalf punten
+      // over voor het bijschrift van de gekozen sectie, en dat is precies wat het nodig heeft.
+      height: 56,
       labelBehavior: NavigationDestinationLabelBehavior.onlyShowSelected,
       // -1 mag niet: staat je op een sectie uit de la, dan wijst de balk nergens naar. Dan maar
       // geen aanwijzing in plaats van de verkeerde.
@@ -7147,7 +7170,13 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
       : () => Navigator.of(context).push(nuSpeeltRoute());
 
   return Container(
-    height: 66 + bottomInset,
+    // 56, en dat is gemeten en niet gevoeld: de hoes is 44 en de rij eromheen had elf punten lucht
+    // boven en onder. Met de navigatiebalk eronder én de systeeminzet daar weer onder stapelt dat
+    // op tot bijna een vijfde van een telefoonscherm, en dan valt elke punt op.
+    //
+    // Onder de 56 kan niet zomaar: de hoes van 44 plus de streep van 2 laat dan zes punten over, en
+    // daaronder raken de knoppen (48 hoog als aanraakdoel) elkaar.
+    height: 56 + bottomInset,
     decoration: const BoxDecoration(
       color: Color(0xFF12141D),
       border: Border(top: BorderSide(color: _line)),
