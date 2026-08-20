@@ -2885,13 +2885,51 @@ class _OfflineSection extends StatelessWidget {
               SizedBox(
                 width: 22,
                 height: 22,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2.4, value: job.progress, color: _accent),
+                child: job.bezig
+                    ? CircularProgressIndicator(
+                        strokeWidth: 2.4, value: job.progress, color: _accent)
+                    : const Icon(Icons.error_outline_rounded, size: 20, color: _mislukt),
               ),
               const SizedBox(width: 12),
-              Expanded(child: Text(job.title, maxLines: 1, overflow: TextOverflow.ellipsis)),
-              Text(job.progress == null ? '' : '${(job.progress! * 100).round()}%',
-                  style: const TextStyle(color: _muted, fontSize: 12.5)),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(job.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    // De reden, en hoever hij kwam. Bij een bestand van gigabytes is "afgebroken
+                    // bij 1,2 van 4,7 GB" het verschil tussen "het doet niets" en "hij was ver".
+                    if (!job.bezig)
+                      Text(job.error!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: _mislukt, fontSize: 12)),
+                  ],
+                ),
+              ),
+              if (job.bezig)
+                Text(job.progress == null ? '' : '${(job.progress! * 100).round()}%',
+                    style: const TextStyle(color: _muted, fontSize: 12.5))
+              else ...[
+                TvLabelled(
+                  label: 'Opnieuw',
+                  child: IconButton(
+                    icon: const Icon(Icons.refresh_rounded, size: 18),
+                    color: _mislukt,
+                    tooltip: 'Nog eens proberen',
+                    // Gaat verder waar hij stopte: het halve bestand blijft staan.
+                    onPressed: () => offline.opnieuw(job.path),
+                  ),
+                ),
+                TvLabelled(
+                  label: 'Weghalen',
+                  child: IconButton(
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    color: _muted,
+                    tooltip: 'Deze poging opgeven',
+                    onPressed: () => offline.cancel(job.path),
+                  ),
+                ),
+              ],
             ]),
           ),
         for (final entry in byAlbum.entries)
@@ -2951,6 +2989,11 @@ class _OfflineSection extends StatelessWidget {
 /// One button for a whole album rather than one per track: nobody wants a record where nine of
 /// twelve songs play in the car. It reports how far it is, because a lossless album is a few
 /// hundred megabytes and silence for two minutes reads as a broken button.
+/// De kleur van "er ging iets mis, maar er is niets kapot" — dezelfde amber die de app elders
+/// voor een waarschuwing gebruikt. Rood is voor onomkeerbaar; een mislukte download probeer je
+/// gewoon opnieuw.
+const _mislukt = Color(0xFFE8913A);
+
 class _OfflineAlbumButton extends StatefulWidget {
   const _OfflineAlbumButton({required this.album});
   final Album album;
@@ -2985,6 +3028,37 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
     ]);
   }
 
+  /// De reden die al gemeld is, zodat één mislukking niet bij elke hertekening opnieuw langskomt.
+  String? _gemeld;
+
+  /// Vertel het zodra het misgaat, in plaats van terug te springen alsof er niets gebeurd is.
+  ///
+  /// **Dit ontbrak, en dat was de hele klacht.** Een mislukte download verdween op hetzelfde
+  /// moment dat zijn reden werd opgeschreven; de knop stond weer op "Offline bewaren" en nergens
+  /// stond wat er scheelde. Nu blijft de taak in de winkel staan en zegt dit vel wat eraan is.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final offline = context.read<OfflineStore>();
+    final fout = widget.album.tracks
+        .map((t) => offline.foutVoor(t.path))
+        .firstWhere((f) => f != null, orElse: () => null);
+    if (fout == null) {
+      _gemeld = null;
+      return;
+    }
+    if (fout == _gemeld) return;
+    _gemeld = fout;
+    // Na het bouwen, want dit loopt middenin een hertekening.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Ophalen mislukt: $fout'),
+        duration: const Duration(seconds: 6),
+      ));
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final offline = context.watch<OfflineStore>();
@@ -2995,13 +3069,32 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
     final here = tracks.where((t) => offline.has(t.path)).length;
     final all = here == tracks.length && tracks.isNotEmpty;
     // Loopt er nog iets van DEZE plaat? De rij zit in de winkel, dus dit is de vraag "staat er nog
-    // een nummer van dit album in de wacht of onder handen".
+    // een nummer van dit album in de wacht of onder handen". Een MISLUKTE taak telt hier niet mee:
+    // die is niet bezig, en de knop moet juist weer aan te tikken zijn om hem opnieuw te proberen.
     final bezig = tracks.any((t) => offline.isBusy(t.path));
+    final stuk = !bezig && tracks.any((t) => offline.foutVoor(t.path) != null);
+
+    // Hoever het lopende nummer is. **Bij een plaat die uit één bestand bestaat is dit het enige
+    // wat beweegt**: "Ophalen 0/1" stond een half uur lang stil bij Thriller (32 bit/384 kHz), en
+    // een knop die niets doet is niet van een kapotte knop te onderscheiden.
+    final loopt = tracks
+        .map((t) => offline.taakVoor(t.path))
+        .where((j) => j != null && j.bezig && !j.wacht)
+        .firstOrNull;
+    final deel = loopt?.progress == null ? '' : ' · ${(loopt!.progress! * 100).round()}%';
 
     return FilledButton.icon(
       style: FilledButton.styleFrom(
-        backgroundColor: all ? _accent2.withValues(alpha: .18) : _panel2,
-        foregroundColor: all ? _accent2 : Colors.white,
+        backgroundColor: stuk
+            ? _mislukt.withValues(alpha: .16)
+            : all
+                ? _accent2.withValues(alpha: .18)
+                : _panel2,
+        foregroundColor: stuk
+            ? _mislukt
+            : all
+                ? _accent2
+                : Colors.white,
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
       ),
       onPressed: bezig
@@ -3013,28 +3106,35 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
                 }
                 return;
               }
+              // Ook de weg terug na een mislukking: opnieuw vragen gaat verder waar het stopte,
+              // want het halve bestand blijft staan.
+              _gemeld = null;
               _fetch(offline, client);
             },
       icon: Icon(
-        bezig
-            ? Icons.downloading_rounded
-            : all
-                ? Icons.offline_pin_rounded
-                : Icons.download_for_offline_outlined,
+        stuk
+            ? Icons.refresh_rounded
+            : bezig
+                ? Icons.downloading_rounded
+                : all
+                    ? Icons.offline_pin_rounded
+                    : Icons.download_for_offline_outlined,
         size: 20,
       ),
       // De stand komt uit de winkel en niet uit deze widget: de rij loopt door als je weggaat, dus
       // moet je bij terugkomst zien hoe ver hij is in plaats van "Offline bewaren" alsof er niets
       // gebeurt.
-      label: Text(bezig
-          ? 'Ophalen $here/${tracks.length}'
-          : all
-              ? 'Op dit toestel'
-              // Partly here is worth saying: it is the state a failed or cancelled run leaves
-              // behind, and "Offline" would claim more than is true.
-              : here > 0
-                  ? 'Offline ($here/${tracks.length})'
-                  : 'Offline bewaren'),
+      label: Text(stuk
+          ? 'Opnieuw proberen'
+          : bezig
+              ? 'Ophalen $here/${tracks.length}$deel'
+              : all
+                  ? 'Op dit toestel'
+                  // Partly here is worth saying: it is the state a failed or cancelled run leaves
+                  // behind, and "Offline" would claim more than is true.
+                  : here > 0
+                      ? 'Offline ($here/${tracks.length})'
+                      : 'Offline bewaren'),
     );
   }
 }
