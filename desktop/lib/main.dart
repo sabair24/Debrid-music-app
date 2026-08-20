@@ -4478,7 +4478,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                               albumCover: album.cover,
                               // An extra shows no number at all — not even its own tag's. See
                               // AlbumSlot.label.
-                              label: s.index < 0 ? '' : s.label);
+                              label: s.index < 0 ? '' : s.label,
+                              uitgaveSeconden: s.andereLengte ? s.official?.seconds : null);
 
                       // A double album says which disc you are looking at, and files the pressing
                       // doesn't name say so — left unlabelled the latter read as part of the record,
@@ -5174,13 +5175,22 @@ class TrackRow extends StatefulWidget {
   /// tag, which is whatever the peer that uploaded it typed. A string, because a double album
   /// numbers from 1 on each disc and reads "2-1".
   final String? label;
+
+  /// Hoe lang de UITGAVE zegt dat dit nummer is, als dat merkbaar iets anders is dan het bestand.
+  ///
+  /// Dan heb je het nummer wel, maar een andere snit: de single-edit naast de albumversie. Zonder
+  /// dit is dat verschil onzichtbaar — en de vorige poging om het zichtbaar te maken zette het
+  /// bestand onder "Niet op deze uitgave", wat een veel grotere leugen is.
+  final int? uitgaveSeconden;
+
   const TrackRow(
       {super.key,
       required this.track,
       required this.index,
       required this.queue,
       this.albumCover,
-      this.label});
+      this.label,
+      this.uitgaveSeconden});
   @override
   State<TrackRow> createState() => _TrackRowState();
 }
@@ -5269,6 +5279,18 @@ class _TrackRowState extends State<TrackRow> {
               _echtheidMerk(t.path),
               _qualityBadge(_trackQuality(t)),
               Text(_fmt(t.duration), style: const TextStyle(color: _muted, fontSize: 13)),
+              // "≠ 4:33" — je hebt het nummer, maar niet die versie. Klein en naast de tijd, want het
+              // is een bijzonderheid en geen probleem.
+              if (widget.uitgaveSeconden != null)
+                Padding(
+                  padding: const EdgeInsets.only(left: 5),
+                  child: Tooltip(
+                    message: 'De uitgave geeft ${_fmt(Duration(seconds: widget.uitgaveSeconden!))} '
+                        'op — je hebt een andere snit van dit nummer.',
+                    child: Text('≠ ${_fmt(Duration(seconds: widget.uitgaveSeconden!))}',
+                        style: const TextStyle(color: Color(0xFFE0B341), fontSize: 11)),
+                  ),
+                ),
               // Both appear on hover, so neither can be hit by accident.
               //
               // OP EEN TELEFOON HELEMAAL NIET. `_hover` komt van een MouseRegion en vuurt daar

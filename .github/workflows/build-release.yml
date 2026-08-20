@@ -89,6 +89,7 @@ jobs:
             test/uitgave_rij_test.dart \
             test/offline_test.dart test/catalogus_kopie_test.dart \
             test/lossless_want_test.dart test/bron_venster_test.dart \
+            test/completeness_test.dart \
             test/discogs_verwijzing_test.dart test/updater_test.dart
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
