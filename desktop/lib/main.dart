@@ -15100,6 +15100,44 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   /// so switching filters never costs another request.
   String _filter = 'Alles';
 
+  /// Het veld waarin een Discogs-nummer of -link geplakt kan worden.
+  final _nummerCtl = TextEditingController();
+  bool _zoeken = false;
+
+  /// Wat er misging bij het opvragen, ONDER het veld en niet als zwevende melding.
+  ///
+  /// Een SnackBar hoort bij de Scaffold, en die ligt achter deze dialoog: de enige terugkoppeling
+  /// op een verkeerd getypt nummer zou dan achter het grijze scherm gebeuren. Onder het veld staat
+  /// hij waar je kijkt, en blijft hij staan tot je het opnieuw probeert.
+  String? _nummerFout;
+
+  /// Hoeveel uitgaves Discogs zegt te hebben, en of er meer zijn dan hier staan.
+  int _dgTotaal = 0;
+  bool _dgMeer = false;
+
+  /// Hoeveel gelijknamige albums op Discogs er niet doorlopen zijn.
+  int _andereMasters = 0;
+
+  /// De sleutel van de vastgezette uitgave, als er één is.
+  ///
+  /// Nodig in [_merge], want juist die ene rij mag nooit sneuvelen op het ontdubbelen: kent
+  /// MusicBrainz dezelfde persing, dan zou je eigen keuze uit de lijst met keuzes verdwijnen.
+  String? _pinSleutel;
+
+  /// De rij die zojuist op nummer is opgehaald, zodat je hem terugvindt tussen tweehonderd andere.
+  String? _gemarkeerd;
+
+  /// Nodig om na zo'n opvraging naar boven te springen: de rij komt bovenaan te staan, en dat helpt
+  /// niet als je op dat moment halverwege de lijst staat te kijken.
+  final _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _nummerCtl.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
   /// role → the scan picked for it, possibly from a DIFFERENT pressing than the others.
   ///
   /// A record you own rarely matches one catalogue entry exactly: the sleeve is best photographed on
@@ -15174,6 +15212,9 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     final settings = context.read<AppSettings>();
     final pinnedMb = lib.pinnedMbid(widget.album);
     final pinnedDg = lib.pinnedRelease(widget.album);
+    _pinSleutel = pinnedMb != null
+        ? 'mb:$pinnedMb'
+        : (pinnedDg != null ? 'dg:$pinnedDg' : null);
 
     try {
       // Shown as it fills in: the pressings the moment they are named, then their scans as each
@@ -15181,16 +15222,10 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       // ready seconds before the artwork the spinner was actually waiting for.
       final mb = await context.read<MusicBrainzService>().editionChoices(
           widget.album.artist, widget.album.title,
-          pinnedMbid: pinnedMb,
-          onPartial: (rows) {
-            if (!mounted || rows.isEmpty) return;
-            setState(() => _choices = rows);
-          });
+          pinnedMbid: pinnedMb, onPartial: _merge);
       if (!mounted) return;
-      setState(() {
-        _choices = mb;
-        _mbDone = true;
-      });
+      _merge(mb);
+      setState(() => _mbDone = true);
     } catch (_) {
       if (mounted) setState(() => _mbDone = true);
     }
@@ -15198,63 +15233,340 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     // Discogs supplements: it has scans for pressings the archive has never seen. Its failures are
     // reported separately, because "Discogs is unreachable" and "this record has no pressings" are
     // very different things to be told.
-    // Everything MusicBrainz found, kept aside so each progressive Discogs update can be merged
-    // against it without the two lists fighting over the same variable.
-    final fromMb = [...?_choices];
-    void merge(List<ReleaseChoice> dg) {
-      if (!mounted) return;
-      final have = {for (final c in fromMb) c.dedupeKey};
-      setState(() => _choices = [...fromMb, ...dg.where((c) => have.add(c.dedupeKey))]);
-    }
-
+    // Kapotte verbindingen TELLEN, want ze gooien niet. `_get` maakt van een time-out, een 429 en
+    // een 5xx dezelfde `null` als van "bestaat niet", dus de `catch` hieronder ving in de praktijk
+    // nooit iets — en Discogs die plat lag las als "deze plaat heeft geen uitgaves". Het verschil
+    // tussen die twee is precies wat de gebruiker moet horen.
+    final foutenVoor = DiscogsService.transportErrors;
     try {
       // The rows appear as soon as the versions listing lands — one request for a whole master.
       // Their scans are fetched per row, as each is scrolled into view: see _wantDetail.
-      await DiscogsService(settings).releaseChoices(widget.album.artist, widget.album.title,
-          pinned: pinnedDg, onPartial: merge);
-      if (mounted) setState(() => _dgDone = true);
+      await DiscogsService(settings).releaseChoices(
+        widget.album.artist,
+        widget.album.title,
+        pinned: pinnedDg,
+        onPartial: _merge,
+        // De dialoog is dicht. Doorgaan kost requests op een baan van zestig per minuut voor een
+        // venster dat er niet meer is — en die requests gaan af van wat de rest van de app krijgt.
+        gestopt: () => !mounted,
+        // Opgeteld en niet overschreven, net als bij het nummerveld. Vraag je een master op terwijl
+        // de gewone lijst nog binnenkomt, dan zou dit anders "niet alles staat hier" weer uitzetten
+        // op grond van een lijst die daar niets over te zeggen heeft.
+        onEinde: (totaal, meer, andereMasters) {
+          if (!mounted) return;
+          setState(() {
+            if (totaal > _dgTotaal) _dgTotaal = totaal;
+            _dgMeer = _dgMeer || meer;
+            _andereMasters = andereMasters;
+          });
+        },
+      );
     } catch (_) {
-      if (mounted) setState(() { _dgDone = true; _dgFailed = true; });
+      _dgFailed = true;
     }
-    if (mounted && (_choices?.isEmpty ?? true)) {
+    if (!mounted) return;
+    // De teller is van de hele app, dus hij kan ook de mislukking van de achtergrondwarmer
+    // opvangen. Dat is bewust de goede kant om ernaast te zitten: hoogstens zegt de dialoog dat de
+    // lijst onvolledig KAN zijn terwijl hij compleet is. Andersom — stilzwijgend een halve lijst
+    // tonen als het hele antwoord — is de fout waar deze wijziging over gaat.
+    setState(() {
+      _dgDone = true;
+      _dgFailed = _dgFailed || DiscogsService.transportErrors > foutenVoor;
+    });
+    if (_choices?.isEmpty ?? true) {
+      // Over de ontbrekende sleutel staat hier niets: die regel staat altijd onder de lijst, ook
+      // als er wél rijen zijn. Hem hier herhalen zou hetzelfde twee keer op één scherm zetten.
       setState(() => _error = _dgFailed
           ? 'Geen uitgaves gevonden. Discogs was niet bereikbaar, dus de aanvulling ontbreekt.'
           : 'Geen uitgaves gevonden.');
     }
   }
 
-  /// Discogs pressings whose scans have been asked for, so scrolling past a row twice doesn't ask
-  /// twice. Holds ids, not rows: the list is rebuilt as answers merge in.
-  final _asked = <int>{};
+  /// Nieuwe rijen erbij, zonder ooit iets weg te gooien wat er al staat.
+  ///
+  /// **Waarom toevoegen en niet opnieuw opbouwen.** Hier stond een functie die `_choices` elke keer
+  /// hersamenstelde uit "alles van MusicBrainz" plus de Discogs-lijst. Dat kon toen alles van
+  /// Discogs in één klap binnenkwam. Nu niet meer, en wel om drie redenen tegelijk: Discogs levert
+  /// pagina voor pagina, elke rij krijgt onderweg zijn scans ingevuld, en de gebruiker kan er zelf
+  /// een uitgave bij zetten met een nummer. Opnieuw opbouwen zou die twee laatste dingen bij elke
+  /// binnenkomende pagina wissen — de scans terug naar een molentje, de opgevraagde rij weg.
+  ///
+  /// Beide catalogussen lopen door deze ene weg. Wie het eerst is wint, en dat is MusicBrainz (twee
+  /// seconden tegen vijftien) — dezelfde uitkomst als de oude volgorde, maar nu als gevolg van één
+  /// regel in plaats van twee die het eens moesten blijven.
+  /// Geeft terug hoeveel rijen er in het BLOK op [opIndex] terecht kwamen — nul als er niets
+  /// veranderde. Het nummerveld leest dat getal, want "de dienst gaf een uitgave terug" en "er staat
+  /// nu een rij op het scherm" zijn twee verschillende dingen, en alleen het tweede telt.
+  int _merge(List<ReleaseChoice> nieuw, {int? opIndex, bool ontdubbel = true}) {
+    if (!mounted || nieuw.isEmpty) return 0;
+    final huidig = [...?_choices];
+    final plaats = <String, int>{};
+    for (var i = 0; i < huidig.length; i++) {
+      plaats[huidig[i].key] = i;
+    }
+    final zelfde = {for (final c in huidig) c.dedupeKey};
+    final gepland = <String, int>{}; // sleutel → plek in [erbij]
+
+    final erbij = <ReleaseChoice>[];
+    var iets = false;
+    for (final c in nieuw) {
+      final g = gepland[c.key];
+      if (g != null) {
+        // Twee keer dezelfde sleutel in één lading. Komt vandaag niet voor, en als het ooit gebeurt
+        // hoort de rijkste te winnen — niet degene die toevallig eerst kwam.
+        if (rijkdom(c) > rijkdom(erbij[g])) erbij[g] = c;
+        continue;
+      }
+      final i = plaats[c.key];
+      if (i != null) {
+        // Dezelfde rij, opnieuw aangeboden. Alleen overnemen als hij RIJKER is — zie [rijkdom].
+        if (rijkdom(c) > rijkdom(huidig[i])) {
+          huidig[i] = c;
+          // De vervanger kan een ANDERE dedupeKey dragen (een uitgave die op nummer is opgehaald
+          // heeft een streepjescode waar de versielijst er geen gaf). Zonder deze regel blijft de
+          // oude sleutel in de verzameling staan en de nieuwe eruit.
+          zelfde.add(c.dedupeKey);
+          iets = true;
+        }
+        continue;
+      }
+      // `dedupeKey` houdt dezelfde PERSING uit de andere catalogus tegen — maar nooit een rij waar
+      // met zoveel woorden om gevraagd is, en nooit de vastgezette uitgave. Precies díe twee mogen
+      // niet stilletjes wegvallen omdat een andere catalogus dezelfde persing ook kent: dan drukt
+      // de gebruiker op Toon en gebeurt er niets, wat de fout is waar dit veld voor bestaat.
+      if (ontdubbel && c.key != _pinSleutel && !zelfde.add(c.dedupeKey)) continue;
+      zelfde.add(c.dedupeKey);
+      gepland[c.key] = erbij.length;
+      erbij.add(c);
+      iets = true;
+    }
+    if (opIndex == null) {
+      if (!iets && _choices != null) return 0;
+      setState(() => _choices = [...huidig, ...erbij]);
+      return erbij.length;
+    }
+    // Op een plek gevraagd: ook een rij die er AL stond schuift daarheen. Zonder dat zou het
+    // nummerveld, uitgerekend voor een uitgave die de lijst al bevatte, zeggen "hier is hij" en je
+    // vervolgens naar regel één sturen terwijl hij op regel tweehonderd staat.
+    final wil = {for (final c in nieuw) c.key};
+    final naarVoren = [for (final c in huidig) if (wil.contains(c.key)) c];
+    if (!iets && naarVoren.isEmpty) return 0;
+    // [opIndex] is hoeveel rijen deze zelfde opvraging er al bovenaan zette. Alles op nul zetten zou
+    // pagina twee bóven pagina één plakken, en Discogs levert op datum — dan staat de oorspronkelijke
+    // persing onderaan het blok in plaats van bovenaan.
+    final rest = [for (final c in huidig) if (!wil.contains(c.key)) c];
+    final k = opIndex.clamp(0, rest.length);
+    setState(() => _choices = [
+          ...rest.take(k),
+          ...erbij,
+          ...naarVoren,
+          ...rest.skip(k),
+        ]);
+    return erbij.length + naarVoren.length;
+  }
+
+
+  /// De rijen die nog op hun scans wachten, als STAPEL en niet als rij.
+  ///
+  /// De lijst telt sinds de paginering geen veertig regels meer maar soms tweehonderd, en elke
+  /// lookup kost een request op een baan van zestig per minuut. Wie doorscrolt naar regel honderd
+  /// zet er onderweg tientallen in de wacht; op volgorde van binnenkomst zou hij daar dan minuten
+  /// naar een molentje zitten kijken terwijl de app rijen ophaalt die allang van het scherm zijn.
+  ///
+  /// De laatst gevraagde rij is de rij waar je nú naar kijkt. Dus die eerst.
+  final _stapel = <ReleaseChoice>[];
+  bool _detailBezig = false;
+
+  /// De uitgave waar nu een lookup voor loopt, zodat hij er niet nog een keer bij komt.
+  int _bezigMet = 0;
 
   /// This row is on screen, so now it is worth knowing what it holds.
   ///
   /// Called from the builder, which Flutter only runs for visible rows — that is the whole saving.
   /// Deferred by a frame because a builder must not setState while it is building.
+  ///
+  /// **Elke keer opnieuw bovenop, en niet één keer en dan nooit meer.** Hier stond een verzameling
+  /// `_asked` die een rij precies één keer in de wacht zette. Dat was genoeg toen de lijst veertig
+  /// regels telde, maar met tweehonderd betekende het: scroll je langs een rij naar beneden en weer
+  /// terug, dan staat die rij nog steeds achteraan de wacht — achter honderd rijen die allang van
+  /// het scherm zijn, op een baan van zestig requests per minuut. Je zit dan minuten naar een
+  /// molentje te kijken van een rij die de app al lang geleden had kunnen ophalen.
+  ///
+  /// Herhalen kan niet blijven duren: een lookup die niets oplevert zet de rij alsnog op
+  /// `detailed`, en dan valt hij op de eerste regel hieronder af.
   void _wantDetail(ReleaseChoice c) {
-    if (c.isMb || c.detailed || c.releaseId <= 0 || !_asked.add(c.releaseId)) return;
+    if (c.isMb || c.detailed || c.releaseId <= 0 || c.releaseId == _bezigMet) return;
+    _stapel.removeWhere((x) => x.releaseId == c.releaseId);
+    _stapel.add(c);
+    if (_detailBezig) return;
+    _detailBezig = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _werkStapelAf());
+  }
+
+  Future<void> _werkStapelAf() async {
+    if (!mounted) {
+      _detailBezig = false;
+      return;
+    }
     final settings = context.read<AppSettings>();
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
+    while (mounted && _stapel.isNotEmpty) {
+      final gevraagd = _stapel.removeLast();
+      // De rij zoals hij NU in de lijst staat, en niet zoals hij was toen de bouwer hem aanwees.
+      // Daartussen kan het nummerveld dezelfde uitgave opnieuw hebben opgehaald, met meer erin;
+      // doorwerken op het oude exemplaar zou dat weer overschrijven.
+      final voor = _choices;
+      final j = voor == null ? -1 : voor.indexWhere((x) => x.key == gevraagd.key);
+      final c = j >= 0 ? voor![j] : gevraagd;
+      if (c.detailed) continue;
+      _bezigMet = c.releaseId;
       final filled = await DiscogsService(settings).detailOf(c).catchError((_) => null);
-      if (!mounted) return;
+      _bezigMet = 0;
+      if (!mounted) break;
       final list = _choices;
-      if (list == null) return;
+      if (list == null) continue;
       final i = list.indexWhere((x) => x.key == c.key);
-      if (i < 0) return;
+      if (i < 0) continue;
       // A failed lookup still ANSWERS the question. Returning here left the row saying "scans
-      // ophalen…" with its little spinner for as long as the dialog stayed open — and never again,
-      // because `_asked` already holds this id so it is not retried. The row promised something that
-      // was no longer coming. Marked as looked-up instead: the three slots then read "asked, and
-      // there was nothing", which is true and is what the crosses are for.
-      setState(() => _choices = [...list]..[i] = filled ?? c.withArt());
+      // ophalen…" with its little spinner for as long as the dialog stayed open. The row promised
+      // something that was no longer coming. Marked as looked-up instead: the three slots then read
+      // "asked, and there was nothing", which is true and is what the crosses are for.
+      setState(() => _choices = [...list]..[i] = filled ?? list[i].withArt());
+    }
+    _detailBezig = false;
+  }
+
+  /// Haal precies de uitgave op die in het veld staat — of elke uitgave van dat master.
+  ///
+  /// **Waarom dit veld er is.** Het zoeken op naam komt uit bij een master, en soms bij het
+  /// verkeerde: van "Te Quiero" bestaan er meerdere, en de persing met de cd-scan hing onder een
+  /// master dat het zoeken nooit koos. Dan is er geen zoekterm die je kunt bedenken om er alsnog te
+  /// komen — maar het nummer staat gewoon op de pagina waar je naar kijkt. Dit is de deur die
+  /// daarvoor open moet staan.
+  Future<void> _haalNummer() async {
+    final verwijzing = DiscogsVerwijzing.ontleed(_nummerCtl.text);
+    if (verwijzing == null) {
+      setState(() => _nummerFout =
+          'Dat lijkt geen Discogs-nummer. Plak het nummer van de uitgave (7738290), de vorm met '
+          'de letter ([r7738290] of [m1938390]) of gewoon de link.');
+      return;
+    }
+    final settings = context.read<AppSettings>();
+    final dg = DiscogsService(settings);
+    // Zonder sleutel komt er nooit een antwoord, en "Discogs kent deze uitgave niet" zou dan een
+    // leugen zijn over iets wat de app zelf weet.
+    if (!dg.available) {
+      setState(() => _nummerFout =
+          'Er is geen Discogs-sleutel ingesteld. Zet die eerst bij Instellingen → Discogs.');
+      return;
+    }
+    setState(() {
+      _zoeken = true;
+      _nummerFout = null;
+    });
+
+    // Bovenaan erbij, zodra er iets is. Dezelfde weg als de gewone lijst, dus een rij die al
+    // stond en al zijn scans had houdt ze — zie [rijkdom].
+    var gezien = 0;
+    var geplaatst = 0;
+    void binnen(List<ReleaseChoice> rijen) {
+      if (!mounted || rijen.length <= gezien) return;
+      final verse = rijen.sublist(gezien);
+      gezien = rijen.length;
+      // `ontdubbel: false`: hier is met zoveel woorden om deze uitgave gevraagd. De gewone
+      // samenvoeging laat een Discogs-persing vallen zodra MusicBrainz dezelfde kent, en dan zou
+      // Toon indrukken precies niets doen — de fout waar dit veld voor gemaakt is.
+      //
+      // `opIndex` telt op, zodat pagina twee ONDER pagina één komt. Discogs levert op datum: op nul
+      // zetten zou de oorspronkelijke persing onderaan het blok zetten in plaats van bovenaan.
+      final n = _merge(verse, opIndex: geplaatst, ontdubbel: false);
+      if (n == 0) return;
+      final eerste = geplaatst == 0;
+      geplaatst += n;
+      // Anders kan de rij die je zojuist opvroeg achter een formaatknop verstopt zitten, of blijft
+      // "Geen uitgaves gevonden" over een lijst staan die er nu wél is.
+      setState(() {
+        _filter = 'Alles';
+        _error = null;
+        _gemarkeerd ??= verse.first.key;
+      });
+      // Alleen bij de eerste lading. Een master van zes pagina's zou de lijst anders zes keer onder
+      // je vinger vandaan naar boven trekken terwijl je zit te lezen.
+      if (eerste && _scroll.hasClients) _scroll.jumpTo(0);
+    }
+
+    setState(() => _gemarkeerd = null);
+    try {
+      if (verwijzing.isMaster) {
+        await dg.keuzesVanMaster(
+          verwijzing.id,
+          onPartial: binnen,
+          gestopt: () => !mounted,
+          // Ook deze weg heeft een plafond (vierhonderd rijen, zes pagina's), en een plafond dat
+          // niets zegt is de fout waar deze hele wijziging over gaat.
+          onEinde: (totaal, meer) {
+            if (!mounted) return;
+            setState(() {
+              if (totaal > _dgTotaal) _dgTotaal = totaal;
+              _dgMeer = _dgMeer || meer;
+            });
+          },
+        );
+      } else {
+        final een = await dg.keuzeVanRelease(verwijzing.id);
+        if (een != null) binnen([een]);
+      }
+    } catch (_) {
+      // Geplaatst is dan nul, en de regel hieronder zegt het.
+    }
+    if (!mounted) return;
+    setState(() {
+      _zoeken = false;
+      if (geplaatst == 0) {
+        // Geteld wordt wat er OP HET SCHERM kwam, niet wat de dienst teruggaf. Dat verschil is een
+        // gebruiker die op Toon drukt en niets ziet gebeuren, zonder een woord waarom.
+        _nummerFout = verwijzing.isMaster
+            ? 'Discogs kent master ${verwijzing.id} niet, of was niet bereikbaar.'
+            : 'Discogs kent uitgave ${verwijzing.id} niet, of was niet bereikbaar.';
+      }
     });
   }
 
   /// Open the assign panel for one pressing, fetching its scans first if that hasn't happened.
+  /// Rollen die de gebruiker in DEZE dialoog met de hand heeft toegewezen.
+  ///
+  /// Zie [_choose]: het kiezen van een uitgave wist met opzet alle rollen, want anders blijft de
+  /// hoes van de digitale uitgave staan boven de cd die je net koos. Maar dat wist óók wat je een
+  /// tel eerder in dit venster zelf aanwees, en dat is de enige weg die er is als de app de
+  /// schijf-scan in het verkeerde vak zet. Deze worden na het wissen teruggezet.
+  final Map<String, String> _eigenRollen = {};
+
   Future<void> _assign(ReleaseChoice c) async {
     if (!mounted) return;
+    final lib = context.read<LibraryStore>();
+    Map<String, String> lees() =>
+        {...lib.albumArtRoles(widget.album.artist, widget.album.title)};
+    final voor = lees();
     await showDialog<void>(
         context: context, builder: (_) => AssignScansDialog(album: widget.album, choice: c));
+    if (!mounted) return;
+    // Alleen wat hier veranderde. Rollen die al op schijf stonden horen wél weg te vallen bij het
+    // kiezen van een andere uitgave — dat is juist waar dat wissen voor is.
+    //
+    // Beide RICHTINGEN, en dat is niet vanzelfsprekend: in het venster hiernaast haal je een rol
+    // weg door hem nog een keer aan te tikken, en "Alles weer laten raden" wist ze allemaal. Keek
+    // dit alleen naar wat erbij kwam, dan zou [_choose] straks netjes terugzetten wat je zojuist
+    // met opzet had weggehaald — en een handmatige rol wint van de uitgave die je kiest, dus je
+    // zou hem er niet meer af krijgen.
+    final na = lees();
+    for (final sleutel in {...voor.keys, ...na.keys}) {
+      final nu = na[sleutel];
+      if (nu == voor[sleutel]) continue;
+      if (nu == null) {
+        _eigenRollen.remove(sleutel);
+      } else {
+        _eigenRollen[sleutel] = nu;
+      }
+    }
   }
 
   Future<void> _choose(ReleaseChoice c) async {
@@ -15276,6 +15588,12 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       // earlier is an override that outranks the pressing, so leaving those in place made this
       // button look like it did nothing: you chose the CD and kept the digital sleeve.
       await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title);
+      // Behalve wat je in ditzelfde venster net zelf hebt aangewezen. Anders is "zoek de scan op,
+      // wijs hem toe, kies dan deze uitgave" een handeling die zichzelf ongedaan maakt — en dat is
+      // precies de weg die openstaat als de app de schijf-scan in het verkeerde vak zette.
+      for (final e in _eigenRollen.entries) {
+        await lib.setAlbumArtRole(widget.album.artist, widget.album.title, e.key, e.value);
+      }
       await lib.applyCorrection(widget.album, settings,
           coverBytes: front,
           discogsRelease: c.isMb ? null : c.releaseId,
@@ -15348,9 +15666,19 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                 const Spacer(),
                 IconButton(icon: const Icon(Icons.close_rounded), onPressed: () => Navigator.of(context).pop(false)),
               ]),
-              Text('${widget.album.artist} — ${widget.album.title}',
+              Text(
+                  '${widget.album.artist} — ${widget.album.title}'
+                  // Hoeveel er staan, want sinds de lijst compleet is kan hij lang zijn — en dan is
+                  // "hoeveel zijn er eigenlijk?" een echte vraag. Tijdens het aanvullen loopt het
+                  // getal op, wat meteen laat zien dat er nog iets binnenkomt.
+                  //
+                  // Geteld wordt wat er ZICHTBAAR is. Het aantal van de hele lijst boven een lijst
+                  // die op CD gefilterd staat, is een getal dat de rijen eronder tegenspreekt.
+                  '${_telRegel()}',
                   style: const TextStyle(color: _muted, fontSize: 12.5)),
-              const SizedBox(height: 14),
+              const SizedBox(height: 10),
+              _nummerVeld(),
+              const SizedBox(height: 10),
               // Filters over what was fetched, not another trip to Discogs.
               Row(children: [
                 for (final f in const ['Alles', 'CD', 'Vinyl', 'Digitaal'])
@@ -15392,10 +15720,61 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                   ]),
                 ),
               if (_dgDone && _dgFailed)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                      // Twee verschillende dingen, en de oude regel zei altijd het eerste. Kwam er
+                      // wél iets van Discogs binnen, dan is "dit zijn alleen de MusicBrainz-uitgaves"
+                      // aantoonbaar onwaar terwijl de Discogs-rijen op het scherm staan.
+                      (_choices ?? const <ReleaseChoice>[]).any((c) => !c.isMb)
+                          ? 'Een deel van Discogs kwam niet door; deze lijst kan onvolledig zijn.'
+                          : 'Discogs was niet bereikbaar — dit zijn alleen de MusicBrainz-uitgaves.',
+                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                ),
+              // De enige eerlijke regel over een afgekapte lijst. Precies dit — een lijst die
+              // ophoudt zonder het te zeggen — is wat deze hele wijziging kwam repareren, dus een
+              // nieuw plafond mag niet opnieuw stil zijn.
+              // Zonder sleutel is de halve catalogus nooit gevraagd, en dat mag niet als "dit is
+              // wat er is" doorgaan. Los van de lege-lijst-melding: juist mét MusicBrainz-rijen
+              // erop lijkt de lijst compleet.
+              if (!DiscogsService(context.read<AppSettings>()).available)
                 const Padding(
                   padding: EdgeInsets.only(top: 8),
-                  child: Text('Discogs was niet bereikbaar — dit zijn alleen de MusicBrainz-uitgaves.',
+                  child: Text(
+                      'Er is geen Discogs-sleutel ingesteld — dit zijn alleen de '
+                      'MusicBrainz-uitgaves.',
                       style: TextStyle(color: _muted, fontSize: 11.5)),
+                ),
+              // Niet achter `_dgDone`: het nummerveld kan dit óók zetten, en dan zou de melding
+              // wachten op een lijst waar je niet op zit te wachten.
+              if (_dgMeer)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                      // "Niet alles staat hier" is de zin die bedoeld werd; er stond iets wat als
+                      // "er staan er niet meer dan dit in de lijst" te lezen was, en dat is een
+                      // mededeling over de lijst in plaats van over wat eruit gebleven is.
+                      //
+                      // "Minstens", want het getal is het grootste dat één master noemde — een
+                      // ondergrens die waar is, waar een optelsom over masters dat niet zou zijn.
+                      _dgTotaal > 0
+                          ? 'Niet alles staat hier: Discogs kent er minstens $_dgTotaal.'
+                          : 'Niet alles staat hier — er zijn er meer dan er nu in de lijst passen.',
+                      style: const TextStyle(color: Color(0xFFE0A33A), fontSize: 11.5)),
+                ),
+              // Het stilste plafond van allemaal, en uitgerekend degene waar een gezochte persing
+              // zich het makkelijkst achter verstopt: het zoeken kiest op naam, loopt de drie
+              // best scorende albums af, en de promo hangt net onder de vierde. Grijs en niet
+              // oranje — het is geen waarschuwing dat er iets misging, het is waar de volgende
+              // stap ligt.
+              if (_dgDone && _andereMasters > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                      'Discogs heeft nog $_andereMasters ${_andereMasters == 1 ? 'ander album' : 'andere albums'} '
+                      'met deze naam. Staat je uitgave er niet bij, plak dan hierboven het '
+                      'masternummer van het juiste album.',
+                      style: const TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               // Only once something is picked: an empty bar at the bottom of every gallery would be
               // a control that does nothing, most of the time.
@@ -15438,6 +15817,98 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     );
   }
 
+  /// Wat het formaatfilter overlaat, en de vastgezette uitgave bovenaan.
+  ///
+  /// Eén functie, gelezen door de teller in de kop én door de lijst eronder — twee tellingen die
+  /// het oneens kunnen worden is precies hoe een kop "312 uitgaves" boven veertig rijen komt te
+  /// staan.
+  ///
+  /// De vastgezette rij vooraan zetten gebeurt HIER en niet bij het binnenhalen, en dat is met
+  /// opzet: hij komt als laatste binnen (hij wordt pas opgehaald als hij onder geen enkel master
+  /// bleek te hangen), dus op volgorde van binnenkomst staat je eigen keuze onderaan een lijst van
+  /// driehonderd. Waar hij hoort te staan hangt niet af van wanneer hij aankwam.
+  List<ReleaseChoice> _zichtbaar(List<ReleaseChoice> alle, String? pinnedKey) {
+    // 'File' is what Discogs calls a digital release; nobody looking for one thinks of it that way.
+    // Through the shared bucketing, not substring matching: MusicBrainz says `12" Vinyl`,
+    // `Digital Media` and `Enhanced CD` where Discogs says `Vinyl` and `File`, and one rule has
+    // to cover both or the filters silently hide half the list.
+    final uit = _filter == 'Alles'
+        ? [...alle]
+        : alle.where((c) {
+            final m = majorFormat(c.format);
+            if (_filter == 'CD') return m == 'CD' || m == 'CDr';
+            if (_filter == 'Vinyl') return m == 'Vinyl';
+            return m == 'File';
+          }).toList();
+    if (pinnedKey != null) {
+      final i = uit.indexWhere((c) => c.key == pinnedKey);
+      if (i > 0) uit.insert(0, uit.removeAt(i));
+    }
+    return uit;
+  }
+
+  String _telRegel() {
+    final alle = _choices;
+    if (alle == null || alle.isEmpty) return '';
+    final n = _zichtbaar(alle, null).length;
+    return n == alle.length ? ' · $n uitgaves' : ' · $n van ${alle.length} uitgaves';
+  }
+
+  /// "Plak hier het nummer van de uitgave die je wél bedoelt."
+  ///
+  /// Eén regel, met de knop ernaast, want op een telefoon is de dialoog 340 punten breed en past er
+  /// niets naast een veld dat ook nog leesbaar moet zijn. De aanwijzing staat in de hint en niet in
+  /// een regel eronder: dat scheelt hoogte in een venster waar de lijst de hoofdzaak is.
+  Widget _nummerVeld() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _nummerRegel(),
+        if (_nummerFout != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6, left: 2),
+            child: Text(_nummerFout!,
+                style: const TextStyle(color: Color(0xFFE0A33A), fontSize: 11.5)),
+          ),
+      ]);
+
+  Widget _nummerRegel() => Row(children: [
+        Expanded(
+          child: TextField(
+            controller: _nummerCtl,
+            style: const TextStyle(fontSize: 13),
+            textInputAction: TextInputAction.search,
+            // Enter doet hetzelfde als de knop. Wie een nummer typt drukt daarna op enter.
+            onSubmitted: (_) => _zoeken ? null : _haalNummer(),
+            decoration: InputDecoration(
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              hintText: 'Discogs-nummer of link — bv. 7738290, [r7738290] of [m1938390]',
+              hintStyle: const TextStyle(color: _muted, fontSize: 12),
+              prefixIcon: const Icon(Icons.tag_rounded, size: 17, color: _muted),
+              prefixIconConstraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: .05),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide.none,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: _accent,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          ),
+          onPressed: _zoeken ? null : _haalNummer,
+          child: _zoeken
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : const Text('Toon'),
+        ),
+      ]);
+
   Widget _body(String? pinnedKey) {
     if (_error != null) return Center(child: Text(_error!, style: const TextStyle(color: _muted)));
     final list = _choices;
@@ -15453,22 +15924,12 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       );
     }
     if (list.isEmpty) return const Center(child: Text('Geen uitgaves gevonden.', style: TextStyle(color: _muted)));
-    // 'File' is what Discogs calls a digital release; nobody looking for one thinks of it that way.
-    // Through the shared bucketing, not substring matching: MusicBrainz says `12" Vinyl`,
-    // `Digital Media` and `Enhanced CD` where Discogs says `Vinyl` and `File`, and one rule has
-    // to cover both or the filters silently hide half the list.
-    final shown = _filter == 'Alles'
-        ? list
-        : list.where((c) {
-            final m = majorFormat(c.format);
-            if (_filter == 'CD') return m == 'CD' || m == 'CDr';
-            if (_filter == 'Vinyl') return m == 'Vinyl';
-            return m == 'File';
-          }).toList();
+    final shown = _zichtbaar(list, pinnedKey);
     if (shown.isEmpty) {
       return const Center(child: Text('Geen uitgaves in dit formaat.', style: TextStyle(color: _muted)));
     }
     return ListView.separated(
+      controller: _scroll,
       itemCount: shown.length,
       separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (_, i) {
@@ -15476,15 +15937,27 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
         // Only rows that are actually built get looked up — that is what makes this cheap.
         _wantDetail(c);
         final isPinned = pinnedKey != null && pinnedKey == c.key;
+        // De rij die zojuist op nummer is opgehaald. Een andere kleur dan de vastgezette rij, want
+        // het zijn twee verschillende dingen: "dit is je keuze" tegenover "dit is wat je opvroeg".
+        final gevraagd = !isPinned && _gemarkeerd != null && _gemarkeerd == c.key;
         return InkWell(
           onTap: () => _choose(c),
           borderRadius: BorderRadius.circular(10),
           child: Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: isPinned ? _accent.withValues(alpha: .16) : _panel2,
+              color: isPinned
+                  ? _accent.withValues(alpha: .16)
+                  : gevraagd
+                      ? _accent2.withValues(alpha: .10)
+                      : _panel2,
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: isPinned ? _accent : Colors.transparent),
+              border: Border.all(
+                  color: isPinned
+                      ? _accent
+                      : gevraagd
+                          ? _accent2
+                          : Colors.transparent),
             ),
             child: Row(children: [
               // The three scans side by side, so what you get is visible rather than described.
@@ -15510,6 +15983,14 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                     // it has to be visible rather than inferred from the row's shape.
                     _source(c.isMb),
                     const SizedBox(width: 6),
+                    // Het nummer van deze uitgave, zichtbaar. Dit is de tegenhanger van het veld
+                    // bovenaan: daar type je een nummer in, hier lees je hem af — zo kun je een rij
+                    // die je hier vindt terugzoeken op Discogs zelf, en andersom.
+                    if (!c.isMb && c.releaseId > 0) ...[
+                      Text('r${c.releaseId}',
+                          style: const TextStyle(color: _muted, fontSize: 10.5)),
+                      const SizedBox(width: 6),
+                    ],
                     // Until this pressing has been looked up we do not know whether it has a back
                     // or a disc, and saying "–" would be a claim we have not earned. A row you can
                     // see is always on its way now — being visible is what starts the lookup — so
