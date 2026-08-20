@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Wat de FileProvider van dit pakket mag uitdelen: één map, en niets anders.
+
+     `cache-path` is `getCacheDir()` — waar updater.dart de APK neerzet. Bewust die map en niet
+     `files-path`: veertig megabyte die na het installeren nergens meer voor dient, en een cachemap
+     is precies wat Android zelf mag opruimen als het toestel vol raakt.
+
+     Het pad is `update/`, niet `.` — anders zou een lek in deze provider de hele cache van de app
+     open zetten, inclusief hoesjes en wat er verder aan tijdelijke bestanden staat. -->
+<paths>
+    <cache-path name="update" path="update/"/>
+</paths>

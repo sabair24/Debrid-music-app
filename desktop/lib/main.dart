@@ -84,6 +84,7 @@ import 'soulseek.dart';
 import 'tidal.dart';
 import 'torbox.dart';
 import 'tv.dart';
+import 'updater.dart';
 import 'hartslag.dart';
 import 'ui/kleuren.dart';
 import 'ui/skelet.dart';
@@ -1285,6 +1286,27 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int _view = 5; // 0 albums, 1 artists, 2 online, 3 ontdek, 4 tracks, 5 start (default)
+
+  @override
+  void initState() {
+    super.initState();
+    _kijkOfErEenNieuweIs();
+  }
+
+  /// Eén keer per start kijken of er een nieuwere versie klaarstaat.
+  ///
+  /// Na een pauze, en niet meteen: bij het opstarten wordt de bibliotheek gelezen en de pc gezocht,
+  /// en een venster dat daar bovenop springt onderbreekt precies het moment waarop je wilt zien of
+  /// je muziek er is. Stil als er niets is, stil als er geen internet is — dit is geen taak die de
+  /// gebruiker gevraagd heeft.
+  Future<void> _kijkOfErEenNieuweIs() async {
+    if (!Updater.kanHier) return;
+    await Future<void>.delayed(const Duration(seconds: 6));
+    if (!mounted) return;
+    final uitgave = await const Updater().zoek();
+    if (uitgave == null || !mounted) return;
+    await toonUpdate(context, uitgave);
+  }
 
   // Library search + quality filter (applies to Albums / Tracks / Artiesten).
   final _searchCtl = TextEditingController();
@@ -13235,8 +13257,41 @@ class _AboutSectionState extends State<_AboutSection> {
               : SelectableText(_path.replaceAll(r'\', '\\\u200B'),
                   style: const TextStyle(color: _muted, fontSize: 11, height: 1.35)),
         ],
+        // Zelf kijken, naast de controle die bij het opstarten loopt.
+        //
+        // Die eerste slaat een versie over als je daarop geklikt hebt, en biedt hem daarna niet
+        // meer aan. Zonder deze knop is er dan geen weg terug \u2014 daarom negeert hij dat expres.
+        if (Updater.kanHier) ...[
+          const SizedBox(height: 10),
+          Row(children: [
+            OutlinedButton.icon(
+              onPressed: _zoeken ? null : _zoekUpdate,
+              icon: _zoeken
+                  ? const SizedBox(
+                      width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.system_update_alt_rounded, size: 16),
+              label: Text(_zoeken ? 'Bezig met kijken\u2026' : 'Controleer op updates'),
+            ),
+          ]),
+        ],
       ],
     );
+  }
+
+  bool _zoeken = false;
+
+  Future<void> _zoekUpdate() async {
+    setState(() => _zoeken = true);
+    final uitgave = await const Updater().zoek(negeerOvergeslagen: true);
+    if (!mounted) return;
+    setState(() => _zoeken = false);
+    if (uitgave == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Je hebt de nieuwste versie.'), duration: Duration(seconds: 3)),
+      );
+      return;
+    }
+    await toonUpdate(context, uitgave);
   }
 }
 
