@@ -86,6 +86,7 @@ jobs:
         run: |
           flutter test \
             test/onderbalk_test.dart test/artiestkop_knoppen_test.dart \
+            test/uitgave_rij_test.dart \
             test/discogs_verwijzing_test.dart test/updater_test.dart
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
