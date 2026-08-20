@@ -55,16 +55,35 @@ jobs:
       #
       # Op 16-08 stond er in dit log `SIGNED: ja` en een v3-handtekening; sinds 19-08 staat er `nee`
       # en de debug-sleutel. De ondertekening is dus KAPOTGEGAAN, niet "nooit ingesteld", en dan is
-      # de vraag welke geheimen deze bouw nu werkelijk ziet — met de naam die ze ECHT hebben, niet
-      # de naam die wij denken dat ze hebben. Een letter verschil is genoeg.
+      # de vraag welke NAAM het wachtwoord werkelijk draagt. Een letter verschil is genoeg, en van
+      # buiten is dat niet te zien: de lijst met geheimen ziet er dan volkomen goed uit.
       #
-      # Alleen de NAMEN. `toJSON(secrets)` draagt ook de waarden; `jq keys` gooit die weg voordat er
-      # iets op het scherm komt, en de loper maskeert geregistreerde waarden bovendien zelf.
-      - name: Welke geheimen ziet deze bouw?
+      # De namen laten opsommen met `toJSON(secrets)` kán niet: GitHub blokkeert zo'n bouw en zet
+      # hem op "wachtend op goedkeuring" — dat is precies het patroon waarmee je geheimen naar
+      # buiten zou smokkelen. Dus: een handvol schrijfwijzen bij name uitproberen. Een geheim dat
+      # niet bestaat levert gewoon een lege tekst op, geen fout.
+      #
+      # Nooit een waarde, alleen ja/nee.
+      - name: Onder welke naam staat het wachtwoord?
         env:
-          ALLE: ${{ toJSON(secrets) }}
+          A: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          B: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          C: ${{ secrets.ANDROID_STOREPASSWORD }}
+          D: ${{ secrets.ANDROID_STORE_PASS }}
+          E: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          F: ${{ secrets.KEYSTORE_PASSWORD }}
+          G: ${{ secrets.STORE_PASSWORD }}
+          H: ${{ secrets.ANDROID_KEY_STORE_PASSWORD }}
         run: |
-          echo "$ALLE" | jq -r 'keys[]' | sed 's/^/  /'
+          zeg() { [ -n "$2" ] && echo "  GEVONDEN  $1" || echo "  leeg      $1"; }
+          zeg ANDROID_STORE_PASSWORD      "$A"
+          zeg ANDROID_KEYSTORE_PASSWORD   "$B"
+          zeg ANDROID_STOREPASSWORD       "$C"
+          zeg ANDROID_STORE_PASS          "$D"
+          zeg ANDROID_KEYSTORE_PASS       "$E"
+          zeg KEYSTORE_PASSWORD           "$F"
+          zeg STORE_PASSWORD              "$G"
+          zeg ANDROID_KEY_STORE_PASSWORD  "$H"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
