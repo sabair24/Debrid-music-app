@@ -270,10 +270,15 @@ class DiscogsVerwijzing {
 
     // Een kaal nummer is een UITGAVE. Dat is het nummer dat op de pagina van één persing staat en
     // dat is waar iemand mee hier komt; een master noem je met de `m` ervoor of met zijn link.
-    // De staart erachter mag: "7738290-Stromae-Te-Quiero" is wat je overhoudt als je de slug uit
-    // een link kopieert.
-    final kaal = RegExp(r'^(\d+)(?:[-\s/].*)?$').firstMatch(t);
-    if (kaal != null) return maak('r', kaal.group(1)!);
+    //
+    // Alleen cijfers, en niets erachter. Hier stond dat "7738290-Stromae-Te-Quiero" ook mocht,
+    // omdat dat is wat je overhoudt als je de slug uit een link kopieert. Dat is waar, maar
+    // "1938390-Stromae-Racine-Carree" komt uit een MASTER-link en ziet er precies hetzelfde uit —
+    // en master- en uitgavenummers lopen door elkaar heen in hetzelfde bereik. Die vorm aannemen
+    // betekent dat een masterslug een wildvreemde persing ophaalt en die bovenaan zet als "degene
+    // die je vroeg". Plak de hele link, dan staat er wél in wat het is.
+    final kaal = RegExp(r'^\d+$').firstMatch(t);
+    if (kaal != null) return maak('r', kaal.group(0)!);
     return null;
   }
 
@@ -594,15 +599,28 @@ class DiscogsService {
     int maxPaginas = 1,
     void Function(List<DiscogsVersion>)? perPagina,
     bool Function()? stop,
+    void Function(int totaal, bool meer)? onEinde,
   }) =>
       _versions(master,
-          format: format, maxPaginas: maxPaginas, perPagina: perPagina, stop: stop);
+          format: format,
+          maxPaginas: maxPaginas,
+          perPagina: perPagina,
+          stop: stop,
+          onEinde: onEinde);
 
-  /// Honderd, het maximum dat Discogs toestaat.
+  /// Honderd, het maximum dat Discogs toestaat, en alleen voor wie écht alles wil.
   ///
-  /// Er stond vijftig, en dat was een halve pagina weggooien per request op de schaarste die telt:
-  /// het budget is zestig REQUESTS per minuut, niet zestig regels. Elke oproep hieronder haalt nu
-  /// twee keer zoveel op voor dezelfde prijs.
+  /// **Waarom de eerste-pagina-oproepen hun oude adres houden.** Honderd halen kost hetzelfde als
+  /// vijftig — het budget is zestig REQUESTS per minuut, niet zestig regels — dus overal honderd
+  /// vragen lijkt gratis winst. Dat is het niet: het adres ís de cachesleutel. Elke versielijst die
+  /// ooit is opgehaald zou in één klap waardeloos worden, en de achtergrondwarmer haalt er vijf per
+  /// album op. Op een bibliotheek van een paar honderd platen zijn dat duizenden requests opnieuw,
+  /// op precies de baan waar de warmer albums voor een hele sessie overslaat als hij zijn deadline
+  /// niet haalt.
+  ///
+  /// Dus: wie één pagina vraagt (de warmer, de hoeszoeker, het bepalen van de uitgave — allemaal op
+  /// zoek naar de BESTE persing, niet naar alle) krijgt letterlijk het oude adres terug en dus zijn
+  /// cache. Alleen de kiezer, die om alles vraagt, gebruikt de gepagineerde vorm.
   static const _perPagina = 100;
 
   /// Hoeveel pagina's dit antwoord zegt te hebben.
@@ -610,17 +628,26 @@ class DiscogsService {
   /// Ontbreekt het blok — een oude cache, een uitgekleed antwoord — dan is het antwoord één, en
   /// niet nul: nul zou de lus laten denken dat er niets is terwijl er net een pagina binnenkwam.
   static int paginaAantal(Map<String, dynamic>? body) {
-    final p = body?['pagination'];
-    if (p is! Map) return 1;
-    final n = (p['pages'] as num?)?.toInt() ?? 1;
+    final n = _getal(body, 'pages') ?? 1;
     return n < 1 ? 1 : n;
   }
 
   /// Hoeveel uitgaves dit master er in totaal heeft, volgens Discogs zelf. Null als het niet staat.
-  static int? itemAantal(Map<String, dynamic>? body) {
+  static int? itemAantal(Map<String, dynamic>? body) => _getal(body, 'items');
+
+  /// Een getal uit het pagineringsblok, zonder cast die kan gooien.
+  ///
+  /// `as num?` gooit op een tekst — het levert geen null op — en deze twee functies bestaan juist
+  /// om een uitgekleed of afwijkend antwoord te overleven. Gooien ze wél, dan valt die fout tot in
+  /// `_load`, die er "Discogs was niet bereikbaar" van maakt terwijl er net een pagina met uitgaves
+  /// binnenkwam.
+  static int? _getal(Map<String, dynamic>? body, String sleutel) {
     final p = body?['pagination'];
     if (p is! Map) return null;
-    return (p['items'] as num?)?.toInt();
+    final v = p[sleutel];
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v.trim());
+    return null;
   }
 
   static List<DiscogsVersion> _lezVersies(Map<String, dynamic>? body) {
@@ -657,25 +684,43 @@ class DiscogsService {
     int maxPaginas = 1,
     void Function(List<DiscogsVersion>)? perPagina,
     bool Function()? stop,
+    void Function(int totaal, bool meer)? onEinde,
   }) async {
     final f = format == null ? '' : '&format=${_q(format)}';
     final out = <DiscogsVersion>[];
+    var totaal = 0;
+    var meer = false;
     for (var pagina = 1; pagina <= maxPaginas; pagina++) {
       // De aanroeper heeft genoeg. Doorgaan zou requests kosten uit een budget van zestig per
       // minuut voor rijen die toch niet meer in de lijst passen.
-      if (stop != null && stop()) break;
+      if (stop != null && stop()) {
+        meer = true;
+        break;
+      }
       final body = await _get(
-        'https://api.discogs.com/masters/$master/versions'
-        '?per_page=$_perPagina&page=$pagina&sort=released$f',
+        // Letterlijk het oude adres zodra er één pagina gevraagd wordt — zie [_perPagina]. Een
+        // andere query is een andere cachesleutel, en die cache is hier het halve verhaal.
+        maxPaginas <= 1
+            ? 'https://api.discogs.com/masters/$master/versions?per_page=50&sort=released$f'
+            : 'https://api.discogs.com/masters/$master/versions'
+                '?per_page=$_perPagina&page=$pagina&sort=released$f',
       );
       // Geen antwoord: teruggeven wat er wél is. Een halve lijst is meer dan een lege, en de
-      // volgende pagina opvragen na een 429 maakt die 429 alleen maar langer.
-      if (body == null) break;
+      // volgende pagina opvragen na een 429 maakt die 429 alleen maar langer. Wel `meer`, want er
+      // ís meer — we konden er alleen niet bij, en dat mag niet als "dit was alles" doorgaan.
+      if (body == null) {
+        meer = pagina > 1 || out.isNotEmpty;
+        break;
+      }
+      if (pagina == 1) totaal = itemAantal(body) ?? 0;
       final gelezen = _lezVersies(body);
       out.addAll(gelezen);
       if (gelezen.isNotEmpty) perPagina?.call(gelezen);
       if (pagina >= paginaAantal(body)) break;
+      // Laatste ronde en er staat nog een pagina open.
+      if (pagina == maxPaginas) meer = true;
     }
+    onEinde?.call(totaal, meer);
     return out;
   }
 
@@ -1715,14 +1760,21 @@ extension DiscogsChoices on DiscogsService {
     int maxPaginas = 6,
     int? pinned,
     void Function(List<ReleaseChoice>)? onPartial,
+    void Function(int totaal, bool meer)? onEinde,
+    bool Function()? gestopt,
   }) async {
     final rows = <ReleaseChoice>[];
     final seen = <int>{};
 
     void addVersion(DiscogsVersion v) {
-      if (rows.length >= max || v.id <= 0 || !seen.add(v.id)) return;
+      if (rows.length >= max || v.id <= 0) return;
       // A tape scan is not what anyone is choosing to describe their FLACs with.
+      //
+      // VOOR `seen`, en dat is geen detail: kwam het id hier in de lijst van geziene, dan gold de
+      // vastgezette uitgave hieronder als "staat er al" en werd hij niet opgehaald. Iemand met een
+      // cassette als vaste keuze zag zijn eigen keuze dan nergens meer staan.
       if (v.major.toLowerCase().contains('cassette')) return;
+      if (!seen.add(v.id)) return;
       rows.add(rijVanVersie(v));
     }
 
@@ -1740,27 +1792,46 @@ extension DiscogsChoices on DiscogsService {
     // pagina mogen verschijnen, of hij zou bij elke pagina onder je vinger door schudden. Discogs
     // levert op datum, dus de oorspronkelijke persing staat sowieso op pagina één; wie iets
     // specifieks zoekt heeft de formaatknoppen en het nummerveld.
+    var totaal = 0;
+    var meer = false;
     final masters = await masterIds(artist, album);
     for (final master in masters.take(3)) {
-      if (rows.length >= max) break;
+      if (rows.length >= max || (gestopt?.call() ?? false)) break;
       // No format filter: one unfiltered call returns every pressing, where asking per format cost
       // a request each and still capped what came back.
-      await versionsOf(master, maxPaginas: maxPaginas, stop: () => rows.length >= max,
-          perPagina: (pagina) {
-        for (final v in DiscogsService.orderByPreference(pagina)) {
-          addVersion(v);
-        }
-        onPartial?.call([...rows]);
-      });
+      await versionsOf(
+        master,
+        maxPaginas: maxPaginas,
+        // Twee redenen om te stoppen: de lijst is vol, of er kijkt niemand meer. Dat tweede is de
+        // dialoog die dichtgegaan is — doorgaan zou minuten aan een baan van zestig per minuut
+        // kosten voor een venster dat er niet meer is.
+        stop: () => rows.length >= max || (gestopt?.call() ?? false),
+        onEinde: (n, m) {
+          totaal += n;
+          meer = meer || m;
+        },
+        perPagina: (pagina) {
+          for (final v in DiscogsService.orderByPreference(pagina)) {
+            addVersion(v);
+          }
+          onPartial?.call([...rows]);
+        },
+      );
     }
+    // Meer masters dan we gelopen hebben is óók "er is meer", en dat is de stilste van de drie:
+    // niets aan de lijst laat zien dat er nog een master met honderd persingen naast staat.
+    if (masters.length > 3) meer = true;
     if (pinned != null && pinned > 0 && !seen.contains(pinned)) {
       final rij = await keuzeVanRelease(pinned);
       if (rij != null) {
         rows.insert(0, rij);
         seen.add(pinned);
+        // Ook doorgeven. De aanroeper leest de lijst via [onPartial] — deze regel als enige alleen
+        // via de retourwaarde geven is hoe de vastgezette uitgave uit de kiezer verdween.
+        onPartial?.call([...rows]);
       }
     }
-    onPartial?.call([...rows]);
+    onEinde?.call(totaal, meer);
     return rows;
   }
 
@@ -1821,19 +1892,28 @@ extension DiscogsChoices on DiscogsService {
   /// en dan is "alles" ook alles.
   Future<List<ReleaseChoice>> keuzesVanMaster(
     int master, {
+    int max = 400,
     int maxPaginas = 6,
     void Function(List<ReleaseChoice>)? onPartial,
+    void Function(int totaal, bool meer)? onEinde,
+    bool Function()? gestopt,
   }) async {
     if (master <= 0) return const [];
     final rows = <ReleaseChoice>[];
     final seen = <int>{};
-    await versionsOf(master, maxPaginas: maxPaginas, perPagina: (pagina) {
-      for (final v in DiscogsService.orderByPreference(pagina)) {
-        if (v.id <= 0 || !seen.add(v.id)) continue;
-        rows.add(rijVanVersie(v));
-      }
-      onPartial?.call([...rows]);
-    });
+    await versionsOf(
+      master,
+      maxPaginas: maxPaginas,
+      stop: () => rows.length >= max || (gestopt?.call() ?? false),
+      onEinde: onEinde,
+      perPagina: (pagina) {
+        for (final v in DiscogsService.orderByPreference(pagina)) {
+          if (v.id <= 0 || rows.length >= max || !seen.add(v.id)) continue;
+          rows.add(rijVanVersie(v));
+        }
+        onPartial?.call([...rows]);
+      },
+    );
     return rows;
   }
 

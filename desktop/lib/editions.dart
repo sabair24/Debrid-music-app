@@ -46,6 +46,28 @@ List<String> pressingFacts({
   ];
 }
 
+/// Hoeveel een rij te vertellen heeft. Er mag nooit voor minder geruild worden.
+///
+/// **Dit getal is de reparatie van twee fouten die er precies hetzelfde uitzagen.** De kiezer krijgt
+/// dezelfde uitgave meer dan eens aangeboden. MusicBrainz levert zijn rijen eerst kaal en daarna
+/// nog eens per persing zodra de scans binnen zijn; het nummerveld levert een rij die per definitie
+/// nog geen scans heeft. Twee keer dezelfde sleutel dus — en in het ene geval is de nieuwe rij
+/// beter, in het andere juist slechter.
+///
+/// Zonder dit onderscheid ging het altijd mis. De rij domweg overnemen wiste de scans die net waren
+/// opgehaald; de rij domweg overslaan liet elke MusicBrainz-uitgave voor eeuwig op "scans ophalen…"
+/// staan. Allebei een molentje dat nooit stopt.
+///
+/// Vier punten voor "er is naar gekeken", want dat is de vraag die de rij zelf stelt; de rest telt
+/// wat er gevonden is. Zo verliest een rij die is opgezocht en niets had het nooit van een rij waar
+/// nog niemand naar keek.
+int rijkdom(ReleaseChoice c) =>
+    (c.detailed ? 4 : 0) +
+    (c.front != null ? 1 : 0) +
+    (c.back != null ? 1 : 0) +
+    (c.disc != null ? 1 : 0) +
+    (c.tracklist.isNotEmpty ? 1 : 0);
+
 class ChoiceImage {
   final String uri, thumb;
   const ChoiceImage(this.uri, this.thumb);
@@ -161,7 +183,16 @@ class ReleaseChoice {
   String get dedupeKey {
     final b = (barcode ?? '').replaceAll(RegExp(r'\D'), '');
     if (b.length >= 8) return 'bc:$b';
-    final c = (catno ?? '').toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    final ruw = (catno ?? '').trim().toLowerCase();
+    // "none" is geen catalogusnummer maar het WOORD dat Discogs schrijft als er geen is. Het als
+    // nummer behandelen maakte van elke promo, elke testpersing en elk witlabel uit hetzelfde land
+    // één enkele rij — en dat is nu juist het soort uitgave waarvoor iemand deze kiezer opent. Ze
+    // hebben geen nummer; dan valt er ook niets aan te ontdubbelen, en vallen ze terug op [key],
+    // waar ze allemaal apart blijven staan.
+    //
+    // Dezelfde regel staat hierboven in [line] om het niet te TONEN. Dat het daar wel stond en hier
+    // niet, is hoe rijen konden verdwijnen zonder dat er iets van te zien was.
+    final c = ruw == 'none' ? '' : ruw.replaceAll(RegExp(r'[^a-z0-9]'), '');
     if (c.isNotEmpty) return 'cn:${(country ?? '').toLowerCase()}|$c';
     // Nothing identifying at all — keep it, rather than collapsing every undocumented stub into one.
     return key;

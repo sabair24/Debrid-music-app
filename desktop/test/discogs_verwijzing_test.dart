@@ -13,6 +13,32 @@ library;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/discogs.dart';
+import 'package:debridmusic/editions.dart';
+
+ReleaseChoice rij({
+  int id = 1,
+  String? catno,
+  String? country,
+  String? barcode,
+  bool detailed = false,
+  ChoiceImage? front,
+  ChoiceImage? back,
+  ChoiceImage? disc,
+}) =>
+    ReleaseChoice(
+      source: EditionSource.discogs,
+      releaseId: id,
+      format: 'CD',
+      catno: catno,
+      country: country,
+      barcode: barcode,
+      detailed: detailed,
+      front: front,
+      back: back,
+      disc: disc,
+    );
+
+const _plaatje = ChoiceImage('https://x/a.jpg', 'https://x/a-thumb.jpg');
 
 void main() {
   group('waar een ingetypt nummer naar wijst', () {
@@ -60,11 +86,14 @@ void main() {
       expect(DiscogsVerwijzing.ontleed('discogs.com/release/7738290')?.id, 7738290);
     });
 
-    test('de staart van een link zonder de link erbij', () {
-      // Wat je overhoudt als je alleen het laatste stuk van het adres pakt.
-      final v = DiscogsVerwijzing.ontleed('7738290-Stromae-Te-Quiero');
-      expect(v?.id, 7738290);
-      expect(v?.isMaster, isFalse);
+    test('een slug zonder link is dubbelzinnig en wordt geweigerd', () {
+      // "7738290-Stromae-Te-Quiero" komt uit een uitgave-link en "1938390-Stromae-Racine-Carree"
+      // uit een master-link, en ze zien er identiek uit. Master- en uitgavenummers lopen bovendien
+      // door hetzelfde bereik, dus een gok haalt geen "verkeerde soort" op maar een WILDVREEMDE
+      // uitgave — en zet die bovenaan als degene die je vroeg. Weigeren is hier het goede antwoord;
+      // de hele link plakken werkt wel, want daar staat in wat het is.
+      expect(DiscogsVerwijzing.ontleed('7738290-Stromae-Te-Quiero'), isNull);
+      expect(DiscogsVerwijzing.ontleed('1938390-Stromae-Racine-Carree'), isNull);
     });
 
     test('en wat er GEEN nummer is levert niets, en geen gok', () {
@@ -114,6 +143,68 @@ void main() {
           }),
           1);
       expect(DiscogsService.itemAantal(null), isNull);
+    });
+
+    test('een getal als tekst gooit niet, maar wordt gelezen', () {
+      // `as num?` gooit op een tekst in plaats van null te geven, en die fout viel tot in de
+      // dialoog — die er dan "Discogs was niet bereikbaar" van maakte terwijl er net een pagina
+      // vol uitgaves was binnengekomen.
+      expect(
+          DiscogsService.paginaAantal({
+            'pagination': {'pages': '4'}
+          }),
+          4);
+      expect(
+          DiscogsService.paginaAantal({
+            'pagination': {'pages': 'weet ik veel'}
+          }),
+          1);
+    });
+  });
+
+  group('twee keer dezelfde uitgave in de lijst', () {
+    test('een rij mag nooit voor een armere geruild worden', () {
+      final kaal = rij();
+      final metHoes = rij(front: _plaatje);
+      final opgezocht = rij(detailed: true, front: _plaatje, back: _plaatje, disc: _plaatje);
+      final opgezochtEnLeeg = rij(detailed: true);
+
+      // De MusicBrainz-kant: eerst kaal, daarna opnieuw met alles erin. Zonder deze volgorde bleef
+      // elke uitgave voor eeuwig op "scans ophalen…" staan.
+      expect(rijkdom(opgezocht), greaterThan(rijkdom(kaal)));
+      expect(rijkdom(metHoes), greaterThan(rijkdom(kaal)));
+
+      // De nummerveld-kant: wat het veld ophaalt is per definitie nog niet opgezocht. Dat over een
+      // rij heen zetten die al scans had is de andere helft van hetzelfde molentje.
+      expect(rijkdom(kaal), lessThan(rijkdom(opgezocht)));
+
+      // En de regel die die twee verenigt: opgezocht-en-niets-gevonden is nog altijd een ANTWOORD,
+      // en telt zwaarder dan een rij waar nog nooit iemand naar gekeken heeft.
+      expect(rijkdom(opgezochtEnLeeg), greaterThan(rijkdom(metHoes)));
+    });
+  });
+
+  group('wanneer twee rijen dezelfde persing zijn', () {
+    test('"none" is geen catalogusnummer', () {
+      // DE reden dat een promo onvindbaar was. Discogs schrijft letterlijk "none" waar een uitgave
+      // geen catalogusnummer heeft — precies wat promo's, testpersingen en witlabels gemeen hebben.
+      // Als nummer behandeld werden ze allemaal één rij, en die ene rij was er dan één van.
+      final a = rij(id: 1, catno: 'none', country: 'Europe');
+      final b = rij(id: 2, catno: 'none', country: 'Europe');
+      expect(a.dedupeKey, isNot(b.dedupeKey));
+      // Hoofdletters en spaties eromheen zijn hetzelfde woord.
+      expect(rij(id: 3, catno: ' None ', country: 'Europe').dedupeKey,
+          isNot(rij(id: 4, catno: 'NONE', country: 'Europe').dedupeKey));
+    });
+
+    test('een echt catalogusnummer ontdubbelt nog steeds wel', () {
+      // Anders zou dezelfde persing twee keer in de lijst staan: één keer van MusicBrainz en één
+      // keer van Discogs. Dat is waar deze sleutel voor gemaakt is en dat moet blijven werken.
+      expect(rij(id: 1, catno: '88725453152', country: 'FR').dedupeKey,
+          rij(id: 2, catno: '887-254 531 52', country: 'fr').dedupeKey);
+      // En een streepjescode wint van allebei.
+      expect(rij(id: 1, barcode: '0888751234561', catno: 'A').dedupeKey,
+          rij(id: 2, barcode: '088875 123456 1', catno: 'B').dedupeKey);
     });
   });
 }
