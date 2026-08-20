@@ -16141,7 +16141,17 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                               height: 10,
                               child: CircularProgressIndicator(strokeWidth: 1.4, color: _muted)),
                           SizedBox(width: 6),
-                          Text('scans ophalen…', style: TextStyle(color: _muted, fontSize: 10.5)),
+                          // `Flexible`, want deze twee zitten expres in een eigen Row en juist
+                          // daardoor beschermt de Wrap eromheen ze niet: een Row geeft zijn vaste
+                          // kinderen geen breedtegrens, dus de tekst neemt zijn volle 78 punten en
+                          // loopt op een smalle telefoon een paar punten over de rand. Zo krimpt hij
+                          // met puntjes in plaats van eroverheen te tekenen.
+                          Flexible(
+                            child: Text('scans ophalen…',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(color: _muted, fontSize: 10.5)),
+                          ),
                         ])
                       else ...[
                         _tag('achterkant', c.hasBack),
