@@ -82,6 +82,12 @@ class FakeServer {
       }
       if (cut != null) {
         // What a dropped connection looks like: bytes, then nothing.
+        //
+        // De `flush` is niet kosmetisch. Zonder hem blijven die bytes in de bufferruimte staan, en
+        // een `close()` die struikelt over de beloofde lengte gooit ze wég: de client kreeg dan
+        // NUL bytes en meteen een fout. Dat is geen afgebroken download maar een mislukte, en het
+        // liet drie toetsen hierover iets anders meten dan ze dachten.
+        await req.response.flush().catchError((_) {});
         await req.response.close().catchError((_) {});
         return;
       }
@@ -300,7 +306,11 @@ void main() {
 
       final job = store.jobs.singleWhere((j) => j.path == path);
       expect(job.error, isNotNull, reason: 'anders weet niemand ooit dat het misging');
-      expect(job.error, contains('afgebroken'));
+      // Hoever hij kwam, niet hoe de uitzondering heette. De ruwe tekst is
+      // "ClientException: Connection closed while receiving data, uri=http://..." en daar heeft
+      // niemand op een telefoon iets aan.
+      expect(job.error, contains('afgebroken bij'));
+      expect(job.error, isNot(contains('Exception')));
       expect(store.foutVoor(path), isNotNull);
       // En hij is NIET bezig, want daar hangt de knop aan: een uitgezette knop na een mislukking
       // laat geen weg terug open.

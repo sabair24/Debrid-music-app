@@ -354,7 +354,14 @@ class OfflineStore extends ChangeNotifier {
     if (tekst.contains('No space left') || tekst.contains('ENOSPC')) {
       return 'geen ruimte meer op dit toestel';
     }
-    if (e is SocketException) return 'geen verbinding met de pc';
+    // Een verbinding die halverwege wegvalt komt hier NIET als SocketException binnen: `package:http`
+    // pakt hem in als ClientException, en die tekst — "Connection closed while receiving data,
+    // uri=http://192.168.1.8:8080/stream/..." — staat op een telefoon even ver van de gebruiker af
+    // als niets zeggen. De bouwstraat wees dit aan; zie offline_test.dart.
+    if (tekst.contains('Connection closed') || tekst.contains('Connection reset')) {
+      return 'de verbinding viel weg';
+    }
+    if (e is SocketException || e is http.ClientException) return 'geen verbinding met de pc';
     if (tekst.contains('HTTP 401') || tekst.contains('HTTP 403')) {
       return 'de pc weigerde de sleutel — opnieuw koppelen';
     }
@@ -475,14 +482,15 @@ class OfflineStore extends ChangeNotifier {
         out.add(chunk);
         written += chunk.length;
         deelBewaren = true;
+        // Bijhouden per stuk, MELDEN per twee procent. De teller moet kloppen op het moment dat het
+        // misgaat — daar hangt "afgebroken bij ... van ..." aan; het scherm hoeft niet zo vaak te
+        // horen dat er iets veranderd is. Een FLAC is tienduizenden stukjes, en een melding per
+        // stukje hertekent het downloadscherm net zo vaak.
+        job.gedaan = written;
         if (total > 0) {
           final next = written / total;
-          // Only when the bar would visibly move. A FLAC is tens of thousands of chunks and a
-          // notifyListeners per chunk rebuilds the whole downloads screen thousands of times.
           if (job.progress == null || next - job.progress! >= 0.02) {
-            job
-              ..progress = next
-              ..gedaan = written;
+            job.progress = next;
             notifyListeners();
           }
         }
@@ -513,17 +521,25 @@ class OfflineStore extends ChangeNotifier {
         album: album,
         savedAt: DateTime.now(),
       );
-      await _save();
+      // Eerst afmelden, dan pas de index wegschrijven. Andersom is er een moment — de tijd van één
+      // schrijfactie — waarop dit nummer zowel "staat op het toestel" als "wordt nog opgehaald" is,
+      // en dan meldt de knop "Ophalen 1/1" van iets wat al af is.
       job.done = true;
       _jobs.remove(libraryPath);
       notifyListeners();
+      await _save();
       return true;
     } catch (e) {
       // **De taak blijft staan.** Vroeger werd hij hier weggegooid op hetzelfde moment dat de fout
       // erin gezet werd, en las niemand hem ooit: de knop sprong terug naar "Offline bewaren" en er
       // stond nergens dat of waarom het mislukt was. Nu blijft hij, met de reden erbij, tot iemand
       // hem opnieuw probeert of weghaalt.
-      job.error = _leesbaar(e);
+      // Hoever hij kwam gaat vóór wat de fout heette. "Afgebroken bij 1,2 van 4,7 GB" zegt allebei
+      // de dingen die ertoe doen — het lukte niet, en hij was ver — waar de naam van de uitzondering
+      // alleen het eerste zegt, en dan nog in het Engels.
+      job.error = deelBewaren && job.totaal > 0 && job.gedaan < job.totaal
+          ? 'afgebroken bij ${_maat(job.gedaan)} van ${_maat(job.totaal)}'
+          : _leesbaar(e);
       job.wacht = false;
       // Close before deleting, and swallow what close() rethrows: a sink whose stream errored
       // hands that same error back here, and it is already being reported as job.error.
