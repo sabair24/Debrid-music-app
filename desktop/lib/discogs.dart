@@ -224,6 +224,63 @@ class DiscogsVersion {
   }
 }
 
+/// Waar een ingetypt Discogs-nummer naar wijst: één persing, of een heel master.
+///
+/// Het verschil is niet academisch. `[r7738290]` is de promo-cd van Te Quiero — één rij. `[m1938390]`
+/// is het master waar die persing onder hangt en levert er tientallen. Discogs schrijft ze zelf met
+/// die letters ervoor, en de kiezer mag ze allebei aannemen.
+enum DiscogsSoort { release, master }
+
+class DiscogsVerwijzing {
+  final DiscogsSoort soort;
+  final int id;
+  const DiscogsVerwijzing(this.soort, this.id);
+
+  bool get isMaster => soort == DiscogsSoort.master;
+
+  /// Wat de gebruiker ook plakt, hier komt een nummer uit — of niets.
+  ///
+  /// **Waarom dit een eigen functie is en geen `int.tryParse` in de dialoog.** Er zijn zes vormen
+  /// waarin ditzelfde nummer op een scherm staat, en ze komen allemaal langs: het kale getal onder
+  /// aan de releasepagina, dezelfde regel met `[r…]` eromheen zoals Discogs hem in verwijzingen
+  /// schrijft, de gedeelde link, diezelfde link met een taalcode erin (`/fr/release/…`, `/nl/…` —
+  /// wat je krijgt als je niet in het Engels bladert), de titel-slug erachter, en de api-vorm met
+  /// `releases` in het meervoud. Eén ervan niet aannemen betekent dat iemand die de link deelt te
+  /// horen krijgt dat zijn nummer niet bestaat, terwijl het er gewoon staat.
+  static DiscogsVerwijzing? ontleed(String invoer) {
+    final t = invoer.trim();
+    if (t.isEmpty) return null;
+
+    DiscogsVerwijzing? maak(String soort, String cijfers) {
+      final id = int.tryParse(cijfers);
+      if (id == null || id <= 0) return null;
+      final m = soort.toLowerCase().startsWith('m');
+      return DiscogsVerwijzing(m ? DiscogsSoort.master : DiscogsSoort.release, id);
+    }
+
+    // Een link. `[^\s]*?` vangt de taalcode die Discogs ertussen zet zodra je niet in het Engels
+    // bladert; `s?` vangt de api-vorm (releases/masters) die in meervoud staat.
+    final link = RegExp(r'discogs\.com/[^\s]*?/?(release|master)s?/(\d+)', caseSensitive: false)
+        .firstMatch(t);
+    if (link != null) return maak(link.group(1)!, link.group(2)!);
+
+    // Discogs' eigen schrijfwijze, met of zonder haken.
+    final code = RegExp(r'^\[?([rm])(\d+)\]?$', caseSensitive: false).firstMatch(t);
+    if (code != null) return maak(code.group(1)!, code.group(2)!);
+
+    // Een kaal nummer is een UITGAVE. Dat is het nummer dat op de pagina van één persing staat en
+    // dat is waar iemand mee hier komt; een master noem je met de `m` ervoor of met zijn link.
+    // De staart erachter mag: "7738290-Stromae-Te-Quiero" is wat je overhoudt als je de slug uit
+    // een link kopieert.
+    final kaal = RegExp(r'^(\d+)(?:[-\s/].*)?$').firstMatch(t);
+    if (kaal != null) return maak('r', kaal.group(1)!);
+    return null;
+  }
+
+  @override
+  String toString() => '${isMaster ? 'm' : 'r'}$id';
+}
+
 /// Discogs: the deepest catalogue there is for what a record actually IS — every pressing, its
 /// label, its catalogue number, who played on it. Deezer stays the search engine (it is faster and
 /// far less noisy for pop, and it is the only one of the two that can recommend anything); this
@@ -531,14 +588,42 @@ class DiscogsService {
   /// Thriller has hundreds of pressings; asking for a hundred of them sorted by date returns the
   /// 1982-84 vinyl and nothing else, which is how its page came to describe a Costa Rican LP.
   /// Public wrapper, so the picker extension can list pressings per format.
-  Future<List<DiscogsVersion>> versionsOf(int master, {String? format}) =>
-      _versions(master, format: format);
+  Future<List<DiscogsVersion>> versionsOf(
+    int master, {
+    String? format,
+    int maxPaginas = 1,
+    void Function(List<DiscogsVersion>)? perPagina,
+    bool Function()? stop,
+  }) =>
+      _versions(master,
+          format: format, maxPaginas: maxPaginas, perPagina: perPagina, stop: stop);
 
-  Future<List<DiscogsVersion>> _versions(int master, {String? format}) async {
-    final f = format == null ? '' : '&format=${_q(format)}';
-    final body = await _get(
-      'https://api.discogs.com/masters/$master/versions?per_page=50&sort=released$f',
-    );
+  /// Honderd, het maximum dat Discogs toestaat.
+  ///
+  /// Er stond vijftig, en dat was een halve pagina weggooien per request op de schaarste die telt:
+  /// het budget is zestig REQUESTS per minuut, niet zestig regels. Elke oproep hieronder haalt nu
+  /// twee keer zoveel op voor dezelfde prijs.
+  static const _perPagina = 100;
+
+  /// Hoeveel pagina's dit antwoord zegt te hebben.
+  ///
+  /// Ontbreekt het blok — een oude cache, een uitgekleed antwoord — dan is het antwoord één, en
+  /// niet nul: nul zou de lus laten denken dat er niets is terwijl er net een pagina binnenkwam.
+  static int paginaAantal(Map<String, dynamic>? body) {
+    final p = body?['pagination'];
+    if (p is! Map) return 1;
+    final n = (p['pages'] as num?)?.toInt() ?? 1;
+    return n < 1 ? 1 : n;
+  }
+
+  /// Hoeveel uitgaves dit master er in totaal heeft, volgens Discogs zelf. Null als het niet staat.
+  static int? itemAantal(Map<String, dynamic>? body) {
+    final p = body?['pagination'];
+    if (p is! Map) return null;
+    return (p['items'] as num?)?.toInt();
+  }
+
+  static List<DiscogsVersion> _lezVersies(Map<String, dynamic>? body) {
     final list = body?['versions'] as List<dynamic>? ?? const [];
     final out = <DiscogsVersion>[];
     for (final v in list) {
@@ -558,6 +643,38 @@ class DiscogsService {
           (v['thumb'] as String?)?.trim(),
         ),
       );
+    }
+    return out;
+  }
+
+  /// [maxPaginas] is standaard 1, en dat is met opzet: elke pagina is een request uit een budget
+  /// van zestig per minuut. De automatische paden (hoes zoeken, uitgave bepalen) hebben aan de
+  /// eerste pagina genoeg — ze zoeken de BESTE pressing, niet alle. Alleen de kiezer, waar de
+  /// gebruiker om álles vraagt, zet hem hoger en krijgt elke pagina meteen te zien via [perPagina].
+  Future<List<DiscogsVersion>> _versions(
+    int master, {
+    String? format,
+    int maxPaginas = 1,
+    void Function(List<DiscogsVersion>)? perPagina,
+    bool Function()? stop,
+  }) async {
+    final f = format == null ? '' : '&format=${_q(format)}';
+    final out = <DiscogsVersion>[];
+    for (var pagina = 1; pagina <= maxPaginas; pagina++) {
+      // De aanroeper heeft genoeg. Doorgaan zou requests kosten uit een budget van zestig per
+      // minuut voor rijen die toch niet meer in de lijst passen.
+      if (stop != null && stop()) break;
+      final body = await _get(
+        'https://api.discogs.com/masters/$master/versions'
+        '?per_page=$_perPagina&page=$pagina&sort=released$f',
+      );
+      // Geen antwoord: teruggeven wat er wél is. Een halve lijst is meer dan een lege, en de
+      // volgende pagina opvragen na een 429 maakt die 429 alleen maar langer.
+      if (body == null) break;
+      final gelezen = _lezVersies(body);
+      out.addAll(gelezen);
+      if (gelezen.isNotEmpty) perPagina?.call(gelezen);
+      if (pagina >= paginaAantal(body)) break;
     }
     return out;
   }
@@ -1575,10 +1692,10 @@ extension DiscogsChoices on DiscogsService {
   /// of waiting. The reason was the shape of the work: it fetched each release in full — one
   /// request apiece, a second apart — before showing anything at all.
   ///
-  /// But a master's versions listing already carries, in ONE request, everything a row needs to be
-  /// worth reading: format, label, catalogue number, country, year and the front cover. Measured on
-  /// Escape, all seventy-five come back in 655 ms. So the list is built from that and handed over
-  /// immediately.
+  /// But a master's versions listing already carries — a hundred pressings per request — everything
+  /// a row needs to be worth reading: format, label, catalogue number, country, year and the front
+  /// cover. Measured on Escape, all seventy-five come back in 655 ms. So the list is built from that
+  /// and handed over immediately, page by page.
   ///
   /// The per-release lookups — the only way to learn whether a pressing has a back or a disc, since
   /// Discogs never says what an image is — are NOT done here. Running them for forty rows up front,
@@ -1594,7 +1711,8 @@ extension DiscogsChoices on DiscogsService {
   Future<List<ReleaseChoice>> releaseChoices(
     String artist,
     String album, {
-    int max = 80,
+    int max = 400,
+    int maxPaginas = 6,
     int? pinned,
     void Function(List<ReleaseChoice>)? onPartial,
   }) async {
@@ -1603,55 +1721,119 @@ extension DiscogsChoices on DiscogsService {
 
     void addVersion(DiscogsVersion v) {
       if (rows.length >= max || v.id <= 0 || !seen.add(v.id)) return;
-      rows.add(
-        ReleaseChoice(
-          source: EditionSource.discogs,
-          releaseId: v.id,
-          format: v.major.isEmpty ? v.format : v.major,
-          label: v.label,
-          catno: v.catno,
-          country: v.country,
-          year: v.year,
-          // The sleeve, straight from the listing — no lookup needed to show it.
-          front: (v.thumb ?? '').isEmpty ? null : ChoiceImage(v.thumb!, v.thumb!),
-          detailed: false,
-        ),
-      );
+      // A tape scan is not what anyone is choosing to describe their FLACs with.
+      if (v.major.toLowerCase().contains('cassette')) return;
+      rows.add(rijVanVersie(v));
     }
 
-    // ── The list, off one request per master ────────────────────────────────
+    // ── De lijst, pagina voor pagina ─────────────────────────────────────────
+    //
+    // Er stond één request per master en dat was één PAGINA per master: vijftig persingen, en van
+    // een plaat met meer was de rest onzichtbaar. Er was geen melding, geen "en nog 90" — de lijst
+    // hield gewoon op, en wie de cd zocht die er wél is kreeg hem nooit te zien.
+    //
+    // Elke pagina wordt doorgegeven zodra hij binnen is. Dat is wat het snel houdt: de eerste
+    // honderd staan er na één request, de rest schuift er in stilte achteraan.
+    //
+    // De voorkeursvolgorde geldt BINNEN een pagina en niet over het geheel, en dat is een keuze.
+    // Over het geheel sorteren kan pas als alles binnen is — dan zou de lijst pas ná de laatste
+    // pagina mogen verschijnen, of hij zou bij elke pagina onder je vinger door schudden. Discogs
+    // levert op datum, dus de oorspronkelijke persing staat sowieso op pagina één; wie iets
+    // specifieks zoekt heeft de formaatknoppen en het nummerveld.
     final masters = await masterIds(artist, album);
     for (final master in masters.take(3)) {
       if (rows.length >= max) break;
       // No format filter: one unfiltered call returns every pressing, where asking per format cost
       // a request each and still capped what came back.
-      final all = DiscogsService.orderByPreference(await versionsOf(master));
-      for (final v in all) {
-        // A tape scan is not what anyone is choosing to describe their FLACs with.
-        if (v.major.toLowerCase().contains('cassette')) continue;
-        addVersion(v);
-      }
+      await versionsOf(master, maxPaginas: maxPaginas, stop: () => rows.length >= max,
+          perPagina: (pagina) {
+        for (final v in DiscogsService.orderByPreference(pagina)) {
+          addVersion(v);
+        }
+        onPartial?.call([...rows]);
+      });
     }
     if (pinned != null && pinned > 0 && !seen.contains(pinned)) {
-      final e = await release(pinned);
-      if (e != null) {
-        rows.insert(
-          0,
-          ReleaseChoice(
-            source: EditionSource.discogs,
-            releaseId: e.releaseId,
-            format: e.format,
-            label: e.label,
-            catno: e.catno,
-            country: e.country,
-            year: e.year,
-            detailed: false,
-          ),
-        );
+      final rij = await keuzeVanRelease(pinned);
+      if (rij != null) {
+        rows.insert(0, rij);
         seen.add(pinned);
       }
     }
     onPartial?.call([...rows]);
+    return rows;
+  }
+
+  /// Eén regel uit de versielijst, als rij voor de kiezer.
+  ReleaseChoice rijVanVersie(DiscogsVersion v) => ReleaseChoice(
+        source: EditionSource.discogs,
+        releaseId: v.id,
+        format: v.major.isEmpty ? v.format : v.major,
+        label: v.label,
+        catno: v.catno,
+        country: v.country,
+        year: v.year,
+        // The sleeve, straight from the listing — no lookup needed to show it.
+        front: (v.thumb ?? '').isEmpty ? null : ChoiceImage(v.thumb!, v.thumb!),
+        detailed: false,
+      );
+
+  /// Eén uitgave, op nummer opgezocht.
+  ///
+  /// Voor het veld waar de gebruiker een Discogs-nummer intypt. `detailed: false`, zodat de kiezer
+  /// de scans langs zijn gewone weg ophaalt zodra de rij op het scherm staat — één weg naar die
+  /// lookup en niet twee. De hoes komt wel meteen mee: het antwoord ligt er toch al, en een rij die
+  /// een tel lang leeg is leest als "deze uitgave heeft niets".
+  Future<ReleaseChoice?> keuzeVanRelease(int releaseId) async {
+    if (releaseId <= 0) return null;
+    final e = await release(releaseId);
+    if (e == null) return null;
+    DiscogsImage? hoes;
+    for (final i in e.images) {
+      if (i.primary) {
+        hoes = i;
+        break;
+      }
+    }
+    hoes ??= e.images.isEmpty ? null : e.images.first;
+    return ReleaseChoice(
+      source: EditionSource.discogs,
+      releaseId: e.releaseId,
+      format: e.format,
+      label: e.label,
+      catno: e.catno,
+      country: e.country,
+      barcode: e.barcode,
+      year: e.year,
+      front: hoes == null ? null : ChoiceImage(hoes.uri, hoes.thumb),
+      detailed: false,
+    );
+  }
+
+  /// Elke persing onder één master, op nummer opgezocht.
+  ///
+  /// Voor hetzelfde veld: plak je de link van een master, dan is dat de vraag "laat mij ALLE
+  /// uitgaves van dít master zien" — en dat is meteen de uitweg als het zoeken op naam op het
+  /// verkeerde master uitkwam, wat bij een plaat met een titel die vaker voorkomt gewoon gebeurt.
+  ///
+  /// Anders dan [releaseChoices] laat dit ook cassettes staan. Daar worden ze weggelaten omdat
+  /// niemand zijn FLAC-map met een bandje beschrijft; hier is er expliciet om dít master gevraagd,
+  /// en dan is "alles" ook alles.
+  Future<List<ReleaseChoice>> keuzesVanMaster(
+    int master, {
+    int maxPaginas = 6,
+    void Function(List<ReleaseChoice>)? onPartial,
+  }) async {
+    if (master <= 0) return const [];
+    final rows = <ReleaseChoice>[];
+    final seen = <int>{};
+    await versionsOf(master, maxPaginas: maxPaginas, perPagina: (pagina) {
+      for (final v in DiscogsService.orderByPreference(pagina)) {
+        if (v.id <= 0 || !seen.add(v.id)) continue;
+        rows.add(rijVanVersie(v));
+      }
+      onPartial?.call([...rows]);
+    });
     return rows;
   }
 

@@ -79,12 +79,14 @@ jobs:
       # — zo brak win-v3.9.142 en kwam er die dag geen Mac-versie uit. Deze bouw draait óók op elke
       # `claude/**`-tak, en dat is waar een fout thuishoort: vóór het samenvoegen.
       #
-      # Alleen deze twee: het zijn de toetsen die meten wat er op een telefoonscherm past, en dat is
-      # het enige wat hier zonder toestel te controleren valt. De hele map duurt minuten en wacht op
-      # het netwerk.
-      - name: Layout tests
+      # Een handvol, en met opzet: dit zijn de toetsen die zonder toestel en zonder netwerk iets
+      # kunnen zeggen. De hele map duurt minuten en wacht op het net.
+      - name: Layout and parsing tests
         working-directory: desktop
-        run: flutter test test/onderbalk_test.dart test/artiestkop_knoppen_test.dart
+        run: |
+          flutter test \
+            test/onderbalk_test.dart test/artiestkop_knoppen_test.dart \
+            test/discogs_verwijzing_test.dart test/updater_test.dart
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
       # the app you actually use while the TV work is in progress — shipping that would install a
