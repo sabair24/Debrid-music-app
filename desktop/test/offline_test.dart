@@ -6,6 +6,7 @@
 /// than no copy at all — it sounds like the track is broken.
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -14,18 +15,29 @@ import 'package:debridmusic/offline.dart';
 import 'package:debridmusic/paths.dart';
 
 /// A stand-in for the PC's /stream route. Serves [bytes], and can be told to hang up halfway.
+///
+/// Doet ook `Range`, want de echte server doet dat (`lan/range.dart`) en het is precies waar
+/// verdergaan-na-een-afbreking op steunt.
 class FakeServer {
   FakeServer(this.bytes);
-  final List<int> bytes;
+  List<int> bytes;
   HttpServer? _server;
 
   /// Close the connection after this many bytes instead of finishing.
   int? cutAfter;
 
+  /// Stuur de koppen en dan nooit meer iets, en hang ook niet op. Een telefoon die van wifi naar
+  /// 4G springt laat precies dit achter: een verbinding die openstaat en zwijgt.
+  bool zwijgNaKoppen = false;
+
   /// How long to wait between chunks, so a test can cancel mid-flight.
   Duration chunkDelay = Duration.zero;
 
   int requests = 0;
+
+  /// Wat er in de laatste `Range`-kop stond, of null. Zo kan een toets zien dat er echt verdergegaan
+  /// is en niet stilletjes opnieuw begonnen.
+  String? laatsteBereik;
 
   Future<Uri> start() async {
     final s = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -33,23 +45,63 @@ class FakeServer {
     s.listen((req) async {
       requests++;
       final cut = cutAfter;
-      req.response.statusCode = 200;
-      req.response.headers.contentType = ContentType('audio', 'flac');
-      // Promised in full even when the connection is about to drop — that is what a real server
-      // does, and it is the only thing that makes a truncated download detectable.
-      req.response.contentLength = bytes.length;
-      var sent = 0;
-      for (var i = 0; i < bytes.length; i += 64) {
-        final end = (i + 64).clamp(0, bytes.length);
-        if (cut != null && sent >= cut) break;
-        req.response.add(bytes.sublist(i, end));
-        sent += end - i;
-        if (chunkDelay > Duration.zero) await Future<void>.delayed(chunkDelay);
-      }
-      if (cut != null) {
-        // What a dropped connection looks like: bytes, then nothing.
-        await req.response.close().catchError((_) {});
+      laatsteBereik = req.headers.value(HttpHeaders.rangeHeader);
+
+      var vanaf = 0;
+      final m = RegExp(r'^bytes=(\d+)-$').firstMatch(laatsteBereik ?? '');
+      if (m != null) vanaf = int.parse(m.group(1)!);
+
+      if (vanaf >= bytes.length) {
+        req.response.statusCode = HttpStatus.requestedRangeNotSatisfiable;
+        req.response.headers.set(HttpHeaders.contentRangeHeader, 'bytes */${bytes.length}');
+        await req.response.close();
         return;
+      }
+
+      final kop = 'HTTP/1.1 ${vanaf > 0 ? '206 Partial Content' : '200 OK'}\r\n'
+          'Content-Type: audio/flac\r\n'
+          'Accept-Ranges: bytes\r\n'
+          '${vanaf > 0 ? 'Content-Range: bytes $vanaf-${bytes.length - 1}/${bytes.length}\r\n' : ''}'
+          // Promised in full even when the connection is about to drop — that is what a real server
+          // does, and it is the only thing that makes a truncated download detectable.
+          'Content-Length: ${bytes.length - vanaf}\r\n\r\n';
+
+      if (cut != null) {
+        // Wat een afgebroken download écht is: de bytes zijn aangekomen, en dán valt de verbinding
+        // weg.
+        //
+        // **Waarom dit langs de sokkel gaat en niet langs HttpResponse.** `close()` op een antwoord
+        // dat zijn beloofde lengte niet haalt breekt de verbinding HARD af -- een RST -- en dan
+        // gooit de kernel aan de andere kant weg wat er nog ongelezen in de ontvangstbuffer staat.
+        // De client kreeg zo NUL bytes en meteen een fout: dat is een mislukte verbinding, niet een
+        // afgebroken download, en er viel dus ook niets te hervatten. Vier toetsen maten daardoor
+        // iets anders dan ze dachten. Een nette FIN levert wél eerst de bytes af.
+        final socket = await req.response.detachSocket(writeHeaders: false);
+        socket
+          ..add(utf8.encode(kop))
+          ..add(bytes.sublist(vanaf, (vanaf + cut).clamp(0, bytes.length)));
+        await socket.flush();
+        await socket.close();
+        return;
+      }
+
+      req.response.statusCode = vanaf > 0 ? HttpStatus.partialContent : HttpStatus.ok;
+      req.response.headers.contentType = ContentType('audio', 'flac');
+      if (vanaf > 0) {
+        req.response.headers
+            .set(HttpHeaders.contentRangeHeader, 'bytes $vanaf-${bytes.length - 1}/${bytes.length}');
+      }
+      req.response.contentLength = bytes.length - vanaf;
+
+      if (zwijgNaKoppen) {
+        await req.response.flush();
+        return; // en verder niets: de verbinding blijft open en zwijgt
+      }
+
+      for (var i = vanaf; i < bytes.length; i += 64) {
+        final end = (i + 64).clamp(0, bytes.length);
+        req.response.add(bytes.sublist(i, end));
+        if (chunkDelay > Duration.zero) await Future<void>.delayed(chunkDelay);
       }
       await req.response.close();
     });
@@ -141,16 +193,20 @@ void main() {
   });
 
   group('half a copy is no copy', () {
-    test('a dropped connection leaves nothing behind', () async {
+    test('a dropped connection is never offered as a copy', () async {
       server.cutAfter = 5000;
       await download();
 
-      // Not merely absent from the index: no stray part-file either, or the next attempt would
-      // find a name it thinks it already has.
       expect(store.has(path), isFalse);
       expect(store.localFor(path), isNull);
-      final files = Directory('${scratch.path}/offline').listSync();
-      expect(files, isEmpty, reason: 'een .part van een mislukte poging hoort opgeruimd te zijn');
+      // Wat er WEL blijft staan is het halve bestand, en dat is met opzet — zie de groep hieronder.
+      // Wat er niet mag staan is een af bestand: dat zou spelen en dan stoppen, en dat klinkt als
+      // een kapot nummer in plaats van als een mislukte download.
+      final af = Directory('${scratch.path}/offline')
+          .listSync()
+          .where((f) => !f.path.contains('.part'))
+          .toList();
+      expect(af, isEmpty, reason: 'een half bestand mag nooit voor een heel bestand doorgaan');
     });
 
     test('a file that vanished stops being offered', () async {
@@ -247,6 +303,127 @@ void main() {
       }
       expect(store.tracks.length, 2);
       expect(store.has(wensen.last.libraryPath), isFalse);
+    });
+  });
+
+  group('als het misgaat', () {
+    // Waarom deze groep bestaat: gemeld op 20-08-2026 met Thriller (MFSL One Step) — één bestand
+    // van 32 bit/384 kHz, dus gigabytes. De knop bleef "Ophalen 0/1" melden en was uitgezet, dus
+    // opnieuw proberen kon niet eens. Drie dingen misten: een wachtklok, een taak die blijft staan
+    // met de reden erbij, en verdergaan waar het stopte.
+
+    test('een mislukking blijft staan, met een reden die iemand kan lezen', () async {
+      server.cutAfter = 5000;
+      expect(await download(), isFalse);
+
+      final job = store.jobs.singleWhere((j) => j.path == path);
+      expect(job.error, isNotNull, reason: 'anders weet niemand ooit dat het misging');
+      // Hoever hij kwam, niet hoe de uitzondering heette. De ruwe tekst is
+      // "ClientException: Connection closed while receiving data, uri=http://..." en daar heeft
+      // niemand op een telefoon iets aan.
+      expect(job.error, contains('afgebroken bij'));
+      expect(job.error, isNot(contains('Exception')));
+      expect(store.foutVoor(path), isNotNull);
+      // En hij is NIET bezig, want daar hangt de knop aan: een uitgezette knop na een mislukking
+      // laat geen weg terug open.
+      expect(store.isBusy(path), isFalse);
+      expect(store.mislukt, 1);
+    });
+
+    test('opnieuw proberen gaat verder waar hij stopte', () async {
+      server.cutAfter = 5000;
+      await download();
+      expect(server.requests, 1);
+
+      final deel = Directory('${scratch.path}/offline')
+          .listSync()
+          .whereType<File>()
+          .firstWhere((f) => f.path.endsWith('.part'));
+      final al = deel.lengthSync();
+      expect(al, greaterThan(0), reason: 'er stond al wat, en dat is het hele punt');
+
+      server.cutAfter = null;
+      expect(await download(), isTrue);
+
+      expect(server.requests, 2);
+      expect(server.laatsteBereik, 'bytes=$al-',
+          reason: 'zonder Range begint een bestand van gigabytes elke keer weer van voren af aan');
+      expect(File(store.localFor(path)!).readAsBytesSync(), payload,
+          reason: 'twee helften aan elkaar moeten precies het bestand zijn');
+      expect(store.jobs, isEmpty);
+    });
+
+    test('een half bestand van een ANDER bestand wordt niet aangeplakt', () async {
+      server.cutAfter = 5000;
+      await download();
+
+      // De plaat op de pc is vervangen. Verdergaan zou nu twee helften van twee bestanden aan
+      // elkaar plakken: dat speelt af als ruis en niets meldt dat er iets mis is.
+      server
+        ..cutAfter = null
+        ..bytes = List<int>.generate(30000, (i) => (i + 7) % 256);
+
+      expect(await download(), isFalse);
+      expect(store.foutVoor(path), contains('veranderd'));
+
+      // En de volgende poging begint dan wél schoon.
+      expect(await download(), isTrue);
+      expect(File(store.localFor(path)!).readAsBytesSync(), server.bytes);
+    });
+
+    test('een verbinding die stilvalt blijft niet eeuwig hangen', () async {
+      // Dít was de klacht: "Ophalen 0/1" dat blijft staan. Geen fout, geen einde — een verbinding
+      // die openstaat en zwijgt laat `await for` wachten tot het einde der tijden.
+      server.zwijgNaKoppen = true;
+      final geduldig = OfflineStore(stilte: const Duration(milliseconds: 300));
+
+      final klaar = await geduldig
+          .download(libraryPath: path, url: url.toString(), title: 't', artist: 'a', album: 'b')
+          .timeout(const Duration(seconds: 10));
+
+      expect(klaar, isFalse);
+      expect(geduldig.foutVoor(path), 'de verbinding viel stil');
+      expect(geduldig.isBusy(path), isFalse);
+      geduldig.dispose();
+    });
+
+    test('een mislukking wegtikken haalt ook het halve bestand weg', () async {
+      server.cutAfter = 5000;
+      await download();
+      expect(Directory('${scratch.path}/offline').listSync(), isNotEmpty);
+
+      store.cancel(path);
+      // cancel ruimt op de achtergrond op.
+      for (var i = 0; i < 100 && Directory('${scratch.path}/offline').listSync().isNotEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(store.jobs, isEmpty);
+      expect(Directory('${scratch.path}/offline').listSync(), isEmpty);
+    });
+
+    test('een hele plaat loopt door als er één nummer misgaat', () async {
+      // De rij mag niet stoppen op de eerste die niet lukt: dan zijn de andere elf er ook niet.
+      server.cutAfter = 5000;
+      store.bewaarAlles([
+        OfflineRequest(
+            libraryPath: r'D:\m\A\B\1.flac', url: url.toString(), title: '1', artist: 'a',
+            album: 'b'),
+      ]);
+      for (var i = 0; i < 200 && store.mislukt == 0; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      server.cutAfter = null;
+      store.bewaarAlles([
+        OfflineRequest(
+            libraryPath: r'D:\m\A\B\2.flac', url: url.toString(), title: '2', artist: 'a',
+            album: 'b'),
+      ]);
+      for (var i = 0; i < 200 && store.tracks.isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+
+      expect(store.has(r'D:\m\A\B\2.flac'), isTrue);
+      expect(store.mislukt, 1, reason: 'de mislukte staat er nog, zichtbaar en te herhalen');
     });
   });
 
