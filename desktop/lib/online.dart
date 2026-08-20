@@ -652,7 +652,10 @@ class DownloadManager extends ChangeNotifier {
 
   /// Remove finished (done/failed) jobs from the list; keep anything still in progress.
   void clearFinished() {
-    jobs.removeWhere((j) => j.status == 'done' || j.status == 'failed');
+    // Ook 'later' mag weg. Dat haalt de REGEL van het scherm, niet de wens: die staat in
+    // lossless_wants.json en wordt gewoon verder afgewerkt. Zonder dit blijft een rij die niets meer
+    // van je vraagt voor altijd tussen je downloads staan.
+    jobs.removeWhere((j) => j.status == 'done' || j.status == 'failed' || j.status == 'later');
     notifyListeners();
   }
 
@@ -978,6 +981,16 @@ class DownloadManager extends ChangeNotifier {
     /// Vijfenveertig peers afgegaan om iets te vervangen wat al in orde was.
     Echtheidsoordeel? oordeelVanWatErLigt;
 
+    /// Waarom de laatste poging niets opleverde, in de woorden van de peer.
+    ///
+    /// **Dit bestond al en kwam nergens aan.** Elke poging eindigt in een [SlskFail] met een reden —
+    /// "Geweigerd: ...", "Uploader niet bereikbaar (firewall)", "Geen reactie (slot bezet of
+    /// offline)" — of in een plaats in een wachtrij die na een halfuur nog niet aan de beurt was. Dat
+    /// ging naar het logboek en verder nergens heen: op het scherm stond alleen "mislukt", en dat is
+    /// precies de vraag "wat wil dat zeggen?" waar niemand een antwoord op kon geven zonder een
+    /// logbestand open te trekken.
+    String? laatsteReden;
+
     /// Shared success path: file the track away tidily (Albums/Singles/Compilaties per artist)
     /// before the rescan picks it up, so the library never sees the loose landing-zone copy.
     Future<bool> succeed(SlskDone res) async {
@@ -1134,6 +1147,16 @@ class DownloadManager extends ChangeNotifier {
           },
         );
         job.live.remove(c);
+        // Vasthouden waaróm deze peer niets leverde. De laatste die iets zegt wint: bij één vaste
+        // keuze is dat de enige peer die er is, en bij een race is de laatste even willekeurig als
+        // elke andere — maar één echte reden is oneindig veel meer dan "mislukt".
+        if (res is SlskFail) {
+          laatsteReden = '${f.username}: ${res.reason}';
+        } else if (res is SlskQueued && !job.cancelled) {
+          laatsteReden = res.place > 0
+              ? '${f.username} liet ons een halfuur op plaats ${res.place} staan'
+              : '${f.username} hield ons een halfuur in de wachtrij';
+        }
         if (inLine) queued--; // this peer gave up its place; the line really is shorter
         if (!moveOn.isCompleted) moveOn.complete();
         if (res is SlskDone) {
@@ -1258,19 +1281,82 @@ class DownloadManager extends ChangeNotifier {
       if (third != null) return finish(third.$1, third.$2);
     }
 
-    job.status = 'failed';
     job.queuePlace = 0;
     // Don't rewrite the user's own stop as an uploader failure and invite them to retry.
-    if (!job.cancelled) {
-      // Bij een vaste keuze is "geen enkele bron leverde" misleidend: er is niet gezocht, er is
-      // precies één bestand geprobeerd. De gebruiker moet weten dat zijn keuze gerespecteerd is en
-      // dat de volgende stap bij hem ligt.
-      job.detail = keuze != null
-          ? 'deze kopie kwam niet binnen — kies een andere regel in de lijst'
-          : 'geen enkele bron leverde — probeer later opnieuw';
+    if (job.cancelled) {
+      job.status = 'failed';
+      notifyListeners();
+      return false;
     }
+
+    // NIET opgeven. Een peer die nu niet levert is meestal een peer die slaapt, en morgen staat hij
+    // er weer — dat is precies waarom de wenslijst bestaat, en waarom de native client gewoon in de
+    // wachtrij blijft staan. "Mislukt" en dan niets meer was het gat: het enige wat er nog gebeurde
+    // was dat de gebruiker het zelf moest onthouden.
+    final opDeLijst = await _wensNaMislukking(job, keuze);
+    // Bij een vaste keuze is "geen enkele bron leverde" misleidend: er is niet gezocht, er is
+    // precies één bestand geprobeerd.
+    final reden = laatsteReden ??
+        (keuze != null ? 'deze kopie kwam niet binnen' : 'geen enkele bron leverde');
+    job.status = opDeLijst ? 'later' : 'failed';
+    job.detail = opDeLijst
+        ? '$reden — blijft op de lijst, de app probeert het vanzelf opnieuw'
+        : '$reden — kies een andere regel in de lijst';
     notifyListeners();
     return false;
+  }
+
+  /// Een mislukte download op de wenslijst zetten, zodat hij vanzelf opnieuw geprobeerd wordt.
+  ///
+  /// Twee soorten wens, en het verschil is het hele punt:
+  ///
+  /// * **Zelf een regel aangeklikt** — dan wordt PRECIES dat bestand bij PRECIES die peer onthouden.
+  ///   Morgen iets anders van hetzelfde nummer halen zou de overrule zijn die de gebruiker net had
+  ///   weggeklikt: hij koos die regel juist omdat de automaat de verkeerde opname pakte.
+  /// * **Gewoon gedownload** — dan wordt het nummer onthouden en morgen opnieuw gezocht, want dan
+  ///   gaat het om de muziek en niet om die ene peer.
+  ///
+  /// Geeft terug of er iets op de lijst staat. Onwaar betekent: er valt niets te onthouden — geen
+  /// gekozen bestand én geen artiest+titel om op te zoeken. Dan is "kies een andere regel" wél het
+  /// eerlijke antwoord.
+  Future<bool> _wensNaMislukking(DownloadJob job, SoulseekFile? keuze) async {
+    final t = job.authority;
+    final heeftNaam =
+        t != null && t.artist.trim().isNotEmpty && t.title.trim().isNotEmpty;
+    if (keuze == null && !heeftNaam) return false;
+
+    await _ensureWants();
+    final nu = DateTime.now().millisecondsSinceEpoch;
+    final nieuw = _wants.want(LosslessWant(
+      artist: heeftNaam ? t.artist.trim() : '',
+      title: heeftNaam ? t.title.trim() : '',
+      album: heeftNaam ? t.album : '',
+      sinceMs: nu,
+      // Eén poging is er net geweest, en die kostte een halfuur. Op nul beginnen zou betekenen dat
+      // de eerstvolgende ronde meteen weer bij dezelfde slapende peer aanklopt.
+      tries: 1,
+      lastTryMs: nu,
+      authority: heeftNaam ? t : null,
+      performer: heeftNaam ? performerFromFilename(job.name, t.title) : null,
+      exact: keuze == null
+          ? null
+          : VasteBron(
+              username: keuze.username,
+              filename: keuze.filename,
+              size: keuze.size,
+              bitrate: keuze.bitrate,
+              durationSec: keuze.durationSec,
+              sampleRate: keuze.sampleRate,
+              bitDepth: keuze.bitDepth,
+            ),
+    ));
+    if (nieuw) {
+      await _wants.save();
+      _log.line('"${job.name}": niets binnen — op de lijst, volgende poging over '
+          '${_kort(wachtVoor(1))} (${_wants.count} op de lijst)');
+    }
+    // Ook als hij er al stond staat hij op de lijst, en dat is wat het scherm meldt.
+    return true;
   }
 
   /// Identity of a track across peers: the filename without its track number, plus the running
@@ -1428,6 +1514,8 @@ class DownloadManager extends ChangeNotifier {
 
   /// Eén wens: zoek opnieuw, sla geweigerde peers over, en probeer de beste lossless.
   Future<bool> _chaseWant(LosslessWant w) async {
+    // Een wens om één bepaald bestand zoekt niet en vervangt niets: hij klopt opnieuw aan.
+    if (w.exact != null) return _chaseExact(w);
     List<SoulseekFile> hits;
     try {
       hits = await soulseek.search(w.query);
@@ -1504,6 +1592,63 @@ class DownloadManager extends ChangeNotifier {
     _wants.update(w.met(
         tries: w.tries + 1, lastTryMs: DateTime.now().millisecondsSinceEpoch, refused: geweigerd));
     _log.line('wens "${w.artist} — ${w.title}": nog niet — volgende poging over '
+        '${_kort(wachtVoor(w.tries + 1))}');
+    return false;
+  }
+
+  /// Eén wens om PRECIES dit bestand: opnieuw aankloppen bij dezelfde peer, en niets anders.
+  ///
+  /// Geen zoekopdracht, geen "beste lossless", geen vervanging. De gebruiker heeft die regel
+  /// aangeklikt omdat de automatische keuze de verkeerde opname pakte; hier alsnog gaan zoeken zou
+  /// diezelfde overrule zijn, alleen een dag later.
+  ///
+  /// Ruim wachten mag: deze jacht houdt geen downloadslot bezig en er zit niemand naar te kijken.
+  Future<bool> _chaseExact(LosslessWant w) async {
+    final b = w.exact!;
+    final f = SoulseekFile(
+      username: b.username,
+      filename: b.filename,
+      size: b.size,
+      bitrate: b.bitrate,
+      durationSec: b.durationSec,
+      sampleRate: b.sampleRate,
+      bitDepth: b.bitDepth,
+    );
+    final job = DownloadJob(w.title.isEmpty ? f.displayName : w.title);
+    var goed = false;
+    _log.line('vaste keuze "${f.displayName}" van ${b.username}: poging ${w.tries + 1}');
+    try {
+      await soulseek.withSession((session) async {
+        final t0 = DateTime.now();
+        final res = await _rawTransfer(session, f, job, () {},
+            waitInQueue: true, maxWait: const Duration(minutes: 30));
+        _log.line('   ${b.username}: ${_uitkomst(res)}  na ${_kort(DateTime.now().difference(t0))}');
+        if (res is! SlskDone) return;
+        // Dezelfde volgorde als de gewone weg: eerst onthouden dat DIT de gekozen kopie is, dan pas
+        // opbergen — want tijdens het opbergen wordt er al vergeleken met wat er ligt, en zonder die
+        // bescherming wint daar de grootste in plaats van de gekozene.
+        try {
+          await onthoudVasteKeuze(res.path);
+          final uit = await placeFileDetailed(File(res.path), _downloadsRoot,
+              tags: w.authority, staatAl: mapVanBestaande);
+          if (uit.how == Placement.moved) await onthoudVasteKeuze(uit.path);
+        } catch (_) {/* de scan vindt hem waar hij ook landde */}
+        goed = true;
+      });
+    } catch (_) {/* geen sessie, geen net — de wens blijft gewoon staan */}
+
+    if (goed) {
+      _wants.forget(w.key);
+      _log.line('vaste keuze "${f.displayName}": binnen na ${w.tries + 1} '
+          'poging${w.tries == 0 ? "" : "en"} — van de lijst');
+      try {
+        await onLibraryChanged();
+      } catch (_) {}
+      return true;
+    }
+    _wants.update(
+        w.met(tries: w.tries + 1, lastTryMs: DateTime.now().millisecondsSinceEpoch));
+    _log.line('vaste keuze "${f.displayName}": nog niet — volgende poging over '
         '${_kort(wachtVoor(w.tries + 1))}');
     return false;
   }

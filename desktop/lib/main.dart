@@ -9101,6 +9101,10 @@ class DownloadsView extends StatelessWidget {
         // A download the user stopped themselves didn't fail — saying "Mislukt" makes it look
         // like something went wrong with it.
         'failed' => j.cancelled ? 'Gestopt' : 'Mislukt',
+        // Niemand leverde, maar het is niet voorbij: dit nummer staat op de wenslijst en wordt
+        // vanzelf opnieuw geprobeerd. "Mislukt" zou hier zeggen dat jij weer aan zet bent, en dat
+        // is precies de verwarring die dit oplost.
+        'later' => 'Later opnieuw',
         'waiting' => j.queuePlace > 0 ? 'Wacht op peer · plaats ${j.queuePlace}' : 'Wacht op peer',
         'queued' => 'In wachtrij',
         // Already on disk and playable; a better copy is still being chased.
@@ -9114,6 +9118,8 @@ class DownloadsView extends StatelessWidget {
         // Rood is voor iets wat misging. Een download die jij zelf hebt afgezet ging niet mis, en
         // een rode balk met een uitroepteken erboven leest als een probleem dat je moet oplossen.
         'failed' => j.cancelled ? _muted : Colors.redAccent,
+        // Amber, niet rood: er is niets kapot en er hoeft niets opgelost te worden.
+        'later' => const Color(0xFFE0B341),
         'waiting' => const Color(0xFFE0B341),
         'upgrading' => _accent2, // green: you can play it, this is a bonus not a problem
         _ => _accent,
@@ -9122,6 +9128,7 @@ class DownloadsView extends StatelessWidget {
   static IconData statusIcon(DownloadJob j) => switch (j.status) {
         'done' => Icons.check_circle_rounded,
         'failed' => j.cancelled ? Icons.do_not_disturb_on_outlined : Icons.error_rounded,
+        'later' => Icons.update_rounded,
         'waiting' => Icons.hourglass_top_rounded,
         'queued' => Icons.schedule_rounded,
         'upgrading' => Icons.upgrade_rounded,
@@ -9422,6 +9429,21 @@ Widget _downloadControl(BuildContext context,
       }
       if (status == 'done') {
         return const Padding(padding: EdgeInsets.all(9), child: Icon(Icons.check_circle_rounded, color: _accent2, size: 20));
+      }
+      // Niemand leverde, maar het staat op de wenslijst: de app klopt er vanzelf weer aan. Deze knop
+      // is dan "nu meteen", niet "anders gebeurt er niets" — vandaar amber en niet rood.
+      if (status == 'later') {
+        final waarom = job?.detail == null
+            ? 'Nog niet binnen — de app probeert het vanzelf opnieuw'
+            : '${job!.detail} · nu meteen proberen';
+        return TvLabelled(
+          label: waarom,
+          child: IconButton(
+              icon: const Icon(Icons.update_rounded),
+              color: const Color(0xFFE0B341),
+              tooltip: waarom,
+              onPressed: onDownload),
+        );
       }
       if (status == 'failed') {
         return TvLabelled(
@@ -10840,7 +10862,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             final rest = dm.jobs.where((j) => !j.busy).toList();
             final recent = [...actief, ...rest].take(actief.isEmpty ? 2 : 5).toList();
             if (recent.isEmpty) return const SizedBox.shrink();
-            final hasFinished = dm.jobs.any((j) => j.status == 'done' || j.status == 'failed');
+            final hasFinished =
+                dm.jobs.any((j) => j.status == 'done' || j.status == 'failed' || j.status == 'later');
             return Padding(
               padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
               child: Column(
