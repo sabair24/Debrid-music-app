@@ -15115,6 +15115,12 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   int _dgTotaal = 0;
   bool _dgMeer = false;
 
+  /// De sleutel van de vastgezette uitgave, als er één is.
+  ///
+  /// Nodig in [_merge], want juist die ene rij mag nooit sneuvelen op het ontdubbelen: kent
+  /// MusicBrainz dezelfde persing, dan zou je eigen keuze uit de lijst met keuzes verdwijnen.
+  String? _pinSleutel;
+
   /// De rij die zojuist op nummer is opgehaald, zodat je hem terugvindt tussen tweehonderd andere.
   String? _gemarkeerd;
 
@@ -15203,6 +15209,9 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     final settings = context.read<AppSettings>();
     final pinnedMb = lib.pinnedMbid(widget.album);
     final pinnedDg = lib.pinnedRelease(widget.album);
+    _pinSleutel = pinnedMb != null
+        ? 'mb:$pinnedMb'
+        : (pinnedDg != null ? 'dg:$pinnedDg' : null);
 
     try {
       // Shown as it fills in: the pressings the moment they are named, then their scans as each
@@ -15258,9 +15267,14 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       _dgFailed = _dgFailed || DiscogsService.transportErrors > foutenVoor;
     });
     if (_choices?.isEmpty ?? true) {
-      setState(() => _error = _dgFailed
-          ? 'Geen uitgaves gevonden. Discogs was niet bereikbaar, dus de aanvulling ontbreekt.'
-          : 'Geen uitgaves gevonden.');
+      setState(() => _error = !DiscogsService(settings).available
+          // De app weet dit van zichzelf. "Geen uitgaves gevonden" is dan een uitspraak over de
+          // plaat, terwijl de helft van de catalogus nooit gevraagd is.
+          ? 'Geen uitgaves gevonden. Er is geen Discogs-sleutel ingesteld, dus alleen MusicBrainz '
+              'is geraadpleegd.'
+          : _dgFailed
+              ? 'Geen uitgaves gevonden. Discogs was niet bereikbaar, dus de aanvulling ontbreekt.'
+              : 'Geen uitgaves gevonden.');
     }
   }
 
@@ -15276,49 +15290,75 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   /// Beide catalogussen lopen door deze ene weg. Wie het eerst is wint, en dat is MusicBrainz (twee
   /// seconden tegen vijftien) — dezelfde uitkomst als de oude volgorde, maar nu als gevolg van één
   /// regel in plaats van twee die het eens moesten blijven.
-  void _merge(List<ReleaseChoice> nieuw, {bool bovenaan = false}) {
-    if (!mounted || nieuw.isEmpty) return;
+  /// Geeft terug hoeveel rijen er in het BLOK op [opIndex] terecht kwamen — nul als er niets
+  /// veranderde. Het nummerveld leest dat getal, want "de dienst gaf een uitgave terug" en "er staat
+  /// nu een rij op het scherm" zijn twee verschillende dingen, en alleen het tweede telt.
+  int _merge(List<ReleaseChoice> nieuw, {int? opIndex, bool ontdubbel = true}) {
+    if (!mounted || nieuw.isEmpty) return 0;
     final huidig = [...?_choices];
     final plaats = <String, int>{};
     for (var i = 0; i < huidig.length; i++) {
       plaats[huidig[i].key] = i;
     }
     final zelfde = {for (final c in huidig) c.dedupeKey};
+    final gepland = <String, int>{}; // sleutel → plek in [erbij]
 
     final erbij = <ReleaseChoice>[];
     var iets = false;
     for (final c in nieuw) {
+      final g = gepland[c.key];
+      if (g != null) {
+        // Twee keer dezelfde sleutel in één lading. Komt vandaag niet voor, en als het ooit gebeurt
+        // hoort de rijkste te winnen — niet degene die toevallig eerst kwam.
+        if (rijkdom(c) > rijkdom(erbij[g])) erbij[g] = c;
+        continue;
+      }
       final i = plaats[c.key];
       if (i != null) {
-        // Dezelfde rij, opnieuw aangeboden. Alleen overnemen als hij RIJKER is — zie [_rijkdom].
-        if (i >= 0 && rijkdom(c) > rijkdom(huidig[i])) {
+        // Dezelfde rij, opnieuw aangeboden. Alleen overnemen als hij RIJKER is — zie [rijkdom].
+        if (rijkdom(c) > rijkdom(huidig[i])) {
           huidig[i] = c;
+          // De vervanger kan een ANDERE dedupeKey dragen (een uitgave die op nummer is opgehaald
+          // heeft een streepjescode waar de versielijst er geen gaf). Zonder deze regel blijft de
+          // oude sleutel in de verzameling staan en de nieuwe eruit.
+          zelfde.add(c.dedupeKey);
           iets = true;
         }
         continue;
       }
-      // `dedupeKey` houdt dezelfde PERSING uit de andere catalogus tegen.
-      if (!zelfde.add(c.dedupeKey)) continue;
-      plaats[c.key] = -1; // al ingepland, en dus geen tweede keer
+      // `dedupeKey` houdt dezelfde PERSING uit de andere catalogus tegen — maar nooit een rij waar
+      // met zoveel woorden om gevraagd is, en nooit de vastgezette uitgave. Precies díe twee mogen
+      // niet stilletjes wegvallen omdat een andere catalogus dezelfde persing ook kent: dan drukt
+      // de gebruiker op Toon en gebeurt er niets, wat de fout is waar dit veld voor bestaat.
+      if (ontdubbel && c.key != _pinSleutel && !zelfde.add(c.dedupeKey)) continue;
+      zelfde.add(c.dedupeKey);
+      gepland[c.key] = erbij.length;
       erbij.add(c);
       iets = true;
     }
-    if (!bovenaan) {
-      if (!iets && _choices != null) return;
+    if (opIndex == null) {
+      if (!iets && _choices != null) return 0;
       setState(() => _choices = [...huidig, ...erbij]);
-      return;
+      return erbij.length;
     }
-    // Bovenaan gevraagd: ook een rij die er AL stond gaat naar voren. Zonder dat zou het
+    // Op een plek gevraagd: ook een rij die er AL stond schuift daarheen. Zonder dat zou het
     // nummerveld, uitgerekend voor een uitgave die de lijst al bevatte, zeggen "hier is hij" en je
     // vervolgens naar regel één sturen terwijl hij op regel tweehonderd staat.
     final wil = {for (final c in nieuw) c.key};
     final naarVoren = [for (final c in huidig) if (wil.contains(c.key)) c];
-    if (!iets && naarVoren.isEmpty) return;
+    if (!iets && naarVoren.isEmpty) return 0;
+    // [opIndex] is hoeveel rijen deze zelfde opvraging er al bovenaan zette. Alles op nul zetten zou
+    // pagina twee bóven pagina één plakken, en Discogs levert op datum — dan staat de oorspronkelijke
+    // persing onderaan het blok in plaats van bovenaan.
+    final rest = [for (final c in huidig) if (!wil.contains(c.key)) c];
+    final k = opIndex.clamp(0, rest.length);
     setState(() => _choices = [
+          ...rest.take(k),
           ...erbij,
           ...naarVoren,
-          ...[for (final c in huidig) if (!wil.contains(c.key)) c],
+          ...rest.skip(k),
         ]);
+    return erbij.length + naarVoren.length;
   }
 
 
@@ -15421,13 +15461,23 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     });
 
     // Bovenaan erbij, zodra er iets is. Dezelfde weg als de gewone lijst, dus een rij die al
-    // stond en al zijn scans had houdt ze — zie [_rijkdom].
+    // stond en al zijn scans had houdt ze — zie [rijkdom].
     var gezien = 0;
+    var geplaatst = 0;
     void binnen(List<ReleaseChoice> rijen) {
       if (!mounted || rijen.length <= gezien) return;
       final verse = rijen.sublist(gezien);
       gezien = rijen.length;
-      _merge(verse, bovenaan: true);
+      // `ontdubbel: false`: hier is met zoveel woorden om deze uitgave gevraagd. De gewone
+      // samenvoeging laat een Discogs-persing vallen zodra MusicBrainz dezelfde kent, en dan zou
+      // Toon indrukken precies niets doen — de fout waar dit veld voor gemaakt is.
+      //
+      // `opIndex` telt op, zodat pagina twee ONDER pagina één komt. Discogs levert op datum: op nul
+      // zetten zou de oorspronkelijke persing onderaan het blok zetten in plaats van bovenaan.
+      final n = _merge(verse, opIndex: geplaatst, ontdubbel: false);
+      if (n == 0) return;
+      final eerste = geplaatst == 0;
+      geplaatst += n;
       // Anders kan de rij die je zojuist opvroeg achter een formaatknop verstopt zitten, of blijft
       // "Geen uitgaves gevonden" over een lijst staan die er nu wél is.
       setState(() {
@@ -15435,30 +15485,41 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
         _error = null;
         _gemarkeerd ??= verse.first.key;
       });
-      if (_scroll.hasClients) _scroll.jumpTo(0);
+      // Alleen bij de eerste lading. Een master van zes pagina's zou de lijst anders zes keer onder
+      // je vinger vandaan naar boven trekken terwijl je zit te lezen.
+      if (eerste && _scroll.hasClients) _scroll.jumpTo(0);
     }
 
     setState(() => _gemarkeerd = null);
-    var aantal = 0;
     try {
       if (verwijzing.isMaster) {
-        aantal = (await dg.keuzesVanMaster(verwijzing.id,
-                onPartial: binnen, gestopt: () => !mounted))
-            .length;
+        await dg.keuzesVanMaster(
+          verwijzing.id,
+          onPartial: binnen,
+          gestopt: () => !mounted,
+          // Ook deze weg heeft een plafond (vierhonderd rijen, zes pagina's), en een plafond dat
+          // niets zegt is de fout waar deze hele wijziging over gaat.
+          onEinde: (totaal, meer) {
+            if (!mounted) return;
+            setState(() {
+              if (totaal > _dgTotaal) _dgTotaal = totaal;
+              _dgMeer = _dgMeer || meer;
+            });
+          },
+        );
       } else {
         final een = await dg.keuzeVanRelease(verwijzing.id);
-        if (een != null) {
-          binnen([een]);
-          aantal = 1;
-        }
+        if (een != null) binnen([een]);
       }
     } catch (_) {
-      aantal = 0;
+      // Geplaatst is dan nul, en de regel hieronder zegt het.
     }
     if (!mounted) return;
     setState(() {
       _zoeken = false;
-      if (aantal == 0) {
+      if (geplaatst == 0) {
+        // Geteld wordt wat er OP HET SCHERM kwam, niet wat de dienst teruggaf. Dat verschil is een
+        // gebruiker die op Toon drukt en niets ziet gebeuren, zonder een woord waarom.
         _nummerFout = verwijzing.isMaster
             ? 'Discogs kent master ${verwijzing.id} niet, of was niet bereikbaar.'
             : 'Discogs kent uitgave ${verwijzing.id} niet, of was niet bereikbaar.';
@@ -15636,11 +15697,15 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: Text(
+                      // "Niet alles staat hier" is de zin die bedoeld werd; er stond iets wat als
+                      // "er staan er niet meer dan dit in de lijst" te lezen was, en dat is een
+                      // mededeling over de lijst in plaats van over wat eruit gebleven is.
+                      //
+                      // "Minstens", want het getal is het grootste dat één master noemde — een
+                      // ondergrens die waar is, waar een optelsom over masters dat niet zou zijn.
                       _dgTotaal > 0
-                          ? 'Discogs kent er hier $_dgTotaal. Er staan er niet meer dan dit in de '
-                              'lijst — vul een masternummer in om een bepaald master helemaal te zien.'
-                          : 'Er zijn er meer dan hier staan — vul een masternummer in om een bepaald '
-                              'master helemaal te zien.',
+                          ? 'Niet alles staat hier: Discogs kent er minstens $_dgTotaal.'
+                          : 'Niet alles staat hier — er zijn er meer dan er nu in de lijst passen.',
                       style: const TextStyle(color: Color(0xFFE0A33A), fontSize: 11.5)),
                 ),
               // Only once something is picked: an empty bar at the bottom of every gallery would be

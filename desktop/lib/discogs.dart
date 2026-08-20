@@ -1766,8 +1766,16 @@ extension DiscogsChoices on DiscogsService {
     final rows = <ReleaseChoice>[];
     final seen = <int>{};
 
+    var vol = false;
     void addVersion(DiscogsVersion v) {
-      if (rows.length >= max || v.id <= 0) return;
+      if (rows.length >= max) {
+        // De lijst zit vol MIDDEN in een pagina. `stop` kijkt alleen tussen pagina's door, dus
+        // zonder deze regel vielen die laatste vijftig persingen weg terwijl de lus daarna netjes
+        // meldde dat alles binnen was.
+        vol = true;
+        return;
+      }
+      if (v.id <= 0) return;
       // A tape scan is not what anyone is choosing to describe their FLACs with.
       //
       // VOOR `seen`, en dat is geen detail: kwam het id hier in de lijst van geziene, dan gold de
@@ -1795,8 +1803,16 @@ extension DiscogsChoices on DiscogsService {
     var totaal = 0;
     var meer = false;
     final masters = await masterIds(artist, album);
-    for (final master in masters.take(3)) {
-      if (rows.length >= max || (gestopt?.call() ?? false)) break;
+    final teLopen = masters.take(3).toList();
+    for (final master in teLopen) {
+      if (gestopt?.call() ?? false) break;
+      if (rows.length >= max) {
+        // Hier stond alleen `break`. Dan bleven master twee en drie ONGELEZEN terwijl de lijst
+        // rapporteerde dat alles binnen was — en het master met de cd die iemand zoekt kan er
+        // precies één van zijn.
+        meer = true;
+        break;
+      }
       // No format filter: one unfiltered call returns every pressing, where asking per format cost
       // a request each and still capped what came back.
       await versionsOf(
@@ -1806,8 +1822,12 @@ extension DiscogsChoices on DiscogsService {
         // dialoog die dichtgegaan is — doorgaan zou minuten aan een baan van zestig per minuut
         // kosten voor een venster dat er niet meer is.
         stop: () => rows.length >= max || (gestopt?.call() ?? false),
+        // Het GROOTSTE aantal, niet de som. Optellen over masters levert een getal dat niets
+        // beschrijft: dezelfde persing hangt onder meerdere masters, cassettes tellen mee terwijl
+        // ze hier wegvallen, en de masters die we niet gelopen hebben ontbreken erin. Het grootste
+        // is wél een echte ondergrens — dát master heeft er zoveel — en zo wordt het ook gezegd.
         onEinde: (n, m) {
-          totaal += n;
+          if (n > totaal) totaal = n;
           meer = meer || m;
         },
         perPagina: (pagina) {
@@ -1818,9 +1838,12 @@ extension DiscogsChoices on DiscogsService {
         },
       );
     }
-    // Meer masters dan we gelopen hebben is óók "er is meer", en dat is de stilste van de drie:
-    // niets aan de lijst laat zien dat er nog een master met honderd persingen naast staat.
-    if (masters.length > 3) meer = true;
+    // Bewust NIET `masters.length > 3`. Dat leek eerlijk, maar [_masters] geeft élke treffer terug
+    // die het zoeken opleverde, ook de promo-singles en de gelijknamige platen van iemand anders die
+    // het juist wegscoorde. Voor een doorsnee album zijn dat er meer dan drie, dus die waarschuwing
+    // zou bijna altijd aan staan — en een waarschuwing die altijd aan staat leest niemand meer,
+    // precies wanneer de lijst wél echt afgekapt is.
+    meer = meer || vol;
     if (pinned != null && pinned > 0 && !seen.contains(pinned)) {
       final rij = await keuzeVanRelease(pinned);
       if (rij != null) {
@@ -1901,14 +1924,19 @@ extension DiscogsChoices on DiscogsService {
     if (master <= 0) return const [];
     final rows = <ReleaseChoice>[];
     final seen = <int>{};
+    var vol = false;
     await versionsOf(
       master,
       maxPaginas: maxPaginas,
       stop: () => rows.length >= max || (gestopt?.call() ?? false),
-      onEinde: onEinde,
+      onEinde: (totaal, meer) => onEinde?.call(totaal, meer || vol),
       perPagina: (pagina) {
         for (final v in DiscogsService.orderByPreference(pagina)) {
-          if (v.id <= 0 || rows.length >= max || !seen.add(v.id)) continue;
+          if (v.id <= 0 || !seen.add(v.id)) continue;
+          if (rows.length >= max) {
+            vol = true;
+            continue;
+          }
           rows.add(rijVanVersie(v));
         }
         onPartial?.call([...rows]);

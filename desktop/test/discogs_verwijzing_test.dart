@@ -197,6 +197,20 @@ void main() {
           isNot(rij(id: 4, catno: 'NONE', country: 'Europe').dedupeKey));
     });
 
+    test('en MusicBrainz schrijft hetzelfde woord anders', () {
+      // `[none]` is de schrijfwijze van de andere catalogus. De eerste reparatie kende alleen die
+      // van Discogs, waardoor precies dezelfde fout aan de MusicBrainz-kant bleef staan: de haken
+      // vielen weg bij het opschonen en er stond alsnog "none" als sleutel.
+      expect(rij(id: 1, catno: '[none]', country: 'FR').dedupeKey,
+          isNot(rij(id: 2, catno: '[none]', country: 'FR').dedupeKey));
+      // En hij hoort ook niet op de regel te komen te staan alsof het een nummer is.
+      expect(rij(id: 1, catno: '[none]', country: 'FR').line, isNot(contains('none')));
+      expect(rij(id: 1, catno: 'none', country: 'FR').line, isNot(contains('none')));
+      expect(
+          pressingFacts(pinned: (format: 'CD', catno: '[none]', country: 'FR', year: 2010)),
+          isNot(contains('[none]')));
+    });
+
     test('een echt catalogusnummer ontdubbelt nog steeds wel', () {
       // Anders zou dezelfde persing twee keer in de lijst staan: één keer van MusicBrainz en één
       // keer van Discogs. Dat is waar deze sleutel voor gemaakt is en dat moet blijven werken.

@@ -39,9 +39,9 @@ List<String> pressingFacts({
   return <String>[
     if (p.format.trim().isNotEmpty) label(p.format.trim()),
     if (p.year != null && p.year != recordYear) '${p.year}',
-    // Discogs writes "none" where a release carries no catalogue number; printing it says less than
-    // leaving the field out.
-    if (catno.isNotEmpty && catno.toLowerCase() != 'none') catno,
+    // Discogs writes "none" where a release carries no catalogue number and MusicBrainz "[none]";
+    // printing either says less than leaving the field out. Beide vormen via [_geenNummer].
+    if (_geenNummer(catno).isNotEmpty) catno,
     if (country.isNotEmpty) country,
   ];
 }
@@ -67,6 +67,23 @@ int rijkdom(ReleaseChoice c) =>
     (c.back != null ? 1 : 0) +
     (c.disc != null ? 1 : 0) +
     (c.tracklist.isNotEmpty ? 1 : 0);
+
+/// Het catalogusnummer, of leeg als de uitgave er geen heeft.
+///
+/// **Het woord "geen" is geen nummer, en beide catalogussen schrijven het anders.** Discogs zet er
+/// `none` neer, MusicBrainz `[none]`. Behandel je dat als een nummer, dan krijgen álle promo's,
+/// testpersingen en witlabels uit hetzelfde land dezelfde sleutel — en die zijn dan opeens één rij
+/// in plaats van tien. Precies het soort uitgave waarvoor iemand de kiezer opent.
+///
+/// Eén functie voor beide plekken die dit moesten weten: het ontdubbelen en het tonen. Dat de
+/// tonende kant het wél wist en de ontdubbelende niet, is hoe rijen konden verdwijnen zonder dat er
+/// iets van te zien was.
+String _geenNummer(String? catno) {
+  final t = (catno ?? '').trim().toLowerCase();
+  // Haken eromheen weg, dan blijft van "[none]" hetzelfde woord over als van "none".
+  final kaal = t.replaceAll(RegExp(r'^[\[(]|[\])]$'), '').trim();
+  return kaal == 'none' || kaal == 'geen' ? '' : t;
+}
 
 class ChoiceImage {
   final String uri, thumb;
@@ -171,7 +188,9 @@ class ReleaseChoice {
   String get line => [
         if (format.isNotEmpty) format,
         if ((country ?? '').isNotEmpty) country!,
-        if ((catno ?? '').isNotEmpty && catno!.toLowerCase() != 'none') catno!,
+        // Via dezelfde functie als het ontdubbelen. Hier stond alleen de Discogs-schrijfwijze, dus
+        // een MusicBrainz-uitgave zette "[none]" op de regel alsof het een nummer was.
+        if (_geenNummer(catno).isNotEmpty) catno!.trim(),
         if (year != null && year! > 0) '$year',
       ].join(' · ');
 
@@ -183,7 +202,7 @@ class ReleaseChoice {
   String get dedupeKey {
     final b = (barcode ?? '').replaceAll(RegExp(r'\D'), '');
     if (b.length >= 8) return 'bc:$b';
-    final ruw = (catno ?? '').trim().toLowerCase();
+    final ruw = _geenNummer(catno);
     // "none" is geen catalogusnummer maar het WOORD dat Discogs schrijft als er geen is. Het als
     // nummer behandelen maakte van elke promo, elke testpersing en elk witlabel uit hetzelfde land
     // één enkele rij — en dat is nu juist het soort uitgave waarvoor iemand deze kiezer opent. Ze
@@ -192,7 +211,7 @@ class ReleaseChoice {
     //
     // Dezelfde regel staat hierboven in [line] om het niet te TONEN. Dat het daar wel stond en hier
     // niet, is hoe rijen konden verdwijnen zonder dat er iets van te zien was.
-    final c = ruw == 'none' ? '' : ruw.replaceAll(RegExp(r'[^a-z0-9]'), '');
+    final c = ruw.replaceAll(RegExp(r'[^a-z0-9]'), '');
     if (c.isNotEmpty) return 'cn:${(country ?? '').toLowerCase()}|$c';
     // Nothing identifying at all — keep it, rather than collapsing every undocumented stub into one.
     return key;
