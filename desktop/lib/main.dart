@@ -15443,6 +15443,15 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   /// komen — maar het nummer staat gewoon op de pagina waar je naar kijkt. Dit is de deur die
   /// daarvoor open moet staan.
   Future<void> _haalNummer() async {
+    // Een leeg veld is geen fout maar een onafgemaakte handeling, en "dat lijkt geen Discogs-nummer"
+    // is daar een raar antwoord op: er stond niets om op te lijken. Dit is wat je krijgt als je op
+    // Toon drukt om te kijken wat de knop doet — dan hoort er te staan wat je moet invullen.
+    if (_nummerCtl.text.trim().isEmpty) {
+      setState(() => _nummerFout =
+          'Vul eerst een nummer of een link in. Het nummer van een uitgave (7738290) geeft die ene '
+          'uitgave; een masternummer ([m1938390]) geeft alle persingen van dat album.');
+      return;
+    }
     final verwijzing = DiscogsVerwijzing.ontleed(_nummerCtl.text);
     if (verwijzing == null) {
       setState(() => _nummerFout =
@@ -15718,6 +15727,25 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                     SizedBox(width: 8),
                     Text('Discogs vult nog aan…', style: TextStyle(color: _muted, fontSize: 11.5)),
                   ]),
+                ),
+              // "Zes? Meer niet?" — en niets op het scherm dat die vraag beantwoordt.
+              //
+              // Een korte lijst en een AFGEKAPTE lijst zien er precies hetzelfde uit, en de app wist
+              // het verschil wel maar zei het alleen in het tweede geval. Dan blijft er twijfel
+              // hangen over een lijst die gewoon compleet is. Deze regel is het spiegelbeeld van de
+              // oranje hieronder: die zegt dat er meer is, deze dat er niet meer is.
+              //
+              // Over het OPHALEN en niet over de lijst: onder deze zes kunnen twee persingen samen
+              // op één regel staan (zelfde catalogusnummer en land), en cassettes vallen weg. Wat
+              // hier wél waar is: Discogs had er niet meer.
+              if (_dgDone &&
+                  !_dgMeer &&
+                  !_dgFailed &&
+                  (_choices ?? const <ReleaseChoice>[]).any((c) => !c.isMb))
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text('Alles opgehaald — meer heeft Discogs er niet onder dit album.',
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               if (_dgDone && _dgFailed)
                 Padding(
