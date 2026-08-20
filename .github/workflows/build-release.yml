@@ -1,10 +1,20 @@
 name: Build & Release APK
 
+# DEZE TAK BOUWT NIETS MEER.
+#
+# main is de standaardtak niet meer -- de app staat op feat/windows-desktop-app, en daar staat ook
+# de versie van dit bestand die er werkelijk toe doet. Deze kopie is van 27 juli.
+#
+# Waarom de triggers eruit zijn en niet alleen "niet meer gebruikt worden": een duw naar main
+# BOUWDE hier niet alleen een APK, hij publiceerde hem ook naar de openbare releases-repo, en die
+# stap gebruikt de werkstroom van DEZE tak. Op 19-08 is zo een app van 27 juli op een telefoon
+# terechtgekomen, met een buildnummer dat hoger lag dan alles wat er daarna kwam. Niets in de app
+# of op GitHub zei dat er iets ouds geïnstalleerd was.
+#
+# Een release loopt sinds release.yml altijd over een `win-v`-tag. Er is dus geen enkele reden meer
+# waarom een duw naar main iets naar buiten zou moeten sturen -- en met de handmatige start
+# hieronder is deze werkstroom nog steeds te draaien als je hem echt een keer nodig hebt.
 on:
-  push:
-    branches: [ "main", "claude/**" ]
-  pull_request:
-    branches: [ "main" ]
   workflow_dispatch:
 
 permissions:
