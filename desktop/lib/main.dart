@@ -60,7 +60,7 @@ import 'now_playing.dart';
 import 'login_screen.dart';
 import 'lossless_want.dart' show performerFromFilename, zoekvraagVoorAlbum, zoekvraagVoorNummer;
 import 'pairing_screen.dart';
-import 'artwork.dart' show decodeWidth, dominantColour;
+import 'artwork.dart' show decodeWidth, kleurBuitenDeTekendraad;
 import 'fps_probe.dart';
 import 'warm_log.dart' show WarmLog;
 import 'library.dart';
@@ -89,6 +89,7 @@ import 'torbox.dart';
 import 'tv.dart';
 import 'updater.dart';
 import 'hartslag.dart';
+import 'ui/binnenkomst.dart';
 import 'ui/kleuren.dart';
 import 'ui/kop.dart';
 import 'ui/leeg.dart';
@@ -3385,7 +3386,11 @@ class AlbumsGrid extends StatelessWidget {
     // duplicates of one you already own. It never moves anything on its own — this just opens the
     // dry-run.
     final dupes = title == null ? context.watch<LibraryStore>().duplicates : const <RedundantAlbum>[];
-    return CustomScrollView(
+    // De groep onthoudt WANNEER dit scherm verscheen; zonder hem doen de tegels hieronder niets.
+    // Zie `ui/binnenkomst.dart` — het is precies wat voorkomt dat de lijst tijdens het scrollen
+    // permanent van onderen komt aanzweven.
+    return BinnenkomstGroep(
+      child: CustomScrollView(
       // De scrollpositie overleeft een wissel naar een ander scherm en terug.
       //
       // Zonder deze sleutel begon je bij elke terugkeer weer bovenaan: het scherm wordt opnieuw
@@ -3464,12 +3469,13 @@ class AlbumsGrid extends StatelessWidget {
                 childAspectRatio: .78,
               ),
               delegate: SliverChildBuilderDelegate(
-                (_, i) => AlbumCard(album: albums[i]),
+                (_, i) => Binnenkomst(index: i, child: AlbumCard(album: albums[i])),
                 childCount: albums.length,
               ),
             ),
           ),
       ],
+      ),
     );
   }
 }
@@ -3744,7 +3750,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     _wasVan = bytes;
     int? kleur;
     try {
-      kleur = await _kleurBuitenDeTekendraad(bytes);
+      kleur = await kleurBuitenDeTekendraad(bytes);
     } catch (e) {
       _uiLog.line('was "${album.title}": ${bytes.length} bytes, maar het uitrekenen klapte: $e');
       return; // een hoes die niet te lezen is, laat de achtergrond gewoon zoals hij was
@@ -6402,13 +6408,17 @@ class PlayerBar extends StatelessWidget {
     if (isCompact(context)) return _compactBar(context, x, bottomInset);
 
     final side = math.min(280.0, math.max(96.0, (width - 336) / 2));
-    return Container(
+    return AnimatedContainer(
+      // Overvloeien en niet omslaan: deze balk staat permanent in beeld, en een kleur die per nummer
+      // omspringt trekt aandacht op de plek waar je juist niet kijkt.
+      duration: kWas,
+      curve: Curves.easeOut,
       // Taller on a television: the text is scaled there, and the bottom row (position, slider,
       // duration) sat flush against the panel edge — the first strip a set overscans away.
       height: (isTv ? 104 : 84) + bottomInset,
-      decoration: const BoxDecoration(
-        color: kVerzonken,
-        border: Border(top: BorderSide(color: _line)),
+      decoration: BoxDecoration(
+        color: balkKleur(x.player.wasKleur),
+        border: const Border(top: BorderSide(color: _line)),
       ),
       // The panel runs to the edge; only what you read and press comes in. On a television the
       // bottom row of this bar is the first thing a set overscans away, so it gets tvOverscan
@@ -6720,14 +6730,13 @@ class AfspeellijstenView extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         if (lijsten.leeg)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 40),
-            child: Text(
-              'Nog geen afspeellijsten.\n\nMaak er een met de knop hierboven, of kies "Toevoegen aan '
-              'afspeellijst" in het menu van een nummer of album.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: _muted, fontSize: 13, height: 1.6),
-            ),
+          const LeegVlak(
+            teken: Icons.queue_music_rounded,
+            kop: 'Nog geen afspeellijsten',
+            uitleg: 'Maak er een met de knop hierboven, of kies "Toevoegen aan afspeellijst" in '
+                'het menu van een nummer of album.',
+            // Staat in een lijst, dus onbegrensd hoog. Zie [LeegVlak.gecentreerd].
+            gecentreerd: false,
           ),
         for (final p in lijsten.lijsten) _AfspeellijstRij(id: p.id),
       ],
@@ -6879,14 +6888,10 @@ class AfspeellijstPagina extends StatelessWidget {
         ],
       ),
       body: nummers.isEmpty
-          ? const Center(
-              child: Padding(
-                padding: EdgeInsets.all(32),
-                child: Text('Nog leeg.\n\nKies "Toevoegen aan afspeellijst" in het menu van een '
-                    'nummer of album.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: _muted, fontSize: 13, height: 1.6)),
-              ),
+          ? const LeegVlak(
+              teken: Icons.playlist_add_rounded,
+              kop: 'Deze lijst is nog leeg',
+              uitleg: 'Kies "Toevoegen aan afspeellijst" in het menu van een nummer of album.',
             )
           : ReorderableListView.builder(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -6973,16 +6978,10 @@ class FavorietenView extends StatelessWidget {
     final narrow = isCompact(context);
 
     if (albums.isEmpty && nummers.isEmpty) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(32),
-          child: Text(
-            'Nog geen favorieten.\n\nRechtermuisknop op een nummer of een album — of lang indrukken '
-            'op je tablet — en kies "Favoriet".',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: _muted, fontSize: 13, height: 1.6),
-          ),
-        ),
+      return const LeegVlak(
+        teken: Icons.favorite_border_rounded,
+        kop: 'Nog geen favorieten',
+        uitleg: 'Houd een nummer of album ingedrukt — of klik met rechts — en kies "Favoriet".',
       );
     }
 
@@ -7568,7 +7567,9 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
       // Op de HOOFDnavigator, niet de binnenste: dit scherm hoort de balken te bedekken.
       : () => Navigator.of(context, rootNavigator: true).push(nuSpeeltRoute());
 
-  return Container(
+  return AnimatedContainer(
+    duration: kWas,
+    curve: Curves.easeOut,
     // 52, en dat is gemeten en niet gevoeld. Er zat 66 en daarna 56; met de balk eronder én de
     // systeeminzet daar weer onder was dat samen bijna een vijfde van een telefoonscherm.
     //
@@ -7578,9 +7579,9 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
     //
     // De hoes zakt mee van 44 naar 40 — anders raakt hij de randen en leest de rij als propvol.
     height: 52 + bottomInset,
-    decoration: const BoxDecoration(
-      color: kVerzonken,
-      border: Border(top: BorderSide(color: _line)),
+    decoration: BoxDecoration(
+      color: balkKleur(p.wasKleur),
+      border: const Border(top: BorderSide(color: _line)),
     ),
     padding: EdgeInsets.only(bottom: bottomInset),
     child: Column(
@@ -7732,26 +7733,6 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
   /// produced a different, older one.
   Uint8List? _shown;
 
-  /// De kleur waar de hoes naar neigt, en de bytes waar hij uit kwam.
-  ///
-  /// Hetzelfde recept als op de albumpagina — zie `ui/vlak.dart` — zodat dezelfde plaat op beide
-  /// schermen dezelfde kleur draagt. Null zolang er niets berekend is en null bij een zwart-witte
-  /// hoes; dan blijft het scherm gewoon zwart, en dat hoort er met opzet uit te zien.
-  int? _was;
-  Uint8List? _wasVan;
-
-  Future<void> _kleurUitHoes(Uint8List? bytes) async {
-    if (bytes == null || identical(bytes, _wasVan)) return;
-    _wasVan = bytes;
-    int? kleur;
-    try {
-      kleur = await _kleurBuitenDeTekendraad(bytes);
-    } catch (_) {
-      return; // een hoes die niet te lezen is laat het scherm gewoon zoals het was
-    }
-    if (mounted && kleur != _was) setState(() => _was = kleur);
-  }
-
   @override
   Widget build(BuildContext context) {
     final x = _Transport(context);
@@ -7763,10 +7744,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
     final duration = x.duration;
     final playing = x.playing;
     final prog = x.progress;
-    // Buiten de tekendraad om, en hij stopt meteen als het om dezelfde bytes gaat — dus bij elke
-    // volgende build kost dit niets. Zelfde afweging als op de albumpagina.
-    _kleurUitHoes(p.currentCover);
-    final was = kleurWas(wasBasis(_was));
+    // Uit de speler, niet uit dit scherm. Die rekent hem één keer per plaat uit, en de spelerbalk
+    // onderaan gebruikt exact dezelfde — zie [PlayerStore.wasKleur].
+    final was = kleurWas(wasBasis(p.wasKleur));
     return Scaffold(
       backgroundColor: _bg,
       // Toetsen bubbelen vanaf de gefocuste knop hierheen. `canRequestFocus: false` en
@@ -8525,6 +8505,7 @@ class TracksView extends StatelessWidget {
           );
         }),
         Expanded(
+          child: BinnenkomstGroep(
           child: ListView.builder(
             // Zie het albumraster: waar je was blijft staan bij een wissel naar een ander scherm.
             key: const PageStorageKey('nummerlijst'),
@@ -8547,7 +8528,9 @@ class TracksView extends StatelessWidget {
               // rij klikte. `findRenderObject` daalt af tot de eerste tekenende afstammeling, dus de
               // context van een `Builder` levert de RIJ. Zelfde truc als bij de drie puntjes op het
               // nu-speelt-scherm.
-              return Builder(
+              return Binnenkomst(
+                index: i,
+                child: Builder(
                 builder: (rij) => InkWell(
                 onTap: () => player.playQueue(tracks, i),
                 onLongPress:
@@ -8635,8 +8618,10 @@ class TracksView extends StatelessWidget {
                   ),
                 ),
               ),
+              ),
               );
             },
+          ),
           ),
         ),
       ],
@@ -8786,7 +8771,8 @@ class _HomeStartViewState extends State<HomeStartView> {
     final eigen = uitJaar(_releases, ditJaar);
     final hero = eigen.isNotEmpty ? eigen : uitJaar(_charts, ditJaar);
 
-    return ListView(
+    return BinnenkomstGroep(
+      child: ListView(
       padding: const EdgeInsets.only(bottom: 32),
       children: [
         // 28 werd 24: alles op dit scherm staat vanaf hier op dezelfde goot als de rijen hoezen
@@ -8831,6 +8817,7 @@ class _HomeStartViewState extends State<HomeStartView> {
             gecentreerd: false,
           ),
       ],
+      ),
     );
   }
 
@@ -8863,10 +8850,13 @@ class _HomeStartViewState extends State<HomeStartView> {
         padding: const EdgeInsets.symmetric(horizontal: kGoot),
         itemCount: albums.length,
         separatorBuilder: (_, __) => const SizedBox(width: kRuimte12),
-        itemBuilder: (_, i) => _card(
-            cover(albums[i].cover, size: kTegelHoes), albums[i].title, albums[i].artist,
-            () => openPagina(context, (_) => AlbumDetailPage(album: albums[i])),
-            artist: albums[i].artist),
+        itemBuilder: (_, i) => Binnenkomst(
+          index: i,
+          child: _card(
+              cover(albums[i].cover, size: kTegelHoes), albums[i].title, albums[i].artist,
+              () => openPagina(context, (_) => AlbumDetailPage(album: albums[i])),
+              artist: albums[i].artist),
+        ),
       );
 
   /// De artiestnaam onder een tegel, aanklikbaar.
@@ -8887,10 +8877,13 @@ class _HomeStartViewState extends State<HomeStartView> {
         separatorBuilder: (_, __) => const SizedBox(width: kRuimte12),
         // Deze builder voedt TWEE rijen — "Top van dit moment" en "Nieuw van jouw artiesten" — dus
         // deze ene regel maakt ze allebei klikbaar.
-        itemBuilder: (_, i) => _card(
-            _netCover(hits[i].album.cover, size: kTegelHoes), hits[i].album.title, hits[i].artist,
-            () => openPagina(context, (_) => AlbumBrowsePage(hits[i].artist, hits[i].album)),
-            artist: hits[i].artist),
+        itemBuilder: (_, i) => Binnenkomst(
+          index: i,
+          child: _card(
+              _netCover(hits[i].album.cover, size: kTegelHoes), hits[i].album.title, hits[i].artist,
+              () => openPagina(context, (_) => AlbumBrowsePage(hits[i].artist, hits[i].album)),
+              artist: hits[i].artist),
+        ),
       );
 
   Widget _recRow(List<RecTrack> ts) => ListView.separated(
@@ -8903,7 +8896,9 @@ class _HomeStartViewState extends State<HomeStartView> {
         //
         // Long-press still plays it: the quickest way to hear a recommendation should not disappear
         // because the tap now goes somewhere better.
-        itemBuilder: (_, i) => _HoverCard(
+        itemBuilder: (_, i) => Binnenkomst(
+          index: i,
+          child: _HoverCard(
           art: _netCover(ts[i].cover, size: kTegelHoes),
           title: ts[i].title,
           subtitle: ts[i].artist,
@@ -8912,6 +8907,7 @@ class _HomeStartViewState extends State<HomeStartView> {
           subtitleWidget: ts[i].artist.trim().isEmpty ? null : _naamLink(ts[i].artist),
           onTap: () => _openRec(ts[i]),
           onLongPress: () => _playRec(ts[i]),
+        ),
         ),
       );
 
@@ -9385,12 +9381,14 @@ class DownloadsView extends StatelessWidget {
               ),
             const SizedBox(height: 18),
             if (dm.jobs.isEmpty)
-              const Padding(
-                padding: EdgeInsets.only(top: 60),
-                child: Center(
-                  child: Text('Nog geen downloads.\nStart er een vanuit een album of via Online zoeken.',
-                      textAlign: TextAlign.center, style: TextStyle(color: _muted, height: 1.6)),
-                ),
+              LeegVlak(
+                teken: Icons.download_rounded,
+                kop: 'Nog geen downloads',
+                uitleg: 'Start er een vanuit een album, of zoek er zelf een op.',
+                knop: 'Online zoeken',
+                opKnop: () => gaNaarSectie?.call(2),
+                // Staat in een lijst, dus onbegrensd hoog. Zie [LeegVlak.gecentreerd].
+                gecentreerd: false,
               ),
             if (active.isNotEmpty) ...[
               const _DlHeader('BEZIG'),
@@ -10177,57 +10175,6 @@ Quality _trackQuality(Track t) {
     return Quality('${t.ext.toUpperCase()} · ${k}k', QTier.lossy);
   }
   return basis;
-}
-
-/// De hoeskleur uitrekenen in een isolate — en dit MOET buiten de klasse staan.
-///
-/// Een closure neemt zijn hele omgeving mee, en de omgeving van een instantiemethode bevat `this`. Zet
-/// je `Isolate.run(() => dominantColour(bytes))` in een State, dan gaat die State mee de isolate in, en
-/// daaraan hangt de complete widgetboom. Dart weigert dat terecht:
-///
-///     object is unsendable - Class: _AsyncCompleter
-///      <- Instance of '_AlbumDetailPageState'
-///      <- _AlbumDetailPageState._kleurUitHoes.<anonymous closure>
-///
-/// Het venijnige is dat het van buiten niet te zien is: er verschijnt geen melding, de achtergrond
-/// blijft gewoon zwart, en de reparatie lijkt niet te werken terwijl elk onderdeel los wél werkt. Ik heb
-/// hem in een los Dart-programma getest — daar zit geen `this` omheen en daar wérkte het. Pas een
-/// logregel in de app zelf gaf de uitzondering te zien.
-///
-/// Hier omheen zit geen klasse, dus vangt de closure alleen [bytes], en dat is een Uint8List: verzendbaar.
-/// De vorige kleurberekening. Zie [_kleurBuitenDeTekendraad].
-Future<int?> _wasVorige = Future<int?>.value();
-
-/// De hoofdkleur van een hoes, buiten de tekendraad — maar ÉÉN TEGELIJK.
-///
-/// **Waarom die rij, en niet gewoon `Isolate.run` per hoes.** De pc-app crashte deze week zes keer
-/// uit zichzelf. Windows noteert elke keer hetzelfde:
-///
-///     Naam van foutmodule: flutter_windows.dll
-///     Uitzonderingscode: 0xc0000005      (toegangsfout)
-///     Foutoffset: 0x1cda0
-///
-/// Geen Dart-uitzondering dus, maar de engine zelf. En het laatste wat de app opschreef, telkens
-/// binnen een minuut voor de klap, was een reeks van deze berekeningen:
-///
-///     21:54:20  was "James Blunt - Back To Bedlam": 5021648 bytes → #685539
-///     21:55:19  was "Notre-Dame De Paris": 85817 bytes → #471716
-///
-/// Elke aanroep startte een verse isolate en kopieerde de hele hoes erin — vijf megabyte per stuk,
-/// meerdere per seconde als je door een album bladert of als de verrijker hoezen binnenhaalt. Ze op
-/// een rij zetten haalt die piek weg: hooguit één isolate tegelijk, en de kopie van de vorige is
-/// opgeruimd voor de volgende begint.
-///
-/// **Eerlijk over wat dit is:** de correlatie is sterk (zes crashes, alle zes vlak na zo'n reeks) en
-/// het mechanisme past, maar bewezen is het niet — de engine valt om zonder te zeggen waaróm. Blijft
-/// hij crashen, dan staat in `ui.log` opnieuw wat er vlak daarvoor gebeurde, en is de volgende
-/// verdachte niet meer deze.
-Future<int?> _kleurBuitenDeTekendraad(Uint8List bytes) {
-  final volgende = _wasVorige
-      .catchError((_) => null)
-      .then((_) => Isolate.run(() => dominantColour(bytes)));
-  _wasVorige = volgende;
-  return volgende;
 }
 
 /// Het beste bestand bovenaan.

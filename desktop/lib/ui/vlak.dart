@@ -184,3 +184,17 @@ LinearGradient? kleurWas(Color? basis) {
     ],
   );
 }
+
+/// De kleur van de spelerbalk: de vloer met een ZWEEM van wat er speelt.
+///
+/// **Waarom een zweem en niet de was.** De balk staat permanent onderaan het scherm, over elke
+/// pagina heen, en hij is de enige plek die zegt wat er speelt terwijl je iets anders doet. Hem de
+/// volle was geven maakt hem een gekleurde balk die met elk nummer van kleur springt en die overal
+/// aandacht trekt waar je juist niet kijkt. Een tiende is genoeg om te merken dat hij bij deze plaat
+/// hoort, en te weinig om hem te laten schreeuwen.
+///
+/// Geen kleur betekent gewoon [kVerzonken] — dat is de vloer waar hij altijd op stond.
+Color balkKleur(int? kleur) {
+  final basis = wasBasis(kleur);
+  return basis == null ? kVerzonken : Color.lerp(kVerzonken, basis, .10)!;
+}
