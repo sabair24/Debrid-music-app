@@ -4293,6 +4293,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     // `ui/vlak.dart` omdat het speelscherm hem óók gebruikt — en dit zijn precies de getallen die
     // uit elkaar lopen zodra ze op twee plekken staan.
     final was = kleurWas(wasBasis(_was));
+    // De bovenkant van dat verloop, apart: de vastgezette balk hierboven moet er exact op landen.
+    // Uit het verloop zelf en niet nog eens uitgerekend, want dan lopen die twee uiteen zodra er aan
+    // de was gesleuteld wordt — en dat is precies de rand die je dán ziet.
+    final wasTop = was?.colors.first ?? _bg;
 
     return Scaffold(
       // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin — its app bar
