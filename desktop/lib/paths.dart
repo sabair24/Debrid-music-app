@@ -33,6 +33,15 @@ Future<void> initAppPaths() async {
   } catch (_) {
     _resolved = _fallback();
   }
+  // Vóór er ook maar iets gelezen wordt, en alleen de allereerste keer. Zie [verhuisMap].
+  if (Platform.isMacOS) {
+    final home = Platform.environment['HOME'];
+    if (home != null && home.isNotEmpty) {
+      try {
+        await verhuisMap(Directory(sandboxPad(home)), Directory(_resolved!));
+      } catch (_) {/* niet kunnen verhuizen is vervelend, geen reden om niet te starten */}
+    }
+  }
   await Directory(_resolved!).create(recursive: true);
 
   // En de plek voor logboeken, die op Android een andere is. Zie [logDir].
@@ -95,6 +104,43 @@ bool get padenZijnHoofdletterOngevoelig => Platform.isWindows || Platform.isMacO
 ///
 /// Wie twee paden vergelijkt vouwt met DEZE functie — beide kanten, altijd.
 String padSleutel(String p) => padenZijnHoofdletterOngevoelig ? p.toLowerCase() : p;
+
+/// De bundel-id, zoals hij in `Info.plist` staat.
+///
+/// Hier met de hand en niet uit `PackageInfo`: dit draait vóór alles, en `PackageInfo` heeft de
+/// bindings van Flutter nodig die op dat moment nog niet staan. Verandert de id ooit, dan verandert
+/// ook de map hieronder en is er niets te verhuizen -- dat is dan geen fout maar een nieuwe app.
+const _bundelId = 'com.debridmedia.music';
+
+/// Waar de gegevens stonden toen de Mac-app nog in de sandbox draaide.
+///
+/// De sandbox is er in augustus 2026 afgehaald, omdat een app erbinnen zichzelf niet kan bijwerken:
+/// hij mag niet buiten zijn eigen container schrijven, en een script dat hij start erft die
+/// beperking. Zonder sandbox wijst `getApplicationSupportDirectory` naar een heel andere map, dus
+/// zonder de verhuizing hieronder zou de app opkomen alsof hij nooit gekoppeld was.
+String sandboxPad(String home) =>
+    '$home/Library/Containers/$_bundelId/Data/Library/Application Support/$_bundelId/DebridMusic';
+
+/// Zet de oude map op de nieuwe plek, precies één keer. Teruggave: is er iets verhuisd?
+///
+/// **Hernoemen en niet kopiëren.** Het gaat om zo'n tweehonderd megabyte, waarvan het meeste hoezen
+/// zijn; kopiëren is een merkbare pauze bij het opstarten en kan halverwege afbreken. Allebei de
+/// mappen staan op dezelfde schijf, dus hernoemen kost geen tijd en gebeurt in één keer of niet.
+///
+/// Er wordt NOOIT over bestaande gegevens heen gegaan. Staat er al iets op de nieuwe plek, dan is
+/// die app daar al eens geweest en is de oude map hooguit een echo van vroeger.
+Future<bool> verhuisMap(Directory oud, Directory nieuw) async {
+  if (!await oud.exists()) return false;
+  if (await nieuw.exists()) {
+    // Een lege map is geen gegevens -- die kan van een eerdere start zijn die halverwege stopte, en
+    // zou de verhuizing anders voorgoed blokkeren.
+    if (!await nieuw.list().isEmpty) return false;
+    await nieuw.delete();
+  }
+  await nieuw.parent.create(recursive: true);
+  await oud.rename(nieuw.path);
+  return true;
+}
 
 String _fallback() {
   final appData = Platform.environment['APPDATA'];

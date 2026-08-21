@@ -98,8 +98,79 @@ void main() {
       expect(installerUit(lijst(['DebridMusic-macOS-3.9.141.zip'])), isNull);
     });
 
+    test('de zip van de Mac, en niet de installer', () {
+      final assets = lijst(['DebridMusic-Setup-v3.9.152.exe', 'DebridMusic-macOS-3.9.152.zip']);
+      expect(macZipUit(assets)?['name'], 'DebridMusic-macOS-3.9.152.zip');
+      // Een release met alleen Windows erin levert voor de Mac niets op -- en dat hoort geen gok te
+      // worden: een willekeurige zip binnenhalen en uitpakken over je app heen is erger dan niets.
+      expect(macZipUit(lijst(['DebridMusic-Setup-v3.9.152.exe'])), isNull);
+      expect(macZipUit(lijst(['bronnen.zip'])), isNull);
+      expect(macZipUit(const []), isNull);
+    });
+
     test('rommel in de lijst laat de rest staan', () {
       expect(apkUit(['geen map', 42, ...lijst(['app.apk'])])?['name'], 'app.apk');
+    });
+  });
+
+  group('waar staat de draaiende Mac-app', () {
+    test('het pakket zit drie mappen boven het uitvoerbare bestand', () {
+      expect(bundelUit('/Applications/DebridMusic.app/Contents/MacOS/DebridMusic'),
+          '/Applications/DebridMusic.app');
+      // Een pad met spaties erin is doodgewoon op een Mac.
+      expect(bundelUit('/Users/ik/Mijn Apps/DebridMusic.app/Contents/MacOS/DebridMusic'),
+          '/Users/ik/Mijn Apps/DebridMusic.app');
+    });
+
+    test('alles wat er niet exact op lijkt levert niets', () {
+      // Onder `flutter run` draait de app niet uit een pakket. Dan hoort er niets geruild te
+      // worden -- wat hierna komt VERPLAATST mappen, en gokken is daar het laatste wat je wilt.
+      expect(bundelUit('/Users/ik/project/build/debug/debridmusic'), isNull);
+      // Wel een .app in het pad, maar niet als pakket eromheen.
+      expect(bundelUit('/Applications/DebridMusic.app/Contents/Resources/hulpje'), isNull);
+      expect(bundelUit('/Applications/DebridMusic.app'), isNull);
+      expect(bundelUit(''), isNull);
+    });
+  });
+
+  group('het ruilscript', () {
+    final script = ruilScript(
+      pid: 4242,
+      pakket: '/Applications/DebridMusic.app',
+      nieuw: '/tmp/update/uitgepakt/DebridMusic.app',
+      terzijde: '/tmp/update/vorige.app',
+    );
+
+    test('het wacht tot deze app echt weg is', () {
+      // Zonder dit verplaatst het script de map waar de app op dat moment uit leest.
+      expect(script, contains('kill -0 "\$PID"'));
+      expect(script, contains('PID=4242'));
+    });
+
+    test('de oude versie gaat opzij en wordt pas daarna weggegooid', () {
+      // De volgorde is het hele vangnet: verplaatsen kan terug, verwijderen niet.
+      final opzij = script.indexOf('mv "\$PAKKET" "\$TERZIJDE"');
+      final weg = script.indexOf('rm -rf "\$TERZIJDE"', opzij);
+      expect(opzij, greaterThan(-1));
+      expect(weg, greaterThan(opzij));
+    });
+
+    test('mislukt het uitpakken, dan komt de oude terug', () {
+      expect(script, contains('mv "\$TERZIJDE" "\$PAKKET"'));
+      // En er wordt hoe dan ook iets opgestart, ook na die terugval.
+      expect(script.trimRight(), endsWith('open "\$PAKKET"'));
+    });
+
+    test('paden staan tussen aanhalingstekens, ook met een apostrof erin', () {
+      final raar = ruilScript(
+        pid: 1,
+        pakket: "/Users/ik/Ann's Mac/DebridMusic.app",
+        nieuw: '/tmp/n.app',
+        terzijde: '/tmp/v.app',
+      );
+      // Een enkele apostrof zou het script anders halverwege afkappen en `rm -rf` op iets anders
+      // laten los gaan.
+      expect(raar, contains(r"PAKKET='/Users/ik/Ann'\''s Mac/DebridMusic.app'"));
     });
   });
 }
