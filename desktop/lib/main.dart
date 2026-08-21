@@ -1322,14 +1322,6 @@ class _HomeShellState extends State<HomeShell> {
     _kijkOfErEenNieuweIs();
   }
 
-  @override
-  void dispose() {
-    // Alleen loslaten als deze schil hem nog vasthoudt: bij een herstart van de app staat de
-    // nieuwe schil er al voordat de oude afgebroken wordt.
-    if (gaNaarSectie == _gaNaar) gaNaarSectie = null;
-    super.dispose();
-  }
-
   /// Eén keer per start kijken of er een nieuwere versie klaarstaat.
   ///
   /// Na een pauze, en niet meteen: bij het opstarten wordt de bibliotheek gelezen en de pc gezocht,
@@ -1467,6 +1459,9 @@ class _HomeShellState extends State<HomeShell> {
     _searchCtl.dispose();
     _searchFocus.dispose();
     _kanTerug.dispose();
+    // Alleen loslaten als deze schil hem nog vasthoudt: bij een herstart van de app staat de
+    // nieuwe schil er al voordat de oude afgebroken wordt.
+    if (gaNaarSectie == _gaNaar) gaNaarSectie = null;
     super.dispose();
   }
 

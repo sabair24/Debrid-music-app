@@ -68,10 +68,18 @@ double hoogteVanTegelrij(BuildContext context, {double hoes = kTegelHoes}) =>
 /// `Expanded`: wat de streep inneemt gaat daar van de hoes af, niet van de rij.
 double hoogteVanTegel(BuildContext context, {double hoes = kTegelHoes}) {
   final schaal = MediaQuery.textScalerOf(context);
-  final titel = schaal.scale(kTegelTitel.fontSize!) * _regel;
-  final onder = schaal.scale(kTegelOnder.fontSize!) * _regel;
-  return hoes + kRuimte8 + titel + onder;
+  return hoes + kRuimte8 + _regelhoogte(schaal, kTegelTitel) + _regelhoogte(schaal, kTegelOnder);
 }
+
+/// De hoogte die één tekstregel werkelijk inneemt.
+///
+/// **Naar boven afgerond, en dat is precies waar de eerste versie op zakte.** Flutter zet een regel
+/// niet op de rekenkundige hoogte neer maar rondt hem af op een heel punt: 14 punten op 1,35×
+/// tekstschaal met regelhoogte 1,35 rekent uit op 25,515 en meet 26. Twee regels, tweemaal iets meer
+/// dan een halve punt, en de tegel was 196 hoog waar de formule 195,4 zei — en dan knipt de rij hem
+/// af. Zonder afronding is dit geen bovengrens en dus geen bruikbare formule.
+double _regelhoogte(TextScaler schaal, TextStyle stijl) =>
+    (schaal.scale(stijl.fontSize!) * _regel).ceilToDouble();
 
 /// De hoes, op de maat die de tegel hem geeft.
 typedef HoesBouwer = Widget Function(double maat);
