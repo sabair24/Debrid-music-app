@@ -58,6 +58,7 @@ import 'lan/client_session.dart';
 import 'lan/remote_services.dart';
 import 'now_playing.dart';
 import 'login_screen.dart';
+import 'lossless_want.dart' show performerFromFilename, zoekvraagVoorAlbum, zoekvraagVoorNummer;
 import 'pairing_screen.dart';
 import 'artwork.dart' show decodeWidth, dominantColour;
 import 'fps_probe.dart';
@@ -68,6 +69,7 @@ import 'models.dart';
 import 'paths.dart';
 import 'musicbrainz.dart';
 import 'navigatie.dart';
+import 'ui/itemmenu.dart';
 import 'offline.dart';
 import 'online.dart';
 import 'organize.dart';
@@ -1033,6 +1035,20 @@ class DebridApp extends StatelessWidget {
         // white, and on these panels, from a sofa, it is not there at all. One line rather than
         // twenty-five edits, and a mouse never sees it because a mouse never focuses.
         focusColor: _accent.withValues(alpha: isTv ? .34 : .18),
+  // Hier stond niets, dus kregen alle zwevende menu's Materials eigen maten: hoeken van VIER punten
+  // in een app die overal tussen 10 en 18 zit, en een vlak dat op geen van deze panelen lijkt. Dat
+  // gold ook voor de twee sorteerkiezers, en juist die twee liepen uiteen — de ene gaf zichzelf een
+  // kleur, de andere stond in Materials standaardgrijs.
+  //
+  // Hier en niet bij elke aanroep, om dezelfde reden als `focusColor` hierboven: één regel in plaats
+  // van drie plekken die stilletjes uit elkaar groeien. Wat hier NIET kan is de duur van de
+  // animatie — `PopupMenuThemeData` kent die niet — dus die staat bij de aanroep in ui/itemmenu.dart.
+  popupMenuTheme: PopupMenuThemeData(
+    color: _panel2,
+    elevation: 8,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    menuPadding: const EdgeInsets.symmetric(vertical: 6),
+  ),
         // Material's buttons signal focus with a tint of their own foreground colour — about a
         // tenth of white. On the purple "Afspelen" button that is nothing at all, and on a TV a
         // button you cannot tell is selected is a button you press by accident. So they get the
@@ -3599,7 +3615,7 @@ class _AlbumCardState extends State<AlbumCard> {
         // Tot nu toe kon een albumtegel precies één ding: opengaan. Afspelen, in de wachtrij zetten,
         // radio en verwijderen zaten allemaal een navigatiestap dieper.
         onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _albumMenu(context, a)) : null,
-        onSecondaryTap: () => _toonItemMenu(context, _albumMenu(context, a)),
+        onSecondaryTap: (bij) => _toonItemMenu(context, _albumMenu(context, a), bij: bij),
         borderRadius: BorderRadius.circular(14),
         // The card already grows and lights up on hover, so focus drives that same state rather
         // than adding a second, different animation on top of it. A remote then gets exactly the
@@ -5334,7 +5350,7 @@ class _TrackRowState extends State<TrackRow> {
         // Bewust NIET met een muis: daar betekent een ingehouden knop niets, en dan gooit een trage
         // klik ineens een menu open. De muis heeft de rechterknop hieronder.
         onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _nummerMenu(context, t)) : null,
-        onSecondaryTap: () => _toonItemMenu(context, _nummerMenu(context, t)),
+        onSecondaryTap: (bij) => _toonItemMenu(context, _nummerMenu(context, t), bij: bij),
         borderRadius: BorderRadius.circular(10),
         // A list of rows: one growing would push every row under it down as the highlight runs
         // through the album. The row already lights up on hover, and focus drives that.
@@ -7042,7 +7058,8 @@ class _FavorietRij extends StatelessWidget {
     return InkWell(
       onTap: () => p.playQueue(alles, plek),
       onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _nummerMenu(context, track)) : null,
-      onSecondaryTap: () => _toonItemMenu(context, _nummerMenu(context, track)),
+      onSecondaryTapDown: (d) =>
+          _toonItemMenu(context, _nummerMenu(context, track), bij: d.globalPosition),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 7),
         child: Row(
@@ -7104,97 +7121,122 @@ class _FavorietRij extends StatelessWidget {
 // trage klik ineens een menu opengooien.
 bool get _menuOpHouden => isTv || _isTouch;
 
-/// Toon [items] naast het aangewezen ding, en voer uit wat gekozen wordt.
+/// Toon het menu voor het aangewezen ding, en voer uit wat gekozen wordt.
 ///
-/// Verankerd aan de rij zelf en niet aan de muispositie: `onSecondaryTap` levert geen coördinaat, en
-/// een menu dat op een vaste plek verschijnt terwijl je op de derde rij klikte leest als een fout.
-Future<void> _toonItemMenu(BuildContext context, List<PopupMenuEntry<VoidCallback>> items) async {
-  final box = context.findRenderObject() as RenderBox?;
-  final laag = Overlay.of(context).context.findRenderObject() as RenderBox?;
-  if (box == null || laag == null || !box.attached) return;
-  final rechts = box.localToGlobal(box.size.centerRight(Offset.zero), ancestor: laag);
-  final keuze = await showMenu<VoidCallback>(
-    context: context,
-    color: _panel2,
-    position: RelativeRect.fromLTRB(
-        rechts.dx, rechts.dy, laag.size.width - rechts.dx, laag.size.height - rechts.dy),
-    items: items,
-  );
-  keuze?.call();
-}
+/// De vorm en de tekening staan in `ui/itemmenu.dart`, los van de schil en dus te meten. Hier blijft
+/// alleen staan WAT er in het menu hoort.
+///
+/// [bij] is waar de muis stond bij een rechtsklik; zonder muispositie hangt het menu aan het
+/// aangewezen ding zelf.
+Future<void> _toonItemMenu(BuildContext context, ItemMenu menu, {Offset? bij}) =>
+    toonItemMenu(context, menu, bij: bij);
 
-PopupMenuItem<VoidCallback> _menuRegel(IconData icoon, String tekst, VoidCallback doen) =>
-    PopupMenuItem<VoidCallback>(
-      value: doen,
-      height: 40,
-      child: Row(children: [
-        Icon(icoon, size: 17, color: _muted),
-        const SizedBox(width: 10),
-        Text(tekst, style: const TextStyle(fontSize: 13.5)),
-      ]),
+/// De bronnenlijst als hele pagina — dezelfde vorm die de personenpagina al opent.
+Widget _bronnenPagina(String titel, String vraag, {TrackTags? tags}) => Scaffold(
+      backgroundColor: _bg,
+      appBar: AppBar(backgroundColor: _bg, title: Text(titel)),
+      body: SingleChildScrollView(child: SourcesView(query: vraag, tags: tags)),
     );
 
 /// Het menu voor één nummer.
-List<PopupMenuEntry<VoidCallback>> _nummerMenu(BuildContext context, Track t) {
+ItemMenu _nummerMenu(BuildContext context, Track t) {
   final p = context.read<PlayerStore>();
   final lib = context.read<LibraryStore>();
   final nav = Navigator.of(context);
   final album = lib.albumForPath(t.path);
   final fav = context.read<Favorieten>();
   final isFav = fav.isFavorietTrack(t);
-  return [
-    _menuRegel(isFav ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-        isFav ? 'Uit favorieten' : 'Favoriet', () => fav.wisselTrack(t)),
-    const PopupMenuDivider(),
-    _menuRegel(Icons.playlist_play_rounded, 'Hierna spelen', () => p.speelHierna([t])),
-    _menuRegel(Icons.playlist_add_rounded, 'Toevoegen aan de wachtrij', () => p.zetAchteraan([t])),
-    _menuRegel(Icons.library_add_outlined, 'Toevoegen aan afspeellijst…',
-        () => _kiesAfspeellijst(context, [if (fav.idVanTrack(t) case final i?) i])),
-    const PopupMenuDivider(),
-    if (album != null)
-      _menuRegel(Icons.album_rounded, 'Ga naar album',
-          () => openOp(nav, (_) => AlbumDetailPage(album: album))),
-    _menuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, t.artist)),
-    _menuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, t.artist)),
-    const PopupMenuDivider(),
-    // Stond in het oude tv-dialoogvenster dat dit menu vervangt. Hem hier weglaten zou die actie
-    // stilletjes van de afstandsbediening halen — en op de albumpagina zit hij achter `_hover`, dus
-    // op een tablet was dit meteen de enige weg ernaartoe.
-    _menuRegel(Icons.drive_file_move_outline, 'Naar ander album…', () {
-      final van = lib.albumForPath(t.path);
-      showDialog<bool>(context: context, builder: (_) => MoveTrackDialog(track: t, from: van));
-    }),
-    _menuRegel(Icons.delete_outline_rounded, 'Verwijderen…',
-        () => _confirmDelete(context, '“${t.title}”', [t.path])),
-  ];
+  // Nu al uitrekenen, niet straks in de sluiting: tegen de tijd dat er gehandeld wordt is het menu
+  // dicht, en dan hoort er geen store meer aangesproken te worden.
+  final vraag = zoekvraagVoorNummer(t.title,
+      performer: performerFromFilename(t.path, t.title), artist: t.artist);
+  final vervangTags = lib.tagsVoorVervanger(t);
+  return ItemMenu(
+    titel: t.title,
+    ondertitel: t.artist,
+    blokken: [
+      [
+        MenuRegel(isFav ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+            isFav ? 'Uit favorieten' : 'Favoriet', () => fav.wisselTrack(t)),
+      ],
+      [
+        MenuRegel(Icons.playlist_play_rounded, 'Hierna spelen', () => p.speelHierna([t])),
+        MenuRegel(Icons.playlist_add_rounded, 'Toevoegen aan de wachtrij', () => p.zetAchteraan([t])),
+        MenuRegel(Icons.library_add_outlined, 'Toevoegen aan afspeellijst…',
+            () => _kiesAfspeellijst(context, [if (fav.idVanTrack(t) case final i?) i])),
+      ],
+      [
+        // Leeg blok als er geen album is, en dan valt de streep vanzelf weg. Dat is de hele reden
+        // dat het menu blokken zijn en geen platte lijst met scheidingsposten erin.
+        if (album != null)
+          MenuRegel(Icons.album_rounded, 'Ga naar album',
+              () => openOp(nav, (_) => AlbumDetailPage(album: album))),
+        MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, t.artist)),
+        MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, t.artist)),
+      ],
+      [
+        // Dezelfde lijst die "Ontbrekende downloaden" gebruikt, alleen dan voor een nummer dat je al
+        // hebt. De tags gaan mee, zodat een vervangende kopie jouw eigen verbeteringen houdt in
+        // plaats van die van de peer.
+        MenuRegel(Icons.travel_explore_rounded, 'Zoeken met Soulseek',
+            () => openOp(nav, (_) => _bronnenPagina(t.title, vraag, tags: vervangTags))),
+        // Stond in het oude tv-dialoogvenster dat dit menu vervangt. Hem hier weglaten zou die actie
+        // stilletjes van de afstandsbediening halen — en op de albumpagina zit hij achter `_hover`,
+        // dus op een tablet was dit meteen de enige weg ernaartoe.
+        MenuRegel(Icons.drive_file_move_outline, 'Naar ander album…', () {
+          final van = lib.albumForPath(t.path);
+          showDialog<bool>(context: context, builder: (_) => MoveTrackDialog(track: t, from: van));
+        }),
+        MenuRegel(Icons.delete_outline_rounded, 'Verwijderen…',
+            () => _confirmDelete(context, '“${t.title}”', [t.path])),
+      ],
+    ],
+  );
 }
 
 /// Het menu voor een heel album. Dezelfde acties, alleen met alle nummers tegelijk.
-List<PopupMenuEntry<VoidCallback>> _albumMenu(BuildContext context, Album a) {
+ItemMenu _albumMenu(BuildContext context, Album a) {
   final p = context.read<PlayerStore>();
   final nav = Navigator.of(context);
   final nummers = a.tracks;
   final fav = context.read<Favorieten>();
   final isFav = fav.isFavorietAlbum(a);
-  return [
-    _menuRegel(isFav ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-        isFav ? 'Uit favorieten' : 'Favoriet', () => fav.wisselAlbum(a)),
-    const PopupMenuDivider(),
-    _menuRegel(Icons.play_arrow_rounded, 'Afspelen', () => p.playQueue(nummers, 0, cover: a.cover)),
-    _menuRegel(Icons.playlist_play_rounded, 'Hierna spelen', () => p.speelHierna(nummers)),
-    _menuRegel(Icons.playlist_add_rounded, 'Toevoegen aan de wachtrij', () => p.zetAchteraan(nummers)),
-    _menuRegel(Icons.library_add_outlined, 'Toevoegen aan afspeellijst…',
-        () => _kiesAfspeellijst(context, [for (final t in nummers) if (fav.idVanTrack(t) case final i?) i])),
-    const PopupMenuDivider(),
-    _menuRegel(Icons.open_in_new_rounded, 'Album openen',
-        () => openOp(nav, (_) => AlbumDetailPage(album: a))),
-    _menuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, a.artist)),
-    _menuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, a.artist)),
-    const PopupMenuDivider(),
-    _menuRegel(Icons.delete_outline_rounded, 'Verwijderen…',
-        () => _confirmDelete(context, a.isSingle ? '“${a.title}”' : 'het album “${a.title}”',
-            [for (final t in nummers) t.path])),
-  ];
+  final vraag = zoekvraagVoorAlbum(a.artist, a.title);
+  return ItemMenu(
+    titel: a.title,
+    ondertitel: a.artist,
+    blokken: [
+      [
+        MenuRegel(isFav ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+            isFav ? 'Uit favorieten' : 'Favoriet', () => fav.wisselAlbum(a)),
+      ],
+      [
+        MenuRegel(Icons.play_arrow_rounded, 'Afspelen', () => p.playQueue(nummers, 0, cover: a.cover)),
+        MenuRegel(Icons.playlist_play_rounded, 'Hierna spelen', () => p.speelHierna(nummers)),
+        MenuRegel(Icons.playlist_add_rounded, 'Toevoegen aan de wachtrij',
+            () => p.zetAchteraan(nummers)),
+        MenuRegel(Icons.library_add_outlined, 'Toevoegen aan afspeellijst…',
+            () => _kiesAfspeellijst(
+                context, [for (final t in nummers) if (fav.idVanTrack(t) case final i?) i])),
+      ],
+      [
+        MenuRegel(Icons.open_in_new_rounded, 'Album openen',
+            () => openOp(nav, (_) => AlbumDetailPage(album: a))),
+        MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, a.artist)),
+        MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, a.artist)),
+      ],
+      [
+        // Geen tags mee: er wordt hier geen bestand vervangen, er wordt een plaat gezocht.
+        MenuRegel(Icons.travel_explore_rounded, 'Zoeken met Soulseek',
+            () => openOp(nav, (_) => _bronnenPagina(a.title, vraag))),
+        MenuRegel(
+            Icons.delete_outline_rounded,
+            'Verwijderen…',
+            () => _confirmDelete(context, a.isSingle ? '“${a.title}”' : 'het album “${a.title}”',
+                [for (final t in nummers) t.path])),
+      ],
+    ],
+  );
 }
 
 /// De knop die de wachtrij laat zien.
@@ -7353,7 +7395,8 @@ class _WachtrijRij extends StatelessWidget {
       child: InkWell(
         onTap: () => p.playQueue(p.queueTracks, plek),
         onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _nummerMenu(context, track)) : null,
-        onSecondaryTap: () => _toonItemMenu(context, _nummerMenu(context, track)),
+        onSecondaryTapDown: (d) =>
+            _toonItemMenu(context, _nummerMenu(context, track), bij: d.globalPosition),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 7),
           child: Row(
@@ -8444,11 +8487,20 @@ class TracksView extends StatelessWidget {
             itemBuilder: (_, i) {
               final t = tracks[i];
               final isCurrent = !player.radioMode && player.current?.path == t.path;
-              return InkWell(
+              // EEN `Builder`, en dat is geen omhaal.
+              //
+              // De context van `itemBuilder` is de sliver zelf, en die van `build` is de HELE
+              // pagina — dus hing het menu hier aan het midden van het scherm terwijl je op de derde
+              // rij klikte. `findRenderObject` daalt af tot de eerste tekenende afstammeling, dus de
+              // context van een `Builder` levert de RIJ. Zelfde truc als bij de drie puntjes op het
+              // nu-speelt-scherm.
+              return Builder(
+                builder: (rij) => InkWell(
                 onTap: () => player.playQueue(tracks, i),
                 onLongPress:
-                    _menuOpHouden ? () => _toonItemMenu(context, _nummerMenu(context, t)) : null,
-                onSecondaryTap: () => _toonItemMenu(context, _nummerMenu(context, t)),
+                    _menuOpHouden ? () => _toonItemMenu(rij, _nummerMenu(rij, t)) : null,
+                onSecondaryTapDown: (d) =>
+                    _toonItemMenu(rij, _nummerMenu(rij, t), bij: d.globalPosition),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
                   color: isCurrent ? _panel : Colors.transparent,
@@ -8529,6 +8581,7 @@ class TracksView extends StatelessWidget {
                     ],
                   ),
                 ),
+              ),
               );
             },
           ),
@@ -17250,7 +17303,7 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
           //
           // Gated, because on a phone or an iPad a long press on a photo is not "set as backdrop"
           // to anybody, and it would fire where a drag or a context menu was meant.
-          onSecondaryTap: () => lib.setArtistArt(widget.artist, 'backdrop', img.uri),
+          onSecondaryTap: (_) => lib.setArtistArt(widget.artist, 'backdrop', img.uri),
           onLongPress:
               isTv ? () => lib.setArtistArt(widget.artist, 'backdrop', img.uri) : null,
           borderRadius: BorderRadius.circular(10),
