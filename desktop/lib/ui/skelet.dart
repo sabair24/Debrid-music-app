@@ -14,6 +14,8 @@ library;
 import 'package:flutter/material.dart';
 
 import 'kleuren.dart';
+import 'maten.dart';
+import 'tegel.dart';
 
 /// Eén grijs blok dat rustig oplicht.
 class Skelet extends StatefulWidget {
@@ -83,13 +85,13 @@ class SkeletTegel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Skelet(breedte: breedte, hoogte: breedte, radius: 12),
-          const SizedBox(height: 9),
+          Skelet(breedte: breedte, hoogte: breedte, radius: kHoek12),
+          const SizedBox(height: kRuimte8),
           // Niet alle regels even lang: een rij van gelijke blokjes leest als een tabel, niet als
           // een lijst die zo met namen gevuld wordt.
-          Skelet(breedte: breedte * .8, hoogte: 11, radius: 4),
-          const SizedBox(height: 6),
-          Skelet(breedte: breedte * .55, hoogte: 9, radius: 4),
+          Skelet(breedte: breedte * .8, hoogte: 11, radius: kHoek4),
+          const SizedBox(height: kRuimte6),
+          Skelet(breedte: breedte * .55, hoogte: 9, radius: kHoek4),
         ],
       ),
     );
@@ -101,9 +103,13 @@ class SkeletTegel extends StatelessWidget {
 /// [hoogte] moet gelijk zijn aan wat de gevulde rij inneemt — dat is de hele reden dat dit bestaat:
 /// als het skelet even hoog is als wat erna komt, verspringt er niets meer.
 class SkeletRij extends StatelessWidget {
-  const SkeletRij({super.key, this.hoogte = 204, this.tegels = 6, this.tegelbreedte = 140});
+  const SkeletRij({super.key, this.hoogte, this.tegels = 6, this.tegelbreedte = kTegelHoes});
 
-  final double hoogte;
+  /// Leeg laten betekent: vul de hoogte die je krijgt.
+  ///
+  /// Dat is sinds ronde 1 het gewone geval — de sectie zet er `hoogteVanTegelrij()` omheen, en dan
+  /// zou een eigen getal hier precies de verspringing terugbrengen die dit skelet moet voorkomen.
+  final double? hoogte;
   final int tegels;
   final double tegelbreedte;
 
@@ -114,11 +120,87 @@ class SkeletRij extends StatelessWidget {
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         physics: const NeverScrollableScrollPhysics(),
-        padding: const EdgeInsets.symmetric(horizontal: 24),
+        padding: const EdgeInsets.symmetric(horizontal: kGoot),
         itemCount: tegels,
-        separatorBuilder: (_, __) => const SizedBox(width: 14),
+        separatorBuilder: (_, __) => const SizedBox(width: kRuimte12),
         itemBuilder: (_, __) => SkeletTegel(breedte: tegelbreedte),
       ),
     );
   }
+}
+
+/// Een raster skelettegels, in de vorm van het albumraster.
+///
+/// **Waarom dit naast [SkeletRij] bestaat.** Albums en Artiesten toonden tijdens het inlezen één
+/// wieltje midden op een leeg scherm. Dat zegt alleen DÁT er iets komt; het zegt niet dat er een
+/// raster met hoezen komt, en het neemt een heel andere hoogte in dan wat erna verschijnt — dus
+/// springt het scherm op het moment dat de bibliotheek binnen is.
+///
+/// De maten zijn dezelfde als die van het echte raster in `main.dart`: 190 breed, verhouding .78.
+/// Loopt dat uiteen, dan verspringt het weer, en dan is dit een mooiere manier om hetzelfde
+/// probleem te houden.
+class SkeletRaster extends StatelessWidget {
+  const SkeletRaster({super.key, this.tegels = 12});
+
+  final int tegels;
+
+  @override
+  Widget build(BuildContext context) => GridView.builder(
+        padding: const EdgeInsets.fromLTRB(kGoot, 0, kGoot, kGoot),
+        physics: const NeverScrollableScrollPhysics(),
+        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 190,
+          mainAxisSpacing: 20,
+          crossAxisSpacing: 20,
+          childAspectRatio: .78,
+        ),
+        itemCount: tegels,
+        itemBuilder: (_, __) => LayoutBuilder(
+          builder: (_, c) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Skelet(breedte: c.maxWidth, hoogte: c.maxWidth, radius: kHoek12),
+              const SizedBox(height: kRuimte8),
+              Skelet(breedte: c.maxWidth * .8, hoogte: 11, radius: kHoek4),
+              const SizedBox(height: kRuimte6),
+              Skelet(breedte: c.maxWidth * .55, hoogte: 9, radius: kHoek4),
+            ],
+          ),
+        ),
+      );
+}
+
+/// Een lijst skeletregels, in de vorm van een nummerlijst.
+///
+/// Dezelfde marges en dezelfde hoogte als `TrackRow`, om dezelfde reden als hierboven: wat erna komt
+/// mag niet verspringen.
+class SkeletLijst extends StatelessWidget {
+  const SkeletLijst({super.key, this.regels = 10});
+
+  final int regels;
+
+  @override
+  Widget build(BuildContext context) => ListView.builder(
+        padding: const EdgeInsets.symmetric(vertical: kRuimte8),
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: regels,
+        itemBuilder: (_, i) => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: kGoot, vertical: kRuimte2),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: kRuimte12, vertical: kRuimte12),
+            child: Row(
+              children: [
+                const Skelet(breedte: 14, hoogte: 11, radius: kHoek4),
+                const SizedBox(width: kRuimte12),
+                // Niet alle regels even lang: gelijke blokjes lezen als een tabel in plaats van als
+                // een lijst die zo met titels gevuld wordt. Het patroon herhaalt per vier, zodat
+                // twee regels onder elkaar nooit toevallig dezelfde lengte krijgen.
+                Skelet(breedte: 120 + (i % 4) * 46, hoogte: 12, radius: kHoek4),
+                const Spacer(),
+                const Skelet(breedte: 30, hoogte: 10, radius: kHoek4),
+              ],
+            ),
+          ),
+        ),
+      );
 }

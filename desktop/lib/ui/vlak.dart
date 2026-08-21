@@ -133,3 +133,54 @@ class Vlak extends StatelessWidget {
 
 Color _meng(Color onder, Color boven, double hoeveel) =>
     Color.lerp(onder, boven, hoeveel)!;
+
+// ── De kleurwas ──────────────────────────────────────────────────────────────
+//
+// **Waarom dit hier staat en niet op de albumpagina.** De was is twee keer nodig — op de
+// albumpagina en op het speelscherm — en het zijn precies de getallen die uit elkaar lopen zodra ze
+// op twee plekken staan: er wordt er één bijgesteld naar aanleiding van één schermafbeelding, en
+// dan tekent dezelfde plaat op twee schermen een andere kleur.
+
+/// De TINT van een hoes, klaargemaakt om achter een scherm te leggen.
+///
+/// **Niet de donkerte van de hoes, alleen zijn tint.** Gemeten op de eigen platen: No Strings
+/// Attached geeft rgb(197,73,45) en dat werkt meteen, maar Thriller geeft rgb(25,37,43) en Adele's
+/// 25 geeft rgb(52,44,36). Zulke kleuren op een achtergrond van #07080C leggen verandert niets
+/// zichtbaars — je krijgt zwart op zwart en het lijkt alsof de was stuk is, terwijl hij precies doet
+/// wat er staat.
+///
+/// Daarom wordt de helderheid gelijkgetrokken en blijven alleen tint en verzadiging over. Dan wordt
+/// Thrillers donkerblauw een zichtbaar blauw en Adele's bruin een zichtbaar bruin, en houdt élke
+/// hoes dezelfde kracht. De verzadiging krijgt een ondergrens (anders blijft het grijzig) en een
+/// bovengrens (anders schreeuwt een felle hoes de tekst weg).
+///
+/// Null in, null uit: een zwart-witte hoes hoort géén was te krijgen. Zie `dominantColour` — geen
+/// was is beter dan een grijze.
+Color? wasBasis(int? kleur) {
+  if (kleur == null) return null;
+  final hsl = HSLColor.fromColor(Color(kleur));
+  return hsl.withLightness(.42).withSaturation(hsl.saturation.clamp(.32, .78)).toColor();
+}
+
+/// Het verloop dat achter een scherm gaat: de tint bovenaan, de gewone achtergrond onderaan.
+///
+/// De drie getallen zijn afgestemd op de grijstrap van ronde 1. Toen [kAchtergrond] van #0C0D12 naar
+/// #07080C ging, werd de top van de was er absoluut donkerder van — vandaar .38 en niet .34. En de
+/// staart mag lang: het einde landt nu op een donkerdere vloer, en dan is de plek waar hij ophoudt
+/// eerder een RAND dan een overgang.
+///
+/// Onder de 78% is er niets meer van over, en dat is met opzet: daaronder staan tracklijsten en
+/// grijze regels, en alles wat daar nog kleur draagt gaat van hun leesbaarheid af.
+LinearGradient? kleurWas(Color? basis) {
+  if (basis == null) return null;
+  return LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    stops: const [0, .34, .78],
+    colors: [
+      Color.lerp(kAchtergrond, basis, .38)!,
+      Color.lerp(kAchtergrond, basis, .15)!,
+      kAchtergrond,
+    ],
+  );
+}

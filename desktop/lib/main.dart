@@ -97,6 +97,7 @@ import 'ui/skelet.dart';
 import 'ui/stijl.dart';
 import 'ui/tegel.dart';
 import 'ui/typografie.dart';
+import 'ui/vlak.dart';
 
 /// What a focused Material button looks like: the same ring the rest of the app draws.
 ///
@@ -2200,7 +2201,10 @@ class _HomeShellState extends State<HomeShell> {
     return Consumer<LibraryStore>(
       builder: (_, lib, __) {
         if (lib.scanning && lib.albums.isEmpty) {
-          return const Center(child: CircularProgressIndicator());
+          // Een raster in de vorm van wat er komt, in plaats van een wieltje midden op zwart. Het
+          // wieltje zei alleen DÁT er iets kwam, en het nam een heel andere hoogte in dan het raster
+          // dat erna verscheen — dus sprong het scherm op het moment dat de bibliotheek binnen was.
+          return const SkeletRaster();
         }
         if (lib.albums.isEmpty) {
           // On a Mac or an iPad there is no folder to point at — the library comes from the PC,
@@ -4285,30 +4289,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     // download die landt herschikt de groepering). Het kost niets: [_kleurUitHoes] stopt meteen als het
     // om dezelfde bytes gaat, en dat is bij elke volgende build zo.
     _kleurUitHoes(album.correctedCover ?? album.cover);
-    // De TINT van de hoes, niet zijn donkerte.
-    //
-    // Gemeten op de eigen platen: No Strings Attached geeft rgb(197,73,45) en dat werkt meteen, maar
-    // Thriller geeft rgb(25,37,43) en Adele's 25 geeft rgb(52,44,36). Zulke kleuren op een achtergrond
-    // van #0C0D12 leggen verandert niets zichtbaars — je krijgt zwart op zwart en het lijkt alsof de
-    // was stuk is, terwijl hij precies doet wat er staat.
-    //
-    // Daarom wordt de helderheid gelijkgetrokken en blijven alleen tint en verzadiging over. Dan wordt
-    // Thrillers donkerblauw een zichtbaar blauw en Adele's bruin een zichtbaar bruin, en houdt élke hoes
-    // dezelfde kracht. De verzadiging krijgt een ondergrens (anders blijft het grijzig) en een
-    // bovengrens (anders schreeuwt een felle hoes de tekst weg).
-    final wasKleur = _was == null ? null : Color(_was!);
-    Color? wasBasis;
-    if (wasKleur != null) {
-      final hsl = HSLColor.fromColor(wasKleur);
-      wasBasis = hsl.withLightness(.42).withSaturation(hsl.saturation.clamp(.32, .78)).toColor();
-    }
-    // **Hertuned toen de vloer donkerder werd.** Deze getallen zijn gemengd MET de achtergrond, dus
-    // toen [kAchtergrond] van #0C0D12 naar #07080C ging, werd de top van de was er absoluut een
-    // stukje donkerder van: L* zakte van ongeveer 19 naar 17,5. Tegen de nieuwe vloer is dat nog
-    // steeds meer verschil dan eerst — maar de was zag er op het toestel goedgekeurd uit op de
-    // OUDE helderheid, en die hoort niet mee te verschuiven met een wijziging die over grijs gaat.
-    // Vandaar .34 → .38: dat brengt de top terug op waar hij stond.
-    final wasTop = wasBasis == null ? _bg : Color.lerp(_bg, wasBasis, .38)!;
+    // De tint van de hoes, klaargemaakt om achter de pagina te leggen. Het recept staat in
+    // `ui/vlak.dart` omdat het speelscherm hem óók gebruikt — en dit zijn precies de getallen die
+    // uit elkaar lopen zodra ze op twee plekken staan.
+    final was = kleurWas(wasBasis(_was));
 
     return Scaffold(
       // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin — its app bar
@@ -4320,23 +4304,19 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
           // De was: bovenaan de kleur van de hoes, onderaan gewoon de achtergrond. Hij staat áchter de
           // hele pagina en scrollt dus niet mee — hij hoort bij het album, niet bij de tracklijst.
           //
-          // Op zeven tiende is hij al helemaal weg, want daaronder staan de tracklijst en de grijze
-          // "niet in bibliotheek"-regels, en die zijn transparant: alles wat daar nog kleur draagt,
-          // gaat van hun leesbaarheid af.
-          if (wasBasis != null)
+          // Onderaan is hij al helemaal weg, want daar staan de tracklijst en de grijze "niet in
+          // bibliotheek"-regels, en die zijn transparant: alles wat daar nog kleur draagt, gaat van
+          // hun leesbaarheid af. Waar precies staat in `kleurWas`.
+          if (was != null)
             Positioned.fill(
               child: IgnorePointer(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      // En de staart mag langer: het einde van de was landt nu op een donkerdere
-                      // vloer, en dan is de plek waar hij ophoudt eerder een RAND dan een overgang.
-                      stops: const [0, .34, .78],
-                      colors: [wasTop, Color.lerp(_bg, wasBasis, .15)!, _bg],
-                    ),
-                  ),
+                // Overvloeien in plaats van omslaan: een download die landt herschikt de groepering
+                // en bouwt deze pagina opnieuw, en dan sprong de kleur van het ene beeld op het
+                // andere. [kWas] is de duur die daarbij hoort.
+                child: AnimatedContainer(
+                  duration: kWas,
+                  curve: Curves.easeOut,
+                  decoration: BoxDecoration(gradient: was),
                 ),
               ),
             ),
@@ -4511,7 +4491,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                 // of as work completing.
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+                    padding: const EdgeInsets.fromLTRB(kGoot, 0, kGoot, 0),
                     child: _officialBusy
                         ? const BusyLine(busy: true)
                         : WarmingLine(uid: context.read<LibraryStore>().uidOf(album)),
@@ -4520,7 +4500,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                 if (_officialBusy && _official.isEmpty && !album.isSingle)
                   const SliverToBoxAdapter(
                     child: Padding(
-                      padding: EdgeInsets.fromLTRB(22, 4, 20, 10),
+                      padding: EdgeInsets.fromLTRB(kGoot, kRuimte4, kGoot, kRuimte8),
                       child: Row(children: [
                         SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
                         SizedBox(width: 10),
@@ -4535,7 +4515,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                 if (!_officialBusy && !album.isSingle)
                   SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(14, 0, 20, 6),
+                      padding: const EdgeInsets.fromLTRB(kRuimte16, 0, kGoot, kRuimte6),
                       child: Align(
                         alignment: Alignment.centerLeft,
                         // A plain TextButton: it already takes focus and already draws the app's
@@ -4614,11 +4594,14 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
   /// A quiet divider inside the tracklist — a disc number, or where the record stops.
   Widget _listLabel(String text) => Padding(
-        padding: const EdgeInsets.fromLTRB(34, 14, 20, 6),
+        // Ingesprongen tot waar de TITEL van een nummerrij begint: de goot, de vulling van de rij,
+        // het nummervakje van 28, en het gat daarachter. Zo staat dit label boven zijn eigen kolom
+        // in plaats van ernaast — het stond op 34 terwijl de titels op 76 beginnen.
+        padding: const EdgeInsets.fromLTRB(
+            kGoot + kRuimte12 + 28 + kRuimte12, kRuimte12, kGoot, kRuimte6),
         child: Align(
           alignment: Alignment.centerLeft,
-          child: Text(text,
-              style: const TextStyle(color: _muted, fontSize: 11, letterSpacing: .4)),
+          child: Text(text, style: kLabel.copyWith(letterSpacing: .4)),
         ),
       );
 
@@ -4629,7 +4612,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   /// shut by default, so a record you hold complete still looks complete.
   Widget _bonusSection() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+      padding: const EdgeInsets.fromLTRB(kGoot, kRuimte16, kGoot, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -4678,7 +4661,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     final missing = c.missing;
     final narrow = isCompact(context);
     return Container(
-      margin: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+      margin: const EdgeInsets.fromLTRB(kGoot, kRuimte4, kGoot, kRuimte8),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: _panel,
@@ -4755,7 +4738,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   Widget _header(BuildContext context) {
     final player = context.read<PlayerStore>();
     final narrow = isCompact(context);
-    final pad = narrow ? 18.0 : 28.0;
+    // 18 op een telefoon en 28 op een pc — terwijl de tracklijst eronder op 20 stond en de rest van
+    // de app sinds ronde 1 op [kGoot]. Drie gootbreedtes op één pagina, en dat is precies wat je als
+    // "het rammelt" ziet zonder te kunnen aanwijzen waarom. De hoes wordt hierdoor op een telefoon
+    // zes punten smaller; dat is de prijs, en hij is het waard.
+    const pad = kGoot;
 
     // The sleeve asks for more room than its own width: the disc slides out to the side, and
     // AlbumArt reserves size * 1.62 for that. Beside a title column on a phone that came to 404 of
@@ -5333,15 +5320,30 @@ class _TrackRowState extends State<TrackRow> {
         // through the album. The row already lights up on hover, and focus drives that.
         scaleOnFocus: false,
         onFocusChange: (v) => setState(() => _hover = v),
-        child: Container(
-          margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-          decoration: BoxDecoration(
-            color: isCurrent
-                ? _accent.withValues(alpha: .16)
-                : (_hover ? _panel : Colors.transparent),
-            borderRadius: BorderRadius.circular(8),
-          ),
+        child: AnimatedContainer(
+          duration: kSnel,
+          curve: Curves.easeOut,
+          margin: const EdgeInsets.symmetric(horizontal: kGoot, vertical: kRuimte2),
+          // Verticaal 12 en niet de 8 van de tekening: op een telefoon is deze rij het ding dat je
+          // met een duim raakt, en 8 maakt hem 34 punten hoog. Een tekening kan dat niet laten zien.
+          padding: const EdgeInsets.symmetric(horizontal: kRuimte12, vertical: kRuimte12),
+          // **"Dit speelt nu" is voortaan een LAAG en niet alleen een kleurwaas.**
+          //
+          // Het was `_accent` op 16% — paars doorschijnend over de achtergrond. Sinds de grijstrap
+          // van ronde 1 bestaat er een stand die "dit is actief" zegt met diepte in plaats van met
+          // een tint, en dit is de rij waar dat het meest voor bedoeld is. De titel blijft in
+          // [_accent2] staan, dus wát er speelt zegt de kleur nog steeds; de laag zegt alleen wáár.
+          //
+          // **Zonder rand**, en dat is geen smaak maar rekenwerk: `Container` telt de randdikte op
+          // bij zijn eigen vulling, dus een rij mét rand wordt twee punten hoger dan de rijen
+          // eromheen. Bij elk volgend nummer zou de hele lijst dan een tikje verspringen. Het
+          // verloop en de schaduw dragen de laag hier alleen.
+          decoration: isCurrent
+              ? paneelDecoratie(Niveau.hoog, radius: kHoek8, rand: false)
+              : BoxDecoration(
+                  color: _hover ? _panel : Colors.transparent,
+                  borderRadius: BorderRadius.circular(kHoek8),
+                ),
           child: Row(
             children: [
               SizedBox(
@@ -5350,9 +5352,9 @@ class _TrackRowState extends State<TrackRow> {
                     ? const Icon(Icons.play_arrow_rounded, size: 18, color: _accent)
                     : Text(widget.label ?? '${t.trackNo > 0 ? t.trackNo : widget.index + 1}',
                         textAlign: TextAlign.right,
-                        style: const TextStyle(color: _muted, fontSize: 13)),
+                        style: kTekstKlein),
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: kRuimte12),
               Expanded(
                 child: Builder(builder: (context) {
                   // Guests named in this track's own tags, shown under the title. No catalogue
@@ -5361,7 +5363,7 @@ class _TrackRowState extends State<TrackRow> {
                   final title = Text(titleWithoutFeat(t.title),
                       maxLines: titelRegels(context),
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontWeight: FontWeight.w600, color: isCurrent ? _accent2 : _text));
+                      style: isCurrent ? kTekstNormaal.copyWith(color: _accent2) : kTekstNormaal);
                   if (guests.isEmpty) return title;
                   return Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -5372,7 +5374,9 @@ class _TrackRowState extends State<TrackRow> {
                       // highlight's path on a television for the same reason as the track lists:
                       // this sits inside a row that is itself the thing you want to press.
                       _maybeFocusable(
-                        ArtistNames(names: guests, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                        // 11,5 werd 12: het verschil met de 12 een regel hoger was met het oog niet
+                        // te zien, en wat je wél zag was dat één regel vier stemmen had.
+                        ArtistNames(names: guests, style: kTekstKlein),
                       ),
                     ],
                   );
@@ -5380,7 +5384,7 @@ class _TrackRowState extends State<TrackRow> {
               ),
               _echtheidMerk(t.path),
               _qualityBadge(_trackQuality(t)),
-              Text(_fmt(t.duration), style: const TextStyle(color: _muted, fontSize: 13)),
+              Text(_fmt(t.duration), style: kTekstKlein),
               // "≠ 4:33" — je hebt het nummer, maar niet die versie. Klein en naast de tijd, want het
               // is een bijzonderheid en geen probleem.
               if (widget.uitgaveSeconden != null)
@@ -5390,7 +5394,7 @@ class _TrackRowState extends State<TrackRow> {
                     message: 'De uitgave geeft ${_fmt(Duration(seconds: widget.uitgaveSeconden!))} '
                         'op — je hebt een andere snit van dit nummer.',
                     child: Text('≠ ${_fmt(Duration(seconds: widget.uitgaveSeconden!))}',
-                        style: const TextStyle(color: Color(0xFFE0B341), fontSize: 11)),
+                        style: kTekstKlein.copyWith(color: const Color(0xFFE0B341))),
                   ),
                 ),
               // Both appear on hover, so neither can be hit by accident.
@@ -5495,20 +5499,22 @@ class _MissingTrackRowState extends State<MissingTrackRow> {
         scaleOnFocus: false,
         onFocusChange: (v) => setState(() => _hover = v),
         child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+        // Precies de marges van [TrackRow] ernaast, want dat is de hele bedoeling van deze rij: hij
+        // staat TUSSEN je eigen nummers en hoort daar op dezelfde lijn te liggen.
+        margin: const EdgeInsets.symmetric(horizontal: kGoot, vertical: kRuimte2),
+        padding: const EdgeInsets.symmetric(horizontal: kRuimte12, vertical: kRuimte12),
         decoration: BoxDecoration(
           color: _hover ? _panel.withValues(alpha: .6) : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(kHoek8),
         ),
         child: Row(
           children: [
             SizedBox(
               width: 28,
               child: Text(s.label,
-                  textAlign: TextAlign.right, style: TextStyle(color: dim, fontSize: 13)),
+                  textAlign: TextAlign.right, style: kTekstKlein.copyWith(color: dim)),
             ),
-            const SizedBox(width: 14),
+            const SizedBox(width: kRuimte12),
             Expanded(
               child: Row(
                 children: [
@@ -5516,23 +5522,23 @@ class _MissingTrackRowState extends State<MissingTrackRow> {
                     child: Text(s.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: dim, fontWeight: FontWeight.w500)),
+                        style: kTekstNormaal.copyWith(color: dim, fontWeight: FontWeight.w500)),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: kRuimte8),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    padding: const EdgeInsets.symmetric(horizontal: kRuimte6, vertical: kRuimte2),
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(4),
+                      borderRadius: BorderRadius.circular(kHoek4),
                       border: Border.all(color: _line),
                     ),
                     child: Text(widget.note ?? 'niet in bibliotheek',
-                        style: TextStyle(color: dim, fontSize: 10.5, letterSpacing: .2)),
+                        style: kLabel.copyWith(color: dim, letterSpacing: .2)),
                   ),
                 ],
               ),
             ),
             if (s.seconds != null && s.seconds! > 0)
-              Text(_fmt(Duration(seconds: s.seconds!)), style: TextStyle(color: dim, fontSize: 13)),
+              Text(_fmt(Duration(seconds: s.seconds!)), style: kTekstKlein.copyWith(color: dim)),
             const SizedBox(width: 8),
             SizedBox(
               width: 72,
@@ -7722,6 +7728,26 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
   /// produced a different, older one.
   Uint8List? _shown;
 
+  /// De kleur waar de hoes naar neigt, en de bytes waar hij uit kwam.
+  ///
+  /// Hetzelfde recept als op de albumpagina — zie `ui/vlak.dart` — zodat dezelfde plaat op beide
+  /// schermen dezelfde kleur draagt. Null zolang er niets berekend is en null bij een zwart-witte
+  /// hoes; dan blijft het scherm gewoon zwart, en dat hoort er met opzet uit te zien.
+  int? _was;
+  Uint8List? _wasVan;
+
+  Future<void> _kleurUitHoes(Uint8List? bytes) async {
+    if (bytes == null || identical(bytes, _wasVan)) return;
+    _wasVan = bytes;
+    int? kleur;
+    try {
+      kleur = await _kleurBuitenDeTekendraad(bytes);
+    } catch (_) {
+      return; // een hoes die niet te lezen is laat het scherm gewoon zoals het was
+    }
+    if (mounted && kleur != _was) setState(() => _was = kleur);
+  }
+
   @override
   Widget build(BuildContext context) {
     final x = _Transport(context);
@@ -7733,6 +7759,10 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
     final duration = x.duration;
     final playing = x.playing;
     final prog = x.progress;
+    // Buiten de tekendraad om, en hij stopt meteen als het om dezelfde bytes gaat — dus bij elke
+    // volgende build kost dit niets. Zelfde afweging als op de albumpagina.
+    _kleurUitHoes(p.currentCover);
+    final was = kleurWas(wasBasis(_was));
     return Scaffold(
       backgroundColor: _bg,
       // Toetsen bubbelen vanaf de gefocuste knop hierheen. `canRequestFocus: false` en
@@ -7759,20 +7789,50 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
         onKeyEvent: (_, e) => _pijlAlsNummerknop(e, x),
         child: Stack(
         children: [
-          if (p.currentCover != null)
+          // **De kleur van de hoes, achter alles.**
+          //
+          // Hiervoor lag er alleen een uitvergrote, doorzichtige hoes over het hele scherm met een
+          // vlakke waas van 50% erbovenop. Dat gaf onderaan — waar de tijdbalk en de knoppen staan —
+          // een uitgesmeerde foto in plaats van een rustige ondergrond, en het had niets te maken
+          // met de kleur die de albumpagina van dezelfde plaat al gebruikt.
+          //
+          // Nu hetzelfde verloop als daar: de tint bovenaan, de gewone achtergrond onderaan. En
+          // overvloeiend, want dit scherm wisselt van plaat terwijl je ernaar kijkt.
+          if (was != null)
             Positioned.fill(
-              // Blurred to almost nothing behind the player, so it never needed the full picture.
-              //
-              // De doorzichtigheid via `Image` en NIET via een `Opacity`-widget. Die laatste zet een
-              // schermvullende `saveLayer` op — de duurste soort laag die er is — en uitgerekend op
-              // dít scherm, waar de draaiende plaat 120 beelden per seconde afdwingt zolang er
-              // muziek speelt. `Image` heeft een ingebouwde dekking die geen laag nodig heeft.
-              child: Image.memory(p.currentCover!,
-                  fit: BoxFit.cover,
-                  cacheWidth: 480,
-                  opacity: const AlwaysStoppedAnimation(.22)),
+              child: IgnorePointer(
+                child: AnimatedContainer(
+                  duration: kWas,
+                  curve: Curves.easeOut,
+                  decoration: BoxDecoration(gradient: was),
+                ),
+              ),
             ),
-          Positioned.fill(child: Container(color: _bg.withValues(alpha: .5))),
+          // De hoes zelf blijft erachter staan, maar dooft naar onderen uit — anders ligt hij nog
+          // steeds over de knoppen heen.
+          //
+          // NIET op een televisie. Daar kost een schermvullend plaatje met een verloopmasker
+          // beeldjes op de Tegra X1, uitgerekend op het scherm waar de draaiende plaat er al 120 per
+          // seconde vraagt, en van drie meter is het verschil met alleen de was er niet.
+          //
+          // De doorzichtigheid via `Image` en NIET via een `Opacity`-widget. Die laatste zet een
+          // schermvullende `saveLayer` op — de duurste soort laag die er is.
+          if (p.currentCover != null && !isTv)
+            Positioned.fill(
+              child: ShaderMask(
+                blendMode: BlendMode.dstIn,
+                shaderCallback: (r) => const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Colors.white, Colors.transparent],
+                  stops: [.20, .72],
+                ).createShader(r),
+                child: Image.memory(p.currentCover!,
+                    fit: BoxFit.cover,
+                    cacheWidth: 480,
+                    opacity: const AlwaysStoppedAnimation(.22)),
+              ),
+            ),
           SafeArea(
               // A television reports no insets, so SafeArea alone is a no-op there; this is the
               // margin that keeps the back arrow off the part of the picture a set cuts away.
@@ -8394,7 +8454,9 @@ class TracksView extends StatelessWidget {
     final all = lib.tracks;
     final tracks = match == null ? all : all.where(match!).toList();
     if (lib.scanning && all.isEmpty) {
-      return const Center(child: CircularProgressIndicator(color: _accent));
+      // Regels in de vorm van nummerregels, op dezelfde marges, zodat er niets verspringt zodra de
+      // echte lijst er staat.
+      return const SkeletLijst();
     }
     if (all.isEmpty) {
       return LeegVlak(
