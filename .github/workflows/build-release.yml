@@ -73,6 +73,20 @@ jobs:
         working-directory: desktop
         run: flutter pub get
 
+      # **Analyse, hier en niet alleen in de Apple-bouw.**
+      #
+      # Deze stap stond alleen in `apple_build.yml`, en die draait alleen op een TAG. Dus kwam een
+      # ongebruikte import pas aan het licht toen de release al liep — en dan is de APK er wel,
+      # maar hangt de Mac-app niet aan de uitgave en krijgt de iPad niets. Dat is precies wat er
+      # met win-v3.9.158 gebeurde: `dart:isolate` bleef in main.dart staan nadat de kleurberekening
+      # naar artwork.dart verhuisd was.
+      #
+      # `--no-fatal-infos` en dus WEL fatale waarschuwingen: dat is exact wat de Apple-bouw doet, en
+      # als deze soepeler zou zijn dan zegt hij niets over wat daar gaat gebeuren.
+      - name: Analyze
+        working-directory: desktop
+        run: flutter analyze --no-fatal-infos lib/
+
       # De toetsen die over de indeling gaan, hier en niet alleen in de Apple-bouw.
       #
       # Die draait namelijk alleen op een tag, dus een kapotte toets bleek pas tijdens het uitgeven
