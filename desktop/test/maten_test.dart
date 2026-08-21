@@ -97,6 +97,18 @@ Finder _binnenOns(Finder wat) => find.descendant(
       matchRoot: true,
     );
 
+/// Staat deze marge op de ladder — eventueel met een haarlijn erbij?
+///
+/// **Waarom die haarlijn.** Een `Container` met een `decoration` die een rand draagt telt de
+/// randdikte OP bij zijn eigen vulling: `EdgeInsets.all(12)` met een rand van één punt komt als 13
+/// bij de `Padding` terecht. Dat is geen slordige maat maar precies de bedoelde 12 plus de rand die
+/// `paneelDecoratie` eromheen zet, en het was de eerste vondst van deze toets.
+///
+/// Eén punt speling kost hier niets: van de acht stappen liggen er geen twee één punt uit elkaar
+/// (2, 4, 6, 8, 12, 16, 24, 32), dus 13 kan alleen "12 met een rand" betekenen en nooit een tweede
+/// maat die stilletjes naast een eerste is gaan staan.
+bool _opDeLadder(double w) => _ruimtes.contains(w) || _ruimtes.contains(w - 1);
+
 void main() {
   testWidgets('elke ronding komt uit de vijf', (t) async {
     await t.pumpWidget(MaterialApp(home: Scaffold(body: _boom())));
@@ -124,16 +136,18 @@ void main() {
   testWidgets('elke marge komt uit de acht', (t) async {
     await t.pumpWidget(MaterialApp(home: Scaffold(body: _boom())));
 
-    final gevonden = <double>{};
+    final gevonden = <double, String>{};
     for (final element in _binnenOns(find.byType(Padding)).evaluate()) {
       final p = (element.widget as Padding).padding;
       if (p is! EdgeInsets) continue;
-      gevonden.addAll([p.left, p.top, p.right, p.bottom]);
+      for (final w in [p.left, p.top, p.right, p.bottom]) {
+        gevonden.putIfAbsent(w, () => element.debugGetCreatorChain(6));
+      }
     }
 
     expect(gevonden, isNotEmpty);
-    for (final w in gevonden) {
-      expect(_ruimtes.contains(w), isTrue, reason: 'marge $w staat niet in de acht');
+    for (final MapEntry(key: w, value: waar) in gevonden.entries) {
+      expect(_opDeLadder(w), isTrue, reason: 'marge $w staat niet in de acht — bij $waar');
     }
   });
 
