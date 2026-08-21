@@ -91,6 +91,8 @@ jobs:
             test/lossless_want_test.dart test/bron_venster_test.dart \
             test/terug_test.dart test/binnen_navigator_test.dart \
             test/itemmenu_test.dart \
+            test/maten_test.dart test/afmetingen_test.dart \
+            test/kleurenladder_test.dart test/overgang_test.dart \
             test/completeness_test.dart \
             test/discogs_verwijzing_test.dart test/updater_test.dart \
             test/verhuizing_test.dart

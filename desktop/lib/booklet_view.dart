@@ -21,7 +21,7 @@ const _muted = kGedempt;
 const _accent = kAccent;
 
 /// Paper showing where a page hasn't loaded yet.
-const _paper = Color(0xFF15161C);
+const _paper = kVerzonken;
 
 const _turnMs = 560;
 const _crossMs = 380;

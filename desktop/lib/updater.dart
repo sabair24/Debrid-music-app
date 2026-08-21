@@ -27,6 +27,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'paths.dart';
+import 'ui/kleuren.dart';
 
 /// De APK's staan in een APARTE, openbare repo. De broncode-repo was ooit privé en de ingebouwde
 /// updater moest zonder in te loggen bij de bestanden kunnen; dat is nog steeds waar deze naar
@@ -557,7 +558,7 @@ Future<void> toonUpdate(BuildContext context, Uitgave u, {Updater updater = cons
   final wil = await showDialog<bool>(
     context: context,
     builder: (d) => AlertDialog(
-      backgroundColor: const Color(0xFF161822),
+      backgroundColor: kPaneel,
       title: const Text('Nieuwe versie'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -594,7 +595,7 @@ Future<void> toonUpdate(BuildContext context, Uitgave u, {Updater updater = cons
     final ga = await showDialog<bool>(
       context: context,
       builder: (d) => AlertDialog(
-        backgroundColor: const Color(0xFF161822),
+        backgroundColor: kPaneel,
         title: const Text('Eén keer toestemming'),
         content: const Text(
             'Android laat een app alleen een andere app installeren als je dat per app toestaat. '
@@ -624,7 +625,7 @@ Future<void> _haalEnInstalleer(BuildContext context, Uitgave u, Updater updater)
     context: context,
     barrierDismissible: false,
     builder: (d) => AlertDialog(
-      backgroundColor: const Color(0xFF161822),
+      backgroundColor: kPaneel,
       title: const Text('Bezig met binnenhalen'),
       content: ValueListenableBuilder<double>(
         valueListenable: voortgang,

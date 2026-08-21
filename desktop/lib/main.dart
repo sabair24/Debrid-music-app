@@ -90,7 +90,12 @@ import 'tv.dart';
 import 'updater.dart';
 import 'hartslag.dart';
 import 'ui/kleuren.dart';
+import 'ui/kop.dart';
+import 'ui/leeg.dart';
+import 'ui/maten.dart';
 import 'ui/skelet.dart';
+import 'ui/stijl.dart';
+import 'ui/tegel.dart';
 import 'ui/typografie.dart';
 
 /// What a focused Material button looks like: the same ring the rest of the app draws.
@@ -1044,9 +1049,11 @@ class DebridApp extends StatelessWidget {
   // van drie plekken die stilletjes uit elkaar groeien. Wat hier NIET kan is de duur van de
   // animatie — `PopupMenuThemeData` kent die niet — dus die staat bij de aanroep in ui/itemmenu.dart.
   popupMenuTheme: PopupMenuThemeData(
-    color: _panel2,
+    // [kBovenop] en niet [kPaneelHoog]: een menu dat opengaat boven de rij die hem opende had
+    // exact de kleur van die rij, en dan is het geen laag maar een vlek.
+    color: kBovenop,
     elevation: 8,
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(kHoek12)),
     menuPadding: const EdgeInsets.symmetric(vertical: 6),
   ),
         // Material's buttons signal focus with a tint of their own foreground colour — about a
@@ -1057,7 +1064,10 @@ class DebridApp extends StatelessWidget {
         textButtonTheme: TextButtonThemeData(style: _focusOutline),
         outlinedButtonTheme: OutlinedButtonThemeData(style: _focusOutline),
         iconButtonTheme: IconButtonThemeData(style: _focusOutline),
-        fontFamily: 'Segoe UI',
+        // **Meegeleverd, en dat is nieuw.** Hier stond 'Segoe UI' en er werd geen enkel lettertype
+        // meegeleverd — dus kreeg Windows Segoe UI en kozen je telefoon, je Mac en je iPad zelf
+        // iets anders. Zie de uitleg in `pubspec.yaml`.
+        fontFamily: 'Inter',
       ),
       // On a Mac or an iPad that has never met the PC there is no library to show yet, so the
       // pairing screen comes first. Everywhere else — and from the moment it is paired — this is
@@ -1198,7 +1208,7 @@ Widget cover(Uint8List? bytes, {double size = 160, double radius = 12, bool circ
     decoration: BoxDecoration(
       shape: shape,
       borderRadius: br,
-      gradient: const LinearGradient(colors: [Color(0xFF242838), Color(0xFF1A1D29)]),
+      gradient: const LinearGradient(colors: [kPaneelHoog, kPaneel]),
     ),
     child: Icon(Icons.music_note_rounded, color: _muted.withValues(alpha: .4), size: size * .34),
   );
@@ -1307,6 +1317,8 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
+    // Zodat een leeg scherm een knop kan hebben die ergens heen gaat. Zie `navigatie.dart`.
+    gaNaarSectie = _gaNaar;
     _kijkOfErEenNieuweIs();
   }
 
@@ -1447,6 +1459,9 @@ class _HomeShellState extends State<HomeShell> {
     _searchCtl.dispose();
     _searchFocus.dispose();
     _kanTerug.dispose();
+    // Alleen loslaten als deze schil hem nog vasthoudt: bij een herstart van de app staat de
+    // nieuwe schil er al voordat de oude afgebroken wordt.
+    if (gaNaarSectie == _gaNaar) gaNaarSectie = null;
     super.dispose();
   }
 
@@ -2190,22 +2205,28 @@ class _HomeShellState extends State<HomeShell> {
         if (lib.albums.isEmpty) {
           // On a Mac or an iPad there is no folder to point at — the library comes from the PC,
           // and naming a drive letter there sends you looking in the wrong place entirely.
-          return Center(
-            child: Text(
-              lib.isRemote
-                  ? 'Nog niets van je pc ontvangen. Staat DebridMusic daar open?'
-                  : 'Geen muziek gevonden in ${lib.rootPath}',
-              style: const TextStyle(color: _muted),
-              textAlign: TextAlign.center,
-            ),
+          return LeegVlak(
+            teken: Icons.album_rounded,
+            kop: 'Nog geen albums',
+            uitleg: lib.isRemote
+                ? 'Er is nog niets van je pc binnengekomen. Staat DebridMusic daar open?'
+                : 'In ${lib.rootPath} staat nog geen muziek. Zoek er een plaat bij, dan komt de rest '
+                    'vanzelf.',
+            knop: 'Online zoeken',
+            opKnop: () => gaNaarSectie?.call(2),
           );
         }
         // An album stays in view when any of its tracks matches (so searching an artist or a
         // single song still surfaces the album it lives on).
         final albums = lib.albums.where((a) => a.tracks.any(_matches)).toList();
         if (albums.isEmpty) {
-          return Center(
-            child: Text('Niets gevonden voor “$_q”.', style: const TextStyle(color: _muted)),
+          return LeegVlak(
+            teken: Icons.search_off_rounded,
+            kop: 'Niets gevonden',
+            uitleg: 'Geen enkel album hier heet “$_q”, en geen enkel nummer erop ook. '
+                'Online zoeken kijkt verder dan je eigen kast.',
+            knop: 'Online zoeken',
+            opKnop: () => gaNaarSectie?.call(2),
           );
         }
         return _view == 0
@@ -3466,26 +3487,31 @@ List<Widget> _albumRowSlivers(List<Album> albums, AlbumSort? sort) {
         ),
       ),
       SliverToBoxAdapter(
-        // The row is taller than the tile, on purpose, and that is the whole trick.
+        // De rij is hoger dan de tegel, met opzet, en dat is de hele truc.
         //
-        // AlbumCard lays its sleeve out in an Expanded, so it takes exactly the height it is given
-        // — which means a tile sized to the row can never grow inside it: the 14% goes straight
-        // over the edge and the list clips it. On the Shield that cut the artist's name off the
-        // focused tile and shaved the first sleeve against the rail. So the tile gets a fixed 253
-        // (180 of sleeve, 20 of padding, two lines of scaled text) and the row gets 300, which is
-        // 253 x 1.14 plus room for the shadow. Same reason the side padding is 40 rather than 24.
-        child: SizedBox(
-          height: 300,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 40),
-            itemCount: g.$2.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 16),
-            itemBuilder: (_, i) => Center(
-              child: SizedBox(width: 200, height: 253, child: AlbumCard(album: g.$2[i])),
+        // De tegel legt zijn hoes in een `Expanded`, dus hij neemt precies de hoogte die hij krijgt
+        // — wat betekent dat een tegel op de maat van de rij er nooit binnen kán groeien: de 14%
+        // gaat rechtstreeks over de rand en de lijst knipt hem af. Op de Shield sneed dat de naam
+        // van de artiest van de gemarkeerde tegel en schuurde de eerste hoes tegen de rail.
+        //
+        // Deze twee getallen stonden met de hand op 253 en 300, met "180 hoes, 20 vulling, twee
+        // regels geschaalde tekst" erbij. Die vulling bestaat niet meer en die tekst schaalt met het
+        // toestel mee, dus ze worden nu uitgerekend. Zie `ui/tegel.dart`.
+        child: Builder(builder: (context) {
+          final hoog = hoogteVanTegel(context, hoes: 200);
+          return SizedBox(
+            height: hoogteVanTegelrij(context, hoes: 200),
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 40),
+              itemCount: g.$2.length,
+              separatorBuilder: (_, __) => const SizedBox(width: kRuimte16),
+              itemBuilder: (_, i) => Center(
+                child: SizedBox(width: 200, height: hoog, child: AlbumCard(album: g.$2[i])),
+              ),
             ),
-          ),
-        ),
+          );
+        }),
       ),
     ],
     const SliverToBoxAdapter(child: SizedBox(height: 16)),
@@ -3595,111 +3621,54 @@ class WarmingLine extends StatelessWidget {
       );
 }
 
-class AlbumCard extends StatefulWidget {
+/// Een album in het raster op Albums.
+///
+/// Sinds `ui/tegel.dart` bestaat is dit alleen nog de knoop tussen een `Album` en de gedeelde
+/// tegel: welke hoes, welk menu, welke pagina. De vorm zelf staat daar, en dus tekenen Albums en
+/// Start dezelfde plaat nu ook echt hetzelfde — daarvoor deed het ene scherm een kaartje met een
+/// randje en het andere een kale hoes.
+class AlbumCard extends StatelessWidget {
   final Album album;
   const AlbumCard({super.key, required this.album});
-  @override
-  State<AlbumCard> createState() => _AlbumCardState();
-}
 
-class _AlbumCardState extends State<AlbumCard> {
-  bool _hover = false;
   @override
   Widget build(BuildContext context) {
-    final a = widget.album;
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: Pressable(
-        onPressed: () => openPagina(context, (_) => AlbumDetailPage(album: a)),
-        // Tot nu toe kon een albumtegel precies één ding: opengaan. Afspelen, in de wachtrij zetten,
-        // radio en verwijderen zaten allemaal een navigatiestap dieper.
-        onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _albumMenu(context, a)) : null,
-        onSecondaryTap: (bij) => _toonItemMenu(context, _albumMenu(context, a), bij: bij),
-        borderRadius: BorderRadius.circular(14),
-        // The card already grows and lights up on hover, so focus drives that same state rather
-        // than adding a second, different animation on top of it. A remote then gets exactly the
-        // look a mouse gets, plus the ring that says which card it is.
-        scaleOnFocus: false,
-        ringOnFocus: false,
-        onFocusChange: (v) => setState(() => _hover = v),
-        // Grows on hover, like the TV app. 1.06 is deliberate: the grid's 20px gap is wider than
-        // the ~6px a card gains per side, so a raised card never collides with its neighbours
-        // (grid children paint in order, so an overlap would be drawn OVER the raised card).
-        child: AnimatedScale(
-          scale: _hover ? tileFocusScale : 1,
-          duration: const Duration(milliseconds: 170),
-          curve: Curves.easeOut,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 170),
-            curve: Curves.easeOut,
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: _hover ? _panel2 : _panel,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: _hover ? Colors.white.withValues(alpha: .16) : _line),
-              boxShadow: _hover
-                  ? [BoxShadow(color: Colors.black.withValues(alpha: .45), blurRadius: 22, offset: const Offset(0, 10))]
-                  : const [],
-            ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // De hoes VLIEGT naar de albumpagina in plaats van te knippen.
-              //
-              // Er stond nergens in de app een Hero. Dit is de plek waar hij het meeste doet: je
-              // tikt een tegel aan en dezelfde hoes groeit door naar de kop van de albumpagina, in
-              // plaats van dat het ene scherm hard door het andere vervangen wordt. Het label is
-              // wat de app zelf als vaste naam voor een album gebruikt, zodat twee persingen van
-              // dezelfde plaat niet met elkaar verwisseld worden.
-              Expanded(
-                child: LayoutBuilder(
-                  builder: (_, c) => Hero(
-                    tag: 'hoes:${context.read<LibraryStore>().uidOf(a)}',
-                    // Tijdens de vlucht alleen de hoes tekenen, zonder het kaartje eromheen: anders
-                    // zweeft er een paneel met tekst door het scherm.
-                    flightShuttleBuilder: (_, __, ___, ____, _____) =>
-                        cover(a.cover, size: c.maxWidth),
-                    child: cover(a.cover, size: c.maxWidth),
-                  ),
-                ),
-              ),
-              // Directly under the sleeve, where the eye already is when it wonders whether the
-              // cover is the final one.
-              WarmingLine(uid: context.read<LibraryStore>().uidOf(a)),
-              const SizedBox(height: 9),
-              Text(a.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
-              // Artiest en editie stonden hier in ÉÉN string, en dat was precies wat de naam
-              // onaanklikbaar maakte. Nu een link plus de rest ernaast — dezelfde vorm die de
-              // albumpagina-kop al gebruikt.
-              //
-              // Six identical "Backstreet Boys" tiles are unusable, however correct the split is.
-              // Naming the pressing is what makes them tellable apart — and choosable.
-              _maybeFocusable(Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                      child: ArtistNames(
-                          names: [a.artist],
-                          style: const TextStyle(color: _muted, fontSize: 12))),
-                  if (a.edition != null)
-                    // Ook Flexible, anders loopt de rij over in een tegel van 140 punt zodra de
-                    // artiestnaam wat langer is.
-                    Flexible(
-                        child: Text(' · ${a.edition}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: _muted, fontSize: 12))),
-                ],
-              )),
-              ],
-            ),
-          ),
-        ),
-      ),
+    final a = album;
+    final uid = context.read<LibraryStore>().uidOf(a);
+    return AlbumTegel(
+      hoes: (maat) => cover(a.cover, size: maat),
+      // De hoes VLIEGT naar de albumpagina in plaats van te knippen. Het label is wat de app zelf
+      // als vaste naam voor een album gebruikt, zodat twee persingen van dezelfde plaat niet met
+      // elkaar verwisseld worden.
+      heroTag: 'hoes:$uid',
+      titel: a.title,
+      // Vlak onder de hoes, waar het oog al is op het moment dat je je afvraagt of dit de
+      // definitieve hoes is.
+      onderHoes: WarmingLine(uid: uid),
+      // Artiest en editie stonden hier in ÉÉN string, en dat was precies wat de naam onaanklikbaar
+      // maakte. Nu een link plus de rest ernaast — dezelfde vorm die de albumpagina-kop al gebruikt.
+      // Zes identieke "Backstreet Boys"-tegels zijn onbruikbaar, hoe correct de splitsing ook is;
+      // de persing benoemen is wat ze uit elkaar houdt.
+      ondertitelWidget: _maybeFocusable(Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+              child: ArtistNames(
+                  names: [a.artist], style: const TextStyle(color: _muted, fontSize: 12))),
+          if (a.edition != null)
+            // Ook Flexible, anders loopt de rij over zodra de artiestnaam wat langer is.
+            Flexible(
+                child: Text(' · ${a.edition}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: _muted, fontSize: 12))),
+        ],
+      )),
+      onTap: () => openPagina(context, (_) => AlbumDetailPage(album: a)),
+      // Tot nu toe kon een albumtegel precies één ding: opengaan. Afspelen, in de wachtrij zetten,
+      // radio en verwijderen zaten allemaal een navigatiestap dieper.
+      onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _albumMenu(context, a)) : null,
+      onSecondaryTap: (bij) => _toonItemMenu(context, _albumMenu(context, a), bij: bij),
     );
   }
 }
@@ -4333,7 +4302,13 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       final hsl = HSLColor.fromColor(wasKleur);
       wasBasis = hsl.withLightness(.42).withSaturation(hsl.saturation.clamp(.32, .78)).toColor();
     }
-    final wasTop = wasBasis == null ? _bg : Color.lerp(_bg, wasBasis, .34)!;
+    // **Hertuned toen de vloer donkerder werd.** Deze getallen zijn gemengd MET de achtergrond, dus
+    // toen [kAchtergrond] van #0C0D12 naar #07080C ging, werd de top van de was er absoluut een
+    // stukje donkerder van: L* zakte van ongeveer 19 naar 17,5. Tegen de nieuwe vloer is dat nog
+    // steeds meer verschil dan eerst — maar de was zag er op het toestel goedgekeurd uit op de
+    // OUDE helderheid, en die hoort niet mee te verschuiven met een wijziging die over grijs gaat.
+    // Vandaar .34 → .38: dat brengt de top terug op waar hij stond.
+    final wasTop = wasBasis == null ? _bg : Color.lerp(_bg, wasBasis, .38)!;
 
     return Scaffold(
       // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin — its app bar
@@ -4356,8 +4331,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
-                      stops: const [0, .30, .70],
-                      colors: [wasTop, Color.lerp(_bg, wasBasis, .13)!, _bg],
+                      // En de staart mag langer: het einde van de was landt nu op een donkerdere
+                      // vloer, en dan is de plek waar hij ophoudt eerder een RAND dan een overgang.
+                      stops: const [0, .34, .78],
+                      colors: [wasTop, Color.lerp(_bg, wasBasis, .15)!, _bg],
                     ),
                   ),
                 ),
@@ -6420,7 +6397,7 @@ class PlayerBar extends StatelessWidget {
       // duration) sat flush against the panel edge — the first strip a set overscans away.
       height: (isTv ? 104 : 84) + bottomInset,
       decoration: const BoxDecoration(
-        color: Color(0xFF12141D),
+        color: kVerzonken,
         border: Border(top: BorderSide(color: _line)),
       ),
       // The panel runs to the edge; only what you read and press comes in. On a television the
@@ -6588,7 +6565,7 @@ class PlayerBar extends StatelessWidget {
                           thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
                           overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
                           activeTrackColor: _accent,
-                          inactiveTrackColor: const Color(0xFF2A2F42),
+                          inactiveTrackColor: kLijn,
                           thumbColor: Colors.white,
                         ),
                         child: _maybeFocusable(Slider(
@@ -7592,7 +7569,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
     // De hoes zakt mee van 44 naar 40 — anders raakt hij de randen en leest de rij als propvol.
     height: 52 + bottomInset,
     decoration: const BoxDecoration(
-      color: Color(0xFF12141D),
+      color: kVerzonken,
       border: Border(top: BorderSide(color: _line)),
     ),
     padding: EdgeInsets.only(bottom: bottomInset),
@@ -7605,7 +7582,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
           height: 2,
           child: LinearProgressIndicator(
             value: x.progress,
-            backgroundColor: const Color(0xFF2A2F42),
+            backgroundColor: kLijn,
             valueColor: const AlwaysStoppedAnimation(_accent),
           ),
         ),
@@ -7943,7 +7920,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                             trackHeight: 4,
                             thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
                             activeTrackColor: _accent,
-                            inactiveTrackColor: const Color(0xFF2A2F42),
+                            inactiveTrackColor: kLijn,
                             thumbColor: Colors.white,
                           ),
                           // Same as the player bar's: a Slider eats left and right to change its
@@ -8115,7 +8092,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                                 trackHeight: 3,
                                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
                                 activeTrackColor: _accent,
-                                inactiveTrackColor: const Color(0xFF2A2F42),
+                                inactiveTrackColor: kLijn,
                                 thumbColor: Colors.white,
                               ),
                               child: _maybeFocusable(Slider(
@@ -8420,12 +8397,22 @@ class TracksView extends StatelessWidget {
       return const Center(child: CircularProgressIndicator(color: _accent));
     }
     if (all.isEmpty) {
-      return const Center(child: Text('Geen tracks gevonden.', style: TextStyle(color: _muted)));
+      return LeegVlak(
+        teken: Icons.music_note_rounded,
+        kop: 'Nog geen nummers',
+        uitleg: 'Zodra er muziek in je bibliotheek staat, staat hier elk nummer los. '
+            'Of zoek er zelf een op.',
+        knop: 'Online zoeken',
+        opKnop: () => gaNaarSectie?.call(2),
+      );
     }
     if (tracks.isEmpty) {
-      return Center(
-        child: Text(query.isEmpty ? 'Niets binnen dit filter.' : 'Niets gevonden voor “$query”.',
-            style: const TextStyle(color: _muted)),
+      return LeegVlak(
+        teken: Icons.filter_alt_off_rounded,
+        kop: query.isEmpty ? 'Niets binnen dit filter' : 'Niets gevonden',
+        uitleg: query.isEmpty
+            ? 'Geen enkel nummer voldoet aan wat je hierboven hebt aangevinkt.'
+            : 'Geen enkel nummer heet “$query”. Probeer een deel van de titel of de artiest.',
       );
     }
     return Column(
@@ -8736,18 +8723,20 @@ class _HomeStartViewState extends State<HomeStartView> {
     return ListView(
       padding: const EdgeInsets.only(bottom: 32),
       children: [
+        // 28 werd 24: alles op dit scherm staat vanaf hier op dezelfde goot als de rijen hoezen
+        // eronder. Zie `ui/maten.dart`.
         Padding(
-          padding: const EdgeInsets.fromLTRB(28, 26, 28, 2),
+          padding: const EdgeInsets.fromLTRB(kGoot, kRuimte24, kGoot, kRuimte2),
           child: Text('${_greeting()} 👋', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
         ),
         const Padding(
-          padding: EdgeInsets.fromLTRB(28, 0, 28, 6),
+          padding: EdgeInsets.fromLTRB(kGoot, 0, kGoot, kRuimte6),
           child: Text('Ontdek nieuwe muziek en pak op waar je gebleven was',
               style: TextStyle(color: _muted, fontSize: 13.5)),
         ),
         if (hero.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.fromLTRB(28, 14, 28, 4),
+            padding: const EdgeInsets.fromLTRB(kGoot, kRuimte12, kGoot, kRuimte4),
             child: HeroCarousel(hits: hero.take(7).toList()),
           ),
         if (recent.isNotEmpty) _section('Recent toegevoegd', _localRow(recent.take(15).toList())),
@@ -8765,10 +8754,15 @@ class _HomeStartViewState extends State<HomeStartView> {
           _section('Nieuw van jouw artiesten',
               _releases.isEmpty ? _loadingRow() : _catalogRow(_releases.take(20).toList())),
         if (!anyLoading && _charts.isEmpty && _releases.isEmpty && _forYou.isEmpty && recent.isEmpty)
-          const Padding(
-            padding: EdgeInsets.fromLTRB(28, 40, 28, 0),
-            child: Text('Nog niks om te tonen — download wat muziek of ga naar Online zoeken.',
-                style: TextStyle(color: _muted)),
+          LeegVlak(
+            teken: Icons.library_music_rounded,
+            kop: 'Nog geen muziek hier',
+            uitleg: 'Zodra je pc gescand heeft, staan je platen hier. '
+                'Of zoek er zelf een op.',
+            knop: 'Online zoeken',
+            opKnop: () => gaNaarSectie?.call(2),
+            // Dit staat in een `ListView`, dus onbegrensd hoog. Zie [LeegVlak.gecentreerd].
+            gecentreerd: false,
           ),
       ],
     );
@@ -8777,18 +8771,17 @@ class _HomeStartViewState extends State<HomeStartView> {
   Widget _section(String title, Widget row) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(28, 22, 28, 12),
-            child: Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-          ),
-          // Taller than the tile itself: a horizontal ListView gives its children a TIGHT height
-          // and clips them, so without slack the hover growth would be sliced off top and bottom.
+          // Stond op `fromLTRB(28, 22, 28, 12)` terwijl de rij eronder op 24 staat: vier punten
+          // scheefstand tussen een kop en zijn eigen inhoud, over de hele hoogte van dit scherm.
+          SectieKop(title),
+          // Hoger dan de tegel zelf: een liggende `ListView` geeft zijn kinderen een STRAKKE hoogte
+          // en knipt ze af, dus zonder lucht wordt de groei bij aanwijzen er boven en onder af
+          // gesneden.
           //
-          // A television needs more slack than a mouse does. The tile is about 179 tall; growing it
-          // by [tileFocusScale] adds roughly 25, and its drop shadow reaches further still. At 204
-          // the focused tile on the Shield would touch the ceiling of its own row and lose the
-          // shadow that lifts it off the background — which, with the ring gone, is half the cue.
-          SizedBox(height: isTv ? 236 : 204, child: row),
+          // Stond met de hand op 204 (236 op tv), met een commentaar erbij dat dat "maar net"
+          // genoeg was. Nu berekend — inclusief de tekstschaal van het toestel, want juist die
+          // maakt op een televisie het verschil. Zie `ui/tegel.dart`.
+          SizedBox(height: hoogteVanTegelrij(context), child: row),
         ],
       );
 
@@ -8801,11 +8794,11 @@ class _HomeStartViewState extends State<HomeStartView> {
 
   Widget _localRow(List<Album> albums) => ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 24),
+        padding: const EdgeInsets.symmetric(horizontal: kGoot),
         itemCount: albums.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 14),
+        separatorBuilder: (_, __) => const SizedBox(width: kRuimte12),
         itemBuilder: (_, i) => _card(
-            cover(albums[i].cover, size: 140), albums[i].title, albums[i].artist,
+            cover(albums[i].cover, size: kTegelHoes), albums[i].title, albums[i].artist,
             () => openPagina(context, (_) => AlbumDetailPage(album: albums[i])),
             artist: albums[i].artist),
       );
@@ -8823,29 +8816,29 @@ class _HomeStartViewState extends State<HomeStartView> {
 
   Widget _catalogRow(List<CatalogAlbumHit> hits) => ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 24),
+        padding: const EdgeInsets.symmetric(horizontal: kGoot),
         itemCount: hits.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 14),
+        separatorBuilder: (_, __) => const SizedBox(width: kRuimte12),
         // Deze builder voedt TWEE rijen — "Top van dit moment" en "Nieuw van jouw artiesten" — dus
         // deze ene regel maakt ze allebei klikbaar.
         itemBuilder: (_, i) => _card(
-            _netCover(hits[i].album.cover, size: 140), hits[i].album.title, hits[i].artist,
+            _netCover(hits[i].album.cover, size: kTegelHoes), hits[i].album.title, hits[i].artist,
             () => openPagina(context, (_) => AlbumBrowsePage(hits[i].artist, hits[i].album)),
             artist: hits[i].artist),
       );
 
   Widget _recRow(List<RecTrack> ts) => ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 24),
+        padding: const EdgeInsets.symmetric(horizontal: kGoot),
         itemCount: ts.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 14),
+        separatorBuilder: (_, __) => const SizedBox(width: kRuimte12),
         // To the album, the same as every other row here. A tile that started playing instead was
         // the odd one out, and it gave you no way to see what the record was.
         //
         // Long-press still plays it: the quickest way to hear a recommendation should not disappear
         // because the tap now goes somewhere better.
         itemBuilder: (_, i) => _HoverCard(
-          art: _netCover(ts[i].cover, size: 140),
+          art: _netCover(ts[i].cover, size: kTegelHoes),
           title: ts[i].title,
           subtitle: ts[i].artist,
           // Juist hier: een aanbeveling gaat over een artiest die je NIET kent, en dan wil je als
@@ -8880,23 +8873,23 @@ class _HomeStartViewState extends State<HomeStartView> {
       );
 }
 
-/// A tile in one of the home rows. Same hover growth as the album and artist grids, so the whole
-/// app responds the same way to the pointer.
-class _HoverCard extends StatefulWidget {
+/// Een tegel in een van de rijen op Start.
+///
+/// Sinds `ui/tegel.dart` bestaat is dit alleen nog de naam waaronder de vier rijen hier hem
+/// aanroepen. De vorm — de hoes met een schaduw eronder, de groei bij aanwijzen, de twee
+/// tekstregels — staat daar, en is dezelfde als die van het raster op Albums.
+class _HoverCard extends StatelessWidget {
   final Widget art;
   final String title, subtitle;
 
   /// De ondertitel als WIDGET, voor waar de artiestnaam aanklikbaar moet zijn.
-  ///
-  /// Naast de bestaande `String` en niet in plaats daarvan: dit is de tegel van álle vier de rijen op
-  /// het eerste scherm van de app, en die in één keer omzetten maakt een fout in de opmaak meteen
-  /// vier keer zichtbaar. Zo kan elke rij los mee.
   final Widget? subtitleWidget;
   final VoidCallback onTap;
 
-  /// The second thing this tile can do, where it has one — play a recommendation outright instead
-  /// of opening the record it is on. Null everywhere else, and then nothing changes.
+  /// Het tweede dat deze tegel kan waar hij dat kan — een aanbeveling meteen afspelen in plaats van
+  /// de plaat openen waar hij op staat. Overal elders leeg, en dan verandert er niets.
   final VoidCallback? onLongPress;
+
   const _HoverCard(
       {required this.art,
       required this.title,
@@ -8906,79 +8899,22 @@ class _HoverCard extends StatefulWidget {
       this.onLongPress});
 
   @override
-  State<_HoverCard> createState() => _HoverCardState();
-}
-
-class _HoverCardState extends State<_HoverCard> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 140,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() => _hover = false),
-        child: Pressable(
-          onPressed: widget.onTap,
-          onLongPress: widget.onLongPress,
-          borderRadius: BorderRadius.circular(14),
-          scaleOnFocus: false,
-          ringOnFocus: false,
-          onFocusChange: (v) => setState(() => _hover = v),
-          child: AnimatedScale(
-            scale: _hover ? tileFocusScale : 1,
-            duration: const Duration(milliseconds: 170),
-            curve: Curves.easeOut,
-            // min + centred: the row hands out a tight height, and a Column that fills it would
-            // scale past the row's edges and get clipped.
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 170),
-                  curve: Curves.easeOut,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(10),
-                    boxShadow: _hover
-                        ? [
-                            BoxShadow(
-                                color: Colors.black.withValues(alpha: .45),
-                                blurRadius: 22,
-                                offset: const Offset(0, 10))
-                          ]
-                        : const [],
-                  ),
-                  child: widget.art,
-                ),
-                const SizedBox(height: 8),
-                Text(widget.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontWeight: FontWeight.w600, fontSize: 13.5, color: _hover ? Colors.white : null)),
-                // De widget wint als hij er is. Op een afstandsbediening moet de naam GEEN eigen
-                // focusstop worden: dan krijgt elke tegel in een rij er een tweede bij en pijl je
-                // twee keer zo lang. Klikken blijft werken — `_maybeFocusable` haalt hem uit het pad
-                // van de highlight, niet uit de app. Dezelfde afweging als bij een tracklijstrij.
-                widget.subtitleWidget == null
-                    ? Text(widget.subtitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _muted, fontSize: 12))
-                    : Align(
-                        alignment: Alignment.centerLeft,
-                        child: _maybeFocusable(widget.subtitleWidget!)),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => AlbumTegel(
+        // De hoezen hier zijn al op maat gebouwd door de rij die ze aanlevert, dus de maat die de
+        // tegel doorgeeft blijft ongebruikt.
+        hoes: (_) => art,
+        breedte: kTegelHoes,
+        titel: title,
+        ondertitel: subtitle,
+        // De widget wint als hij er is. Op een afstandsbediening mag de naam GEEN eigen focusstop
+        // worden: dan krijgt elke tegel in een rij er een tweede bij en pijl je twee keer zo lang.
+        // Klikken blijft werken — `_maybeFocusable` haalt hem uit het pad van de highlight, niet uit
+        // de app. Dezelfde afweging als bij een tracklijstrij.
+        ondertitelWidget:
+            subtitleWidget == null ? null : _maybeFocusable(subtitleWidget!),
+        onTap: onTap,
+        onLongPress: onLongPress,
+      );
 }
 
 class OntdekView extends StatefulWidget {
@@ -9451,7 +9387,7 @@ class DlRow extends StatelessWidget {
 
     final balk = LinearProgressIndicator(
       value: filled ? 1 : (indeterminate || job.progress <= 0 ? null : job.progress),
-      backgroundColor: const Color(0xFF2A2F42),
+      backgroundColor: kLijn,
       color: color,
     );
 
@@ -9593,7 +9529,7 @@ Widget _downloadControl(BuildContext context,
                     strokeWidth: 2.4,
                     value: job.progress > 0 ? job.progress : null,
                     color: _accent,
-                    backgroundColor: const Color(0xFF2A2F42)),
+                    backgroundColor: kLijn),
               ),
               Text('$pct', style: const TextStyle(fontSize: 8.5, color: _muted, fontWeight: FontWeight.w700)),
             ]),
@@ -9812,12 +9748,12 @@ Widget _qualityBadge(Quality q) {
       break;
     case QTier.lossy: // MP3/AAC — blue-grey
       fg = const Color(0xFFA9B6E8);
-      bg = const Color(0xFF161A2C);
+      bg = kPaneel;
       border = const Color(0xFF2A3350);
       break;
     case QTier.unknown: // unclear — subtle grey
       fg = _muted;
-      bg = const Color(0xFF1A1D29);
+      bg = kPaneel;
       border = _line;
       break;
   }
@@ -10491,7 +10427,7 @@ Widget _netCover(String? url, {double size = 160, double radius = 12, bool circl
     decoration: BoxDecoration(
       shape: shape,
       borderRadius: br,
-      gradient: const LinearGradient(colors: [Color(0xFF242838), Color(0xFF1A1D29)]),
+      gradient: const LinearGradient(colors: [kPaneelHoog, kPaneel]),
     ),
     child: Icon(circle ? Icons.person_rounded : Icons.album_rounded, color: _muted.withValues(alpha: .4), size: size * .34),
   );
@@ -10824,7 +10760,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                 decoration: InputDecoration(
                   isDense: true,
                   filled: true,
-                  fillColor: const Color(0xFF14161F),
+                  fillColor: kVerzonken,
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
                   enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
                 ),
@@ -11174,7 +11110,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                                   value: j.status == 'done'
                                       ? 1
                                       : (j.status == 'preparing' && j.progress <= 0 ? null : j.progress),
-                                  backgroundColor: const Color(0xFF2A2F42),
+                                  backgroundColor: kLijn,
                                   color: j.status == 'failed'
                                       ? Colors.red
                                       : (j.status == 'done' ? _accent2 : _accent),
@@ -12065,8 +12001,8 @@ class _ArtistBackdropState extends State<ArtistBackdrop> {
               colors: [
                 Colors.black.withValues(alpha: .26),
                 Colors.black.withValues(alpha: .40),
-                const Color(0xFF0B0D14).withValues(alpha: .86),
-                const Color(0xFF0B0D14).withValues(alpha: .92),
+                kAchtergrond.withValues(alpha: .86),
+                kAchtergrond.withValues(alpha: .92),
               ],
               stops: const [0, .30, .58, 1],
             ),
@@ -12226,7 +12162,7 @@ class _ArtistHeroState extends State<ArtistHero> {
                       Colors.black.withValues(alpha: .30),
                       Colors.black.withValues(alpha: .38),
                       Colors.black.withValues(alpha: .82),
-                      const Color(0xFF0B0D14),
+                      kAchtergrond,
                     ],
                     stops: const [0, .40, .82, 1],
                   ),
@@ -13005,7 +12941,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                   scrollDirection: Axis.horizontal,
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   itemCount: _related.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 14),
+                  separatorBuilder: (_, __) => const SizedBox(width: kRuimte12),
                   itemBuilder: (_, i) {
                     final r = _related[i];
                     return _RelatedArtistCard(
@@ -14413,7 +14349,7 @@ class _SharingSectionState extends State<_SharingSection> {
                 decoration: InputDecoration(
                   isDense: true,
                   filled: true,
-                  fillColor: const Color(0xFF14161F),
+                  fillColor: kVerzonken,
                   border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(9),
                       borderSide: const BorderSide(color: _line)),
@@ -14754,7 +14690,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                 decoration: InputDecoration(
                   isDense: true,
                   filled: true,
-                  fillColor: const Color(0xFF14161F),
+                  fillColor: kVerzonken,
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
                   enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
                 ),
@@ -14844,7 +14780,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
             decoration: InputDecoration(
               isDense: true,
               filled: true,
-              fillColor: const Color(0xFF14161F),
+              fillColor: kVerzonken,
               border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
               enabledBorder: OutlineInputBorder(
@@ -15143,6 +15079,22 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     const Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
                     const _AboutSection(),
+                    const SizedBox(height: kRuimte12),
+                    // De stijlpagina. Gereedschap en geen scherm van de app: wie eraan werkt kan de
+                    // app niet zien, en dit is één schermafbeelding in plaats van zes.
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          openPagina(context, (_) => const StijlPagina());
+                        },
+                        icon: const Icon(Icons.palette_outlined, size: 15),
+                        label: const Text('Stijl van de app'),
+                        style: TextButton.styleFrom(
+                            foregroundColor: _muted, textStyle: const TextStyle(fontSize: 12)),
+                      ),
+                    ),
                   ],
                 ),
                 ),

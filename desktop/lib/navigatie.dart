@@ -18,6 +18,8 @@ library;
 
 import 'package:flutter/material.dart';
 
+import 'ui/maten.dart';
+
 /// De navigator binnen de schil. De chrome staat erbuiten en blijft dus staan.
 ///
 /// Een globale sleutel en geen provider, om dezelfde reden als `appNavigator`: een menu of een blad
@@ -25,7 +27,67 @@ import 'package:flutter/material.dart';
 final binnenNav = GlobalKey<NavigatorState>();
 
 /// De route van een gewone pagina. Eén vorm, zodat ze allemaal hetzelfde in- en uitschuiven.
-MaterialPageRoute<T> paginaRoute<T>(WidgetBuilder bouw) => MaterialPageRoute<T>(builder: bouw);
+///
+/// **Hier zat een verborgen fout in.** Dit was een kale `MaterialPageRoute`, en die kiest zijn
+/// overgang per platform: op Android de zoom van Material 3, op macOS en iOS de zijwaartse schuif
+/// van Cupertino, en op Windows een vervaging omhoog. Dezelfde tik gaf dus op je telefoon, je Mac
+/// en je pc drie verschillende bewegingen — in één app, met één codebestand, waarvan je de vorm op
+/// het ene toestel beoordeelt en op het andere gebruikt.
+///
+/// Nu één beweging: de nieuwe pagina komt van rechts in over een kort stukje en vervaagt erbij,
+/// terwijl de pagina eronder een half zo klein eindje naar links wijkt. Dat tweede is wat een
+/// schuif van een vervanging onderscheidt — zonder dat verschuift er niets ONDER de nieuwe pagina
+/// en lijkt het of er een blad overheen valt.
+PageRoute<T> paginaRoute<T>(WidgetBuilder bouw) => PaginaRoute<T>(bouw);
+
+/// De overgang van elke pagina in de app.
+///
+/// Een eigen klasse en geen `PageRouteBuilder` bij de aanroep, zodat `test/overgang_test.dart` erop
+/// kan wijzen zonder een navigator te bouwen.
+class PaginaRoute<T> extends PageRouteBuilder<T> {
+  PaginaRoute(WidgetBuilder bouw)
+      : super(
+          pageBuilder: (context, _, __) => bouw(context),
+          transitionDuration: kOvergang,
+          reverseTransitionDuration: kOvergang,
+          transitionsBuilder: _schuif,
+        );
+}
+
+/// Zes procent van de breedte, en niet meer.
+///
+/// Een volle schuif van rechts (wat Cupertino doet) laat op een pc-scherm van 1900 punten een halve
+/// seconde lang een lege baan zien. Een kort eindje leest als "dit komt van daar" en is op elk
+/// scherm even lang klaar.
+const double _afstand = .06;
+
+Widget _schuif(
+  BuildContext context,
+  Animation<double> animatie,
+  Animation<double> terug,
+  Widget kind,
+) {
+  // Wie in zijn toestel gezegd heeft dat animaties uit mogen, krijgt ze uit. Dat staat hier en niet
+  // bij de aanroepen, want dit is de plek waar élke paginawissel doorheen komt.
+  if (MediaQuery.of(context).disableAnimations) return kind;
+
+  // `chain(CurveTween(...))` en geen `CurvedAnimation`: die laatste heeft sinds Flutter 3.13 een
+  // eigen `dispose`, en eentje maken in een bouwer die per beeld draait is een lek dat de
+  // lekopsporing in een toets terecht meldt. Een tween met een curve erin heeft geen levensloop.
+  final curve = CurveTween(curve: Curves.easeOutCubic);
+  return SlideTransition(
+    // De pagina ONDER deze wijkt naar links zodra er een nieuwe overheen komt.
+    position: Tween(begin: Offset.zero, end: const Offset(-_afstand / 2, 0))
+        .chain(curve)
+        .animate(terug),
+    child: SlideTransition(
+      position: Tween(begin: const Offset(_afstand, 0), end: Offset.zero)
+          .chain(curve)
+          .animate(animatie),
+      child: FadeTransition(opacity: animatie.drive(curve), child: kind),
+    ),
+  );
+}
 
 /// Open een pagina die de navigatie moet laten staan.
 ///
@@ -53,6 +115,16 @@ Future<T?> openOp<T>(NavigatorState vanaf, WidgetBuilder bouw) {
   if (binnen != null && vanaf != binnen && vanaf.canPop()) vanaf.pop();
   return (binnen ?? vanaf).push<T>(paginaRoute<T>(bouw));
 }
+
+/// Naar een sectie springen, vanaf een plek die de schil niet kan zien.
+///
+/// De secties zijn geen routes maar een getal in `_HomeShellState`, dus er is geen `Navigator` om
+/// naar te wijzen. Een leeg scherm dat "ga naar Online zoeken" zegt zonder er een knop bij te
+/// hebben is een halve mededeling; dit is wat die knop nodig heeft.
+///
+/// Een globale en geen provider, om dezelfde reden als [binnenNav]: leeg zolang er geen schil is —
+/// het koppelscherm en een toets draaien zonder — en dan doet de knop niets in plaats van te vallen.
+void Function(int sectie)? gaNaarSectie;
 
 /// Wat de terugknop hoort te doen.
 ///
