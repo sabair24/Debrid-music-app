@@ -116,7 +116,9 @@ Future<MenuRegel?> _viaBlad(BuildContext context, ItemMenu menu) async {
     // Mag, omdat de providers bóven de MaterialApp staan. Wat er niet doorheen komt zijn de
     // handelingen, en die zitten al gebonden in de gegevens: zie [MenuRegel.doen].
     useRootNavigator: true,
-    backgroundColor: kPaneel,
+    // [kBovenop] en niet [kPaneel]: dit blad ligt óver de app, en op de kleur van een gewone rij
+    // leest het als een rij die per ongeluk heel groot geworden is.
+    backgroundColor: kBovenop,
     // Anders knipt Flutter het blad af op 9/16 van het scherm. Op een Shield van 540 punten met
     // tekstschaal 1,35 zie je dan vijf van de veertien regels.
     isScrollControlled: true,
