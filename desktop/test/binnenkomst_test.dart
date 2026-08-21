@@ -16,7 +16,14 @@ import 'package:flutter_test/flutter_test.dart';
 /// Een kind dat opvalt in de boom, zodat de laag eromheen te vinden is.
 const _kind = SizedBox(width: 40, height: 40, key: ValueKey('kind'));
 
-Finder get _laag => find.ancestor(of: find.byKey(const ValueKey('kind')), matching: find.byType(FadeTransition));
+/// De vervaging die [Binnenkomst] zélf zet.
+///
+/// **Binnen `Binnenkomst` zoeken en niet boven het kind.** Een `MaterialApp` hangt zijn eigen
+/// route-overgangen in de boom, en dat zijn óók `FadeTransition`s — vier stuks, boven alles wat je
+/// neerzet. Zoeken op "staat er een vervaging boven dit kind" vindt die dus altijd, met of zonder
+/// animatie, en dan meet deze toets het raamwerk in plaats van deze widget.
+Finder get _laag =>
+    find.descendant(of: find.byType(Binnenkomst), matching: find.byType(FadeTransition));
 
 void main() {
   testWidgets('zonder een groep eromheen gebeurt er niets', (t) async {
