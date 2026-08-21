@@ -67,6 +67,7 @@ import 'metadata.dart';
 import 'models.dart';
 import 'paths.dart';
 import 'musicbrainz.dart';
+import 'navigatie.dart';
 import 'offline.dart';
 import 'online.dart';
 import 'organize.dart';
@@ -1389,7 +1390,7 @@ class _HomeShellState extends State<HomeShell> {
                             )
                           : null,
                       onTap: () {
-                        setState(() => _view = id);
+                        _gaNaar(id);
                         Navigator.pop(context);
                       },
                     ),
@@ -1411,26 +1412,25 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
-  /// A layer inside the current section that BACK must close before the section itself.
+  /// Ligt er een pagina over de sectie heen?
   ///
-  /// Null when there is none. Held here rather than solved with a second PopScope inside the
-  /// section: both would be registered on the same route and BOTH fire on one press of BACK.
-  VoidCallback? _popInner;
-
-  void _setInnerLayer(VoidCallback? pop) {
-    if (_popInner == pop) return;
-    // During the child's build, so not inside setState — the flag only feeds canPop, which is
-    // read on the next frame anyway.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) setState(() => _popInner = pop);
-    });
-  }
+  /// Hier stond `_popInner`: een haak voor "een laag binnen de sectie die BACK eerst moet sluiten",
+  /// bedoeld voor de artiestenpagina toen die nog een ingewisselde body was. Die werd nooit gevuld
+  /// -- `ArtistsView` zei dat zelf in zijn commentaar -- en is nu ook niet meer nodig: die laag is
+  /// een echte route geworden, in de navigator BINNEN de schil.
+  ///
+  /// Een `ValueNotifier` en geen veld, en dat is geen stijlkwestie. `PopScope` legt zijn `canPop`
+  /// vast op het moment dat hij gebouwd wordt, en een push in de binnennavigator hertekent deze
+  /// schil niet. Zonder een signaal dat buiten de bouwfase valt zou `canPop` op Start `true` blijven
+  /// staan -- en dan sluit een druk op TERUG de app terwijl er een albumpagina openstaat.
+  final _kanTerug = ValueNotifier<bool>(false);
 
   @override
   void dispose() {
     _zoekPauze?.cancel();
     _searchCtl.dispose();
     _searchFocus.dispose();
+    _kanTerug.dispose();
     super.dispose();
   }
 
@@ -1479,6 +1479,9 @@ class _HomeShellState extends State<HomeShell> {
     );
     ctl.dispose();
     if (woorden == null || !mounted) return;
+    // De pagina die er eventueel overheen ligt gaat dicht: je zoekt om iets in de LIJST te vinden,
+    // en die staat eronder.
+    binnenNav.currentState?.popUntil((r) => r.isFirst);
     setState(() {
       _leggenZoekterm(woorden);
       _searchCtl.text = woorden;
@@ -1722,19 +1725,27 @@ class _HomeShellState extends State<HomeShell> {
     //
     // canPop stays true on Start, so a second BACK still leaves. An app you cannot get out of is
     // the other half of this mistake.
-    return PopScope(
-      canPop: _view == 5 && _popInner == null,
+    // Drie lagen, één knop -- zie [terugVanaf] in navigatie.dart, waar de regel zelf staat en
+    // nagemeten wordt. De `ValueListenableBuilder` is er omdat `canPop` bij het BOUWEN vastgelegd
+    // wordt: zonder een hertekening bij elke push blijft die waarde achterlopen.
+    return ValueListenableBuilder<bool>(
+      valueListenable: _kanTerug,
+      builder: (context, paginaOpen, _) => PopScope(
+      canPop: terugVanaf(paginaOpen: paginaOpen, sectie: _view) == TerugActie.appVerlaten,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        // The innermost layer first. A section can have one of its own — the artist page is a
-        // swapped-in body, not a route — and it has to close before the section does, or BACK
-        // from an artist lands on Start and loses your place in the list.
-        final inner = _popInner;
-        if (inner != null) {
-          inner();
-          return;
+        switch (terugVanaf(paginaOpen: paginaOpen, sectie: _view)) {
+          // De pagina die over de sectie heen ligt.
+          case TerugActie.paginaSluiten:
+            binnenNav.currentState?.pop();
+          // De sectie zelf.
+          case TerugActie.naarStart:
+            _gaNaar(startSectie);
+          // Bestaat hier niet: `canPop` hierboven staat dan al aan, dus Flutter heeft de pop zelf
+          // afgehandeld en `didPop` was waar.
+          case TerugActie.appVerlaten:
+            break;
         }
-        setState(() => _view = 5);
       },
       child: Scaffold(
         key: _scaffoldKey,
@@ -1767,9 +1778,22 @@ class _HomeShellState extends State<HomeShell> {
             // canvas — the whole reason the album grid could never show more than one row. The rail
             // also fits all ten sections, which the horizontal strip never did: two of them sat off
             // the right edge with nothing to say so.
-            if (!isTv) RepaintBoundary(child: _topBar()),
-            const _OfflineBanner(),
-            const _TvStatusStrip(),
+            // OP EEN TELEFOON NEEMT DE PAGINA DE BOVENKANT OVER.
+            //
+            // Met een album open zou hier anders de sectiekop staan (naam + hamburger) én daaronder
+            // de eigen kop van de albumpagina met zijn terugpijl. Twee koppen, 112 van de 891 punten
+            // die een telefoon heeft, waarvan de bovenste over een sectie gaat die je niet ziet.
+            //
+            // Ook de melding en de statusstrook gaan mee weg, en dat is geen luxe: staat de pagina
+            // bovenaan het venster, dan rekent hij zijn eigen inzet voor de statusbalk -- precies
+            // zoals hij dat vandaag als losse route al doet. Er iets boven zetten telt die inzet
+            // dubbel. Op een pc en een tv verandert er niets: daar navigeer je met de bovenbalk of
+            // de rail, en die horen juist te blijven staan.
+            if (!(isCompact(context) && paginaOpen)) ...[
+              if (!isTv) RepaintBoundary(child: _topBar()),
+              const _OfflineBanner(),
+              const _TvStatusStrip(),
+            ],
             Expanded(
               // De wachtrij staat NAAST de inhoud en niet erboven: een venster zou dichtgaan zodra
               // je iets aanklikt, en juist bladeren terwijl je de rij ziet is waar hij voor is.
@@ -1781,7 +1805,7 @@ class _HomeShellState extends State<HomeShell> {
                   if (isTv)
                     TvNavRail(
                       view: _view,
-                      onPick: (id) => setState(() => _view = id),
+                      onPick: _gaNaar,
                       onSearch: _tvSearch,
                       onSettings: () =>
                           showDialog(context: context, builder: (_) => const SettingsDialog()),
@@ -1789,37 +1813,31 @@ class _HomeShellState extends State<HomeShell> {
                   Expanded(
                     child: Padding(
                       padding: EdgeInsets.symmetric(horizontal: isTv ? 0 : tvOverscan.left),
-                      child: Column(
-                        children: [
-                          // No permanent search field on a television. It cost 75 points of height
-                          // for a control you cannot type into without the on-screen keyboard
-                          // taking over the screen — and the rail has a "Zoeken" entry that asks
-                          // for the words once and then gets out of the way.
-                          if (_searchable && !isTv) _searchBar(context),
-                          // Een korte overvloeier in plaats van een harde knip.
-                          //
-                          // De navigatiepil schuift al 300 ms naar zijn nieuwe plek terwijl de
-                          // inhoud eronder al gewisseld wás — die mismatch zie je. Kort en met een
-                          // klein zetje omhoog, zodat het als een wissel leest en niet als een
-                          // aarzeling.
-                          Expanded(
-                            child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 160),
-                              switchInCurve: Curves.easeOut,
-                              transitionBuilder: (kind, animatie) => FadeTransition(
-                                opacity: animatie,
-                                child: SlideTransition(
-                                  position: Tween(
-                                    begin: const Offset(0, .012),
-                                    end: Offset.zero,
-                                  ).animate(animatie),
-                                  child: kind,
-                                ),
-                              ),
-                              child: KeyedSubtree(key: ValueKey(_view), child: _content()),
-                            ),
-                          ),
-                        ],
+                      // HIER ligt de grens tussen wat blijft staan en wat wisselt.
+                      //
+                      // Alles hierboven -- de bovenbalk met de pillen, de rail links -- en alles
+                      // hieronder -- de spelerbalk, de onderbalk -- staat BUITEN deze navigator en
+                      // blijft dus staan als je een album opent. Alles wat je opent komt erbinnen.
+                      // Dat is de hele wijziging: een pagina lag vroeger óver de schil heen, balken
+                      // inbegrepen.
+                      //
+                      // De `ShellScope` erboven is geen omweg maar een noodzaak. De pagina van een
+                      // route wordt ÉÉN KEER gebouwd en bewaard; een `setState` van deze schil komt
+                      // er niet in. Zou de sectie zomaar de wortelroute worden, dan bereikte de
+                      // zoekterm, het filter en de sortering hem nooit meer -- je typt en er
+                      // gebeurt niets. Een `InheritedWidget` werkt daar wél doorheen, want die
+                      // dirtyt zijn afhankelijken rechtstreeks.
+                      child: ShellScope(
+                        view: _view,
+                        q: _q,
+                        filter: _qFilter,
+                        sort: _sort,
+                        bouw: _sectieKolom,
+                        child: BinnenNavigator(
+                          navigatorKey: binnenNav,
+                          kanTerug: _kanTerug,
+                          wortel: const _SectieHost(),
+                        ),
                       ),
                     ),
                   ),
@@ -1861,11 +1879,23 @@ class _HomeShellState extends State<HomeShell> {
             // heeft.
             // Ook deze weg als het toetsenbord op is — zie de uitleg bij de spelerbalk hierboven.
             if (isCompact(context) && MediaQuery.viewInsetsOf(context).bottom == 0)
-              Onderbalk(view: _view, onPick: (id) => setState(() => _view = id)),
+              Onderbalk(view: _view, onPick: _gaNaar),
           ],
         ),
       ),
+      ),
     );
+  }
+
+  /// Naar een sectie, en de pagina's die eroverheen lagen gaan dicht.
+  ///
+  /// **Dit is het antwoord op "vanaf elk scherm naar Start".** Sta je drie pagina's diep in een
+  /// artiest en tik je op Start, dan hoor je op Start te landen -- niet op Start met een albumpagina
+  /// eroverheen. Hetzelfde gedrag als een tabbalk: nog eens op de sectie tikken waar je al staat
+  /// brengt je terug naar de bovenkant van die sectie.
+  void _gaNaar(int id) {
+    binnenNav.currentState?.popUntil((r) => r.isFirst);
+    if (_view != id) setState(() => _view = id);
   }
 
   /// Brand, the navigation pill bar, and the library count — the old left rail, laid out
@@ -2023,7 +2053,7 @@ class _HomeShellState extends State<HomeShell> {
                               child: Consumer<DownloadManager>(
                                 builder: (_, dm, __) => _NavPills(
                                   active: _view,
-                                  onSelect: (i) => setState(() => _view = i),
+                                  onSelect: _gaNaar,
                                   badge: dm.jobs.where((j) => j.busy).length,
                                 ),
                               ),
@@ -2093,6 +2123,39 @@ class _HomeShellState extends State<HomeShell> {
       );
 
 
+  /// De sectie zoals hij op het scherm staat: het zoekveld en daaronder de sectie zelf.
+  ///
+  /// Dit is de WORTELROUTE van de binnennavigator. Hij wordt aangeroepen vanuit [_SectieHost], die
+  /// zijn afhankelijkheid op [ShellScope] registreert -- daardoor komt een wissel van sectie,
+  /// zoekterm, filter of sortering hier wél binnen, dwars door de routecache heen.
+  Widget _sectieKolom(BuildContext context) => Column(
+        children: [
+          // No permanent search field on a television. It cost 75 points of height for a control
+          // you cannot type into without the on-screen keyboard taking over the screen — and the
+          // rail has a "Zoeken" entry that asks for the words once and then gets out of the way.
+          if (_searchable && !isTv) _searchBar(context),
+          // Een korte overvloeier in plaats van een harde knip.
+          //
+          // De navigatiepil schuift al 300 ms naar zijn nieuwe plek terwijl de inhoud eronder al
+          // gewisseld wás — die mismatch zie je. Kort en met een klein zetje omhoog, zodat het als
+          // een wissel leest en niet als een aarzeling.
+          Expanded(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 160),
+              switchInCurve: Curves.easeOut,
+              transitionBuilder: (kind, animatie) => FadeTransition(
+                opacity: animatie,
+                child: SlideTransition(
+                  position: Tween(begin: const Offset(0, .012), end: Offset.zero).animate(animatie),
+                  child: kind,
+                ),
+              ),
+              child: KeyedSubtree(key: ValueKey(_view), child: _content()),
+            ),
+          ),
+        ],
+      );
+
   Widget _content() {
     if (_view == 5) return const HomeStartView();
     if (_view == 6) return const DownloadsView();
@@ -2134,7 +2197,7 @@ class _HomeShellState extends State<HomeShell> {
                 albums: _sortAlbums(albums),
                 sort: _sort,
                 title: _q.isEmpty ? null : '${albums.length} resultaten')
-            : ArtistsView(lib: lib, albums: albums, onInnerLayer: _setInnerLayer);
+            : ArtistsView(lib: lib, albums: albums);
       },
     );
   }
@@ -2497,6 +2560,51 @@ class _NavPills extends StatefulWidget {
 ///
 /// A phone lists them in a drawer and everything wider lays them out as pills; both read from here
 /// so a section cannot exist in one and not the other.
+/// Wat de schil aan de sectie doorgeeft, dwars door de routecache heen.
+///
+/// **Waarom dit moet bestaan.** De pagina-widget van een route wordt één keer gebouwd en bewaard;
+/// een `setState` van een voorouder bereikt hem niet. De sectie is sinds de binnennavigator een
+/// route, dus zonder dit zou je in het zoekveld typen en zou de lijst eronder niets doen -- stil, en
+/// pas te merken door het te proberen. Een `InheritedWidget` dirtyt zijn afhankelijken rechtstreeks
+/// en heeft daar geen last van.
+///
+/// [bouw] wijst terug naar de schil, zodat de sectiekeuze en de zoek- en sorteervelden blijven waar
+/// ze staan; alleen het SEIN loopt hierlangs.
+class ShellScope extends InheritedWidget {
+  const ShellScope({
+    super.key,
+    required this.view,
+    required this.q,
+    required this.filter,
+    required this.sort,
+    required this.bouw,
+    required super.child,
+  });
+
+  final int view;
+  final String q;
+  final QFilter filter;
+  final AlbumSort sort;
+  final WidgetBuilder bouw;
+
+  static ShellScope of(BuildContext c) => c.dependOnInheritedWidgetOfExactType<ShellScope>()!;
+
+  @override
+  bool updateShouldNotify(ShellScope o) =>
+      view != o.view || q != o.q || filter != o.filter || sort != o.sort;
+}
+
+/// De wortelroute van de binnennavigator: de sectie waar je op staat.
+///
+/// Bewust `const` en zonder velden. De route bewaart de widget die hij één keer kreeg, dus een
+/// nieuwe instantie zou het scherm niet bereiken — alles wat verandert komt uit [ShellScope].
+class _SectieHost extends StatelessWidget {
+  const _SectieHost();
+
+  @override
+  Widget build(BuildContext context) => ShellScope.of(context).bouw(context);
+}
+
 class NavSections {
   const NavSections._();
 
@@ -3487,8 +3595,7 @@ class _AlbumCardState extends State<AlbumCard> {
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: Pressable(
-        onPressed: () => Navigator.of(context)
-            .push(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: a))),
+        onPressed: () => openPagina(context, (_) => AlbumDetailPage(album: a)),
         // Tot nu toe kon een albumtegel precies één ding: opengaan. Afspelen, in de wachtrij zetten,
         // radio en verwijderen zaten allemaal een navigatiestap dieper.
         onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _albumMenu(context, a)) : null,
@@ -4276,7 +4383,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                           // Read the pinned pressing here, not inside the route: a booklet is
                           // only worth reading if it is the one that came with this record.
                           final pinned = context.read<LibraryStore>().pinnedRelease(album);
-                          Navigator.of(context).push(MaterialPageRoute(
+                          // Op de HOOFDnavigator, met opzet: een boekje lees je over de volle
+                          // breedte, net als "nu speelt". Het heeft daarom ook nu al geen
+                          // spelerbalk.
+                          Navigator.of(context, rootNavigator: true).push(MaterialPageRoute(
                             builder: (_) => BookletScreen(
                               artist: album.artist,
                               album: album.title,
@@ -4502,7 +4612,6 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
               ),
             ),
           ),
-          const PlayerBar(),
         ],
           ),
         ],
@@ -5456,14 +5565,7 @@ class ArtistsView extends StatefulWidget {
   /// Albums already narrowed by the shell's search/filter (defaults to the whole library).
   final List<Album>? albums;
 
-  /// Vroeger: hoe deze weergave de schil vertelde dat er een eigen laag openstond.
-  ///
-  /// Er ís hier geen eigen laag meer. Een artiest opent nu dezelfde route als overal elders, dus BACK
-  /// wordt door de navigator afgehandeld en niet door de schil. De parameter blijft staan omdat de
-  /// schil hem aan meerdere weergaves doorgeeft; hij wordt hier bewust nooit gevuld.
-  final void Function(VoidCallback?)? onInnerLayer;
-
-  const ArtistsView({super.key, required this.lib, this.albums, this.onInnerLayer});
+  const ArtistsView({super.key, required this.lib, this.albums});
   @override
   State<ArtistsView> createState() => _ArtistsViewState();
 }
@@ -5610,8 +5712,8 @@ class _CreditChipState extends State<_CreditChip> {
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: Pressable(
-        onPressed: () => Navigator.of(context)
-            .push(MaterialPageRoute(builder: (_) => PersonPage(widget.credit.name, role: widget.credit.role))),
+        onPressed: () =>
+            openPagina(context, (_) => PersonPage(widget.credit.name, role: widget.credit.role)),
         borderRadius: BorderRadius.circular(999),
         scaleOnFocus: false,
         onFocusChange: (v) => setState(() => _hover = v),
@@ -5690,7 +5792,8 @@ class _PersonPageState extends State<PersonPage> {
       // In de `bottomNavigationBar`-sleuf en niet als Column: Scaffold legt de body er dan
       // vanzelf boven, en de balk blijft binnen deze route — dus `Navigator.of(context)` in de
       // wachtrij- en speakerknop wijst nog naar de goede plek.
-      bottomNavigationBar: const PlayerBar(),
+      // GEEN eigen spelerbalk meer. De schil tekent hem, en die staat sinds de binnennavigator
+      // ónder deze pagina in plaats van erachter — twee balken zouden er twee zijn.
       body: ArtistBackdrop(
         name: widget.name,
         child: CustomScrollView(
@@ -5757,13 +5860,14 @@ class _PersonPageState extends State<PersonPage> {
                     title: Text(w.title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                     subtitle: w.year == null ? null : Text(w.year!, style: const TextStyle(color: _muted, fontSize: 12)),
                     trailing: const Icon(Icons.search_rounded, size: 17, color: _muted),
-                    onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => Scaffold(
+                    onTap: () => openPagina(
+                      context,
+                      (_) => Scaffold(
                         backgroundColor: _bg,
                         appBar: AppBar(backgroundColor: _bg, title: Text(w.title)),
                         body: SingleChildScrollView(child: SourcesView(query: '${widget.name} ${w.title}')),
                       ),
-                    )),
+                    ),
                   );
                 },
                 childCount: _works.length,
@@ -5944,7 +6048,7 @@ Future<void> openArtist(BuildContext context, String name) async {
   // Still nothing: open the page regardless. It can show no discography, but it CAN show the
   // records of theirs you already own — and refusing to open at all showed you neither.
   artist ??= CatalogArtist(0, name, null, 0);
-  navigator.push(MaterialPageRoute(builder: (_) => ArtistBrowsePage(artist!)));
+  openOp(navigator, (_) => ArtistBrowsePage(artist!));
 }
 
 /// Minimise, maximise/restore and close, drawn by the app.
@@ -6319,7 +6423,9 @@ class PlayerBar extends StatelessWidget {
                   // cover that opens nothing.
                   onPressed: t == null
                       ? null
-                      : () => Navigator.of(context).push(nuSpeeltRoute()),
+                      // Zie `naarNuSpeelt`: dit scherm bedekt met opzet álles, en is het enige
+                      // dat dat nog doet.
+                      : () => Navigator.of(context, rootNavigator: true).push(nuSpeeltRoute()),
                   borderRadius: BorderRadius.circular(8),
                   child: MouseRegion(
                     cursor: t == null ? MouseCursor.defer : SystemMouseCursors.click,
@@ -6647,8 +6753,7 @@ class _AfspeellijstRij extends StatelessWidget {
         title: Text(lijst.name, style: const TextStyle(fontWeight: FontWeight.w600)),
         subtitle: Text('${lijst.trackIds.length} nummers',
             style: const TextStyle(color: _muted, fontSize: 12)),
-        onTap: () => Navigator.of(context)
-            .push(MaterialPageRoute(builder: (_) => AfspeellijstPagina(id: lijst.id))),
+        onTap: () => openPagina(context, (_) => AfspeellijstPagina(id: lijst.id)),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -6744,7 +6849,8 @@ class AfspeellijstPagina extends StatelessWidget {
       // In de `bottomNavigationBar`-sleuf en niet als Column: Scaffold legt de body er dan
       // vanzelf boven, en de balk blijft binnen deze route — dus `Navigator.of(context)` in de
       // wachtrij- en speakerknop wijst nog naar de goede plek.
-      bottomNavigationBar: const PlayerBar(),
+      // GEEN eigen spelerbalk meer. De schil tekent hem, en die staat sinds de binnennavigator
+      // ónder deze pagina in plaats van erachter — twee balken zouden er twee zijn.
       appBar: AppBar(
         backgroundColor: _bg,
         title: Text(lijst.name),
@@ -7047,7 +7153,7 @@ List<PopupMenuEntry<VoidCallback>> _nummerMenu(BuildContext context, Track t) {
     const PopupMenuDivider(),
     if (album != null)
       _menuRegel(Icons.album_rounded, 'Ga naar album',
-          () => nav.push(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: album)))),
+          () => openOp(nav, (_) => AlbumDetailPage(album: album))),
     _menuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, t.artist)),
     _menuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, t.artist)),
     const PopupMenuDivider(),
@@ -7081,7 +7187,7 @@ List<PopupMenuEntry<VoidCallback>> _albumMenu(BuildContext context, Album a) {
         () => _kiesAfspeellijst(context, [for (final t in nummers) if (fav.idVanTrack(t) case final i?) i])),
     const PopupMenuDivider(),
     _menuRegel(Icons.open_in_new_rounded, 'Album openen',
-        () => nav.push(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: a)))),
+        () => openOp(nav, (_) => AlbumDetailPage(album: a))),
     _menuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, a.artist)),
     _menuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, a.artist)),
     const PopupMenuDivider(),
@@ -7429,7 +7535,8 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
   final t = x.track;
   final open = t == null
       ? null
-      : () => Navigator.of(context).push(nuSpeeltRoute());
+      // Op de HOOFDnavigator, niet de binnenste: dit scherm hoort de balken te bedekken.
+      : () => Navigator.of(context, rootNavigator: true).push(nuSpeeltRoute());
 
   return Container(
     // 52, en dat is gemeten en niet gevoeld. Er zat 66 en daarna 56; met de balk eronder én de
@@ -8043,7 +8150,10 @@ final appNavigator = GlobalKey<NavigatorState>();
 /// popt hij tot daar. Anders zou tweemaal drukken twee schermen op elkaar leggen en moest je ook
 /// tweemaal terug.
 void naarNuSpeelt(BuildContext context) {
-  final nav = Navigator.of(context);
+  // De HOOFDnavigator, want daar staat "nu speelt" op. De stapel die hij hieronder afzoekt is die
+  // van de hele app; op de binnennavigator zou hij een route zoeken die daar nooit ligt en er dus
+  // een tweede naast zetten.
+  final nav = Navigator.of(context, rootNavigator: true);
   var bestaat = false;
   nav.popUntil((r) {
     if (r.settings.name == _nuSpeeltRoute) bestaat = true;
@@ -8643,7 +8753,7 @@ class _HomeStartViewState extends State<HomeStartView> {
         separatorBuilder: (_, __) => const SizedBox(width: 14),
         itemBuilder: (_, i) => _card(
             cover(albums[i].cover, size: 140), albums[i].title, albums[i].artist,
-            () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: albums[i]))),
+            () => openPagina(context, (_) => AlbumDetailPage(album: albums[i])),
             artist: albums[i].artist),
       );
 
@@ -8667,8 +8777,7 @@ class _HomeStartViewState extends State<HomeStartView> {
         // deze ene regel maakt ze allebei klikbaar.
         itemBuilder: (_, i) => _card(
             _netCover(hits[i].album.cover, size: 140), hits[i].album.title, hits[i].artist,
-            () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => AlbumBrowsePage(hits[i].artist, hits[i].album))),
+            () => openPagina(context, (_) => AlbumBrowsePage(hits[i].artist, hits[i].album)),
             artist: hits[i].artist),
       );
 
@@ -8704,8 +8813,7 @@ class _HomeStartViewState extends State<HomeStartView> {
     // A positive id is a Deezer one — see CatalogAlbum.ref — and this hit came from Deezer. The
     // tracklist and the year are fetched by the page itself, so nothing is invented here.
     final album = CatalogAlbum(t.albumId, t.album, t.cover, null, 0, 'album');
-    Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => AlbumBrowsePage(t.artist, album)));
+    openPagina(context, (_) => AlbumBrowsePage(t.artist, album));
   }
 
   /// [subtitle] blijft de kale tekst voor het geval de widget niets kan; [artist] maakt hem klikbaar.
@@ -11193,7 +11301,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                 final a = _artists[i];
                 return InkWell(
                   onTap: () =>
-                      Navigator.of(context).push(MaterialPageRoute(builder: (_) => ArtistBrowsePage(a))),
+                      openPagina(context, (_) => ArtistBrowsePage(a)),
                   borderRadius: BorderRadius.circular(12),
                   child: SizedBox(
                     width: 116,
@@ -11226,8 +11334,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
               itemBuilder: (_, i) {
                 final h = _albumHits[i];
                 return InkWell(
-                  onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => AlbumBrowsePage(h.artist, h.album))),
+                  onTap: () => openPagina(context, (_) => AlbumBrowsePage(h.artist, h.album)),
                   borderRadius: BorderRadius.circular(12),
                   child: SizedBox(
                     width: 132,
@@ -11702,8 +11809,7 @@ class _HeroCarouselState extends State<HeroCarousel> {
     return Pressable(
       onPressed: isTv
           ? null
-          : () => Navigator.of(context)
-              .push(MaterialPageRoute(builder: (_) => AlbumBrowsePage(hit.artist, hit.album))),
+          : () => openPagina(context, (_) => AlbumBrowsePage(hit.artist, hit.album)),
       borderRadius: BorderRadius.circular(12),
       scaleOnFocus: false,
       child: MouseRegion(
@@ -11783,8 +11889,8 @@ class _HeroCarouselState extends State<HeroCarousel> {
                         FilledButton.icon(
                           style: FilledButton.styleFrom(
                               backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
-                          onPressed: () => Navigator.of(context)
-                              .push(MaterialPageRoute(builder: (_) => AlbumBrowsePage(hit.artist, hit.album))),
+                          onPressed: () =>
+                              openPagina(context, (_) => AlbumBrowsePage(hit.artist, hit.album)),
                           icon: const Icon(Icons.playlist_add_rounded, size: 18),
                           label: const Text('Bekijken'),
                         ),
@@ -12425,8 +12531,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
                     if (i > 0) const Text('·', style: TextStyle(color: _muted, fontSize: 12.5)),
                     if (genres.contains(facts[i]))
                       InkWell(
-                        onTap: () => Navigator.of(context)
-                            .push(MaterialPageRoute(builder: (_) => StylePage(facts[i]))),
+                        onTap: () => openPagina(context, (_) => StylePage(facts[i])),
                         borderRadius: BorderRadius.circular(4),
                         child: Text(facts[i],
                             style: const TextStyle(color: _accent2, fontSize: 12.5)),
@@ -12664,7 +12769,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       // In de `bottomNavigationBar`-sleuf en niet als Column: Scaffold legt de body er dan
       // vanzelf boven, en de balk blijft binnen deze route — dus `Navigator.of(context)` in de
       // wachtrij- en speakerknop wijst nog naar de goede plek.
-      bottomNavigationBar: const PlayerBar(),
+      // GEEN eigen spelerbalk meer. De schil tekent hem, en die staat sinds de binnennavigator
+      // ónder deze pagina in plaats van erachter — twee balken zouden er twee zijn.
       body: ArtistBackdrop(
         name: widget.artist.name,
         // Same as the album browse page: this draws its own hero rather than an AppBar, so the
@@ -12952,8 +13058,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       if (al.isSingle) 'Single' else if (al.trackCount > 0) '${al.trackCount} nummers',
     ].join(' · ');
     return InkWell(
-      onTap: () => Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => AlbumBrowsePage(widget.artist.name, al))),
+      onTap: () => openPagina(context, (_) => AlbumBrowsePage(widget.artist.name, al)),
       borderRadius: BorderRadius.circular(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -13383,7 +13488,8 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       // In de `bottomNavigationBar`-sleuf en niet als Column: Scaffold legt de body er dan
       // vanzelf boven, en de balk blijft binnen deze route — dus `Navigator.of(context)` in de
       // wachtrij- en speakerknop wijst nog naar de goede plek.
-      bottomNavigationBar: const PlayerBar(),
+      // GEEN eigen spelerbalk meer. De schil tekent hem, en die staat sinds de binnennavigator
+      // ónder deze pagina in plaats van erachter — twee balken zouden er twee zijn.
       // Its own header rather than an AppBar, so nothing was adding the status bar's height —
       // the cover and the title were drawn UNDER the clock and the wifi icons. The album page
       // escaped this only because a SliverAppBar puts that inset in by itself.
@@ -18612,7 +18718,8 @@ class _StylePageState extends State<StylePage> {
       // In de `bottomNavigationBar`-sleuf en niet als Column: Scaffold legt de body er dan
       // vanzelf boven, en de balk blijft binnen deze route — dus `Navigator.of(context)` in de
       // wachtrij- en speakerknop wijst nog naar de goede plek.
-      bottomNavigationBar: const PlayerBar(),
+      // GEEN eigen spelerbalk meer. De schil tekent hem, en die staat sinds de binnennavigator
+      // ónder deze pagina in plaats van erachter — twee balken zouden er twee zijn.
       body: CustomScrollView(slivers: [
         SliverAppBar(
           backgroundColor: _bg,
@@ -18720,8 +18827,7 @@ class _OnlineAlbumCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) => InkWell(
         borderRadius: BorderRadius.circular(10),
-        onTap: () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => AlbumBrowsePage(hit.artist, hit.album))),
+        onTap: () => openPagina(context, (_) => AlbumBrowsePage(hit.artist, hit.album)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Expanded(
             child: LayoutBuilder(
