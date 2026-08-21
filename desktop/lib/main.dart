@@ -1,7 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-// Voor het uitlezen van de hoeskleur: dat decodeert een plaatje en hoort niet op de tekendraad.
-import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 // Flutter 3.36+ exports a RepeatMode of its own (for RepeatingAnimationBuilder), which collides
