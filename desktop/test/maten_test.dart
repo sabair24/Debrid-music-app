@@ -19,11 +19,16 @@ import 'package:debridmusic/ui/vlak.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+// `final` en niet `const`, en dat is geen slordigheid maar een regel van de taal: een `const`
+// verzameling mag geen kommagetallen bevatten, want die hebben geen "primitieve gelijkheid" —
+// `0.1 + 0.2 == 0.3` is onwaar, en dan is een verzameling niet meer op het moment van compileren
+// vast te stellen. Alle maten hier zijn `double`.
+
 /// De vijf hoeken, en niets anders.
-const _hoeken = <double>{kHoek4, kHoek8, kHoek12, kHoek18, kHoekRond};
+final _hoeken = <double>{kHoek4, kHoek8, kHoek12, kHoek18, kHoekRond};
 
 /// De acht stappen ruimte, plus nul.
-const _ruimtes = <double>{
+final _ruimtes = <double>{
   0,
   kRuimte2,
   kRuimte4,
