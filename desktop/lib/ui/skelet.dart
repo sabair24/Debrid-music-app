@@ -195,8 +195,23 @@ class SkeletLijst extends StatelessWidget {
                 // Niet alle regels even lang: gelijke blokjes lezen als een tabel in plaats van als
                 // een lijst die zo met titels gevuld wordt. Het patroon herhaalt per vier, zodat
                 // twee regels onder elkaar nooit toevallig dezelfde lengte krijgen.
-                Skelet(breedte: 120 + (i % 4) * 46, hoogte: 12, radius: kHoek4),
-                const Spacer(),
+                //
+                // Als BREUK van de beschikbare ruimte en niet als vast getal. Vaste getallen stonden
+                // er eerst, en op een telefoon van 360 punten liep de langste regel er 26 punten
+                // overheen — een skelet dat zelf overloopt is erger dan het wieltje dat hij vervangt.
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (_, c) => Align(
+                      alignment: Alignment.centerLeft,
+                      child: Skelet(
+                        breedte: c.maxWidth * (.42 + (i % 4) * .13),
+                        hoogte: 12,
+                        radius: kHoek4,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: kRuimte12),
                 const Skelet(breedte: 30, hoogte: 10, radius: kHoek4),
               ],
             ),

@@ -34,8 +34,16 @@ void main() {
 
     test('een flauwe hoes krijgt een ondergrens en een felle een bovengrens', () {
       // Anders blijft een grijzige hoes grijzig, en schreeuwt een felle hoes de tekst weg.
-      expect(HSLColor.fromColor(wasBasis(0xFF6A6866)!).saturation, greaterThanOrEqualTo(.32));
-      expect(HSLColor.fromColor(wasBasis(0xFFFF0033)!).saturation, lessThanOrEqualTo(.78));
+      //
+      // Met `closeTo` en niet met een harde ondergrens, en dat is geen slap aftoetsen: een kleur is
+      // acht bits per kanaal, dus HSL → Color → HSL komt niet exact terug. #6A6866 heeft van zichzelf
+      // een verzadiging van 0,02 en meet na het optrekken 0,3178 in plaats van 0,32. Wat hier bewaakt
+      // wordt is dát hij opgetrokken is, niet het derde cijfer achter de komma.
+      const flauw = 0xFF6A6866;
+      expect(HSLColor.fromColor(const Color(flauw)).saturation, lessThan(.05),
+          reason: 'deze hoes moet juist flauw ZIJN, anders toetst dit niets');
+      expect(HSLColor.fromColor(wasBasis(flauw)!).saturation, closeTo(.32, .01));
+      expect(HSLColor.fromColor(wasBasis(0xFFFF0033)!).saturation, closeTo(.78, .01));
     });
   });
 
