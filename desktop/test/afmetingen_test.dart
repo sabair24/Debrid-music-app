@@ -18,6 +18,7 @@ library;
 
 import 'package:debridmusic/ui/kop.dart';
 import 'package:debridmusic/ui/leeg.dart';
+import 'package:debridmusic/ui/skelet.dart';
 import 'package:debridmusic/ui/tegel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -97,6 +98,27 @@ void main() {
         maat,
         schaal,
       ));
+
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('de skeletten lopen niet over — $naam', (t) async {
+      // Ze staan er juist om te VOORKOMEN dat er iets verspringt, dus een skelet dat zelf overloopt
+      // is erger dan het wieltje dat hij vervangt.
+      await t.binding.setSurfaceSize(maat);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      await t.pumpWidget(_omhulsel(
+        const Column(
+          children: [
+            Expanded(child: SkeletRaster(tegels: 8)),
+            Expanded(child: SkeletLijst(regels: 5)),
+          ],
+        ),
+        maat,
+        schaal,
+      ));
+      await t.pump(const Duration(milliseconds: 300));
 
       expect(t.takeException(), isNull);
     });

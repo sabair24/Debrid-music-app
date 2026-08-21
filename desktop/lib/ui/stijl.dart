@@ -18,6 +18,7 @@ import '../tv.dart';
 import 'kleuren.dart';
 import 'leeg.dart';
 import 'maten.dart';
+import 'skelet.dart';
 import 'tegel.dart';
 import 'typografie.dart';
 import 'vlak.dart';
@@ -196,6 +197,38 @@ class StijlPagina extends StatelessWidget {
               ),
             ),
           ),
+          _kop('De kleurwas — drie hoezen'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: kGoot),
+            child: Row(
+              children: [
+                for (final (naam, kleur) in const <(String, int?)>[
+                  ('verzadigd', 0xFFC5492D),
+                  ('bijna zwart', 0xFF19252B),
+                  ('grijs', null),
+                ])
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: kRuimte12),
+                      child: Container(
+                        height: 120,
+                        alignment: Alignment.bottomLeft,
+                        padding: const EdgeInsets.all(kRuimte8),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(kHoek12),
+                          border: Border.all(color: kLijn),
+                          gradient: kleurWas(wasBasis(kleur)),
+                          color: kleur == null ? kAchtergrond : null,
+                        ),
+                        child: Text(naam, style: kLabel),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          _kop('Skeletten — wat er staat terwijl het laadt'),
+          const SizedBox(height: 150, child: SkeletLijst(regels: 3)),
           _kop('Leeg vlak'),
           LeegVlak(
             teken: Icons.library_music_rounded,
