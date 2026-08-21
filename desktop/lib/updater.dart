@@ -144,6 +144,85 @@ Map<String, dynamic>? installerUit(List<dynamic> assets) {
   return null;
 }
 
+/// Welk bestand uit een release de Mac-zip is.
+///
+/// Dezelfde release draagt ook de Windows-installer en soms een APK, dus op naam én extensie. De
+/// bouwstraat noemt hem `DebridMusic-macOS-3.9.152.zip`; `macos` staat er kleingeschreven in, maar
+/// vergelijken gebeurt hier toch al op kleine letters.
+Map<String, dynamic>? macZipUit(List<dynamic> assets) {
+  for (final a in assets) {
+    if (a is! Map<String, dynamic>) continue;
+    final naam = (a['name'] as String?)?.toLowerCase() ?? '';
+    if (naam.endsWith('.zip') && naam.contains('macos')) return a;
+  }
+  return null;
+}
+
+/// Het app-pakket waar een draaiende Mac-app in zit.
+///
+/// `Platform.resolvedExecutable` wijst naar `…/DebridMusic.app/Contents/MacOS/DebridMusic`; het
+/// pakket is drie mappen daarboven. Null als het daar niet op lijkt — dan draait de app niet uit een
+/// pakket (bijvoorbeeld `flutter run`) en valt er niets te ruilen. Liever niets doen dan gokken:
+/// wat hierna volgt verplaatst mappen.
+String? bundelUit(String uitvoerbaar) {
+  final delen = uitvoerbaar.split('/');
+  final i = delen.lastIndexWhere((d) => d.endsWith('.app'));
+  if (i < 0) return null;
+  // Precies `<pakket>/Contents/MacOS/<naam>`, en niet zomaar ergens een `.app` in het pad.
+  if (delen.length != i + 4) return null;
+  if (delen[i + 1] != 'Contents' || delen[i + 2] != 'MacOS') return null;
+  return delen.sublist(0, i + 1).join('/');
+}
+
+/// Het scriptje dat de ruil doet nádat deze app is afgesloten.
+///
+/// Een app kan zichzelf niet vervangen terwijl hij draait: de map waar hij uit leest is precies de
+/// map die weg moet. Dus wordt dit weggeschreven, losgekoppeld gestart, en dan sluit de app zichzelf
+/// af. Het script wacht tot dat proces echt weg is en doet dan pas iets.
+///
+/// De oude versie wordt VERPLAATST en niet verwijderd, en pas weggegooid als de nieuwe staat. Gaat
+/// het uitpakken mis, dan wordt de oude teruggezet en opgestart. Het ergste wat er dan gebeurd is,
+/// is dat je dezelfde versie weer voor je hebt.
+String ruilScript({
+  required int pid,
+  required String pakket,
+  required String nieuw,
+  required String terzijde,
+}) {
+  // Enkele aanhalingstekens in een pad zouden het script breken. Ze horen niet in een appnaam, maar
+  // het pad eromheen is van de gebruiker en die mag alles heten.
+  String q(String p) => "'${p.replaceAll("'", r"'\''")}'";
+  return '''#!/bin/sh
+# Geschreven door DebridMusic om zichzelf te vervangen. Zie updater.dart.
+PID=$pid
+PAKKET=${q(pakket)}
+NIEUW=${q(nieuw)}
+TERZIJDE=${q(terzijde)}
+
+# Wachten tot de app echt weg is. Twintig seconden is ruim; daarna is er iets anders aan de hand en
+# is niets doen beter dan een half vervangen pakket.
+n=0
+while kill -0 "\$PID" 2>/dev/null; do
+  n=\$((n + 1))
+  if [ "\$n" -gt 200 ]; then exit 1; fi
+  sleep 0.1
+done
+
+rm -rf "\$TERZIJDE"
+mv "\$PAKKET" "\$TERZIJDE" || exit 1
+
+if ditto "\$NIEUW" "\$PAKKET"; then
+  xattr -dr com.apple.quarantine "\$PAKKET" 2>/dev/null
+  rm -rf "\$TERZIJDE"
+else
+  rm -rf "\$PAKKET"
+  mv "\$TERZIJDE" "\$PAKKET"
+fi
+
+open "\$PAKKET"
+''';
+}
+
 /// Het buildnummer van de app die nu draait.
 Future<int> huidigBuildnummer() async {
   try {
@@ -179,9 +258,13 @@ Future<void> _slaOver(String sleutel) async {
 class Updater {
   const Updater();
 
-  /// Android en Windows. De Mac en de iPad krijgen hun versies langs een weg die niet van deze app
-  /// is — een zip die je zelf uitpakt, en TestFlight — en daar valt hier niets te installeren.
-  static bool get kanHier => Platform.isAndroid || Platform.isWindows;
+  /// Android, Windows en de Mac. Alleen de iPad valt erbuiten: die krijgt zijn versies via
+  /// TestFlight, en daar mag geen app zichzelf vervangen.
+  ///
+  /// De Mac stond hier eerst ook buiten, met als reden dat er alleen een zip gepubliceerd wordt en
+  /// er dus niets te installeren viel. Dat klopte voor de helft: er is inderdaad geen installer,
+  /// maar een app-pakket ruilen is een verplaatsing — zie [ruilScript].
+  static bool get kanHier => Platform.isAndroid || Platform.isWindows || Platform.isMacOS;
 
   /// Wat er klaarstaat, of null als dat niets nieuws is.
   ///
@@ -202,7 +285,11 @@ class Updater {
 
       final tag = j['tag_name'] as String? ?? '';
       final assets = (j['assets'] as List?) ?? const [];
-      final uitgave = Platform.isAndroid ? _android(tag, assets) : _windows(tag, assets);
+      final uitgave = Platform.isAndroid
+          ? _android(tag, assets)
+          : Platform.isMacOS
+              ? _mac(tag, assets)
+              : _windows(tag, assets);
       if (uitgave == null) return null;
 
       if (!await _isNieuwerDanHier(uitgave)) return null;
@@ -242,6 +329,24 @@ class Updater {
     );
   }
 
+  /// Dezelfde release als Windows, ander bestand.
+  ///
+  /// Buildnummer nul, net als daar: de Mac-zip hangt aan de `win-v`-tag en het is de VERSIENAAM die
+  /// per release omhoog gaat. `CFBundleVersion` telt wel mee in het pakket, maar dat getal komt uit
+  /// het runnummer van de bouwstraat en zegt niets over oud of nieuw ten opzichte van een zip die
+  /// je met de hand hebt uitgepakt.
+  Uitgave? _mac(String tag, List<dynamic> assets) {
+    final asset = macZipUit(assets);
+    final url = asset?['browser_download_url'] as String?;
+    if (url == null || url.isEmpty) return null;
+    return Uitgave(
+      versie: versieUit(tag),
+      buildnummer: 0,
+      apk: Uri.parse(url),
+      bytes: (asset!['size'] as num?)?.toInt() ?? 0,
+    );
+  }
+
   Future<bool> _isNieuwerDanHier(Uitgave u) async {
     if (Platform.isAndroid) {
       return isNieuwer(hier: await huidigBuildnummer(), daar: u.buildnummer);
@@ -266,7 +371,11 @@ class Updater {
     final tijdelijk = await getTemporaryDirectory();
     final map = Directory('${tijdelijk.path}${Platform.pathSeparator}update');
     await map.create(recursive: true);
-    final doel = File('${map.path}${Platform.pathSeparator}DebridMusic-${u.buildnummer}.apk');
+    // Op de Mac is het een zip die zo meteen door `ditto` gaat; die kijkt naar de inhoud en niet
+    // naar de naam, maar een bestand `.apk` noemen dat geen APK is leest verkeerd in elke logregel.
+    final doel = File(Platform.isMacOS
+        ? '${map.path}${Platform.pathSeparator}DebridMusic-${u.versie}.zip'
+        : '${map.path}${Platform.pathSeparator}DebridMusic-${u.buildnummer}.apk');
 
     // Een half binnengehaald bestand van een vorige poging is geen APK maar ziet er wel zo uit.
     if (await doel.exists()) await doel.delete();
@@ -307,7 +416,10 @@ class Updater {
   /// Zonder dit vooraf te vragen opent het installatiescherm en sluit meteen weer, zonder uitleg.
   /// Op Windows bestaat die vraag niet: daar start je gewoon een installer.
   Future<bool> magInstalleren() async {
-    if (Platform.isWindows) return true;
+    // Alleen Android kent dit recht. Op een pc en een Mac start je gewoon iets; kan dat niet
+    // — omdat het pakket niet van jou is, bijvoorbeeld — dan zegt [installeer] dat met zoveel
+    // woorden. Hier `false` teruggeven zou het Android-scherm openen dat daar niet bestaat.
+    if (Platform.isWindows || Platform.isMacOS) return true;
     if (!kanHier) return false;
     try {
       return await _kanaal.invokeMethod<bool>('magInstalleren') ?? false;
@@ -332,6 +444,7 @@ class Updater {
   /// draait stil, sluit deze app zelf af omdat hij de bestanden vervangt, en start hem daarna weer
   /// op. Die laatste stap is niet vanzelfsprekend — zie het commentaar bij de vlaggen.
   Future<void> installeer(File bestand) async {
+    if (Platform.isMacOS) return _installeerMac(bestand);
     if (Platform.isWindows) {
       await Process.start(
         bestand.path,
@@ -352,6 +465,88 @@ class Updater {
     }
     await _kanaal.invokeMethod('installeer', {'pad': bestand.path});
   }
+
+  /// De Mac: pakket uitpakken, controleren, en de ruil aan een scriptje overlaten.
+  ///
+  /// Alles wat mis kan gaan wordt hiervóór gecontroleerd, want zodra het script loopt is deze app
+  /// weg en staat er niemand meer bij. Elke worp hier komt als melding op het scherm; zie
+  /// `_haalEnInstalleer`.
+  Future<void> _installeerMac(File zip) async {
+    final pakket = bundelUit(Platform.resolvedExecutable);
+    if (pakket == null) {
+      throw const FileSystemException(
+          'Deze app draait niet uit een .app-pakket, dus er valt niets te vervangen.');
+    }
+
+    // Kunnen we hier überhaupt schrijven? Staat de app in /Applications en is hij ooit door een
+    // beheerder neergezet, dan mag jij hem niet verplaatsen. Dat nu weten is een melding; dat
+    // straks pas merken is een halve installatie zonder app.
+    final map = Directory(pakket).parent;
+    try {
+      final proef = File('${map.path}${Platform.pathSeparator}.debridmusic-schrijftest');
+      await proef.writeAsString('x');
+      await proef.delete();
+    } catch (_) {
+      throw FileSystemException('Geen schrijfrechten in ${map.path}', pakket);
+    }
+
+    final uit = Directory('${zip.parent.path}${Platform.pathSeparator}uitgepakt');
+    if (await uit.exists()) await uit.delete(recursive: true);
+    await uit.create(recursive: true);
+
+    // `ditto` en niet `unzip`: die eerste hoort bij macOS en houdt rechten, symlinks en de
+    // handtekening heel. Met `unzip` komt het pakket er als losse bestanden uit en weigert Gatekeeper
+    // het te openen.
+    final uitpakken = await Process.run('/usr/bin/ditto', ['-x', '-k', zip.path, uit.path]);
+    if (uitpakken.exitCode != 0) {
+      throw FileSystemException('Uitpakken mislukte: ${uitpakken.stderr}', zip.path);
+    }
+
+    final nieuw = await uit
+        .list()
+        .where((e) => e is Directory && e.path.endsWith('.app'))
+        .cast<Directory>()
+        .firstWhere((_) => true, orElse: () => Directory(''));
+    if (nieuw.path.isEmpty) {
+      throw FileSystemException('Geen .app in de zip', zip.path);
+    }
+    // Een pakket zonder uitvoerbaar bestand is geen pakket. Zonder deze controle zou het script de
+    // werkende versie opzijzetten en er iets kapots voor in de plaats zetten.
+    if (!await File('${nieuw.path}/Contents/MacOS/${_naamUit(pakket)}').exists()) {
+      throw FileSystemException('Het uitgepakte pakket mist zijn uitvoerbare bestand', nieuw.path);
+    }
+
+    final script = File('${zip.parent.path}${Platform.pathSeparator}ruil.sh');
+    await script.writeAsString(ruilScript(
+      pid: pid,
+      pakket: pakket,
+      nieuw: nieuw.path,
+      terzijde: '${zip.parent.path}${Platform.pathSeparator}vorige.app',
+    ));
+
+    await Process.start('/bin/sh', [script.path], mode: ProcessStartMode.detached);
+    // En dan uit de weg. Het script wacht tot dit proces echt weg is voordat het iets verplaatst,
+    // dus dit is geen wedloop maar het startsein.
+    exit(0);
+  }
+
+  /// `…/DebridMusic.app` → `DebridMusic`.
+  String _naamUit(String pakket) =>
+      pakket.split('/').last.replaceAll(RegExp(r'\.app$'), '');
+}
+
+/// Wat er na het binnenhalen gebeurt, per platform.
+///
+/// Stond hier als één zin over "het installatiescherm van je toestel". Dat is precies wat Android
+/// doet en precies wat de andere twee niet doen: op een pc loopt de installer zichzelf, en op een
+/// Mac wordt het pakket geruild terwijl de app even weg is. Dat laatste hoort erbij te staan, want
+/// een app die uit zichzelf afsluit en terugkomt is schrikken als je het niet ziet aankomen.
+String watErGebeurt() {
+  if (Platform.isMacOS) {
+    return 'Daarna sluit DebridMusic zichzelf af, vervangt zich, en start opnieuw op.';
+  }
+  if (Platform.isWindows) return 'Daarna installeert hij zichzelf en start opnieuw op.';
+  return 'Daarna opent het installatiescherm van je toestel.';
 }
 
 /// Het bericht in de app: één keer vragen, en dan doen.
@@ -371,10 +566,7 @@ Future<void> toonUpdate(BuildContext context, Uitgave u, {Updater updater = cons
           Text('${u.naam} staat klaar.'),
           const SizedBox(height: 8),
           Text(
-            u.grootte.isEmpty
-                ? 'Hij wordt binnengehaald en daarna opent het installatiescherm van je toestel.'
-                : 'Hij is ${u.grootte} groot. Na het binnenhalen opent het installatiescherm van '
-                    'je toestel.',
+            u.grootte.isEmpty ? watErGebeurt() : 'Hij is ${u.grootte} groot. ${watErGebeurt()}',
             style: const TextStyle(color: Color(0xFF8A90A6), fontSize: 12.5),
           ),
         ],
