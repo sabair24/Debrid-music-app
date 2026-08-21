@@ -1,3 +1,4 @@
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
@@ -303,4 +304,60 @@ int decodeWidth(double logicalSize) {
   // Never below 64: a hint smaller than that makes even a list thumbnail visibly mushy.
   final w = (logicalSize * dpr).round();
   return w < 64 ? 64 : w;
+}
+
+/// De vorige kleurberekening. Zie [kleurBuitenDeTekendraad].
+Future<int?> _vorigeKleurberekening = Future<int?>.value();
+
+/// De hoeskleur uitrekenen in een isolate — en dit MOET buiten elke klasse staan.
+///
+/// Een closure neemt zijn hele omgeving mee, en de omgeving van een instantiemethode bevat `this`. Zet
+/// je `Isolate.run(() => dominantColour(bytes))` in een State, dan gaat die State mee de isolate in, en
+/// daaraan hangt de complete widgetboom. Dart weigert dat terecht:
+///
+///     object is unsendable - Class: _AsyncCompleter
+///      <- Instance of '_AlbumDetailPageState'
+///      <- _AlbumDetailPageState._kleurUitHoes.<anonymous closure>
+///
+/// Het venijnige is dat het van buiten niet te zien is: er verschijnt geen melding, de achtergrond
+/// blijft gewoon zwart, en de reparatie lijkt niet te werken terwijl elk onderdeel los wél werkt. Ik heb
+/// hem in een los Dart-programma getest — daar zit geen `this` omheen en daar wérkte het. Pas een
+/// logregel in de app zelf gaf de uitzondering te zien.
+///
+/// Hier omheen zit geen klasse, dus vangt de closure alleen [bytes], en dat is een Uint8List: verzendbaar.
+///
+/// **En hier, in artwork.dart, en niet in main.dart.** Er zijn inmiddels drie plekken die dit nodig
+/// hebben — de albumpagina, het speelscherm en de spelerbalk — en de rij hieronder werkt alleen als
+/// ze hem ALLEMAAL delen: drie eigen rijen zijn geen rij.
+///
+/// De hoofdkleur van een hoes, buiten de tekendraad — maar ÉÉN TEGELIJK.
+///
+/// **Waarom die rij, en niet gewoon `Isolate.run` per hoes.** De pc-app crashte deze week zes keer
+/// uit zichzelf. Windows noteert elke keer hetzelfde:
+///
+///     Naam van foutmodule: flutter_windows.dll
+///     Uitzonderingscode: 0xc0000005      (toegangsfout)
+///     Foutoffset: 0x1cda0
+///
+/// Geen Dart-uitzondering dus, maar de engine zelf. En het laatste wat de app opschreef, telkens
+/// binnen een minuut voor de klap, was een reeks van deze berekeningen:
+///
+///     21:54:20  was "James Blunt - Back To Bedlam": 5021648 bytes → #685539
+///     21:55:19  was "Notre-Dame De Paris": 85817 bytes → #471716
+///
+/// Elke aanroep startte een verse isolate en kopieerde de hele hoes erin — vijf megabyte per stuk,
+/// meerdere per seconde als je door een album bladert of als de verrijker hoezen binnenhaalt. Ze op
+/// een rij zetten haalt die piek weg: hooguit één isolate tegelijk, en de kopie van de vorige is
+/// opgeruimd voor de volgende begint.
+///
+/// **Eerlijk over wat dit is:** de correlatie is sterk (zes crashes, alle zes vlak na zo'n reeks) en
+/// het mechanisme past, maar bewezen is het niet — de engine valt om zonder te zeggen waaróm. Blijft
+/// hij crashen, dan staat in `ui.log` opnieuw wat er vlak daarvoor gebeurde, en is de volgende
+/// verdachte niet meer deze.
+Future<int?> kleurBuitenDeTekendraad(Uint8List bytes) {
+  final volgende = _vorigeKleurberekening
+      .catchError((_) => null)
+      .then((_) => Isolate.run(() => dominantColour(bytes)));
+  _vorigeKleurberekening = volgende;
+  return volgende;
 }

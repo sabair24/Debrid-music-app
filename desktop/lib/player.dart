@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
+import 'artwork.dart' show kleurBuitenDeTekendraad;
 import 'models.dart';
 import 'paths.dart';
 import 'warm_log.dart';
@@ -441,8 +442,47 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   List<RadioItem> get radioQueue => _radio;
   int get radioIndex => _radioIndex;
 
+  /// De hoes van wat er NU speelt.
+  ///
+  /// Een setter en geen kaal veld, en dat is de hele reden dat dit hier staat: elke plek die de hoes
+  /// wisselt — een nummer openen, een wachtrij aannemen, een speaker de muziek overnemen — hoort
+  /// meteen ook de KLEUR van die hoes te laten uitrekenen. Als veld moest elk van die acht plekken
+  /// daar zelf aan denken, en dan denkt er vroeg of laat eentje niet aan.
   @override
-  Uint8List? currentCover;
+  Uint8List? get currentCover => _hoesNu;
+  Uint8List? _hoesNu;
+
+  set currentCover(Uint8List? bytes) {
+    if (identical(bytes, _hoesNu)) return;
+    _hoesNu = bytes;
+    // De kleur van de vorige plaat hoort niet bij deze. Liever even geen was dan de verkeerde.
+    wasKleur = null;
+    if (bytes != null) unawaited(_wasUitHoes(bytes));
+  }
+
+  /// De hoofdkleur van de hoes die nu speelt, als ARGB — of null.
+  ///
+  /// **Waarom hier en niet per scherm.** Het speelscherm, de spelerbalk onderaan en de smalle balk op
+  /// een telefoon willen alle drie dezelfde kleur, en het uitrekenen ervan decodeert een plaatje van
+  /// soms vijf megabyte. Drie schermen die dat elk apart doen is drie keer datzelfde werk én drie
+  /// antwoorden die kunnen verschillen — precies wat er in ronde 2 dreigde te ontstaan.
+  ///
+  /// Null bij een zwart-witte hoes; zie `dominantColour`. Geen was is beter dan een grijze.
+  int? wasKleur;
+
+  Future<void> _wasUitHoes(Uint8List bytes) async {
+    int? kleur;
+    try {
+      kleur = await kleurBuitenDeTekendraad(bytes);
+    } catch (_) {
+      return; // een hoes die niet te lezen is laat de schermen gewoon zoals ze waren
+    }
+    // Er speelt intussen iets anders: dit antwoord is van de vorige plaat.
+    if (!identical(bytes, _hoesNu) || kleur == wasKleur) return;
+    wasKleur = kleur;
+    notifyListeners();
+  }
+
   @override
   bool shuffle = false;
   @override

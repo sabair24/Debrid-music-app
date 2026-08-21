@@ -93,7 +93,7 @@ jobs:
             test/itemmenu_test.dart \
             test/maten_test.dart test/afmetingen_test.dart \
             test/kleurenladder_test.dart test/overgang_test.dart \
-            test/was_test.dart \
+            test/was_test.dart test/binnenkomst_test.dart \
             test/completeness_test.dart \
             test/discogs_verwijzing_test.dart test/updater_test.dart \
             test/verhuizing_test.dart
