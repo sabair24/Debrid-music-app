@@ -272,4 +272,49 @@ void main() {
       expect(lijst.count, 1);
     });
   });
+
+  group('de zoekvraag', () {
+    // Losgetrokken uit `LosslessWant.query` toen het menu er "Zoeken met Soulseek" bij kreeg: daar
+    // geldt precies dezelfde valkuil, en één plek waar hij opgelost is scheelt de tweede fout.
+    test('artiest en titel, zoals je het zou typen', () {
+      expect(zoekvraagVoorNummer('Get Down', artist: 'Backstreet Boys'),
+          'Backstreet Boys Get Down');
+    });
+
+    test('"Various Artists" is geen naam en gaat eruit', () {
+      // Gemeten: "Various Artists Jij Bent Zo Mooi" gaf één treffer, de titel alleen tientallen.
+      expect(zoekvraagVoorNummer('Jij Bent Zo Mooi', artist: 'Various Artists'),
+          'Jij Bent Zo Mooi');
+      expect(zoekvraagVoorNummer('Trein', artist: 'Onbekende artiest'), 'Trein');
+    });
+
+    test('de uitvoerder uit de bestandsnaam wint van de tag', () {
+      const pad = r'D:\m\Top 100\13 - Petra - Jij Bent Zo Mooi.mp3';
+      expect(
+          zoekvraagVoorNummer('Jij Bent Zo Mooi',
+              performer: performerFromFilename(pad, 'Jij Bent Zo Mooi'), artist: 'Various Artists'),
+          'Petra Jij Bent Zo Mooi');
+    });
+
+    test('zonder artiest en zonder uitvoerder blijft de titel over', () {
+      expect(zoekvraagVoorNummer('Trein'), 'Trein');
+      expect(zoekvraagVoorNummer('Trein', artist: '   '), 'Trein');
+    });
+
+    test('een plaat zoekt op artiest en albumtitel', () {
+      expect(zoekvraagVoorAlbum('Portishead', 'Dummy'), 'Portishead Dummy');
+    });
+
+    test('een verzamelplaat zoekt op de albumtitel alleen', () {
+      // Hier is geen bestandsnaam om op terug te vallen, dus is dit het beste wat er is.
+      expect(zoekvraagVoorAlbum('Various Artists', 'Now 47'), 'Now 47');
+      expect(zoekvraagVoorAlbum('V.A.', 'Now 47'), 'Now 47');
+      expect(zoekvraagVoorAlbum('', 'Now 47'), 'Now 47');
+    });
+
+    test('en de wens gebruikt dezelfde functie, dus dit bewaakt ook die', () {
+      expect(_w('Various Artists', 'Trein').query, 'Trein');
+      expect(_w('Sabien Tiels', 'Trein').query, 'Sabien Tiels Trein');
+    });
+  });
 }

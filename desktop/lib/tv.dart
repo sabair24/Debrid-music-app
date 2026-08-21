@@ -147,10 +147,16 @@ class Pressable extends StatefulWidget {
   final VoidCallback? onPressed;
   final VoidCallback? onLongPress;
 
-  /// Right-click. Kept because a mouse has one and dropping it here would quietly take a feature
-  /// away from Windows, Mac and iPad to give one to the remote — where the same action is reached
-  /// by holding OK, which is [onLongPress].
-  final VoidCallback? onSecondaryTap;
+  /// Right-click, met de plek waar de muis stond.
+  ///
+  /// Kept because a mouse has one and dropping it here would quietly take a feature away from
+  /// Windows, Mac and iPad to give one to the remote — where the same action is reached by holding
+  /// OK, which is [onLongPress].
+  ///
+  /// **Waarom er een positie in zit.** Een menu hoort te verschijnen waar je klikte. Dit was een
+  /// kale `VoidCallback`, en dus hing elk contextmenu aan de rand van de RIJ — op de derde rij
+  /// klikken en het menu ergens anders zien opengaan leest als een fout.
+  final void Function(Offset globaal)? onSecondaryTap;
 
   /// Matched to the shape of what is being wrapped, so the ring hugs a cover's corners instead of
   /// drawing a rectangle around a rounded card.
@@ -292,7 +298,10 @@ class _PressableState extends State<Pressable> {
         behavior: HitTestBehavior.opaque,
         onTap: widget.onPressed,
         onLongPress: widget.onLongPress,
-        onSecondaryTap: widget.onSecondaryTap,
+        // `onSecondaryTapDown` en niet `onSecondaryTap`: alleen de eerste draagt een coördinaat.
+        onSecondaryTapDown: widget.onSecondaryTap == null
+            ? null
+            : (d) => widget.onSecondaryTap!(d.globalPosition),
         // De drie haken die de indrukbeweging hierboven voeden. `onTapCancel` hoort erbij: wie
         // begint te scrollen met zijn vinger op een tegel moet die tegel weer zien opveren, anders
         // blijft hij ingedrukt staan terwijl de lijst wegschuift.

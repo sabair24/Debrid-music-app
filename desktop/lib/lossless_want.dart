@@ -106,6 +106,35 @@ class VasteBron {
   }
 }
 
+/// De zoekvraag voor één nummer, zoals een mens hem zou typen.
+///
+/// De ARTIEST-tag is niet altijd de artiest. Op een verzamelaar staat er "Various Artists", en dat
+/// woord in de vraag stoppen maakt hem juist SLECHTER: gemeten gaf "Various Artists Jij Bent Zo
+/// Mooi" precies één treffer, terwijl de titel alleen door tientallen mappen heen zoekt. Peers
+/// noemen hun bestanden naar de uitvoerder, nooit naar "Various Artists".
+///
+/// Dus: [performer] als die bekend is, anders de artiest zolang dat een echte naam is, en anders de
+/// titel alleen. Een matige zoekvraag is beter dan een vergiftigde.
+///
+/// Stond eerst als `LosslessWant.query` en is eruit getild toen het menu er "Zoeken met Soulseek"
+/// bij kreeg: dezelfde valkuil, en één plek waar hij opgelost is.
+String zoekvraagVoorNummer(String title, {String? performer, String? artist}) {
+  for (final naam in [performer, artist]) {
+    final n = (naam ?? '').trim();
+    if (n.isNotEmpty && !isVerzamelnaam(n)) return '$n $title'.trim();
+  }
+  return title.trim();
+}
+
+/// Hetzelfde voor een hele plaat.
+///
+/// Een verzamelaar heeft geen artiest om mee te zoeken, en dan is de albumtitel alleen het beste wat
+/// er is — er is hier geen bestandsnaam om op terug te vallen zoals bij een nummer.
+String zoekvraagVoorAlbum(String artist, String album) {
+  final n = artist.trim();
+  return n.isEmpty || isVerzamelnaam(n) ? album.trim() : '$n $album'.trim();
+}
+
 /// Eén openstaande wens.
 class LosslessWant {
   const LosslessWant({
@@ -170,13 +199,7 @@ class LosslessWant {
   ///
   /// Dus: [performer] als die bekend is, anders de artiest zolang dat een echte naam is, en anders de
   /// titel alleen. Een matige zoekvraag is beter dan een vergiftigde.
-  String get query {
-    for (final naam in [performer, artist]) {
-      final n = (naam ?? '').trim();
-      if (n.isNotEmpty && !isVerzamelnaam(n)) return '$n $title'.trim();
-    }
-    return title.trim();
-  }
+  String get query => zoekvraagVoorNummer(title, performer: performer, artist: artist);
 
   LosslessWant met({int? tries, int? lastTryMs, Map<String, String>? refused}) => LosslessWant(
         artist: artist,
