@@ -93,6 +93,7 @@ import 'ui/kop.dart';
 import 'ui/leeg.dart';
 import 'ui/maten.dart';
 import 'ui/skelet.dart';
+import 'ui/speelvlak.dart';
 import 'ui/stijl.dart';
 import 'ui/tegel.dart';
 import 'ui/typografie.dart';
@@ -7745,6 +7746,335 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
     // Uit de speler, niet uit dit scherm. Die rekent hem één keer per plaat uit, en de spelerbalk
     // onderaan gebruikt exact dezelfde — zie [PlayerStore.wasKleur].
     final was = kleurWas(wasBasis(p.wasKleur));
+    // Naast elkaar of gestapeld? De rekensom staat in `ui/speelvlak.dart`, want die is zonder
+    // speler, bibliotheek en speaker na te rekenen — en dit scherm is dat niet.
+    final schermmaat = MediaQuery.sizeOf(context);
+    final naast = naastElkaar(scherm: schermmaat, compact: isCompact(context), tv: isTv);
+    final hoesMaat = naast
+        ? hoesNaast(scherm: schermmaat, reisfactor: discTravelFactor(context))
+        : _sleeve(context);
+
+    // De hoes met de draaiende plaat, één keer beschreven. Hij staat in beide indelingen, en
+    // twee kopieën van zeventig regels zouden binnen een maand uit elkaar lopen.
+    final hoesBlok = Pressable(
+      // Op tv is de hoes de rustplek: hier landt de markering bij openen, OK pauzeert,
+      // en links/rechts zijn vorige en volgende. Uitvergroten is een muisgebaar — er
+      // hoort een vergrootglas-cursor bij — en verhuist daarom naar een lange druk.
+      autofocus: isTv,
+      onFocusChange: (v) {
+        if (v != _opHoes) setState(() => _opHoes = v);
+      },
+      // What the sleeve is actually drawing wins; the player's snapshot is only the
+      // fallback for a track whose art has not resolved yet.
+      onPressed: isTv
+          ? (t == null ? null : (casting ? cast.playPause : p.playPause))
+          : ((_shown ?? p.currentCover) == null
+              ? null
+              : () => showDialog(
+                  context: context,
+                  builder: (_) => _ZoomView((_shown ?? p.currentCover)!))),
+      onLongPress: isTv && (_shown ?? p.currentCover) != null
+          ? () => showDialog(
+              context: context, builder: (_) => _ZoomView((_shown ?? p.currentCover)!))
+          : null,
+      borderRadius: BorderRadius.circular(10),
+      child: MouseRegion(
+        cursor: (_shown ?? p.currentCover) == null
+            ? MouseCursor.defer
+            : SystemMouseCursors.zoomIn,
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withValues(alpha: .5), blurRadius: 44, offset: const Offset(0, 22))
+            ],
+          ),
+          // Same sleeve-and-disc as the album page, at the size this screen deserves.
+          // The album is taken from the track that is playing, so the disc that comes
+          // out is the one this song is actually on.
+          child: t == null
+              ? cover(p.currentCover, size: hoesMaat, radius: 16)
+              : Builder(builder: (context) {
+                  // Ask the library which album this track is on, rather than resolving
+                  // the record again from its artist and title. Without it this screen
+                  // did its own Discogs lookup and showed a different artist's album
+                  // that shared a title, while the album page had the right one pinned.
+                  final lib = context.watch<LibraryStore>();
+                  final al = lib.albumForPath(t.path);
+                  return AlbumArt(
+                    artist: al?.artist ?? t.artist,
+                    album: al?.title ?? t.album,
+                    identity: al == null ? '' : lib.uidOf(al),
+                    size: hoesMaat,
+                    fallback: p.currentCover,
+                    chosen: al?.correctedCover,
+                    trackCount: al?.tracks.length ?? 0,
+                    pinned: al == null ? null : lib.pinnedRelease(al),
+                    pinnedMbid: al == null ? null : lib.pinnedMbid(al),
+                    roles: al == null
+                        ? const {}
+                        : lib.albumArtRoles(al.artist, al.title),
+                    // Out and spinning while a speaker has it too. This device is
+                    // deliberately silent then, so p.playing is false — but the record
+                    // IS playing, just somewhere else, and that is what you came to
+                    // this screen to look at.
+                    playing: p.playing || context.watch<SpeakerTarget>().isCasting,
+                    onFront: (f) {
+                      if (mounted && !identical(f, _shown)) {
+                        setState(() => _shown = f);
+                      }
+                    },
+                  );
+                }),
+        ),
+      ),
+    );
+
+    // Alles onder de hoes: titel, artiest, spoelbalk, transport, speakervolume. Als lijst en
+    // niet als widget, zodat hij in de gestapelde indeling gewoon in de kolom valt en naast
+    // elkaar in de kolom ernaast — zonder een tussenlaag die de hoogte anders zou verdelen.
+    final onder = <Widget>[
+      // Eén regel op tv, met puntjes. Een titel die naar twee regels loopt kost er 40
+      // bij, en dat is precies wat er niet is — op 540 punten is dit scherm 80 te lang.
+      Text(t?.title ?? '—',
+          maxLines: isTv ? 1 : null,
+          overflow: isTv ? TextOverflow.ellipsis : null,
+          style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w800), textAlign: naast ? TextAlign.left : TextAlign.center),
+      const SizedBox(height: 6),
+      Row(
+        mainAxisAlignment: naast ? MainAxisAlignment.start : MainAxisAlignment.center,
+        children: [
+          if (t != null)
+            ArtistLine(
+              artist: t.artist,
+              title: t.title,
+              lookup: true,
+              style: const TextStyle(color: _muted, fontSize: 15),
+            ),
+          if (t != null) _echtheidMerk(t.path),
+                if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
+        ],
+      ),
+      SizedBox(height: isTv ? 14 : 26),
+      SizedBox(
+        width: naast ? kSpeelKolom : dialogWidth(context, 540),
+        child: Row(
+          children: [
+            Text(_fmt(position), style: const TextStyle(color: _muted, fontSize: 12)),
+
+            Expanded(
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  trackHeight: 4,
+                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                  activeTrackColor: _accent,
+                  inactiveTrackColor: kLijn,
+                  thumbColor: Colors.white,
+                ),
+                // Same as the player bar's: a Slider eats left and right to change its
+                // value, so the highlight would enter the seek bar and never leave it.
+                child: _maybeFocusable(Slider(
+                  value: prog,
+                  // Dragging is carried locally and sent once on release: a seek per pixel
+                  // would flood an embedded stack and land behind where you let go.
+                  onChanged: duration.inMilliseconds == 0 || (!casting && t == null)
+                      ? null
+                      : casting
+                          ? (v) => cast.scrubTo(duration * v)
+                          : (v) => p.seek(duration * v),
+                  onChangeEnd:
+                      casting && duration.inMilliseconds > 0 ? (v) => cast.seekTo(duration * v) : null,
+                )),
+              ),
+            ),
+            Text(_fmt(duration), style: const TextStyle(color: _muted, fontSize: 12)),
+          ],
+        ),
+      ),
+      // Where it is actually coming out, when that is not here. No fake progress bar
+      // above it: the position lives on the speaker and this device does not know it, so
+      // a bar that crawled along on a guess would be a lie you could watch.
+      Builder(builder: (context) {
+        final target = context.watch<SpeakerTarget>();
+        if (!target.isCasting) return const SizedBox(height: 8);
+        // Een reden gaat vóór de geruststelling. "Speelt op Huiskamer" boven een stille
+        // kamer is precies de melding die je een half uur laat zoeken; als de pc weet
+        // waarom er niets klinkt, hoort dat hier te staan en niet in een logbestand.
+        final probleem = target.probleem;
+        if (probleem != null) {
+          return Padding(
+            padding: const EdgeInsets.only(top: 4, bottom: 4),
+            child: Row(mainAxisAlignment: naast ? MainAxisAlignment.start : MainAxisAlignment.center, children: [
+              const Icon(Icons.volume_off_rounded, size: 16, color: Colors.orangeAccent),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(probleem,
+                    maxLines: 3,
+                    style: const TextStyle(color: Colors.orangeAccent, fontSize: 13.5)),
+              ),
+            ]),
+          );
+        }
+        return Padding(
+          padding: const EdgeInsets.only(top: 4, bottom: 4),
+          child: Row(mainAxisAlignment: naast ? MainAxisAlignment.start : MainAxisAlignment.center, children: [
+            const Icon(Icons.speaker_rounded, size: 16, color: _accent),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text('Speelt op ${target.device!.name}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: _accent, fontSize: 13.5)),
+            ),
+          ]),
+        );
+      }),
+      Row(
+        mainAxisAlignment: naast ? MainAxisAlignment.start : MainAxisAlignment.center,
+        children: [
+          IconButton(
+              icon: const Icon(Icons.shuffle_rounded),
+              iconSize: 24,
+              color: p.shuffle ? _accent : _muted,
+              onPressed: p.toggleShuffle),
+          const SizedBox(width: 8),
+          // Spoelen staat hier, naast vorige en volgende, en niet meer bij de schuifbalk.
+          //
+          // Daar zat het in een `TvLabelled`, en dat reserveert altijd 20 punten voor zijn
+          // bijschrift — ook als er niets getoond wordt. Die 20 punten waren precies wat
+          // deze rij van het scherm duwde. Naast de andere transportknoppen kost het niets
+          // extra en staat het bovendien waar je het zoekt.
+          if (isTv)
+            IconButton(
+                icon: const Icon(Icons.replay_10_rounded),
+                iconSize: 24,
+                color: _muted,
+                tooltip: '10 seconden terug',
+                onPressed: _canSeekHere(duration, casting, t)
+                    ? () => _seekBy(p, cast, casting, position, duration, -10)
+                    : null),
+          if (isTv) const SizedBox(width: 6),
+          IconButton(
+              icon: const Icon(Icons.skip_previous_rounded),
+              iconSize: 34,
+              color: _text,
+              // Door `_Transport` en niet met een eigen `?? false`.
+              //
+              // Deze twee knoppen herhaalden de oude logica die grijs werd zodra de
+              // speaker één poll zweeg — terwijl de muziek doorliep en dezelfde knop in de
+              // spelerbalk het wél deed. `x.previous` valt terug op de eigen wachtrij; dat
+              // is precies waar die helper voor gemaakt is.
+              onPressed: x.previous),
+          const SizedBox(width: 8),
+          Container(
+            decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+            child: IconButton(
+              // De markering start op tv niet hier maar op de HOES. Dat was ooit deze
+              // knop, maar die stond op de Shield 80 punten onder de schermrand — dus
+              // begon het scherm met een ring die je niet kon zien. De hoes staat altijd
+              // in beeld, en van daaruit zijn links en rechts vorige en volgende.
+              icon: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
+              color: _bg,
+              iconSize: 40,
+              onPressed: casting ? cast.playPause : (t == null ? null : p.playPause),
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+              icon: const Icon(Icons.skip_next_rounded),
+              iconSize: 34,
+              color: _text,
+              onPressed: x.next),
+          if (isTv) const SizedBox(width: 6),
+          if (isTv)
+            IconButton(
+                icon: const Icon(Icons.forward_10_rounded),
+                iconSize: 24,
+                color: _muted,
+                tooltip: '10 seconden vooruit',
+                onPressed: _canSeekHere(duration, casting, t)
+                    ? () => _seekBy(p, cast, casting, position, duration, 10)
+                    : null),
+          const SizedBox(width: 8),
+          // Shuffle and repeat stay local on purpose: the speaker plays the queue the PC
+          // hands it one track at a time, so changing the order here would take effect on
+          // whatever is sent NEXT and look like it did nothing now.
+          IconButton(
+              icon: Icon(p.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded),
+              iconSize: 24,
+              color: p.repeat == RepeatMode.off ? _muted : _accent,
+              onPressed: casting ? null : p.cycleRepeat),
+          const SizedBox(width: 12),
+          const _SpeakerButton(iconSize: 24),
+        ],
+      ),
+      // The speaker's own volume, and only when it says it has one. A Sonos and the KEF
+      // both do; a renderer without RenderingControl simply shows nothing here rather
+      // than a slider that moves and changes nothing.
+      if (casting && cast.hasVolume)
+        Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: SizedBox(
+            width: dialogWidth(context, 320),
+            child: Row(
+              children: [
+                // The slider is ExcludeFocus on a television — left and right would be
+                // eaten by it — so without these two the speaker's volume cannot be
+                // touched at all from the couch. The TV remote's own volume keys go to
+                // the television, not to a UPnP speaker in another room.
+                if (isTv)
+                  TvLabelled(
+                    label: 'Zachter',
+                    child: IconButton(
+                    icon: const Icon(Icons.volume_down_rounded, size: 22),
+                    color: _muted,
+                    tooltip: 'Zachter',
+                    onPressed: () => cast.setVolume((cast.volume - 5).clamp(0, 100)),
+                  ),
+                  )
+                else
+                  const Icon(Icons.volume_down_rounded, size: 19, color: _muted),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 3,
+                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                      activeTrackColor: _accent,
+                      inactiveTrackColor: kLijn,
+                      thumbColor: Colors.white,
+                    ),
+                    child: _maybeFocusable(Slider(
+                      value: cast.volume.clamp(0, 100).toDouble(),
+                      max: 100,
+                      onChanged: (v) => cast.setVolume(v.round()),
+                    )),
+                  ),
+                ),
+                if (isTv)
+                  TvLabelled(
+                    label: 'Harder',
+                    child: IconButton(
+                    icon: const Icon(Icons.volume_up_rounded, size: 22),
+                    color: _muted,
+                    tooltip: 'Harder',
+                    onPressed: () => cast.setVolume((cast.volume + 5).clamp(0, 100)),
+                  ),
+                  )
+                else
+                  const Icon(Icons.volume_up_rounded, size: 19, color: _muted),
+                const SizedBox(width: 6),
+                SizedBox(
+                  width: 30,
+                  child: Text('${cast.volume}',
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(color: _muted, fontSize: 12)),
+                ),
+              ],
+            ),
+          ),
+        ),
+    ];
+
     return Scaffold(
       backgroundColor: _bg,
       // Toetsen bubbelen vanaf de gefocuste knop hierheen. `canRequestFocus: false` en
@@ -7853,321 +8183,43 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                         ),
                     ],
                   ),
-                const Spacer(),
-                Pressable(
-                  // Op tv is de hoes de rustplek: hier landt de markering bij openen, OK pauzeert,
-                  // en links/rechts zijn vorige en volgende. Uitvergroten is een muisgebaar — er
-                  // hoort een vergrootglas-cursor bij — en verhuist daarom naar een lange druk.
-                  autofocus: isTv,
-                  onFocusChange: (v) {
-                    if (v != _opHoes) setState(() => _opHoes = v);
-                  },
-                  // What the sleeve is actually drawing wins; the player's snapshot is only the
-                  // fallback for a track whose art has not resolved yet.
-                  onPressed: isTv
-                      ? (t == null ? null : (casting ? cast.playPause : p.playPause))
-                      : ((_shown ?? p.currentCover) == null
-                          ? null
-                          : () => showDialog(
-                              context: context,
-                              builder: (_) => _ZoomView((_shown ?? p.currentCover)!))),
-                  onLongPress: isTv && (_shown ?? p.currentCover) != null
-                      ? () => showDialog(
-                          context: context, builder: (_) => _ZoomView((_shown ?? p.currentCover)!))
-                      : null,
-                  borderRadius: BorderRadius.circular(10),
-                  child: MouseRegion(
-                    cursor: (_shown ?? p.currentCover) == null
-                        ? MouseCursor.defer
-                        : SystemMouseCursors.zoomIn,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(color: Colors.black.withValues(alpha: .5), blurRadius: 44, offset: const Offset(0, 22))
-                        ],
-                      ),
-                      // Same sleeve-and-disc as the album page, at the size this screen deserves.
-                      // The album is taken from the track that is playing, so the disc that comes
-                      // out is the one this song is actually on.
-                      child: t == null
-                          ? cover(p.currentCover, size: _sleeve(context), radius: 16)
-                          : Builder(builder: (context) {
-                              // Ask the library which album this track is on, rather than resolving
-                              // the record again from its artist and title. Without it this screen
-                              // did its own Discogs lookup and showed a different artist's album
-                              // that shared a title, while the album page had the right one pinned.
-                              final lib = context.watch<LibraryStore>();
-                              final al = lib.albumForPath(t.path);
-                              return AlbumArt(
-                                artist: al?.artist ?? t.artist,
-                                album: al?.title ?? t.album,
-                                identity: al == null ? '' : lib.uidOf(al),
-                                size: _sleeve(context),
-                                fallback: p.currentCover,
-                                chosen: al?.correctedCover,
-                                trackCount: al?.tracks.length ?? 0,
-                                pinned: al == null ? null : lib.pinnedRelease(al),
-                                pinnedMbid: al == null ? null : lib.pinnedMbid(al),
-                                roles: al == null
-                                    ? const {}
-                                    : lib.albumArtRoles(al.artist, al.title),
-                                // Out and spinning while a speaker has it too. This device is
-                                // deliberately silent then, so p.playing is false — but the record
-                                // IS playing, just somewhere else, and that is what you came to
-                                // this screen to look at.
-                                playing: p.playing || context.watch<SpeakerTarget>().isCasting,
-                                onFront: (f) {
-                                  if (mounted && !identical(f, _shown)) {
-                                    setState(() => _shown = f);
-                                  }
-                                },
-                              );
-                            }),
-                    ),
-                  ),
-                ),
-                SizedBox(height: isTv ? 16 : 30),
-                // Eén regel op tv, met puntjes. Een titel die naar twee regels loopt kost er 40
-                // bij, en dat is precies wat er niet is — op 540 punten is dit scherm 80 te lang.
-                Text(t?.title ?? '—',
-                    maxLines: isTv ? 1 : null,
-                    overflow: isTv ? TextOverflow.ellipsis : null,
-                    style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w800), textAlign: TextAlign.center),
-                const SizedBox(height: 6),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    if (t != null)
-                      ArtistLine(
-                        artist: t.artist,
-                        title: t.title,
-                        lookup: true,
-                        style: const TextStyle(color: _muted, fontSize: 15),
-                      ),
-                    if (t != null) _echtheidMerk(t.path),
-                          if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
-                  ],
-                ),
-                SizedBox(height: isTv ? 14 : 26),
-                SizedBox(
-                  width: dialogWidth(context, 540),
-                  child: Row(
-                    children: [
-                      Text(_fmt(position), style: const TextStyle(color: _muted, fontSize: 12)),
-
-                      Expanded(
-                        child: SliderTheme(
-                          data: SliderTheme.of(context).copyWith(
-                            trackHeight: 4,
-                            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
-                            activeTrackColor: _accent,
-                            inactiveTrackColor: kLijn,
-                            thumbColor: Colors.white,
-                          ),
-                          // Same as the player bar's: a Slider eats left and right to change its
-                          // value, so the highlight would enter the seek bar and never leave it.
-                          child: _maybeFocusable(Slider(
-                            value: prog,
-                            // Dragging is carried locally and sent once on release: a seek per pixel
-                            // would flood an embedded stack and land behind where you let go.
-                            onChanged: duration.inMilliseconds == 0 || (!casting && t == null)
-                                ? null
-                                : casting
-                                    ? (v) => cast.scrubTo(duration * v)
-                                    : (v) => p.seek(duration * v),
-                            onChangeEnd:
-                                casting && duration.inMilliseconds > 0 ? (v) => cast.seekTo(duration * v) : null,
-                          )),
-                        ),
-                      ),
-                      Text(_fmt(duration), style: const TextStyle(color: _muted, fontSize: 12)),
-                    ],
-                  ),
-                ),
-                // Where it is actually coming out, when that is not here. No fake progress bar
-                // above it: the position lives on the speaker and this device does not know it, so
-                // a bar that crawled along on a guess would be a lie you could watch.
-                Builder(builder: (context) {
-                  final target = context.watch<SpeakerTarget>();
-                  if (!target.isCasting) return const SizedBox(height: 8);
-                  // Een reden gaat vóór de geruststelling. "Speelt op Huiskamer" boven een stille
-                  // kamer is precies de melding die je een half uur laat zoeken; als de pc weet
-                  // waarom er niets klinkt, hoort dat hier te staan en niet in een logbestand.
-                  final probleem = target.probleem;
-                  if (probleem != null) {
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 4, bottom: 4),
-                      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                        const Icon(Icons.volume_off_rounded, size: 16, color: Colors.orangeAccent),
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Text(probleem,
-                              maxLines: 3,
-                              style: const TextStyle(color: Colors.orangeAccent, fontSize: 13.5)),
-                        ),
-                      ]),
-                    );
-                  }
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 4, bottom: 4),
-                    child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                      const Icon(Icons.speaker_rounded, size: 16, color: _accent),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: Text('Speelt op ${target.device!.name}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: _accent, fontSize: 13.5)),
-                      ),
-                    ]),
-                  );
-                }),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    IconButton(
-                        icon: const Icon(Icons.shuffle_rounded),
-                        iconSize: 24,
-                        color: p.shuffle ? _accent : _muted,
-                        onPressed: p.toggleShuffle),
-                    const SizedBox(width: 8),
-                    // Spoelen staat hier, naast vorige en volgende, en niet meer bij de schuifbalk.
-                    //
-                    // Daar zat het in een `TvLabelled`, en dat reserveert altijd 20 punten voor zijn
-                    // bijschrift — ook als er niets getoond wordt. Die 20 punten waren precies wat
-                    // deze rij van het scherm duwde. Naast de andere transportknoppen kost het niets
-                    // extra en staat het bovendien waar je het zoekt.
-                    if (isTv)
-                      IconButton(
-                          icon: const Icon(Icons.replay_10_rounded),
-                          iconSize: 24,
-                          color: _muted,
-                          tooltip: '10 seconden terug',
-                          onPressed: _canSeekHere(duration, casting, t)
-                              ? () => _seekBy(p, cast, casting, position, duration, -10)
-                              : null),
-                    if (isTv) const SizedBox(width: 6),
-                    IconButton(
-                        icon: const Icon(Icons.skip_previous_rounded),
-                        iconSize: 34,
-                        color: _text,
-                        // Door `_Transport` en niet met een eigen `?? false`.
-                        //
-                        // Deze twee knoppen herhaalden de oude logica die grijs werd zodra de
-                        // speaker één poll zweeg — terwijl de muziek doorliep en dezelfde knop in de
-                        // spelerbalk het wél deed. `x.previous` valt terug op de eigen wachtrij; dat
-                        // is precies waar die helper voor gemaakt is.
-                        onPressed: x.previous),
-                    const SizedBox(width: 8),
-                    Container(
-                      decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-                      child: IconButton(
-                        // De markering start op tv niet hier maar op de HOES. Dat was ooit deze
-                        // knop, maar die stond op de Shield 80 punten onder de schermrand — dus
-                        // begon het scherm met een ring die je niet kon zien. De hoes staat altijd
-                        // in beeld, en van daaruit zijn links en rechts vorige en volgende.
-                        icon: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
-                        color: _bg,
-                        iconSize: 40,
-                        onPressed: casting ? cast.playPause : (t == null ? null : p.playPause),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                        icon: const Icon(Icons.skip_next_rounded),
-                        iconSize: 34,
-                        color: _text,
-                        onPressed: x.next),
-                    if (isTv) const SizedBox(width: 6),
-                    if (isTv)
-                      IconButton(
-                          icon: const Icon(Icons.forward_10_rounded),
-                          iconSize: 24,
-                          color: _muted,
-                          tooltip: '10 seconden vooruit',
-                          onPressed: _canSeekHere(duration, casting, t)
-                              ? () => _seekBy(p, cast, casting, position, duration, 10)
-                              : null),
-                    const SizedBox(width: 8),
-                    // Shuffle and repeat stay local on purpose: the speaker plays the queue the PC
-                    // hands it one track at a time, so changing the order here would take effect on
-                    // whatever is sent NEXT and look like it did nothing now.
-                    IconButton(
-                        icon: Icon(p.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded),
-                        iconSize: 24,
-                        color: p.repeat == RepeatMode.off ? _muted : _accent,
-                        onPressed: casting ? null : p.cycleRepeat),
-                    const SizedBox(width: 12),
-                    const _SpeakerButton(iconSize: 24),
-                  ],
-                ),
-                // The speaker's own volume, and only when it says it has one. A Sonos and the KEF
-                // both do; a renderer without RenderingControl simply shows nothing here rather
-                // than a slider that moves and changes nothing.
-                if (casting && cast.hasVolume)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: SizedBox(
-                      width: dialogWidth(context, 320),
+                // **Naast elkaar op een breed venster, gestapeld op de rest.**
+                //
+                // Wat dit oplost: op een venster van 1600 punten stond dit scherm als een kolom van
+                // 560 in het midden, met links en rechts samen duizend punten zwart. De hoes werd
+                // uit de HOOGTE gerekend en bleef klein terwijl er breedte over was.
+                //
+                // En de cd is hier het lastige: die schuift naar rechts uit de hoes — precies de
+                // kant waar de tekstkolom komt. Zie [hoesNaast]; die deelt door `1 + reisfactor`,
+                // en dat is de hele reden dat de plaat niet onder de titel schuift.
+                if (naast)
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(kGoot, 0, kGoot, kRuimte32),
                       child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          // The slider is ExcludeFocus on a television — left and right would be
-                          // eaten by it — so without these two the speaker's volume cannot be
-                          // touched at all from the couch. The TV remote's own volume keys go to
-                          // the television, not to a UPnP speaker in another room.
-                          if (isTv)
-                            TvLabelled(
-                              label: 'Zachter',
-                              child: IconButton(
-                              icon: const Icon(Icons.volume_down_rounded, size: 22),
-                              color: _muted,
-                              tooltip: 'Zachter',
-                              onPressed: () => cast.setVolume((cast.volume - 5).clamp(0, 100)),
-                            ),
-                            )
-                          else
-                            const Icon(Icons.volume_down_rounded, size: 19, color: _muted),
-                          Expanded(
-                            child: SliderTheme(
-                              data: SliderTheme.of(context).copyWith(
-                                trackHeight: 3,
-                                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                                activeTrackColor: _accent,
-                                inactiveTrackColor: kLijn,
-                                thumbColor: Colors.white,
-                              ),
-                              child: _maybeFocusable(Slider(
-                                value: cast.volume.clamp(0, 100).toDouble(),
-                                max: 100,
-                                onChanged: (v) => cast.setVolume(v.round()),
-                              )),
-                            ),
-                          ),
-                          if (isTv)
-                            TvLabelled(
-                              label: 'Harder',
-                              child: IconButton(
-                              icon: const Icon(Icons.volume_up_rounded, size: 22),
-                              color: _muted,
-                              tooltip: 'Harder',
-                              onPressed: () => cast.setVolume((cast.volume + 5).clamp(0, 100)),
-                            ),
-                            )
-                          else
-                            const Icon(Icons.volume_up_rounded, size: 19, color: _muted),
-                          const SizedBox(width: 6),
+                          hoesBlok,
+                          const SizedBox(width: kSpeelGat),
                           SizedBox(
-                            width: 30,
-                            child: Text('${cast.volume}',
-                                textAlign: TextAlign.right,
-                                style: const TextStyle(color: _muted, fontSize: 12)),
+                            width: kSpeelKolom,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: onder,
+                            ),
                           ),
                         ],
                       ),
                     ),
-                  ),
-                const Spacer(),
+                  )
+                else ...[
+                  const Spacer(),
+                  hoesBlok,
+                  SizedBox(height: isTv ? 16 : 30),
+                  ...onder,
+                  const Spacer(),
+                ],
               ],
             ),
           ),
