@@ -92,6 +92,7 @@ import 'ui/kleuren.dart';
 import 'ui/kop.dart';
 import 'ui/leeg.dart';
 import 'ui/maten.dart';
+import 'ui/paginawas.dart';
 import 'ui/skelet.dart';
 import 'ui/speelvlak.dart';
 import 'ui/stijl.dart';
@@ -713,6 +714,9 @@ Future<void> main() async {
         ChangeNotifierProvider<FactsWarmer>.value(value: warmer),
         ChangeNotifierProvider<PlayerStore>.value(value: player),
         ChangeNotifierProvider<WachtrijPaneel>(create: (_) => WachtrijPaneel()),
+        // De hoeskleur van de pagina die bovenop ligt. Hoort hier en niet in die pagina, omdat de
+        // SCHIL hem tekent — achter de bovenbalk langs tot aan de schermrand. Zie [PaginaWas].
+        ChangeNotifierProvider<PaginaWas>(create: (_) => PaginaWas()),
         ChangeNotifierProvider<Favorieten>.value(value: favorieten),
         ChangeNotifierProvider<Afspeellijsten>.value(value: lijsten),
         ChangeNotifierProvider<OfflineStore>.value(value: offline),
@@ -1239,6 +1243,42 @@ extension AlbumSortX on AlbumSort {
         AlbumSort.jaarOud => 'Jaar (oud→nieuw)',
         AlbumSort.toegevoegd => 'Recent toegevoegd',
       };
+}
+
+/// De vastgezette balk van de albumpagina, als matglas boven de was.
+///
+/// Geen [glassSurface]: die is een PIL met ronde hoeken, een rand rondom en een schaduw eronder —
+/// precies goed voor iets dat op een pagina zweeft, en precies verkeerd voor een strook die de volle
+/// breedte raakt en tegen de bovenrand aan ligt.
+///
+/// Wat hier wél telt is de vervaging. Deze balk staat vast terwijl de tracklijst eronder doorschuift,
+/// en zonder vervaging lees je die tekst gewoon dwars door de balk heen. De vulling is de bovenkant
+/// van de was, half doorzichtig: genoeg om de titels en de knoppen erop leesbaar te houden, weinig
+/// genoeg om de kleur van de plaat er nog doorheen te zien.
+///
+/// Op een televisie zonder vervaging, om dezelfde reden die bij [glassSurface] staat: een
+/// `BackdropFilter` is de enige laag die Flutter niet kan bewaren, en op een Tegra X1 is dat het
+/// duurste wat er op het scherm staat. Daar dus een dichtere vulling in plaats van glas.
+Widget _glazenBalk(Color tint) {
+  final vulling = Container(
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          tint.withValues(alpha: isTv ? .96 : .58),
+          tint.withValues(alpha: isTv ? .92 : .44),
+        ],
+      ),
+    ),
+  );
+  if (isTv) return vulling;
+  return ClipRect(
+    child: BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+      child: vulling,
+    ),
+  );
 }
 
 /// Een ruit matglas: hij vervaagt écht wat erachter langs schuift.
@@ -1807,7 +1847,37 @@ class _HomeShellState extends State<HomeShell> {
         // the whole app, so the top bar's glass and the player bar's surface still reach the panel
         // edge — a floating panel with a black gutter around it looks like a mistake, and the point
         // was only to keep the things you read and press away from the edge.
-        body: Column(
+        body: Stack(
+          children: [
+            // De was van de plaat die je bekijkt, over de VOLLE hoogte van het venster.
+            //
+            // **Waarom hier en niet op de albumpagina zelf.** Die pagina leeft in `BinnenNavigator`,
+            // en dat staat in de `Expanded` ONDER de bovenbalk. Een kind kan niet achter zijn ouder
+            // schilderen, dus de kleur hield op waar de balk begon — een harde rand dwars over het
+            // scherm, precies op de plek waar hij het minst hoort.
+            //
+            // Nu ligt hij achter alles, en de bovenbalk is matglas: die laat de kleur er dus
+            // doorheen zien in plaats van hem af te snijden. De pagina geeft alleen de KLEUR door
+            // (zie [PaginaWas]); het verloop zelf blijft op één plek staan, in `ui/vlak.dart`.
+            //
+            // `Positioned.fill` staat BUITEN de Consumer: een Positioned moet een directe dochter
+            // van de Stack zijn, en een bouwer ertussen breekt dat met een uitzondering bij het
+            // tekenen.
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Consumer<PaginaWas>(
+                  builder: (_, paginaWas, __) => AnimatedContainer(
+                    // Overvloeien in plaats van omslaan: een download die landt bouwt de pagina
+                    // opnieuw, en dan sprong de kleur van het ene beeld op het andere. Zonder kleur
+                    // is het verloop null en is dit een doorzichtig vlak dat niets doet.
+                    duration: kWas,
+                    curve: Curves.easeOut,
+                    decoration: BoxDecoration(gradient: kleurWas(wasBasis(paginaWas.kleur))),
+                  ),
+                ),
+              ),
+            ),
+            Column(
           children: [
             // Both bars get their own repaint boundary, and the reason is the position ticker.
             //
@@ -1925,6 +1995,8 @@ class _HomeShellState extends State<HomeShell> {
             // Ook deze weg als het toetsenbord op is — zie de uitleg bij de spelerbalk hierboven.
             if (isCompact(context) && MediaQuery.viewInsetsOf(context).bottom == 0)
               Onderbalk(view: _view, onPick: _gaNaar),
+          ],
+        ),
           ],
         ),
       ),
@@ -3770,7 +3842,12 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     _uiLog.line('was "${album.artist} - ${album.title}": ${bytes.length} bytes → '
         '${kleur == null ? 'geen kleur (te grijs/zwart/wit)' : '#${kleur.toRadixString(16).substring(2)}'}'
         '${mounted ? '' : '  (pagina al gesloten)'}');
-    if (mounted && kleur != _was) setState(() => _was = kleur);
+    if (mounted && kleur != _was) {
+      setState(() => _was = kleur);
+      // En doorgeven aan de schil, die hem over de VOLLE hoogte tekent — achter de bovenbalk langs.
+      // Zie [PaginaWas]: deze pagina zit onder die balk in de boom en kan er zelf niet achter komen.
+      context.read<PaginaWas>().toon(kleur);
+    }
   }
 
   /// Ontbrekende nummers staan standaard INGEKLAPT.
@@ -3792,6 +3869,32 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     // After the first frame: this reads providers, and initState runs before the element is
     // fully mounted in the tree.
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadOfficial());
+  }
+
+  @override
+  void dispose() {
+    // De kleur weer intrekken, zodat Start en Albums niet in de tint van het laatst bekeken album
+    // blijven staan.
+    //
+    // `wis` en niet `toon(null)`: ga je van album A naar B, dan zet B zijn kleur vóórdat A wordt
+    // opgeruimd — Flutter bouwt de nieuwe route op terwijl de oude nog leeft. Onvoorwaardelijk
+    // wissen haalde dan de kleur van B weg. Zie [PaginaWas.wis].
+    //
+    // Via de State en niet via `context`: bij het opruimen mag er niet meer in de boom gekeken
+    // worden, en dit is een dienst die de hele app deelt.
+    _paginaWas?.wis(_was);
+    super.dispose();
+  }
+
+  /// De dienst die de schilkleur draagt, vastgehouden zolang deze pagina leeft.
+  ///
+  /// Opgehaald in [didChangeDependencies] omdat `context.read` in [dispose] niet meer mag.
+  PaginaWas? _paginaWas;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _paginaWas = context.read<PaginaWas>();
   }
 
   String get _albumKey => '${artistKey(album.artist)}|${normKey(album.title)}';
@@ -4326,14 +4429,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     // download die landt herschikt de groepering). Het kost niets: [_kleurUitHoes] stopt meteen als het
     // om dezelfde bytes gaat, en dat is bij elke volgende build zo.
     _kleurUitHoes(album.correctedCover ?? album.cover);
-    // De tint van de hoes, klaargemaakt om achter de pagina te leggen. Het recept staat in
-    // `ui/vlak.dart` omdat het speelscherm hem óók gebruikt — en dit zijn precies de getallen die
-    // uit elkaar lopen zodra ze op twee plekken staan.
-    final was = kleurWas(wasBasis(_was));
-    // De bovenkant van dat verloop, apart: de vastgezette balk hierboven moet er exact op landen.
-    // Uit het verloop zelf en niet nog eens uitgerekend, want dan lopen die twee uiteen zodra er aan
-    // de was gesleuteld wordt — en dat is precies de rand die je dán ziet.
-    final wasTop = was?.colors.first ?? _bg;
+    // De bovenkant van de was, voor de glazen balk hieronder. Uit hetzelfde verloop en niet nog eens
+    // apart uitgerekend, want dan lopen die twee uiteen zodra er aan de was gesleuteld wordt — en dat
+    // is precies de rand die je dán ziet. Het recept staat in `ui/vlak.dart`, want het speelscherm
+    // gebruikt het ook.
+    final wasTop = kleurWas(wasBasis(_was))?.colors.first ?? _bg;
 
     return Scaffold(
       // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin — its app bar
@@ -4342,25 +4442,12 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       // surface to the bottom edge and must keep doing so.
       body: Stack(
         children: [
-          // De was: bovenaan de kleur van de hoes, onderaan gewoon de achtergrond. Hij staat áchter de
-          // hele pagina en scrollt dus niet mee — hij hoort bij het album, niet bij de tracklijst.
+          // De was wordt hier NIET meer getekend — de schil doet dat, over de volle hoogte.
           //
-          // Onderaan is hij al helemaal weg, want daar staan de tracklijst en de grijze "niet in
-          // bibliotheek"-regels, en die zijn transparant: alles wat daar nog kleur draagt, gaat van
-          // hun leesbaarheid af. Waar precies staat in `kleurWas`.
-          if (was != null)
-            Positioned.fill(
-              child: IgnorePointer(
-                // Overvloeien in plaats van omslaan: een download die landt herschikt de groepering
-                // en bouwt deze pagina opnieuw, en dan sprong de kleur van het ene beeld op het
-                // andere. [kWas] is de duur die daarbij hoort.
-                child: AnimatedContainer(
-                  duration: kWas,
-                  curve: Curves.easeOut,
-                  decoration: BoxDecoration(gradient: was),
-                ),
-              ),
-            ),
+          // Hij stond hier, en daarom hield de kleur op bij de bovenbalk: die balk staat buiten de
+          // navigator waar deze pagina in leeft, en een kind kan niet achter zijn ouder schilderen.
+          // Het resultaat was een harde rand dwars over het scherm. Deze pagina geeft nu alleen nog
+          // de KLEUR door via [PaginaWas] (zie `_kleurUitHoes`), en de schil legt hem achter alles.
           Column(
         children: [
           // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin — its app bar
@@ -4377,10 +4464,18 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
               child: CustomScrollView(
               slivers: [
                 SliverAppBar(
-                  // Dezelfde kleur als de bovenkant van de was, anders snijdt deze balk hem af met een
-                  // harde rand. Niet transparant: hij is vastgezet, en dan zou de tracklijst er
-                  // leesbaar-en-al onderdoor schuiven.
-                  backgroundColor: wasTop,
+                  // Matglas in plaats van een dichte kleur.
+                  //
+                  // Hier stond de bovenkant van de was als vulling, zodat deze balk hem niet met een
+                  // harde rand afsneed. Dat werkte, maar het maakte hem ook ondoorzichtig — en nu de
+                  // was over de volle hoogte achter alles ligt, hoeft dat niet meer.
+                  //
+                  // De oude reden om NIET transparant te zijn staat overeind: hij is vastgezet, en
+                  // een doorzichtige balk laat de tracklijst er leesbaar-en-al onderdoor schuiven.
+                  // Vandaar geen doorzichtigheid maar glas: de vervaging maakt wat eronder doorgaat
+                  // onleesbaar, terwijl de kleur er wél doorheen komt.
+                  backgroundColor: Colors.transparent,
+                  flexibleSpace: _glazenBalk(wasTop),
                   pinned: true,
                   leading: IconButton(
                     icon: const Icon(Icons.arrow_back_rounded),
