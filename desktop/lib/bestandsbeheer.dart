@@ -9,13 +9,28 @@
 /// dat start een tweede muziekspeler naast deze. `/select,` opent de map mét het bestand
 /// geselecteerd, en dat is wat er gevraagd wordt.
 ///
-/// **De opdracht is een pure functie**, en dat is met opzet: de drie besturingssystemen doen dit
-/// alle drie anders, en elk van die drie is een detail dat je één keer opzoekt en daarna nooit meer
-/// nakijkt. `test/bestandsbeheer_test.dart` legt ze vast, zodat een verschuiving hier opvalt zonder
-/// dat er drie machines aan te pas komen.
+/// **En daar zit op Windows precies de val.** De eerste versie hiervan deed
+/// `Process.run('explorer.exe', ['/select,$pad'])`, wat er in Dart onberispelijk uitziet en op een
+/// echte machine de verkeerde map opent. De reden staat een laag dieper: Windows kent geen lijst van
+/// argumenten, alleen één opdrachtregel, en Dart bouwt die zelf op — een argument met een spatie
+/// erin wordt in aanhalingstekens gezet. Voor `D:\Flac music 2024\...` levert dat
+/// `explorer.exe "/select,D:\Flac music 2024\..."`, met de vlag binnen de aanhalingstekens. En
+/// explorer leest zijn opdrachtregel niet op de gewone manier: hij herkent `/select,` alleen als het
+/// er káál staat. Wat hij hier ziet is één pad dat niet bestaat, en dan opent hij zijn standaardmap.
+///
+/// Vandaar het batchbestandje. Dat wordt door `cmd` als tekst gelezen, dus de regel komt precies zo
+/// bij explorer aan als wanneer je hem zelf zou typen: vlag buiten de aanhalingstekens, pad erbinnen.
+/// Dezelfde vorm die de bijwerker op de Mac al gebruikt om een pakket te ruilen.
+///
+/// **De opdrachten zijn pure functies**, en dat is met opzet: dit zijn details die je één keer
+/// opzoekt en daarna nooit meer nakijkt, en ze zijn geen van alle na te kijken zonder de machine in
+/// kwestie. `test/bestandsbeheer_test.dart` legt ze vast — inclusief de fout hierboven, zodat
+/// niemand er per ongeluk naar terugkeert.
 library;
 
 import 'dart:io';
+
+import 'paths.dart';
 
 /// Kan er op dit toestel überhaupt een bestandsbeheerder geopend worden?
 ///
@@ -30,25 +45,34 @@ String get bestandsbeheerNaam => Platform.isWindows
         ? 'Finder'
         : 'de bestandsbeheerder';
 
-/// De opdracht die [pad] aanwijst, of null op een toestel zonder bestandsbeheerder.
+/// De regel die in het batchbestand komt te staan.
+///
+/// Precies wat je in een opdrachtvenster zou typen. Twee dingen zijn hier niet vrijblijvend:
+///
+///  * `/select,` staat BUITEN de aanhalingstekens en het pad erbinnen. Andersom herkent explorer de
+///    vlag niet en opent hij zijn standaardmap — zie de kop van dit bestand.
+///  * Een `%` in een bestandsnaam wordt verdubbeld. `cmd` leest een batchbestand als tekst en zou
+///    `%iets%` als een omgevingsvariabele uitvouwen; wat er niet is verdwijnt dan spoorloos uit het
+///    pad. Zeldzaam in muziekbestanden, maar het is één teken en het scheelt een raadsel.
+///
+/// De andere tekens die `cmd` bijzonder vindt — `&`, `|`, `^`, `<`, `>` — zijn dat niet binnen
+/// aanhalingstekens, dus die hoeven niets.
+String windowsBatchRegel(String pad) =>
+    'explorer.exe /select,"${pad.replaceAll('%', '%%')}"';
+
+/// De opdracht die [pad] aanwijst op een Mac of onder Linux, of null waar dat niet kan.
+///
+/// Windows staat hier NIET bij, en dat is de kern van de reparatie: daar kan het niet met een lijst
+/// argumenten. Zie [windowsBatchRegel].
 List<String>? onthulOpdracht(String pad) => onthulOpdrachtVoor(pad, os: Platform.operatingSystem);
 
 /// Dezelfde opdracht, met het besturingssysteem als antwoord in plaats van als omgeving.
 ///
-/// **Waarom [os] een parameter is.** Deze drie regels zijn precies het soort ding dat je één keer
-/// opzoekt en daarna nooit meer nakijkt — en ze zijn geen van drieën vanzelfsprekend. Met `Platform`
-/// er rechtstreeks in kan een toets alleen iets zeggen over de machine waar hij toevallig op draait,
-/// en dat is hier de Linux-bouwmachine: precies het enige van de drie dat niemand gebruikt. Zo
-/// liggen alle drie vast, waar dan ook.
+/// **Waarom [os] een parameter is.** Met `Platform` er rechtstreeks in kan een toets alleen iets
+/// zeggen over de machine waar hij toevallig op draait, en dat is hier de Linux-bouwmachine:
+/// precies het enige van de drie dat niemand gebruikt.
 List<String>? onthulOpdrachtVoor(String pad, {required String os}) {
   switch (os) {
-    case 'windows':
-      // Géén aanhalingstekens om het pad heen. `Process.run` geeft de argumenten door zonder shell,
-      // dus aanhalingstekens zouden onderdeel van de bestandsnaam worden. En `/select,` hoort aan
-      // het pad vást te zitten: explorer leest het als één argument, en met een spatie ertussen
-      // negeert hij de vlag en OPENT hij het bestand — dat wil zeggen: hij start er een tweede
-      // muziekspeler mee naast deze.
-      return ['explorer.exe', '/select,$pad'];
     case 'macos':
       return ['open', '-R', pad];
     case 'linux':
@@ -65,16 +89,12 @@ List<String>? onthulOpdrachtVoor(String pad, {required String os}) {
         'string:',
       ];
     default:
+      // Windows incluis: die loopt over [windowsBatchRegel] en niet over een argumentenlijst.
       return null;
   }
 }
 
 /// Wijs [pad] aan in de bestandsbeheerder. Geeft null terug als het lukte, anders de uitleg.
-///
-/// **Waarom de afloopcode van Windows genegeerd wordt.** `explorer.exe /select,` geeft vrijwel
-/// altijd 1 terug, óók als het venster gewoon opent — een bekende eigenaardigheid die al twintig
-/// jaar bestaat. Daarop afgaan zou betekenen dat de app elke keer "het lukte niet" meldt terwijl de
-/// Verkenner voor je neus staat. Er wordt dus alleen gekeken of het programma te starten viel.
 Future<String?> toonInBestandsbeheer(String pad) async {
   if (!kanBestandTonen) return 'Dit kan alleen op een pc.';
   final f = File(pad);
@@ -83,6 +103,7 @@ Future<String?> toonInBestandsbeheer(String pad) async {
     // maar het klopt op een andere machine. Dat hoort er te staan in plaats van een lege mislukking.
     return 'Dat bestand staat hier niet: $pad';
   }
+  if (Platform.isWindows) return _windowsOnthul(f);
   final opdracht = onthulOpdracht(pad);
   if (opdracht == null) return 'Dit kan alleen op een pc.';
   try {
@@ -96,6 +117,30 @@ Future<String?> toonInBestandsbeheer(String pad) async {
     }
     return null;
   } catch (e) {
-    return 'Kon ${bestandsbeheerNaam} niet starten: $e';
+    return 'Kon $bestandsbeheerNaam niet starten: $e';
+  }
+}
+
+/// Windows, via een batchbestandje. Zie de kop van dit bestand voor waarom dat geen omweg is.
+///
+/// Eén vaste naam die elke keer overschreven wordt, dus er groeit niets aan. En losgekoppeld
+/// gestart: de afloopcode van explorer zegt al twintig jaar niets — hij geeft vrijwel altijd 1 terug
+/// terwijl het venster gewoon opent — dus erop wachten levert alleen een verkeerde melding op.
+Future<String?> _windowsOnthul(File f) async {
+  try {
+    final bat = File('$appDir${Platform.pathSeparator}toon-in-verkenner.bat');
+    await bat.writeAsString('@echo off\r\n${windowsBatchRegel(f.path)}\r\n');
+    await Process.start('cmd.exe', ['/c', bat.path], mode: ProcessStartMode.detached);
+    return null;
+  } catch (_) {
+    // Terugval: dan maar de MAP, zonder het bestand aan te wijzen. Dat is minder dan gevraagd, maar
+    // het is wel de goede map — en één kaal pad als enig argument gaat langs de gewone weg wél goed,
+    // want dan staat er geen vlag bij die buiten de aanhalingstekens moet blijven.
+    try {
+      await Process.start('explorer.exe', [f.parent.path], mode: ProcessStartMode.detached);
+      return null;
+    } catch (e) {
+      return 'Kon de Verkenner niet starten: $e';
+    }
   }
 }
