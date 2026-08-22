@@ -1277,11 +1277,18 @@ class _MeeschuivendGlas extends StatelessWidget {
   static const double aanloop = 56;
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-        animation: rol,
-        builder: (_, __) => balkGlas(
-            tint, !rol.hasClients ? 0 : (rol.offset / aanloop).clamp(0.0, 1.0)),
-      );
+  Widget build(BuildContext context) {
+    // Steviger glas op een telefoon. Daar staat de tekst van rand tot rand en is deze balk het enige
+    // tussen zes witte pictogrammen en een lopende alinea; op het toestel las de bovenste regel van
+    // de albumbeschrijving dwars door de knoppen heen. Zie [balkGlas].
+    final dicht = isCompact(context);
+    return AnimatedBuilder(
+      animation: rol,
+      builder: (_, __) => balkGlas(
+          tint, !rol.hasClients ? 0 : (rol.offset / aanloop).clamp(0.0, 1.0),
+          dicht: dicht),
+    );
+  }
 }
 
 /// Een ruit matglas: hij vervaagt écht wat erachter langs schuift.

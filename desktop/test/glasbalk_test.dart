@@ -25,8 +25,8 @@ void main() {
 
   tearDown(() => setTvModeForTest(false));
 
-  Future<void> zet(WidgetTester t, double op) => t.pumpWidget(
-        MaterialApp(home: SizedBox(height: 56, child: balkGlas(tint, op))),
+  Future<void> zet(WidgetTester t, double op, {bool dicht = false}) => t.pumpWidget(
+        MaterialApp(home: SizedBox(height: 56, child: balkGlas(tint, op, dicht: dicht))),
       );
 
   /// Het verloop dat de balk werkelijk schildert, of null als hij niets schildert.
@@ -99,5 +99,43 @@ void main() {
     setTvModeForTest(true);
     await zet(t, 0);
     expect(verloop(t), isNull);
+  });
+
+  group('op een telefoon staat het glas steviger', () {
+    // **Waarom daar een ander getal hoort.** Op een pc is deze balk 64 punten hoog boven een breed
+    // venster; er schuift per keer weinig onderdoor. Op een telefoon staat de tekst van rand tot
+    // rand en is de balk het enige tussen zes witte pictogrammen en een lopende alinea. Gemeld en
+    // op het toestel gezien: bij dezelfde dekking las de bovenste regel van de albumbeschrijving
+    // gewoon dwars door de knoppen heen.
+
+    testWidgets('meer dekking dan op een breed scherm', (t) async {
+      await zet(t, 1);
+      final breed = verloop(t)!.colors.first.a;
+      await zet(t, 1, dicht: true);
+      final smal = verloop(t)!.colors.first.a;
+      expect(smal, greaterThan(breed));
+      expect(smal, greaterThan(.8), reason: 'genoeg om een alinea eronder te dempen');
+    });
+
+    testWidgets('en meer vervaging, want dát is wat letters onleesbaar maakt', (t) async {
+      // Alleen dekking erbij zou de knoppen op een BALK zetten, en dat is precies wat er niet mag
+      // zijn. Het is de vervaging die het glas maakt.
+      await zet(t, 1, dicht: true);
+      expect(t.widget<BackdropFilter>(find.byType(BackdropFilter)).filter,
+          ImageFilter.blur(sigmaX: 34, sigmaY: 34));
+    });
+
+    testWidgets('bij stilstand nog steeds helemaal niets', (t) async {
+      // De hele afspraak van deze balk. Steviger glas mag nooit betekenen dat er bovenaan de lijst
+      // opeens wél een baan over het scherm staat.
+      await zet(t, 0, dicht: true);
+      expect(verloop(t), isNull);
+      expect(find.byType(BackdropFilter), findsNothing);
+    });
+
+    testWidgets('en de onderrand lost ook daar op', (t) async {
+      await zet(t, 1, dicht: true);
+      expect(verloop(t)!.colors.last.a, 0);
+    });
   });
 }
