@@ -3783,6 +3783,25 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
   String get _albumKey => '${artistKey(album.artist)}|${normKey(album.title)}';
 
+  /// De volledige vraag waar `_official` het antwoord op is.
+  ///
+  /// **Waarom dit niet gewoon [_albumKey] is.** De tracklijst wordt gelezen uit de VASTGEZETTE
+  /// persing, maar [_albumKey] kent alleen artiest en titel. Zet je een andere persing vast zonder
+  /// de naam te wijzigen — precies wat je doet als de naam al klopt — dan bleef de sleutel gelijk,
+  /// sloeg `_refresh` het herladen over, en bleef `_official` de OUDE persing.
+  ///
+  /// Zichtbaar werd dat pas bij "Tags gelijktrekken": die knop schrijft `_official` naar je
+  /// bestanden. Je koos een persing, zag hem vastgezet, en kreeg de titels en nummers van de
+  /// persing die je net vervangen had in je FLAC's. Dat is de klacht "verkeerde tags", en het is de
+  /// enige weg in de app die een volledige tagset naar schijf schrijft.
+  ///
+  /// De pin hoort dus in de sleutel. Dan is "is dit nog het antwoord op mijn vraag?" een vraag die
+  /// ook echt over de persing gaat.
+  String get _officialVraag {
+    final lib = context.read<LibraryStore>();
+    return '$_albumKey|${lib.pinnedRelease(album) ?? 0}|${lib.pinnedMbid(album) ?? ''}';
+  }
+
   /// Ask the PC what this record is.
   ///
   /// Null when the PC cannot say — it is not paired, it went to sleep, or it has no answer. The
@@ -3827,7 +3846,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     _officialBonus = f.bonus;
     _officialBestFit = f.bestFit;
     _officialMbid = f.mbid;
-    _officialFor = _albumKey;
+    _officialFor = _officialVraag;
   }
 
   /// The official tracklist: which pressing of this record you actually own.
@@ -3845,7 +3864,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   Future<void> _loadOfficial({bool force = false}) async {
     if (!mounted || album.isSingle) return;
     final a = album;
-    final want = _albumKey;
+    final want = _officialVraag;
     final lib = context.read<LibraryStore>();
     final mb = context.read<MusicBrainzService>();
     final settings = context.read<AppSettings>();
@@ -4238,7 +4257,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         setState(() => album = a);
         // A merge, a correction or a newly picked pressing can all mean a different record — and
         // the pinned edition is exactly what the tracklist is read from.
-        if (_albumKey != _officialFor || _official.isEmpty) _loadOfficial();
+        if (_officialVraag != _officialFor || _official.isEmpty) _loadOfficial();
         return;
       }
     }

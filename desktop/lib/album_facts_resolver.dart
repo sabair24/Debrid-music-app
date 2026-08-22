@@ -164,9 +164,22 @@ Future<AlbumFacts> resolveAlbumFacts(
 
   stap('MusicBrainz klaar — ${out.length} nummers');
 
-  if (out.isEmpty) {
+  /// Heeft de gebruiker een DISCOGS-persing vastgezet, en is dat de vraag die telt?
+  ///
+  /// **Dit stond op `out.isEmpty` alleen, en dat was een lus die zichzelf voedde.** Kende
+  /// MusicBrainz de plaat, dan was `out` gevuld en werd Discogs nooit gevraagd — dus de vastgezette
+  /// persing werd genegeerd én `release` bleef leeg. En `needsResolve` kijkt juist daarnaar:
+  /// `known.discogsRelease != pinned` was dan altijd waar. Gevolg: dat album stond in ELKE ronde van
+  /// de warmer opnieuw op de lijst, en die schreef er telkens de zelfgekozen MusicBrainz-persing
+  /// overheen. Precies de klacht "ik duid iets aan en het komt terug" — en het kostte bovendien
+  /// eeuwig verzoeken op een budget dat op kan.
+  ///
+  /// Een pin is een opdracht, geen suggestie. Staat er een MBID vastgezet, dan gaat die vóór: dan is
+  /// MusicBrainz de gevraagde bron en heeft een oud Discogs-nummer niets te zeggen.
+  final discogsGevraagd = pinned != null && pinned > 0 && (pinnedMbid == null || pinnedMbid.isEmpty);
+  if (out.isEmpty || discogsGevraagd) {
     try {
-      stap('naar Discogs…');
+      stap(discogsGevraagd ? 'naar Discogs (vastgezette persing $pinned)…' : 'naar Discogs…');
       // Here expectedTracks IS safe to pass: Discogs only uses it to drop masters too SMALL to hold
       // the library, never ones bigger.
       final e = await (discogs ?? DiscogsService(settings)).edition(album.artist, album.title,
@@ -181,6 +194,17 @@ Future<AlbumFacts> resolveAlbumFacts(
     } catch (_) {
       threw = true;
     }
+  }
+
+  /// Is de vastgezette persing werkelijk gehaald?
+  ///
+  /// `edition` mag terugvallen op een andere persing als de vastgezette niet op te halen is, dus
+  /// "Discogs antwoordde" is niet hetzelfde als "je keuze is gehonoreerd". Alleen het echte nummer
+  /// telt. Zonder dit onderscheid zou een terugval als succes worden opgeslagen en zou de app
+  /// beweren dat je keuze staat terwijl er iets anders ligt.
+  final pinGehaald = discogsGevraagd && release == pinned;
+  if (discogsGevraagd && !pinGehaald) {
+    stap('vastgezette persing $pinned NIET gehaald — een dag rust voordat het opnieuw geprobeerd wordt');
   }
 
   // Last, and only when asking by name has failed both times: ask the AUDIO.
@@ -224,7 +248,11 @@ Future<AlbumFacts> resolveAlbumFacts(
     // Recorded even when the audio found nothing, because "we asked" is what stops it being asked
     // every single sweep for the rest of the day.
     heardVersion: heard,
-    failedMs: out.isEmpty ? now : null,
+    // Een leeg antwoord is een mislukking — en sinds de pin een opdracht is, een pin die niet
+    // gehaald werd ook. Zonder dat tweede geval blijft [needsResolve] waar en draait de warmer er
+    // eeuwig op door. Mét dat stempel is het één poging per dag, wat de rest van dit bestand ook al
+    // aanhoudt.
+    failedMs: out.isEmpty || (discogsGevraagd && !pinGehaald) ? now : null,
     networkFailed: out.isEmpty &&
         (threw ||
             MusicBrainzService.transportErrors + DiscogsService.transportErrors > errorsBefore),
