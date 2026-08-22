@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'json_body.dart';
 import 'discogs.dart';
 import 'models.dart';
+import 'musicbrainz.dart';
 import 'settings.dart';
 import 'paths.dart';
 
@@ -647,23 +648,43 @@ class CoverEnricher {
     }
   }
 
+  /// De hoes uit het Cover Art Archive, via de dienst en niet eromheen.
+  ///
+  /// **Twee fouten zaten hier in één functie, en ze versterkten elkaar.**
+  ///
+  /// De eerste: dit was de enige plek in de app die `musicbrainz.org/ws/2` met een kale `http.get`
+  /// aanriep, buiten [MusicBrainzService] om. Die dienst houdt een wachtrij van 1,1 seconde bij
+  /// omdat MusicBrainz één verzoek per seconde vraagt en daarboven 503 antwoordt — en die wachtrij
+  /// is `static` juist omdat het budget van de SERVER is, niet van een object. Deze aanroep stond
+  /// buiten die rij, en verrijken doet zes albums tegelijk. Zes verzoeken per tel op een dienst die
+  /// er één wil: de eerste kwam door, de rest kreeg 503.
+  ///
+  /// De tweede: `catch (_) {}` eronder. Een 503 werd dus niet eens een 503 — hij werd niets. Geen
+  /// hoes, geen melding, geen spoor. Dat is precies de klacht "soms zie ik de juiste afbeelding
+  /// niet": hij is er wel, er is alleen te snel om gevraagd.
+  ///
+  /// En passant vervalt `front-500`. [MbImage.full] is de 1200 van het archief, met het origineel
+  /// als terugval — de maat die de keuzelijst al jaren gebruikt en waarvan de reden bij [MbImage]
+  /// nagemeten staat. 500 was zichtbaar zacht zodra een hoes een scherm vult.
   Future<Uint8List?> _musicbrainzCover(String artist, String album) async {
     try {
-      var q = 'release:"$album"';
-      if (artist.isNotEmpty) q += ' AND artist:"$artist"';
-      final r = await http.get(
-        Uri.parse('https://musicbrainz.org/ws/2/release/?query=${Uri.encodeComponent(q)}&fmt=json&limit=3'),
-        headers: {'User-Agent': _ua},
-      ).timeout(const Duration(seconds: 8));
-      if (r.statusCode != 200) return null;
-      final releases = (jsonBody(r)['releases'] as List?) ?? const [];
-      for (final rel in releases.take(3)) {
-        final id = rel['id'] as String?;
-        if (id == null) continue;
-        final b = await _download('https://coverartarchive.org/release/$id/front-500');
-        if (b != null) return b;
+      final mb = MusicBrainzService();
+      // Drie persingen, want de eerste heeft lang niet altijd scans. Meer is zonde: elk kost een
+      // beurt op de wachtrij van één per seconde.
+      final hits = await mb.searchReleases(artist, album, max: 3);
+      for (final r in hits.take(3)) {
+        if (r.mbid.isEmpty) continue;
+        // Het archief zegt zelf wat elke scan is. Alleen de VOORKANT mag hier landen: zonder die
+        // controle werd de eerste de beste scan de hoes, en dat is net zo goed het boekje of de
+        // achterkant.
+        final images = await mb.art(r.mbid);
+        for (final i in images) {
+          if (!i.isFront) continue;
+          final b = await _download(i.full);
+          if (b != null) return b;
+        }
       }
-    } catch (_) {}
+    } catch (_) {/* een hoes is een verrijking; hij mag ontbreken, niets mag erop stuklopen */}
     return null;
   }
 

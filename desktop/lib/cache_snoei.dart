@@ -23,18 +23,54 @@ import 'package:flutter/foundation.dart';
 ///
 /// Draait op de achtergrond na het opstarten, nooit ervoor: dit mag nooit tussen jou en je muziek
 /// staan.
-Future<int> snoeiMap(Directory map, {required int maxBytes}) async {
+///
+/// [perMap] gooit hele ONDERMAPPEN weg in plaats van losse bestanden, en dat is geen detail maar de
+/// reparatie van een bug die de cd van albums liet verdwijnen.
+///
+/// **Wat er misging.** `releaseart` bewaart per album een mapje met `front`, `back`, `disc` en een
+/// merkteken `done`. Dat merkteken is 1 byte en wordt als LAATSTE geschreven, dus het heeft altijd
+/// de nieuwste tijd. Deze snoei sorteerde nieuwste eerst en gooide per bestand weg — dus `done`
+/// overleefde gegarandeerd, terwijl `disc.jpg` van een paar honderd kB als eerste sneuvelde.
+///
+/// Wat er dan overblijft is een map die zegt "hier is alles al opgehaald", zonder cd erin. En
+/// `releaseArt` kijkt naar precies dat merkteken en slaat de hele zoektocht over. Eén snoeibeurt en
+/// de cd was **voorgoed** weg — er is geen vervaltijd en niets dat die map ooit ongeldig verklaart.
+///
+/// Een mapje is dus één ondeelbaar ding: helemaal houden of helemaal weg. Weg kost één keer opnieuw
+/// ophalen, precies zoals de bedoeling was.
+Future<int> snoeiMap(Directory map, {required int maxBytes, bool perMap = false}) async {
   try {
     if (!map.existsSync()) return 0;
-    final bestanden = <({File f, int grootte, DateTime tijd})>[];
+    final bestanden = <({FileSystemEntity f, int grootte, DateTime tijd})>[];
     var totaal = 0;
-    await for (final e in map.list(recursive: true, followLinks: false)) {
-      if (e is! File) continue;
-      try {
-        final st = e.statSync();
-        bestanden.add((f: e, grootte: st.size, tijd: st.modified));
-        totaal += st.size;
-      } catch (_) {/* net weggehaald door iemand anders */}
+    if (perMap) {
+      await for (final sub in map.list(followLinks: false)) {
+        if (sub is! Directory) continue;
+        var grootte = 0;
+        DateTime? nieuwste;
+        try {
+          await for (final e in sub.list(recursive: true, followLinks: false)) {
+            if (e is! File) continue;
+            final st = e.statSync();
+            grootte += st.size;
+            // De NIEUWSTE tijd in het mapje telt. Het mapje is één ding, en het is zo vers als het
+            // laatst geschreven bestand erin.
+            if (nieuwste == null || st.modified.isAfter(nieuwste)) nieuwste = st.modified;
+          }
+        } catch (_) {/* net weggehaald door iemand anders */}
+        if (nieuwste == null) continue;
+        bestanden.add((f: sub, grootte: grootte, tijd: nieuwste));
+        totaal += grootte;
+      }
+    } else {
+      await for (final e in map.list(recursive: true, followLinks: false)) {
+        if (e is! File) continue;
+        try {
+          final st = e.statSync();
+          bestanden.add((f: e, grootte: st.size, tijd: st.modified));
+          totaal += st.size;
+        } catch (_) {/* net weggehaald door iemand anders */}
+      }
     }
     if (totaal <= maxBytes) return 0;
 
@@ -47,7 +83,12 @@ Future<int> snoeiMap(Directory map, {required int maxBytes}) async {
         continue;
       }
       try {
-        b.f.deleteSync();
+        final f = b.f;
+        if (f is Directory) {
+          f.deleteSync(recursive: true);
+        } else {
+          f.deleteSync();
+        }
         bevrijd += b.grootte;
       } catch (_) {/* in gebruik; volgende keer weer */}
     }
@@ -84,3 +125,13 @@ const cacheGrenzen = <String, int>{
   // Scans van boekjes bij een album. Groeit met wat je opent, niet met wat je hebt.
   'booklets': 100 * 1024 * 1024,
 };
+
+/// Welke van die mappen per ONDERMAP gesnoeid moeten worden in plaats van per bestand.
+///
+/// `releaseart/<sleutel>/{front,back,disc,done}` en `booklets/<sleutel>/<bladzijden>` zijn allebei
+/// sets die alleen als geheel iets betekenen. Losse bestanden eruit trekken laat een map achter die
+/// beweert compleet te zijn maar het niet is — en bij `releaseart` betekende dat een album dat
+/// voorgoed zonder cd zat. Zie [snoeiMap].
+///
+/// `cast_cache` staat er bewust niet in: dat zijn losse omgezette bestanden zonder onderling verband.
+const cachePerMap = <String>{'releaseart', 'booklets'};

@@ -913,7 +913,7 @@ Future<void> main() async {
     unawaited(() async {
       for (final e in cacheGrenzen.entries) {
         await snoeiMap(Directory('${library.configDir}${Platform.pathSeparator}${e.key}'),
-            maxBytes: e.value);
+            maxBytes: e.value, perMap: cachePerMap.contains(e.key));
       }
     }());
     await fase('enrich', () => library.enrich(settings));
@@ -4992,8 +4992,11 @@ class _MetadataEditorState extends State<MetadataEditor> {
       if (m.artist.isNotEmpty) _artist.text = m.artist;
       if (newTitle.isNotEmpty) _title.text = newTitle;
     });
-    if (m.coverUrl != null) {
-      final bytes = await CoverEnricher(context.read<AppSettings>()).downloadImage(m.coverUrl!);
+    // `bewaarCover` en niet `coverUrl`: de eerste is de scan op volle maat, de tweede vult alleen
+    // de rij van 44 punten. Dit plaatje wordt bij [_applyInner] de hoes van het album.
+    final teBewaren = m.bewaarCover;
+    if (teBewaren != null) {
+      final bytes = await CoverEnricher(context.read<AppSettings>()).downloadImage(teBewaren);
       if (mounted && identical(_picked, m)) setState(() => _pickedCover = bytes);
     }
   }
@@ -15602,16 +15605,49 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   final Map<String, ChoiceImage> _staged = {};
   bool _saving = false;
 
-  void _stage(String role, ChoiceImage img) {
+  /// Bij welke uitgave elke klaargezette scan hoort.
+  ///
+  /// Nodig omdat een rij die nog niet is uitgevraagd alleen een miniatuur heeft; [_save] haalt daar
+  /// de volle scan bij op, en dat kan alleen met de rij in de hand.
+  final Map<String, ReleaseChoice> _stagedRij = {};
+
+  void _stage(String role, ChoiceImage img, ReleaseChoice rij) {
     setState(() {
       // Tapping the same one again takes it back, which is the only way to undo without cancelling
       // the whole dialog.
       if (_staged[role]?.uri == img.uri) {
         _staged.remove(role);
+        _stagedRij.remove(role);
       } else {
         _staged[role] = img;
+        _stagedRij[role] = rij;
       }
     });
+  }
+
+  /// De volle scan achter een klaargezette keuze, of hem ongewijzigd als hij al vol is.
+  ///
+  /// **Waarom dit bestaat.** De zoeklijst van Discogs geeft per rij een miniatuur van 150×150 en
+  /// verder niets; de volle scan komt pas met de detail-lookup, die lui gebeurt zodra een rij in
+  /// beeld staat. Tik je sneller dan die lookup, dan legde de app dat miniatuur vast als je hoes —
+  /// permanent, want `correctedCover` wint van elke andere bron en wordt bij elke start teruggeladen.
+  ///
+  /// Mislukt de lookup, dan gaat de keuze van de gebruiker vóór de resolutie: liever zijn hoes klein
+  /// dan zijn hoes niet. Maar dan is het wél geprobeerd.
+  Future<ChoiceImage> _volleScan(String rol, ChoiceImage img, AppSettings settings) async {
+    if (!img.alleenMiniatuur) return img;
+    final rij = _stagedRij[rol];
+    if (rij == null || rij.releaseId <= 0) return img;
+    try {
+      final vol = await DiscogsService(settings).detailOf(rij);
+      final beter = switch (rol) {
+        'back' => vol?.back,
+        'disc' => vol?.disc,
+        _ => vol?.front,
+      };
+      if (beter != null && !beter.alleenMiniatuur && beter.uri.isNotEmpty) return beter;
+    } catch (_) {/* de keuze van de gebruiker gaat voor; klein is beter dan weg */}
+    return img;
   }
 
   /// Write the picked scans and have every screen show them in the same frame.
@@ -15630,10 +15666,16 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     final settings = context.read<AppSettings>();
     final mbSvc = context.read<MusicBrainzService>();
     try {
+      // Eerst opwaarderen, dan pas vastleggen: een miniatuur van 150 pixels mag nooit de hoes van
+      // dit album worden. Zie [_volleScan].
+      final teBewaren = <String, ChoiceImage>{};
       for (final e in _staged.entries) {
+        teBewaren[e.key] = await _volleScan(e.key, e.value, settings);
+      }
+      for (final e in teBewaren.entries) {
         await lib.setAlbumArtRole(widget.album.artist, widget.album.title, e.key, e.value.uri);
       }
-      final front = _staged['front'];
+      final front = teBewaren['front'];
       if (front != null) {
         // Each catalogue serves its own images, and Discogs wants its token on the request.
         final bytes = front.uri.contains('coverartarchive.org')
@@ -16512,7 +16554,10 @@ class UitgaveRij extends StatelessWidget {
   final Map<String, ChoiceImage> klaargezet;
 
   final VoidCallback onKiezen, onScans, onNummering;
-  final void Function(String rol, ChoiceImage scan) onKlaarzetten;
+  /// De RIJ hoort erbij, niet alleen de scan. Een rij die nog niet `detailed` is levert alleen een
+  /// miniatuur van 150 pixels, en het opslaan moet dan eerst de volle scan kunnen ophalen — daar is
+  /// de rij voor nodig. Zie [ChoiceImage.alleenMiniatuur].
+  final void Function(String rol, ChoiceImage scan, ReleaseChoice rij) onKlaarzetten;
 
   @override
   Widget build(BuildContext context) => InkWell(
@@ -16692,7 +16737,7 @@ class UitgaveRij extends StatelessWidget {
     // Nothing here yet, and nobody has looked — as opposed to looked and found none.
     final waiting = img == null && !row.detailed;
     return InkWell(
-      onTap: img == null ? null : () => onKlaarzetten(role, img),
+      onTap: img == null ? null : () => onKlaarzetten(role, img, row),
       onLongPress: onLongPress,
       borderRadius: BorderRadius.circular(6),
       child: Tooltip(
