@@ -223,11 +223,24 @@ Color balkKleur(int? kleur) {
 /// duurste wat er op het scherm staat. Daar dus een dichtere vulling in plaats van glas.
 ///
 /// [op] loopt van 0 (niets) tot 1 (volledig glas).
-Widget balkGlas(Color tint, double op) {
+///
+/// [dicht] maakt het glas sterker, en dat is voor de telefoon. **Waarom die daar anders moet zijn.**
+/// Op een pc is deze balk 64 punten hoog boven een venster dat een paar honderd punten breed
+/// materiaal toont; er schuift per keer weinig onderdoor en 62% dekking is ruim. Op een telefoon is
+/// het scherm smal, staat de tekst er van rand tot rand, en is de balk het enige wat tussen zes
+/// witte pictogrammen en een lopende alinea staat. Gemeten op het toestel: bij dezelfde 62% las de
+/// bovenste regel van de albumbeschrijving gewoon dwars door de knoppen heen. Zelfde recept dus,
+/// maar steviger aangezet — nog steeds niets bij stilstand, en dat is wat een balk van een baan
+/// onderscheidt.
+Widget balkGlas(Color tint, double op, {bool dicht = false}) {
   // Helemaal niets, en niet "een doorzichtig vlak": een BackdropFilter met sigma 0 is nog steeds een
   // laag die de achtergrond leest, en dat is op een Shield het duurste wat er op het scherm staat.
   if (op <= .01) return const SizedBox.shrink();
-  final vol = isTv ? .96 : .62;
+  final vol = isTv
+      ? .96
+      : dicht
+          ? .88
+          : .62;
   final vulling = DecoratedBox(
     decoration: BoxDecoration(
       gradient: LinearGradient(
@@ -245,9 +258,13 @@ Widget balkGlas(Color tint, double op) {
     ),
   );
   if (isTv) return vulling;
+  // Meer vervaging waar de balk krapper is. Twaalf punten meer kost niets extra — het is dezelfde
+  // ene laag — en het is precies wat kleine letters van "vager" naar "onleesbaar" brengt. Alleen
+  // dekking erbij zou de knoppen op een BALK zetten; het is de vervaging die het glas maakt.
+  final wazig = (dicht ? 34 : 24) * op;
   return ClipRect(
     child: BackdropFilter(
-      filter: ImageFilter.blur(sigmaX: 24 * op, sigmaY: 24 * op),
+      filter: ImageFilter.blur(sigmaX: wazig, sigmaY: wazig),
       child: vulling,
     ),
   );
