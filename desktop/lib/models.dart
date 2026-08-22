@@ -134,11 +134,22 @@ class Album {
   }
 
   /// Most recent file time among the tracks — "recently added".
-  int get addedMs {
+  /// Eén keer uitgerekend, want dit werd per beeld honderden keren doorlopen.
+  ///
+  /// **Wat het kostte.** Dit was een gewone getter die alle nummers van het album afliep. Hij wordt
+  /// gebruikt om op "onlangs toegevoegd" te SORTEREN, op Start en op Albums, en die sortering staat
+  /// in `build()`. Een sortering vraagt de sleutel twee keer per vergelijking, dus bij tweehonderd
+  /// albums van veertien nummers was dat tienduizenden lussen — per frame, en juist tijdens het
+  /// verrijken wanneer er per vierentwintig hoezen opnieuw getekend wordt.
+  ///
+  /// `late final` mag hier omdat [tracks] vastligt zodra het album bestaat: nergens in de app wordt
+  /// er achteraf een nummer aan toegevoegd of uit verwijderd. Een scan, een correctie of een
+  /// samenvoeging bouwt NIEUWE albumobjecten, en die rekenen dus vanzelf opnieuw.
+  late final int addedMs = () {
     var m = 0;
     for (final t in tracks) {
       if (t.addedMs > m) m = t.addedMs;
     }
     return m;
-  }
+  }();
 }

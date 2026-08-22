@@ -2170,6 +2170,17 @@ class LibraryStore extends ChangeNotifier {
       _remoteCoverSweep ??=
           _loadRemoteCovers(settings).whenComplete(() => _remoteCoverSweep = null);
 
+  /// De hoezen ophalen op een toestel dat de muziek niet bezit.
+  ///
+  /// **Zes tegelijk in plaats van één voor één.** Dit liep strikt serieel: per album twee tot vier
+  /// wachtmomenten — het merkteken lezen, de cache lezen, en bij een misser één HTTP-verzoek naar de
+  /// pc — en pas als dat album klaar was begon het volgende. Bij een paar honderd albums op wifi is
+  /// dat minutenwerk waarin je naar grijze vakjes kijkt, en de lijn staat al die tijd bijna stil:
+  /// het wachten is latentie, geen bandbreedte.
+  ///
+  /// Zes en niet meer. Het gaat om je eigen pc op je eigen netwerk, en die serveert dit uit het
+  /// geheugen; tientallen verzoeken tegelijk maken het niet sneller en zetten de pc wel onder druk
+  /// terwijl daar ook nog muziek vandaan moet komen.
   Future<void> _loadRemoteCovers(AppSettings settings) async {
     final client = _remote;
     if (client == null) return;
@@ -2177,44 +2188,52 @@ class LibraryStore extends ChangeNotifier {
     enriching = true;
     notifyListeners();
     var since = 0;
-    for (final album in albums) {
-      if (album.cover != null) continue;
-      // Het merkteken van de hoes die de eigenaar op de pc GEKOZEN heeft. Wijkt dat af van wat hier
-      // in de cache ligt, dan is die cache achterhaald en moet hij wijken.
-      //
-      // **Dit was het gat.** De cache heet naar `artiest|titel`, en die naam beweegt niet als je een
-      // andere afbeelding kiest. Het bestand lag er dus nog, met de goede naam en de foute inhoud,
-      // en werd bij élke start opnieuw als waarheid genomen. Gemeten op 13-08-2026: op de pc de
-      // juiste Whitney-hoes, op de telefoon het logo van een verzamelaar — telkens weer, hoe vaak de
-      // eigenaar het ook corrigeerde.
-      final merk = _remoteAlbums[album]?.artTag ?? '';
-      final verouderd = merk.isNotEmpty && await enricher.bewaardMerk(album) != merk;
-      final cached = verouderd ? null : await enricher.cached(album);
-      if (cached != null) {
-        album.enriched = cached;
+
+    final wachtrij = [for (final a in albums) if (a.cover == null) a];
+    var volgende = 0;
+
+    Future<void> werker() async {
+      while (true) {
+        if (volgende >= wachtrij.length) return;
+        final album = wachtrij[volgende++];
+        // Het merkteken van de hoes die de eigenaar op de pc GEKOZEN heeft. Wijkt dat af van wat
+        // hier in de cache ligt, dan is die cache achterhaald en moet hij wijken.
+        //
+        // **Dit was het gat.** De cache heet naar `artiest|titel`, en die naam beweegt niet als je
+        // een andere afbeelding kiest. Het bestand lag er dus nog, met de goede naam en de foute
+        // inhoud, en werd bij élke start opnieuw als waarheid genomen. Gemeten op 13-08-2026: op de
+        // pc de juiste Whitney-hoes, op de telefoon het logo van een verzamelaar — telkens weer, hoe
+        // vaak de eigenaar het ook corrigeerde.
+        final merk = _remoteAlbums[album]?.artTag ?? '';
+        final verouderd = merk.isNotEmpty && await enricher.bewaardMerk(album) != merk;
+        final cached = verouderd ? null : await enricher.cached(album);
+        if (cached != null) {
+          album.enriched = cached;
+          if (++since >= 24) {
+            since = 0;
+            notifyListeners();
+          }
+          continue;
+        }
+        final ref = _remoteAlbums[album]?.artRef;
+        final bytes = ref == null ? null : await client.art(ref);
+        if (bytes == null || bytes.isEmpty) continue;
+        album.embeddedCover = bytes;
+        await enricher.putCached(album, bytes);
+        // Pas ná het wegschrijven, zodat een afgebroken download geen merkteken achterlaat dat zegt
+        // "deze is bij" terwijl er iets ouds op schijf staat.
+        if (merk.isNotEmpty) await enricher.schrijfMerk(album, merk);
+        // Gebundeld, net als de tak hierboven: elke melding tekent de startpagina opnieuw. Eén
+        // melding per binnenkomende hoes betekende honderden volledige hertekeningen in de eerste
+        // minuut op de Shield — precies wanneer je wilt gaan bladeren.
         if (++since >= 24) {
           since = 0;
           notifyListeners();
         }
-        continue;
-      }
-      final ref = _remoteAlbums[album]?.artRef;
-      final bytes = ref == null ? null : await client.art(ref);
-      if (bytes == null || bytes.isEmpty) continue;
-      album.embeddedCover = bytes;
-      await enricher.putCached(album, bytes);
-      // Pas ná het wegschrijven, zodat een afgebroken download geen merkteken achterlaat dat zegt
-      // "deze is bij" terwijl er iets ouds op schijf staat.
-      if (merk.isNotEmpty) await enricher.schrijfMerk(album, merk);
-      // Batched exactly like the cached branch above, and for the same reason. Every notify rebuilds
-      // the home page, and that page sorts the whole library by `Album.addedMs` — a getter that walks
-      // every track of every album. One notify per arriving cover meant hundreds of full rebuilds
-      // during the first minute on the Shield, which is precisely when you want to start browsing.
-      if (++since >= 24) {
-        since = 0;
-        notifyListeners();
       }
     }
+
+    await Future.wait([for (var i = 0; i < 6; i++) werker()]);
     enriching = false;
     notifyListeners();
   }

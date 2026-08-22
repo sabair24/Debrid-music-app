@@ -17,9 +17,10 @@ class CatalogSnapshot {
   final Map<String, Album> albumById;
   final Map<String, String> artistNameById;
 
-  /// The encoded body and its ETag, kept so repeat syncs cost nothing: a client that already has
-  /// this version sends `If-None-Match` and gets a 304 instead of several megabytes of JSON.
-  final List<int> json;
+  /// De ETag, zodat herhaald synchroniseren niets kost: een toestel dat deze versie al heeft stuurt
+  /// `If-None-Match` en krijgt een 304 in plaats van megabytes JSON.
+  ///
+  /// Komt uit de vingerafdruk en NIET uit [json] — daarom is hij er zonder dat er iets gecodeerd is.
   final String etag;
 
   CatalogSnapshot({
@@ -27,9 +28,25 @@ class CatalogSnapshot {
     required this.trackById,
     required this.albumById,
     required this.artistNameById,
-    required this.json,
     required this.etag,
   });
+
+  /// De catalogus als verstuurbare bytes — pas berekend als iemand hem werkelijk opvraagt.
+  ///
+  /// **Waarom lui, en waarom dat veel uitmaakt.** Dit was een gewoon veld, gevuld in `_build()`. Dat
+  /// betekende: elke keer dat de momentopname herbouwd werd, ging de HELE bibliotheek naar JSON —
+  /// `catalog.toJson()` bouwt daarvoor eerst nog een tweede volledige boom van elk nummer, en dan
+  /// gaan `jsonEncode` en `utf8.encode` daaroverheen. Megabytes, op de tekendraad van de pc.
+  ///
+  /// En herbouwen gebeurt vaker dan je denkt. De momentopname wordt vuil verklaard bij ELKE melding
+  /// van de bibliotheek — honderden keren tijdens het verrijken van hoezen — en herbouwd bij het
+  /// eerstvolgende verzoek. Dat verzoek is lang niet altijd `/api/catalog`: ook `/art/` en
+  /// `/stream/` vragen de momentopname op, want die hebben de opzoektabellen nodig.
+  ///
+  /// Eén hoesje dat je iPad opvraagt kon dus een volledige JSON-codering van de hele bibliotheek op
+  /// de pc uitlokken. Die twee wegen hebben aan `trackById` en `albumById` genoeg; nu betalen ze ook
+  /// alleen daarvoor.
+  late final List<int> json = utf8.encode(jsonEncode(catalog.toJson()));
 
   /// Dezelfde catalogus, ingepakt — één keer berekend per versie.
   ///
@@ -272,7 +289,6 @@ class LanCatalog {
       trackById: trackById,
       albumById: albumById,
       artistNameById: artistNameById,
-      json: utf8.encode(jsonEncode(catalog.toJson())),
       etag: '"${tracks.length}-${fingerprint.value}"',
     );
   }

@@ -29,6 +29,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 
@@ -427,10 +428,20 @@ class AlbumFactsStore extends ChangeNotifier {
   }
 
   /// The one read on the startup path.
+  ///
+  /// **Het inlezen gebeurt in een isolate, en dat is geen luxe.** Gemeten stond dit bestand op
+  /// 9,9 MB voor 236 albums, en het werd bij elke start in één keer op de tekendraad geparsed —
+  /// vóór het eerste beeld. Dat is precies de stilte tussen "de app is open" en "er staat iets".
+  ///
+  /// Alleen het LEZEN en het ONTLEDEN verhuizen. Het omzetten naar objecten blijft hier, want
+  /// `AlbumFacts.fromJson` telt onderweg dubbel gecodeerde teksten mee in een globale teller
+  /// ([mojibakeHersteld]), en die zou in een isolate opgeteld worden en daarna weggegooid — waarmee
+  /// het logregeltje hieronder zou liegen. Het parsen is bovendien verreweg het duurste deel.
   Future<void> load() async {
     try {
       if (!await _indexFile.exists()) return;
-      final j = jsonDecode(await _indexFile.readAsString());
+      final pad = _indexFile.path;
+      final j = await Isolate.run(() => jsonDecode(File(pad).readAsStringSync()));
       if (j is! Map) return;
       _byUid.clear();
       _folders.clear();
