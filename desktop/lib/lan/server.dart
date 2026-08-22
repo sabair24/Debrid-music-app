@@ -610,7 +610,7 @@ class LanServer {
     // hi-res plaat op een Sonos stil blijft. Zelfde soort mislukking, andere grens.
     final maxBits = int.tryParse(req.uri.queryParameters['maxBits'] ?? '');
     final teHoog = maxRate != null && track.sampleRate > maxRate;
-    final teDiep = maxBits != null && (track.bitsPerSample ?? 0) > maxBits;
+    final teDiep = maxBits != null && track.bitsPerSample > maxBits;
     if (teHoog || teDiep) {
       // Wat niet overschreden wordt, blijft staan. Alleen de diepte verlagen en de frequentie met
       // rust laten is precies wat je wilt voor een speaker die 384 kHz best aankan.

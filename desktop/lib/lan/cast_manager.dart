@@ -288,7 +288,7 @@ class CastManager {
     session.startedAt = DateTime.now();
 
     final url = await _streamUrlFor(
-        id, track.ext, session.renderer, track.sampleRate, track.bitsPerSample ?? 0);
+        id, track.ext, session.renderer, track.sampleRate, track.bitsPerSample);
     await _upnp.playUrl(
       session.renderer,
       url,
@@ -322,7 +322,7 @@ class CastManager {
     final nextTrack = nextId == null ? null : catalog.track(nextId);
     if (nextId == null || nextTrack == null) return;
     final nextUrl = await _streamUrlFor(
-        nextId, nextTrack.ext, session.renderer, nextTrack.sampleRate, nextTrack.bitsPerSample ?? 0);
+        nextId, nextTrack.ext, session.renderer, nextTrack.sampleRate, nextTrack.bitsPerSample);
     await _upnp.setNextUrl(
       session.renderer,
       nextUrl,
