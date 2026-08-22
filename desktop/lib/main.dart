@@ -4211,7 +4211,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         context,
         r.failed.isEmpty
             ? '${r.restored} bestanden teruggezet'
-            : '${r.restored} teruggezet · ${r.failed.length} in gebruik: ${r.failed.first}');
+            // Niet meer "in gebruik" als vaste aanname: de naam draagt nu de werkelijke reden mee,
+            // en die is lang niet altijd een bestand dat openstaat.
+            : '${r.restored} teruggezet · ${r.failed.length} niet gelukt — ${r.failed.first}');
     _refresh();
   }
 
@@ -5236,8 +5238,10 @@ class _MetadataEditorState extends State<MetadataEditor> {
           context,
           geschreven.failed.isEmpty
               ? '${geschreven.written} bestand(en) opnieuw getagd'
-              : '${geschreven.written} getagd · ${geschreven.failed.length} niet gelukt '
-                  '(de wijziging staat wel in de app)');
+              // De REDEN erbij, want die was er wel en werd weggegooid. Eén reden en niet alle:
+              // mislukken ze, dan mislukken ze bijna altijd om hetzelfde.
+              : '${geschreven.written} getagd · ${geschreven.failed.length} niet gelukt — '
+                  '${geschreven.failed.first} (de wijziging staat wel in de app)');
     }
     // Says out loud what was pinned. The pin went missing twice while every line of the path read
     // correctly, so this is no longer something to reason about — it is something to see.
