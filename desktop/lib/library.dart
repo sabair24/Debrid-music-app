@@ -904,9 +904,18 @@ class LibraryStore extends ChangeNotifier {
   /// bestand op dat toestel. Dat was het gat: `album_art_roles.json` bleef staan waar de keuze
   /// gemaakt was, dus de cd die je op de iPad aanwees bestond nergens anders. Een vastgezette
   /// persing en een samengevoegde editie reisden hier al jaren wel mee.
-  Map<String, String> albumArtRoles(String artist, String album) => isRemote
-      ? (_remoteAlbumRoles[albumArtKey(artist, album)] ?? const {})
-      : (_albumArtRoles[albumArtKey(artist, album)] ?? const {});
+  ///
+  /// Op een client eerst wat de pc zegt, en anders wat hier ligt. Die terugval is er voor een pc die
+  /// deze bewerking nog niet kent: dan reist de keuze niet mee, maar hij blijft wél bestaan op het
+  /// toestel waar je hem maakte — precies zoals het vóór de synchronisatie werkte.
+  Map<String, String> albumArtRoles(String artist, String album) {
+    final k = albumArtKey(artist, album);
+    if (isRemote) {
+      final vanPc = _remoteAlbumRoles[k];
+      if (vanPc != null && vanPc.isNotEmpty) return vanPc;
+    }
+    return _albumArtRoles[k] ?? const {};
+  }
 
   /// De aangewezen scans zoals de pc ze kent, op een toestel dat de muziek niet bezit.
   final Map<String, Map<String, String>> _remoteAlbumRoles = {};
@@ -936,15 +945,10 @@ class LibraryStore extends ChangeNotifier {
     // niet altijd een adres — hij kan uit een bestand of uit de tags komen. Daarom base64 en niet
     // een url.
     //
-    // Meteen ook lokaal zetten, zodat het scherm niet eerst de oude hoes blijft tonen terwijl de pc
-    // en de catalogus bijtrekken.
-    if (isRemote) {
-      final id = remoteAlbumId(a);
-      if (id == null) return;
-      a.correctedCover = bytes;
-      notifyListeners();
-      return _editOnPc({'op': 'albumCover', 'albumId': id, 'cover': base64Encode(bytes)});
-    }
+    // Altijd eerst HIER, dan pas naar de pc. Die volgorde is geen detail: kent de pc deze bewerking
+    // nog niet — hij draait een oudere versie, want toestellen werken zich niet tegelijk bij — dan
+    // gooit de tweede stap, en zonder de eerste zou je keuze wég zijn. Lokaal is de bodem, de pc is
+    // de winst.
     a.correctedCover = bytes;
     try {
       await CoverEnricher(settings).saveFixedCover(a, bytes);
@@ -954,17 +958,25 @@ class LibraryStore extends ChangeNotifier {
     }
     _bumpMeta();
     notifyListeners();
+    if (isRemote) {
+      final id = remoteAlbumId(a);
+      if (id == null) return;
+      await _editOnPc({'op': 'albumCover', 'albumId': id, 'cover': base64Encode(bytes)});
+    }
   }
 
   /// Say what an image IS. [url] empty clears that role and lets the app guess again.
   Future<void> setAlbumArtRole(String artist, String album, String role, String url) async {
-    // De pc houdt de boeken bij, net als voor een vastgezette persing en een artiestportret. Zonder
-    // deze regel bleef een keuze op de iPad op de iPad, en zag de pc — en dus elk ander toestel —
-    // hem nooit.
-    if (isRemote) {
-      return _editOnPc(
-          {'op': 'albumArtRole', 'artist': artist, 'album': album, 'role': role, 'url': url});
-    }
+    // Op een client: HIER schrijven én het aan de pc vertellen. In die volgorde, en allebei.
+    //
+    // **Waarom niet alleen naar de pc.** Dat was de eerste opzet, en het was een terugval. Kent de
+    // pc die bewerking niet — hij draait een oudere versie, want toestellen werken zich niet op
+    // hetzelfde moment bij — dan gooide dit, en was de keuze wég. Terwijl hij daarvóór gewoon lokaal
+    // werkte. Een verbetering die het bij een oudere pc slechter maakt, is geen verbetering.
+    //
+    // Nu: lokaal is de bodem die er altijd is, de pc is de winst als hij meedoet. Weigert hij, dan
+    // komt die reden naar boven — de aanroeper mag weten dat het bij dit toestel blijft — maar de
+    // keuze zelf staat er al.
     final k = albumArtKey(artist, album);
     final m = _albumArtRoles.putIfAbsent(k, () => {});
     if (url.isEmpty) {
@@ -978,6 +990,10 @@ class LibraryStore extends ChangeNotifier {
     }
     await _saveAlbumArtRoles();
     notifyListeners();
+    if (isRemote) {
+      await _editOnPc(
+          {'op': 'albumArtRole', 'artist': artist, 'album': album, 'role': role, 'url': url});
+    }
   }
 
   /// Forget every hand-picked scan for this record, so the pressing decides again.
@@ -991,15 +1007,17 @@ class LibraryStore extends ChangeNotifier {
   /// nothing. Picking an edition means "use its scans"; picking a single scan is the exception you
   /// make afterwards.
   Future<void> clearAlbumArtRoles(String artist, String album) async {
-    // Ook wissen is een bewerking, en die hoort op de pc te landen. Bleef dit lokaal, dan wiste een
-    // iPad zijn eigen (lege) lijstje terwijl de pc de oude rollen hield — en na de eerstvolgende
-    // synchronisatie stonden ze er gewoon weer.
-    if (isRemote) {
-      return _editOnPc({'op': 'albumArtRole', 'artist': artist, 'album': album, 'clear': true});
-    }
-    if (_albumArtRoles.remove(albumArtKey(artist, album)) == null) return;
+    // Zelfde verhaal als bij [setAlbumArtRole]: lokaal wissen is de bodem, de pc is de winst.
+    //
+    // De vroege uitgang is hier bewust weg. Lokaal kan er niets staan terwijl de pc nog wél rollen
+    // heeft — dan zou "wis alles" op een client niets doen, en na de eerstvolgende synchronisatie
+    // stonden ze er weer.
+    _albumArtRoles.remove(albumArtKey(artist, album));
     await _saveAlbumArtRoles();
     notifyListeners();
+    if (isRemote) {
+      await _editOnPc({'op': 'albumArtRole', 'artist': artist, 'album': album, 'clear': true});
+    }
   }
 
   Future<void> _saveAlbumArtRoles() => _writeJson(_albumArtRolesFile, _albumArtRoles);
