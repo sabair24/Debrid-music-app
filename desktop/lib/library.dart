@@ -2101,7 +2101,30 @@ class LibraryStore extends ChangeNotifier {
   final Map<String, Map<String, String>> _remoteArtistArt = {};
 
   /// The PC's id for an album we are showing, or null on the machine that owns the music.
-  String? remoteAlbumId(Album a) => _remoteAlbums[a]?.id;
+  String? remoteAlbumId(Album a) {
+    final recht = _remoteAlbums[a]?.id;
+    if (recht != null) return recht;
+    // Het object is OUD, niet het album.
+    //
+    // Deze kaart is gesleuteld op objectidentiteit, en `_adoptCatalog` maakt bij elke verse
+    // catalogus nieuwe [Album]-objecten. Een scherm of een venster dat al open stond houdt dan een
+    // exemplaar vast dat nergens meer in staat — waarna dit null gaf, de pc geen albumId kreeg, en
+    // die antwoordde met "Dat album staat hier niet (meer)". Terwijl het er gewoon staat.
+    //
+    // En dat is geen randgeval: één bewerking ververst de catalogus al, dus een tweede bewerking uit
+    // hetzelfde venster liep er standaard tegenaan.
+    //
+    // Een pad is wél stabiel. Deel je een nummer met een album dat er nu staat, dan ben je dat
+    // album. Alleen op de missende weg, dus het kost niets zolang alles klopt.
+    final paden = {for (final t in a.tracks) t.path};
+    if (paden.isEmpty) return null;
+    for (final e in _remoteAlbums.entries) {
+      for (final t in e.key.tracks) {
+        if (paden.contains(t.path)) return e.value.id;
+      }
+    }
+    return null;
+  }
 
   /// True everywhere now: a Mac and an iPad edit by asking the PC to, and the result comes back
   /// through the catalogue. Kept as a name rather than inlined, because moving files is still the
@@ -3436,12 +3459,43 @@ extension LibraryRenumber on LibraryStore {
 
   /// Write a plan. The user's edit wins over the tags from here on, and outlives a rescan.
   Future<void> applyRenumber(RenumberPlan plan) async {
-    for (final s in plan.steps) {
-      if (s.newNo == null) continue;
-      final c = _correctionsFor(s.track.path);
-      c['trackNo'] = '${s.newNo}';
-      c['trackTotal'] = '${plan.total}';
-      final title = s.official?.title;
+    // Op een client doet de PC het werk, net als bij een correctie.
+    //
+    // **Dit ontbrak volledig.** Het schreef `corrections.json` op het toestel zelf — maar op een
+    // client komt de bibliotheek uit de catalogus van de pc, en die correcties worden daar nooit
+    // gelezen. De nummering veranderde dus even op het scherm en was bij de eerstvolgende
+    // synchronisatie weer weg. "Mijn nummering wil er ook niet bij komen."
+    if (isRemote) {
+      final stappen = <Map<String, dynamic>>[];
+      for (final s in plan.steps) {
+        final no = s.newNo;
+        final id = remoteTrackId(s.track.path);
+        if (no == null || id == null) continue;
+        stappen.add({'trackId': id, 'no': no, 'title': s.official?.title});
+      }
+      if (stappen.isEmpty) return;
+      return _editOnPc({'op': 'renumber', 'total': plan.total, 'steps': stappen});
+    }
+    await hernummer(
+      [
+        for (final s in plan.steps)
+          if (s.newNo != null) (path: s.track.path, no: s.newNo!, title: s.official?.title)
+      ],
+      plan.total,
+    );
+  }
+
+  /// De nummering van losse nummers vastleggen — de vorm die ook over de lijn past.
+  ///
+  /// Apart van [applyRenumber] omdat de pc dit namens een ander toestel moet kunnen doen, en die
+  /// heeft geen `RenumberPlan` maar een lijst met paden en nummers.
+  Future<void> hernummer(
+      List<({String path, int no, String? title})> stappen, int total) async {
+    for (final s in stappen) {
+      final c = _correctionsFor(s.path);
+      c['trackNo'] = '${s.no}';
+      if (total > 0) c['trackTotal'] = '$total';
+      final title = s.title;
       if (title != null && title.trim().isNotEmpty) c['title'] = title.trim();
     }
     await saveCorrectionsNow();

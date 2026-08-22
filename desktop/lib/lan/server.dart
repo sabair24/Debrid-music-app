@@ -926,7 +926,11 @@ class LanServer {
     // `albumArtRole` hoort ook in deze uitzondering: rollen hangen aan artiest|titel en niet aan een
     // album-id, net als een artiestportret. Zonder deze uitzondering kreeg elke rolwijziging van een
     // client een 404 op een album dat de client niet meestuurt.
-    if (op != 'removeTracks' && op != 'artistArt' && op != 'albumArtRole' && album == null) {
+    if (op != 'removeTracks' &&
+        op != 'artistArt' &&
+        op != 'albumArtRole' &&
+        op != 'renumber' &&
+        album == null) {
       // The client is looking at a catalogue this PC has moved on from — say so, rather than
       // silently editing the wrong record.
       return _json(req.response, {'error': 'Dat album staat hier niet (meer).'},
@@ -959,6 +963,28 @@ class LanServer {
           }
           await library.setArtistArt(
               artist, (body['kind'] ?? 'portrait') as String, (body['url'] ?? '') as String);
+        case 'renumber':
+          // Hernummeren namens een ander toestel. Kon hier niet aankomen: op een client schreef dit
+          // alleen `corrections.json` op dát toestel, terwijl de bibliotheek daar uit de catalogus
+          // van deze pc komt. De nummering veranderde even op het scherm en was bij de volgende
+          // synchronisatie weer weg.
+          //
+          // Op NUMMER-ids en niet op een album, want dat is wat hernummeren raakt — vandaar ook de
+          // uitzondering op de albumcontrole hierboven, net als bij `removeTracks`.
+          final totaal = (body['total'] as num?)?.toInt() ?? 0;
+          final stappen = <({String path, int no, String? title})>[];
+          for (final rauw in (body['steps'] as List? ?? const [])) {
+            if (rauw is! Map) continue;
+            final t = catalog.track('${rauw['trackId']}');
+            final no = (rauw['no'] as num?)?.toInt();
+            if (t == null || no == null) continue;
+            stappen.add((path: t.path, no: no, title: rauw['title'] as String?));
+          }
+          if (stappen.isEmpty) {
+            return _json(req.response, {'error': 'Geen nummers gevonden om te hernummeren.'},
+                status: HttpStatus.badRequest);
+          }
+          await library.hernummer(stappen, totaal);
         case 'albumCover':
           // Een hoes die op een ander toestel gekozen is. Kwam hier nooit aan: `setAlbumCover`
           // schreef alleen naar het geheugen en de cache van dát toestel. Corrigeerde je de hoes op
