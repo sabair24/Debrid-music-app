@@ -98,6 +98,7 @@ void main() {
         warmArt: (artist, album,
             {required expectedTracks, pinned, pinnedMbid, required roles, required settings, freeOnly = true, trace}) async {
           warmedArt.add('$artist|$album|$expectedTracks');
+          return null;
         },
       );
 
@@ -132,6 +133,7 @@ void main() {
         warmArt: (artist, album,
             {required expectedTracks, pinned, pinnedMbid, required roles, required settings, freeOnly = true, trace}) async {
           warmedArt.add('$artist|$album|$expectedTracks');
+          return null;
         },
       );
 
@@ -224,6 +226,7 @@ void main() {
         warmArt: (artist, album,
             {required expectedTracks, pinned, pinnedMbid, required roles, required settings, freeOnly = true, trace}) async {
           warmedArt.add('$artist|$album|$expectedTracks');
+          return null;
         },
       );
 
@@ -270,6 +273,7 @@ void main() {
             library.rebuildAlbums();
             library.notifyListeners(); // wat een afgeronde download ook doet
           }
+          return null;
         },
       );
 
@@ -312,7 +316,7 @@ void main() {
           );
         },
         warmArt: (artist, album,
-            {required expectedTracks, pinned, pinnedMbid, required roles, required settings, freeOnly = true, trace}) async {},
+            {required expectedTracks, pinned, pinnedMbid, required roles, required settings, freeOnly = true, trace}) async => null,
       );
 
       await w.start();
@@ -362,6 +366,7 @@ void main() {
             library.scanning = true;
             Future.delayed(const Duration(milliseconds: 600), () => library.scanning = false);
           }
+          return null;
         },
       );
 
@@ -487,7 +492,7 @@ void main() {
               uid: uid, trackSetHash: trackSetHash, source: '', networkFailed: stuk);
         },
         warmArt: (artist, album,
-            {required expectedTracks, pinned, pinnedMbid, required roles, required settings, freeOnly = true, trace}) async {},
+            {required expectedTracks, pinned, pinnedMbid, required roles, required settings, freeOnly = true, trace}) async => null,
       );
 
       await w.start();

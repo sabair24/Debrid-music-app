@@ -1742,6 +1742,29 @@ extension DiscogsArtwork on DiscogsService {
     }
   }
 
+  /// De scans die al op schijf staan, zonder één netwerkverzoek.
+  ///
+  /// **Waarom dit naast [hasReleaseArt] moet bestaan.** Die laatste beantwoordt "is hier al eens
+  /// gekeken" met een blik op één markeerbestand, en dat was genoeg zolang de verwarmer alleen
+  /// hoefde te weten of hij een plaat mocht overslaan. Sinds hij de gevonden hoes ook aan de
+  /// bibliotheek geeft is dat te weinig: overslaan betekent dan dat elke plaat die in een vórige
+  /// sessie gewarmd is voor altijd zonder hoes blijft, want die komt hier nooit meer langs.
+  ///
+  /// Dezelfde sleutel als [DiscogsArtwork.releaseArt], want het gaat om precies dezelfde map — een
+  /// eigen berekening hier zou vroeg of laat uit elkaar lopen met die daar, en dan leest dit
+  /// bestendig de verkeerde map uit zonder dat iets het zegt.
+  Future<ReleaseArt?> cachedReleaseArt(
+    String artist,
+    String album, {
+    int expectedTracks = 0,
+    int? pinned,
+    String? pinnedMbid,
+    Map<String, String> roles = const {},
+  }) {
+    final key = artCacheKey(artist, album, expectedTracks, pinned, pinnedMbid, roles);
+    return _readArt(Directory('$artDir${Platform.pathSeparator}$key'));
+  }
+
   Future<ReleaseArt?> _readArt(Directory dir) async {
     try {
       if (!await dir.exists()) return null;
