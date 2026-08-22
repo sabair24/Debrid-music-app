@@ -959,6 +959,20 @@ class LanServer {
           }
           await library.setArtistArt(
               artist, (body['kind'] ?? 'portrait') as String, (body['url'] ?? '') as String);
+        case 'albumCover':
+          // Een hoes die op een ander toestel gekozen is. Kwam hier nooit aan: `setAlbumCover`
+          // schreef alleen naar het geheugen en de cache van dát toestel. Corrigeerde je de hoes op
+          // de Mac, dan bleef de telefoon de oude tonen — die haalt hem immers hier vandaan.
+          //
+          // BYTES en geen adres, want een gekozen hoes komt niet altijd van het web: hij kan uit een
+          // bestand of uit de tags komen. Zodra hij hier staat beweegt `artTag`, dus de ETag, en
+          // halen de andere toestellen hem vanzelf op.
+          final hoesB64 = (body['cover'] ?? '') as String;
+          if (hoesB64.isEmpty) {
+            return _json(req.response, {'error': 'Geen hoes meegestuurd.'},
+                status: HttpStatus.badRequest);
+          }
+          await library.setAlbumCover(album!, config, base64Decode(hoesB64));
         case 'albumArtRole':
           // Een scan die de eigenaar op een ander toestel aanwees. Kwam hier nooit aan: dit stond
           // alleen in `album_art_roles.json` op dát toestel, zodat een cd die je op de iPad koos

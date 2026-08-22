@@ -924,6 +924,27 @@ class LibraryStore extends ChangeNotifier {
   /// standing on.
   Future<void> setAlbumCover(Album a, AppSettings settings, Uint8List bytes) async {
     if (bytes.isEmpty) return;
+    // De pc houdt de boeken bij — ook voor de hoes.
+    //
+    // **Dit ontbrak, en het is precies de klacht "twee verschillende hoezen".** Op een Mac, een
+    // iPad of een telefoon schreef dit alleen naar het geheugen en de cache van dát toestel. Kies
+    // je de juiste hoes op de Mac, dan blijft hij daar: de pc weet van niets, en je telefoon haalt
+    // zijn hoezen van de pc. Twee toestellen, twee antwoorden, en corrigeren hielp niet omdat de
+    // correctie nooit aankwam waar hij gelezen wordt.
+    //
+    // Anders dan bij een rol gaan hier BYTES over de lijn en geen adres, want een gekozen hoes is
+    // niet altijd een adres — hij kan uit een bestand of uit de tags komen. Daarom base64 en niet
+    // een url.
+    //
+    // Meteen ook lokaal zetten, zodat het scherm niet eerst de oude hoes blijft tonen terwijl de pc
+    // en de catalogus bijtrekken.
+    if (isRemote) {
+      final id = remoteAlbumId(a);
+      if (id == null) return;
+      a.correctedCover = bytes;
+      notifyListeners();
+      return _editOnPc({'op': 'albumCover', 'albumId': id, 'cover': base64Encode(bytes)});
+    }
     a.correctedCover = bytes;
     try {
       await CoverEnricher(settings).saveFixedCover(a, bytes);
@@ -2084,6 +2105,14 @@ class LibraryStore extends ChangeNotifier {
     // correction that takes fifteen seconds to appear reads as one that did not work.
     _catalogEtag = null;
     await loadRemote(quiet: true);
+    // En de hoezen erbij halen.
+    //
+    // `loadRemote` bouwt NIEUWE albumobjecten, en die hebben geen hoes. Zonder deze regel stond het
+    // raster na elke bewerking op een client vol lege vakjes — en het kwam ook niet vanzelf goed:
+    // de eerstvolgende poll krijgt een 304 (de etag klopt inmiddels), dus `changed` is onwaar en de
+    // sweep die dáár aan hangt draait nooit. Pas een herstart haalde de hoezen terug.
+    final hoesInstellingen = _hoesInstellingen;
+    if (hoesInstellingen != null) unawaited(loadRemoteCovers(hoesInstellingen));
   }
 
   /// The PC's id for a track we are showing, for anything that has to name tracks TO the PC —
@@ -2166,9 +2195,40 @@ class LibraryStore extends ChangeNotifier {
   /// album list over the same wifi, each setting `enriching` and each clearing it, so the status line
   /// went off while the other was still fetching. Held as the future so a caller can wait for the one
   /// already running instead of starting a second.
-  Future<void> loadRemoteCovers(AppSettings settings) =>
-      _remoteCoverSweep ??=
-          _loadRemoteCovers(settings).whenComplete(() => _remoteCoverSweep = null);
+  /// De instellingen waarmee de laatste hoezenronde liep.
+  ///
+  /// Nodig omdat een bewerking op een client de albumlijst vervangt en er dus meteen daarna hoezen
+  /// bij gehaald moeten worden — zie [_editOnPc] — terwijl daar geen instellingen voorhanden zijn.
+  /// Een verse [AppSettings] verzinnen zou naar de verkeerde cachemap wijzen.
+  AppSettings? _hoesInstellingen;
+
+  /// Vraagt iemand een ronde terwijl er al een loopt?
+  ///
+  /// **Dit was een stille val.** De wacht hieronder gaf de LOPENDE ronde terug, en die loopt over de
+  /// albumobjecten van toen hij begon. Maar `_adoptCatalog` bouwt bij elke verse catalogus NIEUWE
+  /// objecten: de ronde vult dan albums die niemand meer op het scherm heeft, en de albums die er
+  /// wél staan blijven leeg. Precies het geval "de hoezen komen pas na opnieuw inloggen".
+  ///
+  /// Met deze vlag draait er ná de lopende ronde nog één over de lijst zoals die dán is.
+  bool _hoesRondeOpnieuw = false;
+
+  Future<void> loadRemoteCovers(AppSettings settings) {
+    _hoesInstellingen = settings;
+    final bezig = _remoteCoverSweep;
+    if (bezig != null) {
+      _hoesRondeOpnieuw = true;
+      return bezig;
+    }
+    return _remoteCoverSweep =
+        _hoezenTotHetKlopt(settings).whenComplete(() => _remoteCoverSweep = null);
+  }
+
+  Future<void> _hoezenTotHetKlopt(AppSettings settings) async {
+    do {
+      _hoesRondeOpnieuw = false;
+      await _loadRemoteCovers(settings);
+    } while (_hoesRondeOpnieuw);
+  }
 
   /// De hoezen ophalen op een toestel dat de muziek niet bezit.
   ///
