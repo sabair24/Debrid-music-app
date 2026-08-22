@@ -4,10 +4,17 @@
 /// komen leeg terug bij zowel MusicBrainz als Discogs, en het zijn allemaal verzamelaars.
 library;
 
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:debridmusic/acoustid.dart';
 import 'package:debridmusic/album_facts.dart';
 import 'package:debridmusic/editions.dart';
+import 'package:debridmusic/fingerprint.dart';
+import 'package:debridmusic/settings.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 void main() {
   group('stemming over de release-groep', () {
@@ -281,6 +288,149 @@ void main() {
             ]
           }),
           isEmpty);
+    });
+  });
+
+  group('een mislukking is geen "niet herkend"', () {
+    /// **Waar dit over gaat.** Op de pc kwam er op élk nummer hetzelfde uit: "Geen van deze nummers
+    /// is herkend" — ook op wereldberoemde platen waar AcoustID honderdduizend vingerafdrukken van
+    /// heeft. Dat kón niet kloppen, maar er viel niets aan te onderzoeken: geen sleutel, een
+    /// geweigerde sleutel, een tijdslimiet, een storing en een werkelijk onbekende plaat gaven
+    /// alle vijf een lege lijst en verder niets.
+    ///
+    /// De verreweg meest gemaakte fout zit in die tweede: AcoustID heeft twee soorten sleutels en
+    /// zijn eigen site toont de verkeerde het grootst. Deze toetsen leggen vast dat de app dat nu
+    /// zegt in plaats van te zwijgen.
+    Fingerprint vp() => const Fingerprint(229, [], 'AQAAA-vingerafdruk');
+
+    AcoustIdService dienst(String sleutel, Future<http.Response> Function(http.Request) antwoord) =>
+        AcoustIdService(AppSettings()..acoustidKey = sleutel, client: MockClient(antwoord));
+
+    test('zonder sleutel wordt er niet gezwegen maar gezegd wat er ontbreekt', () async {
+      final a = await AcoustIdService(AppSettings()).identify(vp());
+      expect(a.gelukt, isFalse);
+      expect(a.fout, contains('Instellingen'));
+      expect(a.fout, contains('APPLICATION'));
+    });
+
+    test('de verkeerde soort sleutel wordt bij naam genoemd', () async {
+      // Fout 4 van de server: "invalid API key". Precies wat je krijgt als je de sleutel van
+      // acoustid.org/api-key plakt in plaats van die van acoustid.org/my-applications.
+      final a = await dienst(
+          'user-sleutel',
+          (_) async => http.Response(
+              jsonEncode({
+                'status': 'error',
+                'error': {'code': 4, 'message': 'invalid API key'}
+              }),
+              400)).identify(vp());
+      expect(a.gelukt, isFalse);
+      expect(a.fout, contains('my-applications'),
+          reason: 'zonder de plek waar de goede sleutel staat helpt de melding niemand');
+      expect(a.fout, contains('api-key'), reason: 'en welke de verkeerde is');
+    });
+
+    test('een user-sleutel die als zodanig herkend wordt, ook', () async {
+      final a = await dienst(
+          'x',
+          (_) async => http.Response(
+              jsonEncode({
+                'status': 'error',
+                'error': {'code': 6, 'message': 'invalid user API key'}
+              }),
+              400)).identify(vp());
+      expect(a.fout, contains('USER-sleutel'));
+    });
+
+    test('te druk is iets heel anders dan onbekend, en zegt dat ook', () async {
+      final a = await dienst(
+          'goed',
+          (_) async => http.Response(
+              jsonEncode({
+                'status': 'error',
+                'error': {'code': 14, 'message': 'rate limit exceeded'}
+              }),
+              429)).identify(vp());
+      expect(a.fout, contains('wacht'));
+      expect(a.fout, contains('in orde'), reason: 'de sleutel is hier niet de schuldige');
+    });
+
+    test('een pc zonder net zegt dat, en niet "niet herkend"', () async {
+      final a = await dienst('goed', (_) async => throw const SocketException('geen netwerk'))
+          .identify(vp());
+      expect(a.gelukt, isFalse);
+      expect(a.fout, contains('niet bereikt'));
+    });
+
+    test('gevraagd en werkelijk onbekend: leeg, en GEEN fout', () async {
+      // De enige stand waarin "niet herkend" de waarheid is. Zou hier ook een reden staan, dan was
+      // het onderscheid weer weg — nu andersom.
+      final a = await dienst('goed',
+              (_) async => http.Response(jsonEncode({'status': 'ok', 'results': []}), 200))
+          .identify(vp());
+      expect(a.gelukt, isTrue);
+      expect(a.matches, isEmpty);
+      expect(a.fout, isNull);
+    });
+
+    test('en een gewoon antwoord komt er nog steeds gewoon uit', () async {
+      final a = await dienst(
+          'goed',
+          (_) async => http.Response(
+              jsonEncode({
+                'status': 'ok',
+                'results': [
+                  {
+                    'score': 0.98,
+                    'recordings': [
+                      {
+                        'id': 'rec-1',
+                        'title': 'Billie Jean',
+                        'duration': 294,
+                        'artists': [
+                          {'name': 'Michael Jackson'}
+                        ],
+                        'releasegroupids': ['groep-1'],
+                      }
+                    ]
+                  }
+                ]
+              }),
+              200)).identify(vp());
+      expect(a.gelukt, isTrue);
+      expect(a.matches, hasLength(1));
+      expect(a.matches.first.title, 'Billie Jean');
+      expect(a.matches.first.artist, 'Michael Jackson');
+      expect(a.matches.first.releaseGroups, ['groep-1']);
+    });
+
+    test('de sleutel gaat mee in het lichaam, met de meta-parameter erbij', () async {
+      // Zou de sleutel ooit uit de vraag vallen, dan antwoordt AcoustID met fout 2 en zag je
+      // opnieuw "niet herkend" zonder reden. Dit legt vast wat er werkelijk verstuurd wordt.
+      String? verstuurd;
+      await dienst('mijn-sleutel', (req) async {
+        verstuurd = req.body;
+        return http.Response(jsonEncode({'status': 'ok', 'results': []}), 200);
+      }).identify(vp());
+      expect(verstuurd, contains('client=mijn-sleutel'));
+      expect(verstuurd, contains('duration=229'));
+      expect(verstuurd, isNot(contains('%2B')), reason: 'een plus in meta is de oude stille fout');
+    });
+  });
+
+  group('wat een foutcode betekent', () {
+    test('een onbekende code valt terug op wat de server zelf zei', () {
+      expect(AcoustIdService.uitleg(code: 99, bericht: 'iets nieuws'), contains('iets nieuws'));
+    });
+
+    test('een storing bij AcoustID wijst niet naar jouw sleutel', () {
+      expect(AcoustIdService.uitleg(http: 503), contains('storing'));
+      expect(AcoustIdService.uitleg(http: 503), contains('niet de oorzaak'));
+    });
+
+    test('en er komt nooit een lege melding uit', () {
+      expect(AcoustIdService.uitleg(), isNotEmpty);
+      expect(AcoustIdService.uitleg(http: 418), isNotEmpty);
     });
   });
 }
