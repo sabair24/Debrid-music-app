@@ -1,5 +1,7 @@
 import 'package:http/http.dart' as http;
 
+import 'discogs.dart';
+import 'editions.dart';
 import 'json_body.dart';
 import 'musicbrainz.dart';
 import 'settings.dart';
@@ -38,8 +40,19 @@ class MetaResult {
   /// rijen) en het bewaren 1200. Leeg betekent: dezelfde als [coverUrl].
   final String? coverFullUrl;
 
-  /// De scan om te bewaren, met [coverUrl] als terugval.
-  String? get bewaarCover => coverFullUrl ?? coverUrl;
+  /// Is [coverUrl] in werkelijkheid een MINIATUUR van 150 pixels?
+  ///
+  /// De persingenlijst van Discogs geeft per rij alleen een `uri150`. Die is prima voor de rij van
+  /// 44 punten en rampzalig als hoes: hij zou als `correctedCover` weggeschreven worden — de hoogste
+  /// voorrang die er is, bewaard op schijf, en bij elke start weer teruggeladen. Een hoes van 150
+  /// pixels op een scherm dat er 1200 vraagt.
+  ///
+  /// Staat dit aan, dan geeft [bewaarCover] niets terug en haalt de kiezer eerst de volle scan op.
+  /// Zie `MetadataSearch.volleHoes`.
+  final bool coverIsMiniatuur;
+
+  /// De scan om te bewaren, met [coverUrl] als terugval — maar nooit een miniatuur.
+  String? get bewaarCover => coverFullUrl ?? (coverIsMiniatuur ? null : coverUrl);
 
   const MetaResult({
     required this.title,
@@ -50,6 +63,7 @@ class MetaResult {
     this.releaseId,
     this.mbid,
     this.detail,
+    this.coverIsMiniatuur = false,
   });
 }
 
@@ -60,7 +74,13 @@ class MetadataSearch {
 
   static const _ua = 'DebridMusic/0.1 ( https://github.com/sabair24/Debrid-music-app )';
 
-  static const providers = ['Deezer', 'Discogs', 'MusicBrainz'];
+  /// "Alles" staat vooraan, en dat is de belangrijkste wijziging aan dit venster.
+  ///
+  /// Eén bron per keer betekende dat je zelf moest weten wélke bron jouw persing kent — en dat is
+  /// precies de kennis die je niet hebt als je een correctie zoekt. Discogs kent de persingen,
+  /// MusicBrainz kent de uitgaven, Deezer kent de populaire namen; ze samen bevragen kost één
+  /// zoekopdracht in plaats van drie, en de lijst is de vereniging van wat ze weten.
+  static const providers = ['Alles', 'Discogs', 'MusicBrainz', 'Deezer'];
 
   /// [track] true searches individual tracks (for a single), false searches albums.
   ///
@@ -72,11 +92,46 @@ class MetadataSearch {
   /// Album hits come first and the song-derived ones after, so a query that really is an album title
   /// is not pushed down the list by them. Each of those says which song put it there, because
   /// "Prêt-à-porter" appearing under a search for "porselein" is otherwise a mystery.
-  Future<List<MetaResult>> search(String provider, String query, {bool track = false}) async {
-    if (query.trim().isEmpty) return [];
+  /// [artist] en [album] zijn wat er in de twee velden bovenaan het venster staat, als die er zijn.
+  ///
+  /// **Waarom die apart meekomen en niet als één zoekregel.** Discogs en MusicBrainz kunnen allebei
+  /// op artiest én titel zoeken, en dat is een heel ander soort vraag dan één string over beide
+  /// velden gooien: "Michael Jackson Thriller" als vrije tekst haalt documentaires en tributes
+  /// binnen, `artist=Michael Jackson&release_title=Thriller` niet. Precies dat verschil is waarom
+  /// deze lijst te kort en te scheef was.
+  Future<List<MetaResult>> search(
+    String provider,
+    String query, {
+    bool track = false,
+    String artist = '',
+    String album = '',
+  }) async {
+    if (provider == 'Alles') {
+      // Alle drie tegelijk, niet na elkaar: ze wachten op verschillende servers en het duurt dus
+      // zo lang als de traagste in plaats van zo lang als alle drie bij elkaar.
+      //
+      // Elk apart afgeschermd. Zonder dat zou één bron die een fout gooit — een verlopen
+      // Discogs-token is het gewone geval — de andere twee meesleuren, en dan lijkt "Alles" minder
+      // te kunnen dan elke bron los.
+      Future<List<MetaResult>> veilig(String p) async {
+        try {
+          return await search(p, query, track: track, artist: artist, album: album);
+        } catch (_) {
+          return const [];
+        }
+      }
+
+      final alles = await Future.wait(
+          [veilig('Discogs'), veilig('MusicBrainz'), veilig('Deezer')]);
+      // Discogs voorop, want dat is de bron die PERSINGEN kent — cd's, catalogusnummers, landen —
+      // en dat is waar in dit venster op gekozen wordt. De andere twee vullen aan wat Discogs niet
+      // heeft; dubbele persingen vallen weg in [_merged].
+      return _merged(alles[0], [...alles[1], ...alles[2]]);
+    }
+    if (query.trim().isEmpty && album.trim().isEmpty) return [];
     final direct = switch (provider) {
-      'Discogs' => await _discogs(query),
-      'MusicBrainz' => await _musicbrainz(query),
+      'Discogs' => await _discogs(query, artist: artist, album: album),
+      'MusicBrainz' => await _musicbrainz(query, artist: artist, album: album),
       _ => await _deezer(query, track),
     };
     if (track) return direct;
@@ -135,12 +190,73 @@ class MetadataSearch {
     }
   }
 
-  Future<List<MetaResult>> _discogs(String query) async {
+  /// Elke persing die Discogs van deze plaat kent — niet de eerste twaalf zoekresultaten.
+  ///
+  /// **Waarom dit venster zo weinig cd's liet zien.** Het vroeg `database/search?q=...&per_page=12`.
+  /// Dat is de zoeklijst, en die is op RELEVANTIE gesorteerd: voor *Thriller* levert dat vinyl,
+  /// vinyl, een laserdisc en een vhs-documentaire — terwijl Discogs honderden persingen van die
+  /// plaat heeft, cd's incluis. Twaalf van de honderden, en niet de twaalf waar je iets aan hebt.
+  ///
+  /// De uitgavekiezer had dit al opgelost, en de reden staat daar met zoveel woorden bij: Discogs
+  /// heeft tweeëntwintig masters die "Michael Jackson - Thriller" heten, en de best scorende is een
+  /// vinyl-only ingang met twee versies. Wie daar stopt, ziet vinyl en concludeert dat er geen cd's
+  /// bestaan. [DiscogsService.releaseChoices] loopt daarom méér masters af en haalt van elk de
+  /// persingen op. Dat is precies dezelfde vraag als hier, en het antwoord hoort ook hetzelfde te
+  /// zijn — twee lijsten van dezelfde plaat die elkaar tegenspreken is hoe dit venster aanvoelde.
+  ///
+  /// Zonder artiest valt hij terug op de oude zoeklijst: `releaseChoices` heeft een artiest nodig om
+  /// de masters te vinden, en een lege lijst zou hier slechter zijn dan een korte.
+  Future<List<MetaResult>> _discogs(String query, {String artist = '', String album = ''}) async {
     if (settings.discogsToken.isEmpty) return [];
+    final wie = artist.trim(), wat = album.trim();
+    if (wie.isEmpty || wat.isEmpty) return _discogsZoeklijst(query);
+    try {
+      // Eén pagina per master. `maxPaginas <= 1` vraagt er vijftig tegelijk op — genoeg om alle
+      // formaten te zien — en het scheelt de reeks vervolgverzoeken die dit venster niet kan
+      // betalen: er staat iemand te wachten met een draaiend wieltje.
+      final keuzes = await DiscogsService(settings)
+          .releaseChoices(wie, wat, max: 60, maxPaginas: 1);
+      if (keuzes.isEmpty) return _discogsZoeklijst(query);
+      final persingen = [
+        for (final k in keuzes)
+          MetaResult(
+            title: wat,
+            artist: wie,
+            album: wat,
+            coverUrl: k.front?.thumb ?? k.front?.uri,
+            // De volle scan alleen als hij er echt een IS. Zie [MetaResult.coverIsMiniatuur]: de
+            // persingenlijst geeft 150 pixels, en die als hoes wegschrijven is de val die deze app
+            // al eens ingelopen is.
+            coverFullUrl: (k.front != null && !k.front!.alleenMiniatuur) ? k.front!.uri : null,
+            coverIsMiniatuur: k.front?.alleenMiniatuur ?? false,
+            releaseId: k.releaseId > 0 ? k.releaseId : null,
+            mbid: k.mbid,
+            detail: persingRegel(k),
+          )
+      ];
+      // De persingen vóórop, want dat is waar in dit venster op gekozen wordt. De zoeklijst
+      // erachteraan, en niet in plaats daarvan: die is de enige van de twee die TITELS meebrengt.
+      //
+      // Een persing van deze plaat weet niet hoe de plaat heet — hij is er een persing ván, en de
+      // titel komt uit het veld hierboven. Alleen persingen tonen zou dus stilletjes de helft van
+      // dit venster uitzetten: het heet "metadata corrigeren", en een naam corrigeren hoort daar
+      // net zo goed bij als de juiste cd aanwijzen. Dubbele vallen weg in [_merged], en die houdt
+      // de eerste — dus een persing blijft een persing.
+      return _merged(persingen, await _discogsZoeklijst(query));
+    } catch (_) {
+      // Een fout hier hoort niet het hele venster leeg te laten: de zoeklijst is minder, maar hij
+      // is er wel.
+      return _discogsZoeklijst(query);
+    }
+  }
+
+  /// De oude, ondiepe zoeklijst. Terugval voor wanneer er geen artiest bekend is.
+  Future<List<MetaResult>> _discogsZoeklijst(String query) async {
+    if (query.trim().isEmpty) return [];
     try {
       final tok = Uri.encodeComponent(settings.discogsToken);
       final r = await http.get(
-        Uri.parse('https://api.discogs.com/database/search?type=release&token=$tok&q=${Uri.encodeComponent(query)}&per_page=12'),
+        Uri.parse('https://api.discogs.com/database/search?type=release&token=$tok&q=${Uri.encodeComponent(query)}&per_page=25'),
         headers: {'User-Agent': _ua},
       ).timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return [];
@@ -148,6 +264,36 @@ class MetadataSearch {
     } catch (_) {
       return [];
     }
+  }
+
+  /// De volle scan van een Discogs-persing, voor een rij die alleen een miniatuur meebracht.
+  ///
+  /// Eén verzoek, en alleen op het moment dat iemand een rij aantikt. Dit voor alle zestig rijen
+  /// vooraf doen zou zestig verzoeken kosten uit een budget van zestig per minuut — voor rijen waar
+  /// niemand naar kijkt.
+  Future<String?> volleHoes(MetaResult m) async {
+    final id = m.releaseId;
+    if (id == null || id <= 0) return null;
+    try {
+      final vol = await DiscogsService(settings)
+          .detailOf(ReleaseChoice(source: EditionSource.discogs, releaseId: id));
+      final f = vol?.front;
+      if (f == null || f.alleenMiniatuur) return null;
+      return f.uri;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// "CD · Netherlands · 9902241 · 1995" — waar een rij op te kiezen valt.
+  static String? persingRegel(ReleaseChoice k) {
+    final bits = <String>[
+      if (k.format.isNotEmpty) k.format,
+      if ((k.country ?? '').isNotEmpty) k.country!,
+      if ((k.catno ?? '').isNotEmpty) k.catno!,
+      if (k.year != null) '${k.year}',
+    ];
+    return bits.isEmpty ? null : bits.join(' · ');
   }
 
   /// Discogs search results as rows. Shared, because searching by title and searching by track
@@ -195,14 +341,21 @@ class MetadataSearch {
   /// between, and picking one changed the album's name and nothing else. The pressing is now
   /// described the same way a Discogs row is, and its MBID travels with it so the choice can
   /// actually be pinned.
-  Future<List<MetaResult>> _musicbrainz(String query) async {
+  Future<List<MetaResult>> _musicbrainz(String query, {String artist = '', String album = ''}) async {
     try {
       final mb = MusicBrainzService();
+      // Staan de twee velden bovenaan het venster ingevuld, dan is de vraag al gesteld en hoeft er
+      // niets uit een zoekregel afgeleid te worden. Dat scheelt niet alleen raadwerk maar ook
+      // verzoeken: het uitpluizen hieronder doet er één per poging om de artiest te herkennen.
+      if (artist.trim().isNotEmpty && album.trim().isNotEmpty) {
+        return _mbRijen(await mb.searchReleases(artist.trim(), album.trim(), max: 25));
+      }
       // The query MUST be scoped to an artist. Unscoped, MusicBrainz matches the whole string as
       // one phrase against the release title, so "Daft Punk Discovery" finds two SM64-soundfont
       // parodies and nothing else — it has no popularity signal to rescue a bad match. Split on
       // "Artist - Album" first, then fall back to resolving the leading words as an artist.
-      var artist = '', album = query.trim();
+      artist = '';
+      album = query.trim();
       final dash = query.indexOf(' - ');
       if (dash > 0) {
         artist = query.substring(0, dash).trim();
@@ -220,8 +373,15 @@ class MetadataSearch {
           }
         }
       }
-      final hits = await mb.searchReleases(artist, album.isEmpty ? query.trim() : album, max: 25);
-      return [
+      return _mbRijen(await mb.searchReleases(artist, album.isEmpty ? query.trim() : album, max: 25));
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// MusicBrainz-uitgaven als rijen. Gedeeld, want de twee wegen hierboven — met en zonder ingevulde
+  /// velden — leveren precies dezelfde soort treffers op.
+  static List<MetaResult> _mbRijen(List<MbRelease> hits) => [
         for (final r in hits)
           if (r.title.isNotEmpty)
             MetaResult(
@@ -236,10 +396,6 @@ class MetadataSearch {
               detail: r.line.isEmpty ? null : r.line,
             )
       ];
-    } catch (_) {
-      return [];
-    }
-  }
 
   // ── The same question, asked as a song ──────────────────────────────────────
 
