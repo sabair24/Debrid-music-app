@@ -95,6 +95,12 @@ jobs:
       #
       # Een handvol, en met opzet: dit zijn de toetsen die zonder toestel en zonder netwerk iets
       # kunnen zeggen. De hele map duurt minuten en wacht op het net.
+      #
+      # `lan_client_test.dart` staat er sinds win-v3.9.166 bij, en om precies de reden die hierboven
+      # staat: die uitgave leverde een Android- en een Windows-versie op maar geen Mac, omdat één
+      # toets in dát bestand zakte. Het is de toets die de pc en een toestel naast elkaar legt — dus
+      # juist het bestand dat merkt wanneer die twee uit elkaar gaan lopen. Hij draait op MockClient,
+      # raakt het net niet, en kost een seconde.
       - name: Layout and parsing tests
         working-directory: desktop
         run: |
@@ -112,7 +118,7 @@ jobs:
             test/vastgezette_persing_test.dart test/catalogus_inpakken_test.dart \
             test/rollen_sync_test.dart test/startsnelheid_test.dart \
             test/hoes_sync_test.dart test/oud_albumobject_test.dart \
-            test/hoes_navraag_test.dart \
+            test/hoes_navraag_test.dart test/lan_client_test.dart \
             test/completeness_test.dart \
             test/discogs_verwijzing_test.dart test/updater_test.dart \
             test/verhuizing_test.dart
