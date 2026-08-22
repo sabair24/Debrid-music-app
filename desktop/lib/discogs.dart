@@ -1186,14 +1186,45 @@ String artCacheKey(
   final searchKey =
       (pinned == null && pinnedMbid == null) ? '$artist|$album|$expectedTracks' : '';
   final roleKey = (roles.entries.map((e) => '${e.key}=${e.value}').toList()..sort()).join(',');
-  return sha1.convert(utf8.encode('art|v6|$searchKey|$pinnedKey|$roleKey')).toString();
+  return sha1.convert(utf8.encode('art|v7|$searchKey|$pinnedKey|$roleKey')).toString();
 }
 
 /// The three scans an album page shows: the sleeve, its back, and the disc itself.
 class ReleaseArt {
   final Uint8List? front, back, disc;
-  const ReleaseArt({this.front, this.back, this.disc});
+
+  /// Van WELKE persing [front] de hoes is — `rel:12345` of `mb:<uuid>`. Null als de voorkant niet
+  /// van een aangewezen persing komt.
+  ///
+  /// **Waarom dit erbij hoort.** Dit veld bestond niet, en daardoor gooide de keten precies weg wat
+  /// ze zojuist had uitgezocht. De albumpagina tekende de gevonden hoes, gaf hem door aan de
+  /// bibliotheek — maar zónder te kunnen zeggen wáár hij vandaan kwam. En `adoptAlbumCover` heeft
+  /// dat nodig: alleen een hoes die bij een aangewezen persing hoort is een feit over de plaat en
+  /// gaat vóór wat er in de bestanden zit; een gok op naam blijft eronder.
+  ///
+  /// Zo kwam het dat je op Start de ene hoes zag en op de albumpagina de andere — en dat de
+  /// albumpagina degene was die het goed had. Zie `_kiesHoesBron` en `AlbumArt._load`.
+  final String? bron;
+
+  const ReleaseArt({this.front, this.back, this.disc, this.bron});
   bool get isEmpty => front == null && back == null && disc == null;
+}
+
+/// Van welke persing de getekende hoes is, om aan de bibliotheek door te geven.
+///
+/// **Waarom dit een eigen functie is en geen regel in de widget.** Dit is de regel die stuk was, en
+/// hij is met het oog niet na te kijken: het verschil tussen "hier hoort een persing bij" en "dit is
+/// een gok op naam" beslist of de hoes de bestanden mag overrulen — en dus of Start en de
+/// albumpagina dezelfde plaat laten zien. Hij stond als een uitdrukking middenin een netwerkaanroep,
+/// waar geen toets bij kan.
+///
+/// [artBron] gaat vóór: dat is de persing waar de hoes werkelijk vandaan komt. De pin is de terugval
+/// voor hoezen die uit de cache van vóór deze versie komen, want daar staat nog geen herkomst bij.
+String? hoesHerkomst({String? artBron, String? pinnedMbid, int? pinned}) {
+  if (artBron != null && artBron.isNotEmpty) return artBron;
+  if (pinnedMbid != null && pinnedMbid.isNotEmpty) return 'mb:$pinnedMbid';
+  if (pinned != null && pinned > 0) return 'rel:$pinned';
+  return null;
 }
 
 extension DiscogsArtwork on DiscogsService {
@@ -1241,6 +1272,12 @@ extension DiscogsArtwork on DiscogsService {
     // would keep serving the art it cached first. v2 was when the archive started being consulted;
     // v3 was the move to 1200px scans; v4 is roles becoming part of the question; v5 drops the
     // search terms once a pin makes them irrelevant.
+    //
+    // v7 is [ReleaseArt.bron]: de herkomst van de voorkant. Een map die daarvóór geschreven is
+    // draagt hem niet, en een AFGERONDE map wordt hierboven meteen teruggegeven — dus zonder deze
+    // ophoging zou elk album dat al eens open is geweest voor altijd zonder herkomst blijven
+    // antwoorden, en dat is precies het album waar de klacht over ging. De prijs is dat de scans één
+    // keer per plaat opnieuw opgehaald worden; dat is dezelfde prijs als bij v2 tot en met v6.
     //
     // With a pin, artist/album/expectedTracks do not reach the answer — the pin does; they are only
     // how a release is FOUND when there is none. Leaving them in meant renaming an album guaranteed
@@ -1334,6 +1371,9 @@ extension DiscogsArtwork on DiscogsService {
           front: saidFront ?? found.front,
           back: saidBack ?? found.back,
           disc: saidDisc ?? found.disc,
+          // Heeft de gebruiker de voorkant zélf aangewezen, dan is die niet van deze persing en
+          // hoort er geen persing bij te staan. De hoes is dan een keuze, geen vondst.
+          bron: saidFront != null ? null : found.bron,
         );
 
     /// Enough to stop looking, without paying Discogs for the rest.
@@ -1376,7 +1416,9 @@ extension DiscogsArtwork on DiscogsService {
       final disc = partial?.disc ?? await _fetchIf(info?.discUrl);
       step('theaudiodb-afbeeldingen: achter=${back != null} cd=${disc != null}');
       if (back != null || disc != null) {
-        final art = said(ReleaseArt(front: partial?.front, back: back, disc: disc));
+        // `bron` blijft aan de VOORKANT hangen, en die komt hier van de gepinde persing of nergens
+        // vandaan — TheAudioDB levert alleen een achterkant en een cd.
+        final art = said(ReleaseArt(front: partial?.front, back: back, disc: disc, bron: partial?.bron));
         if (enough(art)) {
           await _writeArt(dir, art);
           return art;
@@ -1405,6 +1447,9 @@ extension DiscogsArtwork on DiscogsService {
           front: partial?.front ?? wider.front,
           back: partial?.back ?? wider.back,
           disc: partial?.disc ?? wider.disc,
+          // Wie de voorkant leverde, levert ook de herkomst. Had `partial` er al een, dan blijft
+          // die staan — de bredere zoektocht vulde dan alleen de rollen die nog open stonden.
+          bron: partial?.front != null ? partial?.bron : wider.bron,
         );
         final art = said(caa);
         if (enough(art)) {
@@ -1489,6 +1534,12 @@ extension DiscogsArtwork on DiscogsService {
       front: caa?.front ?? at(guessed.front),
       back: caa?.back ?? at(guessed.back),
       disc: caa?.disc ?? disc,
+      // Kwam de voorkant hier vandaan, dan is dít de persing waar hij van is — en dat is precies wat
+      // de bibliotheek nodig heeft om hem boven de hoes in de bestanden te zetten. Zonder dit veld
+      // wist alleen de albumpagina het, en zag je op Start nog de oude.
+      bron: caa?.front != null
+          ? caa?.bron
+          : (at(guessed.front) != null && e.releaseId > 0 ? 'rel:${e.releaseId}' : null),
     ));
     if (art.isEmpty) return null; // nothing found — don't cache a blank as the answer
     await _writeArt(dir, art);
@@ -1540,12 +1591,17 @@ extension DiscogsArtwork on DiscogsService {
       const perWave = 4;
       const maxLooked = 12;
       Uint8List? front, back, disc;
+      // Wélke persing de voorkant leverde. De lus loopt er tot twaalf langs en pakt van elk wat er
+      // nog ontbreekt, dus "de eerste treffer" is niet hetzelfde als "de persing waar de hoes van
+      // is" — en dat laatste is precies wat `ReleaseArt.bron` moet zeggen.
+      String? frontVan;
       var looked = 0;
       for (var w = 0; w * perWave < hits.length && w < 5; w++) {
         if (looked >= maxLooked || (front != null && back != null && disc != null)) break;
         final wave = hits.skip(w * perWave).take(perWave).toList();
         final scans = await Future.wait([for (final r in wave) mb.art(r.mbid)]);
-        for (final images in scans) {
+        for (var s = 0; s < scans.length; s++) {
+          final images = scans[s];
           if (images.isEmpty) continue;
           if (looked >= maxLooked) break;
           looked++;
@@ -1563,7 +1619,10 @@ extension DiscogsArtwork on DiscogsService {
           for (var n = 0; n < keys.length; n++) {
             switch (keys[n]) {
               case 'front':
-                front ??= bytes[n];
+                if (front == null && bytes[n] != null) {
+                  front = bytes[n];
+                  frontVan = wave[s].mbid;
+                }
               case 'back':
                 back ??= bytes[n];
               case 'disc':
@@ -1573,7 +1632,8 @@ extension DiscogsArtwork on DiscogsService {
         }
       }
       if (front == null && back == null && disc == null) return null;
-      return ReleaseArt(front: front, back: back, disc: disc);
+      return ReleaseArt(
+          front: front, back: back, disc: disc, bron: frontVan == null ? null : 'mb:$frontVan');
     } catch (_) {
       return null; // no art from here is not an error — the Discogs path takes over
     }
@@ -1622,7 +1682,10 @@ extension DiscogsArtwork on DiscogsService {
         if (disc == null && i.isDisc) disc = await mb.fetchImage(i.full);
       }
       if (front == null && back == null && disc == null) return null;
-      return ReleaseArt(front: front, back: back, disc: disc);
+      // De persing die dit antwoordde staat erbij, maar alleen als er werkelijk een VOORKANT uit
+      // kwam: `bron` zegt waar [ReleaseArt.front] vandaan komt, en een achterkant zonder voorkant
+      // zegt niets over de hoes die straks op Start staat.
+      return ReleaseArt(front: front, back: back, disc: disc, bron: front == null ? null : 'mb:$mbid');
     } catch (_) {
       return null;
     }
@@ -1687,10 +1750,22 @@ extension DiscogsArtwork on DiscogsService {
         return await f.exists() ? await f.readAsBytes() : null;
       }
 
+      final bronBestand = File('${dir.path}${Platform.pathSeparator}bron');
+      String? gelezenBron;
+      if (await bronBestand.exists()) {
+        final s = (await bronBestand.readAsString()).trim();
+        // Een leeg bestand is geen herkomst. Zonder deze regel zou `bron: ''` doorgegeven worden, en
+        // dat is in `adoptAlbumCover` niet-null — een lege persing die de hoes tóch boven de
+        // bestanden zet, op grond van niets.
+        if (s.isNotEmpty) gelezenBron = s;
+      }
       final art = ReleaseArt(
         front: await one('front'),
         back: await one('back'),
         disc: await one('disc'),
+        // Ontbreekt dit bestand, dan is dit een map van vóór deze versie. Dat is geen fout: het
+        // betekent alleen dat er geen persing bij staat, en dan gedraagt alles zich als voorheen.
+        bron: gelezenBron,
       );
       // Een map zonder één enkele afbeelding is GEEN antwoord.
       //
@@ -1754,6 +1829,13 @@ extension DiscogsArtwork on DiscogsService {
       await one('front', art.front);
       await one('back', art.back);
       await one('disc', art.disc);
+      // De herkomst hoort bij de plaatjes en niet alleen bij dit ene antwoord. Zonder dit regeltje
+      // weet de tweede keer dat je een album opent niet meer van welke persing de hoes is — en dan
+      // valt hij in de bibliotheek terug op "gok op naam" en verliest hij weer van de hoes in de
+      // bestanden. Precies het gedrag dat we hier aan het repareren zijn, één dag later.
+      if (art.bron != null) {
+        await File('${dir.path}${Platform.pathSeparator}bron').writeAsString(art.bron!);
+      }
       // A marker, so a release that genuinely has only a front cover isn't refetched every visit.
       //
       // Withheld when the background warmer wrote a partial answer from the free sources only. The

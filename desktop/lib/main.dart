@@ -21,6 +21,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'acoustid.dart';
 import 'auto_hoezen.dart';
+import 'bestandsbeheer.dart';
 import 'cache_snoei.dart';
 import 'album_facts.dart';
 import 'album_facts_resolver.dart';
@@ -5131,7 +5132,12 @@ class _MetadataEditorState extends State<MetadataEditor> {
   late final TextEditingController _title = TextEditingController(text: widget.album.title);
   late final TextEditingController _query =
       TextEditingController(text: '${widget.album.artist} ${widget.album.title}'.trim());
-  String _provider = 'Deezer';
+  /// Standaard alle bronnen tegelijk.
+  ///
+  /// Stond op Deezer, en dat is de bron die géén persingen kent: geen cd's, geen catalogusnummers,
+  /// geen landen. Wie dit venster opent om een persing te corrigeren begon dus bij de enige bron die
+  /// het antwoord niet kan geven, en moest zelf weten dat er een keuzelijst boven stond.
+  String _provider = 'Alles';
   bool _searching = false;
 
   /// What went wrong last time, if anything. Without this a failed lookup left the spinner turning
@@ -5174,9 +5180,20 @@ class _MetadataEditorState extends State<MetadataEditor> {
     try {
       // The timeout is the point as much as the catch: a provider that accepts the connection and
       // then says nothing would otherwise hold this dialog open indefinitely.
+      // De twee velden bovenaan gaan mee als artiest en titel. Dat is een ándere vraag dan de
+      // zoekregel: `artist=…&release_title=…` levert de persingen van déze plaat, waar één string
+      // over beide velden ook documentaires en tributes binnenhaalt.
+      //
+      // Langer wachten voor "Alles": dat bevraagt drie bronnen tegelijk, en de Discogs-tak haalt de
+      // hele persingenlijst op in plaats van de eerste twaalf zoekresultaten. Dertig seconden was
+      // krap voor één bron en zou hier stelselmatig aflopen — een tijdslimiet die altijd afgaat is
+      // geen tijdslimiet maar een storing.
       res = await MetadataSearch(context.read<AppSettings>())
-          .search(_provider, _query.text, track: widget.album.isSingle)
-          .timeout(const Duration(seconds: 30));
+          .search(_provider, _query.text,
+              track: widget.album.isSingle,
+              artist: _artist.text,
+              album: widget.album.isSingle ? '' : _title.text)
+          .timeout(Duration(seconds: _provider == 'Alles' ? 75 : 40));
     } on TimeoutException {
       failure = '$_provider antwoordde niet op tijd. Probeer het opnieuw of kies een andere bron.';
     } catch (e) {
@@ -5204,7 +5221,14 @@ class _MetadataEditorState extends State<MetadataEditor> {
     });
     // `bewaarCover` en niet `coverUrl`: de eerste is de scan op volle maat, de tweede vult alleen
     // de rij van 44 punten. Dit plaatje wordt bij [_applyInner] de hoes van het album.
-    final teBewaren = m.bewaarCover;
+    //
+    // Is er alleen een miniatuur — wat de persingenlijst van Discogs per rij geeft — dan wordt de
+    // volle scan hier alsnog opgehaald, met één verzoek en pas nu iemand deze rij werkelijk kiest.
+    // Zonder dat zou er een hoes van 150 pixels als `correctedCover` weggeschreven worden: de
+    // hoogste voorrang die er is, bewaard op schijf, en bij elke start weer teruggeladen.
+    final zoeker = MetadataSearch(context.read<AppSettings>());
+    final teBewaren = m.bewaarCover ?? (m.coverIsMiniatuur ? await zoeker.volleHoes(m) : null);
+    if (!mounted || !identical(_picked, m)) return;
     if (teBewaren != null) {
       final bytes = await CoverEnricher(context.read<AppSettings>()).downloadImage(teBewaren);
       if (mounted && identical(_picked, m)) setState(() => _pickedCover = bytes);
@@ -5321,7 +5345,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
                       items: MetadataSearch.providers
                           .map((p) => DropdownMenuItem(value: p, child: Text(p)))
                           .toList(),
-                      onChanged: (v) => setState(() => _provider = v ?? 'Deezer'),
+                      onChanged: (v) => setState(() => _provider = v ?? 'Alles'),
                     ),
                   ),
                 );
@@ -7380,6 +7404,18 @@ ItemMenu _nummerMenu(BuildContext context, Track t) {
         // plaats van die van de peer.
         MenuRegel(Icons.travel_explore_rounded, 'Zoeken met Soulseek',
             () => openOp(nav, (_) => _bronnenPagina(t.title, vraag, tags: vervangTags))),
+        // Van "dit nummer" naar "dat bestand". De app weet het pad — het staat in `Track.path` en
+        // wordt gebruikt om af te spelen, te taggen en te verplaatsen — maar er liep geen enkele weg
+        // van het scherm naar de map, dus wie het bestand wilde zien moest zelf gaan zoeken.
+        //
+        // Alleen als de bibliotheek van DEZE machine komt. Op een toestel dat de pc uitleest klopt
+        // het pad wel, maar het klopt daar — een Verkenner openen op een telefoon slaat nergens op,
+        // en op de Mac zou hij naar een map wijzen die daar niet bestaat.
+        if (!lib.isRemote && kanBestandTonen)
+          MenuRegel(Icons.folder_open_rounded, 'Toon in $bestandsbeheerNaam', () async {
+            final fout = await toonInBestandsbeheer(t.path);
+            if (fout != null && context.mounted) _srcToast(context, fout);
+          }),
         // Stond in het oude tv-dialoogvenster dat dit menu vervangt. Hem hier weglaten zou die actie
         // stilletjes van de afstandsbediening halen — en op de albumpagina zit hij achter `_hover`,
         // dus op een tablet was dit meteen de enige weg ernaartoe.
@@ -7429,6 +7465,13 @@ ItemMenu _albumMenu(BuildContext context, Album a) {
         // Geen tags mee: er wordt hier geen bestand vervangen, er wordt een plaat gezocht.
         MenuRegel(Icons.travel_explore_rounded, 'Zoeken met Soulseek',
             () => openOp(nav, (_) => _bronnenPagina(a.title, vraag))),
+        // De map van de plaat, via het eerste nummer erin. Zelfde voorwaarde als bij een nummer: dit
+        // hoort alleen te bestaan waar de bestanden werkelijk staan.
+        if (!context.read<LibraryStore>().isRemote && kanBestandTonen && nummers.isNotEmpty)
+          MenuRegel(Icons.folder_open_rounded, 'Toon in $bestandsbeheerNaam', () async {
+            final fout = await toonInBestandsbeheer(nummers.first.path);
+            if (fout != null && context.mounted) _srcToast(context, fout);
+          }),
         MenuRegel(
             Icons.delete_outline_rounded,
             'Verwijderen…',
@@ -15664,9 +15707,18 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
       // name, which is a guess and stays below the embedded cover.
       final front = art?.front;
       if (front != null && mounted) {
-        final from = widget.pinnedMbid != null && widget.pinnedMbid!.isNotEmpty
-            ? 'mb:${widget.pinnedMbid}'
-            : (widget.pinned != null && widget.pinned! > 0 ? 'rel:${widget.pinned}' : null);
+        // **De persing die de hoes WERKELIJK leverde gaat vóór de gepinde.**
+        //
+        // Hier stond alleen de pin, en dat was te weinig. Zonder pin — het gewone geval — kwam er
+        // `null` uit, en dan landt de hoes in `enriched`, dat het verliest van de hoes die in de
+        // bestanden zit. Gevolg: de albumpagina tekende de gevonden hoes en Start bleef de oude
+        // tonen. Twee schermen, twee antwoorden, één plaat — precies de klacht.
+        //
+        // De keten weet inmiddels wél van welke persing de voorkant is; zie [ReleaseArt.bron]. De
+        // pin blijft als terugval staan voor het geval de hoes uit de cache van vóór deze versie
+        // komt, want daar staat nog geen herkomst bij.
+        final from = hoesHerkomst(
+            artBron: art?.bron, pinnedMbid: widget.pinnedMbid, pinned: widget.pinned);
         // With the settings, a traced sleeve is written down and survives the next start; the
         // correction used to live only for as long as the window stayed open.
         context
