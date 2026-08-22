@@ -112,6 +112,16 @@ class AlbumDto {
   /// vingerafdruk in catalog.dart, die daar al voor waarschuwde.
   final String? artTag;
 
+  /// De scans die de EIGENAAR heeft aangewezen: 'front', 'back' en/of 'disc' → adres.
+  ///
+  /// **Waarom dit over de lijn moet.** Deze keuzes stonden in `album_art_roles.json` op het toestel
+  /// waar ze gemaakt waren, en nergens anders. Kies je op de iPad de juiste cd-scan, dan wist de pc
+  /// daar niets van en de Shield dus ook niet — terwijl een vastgezette persing en een samengevoegde
+  /// editie hier al jaren wél in staan. Dat is geen ontwerpkeuze geweest maar een gat.
+  ///
+  /// Het zijn adressen, geen bytes: klein genoeg om gewoon in de catalogus mee te reizen.
+  final Map<String, String> artRoles;
+
   const AlbumDto({
     required this.id,
     required this.artistId,
@@ -128,6 +138,7 @@ class AlbumDto {
     this.merged = false,
     this.styles = const [],
     this.artTag,
+    this.artRoles = const {},
   });
 
   factory AlbumDto.fromJson(Map<String, dynamic> j) => AlbumDto(
@@ -149,6 +160,10 @@ class AlbumDto {
             if (v is String) v,
         ],
         artTag: j['artTag'] as String?,
+        artRoles: {
+          for (final e in (j['artRoles'] as Map? ?? const {}).entries)
+            if (e.value is String) '${e.key}': e.value as String,
+        },
       );
 
   Map<String, dynamic> toJson() => {
@@ -167,6 +182,7 @@ class AlbumDto {
         'merged': merged,
         'styles': styles,
         'artTag': artTag,
+        if (artRoles.isNotEmpty) 'artRoles': artRoles,
       };
 }
 

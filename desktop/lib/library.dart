@@ -899,8 +899,17 @@ class LibraryStore extends ChangeNotifier {
   /// The images the user assigned for this record: 'front', 'back' and/or 'disc' → image URL.
   ///
   /// Empty when they never said — which is the normal case, and means the guesses stand.
-  Map<String, String> albumArtRoles(String artist, String album) =>
-      _albumArtRoles[albumArtKey(artist, album)] ?? const {};
+  ///
+  /// Op een telefoon, een iPad, een Mac of de tv komen ze met de CATALOGUS mee in plaats van uit een
+  /// bestand op dat toestel. Dat was het gat: `album_art_roles.json` bleef staan waar de keuze
+  /// gemaakt was, dus de cd die je op de iPad aanwees bestond nergens anders. Een vastgezette
+  /// persing en een samengevoegde editie reisden hier al jaren wel mee.
+  Map<String, String> albumArtRoles(String artist, String album) => isRemote
+      ? (_remoteAlbumRoles[albumArtKey(artist, album)] ?? const {})
+      : (_albumArtRoles[albumArtKey(artist, album)] ?? const {});
+
+  /// De aangewezen scans zoals de pc ze kent, op een toestel dat de muziek niet bezit.
+  final Map<String, Map<String, String>> _remoteAlbumRoles = {};
 
   /// Pin a front cover by hand, and have every screen show it at once.
   ///
@@ -928,6 +937,13 @@ class LibraryStore extends ChangeNotifier {
 
   /// Say what an image IS. [url] empty clears that role and lets the app guess again.
   Future<void> setAlbumArtRole(String artist, String album, String role, String url) async {
+    // De pc houdt de boeken bij, net als voor een vastgezette persing en een artiestportret. Zonder
+    // deze regel bleef een keuze op de iPad op de iPad, en zag de pc — en dus elk ander toestel —
+    // hem nooit.
+    if (isRemote) {
+      return _editOnPc(
+          {'op': 'albumArtRole', 'artist': artist, 'album': album, 'role': role, 'url': url});
+    }
     final k = albumArtKey(artist, album);
     final m = _albumArtRoles.putIfAbsent(k, () => {});
     if (url.isEmpty) {
@@ -954,6 +970,12 @@ class LibraryStore extends ChangeNotifier {
   /// nothing. Picking an edition means "use its scans"; picking a single scan is the exception you
   /// make afterwards.
   Future<void> clearAlbumArtRoles(String artist, String album) async {
+    // Ook wissen is een bewerking, en die hoort op de pc te landen. Bleef dit lokaal, dan wiste een
+    // iPad zijn eigen (lege) lijstje terwijl de pc de oude rollen hield — en na de eerstvolgende
+    // synchronisatie stonden ze er gewoon weer.
+    if (isRemote) {
+      return _editOnPc({'op': 'albumArtRole', 'artist': artist, 'album': album, 'clear': true});
+    }
     if (_albumArtRoles.remove(albumArtKey(artist, album)) == null) return;
     await _saveAlbumArtRoles();
     notifyListeners();
@@ -2000,6 +2022,15 @@ class LibraryStore extends ChangeNotifier {
       built.add(al);
     }
     albums = built..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+
+    // De aangewezen scans, op dezelfde sleutel waarop [albumArtRoles] ze opzoekt.
+    _remoteAlbumRoles
+      ..clear()
+      ..addEntries([
+        for (final dto in catalog.albums)
+          if (dto.artRoles.isNotEmpty)
+            MapEntry(albumArtKey(dto.artistName, dto.title), dto.artRoles),
+      ]);
 
     _remoteArtistArt
       ..clear()
