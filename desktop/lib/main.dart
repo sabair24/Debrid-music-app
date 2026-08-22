@@ -755,14 +755,23 @@ Future<void> main() async {
       // Herhalen kost niets als het al goed staat, en het is de enige manier om er zeker van te
       // zijn: er is geen betrouwbare manier om terug te lezen of de balk werkelijk weg is, zoals
       // `isMaximized` dat hieronder wél kan.
-      try {
-        await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
-      } catch (_) {/* een venster zonder balk is mooi, maar geen reden om niet te starten */}
       for (var i = 0; i < 6; i++) {
         if (await windowManager.isMaximized()) break;
         await windowManager.maximize();
         await Future.delayed(const Duration(milliseconds: 100));
       }
+      // NA het maximaliseren, en dat is de hele wijziging ten opzichte van de vorige poging.
+      //
+      // Die vroeg het ervóór, en dat kan per definitie niets opleveren: `maximize()` laat Windows het
+      // vensterkader opnieuw berekenen, en juist dáár komt de systeembalk terug. Wat je vraagt vóór
+      // een kaderwijziging wordt door die wijziging overschreven — dezelfde les die drie regels
+      // hierboven over het maximaliseren zelf staat, alleen andersom toegepast.
+      //
+      // Herhalen kost niets als het al goed staat, en het is de enige manier om er zeker van te
+      // zijn: anders dan bij `isMaximized` is er geen manier om terug te lezen of de balk weg is.
+      try {
+        await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
+      } catch (_) {/* een venster zonder balk is mooi, maar geen reden om niet te starten */}
     });
   }
 
@@ -1245,40 +1254,29 @@ extension AlbumSortX on AlbumSort {
       };
 }
 
-/// De vastgezette balk van de albumpagina, als matglas boven de was.
+/// Het glas van de albumbalk, gekoppeld aan hoe ver de lijst eronder geschoven is.
 ///
-/// Geen [glassSurface]: die is een PIL met ronde hoeken, een rand rondom en een schaduw eronder —
-/// precies goed voor iets dat op een pagina zweeft, en precies verkeerd voor een strook die de volle
-/// breedte raakt en tegen de bovenrand aan ligt.
-///
-/// Wat hier wél telt is de vervaging. Deze balk staat vast terwijl de tracklijst eronder doorschuift,
-/// en zonder vervaging lees je die tekst gewoon dwars door de balk heen. De vulling is de bovenkant
-/// van de was, half doorzichtig: genoeg om de titels en de knoppen erop leesbaar te houden, weinig
-/// genoeg om de kleur van de plaat er nog doorheen te zien.
-///
-/// Op een televisie zonder vervaging, om dezelfde reden die bij [glassSurface] staat: een
-/// `BackdropFilter` is de enige laag die Flutter niet kan bewaren, en op een Tegra X1 is dat het
-/// duurste wat er op het scherm staat. Daar dus een dichtere vulling in plaats van glas.
-Widget _glazenBalk(Color tint) {
-  final vulling = Container(
-    decoration: BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          tint.withValues(alpha: isTv ? .96 : .58),
-          tint.withValues(alpha: isTv ? .92 : .44),
-        ],
-      ),
-    ),
-  );
-  if (isTv) return vulling;
-  return ClipRect(
-    child: BackdropFilter(
-      filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-      child: vulling,
-    ),
-  );
+/// Apart gezet zodat alléén de balk opnieuw getekend wordt bij het scrollen. Zou dit met een
+/// `NotificationListener` rond de hele pagina gaan, dan werd bij elke scrollstap de complete
+/// tracklijst opnieuw gebouwd — op een lange plaat is dat merkbaar, en op een Shield fataal.
+class _MeeschuivendGlas extends StatelessWidget {
+  const _MeeschuivendGlas({required this.tint, required this.rol});
+
+  final Color tint;
+  final ScrollController rol;
+
+  /// Over hoeveel punten scrollen het glas volledig opkomt.
+  ///
+  /// Kort genoeg dat de knoppen leesbaar zijn zodra er werkelijk iets onder ze door gaat, lang
+  /// genoeg dat het opkomen niet als een schakelaar leest. Ongeveer één tracklijstregel.
+  static const double aanloop = 56;
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: rol,
+        builder: (_, __) => balkGlas(
+            tint, !rol.hasClients ? 0 : (rol.offset / aanloop).clamp(0.0, 1.0)),
+      );
 }
 
 /// Een ruit matglas: hij vervaagt écht wat erachter langs schuift.
@@ -2097,17 +2095,33 @@ class _HomeShellState extends State<HomeShell> {
         height: 64 + tvOverscan.top + (_isTouch ? MediaQuery.viewPaddingOf(context).top : 0),
         child: Stack(
           children: [
+            // De gloed van het merk, maar niet bovenop de kleur van een plaat.
+            //
+            // **Waarom hij wegtrekt.** Deze paarse gloed is er voor Start en Albums, waar niets
+            // anders de bovenkant kleurt. Staat er een plaat open, dan ligt de was van die plaat
+            // achter alles — en dan liggen er twee lichtbronnen over elkaar: paars bovenaan, de
+            // kleur van de hoes eronder. Dat is precies wat de bovenkant van het scherm in banen
+            // deed uiteenvallen in plaats van één geheel te zijn.
+            //
+            // Overvloeien, niet omslaan: hij verdwijnt in hetzelfde tempo als waarin de was opkomt.
             Positioned(
               left: 0,
               right: 0,
               top: -150,
               height: 300,
               child: IgnorePointer(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: RadialGradient(
-                      radius: .75,
-                      colors: [_accent.withValues(alpha: .34), Colors.transparent],
+                child: Consumer<PaginaWas>(
+                  builder: (_, paginaWas, __) => AnimatedContainer(
+                    duration: kWas,
+                    curve: Curves.easeOut,
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        radius: .75,
+                        colors: [
+                          _accent.withValues(alpha: paginaWas.kleur == null ? .34 : 0),
+                          Colors.transparent,
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -3863,6 +3877,13 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   List<SoulseekFile> _albumSlsk = const [];
   bool _slskLoaded = false;
 
+  /// Hoe ver de tracklijst geschoven is, want daar hangt het glas van de bovenbalk aan.
+  ///
+  /// Zie [_MeeschuivendGlas]: die balk hoort er alleen te zijn als er werkelijk iets onder hem door
+  /// gaat. Bovenaan tekent hij niets, en loopt de kleur van de plaat ononderbroken van de bovenrand
+  /// van het venster tot in de pagina.
+  final ScrollController _rol = ScrollController();
+
   @override
   void initState() {
     super.initState();
@@ -3883,6 +3904,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     // Via de State en niet via `context`: bij het opruimen mag er niet meer in de boom gekeken
     // worden, en dit is een dienst die de hele app deelt.
     _paginaWas?.wis(_was);
+    _rol.dispose();
     super.dispose();
   }
 
@@ -4472,6 +4494,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                 top: tvOverscan.top,
               ),
               child: CustomScrollView(
+              controller: _rol,
               slivers: [
                 SliverAppBar(
                   // Matglas in plaats van een dichte kleur.
@@ -4485,7 +4508,13 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                   // Vandaar geen doorzichtigheid maar glas: de vervaging maakt wat eronder doorgaat
                   // onleesbaar, terwijl de kleur er wél doorheen komt.
                   backgroundColor: Colors.transparent,
-                  flexibleSpace: _glazenBalk(wasTop),
+                  // Geen schaduw en geen scrolltint van Material eronder: dat zijn allebei manieren
+                  // waarop deze balk zich alsnog als een aparte baan zou aftekenen zodra je scrolt.
+                  elevation: 0,
+                  scrolledUnderElevation: 0,
+                  surfaceTintColor: Colors.transparent,
+                  shadowColor: Colors.transparent,
+                  flexibleSpace: _MeeschuivendGlas(tint: wasTop, rol: _rol),
                   pinned: true,
                   leading: IconButton(
                     icon: const Icon(Icons.arrow_back_rounded),
