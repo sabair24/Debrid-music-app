@@ -1161,9 +1161,17 @@ class LibraryStore extends ChangeNotifier {
   /// as long as the app stays open. That was the shape of the D'Eux bug: its files carry the sleeve
   /// of a Greatest Hits, opening the album put the real one on the grid, and closing the app threw
   /// it away — so the same record was wrong again every morning and right every time it was checked.
-  void adoptAlbumCover(String artist, String album, Uint8List bytes,
+  /// Geeft terug of er werkelijk iets veranderd is.
+  ///
+  /// **Waarom dat niet vanzelfsprekend is.** Deze methode slaat een album over dat een eigenhandig
+  /// gekozen hoes heeft, en ze slaat een hoes over die er al precies zo staat. De aanroeper ziet dat
+  /// niet, en de verwarmer schrijft er een regel over in het logboek. Zonder dit antwoord zou daar
+  /// "hoes overgenomen" staan voor een plaat waar niets aan veranderd is — en dan is dat logboek
+  /// geen bewijs meer maar ruis, precies op de plek waar je het straks nodig hebt om uit te zoeken
+  /// wélke plaat van hoes wisselde.
+  bool adoptAlbumCover(String artist, String album, Uint8List bytes,
       {String? from, AppSettings? settings}) {
-    if (bytes.length < 500) return;
+    if (bytes.length < 500) return false;
     var changed = false;
     for (final a in albums) {
       if (a.tracks.isEmpty) continue;
@@ -1185,6 +1193,7 @@ class LibraryStore extends ChangeNotifier {
       changed = true;
     }
     if (changed) notifyListeners();
+    return changed;
   }
 
   /// Un-hide everything: the files are still on disk, so a rescan restores them.

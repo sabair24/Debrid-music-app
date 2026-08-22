@@ -72,10 +72,15 @@ const _tooSlowLimit = 5;
 
 /// Pull an album's scans into the on-disk cache. The default [FactsWarmer.warmArt].
 ///
-/// Returns nothing on purpose: the caller does not want the bytes, it wants them to be on disk by
-/// the time the page asks. [DiscogsArtwork.releaseArt] owns the cache key and the in-flight table,
-/// so a page that opens mid-warm joins the same fetch instead of starting a second one.
-Future<void> fetchReleaseArt(
+/// [DiscogsArtwork.releaseArt] owns the cache key and the in-flight table, so a page that opens
+/// mid-warm joins the same fetch instead of starting a second one.
+///
+/// **Het antwoord komt nu terug, en dat was eerst niet zo.** Hier stond letterlijk "returns nothing
+/// on purpose: the caller does not want the bytes, it wants them to be on disk". Dat klopte zolang
+/// de bibliotheek niets met een gevonden hoes deed. Sinds `ReleaseArt.bron` bestaat kan hij zeggen
+/// van wélke persing de voorkant is, en dan is het wél de moeite: dezelfde hoes die de albumpagina
+/// zou overnemen, alleen zonder dat je die pagina hoeft te openen. Zie `FactsWarmer._warmArtFor`.
+Future<ReleaseArt?> fetchReleaseArt(
   String artist,
   String album, {
   required int expectedTracks,
@@ -97,7 +102,10 @@ Future<void> fetchReleaseArt(
             // seconds, and the Discogs chain after them had not returned in eighty-seven. Seventy-nine
             // records at ninety seconds each is not a background task, it is a week.
             freeOnly: freeOnly)
-        .then((_) => trace?.call('  [kunst] releaseArt() teruggekeerd'));
+        .then((art) {
+      trace?.call('  [kunst] releaseArt() teruggekeerd');
+      return art;
+    });
 
 class FactsWarmer extends ChangeNotifier {
   FactsWarmer({
@@ -133,7 +141,7 @@ class FactsWarmer extends ChangeNotifier {
   }) resolve;
 
   /// Injected for the same reason [resolve] is: a test drives the whole loop without a socket.
-  final Future<void> Function(
+  final Future<ReleaseArt?> Function(
     String artist,
     String album, {
     required int expectedTracks,
@@ -640,6 +648,16 @@ class FactsWarmer extends ChangeNotifier {
     _artTried.add(uid);
     if (await DiscogsService(settings).hasReleaseArt(album.artist, album.title,
         expectedTracks: expected, pinned: pinned, pinnedMbid: mbid, roles: roles)) {
+      // De scans staan er al — maar dat wil niet zeggen dat de bibliotheek ze KENT.
+      //
+      // Deze tak sloeg alles over, en dat is na de eerste ronde de meerderheid van de platen: wat
+      // in een vorige sessie gewarmd is, staat op schijf en werd hier nooit meer aangeraakt. De
+      // hoes bleef dan liggen in een cachemap waar alleen de albumpagina hem uit haalt. Uitlezen
+      // kost één schijfleesactie en geen enkel netwerkverzoek.
+      _neemHoesOver(
+          album,
+          await DiscogsService(settings).cachedReleaseArt(album.artist, album.title,
+              expectedTracks: expected, pinned: pinned, pinnedMbid: mbid, roles: roles));
       return _Art.already; // one file check, nothing to show a line for
     }
     _busy(uid);
@@ -650,7 +668,7 @@ class FactsWarmer extends ChangeNotifier {
       _log.line('scans: "${album.title}" ophalen… (aantal=$expected mbid=${mbid ?? "-"})');
       final t0 = DateTime.now();
       try {
-        await warmArt(album.artist, album.title,
+        final art = await warmArt(album.artist, album.title,
                 expectedTracks: expected,
                 pinned: pinned,
                 pinnedMbid: mbid,
@@ -658,6 +676,7 @@ class FactsWarmer extends ChangeNotifier {
                 settings: settings,
                 trace: artTrace ?? _log.line)
             .timeout(_artDeadline);
+        _neemHoesOver(album, art);
       } on TimeoutException {
         _log.line('scans: "${album.title}" duurde langer dan ${_artDeadline.inSeconds}s — '
             'verder met de rest (hij loopt op de achtergrond door)');
@@ -675,6 +694,44 @@ class FactsWarmer extends ChangeNotifier {
       _busy(null);
     }
   }
+
+  /// De gevonden hoes aan de bibliotheek geven.
+  ///
+  /// **Waarom dit hier hoort en niet alleen op de albumpagina.** Een hoes met een aangewezen persing
+  /// gaat vóór de hoes die in de bestanden zit — dat is wat `adoptAlbumCover` doet met een `from`.
+  /// Tot nu toe gebeurde dat alleen in `AlbumArt._load`, en dat widget leeft op de albumpagina. Een
+  /// plaat kwam dus pas op zijn plek als je hem één keer opende, en dat is met 336 albums geen
+  /// reparatie maar een lijst huiswerk. De verwarmer loopt precies diezelfde platen al af en haalt
+  /// precies dezelfde scans op — hij gooide het antwoord alleen weg.
+  ///
+  /// **Wat hij NIET doet.** Een hoes zonder persing overschrijft niets zichtbaars: die landt in
+  /// `enriched` en verliest van de bestanden. Dat onderscheid is het hele punt — een gevonden
+  /// persing is een feit over de plaat, een treffer op naam is een gok. En een hoes die jij zelf hebt
+  /// aangewezen blijft staan; dat zit al in [LibraryStore.adoptAlbumCover].
+  ///
+  /// Elke overname gaat met naam en herkomst het logboek in. Zonder dat is "mijn hoezen zijn
+  /// veranderd" achteraf niet te onderzoeken, en dat is precies de klacht die deze wijziging kan
+  /// opleveren als er één slechte match tussen de goede zit.
+  void _neemHoesOver(Album album, ReleaseArt? art) {
+    final front = art?.front;
+    if (front == null) return;
+    final veranderd = library.adoptAlbumCover(album.artist, album.title, front,
+        from: art!.bron, settings: settings);
+    // Alleen wat écht voorgaat wordt geteld en gemeld. Een gok op naam belandt in `enriched` en
+    // verandert niets aan wat je ziet; en `adoptAlbumCover` slaat een plaat over waar jij zelf een
+    // hoes koos. In beide gevallen zou "hoes overgenomen" in het logboek een onwaarheid zijn.
+    if (!veranderd || art.bron == null) return;
+    _hoezen++;
+    _log.line('scans: "${album.title}" hoes overgenomen van ${art.bron}');
+  }
+
+  int _hoezen = 0;
+
+  /// Hoeveel hoezen deze sessie zijn overgenomen van een aangewezen persing.
+  ///
+  /// Alleen die tellen mee: een treffer op naam verandert niets aan wat je ziet, en die meetellen
+  /// zou het getal onbruikbaar maken als antwoord op "is er iets veranderd aan mijn hoezen".
+  int get hoezenOvergenomen => _hoezen;
 
   /// Every album that could hold facts, newest first. The record that just landed is the one you are
   /// about to open.
