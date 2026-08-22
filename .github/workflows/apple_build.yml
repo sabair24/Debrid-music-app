@@ -130,6 +130,59 @@ jobs:
             --build-name=${{ steps.version.outputs.VERSION }} \
             --build-number=${{ steps.version.outputs.BUILD }}
 
+      # Chromaprint's fpcalc, zodat "Herkennen op geluid" ook op de Mac werkt.
+      #
+      # Het zat alleen in de Windows-bouw, en daarom zei de Mac altijd "fpcalc ontbreekt". Dezelfde
+      # versie als daar (1.6.1), en om dezelfde reden vastgezet: een bouw die stilletjes een ander
+      # vingerafdrukalgoritme meebrengt maakt elke bewaarde vingerafdruk op elke schijf waardeloos
+      # zonder dat er een regel code beweegt.
+      #
+      # `macos-universal` en niet `-arm64`: één bestand dat op zowel een Intel-Mac als op Apple
+      # Silicon draait. Nagekeken: het is werkelijk een universeel Mach-O met beide architecturen
+      # erin, en de arm64-helft draagt een handtekening -- dat laatste is geen detail, want Apple
+      # Silicon weigert ongetekende arm64-code botweg uit te voeren.
+      #
+      # In `Contents/MacOS/`, want dat is waar `Platform.resolvedExecutable` naartoe wijst en
+      # `Fingerprinter` dus als eerste kijkt. Geen enkele regel Dart hoeft hiervan te weten.
+      - name: Bundle fpcalc (Chromaprint)
+        run: |
+          set -euo pipefail
+          ver=1.6.1
+          map="chromaprint-fpcalc-$ver-macos-universal"
+          curl -fsSL --retry 3 --retry-delay 5 -o fpcalc.tar.gz \
+            "https://github.com/acoustid/chromaprint/releases/download/v$ver/$map.tar.gz"
+          tar xzf fpcalc.tar.gz
+          app="build/macos/Build/Products/Release/DebridMusic.app"
+          dest="$app/Contents/MacOS/fpcalc"
+          cp "$map/fpcalc" "$dest"
+          chmod +x "$dest"
+
+          # Dat het er STAAT is niet genoeg; het moet ook draaien. Een stille mislukking hier levert
+          # een Mac-app op die weer "fpcalc ontbreekt" zegt, en dat merk je pas na het uitgeven.
+          "$dest" -version
+
+          # Een bestand toevoegen aan een bundel VERBREEKT het zegel: `CodeResources` somt op wat
+          # erin hoort te zitten. Daarom het buitenste niveau opnieuw ondertekenen -- ad hoc, want
+          # deze app wordt sowieso ongetekend uitgegeven en er komt geen certificaat aan te pas. Niet
+          # `--deep`: de ingebedde frameworks hebben hun eigen geldige handtekening en die hoort met
+          # rust gelaten te worden.
+          #
+          # `--preserve-metadata=entitlements` omdat opnieuw ondertekenen zónder dat de rechten
+          # wégschrijft. Deze app draait niet in de sandbox, dus veel zou het niet breken, maar
+          # `network.client` stilletjes kwijtraken is precies het soort ding dat je pas merkt als de
+          # Mac geen enkele hoes meer ophaalt.
+          codesign --force --sign - "$dest"
+          codesign --force --sign - --preserve-metadata=entitlements "$app"
+
+          # En dan nakijken in plaats van aannemen. Klopt het zegel niet, dan zakt de bouw hier --
+          # veel beter dan een Mac die straks "beschadigd" meldt en helemaal niet meer start.
+          codesign --verify --strict "$app"
+
+          # Opruimen: het uitgepakte mapje ligt in `desktop/`, waar de iOS-stap straks nog doorheen
+          # loopt. Niets kritieks, wel netjes.
+          rm -rf fpcalc.tar.gz "$map"
+          echo "OK: fpcalc $ver ($(du -h "$dest" | cut -f1)), bundel geverifieerd"
+
       - name: Package the Mac app
         run: |
           mkdir -p out

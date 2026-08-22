@@ -134,23 +134,60 @@ class Fingerprinter {
 
   /// Where fpcalc lives, or null if it does not.
   ///
-  /// Beside the app's own executable first, because that is where the installer puts it. The
-  /// development tree and PATH are checked too, so a checkout can be tested without an installer.
+  /// Naast het eigen uitvoerbare bestand eerst, want daar zet de bouwstraat hem neer: op Windows in
+  /// de releasemap, op de Mac in `Contents/MacOS/` — precies waar [Platform.resolvedExecutable] naar
+  /// wijst. Daarna de ontwikkelmap, en tot slot de gebruikelijke plekken en PATH.
+  ///
+  /// **Die staart is geen luxe.** De uitleg hier beloofde al dat PATH nagekeken werd, en dat deed
+  /// hij niet — er stonden precies twee kandidaten. Wie fpcalc via Homebrew heeft (`brew install
+  /// chromaprint`, en dat is op een Mac de gewone weg) kreeg dus "fpcalc ontbreekt" terwijl het
+  /// programma gewoon geïnstalleerd was.
   static String? _found;
   static bool _looked = false;
+
+  /// Waar het op stukliep, voor wie het wil weten. Zwijgen is niet gratis — zelfde afspraak als bij
+  /// `Ffmpeg.laatsteFout`, en om dezelfde reden: "niet gevonden" zonder te zeggen waar er gekeken is
+  /// laat niemand verder komen.
+  static String? laatsteFout;
+
+  /// Kandidaten, in volgorde van vertrouwen. Dezelfde vorm als `Ffmpeg._kandidaten()`.
+  ///
+  /// Openbaar, want de volgorde IS de afspraak en die hoort vast te liggen in een toets: wat de
+  /// bouwstraat meelevert gaat vóór wat er toevallig op de machine staat. Alleen van de eerste weten
+  /// we welke versie het is, en een andere versie kan een ander vingerafdrukalgoritme hebben.
+  static List<String> kandidaten() {
+    final naam = Platform.isWindows ? 'fpcalc.exe' : 'fpcalc';
+    final sep = Platform.pathSeparator;
+    return [
+      '${File(Platform.resolvedExecutable).parent.path}$sep$naam',
+      '${Directory.current.path}${sep}tools$sep$naam',
+      if (!Platform.isWindows) ...[
+        '/opt/homebrew/bin/fpcalc',
+        '/usr/local/bin/fpcalc',
+        '/usr/bin/fpcalc',
+      ],
+      naam, // via PATH
+    ];
+  }
 
   String? get tool {
     if (_override != null) return File(_override).existsSync() ? _override : null;
     if (_looked) return _found;
     _looked = true;
-    final naam = Platform.isWindows ? 'fpcalc.exe' : 'fpcalc';
-    final kandidaten = [
-      '${File(Platform.resolvedExecutable).parent.path}${Platform.pathSeparator}$naam',
-      '${Directory.current.path}${Platform.pathSeparator}tools${Platform.pathSeparator}$naam',
-    ];
-    for (final k in kandidaten) {
-      if (File(k).existsSync()) return _found = k;
+    final geprobeerd = <String>[];
+    for (final k in kandidaten()) {
+      // Een naam zonder mappen is de PATH-kandidaat; die bestaat niet als bestand en moet dus
+      // gedraaid worden om te weten of hij er is. Dezelfde afweging als bij ffmpeg.
+      try {
+        if (k.contains(Platform.pathSeparator)) {
+          if (File(k).existsSync()) return _found = k;
+        } else if (Process.runSync(k, ['-version']).exitCode == 0) {
+          return _found = k;
+        }
+      } catch (_) {/* een kandidaat die niet bestaat is geen fout, alleen een kandidaat minder */}
+      geprobeerd.add(k);
     }
+    laatsteFout = 'fpcalc niet gevonden; geprobeerd: ${geprobeerd.join(", ")}';
     return _found = null;
   }
 
@@ -160,6 +197,7 @@ class Fingerprinter {
   static void resetLookup() {
     _looked = false;
     _found = null;
+    laatsteFout = null;
   }
 
   /// What [path] sounds like, from the cache when the file has not changed since.
