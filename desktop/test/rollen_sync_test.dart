@@ -27,6 +27,7 @@ import 'package:debridmusic/lan/tokens.dart';
 import 'package:debridmusic/library.dart';
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/paths.dart';
+import 'package:debridmusic/settings.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
@@ -66,6 +67,9 @@ void main() {
     server = LanServer(
       library: library,
       token: token,
+      // Zonder deze weigert `/api/corrections` élke bewerking met 503 — "Deze pc kan geen
+      // wijzigingen aannemen." In de app is hij er altijd; in een toets moet je eraan denken.
+      settings: AppSettings(),
       state: LanStateStore(File('${wortel.path}/state.json')),
       pairing: PairingStore(),
       port: 0,
