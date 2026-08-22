@@ -62,10 +62,11 @@ class Transcoder {
   /// The cost is honest: the first play of a hi-res track waits for the conversion, which at
   /// compression level 0 is a second or two. The second play is instant, because the result is
   /// kept. Cheaper than a track that never plays.
-  Future<File?> resampleToFile(File file, {required int maxSampleRate, required Directory cacheDir}) async {
+  Future<File?> resampleToFile(File file,
+      {required int maxSampleRate, required Directory cacheDir, int maxBits = 24}) async {
     final ffmpeg = path;
     if (ffmpeg == null) return null;
-    final naam = '${_sleutel(file, maxSampleRate)}.flac';
+    final naam = '${_sleutel(file, maxSampleRate, maxBits)}.flac';
     final uit = File('${cacheDir.path}${Platform.pathSeparator}$naam');
     // Already converted, and not a leftover from a crash halfway through.
     if (uit.existsSync() && uit.lengthSync() > 1024) return uit;
@@ -80,6 +81,11 @@ class Transcoder {
         // of ffmpeg builds ship without soxr and asking for it fails the whole graph silently.
         '-af', 'aresample=$maxSampleRate:filter_size=256',
         '-sample_fmt', 's32',
+        // De bitdiepte UITSPREKEN in plaats van ffmpeg hem laten kiezen. `-sample_fmt s32` zegt
+        // alleen in welk vak de monsters staan, niet hoeveel bits er van gebruikt worden — en dat
+        // is precies het soort ding waarvan je pas op de speaker merkt dat het anders uitpakte dan
+        // je dacht. Deze uitvoer gaat naar een netwerkspeler, en daar is 24 de bovengrens.
+        '-bits_per_raw_sample', '$maxBits',
         '-c:a', 'flac',
         '-compression_level', '0',
         // `-f flac` is NOT optional here, en dat is precies waar dit een release lang op stukliep.
@@ -107,10 +113,10 @@ class Transcoder {
   }
 
   /// Same source and same ceiling means the same result, so it is looked up rather than made again.
-  static String _sleutel(File file, int rate) {
+  static String _sleutel(File file, int rate, int bits) {
     final st = file.statSync();
     return '${file.path.hashCode.toUnsigned(32).toRadixString(16)}'
-        '_${st.size}_$rate';
+        '_${st.size}_${rate}_$bits';
   }
 
   /// Keep the newest [_bewaar] conversions and drop the rest.
@@ -140,7 +146,7 @@ class Transcoder {
   ///
   /// The trade-off is honest: the result is no longer bit-identical to the file on disk. It is
   /// the best Sonos will take, and the alternative is silence.
-  Future<Process?> resample(File file, {required int maxSampleRate}) async {
+  Future<Process?> resample(File file, {required int maxSampleRate, int maxBits = 24}) async {
     final ffmpeg = path;
     if (ffmpeg == null) return null;
     try {
@@ -154,6 +160,11 @@ class Transcoder {
         // more than good enough — a 96→48 conversion is an exact 2:1 ratio.
         '-af', 'aresample=$maxSampleRate:filter_size=256',
         '-sample_fmt', 's32',
+        // De bitdiepte UITSPREKEN in plaats van ffmpeg hem laten kiezen. `-sample_fmt s32` zegt
+        // alleen in welk vak de monsters staan, niet hoeveel bits er van gebruikt worden — en dat
+        // is precies het soort ding waarvan je pas op de speaker merkt dat het anders uitpakte dan
+        // je dacht. Deze uitvoer gaat naar een netwerkspeler, en daar is 24 de bovengrens.
+        '-bits_per_raw_sample', '$maxBits',
         '-c:a', 'flac',
         '-compression_level', '0', // speed over size: this is thrown away after playing
         '-f', 'flac',

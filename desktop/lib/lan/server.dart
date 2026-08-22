@@ -605,8 +605,16 @@ class LanServer {
     // stops at 48 kHz and skips anything above rather than downsampling it. Only the cast path
     // ever asks for this; every other client gets the file untouched.
     final maxRate = int.tryParse(req.uri.queryParameters['maxRate'] ?? '');
-    if (maxRate != null && track.sampleRate > maxRate) {
-      return _streamResampled(req, file, maxRate);
+    // `?maxBits=` is de tweede as, en die ontbrak. Een KEF LS50 Wireless II neemt 384 kHz zonder
+    // morren maar houdt op bij 24 bit; een bestand van 32 bit bleef daar stil, precies zoals een
+    // hi-res plaat op een Sonos stil blijft. Zelfde soort mislukking, andere grens.
+    final maxBits = int.tryParse(req.uri.queryParameters['maxBits'] ?? '');
+    final teHoog = maxRate != null && track.sampleRate > maxRate;
+    final teDiep = maxBits != null && (track.bitsPerSample ?? 0) > maxBits;
+    if (teHoog || teDiep) {
+      // Wat niet overschreden wordt, blijft staan. Alleen de diepte verlagen en de frequentie met
+      // rust laten is precies wat je wilt voor een speaker die 384 kHz best aankan.
+      return _streamResampled(req, file, teHoog ? maxRate : track.sampleRate, maxBits ?? 24);
     }
     return serveFile(req, file, contentType: mimeForExt(track.ext));
   }
@@ -616,7 +624,7 @@ class LanServer {
   /// No Content-Length and no Range: the converted size isn't known until it's done. Renderers
   /// accept a chunked audio stream — the cost is that you cannot seek within a cast hi-res
   /// track, which beats it not playing at all.
-  Future<void> _streamResampled(HttpRequest req, File file, int maxRate) async {
+  Future<void> _streamResampled(HttpRequest req, File file, int maxRate, int maxBits) async {
     // Converted to a FILE and then served like any other, rather than piped.
     //
     // Measured against the Sonos Amp: a piped conversion is sent chunked, without a Content-Length,
@@ -625,9 +633,11 @@ class LanServer {
     // stream. A file has a length, a real header and Range support, and it simply plays. That is
     // also why this goes through serveFile: the seeking half comes for free.
     final klaar = await transcoder.resampleToFile(file,
-        maxSampleRate: maxRate, cacheDir: Directory('$appDir${Platform.pathSeparator}cast_cache'));
+        maxSampleRate: maxRate,
+        maxBits: maxBits,
+        cacheDir: Directory('$appDir${Platform.pathSeparator}cast_cache'));
     if (klaar != null) return serveFile(req, klaar, contentType: 'audio/flac');
-    final process = await transcoder.resample(file, maxSampleRate: maxRate);
+    final process = await transcoder.resample(file, maxSampleRate: maxRate, maxBits: maxBits);
     if (process == null) {
       // No ffmpeg — send the original and let the speaker decide. On a Sonos that means the
       // track is skipped, but silently degrading is better than refusing every hi-res track.

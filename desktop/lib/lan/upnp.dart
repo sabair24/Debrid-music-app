@@ -35,6 +35,23 @@ class Renderer {
 
   int get maxSampleRate => isSonos ? 48000 : 0; // 0 = no known ceiling
 
+  /// Het plafond op de BITDIEPTE, en dat is een andere as dan [maxSampleRate].
+  ///
+  /// Hier zat een gat waar alleen naar de bemonsteringsfrequentie gekeken werd. Gemeld op een KEF
+  /// LS50 Wireless II: een bestand van 32 bit / 384 kHz bleef stil, terwijl 384 kHz voor die speaker
+  /// helemaal geen probleem is — KEF geeft zelf op dat hij over het netwerk tot 24 bit / 384 kHz
+  /// gaat. Niet de frequentie was te hoog dus, maar de diepte.
+  ///
+  /// **24 en niet 32, voor élke speaker op het netwerk.** Dit is geen merkkwestie zoals de 48 kHz
+  /// van Sonos: er bestaat geen DLNA-profiel voor 32-bits PCM, en er is geen netwerkspeler die het
+  /// aanneemt. 32 bit komt uit de studio en uit software; wat er aan de andere kant van een kabel
+  /// hangt, houdt op bij 24.
+  ///
+  /// Dit raakt alleen speakers die via UPnP aangestuurd worden. Een televisie met deze app erop is
+  /// geen [Renderer] maar een `ShieldTarget`, en daar gaat het bestand ongemoeid naar libmpv — juist
+  /// het punt van die weg.
+  int get maxBitDepth => 24;
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
@@ -43,7 +60,40 @@ class Renderer {
         'manufacturer': manufacturer,
         'kind': isSonos ? 'sonos' : 'upnp',
         'maxSampleRate': maxSampleRate,
+        'maxBitDepth': maxBitDepth,
       };
+}
+
+/// Past deze plaat op deze speaker, en zo nee: waar moet hij dan naartoe?
+///
+/// **Waarom dit een losse functie is.** Dit is de regel waar het casten stil van blijft, en stil is
+/// hier het enige symptoom: een speaker die een bestand niet aankan meldt geen fout, hij speelt
+/// gewoon niets. Van buitenaf is dat niet te onderscheiden van een netwerkprobleem, een verkeerd
+/// token of een lege wachtrij. Een regel die je in een toets kunt uitschrijven, kun je nakijken.
+///
+/// Er stonden hier tot nu toe twee assen waarvan er één bekeken werd. Gemeld op een KEF LS50
+/// Wireless II: 32 bit / 384 kHz bleef stil, terwijl die speaker over het netwerk tot 24 bit /
+/// 384 kHz gaat. De frequentie was dus prima en de diepte niet, en de app keek alleen naar de
+/// frequentie.
+///
+/// [maxSampleRate] 0 betekent "geen bekend plafond" — dan blijft de frequentie zoals hij is.
+({bool omzetten, int rate, int bits}) castGrenzen({
+  required int sampleRate,
+  required int bits,
+  required int maxSampleRate,
+  required int maxBitDepth,
+}) {
+  final teHoog = maxSampleRate > 0 && sampleRate > maxSampleRate;
+  // `bits > 0` want een onbekende diepte is geen te grote diepte. Een catalogus van vóór deze
+  // versie geeft 0, en dan hoort er niets omgezet te worden op grond van niets.
+  final teDiep = maxBitDepth > 0 && bits > 0 && bits > maxBitDepth;
+  return (
+    omzetten: teHoog || teDiep,
+    // Wat niet overschreden wordt, blijft staan. Alleen de diepte verlagen en de frequentie met rust
+    // laten is precies wat je wilt voor een speaker die 384 kHz best aankan.
+    rate: teHoog ? maxSampleRate : sampleRate,
+    bits: teDiep ? maxBitDepth : bits,
+  );
 }
 
 /// Where a renderer is in a track — what the queue needs to know to advance.

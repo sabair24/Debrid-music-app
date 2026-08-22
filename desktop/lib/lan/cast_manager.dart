@@ -287,7 +287,8 @@ class CastManager {
     // from when the speaker actually got the track.
     session.startedAt = DateTime.now();
 
-    final url = await _streamUrlFor(id, track.ext, session.renderer, track.sampleRate);
+    final url = await _streamUrlFor(
+        id, track.ext, session.renderer, track.sampleRate, track.bitsPerSample ?? 0);
     await _upnp.playUrl(
       session.renderer,
       url,
@@ -320,7 +321,8 @@ class CastManager {
     final nextId = session.queue.elementAtOrNull(session.index + 1);
     final nextTrack = nextId == null ? null : catalog.track(nextId);
     if (nextId == null || nextTrack == null) return;
-    final nextUrl = await _streamUrlFor(nextId, nextTrack.ext, session.renderer, nextTrack.sampleRate);
+    final nextUrl = await _streamUrlFor(
+        nextId, nextTrack.ext, session.renderer, nextTrack.sampleRate, nextTrack.bitsPerSample ?? 0);
     await _upnp.setNextUrl(
       session.renderer,
       nextUrl,
@@ -471,24 +473,45 @@ class CastManager {
   }
 
   /// The URL to hand the speaker — converted first when the speaker cannot take the original.
-  Future<String> _streamUrlFor(String id, String ext, Renderer renderer, int sampleRate) async {
+  ///
+  /// **Twee plafonds, niet één.** Dit keek alleen naar de bemonsteringsfrequentie, en dat is de helft
+  /// van het verhaal. Gemeld op een KEF LS50 Wireless II: 32 bit / 384 kHz bleef stil, terwijl die
+  /// speaker over het netwerk tot 24 bit / 384 kHz gaat. De frequentie was dus prima; de bitdiepte
+  /// niet. Zie [Renderer.maxBitDepth].
+  Future<String> _streamUrlFor(
+      String id, String ext, Renderer renderer, int sampleRate, int bits) async {
     final base = await lanAddressFor(renderer.host);
     final ceiling = renderer.maxSampleRate;
+    final bitPlafond = renderer.maxBitDepth;
     // Sonos stops at 48 kHz and SKIPS anything higher — no error, no sound, just nothing. Send
-    // it through the converter rather than let a hi-res album play as silence.
-    if (ceiling > 0 && sampleRate > ceiling) {
+    // it through the converter rather than let a hi-res album play as silence. Een te diepe plaat
+    // gedraagt zich net zo: geen fout, geen geluid.
+    final grens = castGrenzen(
+        sampleRate: sampleRate,
+        bits: bits,
+        maxSampleRate: ceiling,
+        maxBitDepth: bitPlafond);
+    final teDiep = grens.bits != bits;
+    if (grens.omzetten) {
       if (_transcoder.available) {
         probleem = null;
-        return 'http://$base:$port/stream/$id.flac?token=$token&maxRate=$ceiling';
+        // Beide grenzen gaan mee, ook als er maar één overschreden wordt: de omzetter moet weten wat
+        // hij mag laten staan.
+        return 'http://$base:$port/stream/$id.flac'
+            '?token=$token&maxRate=${grens.rate}&maxBits=${grens.bits}';
       }
       // Hier ging het mis en zei niemand iets. Een Sonos slaat alles boven 48 kHz over zonder
       // foutmelding, dus zonder omzetter stuurden we een bestand waarvan we wisten dat het stil
-      // zou blijven. Nu wordt het gezegd — dit is de enige plek die beide helften kent: hoe hoog
-      // de plaat is, en dat er niets is om hem mee te verlagen.
-      probleem = 'Deze speaker gaat tot ${ceiling ~/ 1000} kHz en dit nummer is '
-          '${(sampleRate / 1000).round()} kHz. Zonder ffmpeg op de pc kan ik het niet omzetten, '
-          'en dan blijft de speaker stil.';
-      _log?.line('GEEN OMZETTER: ${sampleRate}Hz > ${ceiling}Hz en ffmpeg ontbreekt — $id');
+      // zou blijven. Nu wordt het gezegd — dit is de enige plek die beide helften kent: wat de
+      // plaat is, en dat er niets is om hem mee te verlagen.
+      probleem = teDiep
+          ? 'Deze speaker gaat tot $bitPlafond bit en dit nummer is $bits bit. Zonder ffmpeg op de '
+              'pc kan ik het niet omzetten, en dan blijft de speaker stil.'
+          : 'Deze speaker gaat tot ${ceiling ~/ 1000} kHz en dit nummer is '
+              '${(sampleRate / 1000).round()} kHz. Zonder ffmpeg op de pc kan ik het niet omzetten, '
+              'en dan blijft de speaker stil.';
+      _log?.line('GEEN OMZETTER: ${bits}bit/${sampleRate}Hz tegen '
+          '${bitPlafond}bit/${ceiling}Hz en ffmpeg ontbreekt — $id');
     } else {
       probleem = null;
     }
