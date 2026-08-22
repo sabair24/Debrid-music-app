@@ -745,33 +745,18 @@ Future<void> main() async {
   // instead of assuming it: read isMaximized back and retry for about half a second.
   if (_isDesktop) {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      // Nog een keer zeggen dat er geen systeembalk hoort te staan.
-      //
-      // Hij wordt hierboven al gevraagd in [WindowOptions], en dat hóórt te volstaan. Maar precies
-      // dezelfde les staat drie regels verderop over maximaliseren: wat je Windows vraagt terwijl
-      // het venster nog gemaakt wordt, houdt hij soms gewoon niet vast. Dan staat de app in een
-      // Windows-kader mét eigen knoppen erin — twee sets sluitknopjes onder elkaar.
-      //
-      // Herhalen kost niets als het al goed staat, en het is de enige manier om er zeker van te
-      // zijn: er is geen betrouwbare manier om terug te lezen of de balk werkelijk weg is, zoals
-      // `isMaximized` dat hieronder wél kan.
       for (var i = 0; i < 6; i++) {
         if (await windowManager.isMaximized()) break;
         await windowManager.maximize();
         await Future.delayed(const Duration(milliseconds: 100));
       }
-      // NA het maximaliseren, en dat is de hele wijziging ten opzichte van de vorige poging.
+      // Hier stond nog een verzoek om de systeemtitelbalk te verbergen, twee keer bijgesteld en
+      // twee keer zonder effect. Op Windows regelt de app dat nu zelf, in
+      // `windows/runner/flutter_window.cpp`: daar wordt bij WM_NCCALCSIZE de strook waar de
+      // titelbalk zou staan als app-gebied opgeëist. Dat is te lezen, het staat in dit project, en
+      // de Windows-bouw compileert het — alle drie dingen die aan dit verzoek ontbraken.
       //
-      // Die vroeg het ervóór, en dat kan per definitie niets opleveren: `maximize()` laat Windows het
-      // vensterkader opnieuw berekenen, en juist dáár komt de systeembalk terug. Wat je vraagt vóór
-      // een kaderwijziging wordt door die wijziging overschreven — dezelfde les die drie regels
-      // hierboven over het maximaliseren zelf staat, alleen andersom toegepast.
-      //
-      // Herhalen kost niets als het al goed staat, en het is de enige manier om er zeker van te
-      // zijn: anders dan bij `isMaximized` is er geen manier om terug te lezen of de balk weg is.
-      try {
-        await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
-      } catch (_) {/* een venster zonder balk is mooi, maar geen reden om niet te starten */}
+      // Voor macOS blijft [WindowOptions.titleBarStyle] hierboven staan; daar werkt het wél.
     });
   }
 
