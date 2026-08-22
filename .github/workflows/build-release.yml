@@ -313,28 +313,104 @@ jobs:
       # terechtkwam: main lag sinds die datum stil, en niets zei dat. Een release loopt sinds
       # release.yml altijd over een tag, dus deze tweede weg naar buiten kon alleen nog per
       # ongeluk gebruikt worden.
+      #
+      # **Waarom deze stap wacht in plaats van te zakken.** Twee keer op één dag (build 11215 en
+      # 11218) zakte hier alleen dít: `API rate limit exceeded for user ID 36713342`. De APK was
+      # gebouwd, ondertekend en gecontroleerd; hij kwam alleen de deur niet uit. Dat is geen fout in
+      # de code en er valt niets aan te repareren — je moet wachten. De oude opzet maakte daar een
+      # rode bouw van, en dus een handmatige "Re-run failed jobs" op een moment dat niemand kan
+      # weten.
+      #
+      # GitHub zégt wanneer er weer ruimte is: `rate_limit` geeft het tijdstip, en dat opvragen telt
+      # zelf niet mee. Dus eerst kijken, zo nodig slapen tot dat tijdstip, dan pas publiceren. Beide
+      # repo's zijn openbaar, dus wachten op een Ubuntu-machine kost geen minuten — het kost alleen
+      # kloktijd, en die is hier goedkoper dan jouw aandacht.
+      #
+      # De limiet is er één per gebruiker, niet per token: elk klassiek toegangstoken van dit account
+      # deelt dezelfde 5000 verzoeken per uur. Wachten lost het symptoom op; wie de bron structureel
+      # wil scheiden geeft deze stap een eigen token via een GitHub App.
+      #
+      # En `gh` in plaats van een kant-en-klare actie, om twee redenen: het zijn merkbaar minder
+      # verzoeken (drie in plaats van een handvol, en dat is precies de schaarste hier), en een
+      # herhaalde poging wordt hiermee gewoon leesbare shell in plaats van een derde partij die de
+      # foutcode achter een groen vinkje kan wegmoffelen.
       - name: Publish APK to public releases repo
         if: startsWith(github.ref, 'refs/tags/win-v') && env.RELEASES_TOKEN != ''
         env:
           RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-        uses: softprops/action-gh-release@v2
-        with:
-          repository: sabair24/Debrid-music-app-releases
-          token: ${{ secrets.RELEASES_TOKEN }}
-          tag_name: v${{ env.VERSION }}-build${{ env.BUILD_NUMBER }}
-          name: "DebridMusic v${{ env.VERSION }} (build ${{ env.BUILD_NUMBER }})"
-          body: |
-            ## DebridMusic v${{ env.VERSION }} (build ${{ env.BUILD_NUMBER }})
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          DOEL: sabair24/Debrid-music-app-releases
+        run: |
+          set -uo pipefail
+          apk="desktop/build/app/outputs/flutter-apk/${APK_NAME}"
+          tag="v${VERSION}-build${BUILD_NUMBER}"
+          [ -f "$apk" ] || { echo "::error::De APK staat niet waar hij verwacht wordt: $apk"; exit 1; }
 
-            Dezelfde app als op je pc, Mac en iPad — één codebase, ook op Android en Android TV.
+          cat > "$RUNNER_TEMP/notities.md" <<EOF
+          ## DebridMusic v${VERSION} (build ${BUILD_NUMBER})
 
-            ### Installeren
-            Download de APK hieronder en installeer hem op je telefoon of je Shield. Hij vervangt
-            de app die er staat; daarna één keer opnieuw inloggen met je account.
+          Dezelfde app als op je pc, Mac en iPad — één codebase, ook op Android en Android TV.
 
-            > Mogelijk moet je "Installeren uit onbekende bronnen" aanzetten.
+          ### Installeren
+          Download de APK hieronder en installeer hem op je telefoon of je Shield. Hij vervangt
+          de app die er staat; daarna één keer opnieuw inloggen met je account.
 
-            Alleen arm64.
-          draft: false
-          prerelease: false
-          files: desktop/build/app/outputs/flutter-apk/${{ env.APK_NAME }}
+          > Mogelijk moet je "Installeren uit onbekende bronnen" aanzetten.
+
+          Alleen arm64.
+          EOF
+
+          # Wacht tot er weer ruimte is. Geeft 1 terug als het wachten langer zou duren dan een uur —
+          # dat kan niet, want een limiet loopt binnen het uur af, dus dan is er iets anders aan de
+          # hand en is stilzwijgend blijven hangen het verkeerde antwoord.
+          gewacht=0
+          ruimte() {
+            for ronde in 1 2 3; do
+              lees=$(gh api rate_limit --jq '"\(.resources.core.remaining) \(.resources.core.reset)"' 2>/dev/null) || {
+                echo "Kon de limiet niet uitlezen; dan maar gewoon proberen."
+                return 0
+              }
+              over=${lees%% *}; reset=${lees##* }
+              if [ "$over" -ge 20 ]; then
+                echo "Ruimte genoeg: nog $over verzoeken tot $(date -u -d "@$reset" +%H:%M) UTC."
+                return 0
+              fi
+              slaap=$(( reset - $(date +%s) + 15 ))
+              [ "$slaap" -lt 15 ] && slaap=15
+              # Een limiet loopt binnen het uur af, dus meer dan dat wachten kan niet kloppen. En in
+              # totaal nooit langer dan ruim een uur: eeuwig blijven hangen is geen betere afloop dan
+              # zakken, alleen een duurdere.
+              if [ "$slaap" -gt 3900 ] || [ $(( gewacht + slaap )) -gt 4200 ]; then
+                echo "::error::Nog $over verzoeken over en de teller loopt pas af om $(date -u -d "@$reset" +%H:%M) UTC. Zo lang wachten hoort niet nodig te zijn."
+                return 1
+              fi
+              echo "::notice::Nog $over verzoeken over. Wachten tot $(date -u -d "@$reset" +%H:%M) UTC (${slaap}s) — de APK is klaar, alleen het publiceren wacht."
+              sleep "$slaap"
+              gewacht=$(( gewacht + slaap ))
+            done
+            return 0
+          }
+
+          publiceer() {
+            if gh release view "$tag" --repo "$DOEL" >/dev/null 2>&1; then
+              # Bestaat al — dat is een herhaalde poging, geen fout. Alleen het bestand erover.
+              gh release upload "$tag" "$apk" --repo "$DOEL" --clobber
+            else
+              gh release create "$tag" "$apk" --repo "$DOEL" \
+                --title "DebridMusic v${VERSION} (build ${BUILD_NUMBER})" \
+                --notes-file "$RUNNER_TEMP/notities.md"
+            fi
+          }
+
+          for poging in 1 2 3; do
+            ruimte || exit 1
+            if publiceer; then
+              echo "Gepubliceerd als $tag op $DOEL (poging $poging)."
+              exit 0
+            fi
+            echo "Poging $poging mislukt."
+            [ "$poging" -lt 3 ] && sleep $(( poging * 30 ))
+          done
+
+          echo "::error::Publiceren lukte na drie pogingen niet. De APK zit wel bij de artefacten van deze bouw."
+          exit 1
