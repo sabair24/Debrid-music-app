@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io' show gzip;
 import 'dart:typed_data';
 
 import '../library.dart';
@@ -21,7 +22,7 @@ class CatalogSnapshot {
   final List<int> json;
   final String etag;
 
-  const CatalogSnapshot({
+  CatalogSnapshot({
     required this.catalog,
     required this.trackById,
     required this.albumById,
@@ -29,6 +30,21 @@ class CatalogSnapshot {
     required this.json,
     required this.etag,
   });
+
+  /// Dezelfde catalogus, ingepakt — één keer berekend per versie.
+  ///
+  /// **Waarom dit er niet was.** De server zet `autoCompress = false` met de reden "audio and covers
+  /// are already compressed". Dat klopt voor audio en hoezen, maar het zette het óók uit voor dit
+  /// antwoord: het enige dat groot én goed samendrukbaar is. Deze catalogus is JSON van megabytes,
+  /// en de cloudkopie in dit project meet zelf dat diezelfde tekst ongeveer vijfvoudig comprimeert.
+  ///
+  /// Vier toestellen die na elke wijziging opnieuw synchroniseren betaalden dat vijfvoudig te veel
+  /// over wifi. Dat is de "hij bevriest even" op de iPad en de Shield.
+  ///
+  /// Lui en gecachet, want dit hangt aan de momentopname en niet aan het verzoek: een tweede toestel
+  /// dat dezelfde versie ophaalt betaalt het inpakken geen tweede keer. En de ETag blijft die van de
+  /// ONgecomprimeerde inhoud, zodat een 304 hetzelfde blijft betekenen.
+  late final List<int> gzipJson = gzip.encode(json);
 }
 
 /// Turns [LibraryStore] into the wire catalogue, and keeps it fresh.
@@ -146,6 +162,9 @@ class LanCatalog {
         // heeft, of die bij een geïdentificeerde persing hoort. De automatisch verrijkte hoes
         // (`enriched`) niet — zie de uitleg bij [AlbumDto.artTag] en bij de vingerafdruk hieronder.
         artTag: CoverEnricher.hoesMerk(album.correctedCover ?? album.resolvedCover),
+        // De scans die de eigenaar zelf heeft aangewezen. Stonden alleen op het toestel waar ze
+        // gemaakt waren; zie [AlbumDto.artRoles].
+        artRoles: library.albumArtRoles(album.artist, album.title),
       ));
 
       for (final t in album.tracks) {
@@ -238,7 +257,11 @@ class LanCatalog {
         // draagt dit veld ALLEEN een bewuste keuze en niet de automatische verrijking. Zonder deze
         // regel beweegt de vingerafdruk niet, krijgt een toestel een 304, en hoort het nooit dat de
         // hoes veranderd is: precies de bug die op 13-08-2026 gemeten werd.
-        ..add(a.artTag ?? '');
+        ..add(a.artTag ?? '')
+        // En de scans die de eigenaar aanwees. Zelfde reden als hierboven: een aangewezen cd
+        // verandert geen enkel nummer, dus zonder deze regel beweegt de vingerafdruk niet, krijgt
+        // elk toestel een 304, en blijft die keuze op één toestel hangen.
+        ..add(a.artRoles.entries.map((e) => '${e.key}=${e.value}').join(','));
     }
     for (final t in tracks) {
       fingerprint..add(t.id)..add(t.title)..add('${t.trackNo}')..add('${t.sizeBytes}');

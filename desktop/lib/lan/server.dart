@@ -339,8 +339,24 @@ class LanServer {
     res.headers
       ..set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8')
       ..set(HttpHeaders.etagHeader, snap.etag);
-    res.headers.contentLength = snap.json.length;
-    res.add(snap.json);
+    // Ingepakt als de client dat aankan.
+    //
+    // `autoCompress` staat serverbreed uit, en met reden: audio en hoezen zijn al gecomprimeerd en
+    // die nog eens door gzip halen kost alleen rekentijd. Maar dat zette het óók uit voor dit
+    // antwoord — het enige dat groot én goed samendrukbaar is. Deze JSON is megabytes, en de
+    // cloudkopie in dit project meet zelf dat diezelfde tekst ongeveer vijfvoudig comprimeert. Vier
+    // toestellen betaalden dat na elke wijziging vijfvoudig te veel over wifi.
+    //
+    // Dus hier expliciet, alleen voor de catalogus. De ETag blijft die van de ONgecomprimeerde
+    // inhoud, zodat een 304 precies hetzelfde blijft betekenen; `Vary` staat erbij zodat niets
+    // onderweg een ingepakt antwoord aan een client geeft die er niet om vroeg.
+    final magInpakken =
+        (req.headers.value(HttpHeaders.acceptEncodingHeader) ?? '').toLowerCase().contains('gzip');
+    final lijf = magInpakken ? snap.gzipJson : snap.json;
+    if (magInpakken) res.headers.set(HttpHeaders.contentEncodingHeader, 'gzip');
+    res.headers.set(HttpHeaders.varyHeader, HttpHeaders.acceptEncodingHeader);
+    res.headers.contentLength = lijf.length;
+    res.add(lijf);
     return res.close();
   }
 
@@ -907,7 +923,10 @@ class LanServer {
     // Twee bewerkingen gaan niet OVER een album: nummers weghalen noemt losse nummers, en een
     // artiestfoto hoort bij de artiest. Zonder deze uitzondering kreeg de telefoon hier "Dat album
     // staat hier niet (meer)" terug op iets waar ze nooit een album bij gestuurd heeft.
-    if (op != 'removeTracks' && op != 'artistArt' && album == null) {
+    // `albumArtRole` hoort ook in deze uitzondering: rollen hangen aan artiest|titel en niet aan een
+    // album-id, net als een artiestportret. Zonder deze uitzondering kreeg elke rolwijziging van een
+    // client een 404 op een album dat de client niet meestuurt.
+    if (op != 'removeTracks' && op != 'artistArt' && op != 'albumArtRole' && album == null) {
       // The client is looking at a catalogue this PC has moved on from — say so, rather than
       // silently editing the wrong record.
       return _json(req.response, {'error': 'Dat album staat hier niet (meer).'},
@@ -940,6 +959,26 @@ class LanServer {
           }
           await library.setArtistArt(
               artist, (body['kind'] ?? 'portrait') as String, (body['url'] ?? '') as String);
+        case 'albumArtRole':
+          // Een scan die de eigenaar op een ander toestel aanwees. Kwam hier nooit aan: dit stond
+          // alleen in `album_art_roles.json` op dát toestel, zodat een cd die je op de iPad koos
+          // voor de pc en de tv niet bestond.
+          //
+          // Op artiest en titel, want zo zijn rollen gesleuteld — [LibraryStore.albumArtKey]. De
+          // client leest die twee uit dezelfde catalogus die deze pc gestuurd heeft, dus ze komen
+          // altijd op dezelfde sleutel uit.
+          final rolArtiest = (body['artist'] ?? '') as String;
+          final rolAlbum = (body['album'] ?? '') as String;
+          if (rolArtiest.isEmpty || rolAlbum.isEmpty) {
+            return _json(req.response, {'error': 'Geen album opgegeven.'},
+                status: HttpStatus.badRequest);
+          }
+          if (body['clear'] == true) {
+            await library.clearAlbumArtRoles(rolArtiest, rolAlbum);
+          } else {
+            await library.setAlbumArtRole(rolArtiest, rolAlbum, (body['role'] ?? '') as String,
+                (body['url'] ?? '') as String);
+          }
         case 'removeTracks':
           final paths = <String>[];
           for (final id in (body['trackIds'] as List? ?? const [])) {
