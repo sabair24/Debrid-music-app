@@ -81,7 +81,10 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   //
   // Vóór de doorgifte aan de plug-ins, en dat is nodig: geeft `window_manager` zelf een antwoord op
   // dit bericht, dan komt de regel hieronder er nooit aan toe en verandert er niets.
-  if (message == WM_NCCALCSIZE && wparam == TRUE) {
+  // `!= 0u` en niet `== TRUE`: WPARAM is een 64-bits ONgetekend getal en TRUE is een getekende int.
+  // Die vergelijking geeft C4389, en deze bouw draait met /W4 /WX — daar is een waarschuwing een
+  // fout. Zie `windows/CMakeLists.txt`.
+  if (message == WM_NCCALCSIZE && wparam != 0u) {
     NCCALCSIZE_PARAMS* maten = reinterpret_cast<NCCALCSIZE_PARAMS*>(lparam);
     const LONG boven = maten->rgrc[0].top;
     const LRESULT standaard = DefWindowProc(hwnd, message, wparam, lparam);
