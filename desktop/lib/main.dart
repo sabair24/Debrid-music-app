@@ -4468,6 +4468,20 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     final wasTop = kleurWas(wasBasis(_was))?.colors.first ?? _bg;
 
     return Scaffold(
+      // DOORZICHTIG, en dat is de reden dat de bovenbalk als een gekleurde balk las.
+      //
+      // Een Scaffold zonder eigen kleur pakt `scaffoldBackgroundColor` uit het thema, en dat is een
+      // DICHTE bijna-zwarte vulling. Deze pagina schilderde die dus over de was van de schil heen —
+      // over alles behalve de bovenbalk, want die staat buiten de navigator waar deze pagina in
+      // leeft. Gevolg: de kleur van de plaat was alleen dáár te zien, en precies daardoor was die
+      // strook een balk. Niet omdat er iets extra's getekend werd, maar omdat de rest van het
+      // scherm de kleur wegpoetste.
+      //
+      // De vloer is niet weg: de Scaffold van de SCHIL ligt eronder en heeft dezelfde kleur, met de
+      // was ertussen. En de paginaovergang vervaagt (zie `_schuif` in navigatie.dart), dus een
+      // doorzichtige pagina kruist netjes over de vorige heen in plaats van er hard overheen te
+      // springen.
+      backgroundColor: Colors.transparent,
       // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin — its app bar
       // icons and the sleeve were hard against the panel edge, which is the first strip a
       // television crops away. Horizontal and top only: the player bar below draws its own
