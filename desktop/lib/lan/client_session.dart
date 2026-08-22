@@ -12,6 +12,7 @@ import '../catalogus_kopie.dart';
 import '../library.dart';
 import '../settings.dart';
 import 'client.dart';
+import 'discovery.dart';
 import '../cloud/catalog_mirror.dart';
 import 'client_mode.dart';
 
@@ -74,8 +75,49 @@ class ClientSession extends ChangeNotifier {
   /// How the PC calls itself, for the settings screen.
   String get serverName => _endpoint?.name ?? _endpoint?.baseUrl.host ?? '';
 
+  /// Het onthouden adres, of een vers gevonden adres als dat niet meer antwoordt.
+  ///
+  /// Geeft altijd íets terug — bij twijfel het onthouden adres. Niets vinden is geen reden om de
+  /// verbinding niet eens te proberen: de pc kan gewoon uit staan, en dan hoort de app de kopie te
+  /// tonen en het later opnieuw te proberen, niet om te vallen.
+  ///
+  /// De sleutel gaat mee naar het nieuwe adres. Dat is dezelfde pc met dezelfde koppeling; alleen
+  /// zijn plek op het netwerk is veranderd.
+  Future<RemoteEndpoint> _bereikbaarAdres(RemoteEndpoint onthouden) async {
+    try {
+      if (await RemoteClient.health(onthouden.baseUrl) != null) return onthouden;
+      for (final server in await LanBrowser.find()) {
+        if (server.baseUrl == onthouden.baseUrl) continue;
+        if (await RemoteClient.health(server.baseUrl) == null) continue;
+        final vers = RemoteEndpoint(
+          baseUrl: server.baseUrl,
+          token: onthouden.token,
+          name: server.name.isEmpty ? onthouden.name : server.name,
+        );
+        // Meteen vastleggen, anders staat hier bij de volgende start weer het oude adres.
+        await savePairedServer(vers);
+        return vers;
+      }
+    } catch (_) {/* zoeken mag nooit tussen jou en je muziek staan */}
+    return onthouden;
+  }
+
   /// Wire an endpoint into the app and pull the library in.
   Future<void> connect(RemoteEndpoint endpoint, {bool remember = true}) async {
+    // Een ONTHOUDEN adres wordt eerst nagekeken; een vers gekoppeld adres niet.
+    //
+    // **Waarom dat verschil er moest komen.** Het inlogscherm loopt élk adres af dat de pc publiceert
+    // en neemt alleen dat wat antwoordt — een pc met een VPN of Hyper-V heeft er meerdere, en alleen
+    // dit toestel weet welke het kan bereiken. Het opstartpad deed dat niet: het pakte blind wat er
+    // in `paired_server.json` stond, van de dag dat je koppelde.
+    //
+    // Verandert dat adres — een ander subnet, een nieuwe lease, een VPN die aan of uit ging — dan
+    // mislukt alles stil. De catalogus komt dan uit de kopie op dit toestel, dus je ziet je albums
+    // met de juiste namen, maar elke hoes wordt bij een adres opgehaald dat niemand opneemt. Dat is
+    // exact het beeld: titels goed, vakjes leeg. En opnieuw inloggen hielp permanent, want dán werd
+    // er wél gezocht.
+    final werkend = remember ? endpoint : await _bereikbaarAdres(endpoint);
+    endpoint = werkend;
     _endpoint = endpoint;
     if (remember) await savePairedServer(endpoint);
 

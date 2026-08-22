@@ -904,9 +904,18 @@ class LibraryStore extends ChangeNotifier {
   /// bestand op dat toestel. Dat was het gat: `album_art_roles.json` bleef staan waar de keuze
   /// gemaakt was, dus de cd die je op de iPad aanwees bestond nergens anders. Een vastgezette
   /// persing en een samengevoegde editie reisden hier al jaren wel mee.
-  Map<String, String> albumArtRoles(String artist, String album) => isRemote
-      ? (_remoteAlbumRoles[albumArtKey(artist, album)] ?? const {})
-      : (_albumArtRoles[albumArtKey(artist, album)] ?? const {});
+  ///
+  /// Op een client eerst wat de pc zegt, en anders wat hier ligt. Die terugval is er voor een pc die
+  /// deze bewerking nog niet kent: dan reist de keuze niet mee, maar hij blijft wél bestaan op het
+  /// toestel waar je hem maakte — precies zoals het vóór de synchronisatie werkte.
+  Map<String, String> albumArtRoles(String artist, String album) {
+    final k = albumArtKey(artist, album);
+    if (isRemote) {
+      final vanPc = _remoteAlbumRoles[k];
+      if (vanPc != null && vanPc.isNotEmpty) return vanPc;
+    }
+    return _albumArtRoles[k] ?? const {};
+  }
 
   /// De aangewezen scans zoals de pc ze kent, op een toestel dat de muziek niet bezit.
   final Map<String, Map<String, String>> _remoteAlbumRoles = {};
@@ -924,6 +933,22 @@ class LibraryStore extends ChangeNotifier {
   /// standing on.
   Future<void> setAlbumCover(Album a, AppSettings settings, Uint8List bytes) async {
     if (bytes.isEmpty) return;
+    // De pc houdt de boeken bij — ook voor de hoes.
+    //
+    // **Dit ontbrak, en het is precies de klacht "twee verschillende hoezen".** Op een Mac, een
+    // iPad of een telefoon schreef dit alleen naar het geheugen en de cache van dát toestel. Kies
+    // je de juiste hoes op de Mac, dan blijft hij daar: de pc weet van niets, en je telefoon haalt
+    // zijn hoezen van de pc. Twee toestellen, twee antwoorden, en corrigeren hielp niet omdat de
+    // correctie nooit aankwam waar hij gelezen wordt.
+    //
+    // Anders dan bij een rol gaan hier BYTES over de lijn en geen adres, want een gekozen hoes is
+    // niet altijd een adres — hij kan uit een bestand of uit de tags komen. Daarom base64 en niet
+    // een url.
+    //
+    // Altijd eerst HIER, dan pas naar de pc. Die volgorde is geen detail: kent de pc deze bewerking
+    // nog niet — hij draait een oudere versie, want toestellen werken zich niet tegelijk bij — dan
+    // gooit de tweede stap, en zonder de eerste zou je keuze wég zijn. Lokaal is de bodem, de pc is
+    // de winst.
     a.correctedCover = bytes;
     try {
       await CoverEnricher(settings).saveFixedCover(a, bytes);
@@ -933,17 +958,25 @@ class LibraryStore extends ChangeNotifier {
     }
     _bumpMeta();
     notifyListeners();
+    if (isRemote) {
+      final id = remoteAlbumId(a);
+      if (id == null) return;
+      await _editOnPc({'op': 'albumCover', 'albumId': id, 'cover': base64Encode(bytes)});
+    }
   }
 
   /// Say what an image IS. [url] empty clears that role and lets the app guess again.
   Future<void> setAlbumArtRole(String artist, String album, String role, String url) async {
-    // De pc houdt de boeken bij, net als voor een vastgezette persing en een artiestportret. Zonder
-    // deze regel bleef een keuze op de iPad op de iPad, en zag de pc — en dus elk ander toestel —
-    // hem nooit.
-    if (isRemote) {
-      return _editOnPc(
-          {'op': 'albumArtRole', 'artist': artist, 'album': album, 'role': role, 'url': url});
-    }
+    // Op een client: HIER schrijven én het aan de pc vertellen. In die volgorde, en allebei.
+    //
+    // **Waarom niet alleen naar de pc.** Dat was de eerste opzet, en het was een terugval. Kent de
+    // pc die bewerking niet — hij draait een oudere versie, want toestellen werken zich niet op
+    // hetzelfde moment bij — dan gooide dit, en was de keuze wég. Terwijl hij daarvóór gewoon lokaal
+    // werkte. Een verbetering die het bij een oudere pc slechter maakt, is geen verbetering.
+    //
+    // Nu: lokaal is de bodem die er altijd is, de pc is de winst als hij meedoet. Weigert hij, dan
+    // komt die reden naar boven — de aanroeper mag weten dat het bij dit toestel blijft — maar de
+    // keuze zelf staat er al.
     final k = albumArtKey(artist, album);
     final m = _albumArtRoles.putIfAbsent(k, () => {});
     if (url.isEmpty) {
@@ -957,6 +990,10 @@ class LibraryStore extends ChangeNotifier {
     }
     await _saveAlbumArtRoles();
     notifyListeners();
+    if (isRemote) {
+      await _editOnPc(
+          {'op': 'albumArtRole', 'artist': artist, 'album': album, 'role': role, 'url': url});
+    }
   }
 
   /// Forget every hand-picked scan for this record, so the pressing decides again.
@@ -970,15 +1007,17 @@ class LibraryStore extends ChangeNotifier {
   /// nothing. Picking an edition means "use its scans"; picking a single scan is the exception you
   /// make afterwards.
   Future<void> clearAlbumArtRoles(String artist, String album) async {
-    // Ook wissen is een bewerking, en die hoort op de pc te landen. Bleef dit lokaal, dan wiste een
-    // iPad zijn eigen (lege) lijstje terwijl de pc de oude rollen hield — en na de eerstvolgende
-    // synchronisatie stonden ze er gewoon weer.
-    if (isRemote) {
-      return _editOnPc({'op': 'albumArtRole', 'artist': artist, 'album': album, 'clear': true});
-    }
-    if (_albumArtRoles.remove(albumArtKey(artist, album)) == null) return;
+    // Zelfde verhaal als bij [setAlbumArtRole]: lokaal wissen is de bodem, de pc is de winst.
+    //
+    // De vroege uitgang is hier bewust weg. Lokaal kan er niets staan terwijl de pc nog wél rollen
+    // heeft — dan zou "wis alles" op een client niets doen, en na de eerstvolgende synchronisatie
+    // stonden ze er weer.
+    _albumArtRoles.remove(albumArtKey(artist, album));
     await _saveAlbumArtRoles();
     notifyListeners();
+    if (isRemote) {
+      await _editOnPc({'op': 'albumArtRole', 'artist': artist, 'album': album, 'clear': true});
+    }
   }
 
   Future<void> _saveAlbumArtRoles() => _writeJson(_albumArtRolesFile, _albumArtRoles);
@@ -2062,7 +2101,30 @@ class LibraryStore extends ChangeNotifier {
   final Map<String, Map<String, String>> _remoteArtistArt = {};
 
   /// The PC's id for an album we are showing, or null on the machine that owns the music.
-  String? remoteAlbumId(Album a) => _remoteAlbums[a]?.id;
+  String? remoteAlbumId(Album a) {
+    final recht = _remoteAlbums[a]?.id;
+    if (recht != null) return recht;
+    // Het object is OUD, niet het album.
+    //
+    // Deze kaart is gesleuteld op objectidentiteit, en `_adoptCatalog` maakt bij elke verse
+    // catalogus nieuwe [Album]-objecten. Een scherm of een venster dat al open stond houdt dan een
+    // exemplaar vast dat nergens meer in staat — waarna dit null gaf, de pc geen albumId kreeg, en
+    // die antwoordde met "Dat album staat hier niet (meer)". Terwijl het er gewoon staat.
+    //
+    // En dat is geen randgeval: één bewerking ververst de catalogus al, dus een tweede bewerking uit
+    // hetzelfde venster liep er standaard tegenaan.
+    //
+    // Een pad is wél stabiel. Deel je een nummer met een album dat er nu staat, dan ben je dat
+    // album. Alleen op de missende weg, dus het kost niets zolang alles klopt.
+    final paden = {for (final t in a.tracks) t.path};
+    if (paden.isEmpty) return null;
+    for (final e in _remoteAlbums.entries) {
+      for (final t in e.key.tracks) {
+        if (paden.contains(t.path)) return e.value.id;
+      }
+    }
+    return null;
+  }
 
   /// True everywhere now: a Mac and an iPad edit by asking the PC to, and the result comes back
   /// through the catalogue. Kept as a name rather than inlined, because moving files is still the
@@ -2084,6 +2146,14 @@ class LibraryStore extends ChangeNotifier {
     // correction that takes fifteen seconds to appear reads as one that did not work.
     _catalogEtag = null;
     await loadRemote(quiet: true);
+    // En de hoezen erbij halen.
+    //
+    // `loadRemote` bouwt NIEUWE albumobjecten, en die hebben geen hoes. Zonder deze regel stond het
+    // raster na elke bewerking op een client vol lege vakjes — en het kwam ook niet vanzelf goed:
+    // de eerstvolgende poll krijgt een 304 (de etag klopt inmiddels), dus `changed` is onwaar en de
+    // sweep die dáár aan hangt draait nooit. Pas een herstart haalde de hoezen terug.
+    final hoesInstellingen = _hoesInstellingen;
+    if (hoesInstellingen != null) unawaited(loadRemoteCovers(hoesInstellingen));
   }
 
   /// The PC's id for a track we are showing, for anything that has to name tracks TO the PC —
@@ -2166,9 +2236,40 @@ class LibraryStore extends ChangeNotifier {
   /// album list over the same wifi, each setting `enriching` and each clearing it, so the status line
   /// went off while the other was still fetching. Held as the future so a caller can wait for the one
   /// already running instead of starting a second.
-  Future<void> loadRemoteCovers(AppSettings settings) =>
-      _remoteCoverSweep ??=
-          _loadRemoteCovers(settings).whenComplete(() => _remoteCoverSweep = null);
+  /// De instellingen waarmee de laatste hoezenronde liep.
+  ///
+  /// Nodig omdat een bewerking op een client de albumlijst vervangt en er dus meteen daarna hoezen
+  /// bij gehaald moeten worden — zie [_editOnPc] — terwijl daar geen instellingen voorhanden zijn.
+  /// Een verse [AppSettings] verzinnen zou naar de verkeerde cachemap wijzen.
+  AppSettings? _hoesInstellingen;
+
+  /// Vraagt iemand een ronde terwijl er al een loopt?
+  ///
+  /// **Dit was een stille val.** De wacht hieronder gaf de LOPENDE ronde terug, en die loopt over de
+  /// albumobjecten van toen hij begon. Maar `_adoptCatalog` bouwt bij elke verse catalogus NIEUWE
+  /// objecten: de ronde vult dan albums die niemand meer op het scherm heeft, en de albums die er
+  /// wél staan blijven leeg. Precies het geval "de hoezen komen pas na opnieuw inloggen".
+  ///
+  /// Met deze vlag draait er ná de lopende ronde nog één over de lijst zoals die dán is.
+  bool _hoesRondeOpnieuw = false;
+
+  Future<void> loadRemoteCovers(AppSettings settings) {
+    _hoesInstellingen = settings;
+    final bezig = _remoteCoverSweep;
+    if (bezig != null) {
+      _hoesRondeOpnieuw = true;
+      return bezig;
+    }
+    return _remoteCoverSweep =
+        _hoezenTotHetKlopt(settings).whenComplete(() => _remoteCoverSweep = null);
+  }
+
+  Future<void> _hoezenTotHetKlopt(AppSettings settings) async {
+    do {
+      _hoesRondeOpnieuw = false;
+      await _loadRemoteCovers(settings);
+    } while (_hoesRondeOpnieuw);
+  }
 
   /// De hoezen ophalen op een toestel dat de muziek niet bezit.
   ///
@@ -2191,6 +2292,11 @@ class LibraryStore extends ChangeNotifier {
 
     final wachtrij = [for (final a in albums) if (a.cover == null) a];
     var volgende = 0;
+    // Wat het netwerk deed. Zonder deze twee is een hoezenronde die HELEMAAL mislukt niet te
+    // onderscheiden van een bibliotheek zonder hoezen: `client.art` slikt alles — geweigerde
+    // verbinding, 401, time-out — en geeft null, en de lus slikt die null nog eens. Het gevolg is een
+    // scherm vol grijze vakjes waar nergens iets over opgeschreven staat.
+    var gevraagd = 0, gelukt = 0;
 
     Future<void> werker() async {
       while (true) {
@@ -2216,8 +2322,10 @@ class LibraryStore extends ChangeNotifier {
           continue;
         }
         final ref = _remoteAlbums[album]?.artRef;
+        if (ref != null) gevraagd++;
         final bytes = ref == null ? null : await client.art(ref);
         if (bytes == null || bytes.isEmpty) continue;
+        gelukt++;
         album.embeddedCover = bytes;
         await enricher.putCached(album, bytes);
         // Pas ná het wegschrijven, zodat een afgebroken download geen merkteken achterlaat dat zegt
@@ -2234,9 +2342,24 @@ class LibraryStore extends ChangeNotifier {
     }
 
     await Future.wait([for (var i = 0; i < 6; i++) werker()]);
+    // Alles gevraagd, niets gekregen: dat is geen bibliotheek zonder hoezen maar een pc die niet
+    // antwoordt of een sleutel die geweigerd wordt. Eén regel is genoeg om het verschil te kunnen
+    // zien; zonder die regel is er niets om naar te kijken.
+    hoezenMislukt = gevraagd > 0 && gelukt == 0;
+    if (hoezenMislukt) {
+      debugPrint('hoezen: $gevraagd gevraagd aan de pc, geen enkele gekregen — '
+          'staat de pc aan, en klopt het adres nog?');
+    }
     enriching = false;
     notifyListeners();
   }
+
+  /// Ging de laatste hoezenronde volledig mis?
+  ///
+  /// Waar betekent: er is minstens één hoes bij de pc opgevraagd en er kwam er geen enkele terug.
+  /// Dat is iets heel anders dan "deze platen hebben geen hoes", en het scherm hoort die twee niet
+  /// door elkaar te halen.
+  bool hoezenMislukt = false;
 
   Track _trackFromMap(Map<String, dynamic> m) => Track(
         path: m['path'] as String,
@@ -3336,12 +3459,43 @@ extension LibraryRenumber on LibraryStore {
 
   /// Write a plan. The user's edit wins over the tags from here on, and outlives a rescan.
   Future<void> applyRenumber(RenumberPlan plan) async {
-    for (final s in plan.steps) {
-      if (s.newNo == null) continue;
-      final c = _correctionsFor(s.track.path);
-      c['trackNo'] = '${s.newNo}';
-      c['trackTotal'] = '${plan.total}';
-      final title = s.official?.title;
+    // Op een client doet de PC het werk, net als bij een correctie.
+    //
+    // **Dit ontbrak volledig.** Het schreef `corrections.json` op het toestel zelf — maar op een
+    // client komt de bibliotheek uit de catalogus van de pc, en die correcties worden daar nooit
+    // gelezen. De nummering veranderde dus even op het scherm en was bij de eerstvolgende
+    // synchronisatie weer weg. "Mijn nummering wil er ook niet bij komen."
+    if (isRemote) {
+      final stappen = <Map<String, dynamic>>[];
+      for (final s in plan.steps) {
+        final no = s.newNo;
+        final id = remoteTrackId(s.track.path);
+        if (no == null || id == null) continue;
+        stappen.add({'trackId': id, 'no': no, 'title': s.official?.title});
+      }
+      if (stappen.isEmpty) return;
+      return _editOnPc({'op': 'renumber', 'total': plan.total, 'steps': stappen});
+    }
+    await hernummer(
+      [
+        for (final s in plan.steps)
+          if (s.newNo != null) (path: s.track.path, no: s.newNo!, title: s.official?.title)
+      ],
+      plan.total,
+    );
+  }
+
+  /// De nummering van losse nummers vastleggen — de vorm die ook over de lijn past.
+  ///
+  /// Apart van [applyRenumber] omdat de pc dit namens een ander toestel moet kunnen doen, en die
+  /// heeft geen `RenumberPlan` maar een lijst met paden en nummers.
+  Future<void> hernummer(
+      List<({String path, int no, String? title})> stappen, int total) async {
+    for (final s in stappen) {
+      final c = _correctionsFor(s.path);
+      c['trackNo'] = '${s.no}';
+      if (total > 0) c['trackTotal'] = '$total';
+      final title = s.title;
       if (title != null && title.trim().isNotEmpty) c['title'] = title.trim();
     }
     await saveCorrectionsNow();

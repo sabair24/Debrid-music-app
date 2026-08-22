@@ -16912,10 +16912,14 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
       for (final e in _rollen.entries) {
         await lib.setAlbumArtRole(widget.album.artist, widget.album.title, e.key, e.value);
       }
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       setState(() => _opslaan = false);
-      _srcToast(context, 'Kon de keuze niet opslaan.');
+      // MÉT de reden. Die was er — `RemoteClient.edit` gooit een leesbare zin, en de pc stuurt zelfs
+      // zijn eigen tekst mee — en `catch (_)` gooide hem weg. "Kon de keuze niet opslaan." is dan
+      // alles wat je hebt, en daar valt niets mee te beginnen: staat de pc uit, weigert hij de
+      // sleutel, of kent hij deze bewerking niet? Drie heel verschillende problemen, één zin.
+      _srcToast(context, 'Kon de keuze niet opslaan: $e');
       return;
     }
     if (!mounted) return;
