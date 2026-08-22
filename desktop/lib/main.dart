@@ -11156,6 +11156,38 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     } catch (_) {/* Deezer and Discogs on their own are still a working search */}
   }
 
+  /// Waarom er niets gevonden is — als er een betere reden voor is dan "het bestaat niet".
+  ///
+  /// **Waarom dit nodig is.** Een time-out, een geweigerd verzoek, een storing bij Discogs en een
+  /// zoekterm die werkelijk nergens voorkomt geven hier allemaal een lege lijst, en dus allemaal
+  /// "Niets gevonden." Zonder Discogs-token faalt daar bovendien élke aanroep stil. Dat is precies
+  /// de reden dat taggen "soms niet lukt" zonder dat er iets te onderzoeken valt: het scherm zegt
+  /// dat de plaat niet bestaat, terwijl er in werkelijkheid niemand geantwoord heeft.
+  ///
+  /// De tellers waren er al — `transportErrors` telt op beide diensten alles wat GEEN 404 is, juist
+  /// om dit onderscheid mogelijk te maken. Ze werden hier alleen niet gelezen.
+  String? _waaromLeeg(int dgVoor, int mbVoor) {
+    final dgStuk = DiscogsService.transportErrors > dgVoor;
+    final mbStuk = MusicBrainzService.transportErrors > mbVoor;
+    if (dgStuk && mbStuk) {
+      return 'Geen van de catalogi antwoordde. Dat is iets anders dan "niet gevonden" — '
+          'controleer je verbinding en probeer het zo nog eens.';
+    }
+    if (dgStuk) {
+      return 'Discogs antwoordde niet: een time-out, te veel verzoeken achter elkaar, of een '
+          'storing daar. Wat je zoekt kan er dus wél zijn.';
+    }
+    if (mbStuk) {
+      return 'MusicBrainz antwoordde niet. Wat je zoekt kan er dus wél zijn; probeer het zo nog '
+          'eens.';
+    }
+    if (context.read<AppSettings>().discogsToken.trim().isEmpty) {
+      return 'Niets gevonden — maar er is ook geen Discogs-token ingevuld, dus er is alleen bij '
+          'Deezer en MusicBrainz gekeken. Discogs kent juist de persingen en verzamelaars.';
+    }
+    return null;
+  }
+
   Future<void> _searchBrowse(String q) async {
     setState(() {
       _browseBusy = true;
@@ -11165,6 +11197,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       _trackExpanded = null;
       _status = null;
     });
+    // Vóór het zoeken opnemen, want deze tellers zijn statisch en lopen ook door van andere
+    // zoekopdrachten. Alleen het VERSCHIL over deze zoekopdracht zegt iets.
+    final dgVoor = DiscogsService.transportErrors;
+    final mbVoor = MusicBrainzService.transportErrors;
     try {
       final res = await Future.wait([
         _catalog.searchArtists(q),
@@ -11176,6 +11212,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         _artists = res[0] as List<CatalogArtist>;
         _albumHits = res[1] as List<CatalogAlbumHit>;
         _trackHits = res[2] as List<CatalogTrackHit>;
+        // Nog geen reden geven: Discogs en MusicBrainz zijn hieronder nog aan het werk, en een
+        // oordeel over "waarom leeg" is pas te vellen als iedereen geantwoord heeft.
         _status = (_artists.isEmpty && _albumHits.isEmpty && _trackHits.isEmpty)
             ? 'Niets gevonden.'
             : null;
@@ -11183,7 +11221,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       await _addDiscogsAlbums(q);
       await _addMusicBrainzHits(q);
       if (mounted && _artists.isEmpty && _albumHits.isEmpty && _trackHits.isEmpty) {
-        setState(() => _status = 'Niets gevonden.');
+        setState(() => _status = _waaromLeeg(dgVoor, mbVoor) ?? 'Niets gevonden.');
       }
     } catch (e) {
       if (mounted) setState(() => _status = 'Zoeken mislukt: $e');
