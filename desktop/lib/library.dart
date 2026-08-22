@@ -2290,7 +2290,20 @@ class LibraryStore extends ChangeNotifier {
     notifyListeners();
     var since = 0;
 
-    final wachtrij = [for (final a in albums) if (a.cover == null) a];
+    // Niet alleen de albums ZONDER hoes.
+    //
+    // **Hier zat het volgende gat.** De controle hieronder — klopt het merkteken van de hoes die de
+    // eigenaar koos nog met wat hier ligt? — was onbereikbaar voor elk album dat al iets liet zien.
+    // De wachtrij bevatte immers alleen `cover == null`. Dus: op de pc de juiste hoes, op de Mac de
+    // oude, en die kwam er nooit meer af omdat de Mac vond dat hij al klaar was.
+    //
+    // Een album waar de pc een BEWUSTE keuze voor kent (`artTag` gevuld) gaat er daarom altijd in,
+    // ook met een hoes. Dat is een kleine groep — alleen platen waarvan je zelf de hoes hebt gekozen
+    // — en juist daar mogen twee toestellen het niet oneens zijn.
+    final wachtrij = [
+      for (final a in albums)
+        if (a.cover == null || (_remoteAlbums[a]?.artTag ?? '').isNotEmpty) a
+    ];
     var volgende = 0;
     // Wat het netwerk deed. Zonder deze twee is een hoezenronde die HELEMAAL mislukt niet te
     // onderscheiden van een bibliotheek zonder hoezen: `client.art` slikt alles — geweigerde
@@ -2312,6 +2325,16 @@ class LibraryStore extends ChangeNotifier {
         // vaak de eigenaar het ook corrigeerde.
         final merk = _remoteAlbums[album]?.artTag ?? '';
         final verouderd = merk.isNotEmpty && await enricher.bewaardMerk(album) != merk;
+        // Er staat al iets én het klopt: niets te doen. Deze uitgang stond vroeger in de wachtrij
+        // zelf, en daarom werd `verouderd` hierboven nooit voor zo'n album berekend.
+        if (album.cover != null && !verouderd) continue;
+        if (verouderd) {
+          // De pc heeft een ANDERE bewuste keuze dan hier ligt, en de pc houdt de boeken bij. Alles
+          // wat hier lokaal voorrang had is daarmee achterhaald — laat je dat staan, dan wint het
+          // straks weer van de bytes die zo binnenkomen en verandert er zichtbaar niets.
+          album.correctedCover = null;
+          album.resolvedCover = null;
+        }
         final cached = verouderd ? null : await enricher.cached(album);
         if (cached != null) {
           album.enriched = cached;
