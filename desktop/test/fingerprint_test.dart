@@ -5,6 +5,8 @@
 /// dubbel wordt aangeboden om weg te doen.
 library;
 
+import 'dart:io';
+
 import 'package:debridmusic/fingerprint.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -101,10 +103,52 @@ void main() {
   });
 
   group('gereedschap', () {
+    setUp(Fingerprinter.resetLookup);
+    tearDown(Fingerprinter.resetLookup);
+
     test('zonder fpcalc gebeurt er niets, en niets stort in', () async {
       final fp = Fingerprinter(toolPath: r'C:\bestaat\niet\fpcalc.exe');
       expect(fp.available, isFalse);
       expect(await fp.of(r'C:\ook\niet.flac'), isNull);
+    });
+
+    test('een opgegeven pad dat WEL bestaat wordt aangenomen', () {
+      // De enige tak die zonder een echte fpcalc te toetsen is: het kalibratiescript geeft er een
+      // mee, en dan hoort er niet gezocht te worden.
+      final f = File('${Directory.systemTemp.path}${Platform.pathSeparator}dm_fpcalc_toets');
+      f.writeAsStringSync('geen echte fpcalc, maar hij bestaat');
+      addTearDown(() => f.deleteSync());
+      expect(Fingerprinter(toolPath: f.path).tool, f.path);
+    });
+
+    test('niet gevonden zegt WAAR er gekeken is', () {
+      // **Waarom dit een toets waard is.** De uitleg bij `tool` beloofde dat PATH nagekeken werd, en
+      // dat deed hij niet -- er stonden precies twee kandidaten, allebei naast de app. Wie fpcalc via
+      // Homebrew had (op een Mac de gewone weg) kreeg "fpcalc ontbreekt" terwijl het programma
+      // gewoon geïnstalleerd was, en het scherm zei niet waar er gezocht was.
+      //
+      // Deze toets doet geen uitspraak over of fpcalc gevonden WORDT -- op de bouwmachine kan hij er
+      // staan of niet. Hij legt vast dat er bij een misser iets te lezen valt.
+      Fingerprinter().tool;
+      final fout = Fingerprinter.laatsteFout;
+      if (fout == null) return; // fpcalc staat op deze machine; dan is er niets te melden
+      expect(fout, contains('fpcalc'));
+      expect(fout, contains('geprobeerd'));
+      if (!Platform.isWindows) {
+        expect(fout, contains('/opt/homebrew/bin/fpcalc'),
+            reason: 'de plek waar Homebrew hem neerzet hoort erbij te staan');
+      }
+    });
+
+    test('de kandidatenlijst begint naast de app en eindigt op PATH', () {
+      // De volgorde IS de afspraak: wat de bouwstraat meelevert gaat vóór wat er toevallig op de
+      // machine staat, want alleen van de eerste weten we welke versie het is -- en een andere
+      // versie kan een ander vingerafdrukalgoritme hebben.
+      final lijst = Fingerprinter.kandidaten();
+      final naam = Platform.isWindows ? 'fpcalc.exe' : 'fpcalc';
+      expect(lijst.first, startsWith(File(Platform.resolvedExecutable).parent.path));
+      expect(lijst.last, naam, reason: 'een kale naam is de PATH-kandidaat');
+      expect(lijst.toSet(), hasLength(lijst.length), reason: 'geen dubbele kandidaten');
     });
   });
 }

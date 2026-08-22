@@ -4118,7 +4118,14 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     }
     final fp = Fingerprinter();
     if (!fp.available) {
-      _srcToast(context, 'fpcalc ontbreekt — herinstalleer de app om dit te gebruiken.');
+      // Zeggen waar er gekeken is, niet alleen dat het er niet is. Sinds de Mac-bouw fpcalc
+      // meelevert hoort dit bijna nooit meer voor te komen; gebeurt het tóch, dan is de vraag
+      // meteen "waar dan wel" en die stond nergens.
+      _srcToast(
+          context,
+          'fpcalc ontbreekt — herinstalleer de app. '
+          '${Platform.isMacOS ? 'Of installeer hem los: brew install chromaprint. ' : ''}'
+          '${Fingerprinter.laatsteFout ?? ''}');
       return;
     }
 
