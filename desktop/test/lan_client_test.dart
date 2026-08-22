@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+import 'package:debridmusic/enrichment.dart';
 import 'package:debridmusic/lan/catalog.dart';
 import 'package:debridmusic/lan/pairing.dart';
 import 'package:debridmusic/lan/remote_services.dart';
@@ -98,7 +99,13 @@ Track _t(
 }
 
 /// A client bound to a MockClient that answers out of [pc]'s real catalogue.
-({LibraryStore library, RemoteClient client, List<String> requests, List<Map<String, dynamic>> edits}) _client(
+({
+  LibraryStore library,
+  RemoteClient client,
+  List<String> requests,
+  List<Map<String, dynamic>> edits,
+  List<String> uitgeleverd,
+}) _client(
   LibraryStore pc, {
   Map<String, Uint8List> art = const {},
   int catalogStatus = 200,
@@ -107,6 +114,9 @@ Track _t(
   final catalog = LanCatalog(pc);
   final requests = <String>[];
   final edits = <Map<String, dynamic>>[];
+  // Voor welke hoezen er werkelijk BYTES over de lijn gingen. Een verzoek tellen is niet genoeg:
+  // het verschil tussen een volle download en een lege 304 is precies waar het hier om draait.
+  final uitgeleverd = <String>[];
   final base = Uri.parse('http://192.168.0.216:47820');
 
   final mock = MockClient((req) async {
@@ -130,7 +140,15 @@ Track _t(
       final ref = req.url.pathSegments.last;
       final bytes = art[ref] ?? catalog.artwork(ref);
       if (bytes == null) return http.Response('', 404);
-      return http.Response.bytes(bytes, 200);
+      // Net als de echte pc: een merkteken over de bytes die er NU liggen, en een lege 304 als het
+      // toestel er al mee aankomt. Zonder dit hier deed deze nagemaakte pc iets wat geen enkele
+      // echte pc doet, en toetste de bewering hieronder een wereld die niet bestaat.
+      final etag = '"${CoverEnricher.hoesMerk(bytes)}"';
+      if (req.headers['If-None-Match'] == etag) {
+        return http.Response('', 304, headers: {'etag': etag});
+      }
+      uitgeleverd.add(ref);
+      return http.Response.bytes(bytes, 200, headers: {'etag': etag});
     }
     return http.Response('', 404);
   });
@@ -140,7 +158,13 @@ Track _t(
     client: mock,
   );
   final library = LibraryStore()..remote = client;
-  return (library: library, client: client, requests: requests, edits: edits);
+  return (
+    library: library,
+    client: client,
+    requests: requests,
+    edits: edits,
+    uitgeleverd: uitgeleverd
+  );
 }
 
 /// What a person actually sees of an album, in a form two libraries can be compared on.
@@ -237,7 +261,7 @@ void main() {
       expect(c.library.albums.firstWhere((a) => a.title == 'Dummy').cover, chosen);
     });
 
-    test('a cover seen once comes from disk the next time, not over wifi', () async {
+    test('een hoes die je al hebt komt van schijf: navragen mag, downloaden niet', () async {
       final pc = _pc();
       pc.library.albums.firstWhere((a) => a.title == 'Dummy').embeddedCover =
           Uint8List.fromList(List.generate(600, (i) => i % 256));
@@ -247,17 +271,54 @@ void main() {
       await first.library.loadRemoteCovers(AppSettings());
       final ref = first.library
           .remoteAlbumId(first.library.albums.firstWhere((a) => a.title == 'Dummy'))!;
-      expect(first.requests.where((r) => r.startsWith('/art/$ref')), isNotEmpty);
+      expect(first.uitgeleverd.where((r) => r == ref), isNotEmpty,
+          reason: 'de eerste keer moet hij wél echt binnenkomen');
 
-      // A second device start, same on-disk cache. The cover has to appear without asking the PC —
-      // that is the difference between a grid that fills instantly and one that fills over wifi.
-      // Only for the record that HAS one: an album with no cover is asked about again, which is
-      // right, because the PC's enricher may have found one since.
+      // Een tweede start van het toestel, met dezelfde cache op schijf.
+      //
+      // **Deze bewering is bijgesteld, en strenger geworden.** Vroeger stond hier dat er GEEN
+      // verzoek meer mocht gaan. Dat las als "de hoes komt van schijf", maar het betekende in de
+      // praktijk iets anders: het toestel keek nooit meer om. Kwam de hoes op de pc niet uit een
+      // bewuste keuze — het gewone geval — dan was er niets waaraan het kon zien dat zijn
+      // cachebestand achterhaald was, want dat bestand heet naar `artiest|titel` en die naam
+      // beweegt niet. Zo hield een Mac maandenlang een andere hoes vast dan de pc.
+      //
+      // Waar het werkelijk om ging is dat er geen HOES over wifi komt. Dat is wat hier nu staat:
+      // één vraag mag, en die vraag moet voorwaardelijk zijn en met een lege 304 beantwoord worden.
       final second = _client(pc.library);
       await second.library.loadRemote();
       await second.library.loadRemoteCovers(AppSettings());
-      expect(second.requests.where((r) => r.startsWith('/art/$ref')), isEmpty);
+      expect(second.requests.where((r) => r.startsWith('/art/$ref')), hasLength(1),
+          reason: 'één keer navragen, niet meer');
+      expect(second.uitgeleverd.where((r) => r == ref), isEmpty,
+          reason: 'en geen enkele byte: dat is het hele punt van het navragen');
       expect(second.library.albums.firstWhere((a) => a.title == 'Dummy').cover, isNotNull);
+    });
+
+    test('verandert de hoes op de pc, dan haalt het toestel hem alsnog op', () async {
+      // De keerzijde van de toets hierboven, en de reden dat het navragen er is. Zonder deze zou
+      // "geen bytes" ook groen blijven als het toestel gewoon nooit meer keek.
+      final pc = _pc();
+      final dummy = pc.library.albums.firstWhere((a) => a.title == 'Dummy');
+      dummy.embeddedCover = Uint8List.fromList(List.generate(600, (i) => i % 256));
+
+      final first = _client(pc.library);
+      await first.library.loadRemote();
+      await first.library.loadRemoteCovers(AppSettings());
+      final ref =
+          first.library.remoteAlbumId(first.library.albums.firstWhere((a) => a.title == 'Dummy'))!;
+
+      // Op de pc staat nu een andere hoes — niet gekozen, gewoon anders. Precies het geval waar
+      // `artTag` blind voor is.
+      final nieuwe = Uint8List.fromList(List.generate(600, (i) => (i * 5 + 3) % 256));
+      dummy.embeddedCover = nieuwe;
+
+      final second = _client(pc.library);
+      await second.library.loadRemote();
+      await second.library.loadRemoteCovers(AppSettings());
+      expect(second.uitgeleverd.where((r) => r == ref), isNotEmpty,
+          reason: 'het merkteken klopt niet meer, dus de nieuwe hoes hoort te komen');
+      expect(second.library.albums.firstWhere((a) => a.title == 'Dummy').cover, nieuwe);
     });
   });
 
