@@ -132,10 +132,14 @@ class AcoustIdService {
   final AppSettings settings;
   final http.Client? _client;
 
-  Future<http.Response> _post(Uri u, Map<String, String> headers, Map<String, String> body) =>
-      _client == null
-          ? http.post(u, headers: headers, body: body)
-          : _client!.post(u, headers: headers, body: body);
+  Future<http.Response> _post(Uri u, Map<String, String> headers, Map<String, String> body) {
+    // Geen `!` achter `_client`: Dart weet in deze tak zelf al dat een privé final veld niet null
+    // is, en `flutter analyze` maakt daar een WAARSCHUWING van — die hier de bouw breekt.
+    final c = _client;
+    return c == null
+        ? http.post(u, headers: headers, body: body)
+        : c.post(u, headers: headers, body: body);
+  }
 
   bool get available => settings.acoustidKey.trim().isNotEmpty;
 
