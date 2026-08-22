@@ -101,6 +101,32 @@ void main() {
     expect(verloop(t), isNull);
   });
 
+  testWidgets('de vulling is GEEN kind van de vervaging', (t) async {
+    // **De fout die dit vastlegt, en waarom hij zo lang onzichtbaar bleef.**
+    //
+    // De vulling stond als kind ván de `BackdropFilter`. Op een pc werkte dat en zag je glas. Op een
+    // Android-telefoon liep de albumbeschrijving kraakhelder dwars door de knoppen heen — géén
+    // wazigheid en géén kleur.
+    //
+    // Dat "en géén kleur" was de aanwijzing. Een vulling is een gewoon gekleurd vlak en tekent
+    // altijd, tenzij hij niet getekend WORDT. Als kind van een vervaging die het toestel laat vallen
+    // — en dat gebeurt op Android met een BackdropFilter binnen de clip van een scrollende lijst —
+    // verdwijnt hij mee.
+    //
+    // Naast elkaar overleeft de kleur het dus als de vervaging sneuvelt. Minder mooi, wel leesbaar,
+    // en dat is de goede kant om op te falen. Deze toets bestaat omdat de tien andere allemaal groen
+    // stonden terwijl er op het toestel niets te zien was: die keken of de lagen er WAREN, niet hoe
+    // ze zich tot elkaar verhouden.
+    await zet(t, 1);
+    final gekleurd = find.byWidgetPredicate((w) =>
+        w is DecoratedBox &&
+        w.decoration is BoxDecoration &&
+        (w.decoration as BoxDecoration).gradient != null);
+    expect(gekleurd, findsOneWidget);
+    expect(find.descendant(of: find.byType(BackdropFilter), matching: gekleurd), findsNothing,
+        reason: 'valt de vervaging weg, dan gaat de kleur mee — en dan staat er niets');
+  });
+
   group('op een telefoon staat het glas steviger', () {
     // **Waarom daar een ander getal hoort.** Op een pc is deze balk 64 punten hoog boven een breed
     // venster; er schuift per keer weinig onderdoor. Op een telefoon staat de tekst van rand tot
@@ -114,7 +140,7 @@ void main() {
       await zet(t, 1, dicht: true);
       final smal = verloop(t)!.colors.first.a;
       expect(smal, greaterThan(breed));
-      expect(smal, greaterThan(.8), reason: 'genoeg om een alinea eronder te dempen');
+      expect(smal, greaterThan(.7), reason: 'genoeg om een alinea eronder te dempen');
     });
 
     testWidgets('en meer vervaging, want dát is wat letters onleesbaar maakt', (t) async {
@@ -122,7 +148,7 @@ void main() {
       // zijn. Het is de vervaging die het glas maakt.
       await zet(t, 1, dicht: true);
       expect(t.widget<BackdropFilter>(find.byType(BackdropFilter)).filter,
-          ImageFilter.blur(sigmaX: 34, sigmaY: 34));
+          ImageFilter.blur(sigmaX: 30, sigmaY: 30));
     });
 
     testWidgets('bij stilstand nog steeds helemaal niets', (t) async {

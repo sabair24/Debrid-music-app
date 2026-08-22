@@ -224,14 +224,23 @@ Color balkKleur(int? kleur) {
 ///
 /// [op] loopt van 0 (niets) tot 1 (volledig glas).
 ///
-/// [dicht] maakt het glas sterker, en dat is voor de telefoon. **Waarom die daar anders moet zijn.**
-/// Op een pc is deze balk 64 punten hoog boven een venster dat een paar honderd punten breed
-/// materiaal toont; er schuift per keer weinig onderdoor en 62% dekking is ruim. Op een telefoon is
-/// het scherm smal, staat de tekst er van rand tot rand, en is de balk het enige wat tussen zes
-/// witte pictogrammen en een lopende alinea staat. Gemeten op het toestel: bij dezelfde 62% las de
-/// bovenste regel van de albumbeschrijving gewoon dwars door de knoppen heen. Zelfde recept dus,
-/// maar steviger aangezet — nog steeds niets bij stilstand, en dat is wat een balk van een baan
-/// onderscheidt.
+/// **De vulling staat NAAST de vervaging en niet erin, en dat is geen stijlkwestie.**
+///
+/// Ze stond als kind ván de `BackdropFilter`. Op een pc werkte dat: je zag glas. Op een Android-
+/// telefoon liep de albumbeschrijving kraakhelder dwars door de knoppen heen — geen wazigheid en
+/// geen kleur. Dat "en geen kleur" is de aanwijzing: een vulling is een gewoon gekleurd vlak en
+/// tekent altijd, tenzij hij niet getekend WORDT. Als kind van een vervaging die het toestel laat
+/// vallen — en dat gebeurt op Android met een `BackdropFilter` binnen de clip van een scrollende
+/// lijst — verdwijnt hij mee.
+///
+/// Naast elkaar in een `Stack` overleeft de kleur het dus als de vervaging sneuvelt. Wat je dan
+/// overhoudt is minder mooi maar wel leesbaar, en dat is precies de goede kant om op te falen.
+/// `StackFit.expand` erbij: een `DecoratedBox` zonder kind neemt bij losse randvoorwaarden de
+/// KLEINSTE maat aan, en dat is nul — dezelfde stille manier om niets te tekenen.
+///
+/// [dicht] maakt het glas sterker, en dat is voor de telefoon. Op een pc is deze balk 64 punten hoog
+/// boven een breed venster; er schuift per keer weinig onderdoor. Op een telefoon staat de tekst van
+/// rand tot rand en is de balk het enige tussen zes witte pictogrammen en een lopende alinea.
 Widget balkGlas(Color tint, double op, {bool dicht = false}) {
   // Helemaal niets, en niet "een doorzichtig vlak": een BackdropFilter met sigma 0 is nog steeds een
   // laag die de achtergrond leest, en dat is op een Shield het duurste wat er op het scherm staat.
@@ -239,7 +248,7 @@ Widget balkGlas(Color tint, double op, {bool dicht = false}) {
   final vol = isTv
       ? .96
       : dicht
-          ? .88
+          ? .78
           : .62;
   final vulling = DecoratedBox(
     decoration: BoxDecoration(
@@ -258,14 +267,23 @@ Widget balkGlas(Color tint, double op, {bool dicht = false}) {
     ),
   );
   if (isTv) return vulling;
-  // Meer vervaging waar de balk krapper is. Twaalf punten meer kost niets extra — het is dezelfde
-  // ene laag — en het is precies wat kleine letters van "vager" naar "onleesbaar" brengt. Alleen
-  // dekking erbij zou de knoppen op een BALK zetten; het is de vervaging die het glas maakt.
-  final wazig = (dicht ? 34 : 24) * op;
-  return ClipRect(
-    child: BackdropFilter(
-      filter: ImageFilter.blur(sigmaX: wazig, sigmaY: wazig),
-      child: vulling,
-    ),
+  // Meer vervaging waar de balk krapper is. Zes punten meer kost niets extra — het is dezelfde ene
+  // laag — en het is wat kleine letters van "vager" naar "onleesbaar" brengt.
+  final wazig = (dicht ? 30 : 24) * op;
+  return Stack(
+    fit: StackFit.expand,
+    children: [
+      // Eerst de vervaging, met een LEEG kind: hij hoeft niets te tekenen, alleen te vervagen wat
+      // erachter langs schuift.
+      ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: wazig, sigmaY: wazig),
+          child: const SizedBox.expand(),
+        ),
+      ),
+      // En dan de kleur eroverheen, als eigen laag. Sneuvelt de vervaging op een toestel, dan staat
+      // deze er nog steeds.
+      vulling,
+    ],
   );
 }
