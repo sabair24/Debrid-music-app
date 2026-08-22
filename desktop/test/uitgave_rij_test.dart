@@ -93,7 +93,7 @@ UitgaveRij bouw({
       onKiezen: () => getikt?.add('kiezen'),
       onScans: () => getikt?.add('scans'),
       onNummering: () => getikt?.add('nummering'),
-      onKlaarzetten: (rol, _) => getikt?.add('klaarzetten:$rol'),
+      onKlaarzetten: (rol, _, __) => getikt?.add('klaarzetten:$rol'),
     );
 
 void main() {
@@ -198,7 +198,7 @@ void main() {
         onKiezen: () {},
         onScans: () {},
         onNummering: () {},
-        onKlaarzetten: (_, __) {},
+        onKlaarzetten: (_, __, ___) {},
       ),
       411,
     ));

@@ -1252,7 +1252,7 @@ extension DiscogsArtwork on DiscogsService {
     // sources without the marker; those are worth having on screen but they are not the last word, and
     // serving them as the answer would mean the back and the disc never get looked for.
     final cached = await _readArt(dir);
-    if (cached != null && await File('${dir.path}${Platform.pathSeparator}done').exists()) {
+    if (cached != null && await _afgerond(dir, cached)) {
       return cached;
     }
 
@@ -1317,7 +1317,7 @@ extension DiscogsArtwork on DiscogsService {
     if (roles.isNotEmpty) {
       final wanted = ['front', 'back', 'disc'];
       final got = await Future.wait(
-          [for (final r in wanted) (roles[r] ?? '').isEmpty ? Future.value(null) : fetchImage(roles[r]!)]);
+          [for (final r in wanted) (roles[r] ?? '').isEmpty ? Future.value(null) : _rolPlaatje(roles[r]!)]);
       saidFront = got[0];
       saidBack = got[1];
       saidDisc = got[2];
@@ -1687,13 +1687,60 @@ extension DiscogsArtwork on DiscogsService {
         return await f.exists() ? await f.readAsBytes() : null;
       }
 
-      return ReleaseArt(
+      final art = ReleaseArt(
         front: await one('front'),
         back: await one('back'),
         disc: await one('disc'),
       );
+      // Een map zonder één enkele afbeelding is GEEN antwoord.
+      //
+      // Hij gaf hier `ReleaseArt(null, null, null)` terug, en dat is niet hetzelfde als "niets
+      // gevonden" — het telt bovenaan als een cachetreffer en in de widget als `art != null`, dus het
+      // OVERSCHRIJFT wat er al op het scherm stond. Zo werd een leeggeruimd mapje een album zonder
+      // hoes en zonder cd, en werd er nooit meer gezocht.
+      if (art.front == null && art.back == null && art.disc == null) return null;
+      return art;
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Een door de gebruiker AANGEWEZEN scan ophalen, bij de juiste balie.
+  ///
+  /// Elk archief bedient zijn eigen afbeeldingen, en Discogs wil zijn sleutel op het verzoek. Die
+  /// splitsing maakt de app elders al — zie het opslaan van een gekozen hoes in `main.dart` en
+  /// `booklet.dart`, waar letterlijk staat: *"Discogs images need the app's token; the Cover Art
+  /// Archive is open"*. Alleen hier niet, en juist hier deed het pijn.
+  ///
+  /// Wijs je een cd aan in de MusicBrainz-kolom van de galerij, dan is dat een `coverartarchive.org`-
+  /// adres. Dat werd met een `Authorization: Discogs token=…` opgehaald — een sleutel voor een heel
+  /// ander huis, en bij een leeg token zelfs een lege sleutel. Mislukte die GET, dan bleef `saidDisc`
+  /// leeg, ging de app **zelf gokken** welke scan de schijf was, en werd die gok gecached. Precies de
+  /// klacht: "de cd is er niet altijd terwijl ik die wel heb aangeduid."
+  Future<Uint8List?> _rolPlaatje(String url) =>
+      url.contains('coverartarchive.org') ? MusicBrainzService().fetchImage(url) : fetchImage(url);
+
+  /// Hoe lang een ONVOLLEDIG antwoord meegaat.
+  ///
+  /// Sommige platen hebben werkelijk geen scan van de achterkant of de schijf, en die elke keer
+  /// opnieuw gaan zoeken is precies waar het merkteken `done` voor gemaakt is. Maar "nu niet
+  /// gevonden" is niet hetzelfde als "bestaat niet": scans worden bij het Cover Art Archive dagelijks
+  /// bijgeladen, en een Discogs-token dat later ingevuld wordt opent een bron die er eerst niet was.
+  ///
+  /// Een VOLLEDIG antwoord — hoes, achterkant én cd — vervalt nooit; daar valt niets aan te
+  /// verbeteren. Alleen een onvolledig antwoord krijgt een houdbaarheidsdatum, zodat het hooguit
+  /// eens per twee weken één zoekronde kost in plaats van bij elk bezoek.
+  static const _onvolledigGeldig = Duration(days: 14);
+
+  /// Is dit een afgerond antwoord waar niets meer aan te halen valt?
+  Future<bool> _afgerond(Directory dir, ReleaseArt art) async {
+    final merk = File('${dir.path}${Platform.pathSeparator}done');
+    if (!await merk.exists()) return false;
+    if (art.front != null && art.back != null && art.disc != null) return true;
+    try {
+      return DateTime.now().difference((await merk.stat()).modified) < _onvolledigGeldig;
+    } catch (_) {
+      return true; // een tijd die niet te lezen is, is geen reden om alles opnieuw te doen
     }
   }
 
@@ -1944,7 +1991,9 @@ extension DiscogsChoices on DiscogsService {
         catno: (it['catno'] as String?)?.trim(),
         country: (it['country'] as String?)?.trim(),
         year: DiscogsService.jaarUit(it['year']),
-        front: thumb.isEmpty || thumb.contains('spacer') ? null : ChoiceImage(thumb, thumb),
+        front: thumb.isEmpty || thumb.contains('spacer')
+            ? null
+            : ChoiceImage(thumb, thumb, alleenMiniatuur: true),
         detailed: false,
       ));
     }
@@ -1976,7 +2025,7 @@ extension DiscogsChoices on DiscogsService {
         country: v.country,
         year: v.year,
         // The sleeve, straight from the listing — no lookup needed to show it.
-        front: (v.thumb ?? '').isEmpty ? null : ChoiceImage(v.thumb!, v.thumb!),
+        front: (v.thumb ?? '').isEmpty ? null : ChoiceImage(v.thumb!, v.thumb!, alleenMiniatuur: true),
         detailed: false,
       );
 

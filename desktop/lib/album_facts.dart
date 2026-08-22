@@ -264,7 +264,19 @@ bool needsResolve(
   // so the hash above cannot see it — and serving the tracklist of the pressing someone just
   // replaced is the one staleness they would certainly notice.
   if (pinnedMbid != null && pinnedMbid.isNotEmpty && known.mbid != pinnedMbid) return true;
-  if (pinned != null && pinned > 0 && known.discogsRelease != pinned) return true;
+  // Idem voor een vastgezette Discogs-persing — maar mét een rem erop.
+  //
+  // Deze regel stond er kaal, en dat was de helft van een lus. De oplosser vroeg Discogs alleen als
+  // MusicBrainz niets wist, dus bij een plaat die MusicBrainz wél kent werd de pin nooit gehaald en
+  // bleef `discogsRelease` leeg — waarop deze regel altijd waar bleef. Elke sweep van de warmer nam
+  // dat album opnieuw, en schreef er telkens de zelfgekozen persing overheen.
+  //
+  // De oplosser honoreert de pin nu wel (zie `resolveAlbumFacts`), en stempelt `failedMs` als het
+  // niet lukte. Blijft die pin dus onhaalbaar — een verwijderde release, een token dat weg is — dan
+  // is het één poging per dag in plaats van elke ronde.
+  if (pinned != null && pinned > 0 && known.discogsRelease != pinned) {
+    return known.failedMs == null || known.retryDue(nowMs);
+  }
   if (known.isEmpty && known.retryDue(nowMs)) return true;
   return false;
 }

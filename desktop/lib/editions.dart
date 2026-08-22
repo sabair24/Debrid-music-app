@@ -87,7 +87,20 @@ String _geenNummer(String? catno) {
 
 class ChoiceImage {
   final String uri, thumb;
-  const ChoiceImage(this.uri, this.thumb);
+
+  /// Waar: [uri] is in werkelijkheid het MINIATUUR, want de volle scan is nog niet opgevraagd.
+  ///
+  /// De zoeklijst van Discogs geeft per rij alleen een `uri150` van 150×150. Die werd hier als
+  /// `ChoiceImage(thumb, thumb)` neergezet — dus met het miniatuur óók in het `uri`-vak, het vak
+  /// waar de rest van de app "de echte scan" leest. Tikte je zo'n rij aan voordat de detail-lookup
+  /// binnen was, dan werd een plaatje van 150 pixels je `correctedCover`: de hoogste prioriteit die
+  /// er is, weggeschreven naar schijf, en bij elke start weer teruggeladen. Een hoes van 150 pixels
+  /// op een scherm dat er 1200 vraagt.
+  ///
+  /// Met deze vlag kan het opslaan eerst de volle scan ophalen — zie `_save` in de uitgavegalerij.
+  final bool alleenMiniatuur;
+
+  const ChoiceImage(this.uri, this.thumb, {this.alleenMiniatuur = false});
 }
 
 /// One line of a pressing's tracklist, as the pressing itself states it.

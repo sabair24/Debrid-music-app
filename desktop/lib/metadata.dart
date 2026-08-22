@@ -25,11 +25,28 @@ class MetaResult {
   /// What this pressing IS, in one line: "CD · Europe · 19439937972 · 2021". Five results reading
   /// "30 — Adele" and nothing else give you nothing to choose between.
   final String? detail;
+
+  /// De scan die BEWAARD wordt als je deze regel kiest, tegenover [coverUrl] die alleen de rij van
+  /// 44 punten vult.
+  ///
+  /// Die twee liepen door elkaar. Het Cover Art Archive werd om `front-500` gevraagd, dat plaatje
+  /// vulde de lijst én werd bij het kiezen als hoes van het album weggeschreven. Vijfhonderd pixels
+  /// is ruim voor een rij en zichtbaar zacht zodra een hoes een scherm vult — en het is nergens voor
+  /// nodig, want hetzelfde archief levert 1200.
+  ///
+  /// Nu vraagt de lijst 250 (genoeg voor 44 punten, vier keer minder verkeer over vijfentwintig
+  /// rijen) en het bewaren 1200. Leeg betekent: dezelfde als [coverUrl].
+  final String? coverFullUrl;
+
+  /// De scan om te bewaren, met [coverUrl] als terugval.
+  String? get bewaarCover => coverFullUrl ?? coverUrl;
+
   const MetaResult({
     required this.title,
     required this.artist,
     required this.album,
     this.coverUrl,
+    this.coverFullUrl,
     this.releaseId,
     this.mbid,
     this.detail,
@@ -213,7 +230,8 @@ class MetadataSearch {
               album: r.title,
               // The archive answers 404 for a pressing with no scans, which the image widget shows
               // as an empty box — honest, and the row is still choosable on its edition line.
-              coverUrl: 'https://coverartarchive.org/release/${r.mbid}/front-500',
+              coverUrl: 'https://coverartarchive.org/release/${r.mbid}/front-250',
+              coverFullUrl: 'https://coverartarchive.org/release/${r.mbid}/front-1200',
               mbid: r.mbid,
               detail: r.line.isEmpty ? null : r.line,
             )
@@ -243,6 +261,7 @@ class MetadataSearch {
             artist: t.artist,
             album: t.album,
             coverUrl: t.coverUrl,
+            coverFullUrl: t.coverFullUrl,
             detail: _because(t.title, t.detail),
           )
     ];
@@ -306,7 +325,8 @@ class MetadataSearch {
             title: rel.title,
             artist: rec.artist,
             album: rel.title,
-            coverUrl: 'https://coverartarchive.org/release/${rel.mbid}/front-500',
+            coverUrl: 'https://coverartarchive.org/release/${rel.mbid}/front-250',
+            coverFullUrl: 'https://coverartarchive.org/release/${rel.mbid}/front-1200',
             mbid: rel.mbid,
             detail: _because(rec.title, rel.isCompilation ? 'verzamelaar' : null),
           ));
