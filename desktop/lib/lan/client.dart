@@ -283,6 +283,41 @@ class RemoteClient {
     }
   }
 
+  /// "Ik heb deze hoes al — is hij nog steeds de jouwe?"
+  ///
+  /// Hetzelfde verzoek als [art], maar met het merkteken van wat er hier op schijf ligt. De pc
+  /// antwoordt met een lege 304 als het klopt, en anders meteen met de nieuwe bytes. Eén rit over de
+  /// lijn dus, ook in het slechtste geval.
+  ///
+  /// **Waarom dit er is.** De hoescache van een toestel heet naar `artiest|titel`, en die naam
+  /// beweegt niet als de afbeelding verandert. Zonder deze vraag was er voor een hoes die niet uit
+  /// een bewuste keuze kwam nergens iets om aan te zien dat het bestand achterhaald was, en bleef de
+  /// Mac een andere hoes tonen dan de pc — hoe vaak je het daar ook corrigeerde.
+  ///
+  /// De uitkomsten: `ongewijzigd` (houden wat je hebt), bytes (vervangen), of null — dat laatste is
+  /// "geen antwoord" en betekent uitdrukkelijk NIET dat de hoes weg moet. Een pc die even niet
+  /// bereikbaar is mag geen schermen leegmaken.
+  ///
+  /// `merk` mag leeg zijn: dan is het gewoon een gewoon verzoek, en dient dit alleen om het
+  /// merkteken van de pc mee terug te krijgen.
+  ///
+  /// `etag` is null als de pc er geen meegaf. Dat is een OUDERE pc, en de beller hoort daaruit af te
+  /// leiden dat navragen daar zinloos is — anders haalt hij bij elke ronde elke hoes opnieuw op.
+  Future<({bool ongewijzigd, Uint8List? bytes, String? etag})?> artAls(
+      String ref, String merk) async {
+    try {
+      final res = await _http
+          .get(artUrl(ref), headers: merk.isEmpty ? null : {'If-None-Match': '"$merk"'})
+          .timeout(timeout);
+      final etag = res.headers['etag']?.replaceAll('"', '');
+      if (res.statusCode == 304) return (ongewijzigd: true, bytes: null, etag: etag);
+      if (res.statusCode != 200 || res.bodyBytes.isEmpty) return null;
+      return (ongewijzigd: false, bytes: res.bodyBytes, etag: etag);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// The read-only keys the PC is willing to share, so this device can look things up itself.
   /// Empty rather than throwing when the PC has none: that is a PC without a Discogs token, which
   /// is a perfectly ordinary thing to be.

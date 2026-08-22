@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import '../album_facts.dart';
 import '../cloud/device_identity.dart';
 import '../album_facts_resolver.dart';
+import '../enrichment.dart';
 import '../library.dart';
 import '../models.dart';
 import '../musicbrainz.dart';
@@ -1133,10 +1134,32 @@ class LanServer {
       res.statusCode = HttpStatus.notFound;
       return res.close();
     }
+    // Een merkteken van de bytes die hier NU liggen, en niet van wat de eigenaar bewust gekozen
+    // heeft.
+    //
+    // **Waarom dat verschil ertoe doet.** `AlbumDto.artTag` is er alleen voor een bewuste keuze —
+    // met opzet, want die reist in de vingerafdruk van de catalogus mee en zou anders bij het
+    // verrijken van een verse bibliotheek honderden keren gaan bewegen. Maar daardoor kon een
+    // toestel niet nagaan of de hoes die het al maanden in zijn cache heeft nog steeds is wat de pc
+    // toont: zonder bewuste keuze is er niets om tegenaan te houden. Zo hielden de Mac en de pc
+    // hardnekkig twee verschillende hoezen van hetzelfde album vast.
+    //
+    // Hier kost het niets: dit is één antwoord op één verzoek, geen veld dat elke catalogus naar elk
+    // toestel duwt. Het toestel kan met `If-None-Match` in één goedkope 304 te horen krijgen dat het
+    // gelijk had — en anders krijgt het meteen de juiste bytes.
+    final etag = '"${CoverEnricher.hoesMerk(bytes)}"';
+    if (req.headers.value(HttpHeaders.ifNoneMatchHeader) == etag) {
+      res.statusCode = HttpStatus.notModified;
+      res.headers.set(HttpHeaders.etagHeader, etag);
+      return res.close();
+    }
     res.statusCode = HttpStatus.ok;
     res.headers
       ..set(HttpHeaders.contentTypeHeader, _imageType(bytes))
-      ..set(HttpHeaders.cacheControlHeader, 'private, max-age=3600');
+      ..set(HttpHeaders.etagHeader, etag)
+      // `must-revalidate` en geen uur meer: een tussenliggende cache die dit een uur vasthoudt zou
+      // precies de vraag onbeantwoord laten die we hierboven stellen.
+      ..set(HttpHeaders.cacheControlHeader, 'private, max-age=0, must-revalidate');
     res.headers.contentLength = bytes.length;
     if (req.method != 'HEAD') res.add(bytes);
     return res.close();

@@ -2290,13 +2290,34 @@ class LibraryStore extends ChangeNotifier {
     notifyListeners();
     var since = 0;
 
-    final wachtrij = [for (final a in albums) if (a.cover == null) a];
+    // Niet alleen de albums ZONDER hoes.
+    //
+    // **Hier zat het volgende gat.** De controle hieronder — klopt het merkteken van de hoes die de
+    // eigenaar koos nog met wat hier ligt? — was onbereikbaar voor elk album dat al iets liet zien.
+    // De wachtrij bevatte immers alleen `cover == null`. Dus: op de pc de juiste hoes, op de Mac de
+    // oude, en die kwam er nooit meer af omdat de Mac vond dat hij al klaar was.
+    //
+    // Een album waar de pc een BEWUSTE keuze voor kent (`artTag` gevuld) gaat er daarom altijd in,
+    // ook met een hoes. Dat is een kleine groep — alleen platen waarvan je zelf de hoes hebt gekozen
+    // — en juist daar mogen twee toestellen het niet oneens zijn.
+    final wachtrij = [
+      for (final a in albums)
+        if (a.cover == null || (_remoteAlbums[a]?.artTag ?? '').isNotEmpty) a
+    ];
     var volgende = 0;
     // Wat het netwerk deed. Zonder deze twee is een hoezenronde die HELEMAAL mislukt niet te
     // onderscheiden van een bibliotheek zonder hoezen: `client.art` slikt alles — geweigerde
     // verbinding, 401, time-out — en geeft null, en de lus slikt die null nog eens. Het gevolg is een
     // scherm vol grijze vakjes waar nergens iets over opgeschreven staat.
     var gevraagd = 0, gelukt = 0;
+    // Geeft deze pc merktekens af bij een hoes?
+    //
+    // Een oudere pc kent `If-None-Match` op `/art/` niet en antwoordt gewoon met de volle bytes.
+    // Zou dit blijven navragen, dan haalde elke ronde de héle hoezenverzameling opnieuw over de
+    // lijn — precies het tegendeel van wat de navraag moet opleveren. Eén antwoord zonder merkteken
+    // is genoeg om te weten dat het hier zinloos is; daarna gedraagt deze ronde zich weer als
+    // vroeger.
+    var pcKentMerken = true;
 
     Future<void> werker() async {
       while (true) {
@@ -2311,8 +2332,63 @@ class LibraryStore extends ChangeNotifier {
         // pc de juiste Whitney-hoes, op de telefoon het logo van een verzamelaar — telkens weer, hoe
         // vaak de eigenaar het ook corrigeerde.
         final merk = _remoteAlbums[album]?.artTag ?? '';
-        final verouderd = merk.isNotEmpty && await enricher.bewaardMerk(album) != merk;
+        final bewaard = await enricher.bewaardMerk(album);
+        final verouderd = merk.isNotEmpty && bewaard != merk;
+        // Er staat al iets én het klopt: niets te doen. Deze uitgang stond vroeger in de wachtrij
+        // zelf, en daarom werd `verouderd` hierboven nooit voor zo'n album berekend.
+        if (album.cover != null && !verouderd) continue;
+        if (verouderd) {
+          // De pc heeft een ANDERE bewuste keuze dan hier ligt, en de pc houdt de boeken bij. Alles
+          // wat hier lokaal voorrang had is daarmee achterhaald — laat je dat staan, dan wint het
+          // straks weer van de bytes die zo binnenkomen en verandert er zichtbaar niets.
+          album.correctedCover = null;
+          album.resolvedCover = null;
+        }
+        final ref = _remoteAlbums[album]?.artRef;
         final cached = verouderd ? null : await enricher.cached(album);
+
+        // Er ligt hier al een hoes. Klopt hij nog met wat de pc toont?
+        //
+        // **Dit was het laatste gat, en het grootste.** De vorige controle keek naar `artTag`, en die
+        // is er alleen bij een BEWUSTE keuze. Kwam de hoes van de pc uit de tags van het bestand of
+        // uit het verrijken — het gewone geval — dan stond er nergens iets om het cachebestand
+        // tegenaan te houden. Dat bestand heet naar `artiest|titel` en die naam beweegt nooit, dus
+        // wat er één keer in beland was bleef er staan. Zo hield de Mac maandenlang een andere
+        // clownhoes vast dan de pc, en hielp corrigeren op de pc niets: de Mac keek er niet meer
+        // naar.
+        //
+        // Navragen kost één rit: klopt het, dan komt er een lege 304 terug; klopt het niet, dan
+        // meteen de juiste bytes. Dat is niet duurder dan de download die anders zou volgen.
+        if (cached != null && ref != null && pcKentMerken) {
+          gevraagd++;
+          final antwoord = await client.artAls(ref, bewaard);
+          // Een lege 304 telt hier als geslaagd, en dat is geen boekhoudkundige truc: de vraag die
+          // `hoezenMislukt` stelt is "antwoordt de pc nog?". Een bibliotheek die volledig in de cache
+          // staat vraagt hier alleen maar na, krijgt alleen maar 304'jes, en zou anders bij elke
+          // start melden dat de pc onbereikbaar is terwijl alles werkt.
+          if (antwoord != null) gelukt++;
+          if (antwoord != null && antwoord.etag == null) pcKentMerken = false;
+          final verse = antwoord?.bytes;
+          if (verse != null && verse.isNotEmpty) {
+            album.embeddedCover = verse;
+            await enricher.putCached(album, verse);
+            final versMerk = antwoord!.etag ?? merk;
+            if (versMerk.isNotEmpty) await enricher.schrijfMerk(album, versMerk);
+            if (++since >= 24) {
+              since = 0;
+              notifyListeners();
+            }
+            continue;
+          }
+          // 304, of geen antwoord. In beide gevallen houden we wat we hebben — een pc die even niet
+          // opneemt mag geen hoezen van het scherm halen. Wél het merkteken bijwerken als de pc er
+          // een gaf, want dan weten we voortaan wat we vasthouden.
+          final gekregen = antwoord?.etag ?? '';
+          if (gekregen.isNotEmpty && gekregen != bewaard) {
+            await enricher.schrijfMerk(album, gekregen);
+          }
+        }
+
         if (cached != null) {
           album.enriched = cached;
           if (++since >= 24) {
@@ -2321,16 +2397,22 @@ class LibraryStore extends ChangeNotifier {
           }
           continue;
         }
-        final ref = _remoteAlbums[album]?.artRef;
         if (ref != null) gevraagd++;
-        final bytes = ref == null ? null : await client.art(ref);
+        final antwoord = ref == null ? null : await client.artAls(ref, '');
+        if (antwoord != null && antwoord.etag == null) pcKentMerken = false;
+        final bytes = antwoord?.bytes;
         if (bytes == null || bytes.isEmpty) continue;
         gelukt++;
         album.embeddedCover = bytes;
         await enricher.putCached(album, bytes);
         // Pas ná het wegschrijven, zodat een afgebroken download geen merkteken achterlaat dat zegt
         // "deze is bij" terwijl er iets ouds op schijf staat.
-        if (merk.isNotEmpty) await enricher.schrijfMerk(album, merk);
+        //
+        // Het merkteken van de pc gaat vóór dat van de bewuste keuze: het beschrijft precies de
+        // bytes die hier zojuist geland zijn, ook als de hoes helemaal geen bewuste keuze was. Een
+        // oudere pc geeft er geen, en dan valt dit terug op het oude gedrag.
+        final teBewaren = antwoord?.etag ?? merk;
+        if (teBewaren.isNotEmpty) await enricher.schrijfMerk(album, teBewaren);
         // Gebundeld, net als de tak hierboven: elke melding tekent de startpagina opnieuw. Eén
         // melding per binnenkomende hoes betekende honderden volledige hertekeningen in de eerste
         // minuut op de Shield — precies wanneer je wilt gaan bladeren.

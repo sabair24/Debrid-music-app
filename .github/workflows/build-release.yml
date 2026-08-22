@@ -112,6 +112,7 @@ jobs:
             test/vastgezette_persing_test.dart test/catalogus_inpakken_test.dart \
             test/rollen_sync_test.dart test/startsnelheid_test.dart \
             test/hoes_sync_test.dart test/oud_albumobject_test.dart \
+            test/hoes_navraag_test.dart \
             test/completeness_test.dart \
             test/discogs_verwijzing_test.dart test/updater_test.dart \
             test/verhuizing_test.dart
