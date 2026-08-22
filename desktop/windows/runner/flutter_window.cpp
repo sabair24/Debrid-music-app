@@ -53,6 +53,52 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  // GEEN Windows-titelbalk. Hier, en niet meer via het pakket.
+  //
+  // De app tekent zijn eigen knoppen in de bovenbalk, en er hoort dus geen tweede set boven te
+  // staan. Dat werd tot nu toe aan `window_manager` gevraagd -- `titleBarStyle: hidden`, bij het
+  // maken van het venster en later nog eens na het maximaliseren -- en het gebeurde gewoon niet.
+  // Gemeten op 22-08-2026, op een venster dat NIET gemaximaliseerd was: de balk stond er, met twee
+  // sets vensterknoppen onder elkaar. Dat het ook zonder maximaliseren misgaat sluit die weg uit.
+  //
+  // Er is geen manier om aan dat pakket terug te vragen of de balk werkelijk verborgen is, dus
+  // "nog een keer vragen" is niet te controleren. Hier wél: dit is onze eigen vensterprocedure,
+  // hij staat in dit bestand, en de Windows-bouw compileert hem.
+  //
+  // **Hoe het werkt.** Windows vraagt met WM_NCCALCSIZE hoeveel van het venster CLIËNTgebied is.
+  // We laten hem eerst normaal rekenen en zetten dan alleen de BOVENkant terug op de vensterrand.
+  // Daarmee wordt de strook waar de titelbalk stond gewoon app, en tekent Windows hem niet meer.
+  //
+  // Links, rechts en onder blijven met opzet niet-cliëntgebied: dat zijn de sleepranden. Zou je die
+  // ook opeisen, dan is het venster niet meer te vergroten aan de randen en verliest het zijn
+  // schaduw en het vastklikken tegen de schermrand. De bovenrand is de enige die dit kost -- daar
+  // ligt nu de bovenbalk van de app, en die sleept het venster (DragToMoveArea) in plaats van het
+  // te vergroten.
+  //
+  // Gemaximaliseerd maakt Windows het venster juist GROTER dan het scherm, precies met de
+  // framedikte eromheen. Zonder die inzet terug te geven zou de bovenrand van de app buiten beeld
+  // vallen -- de knoppen zouden er half af zijn.
+  //
+  // Vóór de doorgifte aan de plug-ins, en dat is nodig: geeft `window_manager` zelf een antwoord op
+  // dit bericht, dan komt de regel hieronder er nooit aan toe en verandert er niets.
+  // `!= 0u` en niet `== TRUE`: WPARAM is een 64-bits ONgetekend getal en TRUE is een getekende int.
+  // Die vergelijking geeft C4389, en deze bouw draait met /W4 /WX — daar is een waarschuwing een
+  // fout. Zie `windows/CMakeLists.txt`.
+  if (message == WM_NCCALCSIZE && wparam != 0u) {
+    NCCALCSIZE_PARAMS* maten = reinterpret_cast<NCCALCSIZE_PARAMS*>(lparam);
+    const LONG boven = maten->rgrc[0].top;
+    const LRESULT standaard = DefWindowProc(hwnd, message, wparam, lparam);
+    if (standaard != 0) {
+      return standaard;
+    }
+    maten->rgrc[0].top = boven;
+    if (IsZoomed(hwnd)) {
+      maten->rgrc[0].top +=
+          GetSystemMetrics(SM_CYSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+    }
+    return 0;
+  }
+
   // ELKE keer dat deze app afsloot, crashte hij. Gemeten, niet vermoed.
   //
   // Vier crashdumps van 15 t/m 18-08 plus een naspeling op 19-08 om 06:24 wijzen allemaal naar
