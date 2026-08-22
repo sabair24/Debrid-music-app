@@ -1556,8 +1556,12 @@ class LibraryStore extends ChangeNotifier {
       final raw =
           t.path.toLowerCase().endsWith('.mp3') ? readMp3RawFields(f) : readFlacRawFields(f);
       final voor = {for (final k in velden.keys) k: raw[k.toLowerCase()]};
-      if (!await writeTagFields(f, velden)) {
-        failed.add(t.title);
+      // Mét reden. Zonder deze stond er op het scherm "3 niet gelukt" en niets meer — terwijl een
+      // bestand dat openstaat in een andere speler iets heel anders is dan een volle schijf, en
+      // alleen het eerste los je op door iets dicht te doen.
+      String? reden;
+      if (!await writeTagFields(f, velden, waarom: (w) => reden = w)) {
+        failed.add(reden == null ? t.title : '${t.title} — $reden');
         continue;
       }
       written++;
@@ -3482,8 +3486,10 @@ extension LibraryNormalise on LibraryStore {
     for (final t in recordTracks(album)) {
       final before = _tagUndo[t.path];
       if (before == null) continue;
-      if (!await writeTagFields(File(t.path), before)) {
-        failed.add(File(t.path).uri.pathSegments.last);
+      String? reden;
+      if (!await writeTagFields(File(t.path), before, waarom: (w) => reden = w)) {
+        final naam = File(t.path).uri.pathSegments.last;
+        failed.add(reden == null ? naam : '$naam — $reden');
         continue;
       }
       _tagUndo.remove(t.path);

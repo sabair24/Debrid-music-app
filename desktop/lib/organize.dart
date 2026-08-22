@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 
@@ -860,24 +861,70 @@ Future<bool> stampTags(File f, TrackTags t) async {
 ///
 /// Runs in an isolate: parsing a stranger's file is exactly where a throw would otherwise leak the
 /// handle and leave the track unmovable for the rest of the session.
-Future<bool> writeTagFields(File f, Map<String, String?> fields) async {
+/// [waarom] krijgt, als het misgaat, één zin in gewone taal. Zonder dat verdween de reden hier in
+/// een `catch (_)`, en bleef er op het scherm "3 niet gelukt" over — terwijl het commentaar bij die
+/// melding beloofde dat je zou weten waaróm. Een bestand dat openstaat in een andere speler en een
+/// bestand op een volle schijf zijn heel verschillende problemen, en alleen het eerste los je op
+/// door iets dicht te doen.
+Future<bool> writeTagFields(
+  File f,
+  Map<String, String?> fields, {
+  void Function(String)? waarom,
+}) async {
   final path = f.path;
   final mp3 = path.toLowerCase().endsWith('.mp3');
-  if (!mp3 && !path.toLowerCase().endsWith('.flac')) return false;
+  if (!mp3 && !path.toLowerCase().endsWith('.flac')) {
+    waarom?.call('alleen FLAC en MP3 worden geschreven');
+    return false;
+  }
   try {
     // The one place the format is decided, because it is also the one place undoing goes through.
     // Both writers keep the same promise: rebuild only the tag, copy every other byte, land through
     // a temporary file, and refuse rather than guess.
-    return await Isolate.run(() => mp3
+    final gelukt = await Isolate.run(() => mp3
             ? writeMp3Fields(File(path), fields)
             : writeFlacFields(File(path), fields))
         // Dertig seconden is ruim: een volledige herschrijving van 723 MB op 32/384 -- het grootste
         // dat hier binnenkomt -- gemeten op 3 seconden. Dit kapt een vastgelopen schrijver af, geen
         // eerlijke kopie.
         .timeout(const Duration(seconds: 30));
-  } catch (_) {
+    // De schrijver zegt zelf nee. Dat is geen uitzondering maar een oordeel: hij weigert liever dan
+    // te gokken op een tag die hij niet begrijpt.
+    if (!gelukt) waarom?.call('de schrijver herkende de tag in dit bestand niet');
+    return gelukt;
+  } on TimeoutException {
+    waarom?.call('het schrijven liep vast en is na 30 seconden afgekapt');
+    return false;
+  } catch (e) {
+    waarom?.call(schrijffoutUitleg(e));
     return false; // the file is still filed correctly; only its tags stayed as they were
   }
+}
+
+/// Een schrijffout in gewone taal, en met wat eraan te doen valt.
+///
+/// De drie die werkelijk voorkomen staan er met naam bij. De rest valt terug op wat het besturings-
+/// systeem zei -- lelijk, maar nog altijd oneindig veel meer dan niets.
+String schrijffoutUitleg(Object e) {
+  if (e is FileSystemException) {
+    final code = e.osError?.errorCode;
+    // 32 op Windows (ERROR_SHARING_VIOLATION) en 16 op macOS/Linux (EBUSY, "resource busy"): een
+    // ander programma houdt het bestand vast. Verreweg de gewoonste, en de enige die je zelf oplost.
+    if (code == 32 || code == 16) {
+      return 'het bestand is in gebruik door een ander programma';
+    }
+    if (code == 13 || code == 5) return 'geen toestemming om dit bestand te wijzigen';
+    if (code == 28) return 'geen ruimte meer op de schijf';
+    if (code == 2) return 'het bestand staat er niet meer';
+    final os = e.osError?.message.trim() ?? '';
+    final bericht = e.message.trim();
+    // Allebei leeg kan: `FileSystemException('')` bestaat. Dan liever de kale uitzondering dan een
+    // lege melding — want leeg is precies de stand waar dit ding vanaf moest.
+    if (bericht.isEmpty && os.isEmpty) return '$e';
+    if (os.isEmpty) return bericht;
+    return bericht.isEmpty ? os : '$bericht: $os';
+  }
+  return '$e';
 }
 
 /// For callers that only care where the file ended up.

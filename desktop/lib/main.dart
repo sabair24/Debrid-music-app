@@ -1239,6 +1239,25 @@ extension AlbumSortX on AlbumSort {
       };
 }
 
+/// Hoe hoog de bovenbalk van de schil is — de afstand tussen de bovenrand van het VENSTER en de
+/// bovenrand van een pagina die in de binnennavigator leeft.
+///
+/// **Waarom dit een gedeelde functie is en geen getal op twee plekken.** De schil tekent de was
+/// achter zijn bovenbalk en de albumpagina tekent hem opnieuw over zijn eigen vak. Die twee moeten
+/// op elke hoogte dezelfde kleur geven, en dat lukt alleen als de pagina precies weet hoeveel hij
+/// omhoog moet schuiven. Lopen ze uiteen, dan staat er weer een rand dwars over het scherm — precies
+/// waar we net vanaf zijn.
+///
+/// Nul waar er geen bovenbalk is: op een televisie staan de secties in de rail links, en op een
+/// telefoon neemt een open pagina de bovenkant over. Zie de voorwaarde rond `_topBar()` in de schil.
+double _balkBoven(BuildContext context) =>
+    isTv || isCompact(context) ? 0 : _breedeBalkHoogte(context);
+
+/// De hoogte van de brede bovenbalk zelf (pc, Mac, iPad). Apart van [_balkBoven] omdat die laatste
+/// nul geeft waar er géén balk staat, en de balk zelf die uitzondering niet mag erven.
+double _breedeBalkHoogte(BuildContext context) =>
+    64 + tvOverscan.top + (_isTouch ? MediaQuery.viewPaddingOf(context).top : 0);
+
 /// Het glas van de albumbalk, gekoppeld aan hoe ver de lijst eronder geschoven is.
 ///
 /// Apart gezet zodat alléén de balk opnieuw getekend wordt bij het scrollen. Zou dit met een
@@ -2077,7 +2096,11 @@ class _HomeShellState extends State<HomeShell> {
   Widget _topBarBody() => SizedBox(
         // The glow keeps running behind the status bar; only the contents move down, so the top of
         // the screen still looks like one piece rather than a black strip above the app.
-        height: 64 + tvOverscan.top + (_isTouch ? MediaQuery.viewPaddingOf(context).top : 0),
+        //
+        // Uit [_breedeBalkHoogte], want een pagina in de binnennavigator moet via [_balkBoven] exact
+        // ditzelfde getal weten om zijn was op die van de schil te laten passen. Twee kopieën lopen
+        // uiteen zodra er één wordt bijgesteld, en dan staat er weer een rand dwars over het scherm.
+        height: _breedeBalkHoogte(context),
         child: Stack(
           children: [
             // De gloed van het merk, maar niet bovenop de kleur van een plaat.
@@ -4188,7 +4211,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         context,
         r.failed.isEmpty
             ? '${r.restored} bestanden teruggezet'
-            : '${r.restored} teruggezet · ${r.failed.length} in gebruik: ${r.failed.first}');
+            // Niet meer "in gebruik" als vaste aanname: de naam draagt nu de werkelijke reden mee,
+            // en die is lang niet altijd een bestand dat openstaat.
+            : '${r.restored} teruggezet · ${r.failed.length} niet gelukt — ${r.failed.first}');
     _refresh();
   }
 
@@ -4453,32 +4478,45 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     final wasTop = kleurWas(wasBasis(_was))?.colors.first ?? _bg;
 
     return Scaffold(
-      // DOORZICHTIG, en dat is de reden dat de bovenbalk als een gekleurde balk las.
-      //
-      // Een Scaffold zonder eigen kleur pakt `scaffoldBackgroundColor` uit het thema, en dat is een
-      // DICHTE bijna-zwarte vulling. Deze pagina schilderde die dus over de was van de schil heen —
-      // over alles behalve de bovenbalk, want die staat buiten de navigator waar deze pagina in
-      // leeft. Gevolg: de kleur van de plaat was alleen dáár te zien, en precies daardoor was die
-      // strook een balk. Niet omdat er iets extra's getekend werd, maar omdat de rest van het
-      // scherm de kleur wegpoetste.
-      //
-      // De vloer is niet weg: de Scaffold van de SCHIL ligt eronder en heeft dezelfde kleur, met de
-      // was ertussen. En de paginaovergang vervaagt (zie `_schuif` in navigatie.dart), dus een
-      // doorzichtige pagina kruist netjes over de vorige heen in plaats van er hard overheen te
-      // springen.
-      backgroundColor: Colors.transparent,
       // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin — its app bar
       // icons and the sleeve were hard against the panel edge, which is the first strip a
       // television crops away. Horizontal and top only: the player bar below draws its own
       // surface to the bottom edge and must keep doing so.
       body: Stack(
         children: [
-          // De was wordt hier NIET meer getekend — de schil doet dat, over de volle hoogte.
+          // De was van de plaat, hier getekend maar UITGELIJND op het venster.
           //
-          // Hij stond hier, en daarom hield de kleur op bij de bovenbalk: die balk staat buiten de
-          // navigator waar deze pagina in leeft, en een kind kan niet achter zijn ouder schilderen.
-          // Het resultaat was een harde rand dwars over het scherm. Deze pagina geeft nu alleen nog
-          // de KLEUR door via [PaginaWas] (zie `_kleurUitHoes`), en de schil legt hem achter alles.
+          // **Drie standen, en alle drie hadden ze iets mis.**
+          //
+          // 1. Eerst tekende deze pagina de was over zijn eigen vak. Dat gaf een harde rand op de
+          //    grens met de bovenbalk: die balk staat buiten de navigator waar deze pagina in leeft,
+          //    en een kind kan niet achter zijn ouder schilderen. Het verloop begon dus opnieuw.
+          // 2. Toen deed de schil het, over de volle hoogte, en werd deze pagina doorzichtig. De
+          //    kleur liep prachtig door — maar tijdens een paginawissel zie je de pagina eronder er
+          //    dwars doorheen. Alles wat de albumpagina tekent zweefde over het albumraster: hoes,
+          //    titel, knoppen, chips. Spookbeelden, op de pc en op de Mac.
+          // 3. Nu allebei, met hetzelfde recept en dezelfde meetlat. De schil houdt zijn was achter
+          //    de bovenbalk; deze pagina tekent hem opnieuw over een vak zo hoog als het VENSTER, en
+          //    schuift dat omhoog met precies de hoogte van die balk. Dan liggen de twee verlopen op
+          //    elke hoogte op dezelfde kleur — één doorlopend geheel — én is de pagina weer dicht,
+          //    dus er schijnt niets meer doorheen.
+          //
+          // De hoogte van de balk is dezelfde uitdrukking die `_topBarBody` gebruikt. Op een
+          // televisie en op een telefoon met een plaat open staat er geen bovenbalk, en dan begint
+          // de pagina gewoon bovenaan het venster.
+          Positioned(
+            top: -_balkBoven(context),
+            left: 0,
+            right: 0,
+            height: MediaQuery.sizeOf(context).height,
+            child: IgnorePointer(
+              child: AnimatedContainer(
+                duration: kWas,
+                curve: Curves.easeOut,
+                decoration: BoxDecoration(gradient: kleurWas(wasBasis(_was))),
+              ),
+            ),
+          ),
           Column(
         children: [
           // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin — its app bar
@@ -5200,8 +5238,10 @@ class _MetadataEditorState extends State<MetadataEditor> {
           context,
           geschreven.failed.isEmpty
               ? '${geschreven.written} bestand(en) opnieuw getagd'
-              : '${geschreven.written} getagd · ${geschreven.failed.length} niet gelukt '
-                  '(de wijziging staat wel in de app)');
+              // De REDEN erbij, want die was er wel en werd weggegooid. Eén reden en niet alle:
+              // mislukken ze, dan mislukken ze bijna altijd om hetzelfde.
+              : '${geschreven.written} getagd · ${geschreven.failed.length} niet gelukt — '
+                  '${geschreven.failed.first} (de wijziging staat wel in de app)');
     }
     // Says out loud what was pinned. The pin went missing twice while every line of the path read
     // correctly, so this is no longer something to reason about — it is something to see.
@@ -11120,6 +11160,38 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     } catch (_) {/* Deezer and Discogs on their own are still a working search */}
   }
 
+  /// Waarom er niets gevonden is — als er een betere reden voor is dan "het bestaat niet".
+  ///
+  /// **Waarom dit nodig is.** Een time-out, een geweigerd verzoek, een storing bij Discogs en een
+  /// zoekterm die werkelijk nergens voorkomt geven hier allemaal een lege lijst, en dus allemaal
+  /// "Niets gevonden." Zonder Discogs-token faalt daar bovendien élke aanroep stil. Dat is precies
+  /// de reden dat taggen "soms niet lukt" zonder dat er iets te onderzoeken valt: het scherm zegt
+  /// dat de plaat niet bestaat, terwijl er in werkelijkheid niemand geantwoord heeft.
+  ///
+  /// De tellers waren er al — `transportErrors` telt op beide diensten alles wat GEEN 404 is, juist
+  /// om dit onderscheid mogelijk te maken. Ze werden hier alleen niet gelezen.
+  String? _waaromLeeg(int dgVoor, int mbVoor) {
+    final dgStuk = DiscogsService.transportErrors > dgVoor;
+    final mbStuk = MusicBrainzService.transportErrors > mbVoor;
+    if (dgStuk && mbStuk) {
+      return 'Geen van de catalogi antwoordde. Dat is iets anders dan "niet gevonden" — '
+          'controleer je verbinding en probeer het zo nog eens.';
+    }
+    if (dgStuk) {
+      return 'Discogs antwoordde niet: een time-out, te veel verzoeken achter elkaar, of een '
+          'storing daar. Wat je zoekt kan er dus wél zijn.';
+    }
+    if (mbStuk) {
+      return 'MusicBrainz antwoordde niet. Wat je zoekt kan er dus wél zijn; probeer het zo nog '
+          'eens.';
+    }
+    if (context.read<AppSettings>().discogsToken.trim().isEmpty) {
+      return 'Niets gevonden — maar er is ook geen Discogs-token ingevuld, dus er is alleen bij '
+          'Deezer en MusicBrainz gekeken. Discogs kent juist de persingen en verzamelaars.';
+    }
+    return null;
+  }
+
   Future<void> _searchBrowse(String q) async {
     setState(() {
       _browseBusy = true;
@@ -11129,6 +11201,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       _trackExpanded = null;
       _status = null;
     });
+    // Vóór het zoeken opnemen, want deze tellers zijn statisch en lopen ook door van andere
+    // zoekopdrachten. Alleen het VERSCHIL over deze zoekopdracht zegt iets.
+    final dgVoor = DiscogsService.transportErrors;
+    final mbVoor = MusicBrainzService.transportErrors;
     try {
       final res = await Future.wait([
         _catalog.searchArtists(q),
@@ -11140,6 +11216,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         _artists = res[0] as List<CatalogArtist>;
         _albumHits = res[1] as List<CatalogAlbumHit>;
         _trackHits = res[2] as List<CatalogTrackHit>;
+        // Nog geen reden geven: Discogs en MusicBrainz zijn hieronder nog aan het werk, en een
+        // oordeel over "waarom leeg" is pas te vellen als iedereen geantwoord heeft.
         _status = (_artists.isEmpty && _albumHits.isEmpty && _trackHits.isEmpty)
             ? 'Niets gevonden.'
             : null;
@@ -11147,7 +11225,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       await _addDiscogsAlbums(q);
       await _addMusicBrainzHits(q);
       if (mounted && _artists.isEmpty && _albumHits.isEmpty && _trackHits.isEmpty) {
-        setState(() => _status = 'Niets gevonden.');
+        setState(() => _status = _waaromLeeg(dgVoor, mbVoor) ?? 'Niets gevonden.');
       }
     } catch (e) {
       if (mounted) setState(() => _status = 'Zoeken mislukt: $e');
