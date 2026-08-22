@@ -11014,7 +11014,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: _panel,
-        title: const Text('TIDAL-code plakken', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        title: const Text('TIDAL-code plakken', style: kKopKlein),
         content: SizedBox(
           width: dialogWidth(context, 460),
           child: Column(
@@ -11022,7 +11022,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text('Plak de volledige "debridmusic://…"-URL (of enkel de code) die je browser na het inloggen toonde.',
-                  style: TextStyle(color: _muted, fontSize: 12.5)),
+                  style: kTekstKlein),
               const SizedBox(height: 10),
               TextField(
                 controller: ctrl,
@@ -11289,7 +11289,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       children: [
         const Padding(
           padding: EdgeInsets.fromLTRB(24, 22, 24, 8),
-          child: Text('Online zoeken', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+          child: Text('Online zoeken', style: kKop),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 0, 24, 10),
@@ -11372,8 +11372,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                 children: [
                   Row(
                     children: [
-                      const Text('DOWNLOADS',
-                          style: TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: .6)),
+                      const Text('DOWNLOADS', style: kOpschrift),
                       const Spacer(),
                       if (hasFinished)
                         TextButton.icon(
@@ -11400,14 +11399,14 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                                       Text(j.name,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(fontSize: 12.5)),
+                                          style: kTekstBij.copyWith(color: kTekst)),
                                       if (j.detail != null && j.detail!.isNotEmpty)
                                         Text(j.detail!,
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(
-                                                fontSize: 10.5,
-                                                color: j.status == 'failed' ? Colors.red.shade300 : _muted)),
+                                            style: kLabel.copyWith(
+                                                fontWeight: FontWeight.w400,
+                                                color: j.status == 'failed' ? Colors.red.shade300 : null)),
                                     ],
                                   )),
                               SizedBox(
@@ -11439,7 +11438,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                                                   ? (j.progress > 0 ? 'TorBox ${(j.progress * 100).round()}%' : 'voorbereiden')
                                                   : '${(j.progress * 100).round()}%'))),
                                   textAlign: TextAlign.right,
-                                  style: const TextStyle(color: _muted, fontSize: 11.5),
+                                  style: kLabel.copyWith(fontWeight: FontWeight.w400),
                                 ),
                               ),
                             ],
@@ -11494,8 +11493,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             const SizedBox(height: 6),
             TextButton(
               onPressed: _tidalConnecting ? null : _manualTidal,
-              child: const Text('Lukt het automatisch niet? Plak de URL handmatig',
-                  style: TextStyle(color: _muted, fontSize: 12.5)),
+              child: const Text('Lukt het automatisch niet? Plak de URL handmatig', style: kTekstKlein),
             ),
           ],
         ),
@@ -11537,10 +11535,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                       Text(t.title,
                           maxLines: titelRegels(context),
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w600)),
+                          style: kTekstNormaal),
                       if (t.artist.isNotEmpty)
-                        _artistLine(splitFeatured(t.artist, t.title),
-                            const TextStyle(color: _muted, fontSize: 12)),
+                        _artistLine(splitFeatured(t.artist, t.title), kTekstKlein),
                     ],
                   ),
                 ),
@@ -11611,7 +11608,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             textAlign: TextAlign.center,
-                            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                            style: kTegelTitel),
                       ],
                     ),
                   ),
@@ -11644,12 +11641,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                         Text(h.album.title,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                            style: kTegelTitel),
                         _maybeFocusable(Align(
                           alignment: Alignment.centerLeft,
-                          child: ArtistNames(
-                              names: [h.artist],
-                              style: const TextStyle(fontSize: 11.5, color: _muted)),
+                          child: ArtistNames(names: [h.artist], style: kTegelOnder),
                         )),
                       ],
                     ),
@@ -11669,9 +11664,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
 
   Widget _browseHeader(String title, int count) => Padding(
         padding: const EdgeInsets.fromLTRB(24, 14, 24, 8),
-        child: Text('${title.toUpperCase()}  ·  $count',
-            style: const TextStyle(
-                color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
+        child: Text('${title.toUpperCase()}  ·  $count', style: kOpschrift),
       );
 
   Widget _browseTrackRow(int i, CatalogTrackHit t) {
@@ -11696,9 +11689,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                       Text(t.title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
-                      _artistLine(splitFeatured(t.artist, t.title),
-                          const TextStyle(fontSize: 12, color: _muted)),
+                          style: kTekstNormaal),
+                      _artistLine(splitFeatured(t.artist, t.title), kTekstKlein),
                     ],
                   ),
                 ),
@@ -11729,7 +11721,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
               : const Padding(
                   padding: EdgeInsets.fromLTRB(24, 16, 24, 6),
                   child: Text('SOULSEEK · log in via Instellingen om P2P mee te zoeken',
-                      style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)))),
+                      style: kOpschrift))),
         ..._slskTiles(context, slsk,
             limiet: _slskLimiet,
             onMeer: () => setState(() => _slskLimiet += _slskStap)),

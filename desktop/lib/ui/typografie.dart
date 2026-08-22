@@ -51,6 +51,22 @@ const kTekstKlein = TextStyle(fontSize: 12, color: kGedempt);
 /// Het kleinste dat nog leesbaar hoort te zijn: labels op merkjes en badges.
 const kLabel = TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: kGedempt);
 
+/// Het kleine kapitaal boven een blok: DOWNLOADS, CREDITS, ARTIESTEN.
+///
+/// **Waarom dit een eigen rol is en geen [kLabel] met wat erbij.** Het is niet hetzelfde ding. Een
+/// label zit óp iets — een merkje, een badge — en een opschrift staat erbóven en zegt wat er volgt.
+/// Dat verschil zit in de spatiëring: kapitalen zonder extra ruimte ertussen lezen als een woord dat
+/// per ongeluk hard staat, mét die ruimte als een kopje.
+///
+/// En het stond er al drie keer, in twee maten (11 en 11,5) met steeds dezelfde bedoeling. Dat is
+/// precies het patroon waar dit bestand voor gemaakt is: één ding, één plek.
+const kOpschrift = TextStyle(
+  fontSize: 11,
+  fontWeight: FontWeight.w700,
+  letterSpacing: .6,
+  color: kGedempt,
+);
+
 /// Tekst zonder eigen stijl. Zie [kTekstThema] voor waarom deze apart bestaat.
 const kTekstBasis = TextStyle(fontSize: 14, color: kTekst);
 
