@@ -2251,6 +2251,11 @@ class LibraryStore extends ChangeNotifier {
 
     final wachtrij = [for (final a in albums) if (a.cover == null) a];
     var volgende = 0;
+    // Wat het netwerk deed. Zonder deze twee is een hoezenronde die HELEMAAL mislukt niet te
+    // onderscheiden van een bibliotheek zonder hoezen: `client.art` slikt alles — geweigerde
+    // verbinding, 401, time-out — en geeft null, en de lus slikt die null nog eens. Het gevolg is een
+    // scherm vol grijze vakjes waar nergens iets over opgeschreven staat.
+    var gevraagd = 0, gelukt = 0;
 
     Future<void> werker() async {
       while (true) {
@@ -2276,8 +2281,10 @@ class LibraryStore extends ChangeNotifier {
           continue;
         }
         final ref = _remoteAlbums[album]?.artRef;
+        if (ref != null) gevraagd++;
         final bytes = ref == null ? null : await client.art(ref);
         if (bytes == null || bytes.isEmpty) continue;
+        gelukt++;
         album.embeddedCover = bytes;
         await enricher.putCached(album, bytes);
         // Pas ná het wegschrijven, zodat een afgebroken download geen merkteken achterlaat dat zegt
@@ -2294,9 +2301,24 @@ class LibraryStore extends ChangeNotifier {
     }
 
     await Future.wait([for (var i = 0; i < 6; i++) werker()]);
+    // Alles gevraagd, niets gekregen: dat is geen bibliotheek zonder hoezen maar een pc die niet
+    // antwoordt of een sleutel die geweigerd wordt. Eén regel is genoeg om het verschil te kunnen
+    // zien; zonder die regel is er niets om naar te kijken.
+    hoezenMislukt = gevraagd > 0 && gelukt == 0;
+    if (hoezenMislukt) {
+      debugPrint('hoezen: $gevraagd gevraagd aan de pc, geen enkele gekregen — '
+          'staat de pc aan, en klopt het adres nog?');
+    }
     enriching = false;
     notifyListeners();
   }
+
+  /// Ging de laatste hoezenronde volledig mis?
+  ///
+  /// Waar betekent: er is minstens één hoes bij de pc opgevraagd en er kwam er geen enkele terug.
+  /// Dat is iets heel anders dan "deze platen hebben geen hoes", en het scherm hoort die twee niet
+  /// door elkaar te halen.
+  bool hoezenMislukt = false;
 
   Track _trackFromMap(Map<String, dynamic> m) => Track(
         path: m['path'] as String,

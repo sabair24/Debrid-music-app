@@ -28,5 +28,21 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!-- De pc op je eigen netwerk vinden. Deze drie stonden alleen in de iOS-plist, en dat is een
+	     gat: sinds macOS 15 vraagt ook de Mac toestemming voor het lokale netwerk. Zonder de tekst
+	     hieronder is die vraag naamloos — dan staat er niet bij WAARVOOR, en dat is precies een
+	     venster dat je wegklikt. Klik je hem weg, dan bereikt de app de pc niet meer en zijn de
+	     hoezen lege vakjes zonder dat iets zegt waarom. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Om je pc met je muziekbibliotheek op je eigen netwerk te vinden.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_debridmusic._tcp</string>
+	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 </dict>
 </plist>
