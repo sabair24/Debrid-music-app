@@ -1,5 +1,6 @@
 import 'package:http/http.dart' as http;
 
+import 'acoustid.dart';
 import 'json_body.dart';
 import 'online.dart';
 import 'rutracker.dart';
@@ -107,6 +108,62 @@ class ConnectionChecker {
           : const ConnResult(ConnState.fail, 'Nog niet ingelogd — klik Inloggen');
     } catch (_) {
       return const ConnResult(ConnState.fail, 'Geen verbinding');
+    }
+  }
+
+  /// Is de AcoustID-sleutel de goede soort, en neemt de dienst hem aan?
+  ///
+  /// **Waarom dit er is.** Er is geen manier om dit te weten te komen zonder het te proberen, en het
+  /// proberen ging tot nu toe alleen via "Herkennen op geluid" op een echte plaat — waar elke
+  /// mislukking eruitzag als "AcoustID kent dit nummer niet". Een verkeerde sleutel en een
+  /// onbekende plaat waren niet uit elkaar te houden, en de meest gemaakte fout is nu net dat je de
+  /// verkeerde van de twee sleutels plakt: acoustid.org toont je USER-sleutel groot op het scherm,
+  /// terwijl hier de APPLICATION-sleutel moet.
+  ///
+  /// **De truc.** Er is geen "ping" bij AcoustID, maar er hoeft er ook geen te zijn: de server kijkt
+  /// eerst naar de sleutel en pas dáárna naar de vingerafdruk (`_parse_client` staat vóór het
+  /// ontleden van de vraag in `acoustid/api/v2/__init__.py`). Een vraag met een onzinnige
+  /// vingerafdruk geeft dus fout 4 als de sleutel niet deugt, en fout 3 — "invalid fingerprint" —
+  /// als hij wél deugt. Die tweede is hier het bewijs dat we zoeken, en er gaat geen enkel bestand
+  /// voor over de lijn.
+  Future<ConnResult> acoustidCheck() async {
+    final key = settings.acoustidKey.trim();
+    if (key.isEmpty) return const ConnResult(ConnState.absent, 'Geen sleutel ingevuld');
+    try {
+      final r = await http
+          .post(
+            Uri.parse('https://api.acoustid.org/v2/lookup'),
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            // Met opzet onbruikbaar: we vragen niets op, we willen alleen weten of de sleutel de
+            // deur door komt.
+            body: {'client': key, 'duration': '200', 'fingerprint': 'x', 'meta': 'recordings'},
+          )
+          .timeout(const Duration(seconds: 15));
+      Object? body;
+      try {
+        body = jsonBody(r);
+      } catch (_) {
+        // Geen JSON terug. Dat is niet "geen verbinding" — er ís geantwoord — en het zo noemen
+        // stuurt je de verkeerde kant op.
+        return ConnResult(ConnState.fail,
+            'api.acoustid.org antwoordde met ${r.statusCode} en geen leesbaar bericht.');
+      }
+      final kaart = body is Map ? body : const {};
+      final fout = kaart['error'];
+      final code = fout is Map ? (fout['code'] as num?)?.toInt() : null;
+      // Voorbij de sleutel gekomen: precies wat we wilden weten.
+      if (code == 3 || code == 2 || code == 8 || kaart['status'] == 'ok') {
+        return const ConnResult(ConnState.ok, 'Sleutel aanvaard');
+      }
+      return ConnResult(
+          ConnState.fail,
+          AcoustIdService.uitleg(
+            code: code,
+            bericht: fout is Map ? fout['message'] as String? : null,
+            http: r.statusCode,
+          ));
+    } catch (_) {
+      return const ConnResult(ConnState.fail, 'Geen verbinding met api.acoustid.org');
     }
   }
 }

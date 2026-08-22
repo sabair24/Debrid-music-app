@@ -298,14 +298,19 @@ Future<(MbRelease, List<ChoiceTrack>)?> _fromSound(
 
   final perTrack = <List<String>>[];
   var gevraagd = 0;
+  String? mislukt;
   for (final t in album.tracks) {
     if (gevraagd >= _heardAtMost) break;
     final a = await fp.of(t.path, compressed: true);
     if (a == null) continue;
     gevraagd++;
-    final matches = await acoust.identify(a);
-    perTrack.add([for (final m in matches) ...m.releaseGroups]);
+    final antwoord = await acoust.identify(a);
+    // De reden één keer opschrijven, niet twaalf keer dezelfde regel. Zonder dit zag een geweigerde
+    // sleutel eruit als een plaat die AcoustID niet kent.
+    if (!antwoord.gelukt && mislukt == null) mislukt = antwoord.fout;
+    perTrack.add([for (final m in antwoord.matches) ...m.releaseGroups]);
   }
+  if (mislukt != null) stap('geluid: $mislukt');
   stap('geluid: $gevraagd bestanden gevraagd, '
       '${perTrack.where((l) => l.isNotEmpty).length} herkend');
   if (perTrack.isEmpty) return null;

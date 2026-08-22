@@ -102,9 +102,40 @@ String? bestReleaseGroup(List<List<String>> perTrack, {double minShare = 2 / 3})
   return hoogste >= (met.length * minShare) ? beste : null;
 }
 
+/// Wat er van één vraag aan AcoustID terugkomt.
+///
+/// **Waarom dit geen kale lijst meer is.** Elke mislukking gaf hier vroeger een lege lijst: geen
+/// sleutel, een geweigerde sleutel, een tijdslimiet, een storing, een pc zonder net — allemaal
+/// hetzelfde als "AcoustID kent dit nummer niet". Het scherm zei dan "Geen van deze nummers is
+/// herkend", en dat is precies de melding die je krijgt bij wereldberoemde platen waarvan AcoustID
+/// er honderdduizend vingerafdrukken van heeft. Onmogelijk om te weten of er iets stuk is of dat het
+/// antwoord echt nee is.
+///
+/// De reden reist nu mee. Leeg én zonder reden betekent werkelijk: gevraagd, en niet gevonden.
+class AcoustIdAntwoord {
+  const AcoustIdAntwoord(this.matches) : fout = null;
+  const AcoustIdAntwoord.mislukt(this.fout) : matches = const [];
+
+  final List<AcoustIdMatch> matches;
+
+  /// Waarom er niets is, in gewone taal en met wat eraan te doen valt. Null als de vraag netjes
+  /// gesteld én beantwoord is — ook als het antwoord "onbekend" was.
+  final String? fout;
+
+  bool get gelukt => fout == null;
+}
+
 class AcoustIdService {
-  AcoustIdService(this.settings);
+  /// [client] is er alleen voor de toetsen. Zonder gedraagt dit zich precies als vroeger: de
+  /// bovenste `http.post`, die zelf een verbinding opzet en weer sluit.
+  AcoustIdService(this.settings, {http.Client? client}) : _client = client;
   final AppSettings settings;
+  final http.Client? _client;
+
+  Future<http.Response> _post(Uri u, Map<String, String> headers, Map<String, String> body) =>
+      _client == null
+          ? http.post(u, headers: headers, body: body)
+          : _client!.post(u, headers: headers, body: body);
 
   bool get available => settings.acoustidKey.trim().isNotEmpty;
 
@@ -142,44 +173,116 @@ class AcoustIdService {
     return slot;
   }
 
-  /// What one file is, according to AcoustID. Empty on any failure — never throws.
-  Future<List<AcoustIdMatch>> identify(Fingerprint fp) async {
+  /// De sleutel die AcoustID hier verwacht, in gewone taal.
+  ///
+  /// Dit staat als aparte tekst omdat het de meest gemaakte fout is, en de site zelf helpt niet mee:
+  /// acoustid.org/api-key toont je USER-sleutel groot op het scherm, en dat is niet deze. De
+  /// application-sleutel zit achter "een toepassing aanmelden" op acoustid.org/my-applications. Wie
+  /// de verkeerde plakt krijgt op elk nummer hetzelfde antwoord — niets — en er stond nergens iets
+  /// dat de fout aanwees.
+  static const String welkeSleutel =
+      'AcoustID heeft twee soorten sleutels. Hier hoort de APPLICATION-sleutel '
+      '(acoustid.org/my-applications, meld daar een toepassing aan). De sleutel op '
+      'acoustid.org/api-key is je USER-sleutel en die werkt hier niet.';
+
+  /// Wat een foutcode van AcoustID betekent, en wat eraan te doen valt.
+  ///
+  /// De nummers komen uit `acoustid/api/errors.py` van de server zelf. Ze staan hier uitgeschreven
+  /// omdat het verschil tussen "je sleutel is de verkeerde soort" en "even te druk, probeer zo
+  /// nog eens" het verschil is tussen iets repareren en een uur zoeken.
+  static String uitleg({int? code, String? bericht, int? http}) {
+    switch (code) {
+      case 2:
+        return 'AcoustID mist een gegeven in de vraag. Dat is een fout in de app, niet in je sleutel.';
+      case 3:
+        return 'AcoustID weigerde de vingerafdruk. Meestal een bestand dat fpcalc niet goed kon '
+            'lezen; probeer een ander nummer van dezelfde plaat.';
+      case 4:
+      case 17:
+        return 'AcoustID kent deze sleutel niet. $welkeSleutel';
+      case 6:
+        return 'Dit is een USER-sleutel. $welkeSleutel';
+      case 8:
+        return 'De lengte die met de vraag meeging klopt niet. Dat is een fout in de app.';
+      case 12:
+        return 'AcoustID staat deze vraag niet toe (12).';
+      case 13:
+        return 'AcoustID heeft zelf een storing. Je sleutel is hier niet de oorzaak; later opnieuw.';
+      case 14:
+        return 'Te veel vragen achter elkaar. Je sleutel is in orde; wacht een minuut.';
+      case 16:
+        return 'AcoustID wil HTTPS. Dat is een fout in de app.';
+      case 19:
+        return 'De vraag was te groot voor AcoustID (19).';
+    }
+    if (http == 429) return 'Te veel vragen achter elkaar. Je sleutel is in orde; wacht een minuut.';
+    if (http != null && http >= 500) {
+      return 'AcoustID heeft zelf een storing ($http). Je sleutel is hier niet de oorzaak.';
+    }
+    final tekst = (bericht ?? '').trim();
+    if (tekst.isNotEmpty) return 'AcoustID zegt: $tekst${code == null ? '' : ' ($code)'}';
+    return http == null ? 'AcoustID gaf geen bruikbaar antwoord.' : 'AcoustID antwoordde met HTTP $http.';
+  }
+
+  /// What one file is, according to AcoustID. Never throws — a mislukking komt terug als een reden.
+  Future<AcoustIdAntwoord> identify(Fingerprint fp) async {
     final key = settings.acoustidKey.trim();
-    if (key.isEmpty) return const [];
+    if (key.isEmpty) {
+      return const AcoustIdAntwoord.mislukt(
+          'Geen AcoustID-sleutel ingevuld. Zet er een in Instellingen. $welkeSleutel');
+    }
     final code = fp.compressed;
-    if (code == null || code.isEmpty) return const [];
+    if (code == null || code.isEmpty) {
+      return const AcoustIdAntwoord.mislukt(
+          'fpcalc leverde geen vingerafdruk voor dit bestand op — het kon de audio niet lezen.');
+    }
 
     try {
       await _slot();
       // POST, not GET: a fingerprint is a few kilobytes of base64 and puts a GET well past what
       // proxies will carry. The key travels in the body for the same reason it belongs there — it is
       // not part of the address of anything.
-      final r = await http
-          .post(
-            Uri.parse('https://api.acoustid.org/v2/lookup'),
-            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-            body: {
-              'client': key,
-              'duration': fp.seconds.round().toString(),
-              'fingerprint': code,
-              'meta': metaParam,
-            },
-          )
-          .timeout(const Duration(seconds: 15));
-      if (r.statusCode != 200) {
-        trace?.call('  [acoustid] HTTP ${r.statusCode}');
-        return const [];
+      final r = await _post(
+        Uri.parse('https://api.acoustid.org/v2/lookup'),
+        {'Content-Type': 'application/x-www-form-urlencoded'},
+        {
+          'client': key,
+          'duration': fp.seconds.round().toString(),
+          'fingerprint': code,
+          'meta': metaParam,
+        },
+      ).timeout(const Duration(seconds: 15));
+      // Ook een 4xx draagt een nette foutbeschrijving in het lichaam — juist die met de reden erin.
+      // Vroeger werd hij weggegooid op de statuscode en bleef alleen "HTTP 400" over, in een spoor
+      // dat op dit pad niet eens gelezen werd.
+      Object? body;
+      try {
+        body = jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true));
+      } catch (_) {
+        body = null;
       }
-      final body = jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true));
-      if (body is! Map<String, dynamic>) return const [];
-      if (body['status'] != 'ok') {
-        trace?.call('  [acoustid] ${body['error']?['message'] ?? body['status']}');
-        return const [];
+      final fout = body is Map<String, dynamic> ? body['error'] : null;
+      if (fout is Map || r.statusCode != 200) {
+        final reden = uitleg(
+          code: fout is Map ? (fout['code'] as num?)?.toInt() : null,
+          bericht: fout is Map ? fout['message'] as String? : null,
+          http: r.statusCode,
+        );
+        trace?.call('  [acoustid] $reden');
+        return AcoustIdAntwoord.mislukt(reden);
       }
-      return parseLookup(body);
+      if (body is! Map<String, dynamic> || body['status'] != 'ok') {
+        const reden = 'AcoustID gaf een antwoord dat de app niet kon lezen.';
+        trace?.call('  [acoustid] $reden');
+        return const AcoustIdAntwoord.mislukt(reden);
+      }
+      return AcoustIdAntwoord(parseLookup(body));
     } catch (e) {
-      trace?.call('  [acoustid] $e');
-      return const [];
+      // Een tijdslimiet of een geweigerde verbinding. Dit is de stand waarin een pc achter een
+      // firewall of zonder net terechtkomt, en die zag er tot nu toe uit als "niet herkend".
+      final reden = 'AcoustID niet bereikt: $e';
+      trace?.call('  [acoustid] $reden');
+      return AcoustIdAntwoord.mislukt(reden);
     }
   }
 

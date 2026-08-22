@@ -4096,6 +4096,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     final found = <Track, AcoustIdMatch>{};
     final current = <String, ({String artist, String title})>{};
     final unknown = <String>[];
+    String? fout;
     try {
       // Every tile the record was split into, not just the one that was clicked — named through the
       // extension because two of them define recordTracks and Dart will not pick for us.
@@ -4116,10 +4117,19 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
           unknown.add(naam);
           continue;
         }
+        final antwoord = await acoust.identify(a);
+        // De REDEN, één keer. Zonder deze regel zag een geweigerde sleutel, een tijdslimiet of een
+        // pc zonder net er precies zo uit als een plaat die AcoustID niet kent — en dat is waarom
+        // "niets herkend" jarenlang niets te onderzoeken gaf.
+        if (!antwoord.gelukt) {
+          fout ??= antwoord.fout;
+          unknown.add(naam);
+          continue;
+        }
         // The file's own length decides which of the matches is meant — see [bestFor]. Null means
         // the fingerprint was recognised but every candidate is a different version, and that is a
         // "not recognised" as far as the user is concerned rather than a wrong suggestion.
-        final beste = AcoustIdService.bestFor(await acoust.identify(a), a.seconds);
+        final beste = AcoustIdService.bestFor(antwoord.matches, a.seconds);
         if (beste == null) {
           unknown.add(naam);
         } else {
@@ -4138,7 +4148,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     final done = await showDialog<bool>(
         context: context,
         builder: (_) => RecogniseTracksDialog(
-            album: album, found: found, current: current, unknown: unknown));
+            album: album, found: found, current: current, unknown: unknown, fout: fout));
     if (done == true && mounted) _refresh();
   }
 
@@ -14794,6 +14804,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       ..soulseekPort = int.tryParse(_slskPort.text.trim()) ?? 0
       ..rutrackerUser = _rtUser.text.trim()
       ..rutrackerPass = _rtPass.text
+      ..acoustidKey = _acoustid.text.trim()
       ..rutrackerCookie = real.rutrackerCookie; // RuTracker validity depends on the live session
     // Soulseek deliberately uses the app's REAL service, not a probe copy: a probe would have its
     // own client, so testing the connection would open a SECOND login on an account that allows
@@ -14803,7 +14814,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
         context.read<SoulseekService>(), RuTrackerService(probe));
     setState(() {
       _testing = true;
-      for (final k in ['torbox', 'discogs', 'soulseek', 'rutracker']) {
+      for (final k in ['torbox', 'discogs', 'soulseek', 'rutracker', 'acoustid']) {
         _conn[k] = const ConnResult(ConnState.checking);
       }
     });
@@ -14817,6 +14828,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       run('discogs', checker.discogsCheck),
       run('soulseek', checker.soulseekCheck),
       run('rutracker', checker.rutrackerCheck),
+      run('acoustid', checker.acoustidCheck),
     ]);
     if (mounted) setState(() => _testing = false);
   }
@@ -15080,9 +15092,21 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     ),
                     _field('Last.fm API-sleutel', _lastfm),
                     const SizedBox(height: 8),
-                    // Alleen nodig voor platen die geen enkele catalogus op naam kan vinden -- de
-                    // verzamelaars. Gratis, via acoustid.org/new-application.
-                    _field('AcoustID-sleutel (verzamelaars herkennen)', _acoustid),
+                    // WELKE sleutel staat er nu bij, en dat is geen detail: AcoustID heeft er twee
+                    // en de site duwt je naar de verkeerde. acoustid.org/api-key toont je
+                    // USER-sleutel groot op het scherm; die werkt hier niet. De application-sleutel
+                    // zit achter "een toepassing aanmelden" op acoustid.org/my-applications.
+                    //
+                    // Wie de verkeerde plakte kreeg op élk nummer hetzelfde: niets. Er stond nergens
+                    // iets dat de fout aanwees, en "Test verbindingen" kende AcoustID niet eens.
+                    _field('AcoustID APPLICATION-sleutel (herkennen op geluid)', _acoustid),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Van acoustid.org/my-applications — meld daar een toepassing aan. NIET de '
+                      'sleutel van acoustid.org/api-key: dat is je user-sleutel en die werkt hier '
+                      'niet. Test hem hieronder.',
+                      style: TextStyle(color: _muted, fontSize: 11.5, height: 1.3),
+                    ),
                     const SizedBox(height: 4),
                     const Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
@@ -15111,6 +15135,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                           style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8)),
                           child: Text(_rtBusy ? 'Bezig…' : 'Inloggen', style: const TextStyle(fontSize: 12.5)),
                         )),
+                    _statusRow('AcoustID', 'acoustid'),
                     const SizedBox(height: 10),
                     const Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
@@ -18257,12 +18282,21 @@ class RecogniseTracksDialog extends StatefulWidget {
   /// of quietly listing fewer rows than there are files.
   final List<String> unknown;
 
+  /// Waarom er niets terugkwam, als er iets MIS ging in plaats van dat het antwoord nee was.
+  ///
+  /// Dit veld bestaat omdat het scherm die twee jarenlang door elkaar haalde. Een geweigerde
+  /// sleutel, een tijdslimiet, een pc zonder net en een plaat die AcoustID werkelijk niet kent
+  /// gaven allemaal "Geen van deze nummers is herkend" — ook bij wereldberoemde platen waar de
+  /// dienst honderdduizend vingerafdrukken van heeft. Er viel niets aan te onderzoeken.
+  final String? fout;
+
   const RecogniseTracksDialog(
       {super.key,
       required this.album,
       required this.found,
       required this.current,
-      required this.unknown});
+      required this.unknown,
+      this.fout});
 
   @override
   State<RecogniseTracksDialog> createState() => _RecogniseTracksDialogState();
@@ -18330,12 +18364,37 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
             Text(
               _changes.isEmpty
                   ? widget.found.isEmpty
-                      ? 'Geen van deze nummers is herkend.'
+                      ? widget.fout == null
+                          ? 'Gevraagd aan AcoustID, en het antwoord is: onbekend.'
+                          : 'Er is niet gevraagd wat deze nummers zijn — er ging iets mis.'
                       : 'Alles herkend, en de tags kloppen al — er valt niets te wijzigen.'
                   : '${_changes.length} ${_changes.length == 1 ? 'nummer wijkt' : 'nummers wijken'} af '
                       '· alleen artiest en titel worden geschreven, album en nummering blijven',
               style: const TextStyle(color: _muted, fontSize: 12.5),
             ),
+            // De reden, als er een is. Bovenaan en niet weggestopt: dit is het enige wat je verder
+            // helpt, en het onderscheid tussen "AcoustID kent dit niet" en "AcoustID heeft de vraag
+            // nooit gekregen" is precies wat hier vroeger ontbrak.
+            if (widget.fout != null) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(11),
+                decoration: BoxDecoration(
+                  color: _panel2,
+                  borderRadius: BorderRadius.circular(9),
+                  border: Border.all(color: _accent2.withValues(alpha: .45)),
+                ),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Icon(Icons.report_gmailerrorred_rounded, size: 17, color: _accent2),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: SelectableText(widget.fout!,
+                        style: const TextStyle(fontSize: 12.5, height: 1.35)),
+                  ),
+                ]),
+              ),
+            ],
             const SizedBox(height: 12),
             Expanded(
               child: ListView(children: [
