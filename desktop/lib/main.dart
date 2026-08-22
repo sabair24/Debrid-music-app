@@ -741,6 +741,19 @@ Future<void> main() async {
   // instead of assuming it: read isMaximized back and retry for about half a second.
   if (_isDesktop) {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Nog een keer zeggen dat er geen systeembalk hoort te staan.
+      //
+      // Hij wordt hierboven al gevraagd in [WindowOptions], en dat hóórt te volstaan. Maar precies
+      // dezelfde les staat drie regels verderop over maximaliseren: wat je Windows vraagt terwijl
+      // het venster nog gemaakt wordt, houdt hij soms gewoon niet vast. Dan staat de app in een
+      // Windows-kader mét eigen knoppen erin — twee sets sluitknopjes onder elkaar.
+      //
+      // Herhalen kost niets als het al goed staat, en het is de enige manier om er zeker van te
+      // zijn: er is geen betrouwbare manier om terug te lezen of de balk werkelijk weg is, zoals
+      // `isMaximized` dat hieronder wél kan.
+      try {
+        await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
+      } catch (_) {/* een venster zonder balk is mooi, maar geen reden om niet te starten */}
       for (var i = 0; i < 6; i++) {
         if (await windowManager.isMaximized()) break;
         await windowManager.maximize();
