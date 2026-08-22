@@ -278,4 +278,127 @@ void main() {
       expect(Echtheidsoordeel.fromJson({}), isNull);
     });
   });
+
+  group('de afkap van een mp3 van 320 — het gat dat er zat', () {
+    // **Waarom deze groep bestaat.** Spek liet een nep-FLAC zien terwijl de app hem goedkeurde. De
+    // oorzaak stond als bewuste keuze in de code: de muurzoeker eiste 2000 Hz ruimte boven de muur,
+    // dus op een 44,1 kHz-bestand liep het zoekgebied maar tot 20,05 kHz. Een mp3 van 320 kbit/s
+    // kapt rond 20,5 — verreweg de meest gebruikte bron voor een nep-FLAC, en hij viel er net
+    // buiten.
+    //
+    // De toets hierboven heette "een mp3 van 320 kbps" maar gebruikte 19,8 kHz, en dat is waar 256
+    // kapt. Hij paste dus binnen het oude bereik en verborg het gat in plaats van het te vinden.
+
+    test('een muur op 20,5 kHz wordt nu gezien', () {
+      final o = beoordeel(spectrum(totHz: 20500));
+      expect(o.band, Bandbreedte.afgekapt, reason: 'dit is precies waar een mp3 van 320 kapt');
+      expect(o.afkapHz, closeTo(20500, 400));
+      expect(o.isNep, isTrue);
+    });
+
+    test('en de melding noemt de meting eerst, de verklaring erachter', () {
+      final o = beoordeel(spectrum(totHz: 20500));
+      final zin = waarom(o);
+      // De muur wordt op de eerste plek gevonden waar hij het steilst is, dus ergens tussen 20,3 en
+      // 20,7 — vandaar het begin van het getal en niet één exacte waarde.
+      expect(zin, startsWith('afgekapt op 20.'), reason: 'de gemeten hoogte staat vooraan');
+      expect(zin, contains('mp3 320'));
+    });
+
+    test('een echte cd-rip die tot Nyquist doorloopt blijft schoon', () {
+      // De keerzijde, en de reden dat er nog steeds een marge is: een cd heeft zijn eigen
+      // antialiasmuur pal op 22,05 kHz. Zonder marge was élke cd-rip ineens een transcode.
+      final o = beoordeel(spectrum(totHz: 22000));
+      expect(o.band, Bandbreedte.doorlopend);
+      expect(o.isNep, isFalse);
+    });
+
+    test('een echte 96 kHz-opname wordt nog steeds niet beschuldigd', () {
+      // Het anti-aliasfilter van de omzetter zit daar rond 46 kHz. Dat is een volkomen normale
+      // steile val, en hij hoort buiten het zoekgebied te blijven vallen.
+      final o = beoordeel(
+        spectrum(totHz: 46000, sampleRate: 96000),
+        sampleRate: 96000,
+        kopSampleRate: 96000,
+        kopBits: 24,
+        gebruikteBits: 24,
+      );
+      expect(o.band, Bandbreedte.doorlopend);
+      expect(o.isNep, isFalse);
+    });
+  });
+
+  group('waar een afkap vandaan komt', () {
+    test('de bekende encoders worden bij naam genoemd', () {
+      expect(vermoedelijkeBron(16000), contains('128'));
+      expect(vermoedelijkeBron(19500), contains('V0'));
+      expect(vermoedelijkeBron(20500), contains('320'));
+    });
+
+    test('met een marge, want encoders schuiven hun filter een beetje', () {
+      expect(vermoedelijkeBron(20300), contains('320'));
+      expect(vermoedelijkeBron(20700), contains('320'));
+    });
+
+    test('en wat nergens naar wijst krijgt geen verzonnen naam', () {
+      // Sinds de zoeker tot 21 kHz kijkt zit daar ook de bovengrens van een oude, smal gemasterde
+      // cd. Die is smal — dat is een meting — maar hem "mp3" noemen zou een gok zijn.
+      expect(vermoedelijkeBron(14500), isNull);
+      expect(vermoedelijkeBron(21000), isNull);
+    });
+
+    test('een afkap zonder bekende bron zegt nog steeds wat er gemeten is', () {
+      expect(afkapZin(14500), contains('14.5'));
+      expect(afkapZin(14500), isNot(contains('mp3')));
+      expect(afkapZin(14500), contains('smaller'));
+    });
+  });
+
+  group('wat het dan WEL is', () {
+    // Het bolletje naast `FLAC · 24/192` zei dat die getallen niet klopten, zonder te zeggen wat het
+    // dan wél was. Dit is dat getal.
+
+    test('een muur in het spectrum bindt sterker dan welke bemonstering ook', () {
+      const o = Echtheidsoordeel(
+        bits: Bitdiepte.opgeblazen,
+        gebruikteBits: 16,
+        boven: Bovenband.leeg,
+        band: Bandbreedte.afgekapt,
+        afkapHz: 17200,
+      );
+      // Niet "16/44,1": een bestand dat op 17,2 kHz ophoudt draagt geen 44,1 kHz aan inhoud.
+      expect(echteResolutie(o, kopSampleRate: 192000, kopBits: 24), 'tot 17.2 kHz');
+    });
+
+    test('opgeblazen bits worden het gemeten getal', () {
+      const o = Echtheidsoordeel(
+        bits: Bitdiepte.opgeblazen,
+        gebruikteBits: 16,
+        boven: Bovenband.vol,
+        band: Bandbreedte.doorlopend,
+      );
+      expect(echteResolutie(o, kopSampleRate: 192000, kopBits: 24), '16/192');
+    });
+
+    test('niets boven 22 kHz betekent dat er niet meer dan 44,1 in zit', () {
+      const o = Echtheidsoordeel(
+        bits: Bitdiepte.opgeblazen,
+        gebruikteBits: 16,
+        boven: Bovenband.leeg,
+        band: Bandbreedte.doorlopend,
+      );
+      expect(echteResolutie(o, kopSampleRate: 96000, kopBits: 24), '16/44.1');
+    });
+
+    test('klopt de kop, dan valt er niets te vervangen', () {
+      const o = Echtheidsoordeel(
+        bits: Bitdiepte.spreektNietTegen,
+        gebruikteBits: 24,
+        boven: Bovenband.vol,
+        band: Bandbreedte.doorlopend,
+      );
+      expect(echteResolutie(o, kopSampleRate: 96000, kopBits: 24), isNull,
+          reason: 'dan hoort er ook geen merkteken te staan');
+    });
+  });
 }

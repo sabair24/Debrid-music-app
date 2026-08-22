@@ -5599,7 +5599,7 @@ class _TrackRowState extends State<TrackRow> {
                   );
                 }),
               ),
-              _echtheidMerk(t.path),
+              _echtheidMerk(t),
               _qualityBadge(_trackQuality(t)),
               Text(_fmt(t.duration), style: kTekstKlein),
               // "≠ 4:33" — je hebt het nummer, maar niet die versie. Klein en naast de tijd, want het
@@ -6668,7 +6668,7 @@ class PlayerBar extends StatelessWidget {
                           ),
                           // What quality am I actually hearing? (local files only — a streamed
                           // source's real quality isn't known here.)
-                          if (t != null) _echtheidMerk(t.path),
+                          if (t != null) _echtheidMerk(t),
                           if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
                         ],
                       ),
@@ -7131,7 +7131,7 @@ class AfspeellijstPagina extends StatelessWidget {
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _echtheidMerk(nummers[i].path),
+                    _echtheidMerk(nummers[i]),
                     TvLabelled(
                       label: 'Uit deze lijst halen',
                       child: IconButton(
@@ -7274,7 +7274,7 @@ class _FavorietRij extends StatelessWidget {
                 ],
               ),
             ),
-            _echtheidMerk(track.path),
+            _echtheidMerk(track),
             _qualityBadge(_trackQuality(track)),
             const SizedBox(width: 4),
             Text(_fmt(track.duration), style: const TextStyle(color: _muted, fontSize: 12)),
@@ -7659,7 +7659,7 @@ class _WachtrijRij extends StatelessWidget {
                   ],
                 ),
               ),
-              _echtheidMerk(track.path),
+              _echtheidMerk(track),
               // Het lopende nummer heeft geen kruisje: eruit halen zou "stop" of "volgende" moeten
               // betekenen, en die knoppen staan al onderaan. Zie [PlayerStore.haalUitWachtrij].
               SizedBox(
@@ -8059,7 +8059,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
               lookup: true,
               style: const TextStyle(color: _muted, fontSize: 15),
             ),
-          if (t != null) _echtheidMerk(t.path),
+          if (t != null) _echtheidMerk(t),
                 if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
         ],
       ),
@@ -8827,7 +8827,7 @@ class TracksView extends StatelessWidget {
                           ],
                         ),
                       ),
-                      _echtheidMerk(t.path),
+                      _echtheidMerk(t),
                       _qualityBadge(_trackQuality(t)),
                       const SizedBox(width: 4),
                       // De looptijd valt weg op een telefoon.
@@ -10357,42 +10357,34 @@ class EchtheidDialog extends StatelessWidget {
 ///
 /// De uitleg gaat niet verloren, want de tooltip blijft eronder hangen — één beweging ver, met
 /// dezelfde zin uit [waarom] die de badge ook toonde.
-Widget _echtheidMerk(String? pad) {
-  if (pad == null || pad.isEmpty) return const SizedBox.shrink();
+Widget _echtheidMerk(Track? t) {
+  final pad = t?.path;
+  if (t == null || pad == null || pad.isEmpty) return const SizedBox.shrink();
+  final sr = t.sampleRate, bits = t.bitsPerSample;
   final o = gemeten(pad);
   if (o == null || !o.isNep) return const SizedBox.shrink();
 
-  if (o.band != Bandbreedte.afgekapt) {
-    return Tooltip(
-      message: waarom(o),
-      child: Container(
-        margin: const EdgeInsets.only(right: 8),
-        width: 7,
-        height: 7,
-        decoration: BoxDecoration(
-          color: const Color(0xFFB98A4A), // gedempt amber: zichtbaar, niet alarmerend
-          shape: BoxShape.circle,
-        ),
-      ),
-    );
-  }
-
+  // ZEGGEN WAT HET DAN WEL IS, in plaats van alleen dat het niet klopt.
+  //
+  // Hier stond een bolletje van zeven bij zeven. Dat was een eerlijke keuze -- een even luide
+  // waarschuwing als bij een echte transcode zette negenentachtig nummers in het rood voor iets wat
+  // alleen ruimte kost -- maar het beantwoordde de verkeerde vraag. Ernaast staat `FLAC · 24/192`,
+  // wat het bestand BEWEERT, en het bolletje zei dat dat gelogen was zonder te zeggen wat het dan
+  // wél was. Precies het getal dat je wilt weten stond nergens.
+  //
+  // Nu staat de gemeten waarheid er: `16/44,1`, of `tot 17,2 kHz` als er een muur in het spectrum
+  // zit. Even rustig als het bolletje -- gedempt amber, geen kader, geen pictogram -- en het zegt
+  // iets.
+  //
+  // En met ruimte aan BEIDE kanten. De marge stond alleen rechts, dus het plakte tegen de
+  // artiestennaam aan.
+  final echt = echteResolutie(o, kopSampleRate: sr, kopBits: bits);
+  if (echt == null) return const SizedBox.shrink();
   return Tooltip(
     message: waarom(o),
-    child: Container(
-      margin: const EdgeInsets.only(right: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-      decoration: BoxDecoration(
-        color: const Color(0x33FF9800),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.orange.shade300),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.warning_amber_rounded, size: 11, color: Colors.orange.shade300),
-        const SizedBox(width: 3),
-        Text('uit mp3',
-            style: TextStyle(color: Colors.orange.shade300, fontSize: 10.5, fontWeight: FontWeight.w600)),
-      ]),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Text(echt, style: kLabel.copyWith(color: const Color(0xFFB98A4A))),
     ),
   );
 }
@@ -10416,9 +10408,18 @@ Quality _trackQuality(Track t) {
   // de uitkomst van de muziek en de compressie samen en verschilt per nummer; dit zegt wat het bestand
   // is. En één notatie voor de hele lijst leest rustiger dan de ene rij "1433k" en de volgende "24/96".
   if (t.isFlac && t.sampleRate > 0 && t.bitsPerSample > 0) {
+    // GEMETEN gaat vóór wat de kop beweert.
+    //
+    // Zonder deze regel kreeg een opgeblazen bestand het gouden hi-res-merk op grond van getallen
+    // waarvan de meting had aangetoond dat ze niet kloppen — en dan filtert "Hi-Res" precies de
+    // nepbestanden naar voren. De meting spreekt alleen het NEGATIEVE uit (zie echtheid.dart), dus
+    // dit kan de badge alleen omlaag halen, nooit omhoog.
+    final o = gemeten(t.path);
+    final echtHiRes = isHiRes(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample) &&
+        !(o?.isNep ?? false);
     return Quality(
       'FLAC · ${depthRateLabel(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample)}',
-      isHiRes(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample) ? QTier.hires : QTier.lossless,
+      echtHiRes ? QTier.hires : QTier.lossless,
     );
   }
   // Bij een lossy bestand is bitdiepte betekenisloos en is de bitrate juist wél waar het om gaat. Toch

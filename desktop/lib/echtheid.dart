@@ -33,6 +33,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'fft.dart';
+import 'quality.dart';
 
 // ── De drempels ────────────────────────────────────────────────────────────
 // Elk getal met de redenering erboven, zoals `sameRecordingScore` in fingerprint.dart. Ze zijn
@@ -55,10 +56,26 @@ const double laagsteAfkapHz = 14000;
 
 /// Er moet ruimte zijn om de val te MÉTEN, dus de afkap mag niet tegen Nyquist aan liggen.
 ///
-/// Bij 44,1 kHz betekent dat: alleen afkappen tot 20,05 kHz zijn beoordeelbaar. Een transcode van 320
-/// kbps kapt rond 20,5 kHz en valt daar soms net buiten. Dat is de juiste prijs: liever een gemiste
-/// transcode dan een beschuldigde plaat.
+/// Alleen nog voor proef B, de bovenband. Voor de muurzoeker geldt [wandRandHz] — zie daar waarom dat
+/// uit elkaar getrokken is.
 const double randNyquistHz = 2000;
+
+/// Hoeveel ruimte er BOVEN de muur moet overblijven om er nog een eerlijk gemiddelde van te maken.
+///
+/// **Hier zat het gat, en het stond er als bewuste keuze bij.** De muurzoeker gebruikte dezelfde 2000
+/// Hz als proef B, en dat betekende op een 44,1 kHz-bestand: zoeken tot 20,05 kHz. Een mp3 van 320
+/// kbit/s kapt rond 20,5. Dat is verreweg de meest gebruikte bron voor een nep-FLAC, en hij viel er
+/// net buiten. De oude afweging — "liever een gemiste transcode dan een beschuldigde plaat" — is
+/// omgedraaid op uitdrukkelijk verzoek: liever de waarheid.
+///
+/// Waarom 700 Hz genoeg is en 2000 niet nodig: het gemiddelde boven de muur hoeft alleen stabiel te
+/// zijn, niet breed. Bij vensters van 4096 op 44,1 kHz is een bin 10,8 Hz, dus 700 Hz zijn ruim
+/// zestig bins — meer dan genoeg om ruis uit te middelen. Het zoekgebied loopt daarmee tot 21,0 kHz
+/// (de harde grens [hoogsteAfkapHz]) in plaats van 20,05.
+///
+/// En de rand blijft er wél: een echte cd-master heeft zijn eigen antialiasmuur pal op 22,05 kHz.
+/// Zonder deze marge zou die als afkap gelezen worden en was élke cd-rip ineens een transcode.
+const double wandRandHz = 700;
 
 /// En boven deze frequentie zoeken we niet, hoe hoog de bemonstering ook is.
 ///
@@ -197,13 +214,17 @@ int gebruikteBitsVan(Int32List samples) {
   }
 
   final nyquist = sampleRate / 2;
-  final bovengrens = math.min(nyquist - randNyquistHz, hoogsteAfkapHz);
+  final bovengrens = math.min(nyquist - wandGat - wandRandHz, hoogsteAfkapHz);
   if (bovengrens <= laagsteAfkapHz) return null;
 
   double besteHz = 0, besteDb = -1e9;
   for (var f = laagsteAfkapHz; f <= bovengrens; f += perBin) {
     final onder = gemiddeldDb(f - wandSpan, f - wandGat);
-    final boven = gemiddeldDb(f + wandGat, f + wandSpan + wandGat);
+    // Afgekapt op Nyquist, want dicht bij de rand past het volle venster er niet meer in. Zonder
+    // deze grens klapt `gemiddeldDb` daar terug op één enkele bin, en dan meet je ruis in plaats van
+    // een band — precies waar de meest voorkomende transcode zit.
+    final bovenTot = math.min(f + wandSpan + wandGat, nyquist - 50);
+    final boven = gemiddeldDb(f + wandGat, bovenTot);
     final val = onder - boven;
     if (val > besteDb) {
       besteDb = val;
@@ -300,12 +321,74 @@ Echtheidsoordeel oordeel({
 String waaromAfkap(Echtheidsoordeel o) {
   final hz = o.afkapHz;
   if (o.band != Bandbreedte.afgekapt || hz == null) return waarom(o);
-  final zin = 'harde afkap op ${(hz / 1000).toStringAsFixed(1)} kHz — dit kwam uit een mp3';
+  final zin = afkapZin(hz);
   if (o.bits == Bitdiepte.opgeblazen) {
     return '$zin · en het zegt meer dan ${o.gebruikteBits} bits';
   }
   if (o.boven == Bovenband.leeg) return '$zin · en het is bovendien opgeschaald';
   return zin;
+}
+
+/// Waar een afkap op deze hoogte vandaan pleegt te komen, of null als hij nergens naar wijst.
+///
+/// De getallen zijn de standaardinstellingen van de encoders zelf. Ze staan hier omdat "17,2 kHz"
+/// een meting is en "dit was een mp3 van 128" een verklaring — en het verschil tussen die twee hoort
+/// zichtbaar te blijven. Een marge van 400 Hz, want encoders schuiven hun filter een beetje met de
+/// bemonstering en de versie mee.
+/// De meting eerst, de verklaring erachter.
+///
+/// Vroeger stond hier onvoorwaardelijk "dit kwam uit een mp3". Sinds de muurzoeker tot 21 kHz kijkt
+/// is dat te stellig: daar zit ook de bovengrens van een oude, smal gemasterde cd. De AFKAP is een
+/// meting en blijft dus vooropstaan; wat hem waarschijnlijk veroorzaakte staat erachter, en alleen
+/// als de hoogte ergens naar wijst.
+String afkapZin(double hz) {
+  final k = (hz / 1000).toStringAsFixed(1);
+  final bron = vermoedelijkeBron(hz);
+  return bron == null
+      ? 'afgekapt op $k kHz — smaller dan lossless hoort te zijn'
+      : 'afgekapt op $k kHz — dat is waar $bron kapt';
+}
+
+String? vermoedelijkeBron(double hz) {
+  const bekend = <(double, String)>[
+    (16000, 'mp3 128'),
+    (18000, 'mp3 192'),
+    (18500, 'mp3 V2'),
+    (19500, 'mp3 V0 of aac 256'),
+    (19800, 'mp3 256'),
+    (20500, 'mp3 320'),
+  ];
+  for (final (f, naam) in bekend) {
+    if ((hz - f).abs() <= 400) return naam;
+  }
+  return null;
+}
+
+/// Wat er WERKELIJK in zit, in de notatie waarin de kop het beweert.
+///
+/// **Waarom dit er is.** De badge toonde `FLAC · 24/192` — wat het bestand BEWEERT — met daarnaast
+/// een bolletje dat zei dat dat niet klopte. Wat het dan wél was stond nergens, en dat is precies wat
+/// je wilt weten. Nu vervangt dit de getallen door de gemeten waarheid.
+///
+/// Null als er niets tegengesproken is; dan klopt de kop en hoeft er niets te veranderen.
+///
+/// De volgorde is die van het HARDSTE gemeten feit. Een muur in het spectrum bindt sterker dan een
+/// bemonstering: een bestand dat op 17,2 kHz ophoudt draagt geen 44,1 kHz aan inhoud, hoe de kop het
+/// ook noemt. Daarom staat de bandbreedte vooraan en niet de bits.
+String? echteResolutie(Echtheidsoordeel o, {required int kopSampleRate, required int kopBits}) {
+  final hz = o.afkapHz;
+  if (o.band == Bandbreedte.afgekapt && hz != null) {
+    return 'tot ${(hz / 1000).toStringAsFixed(1)} kHz';
+  }
+  // Niets boven 22 kHz betekent dat de inhoud niet meer draagt dan wat 44,1 kHz kan bevatten, hoe
+  // hoog de kop ook staat. Dat is de gewone vorm van opgeschaalde hi-res.
+  final echteRate = o.boven == Bovenband.leeg ? 44100 : kopSampleRate;
+  final echteBits = o.bits == Bitdiepte.opgeblazen ? (o.gebruikteBits ?? 16) : kopBits;
+  if (echteRate == kopSampleRate && echteBits == kopBits) return null;
+  // Dezelfde notatie als de badge ernaast, uit dezelfde functie. Een eigen kopie zou hier `16/44,1`
+  // kunnen gaan schrijven terwijl de badge `16/44` zegt, en dan lezen ze als twee verschillende
+  // soorten getallen over hetzelfde bestand.
+  return depthRateLabel(sampleRate: echteRate, bitsPerSample: echteBits);
 }
 
 String waarom(Echtheidsoordeel o) {
@@ -316,8 +399,7 @@ String waarom(Echtheidsoordeel o) {
     return 'niets boven 22 kHz — opgeschaald, geen echte hi-res';
   }
   if (o.band == Bandbreedte.afgekapt) {
-    final k = (o.afkapHz! / 1000).toStringAsFixed(1);
-    return 'harde afkap op $k kHz — dit kwam uit een mp3';
+    return afkapZin(o.afkapHz!);
   }
   if (o.isOnbekend) return 'niet te beoordelen';
   final stukken = <String>[];
