@@ -93,4 +93,46 @@ curl 'https://rutracker.org/forum/index.php' \
           reason: 'anders leest een fout wachtwoord straks als een uitdaging');
     });
   });
+
+  group('de vorm die Chrome zelf uitspuugt', () {
+    test('koekjes staan achter -b, zonder het woord "cookie"', () {
+      // Precies waar de eerste poging op strandde: Chrome 151 exporteert de koekjes als
+      // `-b 'naam=waarde; ...'`. De lezer zocht alleen naar `-H 'cookie: ...'`, vond niets, en het
+      // scherm meldde dat cf_clearance ontbrak terwijl hij er gewoon in stond.
+      const plaksel = """
+curl --url 'https://rutracker.org/forum/index.php' \
+  -H 'accept: text/html' \
+  -b 'bb_guid=aa; bb_ssl=1; bb_session=0-27713872-tth6; cf_clearance=ZmQDgB0xMfG-1787499836-1.2.1.1-Uou' \
+  -H 'user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/151.0.0.0 Safari/537.36'
+""";
+      final g = RuTrackerService.leesPlaksel(plaksel)!;
+
+      expect(g.heeftClearance, isTrue);
+      expect(g.heeftSessie, isTrue);
+      expect(g.cookie, contains('cf_clearance=ZmQDgB0xMfG-1787499836-1.2.1.1-Uou'));
+      expect(g.cookie, contains('bb_guid=aa'));
+      expect(g.ua, contains('Chrome/151.0.0.0'));
+    });
+  });
+
+  group('het verzoek dat langs curl gaat', () {
+    test('draagt het koekje, het kenmerk, en volgt geen omleiding', () {
+      final a = RuTrackerService.curlArgumenten(
+          'https://rutracker.org/forum/tracker.php', 'cf_clearance=x; bb_session=y', 'Chrome/151', '/tmp/uit');
+
+      expect(a, containsAllInOrder(['-A', 'Chrome/151']));
+      expect(a, containsAllInOrder(['-b', 'cf_clearance=x; bb_session=y']));
+      // Een 302 naar login.php IS het antwoord (sessie verlopen) — dat mag curl niet wegslikken.
+      expect(a, contains('--no-location'));
+      expect(a, containsAllInOrder(['-o', '/tmp/uit']));
+      expect(a.last, 'https://rutracker.org/forum/tracker.php');
+      // Niet uitgepakt: het antwoord is windows-1251 en wordt als losse bytes gelezen.
+      expect(a, isNot(contains('--compressed')));
+    });
+
+    test('en laat -b weg als er geen koekje is', () {
+      final a = RuTrackerService.curlArgumenten('https://rutracker.org/forum/', '', 'Chrome/151', '/tmp/uit');
+      expect(a, isNot(contains('-b')));
+    });
+  });
 }

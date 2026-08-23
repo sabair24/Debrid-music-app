@@ -1,4 +1,7 @@
 import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'settings.dart';
@@ -140,6 +143,16 @@ class RuTrackerService {
     var koekjes = uitKop('cookie') ?? '';
     final ua = uitKop('user-agent') ?? '';
 
+    // En de vorm die Chrome zelf gebruikt: `-b 'naam=waarde; naam=waarde'`, zónder het woord
+    // "cookie" ervoor. Dit is geen randgeval — het is wat "Kopieer als cURL" in Chrome 151
+    // uitspuugt, en precies hierop liep de eerste poging stuk: de koekjes zaten in het plaksel,
+    // werden niet gevonden, en het scherm zei dat cf_clearance ontbrak terwijl hij er gewoon in
+    // stond.
+    if (koekjes.isEmpty) {
+      final m = RegExp('''-b\\s+["'^]([^"'^]+)["'^]''').firstMatch(tekst);
+      if (m != null) koekjes = m.group(1)!.trim();
+    }
+
     // Geen cURL? Dan is het plaksel zelf de koekjesregel, zoals je hem uit de ontwikkelaarshulp of
     // uit een `document.cookie` kopieert.
     if (koekjes.isEmpty && tekst.contains('=') && !tekst.contains('\n-')) {
@@ -224,6 +237,103 @@ class RuTrackerService {
         (laag.contains('just a moment') ||
             laag.contains('challenges.cloudflare.com') ||
             laag.contains('__cf_chl'));
+  }
+
+  // ── Ophalen langs curl ────────────────────────────────────────────────────
+  //
+  // **Waarom niet gewoon de HTTP-client van de app.** Gemeten op 23-08-2026, met één en hetzelfde
+  // geldige koekje, dezelfde koppen en hetzelfde IP-adres:
+  //
+  //     curl.exe (Windows)                 -> 200
+  //     .NET (Invoke-WebRequest, Schannel) -> 403
+  //     deze app (Dart, BoringSSL)         -> 403, Cloudflare-uitdaging
+  //
+  // Het verschil zit dus niet in wat we STUREN maar in hoe de TLS-verbinding zich voorstelt: de
+  // vingerafdruk van de ClientHello. Cloudflare weegt die mee, en die van Dart komt er niet door.
+  // Geen enkele kop, koekje of instelling verandert daar iets aan — dat is uitgeprobeerd.
+  //
+  // `curl.exe` zit sinds Windows 10 (1803) in het systeem en staat op macOS en Linux ook gewoon in
+  // het pad. Voor RuTracker gaat het verkeer daar dus langs. Is curl er niet, dan valt alles terug
+  // op de gewone weg — dan werkt het niet beter dan voorheen, maar ook niet slechter.
+  //
+  // Eerlijk over wat dit is: een omweg om binnen te komen op een account dat van jou is, langs een
+  // deur die je met de hand ook zou openen. Er wordt niets omzeild wat jou niet toekomt, en het kan
+  // morgen weer dicht: gaat Cloudflare ook op deze vingerafdruk letten, dan is dit voorbij.
+
+  /// Is er een curl om langs te gaan? Eén keer vastgesteld, daarna onthouden.
+  static bool? _curlAanwezig;
+
+  static Future<bool> curlBeschikbaar() async {
+    if (_curlAanwezig != null) return _curlAanwezig!;
+    try {
+      final p = await Process.run('curl', ['--version'])
+          .timeout(const Duration(seconds: 5));
+      _curlAanwezig = p.exitCode == 0;
+    } catch (_) {
+      _curlAanwezig = false;
+    }
+    return _curlAanwezig!;
+  }
+
+  @visibleForTesting
+  static set curlBeschikbaarVoorTest(bool? v) => _curlAanwezig = v;
+
+  /// De argumenten voor één opgehaalde pagina. Apart, zodat er een toets op past zonder curl.
+  ///
+  /// `--compressed` staat er NIET bij: het antwoord is windows-1251 en wordt hier als losse bytes
+  /// gelezen; een gzip-laag zou daar alleen maar tussen zitten.
+  @visibleForTesting
+  static List<String> curlArgumenten(String url, String cookie, String ua, String uitPad,
+      {String? koppenPad}) {
+    return [
+      '-s',
+      '--max-time', '20',
+      // Zelf volgen doen we niet: een 302 naar login.php IS het antwoord (sessie verlopen).
+      '--no-location',
+      '-A', ua,
+      if (cookie.isNotEmpty) ...['-b', cookie],
+      if (koppenPad != null) ...['-D', koppenPad],
+      '-o', uitPad,
+      '-w', '%{http_code}',
+      url,
+    ];
+  }
+
+  /// Eén GET, langs curl als die er is en anders langs de gewone client.
+  Future<({int status, List<int> bytes})?> _haal(String url) async {
+    if (await curlBeschikbaar()) {
+      Directory? tijdelijk;
+      try {
+        tijdelijk = await Directory.systemTemp.createTemp('rt_');
+        final uit = '${tijdelijk.path}${Platform.pathSeparator}p';
+        final p = await Process.run(
+                'curl', curlArgumenten(url, settings.rutrackerCookie, _ua, uit))
+            .timeout(const Duration(seconds: 25));
+        final status = int.tryParse((p.stdout as String).trim()) ?? 0;
+        final f = File(uit);
+        final bytes = await f.exists() ? await f.readAsBytes() : <int>[];
+        return (status: status, bytes: bytes);
+      } catch (_) {
+        return null;
+      } finally {
+        try {
+          await tijdelijk?.delete(recursive: true);
+        } catch (_) {/* een achtergebleven tijdelijk bestand is geen reden om te falen */}
+      }
+    }
+    try {
+      final req = http.Request('GET', Uri.parse(url))
+        ..followRedirects = false
+        ..headers['Cookie'] = settings.rutrackerCookie
+        ..headers['User-Agent'] = _ua;
+      final client = http.Client();
+      final resp = await http.Response.fromStream(await client.send(req))
+          .timeout(const Duration(seconds: 12));
+      client.close();
+      return (status: resp.statusCode, bytes: resp.bodyBytes);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// De zin die daarbij hoort. Eén plek, want hij hoort overal hetzelfde te zijn.
@@ -377,19 +487,8 @@ class RuTrackerService {
   /// True if the cached cookie still authenticates (tracker.php returns 200, not a 302 to login).
   Future<bool> verify() async {
     if (settings.rutrackerCookie.isEmpty) return false;
-    try {
-      final req = http.Request('GET', Uri.parse('$_base/tracker.php'))
-        ..followRedirects = false
-        ..headers['Cookie'] = settings.rutrackerCookie
-        ..headers['User-Agent'] = _ua;
-      final client = http.Client();
-      final streamed = await client.send(req).timeout(const Duration(seconds: 12));
-      await streamed.stream.drain<void>();
-      client.close();
-      return streamed.statusCode == 200;
-    } catch (_) {
-      return false;
-    }
+    final r = await _haal('$_base/tracker.php');
+    return r?.status == 200;
   }
 
   /// Set when the session died and logging back in needs a human — a captcha.
@@ -406,24 +505,18 @@ class RuTrackerService {
     // met opzet onder: liever een korte lijst die aankomt dan een volledige die weggegooid wordt.
     final deadline = DateTime.now().add(const Duration(milliseconds: 10500));
     try {
-      final req = http.Request(
-          'GET', Uri.parse('$_base/tracker.php?nm=${Uri.encodeComponent(query)}'))
-        ..followRedirects = false
-        ..headers['Cookie'] = settings.rutrackerCookie
-        ..headers['User-Agent'] = _ua;
-      final client = http.Client();
-      final resp =
-          await http.Response.fromStream(await client.send(req)).timeout(const Duration(seconds: 7));
-      client.close();
+      final resp = await _haal('$_base/tracker.php?nm=${Uri.encodeComponent(query)}');
+      if (resp == null) return [];
       // Een verlopen cf_clearance ziet er anders uit dan een verlopen sessie: geen omleiding naar
       // login.php, maar dezelfde wachtpagina als bij de deur. Opnieuw inloggen heeft dan geen zin —
       // dat loopt tegen precies dezelfde muur — dus zeg wat er aan de hand is en stop.
-      if (resp.statusCode == 403 &&
-          cloudflareUitdaging(resp.headers, latin1.decode(resp.bodyBytes, allowInvalid: true))) {
+      //
+      // Op de curl-weg zijn er geen koppen om te wegen, dus daar beslist de wachtpagina zelf.
+      if (resp.status == 403) {
         lastError = uitdagingUitleg;
         return [];
       }
-      if (resp.statusCode == 302) {
+      if (resp.status == 302) {
         // The session expired. RuTracker's cookie does not last forever, and nothing renewed it:
         // login() had exactly two callers, the button in Settings and a test. So the cookie was
         // dropped, an empty list came back, and the whole thing read as "it forgot my login".
@@ -447,7 +540,7 @@ class RuTrackerService {
             : (again.error ?? 'RuTracker-login mislukt.');
         return [];
       }
-      final html = latin1.decode(resp.bodyBytes, allowInvalid: true);
+      final html = latin1.decode(resp.bytes, allowInvalid: true);
       final rows = _parseRows(html);
       // Fill missing infohashes from the topic page (top results only, concurrently).
       //
@@ -502,16 +595,10 @@ class RuTrackerService {
   }
 
   Future<String?> _hashFromTopic(String topicId) async {
-    try {
-      final r = await http.get(
-        Uri.parse('$_base/viewtopic.php?t=$topicId'),
-        headers: {'Cookie': settings.rutrackerCookie, 'User-Agent': _ua},
-      ).timeout(const Duration(seconds: 12));
-      final html = latin1.decode(r.bodyBytes, allowInvalid: true);
-      return RegExp(r'urn:btih:([a-fA-F0-9]{40})').firstMatch(html)?.group(1)?.toLowerCase();
-    } catch (_) {
-      return null;
-    }
+    final r = await _haal('$_base/viewtopic.php?t=$topicId');
+    if (r == null || r.status != 200) return null;
+    final html = latin1.decode(r.bytes, allowInvalid: true);
+    return RegExp(r'urn:btih:([a-fA-F0-9]{40})').firstMatch(html)?.group(1)?.toLowerCase();
   }
 
   String _clean(String s) => s
