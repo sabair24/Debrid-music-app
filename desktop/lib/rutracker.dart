@@ -38,8 +38,16 @@ class RuTrackerService {
 
   static const _base = 'https://rutracker.org/forum';
   static const _host = 'rutracker.org';
-  static const _ua =
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) DebridMusic/0.1';
+  /// **Waarom hier geen "DebridMusic" meer in staat.** RuTracker antwoordde met `403` op de
+  /// aanmelding — niet "wachtwoord fout" (dat is een 200 met het formulier er weer bij), maar
+  /// "jij niet". De oude waarde was een half nagemaakte browser met `DebridMusic/0.1` erachter
+  /// geplakt: precies het soort kenmerk waar een antibot-laag op afgaat.
+  ///
+  /// Eerlijk over wat dit is: de app doet zich voor als een browser om binnen te komen op een
+  /// account dat van jou is. Dat is dezelfde weg die je met de hand ook zou nemen, en er wordt niets
+  /// omzeild wat jou niet toekomt.
+  static const _ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
   bool get configured =>
       settings.rutrackerUser.trim().isNotEmpty && settings.rutrackerPass.isNotEmpty;
@@ -92,6 +100,14 @@ class RuTrackerService {
             'met de Russische codetabel). Alleen gewone letters, cijfers en leestekens komen daar '
             'ongeschonden aan.');
       }
+      // Eerst de inlogpagina ophalen, zoals een browser doet.
+      //
+      // Dit stond er niet: de app postte blind naar login.php zonder ooit een pagina gezien te
+      // hebben. Een site die een sessie-koekje verwacht vóórdat je het formulier opstuurt, wijst
+      // zo'n post af — en 403 is precies hoe dat eruitziet. Wat hij terugstuurt aan koekjes gaat
+      // mee met de aanmelding.
+      final voorafCookies = await _haalInlogpagina();
+
       var body = 'login_username=$naam&login_password=$woord'
           '&login=${cp1251Form('вход')}';
       final headers = <String, String>{
@@ -104,10 +120,15 @@ class RuTrackerService {
         // Een formulier dat van de site zelf komt heeft deze twee. Ze ontbraken.
         'Referer': '$_base/login.php',
         'Origin': 'https://$_host',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'ru,en;q=0.9',
+        if (voorafCookies.isNotEmpty) 'Cookie': voorafCookies,
       };
       if (captcha != null && captchaAnswer != null) {
         final antwoord = cp1251Form(captchaAnswer) ?? '';
         body += '&cap_sid=${cp1251Form(captcha.sid) ?? ''}&${captcha.codeField}=$antwoord';
+        // De koekjes van de captcha-uitdaging gaan vóór die van de kale inlogpagina: het antwoord
+        // hoort bij díé sessie.
         if (captcha.cookies.isNotEmpty) headers['Cookie'] = captcha.cookies;
       }
       final req = http.Request('POST', Uri.parse('$_base/login.php'))
@@ -164,12 +185,44 @@ class RuTrackerService {
     }
   }
 
-  String _cookiesFrom(String setCookie) {
-    final parts = <String>[];
-    for (final m in RegExp(r'(bb_[a-z_]+)=([^;,\s]+)').allMatches(setCookie)) {
-      parts.add('${m.group(1)}=${m.group(2)}');
+  /// De inlogpagina ophalen om de koekjes te krijgen die een browser ook zou hebben.
+  ///
+  /// Mislukt dit, dan is dat geen reden om de aanmelding niet te proberen — dan gaat hij zoals
+  /// vroeger, blind. Een voorbereidende stap mag nooit de hoofdweg blokkeren.
+  Future<String> _haalInlogpagina() async {
+    try {
+      final client = http.Client();
+      final req = http.Request('GET', Uri.parse('$_base/login.php'))
+        ..followRedirects = false
+        ..headers['User-Agent'] = _ua
+        ..headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        ..headers['Accept-Language'] = 'ru,en;q=0.9';
+      final resp = await http.Response.fromStream(await client.send(req))
+          .timeout(const Duration(seconds: 12));
+      client.close();
+      return _cookiesFrom(resp.headers['set-cookie'] ?? '');
+    } catch (_) {
+      return '';
     }
-    return parts.join('; ');
+  }
+
+  /// De koekjes uit een antwoord, klaar om terug te sturen.
+  ///
+  /// **Niet alleen de `bb_`-koekjes.** Dat stond hier, en het is precies de val bij een 403: een
+  /// antibot-laag zet iets neer dat `cf_clearance` of `__ddg1` heet, en dat werd weggegooid. Dan
+  /// stuur je je aanmelding naar een sessie die de server niet kan thuisbrengen.
+  ///
+  /// Alleen de naam en de waarde; `Path=`, `Domain=`, `Expires=` en `HttpOnly` horen bij het
+  /// antwoord en niet bij wat je terugstuurt.
+  String _cookiesFrom(String setCookie) {
+    const geenKoekje = {'path', 'domain', 'expires', 'max-age', 'samesite', 'secure', 'httponly'};
+    final gezien = <String, String>{};
+    for (final m in RegExp(r'([A-Za-z0-9_\-]+)=([^;,\s]*)').allMatches(setCookie)) {
+      final naam = m.group(1)!;
+      if (geenKoekje.contains(naam.toLowerCase())) continue;
+      gezien[naam] = m.group(2)!; // een latere waarde vervangt een eerdere, zoals een browser doet
+    }
+    return gezien.entries.map((e) => '${e.key}=${e.value}').join('; ');
   }
 
   /// True if the cached cookie still authenticates (tracker.php returns 200, not a 302 to login).

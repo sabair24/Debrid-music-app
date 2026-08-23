@@ -101,16 +101,22 @@ class TidalService {
 
   static String _dataDir() => appDir;
 
-  /// Het pad van een zoekopdracht: de zoekterm ís de bron-id.
+  /// Het pad van een zoekopdracht. Zonder id, en dát was de hele fout.
   ///
-  /// **Kleingeschreven, en dat is geen smaak.** Hier stond `/searchResults/`, en TIDAL antwoordde
-  /// daarop met `400 INVALID_RESOURCE_ID` met de vinger bij `data/id` — dus niet "dit pad bestaat
-  /// niet" maar "die id deugt niet". In TIDAL's eigen voorbeelden staat het pad kleingeschreven, en
-  /// een REST-pad is hoofdlettergevoelig.
+  /// **Twee keer verkeerd geraden voordat de bron uitsluitsel gaf.** Eerst stond hier
+  /// `/searchResults/<zoekterm>`, en TIDAL antwoordde met `400 INVALID_RESOURCE_ID` met de vinger
+  /// bij `data/id`. Toen leek kleinschrijven het antwoord; dat gaf `404`, dus het pad wás goed.
   ///
-  /// De zoekterm gaat er gecodeerd in: een spatie wordt `%20`. Dat is wat TIDAL's eigen voorbeeld
-  /// ook doet, en een kale spatie in een pad is sowieso geen geldig adres.
-  static String zoekPad(String query) => '/searchresults/${Uri.encodeComponent(query.trim())}';
+  /// Wat er werkelijk aan de hand is, staat in TIDAL's eigen SDK-voorbeelden: er bestaan twee
+  /// vormen. `/searchResults/{id}` verwacht een **id uit een eerder antwoord** — daar hoort geen
+  /// zoekterm, vandaar "invalid resource ID". En `/searchResults` zonder id is de zoekopdracht
+  /// zelf, met de term als `filter[query]` in de vraag. Die laatste is wat we nodig hebben.
+  static const zoekPad = '/searchResults';
+
+  /// De vraagtekens achter [zoekPad]. De zoekterm gaat als `filter[query]` mee, niet in het pad.
+  static Map<String, String> zoekVraag(String query,
+          {required String land, required String include}) =>
+      {'countryCode': land, 'filter[query]': query.trim(), 'include': include};
 
   /// Extract the auth code from a callback URL / pasted text (or a bare code).
   static String? extractCode(String text) {
@@ -284,10 +290,7 @@ class TidalService {
   /// Search the TIDAL catalog for tracks (title + primary artist), to feed the
   /// torrent/Soulseek source search.
   Future<List<TidalTrack>> searchTracks(String query) async {
-    final j = await _get(zoekPad(query), {
-      'countryCode': _country,
-      'include': 'tracks,tracks.artists',
-    });
+    final j = await _get(zoekPad, zoekVraag(query, land: _country, include: 'tracks,tracks.artists'));
     return j == null ? [] : parseTracks(j);
   }
 
@@ -302,10 +305,8 @@ class TidalService {
   Future<TidalZoekResultaat> search(String query) async {
     Map<String, dynamic>? j;
     try {
-      j = await _get(zoekPad(query), {
-        'countryCode': _country,
-        'include': 'tracks,tracks.artists,tracks.albums,albums,albums.artists',
-      });
+      j = await _get(zoekPad,
+          zoekVraag(query, land: _country, include: 'tracks,tracks.artists,albums,albums.artists'));
     } catch (e) {
       _spoor('brede zoekvraag geweigerd ($e) — terugvallen op alleen nummers');
       j = null;
