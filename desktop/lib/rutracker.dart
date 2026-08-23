@@ -37,32 +37,83 @@ class RuTrackerService {
   RuTrackerService(this.settings);
 
   static const _base = 'https://rutracker.org/forum';
+  static const _host = 'rutracker.org';
   static const _ua =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) DebridMusic/0.1';
 
   bool get configured =>
       settings.rutrackerUser.trim().isNotEmpty && settings.rutrackerPass.isNotEmpty;
+
+  /// Eén teken naar zijn byte in windows-1251, of null als die codetabel het niet kent.
+  ///
+  /// RuTracker is een cp1251-site: `login.php` leest wat je stuurt als windows-1251. Deze app
+  /// stuurde UTF-8, en dat is op twee manieren fout. De knopwaarde `вход` kwam aan als twaalf bytes
+  /// onzin in plaats van vier, en een wachtwoord met één letter met een accent erin werd verstuurd
+  /// als andere bytes dan je intikte — waarna het nooit klopt, hoe zeker je ook van je wachtwoord
+  /// bent.
+  static int? cp1251Byte(int teken) {
+    if (teken < 0x80) return teken; // ASCII is in beide tabellen hetzelfde
+    if (teken >= 0x410 && teken <= 0x44F) return 0xC0 + (teken - 0x410); // А..я aaneengesloten
+    if (teken == 0x401) return 0xA8; // Ё
+    if (teken == 0x451) return 0xB8; // ё
+    return null;
+  }
+
+  /// Een waarde klaar voor een formulier, op cp1251-bytes. Null als er een teken in staat dat die
+  /// codetabel niet kent — dan is er niets te versturen en hoort dat gezegd te worden.
+  ///
+  /// Alles behalve de onbelaste tekens gaat er procentgecodeerd in, ook de spatie (`%20` en niet
+  /// `+`, zodat een wachtwoord met een echte `+` erin niet stiekem een spatie wordt).
+  static String? cp1251Form(String waarde) {
+    const vrij = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~';
+    final uit = StringBuffer();
+    for (final teken in waarde.runes) {
+      final b = cp1251Byte(teken);
+      if (b == null) return null;
+      final c = String.fromCharCode(teken);
+      if (teken < 0x80 && vrij.contains(c)) {
+        uit.write(c);
+      } else {
+        uit.write('%${b.toRadixString(16).toUpperCase().padLeft(2, '0')}');
+      }
+    }
+    return uit.toString();
+  }
   bool get loggedIn => settings.rutrackerCookie.isNotEmpty;
 
   Future<RtLogin> login({String? captchaAnswer, RtCaptcha? captcha}) async {
     if (!configured) return const RtLogin.failed('Geen RuTracker-login ingevuld');
     try {
-      var body = 'login_username=${Uri.encodeQueryComponent(settings.rutrackerUser.trim())}'
-          '&login_password=${Uri.encodeQueryComponent(settings.rutrackerPass)}'
-          '&login=${Uri.encodeQueryComponent('вход')}';
+      final naam = cp1251Form(settings.rutrackerUser.trim());
+      final woord = cp1251Form(settings.rutrackerPass);
+      if (naam == null || woord == null) {
+        return const RtLogin.failed(
+            'Je gebruikersnaam of wachtwoord bevat een teken dat RuTracker niet kent (hij werkt '
+            'met de Russische codetabel). Alleen gewone letters, cijfers en leestekens komen daar '
+            'ongeschonden aan.');
+      }
+      var body = 'login_username=$naam&login_password=$woord'
+          '&login=${cp1251Form('вход')}';
       final headers = <String, String>{
+        // Zonder charset: het lichaam is al procentgecodeerd op cp1251-bytes. Zou hier
+        // `; charset=utf-8` bij komen — en dat gebeurt vanzelf als je `..body =` gebruikt in
+        // plaats van `..bodyBytes =` — dan vertel je een cp1251-site het tegenovergestelde van
+        // wat je stuurt.
         'Content-Type': 'application/x-www-form-urlencoded',
         'User-Agent': _ua,
+        // Een formulier dat van de site zelf komt heeft deze twee. Ze ontbraken.
+        'Referer': '$_base/login.php',
+        'Origin': 'https://$_host',
       };
       if (captcha != null && captchaAnswer != null) {
-        body += '&cap_sid=${Uri.encodeQueryComponent(captcha.sid)}'
-            '&${captcha.codeField}=${Uri.encodeQueryComponent(captchaAnswer)}';
+        final antwoord = cp1251Form(captchaAnswer) ?? '';
+        body += '&cap_sid=${cp1251Form(captcha.sid) ?? ''}&${captcha.codeField}=$antwoord';
         if (captcha.cookies.isNotEmpty) headers['Cookie'] = captcha.cookies;
       }
       final req = http.Request('POST', Uri.parse('$_base/login.php'))
         ..followRedirects = false
         ..headers.addAll(headers)
-        ..body = body;
+        ..bodyBytes = ascii.encode(body);
       final client = http.Client();
       final resp = await http.Response.fromStream(await client.send(req))
           .timeout(const Duration(seconds: 20));
@@ -86,9 +137,30 @@ class RuTrackerService {
         return RtLogin.needCaptcha(
             RtCaptcha(url, sid.group(1)!, field.group(1)!, _cookiesFrom(setCookie)));
       }
-      return const RtLogin.failed('Login geweigerd — controleer je gegevens.');
-    } catch (_) {
-      return const RtLogin.failed('Geen verbinding met RuTracker.');
+      // Hieronder stond één zin — "controleer je gegevens" — voor drie totaal verschillende
+      // oorzaken: een fout wachtwoord, een blokkadepagina van je provider, en een RuTracker die
+      // iets anders terugstuurt dan vroeger. Dat stuurt je precies de verkeerde kant op: je gaat je
+      // wachtwoord zitten controleren terwijl de site niet eens bereikt is.
+      //
+      // Kregen we werkelijk RuTracker aan de lijn? Zijn eigen pagina's noemen zichzelf. Een
+      // blokkadepagina van een provider doet dat niet.
+      final lijktRuTracker = html.toLowerCase().contains('rutracker') ||
+          resp.headers['set-cookie']?.contains('bb_') == true;
+      if (!lijktRuTracker) {
+        return RtLogin.failed(
+            'Er antwoordde iets op $_host, maar het was RuTracker niet (${resp.statusCode}). '
+            'Waarschijnlijk blokkeert je provider of je netwerk die site. Kun je '
+            'https://$_host in je browser openen? Lukt dat ook niet, dan ligt het daar en niet '
+            'aan je wachtwoord.');
+      }
+      return RtLogin.failed(
+          'RuTracker wees de aanmelding af (${resp.statusCode}). Als je gebruikersnaam en '
+          'wachtwoord kloppen, vraagt hij mogelijk om iets nieuws dat deze app nog niet meestuurt.');
+    } catch (e) {
+      // De uitzondering ZELF, en niet "geen verbinding". Het verschil tussen een naam die niet
+      // opgezocht kan worden, een certificaat dat niet deugt en een verbinding die na twintig
+      // seconden opgeeft is precies wat je wil weten, en dat werd hier weggegooid.
+      return RtLogin.failed('Geen verbinding met $_host: $e');
     }
   }
 
