@@ -111,6 +111,39 @@ void main() {
     });
   });
 
+  group('wat er binnenkwam, en niet wat je vroeg', () {
+    // De app vraagt `max`, maar Tidal levert aan tiddl vaak 16 bit / 44,1 kHz terug — een bekende
+    // beperking van tiddl, niet hier op te lossen. Wél op te lossen: dat je dat pas merkt door
+    // achteraf naar je bestand te kijken. Dus wordt gelezen wat hij zégt geleverd te hebben.
+    test('de kwaliteit komt uit de uitvoer van tiddl zelf', () {
+      const echt = 'Auth token expires in 0d 3h 56m\n'
+          'Downloaded Vuur en Vlam  16-bit, 44.1 kHz D:\\Flac music 2024\\Niels Destadsbader\n'
+          'Total downloads: 1';
+      expect(gemeldeKwaliteit(echt), '16 bit / 44.1 kHz');
+    });
+
+    test('een hele plaat op één kwaliteit noemt hem één keer', () {
+      final plaat = [
+        for (var i = 1; i <= 12; i++) 'Downloaded nummer $i  24-bit, 48 kHz D:\\pad',
+      ].join('\n');
+      expect(gemeldeKwaliteit(plaat), '24 bit / 48 kHz');
+    });
+
+    test('gemengde bronnen laten allebei zien', () {
+      // Een verzamelaar met deels hi-res: dan is één getal een leugen.
+      const gemengd = 'Downloaded a  24-bit, 96 kHz\nDownloaded b  16-bit, 44.1 kHz';
+      expect(gemeldeKwaliteit(gemengd), '24 bit / 96 kHz · 16 bit / 44.1 kHz');
+    });
+
+    test('zegt hij niets, dan verzint de app niets', () {
+      expect(gemeldeKwaliteit('Total downloads: 1'), isNull);
+      expect(gemeldeKwaliteit(''), isNull);
+      // En dan blijft de melding gewoon zonder haakjes staan.
+      expect(opgehaaldMelding(''), isNot(contains('(')));
+      expect(opgehaaldMelding('24 bit / 48 kHz'), contains('24 bit / 48 kHz'));
+    });
+  });
+
   group('ffmpeg meegeven aan tiddl', () {
     // Zonder ffmpeg levert tiddl 16 bit / 44,1 kHz af terwijl je om `max` vroeg, met één
     // waarschuwingsregel tussen zijn voortgangsbalken door. Geen fout, geen afloopcode, gewoon een

@@ -227,22 +227,52 @@ String padMetFfmpeg(String? ffmpegPad, String huidigPad, {required bool windows}
 /// die je toch alleen maar leest hoort nooit de reden te zijn dat iets faalt.
 const _soepelUtf8 = Utf8Codec(allowMalformed: true);
 
+/// De kwaliteit die tiddl zégt geleverd te hebben, uit zijn eigen uitvoer.
+///
+/// **Waarom dit uitgelezen wordt in plaats van aangenomen.** De app vraagt om `max`, maar wat er
+/// werkelijk binnenkomt bepaalt Tidal — en die levert aan tiddl vaak 16 bit / 44,1 kHz terug terwijl
+/// de Tidal-app zelf 24 bit speelt. Dat is een bekende beperking van tiddl (oskvr37/tiddl #395,
+/// #379, #333) en niet iets wat hier op te lossen valt. Wél op te lossen: dat je het pas ontdekt
+/// door achteraf naar de bitdiepte van je bestand te kijken. Wat hij levert, staat er nu bij.
+///
+/// Meerdere verschillende waarden bij een plaat betekent meestal een verzamelaar met gemengde
+/// bronnen; dan hoor je ze allebei te zien in plaats van de laatste.
+String? gemeldeKwaliteit(String uitvoer) {
+  final gevonden = <String>{};
+  for (final m in RegExp(r'(\d{1,2})-bit,\s*([\d.]+)\s*kHz', caseSensitive: false)
+      .allMatches(uitvoer)) {
+    gevonden.add('${m.group(1)} bit / ${m.group(2)} kHz');
+  }
+  return gevonden.isEmpty ? null : gevonden.join(' · ');
+}
+
+/// Wat er na een geslaagde download op het scherm komt.
+///
+/// De kwaliteit staat erbij omdat je die anders pas ontdekt door naar de bitdiepte van je bestand
+/// te kijken — en dat is precies hoe het vandaag ontdekt werd dat `max` 16 bit opleverde.
+String opgehaaldMelding(String kwaliteit) => kwaliteit.isEmpty
+    ? 'Opgehaald — de bibliotheek wordt opnieuw doorzocht'
+    : 'Opgehaald ($kwaliteit) — de bibliotheek wordt opnieuw doorzocht';
+
 /// Haal [doel] op naar [map]. Null als het lukte, anders de uitleg.
 ///
 /// Geen tijdslimiet: een plaat van 24 bit is honderden megabytes en dat mag duren. Wat er niet mag
 /// gebeuren is dat de app "klaar" zegt zonder dat er iets staat — daar is `-err` voor.
-Future<String?> haalVanTidal({
+Future<({String? fout, String? kwaliteit})> haalVanTidal({
   required String doel,
   required String map,
   String kwaliteit = 'max',
 }) async {
   final tool = Tiddl.pad;
   if (tool == null) {
-    return 'tiddl staat niet op deze pc. Installeer hem met "uv tool install tiddl" of '
-        '"pip install tiddl", en log één keer in met "tiddl auth login". '
-        '${Tiddl.laatsteFout ?? ""}';
+    return (
+      fout: 'tiddl staat niet op deze pc. Installeer hem met "uv tool install tiddl" of '
+          '"pip install tiddl", en log één keer in met "tiddl auth login". '
+          '${Tiddl.laatsteFout ?? ""}',
+      kwaliteit: null,
+    );
   }
-  if (map.trim().isEmpty) return 'Er is nog geen muziekmap ingesteld.';
+  if (map.trim().isEmpty) return (fout: 'Er is nog geen muziekmap ingesteld.', kwaliteit: null);
   try {
     final r = await Process.run(
       tool,
@@ -259,9 +289,10 @@ Future<String?> haalVanTidal({
             windows: Platform.isWindows),
       },
     );
-    if (r.exitCode == 0) return null;
-    return leesbareFout('${r.stdout}\n${r.stderr}');
+    final uitvoer = '${r.stdout}\n${r.stderr}';
+    if (r.exitCode == 0) return (fout: null, kwaliteit: gemeldeKwaliteit(uitvoer));
+    return (fout: leesbareFout(uitvoer), kwaliteit: null);
   } catch (e) {
-    return 'Kon tiddl niet starten: $e';
+    return (fout: 'Kon tiddl niet starten: $e', kwaliteit: null);
   }
 }

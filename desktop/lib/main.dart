@@ -9690,16 +9690,16 @@ class _TidalOphalenState extends State<_TidalOphalen> {
       _bezig = true;
       _fout = null;
     });
-    final fout = await haalVanTidal(doel: doel, map: map, kwaliteit: _kwaliteit);
+    final uitslag = await haalVanTidal(doel: doel, map: map, kwaliteit: _kwaliteit);
     if (!mounted) return;
-    if (fout != null) {
+    if (uitslag.fout != null) {
       setState(() {
         _bezig = false;
-        _fout = fout;
+        _fout = uitslag.fout;
       });
       return;
     }
-    Navigator.of(context).pop(true);
+    Navigator.of(context).pop(uitslag.kwaliteit ?? '');
   }
 
   @override
@@ -9809,7 +9809,7 @@ class _TidalOphalenState extends State<_TidalOphalen> {
                               style: kTekstKlein)),
                     ],
                     TextButton(
-                      onPressed: _bezig ? null : () => Navigator.of(context).pop(false),
+                      onPressed: _bezig ? null : () => Navigator.of(context).pop(),
                       child: const Text('Annuleren'),
                     ),
                     const SizedBox(width: kRuimte8),
@@ -9912,10 +9912,12 @@ class DownloadsView extends StatelessWidget {
                 if (_isDesktop && !context.read<LibraryStore>().isRemote)
                   TextButton.icon(
                     onPressed: () async {
-                      final gedaan = await showDialog<bool>(
+                      // Een string terug betekent gelukt; de inhoud is de kwaliteit die tiddl
+                      // meldde. Null is geannuleerd.
+                      final kwaliteit = await showDialog<String>(
                           context: context, builder: (_) => const _TidalOphalen());
-                      if (gedaan != true || !context.mounted) return;
-                      _srcToast(context, 'Opgehaald — de bibliotheek wordt opnieuw doorzocht');
+                      if (kwaliteit == null || !context.mounted) return;
+                      _srcToast(context, opgehaaldMelding(kwaliteit));
                       unawaited(context.read<LibraryStore>().scan());
                     },
                     icon: const Icon(Icons.link_rounded, size: 16),
@@ -11408,10 +11410,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       _srcToast(context, 'Dit resultaat heeft geen bruikbaar Tidal-id.');
       return;
     }
-    final gedaan = await showDialog<bool>(
+    final kwaliteit = await showDialog<String>(
         context: context, builder: (_) => _TidalOphalen(doel: doel, titel: naam));
-    if (gedaan != true || !mounted) return;
-    _srcToast(context, 'Opgehaald — de bibliotheek wordt opnieuw doorzocht');
+    if (kwaliteit == null || !mounted) return;
+    _srcToast(context, opgehaaldMelding(kwaliteit));
     unawaited(context.read<LibraryStore>().scan());
   }
 
