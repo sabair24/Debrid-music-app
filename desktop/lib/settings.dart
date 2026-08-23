@@ -37,6 +37,18 @@ class AppSettings extends ChangeNotifier {
   /// een ander kenmerk mee, dan is het koekje meteen waardeloos — vandaar dat dit erbij bewaard
   /// wordt in plaats van dat de app zelf iets verzint.
   String rutrackerUa = '';
+
+  /// Wie de torrent binnenhaalt: `auto`, `torbox` of `lokaal`.
+  ///
+  /// **Waarom deze keuze bestaat.** TorBox haalt de torrent aan zijn kant op, dus jouw IP komt nooit
+  /// in de zwerm — dat is de hele reden om een debrid-dienst te gebruiken. Maar op 23-08-2026 lag hun
+  /// API er een uur uit en kwam er niets binnen, terwijl dezelfde plaat in µTorrent op 6 MB/s liep.
+  ///
+  /// `auto` doet het verstandige: wat TorBox al klaar heeft staan komt via TorBox (dat is meteen
+  /// klaar), en de rest gaat lokaal — daar is TorBox toch traag in, want die moet dan zelf eerst de
+  /// hele torrent ophalen. Gemeten met B.B.E. — Seven Days And One Week: lokaal 26 MB in 73 s uit een
+  /// zwerm van drie seeders, tegenover een TorBox die die dag helemaal niet antwoordde.
+  String torrentMotor = 'auto';
   // TIDAL: client id/secret entered by the user; the rest is managed by the OAuth flow.
   String tidalClientId = '';
   String tidalClientSecret = '';
@@ -213,6 +225,7 @@ class AppSettings extends ChangeNotifier {
         rutrackerPass = (m['rutracker_pass'] ?? '') as String;
         rutrackerCookie = (m['rutracker_cookie'] ?? '') as String;
         rutrackerUa = (m['rutracker_ua'] ?? '') as String;
+        torrentMotor = (m['torrent_motor'] ?? 'auto') as String;
         tidalClientId = (m['tidal_client_id'] ?? '') as String;
         tidalClientSecret = (m['tidal_client_secret'] ?? '') as String;
         tidalAccessToken = (m['tidal_access_token'] ?? '') as String;
@@ -242,6 +255,7 @@ class AppSettings extends ChangeNotifier {
         'rutracker_pass': rutrackerPass,
         'rutracker_cookie': rutrackerCookie,
         'rutracker_ua': rutrackerUa,
+        'torrent_motor': torrentMotor,
         'tidal_client_id': tidalClientId,
         'tidal_client_secret': tidalClientSecret,
         'tidal_access_token': tidalAccessToken,

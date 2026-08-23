@@ -94,7 +94,7 @@ void main() {
 
       expect(gemeten(url), isNotNull, reason: 'hier zou het op een iPad stilvallen');
       expect(bewezenNep(url), isTrue);
-      expect(waaromAfkap(gemeten(url)!), startsWith('harde afkap op 17.7 kHz'));
+      expect(waaromAfkap(gemeten(url)!), startsWith('afgekapt op 17.7 kHz'));
 
       // En het pad van de pc zegt hier niets — dat bestand bestaat op dit toestel niet.
       expect(gemeten(r'D:\flac music 2024\stromae\05 - tous les mêmes.flac'), isNull);

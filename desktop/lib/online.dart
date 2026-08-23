@@ -12,6 +12,8 @@ import 'search.dart';
 import 'settings.dart';
 import 'soulseek.dart';
 import 'torbox.dart';
+import 'torrentbestand.dart';
+import 'aria2.dart';
 import 'warm_log.dart';
 import 'werkrij.dart';
 import 'paths.dart';
@@ -26,6 +28,10 @@ class OnlineService {
   final AppSettings settings;
   final TorBox torbox;
   final RuTrackerService rutracker;
+
+  /// De lokale torrentmotor. Eén per app: hij houdt één proces vast, en twee processen die dezelfde
+  /// map vullen vechten om dezelfde bestanden.
+  final Aria2 aria2 = Aria2();
   final SearchAggregator aggregator;
   OnlineService(this.settings)
       : torbox = TorBox(() => settings.torboxToken),
@@ -82,36 +88,56 @@ class OnlineService {
     // Het bestand gaat er meteen als eerste in, niet als reddingspoging achteraf: TorBox kijkt naar
     // de infohash, en staat er al een vastgelopen magneetpoging met dezelfde hash, dan antwoordt hij
     // "Found Cached Torrent" en krijg je die vastgelopen poging terug — bestand of niet.
+    final redenen = <String>[];
     if (r.torrentUrl.isNotEmpty) {
       final bytes = await rutracker.haalTorrentBestand(r.torrentUrl);
-      if (bytes != null && bytes.isNotEmpty) {
+      if (bytes == null || bytes.isEmpty) {
+        redenen.add('het torrentbestand kwam niet binnen bij de bron (koekje verlopen?)');
+      } else {
         final uitkomst = await torbox.addTorrentFile(bytes, '${r.hash}.torrent');
         final gevonden = await _uitTorboxAntwoord(uitkomst, r.hash);
         if (gevonden != null) return gevonden;
+        // Ligt het aan TorBox zelf, dan heeft de magneet erachteraan geen zin: dat is nog eens
+        // veertig seconden wachten op dezelfde stilte, waarna het scherm de verkeerde schuldige
+        // aanwijst.
+        if (uitkomst.storing) throw await _storingUitleg(uitkomst);
+        redenen.add('bestand: ${uitkomst.reden}');
       }
-      // Niet gelukt (geen sessie, of RuTracker gaf een pagina in plaats van een torrent)? Dan
+      // Niet gelukt (geen sessie, of de bron gaf een pagina in plaats van een torrent)? Dan
       // alsnog de magneet: die werkt bij een torrent die wél in DHT zit.
     }
     final uitkomst = await torbox.addMagnet(r.magnet);
     final gevonden = await _uitTorboxAntwoord(uitkomst, r.hash);
     if (gevonden != null) return gevonden;
-    // Wat hier binnenkomt is de reden van TorBox — of, als het verzoek zelf strandde, de tekst van
-    // de uitzondering. Die stond ongefilterd op het scherm: "TimeoutException after 0:00:15.000000:
-    // Future not completed" boven een dialoog die vraagt welk nummer je wil. Zeg wat er gebeurde.
-    final detail = uitkomst.$4;
-    if (detail.contains('TimeoutException')) {
-      throw 'TorBox antwoordde niet binnen vijftien seconden op het toevoegen van deze bron.';
+    if (uitkomst.storing) throw await _storingUitleg(uitkomst);
+    redenen.add('magneet: ${uitkomst.reden}');
+    throw redenen.isEmpty
+        ? 'Kon torrent niet toevoegen'
+        : 'TorBox nam deze bron niet aan — ${redenen.join('; ')}';
+  }
+
+  /// TorBox gaf iets terug dat niet over déze torrent gaat. Vraag hem of hij nog leeft, en zeg dan
+  /// pas wat er aan de hand is.
+  ///
+  /// **Waarom die extra vraag het waard is.** Op 23-08-2026 stond er "Mislukt" bij een album dat in
+  /// µTorrent tegelijk op 6 MB/s binnenkwam. Het lag aan TorBox — hun statuspagina meldde op dat
+  /// moment "Some services are degraded — API" — maar het scherm gaf de gebruiker geen enkele
+  /// aanleiding om dat te vermoeden, dus ging hij zijn eigen app en zijn eigen torrent wantrouwen.
+  /// Eén korte vraag van tien seconden is genoeg om de schuldige bij naam te noemen.
+  Future<String> _storingUitleg(TbToevoeging uitkomst) async {
+    if (await torbox.leeft()) {
+      return 'TorBox nam deze bron niet aan: ${uitkomst.reden}';
     }
-    throw detail.isNotEmpty ? detail : 'Kon torrent niet toevoegen';
+    return 'TorBox zelf antwoordt op dit moment niet — hun API is verstoord. Het ligt niet aan deze '
+        'torrent. Kijk op status.torbox.app en probeer het straks opnieuw.';
   }
 
   /// Het antwoord van TorBox op "voeg dit toe" uitpakken: (id, hash), of null als het niet lukte.
-  Future<(int?, String)?> _uitTorboxAntwoord(
-      (bool, int?, String?, String) antwoord, String hashUitBron) async {
-    final (success, id, hash0, detail) = antwoord;
-    final hash = (hash0 != null && hash0.isNotEmpty) ? hash0 : hashUitBron;
+  Future<(int?, String)?> _uitTorboxAntwoord(TbToevoeging antwoord, String hashUitBron) async {
+    final hash = (antwoord.hash != null && antwoord.hash!.isNotEmpty) ? antwoord.hash! : hashUitBron;
+    final detail = antwoord.reden;
     if (hash.isEmpty) throw 'Torrent heeft geen infohash';
-    if (success) return (id, hash);
+    if (antwoord.gelukt) return (antwoord.id, hash);
     if (detail.toLowerCase().contains('already')) {
       final item = (await torbox.listTorrents())
           .cast<TbTorrent?>()
@@ -244,9 +270,67 @@ class OnlineService {
     return t.length >= 3 && n(name).contains(t);
   }
 
+  /// De motor die deze bron gaat halen.
+  ///
+  /// `torbox` en `lokaal` zijn wat ze zeggen. `auto` is de afweging die de meeste mensen zouden
+  /// maken als ze alle feiten hadden:
+  ///
+  ///  * staat het al bij TorBox in de cache, dan is dát meteen klaar en gaat er niets de zwerm in;
+  ///  * staat het er niet, dan moet TorBox de hele torrent eerst zélf ophalen — precies waar het
+  ///    traag wordt, en op 23-08-2026 waar het helemaal stilviel — dus doen we het zelf.
+  ///
+  /// Alleen met een `.torrent` in handen. Een kale magneet laten we aan TorBox: die moet de zwerm
+  /// via DHT vinden, en dat is nu juist wat bij een tracker als RuTracker niet werkt.
+  bool lokaalVoor(SearchResult r) => kiesLokaal(
+        motor: settings.torrentMotor,
+        heeftTorrentbestand: r.torrentUrl.isNotEmpty,
+        staatKlaarBijTorbox: r.cached,
+        motorBeschikbaar: aria2.beschikbaar,
+      );
+
+  /// De regel zelf, los van waar de feiten vandaan komen — anders valt hij alleen te toetsen op een
+  /// machine waar toevallig een aria2 staat, en dat is precies het soort regel dat ongemerkt kantelt.
+  static bool kiesLokaal({
+    required String motor,
+    required bool heeftTorrentbestand,
+    required bool staatKlaarBijTorbox,
+    required bool motorBeschikbaar,
+  }) {
+    if (!heeftTorrentbestand || !motorBeschikbaar) return false;
+    return switch (motor) {
+      'torbox' => false,
+      'lokaal' => true,
+      _ => !staatKlaarBijTorbox,
+    };
+  }
+
+  /// De nummerlijst uit het torrentbestand zelf, zonder iemand iets te hoeven vragen.
+  ///
+  /// Dit is het stuk dat de nummerkeuze van een halve minuut wachten naar een halve seconde brengt:
+  /// wat erin zit staat IN het bestand, en dat hebben we al zodra RuTracker het heeft afgegeven.
+  Future<(TbTorrent, List<TbFile>)?> _lokaleTracklist(SearchResult r) async {
+    final bytes = await rutracker.haalTorrentBestand(r.torrentUrl);
+    if (bytes == null || bytes.isEmpty) return null;
+    final inhoud = TorrentInhoud.lees(bytes);
+    if (inhoud == null) return null;
+
+    final bestanden = [
+      for (final f in inhoud.bestanden) TbFile(f.index, f.pad, f.naam, f.grootte, null),
+    ];
+    final torrent = TbTorrent(0, inhoud.naam, r.hash, 'lokaal', 0, bestanden, false, false,
+        size: inhoud.totaleGrootte, seeds: r.seeders, lokaleTorrent: bytes);
+    final audio = bestanden.where((f) => f.isAudio).toList();
+    return audio.isEmpty ? null : (torrent, audio);
+  }
+
   /// (torrent, audio files) for the track picker.
   Future<(TbTorrent, List<TbFile>)> tracklist(SearchResult r,
       {void Function(double, String)? onProgress}) async {
+    if (lokaalVoor(r)) {
+      final lokaal = await _lokaleTracklist(r);
+      if (lokaal != null) return lokaal;
+      // Geen bestand of geen audio erin? Dan alsnog langs TorBox — beter een trage lijst dan geen.
+    }
     if (!torbox.hasKey) throw 'Stel eerst je TorBox-sleutel in (Instellingen).';
     final (id, hash) = await _addOrFind(r);
     final item = await _pollReady(id, hash, patient: !r.cached, onProgress: onProgress);
@@ -264,6 +348,18 @@ class OnlineService {
   /// Resolve the torrent + the files to download (all audio, or one file).
   Future<(TbTorrent, List<TbFile>)> resolveForDownload(SearchResult r, int? fileId,
       {void Function(double, String)? onProgress}) async {
+    if (lokaalVoor(r)) {
+      final lokaal = await _lokaleTracklist(r);
+      if (lokaal != null) {
+        final (torrent, audio) = lokaal;
+        // Er valt hier niets te wachten: aria2 begint pas als de downloadlijst hem de opdracht
+        // geeft. Dat is meteen het verschil met TorBox, waar dit punt betekende dat de torrent daar
+        // al helemaal binnen moest zijn voordat de eerste byte deze kant op kwam.
+        final gekozen =
+            fileId != null ? torrent.files.where((f) => f.id == fileId).toList() : audio;
+        if (gekozen.isNotEmpty) return (torrent, gekozen);
+      }
+    }
     if (!torbox.hasKey) throw 'Stel eerst je TorBox-sleutel in (Instellingen).';
     final (id, hash) = await _addOrFind(r);
     final item = await _pollReady(id, hash, patient: !r.cached, onProgress: onProgress);
@@ -2011,11 +2107,22 @@ class DownloadManager extends ChangeNotifier {
         final destDir = Directory(
             '$musicRoot${Platform.pathSeparator}DebridMusic Downloads${Platform.pathSeparator}${_sanitize(torrent.name)}');
         await destDir.create(recursive: true);
+        final nieuwe = <DownloadJob>[];
         for (final f in files) {
           final job = DownloadJob(f.label);
+          nieuwe.add(job);
           jobs.insert(0, job);
-          notifyListeners();
-          _torrentRij.voegToe(() => _download(torrent.id, f, destDir, job));
+        }
+        notifyListeners();
+        if (torrent.lokaal) {
+          // Eén opdracht voor de hele torrent, niet één per nummer: aria2 kent een torrent aan zijn
+          // infohash en zou een tweede aanmelding van dezelfde plaat als dubbel weigeren. De balken
+          // per nummer komen uit zijn eigen bestandslijst.
+          _torrentRij.voegToe(() => _downloadLokaal(torrent, files, destDir, nieuwe));
+        } else {
+          for (var i = 0; i < files.length; i++) {
+            _torrentRij.voegToe(() => _download(torrent.id, files[i], destDir, nieuwe[i]));
+          }
         }
         notifyListeners();
       } catch (e) {
@@ -2068,6 +2175,118 @@ class DownloadManager extends ChangeNotifier {
   /// And there was no size check at all: progress went to 1 and the status to 'done' regardless. A
   /// stream that ends early but cleanly is not an error anywhere in this function, so a CDN cutting
   /// off mid-file produced a forty-second track that the app called finished.
+  /// De hele plaat via aria2, met per nummer zijn eigen balk.
+  ///
+  /// **Waarom dit naast [_download] staat en niet erin.** De TorBox-weg is een HTTP-download per
+  /// bestand: één verbinding, één voortgang, klaar is klaar. Een torrent is één zwerm die alle
+  /// gekozen bestanden tegelijk vult, in stukken die zich niets van bestandsgrenzen aantrekken. Wie
+  /// dat in dezelfde functie propt krijgt vanzelf een balk die achteruit loopt.
+  Future<void> _downloadLokaal(
+      TbTorrent torrent, List<TbFile> files, Directory destDir, List<DownloadJob> jobs) async {
+    void alle(String status, {String? detail}) {
+      for (final j in jobs) {
+        j.status = status;
+        if (detail != null) j.detail = detail;
+      }
+      notifyListeners();
+    }
+
+    final motor = online.aria2;
+    if (!await motor.start(downloadMap: destDir.path)) {
+      alle('failed', detail: motor.laatsteFout ?? 'aria2 niet gevonden');
+      return;
+    }
+
+    final gid = await motor.voegTorrentToe(torrent.lokaleTorrent!,
+        map: destDir.path, kies: files.map((f) => f.id).toList());
+    if (gid == null) {
+      alle('failed', detail: motor.laatsteFout ?? 'torrent geweigerd');
+      return;
+    }
+
+    alle('downloading');
+    var stilStaandeSeconden = 0;
+    var laatstGedaan = 0;
+    try {
+      while (true) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+        final s = await motor.stand(gid);
+        if (s == null) continue;
+
+        for (var i = 0; i < files.length; i++) {
+          final b = s.bestand(files[i].id);
+          if (b == null) continue;
+          jobs[i].progress = b.voortgang;
+        }
+        // Zeggen wat er te zien valt: geen seeders is iets anders dan traag, en dat verschil is het
+        // enige dat je kunt gebruiken om te beslissen of je op een andere bron overstapt.
+        alle('downloading',
+            detail: s.geenBron
+                ? 'nog geen bron gevonden — zoeken in de zwerm'
+                : '${s.seeders} seeders · ${s.verbindingen} verbindingen');
+
+        if (s.klaar) break;
+        if (s.stuk) {
+          alle('failed', detail: s.fout.isEmpty ? 'aria2 stopte ermee' : s.fout);
+          return;
+        }
+        stilStaandeSeconden = s.gedaan > laatstGedaan ? 0 : stilStaandeSeconden + 2;
+        laatstGedaan = s.gedaan;
+        // Een kwartier geen enkele byte: dan is er niets om op te wachten. aria2 stopt zelf ook na
+        // deze tijd (--bt-stop-timeout), maar dan zonder iemand iets te zeggen.
+        if (stilStaandeSeconden >= 900) {
+          alle('failed', detail: 'een kwartier lang geen byte — geen bron voor deze torrent');
+          await motor.verwijder(gid);
+          return;
+        }
+      }
+
+      // Binnen. aria2 zet alles onder een map met de torrentnaam; de app verwacht de bestanden los
+      // in de doelmap, want dat is wat de bibliotheek straks inleest.
+      final s = await motor.stand(gid);
+      for (var i = 0; i < files.length; i++) {
+        final b = s?.bestand(files[i].id);
+        if (b == null) continue;
+        final bron = File(b.pad);
+        if (!await bron.exists()) {
+          jobs[i].status = 'failed';
+          jobs[i].detail = 'aria2 meldde klaar, maar het bestand staat er niet';
+          continue;
+        }
+        final doel = File('${destDir.path}${Platform.pathSeparator}${_sanitize(files[i].label)}');
+        try {
+          if (bron.path != doel.path) await bron.rename(doel.path);
+        } catch (_) {
+          // Over een schijfgrens heen kan `rename` niet; dan maar kopiëren en de bron opruimen.
+          await bron.copy(doel.path);
+          await bron.delete().catchError((_) => bron);
+        }
+        jobs[i].progress = 1;
+        jobs[i].status = 'done';
+      }
+      notifyListeners();
+      await _ruimLegeMappenOp(destDir);
+      await onLibraryChanged();
+    } finally {
+      // De torrent uit aria2 halen zodra hij klaar is: hij seedt toch niet (--seed-time=0) en een
+      // lijst die volloopt met afgeronde taken maakt elke volgende vraag trager.
+      await motor.verwijder(gid);
+    }
+  }
+
+  /// De map die aria2 achterlaat (torrentnaam, en daaronder soms nog submappen) opruimen zodra de
+  /// bestanden eruit gehaald zijn. Een lege map is geen ramp, maar de scanner loopt er wel doorheen.
+  Future<void> _ruimLegeMappenOp(Directory wortel) async {
+    try {
+      for (final e in wortel.listSync().whereType<Directory>()) {
+        final inhoud = e.listSync(recursive: true).whereType<File>();
+        if (inhoud.isEmpty) await e.delete(recursive: true);
+      }
+    } catch (_) {
+      // opruimen is nooit een reden om een geslaagde download te laten mislukken
+    }
+  }
+
   Future<void> _download(int torrentId, TbFile f, Directory destDir, DownloadJob job) async {
     http.Client? client;
     IOSink? sink;

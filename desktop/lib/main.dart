@@ -15638,6 +15638,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _field('TorBox API-sleutel', _torbox),
+                    const TorrentmotorKeuze(),
                     _field('Discogs token', _discogs),
                     Row(
                       children: [
@@ -19801,6 +19802,65 @@ class _OnlineAlbumCard extends StatelessWidget {
 /// User-Agent en met een volledige Chrome inclusief `sec-ch-ua` en `Sec-Fetch-*`, allemaal 403.
 /// Zolang er geen ingebouwde webview is, is dit de enige eerlijke weg: jouw browser lost de
 /// uitdaging op, en de app leent het koekje dat daaruit komt.
+/// Wie de torrent binnenhaalt: TorBox, deze pc, of de app die kiest.
+///
+/// **Waarom dit op het scherm staat en niet alleen in een bestand.** Het is de enige instelling die
+/// bepaalt of jouw IP-adres in de zwerm terechtkomt. Dat is geen technisch detail dat je stilletjes
+/// voor iemand invult — dat is precies het verschil waarvoor mensen een debrid-dienst nemen.
+class TorrentmotorKeuze extends StatelessWidget {
+  const TorrentmotorKeuze({super.key});
+
+  static const _keuzes = [
+    ('auto', 'Automatisch'),
+    ('torbox', 'Altijd TorBox'),
+    ('lokaal', 'Altijd deze pc'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = context.watch<AppSettings>();
+    final motor = context.read<OnlineService>().aria2;
+    final huidig = _keuzes.any((k) => k.$1 == settings.torrentMotor) ? settings.torrentMotor : 'auto';
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Torrents ophalen via',
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final (waarde, naam) in _keuzes)
+                ChoiceChip(
+                  label: Text(naam),
+                  selected: huidig == waarde,
+                  onSelected: (aan) async {
+                    if (!aan) return;
+                    settings.torrentMotor = waarde;
+                    await settings.save();
+                  },
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            motor.beschikbaar
+                ? 'Automatisch: wat TorBox al klaar heeft komt daarvandaan (meteen klaar, en jouw '
+                    'IP blijft erbuiten). De rest haalt deze pc zelf op — dat is waar TorBox de hele '
+                    'torrent nog moet ophalen en dus traag is. Daarbij zit je eigen IP wél in de zwerm.'
+                : 'Deze pc kan zelf geen torrents halen: aria2c.exe staat niet naast de app. Alles '
+                    'gaat via TorBox.',
+            style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class RuTrackerKoekjeDialoog extends StatefulWidget {
   const RuTrackerKoekjeDialoog({super.key});
 

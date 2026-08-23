@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:http/http.dart' as http;
 import 'json_body.dart';
 
@@ -105,9 +107,19 @@ class TbTorrent {
   /// meer te vinden is.
   final int seeds;
 
+  /// De bytes van het `.torrent`, als deze torrent LOKAAL wordt gehaald in plaats van via TorBox.
+  ///
+  /// Ze reizen mee omdat de downloadlijst ze nodig heeft en niemand anders ze nog heeft: de
+  /// nummerkeuze leest de bestandslijst rechtstreeks uit dit bestand (zie `TorrentInhoud`), en de
+  /// download geeft dezelfde bytes door aan aria2. Ze nog een keer bij RuTracker gaan halen zou
+  /// betekenen dat een verlopen koekje tussen "kiezen" en "downloaden" in stilte roet gooit.
+  final List<int>? lokaleTorrent;
+
+  bool get lokaal => lokaleTorrent != null;
+
   TbTorrent(this.id, this.name, this.hash, this.status, this.progress, this.files,
       this.downloadFinished, this.cached,
-      {this.size = 0, this.seeds = 0});
+      {this.size = 0, this.seeds = 0, this.lokaleTorrent});
 
   factory TbTorrent.fromJson(Map<String, dynamic> j) => TbTorrent(
         (j['id'] ?? 0) as int,
@@ -136,6 +148,42 @@ class TbTorrent {
   List<TbFile> get audio => files.where((f) => f.isAudio).toList();
 }
 
+/// Wat de sleutelcontrole bij TorBox opleverde.
+enum TbControle { ok, sleutelOngeldig, storing }
+
+/// Wat TorBox antwoordde op "voeg deze bron toe".
+///
+/// Vroeger een naamloze tuple. Het veld dat er niet in zat — de HTTP-status — is precies het veld
+/// dat het verschil vertelt tussen "deze torrent kan niet" en "TorBox ligt eruit", en dat verschil
+/// stond wél op het scherm van de gebruiker: "TorBox antwoordde niet binnen vijftien seconden",
+/// terwijl dezelfde torrent in µTorrent gewoon op 6 MB/s binnenkwam.
+class TbToevoeging {
+  final bool gelukt;
+  final int? id;
+  final String? hash;
+
+  /// De reden van TorBox zelf, of de tekst van de uitzondering als er niets terugkwam.
+  final String reden;
+
+  /// De HTTP-status. **0 betekent: er kwam helemaal geen antwoord** — time-out of netwerkfout.
+  final int status;
+
+  const TbToevoeging(this.gelukt, this.id, this.hash, this.reden, this.status);
+
+  /// Dit antwoord gaat niet over jouw torrent maar over TorBox.
+  ///
+  /// Gemeten op 23-08-2026, 19:25: `createtorrent` gaf 504 na een minuut, daarna een 302 naar
+  /// `status.torbox.app`, en `user/me` antwoordde `DATABASE_ERROR`. Hun statuspagina zei op datzelfde
+  /// moment "Some services are degraded — API". Een gebruiker die dan "Mislukt" leest gaat zijn
+  /// eigen torrent zitten wantrouwen.
+  bool get storing =>
+      status == 0 ||
+      status == 429 ||
+      status >= 500 ||
+      reden.contains('status.torbox.app') ||
+      reden.contains('DATABASE_ERROR');
+}
+
 /// Thin TorBox API client. The key is read per-call so settings changes take effect live.
 class TorBox {
   final String Function() apiKey;
@@ -146,17 +194,52 @@ class TorBox {
   Map<String, String> get _auth => hasKey ? {'Authorization': 'Bearer ${apiKey()}'} : {};
 
   /// Confirm the API key is valid (used by the connection-status check).
-  Future<bool> verify() async {
-    if (!hasKey) return false;
+  Future<bool> verify() async => await controleer() == TbControle.ok;
+
+  /// Leeft TorBox nog? Eén korte vraag, alleen om te weten wie de schuldige is.
+  Future<bool> leeft() async => await controleer() != TbControle.storing;
+
+  /// Wat er met TorBox aan de hand is: jouw sleutel, of hun kant.
+  ///
+  /// **Waarom dit onderscheid moet bestaan.** Hetzelfde als bij Discogs hierboven in
+  /// `connectivity.dart`: een controle die bij een storing "Ongeldige sleutel" zegt stuurt je een
+  /// sleutel vervangen die niets mankeerde. Gemeten op 23-08-2026 tijdens hun API-storing:
+  ///
+  ///     echte sleutel   -> 403 AUTH_ERROR "error occurred while verifying your token, try again"
+  ///     echte sleutel   -> geen antwoord (time-out) toen het erger werd
+  ///     geen sleutel    -> 401 {"detail":"Not authenticated"}
+  ///
+  /// De 401 is het enige antwoord dat écht over de sleutel gaat; hun AUTH_ERROR en DATABASE_ERROR
+  /// zeggen zelf al "probeer het opnieuw".
+  Future<TbControle> controleer() async {
+    if (!hasKey) return TbControle.sleutelOngeldig;
     try {
       final r = await http
           .get(Uri.parse('$_base/user/me?settings=false'), headers: _auth)
           .timeout(const Duration(seconds: 12));
-      if (r.statusCode != 200) return false;
-      final j = jsonBody(r);
-      return j is Map && (j['success'] == true || j['data'] != null);
+      return beoordeel(r.statusCode, utf8.decode(r.bodyBytes, allowMalformed: true),
+          locatie: r.headers['location'] ?? '');
     } catch (_) {
-      return false;
+      return TbControle.storing;
+    }
+  }
+
+  /// Het oordeel over één antwoord van `user/me`. Apart en openbaar omdat dit de regel is die fout
+  /// kan gaan zonder dat iemand het merkt — tot je een goede sleutel staat te vervangen.
+  static TbControle beoordeel(int status, String body, {String locatie = ''}) {
+    if (status >= 500 || status == 429 || status == 0) return TbControle.storing;
+    if (locatie.contains('status.torbox.app')) return TbControle.storing;
+    if (body.contains('AUTH_ERROR') || body.contains('DATABASE_ERROR')) return TbControle.storing;
+    if (status == 401 || status == 403 || body.contains('BAD_TOKEN')) {
+      return TbControle.sleutelOngeldig;
+    }
+    if (status != 200) return TbControle.storing;
+    try {
+      final j = jsonDecode(body);
+      final goed = j is Map && (j['success'] == true || j['data'] != null);
+      return goed ? TbControle.ok : TbControle.storing;
+    } catch (_) {
+      return TbControle.storing;
     }
   }
 
@@ -175,19 +258,41 @@ class TorBox {
     }
   }
 
-  /// Returns (success, torrentId?, hash?, detail).
-  Future<(bool, int?, String?, String)> addMagnet(String magnet) async {
+  /// Wachtklok voor het aanmelden. Ruim, want een gezonde TorBox antwoordt in een seconde of twee
+  /// en een drukke mag even doen — maar niet oneindig, want een dialoog staat erop te wachten.
+  ///
+  /// Stond op 15 s. Dat was te kort om trage drukte van een storing te onderscheiden, en de tekst
+  /// "niet binnen vijftien seconden" suggereerde bovendien dat er iets mis was met de torrent.
+  static const _wachtToevoegen = Duration(seconds: 40);
+
+  Future<TbToevoeging> addMagnet(String magnet) async {
     try {
       final r = await http
           .post(Uri.parse('$_base/torrents/createtorrent'), headers: _auth, body: {'magnet': magnet})
-          .timeout(const Duration(seconds: 15));
+          .timeout(_wachtToevoegen);
+      return leesToevoeging(r);
+    } catch (e) {
+      return TbToevoeging(false, null, null, e.toString(), 0);
+    }
+  }
+
+  /// Het antwoord uitpakken, ook als het geen JSON is.
+  ///
+  /// Bij een storing komt er HTML terug ("error code: 504") of een omleiding naar de statuspagina.
+  /// `jsonDecode` gooit daar een `FormatException` over, en die tekst — "Unexpected character" —
+  /// zegt de gebruiker niets. De status zegt alles.
+  static TbToevoeging leesToevoeging(http.Response r) {
+    try {
       final j = jsonBody(r) as Map<String, dynamic>;
       final data = j['data'] as Map<String, dynamic>?;
       final detail = (j['detail'] ?? j['error'] ?? '').toString();
       final id = (data?['torrent_id'] as int?);
-      return ((j['success'] ?? false) as bool, (id != null && id > 0) ? id : null, data?['hash'] as String?, detail);
-    } catch (e) {
-      return (false, null, null, e.toString());
+      return TbToevoeging((j['success'] ?? false) as bool, (id != null && id > 0) ? id : null,
+          data?['hash'] as String?, detail, r.statusCode);
+    } catch (_) {
+      final naarStatuspagina = (r.headers['location'] ?? '').contains('status.torbox.app');
+      return TbToevoeging(false, null, null,
+          naarStatuspagina ? 'omleiding naar status.torbox.app' : 'HTTP ${r.statusCode}', r.statusCode);
     }
   }
 
@@ -200,26 +305,16 @@ class TorBox {
   /// poging met dezelfde hash, dan antwoordt hij "Found Cached Torrent" en krijg je die oude terug,
   /// bestand of niet. Vandaar dat de app het bestand meteen als eerste aanbiedt en niet pas nadat
   /// een magneet is blijven hangen.
-  Future<(bool, int?, String?, String)> addTorrentFile(List<int> bytes, String naam) async {
+  Future<TbToevoeging> addTorrentFile(List<int> bytes, String naam) async {
     try {
       final req = http.MultipartRequest('POST', Uri.parse('$_base/torrents/createtorrent'))
         ..headers.addAll(_auth)
         ..files.add(http.MultipartFile.fromBytes('file', bytes,
             filename: naam.isEmpty ? 'bron.torrent' : naam));
-      final streamed = await req.send().timeout(const Duration(seconds: 45));
-      final r = await http.Response.fromStream(streamed);
-      final j = jsonBody(r) as Map<String, dynamic>;
-      final data = j['data'] as Map<String, dynamic>?;
-      final detail = (j['detail'] ?? j['error'] ?? '').toString();
-      final id = (data?['torrent_id'] as int?);
-      return (
-        (j['success'] ?? false) as bool,
-        (id != null && id > 0) ? id : null,
-        data?['hash'] as String?,
-        detail
-      );
+      final streamed = await req.send().timeout(_wachtToevoegen);
+      return leesToevoeging(await http.Response.fromStream(streamed));
     } catch (e) {
-      return (false, null, null, e.toString());
+      return TbToevoeging(false, null, null, e.toString(), 0);
     }
   }
 

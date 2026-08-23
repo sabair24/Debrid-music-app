@@ -105,8 +105,21 @@ void main() {
 
   tearDown(() async {
     await server.dispose();
-    pcRoot.deleteSync(recursive: true);
-    scratch.deleteSync(recursive: true);
+    // Windows houdt na de laatste sluiting nog even een greep op deze mappen, dus een rechte
+    // `deleteSync` faalde met "het proces heeft geen toegang" — en dan is een toets rood die zijn
+    // punt allang gemaakt had. Even opnieuw proberen, en anders laten liggen: een achtergebleven
+    // tijdelijke map is geen reden om een geslaagde meting te laten mislukken. Zelfde aanpak als in
+    // `offline_test.dart`.
+    for (final map in [pcRoot, scratch]) {
+      for (var poging = 0; poging < 10; poging++) {
+        try {
+          map.deleteSync(recursive: true);
+          break;
+        } on FileSystemException {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+      }
+    }
   });
 
   test('six digits off the PC screen, and the library is there', () async {

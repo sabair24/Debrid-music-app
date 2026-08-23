@@ -26,10 +26,15 @@ class ConnectionChecker {
 
   Future<ConnResult> torboxCheck() async {
     if (settings.torboxToken.trim().isEmpty) return const ConnResult(ConnState.absent, 'Geen sleutel ingevuld');
+    // Dezelfde les als bij Discogs hieronder, nu voor TorBox: tijdens hún storing van 23-08-2026
+    // stond hier "Ongeldige sleutel" bij een sleutel die niets mankeerde.
     try {
-      return await torbox.verify()
-          ? const ConnResult(ConnState.ok, 'Geldige API-sleutel')
-          : const ConnResult(ConnState.fail, 'Ongeldige sleutel');
+      return switch (await torbox.controleer()) {
+        TbControle.ok => const ConnResult(ConnState.ok, 'Geldige API-sleutel'),
+        TbControle.sleutelOngeldig => const ConnResult(ConnState.fail, 'Ongeldige sleutel'),
+        TbControle.storing =>
+          const ConnResult(ConnState.fail, 'TorBox antwoordt niet — zie status.torbox.app'),
+      };
     } catch (_) {
       return const ConnResult(ConnState.fail, 'Geen verbinding');
     }

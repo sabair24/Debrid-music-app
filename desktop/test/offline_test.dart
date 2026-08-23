@@ -147,6 +147,25 @@ void main() {
     }
   });
 
+  /// Wachten tot iets waar is, niet tot de klok op is.
+  ///
+  /// **Waarom dit er staat.** Twee toetsen over de rij telden 300 rondjes van 10 ms en noemden dat
+  /// drie seconden. Op deze machine kost één zo'n rondje eerder 15 ms en duurt één nagebootste
+  /// download 1,25 s, dus liep de meting af terwijl het derde nummer nog binnenkwam: "verwacht 3,
+  /// kreeg 2" — een rode toets over code die deed wat ze moest doen. Gemeten met een wegwerpmeting:
+  /// t=1500ms tracks=1, t=2500ms tracks=2, t=3800ms tracks=3.
+  ///
+  /// Een ruime bovengrens is geen slordigheid: hij gaat alleen af als het écht hangt, en dan zegt
+  /// [wat] wat er niet gebeurde in plaats van een naakte getalvergelijking.
+  Future<void> wachtTot(bool Function() klaar, String wat,
+      {Duration limiet = const Duration(seconds: 20)}) async {
+    final tot = DateTime.now().add(limiet);
+    while (!klaar()) {
+      if (DateTime.now().isAfter(tot)) fail('binnen ${limiet.inSeconds}s niet gebeurd: $wat');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
+
   const path = r'D:\Flac music 2024\Adele\30\01 Strangers By Nature.flac';
 
   Future<bool> download() => store.download(
@@ -277,30 +296,25 @@ void main() {
     test('een nummer dat nog wacht is zichtbaar als wachtend, niet als bezig', () async {
       server.chunkDelay = const Duration(milliseconds: 2);
       store.bewaarAlles(plaat(3));
-      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await wachtTot(() => store.jobs.any((j) => j.bezig), 'de eerste is begonnen');
 
-      final wachtend = store.jobs.where((j) => j.wacht).length;
       expect(store.jobs.length, 3);
-      expect(wachtend, 2, reason: 'er loopt er één; de andere twee staan in de rij');
+      expect(store.jobs.where((j) => j.wacht).length, 2,
+          reason: 'er loopt er één; de andere twee staan in de rij');
       expect(store.wachtend, 2);
 
-      for (var i = 0; i < 300 && store.tracks.length < 3; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 10));
-      }
-      expect(store.tracks.length, 3);
+      await wachtTot(() => store.tracks.length == 3, 'alle drie binnen');
     });
 
     test('uit de rij halen betekent dat hij ook niet alsnog begint', () async {
       server.chunkDelay = const Duration(milliseconds: 2);
       final wensen = plaat(3);
       store.bewaarAlles(wensen);
-      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await wachtTot(() => store.jobs.any((j) => j.bezig), 'de eerste is begonnen');
 
       store.cancel(wensen.last.libraryPath);
 
-      for (var i = 0; i < 300 && store.jobs.isNotEmpty; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 10));
-      }
+      await wachtTot(() => store.jobs.isEmpty, 'de rij is leeggelopen');
       expect(store.tracks.length, 2);
       expect(store.has(wensen.last.libraryPath), isFalse);
     });

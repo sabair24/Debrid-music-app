@@ -145,7 +145,7 @@ void main() {
         vensters: 32,
       );
       expect(waarom(beide), startsWith('zegt meer dan 16 bits'));
-      expect(waaromAfkap(beide), startsWith('harde afkap op 17.2 kHz'));
+      expect(waaromAfkap(beide), startsWith('afgekapt op 17.2 kHz'));
       // en de tweede bevinding gaat niet verloren
       expect(waaromAfkap(beide), contains('16 bits'));
     });
@@ -159,7 +159,7 @@ void main() {
         wandDb: 45,
         vensters: 32,
       );
-      expect(waaromAfkap(o), startsWith('harde afkap op 19.1 kHz'));
+      expect(waaromAfkap(o), startsWith('afgekapt op 19.1 kHz'));
       expect(waaromAfkap(o), contains('opgeschaald'));
     });
 

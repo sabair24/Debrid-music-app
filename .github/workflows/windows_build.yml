@@ -114,6 +114,37 @@ jobs:
           if (-not (Test-Path $dest)) { echo "MISSING: $dest"; exit 1 }
           echo "OK: fpcalc $ver ($([math]::Round((Get-Item $dest).Length/1MB,1)) MB)"
 
+      # aria2: torrents binnenhalen zonder tussenpersoon.
+      #
+      # Waarom dit meegaat. De app haalde alles via TorBox, en op 23-08-2026 lag hun API er een uur
+      # uit: 504's en een omleiding naar hun eigen statuspagina, terwijl dezelfde plaat in µTorrent
+      # op 6 MB/s binnenkwam. Met aria2 ernaast kan deze pc het zelf, en dat is bovendien sneller
+      # voor alles wat TorBox nog niet in de cache heeft staan — die moet de torrent dan namelijk
+      # eerst helemaal zelf ophalen.
+      #
+      # Alleen op de machine met de muziek, net als fpcalc: een telefoon vraagt het de pc.
+      #
+      # Vastgezet op een versie ÉN op zijn vingerafdruk. Dit is een programma dat namens de gebruiker
+      # verbindingen opzet; een zip die onderweg iets anders wordt hoort de build te laten vallen, niet
+      # stilletjes mee te reizen naar iedereens pc.
+      - name: Bundle aria2 (lokale torrentmotor)
+        shell: pwsh
+        run: |
+          $ver = "1.37.0"
+          $sha = "67d015301eef0b612191212d564c5bb0a14b5b9c4796b76454276a4d28d9b288"
+          $url = "https://github.com/aria2/aria2/releases/download/release-$ver/aria2-$ver-win-64bit-build1.zip"
+          . "$env:GITHUB_WORKSPACE/.github/haal.ps1"
+          Haal $url "aria2.zip"
+          $echt = (Get-FileHash "aria2.zip" -Algorithm SHA256).Hash.ToLower()
+          if ($echt -ne $sha) { echo "aria2.zip heeft een ANDERE vingerafdruk: $echt (verwacht $sha)"; exit 1 }
+          Expand-Archive "aria2.zip" -DestinationPath "aria2_tmp" -Force
+          $exe = (Get-ChildItem "aria2_tmp" -Recurse -Filter "aria2c.exe" | Select-Object -First 1).FullName
+          if (-not $exe) { echo "aria2c.exe niet gevonden in de zip"; exit 1 }
+          Copy-Item $exe "build\windows\x64\runner\Release\aria2c.exe" -Force
+          $dest = "build\windows\x64\runner\Release\aria2c.exe"
+          if (-not (Test-Path $dest)) { echo "MISSING: $dest"; exit 1 }
+          echo "OK: aria2 $ver ($([math]::Round((Get-Item $dest).Length/1MB,1)) MB)"
+
       - name: Download VC++ Redistributable
         shell: pwsh
         run: |
