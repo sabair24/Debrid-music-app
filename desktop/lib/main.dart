@@ -11338,6 +11338,23 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
 
   Future<void> _manualTidal() async {
     final tidal = context.read<TidalService>();
+
+    // Eerst het klembord zelf lezen, en pas als daar niets bruikbaars in staat een tekstvak tonen.
+    //
+    // **Waarom.** Je hebt dat adres net gekopieerd — het staat al op je klembord. Er is dus geen
+    // reden om jou te laten plakken in een veld dat vierhonderd tekens moet slikken. Dat scheelt
+    // een handeling, en het omzeilt de plek waar het inloggen vastliep: precies op het moment van
+    // plakken, nog vóór er ook maar één regel van dit inlogwerk draaide. Wat daar misgaat weet ik
+    // nog niet; deze weg komt er niet langs.
+    try {
+      final klembord = await Clipboard.getData(Clipboard.kTextPlain);
+      final tekst = klembord?.text ?? '';
+      if (tekst.isNotEmpty && TidalService.extractCode(tekst) != null) {
+        await _verbindMetGeplakt(tidal, tekst);
+        return;
+      }
+    } catch (_) {/* geen klembord? dan gewoon het venster hieronder */}
+
     final ctrl = TextEditingController();
     final pasted = await showDialog<String>(
       context: context,
@@ -11384,9 +11401,14 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     // en dan verdwijnt de halve pagina — erger dan één controller die blijft hangen in een venster
     // dat je één keer in je leven opent.
     if (pasted == null || pasted.isEmpty) return;
+    await _verbindMetGeplakt(tidal, pasted);
+  }
+
+  /// De code inwisselen, of het nu uit het klembord kwam of uit het tekstvak.
+  Future<void> _verbindMetGeplakt(TidalService tidal, String tekst) async {
     setState(() => _tidalConnecting = true);
     try {
-      await tidal.completeManual(pasted);
+      await tidal.completeManual(tekst);
       if (mounted) _srcToast(context, 'TIDAL verbonden ✓');
     } catch (e) {
       // In een venster en niet als toast: het antwoord van TIDAL is meerdere regels en zegt wélk
@@ -11859,15 +11881,16 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             const SizedBox(height: 14),
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 24),
-              child: Text('Na het inloggen kom je uit op tidal.com. Kopieer dan het hele adres uit '
-                  'de adresbalk van je browser — daar staat ?code= in — en plak het hieronder.',
+              child: Text('Na het inloggen kom je uit op tidal.com. Kopieer daar het hele adres uit '
+                  'de adresbalk van je browser — er staat ?code= in — en klik dan hieronder. De app '
+                  'haalt het van je klembord; je hoeft nergens te plakken.',
                   textAlign: TextAlign.center, style: kTekstKlein),
             ),
             const SizedBox(height: 8),
             OutlinedButton.icon(
               onPressed: _tidalConnecting ? null : _manualTidal,
               icon: const Icon(Icons.content_paste_rounded, size: 16),
-              label: const Text('Stap 2 · Adres plakken'),
+              label: const Text('Stap 2 · Adres van klembord halen'),
             ),
           ],
         ),
