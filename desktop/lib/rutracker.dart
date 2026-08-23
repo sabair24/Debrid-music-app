@@ -200,6 +200,9 @@ class RuTrackerService {
 
   Future<List<SearchResult>> search(String query, {bool allowRelogin = true}) async {
     if (!configured || settings.rutrackerCookie.isEmpty) return [];
+    // De zoekverdeler in search.dart hakt elke bron na 12 seconden af, en slikt de fout. Blijf daar
+    // met opzet onder: liever een korte lijst die aankomt dan een volledige die weggegooid wordt.
+    final deadline = DateTime.now().add(const Duration(milliseconds: 10500));
     try {
       final req = http.Request(
           'GET', Uri.parse('$_base/tracker.php?nm=${Uri.encodeComponent(query)}'))
@@ -208,7 +211,7 @@ class RuTrackerService {
         ..headers['User-Agent'] = _ua;
       final client = http.Client();
       final resp =
-          await http.Response.fromStream(await client.send(req)).timeout(const Duration(seconds: 15));
+          await http.Response.fromStream(await client.send(req)).timeout(const Duration(seconds: 7));
       client.close();
       if (resp.statusCode == 302) {
         // The session expired. RuTracker's cookie does not last forever, and nothing renewed it:
@@ -237,8 +240,21 @@ class RuTrackerService {
       final html = latin1.decode(resp.bodyBytes, allowInvalid: true);
       final rows = _parseRows(html);
       // Fill missing infohashes from the topic page (top results only, concurrently).
+      //
+      // **Met een eigen klok, en dat is het verschil tussen resultaten en niets.** De zoekverdeler
+      // hakt elke bron na 12 seconden af en slikt de fout in stilte. RuTracker had hier een
+      // slechtste geval van 15 seconden voor de lijst plus 12 voor deze twaalf pagina's — samen 27,
+      // ruim over die grens. Dan viel de hele bron weg en zag je "geen resultaten van RuTracker"
+      // terwijl er gewoon een lijst lag.
+      //
+      // Wat er binnen de tijd is, is binnen. De rest valt af zoals hij altijd al afviel: zonder
+      // infohash valt er niets op te halen.
       final need = rows.where((r) => r.hash == null).take(12).toList();
-      await Future.wait(need.map((r) async => r.hash = await _hashFromTopic(r.topicId)));
+      final resterend = deadline.difference(DateTime.now());
+      if (need.isNotEmpty && !resterend.isNegative) {
+        await Future.wait(need.map((r) async => r.hash = await _hashFromTopic(r.topicId)))
+            .timeout(resterend, onTimeout: () => const []);
+      }
       return rows
           .where((r) => r.hash != null)
           .map((r) => SearchResult(
