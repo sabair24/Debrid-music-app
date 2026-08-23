@@ -111,6 +111,47 @@ void main() {
     });
   });
 
+  group('ffmpeg meegeven aan tiddl', () {
+    // Zonder ffmpeg levert tiddl 16 bit / 44,1 kHz af terwijl je om `max` vroeg, met één
+    // waarschuwingsregel tussen zijn voortgangsbalken door. Geen fout, geen afloopcode, gewoon een
+    // mindere plaat dan je denkt te hebben — precies de soort die er goed uitziet. Deze app weet
+    // waar ffmpeg staat, dus die map gaat mee.
+    test('de map van ffmpeg komt vooraan te staan', () {
+      expect(padMetFfmpeg(r'C:\ffmpeg\bin\ffmpeg.exe', r'C:\Windows;C:\Windows\System32',
+              windows: true),
+          r'C:\ffmpeg\bin;C:\Windows;C:\Windows\System32');
+      expect(padMetFfmpeg('/opt/homebrew/bin/ffmpeg', '/usr/bin:/bin', windows: false),
+          '/opt/homebrew/bin:/usr/bin:/bin');
+    });
+
+    test('twee keer aanroepen laat het PATH niet groeien', () {
+      // Anders staat er na tien downloads tien keer dezelfde map in, en dat is het soort lek dat
+      // pas opvalt als er een grens overschreden wordt.
+      const eerst = r'C:\ffmpeg\bin;C:\Windows';
+      expect(padMetFfmpeg(r'C:\ffmpeg\bin\ffmpeg.exe', eerst, windows: true), eerst);
+      // Windows trekt zich niets aan van hoofdletters, dus deze toets ook niet.
+      expect(padMetFfmpeg(r'C:\FFmpeg\Bin\ffmpeg.exe', eerst, windows: true), eerst);
+    });
+
+    test('is ffmpeg via PATH gevonden, dan verandert er niets', () {
+      // Een kale naam betekent: hij stond al op het PATH. Er valt dan niets toe te voegen, en
+      // "ffmpeg.exe" als map ervoor zetten zou het PATH juist stukmaken.
+      expect(padMetFfmpeg('ffmpeg.exe', r'C:\Windows', windows: true), r'C:\Windows');
+      expect(padMetFfmpeg('ffmpeg', '/usr/bin', windows: false), '/usr/bin');
+    });
+
+    test('geen ffmpeg, geen wijziging', () {
+      expect(padMetFfmpeg(null, r'C:\Windows', windows: true), r'C:\Windows');
+      expect(padMetFfmpeg('', r'C:\Windows', windows: true), r'C:\Windows');
+    });
+
+    test('een leeg PATH levert alleen de map van ffmpeg op', () {
+      // Geen lege eerste ingang met een scheidingsteken ervoor: dat leest voor Windows als "de
+      // huidige map", en dat is precies waar je geen programma's uit wil starten.
+      expect(padMetFfmpeg(r'C:\ffmpeg\bin\ffmpeg.exe', '', windows: true), r'C:\ffmpeg\bin');
+    });
+  });
+
   group('wat er van een mislukking op het scherm komt', () {
     test('de kleurcodes van Rich gaan eraf', () {
       const rauw = '\x1B[31mTrack not available in your country\x1B[0m';

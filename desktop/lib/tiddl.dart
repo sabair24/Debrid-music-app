@@ -25,6 +25,8 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'ffmpeg.dart';
+
 /// Waar tiddl kan staan, in volgorde van waarschijnlijkheid.
 ///
 /// Anders dan bij ffmpeg en fpcalc levert de bouwstraat dit NIET mee — het is een Python-programma
@@ -186,6 +188,32 @@ String leesbareFout(String uitvoer, {int regels = 4}) {
   return over.sublist(over.length > regels ? over.length - regels : 0).join('\n');
 }
 
+/// Het PATH waarmee tiddl gestart wordt, met de map van ffmpeg erbij.
+///
+/// **Waarom dit nodig is, en het kostte een plaat in de verkeerde kwaliteit om het te zien.** tiddl
+/// heeft ffmpeg nodig om de hi-res-stroom van Tidal in elkaar te zetten. Staat ffmpeg niet op het
+/// PATH, dan waarschuwt hij één regel — tussen zijn eigen voortgangsbalken door — en levert
+/// vervolgens 16 bit / 44,1 kHz af terwijl je om `max` vroeg. Geen fout, geen afloopcode, gewoon
+/// een mindere plaat dan je denkt te hebben. Dat is de vervelendste soort: hij ziet er goed uit.
+///
+/// Deze app wéét waar ffmpeg staat — hij zoekt hem al voor het herbemonsteren en de echtheidsproef,
+/// en kijkt óók naast zijn eigen exe. Die map er hier bij zetten kost niets en haalt de val weg.
+/// Vindt de app hem zelf niet, dan verandert er niets en blijft het aan jou om hem te installeren.
+String padMetFfmpeg(String? ffmpegPad, String huidigPad, {required bool windows}) {
+  if (ffmpegPad == null || ffmpegPad.isEmpty) return huidigPad;
+  final scheiding = windows ? '\\' : '/';
+  final knip = ffmpegPad.lastIndexOf(scheiding);
+  // Een kale naam ('ffmpeg.exe') betekent: gevonden via PATH. Dan staat hij er al.
+  if (knip <= 0) return huidigPad;
+  final map = ffmpegPad.substring(0, knip);
+  final tussen = windows ? ';' : ':';
+  if (huidigPad.isEmpty) return map;
+  // Niet twee keer, anders groeit dit bij elke aanroep.
+  final delen = huidigPad.split(tussen);
+  if (delen.any((d) => d.toLowerCase() == map.toLowerCase())) return huidigPad;
+  return '$map$tussen$huidigPad';
+}
+
 /// Zoals UTF-8, maar hij struikelt niet over een byte die er niet in hoort.
 ///
 /// **Waarom dit nodig is.** Op Windows schrijft Python zijn uitvoer standaard in de codetabel van
@@ -223,8 +251,13 @@ Future<String?> haalVanTidal({
       stderrEncoding: _soepelUtf8,
       // Python vragen om UTF-8 te schrijven in plaats van de codetabel van de Windows-console.
       // Zonder dit komen accenten in artiestennamen er als rommel uit — en tot vandaag brak het
-      // zelfs de hele aanroep af.
-      environment: const {'PYTHONIOENCODING': 'utf-8', 'PYTHONUTF8': '1'},
+      // zelfs de hele aanroep af. Plus de map van ffmpeg, zie [padMetFfmpeg].
+      environment: {
+        'PYTHONIOENCODING': 'utf-8',
+        'PYTHONUTF8': '1',
+        'PATH': padMetFfmpeg(Ffmpeg().pad, Platform.environment['PATH'] ?? '',
+            windows: Platform.isWindows),
+      },
     );
     if (r.exitCode == 0) return null;
     return leesbareFout('${r.stdout}\n${r.stderr}');

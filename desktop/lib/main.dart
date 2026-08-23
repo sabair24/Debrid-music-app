@@ -36,6 +36,7 @@ import 'editions.dart';
 import 'connectivity.dart';
 import 'enrichment.dart';
 import 'facts_warmer.dart';
+import 'ffmpeg.dart';
 import 'fingerprint.dart';
 import 'flac_tags.dart';
 import 'mp3_tags.dart';
@@ -9772,6 +9773,18 @@ class _TidalOphalenState extends State<_TidalOphalen> {
                     ),
                   ],
                 ),
+                // Zonder ffmpeg kan tiddl de hi-res-stroom niet in elkaar zetten en levert hij
+                // 16 bit / 44,1 kHz af terwijl je om max vroeg — met één waarschuwingsregel tussen
+                // zijn voortgangsbalken door, die niemand ziet. Een mindere plaat die er goed
+                // uitziet is de vervelendste soort, dus staat het hier vóórdat je op Ophalen klikt.
+                if (!Ffmpeg().available) ...[
+                  const SizedBox(height: kRuimte12),
+                  const Text(
+                    'ffmpeg staat niet op deze pc. Zonder ffmpeg komt er 16 bit / 44,1 kHz binnen, '
+                    'ook op "max". Installeer hem met "winget install ffmpeg" en herstart de app.',
+                    style: TextStyle(color: Color(0xFFE0B341), fontSize: 12, height: 1.35),
+                  ),
+                ],
                 if (_fout != null) ...[
                   const SizedBox(height: kRuimte12),
                   // In het venster en niet als toast: een fout van tiddl is meerdere regels, en die
