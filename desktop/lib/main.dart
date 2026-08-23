@@ -84,6 +84,7 @@ import 'settings.dart';
 import 'speakers.dart';
 import 'soulseek.dart';
 import 'tidal.dart';
+import 'tiddl.dart';
 import 'torbox.dart';
 import 'tv.dart';
 import 'updater.dart';
@@ -9589,6 +9590,168 @@ Future<void> _downloadSoulseek(BuildContext context, SoulseekFile f, List<Soulse
 /// Everything the app is downloading, in one place — the equivalent of the native Soulseek
 /// transfer list. Split into what's still running and what's finished, because a track that is
 /// merely WAITING for an uploader's slot is not a failure and shouldn't look like one.
+/// "Plak een Tidal-link" — de hele koppeling met tiddl, in één venster.
+///
+/// **Waarom een venster en geen zoekscherm.** tiddl kán niet zoeken; hij neemt alleen een link of
+/// een id. Een zoekscherm zou betekenen dat deze app de Tidal-API zélf gaat spreken, en dat is
+/// precies het stuk dat stukgaat zodra Tidal iets verandert. Je zoekt dus in de Tidal-app, kopieert
+/// de link, en plakt hem hier.
+///
+/// **Waarom hier en niet bij de andere twee bronnen.** Soulseek en TorBox hebben een wachtrij, een
+/// voortgang en een eigen scherm. Dit is één opdracht die een bestand in je muziekmap zet, waarna de
+/// bestaande scan het oppakt. Er is niets te beheren, dus er komt geen beheer bij.
+class _TidalOphalen extends StatefulWidget {
+  const _TidalOphalen();
+
+  @override
+  State<_TidalOphalen> createState() => _TidalOphalenState();
+}
+
+class _TidalOphalenState extends State<_TidalOphalen> {
+  final _link = TextEditingController();
+  String _kwaliteit = tidalKwaliteiten.first;
+  bool _bezig = false;
+  String? _fout;
+
+  @override
+  void dispose() {
+    _link.dispose();
+    super.dispose();
+  }
+
+  Future<void> _ophalen() async {
+    // Eerst hier weigeren wat niet klopt. Een zin op het scherm is beter dan een stapeltrace uit
+    // een proces dat je startte om een fout te ontdekken die je al kon zien.
+    final doel = tidalDoel(_link.text);
+    if (doel == null) {
+      setState(() => _fout = 'Dat is geen Tidal-link. Plak het adres van een plaat of een nummer, '
+          'bijvoorbeeld https://tidal.com/browse/album/103805723');
+      return;
+    }
+    final map = context.read<AppSettings>().musicRoot;
+    setState(() {
+      _bezig = true;
+      _fout = null;
+    });
+    final fout = await haalVanTidal(doel: doel, map: map, kwaliteit: _kwaliteit);
+    if (!mounted) return;
+    if (fout != null) {
+      setState(() {
+        _bezig = false;
+        _fout = fout;
+      });
+      return;
+    }
+    Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) => Dialog(
+        backgroundColor: _panel,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: SizedBox(
+          width: dialogWidth(context, 520),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Ophalen van Tidal', style: kKop),
+                const SizedBox(height: kRuimte6),
+                const Text(
+                  'Zoek de plaat in Tidal, kopieer de link en plak hem hier. '
+                  'Hij komt in je muziekmap te staan en wordt daarna vanzelf gevonden.',
+                  style: kTekstBij,
+                ),
+                const SizedBox(height: kRuimte16),
+                TextField(
+                  controller: _link,
+                  autofocus: true,
+                  enabled: !_bezig,
+                  onSubmitted: (_) => _bezig ? null : _ophalen(),
+                  decoration: InputDecoration(
+                    hintText: 'https://tidal.com/browse/album/…',
+                    filled: true,
+                    fillColor: _panel2,
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(kHoek8), borderSide: BorderSide.none),
+                  ),
+                ),
+                const SizedBox(height: kRuimte12),
+                Row(
+                  children: [
+                    const Text('Kwaliteit', style: kTekstKlein),
+                    const SizedBox(width: kRuimte8),
+                    Container(
+                      decoration: BoxDecoration(
+                          color: _panel2, borderRadius: BorderRadius.circular(kHoek8)),
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: _kwaliteit,
+                          dropdownColor: _panel2,
+                          items: [
+                            for (final k in tidalKwaliteiten)
+                              DropdownMenuItem(value: k, child: Text(k)),
+                          ],
+                          onChanged:
+                              _bezig ? null : (v) => setState(() => _kwaliteit = v ?? 'max'),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: kRuimte8),
+                    // Waarom dit erbij staat: `low` en `normal` zijn m4a van 96 en 320 kbps, en dus
+                    // slechter dan wat deze bibliotheek al heeft. Wie ze kiest hoort te weten dat
+                    // hij zichzelf een slechtere kopie bezorgt.
+                    const Expanded(
+                      child: Text('max = 24 bit tot 192 kHz · low en normal zijn m4a',
+                          style: kTekstKlein),
+                    ),
+                  ],
+                ),
+                if (_fout != null) ...[
+                  const SizedBox(height: kRuimte12),
+                  // In het venster en niet als toast: een fout van tiddl is meerdere regels, en die
+                  // wil je kunnen lezen én overtypen.
+                  SelectableText(_fout!,
+                      style: kTekstBij.copyWith(color: Colors.orangeAccent, height: 1.4)),
+                ],
+                const SizedBox(height: kRuimte16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (_bezig) ...[
+                      const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: _accent)),
+                      const SizedBox(width: kRuimte8),
+                      // Een plaat van 24 bit is honderden megabytes; zonder deze regel lijkt het
+                      // venster na een halve minuut vast te staan.
+                      const Expanded(
+                          child: Text('Bezig met ophalen — dit kan even duren.',
+                              style: kTekstKlein)),
+                    ],
+                    TextButton(
+                      onPressed: _bezig ? null : () => Navigator.of(context).pop(false),
+                      child: const Text('Annuleren'),
+                    ),
+                    const SizedBox(width: kRuimte8),
+                    FilledButton(
+                      style: FilledButton.styleFrom(backgroundColor: _accent),
+                      onPressed: _bezig ? null : _ophalen,
+                      child: const Text('Ophalen'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+}
+
 class DownloadsView extends StatelessWidget {
   const DownloadsView({super.key});
 
@@ -9665,6 +9828,23 @@ class DownloadsView extends StatelessWidget {
                     onPressed: dm.clearFinished,
                     icon: const Icon(Icons.clear_all_rounded, size: 16),
                     label: const Text('Wis afgeronde'),
+                    style: TextButton.styleFrom(foregroundColor: _muted),
+                  ),
+                // De derde bron. Alleen op de machine die de muziek bezit: tiddl is een programma
+                // op die pc, en een telefoon heeft geen muziekmap om iets in te zetten. Hij staat
+                // hier en niet tussen de bronnen op Zoeken, omdat er niets te zoeken valt — je
+                // plakt een link.
+                if (_isDesktop && !context.read<LibraryStore>().isRemote)
+                  TextButton.icon(
+                    onPressed: () async {
+                      final gedaan = await showDialog<bool>(
+                          context: context, builder: (_) => const _TidalOphalen());
+                      if (gedaan != true || !context.mounted) return;
+                      _srcToast(context, 'Opgehaald — de bibliotheek wordt opnieuw doorzocht');
+                      unawaited(context.read<LibraryStore>().scan());
+                    },
+                    icon: const Icon(Icons.link_rounded, size: 16),
+                    label: const Text('Ophalen van Tidal…'),
                     style: TextButton.styleFrom(foregroundColor: _muted),
                   ),
               ],
