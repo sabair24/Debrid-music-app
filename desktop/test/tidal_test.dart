@@ -11,16 +11,25 @@ void main() {
     final t = TidalService(s);
     expect(t.configured, false);
     expect(t.connected, false);
-    expect(TidalService.redirectUri, 'debridmusic://tidal/callback');
+    // Moet letterlijk overeenkomen met wat er in het TIDAL-dashboard bij Redirect URIs staat, en
+    // het moet https zijn: naar een eigen adresschema (debridmusic://) stuurt de inlogdienst niet
+    // door. Hij logt je dan in, toont "Login successful" en dat is het — geen foutmelding, geen
+    // code, en aan onze kant een knop die eeuwig draait. Vandaar dat dit vastligt.
+    expect(TidalService.redirectUri, 'https://www.tidal.com');
+    expect(TidalService.redirectUri, startsWith('https://'));
     s.tidalClientId = 'abc';
     expect(TidalService(s).configured, true);
   });
 
   test('extractCode from callback url / bare code', () {
-    expect(TidalService.extractCode('"debridmusic://tidal/callback?code=ABC123&state=x"'), 'ABC123');
-    expect(TidalService.extractCode('debridmusic://tidal/callback?code=XYZ'), 'XYZ');
+    // Dit is werkelijk wat er in de adresbalk staat als het gelukt is: tidal.com met de code als
+    // vraagteken-stuk. De code zelf is een JWT en zit dus vol punten en streepjes.
+    expect(TidalService.extractCode('https://tidal.com/?code=eyJhbGc.eyJ1aWQ.sHWC-3bN_f0&state=R3F7'),
+        'eyJhbGc.eyJ1aWQ.sHWC-3bN_f0');
+    expect(TidalService.extractCode('"https://tidal.com/?code=ABC123&state=x"'), 'ABC123');
+    expect(TidalService.extractCode('https://www.tidal.com/?code=XYZ'), 'XYZ');
     expect(TidalService.extractCode('ABC123'), 'ABC123');
-    expect(TidalService.extractCode('debridmusic://tidal/callback'), null);
+    expect(TidalService.extractCode('https://tidal.com/'), null, reason: 'geen code erin');
   });
 
   test('parseTracks maps title + primary artist from JSON:API', () {

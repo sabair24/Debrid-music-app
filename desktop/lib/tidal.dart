@@ -21,31 +21,6 @@ class TidalTrack {
   String get label => artist.isEmpty ? title : '$artist — $title';
 }
 
-/// Het bestand waar een binnengekomen `debridmusic://`-adres in belandt.
-///
-/// Twee kopieën van de app praten hierlangs: de kopie die Windows start als je in de browser op de
-/// terugkoppeling klikt legt het adres hier neer, en de kopie die al draait — en die op het
-/// inloggen wacht — ziet het liggen.
-File tidalCallbackBestand() => File('$appDir${Platform.pathSeparator}tidal_cb.txt');
-
-/// Het `debridmusic://`-adres uit de opstartargumenten, of null als het een gewone start is.
-///
-/// **Waarom dit bestaat.** Na het inloggen stuurt TIDAL de browser naar
-/// `debridmusic://tidal/callback?code=…`. Windows kent dat adres alleen als de installer het
-/// vastgelegd heeft, en start dan deze app opnieuw met het adres als argument. Die kopie doet
-/// verder niets: hij legt het neer en sluit zichzelf.
-///
-/// Dit stuk ontbrak, en daarmee kon "Verbind TIDAL" nooit afronden — de app wachtte tien minuten op
-/// een bestand dat niets ooit schreef. Een lus die op zichzelf wacht is met het oog niet van
-/// "bezig" te onderscheiden, vandaar een toets op deze functie.
-String? tidalCallbackUit(List<String> args) {
-  for (final a in args) {
-    final s = a.trim();
-    if (s.toLowerCase().startsWith('debridmusic://')) return s;
-  }
-  return null;
-}
-
 /// Een plaat uit de TIDAL-catalogus.
 ///
 /// Net zo mager als [TidalTrack] en met opzet: het enige dat er werkelijk toe doet is het id, want
@@ -73,7 +48,7 @@ class TidalZoekResultaat {
 }
 
 /// TIDAL official developer API (openapi.tidal.com):
-/// OAuth 2.1 Authorization-Code + PKCE via a loopback redirect, then catalog search.
+/// OAuth 2.1 Authorization-Code + PKCE via een https-terugkoppeling, dan catalogus doorzoeken.
 /// No direct playback — full-track streaming isn't permitted for third-party native apps.
 class TidalService {
   final AppSettings settings;
@@ -82,10 +57,22 @@ class TidalService {
   static const _authorizeUrl = 'https://login.tidal.com/authorize';
   static const _tokenUrl = 'https://auth.tidal.com/v1/oauth2/token';
   static const _apiBase = 'https://openapi.tidal.com/v2';
-  // TIDAL rejects http/localhost redirects, so we use the registered custom scheme.
-  // A Windows URI-scheme handler (added by the installer) writes the callback URL
-  // to tidal_cb.txt, which the app polls.
-  static const redirectUri = 'debridmusic://tidal/callback';
+  /// Waar TIDAL je browser naartoe stuurt als het inloggen gelukt is.
+  ///
+  /// **Waarom dit tidal.com is en geen adres van deze app.** Er stond hier `debridmusic://tidal/
+  /// callback`, en het dashboard van TIDAL neemt zo'n adres ook gewoon aan — maar de inlogdienst
+  /// stuurt er niet naartoe. Hij logt je in en zet je op zijn eigen "Login successful"-pagina,
+  /// zonder één woord over wat er misging. Aan deze kant zag je dus een knop die eeuwig bleef
+  /// draaien, terwijl in de browser alles gelukt leek.
+  ///
+  /// Met een https-adres gebeurt het wél: je landt op tidal.com met `?code=…` in de adresbalk. Dat
+  /// is ook wat andere bureaublad-spelers doen. De prijs is dat er niets automatisch terugkomt —
+  /// tidal.com is niet van ons, dus die code moet je zelf uit de adresbalk plakken. Eén keer, en
+  /// dan nooit meer.
+  ///
+  /// Dit moet **letterlijk** overeenkomen met wat er in het dashboard bij Redirect URIs staat, hier
+  /// én bij het inwisselen van de code.
+  static const redirectUri = 'https://www.tidal.com';
   static const _scopes = 'user.read collection.read playlists.read search.read recommendations.read';
 
   String? _pendingVerifier; // held between opening the browser and the redirect coming back
@@ -97,8 +84,6 @@ class TidalService {
   String _b64url(List<int> bytes) => base64Url.encode(bytes).replaceAll('=', '');
 
   static String _dataDir() => appDir;
-
-  File _callbackFile() => tidalCallbackBestand();
 
   /// Extract the auth code from a callback URL / pasted text (or a bare code).
   static String? extractCode(String text) {
@@ -112,9 +97,13 @@ class TidalService {
     return (t.isEmpty || t.contains(' ') || t.contains('://')) ? null : t; // else treat as a bare code
   }
 
-  /// Interactive login: opens the browser to TIDAL, then polls the file that the
-  /// registered debridmusic:// URI-scheme handler writes. The user's password is
-  /// only ever entered on TIDAL's own page.
+  /// Stap 1: de browser openen op TIDAL's inlogpagina, en de verifier onthouden.
+  ///
+  /// Geeft meteen terug. Er komt hier **niets** vanzelf terug: TIDAL zet je na het inloggen op
+  /// tidal.com, en die pagina is niet van ons. Wat er daar in de adresbalk staat gaat via
+  /// [completeManual] naar binnen. Zie [redirectUri] voor waarom dat zo is.
+  ///
+  /// Je wachtwoord tik je alleen op TIDAL's eigen pagina in; deze app ziet het nooit.
   Future<void> login() async {
     if (settings.tidalClientId.isEmpty) throw 'Vul eerst je TIDAL Client ID in (Instellingen).';
     final rnd = Random.secure();
@@ -122,11 +111,6 @@ class TidalService {
     final challenge = _b64url(sha256.convert(ascii.encode(verifier)).bytes);
     final state = _b64url(List<int>.generate(8, (_) => rnd.nextInt(256)));
     _pendingVerifier = verifier;
-
-    final cb = _callbackFile();
-    try {
-      if (await cb.exists()) await cb.delete();
-    } catch (_) {}
 
     // Build the query manually so spaces in scope become %20 (TIDAL can reject '+').
     final params = <String, String>{
@@ -144,27 +128,9 @@ class TidalService {
       await File('${_dataDir()}${Platform.pathSeparator}tidal_auth_url.txt').writeAsString(authUrl);
     } catch (_) {}
     await _openBrowser(authUrl);
-
-    String? code;
-    for (var i = 0; i < 600; i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 500));
-      if (connected) return; // completed via manual paste
-      if (await cb.exists()) {
-        try {
-          code = extractCode(await cb.readAsString());
-          await cb.delete();
-        } catch (_) {}
-        if (code != null) break;
-      }
-    }
-    if (code == null) {
-      throw 'Geen TIDAL-code ontvangen. Klik "Openen" als je browser dat vraagt, of plak de debridmusic://-URL handmatig.';
-    }
-    await _exchange(code, verifier);
-    await _fetchProfile();
   }
 
-  /// Manual fallback: exchange a code the user pasted (full callback URL or bare code).
+  /// Stap 2: de code inwisselen die je uit de adresbalk plakte (het hele adres mag).
   Future<void> completeManual(String pasted) async {
     final code = extractCode(pasted);
     if (code == null || code.isEmpty) throw 'Geen geldige code gevonden in wat je plakte.';

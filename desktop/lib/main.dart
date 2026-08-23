@@ -275,26 +275,12 @@ Future<void> afsluiten(LibraryStore library, SoulseekService soulseek) async {
   } catch (_) {}
 }
 
-Future<void> main(List<String> args) async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
   // Before anything reads a setting or a cache: on iOS the app's own folder cannot be worked out
   // from the environment, it has to be asked for.
   await initAppPaths();
-  // Kom je hier binnen via debridmusic://tidal/callback?code=… — dan ben je niet de app maar de
-  // terugweg van het inloggen bij TIDAL. Windows start hiervoor een tweede kopie met dat adres als
-  // argument; die legt het neer en sluit zichzelf. De kopie die al draait en op het inloggen wacht
-  // ziet het bestand liggen en maakt het af.
-  //
-  // Vóór al het andere, want deze kopie hoort geen venster te openen, geen hartslag te schrijven en
-  // geen tweede-start-regel in het logboek te zetten.
-  final tidalTerug = tidalCallbackUit(args);
-  if (tidalTerug != null) {
-    try {
-      await tidalCallbackBestand().writeAsString(tidalTerug);
-    } catch (_) {/* dan wacht de andere kopie af en meldt zelf dat er niets kwam */}
-    exit(0);
-  }
   // Before the first widget: whether this is a television decides focus rings, overscan margins
   // and type sizes, and a layout that changes shape one frame after it appears looks broken.
   await initTvMode();
@@ -11293,14 +11279,15 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: _panel,
-        title: const Text('TIDAL-code plakken', style: kKopKlein),
+        title: const Text('Adres uit je browser plakken', style: kKopKlein),
         content: SizedBox(
           width: dialogWidth(context, 460),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Plak de volledige "debridmusic://…"-URL (of enkel de code) die je browser na het inloggen toonde.',
+              const Text('Plak het hele adres waar je browser op uitkwam — dat begint met '
+                  'https://tidal.com/?code= en is lang. Enkel de code mag ook.',
                   style: kTekstKlein),
               const SizedBox(height: 10),
               TextField(
@@ -11328,6 +11315,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ],
       ),
     );
+    ctrl.dispose();
     if (pasted == null || pasted.isEmpty) return;
     setState(() => _tidalConnecting = true);
     try {
@@ -11779,9 +11767,13 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // Twee stappen, en de tweede is geen noodgreep. TIDAL zet je na het inloggen op
+            // tidal.com — een pagina die niet van ons is, dus er kan niets vanzelf terugkomen. Dat
+            // stond hier eerder als "lukt het automatisch niet?", en dat is precies de zin die je
+            // laat wachten op iets wat nooit gaat gebeuren.
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 24),
-              child: Text('Verbind je TIDAL-account om je muziek te doorzoeken.\n'
+              child: Text('Verbind je TIDAL-account om de catalogus te doorzoeken.\n'
                   'Je logt in op TIDAL zelf — DebridMusic ziet je wachtwoord niet.',
                   textAlign: TextAlign.center, style: TextStyle(color: _muted)),
             ),
@@ -11790,14 +11782,22 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
               style: FilledButton.styleFrom(backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14)),
               icon: _tidalConnecting
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.link_rounded, size: 18),
-              label: Text(_tidalConnecting ? 'Bezig… (log in in je browser)' : 'Verbind TIDAL'),
+                  : const Icon(Icons.open_in_browser_rounded, size: 18),
+              label: Text(_tidalConnecting ? 'Bezig…' : 'Stap 1 · Inloggen bij TIDAL'),
               onPressed: _tidalConnecting ? null : _connectTidal,
             ),
-            const SizedBox(height: 6),
-            TextButton(
+            const SizedBox(height: 14),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 24),
+              child: Text('Na het inloggen kom je uit op tidal.com. Kopieer dan het hele adres uit '
+                  'de adresbalk van je browser — daar staat ?code= in — en plak het hieronder.',
+                  textAlign: TextAlign.center, style: kTekstKlein),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
               onPressed: _tidalConnecting ? null : _manualTidal,
-              child: const Text('Lukt het automatisch niet? Plak de URL handmatig', style: kTekstKlein),
+              icon: const Icon(Icons.content_paste_rounded, size: 16),
+              label: const Text('Stap 2 · Adres plakken'),
             ),
           ],
         ),
@@ -15585,10 +15585,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     ),
                     const SizedBox(height: 4),
                     const Text(
-                      'Maak op developer.tidal.com een app aan en zet daar '
-                      'debridmusic://tidal/callback als Redirect URI. Hiermee kan de app in TIDAL '
-                      'zóéken. Het ophalen zelf gaat met je eigen abonnement via tiddl op deze pc — '
-                      'dat is een aparte, eenmalige "tiddl auth login".',
+                      'Maak op developer.tidal.com een app aan en zet daar exact '
+                      'https://www.tidal.com als Redirect URI. Hiermee kan de app in TIDAL zóéken. '
+                      'Het ophalen zelf gaat met je eigen abonnement via tiddl op deze pc — dat is '
+                      'een aparte, eenmalige "tiddl auth login".',
                       style: TextStyle(color: _muted, fontSize: 11.5, height: 1.3),
                     ),
                     const SizedBox(height: 12),
