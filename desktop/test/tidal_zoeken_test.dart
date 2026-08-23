@@ -81,6 +81,27 @@ Map<String, dynamic> hetVolledigeAntwoord() => {
     };
 
 void main() {
+  group('het pad van een zoekopdracht', () {
+    // TIDAL antwoordde op `/searchResults/…` met 400 INVALID_RESOURCE_ID, met de vinger bij
+    // `data/id`: niet "dit pad bestaat niet", maar "die id deugt niet". Het pad hoort klein te zijn
+    // — een REST-pad is hoofdlettergevoelig — en de zoekterm is daar de bron-id.
+    test('kleingeschreven, en de term is de id', () {
+      expect(TidalService.zoekPad('thriller'), '/searchresults/thriller');
+      expect(TidalService.zoekPad('thriller'), isNot(contains('searchResults')));
+    });
+
+    test('een spatie wordt %20, want een kale spatie is geen adres', () {
+      expect(TidalService.zoekPad('vuur en vlam'), '/searchresults/vuur%20en%20vlam');
+    });
+
+    test('en de rest gaat er ook gecodeerd in', () {
+      expect(TidalService.zoekPad('on & on'), '/searchresults/on%20%26%20on');
+      expect(TidalService.zoekPad('AC/DC'), '/searchresults/AC%2FDC',
+          reason: 'een schuine streep zou anders een tweede padstuk worden');
+      expect(TidalService.zoekPad('  spaties eromheen  '), '/searchresults/spaties%20eromheen');
+    });
+  });
+
   group('de platen uit een antwoord', () {
     test('titel, artiest en jaar komen eruit', () {
       final albums = TidalService.parseAlbums(hetVolledigeAntwoord());

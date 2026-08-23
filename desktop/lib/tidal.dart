@@ -101,6 +101,17 @@ class TidalService {
 
   static String _dataDir() => appDir;
 
+  /// Het pad van een zoekopdracht: de zoekterm ís de bron-id.
+  ///
+  /// **Kleingeschreven, en dat is geen smaak.** Hier stond `/searchResults/`, en TIDAL antwoordde
+  /// daarop met `400 INVALID_RESOURCE_ID` met de vinger bij `data/id` — dus niet "dit pad bestaat
+  /// niet" maar "die id deugt niet". In TIDAL's eigen voorbeelden staat het pad kleingeschreven, en
+  /// een REST-pad is hoofdlettergevoelig.
+  ///
+  /// De zoekterm gaat er gecodeerd in: een spatie wordt `%20`. Dat is wat TIDAL's eigen voorbeeld
+  /// ook doet, en een kale spatie in een pad is sowieso geen geldig adres.
+  static String zoekPad(String query) => '/searchresults/${Uri.encodeComponent(query.trim())}';
+
   /// Extract the auth code from a callback URL / pasted text (or a bare code).
   static String? extractCode(String text) {
     final t = text.replaceAll('"', '').trim();
@@ -244,6 +255,9 @@ class TidalService {
     }).timeout(const Duration(seconds: 12));
     if (r.statusCode != 200) {
       final body = r.body.length > 300 ? r.body.substring(0, 300) : r.body;
+      // Het pad erbij, zonder het token. Bij een 400 op een zoekopdracht is de vraag altijd "wat
+      // stuurde hij dan?", en daar was tot nu toe niets over terug te vinden.
+      _spoor('API ${r.statusCode} op $path (${query['include'] ?? "geen include"})');
       throw 'TIDAL API ${r.statusCode}: $body';
     }
     return jsonBody(r) as Map<String, dynamic>;
@@ -270,7 +284,7 @@ class TidalService {
   /// Search the TIDAL catalog for tracks (title + primary artist), to feed the
   /// torrent/Soulseek source search.
   Future<List<TidalTrack>> searchTracks(String query) async {
-    final j = await _get('/searchResults/${Uri.encodeComponent(query)}', {
+    final j = await _get(zoekPad(query), {
       'countryCode': _country,
       'include': 'tracks,tracks.artists',
     });
@@ -288,11 +302,12 @@ class TidalService {
   Future<TidalZoekResultaat> search(String query) async {
     Map<String, dynamic>? j;
     try {
-      j = await _get('/searchResults/${Uri.encodeComponent(query)}', {
+      j = await _get(zoekPad(query), {
         'countryCode': _country,
-        'include': 'albums,albums.artists,tracks,tracks.artists',
+        'include': 'tracks,tracks.artists,tracks.albums,albums,albums.artists',
       });
-    } catch (_) {
+    } catch (e) {
+      _spoor('brede zoekvraag geweigerd ($e) — terugvallen op alleen nummers');
       j = null;
     }
     if (j == null) return TidalZoekResultaat(const [], await searchTracks(query));
