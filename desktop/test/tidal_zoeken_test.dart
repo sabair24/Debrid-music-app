@@ -82,23 +82,31 @@ Map<String, dynamic> hetVolledigeAntwoord() => {
 
 void main() {
   group('het pad van een zoekopdracht', () {
-    // TIDAL antwoordde op `/searchResults/…` met 400 INVALID_RESOURCE_ID, met de vinger bij
-    // `data/id`: niet "dit pad bestaat niet", maar "die id deugt niet". Het pad hoort klein te zijn
-    // — een REST-pad is hoofdlettergevoelig — en de zoekterm is daar de bron-id.
-    test('kleingeschreven, en de term is de id', () {
-      expect(TidalService.zoekPad('thriller'), '/searchresults/thriller');
-      expect(TidalService.zoekPad('thriller'), isNot(contains('searchResults')));
+    // Twee keer verkeerd geraden voordat TIDAL's eigen SDK uitsluitsel gaf. `/searchResults/<term>`
+    // gaf 400 INVALID_RESOURCE_ID met de vinger bij `data/id`; kleinschrijven gaf 404, dus het pad
+    // was goed. De fout zat in de vórm: `/searchResults/{id}` verwacht een id uit een eerder
+    // antwoord, en de zoekterm hoort als `filter[query]` in de vraag.
+    test('geen zoekterm in het pad', () {
+      expect(TidalService.zoekPad, '/searchResults');
+      expect(TidalService.zoekPad, isNot(contains('{')));
+      expect(TidalService.zoekPad.split('/').where((d) => d.isNotEmpty).length, 1,
+          reason: 'één padstuk: een tweede zou als bron-id gelezen worden');
     });
 
-    test('een spatie wordt %20, want een kale spatie is geen adres', () {
-      expect(TidalService.zoekPad('vuur en vlam'), '/searchresults/vuur%20en%20vlam');
+    test('de zoekterm gaat als filter[query] mee', () {
+      final v = TidalService.zoekVraag('vuur en vlam', land: 'BE', include: 'tracks');
+      expect(v['filter[query]'], 'vuur en vlam');
+      expect(v['countryCode'], 'BE');
+      expect(v['include'], 'tracks');
     });
 
-    test('en de rest gaat er ook gecodeerd in', () {
-      expect(TidalService.zoekPad('on & on'), '/searchresults/on%20%26%20on');
-      expect(TidalService.zoekPad('AC/DC'), '/searchresults/AC%2FDC',
-          reason: 'een schuine streep zou anders een tweede padstuk worden');
-      expect(TidalService.zoekPad('  spaties eromheen  '), '/searchresults/spaties%20eromheen');
+    test('spaties eromheen gaan eraf, erbinnen blijven ze', () {
+      // Als vraagwaarde hoeft een spatie niet gecodeerd te worden — dat doet de Uri zelf. Zou hij
+      // hier al gecodeerd worden, dan zocht je naar "vuur%20en%20vlam".
+      expect(TidalService.zoekVraag('  AC/DC  ', land: 'NL', include: 'x')['filter[query]'],
+          'AC/DC');
+      expect(TidalService.zoekVraag('on & on', land: 'NL', include: 'x')['filter[query]'],
+          'on & on');
     });
   });
 
