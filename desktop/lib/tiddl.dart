@@ -128,6 +128,13 @@ String? tidalDoel(String invoer) {
   return '${delen[0]}/${delen[1]}';
 }
 
+/// Een id uit de TIDAL-API omgezet naar wat tiddl aanneemt. Null als het onbruikbaar is.
+///
+/// Bewust via [tidalDoel] en niet met een eigen `'$soort/$id'`: die functie kent de zes soorten al
+/// en weigert alles wat er niet uitziet als een id. Twee plekken die allebei beslissen wat een
+/// geldig doel is, is er één te veel.
+String? tidalDoelVanId(String soort, String id) => tidalDoel('$soort/${id.trim()}');
+
 /// De vier kwaliteiten die tiddl kent, zoals hij ze zelf schrijft.
 ///
 /// `max` is 24 bit tot 192 kHz en is de enige reden om dit te bouwen: het is een bron die levert wat
