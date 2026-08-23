@@ -12,6 +12,19 @@ class SearchResult {
   final String source;
   bool cached;
 
+  /// Waar het `.torrent`-BESTAND te halen is, als de bron dat heeft. Leeg bij de meeste.
+  ///
+  /// **Waarom dit erbij moest.** Een magneet draagt alleen de infohash; wie hem oppakt moet de
+  /// zwerm zelf zien te vinden via DHT. Bij een tracker als RuTracker zit die zwerm achter hún
+  /// announce, en dan vindt DHT niemand. Gemeten op 23-08-2026 met dezelfde plaat (Kai Tracid,
+  /// Liquid Skies, 24/96):
+  ///
+  ///     als magneet   : 2,5 uur "checking", size -1, seeds 0  -> nooit iets
+  ///     als .torrent  : binnen 12 s "downloading", 554 MB, seeds 1, 4% -> 61% in twee minuten
+  ///
+  /// Het verschil is de `announce` die in het bestand staat en in de magneet niet.
+  final String torrentUrl;
+
   SearchResult({
     required this.name,
     this.size = 0,
@@ -21,11 +34,13 @@ class SearchResult {
     required this.hash,
     this.source = '',
     this.cached = false,
+    this.torrentUrl = '',
   });
 
   Map<String, dynamic> toJson() => {
         'name': name, 'size': size, 'seeders': seeders, 'leechers': leechers,
         'magnet': magnet, 'hash': hash, 'source': source, 'cached': cached,
+        'torrentUrl': torrentUrl,
       };
 
   /// The way back in, for a Mac or an iPad reading results the PC found. Beside [toJson] on
@@ -40,6 +55,7 @@ class SearchResult {
         hash: (j['hash'] ?? '') as String,
         source: (j['source'] ?? '') as String,
         cached: j['cached'] == true,
+        torrentUrl: (j['torrentUrl'] ?? '') as String,
       );
 }
 
@@ -80,7 +96,18 @@ class TbTorrent {
   final List<TbFile> files;
   final bool downloadFinished;
   final bool cached;
-  TbTorrent(this.id, this.name, this.hash, this.status, this.progress, this.files, this.downloadFinished, this.cached);
+
+  /// Hoe groot TorBox denkt dat de torrent is. **-1 betekent: hij weet het nog niet** — de metadata
+  /// is nog niet binnen, dus er is nog niet eens een bestandslijst.
+  final int size;
+
+  /// Hoeveel seeders TorBox ziet. Nul plus geen metadata is het beeld van een torrent die nergens
+  /// meer te vinden is.
+  final int seeds;
+
+  TbTorrent(this.id, this.name, this.hash, this.status, this.progress, this.files,
+      this.downloadFinished, this.cached,
+      {this.size = 0, this.seeds = 0});
 
   factory TbTorrent.fromJson(Map<String, dynamic> j) => TbTorrent(
         (j['id'] ?? 0) as int,
@@ -91,10 +118,21 @@ class TbTorrent {
         ((j['files'] as List?) ?? const []).map((f) => TbFile.fromJson(f as Map<String, dynamic>)).toList(),
         (j['download_finished'] ?? false) as bool,
         (j['cached'] ?? false) as bool,
+        size: ((j['size'] ?? 0) as num).toInt(),
+        seeds: ((j['seeds'] ?? 0) as num).toInt(),
       );
 
   bool get isReady => status == 'completed' || cached || downloadFinished;
   bool get isFailed => status == 'error' || status == 'stalled';
+
+  /// Niemand heeft deze torrent, en TorBox weet niet eens hoe groot hij is.
+  ///
+  /// **Waarom dit apart staat.** Gemeten op 23-08-2026 met een RuTracker-vondst (Kai Tracid,
+  /// Liquid Skies, 1998): tweeënhalf uur na het toevoegen stond hij nog op `checking`, `size: -1`,
+  /// `seeds: 0`, `peers: 2`. Zo'n torrent komt niet meer los — het is geen trage download, er is
+  /// niets om van te downloaden. Toch bleef de app "Voorbereiden" melden, en bij elke herstart begon
+  /// dat wachten opnieuw. Beter meteen zeggen wat er aan de hand is.
+  bool get geenBron => size <= 0 && seeds <= 0 && !isReady;
   List<TbFile> get audio => files.where((f) => f.isAudio).toList();
 }
 
@@ -148,6 +186,38 @@ class TorBox {
       final detail = (j['detail'] ?? j['error'] ?? '').toString();
       final id = (data?['torrent_id'] as int?);
       return ((j['success'] ?? false) as bool, (id != null && id > 0) ? id : null, data?['hash'] as String?, detail);
+    } catch (e) {
+      return (false, null, null, e.toString());
+    }
+  }
+
+  /// Een `.torrent`-BESTAND aanmelden in plaats van een magneet.
+  ///
+  /// Dat maakt het verschil bij een tracker die zijn zwerm niet in DHT heeft staan: het bestand
+  /// draagt de `announce`, de magneet niet. Zie [SearchResult.torrentUrl] voor de meting.
+  ///
+  /// **Let op de dubbelentrap.** TorBox kijkt naar de infohash: staat er al een (vastgelopen)
+  /// poging met dezelfde hash, dan antwoordt hij "Found Cached Torrent" en krijg je die oude terug,
+  /// bestand of niet. Vandaar dat de app het bestand meteen als eerste aanbiedt en niet pas nadat
+  /// een magneet is blijven hangen.
+  Future<(bool, int?, String?, String)> addTorrentFile(List<int> bytes, String naam) async {
+    try {
+      final req = http.MultipartRequest('POST', Uri.parse('$_base/torrents/createtorrent'))
+        ..headers.addAll(_auth)
+        ..files.add(http.MultipartFile.fromBytes('file', bytes,
+            filename: naam.isEmpty ? 'bron.torrent' : naam));
+      final streamed = await req.send().timeout(const Duration(seconds: 45));
+      final r = await http.Response.fromStream(streamed);
+      final j = jsonBody(r) as Map<String, dynamic>;
+      final data = j['data'] as Map<String, dynamic>?;
+      final detail = (j['detail'] ?? j['error'] ?? '').toString();
+      final id = (data?['torrent_id'] as int?);
+      return (
+        (j['success'] ?? false) as bool,
+        (id != null && id > 0) ? id : null,
+        data?['hash'] as String?,
+        detail
+      );
     } catch (e) {
       return (false, null, null, e.toString());
     }

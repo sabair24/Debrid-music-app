@@ -67,8 +67,49 @@ class OnlineService {
   }
 
   Future<(int?, String)> _addOrFind(SearchResult r) async {
-    final (success, id, hash0, detail) = await torbox.addMagnet(r.magnet);
-    final hash = (hash0 != null && hash0.isNotEmpty) ? hash0 : r.hash;
+    // Eerst het BESTAND, als de bron er een heeft — en dat is niet netter, dat is het verschil
+    // tussen wel en niet werken.
+    //
+    // Gemeten op 23-08-2026 met een RuTracker-vondst (Kai Tracid — Liquid Skies, 24/96 FLAC):
+    //
+    //     als magneet   : 2,5 uur "checking", size -1, seeds 0   -> nooit iets
+    //     als .torrent  : na 12 s "downloading", 554 MB, seeds 1 -> 4% naar 61% in twee minuten
+    //
+    // Een magneet draagt alleen de infohash, dus moet wie hem oppakt de zwerm via DHT zien te
+    // vinden. De zwerm van RuTracker hangt achter hun eigen announce, en die staat alleen IN het
+    // torrentbestand.
+    //
+    // Het bestand gaat er meteen als eerste in, niet als reddingspoging achteraf: TorBox kijkt naar
+    // de infohash, en staat er al een vastgelopen magneetpoging met dezelfde hash, dan antwoordt hij
+    // "Found Cached Torrent" en krijg je die vastgelopen poging terug — bestand of niet.
+    if (r.torrentUrl.isNotEmpty) {
+      final bytes = await rutracker.haalTorrentBestand(r.torrentUrl);
+      if (bytes != null && bytes.isNotEmpty) {
+        final uitkomst = await torbox.addTorrentFile(bytes, '${r.hash}.torrent');
+        final gevonden = await _uitTorboxAntwoord(uitkomst, r.hash);
+        if (gevonden != null) return gevonden;
+      }
+      // Niet gelukt (geen sessie, of RuTracker gaf een pagina in plaats van een torrent)? Dan
+      // alsnog de magneet: die werkt bij een torrent die wél in DHT zit.
+    }
+    final uitkomst = await torbox.addMagnet(r.magnet);
+    final gevonden = await _uitTorboxAntwoord(uitkomst, r.hash);
+    if (gevonden != null) return gevonden;
+    // Wat hier binnenkomt is de reden van TorBox — of, als het verzoek zelf strandde, de tekst van
+    // de uitzondering. Die stond ongefilterd op het scherm: "TimeoutException after 0:00:15.000000:
+    // Future not completed" boven een dialoog die vraagt welk nummer je wil. Zeg wat er gebeurde.
+    final detail = uitkomst.$4;
+    if (detail.contains('TimeoutException')) {
+      throw 'TorBox antwoordde niet binnen vijftien seconden op het toevoegen van deze bron.';
+    }
+    throw detail.isNotEmpty ? detail : 'Kon torrent niet toevoegen';
+  }
+
+  /// Het antwoord van TorBox op "voeg dit toe" uitpakken: (id, hash), of null als het niet lukte.
+  Future<(int?, String)?> _uitTorboxAntwoord(
+      (bool, int?, String?, String) antwoord, String hashUitBron) async {
+    final (success, id, hash0, detail) = antwoord;
+    final hash = (hash0 != null && hash0.isNotEmpty) ? hash0 : hashUitBron;
     if (hash.isEmpty) throw 'Torrent heeft geen infohash';
     if (success) return (id, hash);
     if (detail.toLowerCase().contains('already')) {
@@ -77,7 +118,7 @@ class OnlineService {
           .firstWhere((t) => t?.hash?.toLowerCase() == hash.toLowerCase(), orElse: () => null);
       return (item?.id, hash);
     }
-    throw detail.isNotEmpty ? detail : 'Kon torrent niet toevoegen';
+    return null;
   }
 
   Future<TbTorrent> _pollReady(int? id, String hash,

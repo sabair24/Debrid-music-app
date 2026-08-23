@@ -284,13 +284,15 @@ class RuTrackerService {
   /// gelezen; een gzip-laag zou daar alleen maar tussen zitten.
   @visibleForTesting
   static List<String> curlArgumenten(String url, String cookie, String ua, String uitPad,
-      {String? koppenPad}) {
+      {String? koppenPad, String? referer}) {
     return [
       '-s',
       '--max-time', '20',
       // Zelf volgen doen we niet: een 302 naar login.php IS het antwoord (sessie verlopen).
       '--no-location',
       '-A', ua,
+      // `dl.php` geeft het torrentbestand alleen aan wie van de site zelf lijkt te komen.
+      if (referer != null) ...['-e', referer],
       if (cookie.isNotEmpty) ...['-b', cookie],
       if (koppenPad != null) ...['-D', koppenPad],
       '-o', uitPad,
@@ -300,14 +302,14 @@ class RuTrackerService {
   }
 
   /// Eén GET, langs curl als die er is en anders langs de gewone client.
-  Future<({int status, List<int> bytes})?> _haal(String url) async {
+  Future<({int status, List<int> bytes})?> _haal(String url, {String? referer}) async {
     if (await curlBeschikbaar()) {
       Directory? tijdelijk;
       try {
         tijdelijk = await Directory.systemTemp.createTemp('rt_');
         final uit = '${tijdelijk.path}${Platform.pathSeparator}p';
-        final p = await Process.run(
-                'curl', curlArgumenten(url, settings.rutrackerCookie, _ua, uit))
+        final p = await Process.run('curl',
+            curlArgumenten(url, settings.rutrackerCookie, _ua, uit, referer: referer))
             .timeout(const Duration(seconds: 25));
         final status = int.tryParse((p.stdout as String).trim()) ?? 0;
         final f = File(uit);
@@ -484,6 +486,19 @@ class RuTrackerService {
     return gezien.entries.map((e) => '${e.key}=${e.value}').join('; ');
   }
 
+  /// Het `.torrent`-bestand zelf ophalen, ingelogd.
+  ///
+  /// `dl.php` geeft alleen iets zinnigs terug met een geldige sessie; zonder krijg je een
+  /// HTML-pagina in plaats van een torrent. Vandaar de controle op de eerste byte: een bencode-
+  /// bestand begint met `d`. Zo komt er nooit een foutpagina als "torrent" bij TorBox terecht.
+  Future<List<int>?> haalTorrentBestand(String url) async {
+    if (settings.rutrackerCookie.isEmpty) return null;
+    final r = await _haal(url, referer: '$_base/index.php');
+    if (r == null || r.status != 200 || r.bytes.isEmpty) return null;
+    if (r.bytes.first != 0x64) return null; // geen 'd' = geen torrent, maar een pagina
+    return r.bytes;
+  }
+
   /// True if the cached cookie still authenticates (tracker.php returns 200, not a 302 to login).
   Future<bool> verify() async {
     if (settings.rutrackerCookie.isEmpty) return false;
@@ -568,6 +583,10 @@ class RuTrackerService {
                 magnet:
                     'magnet:?xt=urn:btih:${r.hash}&dn=${Uri.encodeComponent(r.title)}',
                 source: 'RuTracker',
+                // Het bestand erbij, want de magneet alleen levert hier niets op: de zwerm van
+                // RuTracker staat achter hun eigen announce en niet in DHT. Zie
+                // [SearchResult.torrentUrl] voor de meting.
+                torrentUrl: '$_base/dl.php?t=${r.topicId}',
               ))
           .toList();
     } catch (_) {
