@@ -174,6 +174,20 @@ jobs:
           $L.Add('Name: "{group}\{cm:UninstallProgram,DebridMusic}"; Filename: "{uninstallexe}"')
           $L.Add('Name: "{autodesktop}\DebridMusic"; Filename: "{app}\debridmusic.exe"; Tasks: desktopicon')
           $L.Add("")
+          # Windows leren dat debridmusic:// van deze app is. Zonder dit komt de terugkoppeling van
+          # het TIDAL-inloggen nooit aan: de browser krijgt debridmusic://tidal/callback?code=... en
+          # weet niet wat hij daarmee moet, terwijl de app blijft wachten op een bestand dat niets
+          # schrijft. "Verbind TIDAL" draaide daardoor eeuwig door.
+          #
+          # HKCU en niet HKLM: deze installer draait met PrivilegesRequired=lowest, dus er is geen
+          # schrijfrecht op de machine-brede tak. Per gebruiker is hier ook het juiste: de app staat
+          # in het profiel van wie hem installeerde.
+          $L.Add("[Registry]")
+          $L.Add('Root: HKCU; Subkey: "Software\Classes\debridmusic"; ValueType: string; ValueName: ""; ValueData: "URL:DebridMusic"; Flags: uninsdeletekey')
+          $L.Add('Root: HKCU; Subkey: "Software\Classes\debridmusic"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""')
+          $L.Add('Root: HKCU; Subkey: "Software\Classes\debridmusic\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\debridmusic.exe,0"')
+          $L.Add('Root: HKCU; Subkey: "Software\Classes\debridmusic\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\debridmusic.exe"" ""%1"""')
+          $L.Add("")
           $L.Add("[Run]")
           $L.Add('Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Visual C++ Runtime installeren..."; Flags: waituntilterminated')
           $L.Add('Filename: "{app}\debridmusic.exe"; Description: "{cm:LaunchProgram,DebridMusic}"; Flags: nowait postinstall skipifsilent')

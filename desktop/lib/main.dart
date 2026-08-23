@@ -275,12 +275,26 @@ Future<void> afsluiten(LibraryStore library, SoulseekService soulseek) async {
   } catch (_) {}
 }
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
   // Before anything reads a setting or a cache: on iOS the app's own folder cannot be worked out
   // from the environment, it has to be asked for.
   await initAppPaths();
+  // Kom je hier binnen via debridmusic://tidal/callback?code=… — dan ben je niet de app maar de
+  // terugweg van het inloggen bij TIDAL. Windows start hiervoor een tweede kopie met dat adres als
+  // argument; die legt het neer en sluit zichzelf. De kopie die al draait en op het inloggen wacht
+  // ziet het bestand liggen en maakt het af.
+  //
+  // Vóór al het andere, want deze kopie hoort geen venster te openen, geen hartslag te schrijven en
+  // geen tweede-start-regel in het logboek te zetten.
+  final tidalTerug = tidalCallbackUit(args);
+  if (tidalTerug != null) {
+    try {
+      await tidalCallbackBestand().writeAsString(tidalTerug);
+    } catch (_) {/* dan wacht de andere kopie af en meldt zelf dat er niets kwam */}
+    exit(0);
+  }
   // Before the first widget: whether this is a television decides focus rings, overscan margins
   // and type sizes, and a layout that changes shape one frame after it appears looks broken.
   await initTvMode();

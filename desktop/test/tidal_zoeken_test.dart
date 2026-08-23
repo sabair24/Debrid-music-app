@@ -212,6 +212,42 @@ void main() {
     });
   });
 
+  group('de terugweg van het inloggen', () {
+    // Deze lus was met het oog niet te onderscheiden van "bezig": de app wachtte tien minuten op
+    // een bestand dat niets ooit schreef, met een draaiend wieltje erbij. Vandaar een toets op de
+    // schakel die dat bestand voedt.
+    test('het adres wordt uit de opstartargumenten gehaald', () {
+      expect(tidalCallbackUit(['debridmusic://tidal/callback?code=ABC123&state=x']),
+          'debridmusic://tidal/callback?code=ABC123&state=x');
+    });
+
+    test('ook als Windows er iets vóór zet', () {
+      // Windows geeft het adres door zoals het in het register staat; er kan van alles omheen staan.
+      expect(tidalCallbackUit(['--verbose', 'debridmusic://tidal/callback?code=Q']),
+          'debridmusic://tidal/callback?code=Q');
+      expect(tidalCallbackUit([' debridmusic://tidal/callback?code=Q ']),
+          'debridmusic://tidal/callback?code=Q',
+          reason: 'spaties eromheen gaan eraf');
+      expect(tidalCallbackUit(['DEBRIDMUSIC://tidal/callback?code=Q']),
+          'DEBRIDMUSIC://tidal/callback?code=Q',
+          reason: 'hoofdletters: het register is er niet kieskeurig in');
+    });
+
+    test('een gewone start is geen terugkoppeling', () {
+      // Zou dit ooit waar worden bij een normale start, dan sluit de app zichzelf meteen af en is
+      // hij helemaal niet meer te openen. Dat is de reden dat dit strikt op het adres kijkt.
+      expect(tidalCallbackUit([]), isNull);
+      expect(tidalCallbackUit(['--observatory-port=1234']), isNull);
+      expect(tidalCallbackUit(['C:\\Muziek\\debridmusic-map']), isNull);
+      expect(tidalCallbackUit(['tidal/callback?code=Q']), isNull);
+    });
+
+    test('en de code komt er daarna gewoon uit', () {
+      // Wat de wachtende kopie ermee doet: dezelfde functie die ook de handmatige plakweg voedt.
+      expect(TidalService.extractCode('debridmusic://tidal/callback?code=ABC123&state=x'), 'ABC123');
+    });
+  });
+
   group('van een id naar een doel voor tiddl', () {
     test('de soort gaat mee, want de ids botsen', () {
       // Een plaat "1" en een nummer "1" bestaan naast elkaar. Wie de soort zou raden uit het getal,

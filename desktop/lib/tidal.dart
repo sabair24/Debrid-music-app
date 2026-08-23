@@ -21,6 +21,31 @@ class TidalTrack {
   String get label => artist.isEmpty ? title : '$artist — $title';
 }
 
+/// Het bestand waar een binnengekomen `debridmusic://`-adres in belandt.
+///
+/// Twee kopieën van de app praten hierlangs: de kopie die Windows start als je in de browser op de
+/// terugkoppeling klikt legt het adres hier neer, en de kopie die al draait — en die op het
+/// inloggen wacht — ziet het liggen.
+File tidalCallbackBestand() => File('$appDir${Platform.pathSeparator}tidal_cb.txt');
+
+/// Het `debridmusic://`-adres uit de opstartargumenten, of null als het een gewone start is.
+///
+/// **Waarom dit bestaat.** Na het inloggen stuurt TIDAL de browser naar
+/// `debridmusic://tidal/callback?code=…`. Windows kent dat adres alleen als de installer het
+/// vastgelegd heeft, en start dan deze app opnieuw met het adres als argument. Die kopie doet
+/// verder niets: hij legt het neer en sluit zichzelf.
+///
+/// Dit stuk ontbrak, en daarmee kon "Verbind TIDAL" nooit afronden — de app wachtte tien minuten op
+/// een bestand dat niets ooit schreef. Een lus die op zichzelf wacht is met het oog niet van
+/// "bezig" te onderscheiden, vandaar een toets op deze functie.
+String? tidalCallbackUit(List<String> args) {
+  for (final a in args) {
+    final s = a.trim();
+    if (s.toLowerCase().startsWith('debridmusic://')) return s;
+  }
+  return null;
+}
+
 /// Een plaat uit de TIDAL-catalogus.
 ///
 /// Net zo mager als [TidalTrack] en met opzet: het enige dat er werkelijk toe doet is het id, want
@@ -73,7 +98,7 @@ class TidalService {
 
   static String _dataDir() => appDir;
 
-  File _callbackFile() => File('${_dataDir()}${Platform.pathSeparator}tidal_cb.txt');
+  File _callbackFile() => tidalCallbackBestand();
 
   /// Extract the auth code from a callback URL / pasted text (or a bare code).
   static String? extractCode(String text) {
