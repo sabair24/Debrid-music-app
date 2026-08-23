@@ -9,6 +9,22 @@ import 'package:url_launcher/url_launcher.dart';
 import 'json_body.dart';
 import 'settings.dart';
 import 'paths.dart';
+import 'warm_log.dart';
+
+/// Eén regel in start.log per stap van het inloggen.
+///
+/// **Waarom dit erbij moest.** Het inloggen bleef hangen zonder dat er íéts omviel: geen fout in het
+/// logboek, geen antwoord van Tidal op schijf, en de app draaide vrolijk door met zijn scans. Dan
+/// blijft er niets over dan raden welke van de vijf stappen niet terugkwam — en dat is drie ronden
+/// lang precies wat er gebeurde.
+///
+/// Nooit de code of het token zelf: alleen hoe lang iets was en wat de statuscode was. Een logboek
+/// dat je aan iemand wil kunnen sturen mag geen sleutels bevatten.
+void _spoor(String regel) {
+  try {
+    WarmLog('$appDir${Platform.pathSeparator}start.log').line('tidal: $regel');
+  } catch (_) {/* een spoor dat niet lukt mag nooit de weg blokkeren die het volgt */}
+}
 
 /// A TIDAL catalog track — used only as metadata to drive the torrent/Soulseek
 /// source search (TIDAL itself can't be streamed by a third-party native app).
@@ -127,17 +143,29 @@ class TidalService {
     try {
       await File('${_dataDir()}${Platform.pathSeparator}tidal_auth_url.txt').writeAsString(authUrl);
     } catch (_) {}
+    _spoor('stap 1 — browser openen (scopes: ${_scopes.split(" ").length}, redirect: $redirectUri)');
     await _openBrowser(authUrl);
+    _spoor('stap 1 klaar — browser is gevraagd te openen; nu wacht hij op jouw plakwerk');
   }
 
   /// Stap 2: de code inwisselen die je uit de adresbalk plakte (het hele adres mag).
   Future<void> completeManual(String pasted) async {
+    _spoor('stap 2 — geplakt (${pasted.length} tekens)');
     final code = extractCode(pasted);
-    if (code == null || code.isEmpty) throw 'Geen geldige code gevonden in wat je plakte.';
+    if (code == null || code.isEmpty) {
+      _spoor('stap 2 gestopt — geen code in wat er geplakt is');
+      throw 'Geen geldige code gevonden in wat je plakte.';
+    }
     final verifier = _pendingVerifier;
-    if (verifier == null) throw 'Klik eerst "Verbind TIDAL" (dan opent de browser).';
+    if (verifier == null) {
+      _spoor('stap 2 gestopt — geen verifier; stap 1 is in deze sessie niet geklikt');
+      throw 'Klik eerst op "Stap 1 · Inloggen bij TIDAL" — de app moet die knop in dezelfde '
+          'sessie gezien hebben, anders mist hij het geheim dat bij jouw code hoort.';
+    }
+    _spoor('code gevonden (${code.length} tekens), inwisselen...');
     await _exchange(code, verifier);
     await _fetchProfile();
+    _spoor('verbonden ✓');
   }
 
   /// Open the Tidal sign-in page in the user's browser.
@@ -164,6 +192,7 @@ class TidalService {
     final r = await http
         .post(Uri.parse(_tokenUrl), headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: body)
         .timeout(const Duration(seconds: 15));
+    _spoor('token-antwoord: ${r.statusCode}');
     if (r.statusCode != 200) {
       try {
         await File('${_dataDir()}${Platform.pathSeparator}tidal_error.txt').writeAsString('exchange ${r.statusCode}: ${r.body}');
@@ -221,6 +250,7 @@ class TidalService {
   }
 
   Future<void> _fetchProfile() async {
+    _spoor('token bewaard, profiel ophalen...');
     try {
       final j = await _get('/users/me', {});
       final data = j?['data'];
