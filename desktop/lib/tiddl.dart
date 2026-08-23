@@ -71,7 +71,12 @@ class Tiddl {
       try {
         if (k.contains(Platform.pathSeparator)) {
           if (File(k).existsSync()) return _gevonden = k;
-        } else if (Process.runSync(k, ['--help']).exitCode == 0) {
+          // Zonder decoder: hier telt alleen of hij start. Zou de uitvoer wél gelezen worden, dan
+          // kan een teken uit de verkeerde codetabel een uitzondering geven, en die zou hier
+          // betekenen "tiddl bestaat niet" terwijl hij er gewoon staat.
+        } else if (Process.runSync(k, ['--help'], stdoutEncoding: null, stderrEncoding: null)
+                .exitCode ==
+            0) {
           return _gevonden = k;
         }
       } catch (_) {/* niet daar; volgende */}
@@ -181,6 +186,19 @@ String leesbareFout(String uitvoer, {int regels = 4}) {
   return over.sublist(over.length > regels ? over.length - regels : 0).join('\n');
 }
 
+/// Zoals UTF-8, maar hij struikelt niet over een byte die er niet in hoort.
+///
+/// **Waarom dit nodig is.** Op Windows schrijft Python zijn uitvoer standaard in de codetabel van
+/// de console (cp1252), niet in UTF-8. De strenge lezer gooide daar `FormatException: Unexpected
+/// extension byte` op — en die vloog eruit ná afloop van het proces, dus terwijl de plaat allang
+/// binnengehaald wás meldde de app "Kon tiddl niet starten". Een leesfout in een foutmelding die
+/// zich voordoet als een mislukte download.
+///
+/// Hieronder wordt ook `PYTHONIOENCODING` gezet, zodat er om te beginnen UTF-8 uit komt. Dit is het
+/// vangnet daaronder: kapotte tekens worden een vraagteken in plaats van een uitzondering. Tekst
+/// die je toch alleen maar leest hoort nooit de reden te zijn dat iets faalt.
+const _soepelUtf8 = Utf8Codec(allowMalformed: true);
+
 /// Haal [doel] op naar [map]. Null als het lukte, anders de uitleg.
 ///
 /// Geen tijdslimiet: een plaat van 24 bit is honderden megabytes en dat mag duren. Wat er niet mag
@@ -201,8 +219,12 @@ Future<String?> haalVanTidal({
     final r = await Process.run(
       tool,
       tiddlOpdracht(tool: tool, doel: doel, map: map, kwaliteit: kwaliteit).sublist(1),
-      stdoutEncoding: utf8,
-      stderrEncoding: utf8,
+      stdoutEncoding: _soepelUtf8,
+      stderrEncoding: _soepelUtf8,
+      // Python vragen om UTF-8 te schrijven in plaats van de codetabel van de Windows-console.
+      // Zonder dit komen accenten in artiestennamen er als rommel uit — en tot vandaag brak het
+      // zelfs de hele aanroep af.
+      environment: const {'PYTHONIOENCODING': 'utf-8', 'PYTHONUTF8': '1'},
     );
     if (r.exitCode == 0) return null;
     return leesbareFout('${r.stdout}\n${r.stderr}');
