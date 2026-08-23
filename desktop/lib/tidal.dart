@@ -21,6 +21,32 @@ class TidalTrack {
   String get label => artist.isEmpty ? title : '$artist — $title';
 }
 
+/// Een plaat uit de TIDAL-catalogus.
+///
+/// Net zo mager als [TidalTrack] en met opzet: het enige dat er werkelijk toe doet is het id, want
+/// dáármee haalt tiddl de plaat op. [jaar] staat erbij omdat er van veel platen een heruitgave
+/// náást het origineel in de lijst komt, en de titel dan twee keer hetzelfde zegt.
+class TidalAlbum {
+  final String id;
+  final String title;
+  final String artist;
+  final String jaar;
+  const TidalAlbum(this.id, this.title, this.artist, [this.jaar = '']);
+  String get sourceQuery => artist.isEmpty ? title : '$artist $title';
+  String get label => artist.isEmpty ? title : '$artist — $title';
+}
+
+/// Wat één zoekopdracht oplevert: platen én losse nummers.
+///
+/// Uit dezelfde vraag, want TIDAL stuurt ze in één antwoord mee. Twee keer zoeken voor iets wat in
+/// één keer terugkomt is twee keer wachten.
+class TidalZoekResultaat {
+  final List<TidalAlbum> albums;
+  final List<TidalTrack> tracks;
+  const TidalZoekResultaat(this.albums, this.tracks);
+  bool get leeg => albums.isEmpty && tracks.isEmpty;
+}
+
 /// TIDAL official developer API (openapi.tidal.com):
 /// OAuth 2.1 Authorization-Code + PKCE via a loopback redirect, then catalog search.
 /// No direct playback — full-track streaming isn't permitted for third-party native apps.
@@ -230,16 +256,46 @@ class TidalService {
     return j == null ? [] : parseTracks(j);
   }
 
+  /// Zoeken naar platen én nummers in één vraag.
+  ///
+  /// **Waarom hier een terugval in zit.** `albums,albums.artists,tracks,tracks.artists` is meer dan
+  /// deze app tot nu toe vroeg. Weigert TIDAL dat ooit — een grens op het aantal relaties, een
+  /// hernoemde relatie — dan komt er een 4xx terug en zou het zoeken in één klap helemaal stuk
+  /// zijn. Dus valt hij dan terug op de smalle vraag die er al stond: geen platen, maar de nummers
+  /// doen het nog. Is er werkelijk iets mis (geen verbinding, verlopen aanmelding), dan gooit
+  /// [searchTracks] dezelfde fout alsnog naar het scherm.
+  Future<TidalZoekResultaat> search(String query) async {
+    Map<String, dynamic>? j;
+    try {
+      j = await _get('/searchResults/${Uri.encodeComponent(query)}', {
+        'countryCode': _country,
+        'include': 'albums,albums.artists,tracks,tracks.artists',
+      });
+    } catch (_) {
+      j = null;
+    }
+    if (j == null) return TidalZoekResultaat(const [], await searchTracks(query));
+    return TidalZoekResultaat(parseAlbums(j), parseTracks(j));
+  }
+
+  /// Artiest-id → naam, uit het `included`-blok.
+  ///
+  /// Twee parsers lopen dezelfde lijst af; dit is de helft die ze delen.
+  static Map<String, String> _artiestNamen(List<dynamic> included) {
+    final namen = <String, String>{};
+    for (final it in included) {
+      if (it is Map && it['type'] == 'artists') {
+        namen[it['id'].toString()] = ((it['attributes']?['name']) ?? '') as String;
+      }
+    }
+    return namen;
+  }
+
   /// Parse a JSON:API searchResults response (with tracks + tracks.artists included)
   /// into TidalTracks. Static + defensive so it can be unit-tested without the network.
   static List<TidalTrack> parseTracks(Map<String, dynamic> j) {
     final included = (j['included'] as List?) ?? const [];
-    final artistName = <String, String>{};
-    for (final it in included) {
-      if (it is Map && it['type'] == 'artists') {
-        artistName[it['id'].toString()] = ((it['attributes']?['name']) ?? '') as String;
-      }
-    }
+    final artistName = _artiestNamen(included);
     final tracks = <TidalTrack>[];
     for (final it in included) {
       if (it is Map && it['type'] == 'tracks') {
@@ -252,6 +308,31 @@ class TidalService {
       }
     }
     return tracks;
+  }
+
+  /// Hetzelfde als [parseTracks], maar voor de platen.
+  ///
+  /// Een antwoord zónder albums levert een lege lijst op en geen fout. Dat is precies wat er
+  /// gebeurt als TIDAL de bredere `include` niet honoreert, en dan hoort de nummerlijst het gewoon
+  /// te blijven doen.
+  static List<TidalAlbum> parseAlbums(Map<String, dynamic> j) {
+    final included = (j['included'] as List?) ?? const [];
+    final namen = _artiestNamen(included);
+    final albums = <TidalAlbum>[];
+    for (final it in included) {
+      if (it is! Map || it['type'] != 'albums') continue;
+      final attr = (it['attributes'] as Map?) ?? const {};
+      final title = (attr['title'] ?? '').toString();
+      if (title.isEmpty) continue;
+      var artist = '';
+      final rel = it['relationships']?['artists']?['data'];
+      if (rel is List && rel.isNotEmpty) artist = namen[rel.first['id'].toString()] ?? '';
+      // releaseDate is "1982-11-30"; alleen het jaar is bruikbaar, en het veld mag ontbreken.
+      final datum = (attr['releaseDate'] ?? '').toString();
+      albums.add(TidalAlbum(it['id'].toString(), title, artist,
+          datum.length >= 4 ? datum.substring(0, 4) : ''));
+    }
+    return albums;
   }
 
   void disconnect() {

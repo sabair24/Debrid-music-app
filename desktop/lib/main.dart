@@ -9601,7 +9601,14 @@ Future<void> _downloadSoulseek(BuildContext context, SoulseekFile f, List<Soulse
 /// voortgang en een eigen scherm. Dit is één opdracht die een bestand in je muziekmap zet, waarna de
 /// bestaande scan het oppakt. Er is niets te beheren, dus er komt geen beheer bij.
 class _TidalOphalen extends StatefulWidget {
-  const _TidalOphalen();
+  /// Het doel als het al vaststaat ('album/103805723'), omdat je hier vanaf een zoekresultaat komt.
+  /// Null betekent: het venster waar je zelf een link plakt.
+  final String? doel;
+
+  /// Hoe die plaat heet — alleen om te tonen wát er straks binnenkomt.
+  final String? titel;
+
+  const _TidalOphalen({this.doel, this.titel});
 
   @override
   State<_TidalOphalen> createState() => _TidalOphalenState();
@@ -9622,7 +9629,7 @@ class _TidalOphalenState extends State<_TidalOphalen> {
   Future<void> _ophalen() async {
     // Eerst hier weigeren wat niet klopt. Een zin op het scherm is beter dan een stapeltrace uit
     // een proces dat je startte om een fout te ontdekken die je al kon zien.
-    final doel = tidalDoel(_link.text);
+    final doel = widget.doel ?? tidalDoel(_link.text);
     if (doel == null) {
       setState(() => _fout = 'Dat is geen Tidal-link. Plak het adres van een plaat of een nummer, '
           'bijvoorbeeld https://tidal.com/browse/album/103805723');
@@ -9659,26 +9666,32 @@ class _TidalOphalenState extends State<_TidalOphalen> {
               children: [
                 const Text('Ophalen van Tidal', style: kKop),
                 const SizedBox(height: kRuimte6),
-                const Text(
-                  'Zoek de plaat in Tidal, kopieer de link en plak hem hier. '
-                  'Hij komt in je muziekmap te staan en wordt daarna vanzelf gevonden.',
+                Text(
+                  widget.doel == null
+                      ? 'Zoek de plaat in Tidal, kopieer de link en plak hem hier. '
+                          'Hij komt in je muziekmap te staan en wordt daarna vanzelf gevonden.'
+                      : '“${widget.titel ?? widget.doel}” wordt met jouw Tidal-abonnement '
+                          'opgehaald en komt in je muziekmap te staan.',
                   style: kTekstBij,
                 ),
                 const SizedBox(height: kRuimte16),
-                TextField(
-                  controller: _link,
-                  autofocus: true,
-                  enabled: !_bezig,
-                  onSubmitted: (_) => _bezig ? null : _ophalen(),
-                  decoration: InputDecoration(
-                    hintText: 'https://tidal.com/browse/album/…',
-                    filled: true,
-                    fillColor: _panel2,
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(kHoek8), borderSide: BorderSide.none),
+                // Komt het doel van een zoekresultaat, dan valt er niets meer te plakken.
+                if (widget.doel == null) ...[
+                  TextField(
+                    controller: _link,
+                    autofocus: true,
+                    enabled: !_bezig,
+                    onSubmitted: (_) => _bezig ? null : _ophalen(),
+                    decoration: InputDecoration(
+                      hintText: 'https://tidal.com/browse/album/…',
+                      filled: true,
+                      fillColor: _panel2,
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(kHoek8), borderSide: BorderSide.none),
+                    ),
                   ),
-                ),
-                const SizedBox(height: kRuimte12),
+                  const SizedBox(height: kRuimte12),
+                ],
                 Row(
                   children: [
                     const Text('Kwaliteit', style: kTekstKlein),
@@ -11203,8 +11216,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   int _searchGen = 0; // guards streaming callbacks from a superseded search
   // tidal
   List<TidalTrack> _tidalTracks = [];
+  List<TidalAlbum> _tidalAlbums = [];
   bool _tidalBusy = false, _tidalConnecting = false;
-  int? _tidalExpanded;
+  int? _tidalExpanded, _tidalAlbumExpanded;
 
   Future<void> _search() async {
     final q = _c.text.trim();
@@ -11221,10 +11235,23 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   Future<void> _searchTidal(String q) async {
     final tidal = context.read<TidalService>();
     if (!tidal.connected) return;
-    setState(() { _tidalBusy = true; _tidalTracks = []; _tidalExpanded = null; _status = null; });
+    setState(() {
+      _tidalBusy = true;
+      _tidalTracks = [];
+      _tidalAlbums = [];
+      _tidalExpanded = null;
+      _tidalAlbumExpanded = null;
+      _status = null;
+    });
     try {
-      final t = await tidal.searchTracks(q);
-      if (mounted) setState(() { _tidalTracks = t; _status = t.isEmpty ? 'Geen TIDAL-resultaten.' : null; });
+      final r = await tidal.search(q);
+      if (mounted) {
+        setState(() {
+          _tidalAlbums = r.albums;
+          _tidalTracks = r.tracks;
+          _status = r.leeg ? 'Geen TIDAL-resultaten.' : null;
+        });
+      }
     } catch (e) {
       if (mounted) setState(() => _status = 'TIDAL-zoeken mislukt: $e');
     } finally {
@@ -11297,6 +11324,25 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     } finally {
       if (mounted) setState(() => _tidalConnecting = false);
     }
+  }
+
+  /// Eén resultaat uit de TIDAL-lijst binnenhalen met tiddl.
+  ///
+  /// Hetzelfde venster als "Ophalen van Tidal…" bij Mijn downloads, alleen met het doel al
+  /// ingevuld: er valt hier niets meer te plakken. Daarna dezelfde scan, want het bestand staat dan
+  /// in de muziekmap en moet nog gevonden worden.
+  Future<void> _ophalenVanTidal(String? doel, String naam) async {
+    if (doel == null) {
+      // Kan alleen als TIDAL een id teruggeeft dat niet op een id lijkt. Beter een zin dan een
+      // proces starten om een fout te ontdekken die hier al zichtbaar was.
+      _srcToast(context, 'Dit resultaat heeft geen bruikbaar Tidal-id.');
+      return;
+    }
+    final gedaan = await showDialog<bool>(
+        context: context, builder: (_) => _TidalOphalen(doel: doel, titel: naam));
+    if (gedaan != true || !mounted) return;
+    _srcToast(context, 'Opgehaald — de bibliotheek wordt opnieuw doorzocht');
+    unawaited(context.read<LibraryStore>().scan());
   }
 
   /// Append what Discogs has that Deezer does not.
@@ -11531,10 +11577,16 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 0, 24, 10),
-          child: Row(children: [
+          // Wrap en geen Row: drie chips passen op een telefoon van 360 punten net niet naast
+          // elkaar, en een overloop is een gele balk op het toestel die geen enkele toets ziet.
+          child: Wrap(spacing: 8, runSpacing: 8, children: [
             _modeChip('Bladeren', 0),
-            const SizedBox(width: 8),
             _modeChip('Direct zoeken', 1),
+            // Altijd zichtbaar, ook zonder Client ID. Verstoppen zou betekenen dat de chip pas ná
+            // een herstart verschijnt: dit scherm luistert niet naar de instellingen. Het paneel
+            // eronder legt zelf uit wat er nog ontbreekt — dat stond er al, maar was tot nu toe
+            // onbereikbaar omdat deze chip nooit gebouwd werd.
+            _modeChip('TIDAL', 2),
           ]),
         ),
         Padding(
@@ -11738,23 +11790,95 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       );
     }
     if (_tidalBusy) return const Center(child: CircularProgressIndicator(color: _accent));
-    if (_tidalTracks.isEmpty) {
+    if (_tidalAlbums.isEmpty && _tidalTracks.isEmpty) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(24),
-          child: Text('Verbonden met TIDAL ✓  — zoek een nummer; de bronnen (torrent/Soulseek) verschijnen eronder.',
+          child: Text('Verbonden met TIDAL ✓  — zoek een plaat of een nummer. Ophalen gaat met je '
+              'eigen abonnement; klap een regel uit voor torrent en Soulseek.',
               textAlign: TextAlign.center, style: TextStyle(color: _muted)),
         ),
       );
     }
-    return ListView.builder(
+    // tiddl staat op de machine die de muziek bezit. Een telefoon, de Shield en een op afstand
+    // gekoppeld toestel hebben geen muziekmap om iets in te zetten — daar blijft dit precies wat
+    // het was: een zoekscherm dat torrents en Soulseek voedt.
+    final kanOphalen = _isDesktop && !context.read<LibraryStore>().isRemote;
+    return ListView(
       padding: const EdgeInsets.only(bottom: 24),
-      itemCount: _tidalTracks.length,
-      itemBuilder: (_, i) => _tidalTrackRow(i, _tidalTracks[i]),
+      children: [
+        if (_tidalAlbums.isNotEmpty) ...[
+          _browseHeader('Albums', _tidalAlbums.length),
+          for (var i = 0; i < _tidalAlbums.length; i++)
+            _tidalAlbumRow(i, _tidalAlbums[i], kanOphalen),
+        ],
+        if (_tidalTracks.isNotEmpty) ...[
+          _browseHeader('Nummers', _tidalTracks.length),
+          for (var i = 0; i < _tidalTracks.length; i++)
+            _tidalTrackRow(i, _tidalTracks[i], kanOphalen),
+        ],
+      ],
     );
   }
 
-  Widget _tidalTrackRow(int i, TidalTrack t) {
+  /// Eén plaat uit de TIDAL-lijst.
+  ///
+  /// Dezelfde vorm als [_tidalTrackRow], met twee verschillen: het jaar staat achter de artiest
+  /// (heruitgaven dragen dezelfde titel) en de artiestnaam gaat er zonder [splitFeatured] in — een
+  /// plaat heeft geen gastartiest in zijn titel, en dat raden levert alleen maar rare afbrekingen.
+  Widget _tidalAlbumRow(int i, TidalAlbum a, bool kanOphalen) {
+    final open = _tidalAlbumExpanded == i;
+    return Column(
+      children: [
+        InkWell(
+          onTap: () => setState(() => _tidalAlbumExpanded = open ? null : i),
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            decoration: BoxDecoration(
+                color: open ? _panel : Colors.transparent, borderRadius: BorderRadius.circular(8)),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(a.title,
+                          maxLines: titelRegels(context),
+                          overflow: TextOverflow.ellipsis,
+                          style: kTekstNormaal),
+                      if (a.artist.isNotEmpty || a.jaar.isNotEmpty)
+                        Text(a.jaar.isEmpty ? a.artist : '${a.artist} · ${a.jaar}',
+                            maxLines: 1, overflow: TextOverflow.ellipsis, style: kTekstKlein),
+                    ],
+                  ),
+                ),
+                if (kanOphalen) _ophaalKnop(tidalDoelVanId('album', a.id), a.label),
+                Icon(open ? Icons.expand_less_rounded : Icons.travel_explore_rounded,
+                    size: 18, color: open ? _accent : _muted),
+              ],
+            ),
+          ),
+        ),
+        if (open)
+          Padding(padding: const EdgeInsets.only(bottom: 8), child: SourcesView(query: a.sourceQuery)),
+      ],
+    );
+  }
+
+  /// De knop die één resultaat binnenhaalt.
+  ///
+  /// Een knop binnen de `InkWell` van de regel wint de aanraking, dus ophalen klapt de regel niet
+  /// óók nog open.
+  Widget _ophaalKnop(String? doel, String naam) => TextButton.icon(
+        onPressed: () => _ophalenVanTidal(doel, naam),
+        icon: const Icon(Icons.download_rounded, size: 15),
+        label: const Text('Ophalen'),
+        style: TextButton.styleFrom(
+            foregroundColor: _accent2, textStyle: const TextStyle(fontSize: 12)),
+      );
+
+  Widget _tidalTrackRow(int i, TidalTrack t, bool kanOphalen) {
     final open = _tidalExpanded == i;
     return Column(
       children: [
@@ -11779,6 +11903,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                     ],
                   ),
                 ),
+                if (kanOphalen) _ophaalKnop(tidalDoelVanId('track', t.id), t.label),
                 Icon(open ? Icons.expand_less_rounded : Icons.travel_explore_rounded, size: 18, color: open ? _accent : _muted),
               ],
             ),
@@ -14956,7 +15081,7 @@ class SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
-  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _rtUser, _rtPass, _slskPort, _acoustid;
+  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _rtUser, _rtPass, _slskPort, _acoustid, _tidalId, _tidalSecret;
 
   @override
   void initState() {
@@ -14969,6 +15094,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskPort = TextEditingController(text: s.soulseekPort > 0 ? s.soulseekPort.toString() : "");
     _lastfm = TextEditingController(text: s.lastfmKey);
     _acoustid = TextEditingController(text: s.acoustidKey);
+    _tidalId = TextEditingController(text: s.tidalClientId);
+    _tidalSecret = TextEditingController(text: s.tidalClientSecret);
     _rtUser = TextEditingController(text: s.rutrackerUser);
     _rtPass = TextEditingController(text: s.rutrackerPass);
   }
@@ -15097,6 +15224,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskPort.dispose();
     _lastfm.dispose();
     _acoustid.dispose();
+    _tidalId.dispose();
+    _tidalSecret.dispose();
     _rtUser.dispose();
     _rtPass.dispose();
     for (final n in _fieldFocus.values) {
@@ -15428,6 +15557,27 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     ),
                     _field('Last.fm API-sleutel', _lastfm),
                     const SizedBox(height: 8),
+                    // Zonder dit veld was de enige manier om een Client ID in te vullen: het
+                    // instellingenbestand op schijf met de hand openen. De waarde werd al bewaard —
+                    // er was alleen nergens een plek om hem in te typen, en het TIDAL-scherm
+                    // verwees wél naar Instellingen.
+                    Row(
+                      children: [
+                        Expanded(child: _field('TIDAL Client ID', _tidalId)),
+                        const SizedBox(width: 12),
+                        Expanded(
+                            child: _field('TIDAL Secret (mag leeg)', _tidalSecret, obscure: true)),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Maak op developer.tidal.com een app aan en zet daar '
+                      'debridmusic://tidal/callback als Redirect URI. Hiermee kan de app in TIDAL '
+                      'zóéken. Het ophalen zelf gaat met je eigen abonnement via tiddl op deze pc — '
+                      'dat is een aparte, eenmalige "tiddl auth login".',
+                      style: TextStyle(color: _muted, fontSize: 11.5, height: 1.3),
+                    ),
+                    const SizedBox(height: 12),
                     // WELKE sleutel staat er nu bij, en dat is geen detail: AcoustID heeft er twee
                     // en de site duwt je naar de verkeerde. acoustid.org/api-key toont je
                     // USER-sleutel groot op het scherm; die werkt hier niet. De application-sleutel
@@ -15674,6 +15824,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     s.rutrackerPass = _rtPass.text;
                     s.lastfmKey = _lastfm.text.trim();
                     s.acoustidKey = _acoustid.text.trim();
+                    s.tidalClientId = _tidalId.text.trim();
+                    s.tidalClientSecret = _tidalSecret.text.trim();
                     // Pressing Save here is the deliberate override of the refuse-to-write guard:
                     // these values came from the fields, not from a failed load, so writing them
                     // over a broken file is a repair rather than the loss the guard exists for.
