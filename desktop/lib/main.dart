@@ -275,6 +275,31 @@ Future<void> afsluiten(LibraryStore library, SoulseekService soulseek) async {
   } catch (_) {}
 }
 
+/// De eerste regels van een stapeltrace naar het logboek, zonder de rommel van Flutter zelf.
+///
+/// **Waarom dit erbij moest.** Er stond alleen de fóút in het logboek: "Null check operator used on
+/// a null value". Dat is waar, en volstrekt nutteloos — er staan duizenden plekken in deze app waar
+/// dat kan gebeuren. Zonder een regelnummer blijft er niets over dan gissen, en dat is precies wat
+/// er dan ook gebeurde.
+///
+/// Alleen de regels van deze app: de rest is `package:flutter/…`, en dat zijn dertig regels waar de
+/// enige zin tussen verdwijnt. Twaalf is ruim genoeg om de aanroeper van de aanroeper te zien.
+void _logStapel(WarmLog log, StackTrace? stapel) {
+  if (stapel == null) return;
+  var geteld = 0;
+  for (final regel in stapel.toString().split('\n')) {
+    if (!regel.contains('package:debridmusic/')) continue;
+    log.line('    $regel');
+    if (++geteld >= 12) break;
+  }
+  // Zit er geen enkele eigen regel in, dan is de trace toch het enige spoor dat er is.
+  if (geteld == 0) {
+    for (final regel in stapel.toString().split('\n').take(6)) {
+      if (regel.trim().isNotEmpty) log.line('    $regel');
+    }
+  }
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
@@ -335,10 +360,12 @@ Future<void> main() async {
   // symptoom over.
   FlutterError.onError = (details) {
     startLog.line('FLUTTERFOUT: ${details.exceptionAsString()}');
+    _logStapel(startLog, details.stack);
     FlutterError.presentError(details);
   };
   PlatformDispatcher.instance.onError = (fout, stapel) {
     startLog.line('ONGEVANGEN: $fout');
+    _logStapel(startLog, stapel);
     return false;
   };
 
@@ -8616,6 +8643,28 @@ String _fmtBytes(int b) => b >= 1000000000
         : '${(b / 1e3).round()} KB';
 
 // Shared source-result rendering + actions (used by direct search AND browse sources).
+/// Een fout die je moet kúnnen lezen, en overtypen.
+///
+/// Een toast van twee seconden is goed voor "opgeslagen ✓". Voor het antwoord van een server dat
+/// vertelt wát er niet klopte is hij het slechtst denkbare: tegen dat je hem gelezen hebt is hij
+/// weg, en dan blijft alleen "het lukte niet" over.
+Future<void> _toonFout(BuildContext context, String kop, String tekst) => showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _panel,
+        title: Text(kop, style: kKopKlein),
+        content: SizedBox(
+          width: dialogWidth(ctx, 520),
+          child: SingleChildScrollView(
+            child: SelectableText(tekst, style: kTekstBij.copyWith(height: 1.4)),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Sluiten')),
+        ],
+      ),
+    );
+
 void _srcToast(BuildContext context, String m) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), duration: const Duration(seconds: 2)));
 }
@@ -11315,14 +11364,20 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ],
       ),
     );
-    ctrl.dispose();
+    // Bewust NIET ctrl.dispose() hier: het venster is aan het wegschuiven en zijn TextField leeft
+    // nog een paar beelden door. Een controller die dan al opgeruimd is gooit tijdens het tekenen,
+    // en dan verdwijnt de halve pagina — erger dan één controller die blijft hangen in een venster
+    // dat je één keer in je leven opent.
     if (pasted == null || pasted.isEmpty) return;
     setState(() => _tidalConnecting = true);
     try {
       await tidal.completeManual(pasted);
       if (mounted) _srcToast(context, 'TIDAL verbonden ✓');
     } catch (e) {
-      if (mounted) _srcToast(context, 'Mislukt: $e');
+      // In een venster en niet als toast: het antwoord van TIDAL is meerdere regels en zegt wélk
+      // stuk niet klopte. Dat in twee seconden laten wegglijden is precies waardoor deze fout
+      // vanmorgen niet te onderzoeken was.
+      if (mounted) await _toonFout(context, 'Verbinden met TIDAL mislukt', '$e');
     } finally {
       if (mounted) setState(() => _tidalConnecting = false);
     }
