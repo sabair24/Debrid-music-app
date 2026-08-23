@@ -36,6 +36,7 @@ import 'editions.dart';
 import 'connectivity.dart';
 import 'enrichment.dart';
 import 'facts_warmer.dart';
+import 'ffmpeg.dart';
 import 'fingerprint.dart';
 import 'flac_tags.dart';
 import 'mp3_tags.dart';
@@ -275,6 +276,31 @@ Future<void> afsluiten(LibraryStore library, SoulseekService soulseek) async {
   } catch (_) {}
 }
 
+/// De eerste regels van een stapeltrace naar het logboek, zonder de rommel van Flutter zelf.
+///
+/// **Waarom dit erbij moest.** Er stond alleen de fóút in het logboek: "Null check operator used on
+/// a null value". Dat is waar, en volstrekt nutteloos — er staan duizenden plekken in deze app waar
+/// dat kan gebeuren. Zonder een regelnummer blijft er niets over dan gissen, en dat is precies wat
+/// er dan ook gebeurde.
+///
+/// Alleen de regels van deze app: de rest is `package:flutter/…`, en dat zijn dertig regels waar de
+/// enige zin tussen verdwijnt. Twaalf is ruim genoeg om de aanroeper van de aanroeper te zien.
+void _logStapel(WarmLog log, StackTrace? stapel) {
+  if (stapel == null) return;
+  var geteld = 0;
+  for (final regel in stapel.toString().split('\n')) {
+    if (!regel.contains('package:debridmusic/')) continue;
+    log.line('    $regel');
+    if (++geteld >= 12) break;
+  }
+  // Zit er geen enkele eigen regel in, dan is de trace toch het enige spoor dat er is.
+  if (geteld == 0) {
+    for (final regel in stapel.toString().split('\n').take(6)) {
+      if (regel.trim().isNotEmpty) log.line('    $regel');
+    }
+  }
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
@@ -335,10 +361,12 @@ Future<void> main() async {
   // symptoom over.
   FlutterError.onError = (details) {
     startLog.line('FLUTTERFOUT: ${details.exceptionAsString()}');
+    _logStapel(startLog, details.stack);
     FlutterError.presentError(details);
   };
   PlatformDispatcher.instance.onError = (fout, stapel) {
     startLog.line('ONGEVANGEN: $fout');
+    _logStapel(startLog, stapel);
     return false;
   };
 
@@ -8616,6 +8644,28 @@ String _fmtBytes(int b) => b >= 1000000000
         : '${(b / 1e3).round()} KB';
 
 // Shared source-result rendering + actions (used by direct search AND browse sources).
+/// Een fout die je moet kúnnen lezen, en overtypen.
+///
+/// Een toast van twee seconden is goed voor "opgeslagen ✓". Voor het antwoord van een server dat
+/// vertelt wát er niet klopte is hij het slechtst denkbare: tegen dat je hem gelezen hebt is hij
+/// weg, en dan blijft alleen "het lukte niet" over.
+Future<void> _toonFout(BuildContext context, String kop, String tekst) => showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _panel,
+        title: Text(kop, style: kKopKlein),
+        content: SizedBox(
+          width: dialogWidth(ctx, 520),
+          child: SingleChildScrollView(
+            child: SelectableText(tekst, style: kTekstBij.copyWith(height: 1.4)),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Sluiten')),
+        ],
+      ),
+    );
+
 void _srcToast(BuildContext context, String m) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), duration: const Duration(seconds: 2)));
 }
@@ -9640,16 +9690,16 @@ class _TidalOphalenState extends State<_TidalOphalen> {
       _bezig = true;
       _fout = null;
     });
-    final fout = await haalVanTidal(doel: doel, map: map, kwaliteit: _kwaliteit);
+    final uitslag = await haalVanTidal(doel: doel, map: map, kwaliteit: _kwaliteit);
     if (!mounted) return;
-    if (fout != null) {
+    if (uitslag.fout != null) {
       setState(() {
         _bezig = false;
-        _fout = fout;
+        _fout = uitslag.fout;
       });
       return;
     }
-    Navigator.of(context).pop(true);
+    Navigator.of(context).pop(uitslag.kwaliteit ?? '');
   }
 
   @override
@@ -9723,6 +9773,18 @@ class _TidalOphalenState extends State<_TidalOphalen> {
                     ),
                   ],
                 ),
+                // Zonder ffmpeg kan tiddl de hi-res-stroom niet in elkaar zetten en levert hij
+                // 16 bit / 44,1 kHz af terwijl je om max vroeg — met één waarschuwingsregel tussen
+                // zijn voortgangsbalken door, die niemand ziet. Een mindere plaat die er goed
+                // uitziet is de vervelendste soort, dus staat het hier vóórdat je op Ophalen klikt.
+                if (!Ffmpeg().available) ...[
+                  const SizedBox(height: kRuimte12),
+                  const Text(
+                    'ffmpeg staat niet op deze pc. Zonder ffmpeg komt er 16 bit / 44,1 kHz binnen, '
+                    'ook op "max". Installeer hem met "winget install ffmpeg" en herstart de app.',
+                    style: TextStyle(color: Color(0xFFE0B341), fontSize: 12, height: 1.35),
+                  ),
+                ],
                 if (_fout != null) ...[
                   const SizedBox(height: kRuimte12),
                   // In het venster en niet als toast: een fout van tiddl is meerdere regels, en die
@@ -9747,7 +9809,7 @@ class _TidalOphalenState extends State<_TidalOphalen> {
                               style: kTekstKlein)),
                     ],
                     TextButton(
-                      onPressed: _bezig ? null : () => Navigator.of(context).pop(false),
+                      onPressed: _bezig ? null : () => Navigator.of(context).pop(),
                       child: const Text('Annuleren'),
                     ),
                     const SizedBox(width: kRuimte8),
@@ -9850,10 +9912,12 @@ class DownloadsView extends StatelessWidget {
                 if (_isDesktop && !context.read<LibraryStore>().isRemote)
                   TextButton.icon(
                     onPressed: () async {
-                      final gedaan = await showDialog<bool>(
+                      // Een string terug betekent gelukt; de inhoud is de kwaliteit die tiddl
+                      // meldde. Null is geannuleerd.
+                      final kwaliteit = await showDialog<String>(
                           context: context, builder: (_) => const _TidalOphalen());
-                      if (gedaan != true || !context.mounted) return;
-                      _srcToast(context, 'Opgehaald — de bibliotheek wordt opnieuw doorzocht');
+                      if (kwaliteit == null || !context.mounted) return;
+                      _srcToast(context, opgehaaldMelding(kwaliteit));
                       unawaited(context.read<LibraryStore>().scan());
                     },
                     icon: const Icon(Icons.link_rounded, size: 16),
@@ -11315,14 +11379,20 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ],
       ),
     );
-    ctrl.dispose();
+    // Bewust NIET ctrl.dispose() hier: het venster is aan het wegschuiven en zijn TextField leeft
+    // nog een paar beelden door. Een controller die dan al opgeruimd is gooit tijdens het tekenen,
+    // en dan verdwijnt de halve pagina — erger dan één controller die blijft hangen in een venster
+    // dat je één keer in je leven opent.
     if (pasted == null || pasted.isEmpty) return;
     setState(() => _tidalConnecting = true);
     try {
       await tidal.completeManual(pasted);
       if (mounted) _srcToast(context, 'TIDAL verbonden ✓');
     } catch (e) {
-      if (mounted) _srcToast(context, 'Mislukt: $e');
+      // In een venster en niet als toast: het antwoord van TIDAL is meerdere regels en zegt wélk
+      // stuk niet klopte. Dat in twee seconden laten wegglijden is precies waardoor deze fout
+      // vanmorgen niet te onderzoeken was.
+      if (mounted) await _toonFout(context, 'Verbinden met TIDAL mislukt', '$e');
     } finally {
       if (mounted) setState(() => _tidalConnecting = false);
     }
@@ -11340,10 +11410,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       _srcToast(context, 'Dit resultaat heeft geen bruikbaar Tidal-id.');
       return;
     }
-    final gedaan = await showDialog<bool>(
+    final kwaliteit = await showDialog<String>(
         context: context, builder: (_) => _TidalOphalen(doel: doel, titel: naam));
-    if (gedaan != true || !mounted) return;
-    _srcToast(context, 'Opgehaald — de bibliotheek wordt opnieuw doorzocht');
+    if (kwaliteit == null || !mounted) return;
+    _srcToast(context, opgehaaldMelding(kwaliteit));
     unawaited(context.read<LibraryStore>().scan());
   }
 
