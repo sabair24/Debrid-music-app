@@ -2183,8 +2183,10 @@ class DownloadManager extends ChangeNotifier {
   /// dat in dezelfde functie propt krijgt vanzelf een balk die achteruit loopt.
   Future<void> _downloadLokaal(
       TbTorrent torrent, List<TbFile> files, Directory destDir, List<DownloadJob> jobs) async {
+    // Een gestopte taak niet opnieuw beschrijven: `cancelJob` heeft daar het laatste woord al
+    // gezet ("geannuleerd"), en de lus draait daarna nog minstens één ronde.
     void alle(String status, {String? detail}) {
-      for (final j in jobs) {
+      for (final j in jobs.where((j) => !j.cancelled)) {
         j.status = status;
         if (detail != null) j.detail = detail;
       }
@@ -2205,11 +2207,18 @@ class DownloadManager extends ChangeNotifier {
     }
 
     alle('downloading');
+    // Dit is de eerste torrentdownload die écht te stoppen is. Bij TorBox loopt het ophalen aan hún
+    // kant door en heeft de app geen handvat; hier is er een gid, en die kunnen we weghalen.
+    for (final j in jobs) {
+      j.canCancel = true;
+    }
     var stilStaandeSeconden = 0;
     var laatstGedaan = 0;
     try {
       while (true) {
         await Future<void>.delayed(const Duration(seconds: 2));
+        // Alles weggetikt? Dan heeft niemand deze zwerm nog nodig.
+        if (jobs.every((j) => j.cancelled)) return;
         final s = await motor.stand(gid);
         if (s == null) continue;
 
@@ -2246,7 +2255,10 @@ class DownloadManager extends ChangeNotifier {
       final s = await motor.stand(gid);
       for (var i = 0; i < files.length; i++) {
         final b = s?.bestand(files[i].id);
-        if (b == null) continue;
+        // Een nummer dat je onderweg hebt weggetikt hoort niet alsnog in je bibliotheek te landen.
+        // Het stuk dat aria2 er al van had blijft in zijn eigen map staan en gaat mee in de
+        // opruiming hieronder.
+        if (b == null || jobs[i].cancelled) continue;
         final bron = File(b.pad);
         if (!await bron.exists()) {
           jobs[i].status = 'failed';
@@ -2265,25 +2277,12 @@ class DownloadManager extends ChangeNotifier {
         jobs[i].status = 'done';
       }
       notifyListeners();
-      await _ruimLegeMappenOp(destDir);
+      await ruimOpNaTorrent(destDir, s);
       await onLibraryChanged();
     } finally {
       // De torrent uit aria2 halen zodra hij klaar is: hij seedt toch niet (--seed-time=0) en een
       // lijst die volloopt met afgeronde taken maakt elke volgende vraag trager.
       await motor.verwijder(gid);
-    }
-  }
-
-  /// De map die aria2 achterlaat (torrentnaam, en daaronder soms nog submappen) opruimen zodra de
-  /// bestanden eruit gehaald zijn. Een lege map is geen ramp, maar de scanner loopt er wel doorheen.
-  Future<void> _ruimLegeMappenOp(Directory wortel) async {
-    try {
-      for (final e in wortel.listSync().whereType<Directory>()) {
-        final inhoud = e.listSync(recursive: true).whereType<File>();
-        if (inhoud.isEmpty) await e.delete(recursive: true);
-      }
-    } catch (_) {
-      // opruimen is nooit een reden om een geslaagde download te laten mislukken
     }
   }
 

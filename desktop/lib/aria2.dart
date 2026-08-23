@@ -86,6 +86,46 @@ class Aria2Stand {
   bool get geenBron => seeders <= 0 && verbindingen <= 0 && gedaan == 0;
 }
 
+/// Alles weghalen wat aria2 achterlaat, zodra de gekozen nummers uit de map gehaald zijn.
+///
+/// **Dit is geen netheid, dit is een reparatie.** Gemeten met B.B.E. — Seven Days And One Week,
+/// waarbij alléén nummer 1 gekozen was; na afloop stond er in de map:
+///
+///     01. ... [Radio Edit].flac                      26 MB   <- het gevraagde nummer
+///     <torrentnaam>/02. ... [Club Mix].flac           2 kB   <- NIET gevraagd, en toch een bestand
+///     <torrentnaam>.aria2                                    <- aria2's eigen administratie
+///     <infohash>.torrent                                     <- het aangeboden torrentbestand
+///
+/// Dat tweede bestand is het gevaarlijke. Torrentstukken trekken zich niets aan van bestandsgrenzen,
+/// dus een stuk dat half in nummer 2 valt schrijft daar een paar kilobytes. De scanner slaat deze map
+/// niet over — en dan staat er een FLAC van twee kilobyte in je bibliotheek die nergens op lijkt en
+/// die je pas hoort als je hem aanklikt.
+///
+/// Welke mappen weg mogen komt uit aria2's eigen opgave en niet uit de torrentnaam: die twee lopen
+/// uiteen zodra er een teken in staat dat Windows niet in een mapnaam duldt.
+Future<void> ruimOpNaTorrent(Directory wortel, Aria2Stand? stand) async {
+  try {
+    final vanAria2 = <String>{};
+    for (final b in stand?.bestanden ?? const <Aria2Bestand>[]) {
+      final rest = b.pad.replaceAll('/', Platform.pathSeparator);
+      if (!rest.startsWith(wortel.path)) continue;
+      final staart = rest.substring(wortel.path.length).split(Platform.pathSeparator)
+        ..removeWhere((s) => s.isEmpty);
+      if (staart.length > 1) vanAria2.add(staart.first);
+    }
+
+    for (final naam in vanAria2) {
+      final map = Directory('${wortel.path}${Platform.pathSeparator}$naam');
+      if (await map.exists()) await map.delete(recursive: true);
+    }
+    for (final e in wortel.listSync().whereType<File>()) {
+      if (e.path.endsWith('.aria2') || e.path.endsWith('.torrent')) await e.delete();
+    }
+  } catch (_) {
+    // Opruimen is nooit een reden om een geslaagde download te laten mislukken.
+  }
+}
+
 /// De motor: één aria2-proces, aangestuurd over JSON-RPC op localhost.
 class Aria2 {
   Aria2({String? pad}) : _opgegeven = pad;
@@ -169,6 +209,9 @@ class Aria2 {
         // Een torrentbestand gaat als base64 door de RPC heen; de standaard van 2 MB is te krap voor
         // een plaat met veel stukken.
         '--rpc-max-request-size=32M',
+        // Niet het aangeboden torrentbestand naast de muziek neerleggen. Staat standaard AAN: er
+        // bleef een `<infohash>.torrent` liggen in de map waar de scanner straks doorheen loopt.
+        '--rpc-save-upload-metadata=false',
         '--dir=$map',
         // Klaar is klaar: niet blijven seeden met andermans bandbreedte zonder dat iemand daarom
         // vroeg. Wie wél wil seeden zet dit om in de instellingen.
