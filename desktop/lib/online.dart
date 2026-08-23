@@ -47,8 +47,14 @@ class OnlineService {
     // Mark instantly-cached results (top 40, batches of 20).
     final top = results.take(40).map((r) => r.hash.toLowerCase()).toList();
     final cached = <String>{};
-    for (var i = 0; i < top.length; i += 20) {
-      cached.addAll(await torbox.checkCached(top.sublist(i, (i + 20).clamp(0, top.length))));
+    // Twee vragen náást elkaar in plaats van achter elkaar. Ze weten niets van elkaar, en met een
+    // wachtklok van 15 seconden per stuk kostte het serieel afwerken tot een halve minuut ná het
+    // moment dat alle bronnen hun resultaten al hadden liggen.
+    final brokken = <List<String>>[
+      for (var i = 0; i < top.length; i += 20) top.sublist(i, (i + 20).clamp(0, top.length)),
+    ];
+    for (final deel in await Future.wait(brokken.map(torbox.checkCached))) {
+      cached.addAll(deel);
     }
     for (final r in results) {
       r.cached = cached.contains(r.hash.toLowerCase());
@@ -581,9 +587,28 @@ class DownloadManager extends ChangeNotifier {
   /// staart serieel liep. Drie tegelijk maakt die staart korter zonder de lijn te overvragen: elke
   /// jacht is één overdracht, en drie erbij past ruim in wat de lijn aankan (zie
   /// [_slskMaxParallel]).
+  /// Hoe lang een torrentdownload mag zwijgen voor hij als stuk geldt.
+  ///
+  /// Zelfde gedachte als `stilte` in `offline.dart`, en om dezelfde reden een ruime waarde: het gaat
+  /// om stilte, niet om duur.
+  static const _torrentStilte = Duration(seconds: 60);
+
+  /// Hoeveel bestanden van een plaat er tegelijk binnenkomen.
+  ///
+  /// Hier stond geen rem: `enqueue` vuurde voor élk bestand een `unawaited(_download(...))` af. Een
+  /// plaat van 25 nummers opende dus 25 verbindingen naar de CDN én deed 25 gelijktijdige
+  /// `requestdl`-aanroepen. Dat is niet sneller — een lijn heeft een bodem, en je verdeelt hem
+  /// alleen in dunnere stroompjes — maar het maakt de voortgang wel onleesbaar en de kans op een
+  /// afgeknepen verbinding groter. Vier tegelijk vult een gewone lijn en houdt de rest netjes in de
+  /// wacht, zoals de opwaardeerjachten hierboven ook al deden.
+  static const _maxParallelleDownloads = 4;
+
   static const _maxParallelleJachten = 3;
 
   final Werkrij _jachten = Werkrij(_maxParallelleJachten);
+
+  /// Dezelfde rij, maar voor de bestanden van een torrent. Zie [_maxParallelleDownloads].
+  final Werkrij _torrentRij = Werkrij(_maxParallelleDownloads);
   int _slskActive = 0; // downloads holding a PARALLEL SLOT (a queued one gives its slot back)
   final List<Completer<void>> _slskWaiting = [];
 
@@ -1949,7 +1974,7 @@ class DownloadManager extends ChangeNotifier {
           final job = DownloadJob(f.label);
           jobs.insert(0, job);
           notifyListeners();
-          unawaited(_download(torrent.id, f, destDir, job));
+          _torrentRij.voegToe(() => _download(torrent.id, f, destDir, job));
         }
         notifyListeners();
       } catch (e) {
@@ -2011,13 +2036,20 @@ class DownloadManager extends ChangeNotifier {
       final url = await online.resolveTrackUrl(torrentId, f.id);
       client = http.Client();
       final req = http.Request('GET', Uri.parse(url));
-      final resp = await client.send(req);
+      final resp = await client.send(req).timeout(_torrentStilte);
       if (resp.statusCode < 200 || resp.statusCode >= 300) throw 'HTTP ${resp.statusCode}';
       final total = resp.contentLength ?? f.size;
       dest = File('${destDir.path}${Platform.pathSeparator}${_sanitize(f.label)}');
       sink = dest.openWrite();
       var received = 0;
-      await for (final chunk in resp.stream) {
+      // De wachtklok staat op de STROOM en niet op het geheel: hij slaat toe als er zólang niets
+      // binnenkomt, niet als het lang duurt. Een plaat van een gigabyte mag een uur doen; een
+      // minuut niets is stuk.
+      //
+      // Hier stond niets. Een verbinding die opengaat en dan zwijgt liet de download voor eeuwig
+      // op 34% staan — geen voortgang, geen fout, geen einde. En omdat alle nummers van een plaat
+      // tegelijk starten, zag één zieke verbinding eruit als een plaat die vastliep.
+      await for (final chunk in resp.stream.timeout(_torrentStilte)) {
         sink.add(chunk);
         received += chunk.length;
         if (total > 0) {
