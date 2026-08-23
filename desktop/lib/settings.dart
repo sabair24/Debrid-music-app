@@ -22,7 +22,21 @@ class AppSettings extends ChangeNotifier {
   int soulseekPort = 0;
   String rutrackerUser = '';
   String rutrackerPass = '';
-  String rutrackerCookie = ''; // bb_session cookie, kept so we don't re-login (or re-captcha) each run
+
+  /// De koekjes voor RuTracker, als één regel zoals een browser ze stuurt.
+  ///
+  /// Hier stond alleen `bb_session=…` uit een eigen aanmelding. Dat kan niet meer: RuTracker staat
+  /// sinds 23-08-2026 achter een Cloudflare-uitdaging die de aanmelding al bij de deur tegenhoudt
+  /// (403 met `Cf-Mitigated: challenge`, gemeten). Wat er nu in hoort is wat je browser stuurt —
+  /// `cf_clearance=…; bb_session=…` — geplakt uit een browser die de uitdaging zelf heeft opgelost.
+  String rutrackerCookie = '';
+
+  /// Het browserkenmerk dat bij [rutrackerCookie] hoort.
+  ///
+  /// Cloudflare bindt `cf_clearance` aan het IP-adres ÉN aan de User-Agent die hem kreeg. Sturen we
+  /// een ander kenmerk mee, dan is het koekje meteen waardeloos — vandaar dat dit erbij bewaard
+  /// wordt in plaats van dat de app zelf iets verzint.
+  String rutrackerUa = '';
   // TIDAL: client id/secret entered by the user; the rest is managed by the OAuth flow.
   String tidalClientId = '';
   String tidalClientSecret = '';
@@ -198,6 +212,7 @@ class AppSettings extends ChangeNotifier {
         rutrackerUser = (m['rutracker_user'] ?? '') as String;
         rutrackerPass = (m['rutracker_pass'] ?? '') as String;
         rutrackerCookie = (m['rutracker_cookie'] ?? '') as String;
+        rutrackerUa = (m['rutracker_ua'] ?? '') as String;
         tidalClientId = (m['tidal_client_id'] ?? '') as String;
         tidalClientSecret = (m['tidal_client_secret'] ?? '') as String;
         tidalAccessToken = (m['tidal_access_token'] ?? '') as String;
@@ -226,6 +241,7 @@ class AppSettings extends ChangeNotifier {
         'rutracker_user': rutrackerUser,
         'rutracker_pass': rutrackerPass,
         'rutracker_cookie': rutrackerCookie,
+        'rutracker_ua': rutrackerUa,
         'tidal_client_id': tidalClientId,
         'tidal_client_secret': tidalClientSecret,
         'tidal_access_token': tidalAccessToken,

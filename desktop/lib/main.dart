@@ -15662,6 +15662,35 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         Expanded(child: _field('RuTracker wachtwoord', _rtPass, obscure: true)),
                       ],
                     ),
+                    // De weg naar binnen als Cloudflare ertussen staat.
+                    //
+                    // Naam en wachtwoord blijven staan, want ze doen nog steeds hun werk zodra de
+                    // app langs de deur komt. Maar sinds 23-08-2026 komt hij daar niet meer langs:
+                    // elk verzoek eindigt in een uitdaging die alleen een echte browser oplost. Dan
+                    // is dit de enige eerlijke weg — jouw browser lost hem op, de app leent het
+                    // koekje.
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4, bottom: 4),
+                      child: Row(
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: () => showDialog<void>(
+                                context: context, builder: (_) => const RuTrackerKoekjeDialoog()),
+                            icon: const Icon(Icons.cookie_outlined, size: 16),
+                            label: const Text('Koekje uit browser…'),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                                context.watch<AppSettings>().rutrackerCookie.contains('cf_clearance')
+                                    ? 'Koekje uit je browser staat klaar.'
+                                    : 'RuTracker staat achter Cloudflare; inloggen met alleen naam '
+                                        'en wachtwoord lukt niet meer.',
+                                style: const TextStyle(color: _muted, fontSize: 11.5)),
+                          ),
+                        ],
+                      ),
+                    ),
                     _field('Last.fm API-sleutel', _lastfm),
                     const SizedBox(height: 8),
                     // Zonder dit veld was de enige manier om een Client ID in te vullen: het
@@ -19762,4 +19791,142 @@ class _OnlineAlbumCard extends StatelessWidget {
           ])),
         ]),
       );
+}
+
+/// Het koekje uit je eigen browser overnemen, omdat de app zelf niet langs Cloudflare komt.
+///
+/// **Waarom dit scherm bestaat.** Gemeten op 23-08-2026: élk verzoek aan rutracker.org strandt in
+/// een Cloudflare-uitdaging (403, `Cf-Mitigated: challenge`, "Just a moment..."), ook een kale GET
+/// van de inlogpagina zonder gegevens. Headers nabootsen helpt niet — uitgeprobeerd met en zonder
+/// User-Agent en met een volledige Chrome inclusief `sec-ch-ua` en `Sec-Fetch-*`, allemaal 403.
+/// Zolang er geen ingebouwde webview is, is dit de enige eerlijke weg: jouw browser lost de
+/// uitdaging op, en de app leent het koekje dat daaruit komt.
+class RuTrackerKoekjeDialoog extends StatefulWidget {
+  const RuTrackerKoekjeDialoog({super.key});
+
+  @override
+  State<RuTrackerKoekjeDialoog> createState() => _RuTrackerKoekjeDialoogState();
+}
+
+class _RuTrackerKoekjeDialoogState extends State<RuTrackerKoekjeDialoog> {
+  final _plaksel = TextEditingController();
+  bool _bezig = false;
+  String? _melding;
+  bool _gelukt = false;
+
+  @override
+  void dispose() {
+    _plaksel.dispose();
+    super.dispose();
+  }
+
+  Future<void> _gebruik() async {
+    setState(() {
+      _bezig = true;
+      _melding = null;
+    });
+    final rt = context.read<OnlineService>().rutracker;
+    final uitkomst = await rt.gebruikPlaksel(_plaksel.text);
+    if (!mounted) return;
+    setState(() {
+      _bezig = false;
+      _gelukt = uitkomst.ok;
+      _melding = uitkomst.ok
+          ? 'Gelukt — RuTracker antwoordt weer. Zoeken werkt tot Cloudflare het koekje intrekt.'
+          : (uitkomst.error ?? 'Het lukte niet.');
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: dialogWidth(context, 620),
+        child: Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Koekje uit je browser',
+                  style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
+              const Text(
+                  'RuTracker staat achter Cloudflare. Die uitdaging kan alleen een echte browser '
+                  'oplossen — dus doet jouw browser dat, en gebruikt de app het resultaat.',
+                  style: TextStyle(color: _muted, fontSize: 12.5, height: 1.4)),
+              const SizedBox(height: 14),
+              const Text('1.  Open rutracker.org in je browser en log daar in.\n'
+                  '2.  Druk op F12, ga naar het tabblad Netwerk en ververs de pagina.\n'
+                  '3.  Rechtsklik op het bovenste verzoek → Kopiëren → Kopieer als cURL.\n'
+                  '4.  Plak dat hieronder.',
+                  style: TextStyle(fontSize: 12.5, height: 1.6)),
+              const SizedBox(height: 10),
+              // Waarom niet gewoon document.cookie: cf_clearance is HttpOnly en staat daar dus niet
+              // in. Via "Kopieer als cURL" komt hij wél mee — samen met het browserkenmerk, en dat
+              // is nodig omdat Cloudflare het koekje aan die twee bindt.
+              const Text(
+                  'Kopieer als cURL neemt ook je browserkenmerk mee. Dat is nodig: het koekje hoort '
+                  'bij dat kenmerk én bij je IP-adres, dus na een netwerkwissel plak je het opnieuw.',
+                  style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4)),
+              const SizedBox(height: 14),
+              TextField(
+                controller: _plaksel,
+                maxLines: 6,
+                minLines: 4,
+                style: const TextStyle(fontSize: 12),
+                decoration: InputDecoration(
+                  hintText: "curl 'https://rutracker.org/forum/index.php' -H 'cookie: …'",
+                  hintStyle: const TextStyle(color: _muted, fontSize: 11.5),
+                  filled: true,
+                  fillColor: _panel2,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+              if (_melding != null) ...[
+                const SizedBox(height: 12),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(_gelukt ? Icons.check_circle_rounded : Icons.error_outline_rounded,
+                        size: 17, color: _gelukt ? _accent2 : Colors.redAccent),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(_melding!,
+                          style: TextStyle(
+                              fontSize: 12.5,
+                              height: 1.4,
+                              color: _gelukt ? _accent2 : Colors.red.shade300)),
+                    ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: Text(_gelukt ? 'Klaar' : 'Annuleren')),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    style: FilledButton.styleFrom(backgroundColor: _accent),
+                    onPressed: _bezig ? null : _gebruik,
+                    child: _bezig
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Text('Gebruik dit'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

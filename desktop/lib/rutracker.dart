@@ -46,8 +46,16 @@ class RuTrackerService {
   /// Eerlijk over wat dit is: de app doet zich voor als een browser om binnen te komen op een
   /// account dat van jou is. Dat is dezelfde weg die je met de hand ook zou nemen, en er wordt niets
   /// omzeild wat jou niet toekomt.
-  static const _ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+  static const _uaStandaard = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+  /// Het kenmerk dat bij de koekjes hoort, of anders het standaardkenmerk hierboven.
+  ///
+  /// **Waarom dit niet vast mag staan.** Cloudflare bindt `cf_clearance` aan het IP-adres én aan de
+  /// User-Agent die hem gekregen heeft. Plak je een koekje uit Chrome 139 en stuurt de app er
+  /// Chrome 131 bij, dan is dat koekje op slag waardeloos en krijg je dezelfde 403 terug — zonder
+  /// dat iets uitlegt waarom.
+  String get _ua => settings.rutrackerUa.isNotEmpty ? settings.rutrackerUa : _uaStandaard;
 
   bool get configured =>
       settings.rutrackerUser.trim().isNotEmpty && settings.rutrackerPass.isNotEmpty;
@@ -88,6 +96,141 @@ class RuTrackerService {
     return uit.toString();
   }
   bool get loggedIn => settings.rutrackerCookie.isNotEmpty;
+
+  // ── Het koekje uit je eigen browser ───────────────────────────────────────
+  //
+  // **Waarom de app niet meer zelf kan inloggen.** Gemeten op 23-08-2026: elk verzoek aan
+  // rutracker.org — óók een kale GET van login.php, zonder gegevens — komt terug als
+  //
+  //     HTTP/1.1 403 Forbidden
+  //     Server: cloudflare
+  //     Cf-Mitigated: challenge
+  //     <title>Just a moment...</title>
+  //
+  // Dat is de uitdaging die alleen een echte browser oplost (JavaScript plus een Turnstile-widget).
+  // Headers nabootsen helpt niet, en dat is niet bij benadering vastgesteld maar uitgeprobeerd:
+  // zonder User-Agent 403, met de Chrome-UA van de app 403, en met een volledige Chrome 139 inclusief
+  // `sec-ch-ua`, `Sec-Fetch-*` en `Upgrade-Insecure-Requests` óók 403. rutracker.net idem;
+  // rutracker.nl geeft wel 200 maar is een geparkeerde advertentiepagina — daar hoort geen
+  // wachtwoord heen.
+  //
+  // Wat overblijft zonder een ingebouwde webview: de gebruiker lost de uitdaging op in zijn eigen
+  // browser en geeft de app de koekjes die daaruit komen. `cf_clearance` is HttpOnly, dus
+  // `document.cookie` toont hem niet — de bruikbare weg is "Kopieer als cURL" uit de netwerktab,
+  // en die draagt het browserkenmerk meteen mee.
+
+  /// Wat er uit een plaksel te halen viel.
+  ///
+  /// [cookie] is klaar om als `Cookie:`-kop te versturen; [ua] is leeg als het plaksel er geen
+  /// bevatte (dan blijft het bestaande kenmerk staan).
+  static ({String cookie, String ua, bool heeftClearance, bool heeftSessie})? leesPlaksel(
+      String plaksel) {
+    final tekst = plaksel.trim();
+    if (tekst.isEmpty) return null;
+
+    // Eerst de vorm van "Kopieer als cURL": -H 'cookie: …' of -H "cookie: …", en in de Windows-
+    // variant ook ^"cookie: …^". Daarnaast kent curl -b voor koekjes.
+    String? uitKop(String naam) {
+      final re = RegExp(
+          '''-[Hb]\\s+["'^]*\\s*(?:$naam)\\s*:?\\s*([^"'^]+)["'^]''',
+          caseSensitive: false);
+      return re.firstMatch(tekst)?.group(1)?.trim();
+    }
+
+    var koekjes = uitKop('cookie') ?? '';
+    final ua = uitKop('user-agent') ?? '';
+
+    // Geen cURL? Dan is het plaksel zelf de koekjesregel, zoals je hem uit de ontwikkelaarshulp of
+    // uit een `document.cookie` kopieert.
+    if (koekjes.isEmpty && tekst.contains('=') && !tekst.contains('\n-')) {
+      koekjes = tekst.replaceAll(RegExp(r'^\s*(cookie|Cookie)\s*:\s*'), '').trim();
+    }
+    if (koekjes.isEmpty) return null;
+
+    // Alleen naam=waarde-paren houden; wat een browser meestuurt mag er allemaal in blijven, want
+    // Cloudflare kijkt naar meer dan alleen cf_clearance.
+    final paren = <String>[];
+    var clearance = false;
+    var sessie = false;
+    for (final deel in koekjes.split(';')) {
+      final m = RegExp(r'^\s*([A-Za-z0-9_\-\.]+)=(.*)$').firstMatch(deel);
+      if (m == null) continue;
+      final naam = m.group(1)!;
+      final waarde = m.group(2)!.trim();
+      if (waarde.isEmpty) continue;
+      if (naam == 'cf_clearance') clearance = true;
+      if (naam == 'bb_session') sessie = true;
+      paren.add('$naam=$waarde');
+    }
+    if (paren.isEmpty) return null;
+    return (
+      cookie: paren.join('; '),
+      ua: ua,
+      heeftClearance: clearance,
+      heeftSessie: sessie,
+    );
+  }
+
+  /// Neem de koekjes uit de browser over en kijk meteen of ze werken.
+  ///
+  /// Eén handeling, want een koekje dat je bewaart zonder het te proberen is een instelling waarvan
+  /// je pas bij de volgende zoekopdracht hoort dat hij niets deed.
+  Future<RtLogin> gebruikPlaksel(String plaksel) async {
+    final gelezen = leesPlaksel(plaksel);
+    if (gelezen == null) {
+      return const RtLogin.failed(
+          'Daar zat geen koekje in. Plak de hele regel uit "Kopieer als cURL" van je browser, of '
+          'de koekjesregel zelf (naam=waarde; naam=waarde).');
+    }
+    if (!gelezen.heeftSessie) {
+      return const RtLogin.failed(
+          'Er zit geen bb_session in — dat is het koekje dat zegt dat je ingelogd bent. Log eerst '
+          'in op rutracker.org in je browser en kopieer daarna een verzoek naar die site.');
+    }
+
+    final vorigeCookie = settings.rutrackerCookie;
+    final vorigeUa = settings.rutrackerUa;
+    settings.rutrackerCookie = gelezen.cookie;
+    if (gelezen.ua.isNotEmpty) settings.rutrackerUa = gelezen.ua;
+
+    if (await verify()) {
+      await settings.save();
+      lastError = '';
+      pendingCaptcha = null;
+      return const RtLogin.success();
+    }
+
+    // Niet bewaren wat aantoonbaar niet werkt: dan blijft er een dode instelling staan die elke
+    // zoekopdracht stil laat mislukken.
+    settings.rutrackerCookie = vorigeCookie;
+    settings.rutrackerUa = vorigeUa;
+    return RtLogin.failed(gelezen.heeftClearance
+        ? 'De koekjes kwamen aan, maar RuTracker herkende de sessie niet (meer). Ververs de pagina '
+            'in je browser en kopieer het verzoek opnieuw.'
+        : 'Er zit geen cf_clearance in het plaksel, en zonder dat koekje houdt Cloudflare de app '
+            'tegen. Kopieer een verzoek naar rutracker.org uit de netwerktab van je browser — dat '
+            'koekje is HttpOnly en staat dus niet in document.cookie.');
+  }
+
+  /// Staat Cloudflare ertussen? Dan is er niets mis met naam, wachtwoord of sessie.
+  ///
+  /// Drie aanwijzingen, en één is genoeg: de kop die Cloudflare zelf zet, de server die zich noemt,
+  /// of de titel van de wachtpagina.
+  static bool cloudflareUitdaging(Map<String, String> koppen, String lichaam) {
+    if (koppen.keys.any((k) => k.toLowerCase() == 'cf-mitigated')) return true;
+    final server = (koppen['server'] ?? '').toLowerCase();
+    final laag = lichaam.toLowerCase();
+    return server.contains('cloudflare') &&
+        (laag.contains('just a moment') ||
+            laag.contains('challenges.cloudflare.com') ||
+            laag.contains('__cf_chl'));
+  }
+
+  /// De zin die daarbij hoort. Eén plek, want hij hoort overal hetzelfde te zijn.
+  static const uitdagingUitleg =
+      'Cloudflare houdt de app tegen met een uitdaging die alleen een echte browser kan oplossen — '
+      'het ligt niet aan je gebruikersnaam of wachtwoord. Open rutracker.org in je browser en geef '
+      'de app het koekje daaruit (Instellingen → RuTracker → Koekje uit browser).';
 
   Future<RtLogin> login({String? captchaAnswer, RtCaptcha? captcha}) async {
     if (!configured) return const RtLogin.failed('Geen RuTracker-login ingevuld');
@@ -149,6 +292,12 @@ class RuTrackerService {
       }
 
       final html = latin1.decode(resp.bodyBytes, allowInvalid: true);
+      // Eerst Cloudflare, want daar strandt het tegenwoordig al vóór het formulier. Zonder deze
+      // regel komt zo'n 403 eruit als "controleer je gegevens" en ga je je wachtwoord zitten
+      // nakijken terwijl de app RuTracker nooit gesproken heeft.
+      if (cloudflareUitdaging(resp.headers, html)) {
+        return const RtLogin.failed(uitdagingUitleg);
+      }
       final img = RegExp(r'src="((?:https?:)?//[^"]*captcha[^"]*)"').firstMatch(html);
       final sid = RegExp(r'name="cap_sid"\s+value="([^"]+)"').firstMatch(html);
       final field = RegExp(r'name="(cap_code_[^"]+)"').firstMatch(html);
@@ -266,6 +415,14 @@ class RuTrackerService {
       final resp =
           await http.Response.fromStream(await client.send(req)).timeout(const Duration(seconds: 7));
       client.close();
+      // Een verlopen cf_clearance ziet er anders uit dan een verlopen sessie: geen omleiding naar
+      // login.php, maar dezelfde wachtpagina als bij de deur. Opnieuw inloggen heeft dan geen zin —
+      // dat loopt tegen precies dezelfde muur — dus zeg wat er aan de hand is en stop.
+      if (resp.statusCode == 403 &&
+          cloudflareUitdaging(resp.headers, latin1.decode(resp.bodyBytes, allowInvalid: true))) {
+        lastError = uitdagingUitleg;
+        return [];
+      }
       if (resp.statusCode == 302) {
         // The session expired. RuTracker's cookie does not last forever, and nothing renewed it:
         // login() had exactly two callers, the button in Settings and a test. So the cookie was
