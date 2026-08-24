@@ -25,6 +25,8 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'uitvoerbaar.dart';
+
 import 'ffmpeg.dart';
 
 /// Waar tiddl kan staan, in volgorde van waarschijnlijkheid.
@@ -76,10 +78,19 @@ class Tiddl {
           // Zonder decoder: hier telt alleen of hij start. Zou de uitvoer wél gelezen worden, dan
           // kan een teken uit de verkeerde codetabel een uitzondering geven, en die zou hier
           // betekenen "tiddl bestaat niet" terwijl hij er gewoon staat.
-        } else if (Process.runSync(k, ['--help'], stdoutEncoding: null, stderrEncoding: null)
-                .exitCode ==
-            0) {
-          return _gevonden = k;
+        } else {
+          // Kale naam: eerst zelf in PATH zoeken. Een `runSync` op iets wat er niet is kost op
+          // macOS de hele app een SIGPIPE — zie uitvoerbaar.dart.
+          final echt = uitvoerbaarPad(k);
+          if (echt == null) {
+            geprobeerd.add(k);
+            continue;
+          }
+          if (Process.runSync(echt, ['--help'], stdoutEncoding: null, stderrEncoding: null)
+                  .exitCode ==
+              0) {
+            return _gevonden = echt;
+          }
         }
       } catch (_) {/* niet daar; volgende */}
       geprobeerd.add(k);

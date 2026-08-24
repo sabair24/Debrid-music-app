@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import '../uitvoerbaar.dart';
+
 import 'package:flutter/foundation.dart';
 
 /// Converts a track on the fly when a speaker cannot take the original.
@@ -38,8 +40,10 @@ class Transcoder {
         : const ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg', 'ffmpeg'];
     for (final candidate in candidates) {
       try {
-        final result = Process.runSync(candidate, ['-version']);
-        if (result.exitCode == 0) return candidate;
+        final echt = uitvoerbaarPad(candidate);
+        if (echt == null) continue;
+        final result = Process.runSync(echt, ['-version']);
+        if (result.exitCode == 0) return echt;
       } catch (_) {/* not there — try the next */}
     }
     return null;
