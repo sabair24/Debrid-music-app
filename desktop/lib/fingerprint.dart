@@ -24,6 +24,8 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'uitvoerbaar.dart';
+
 import 'package:crypto/crypto.dart';
 
 import 'paths.dart';
@@ -179,10 +181,15 @@ class Fingerprinter {
       // Een naam zonder mappen is de PATH-kandidaat; die bestaat niet als bestand en moet dus
       // gedraaid worden om te weten of hij er is. Dezelfde afweging als bij ffmpeg.
       try {
+        final echt = uitvoerbaarPad(k);
+        if (echt == null) {
+          geprobeerd.add(k);
+          continue;
+        }
         if (k.contains(Platform.pathSeparator)) {
-          if (File(k).existsSync()) return _found = k;
-        } else if (Process.runSync(k, ['-version']).exitCode == 0) {
-          return _found = k;
+          return _found = echt;
+        } else if (Process.runSync(echt, ['-version']).exitCode == 0) {
+          return _found = echt;
         }
       } catch (_) {/* een kandidaat die niet bestaat is geen fout, alleen een kandidaat minder */}
       geprobeerd.add(k);

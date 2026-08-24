@@ -11,6 +11,8 @@ library;
 
 import 'dart:io';
 
+import 'uitvoerbaar.dart';
+
 class Ffmpeg {
   Ffmpeg({String? pad}) : _opgegeven = pad;
   final String? _opgegeven;
@@ -50,9 +52,14 @@ class Ffmpeg {
     final geprobeerd = <String>[];
     for (final k in _kandidaten()) {
       try {
-        if (Process.runSync(k, ['-version']).exitCode == 0) {
-          _gevonden = k;
-          return k;
+        final echt = uitvoerbaarPad(k);
+        if (echt == null) {
+          geprobeerd.add(k);
+          continue;
+        }
+        if (Process.runSync(echt, ['-version']).exitCode == 0) {
+          _gevonden = echt;
+          return echt;
         }
         geprobeerd.add(k);
       } catch (_) {

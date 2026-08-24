@@ -19,6 +19,8 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
+import 'uitvoerbaar.dart';
 import 'dart:math';
 
 import 'package:http/http.dart' as http;
@@ -167,9 +169,11 @@ class Aria2 {
     final geprobeerd = <String>[];
     for (final k in kandidaten(eigenMap: appDir)) {
       try {
-        if (Process.runSync(k, ['--version']).exitCode == 0) {
-          _gevonden = k;
-          return k;
+        final echt = uitvoerbaarPad(k);
+        if (echt == null) continue;
+        if (Process.runSync(echt, ['--version']).exitCode == 0) {
+          _gevonden = echt;
+          return echt;
         }
       } catch (_) {
         // niet gevonden of niet uitvoerbaar; volgende
