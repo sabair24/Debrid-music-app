@@ -11287,7 +11287,12 @@ class _SourcesViewState extends State<SourcesView> {
 /// bestaan en bij elke beweging meegetekend worden, ook de honderdtachtig die je niet ziet; dat was
 /// te voelen als haperend scrollen. Vijftig bronnen is ruim genoeg om te kiezen, en de knop staat
 /// eronder.
-const _slskStap = 50;
+///
+/// **Niet privé, en dat is met opzet.** Dit getal stond in `bron_venster_test.dart` nog eens als
+/// `200` uitgeschreven, dus toen het hier veranderde brak die toets — op het getal, niet op de
+/// rekensom die hij hoort te bewaken. Nu leest de toets het hier, en mag het getal veranderen
+/// zonder dat er iets stuk hoeft.
+const bronStap = 50;
 
 /// Wat er van een gerangschikte bronnenlijst getoond wordt, en wat er nog wacht.
 ///
@@ -11301,7 +11306,7 @@ const _slskStap = 50;
           ? aantal
           : limiet;
   final rest = aantal - tot;
-  return (tot: tot, rest: rest, volgende: rest < _slskStap ? rest : _slskStap);
+  return (tot: tot, rest: rest, volgende: rest < bronStap ? rest : bronStap);
 }
 
 /// De bronnenlijst voorgekauwd: gefilterd, gerangschikt en gegroepeerd, in één keer.
@@ -11371,7 +11376,7 @@ bool _filterLaatDoor(QFilter filter, SoulseekFile f) =>
 /// Hoeveel gebruikers er standaard opengeklapt staan.
 ///
 /// Niet nul: een scherm vol dichte namen is nog steeds niets waar je uit kunt maken wat er te halen
-/// valt. Niet alles: de rijen worden gretig gebouwd (zie [_slskStap]), en van zevenduizend
+/// valt. Niet alles: de rijen worden gretig gebouwd (zie [bronStap]), en van zevenduizend
 /// treffers alles tegelijk tekenen zet de app vast. Drie is waar het beste resultaat meteen te zien
 /// is terwijl er hooguit een paar tientallen rijen staan.
 const _slskOpenVanZelf = 3;
@@ -11419,7 +11424,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
   /// Hoeveel GEBRUIKERS er nu getoond worden — niet hoeveel bestanden. Door het groeperen zakt een
   /// resultaat van zevenduizend bestanden meestal naar een paar honderd bronnen, en dan is er in de
   /// praktijk geen tik meer nodig.
-  int _limiet = _slskStap;
+  int _limiet = bronStap;
 
   /// Wie de gebruiker zelf heeft opengeklapt, en wie hij heeft dichtgeklapt. Twee verzamelingen en
   /// geen enkele `bool`: de eerste [_slskOpenVanZelf] staan vanzelf open, en die moeten óók dicht
@@ -11431,7 +11436,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
   void didUpdateWidget(_SoulseekGroepen oud) {
     super.didUpdateWidget(oud);
     if (oud.sleutel != widget.sleutel) {
-      _limiet = _slskStap;
+      _limiet = bronStap;
       _open.clear();
       _dicht.clear();
     }
@@ -11475,7 +11480,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   ),
-                  onPressed: () => setState(() => _limiet += _slskStap),
+                  onPressed: () => setState(() => _limiet += bronStap),
                   icon: const Icon(Icons.expand_more_rounded, size: 19),
                   label: Text('Nog ${venster.volgende} tonen'),
                 ),
