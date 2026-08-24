@@ -82,6 +82,7 @@ import 'recommend.dart';
 import 'release_format.dart';
 import 'rutracker.dart';
 import 'settings.dart';
+import 'slsk_groepen.dart';
 import 'speakers.dart';
 import 'soulseek.dart';
 import 'tidal.dart';
@@ -10223,9 +10224,9 @@ Widget _downloadControl(BuildContext context,
 List<SoulseekFile> _bestSoulseekFolder(List<SoulseekFile> files) {
   final groups = <String, List<SoulseekFile>>{};
   for (final f in files) {
-    final p = f.filename.replaceAll('/', '\\');
-    final folder = p.contains('\\') ? p.substring(0, p.lastIndexOf('\\')) : p;
-    groups.putIfAbsent('${f.username}|$folder', () => []).add(f);
+    // Dezelfde padsplitsing als de bronnenlijst gebruikt — zie [mapVan]. Twee eigen versies zouden
+    // betekenen dat deze knop een ander album kiest dan het scherm eronder toont.
+    groups.putIfAbsent('${f.username}|${mapVan(f.filename)}', () => []).add(f);
   }
   final ranked = groups.values.toList()
     ..sort((a, b) {
@@ -10343,7 +10344,12 @@ Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy,
   final folder = _bestSoulseekFolder(slsk);
   return Padding(
     padding: const EdgeInsets.fromLTRB(24, 14, 18, 6),
-    child: Row(
+    // Gevouwen: "SOULSEEK · P2P 7083" plus "Download album (24)" is op een telefoon breder dan het
+    // scherm. Er stond een `Spacer` in, en die duwt de knop er dan gewoon af.
+    child: Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 4,
+      runSpacing: 2,
       children: [
         const Text('SOULSEEK · P2P',
             style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
@@ -10356,7 +10362,6 @@ Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy,
           SizedBox(width: 8),
           SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
         ],
-        const Spacer(),
         if (folder.length >= 2)
           TextButton.icon(
             onPressed: () => _downloadSoulseekAlbum(context, folder, all, authority: authority),
@@ -10758,29 +10763,41 @@ Quality _trackQuality(Track t) {
 ///
 /// Lossless boven lossy, daarbinnen op bitrate; zie [kwaliteitsRang]. Bij gelijke kwaliteit wint de peer
 /// met een vrije plek, want het beste bestand van iemand die niets uitdeelt heb je nog steeds niet.
+///
+/// De grootte is de laatste trap, en dat was hij niet. Twee 16/44-kopieën van hetzelfde nummer
+/// krijgen dezelfde rang en meestal ook dezelfde wachtrij, en dan besliste de volgorde van
+/// binnenkomst — dus stond een afgeknepen kopie net zo vaak boven de volledige. Gevraagd was
+/// letterlijk "per grote boven".
 int _besteEerst(SoulseekFile a, SoulseekFile b) {
-  int rang(SoulseekFile f) {
-    final kbps = effectieveBitrate(bitrate: f.bitrate, durationSec: f.durationSec, size: f.size);
-    final lossless = f.isFlac || const {'alac', 'ape', 'wav', 'aiff'}.contains(f.ext);
-    return kwaliteitsRang(
-      lossless: lossless,
-      // Het formaat dat de peer meldt gaat vóór de gemeten bitrate. Twee ripjes van dezelfde 24/96
-      // verschillen een paar procent in bitrate zonder dat er iets beters aan is; hun sample rate maal
-      // bitdiepte is identiek, en dát is waar het om gaat. Meldt de peer niets, dan rekent
-      // [capaciteitOpEenSchaal] de gemeten bitrate terug naar diezelfde maat — anders vergelijk je een
-      // ruwe capaciteit met een ingepakte en staat elk onbekend bestand een derde te hoog.
-      kbps: capaciteitOpEenSchaal(
-          sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: kbps, lossless: lossless),
-      // Twee wegen: de som bewijst het, de naam vangt de peers die geen sample rate sturen. Op de hele
-      // naam en niet alleen het bestandsnaampje — uploaders zetten "5.1" net zo vaak in de mapnaam.
-      stereo: !meerDanStereo(sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: kbps) &&
-          surroundLabel(f.filename) == null,
-    );
-  }
-  final verschil = rang(b) - rang(a);
+  final verschil = _slskRang(b) - _slskRang(a);
   if (verschil != 0) return verschil;
   if (a.freeSlots != b.freeSlots) return a.freeSlots ? -1 : 1;
-  return a.queueLength.compareTo(b.queueLength);
+  if (a.queueLength != b.queueLength) return a.queueLength.compareTo(b.queueLength);
+  return b.size.compareTo(a.size);
+}
+
+/// De kwaliteitsrang van één Soulseek-bestand, als één plat getal.
+///
+/// Apart van [_besteEerst] omdat [groepeerSoulseek] hem ook nodig heeft: de rang van een hele map is
+/// het maximum van zijn nummers, en dat kan alleen als er een rang per bestand te vragen is. Eén
+/// rangschikking voor de lijst én de groepen, zodat die twee het nooit oneens kunnen worden.
+int _slskRang(SoulseekFile f) {
+  final kbps = effectieveBitrate(bitrate: f.bitrate, durationSec: f.durationSec, size: f.size);
+  final lossless = f.isFlac || const {'alac', 'ape', 'wav', 'aiff'}.contains(f.ext);
+  return kwaliteitsRang(
+    lossless: lossless,
+    // Het formaat dat de peer meldt gaat vóór de gemeten bitrate. Twee ripjes van dezelfde 24/96
+    // verschillen een paar procent in bitrate zonder dat er iets beters aan is; hun sample rate maal
+    // bitdiepte is identiek, en dát is waar het om gaat. Meldt de peer niets, dan rekent
+    // [capaciteitOpEenSchaal] de gemeten bitrate terug naar diezelfde maat — anders vergelijk je een
+    // ruwe capaciteit met een ingepakte en staat elk onbekend bestand een derde te hoog.
+    kbps: capaciteitOpEenSchaal(
+        sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: kbps, lossless: lossless),
+    // Twee wegen: de som bewijst het, de naam vangt de peers die geen sample rate sturen. Op de hele
+    // naam en niet alleen het bestandsnaampje — uploaders zetten "5.1" net zo vaak in de mapnaam.
+    stereo: !meerDanStereo(sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: kbps) &&
+        surroundLabel(f.filename) == null,
+  );
 }
 
 /// Wat er als waarschuwing op de rij komt, of null bij gewoon stereo.
@@ -10830,7 +10847,12 @@ Quality _slskQualityUitGrootte(SoulseekFile f) => qualityFromFile(
 /// direct-search results and the browse "Bronnen" panel.
 Widget _filterChipsRow(QFilter current, ValueChanged<QFilter> onChanged) => Padding(
       padding: const EdgeInsets.fromLTRB(22, 6, 20, 2),
-      child: Row(
+      // Gevouwen en niet op één rij: vier chips plus het icoontje passen op 360 punten net niet,
+      // en een `Row` die niet past geeft de gele overloopbalk — iets wat geen enkele toets ziet en
+      // alleen op het toestel opvalt.
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        runSpacing: 6,
         children: [
           const Icon(Icons.tune_rounded, size: 15, color: _muted),
           const SizedBox(width: 8),
@@ -10875,126 +10897,226 @@ Widget _sourceHeader(String title, int count, bool loading) => Padding(
       ),
     );
 
+/// Eén torrenttreffer.
+///
+/// **Waarom deze rij op een telefoon een kaart is en geen regel.** Hij was een `Row` met rechts drie
+/// `IconButton`s (samen zo'n 130 punten) en een keurmerk, en links wat er dan nog overbleef. Op 360
+/// punten breed hield de titel er nog geen 150 over: op het scherm stond "(Pop) [CDM] Backstre…" en
+/// "Backstreet Boys - Bac…" — vier treffers onder elkaar die er allemaal precies hetzelfde uitzien,
+/// terwijl juist het weggevallen stuk (welke persing, welk jaar, welke uitgave) het verschil is waar
+/// je op kiest. Ook de tweede regel was op één regel gesnoerd, dus daar stond "BitS… · 2 se…".
+///
+/// Op een telefoon staat nu alles onder elkaar: de titel over [titelRegels] regels, daaronder de
+/// gegevens die mogen omlopen, en de drie knoppen op hun eigen regel — mét hun naam erbij, want als
+/// ze toch ruimte krijgen kun je net zo goed zien wat ze doen. Op een breed scherm blijft het de
+/// rij die het was: daar past het ruim, en rijen van gelijke hoogte lezen sneller.
 Widget _torrentTile(BuildContext context, SearchResult r) {
   final q = qualityFromName(r.name);
+  final smal = isCompact(context);
+  final meta = '${r.source} · ${r.seeders} seeders · ${_fmtBytes(r.size)}';
+  final acties = <({IconData icoon, String naam, String uitleg, Color kleur, VoidCallback doen})>[
+    (
+      icoon: Icons.play_arrow_rounded,
+      naam: 'Beste nummer',
+      uitleg: 'Beste nummer afspelen',
+      kleur: _accent,
+      doen: () => _playTorrent(context, r)
+    ),
+    (
+      icoon: Icons.queue_music_rounded,
+      naam: 'Kies nummer',
+      uitleg: 'Kies nummer',
+      kleur: _muted,
+      doen: () => _pickTorrentTracks(context, r)
+    ),
+    (
+      icoon: Icons.download_rounded,
+      naam: 'Alles',
+      uitleg: 'Alles downloaden',
+      kleur: _muted,
+      doen: () => _downloadTorrent(context, r)
+    ),
+  ];
   return Container(
     margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
     decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(8)),
-    child: Row(
-      children: [
-        Expanded(
-          child: Column(
+    child: smal
+        ? Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(r.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 2),
-              Row(
+              Text(r.name,
+                  maxLines: titelRegels(context),
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              // Gevouwen en niet gesnoerd: staat er een bron met een lange naam of een grote
+              // seedersstand, dan zakt het keurmerk naar de volgende regel in plaats van dat de
+              // tekst achter puntjes verdwijnt.
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  // Ingesnoerd, want deze regel liep ONDER de badge door.
-                  //
-                  // Een `Text` los in een `Row` krijgt geen bovengrens en tekent gewoon door tot
-                  // buiten zijn vak. Op een telefoon houdt deze kolom nog geen 100 dp over, dus
-                  // stond er "BitSearch · 4 seeders · 31 MB" met het FLAC-plaatje bovenop de laatste
-                  // woorden. Geen overloopstreep, geen fout — twee stukken tekst over elkaar.
-                  Flexible(
-                    child: Text('${r.source} · ${r.seeders} seeders · ${_fmtBytes(r.size)}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _muted, fontSize: 12)),
-                  ),
+                  Text(meta, style: const TextStyle(color: _muted, fontSize: 12)),
                   if (r.cached)
-                    const Padding(
-                        padding: EdgeInsets.only(left: 8),
-                        child: Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12))),
-                  // Op een smal scherm staat het keurmerk hier, op de tweede regel: naast de titel
-                  // vrat het de laatste ruimte op die de naam nog had.
-                  if (isCompact(context)) ...[const SizedBox(width: 8), _qualityBadge(q)],
+                    const Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12)),
+                  _qualityBadge(q),
+                ],
+              ),
+              const SizedBox(height: 2),
+              Wrap(
+                children: [
+                  // Geen [TvLabelled] hier: die zet een naam ónder een icoon voor de
+                  // afstandsbediening, en op een scherm dat hier binnenkomt (smaller dan 600 punten)
+                  // is dat nooit een tv. De naam staat bovendien al op de knop.
+                  for (final a in acties)
+                    TextButton.icon(
+                      onPressed: a.doen,
+                      icon: Icon(a.icoon, size: 19),
+                      label: Text(a.naam),
+                      style: TextButton.styleFrom(
+                        foregroundColor: a.kleur,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
                 ],
               ),
             ],
+          )
+        : Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(r.name,
+                        maxLines: titelRegels(context),
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        // Ingesnoerd, want deze regel liep ONDER de badge door. Een `Text` los in
+                        // een `Row` krijgt geen bovengrens en tekent gewoon door tot buiten zijn vak.
+                        Flexible(
+                          child: Text(meta,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: _muted, fontSize: 12)),
+                        ),
+                        if (r.cached)
+                          const Padding(
+                              padding: EdgeInsets.only(left: 8),
+                              child:
+                                  Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12))),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              _qualityBadge(q),
+              for (final a in acties)
+                TvLabelled(
+                  label: a.naam,
+                  child: IconButton(
+                      icon: Icon(a.icoon), color: a.kleur, tooltip: a.uitleg, onPressed: a.doen),
+                ),
+            ],
           ),
-        ),
-        if (!isCompact(context)) _qualityBadge(q),
-        TvLabelled(label: 'Beste nummer', child: IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, tooltip: 'Beste nummer afspelen', onPressed: () => _playTorrent(context, r))),
-        TvLabelled(label: 'Kies nummer', child: IconButton(icon: const Icon(Icons.queue_music_rounded), color: _muted, tooltip: 'Kies nummer', onPressed: () => _pickTorrentTracks(context, r))),
-        TvLabelled(label: 'Alles', child: IconButton(icon: const Icon(Icons.download_rounded), color: _muted, tooltip: 'Alles downloaden', onPressed: () => _downloadTorrent(context, r))),
-      ],
-    ),
   );
 }
 
-Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> all, {TrackTags? authority}) {
+/// Eén Soulseek-bestand.
+///
+/// De gebruikersnaam staat hier NIET meer: die hoort in de kop van zijn groep, één keer, in plaats
+/// van op elk van de zevenduizend regels. Dat was ook precies de ruimte die de titel tekortkwam.
+/// [toonGebruiker] zet hem terug voor een lijst die niet gegroepeerd is.
+///
+/// Op een telefoon zakken de merken (meerkanaals, "verdacht klein", het keurmerk) naar een eigen
+/// regel onder de tekst. Naast de titel vraten ze de laatste ruimte op die de naam nog had — en een
+/// naam als "Backstreet Boys - …" zonder de rest zegt niets, want dat staat op álle treffers.
+Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> all,
+    {TrackTags? authority, bool toonGebruiker = true, EdgeInsets? marge}) {
   final status = f.freeSlots ? 'vrij' : 'wachtrij ${f.queueLength}';
   final q = _slskQuality(f);
+  final smal = isCompact(context);
+  final meta = [
+    status,
+    if (toonGebruiker) f.username,
+    _fmtBytes(f.size),
+    if (f.durationSec != null && f.durationSec! > 0) _fmt(Duration(seconds: f.durationSec!)),
+  ].join(' · ');
+  // Het kanaalaantal, als de naam het prijsgeeft. Zonder dit was een 5.1-bestand niet van een
+  // stereobestand te onderscheiden behalve aan zijn verdachte grootte — en die grootte leest
+  // juist als "beter", terwijl het op een stereo-installatie minder is.
+  //
+  // Oranje en niet groen: dit is een waarschuwing, geen keurmerk.
+  Widget merk(String tekst, {String? uitleg}) {
+    final blok = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE8913A).withValues(alpha: .16),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: const Color(0xFFE8913A).withValues(alpha: .45)),
+      ),
+      child: Text(tekst,
+          style: const TextStyle(
+              fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFFE8913A))),
+    );
+    return uitleg == null ? blok : Tooltip(message: uitleg, child: blok);
+  }
+
+  final merken = <Widget>[
+    if (_surroundMerk(f) != null) merk(_surroundMerk(f)!),
+    // TE KLEIN VOOR WAT HET BEWEERT. Meten kan hier niet: je kunt niet in het bestand van een
+    // vreemde kijken zonder het eerst binnen te halen. Wat wél kan is de getallen tegen elkaar
+    // wegstrepen die de peer zelf meestuurt — een 24/96 die uit een 44,1-bron is opgetild pakt veel
+    // kleiner in dan een echte. Zie [verdachtKleinVoorHiRes].
+    //
+    // Bewust dezelfde oranje vorm als het surroundmerk, en om dezelfde reden: dit is een
+    // waarschuwing, geen keurmerk en geen oordeel. Het staat ook NIET in de rangschikking — een
+    // vermoeden hoort de gebruiker te informeren, niet voor hem te beslissen.
+    if (verdachtKleinVoorHiRes(
+        sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: f.bitrate ?? 0))
+      merk('verdacht klein',
+          uitleg: 'Zegt ${f.bitDepth}/${f.sampleRate} maar is daar veel te klein voor — '
+              'waarschijnlijk opgeschaald. Zeker weten kan pas na het binnenhalen.'),
+    _qualityBadge(q),
+  ];
   return Container(
-    margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
+    margin: marge ?? const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
     decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(8)),
     child: Row(
+      crossAxisAlignment: smal ? CrossAxisAlignment.start : CrossAxisAlignment.center,
       children: [
-        Icon(f.freeSlots ? Icons.circle : Icons.schedule_rounded, size: 10, color: f.freeSlots ? _accent2 : _muted),
+        Padding(
+          padding: EdgeInsets.only(top: smal ? 5 : 0),
+          child: Icon(f.freeSlots ? Icons.circle : Icons.schedule_rounded,
+              size: 10, color: f.freeSlots ? _accent2 : _muted),
+        ),
         const SizedBox(width: 10),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(f.displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+              Text(f.displayName,
+                  maxLines: titelRegels(context),
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 2),
-              Text(
-                  '$status · ${f.username} · ${_fmtBytes(f.size)}'
-                  '${f.durationSec != null && f.durationSec! > 0 ? " · ${_fmt(Duration(seconds: f.durationSec!))}" : ""}',
-                  style: const TextStyle(color: _muted, fontSize: 12)),
+              Text(meta, style: const TextStyle(color: _muted, fontSize: 12)),
+              if (smal) ...[
+                const SizedBox(height: 6),
+                Wrap(spacing: 6, runSpacing: 4, children: merken),
+              ],
             ],
           ),
         ),
-        // Het kanaalaantal, als de naam het prijsgeeft. Zonder dit was een 5.1-bestand niet van een
-        // stereobestand te onderscheiden behalve aan zijn verdachte grootte — en die grootte leest
-        // juist als "beter", terwijl het op een stereo-installatie minder is.
-        //
-        // Oranje en niet groen: dit is een waarschuwing, geen keurmerk.
-        if (_surroundMerk(f) != null) ...[
-          Container(
-            margin: const EdgeInsets.only(right: 6),
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: const Color(0xFFE8913A).withValues(alpha: .16),
-              borderRadius: BorderRadius.circular(5),
-              border: Border.all(color: const Color(0xFFE8913A).withValues(alpha: .45)),
-            ),
-            child: Text(_surroundMerk(f)!,
-                style: const TextStyle(
-                    fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFFE8913A))),
-          ),
-        ],
-        // TE KLEIN VOOR WAT HET BEWEERT. Meten kan hier niet: je kunt niet in het bestand van een
-        // vreemde kijken zonder het eerst binnen te halen. Wat wél kan is de getallen tegen elkaar
-        // wegstrepen die de peer zelf meestuurt — een 24/96 die uit een 44,1-bron is opgetild pakt veel
-        // kleiner in dan een echte. Zie [verdachtKleinVoorHiRes].
-        //
-        // Bewust dezelfde oranje vorm als het surroundmerk, en om dezelfde reden: dit is een
-        // waarschuwing, geen keurmerk en geen oordeel. Het staat ook NIET in de rangschikking — een
-        // vermoeden hoort de gebruiker te informeren, niet voor hem te beslissen.
-        if (verdachtKleinVoorHiRes(
-            sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: f.bitrate ?? 0)) ...[
-          Tooltip(
-            message: 'Zegt ${f.bitDepth}/${f.sampleRate} maar is daar veel te klein voor — '
-                'waarschijnlijk opgeschaald. Zeker weten kan pas na het binnenhalen.',
-            child: Container(
-              margin: const EdgeInsets.only(right: 6),
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: const Color(0xFFE8913A).withValues(alpha: .16),
-                borderRadius: BorderRadius.circular(5),
-                border: Border.all(color: const Color(0xFFE8913A).withValues(alpha: .45)),
-              ),
-              child: const Text('verdacht klein',
-                  style: TextStyle(
-                      fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFFE8913A))),
-            ),
-          ),
-        ],
-        _qualityBadge(q),
+        if (!smal)
+          for (final m in merken) Padding(padding: const EdgeInsets.only(left: 6), child: m),
         _downloadControl(context,
             jobKey: _slskKey(f),
             onDownload: () => _downloadSoulseek(context, f, all, authority: authority)),
@@ -11078,8 +11200,6 @@ class _SourcesViewState extends State<SourcesView> {
   List<SearchResult> _torrents = [];
   List<SoulseekFile> _slsk = [];
 
-  /// Hoeveel bronnen er nu getoond worden. Groeit met [_slskStap] per tik op "Nog N tonen".
-  int _slskLimiet = _slskStap;
   bool _tBusy = true, _sBusy = false;
   QFilter _filter = QFilter.all;
 
@@ -11092,14 +11212,10 @@ class _SourcesViewState extends State<SourcesView> {
   Future<void> _run() async {
     final online = context.read<OnlineService>();
     final soulseek = context.read<SoulseekService>();
-    // Een NIEUWE zoekopdracht begint weer bij het begin. Bewust hier en niet bij elk deelresultaat:
-    // die stromen binnen terwijl je kijkt, en een lijst die dan terugklapt naar tweehonderd zou het
-    // scherm onder je vinger wegtrekken.
     if (mounted) {
       setState(() {
         _tBusy = true;
         _sBusy = soulseek.available;
-        _slskLimiet = _slskStap;
       });
     }
     if (soulseek.available) {
@@ -11148,10 +11264,13 @@ class _SourcesViewState extends State<SourcesView> {
               child: Text('Geen Soulseek-bronnen.', style: TextStyle(color: _muted, fontSize: 12.5))),
         // Whichever copy the user picks, the record decides what it is. That is the whole point:
         // this same song is offered as "13 …", "19. …" and "…The Essential … - 01 - …".
-        ..._slskTiles(context, slsk,
+        // De boom houdt zijn eigen openstand en venster bij; [sleutel] is wat hem terugzet als er
+        // een nieuwe zoekopdracht onder komt te staan.
+        _SoulseekGroepen(
+            slsk: slsk,
+            sleutel: widget.query,
             authority: _trackAuthority,
-            limiet: _slskLimiet,
-            onMeer: () => setState(() => _slskLimiet += _slskStap)),
+            uitgave: widget.authority),
       ],
     );
   }
@@ -11172,11 +11291,15 @@ class _SourcesViewState extends State<SourcesView> {
   }
 }
 
-/// Hoeveel bronnen er in één keer op het scherm komen, en hoeveel erbij per tik.
+/// Hoeveel BRONNEN er in één keer op het scherm komen, en hoeveel erbij per tik.
 ///
 /// Rows are built eagerly inside a plain ListView, so a broad query (3500+ hits is normal for a
 /// popular track) would build every one of them on every rebuild and lock the UI. Vandaar een
 /// venster in plaats van alles — maar het is nu een venster dat OPENGAAT.
+///
+/// Sinds de lijst per gebruiker gegroepeerd is, telt dit gebruikers en geen bestanden. Zevenduizend
+/// treffers zijn meestal een paar honderd bronnen, dus in de praktijk is de knop eronder er nog
+/// vooral voor het geval dat het er tóch meer zijn.
 const _slskStap = 200;
 
 /// Wat er van een gerangschikte bronnenlijst getoond wordt, en wat er nog wacht.
@@ -11194,57 +11317,229 @@ const _slskStap = 200;
   return (tot: tot, rest: rest, volgende: rest < _slskStap ? rest : _slskStap);
 }
 
-/// De lijst met bronnen, tot [limiet], met een knop eronder om er meer bij te halen.
+/// Hoeveel gebruikers er standaard opengeklapt staan.
 ///
-/// **Waarom er een knop staat waar advies stond.** Er stond "verfijn je zoekopdracht om ze te
-/// zien", en dat was onuitvoerbaar advies: bij "men at work down under" heb je artiest én titel al
-/// getypt en is er niets meer te verfijnen — er ZIJN gewoon zeventienhonderd mensen die dat nummer
-/// delen. De grens was bovendien nooit een grens van de zoekopdracht maar van het tekenen: alle
-/// treffers zaten al in het geheugen en werden alleen niet getoond.
+/// Niet nul: een scherm vol dichte namen is nog steeds niets waar je uit kunt maken wat er te halen
+/// valt. Niet alles: de rijen worden gretig gebouwd (zie [_slskStap]), en van zevenduizend
+/// treffers alles tegelijk tekenen zet de app vast. Drie is waar het beste resultaat meteen te zien
+/// is terwijl er hooguit een paar tientallen rijen staan.
+const _slskOpenVanZelf = 3;
+
+/// De Soulseek-treffers als boom: gebruiker → eventueel album → de liedjes.
 ///
-/// De volgorde verandert niet als het venster opengaat. [slsk] is al gerangschikt (kwaliteit,
-/// grootte, vrije slots — zie `_besteEerst`) voordat er gesneden wordt, dus wat erbij komt is
-/// precies de volgende in dezelfde rij. Nooit een tweede sortering op een halve lijst.
-List<Widget> _slskTiles(
-  BuildContext context,
-  List<SoulseekFile> slsk, {
-  TrackTags? authority,
-  required int limiet,
-  required void Function() onMeer,
-}) {
-  final venster = bronVenster(slsk.length, limiet);
-  final shown = slsk.sublist(0, venster.tot);
-  final rest = venster.rest;
-  final volgende = venster.volgende;
-  return [
-    // De volledige lijst gaat als kandidatenpoel mee, ook wat niet getoond wordt: een download die
-    // bij de eerste peer strandt valt terug op alle andere, niet alleen op de zichtbare.
-    ...shown.map((f) => _soulseekTile(context, f, slsk, authority: authority)),
-    if (rest > 0)
-      Padding(
-        padding: const EdgeInsets.fromLTRB(24, 10, 24, 16),
-        // Gevouwen, want naast elkaar is dit breder dan een telefoon.
+/// **Waarom niet meer één platte lijst.** Er stonden zevenduizend losse regels onder elkaar, met
+/// dezelfde gebruiker twintig keer, zijn naam op elke regel opnieuw, en zonder enige aanwijzing dat
+/// vijf van die regels bij één album van één persoon horen. Het Soulseek-programma zelf toont het
+/// als een boom, en dat is niet toevallig: bij P2P kies je een BRON, niet een bestand — wat die
+/// bron verder heeft en of hij een plek vrij heeft, bepaalt of je het ooit krijgt.
+///
+/// **Waarom een widget met eigen staat.** Wat opengeklapt is en hoeveel gebruikers er getoond
+/// worden, hoort bij deze lijst en niet bij het scherm eromheen. Beide schermen die hem gebruiken
+/// (het bronnenpaneel van een album en het losse zoekscherm) krijgen daarmee vanzelf dezelfde
+/// lijst, zonder dat ze allebei hun eigen teller moeten bijhouden.
+class _SoulseekGroepen extends StatefulWidget {
+  /// Al gefilterd (zie `QFilter`) en al gerangschikt met [_besteEerst].
+  final List<SoulseekFile> slsk;
+
+  /// De zoekterm. Wisselt die, dan klapt alles weer dicht en begint het venster opnieuw — anders
+  /// zou een nieuwe zoekopdracht de openstand van de vorige erven.
+  final String sleutel;
+
+  final TrackTags? authority;
+
+  /// Voor de "Download album"-knop per map; komt van de albumpagina waar dit paneel onder hangt.
+  final ReleaseAuthority? uitgave;
+
+  const _SoulseekGroepen(
+      {required this.slsk, required this.sleutel, this.authority, this.uitgave});
+
+  @override
+  State<_SoulseekGroepen> createState() => _SoulseekGroepenState();
+}
+
+class _SoulseekGroepenState extends State<_SoulseekGroepen> {
+  /// Hoeveel GEBRUIKERS er nu getoond worden — niet hoeveel bestanden. Door het groeperen zakt een
+  /// resultaat van zevenduizend bestanden meestal naar een paar honderd bronnen, en dan is er in de
+  /// praktijk geen tik meer nodig.
+  int _limiet = _slskStap;
+
+  /// Wie de gebruiker zelf heeft opengeklapt, en wie hij heeft dichtgeklapt. Twee verzamelingen en
+  /// geen enkele `bool`: de eerste [_slskOpenVanZelf] staan vanzelf open, en die moeten óók dicht
+  /// kunnen — met één verzameling was "niet opengeklapt" niet te onderscheiden van "dichtgeklapt".
+  final _open = <String>{};
+  final _dicht = <String>{};
+
+  @override
+  void didUpdateWidget(_SoulseekGroepen oud) {
+    super.didUpdateWidget(oud);
+    if (oud.sleutel != widget.sleutel) {
+      _limiet = _slskStap;
+      _open.clear();
+      _dicht.clear();
+    }
+  }
+
+  bool _staatOpen(int i, String naam) =>
+      _open.contains(naam) || (i < _slskOpenVanZelf && !_dicht.contains(naam));
+
+  void _klap(int i, String naam) {
+    setState(() {
+      if (_staatOpen(i, naam)) {
+        _open.remove(naam);
+        _dicht.add(naam);
+      } else {
+        _dicht.remove(naam);
+        _open.add(naam);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final gebruikers =
+        groepeerSoulseek(widget.slsk, rang: _slskRang, volgorde: _besteEerst);
+    final venster = bronVenster(gebruikers.length, _limiet);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < venster.tot; i++) ..._gebruikerRijen(i, gebruikers[i]),
+        if (venster.rest > 0)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 10, 24, 16),
+            // Gevouwen, want naast elkaar is dit breder dan een telefoon.
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 12,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _panel2,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  ),
+                  onPressed: () => setState(() => _limiet += _slskStap),
+                  icon: const Icon(Icons.expand_more_rounded, size: 19),
+                  label: Text('Nog ${venster.volgende} tonen'),
+                ),
+                Text('nog ${venster.rest} bronnen · de beste staan bovenaan',
+                    style: const TextStyle(color: _muted, fontSize: 12)),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  List<Widget> _gebruikerRijen(int i, SlskGebruiker g) {
+    final open = _staatOpen(i, g.naam);
+    final rijen = <Widget>[_gebruikerKop(g, open, () => _klap(i, g.naam))];
+    if (!open) return rijen;
+    // Eén map met één nummer: geen albumkop, want er is geen album. "Gebruiker, EVENTUEEL album,
+    // en daar de liedjes." Een kop boven één regel is geen indeling maar ruis.
+    if (g.losNummer) {
+      rijen.add(_nummer(g.mappen.first.nummers.first));
+      return rijen;
+    }
+    for (final m in g.mappen) {
+      rijen.add(_mapKop(m));
+      rijen.addAll(m.nummers.map(_nummer));
+    }
+    return rijen;
+  }
+
+  /// De kop van een gebruiker: wie het is, hoeveel hij heeft, en of hij nú uitdeelt.
+  Widget _gebruikerKop(SlskGebruiker g, bool open, VoidCallback klap) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 6, 20, 1),
+        child: Material(
+          color: _panel2,
+          borderRadius: BorderRadius.circular(8),
+          child: InkWell(
+            onTap: klap,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              child: Row(
+                children: [
+                  Icon(open ? Icons.expand_more_rounded : Icons.chevron_right_rounded,
+                      size: 20, color: _muted),
+                  const SizedBox(width: 6),
+                  Icon(g.vrij ? Icons.circle : Icons.schedule_rounded,
+                      size: 10, color: g.vrij ? _accent2 : _muted),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(g.naam,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 2),
+                        Text(
+                            '${g.vrij ? "vrij" : "wachtrij ${g.wachtrij}"} · '
+                            '${g.aantal} ${g.aantal == 1 ? "nummer" : "nummers"}'
+                            '${g.mappen.length > 1 ? " in ${g.mappen.length} mappen" : ""} · '
+                            '${_fmtBytes(g.totaal)}',
+                            maxLines: 2,
+                            style: const TextStyle(color: _muted, fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // Het keurmerk van zijn BESTE bestand. Dat is waar je op kiest zonder open te
+                  // klappen, en het is ook waarop deze hele lijst gerangschikt staat.
+                  _qualityBadge(_slskQuality(g.beste)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+  /// De albumregel onder een gebruiker, met de knop die de hele map in één keer binnenhaalt.
+  Widget _mapKop(SlskMap m) => Padding(
+        padding: const EdgeInsets.fromLTRB(34, 8, 20, 2),
+        // Gevouwen: een mapnaam plus een knop is op een telefoon breder dan het scherm, en een
+        // `Row` die niet past geeft de gele overloopbalk die geen enkele toets ziet.
         child: Wrap(
           crossAxisAlignment: WrapCrossAlignment.center,
-          spacing: 12,
-          runSpacing: 8,
+          spacing: 10,
+          runSpacing: 2,
           children: [
-            FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: _panel2,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              ),
-              onPressed: onMeer,
-              icon: const Icon(Icons.expand_more_rounded, size: 19),
-              label: Text('Nog $volgende tonen'),
+            const Icon(Icons.folder_rounded, size: 15, color: _muted),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 260),
+              child: Text(m.naam.isEmpty ? 'losse nummers' : m.naam,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
             ),
-            Text('nog $rest bronnen · de beste staan bovenaan',
+            Text('${m.aantal} · ${_fmtBytes(m.totaal)}',
                 style: const TextStyle(color: _muted, fontSize: 12)),
+            if (m.aantal >= 2)
+              TextButton.icon(
+                // De volledige lijst gaat als kandidatenpoel mee: een download die bij deze peer
+                // strandt valt terug op alle andere, niet alleen op wat er in deze map staat.
+                onPressed: () => _downloadSoulseekAlbum(context, m.nummers, widget.slsk,
+                    authority: widget.uitgave),
+                icon: const Icon(Icons.library_add_rounded, size: 15),
+                label: Text('Album (${m.aantal})'),
+                style: TextButton.styleFrom(
+                    foregroundColor: _accent,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    visualDensity: VisualDensity.compact),
+              ),
           ],
         ),
-      ),
-  ];
+      );
+
+  /// Eén nummer, ingesprongen onder zijn gebruiker. De volledige lijst gaat als kandidatenpoel mee,
+  /// ook wat niet getoond wordt — zie [_slskCandidates].
+  Widget _nummer(SoulseekFile f) => _soulseekTile(context, f, widget.slsk,
+      authority: widget.authority,
+      toonGebruiker: false,
+      marge: const EdgeInsets.fromLTRB(34, 1, 20, 1));
 }
 
 class OnlineSearchScreen extends StatefulWidget {
@@ -11272,8 +11567,6 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   List<SearchResult> _torrents = [];
   List<SoulseekFile> _slsk = [];
 
-  /// Hoeveel bronnen er nu getoond worden. Groeit met [_slskStap] per tik op "Nog N tonen".
-  int _slskLimiet = _slskStap;
   bool _busy = false, _slskBusy = false;
   String? _status;
   QFilter _filter = QFilter.all;
@@ -11622,8 +11915,6 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       _slskBusy = soulseek.available;
       _torrents = [];
       _slsk = [];
-      // Een nieuwe zoekopdracht begint weer bij tweehonderd.
-      _slskLimiet = _slskStap;
       _status = 'Zoeken…';
     });
     if (soulseek.available) {
@@ -12192,9 +12483,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                   padding: EdgeInsets.fromLTRB(24, 16, 24, 6),
                   child: Text('SOULSEEK · log in via Instellingen om P2P mee te zoeken',
                       style: kOpschrift))),
-        ..._slskTiles(context, slsk,
-            limiet: _slskLimiet,
-            onMeer: () => setState(() => _slskLimiet += _slskStap)),
+        // `_searchGen` telt op bij elke nieuwe zoekopdracht — precies het teken dat de boom nodig
+        // heeft om zijn openstand en venster terug te zetten.
+        _SoulseekGroepen(slsk: slsk, sleutel: '$_searchGen'),
       ],
     );
   }
