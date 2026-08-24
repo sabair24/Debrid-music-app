@@ -44,14 +44,19 @@ int rangVanBestand(SoulseekFile f) {
   return f.bitrate ?? 0;
 }
 
-int volgordeVanBestand(SoulseekFile a, SoulseekFile b) {
-  final r = rangVanBestand(b) - rangVanBestand(a);
-  if (r != 0) return r;
-  return b.size.compareTo(a.size);
+/// Hoe vaak [rangVanBestand] aangeroepen is sinds de laatste [groepeer]. Zie de toets onderaan:
+/// dat aantal is geen detail maar precies wat het scrollen deed haperen.
+int rangTeller = 0;
+
+int geteldeRang(SoulseekFile f) {
+  rangTeller++;
+  return rangVanBestand(f);
 }
 
-List<SlskGebruiker> groepeer(Iterable<SoulseekFile> files) =>
-    groepeerSoulseek(files, rang: rangVanBestand, volgorde: volgordeVanBestand);
+List<SlskGebruiker> groepeer(Iterable<SoulseekFile> files) {
+  rangTeller = 0;
+  return groepeerSoulseek(files, rang: geteldeRang);
+}
 
 void main() {
   group('een pad in tweeën', () {
@@ -203,6 +208,61 @@ void main() {
       ]);
       expect(g.single.mappen.first.naam, 'FLAC-map');
       expect(g.single.beste.isFlac, isTrue, reason: 'het keurmerk in de kop hoort van de beste te komen');
+    });
+  });
+
+  group('de kosten van het rangschikken', () {
+    // Dit is geen smaakkwestie maar de reden dat het scrollen haperde. Een `sort` met een
+    // vergelijker die de rang van beide kanten opnieuw uitrekent, roept die rang zo'n n·log n keer
+    // aan — bij zevenduizend treffers tweehonderdduizend keer, mét een reguliere uitdrukking over
+    // het hele pad erin, en dat bij élke keer tekenen. Nu wordt hij eerst uitgerekend en daarna
+    // gesorteerd op een getal.
+    test('de rang wordt één keer per bestand gevraagd, niet één keer per vergelijking', () {
+      final veel = [
+        for (var i = 0; i < 200; i++)
+          bestand('gebruiker$i', '@@a\\Album\\$i.flac',
+              sampleRate: 44100, bitDepth: 16, grootte: 1000000 + i),
+      ];
+      groepeer(veel);
+      expect(rangTeller, 200,
+          reason: 'exact één keer per bestand; een vergelijker zou er ruim duizend halen');
+    });
+
+    test('rangschikSoulseek vraagt de rang ook maar één keer per bestand', () {
+      var n = 0;
+      final veel = [
+        for (var i = 0; i < 200; i++)
+          bestand('u$i', '@@a\\Album\\$i.flac', sampleRate: 44100, bitDepth: 16),
+      ];
+      rangschikSoulseek(veel, rang: (f) {
+        n++;
+        return rangVanBestand(f);
+      });
+      expect(n, 200);
+    });
+
+    test('en levert dezelfde volgorde als de trapsgewijze regel voorschrijft', () {
+      final gesorteerd = rangschikSoulseek([
+        bestand('mp3', r'@@a\Album\01.mp3', bitrate: 320),
+        bestand('klein', r'@@b\Album\01.flac', sampleRate: 44100, bitDepth: 16, grootte: 20000000),
+        bestand('groot', r'@@c\Album\01.flac', sampleRate: 44100, bitDepth: 16, grootte: 60000000),
+        bestand('hires', r'@@d\Album\01.flac', sampleRate: 96000, bitDepth: 24),
+      ], rang: rangVanBestand);
+      expect(gesorteerd.map((f) => f.username).toList(), ['hires', 'groot', 'klein', 'mp3']);
+    });
+
+    test('vergelijkNaRang: vrij vóór wachtrij vóór grootte', () {
+      final vrij = bestand('a', r'@@a\x\1.flac');
+      final wacht = bestand('b', r'@@b\x\1.flac', vrij: false, wachtrij: 3);
+      expect(vergelijkNaRang(vrij, wacht), lessThan(0));
+
+      final kort = bestand('c', r'@@c\x\1.flac', vrij: false, wachtrij: 1);
+      final lang = bestand('d', r'@@d\x\1.flac', vrij: false, wachtrij: 9);
+      expect(vergelijkNaRang(kort, lang), lessThan(0));
+
+      final groot = bestand('e', r'@@e\x\1.flac', grootte: 90);
+      final min = bestand('f', r'@@f\x\1.flac', grootte: 10);
+      expect(vergelijkNaRang(groot, min), lessThan(0), reason: 'per grote boven');
     });
   });
 

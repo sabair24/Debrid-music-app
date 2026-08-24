@@ -618,6 +618,16 @@ String whyBetter(File keep, File drop) {
   }
 }
 
+/// De namen die surround verraden, één keer samengesteld.
+///
+/// Hij stond in de body van [surroundLabel], en dat was op de telefoon te VOELEN. Die functie hangt
+/// in de rangschikking van de bronnenlijst, en die draait bij zevenduizend Soulseek-treffers
+/// tienduizenden keren per keer tekenen. Een `RegExp` in een body wordt bij élke aanroep opnieuw
+/// vertaald — precies het soort kosten dat nergens opvalt behalve als haperend scrollen.
+final _surroundInNaam = RegExp(
+    r'(\b5[\._ ]1\b|\b7[\._ ]1\b|surround|multi[\- ]?channel|quadraphonic|quad\b|atmos)',
+    caseSensitive: false);
+
 /// Wat een naam zegt over het aantal kanalen: `5.1`, `7.1`, `Atmos`, … of null voor gewoon stereo.
 ///
 /// Een LABEL en geen ja/nee, want dit is bedoeld om te tonen. Bij een zoekresultaat is de naam alles wat
@@ -629,9 +639,7 @@ String whyBetter(File keep, File drop) {
 /// de FLAC-kop. Daarom staat die weg er nog steeds naast en gaat de naam alleen vóór als er niets beters
 /// is.
 String? surroundLabel(String naam) {
-  final m = RegExp(r'(\b5[\._ ]1\b|\b7[\._ ]1\b|surround|multi[\- ]?channel|quadraphonic|quad\b|atmos)',
-          caseSensitive: false)
-      .firstMatch(naam);
+  final m = _surroundInNaam.firstMatch(naam);
   if (m == null) return null;
   final gevonden = m.group(0)!.toLowerCase();
   if (gevonden.startsWith('5')) return '5.1';
