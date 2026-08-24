@@ -10219,24 +10219,6 @@ Widget _downloadControl(BuildContext context,
   );
 }
 
-/// The most complete album folder among Soulseek hits (most audio files from ONE peer's
-/// folder) — so "Download album" grabs a coherent album from a single source.
-List<SoulseekFile> _bestSoulseekFolder(List<SoulseekFile> files) {
-  final groups = <String, List<SoulseekFile>>{};
-  for (final f in files) {
-    // Dezelfde padsplitsing als de bronnenlijst gebruikt — zie [mapVan]. Twee eigen versies zouden
-    // betekenen dat deze knop een ander album kiest dan het scherm eronder toont.
-    groups.putIfAbsent('${f.username}|${mapVan(f.filename)}', () => []).add(f);
-  }
-  final ranked = groups.values.toList()
-    ..sort((a, b) {
-      if (a.length != b.length) return b.length.compareTo(a.length); // most tracks
-      final fa = a.where((f) => f.freeSlots).length, fb = b.where((f) => f.freeSlots).length;
-      return fb.compareTo(fa); // then most free-slot peers
-    });
-  return ranked.isEmpty ? const [] : ranked.first;
-}
-
 Future<void> _downloadSoulseekAlbum(
     BuildContext context, List<SoulseekFile> folder, List<SoulseekFile> all,
     {ReleaseAuthority? authority}) async {
@@ -10339,9 +10321,9 @@ class _SlskPauzeStrookState extends State<_SlskPauzeStrook> {
 
 /// Soulseek section header with a "Download album" action for the best complete folder.
 /// [all] is the full (unfiltered) result set — used to find fallback peers per track.
-Widget _soulseekHeader(BuildContext context, List<SoulseekFile> slsk, bool busy, List<SoulseekFile> all,
-    {ReleaseAuthority? authority}) {
-  final folder = _bestSoulseekFolder(slsk);
+Widget _soulseekHeader(
+    BuildContext context, List<SoulseekFile> slsk, bool busy, List<SoulseekFile> all,
+    {required List<SoulseekFile> folder, ReleaseAuthority? authority}) {
   return Padding(
     padding: const EdgeInsets.fromLTRB(24, 14, 18, 6),
     // Gevouwen: "SOULSEEK · P2P 7083" plus "Download album (24)" is op een telefoon breder dan het
@@ -10755,32 +10737,18 @@ Quality _trackQuality(Track t) {
   return basis;
 }
 
-/// Het beste bestand bovenaan.
-///
-/// De resultaten stonden in de volgorde waarin de peers toevallig antwoordden, en dat is geen volgorde.
-/// Een bestand van 212 MB kon onder een van 30 MB staan — en dan zie je niet dat er iets tussen zit dat
-/// veel beter is dan wat je al in de kast hebt.
-///
-/// Lossless boven lossy, daarbinnen op bitrate; zie [kwaliteitsRang]. Bij gelijke kwaliteit wint de peer
-/// met een vrije plek, want het beste bestand van iemand die niets uitdeelt heb je nog steeds niet.
-///
-/// De grootte is de laatste trap, en dat was hij niet. Twee 16/44-kopieën van hetzelfde nummer
-/// krijgen dezelfde rang en meestal ook dezelfde wachtrij, en dan besliste de volgorde van
-/// binnenkomst — dus stond een afgeknepen kopie net zo vaak boven de volledige. Gevraagd was
-/// letterlijk "per grote boven".
-int _besteEerst(SoulseekFile a, SoulseekFile b) {
-  final verschil = _slskRang(b) - _slskRang(a);
-  if (verschil != 0) return verschil;
-  if (a.freeSlots != b.freeSlots) return a.freeSlots ? -1 : 1;
-  if (a.queueLength != b.queueLength) return a.queueLength.compareTo(b.queueLength);
-  return b.size.compareTo(a.size);
-}
-
 /// De kwaliteitsrang van één Soulseek-bestand, als één plat getal.
 ///
-/// Apart van [_besteEerst] omdat [groepeerSoulseek] hem ook nodig heeft: de rang van een hele map is
-/// het maximum van zijn nummers, en dat kan alleen als er een rang per bestand te vragen is. Eén
-/// rangschikking voor de lijst én de groepen, zodat die twee het nooit oneens kunnen worden.
+/// De resultaten stonden in de volgorde waarin de peers toevallig antwoordden, en dat is geen
+/// volgorde: een bestand van 212 MB kon onder een van 30 MB staan. Lossless boven lossy, daarbinnen
+/// op capaciteit; zie [kwaliteitsRang]. Wat er bij gelijke rang gebeurt staat in [vergelijkNaRang]:
+/// eerst een vrije plek, dan de kortste wachtrij, dan de grootste — want het beste bestand van
+/// iemand die niets uitdeelt heb je nog steeds niet, en "per grote boven" was letterlijk de vraag.
+///
+/// Een functie per BESTAND en niet een vergelijker, en dat is niet cosmetisch: [rangschikSoulseek]
+/// en [groepeerSoulseek] roepen hem allebei één keer per bestand aan in plaats van twee keer per
+/// vergelijking. Bij zevenduizend treffers scheelt dat een factor twintig, en dat is precies het
+/// verschil tussen soepel en haperend scrollen.
 int _slskRang(SoulseekFile f) {
   final kbps = effectieveBitrate(bitrate: f.bitrate, durationSec: f.durationSec, size: f.size);
   final lossless = f.isFlac || const {'alac', 'ape', 'wav', 'aiff'}.contains(f.ext);
@@ -10937,7 +10905,7 @@ Widget _torrentTile(BuildContext context, SearchResult r) {
       doen: () => _downloadTorrent(context, r)
     ),
   ];
-  return Container(
+  final kaart = Container(
     margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
     decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(8)),
@@ -11026,6 +10994,10 @@ Widget _torrentTile(BuildContext context, SearchResult r) {
             ],
           ),
   );
+  // Eigen tekenlaag per rij. Zonder dit tekent een beweging van één punt de hele lijst opnieuw —
+  // ook de rijen die niet veranderen en de rijen die je niet ziet. Met een [RepaintBoundary] wordt
+  // een rij één keer getekend en daarna alleen nog verschoven, en dát is wat scrollen soepel maakt.
+  return RepaintBoundary(child: kaart);
 }
 
 /// Eén Soulseek-bestand.
@@ -11085,7 +11057,7 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
               'waarschijnlijk opgeschaald. Zeker weten kan pas na het binnenhalen.'),
     _qualityBadge(q),
   ];
-  return Container(
+  final kaart = Container(
     margin: marge ?? const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
     decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(8)),
@@ -11123,6 +11095,8 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
       ],
     ),
   );
+  // Eigen tekenlaag, om dezelfde reden als bij [_torrentTile].
+  return RepaintBoundary(child: kaart);
 }
 
 /// Network cover with a graceful placeholder (album browse / artist photos from Deezer).
@@ -11234,12 +11208,21 @@ class _SourcesViewState extends State<SourcesView> {
     if (mounted) setState(() => _tBusy = false);
   }
 
+  /// Het geheugen van één: zie [_SlskKlaar]. Zonder dit werd er bij elke tik en elk deelresultaat
+  /// opnieuw gefilterd, gerangschikt en gegroepeerd over duizenden bestanden.
+  _SlskKlaar? _klaar;
+  _SlskKlaar get _bronnen {
+    final k = _klaar;
+    if (k != null && k.geldigVoor(_slsk, _filter)) return k;
+    return _klaar = _SlskKlaar.van(_slsk, _filter);
+  }
+
   @override
   Widget build(BuildContext context) {
     final ready = context.read<SoulseekService>().available;
     final torrents = _torrents.where((r) => _filter.matches(qualityFromName(r.name))).toList();
-    final slsk = _slsk.where((f) => _filter.matches(_slskQuality(f))).toList()
-      ..sort(_besteEerst);
+    final bronnen = _bronnen;
+    final slsk = bronnen.gefilterd;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -11252,7 +11235,8 @@ class _SourcesViewState extends State<SourcesView> {
               child: Text('Geen torrents gevonden.', style: TextStyle(color: _muted, fontSize: 12.5))),
         ...torrents.map((r) => _torrentTile(context, r)),
         if (ready)
-          _soulseekHeader(context, slsk, _sBusy, slsk, authority: widget.authority)
+          _soulseekHeader(context, slsk, _sBusy, slsk,
+              folder: bronnen.besteMap, authority: widget.authority)
         else
           const Padding(
               padding: EdgeInsets.fromLTRB(24, 14, 24, 6),
@@ -11267,6 +11251,7 @@ class _SourcesViewState extends State<SourcesView> {
         // De boom houdt zijn eigen openstand en venster bij; [sleutel] is wat hem terugzet als er
         // een nieuwe zoekopdracht onder komt te staan.
         _SoulseekGroepen(
+            gebruikers: bronnen.gebruikers,
             slsk: slsk,
             sleutel: widget.query,
             authority: _trackAuthority,
@@ -11297,10 +11282,17 @@ class _SourcesViewState extends State<SourcesView> {
 /// popular track) would build every one of them on every rebuild and lock the UI. Vandaar een
 /// venster in plaats van alles — maar het is nu een venster dat OPENGAAT.
 ///
-/// Sinds de lijst per gebruiker gegroepeerd is, telt dit gebruikers en geen bestanden. Zevenduizend
-/// treffers zijn meestal een paar honderd bronnen, dus in de praktijk is de knop eronder er nog
-/// vooral voor het geval dat het er tóch meer zijn.
-const _slskStap = 200;
+/// Sinds de lijst per gebruiker gegroepeerd is, telt dit BRONNEN en geen bestanden — en daarom mag
+/// het getal veel lager. Tweehonderd kaarten tegelijk zijn tweehonderd rijen die allemaal echt
+/// bestaan en bij elke beweging meegetekend worden, ook de honderdtachtig die je niet ziet; dat was
+/// te voelen als haperend scrollen. Vijftig bronnen is ruim genoeg om te kiezen, en de knop staat
+/// eronder.
+///
+/// **Niet privé, en dat is met opzet.** Dit getal stond in `bron_venster_test.dart` nog eens als
+/// `200` uitgeschreven, dus toen het hier veranderde brak die toets — op het getal, niet op de
+/// rekensom die hij hoort te bewaken. Nu leest de toets het hier, en mag het getal veranderen
+/// zonder dat er iets stuk hoeft.
+const bronStap = 50;
 
 /// Wat er van een gerangschikte bronnenlijst getoond wordt, en wat er nog wacht.
 ///
@@ -11314,13 +11306,77 @@ const _slskStap = 200;
           ? aantal
           : limiet;
   final rest = aantal - tot;
-  return (tot: tot, rest: rest, volgende: rest < _slskStap ? rest : _slskStap);
+  return (tot: tot, rest: rest, volgende: rest < bronStap ? rest : bronStap);
 }
+
+/// De bronnenlijst voorgekauwd: gefilterd, gerangschikt en gegroepeerd, in één keer.
+///
+/// **Waarom hier een geheugen zit.** Dit rekenwerk stond gewoon in `build()`, en `build()` draait
+/// veel vaker dan er iets verandert: elke driehonderd milliseconden komt er een deelresultaat
+/// binnen, en elke tik op een groep is er ook één. Bij zevenduizend treffers is dat per keer een
+/// filter, een sortering en een groepering over alles — terwijl je aan het scrollen bent.
+///
+/// Eén uitkomst onthouden is genoeg: hij is alleen ongeldig als er nieuwe treffers zijn (dan is het
+/// een ándere lijst, vandaar [identical] en geen inhoudelijke vergelijking) of als je een ander
+/// filter aantikt.
+class _SlskKlaar {
+  final List<SoulseekFile> ruw;
+  final QFilter filter;
+
+  /// De overgebleven bestanden, beste eerst. Gaat als kandidatenpoel mee naar elke rij: een
+  /// download die bij de eerste peer strandt valt terug op alle andere.
+  final List<SoulseekFile> gefilterd;
+
+  /// Diezelfde bestanden als boom: gebruiker → map → nummers.
+  final List<SlskGebruiker> gebruikers;
+
+  /// De meest complete map van één peer, voor de knop "Download album" in de kop.
+  ///
+  /// Die had zijn eigen doorloop over alle treffers (`_bestSoulseekFolder`), met een padsplitsing
+  /// per bestand — een tweede keer precies het werk dat [gebruikers] al gedaan heeft. Nu is het een
+  /// keuze uit de mappen die er al liggen. Dezelfde regel als voorheen: de meeste nummers wint, en
+  /// bij gelijk aantal de peer die nú uitdeelt.
+  final List<SoulseekFile> besteMap;
+
+  const _SlskKlaar._(
+      this.ruw, this.filter, this.gefilterd, this.gebruikers, this.besteMap);
+
+  factory _SlskKlaar.van(List<SoulseekFile> ruw, QFilter filter) {
+    // De rang van een bestand wordt hier één keer uitgerekend en daarna hergebruikt, door zowel de
+    // rangschikking als de groepering. Zie [rangschikSoulseek] voor waarom dat het verschil maakt.
+    final onthouden = Map<SoulseekFile, int>.identity();
+    int rang(SoulseekFile f) => onthouden[f] ??= _slskRang(f);
+
+    final gefilterd =
+        rangschikSoulseek(ruw.where((f) => _filterLaatDoor(filter, f)), rang: rang);
+    final gebruikers = groepeerSoulseek(gefilterd, rang: rang);
+
+    List<SoulseekFile> beste = const [];
+    var meeste = 0;
+    var besteVrij = false;
+    for (final g in gebruikers) {
+      for (final m in g.mappen) {
+        if (m.aantal > meeste || (m.aantal == meeste && g.vrij && !besteVrij)) {
+          beste = m.nummers;
+          meeste = m.aantal;
+          besteVrij = g.vrij;
+        }
+      }
+    }
+    return _SlskKlaar._(ruw, filter, gefilterd, gebruikers, beste);
+  }
+
+  bool geldigVoor(List<SoulseekFile> r, QFilter f) => identical(r, ruw) && f == filter;
+}
+
+/// Of dit bestand door het gekozen kwaliteitsfilter komt.
+bool _filterLaatDoor(QFilter filter, SoulseekFile f) =>
+    filter == QFilter.all || filter.matches(_slskQuality(f));
 
 /// Hoeveel gebruikers er standaard opengeklapt staan.
 ///
 /// Niet nul: een scherm vol dichte namen is nog steeds niets waar je uit kunt maken wat er te halen
-/// valt. Niet alles: de rijen worden gretig gebouwd (zie [_slskStap]), en van zevenduizend
+/// valt. Niet alles: de rijen worden gretig gebouwd (zie [bronStap]), en van zevenduizend
 /// treffers alles tegelijk tekenen zet de app vast. Drie is waar het beste resultaat meteen te zien
 /// is terwijl er hooguit een paar tientallen rijen staan.
 const _slskOpenVanZelf = 3;
@@ -11338,7 +11394,10 @@ const _slskOpenVanZelf = 3;
 /// (het bronnenpaneel van een album en het losse zoekscherm) krijgen daarmee vanzelf dezelfde
 /// lijst, zonder dat ze allebei hun eigen teller moeten bijhouden.
 class _SoulseekGroepen extends StatefulWidget {
-  /// Al gefilterd (zie `QFilter`) en al gerangschikt met [_besteEerst].
+  /// De boom, al gerangschikt. Komt uit [_SlskKlaar], dat hem onthoudt tussen twee keer tekenen.
+  final List<SlskGebruiker> gebruikers;
+
+  /// Alle overgebleven bestanden, als kandidatenpoel voor een download die bij één peer strandt.
   final List<SoulseekFile> slsk;
 
   /// De zoekterm. Wisselt die, dan klapt alles weer dicht en begint het venster opnieuw — anders
@@ -11351,7 +11410,11 @@ class _SoulseekGroepen extends StatefulWidget {
   final ReleaseAuthority? uitgave;
 
   const _SoulseekGroepen(
-      {required this.slsk, required this.sleutel, this.authority, this.uitgave});
+      {required this.gebruikers,
+      required this.slsk,
+      required this.sleutel,
+      this.authority,
+      this.uitgave});
 
   @override
   State<_SoulseekGroepen> createState() => _SoulseekGroepenState();
@@ -11361,7 +11424,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
   /// Hoeveel GEBRUIKERS er nu getoond worden — niet hoeveel bestanden. Door het groeperen zakt een
   /// resultaat van zevenduizend bestanden meestal naar een paar honderd bronnen, en dan is er in de
   /// praktijk geen tik meer nodig.
-  int _limiet = _slskStap;
+  int _limiet = bronStap;
 
   /// Wie de gebruiker zelf heeft opengeklapt, en wie hij heeft dichtgeklapt. Twee verzamelingen en
   /// geen enkele `bool`: de eerste [_slskOpenVanZelf] staan vanzelf open, en die moeten óók dicht
@@ -11373,7 +11436,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
   void didUpdateWidget(_SoulseekGroepen oud) {
     super.didUpdateWidget(oud);
     if (oud.sleutel != widget.sleutel) {
-      _limiet = _slskStap;
+      _limiet = bronStap;
       _open.clear();
       _dicht.clear();
     }
@@ -11396,8 +11459,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
 
   @override
   Widget build(BuildContext context) {
-    final gebruikers =
-        groepeerSoulseek(widget.slsk, rang: _slskRang, volgorde: _besteEerst);
+    final gebruikers = widget.gebruikers;
     final venster = bronVenster(gebruikers.length, _limiet);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -11418,7 +11480,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   ),
-                  onPressed: () => setState(() => _limiet += _slskStap),
+                  onPressed: () => setState(() => _limiet += bronStap),
                   icon: const Icon(Icons.expand_more_rounded, size: 19),
                   label: Text('Nog ${venster.volgende} tonen'),
                 ),
@@ -11449,7 +11511,8 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
   }
 
   /// De kop van een gebruiker: wie het is, hoeveel hij heeft, en of hij nú uitdeelt.
-  Widget _gebruikerKop(SlskGebruiker g, bool open, VoidCallback klap) => Padding(
+  Widget _gebruikerKop(SlskGebruiker g, bool open, VoidCallback klap) => RepaintBoundary(
+        child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 6, 20, 1),
         child: Material(
           color: _panel2,
@@ -11494,6 +11557,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
               ),
             ),
           ),
+        ),
         ),
       );
 
@@ -12465,10 +12529,18 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     );
   }
 
+  /// Zelfde geheugen van één als bij [SourcesView] — zie [_SlskKlaar].
+  _SlskKlaar? _klaar;
+  _SlskKlaar get _bronnen {
+    final k = _klaar;
+    if (k != null && k.geldigVoor(_slsk, _filter)) return k;
+    return _klaar = _SlskKlaar.van(_slsk, _filter);
+  }
+
   Widget _directResults(bool soulseekReady) {
     final torrents = _torrents.where((r) => _filter.matches(qualityFromName(r.name))).toList();
-    final slsk = _slsk.where((f) => _filter.matches(_slskQuality(f))).toList()
-      ..sort(_besteEerst);
+    final bronnen = _bronnen;
+    final slsk = bronnen.gefilterd;
     return ListView(
       padding: const EdgeInsets.only(bottom: 24),
       children: [
@@ -12478,14 +12550,15 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ...torrents.map((r) => _torrentTile(context, r)),
         if (_status == null || _slsk.isNotEmpty || _slskBusy)
           (soulseekReady
-              ? _soulseekHeader(context, slsk, _slskBusy, slsk)
+              ? _soulseekHeader(context, slsk, _slskBusy, slsk, folder: bronnen.besteMap)
               : const Padding(
                   padding: EdgeInsets.fromLTRB(24, 16, 24, 6),
                   child: Text('SOULSEEK · log in via Instellingen om P2P mee te zoeken',
                       style: kOpschrift))),
         // `_searchGen` telt op bij elke nieuwe zoekopdracht — precies het teken dat de boom nodig
         // heeft om zijn openstand en venster terug te zetten.
-        _SoulseekGroepen(slsk: slsk, sleutel: '$_searchGen'),
+        _SoulseekGroepen(
+            gebruikers: bronnen.gebruikers, slsk: slsk, sleutel: '$_searchGen'),
       ],
     );
   }
