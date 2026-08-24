@@ -189,6 +189,7 @@ String ruilScript({
   required String pakket,
   required String nieuw,
   required String terzijde,
+  String zip = '',
 }) {
   // Enkele aanhalingstekens in een pad zouden het script breken. Ze horen niet in een appnaam, maar
   // het pad eromheen is van de gebruiker en die mag alles heten.
@@ -199,6 +200,7 @@ PID=$pid
 PAKKET=${q(pakket)}
 NIEUW=${q(nieuw)}
 TERZIJDE=${q(terzijde)}
+ZIP=${q(zip)}
 
 # Wachten tot de app echt weg is. Twintig seconden is ruim; daarna is er iets anders aan de hand en
 # is niets doen beter dan een half vervangen pakket.
@@ -221,6 +223,15 @@ else
 fi
 
 open "\$PAKKET"
+
+# En de eigen rommel weg. Het uitgepakte pakket is een TWEEDE .app met dezelfde bundle-id, en zolang
+# die ergens staat kan LaunchServices hem registreren en er later naartoe wijzen -- dan opent de Dock
+# een kopie in een tijdelijke map in plaats van de app in /Applications. Gemeten op 24-08-2026: een
+# dangling verwijzing naar zo'n tweede bundel leverde een proces zonder venster op.
+# Niet het script zelf: `sh` leest een script stapsgewijs, en wie de grond onder zijn eigen voeten
+# weghaalt terwijl er nog `rm -rf`-regels boven staan, wil dat niet halverwege ontdekken. Het is een
+# paar honderd bytes in een tijdelijke map; die veegt macOS zelf weg.
+rm -rf "\$NIEUW" "\$ZIP"
 ''';
 }
 
@@ -523,6 +534,7 @@ class Updater {
       pakket: pakket,
       nieuw: nieuw.path,
       terzijde: '${zip.parent.path}${Platform.pathSeparator}vorige.app',
+      zip: zip.path,
     ));
 
     await Process.start('/bin/sh', [script.path], mode: ProcessStartMode.detached);
