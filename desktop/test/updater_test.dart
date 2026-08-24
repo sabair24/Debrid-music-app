@@ -157,8 +157,28 @@ void main() {
 
     test('mislukt het uitpakken, dan komt de oude terug', () {
       expect(script, contains('mv "\$TERZIJDE" "\$PAKKET"'));
-      // En er wordt hoe dan ook iets opgestart, ook na die terugval.
-      expect(script.trimRight(), endsWith('open "\$PAKKET"'));
+      // En er wordt hoe dan ook iets opgestart, ook na die terugval: `open` staat ná de hele
+      // if/else, niet erin.
+      expect(script.indexOf('open "\$PAKKET"'), greaterThan(script.indexOf('mv "\$TERZIJDE"')));
+    });
+
+    test('het ruimt zijn eigen rommel op, maar niet zichzelf', () {
+      final met = ruilScript(
+        pid: 1,
+        pakket: '/Applications/DebridMusic.app',
+        nieuw: '/tmp/update/uitgepakt/DebridMusic.app',
+        terzijde: '/tmp/update/vorige.app',
+        zip: '/tmp/update/DebridMusic-3.9.196.zip',
+      );
+      // Het uitgepakte pakket is een TWEEDE .app met dezelfde bundle-id. Blijft die staan, dan kan
+      // LaunchServices hem registreren en er later naartoe wijzen -- en dan opent de Dock een kopie
+      // in een tijdelijke map. Op 24-08-2026 leverde precies zo'n verwijzing een proces zonder
+      // venster op, en las dat als "de app wil niet meer open".
+      expect(met, contains(r'rm -rf "$NIEUW" "$ZIP"'));
+      // Maar niet het script zelf: sh leest stapsgewijs.
+      expect(met, isNot(contains(r'"$0"')));
+      // En pas NA het opstarten, anders is er niets meer om te openen.
+      expect(met.indexOf(r'rm -rf "$NIEUW"'), greaterThan(met.indexOf(r'open "$PAKKET"')));
     });
 
     test('paden staan tussen aanhalingstekens, ook met een apostrof erin', () {
