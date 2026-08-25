@@ -279,8 +279,11 @@ class RemoteDownloadManager extends DownloadManager {
       [for (final j in jobs) '${j.key ?? j.name}|${j.status}|${j.progress.toStringAsFixed(3)}|${j.detail ?? ''}']
           .join(';');
 
+  /// [klaar] wordt hier bewust genegeerd. Het is een torrent die de PC-kant al heeft laten
+  /// voorbereiden bij TorBox; over de lijn heeft dat geen betekenis, want de PC bereidt hem daar
+  /// zelf voor en kent zijn eigen TorBox-sessie. Meesturen zou een tweede waarheid zijn.
   @override
-  void enqueue(SearchResult result, {int? fileId}) {
+  void enqueue(SearchResult result, {int? fileId, TbTorrent? klaar}) {
     unawaited(() async {
       final payload = {...result.toJson(), 'fileId': fileId};
       try {
