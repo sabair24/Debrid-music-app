@@ -132,6 +132,21 @@ String titleWithoutFeat(String title) {
   return cut.replaceAll(RegExp(r'[\(\[]\s*$'), '').trim();
 }
 
+/// De "(feat. …)"-staart van een titel, mét zijn haakjes — leeg als er geen gasten genoemd worden.
+///
+/// De tegenhanger van [titleWithoutFeat]: die geeft de kop, dit geeft de staart. Bestaat omdat een
+/// gastenlijst informatie is die nergens anders staat, en dus nergens stilletjes van een titel af
+/// mag vallen. Zie [titelNaOvername].
+String featStaart(String titel) {
+  final kaal = titleWithoutFeat(titel);
+  if (kaal.isEmpty || kaal.length >= titel.length) return '';
+  final staart = titel.substring(kaal.length).trim();
+  // Alleen een staart tussen haakjes telt. De herkenning kent ook `met` als gastwoord, en dat is
+  // een doodgewoon Nederlands woord: zonder deze eis zou "Samen met jou" een gastenlijst krijgen en
+  // hier een titel blijven staan die de persing terecht wilde corrigeren.
+  return staart.startsWith('(') || staart.startsWith('[') ? staart : '';
+}
+
 /// Comparison key for an ARTIST. On top of [normKey] it drops a leading "the", because "The
 /// Doors" and "Doors" are one act. Deliberately artist-only: for an ALBUM the leading word is
 /// part of the title ("The Wall" is not "Wall").
@@ -1142,6 +1157,16 @@ bool versieVolgtUitMap(String titel, String pad) => _merkWijstNaar(
 String titelNaOvername(String vanJou, String? vanPersing) {
   final hunne = vanPersing?.trim() ?? '';
   if (hunne.isEmpty) return vanJou;
+  // Een gastenlijst is geen VERSIEmerk — er staat geen "live", "remix" of "edit" in, dus
+  // [versionMarkers] ziet er niets in en de persing won. Zo werd "Lose Control (feat. Ciara and
+  // Fat Man Scoop)" gewoon "Lose Control", en daarmee verdween wie er meezingt uit het bestand.
+  // Dezelfde schade als bij een versiemerk: er wordt daarna op die kale titel gezocht.
+  //
+  // De spelling van de persing is nog steeds beter, dus die wint — de gasten gaan er weer achter.
+  final gasten = featStaart(vanJou);
+  if (gasten.isNotEmpty && featStaart(hunne).isEmpty) {
+    return '${titelNaOvername(titleWithoutFeat(vanJou), hunne)} $gasten';
+  }
   final mijne = versionMarkers(vanJou);
   if (mijne.isEmpty) return hunne;
   // Alles wat ik zeg en zij niet: dan verliest de overname informatie, en dat mag niet.
