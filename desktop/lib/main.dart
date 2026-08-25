@@ -1408,6 +1408,33 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int _view = 5; // 0 albums, 1 artists, 2 online, 3 ontdek, 4 tracks, 5 start (default)
 
+  /// De twee helften van het tv-scherm, elk met een eigen focusscope.
+  ///
+  /// **Waarom dit moet.** De inhoud zit sinds de binnennavigator in een eigen route, en een route
+  /// is een focusscope. Richtingsnavigatie steekt zo'n grens niet over: OMHOOG vanaf de bovenste
+  /// albumrij kwam nooit bij de navigatie uit, en OMLAAG vanuit de navigatie nooit bij de inhoud.
+  /// Op het toestel gemeten, en dit is ook waarom de rail links onbereikbaar was -- die stond buiten
+  /// dezelfde grens, dus hem naar boven verhuizen loste op zichzelf niets op.
+  ///
+  /// Die ene sprong wordt hier met de hand gemaakt, en alleen als de pagina zelf niet verder kan.
+  /// Binnen een pagina verandert er dus niets.
+  final _tvBalk = FocusScopeNode(debugLabel: 'tv-bovenbalk');
+  final _tvInhoud = FocusScopeNode(debugLabel: 'tv-inhoud');
+
+  /// Vangt de pijl die de scope uit wil.
+  ///
+  /// Eerst de pagina zelf laten proberen: is er binnen de inhoud nog iets boven je, dan hoort de
+  /// focus daarheen en niet naar de balk. Pas als dat niets oplevert is de rand bereikt.
+  KeyEventResult _tvSprong(
+      KeyEvent e, LogicalKeyboardKey pijl, TraversalDirection richting, FocusScopeNode naar) {
+    if (!isTv || e is! KeyDownEvent || e.logicalKey != pijl) return KeyEventResult.ignored;
+    if (FocusManager.instance.primaryFocus?.focusInDirection(richting) ?? false) {
+      return KeyEventResult.handled;
+    }
+    naar.requestFocus();
+    return KeyEventResult.handled;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1550,6 +1577,8 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void dispose() {
     _zoekPauze?.cancel();
+    _tvBalk.dispose();
+    _tvInhoud.dispose();
     _searchCtl.dispose();
     _searchFocus.dispose();
     _kanTerug.dispose();
@@ -1949,7 +1978,11 @@ class _HomeShellState extends State<HomeShell> {
               // Op een tv staat de navigatie BOVENAAN in plaats van in een rail links. Zie TvTopBar
               // voor waarom hij daar weg moest: hij was met de afstandsbediening niet te bereiken.
               if (isTv)
-                RepaintBoundary(
+                FocusScope(
+                  node: _tvBalk,
+                  onKeyEvent: (_, e) =>
+                      _tvSprong(e, LogicalKeyboardKey.arrowDown, TraversalDirection.down, _tvInhoud),
+                  child: RepaintBoundary(
                   child: TvTopBar(
                     view: _view,
                     onPick: _gaNaar,
@@ -1957,6 +1990,7 @@ class _HomeShellState extends State<HomeShell> {
                     onSettings: () =>
                         showDialog(context: context, builder: (_) => const SettingsDialog()),
                   ),
+                ),
                 ),
               const _OfflineBanner(),
               const _TvStatusStrip(),
@@ -1970,7 +2004,11 @@ class _HomeShellState extends State<HomeShell> {
               child: Row(
                 children: [
                   Expanded(
-                    child: Padding(
+                    child: FocusScope(
+                      node: _tvInhoud,
+                      onKeyEvent: (_, e) =>
+                          _tvSprong(e, LogicalKeyboardKey.arrowUp, TraversalDirection.up, _tvBalk),
+                      child: Padding(
                       // De overscan zat vroeger in de rail links; die is er niet meer, dus de
                       // inhoud houdt hem nu zelf van de schermrand af.
                       padding: EdgeInsets.symmetric(horizontal: tvOverscan.left),
@@ -1999,6 +2037,7 @@ class _HomeShellState extends State<HomeShell> {
                           kanTerug: _kanTerug,
                           wortel: const _SectieHost(),
                         ),
+                      ),
                       ),
                     ),
                   ),
