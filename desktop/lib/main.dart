@@ -2004,10 +2004,16 @@ class _HomeShellState extends State<HomeShell> {
               child: Row(
                 children: [
                   Expanded(
-                    child: FocusScope(
-                      node: _tvInhoud,
-                      onKeyEvent: (_, e) =>
-                          _tvSprong(e, LogicalKeyboardKey.arrowUp, TraversalDirection.up, _tvBalk),
+                    // Alleen op een tv een eigen scope: op een pc en een telefoon zou een extra
+                    // focusscope om de inhoud heen de tab-volgorde veranderen, en daar is niets mis
+                    // mee dat gerepareerd hoeft te worden.
+                    child: _AlleenOpTv(
+                      bouw: (kind) => FocusScope(
+                        node: _tvInhoud,
+                        onKeyEvent: (_, e) =>
+                            _tvSprong(e, LogicalKeyboardKey.arrowUp, TraversalDirection.up, _tvBalk),
+                        child: kind,
+                      ),
                       child: Padding(
                       // De overscan zat vroeger in de rail links; die is er niet meer, dus de
                       // inhoud houdt hem nu zelf van de schermrand af.
@@ -2656,6 +2662,21 @@ class _TvStatusStrip extends StatelessWidget {
 /// niet in kwam: zo'n groep is een grens, en richtingsnavigatie steekt die niet zomaar over. Hier
 /// staat er dus geen -- deze knoppen doen gewoon mee in de traversal van het scherm, zodat OMLAAG je
 /// de inhoud in brengt en OMHOOG je terugbrengt.
+/// Wikkelt [child] alleen in als dit een televisie is.
+///
+/// Bestaat omdat de tv-focusscope om de inhoud heen op een pc niets te zoeken heeft: daar zou hij de
+/// tab-volgorde veranderen zonder dat er iets kapot was. Een `if` in de boom zou hier twee takken
+/// opleveren die uit elkaar gaan lopen; zo staat de inhoud er maar één keer.
+class _AlleenOpTv extends StatelessWidget {
+  const _AlleenOpTv({required this.bouw, required this.child});
+
+  final Widget Function(Widget) bouw;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => isTv ? bouw(child) : child;
+}
+
 class TvTopBar extends StatefulWidget {
   const TvTopBar({
     super.key,
