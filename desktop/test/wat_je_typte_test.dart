@@ -53,6 +53,44 @@ void main() {
           'Fields Of Gold (My Songs Version)');
     });
 
+    test('DE TWEEDE KERN: een gastenlijst mag er ook niet af', () {
+      // Het gemelde geval. "(feat. …)" bevat geen enkel versiewoord — geen live, geen remix, geen
+      // edit — dus `versionMarkers` zag er niets in en de persing won. Zo werd op *The Cookbook*
+      // van Missy Elliott "Lose Control (feat. Ciara and Fat Man Scoop)" gewoon "Lose Control", en
+      // was uit het bestand niet meer op te maken wie er meedoet. De spelling van de persing wint
+      // nog steeds; alleen gaan de gasten er weer achter.
+      expect(titelNaOvername('lose control (feat. Ciara and Fat Man Scoop)', 'Lose Control'),
+          'Lose Control (feat. Ciara and Fat Man Scoop)');
+      expect(titelNaOvername('Telephone [ft. Beyoncé]', 'Telephone'), 'Telephone [ft. Beyoncé]');
+    });
+
+    test('noemt de persing de gasten zelf, dan beslist de persing', () {
+      expect(titelNaOvername('Lose Control (feat. Ciara)', 'Lose Control (feat. Ciara & Fat Man Scoop)'),
+          'Lose Control (feat. Ciara & Fat Man Scoop)');
+      expect(titelNaOvername('Telephone', 'Telephone (feat. Beyoncé)'), 'Telephone (feat. Beyoncé)');
+    });
+
+    test('een versiemerk en een gastenlijst samen overleven allebei', () {
+      // De twee regels mogen elkaar niet opheffen: hier is er één die de persing wél heeft en één
+      // die hij niet heeft.
+      expect(titelNaOvername('Lose Control (Live) (feat. Ciara)', 'Lose Control'),
+          'Lose Control (Live) (feat. Ciara)');
+    });
+
+    test('de staart is alleen de gasten, niet de halve titel', () {
+      expect(featStaart('Lose Control (feat. Ciara and Fat Man Scoop)'),
+          '(feat. Ciara and Fat Man Scoop)');
+      expect(featStaart('Lose Control'), '');
+      expect(featStaart(''), '');
+    });
+
+    test('"met" alleen is geen gastenlijst', () {
+      // De gastherkenning kent `met` als gastwoord, en dat is ook gewoon een Nederlands woord.
+      // Zonder de eis van haakjes zou deze titel niet meer door de persing verbeterd mogen worden.
+      expect(featStaart('Samen met jou'), '');
+      expect(titelNaOvername('samen met jou', 'Samen Met Jou'), 'Samen Met Jou');
+    });
+
     test('een live-opname verliest zijn merk ook niet', () {
       // Belangrijker dan het lijkt: zonder deze regel werd een live-opname stilletjes hernoemd naar
       // de studioversie, en dan is hij in je bibliotheek niet meer van de studioversie te

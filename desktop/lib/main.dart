@@ -11198,6 +11198,9 @@ class _SourcesViewState extends State<SourcesView> {
   bool _tBusy = true, _sBusy = false;
   QFilter _filter = QFilter.all;
 
+  /// Zie [_tekenRem]: één per bron, zodat torrents en Soulseek elkaar niet in de weg zitten.
+  final _slskRem = _Tekenrem(), _torrentRem = _Tekenrem();
+
   /// De vraag waarop Soulseek uiteindelijk gezocht heeft. Wijkt hij af van [SourcesView.query], dan
   /// staat er een regel bij die dat zegt.
   String? _gezochtOp;
@@ -11224,14 +11227,15 @@ class _SourcesViewState extends State<SourcesView> {
         // stelde. Dat hoort erbij te staan — zie [zoekLadder].
         if (mounted && v != _gezochtOp) setState(() => _gezochtOp = v);
       }, onPartial: (p) {
-        if (mounted) setState(() => _slsk = p);
+        // Zie [_tekenRem]: niet elk stukje hoeft het scherm opnieuw te laten tekenen.
+        if (mounted && _slskRem.mag()) setState(() => _slsk = p);
       }).then((r) {
         if (mounted) setState(() { _slsk = r; _sBusy = false; });
       }).catchError((_) { if (mounted) setState(() => _sBusy = false); });
     }
     try {
       final r = await online.search(widget.query, onPartial: (p) {
-        if (mounted) setState(() => _torrents = p);
+        if (mounted && _torrentRem.mag()) setState(() => _torrents = p);
       });
       if (mounted) setState(() => _torrents = r);
     } catch (_) {}
@@ -11244,7 +11248,8 @@ class _SourcesViewState extends State<SourcesView> {
   _SlskKlaar get _bronnen {
     final k = _klaar;
     if (k != null && k.geldigVoor(_slsk, _filter, null)) return k;
-    return _klaar = _SlskKlaar.van(_slsk, _filter, past: _pastBijNummer);
+    return _klaar = _SlskKlaar.van(_slsk, _filter,
+        past: _pastBijNummer, hergebruik: k?.hergebruikVoor(_slsk, null));
   }
 
   /// Of een aangeboden bestand bewijsbaar het nummer is dat onder deze lijst hangt.
@@ -11398,6 +11403,36 @@ const _reeksStap = 10000000000;
 /// Eén uitkomst onthouden is genoeg: hij is alleen ongeldig als er nieuwe treffers zijn (dan is het
 /// een ándere lijst, vandaar [identical] en geen inhoudelijke vergelijking) of als je een ander
 /// filter aantikt.
+/// Hoe vaak binnenstromende zoekresultaten het scherm opnieuw mogen laten tekenen.
+///
+/// **Waarom hier een rem op moet.** Soulseek levert zijn treffers in tientallen tot honderden
+/// stukjes aan. De laag eronder bundelt die al tot één melding per 300 ms, en elke melding zette
+/// tot nu toe rechtstreeks de hele lijst opnieuw: zeven, rangschikken, groeperen, en dan het hele
+/// blok opnieuw tekenen. Bij duizenden treffers kost die ronde op een telefoon méér dan 300 ms, dus
+/// het scherm liep permanent achter de resultaten aan — en dat is precies wat je voelt als je
+/// probeert te scrollen terwijl er gezocht wordt.
+///
+/// Eén keer per seconde is genoeg om te zien dát er iets binnenkomt. Er gaat niets verloren: de
+/// volledige lijst wordt sowieso in één keer gezet zodra de ronde klaar is.
+const _tekenRem = Duration(milliseconds: 900);
+
+/// Laat hoogstens één keer per [_tekenRem] iets door, maar de eerste keer altijd meteen.
+///
+/// Die eerste doorlaat is met opzet: anders blijft het scherm een seconde op "Zoeken…" staan
+/// terwijl de treffers er al zijn.
+class _Tekenrem {
+  DateTime? _vorige;
+
+  bool mag() {
+    final nu = DateTime.now();
+    if (_vorige != null && nu.difference(_vorige!) < _tekenRem) return false;
+    _vorige = nu;
+    return true;
+  }
+
+  void herbegin() => _vorige = null;
+}
+
 class _SlskKlaar {
   final List<SoulseekFile> ruw;
   final QFilter filter;
@@ -11418,7 +11453,23 @@ class _SlskKlaar {
   final List<SoulseekFile> besteMap;
 
   const _SlskKlaar._(this.ruw, this.filter, this.gefilterd, this.gebruikers, this.besteMap,
-      this.passend, this.vraag, this.besteDekking);
+      this.passend, this.vraag, this.besteDekking, this.rangen);
+
+  /// De rangen die voor deze ronde al uitgerekend zijn, om aan de volgende door te geven.
+  ///
+  /// Tijdens één zoekopdracht groeit de lijst in stukjes, en tot nu toe werd bij elk stukje de rang
+  /// van élk bestand opnieuw bepaald — inclusief de bestanden die er de vorige keer ook al in
+  /// zaten. Dat is het werk dat het scrollen deed haperen. Nu kost een stukje alleen nog de rang
+  /// van wat er nieuw bij kwam.
+  final Map<SoulseekFile, int> rangen;
+
+  /// Die rangen, maar alleen als ze voor deze nieuwe lijst nog gelden.
+  ///
+  /// Alleen bij dezelfde vraag (de vraag zit ín de rang) en bij een lijst die alleen maar gegroeid
+  /// is. Wordt de lijst korter, dan is er een nieuwe zoekopdracht begonnen en beginnen we schoon —
+  /// anders blijft het geheugen van elke zoekopdracht van vandaag hangen.
+  Map<SoulseekFile, int>? hergebruikVoor(List<SoulseekFile> nieuw, String? v) =>
+      v == vraag && nieuw.length >= ruw.length ? rangen : null;
 
   /// Welke bestanden echt het gevraagde nummer zijn — leeg als er geen uitgave bekend is.
   ///
@@ -11432,10 +11483,14 @@ class _SlskKlaar {
   /// [vraag] erbij gaat wat je vroeg vóór, en valt wat er niets mee te maken heeft weg. Zie
   /// [vraagScore] en [volslagenAnders].
   factory _SlskKlaar.van(List<SoulseekFile> ruw, QFilter filter,
-      {bool Function(SoulseekFile)? past, String? vraag}) {
+      {bool Function(SoulseekFile)? past,
+      String? vraag,
+      Map<SoulseekFile, int>? hergebruik}) {
     // De rang van een bestand wordt hier één keer uitgerekend en daarna hergebruikt, door zowel de
     // rangschikking als de groepering. Zie [rangschikSoulseek] voor waarom dat het verschil maakt.
-    final onthouden = Map<SoulseekFile, int>.identity();
+    // Met [hergebruik] loopt dat geheugen door over de stukjes van één zoekopdracht heen — zie
+    // [hergebruikVoor].
+    final onthouden = hergebruik ?? Map<SoulseekFile, int>.identity();
     final passend = Set<SoulseekFile>.identity();
     // Wat je vroeg gaat vóór wat goed klinkt. Twintig treden, zodat "alles in de bestandsnaam"
     // ruim boven "alleen de artiest in de mapnaam" staat en de kwaliteit binnen één trede beslist.
@@ -11478,7 +11533,7 @@ class _SlskKlaar {
         ? -1
         : gedekteWoorden(vraag, gefilterd.first.filename);
     return _SlskKlaar._(
-        ruw, filter, gefilterd, gebruikers, beste, passend, vraag, dekking);
+        ruw, filter, gefilterd, gebruikers, beste, passend, vraag, dekking, onthouden);
   }
 
   /// De vraag waarop dit gebaseerd is, zodat het geheugen ongeldig wordt als je iets anders typt.
@@ -11769,6 +11824,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   List<SoulseekFile> _slsk = [];
 
   bool _busy = false, _slskBusy = false;
+
+  /// Zie [_tekenRem]: één per bron, zodat torrents en Soulseek elkaar niet in de weg zitten.
+  final _slskRem = _Tekenrem(), _torrentRem = _Tekenrem();
 
   /// Wat er letterlijk getypt is bij direct zoeken. Zie [_SlskKlaar.vraag]: dit is het enige wat
   /// dit scherm heeft om "past dit bij wat ik zocht?" mee te beantwoorden.
@@ -12129,11 +12187,15 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       _gezochtDirect = null;
       _status = 'Zoeken…';
     });
+    // Een nieuwe zoekopdracht mag meteen weer iets tonen — zie [_Tekenrem].
+    _slskRem.herbegin();
+    _torrentRem.herbegin();
     if (soulseek.available) {
       soulseek.search(q, gebruikteVraag: (v) {
         if (live() && v != _gezochtDirect) setState(() => _gezochtDirect = v);
       }, onPartial: (p) {
-        if (live()) setState(() => _slsk = p); // stream results as peers respond
+        // Stream results as peers respond — maar geremd, zie [_tekenRem].
+        if (live() && _slskRem.mag()) setState(() => _slsk = p);
       }).then((r) {
         if (live()) setState(() { _slsk = r; _slskBusy = false; });
       }).catchError((_) {
@@ -12142,7 +12204,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     }
     try {
       final r = await online.search(q, onPartial: (p) {
-        if (live()) setState(() { _torrents = p; _status = null; }); // fast sources show first
+        // fast sources show first — de eerste komt er altijd meteen door, zie [_Tekenrem]
+        if (live() && _torrentRem.mag()) setState(() { _torrents = p; _status = null; });
       });
       if (live()) setState(() { _torrents = r; _status = null; });
     } catch (e) {
@@ -12695,7 +12758,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         vraag: v,
         past: v == null || v.isEmpty
             ? null
-            : (f) => gedekteWoorden(v, f.filename) >= telbareWoorden(v));
+            : (f) => gedekteWoorden(v, f.filename) >= telbareWoorden(v),
+        hergebruik: k?.hergebruikVoor(_slsk, v));
   }
 
   Widget _directResults(bool soulseekReady) {
@@ -14688,6 +14752,11 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   String _behoudTitel(String vanCatalogus, String vanPersing) {
     if (vanPersing.isEmpty) return vanCatalogus;
     if (versieNoemtDeUitgave(vanCatalogus, widget.album.title)) return vanCatalogus;
+    // Noemt de catalogus gasten en de persing niet, dan blijven die gasten staan — zie [featStaart].
+    // "Lose Control (feat. Ciara and Fat Man Scoop)" werd hier anders "Lose Control", en dan is niet
+    // meer te zien wie er meedoet.
+    final gasten = featStaart(vanCatalogus);
+    if (gasten.isNotEmpty && featStaart(vanPersing).isEmpty) return '$vanPersing $gasten';
     return vanPersing;
   }
 
