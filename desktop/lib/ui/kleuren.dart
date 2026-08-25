@@ -72,6 +72,13 @@ const kTekst = Color(0xFFE8EAF2);
 /// Bijzaken: artiestnamen onder een titel, tellingen, tijden.
 const kGedempt = Color(0xFF9AA0B4);
 
+/// Wat er wél staat maar niet kan: een menuregel die voor dít ding niets betekent.
+///
+/// Lichter dan [kGedempt], want gedempt is nog steeds tekst die je hoort te lezen — dit is tekst
+/// die je hoort over te slaan. Zie [MenuRegel.uit]: bij een ontbrekend nummer werkt de helft van het
+/// menu niet, en die regels weglaten zou het menu elke keer een andere vorm geven.
+const kUitgezet = Color(0xFF5A6076);
+
 /// Het merkpaars. Knoppen die iets dóén, de actieve navigatiepil, de focusring.
 const kAccent = Color(0xFF7C5CFF);
 

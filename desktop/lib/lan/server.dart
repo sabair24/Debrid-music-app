@@ -262,6 +262,8 @@ class LanServer {
         return _jobCancel(req);
       case '/api/jobs/clear':
         return _jobsClear(req);
+      case '/api/jobs/stopwens':
+        return _jobStopWens(req);
       case '/api/config':
         return _config(req);
       case '/api/corrections':
@@ -886,6 +888,25 @@ class LanServer {
         ? manager.jobByKey(key)
         : manager.jobs.cast<DownloadJob?>().firstWhere((j) => j?.name == name, orElse: () => null);
     if (job != null) manager.cancelJob(job);
+    return _json(req.response, {'ok': job != null});
+  }
+
+  /// "Niet meer proberen" vanaf een ander toestel.
+  ///
+  /// Moet hier terechtkomen en niet op de telefoon blijven hangen: de wenslijst staat op DEZE pc, en
+  /// een knop die alleen de rij op je telefoon weghaalt terwijl de pc doorzoekt is een knop die
+  /// liegt. Zelfde manier van aanwijzen als [_jobCancel] — op sleutel als die er is, anders op naam.
+  Future<void> _jobStopWens(HttpRequest req) async {
+    final manager = downloads;
+    if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final key = body['key'] as String?;
+    final name = body['name'] as String?;
+    final job = key != null
+        ? manager.jobByKey(key)
+        : manager.jobs.cast<DownloadJob?>().firstWhere((j) => j?.name == name, orElse: () => null);
+    if (job != null) await manager.stopWens(job);
     return _json(req.response, {'ok': job != null});
   }
 
