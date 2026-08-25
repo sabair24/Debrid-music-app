@@ -1409,6 +1409,33 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int _view = 5; // 0 albums, 1 artists, 2 online, 3 ontdek, 4 tracks, 5 start (default)
 
+  /// De twee helften van het tv-scherm, elk met een eigen focusscope.
+  ///
+  /// **Waarom dit moet.** De inhoud zit sinds de binnennavigator in een eigen route, en een route
+  /// is een focusscope. Richtingsnavigatie steekt zo'n grens niet over: OMHOOG vanaf de bovenste
+  /// albumrij kwam nooit bij de navigatie uit, en OMLAAG vanuit de navigatie nooit bij de inhoud.
+  /// Op het toestel gemeten, en dit is ook waarom de rail links onbereikbaar was -- die stond buiten
+  /// dezelfde grens, dus hem naar boven verhuizen loste op zichzelf niets op.
+  ///
+  /// Die ene sprong wordt hier met de hand gemaakt, en alleen als de pagina zelf niet verder kan.
+  /// Binnen een pagina verandert er dus niets.
+  final _tvBalk = FocusScopeNode(debugLabel: 'tv-bovenbalk');
+  final _tvInhoud = FocusScopeNode(debugLabel: 'tv-inhoud');
+
+  /// Vangt de pijl die de scope uit wil.
+  ///
+  /// Eerst de pagina zelf laten proberen: is er binnen de inhoud nog iets boven je, dan hoort de
+  /// focus daarheen en niet naar de balk. Pas als dat niets oplevert is de rand bereikt.
+  KeyEventResult _tvSprong(
+      KeyEvent e, LogicalKeyboardKey pijl, TraversalDirection richting, FocusScopeNode naar) {
+    if (!isTv || e is! KeyDownEvent || e.logicalKey != pijl) return KeyEventResult.ignored;
+    if (FocusManager.instance.primaryFocus?.focusInDirection(richting) ?? false) {
+      return KeyEventResult.handled;
+    }
+    naar.requestFocus();
+    return KeyEventResult.handled;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1551,6 +1578,8 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void dispose() {
     _zoekPauze?.cancel();
+    _tvBalk.dispose();
+    _tvInhoud.dispose();
     _searchCtl.dispose();
     _searchFocus.dispose();
     _kanTerug.dispose();
@@ -1947,6 +1976,23 @@ class _HomeShellState extends State<HomeShell> {
             // de rail, en die horen juist te blijven staan.
             if (!(isCompact(context) && paginaOpen)) ...[
               if (!isTv) RepaintBoundary(child: _topBar()),
+              // Op een tv staat de navigatie BOVENAAN in plaats van in een rail links. Zie TvTopBar
+              // voor waarom hij daar weg moest: hij was met de afstandsbediening niet te bereiken.
+              if (isTv)
+                FocusScope(
+                  node: _tvBalk,
+                  onKeyEvent: (_, e) =>
+                      _tvSprong(e, LogicalKeyboardKey.arrowDown, TraversalDirection.down, _tvInhoud),
+                  child: RepaintBoundary(
+                  child: TvTopBar(
+                    view: _view,
+                    onPick: _gaNaar,
+                    onSearch: _tvSearch,
+                    onSettings: () =>
+                        showDialog(context: context, builder: (_) => const SettingsDialog()),
+                  ),
+                ),
+                ),
               const _OfflineBanner(),
               const _TvStatusStrip(),
             ],
@@ -1958,17 +2004,21 @@ class _HomeShellState extends State<HomeShell> {
               // dezelfde lijst als een blad van onderen (zie de knop in `_compactBar`).
               child: Row(
                 children: [
-                  if (isTv)
-                    TvNavRail(
-                      view: _view,
-                      onPick: _gaNaar,
-                      onSearch: _tvSearch,
-                      onSettings: () =>
-                          showDialog(context: context, builder: (_) => const SettingsDialog()),
-                    ),
                   Expanded(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(horizontal: isTv ? 0 : tvOverscan.left),
+                    // Alleen op een tv een eigen scope: op een pc en een telefoon zou een extra
+                    // focusscope om de inhoud heen de tab-volgorde veranderen, en daar is niets mis
+                    // mee dat gerepareerd hoeft te worden.
+                    child: _AlleenOpTv(
+                      bouw: (kind) => FocusScope(
+                        node: _tvInhoud,
+                        onKeyEvent: (_, e) =>
+                            _tvSprong(e, LogicalKeyboardKey.arrowUp, TraversalDirection.up, _tvBalk),
+                        child: kind,
+                      ),
+                      child: Padding(
+                      // De overscan zat vroeger in de rail links; die is er niet meer, dus de
+                      // inhoud houdt hem nu zelf van de schermrand af.
+                      padding: EdgeInsets.symmetric(horizontal: tvOverscan.left),
                       // HIER ligt de grens tussen wat blijft staan en wat wisselt.
                       //
                       // Alles hierboven -- de bovenbalk met de pillen, de rail links -- en alles
@@ -1994,6 +2044,7 @@ class _HomeShellState extends State<HomeShell> {
                           kanTerug: _kanTerug,
                           wortel: const _SectieHost(),
                         ),
+                      ),
                       ),
                     ),
                   ),
@@ -2594,8 +2645,41 @@ class _TvStatusStrip extends StatelessWidget {
 }
 
 
-class TvNavRail extends StatefulWidget {
-  const TvNavRail({
+/// De navigatie op een televisie: bovenaan, en met de afstandsbediening te bereiken.
+///
+/// **Waarom bovenaan.** Dit heeft als rail links gestaan, en daar was een reden voor: elf secties
+/// naast elkaar passen niet op de 960 punten die een Shield breed is, en een balk bovenaan kost
+/// hoogte op een doek van 540 -- de schaarse richting. Maar links bleek hij met de afstandsbediening
+/// niet te bereiken: op het toestel gemeten deed vier keer LINKS vanaf de eerste albumtegel niets,
+/// de focus verroerde zich niet. Een menu dat je niet kunt aanwijzen is geen menu, hoeveel hoogte
+/// het ook bespaart.
+///
+/// **Waarom het nu wel past.** Niet door alles kleiner te maken, maar door mee te schuiven: de balk
+/// rolt horizontaal en brengt in beeld wat de focus krijgt. Zo zie je er vijf of zes tegelijk en zijn
+/// alle dertien bereikbaar met LINKS en RECHTS. Elke andere tv-app doet het zo, en dat is precies
+/// waarom je er als kijker naar zoekt.
+///
+/// **Geen FocusTraversalGroup.** Die zat om de rail heen en is de eerste verdachte voor waarom je er
+/// niet in kwam: zo'n groep is een grens, en richtingsnavigatie steekt die niet zomaar over. Hier
+/// staat er dus geen -- deze knoppen doen gewoon mee in de traversal van het scherm, zodat OMLAAG je
+/// de inhoud in brengt en OMHOOG je terugbrengt.
+/// Wikkelt [child] alleen in als dit een televisie is.
+///
+/// Bestaat omdat de tv-focusscope om de inhoud heen op een pc niets te zoeken heeft: daar zou hij de
+/// tab-volgorde veranderen zonder dat er iets kapot was. Een `if` in de boom zou hier twee takken
+/// opleveren die uit elkaar gaan lopen; zo staat de inhoud er maar één keer.
+class _AlleenOpTv extends StatelessWidget {
+  const _AlleenOpTv({required this.bouw, required this.child});
+
+  final Widget Function(Widget) bouw;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => isTv ? bouw(child) : child;
+}
+
+class TvTopBar extends StatefulWidget {
+  const TvTopBar({
     super.key,
     required this.view,
     required this.onPick,
@@ -2608,125 +2692,106 @@ class TvNavRail extends StatefulWidget {
   final VoidCallback onSearch;
   final VoidCallback onSettings;
 
-  /// What the rail occupies in the layout, always — the expansion is drawn on top of the content.
-  static const double collapsedWidth = 76;
-  static const double expandedWidth = 240;
+  /// Wat de balk aan hoogte kost, overscan niet meegerekend.
+  ///
+  /// 46 en niet meer: op 540 punten is elke tien punten hoogte een stuk van de rij eronder. Met de
+  /// tekstschaal van 1,35 die een tv krijgt is een label van 11 punten hier 15 op het scherm, en dat
+  /// leest van de bank af.
+  static const double hoogte = 46;
 
   @override
-  State<TvNavRail> createState() => _TvNavRailState();
+  State<TvTopBar> createState() => _TvTopBarState();
 }
 
-class _TvNavRailState extends State<TvNavRail> {
-  bool _open = false;
+class _TvTopBarState extends State<TvTopBar> {
+  final _rol = ScrollController();
+
+  @override
+  void dispose() {
+    _rol.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final badge = context.watch<DownloadManager>().jobs.where((j) => j.busy).length;
-    return FocusTraversalGroup(
-      child: Focus(
-        // Watching, not taking. The buttons inside hold the highlight; this only needs to know
-        // whether any of them does, so the rail can open and close with the highlight instead of
-        // needing a button of its own to toggle it.
-        canRequestFocus: false,
-        skipTraversal: true,
-        onFocusChange: (v) => v == _open ? null : setState(() => _open = v),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOut,
-          width: _open ? TvNavRail.expandedWidth : TvNavRail.collapsedWidth,
-          padding: EdgeInsets.only(top: tvOverscan.top, bottom: tvOverscan.bottom, left: 12),
-          decoration: BoxDecoration(
-            color: _open ? _panel : Colors.transparent,
-            border: Border(right: BorderSide(color: _open ? _line : Colors.transparent)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 4),
-              _railItem(Icons.search_rounded, 'Zoeken', false, widget.onSearch),
-              const SizedBox(height: 10),
-              Expanded(
-                child: ListView(
-                  padding: EdgeInsets.zero,
-                  children: [
-                    for (final (id, label, icoon) in NavSections.items)
-                      _railItem(icoon, label, widget.view == id, () => widget.onPick(id),
-                          badge: id == 6 ? badge : 0),
-                  ],
-                ),
-              ),
-              _railItem(Icons.settings_rounded, 'Instellingen', false, widget.onSettings),
-              const SizedBox(height: 4),
-            ],
-          ),
-        ),
+    return Container(
+      height: TvTopBar.hoogte + tvOverscan.top,
+      padding: EdgeInsets.only(top: tvOverscan.top),
+      decoration: const BoxDecoration(
+        color: _panel,
+        border: Border(bottom: BorderSide(color: _line)),
+      ),
+      child: ListView(
+        controller: _rol,
+        scrollDirection: Axis.horizontal,
+        padding: EdgeInsets.symmetric(horizontal: tvOverscan.left),
+        children: [
+          _item(Icons.search_rounded, 'Zoeken', false, widget.onSearch),
+          for (final (id, label, icoon) in NavSections.items)
+            _item(icoon, label, widget.view == id, () => widget.onPick(id),
+                badge: id == 6 ? badge : 0),
+          _item(Icons.settings_rounded, 'Instellingen', false, widget.onSettings),
+        ],
       ),
     );
   }
 
-  Widget _railItem(IconData icoon, String label, bool selected, VoidCallback onTap,
+  Widget _item(IconData icoon, String label, bool geselecteerd, VoidCallback onTap,
       {int badge = 0}) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 2, right: 8),
-      child: Pressable(
-        onPressed: onTap,
-        borderRadius: BorderRadius.circular(10),
-        scaleOnFocus: false,
-        child: Container(
-          // 26, and that number is measured rather than reasoned.
-          //
-          // My first arithmetic said 470 points were available and picked 34. On the Shield two
-          // sections still fell below the fold, because the rail does not get the whole 540: the
-          // player bar ends it at about 435, and the overscan, the search row and the settings row
-          // take another 145. What is left for the ten sections is 289. Twelve rows of 28 need 336
-          // of the 381 the rail actually has, so everything is on screen at once — which is the
-          // entire point of moving the navigation here.
-          height: 26,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: BoxDecoration(
-            color: selected ? _accent.withValues(alpha: .18) : Colors.transparent,
+      padding: const EdgeInsets.only(right: 6),
+      child: Center(
+        child: Builder(builder: (context) {
+          return Pressable(
+            onPressed: onTap,
             borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(
-            children: [
-              Icon(icoon, size: 18, color: selected ? Colors.white : _muted),
-              if (badge > 0 && !_open)
-                // Collapsed there is no room for the count beside the word, and "something is
-                // downloading" is exactly what you want to see from the couch without opening it.
-                Transform.translate(
-                  offset: const Offset(-6, -8),
-                  child: Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(color: _accent, shape: BoxShape.circle),
+            scaleOnFocus: false,
+            // Wat de focus krijgt moet ook te zien zijn. Zonder dit loop je met RECHTS de balk uit en
+            // gebeurt er ogenschijnlijk niets: de knop staat scherp, maar buiten beeld.
+            onFocusChange: (heeft) {
+              if (!heeft || !mounted) return;
+              final doel = context.findRenderObject();
+              if (doel is RenderBox && _rol.hasClients) {
+                _rol.position.ensureVisible(doel,
+                    alignment: 0.5,
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOut);
+              }
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: geselecteerd ? _accent.withValues(alpha: .18) : Colors.transparent,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icoon, size: 16, color: geselecteerd ? Colors.white : _muted),
+                  if (badge > 0)
+                    Transform.translate(
+                      offset: const Offset(-4, -6),
+                      child: Container(
+                        width: 7,
+                        height: 7,
+                        decoration: const BoxDecoration(color: _accent, shape: BoxShape.circle),
+                      ),
+                    ),
+                  const SizedBox(width: 6),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: geselecteerd ? FontWeight.w700 : FontWeight.w500,
+                      color: geselecteerd ? Colors.white : _muted,
+                    ),
                   ),
-                ),
-              if (_open) ...[
-                const SizedBox(width: 12),
-                // Clipped rather than wrapped: mid-animation the box is narrower than the word, and
-                // a Text that wraps would jump to two lines and back on every open.
-                Expanded(
-                  child: Text(label,
-                      maxLines: 1,
-                      overflow: TextOverflow.clip,
-                      softWrap: false,
-                      style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                          color: selected ? Colors.white : _muted)),
-                ),
-                if (badge > 0)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                    decoration:
-                        BoxDecoration(color: _accent, borderRadius: BorderRadius.circular(9)),
-                    child: Text('$badge',
-                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
-                  ),
-              ],
-            ],
-          ),
-        ),
+                ],
+              ),
+            ),
+          );
+        }),
       ),
     );
   }
@@ -6759,8 +6824,18 @@ class PlayerBar extends StatelessWidget {
                           ),
                           // What quality am I actually hearing? (local files only — a streamed
                           // source's real quality isn't known here.)
-                          if (t != null) _echtheidMerk(t),
-                          if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
+                          //
+                          // NIET OP EEN TELEVISIE. Deze twee staan niet in de flex, dus ze krijgen
+                          // hun volle breedte en de titel houdt over wat er rest. Op een pc is dat
+                          // ruim; op een tv is dit blok 280 punten breed, waarvan de hoes en de tussen-
+                          // ruimte er 66 nemen, en bij de tekstschaal van 1,35 die een tv krijgt vullen
+                          // "24/44.1" en "FLAC · 24/192" samen de rest. Gemeten op de Shield: de titel
+                          // werd naar nul geknepen, en in de balk stond alleen nog de artiest met twee
+                          // getallen erboven. Van drie meter afstand is de titel juist het enige wat
+                          // telt -- en de kwaliteit staat voluit op het nu-speelt-scherm, één knop weg.
+                          if (t != null && !isTv) _echtheidMerk(t),
+                          if (t != null && !isTv && t.sizeBytes > 0)
+                            _qualityBadge(_trackQuality(t)),
                         ],
                       ),
                       // Een klacht gaat vóór de artiestnaam. Wie hier kijkt omdat er geen geluid
