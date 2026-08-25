@@ -11012,7 +11012,11 @@ Widget _torrentTile(BuildContext context, SearchResult r) {
 /// regel onder de tekst. Naast de titel vraten ze de laatste ruimte op die de naam nog had — en een
 /// naam als "Backstreet Boys - …" zonder de rest zegt niets, want dat staat op álle treffers.
 Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> all,
-    {TrackTags? authority, bool toonGebruiker = true, bool past = false, EdgeInsets? marge}) {
+    {TrackTags? authority,
+    bool toonGebruiker = true,
+    bool past = false,
+    String pastMerk = 'dit nummer',
+    EdgeInsets? marge}) {
   final status = f.freeSlots ? 'vrij' : 'wachtrij ${f.queueLength}';
   final q = _slskQuality(f);
   final smal = isCompact(context);
@@ -11055,8 +11059,8 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
           borderRadius: BorderRadius.circular(5),
           border: Border.all(color: _accent2.withValues(alpha: .45)),
         ),
-        child: const Text('dit nummer',
-            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: _accent2)),
+        child: Text(pastMerk,
+            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: _accent2)),
       ),
     if (_surroundMerk(f) != null) merk(_surroundMerk(f)!),
     // TE KLEIN VOOR WAT HET BEWEERT. Meten kan hier niet: je kunt niet in het bestand van een
@@ -11370,6 +11374,20 @@ const bronStap = 50;
 /// los zoekscherm gebeurt er niets en blijft de volgorde precies wat hij was.
 const _pastBonus = 1000000000;
 
+/// Eén trede DEKKING: hoeveel van je getypte woorden er in dit pad voorkomen.
+///
+/// De hoogste trap van alle, want dit is letterlijk "hoeveel van mijn vraag zit hierin". Twintig
+/// treden, dus één woord meer van een vraag van vier telt vijf treden.
+const _dekkingStap = 1000000000000;
+
+/// Eén trede REEKS: hoeveel van je woorden er ACHTER ELKAAR in de bestandsnaam staan.
+///
+/// Onder de dekking en boven de kwaliteit. Zie [reeksScore]: op "mackenzie you all i need" haalt
+/// `YORK feat. Ginger Mackenzie - I Need You` dekking 0,75 en reeks 0,25, terwijl
+/// `Mackenzie - You're All I Need` op 1,00 en 0,50 komt. Bij gelijke dekking is dít wat een
+/// treffer van een toevalstreffer scheidt.
+const _reeksStap = 10000000000;
+
 /// De bronnenlijst voorgekauwd: gefilterd, gerangschikt en gegroepeerd, in één keer.
 ///
 /// **Waarom hier een geheugen zit.** Dit rekenwerk stond gewoon in `build()`, en `build()` draait
@@ -11400,7 +11418,7 @@ class _SlskKlaar {
   final List<SoulseekFile> besteMap;
 
   const _SlskKlaar._(this.ruw, this.filter, this.gefilterd, this.gebruikers, this.besteMap,
-      this.passend, this.vraag);
+      this.passend, this.vraag, this.besteDekking);
 
   /// Welke bestanden echt het gevraagde nummer zijn — leeg als er geen uitgave bekend is.
   ///
@@ -11423,7 +11441,8 @@ class _SlskKlaar {
     // ruim boven "alleen de artiest in de mapnaam" staat en de kwaliteit binnen één trede beslist.
     int bonus(SoulseekFile f) => vraag == null
         ? 0
-        : (vraagScore(vraag, f.filename) * 20).round() * _pastBonus;
+        : (vraagScore(vraag, f.filename) * 20).round() * _dekkingStap +
+            (reeksScore(vraag, f.filename) * 10).round() * _reeksStap;
     int rang(SoulseekFile f) =>
         onthouden[f] ??= _slskRang(f) + (passend.contains(f) ? _pastBonus : 0) + bonus(f);
 
@@ -11454,11 +11473,23 @@ class _SlskKlaar {
         }
       }
     }
-    return _SlskKlaar._(ruw, filter, gefilterd, gebruikers, beste, passend, vraag);
+    // De bovenste is per definitie de best dekkende — daar is de rangschikking op gebouwd.
+    final dekking = vraag == null || gefilterd.isEmpty
+        ? -1
+        : gedekteWoorden(vraag, gefilterd.first.filename);
+    return _SlskKlaar._(
+        ruw, filter, gefilterd, gebruikers, beste, passend, vraag, dekking);
   }
 
   /// De vraag waarop dit gebaseerd is, zodat het geheugen ongeldig wordt als je iets anders typt.
   final String? vraag;
+
+  /// Hoeveel van je getypte woorden de BESTE treffer dekt. -1 als er geen vraag is.
+  ///
+  /// Dit is het getal dat op het scherm hoort. Zonder dat moet je zelf bestandsnamen ontcijferen om
+  /// te zien dat de bovenste treffer maar drie van je vier woorden heeft — en dan zoek je door
+  /// terwijl je denkt dat je gevonden hebt.
+  final int besteDekking;
 
   bool geldigVoor(List<SoulseekFile> r, QFilter f, String? v) =>
       identical(r, ruw) && f == filter && v == vraag;
@@ -11498,6 +11529,10 @@ class _SoulseekGroepen extends StatefulWidget {
   /// De bestanden die bewijsbaar het gevraagde nummer zijn. Leeg als er geen uitgave bekend is.
   final Set<SoulseekFile> passend;
 
+  /// Wat er op het groene merkje staat. Op een albumpagina "dit nummer"; bij direct zoeken slaat
+  /// het op de getypte tekst en niet op een nummer, dus dan hoort er iets anders te staan.
+  final String pastMerk;
+
   /// De zoekterm. Wisselt die, dan klapt alles weer dicht en begint het venster opnieuw — anders
   /// zou een nieuwe zoekopdracht de openstand van de vorige erven.
   final String sleutel;
@@ -11512,6 +11547,7 @@ class _SoulseekGroepen extends StatefulWidget {
       required this.slsk,
       required this.passend,
       required this.sleutel,
+      this.pastMerk = 'dit nummer',
       this.authority,
       this.uitgave});
 
@@ -11703,6 +11739,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
       authority: widget.authority,
       toonGebruiker: false,
       past: widget.passend.contains(f),
+      pastMerk: widget.pastMerk,
       marge: const EdgeInsets.fromLTRB(34, 1, 20, 1));
 }
 
@@ -12651,7 +12688,14 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   _SlskKlaar get _bronnen {
     final k = _klaar;
     if (k != null && k.geldigVoor(_slsk, _filter, _getypt)) return k;
-    return _klaar = _SlskKlaar.van(_slsk, _filter, vraag: _getypt);
+    // Volledige dekking krijgt het groene merkje: alles wat je typte staat in dit bestand. Dat is
+    // hier de enige maat die er is — er hangt geen uitgave onder dit scherm.
+    final v = _getypt;
+    return _klaar = _SlskKlaar.van(_slsk, _filter,
+        vraag: v,
+        past: v == null || v.isEmpty
+            ? null
+            : (f) => gedekteWoorden(v, f.filename) >= telbareWoorden(v));
   }
 
   Widget _directResults(bool soulseekReady) {
@@ -12686,6 +12730,25 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                 'Niets gevonden voor “$vraag”. Dit zijn de treffers voor “$_gezochtDirect”.',
                 style: const TextStyle(color: Color(0xFFE8913A), fontSize: 12.5)),
           ),
+        // HOE GOED DEKT DE BESTE TREFFER JE VRAAG? Zonder dit moest je zelf bestandsnamen
+        // ontcijferen om te zien dat de bovenste maar drie van je vier woorden had — en dan zoek je
+        // door terwijl je denkt dat je gevonden hebt. Gemeld op "mackenzie you all i need": 1867
+        // treffers, geen enkele met alle vier de woorden, en niets op het scherm dat dat zei.
+        if (vraag != null && bronnen.besteDekking >= 0 && slsk.isNotEmpty)
+          Builder(builder: (_) {
+            final totaal = telbareWoorden(vraag);
+            final volledig = bronnen.besteDekking >= totaal;
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(24, 6, 24, 2),
+              child: Text(
+                  volledig
+                      ? 'Beste treffer heeft al je woorden.'
+                      : 'Beste treffer heeft ${bronnen.besteDekking} van je $totaal woorden — '
+                          'waarschijnlijk staat wat je zoekt er niet bij.',
+                  style: TextStyle(
+                      color: volledig ? _accent2 : const Color(0xFFE8913A), fontSize: 12.5)),
+            );
+          }),
         if (torrents.isNotEmpty) _sourceHeader('Torrents · TorBox', torrents.length, _busy),
         ...torrents.map((r) => _torrentTile(context, r)),
         if (_status == null || _slsk.isNotEmpty || _slskBusy)
@@ -12701,6 +12764,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             gebruikers: bronnen.gebruikers,
             slsk: slsk,
             passend: bronnen.passend,
+            pastMerk: 'alles wat je typte',
             sleutel: '$_searchGen'),
       ],
     );
