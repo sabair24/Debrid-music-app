@@ -90,6 +90,7 @@ import 'tiddl.dart';
 import 'torbox.dart';
 import 'tv.dart';
 import 'zoekladder.dart';
+import 'zoek_geheugen.dart';
 import 'updater.dart';
 import 'hartslag.dart';
 import 'ui/binnenkomst.dart';
@@ -11774,6 +11775,14 @@ class _SoulseekGroepen extends StatefulWidget {
   /// Voor de "Download album"-knop per map; komt van de albumpagina waar dit paneel onder hangt.
   final ReleaseAuthority? uitgave;
 
+  /// Waar de open- en dichtstand bewaard blijft, als hij een schermwissel moet overleven.
+  ///
+  /// Bij direct zoeken wijzen deze naar [ZoekGeheugen]: wie naar de speler loopt en terugkomt, vindt
+  /// dezelfde gebruiker nog opengeklapt. Op een albumpagina blijft dit null — die pagina staat op de
+  /// navigator en wordt sowieso niet weggegooid, dus daar valt niets te bewaren.
+  final Set<String>? open;
+  final Set<String>? dicht;
+
   const _SoulseekGroepen(
       {required this.gebruikers,
       required this.slsk,
@@ -11781,7 +11790,9 @@ class _SoulseekGroepen extends StatefulWidget {
       required this.sleutel,
       this.pastMerk = 'dit nummer',
       this.authority,
-      this.uitgave});
+      this.uitgave,
+      this.open,
+      this.dicht});
 
   @override
   State<_SoulseekGroepen> createState() => _SoulseekGroepenState();
@@ -11796,8 +11807,12 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
   /// Wie de gebruiker zelf heeft opengeklapt, en wie hij heeft dichtgeklapt. Twee verzamelingen en
   /// geen enkele `bool`: de eerste [_slskOpenVanZelf] staan vanzelf open, en die moeten óók dicht
   /// kunnen — met één verzameling was "niet opengeklapt" niet te onderscheiden van "dichtgeklapt".
-  final _open = <String>{};
-  final _dicht = <String>{};
+  ///
+  /// Krijgt dit paneel er twee mee, dan zijn dat DEZELFDE verzamelingen als in [ZoekGeheugen] — niet
+  /// een kopie. Wat je hier openklapt staat daarmee meteen ook in het geheugen, zonder dat er ergens
+  /// een moment van wegschrijven bedacht hoeft te worden.
+  late final Set<String> _open = widget.open ?? <String>{};
+  late final Set<String> _dicht = widget.dicht ?? <String>{};
 
   @override
   void didUpdateWidget(_SoulseekGroepen oud) {
@@ -11989,17 +12004,22 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   /// below it becomes unreachable. OK on the field is what opens it.
   final _searchFocus = FocusNode(skipTraversal: isTv, debugLabel: 'online search');
   final _catalog = CatalogService();
-  int _mode = 0; // 0 = Bladeren, 1 = Direct, 2 = TIDAL
+  // Elk veld hieronder begint bij wat er de vorige keer stond — zie [ZoekGeheugen]. Zonder dat
+  // opende dit scherm na elke sectiewissel leeg, en moest je "rihanna" opnieuw intikken en opnieuw
+  // afwachten omdat je even naar de speler was.
+  int _mode = ZoekGeheugen.tab; // 0 = Bladeren, 1 = Direct, 2 = TIDAL
   // browse (artists + albums + tracks)
-  List<CatalogArtist> _artists = [];
-  List<CatalogAlbumHit> _albumHits = [];
-  List<CatalogTrackHit> _trackHits = [];
+  List<CatalogArtist> _artists = ZoekGeheugen.artiesten;
+  List<CatalogAlbumHit> _albumHits = ZoekGeheugen.albums;
+  List<CatalogTrackHit> _trackHits = ZoekGeheugen.nummers;
   bool _browseBusy = false;
-  int? _trackExpanded;
+  int? _trackExpanded = ZoekGeheugen.nummerOpen;
   // direct
-  List<SearchResult> _torrents = [];
-  List<SoulseekFile> _slsk = [];
+  List<SearchResult> _torrents = ZoekGeheugen.torrents;
+  List<SoulseekFile> _slsk = ZoekGeheugen.slsk;
 
+  /// Bewust NIET onthouden. Een molentje dat blijft draaien voor een zoekopdracht die allang klaar
+  /// is, is erger dan geen molentje — en of er nog iets loopt weet dit scherm na een wissel niet.
   bool _busy = false, _slskBusy = false;
 
   /// Zie [_tekenRem]: één per bron, zodat torrents en Soulseek elkaar niet in de weg zitten.
@@ -12007,20 +12027,26 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
 
   /// Wat er letterlijk getypt is bij direct zoeken. Zie [_SlskKlaar.vraag]: dit is het enige wat
   /// dit scherm heeft om "past dit bij wat ik zocht?" mee te beantwoorden.
-  String? _getypt;
+  String? _getypt = ZoekGeheugen.getypt;
 
   /// De vraag waarop Soulseek uiteindelijk gezocht heeft — zie [zoekLadder]. Wijkt hij af van
   /// [_getypt], dan hoort dat erbij te staan; anders sta je naar een ander nummer te kijken.
-  String? _gezochtDirect;
+  String? _gezochtDirect = ZoekGeheugen.gezochtDirect;
 
-  String? _status;
-  QFilter _filter = QFilter.all;
-  int _searchGen = 0; // guards streaming callbacks from a superseded search
+  String? _status = ZoekGeheugen.status;
+  QFilter _filter = ZoekGeheugen.filter;
   // tidal
-  List<TidalTrack> _tidalTracks = [];
-  List<TidalAlbum> _tidalAlbums = [];
+  List<TidalTrack> _tidalTracks = ZoekGeheugen.tidalNummers;
+  List<TidalAlbum> _tidalAlbums = ZoekGeheugen.tidalAlbums;
   bool _tidalBusy = false, _tidalConnecting = false;
-  int? _tidalExpanded, _tidalAlbumExpanded;
+  int? _tidalExpanded = ZoekGeheugen.tidalNummerOpen,
+      _tidalAlbumExpanded = ZoekGeheugen.tidalAlbumOpen;
+
+  @override
+  void initState() {
+    super.initState();
+    _c.text = ZoekGeheugen.vraag;
+  }
 
   Future<void> _search() async {
     final q = _c.text.trim();
@@ -12037,6 +12063,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   Future<void> _searchTidal(String q) async {
     final tidal = context.read<TidalService>();
     if (!tidal.connected) return;
+    final gen = ZoekGeheugen.nieuweRonde();
+    bool geldig() => ZoekGeheugen.geldig(gen);
     setState(() {
       _tidalBusy = true;
       _tidalTracks = [];
@@ -12045,19 +12073,28 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       _tidalAlbumExpanded = null;
       _status = null;
     });
+    ZoekGeheugen.tidalNummers = const [];
+    ZoekGeheugen.tidalAlbums = const [];
+    ZoekGeheugen.tidalNummerOpen = null;
+    ZoekGeheugen.tidalAlbumOpen = null;
+    ZoekGeheugen.status = null;
     try {
       final r = await tidal.search(q);
-      if (mounted) {
-        setState(() {
-          _tidalAlbums = r.albums;
-          _tidalTracks = r.tracks;
-          _status = r.leeg ? 'Geen TIDAL-resultaten.' : null;
-        });
-      }
+      if (!geldig()) return;
+      _tidalAlbums = r.albums;
+      _tidalTracks = r.tracks;
+      _status = r.leeg ? 'Geen TIDAL-resultaten.' : null;
+      ZoekGeheugen.tidalAlbums = _tidalAlbums;
+      ZoekGeheugen.tidalNummers = _tidalTracks;
+      ZoekGeheugen.status = _status;
+      if (mounted) setState(() {});
     } catch (e) {
-      if (mounted) setState(() => _status = 'TIDAL-zoeken mislukt: $e');
+      if (!geldig()) return;
+      _status = 'TIDAL-zoeken mislukt: $e';
+      ZoekGeheugen.status = _status;
+      if (mounted) setState(() {});
     } finally {
-      if (mounted) setState(() => _tidalBusy = false);
+      if (geldig() && mounted) setState(() => _tidalBusy = false);
     }
   }
 
@@ -12185,10 +12222,12 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   ///
   /// Deduped on artist + title, so the same record never appears twice; a different EDITION of it
   /// carries a different title and still comes through, which is the whole reason to add it.
-  Future<void> _addDiscogsAlbums(String q) async {
+  /// [geldig] in plaats van `mounted`: deze aanvulling hoort ook binnen te komen als je intussen naar
+  /// de speler bent, want de lijst wordt bewaard — zie [ZoekGeheugen].
+  Future<void> _addDiscogsAlbums(String q, bool Function() geldig) async {
     try {
       final extra = await DiscogsService(context.read<AppSettings>()).searchAlbums(q);
-      if (!mounted || extra.isEmpty) return;
+      if (!geldig() || extra.isEmpty) return;
       String key(CatalogAlbumHit h) => '${artistKey(h.artist)}|${normKey(h.album.title)}';
       final seen = {for (final h in _albumHits) key(h)};
       final add = [
@@ -12196,10 +12235,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           if (seen.add(key(h))) h
       ];
       if (add.isEmpty) return;
-      setState(() {
-        _albumHits = [..._albumHits, ...add];
-        _status = null;
-      });
+      _albumHits = [..._albumHits, ...add];
+      _status = null;
+      _onthoudBladeren();
+      if (mounted) setState(() {});
     } catch (_) {/* Deezer on its own is still a working search */}
   }
 
@@ -12211,7 +12250,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   /// Every query is scoped to an artist first. MusicBrainz ranks on text alone with no popularity
   /// signal at all: bare "thriller" returns Part Chimp and Swoop before Michael Jackson, and bare
   /// "quit playing games" returns Mar.Ko before the Backstreet Boys. Scoped, both are exact.
-  Future<void> _addMusicBrainzHits(String q) async {
+  Future<void> _addMusicBrainzHits(String q, bool Function() geldig) async {
     final mb = context.read<MusicBrainzService>();
     try {
       // "Artist - Album" first, then the whole query as an artist name, then whatever the Deezer
@@ -12226,7 +12265,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       }
 
       final found = await mb.searchArtists(q, max: 8);
-      if (!mounted) return;
+      if (!geldig()) return;
       if (found.isNotEmpty) {
         final have = {for (final a in _artists) artistKey(a.name)};
         final add = [
@@ -12235,13 +12274,17 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
               CatalogArtist(0, a.name, null, 0,
                   origin: CatalogRef.musicbrainz(a.mbid), detail: a.line)
         ];
-        if (add.isNotEmpty) setState(() => _artists = [..._artists, ...add]);
+        if (add.isNotEmpty) {
+          _artists = [..._artists, ...add];
+          _onthoudBladeren();
+          if (mounted) setState(() {});
+        }
         if (artist.isEmpty) artist = found.first.name;
       }
 
       // Records, not pressings — otherwise twenty CDs of one album are twenty cards.
       final groups = await mb.searchReleaseGroups(rest, artist: artist);
-      if (!mounted) return;
+      if (!geldig()) return;
       if (groups.isNotEmpty) {
         final have = {
           for (final h in _albumHits) '${artistKey(h.artist)}|${normKey(h.album.title)}'
@@ -12259,11 +12302,15 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           ));
           if (add.length >= 12) break;
         }
-        if (add.isNotEmpty) setState(() => _albumHits = [..._albumHits, ...add]);
+        if (add.isNotEmpty) {
+          _albumHits = [..._albumHits, ...add];
+          _onthoudBladeren();
+          if (mounted) setState(() {});
+        }
       }
 
       final recs = await mb.searchRecordings(rest, artist: artist);
-      if (!mounted || recs.isEmpty) return;
+      if (!geldig() || recs.isEmpty) return;
       // MusicBrainz returns one row per release a recording appears on, so a popular song comes
       // back twenty-five times. Without this the track list is one title repeated.
       final have = {for (final t in _trackHits) '${artistKey(t.artist)}|${normKey(t.title)}'};
@@ -12272,7 +12319,11 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           if (have.add('${artistKey(r.artist)}|${normKey(r.title)}'))
             CatalogTrackHit(r.title, r.artist, null)
       ];
-      if (add.isNotEmpty) setState(() => _trackHits = [..._trackHits, ...add.take(12)]);
+      if (add.isNotEmpty) {
+        _trackHits = [..._trackHits, ...add.take(12)];
+        _onthoudBladeren();
+        if (mounted) setState(() {});
+      }
     } catch (_) {/* Deezer and Discogs on their own are still a working search */}
   }
 
@@ -12309,6 +12360,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   }
 
   Future<void> _searchBrowse(String q) async {
+    // Zelfde volgnummer als bij direct zoeken — één zoekveld, één lopende vraag. Zie [ZoekGeheugen].
+    final gen = ZoekGeheugen.nieuweRonde();
+    bool geldig() => ZoekGeheugen.geldig(gen);
     setState(() {
       _browseBusy = true;
       _artists = [];
@@ -12317,6 +12371,11 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       _trackExpanded = null;
       _status = null;
     });
+    ZoekGeheugen.artiesten = const [];
+    ZoekGeheugen.albums = const [];
+    ZoekGeheugen.nummers = const [];
+    ZoekGeheugen.nummerOpen = null;
+    ZoekGeheugen.status = null;
     // Vóór het zoeken opnemen, want deze tellers zijn statisch en lopen ook door van andere
     // zoekopdrachten. Alleen het VERSCHIL over deze zoekopdracht zegt iets.
     final dgVoor = DiscogsService.transportErrors;
@@ -12327,34 +12386,54 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         _catalog.searchAlbums(q),
         _catalog.searchTracks(q),
       ]);
-      if (!mounted) return;
-      setState(() {
-        _artists = res[0] as List<CatalogArtist>;
-        _albumHits = res[1] as List<CatalogAlbumHit>;
-        _trackHits = res[2] as List<CatalogTrackHit>;
-        // Nog geen reden geven: Discogs en MusicBrainz zijn hieronder nog aan het werk, en een
-        // oordeel over "waarom leeg" is pas te vellen als iedereen geantwoord heeft.
-        _status = (_artists.isEmpty && _albumHits.isEmpty && _trackHits.isEmpty)
-            ? 'Niets gevonden.'
-            : null;
-      });
-      await _addDiscogsAlbums(q);
-      await _addMusicBrainzHits(q);
-      if (mounted && _artists.isEmpty && _albumHits.isEmpty && _trackHits.isEmpty) {
-        setState(() => _status = _waaromLeeg(dgVoor, mbVoor) ?? 'Niets gevonden.');
+      if (!geldig()) return;
+      _artists = res[0] as List<CatalogArtist>;
+      _albumHits = res[1] as List<CatalogAlbumHit>;
+      _trackHits = res[2] as List<CatalogTrackHit>;
+      // Nog geen reden geven: Discogs en MusicBrainz zijn hieronder nog aan het werk, en een
+      // oordeel over "waarom leeg" is pas te vellen als iedereen geantwoord heeft.
+      _status = (_artists.isEmpty && _albumHits.isEmpty && _trackHits.isEmpty)
+          ? 'Niets gevonden.'
+          : null;
+      _onthoudBladeren();
+      if (mounted) setState(() {});
+      await _addDiscogsAlbums(q, geldig);
+      await _addMusicBrainzHits(q, geldig);
+      if (geldig() && _artists.isEmpty && _albumHits.isEmpty && _trackHits.isEmpty) {
+        _status = _waaromLeeg(dgVoor, mbVoor) ?? 'Niets gevonden.';
+        ZoekGeheugen.status = _status;
+        if (mounted) setState(() {});
       }
     } catch (e) {
-      if (mounted) setState(() => _status = 'Zoeken mislukt: $e');
+      if (!geldig()) return;
+      _status = 'Zoeken mislukt: $e';
+      ZoekGeheugen.status = _status;
+      if (mounted) setState(() {});
     } finally {
-      if (mounted) setState(() => _browseBusy = false);
+      if (geldig() && mounted) setState(() => _browseBusy = false);
     }
+  }
+
+  /// De drie bladerlijsten en de stand wegschrijven, zodat ze een schermwissel overleven.
+  void _onthoudBladeren() {
+    ZoekGeheugen.artiesten = _artists;
+    ZoekGeheugen.albums = _albumHits;
+    ZoekGeheugen.nummers = _trackHits;
+    ZoekGeheugen.status = _status;
   }
 
   Future<void> _searchDirect(String q) async {
     final online = context.read<OnlineService>();
     final soulseek = context.read<SoulseekService>();
-    final gen = ++_searchGen; // a newer search invalidates this one's streaming callbacks
-    bool live() => mounted && gen == _searchGen;
+    // Het volgnummer staat in [ZoekGeheugen] en niet meer hier. Dat is een reparatie op zichzelf:
+    // als veld van dit scherm begon het bij elke sectiewissel weer bij nul, en dan werd een oudere,
+    // nog lopende zoekopdracht per ongeluk weer geldig verklaard.
+    final gen = ZoekGeheugen.nieuweRonde();
+    // ALLEEN over de vraag, niet meer over het scherm. Wie wegloopt naar de speler terwijl Soulseek
+    // nog bezig is, kwam vroeger terug bij een leeg scherm: de resultaten kwamen wél binnen, maar
+    // `mounted` was onwaar en er was niemand meer die ze aannam. Nu worden ze altijd bewaard en
+    // alleen getekend als er iemand kijkt.
+    bool geldig() => ZoekGeheugen.geldig(gen);
     setState(() {
       _busy = true;
       _slskBusy = soulseek.available;
@@ -12364,31 +12443,52 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       _gezochtDirect = null;
       _status = 'Zoeken…';
     });
+    ZoekGeheugen.torrents = const [];
+    ZoekGeheugen.slsk = const [];
+    ZoekGeheugen.getypt = q;
+    ZoekGeheugen.gezochtDirect = null;
+    ZoekGeheugen.status = null;
+    ZoekGeheugen.slskOpen.clear();
+    ZoekGeheugen.slskDicht.clear();
     // Een nieuwe zoekopdracht mag meteen weer iets tonen — zie [_Tekenrem].
     _slskRem.herbegin();
     _torrentRem.herbegin();
     if (soulseek.available) {
       soulseek.search(q, gebruikteVraag: (v) {
-        if (live() && v != _gezochtDirect) setState(() => _gezochtDirect = v);
+        if (!geldig()) return;
+        ZoekGeheugen.gezochtDirect = v;
+        if (mounted && v != _gezochtDirect) setState(() => _gezochtDirect = v);
       }, onPartial: (p) {
         // Stream results as peers respond — maar geremd, zie [_tekenRem].
-        if (live() && _slskRem.mag()) setState(() => _slsk = p);
+        if (!geldig()) return;
+        ZoekGeheugen.slsk = p;
+        if (mounted && _slskRem.mag()) setState(() => _slsk = p);
       }).then((r) {
-        if (live()) setState(() { _slsk = r; _slskBusy = false; });
+        if (!geldig()) return;
+        ZoekGeheugen.slsk = r;
+        if (mounted) setState(() { _slsk = r; _slskBusy = false; });
       }).catchError((_) {
-        if (live()) setState(() => _slskBusy = false);
+        if (geldig() && mounted) setState(() => _slskBusy = false);
       });
     }
     try {
       final r = await online.search(q, onPartial: (p) {
         // fast sources show first — de eerste komt er altijd meteen door, zie [_Tekenrem]
-        if (live() && _torrentRem.mag()) setState(() { _torrents = p; _status = null; });
+        if (!geldig()) return;
+        ZoekGeheugen.torrents = p;
+        ZoekGeheugen.status = null;
+        if (mounted && _torrentRem.mag()) setState(() { _torrents = p; _status = null; });
       });
-      if (live()) setState(() { _torrents = r; _status = null; });
+      if (!geldig()) return;
+      ZoekGeheugen.torrents = r;
+      ZoekGeheugen.status = null;
+      if (mounted) setState(() { _torrents = r; _status = null; });
     } catch (e) {
-      if (live()) setState(() => _status = 'Torrent-zoeken mislukt: $e');
+      if (!geldig()) return;
+      ZoekGeheugen.status = 'Torrent-zoeken mislukt: $e';
+      if (mounted) setState(() => _status = ZoekGeheugen.status);
     } finally {
-      if (live()) setState(() => _busy = false);
+      if (geldig() && mounted) setState(() => _busy = false);
     }
   }
 
@@ -12399,6 +12499,14 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
 
   @override
   void dispose() {
+    // De bedieningsstand, niet de resultaten: die schrijven de zoekfuncties zelf al weg, ook als dit
+    // scherm er niet meer is. Zie [ZoekGeheugen] en `_searchDirect`.
+    ZoekGeheugen.tab = _mode;
+    ZoekGeheugen.vraag = _c.text;
+    ZoekGeheugen.filter = _filter;
+    ZoekGeheugen.nummerOpen = _trackExpanded;
+    ZoekGeheugen.tidalNummerOpen = _tidalExpanded;
+    ZoekGeheugen.tidalAlbumOpen = _tidalAlbumExpanded;
     _c.dispose();
     _searchFocus.dispose();
     super.dispose();
@@ -12492,8 +12600,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             final rest = dm.jobs.where((j) => !j.busy).toList();
             final recent = [...actief, ...rest].take(actief.isEmpty ? 2 : 5).toList();
             if (recent.isEmpty) return const SizedBox.shrink();
+            // GEEN 'later' meer: die rijen laat "Wis afgeronde" sinds kort staan, dus de knop zou
+            // hier iets beloven wat niet gebeurt als er alleen zulke rijen zijn.
             final hasFinished =
-                dm.jobs.any((j) => j.status == 'done' || j.status == 'failed' || j.status == 'later');
+                dm.jobs.any((j) => j.status == 'done' || j.status == 'failed');
             return Padding(
               padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
               child: Column(
@@ -12657,6 +12767,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     // het was: een zoekscherm dat torrents en Soulseek voedt.
     final kanOphalen = _isDesktop && !context.read<LibraryStore>().isRemote;
     return ListView(
+      // Waar je gebleven was blijft staan als je even naar de speler gaat. De route eronder
+      // overleeft de sectiewissel, dus die bewaart de scrolstand — zelfde truc als bij het
+      // albumraster en de nummerlijst.
+      key: const PageStorageKey('online-tidal'),
       padding: const EdgeInsets.only(bottom: 24),
       children: [
         if (_tidalAlbums.isNotEmpty) ...[
@@ -12796,6 +12910,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       );
     }
     return ListView(
+      // Waar je gebleven was blijft staan als je even naar de speler gaat. De route eronder
+      // overleeft de sectiewissel, dus die bewaart de scrolstand — zelfde truc als bij het
+      // albumraster en de nummerlijst.
+      key: const PageStorageKey('online-bladeren'),
       padding: const EdgeInsets.only(bottom: 24),
       children: [
         if (_artists.isNotEmpty) ...[
@@ -12958,6 +13076,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     final bronnen = _bronnen;
     final slsk = bronnen.gefilterd;
     return ListView(
+      // Waar je gebleven was blijft staan als je even naar de speler gaat. De route eronder
+      // overleeft de sectiewissel, dus die bewaart de scrolstand — zelfde truc als bij het
+      // albumraster en de nummerlijst.
+      key: const PageStorageKey('online-direct'),
       padding: const EdgeInsets.only(bottom: 24),
       children: [
         if (_torrents.isNotEmpty || _slsk.isNotEmpty)
@@ -12999,14 +13121,17 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                   padding: EdgeInsets.fromLTRB(24, 16, 24, 6),
                   child: Text('SOULSEEK · log in via Instellingen om P2P mee te zoeken',
                       style: kOpschrift))),
-        // `_searchGen` telt op bij elke nieuwe zoekopdracht — precies het teken dat de boom nodig
-        // heeft om zijn openstand en venster terug te zetten.
+        // Het volgnummer telt op bij elke nieuwe zoekopdracht — precies het teken dat de boom nodig
+        // heeft om zijn openstand en venster terug te zetten. De open- en dichtstand wijst naar
+        // [ZoekGeheugen], zodat een gebruiker die je openklapte ook na een schermwissel open staat.
         _SoulseekGroepen(
             gebruikers: bronnen.gebruikers,
             slsk: slsk,
             passend: bronnen.passend,
             pastMerk: 'alles wat je typte',
-            sleutel: '$_searchGen'),
+            open: ZoekGeheugen.slskOpen,
+            dicht: ZoekGeheugen.slskDicht,
+            sleutel: '${ZoekGeheugen.gen}'),
       ],
     );
   }
