@@ -160,7 +160,7 @@ void main() {
       // juist dat parkeren was de klacht.
       final groter = inkomend('automatisch.flac', 217, 90000);
       final tweede = await placeFileDetailed(groter, root.path,
-          staatAl: (artiest, titel) => eerste.path);
+          staatAl: (artiest, titel, {int? seconds}) => eerste.path);
 
       expect(tweede.how, Placement.duplicate, reason: 'de nieuwe kopie verliest en wordt weggegooid');
       expect(File(eerste.path).existsSync(), isTrue, reason: 'de keuze staat er nog');

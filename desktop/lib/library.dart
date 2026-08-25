@@ -528,8 +528,30 @@ class LibraryStore extends ChangeNotifier {
   ///
   /// Met het volledige pad wordt de bestemming letterlijk het bestand dat er al ligt, en dan doet
   /// [firstIsBetter] zijn werk: de hoogste resolutie blijft, de mindere gaat naar `_dubbel`.
-  String? fileOfRecording(String artist, String title) =>
-      (ownedTrack(artist, title) ?? recordingElsewhere(artist, title))?.path;
+  /// **[seconds] is niet optioneel uit gemak — het is de reparatie.** Zonder looptijd antwoordde
+  /// deze functie op niets meer dan artiest + titel, en [ownedTrack] doet dat met een sleutel die
+  /// alleen genormaliseerde tekst kent. Gemeld op Sting: *Fields of Gold (My Songs Version)* uit
+  /// 2019 (3:47) kreeg dezelfde sleutel als de plaat uit 1993 (3:39) die er al lag. De filer maakte
+  /// van dat antwoord de BESTEMMING, en gooide het zojuist gedownloade bestand weg als mindere
+  /// dubbel. [recordingElsewhere] paste die grens al toe; hier kwam hij nooit aan.
+  ///
+  /// Blijft [seconds] leeg — de catalogus zei niets — dan verandert er niets aan het oude gedrag.
+  String? fileOfRecording(String artist, String title, {int? seconds}) {
+    final eigen = ownedTrack(artist, title);
+    if (eigen != null && _zelfdeLengte(eigen, seconds)) return eigen.path;
+    return recordingElsewhere(artist, title, seconds: seconds)?.path;
+  }
+
+  /// Kan dit bestand de opname van [seconds] zijn?
+  ///
+  /// Alles onbekend is "ja": een track zonder leesbare looptijd, of een catalogus die er geen gaf,
+  /// mag geen download blokkeren én geen download doorlaten die er al is. Alleen als beide getallen
+  /// er zijn en ze verder uit elkaar liggen dan [sameRecordingSlack], is dit een andere opname.
+  static bool _zelfdeLengte(Track t, int? seconds) {
+    final secs = t.duration?.inSeconds ?? 0;
+    if (seconds == null || seconds <= 0 || secs <= 0) return true;
+    return (secs - seconds).abs() <= sameRecordingSlack;
+  }
 
   /// A copy of this recording ANYWHERE in the library, whatever album it happens to be filed under.
   ///

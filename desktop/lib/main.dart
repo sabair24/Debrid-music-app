@@ -4272,6 +4272,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         trackNo: s.number,
         trackTotal: _stampTotal,
         year: _officialYear ?? album.year,
+        seconds: s.official?.seconds,
       );
 
   /// How many tracks to WRITE into a downloaded file — what the album already says, not what the
@@ -12693,7 +12694,9 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
   }
 
   void _download(TbFile f) {
-    context.read<DownloadManager>().enqueue(widget.result, fileId: f.id);
+    // De torrent die dit venster al heeft laten voorbereiden gaat mee. Zonder dat begon het
+    // downloaden met precies hetzelfde wachten er nog een keer overheen.
+    context.read<DownloadManager>().enqueue(widget.result, fileId: f.id, klaar: _torrent);
     _snack('“${f.label}” naar downloads');
   }
 
@@ -14534,7 +14537,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         for (var i = 0; i < _tracks.length; i++)
           CatalogTrack(
             _tracks[i].id,
-            titles[i].isEmpty ? _tracks[i].title : titles[i],
+            _behoudTitel(_tracks[i].title, titles[i]),
             _tracks[i].artist,
             // Keep Deezer's running time when the pressing doesn't state one.
             secs[i] > 0 ? secs[i] : _tracks[i].durationSec,
@@ -14542,6 +14545,24 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
           )
       ];
     });
+  }
+
+  /// Welke van de twee titels blijft staan: die van de catalogus of die van de persing?
+  ///
+  /// **Waarom dit niet altijd de persing is.** Dat wás het, en dat wiste een verschil dat er echt
+  /// toe doet. Op *My Songs* van Sting heet elk nummer bij Deezer "… (My Songs Version)" — het zijn
+  /// heropnames uit 2019. De persing noemt ze kaal, want bínnen dat album valt er niets te
+  /// onderscheiden. Door de persing te volgen stond er "Fields Of Gold" op het scherm, werd daarop
+  /// gezocht, en kwamen er honderden kopieën van de plaat uit 1993 terug. De heropname was
+  /// onbereikbaar geworden, en niemand kon zien waaróm.
+  ///
+  /// Het merk blijft staan als het de PLAAT noemt — zie [versieNoemtDeUitgave]. "(My Songs Version)"
+  /// op *My Songs* noemt de plaat en is dus identiteit; "(Single Version)" op *Off the Wall* noemt
+  /// hem niet en is de ruis waar deze hele vervanging voor bedoeld was. Die blijft dus verdwijnen.
+  String _behoudTitel(String vanCatalogus, String vanPersing) {
+    if (vanPersing.isEmpty) return vanCatalogus;
+    if (versieNoemtDeUitgave(vanCatalogus, widget.album.title)) return vanCatalogus;
+    return vanPersing;
   }
 
   Future<void> _preloadSoulseek() async {
@@ -14617,6 +14638,8 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         trackNo: _numberOf(t, i),
         trackTotal: _tracks.length,
         year: _officialYear ?? int.tryParse(widget.album.year ?? ''),
+        // De looptijd gaat mee tot in de filer. Zie [TrackTags.seconds].
+        seconds: t.durationSec,
       );
 
   /// Every peer copy of this track worth trying — the preload's, plus a fresh targeted search.

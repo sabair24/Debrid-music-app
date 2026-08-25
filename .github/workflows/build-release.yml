@@ -133,7 +133,8 @@ jobs:
             test/rutracker_codetabel_test.dart \
             test/slsk_groepen_test.dart \
             test/versie_uit_map_test.dart test/soulseek_query_test.dart \
-            test/wat_is_nieuw_test.dart
+            test/wat_is_nieuw_test.dart test/heropname_test.dart \
+            test/place_file_test.dart test/authority_test.dart
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
       # the app you actually use while the TV work is in progress — shipping that would install a
