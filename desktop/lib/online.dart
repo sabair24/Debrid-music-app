@@ -602,23 +602,37 @@ class SoulseekService {
     // would just burn another login and still show the user the wrong answer.
     final blocked = client.whyNotLogin;
     if (blocked != null) throw blocked;
-    final trappen = zoekLadder(query);
+    final rondes = zoekRondes(query);
     var laatste = <SoulseekFile>[];
-    for (final vraag in trappen) {
-      gebruikteVraag?.call(vraag);
-      laatste = await _searchOnce(vraag, onPartial);
+    for (final ronde in rondes) {
+      // De RUIMSTE vraag van deze ronde, want daar kunnen de resultaten vandaan komen. Zie
+      // [ruimerGezocht]: dat is precies waar het scherm eerlijk over hoort te zijn.
+      gebruikteVraag?.call(ronde.last);
+      laatste = await _searchOnce(ronde, onPartial);
       if (laatste.isNotEmpty) return laatste;
       if (client.whyNotLogin != null) throw client.whyNotLogin!;
     }
     return laatste;
   }
 
-  Future<List<SoulseekFile>> _searchOnce(String query, void Function(List<SoulseekFile>)? onPartial) async {
+  /// Alle vragen van één ronde in ÉÉN zoekopdracht — zie [zoekRondes].
+  ///
+  /// Ze gaan als losse tickets naar dezelfde sessie en komen op één hoop terug, dus twee vragen
+  /// kosten hetzelfde als één. Zou je ze na elkaar sturen, dan was elke ronde er ruim acht seconden
+  /// bij.
+  Future<List<SoulseekFile>> _searchOnce(
+      List<String> vragen, void Function(List<SoulseekFile>)? onPartial) async {
     if (!available) return [];
-    final q = query.trim();
-    if (q.isEmpty) return [];
-    final variants = <String>{q};
-    if (jokerHelpt(q)) variants.add('*${q.substring(1)}');
+    final variants = <String>{};
+    for (final v in vragen) {
+      final q = v.trim();
+      if (q.isEmpty) continue;
+      // Alleen op de eerste vraag. De jokervariant vangt één weggevallen eerste teken op; hem voor
+      // élke vraag meesturen verdubbelt het aantal tickets zonder er iets tegenover te zetten.
+      if (variants.isEmpty && jokerHelpt(q)) variants.add('*${q.substring(1)}');
+      variants.add(q);
+    }
+    if (variants.isEmpty) return [];
     try {
       return await withSession((s) => s.search(variants.toList(), onPartial: onPartial));
     } catch (_) {
