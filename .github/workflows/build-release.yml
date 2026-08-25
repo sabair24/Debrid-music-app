@@ -137,6 +137,7 @@ jobs:
             test/wat_is_nieuw_test.dart test/heropname_test.dart \
             test/place_file_test.dart test/authority_test.dart \
             test/wat_je_typte_test.dart test/renumber_test.dart \
+            test/zoek_geheugen_test.dart \
             test/normalise_tags_test.dart
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
