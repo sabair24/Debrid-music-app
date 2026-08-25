@@ -148,17 +148,46 @@ class OnlineService {
     return null;
   }
 
+  /// Hoe lang er gewacht wordt vóór de volgende peiling, gegeven hoeveel er al verstreken is.
+  ///
+  /// Zuiver en apart, want dit is de rekensom die het verschil maakt tussen "meteen klaar" en "sta
+  /// te wachten op niets", en het is het enige stuk van deze weg dat zonder TorBox na te meten is.
+  ///
+  /// Drie tempo's, en de reden staat in de getallen:
+  ///
+  /// - **de eerste 6 seconden: 400 ms.** Een gecachte torrent is er binnen een paar seconden. Hier
+  ///   snel kijken kost twee of drie kleine verzoeken en scheelt de gebruiker de halve minuut die er
+  ///   eerst stond.
+  /// - **tot 45 seconden: 1,5 seconde.** De meeste niet-gecachte torrents met genoeg seeders landen
+  ///   in dit venster.
+  /// - **daarna: 5 seconden.** Nu is het een grote bron met weinig seeders. Vaker kijken maakt hem
+  ///   niet sneller; het houdt alleen de lijn en de tekenlus bezig.
+  static int tempoVoorPeiling(int verstrekenMs) {
+    if (verstrekenMs < 6000) return 400;
+    if (verstrekenMs < 45000) return 1500;
+    return 5000;
+  }
+
   Future<TbTorrent> _pollReady(int? id, String hash,
       {bool patient = false, void Function(double progress, String status)? onProgress}) async {
-    var delayMs = 2000;
+    // HET RITME LIEP DE VERKEERDE KANT OP. Het begon op twee seconden en werd elke ronde de helft
+    // trager, tot tien. Precies in het venster waarin een gecachte of snelle torrent klaar komt
+    // (vijf tot dertig seconden) zat de app dus het langst niks te doen: een bron die op t=12 klaar
+    // was, werd pas op t=18 gezien. Dat is geen wachten op TorBox, dat is wachten op onszelf.
+    //
+    // Nu: snel beginnen, kort blijven zolang het ertoe doet, en pas ná een halve minuut rustiger
+    // worden — want dán is het een grote torrent met weinig seeders en helpt vaker kijken niets.
+    var delayMs = 400;
     var noProgress = 0;
     var readyNoAudio = 0;
+    var verstreken = 0;
     // Big, low-seed torrents (a whole discography) take TorBox a long time to fetch from
     // few peers — be patient and, crucially, report progress so it's not a mystery spinner.
-    final maxAttempts = patient ? 120 : 30;
+    final maxAttempts = patient ? 220 : 60;
     final stallTimeout = patient ? 90000 : 25000;
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
-      final list = await torbox.listTorrents();
+      // Eén torrent opvragen in plaats van je hele account. Zie [TorBox.listTorrents].
+      final list = await torbox.listTorrents(id: id);
       final item = list.cast<TbTorrent?>().firstWhere(
           (t) => (id != null && t?.id == id) || (t?.hash?.toLowerCase() == hash.toLowerCase()),
           orElse: () => null);
@@ -181,7 +210,8 @@ class OnlineService {
       }
       if (noProgress >= stallTimeout) throw 'Bron loopt vast — geen voortgang';
       await Future.delayed(Duration(milliseconds: delayMs));
-      if (attempt >= 1) delayMs = (delayMs * 1.5).round().clamp(0, 10000);
+      verstreken += delayMs;
+      delayMs = tempoVoorPeiling(verstreken);
     }
     throw 'Time-out bij voorbereiden van deze bron';
   }
@@ -664,7 +694,10 @@ class DownloadManager extends ChangeNotifier {
   /// Zonder dit bergt de app een download op volgens diens eigen albumtag, en dan landt een 24/192 van
   /// Thriller in een map "Thriller" naast je "Thriller (MFSL One Step)" — twee albums, en het mindere
   /// bestand blijft staan omdat de vervangingsregel alleen binnen één map kijkt.
-  String? Function(String artist, String title)? mapVanBestaande;
+  /// [seconds] is de looptijd volgens de UITGAVE. Zonder haar antwoordde de bibliotheek "die heb je
+  /// al" op enkel artiest + titel, en werd een heropname als mindere dubbel van schijf gewist. Zie
+  /// [LibraryStore.fileOfRecording].
+  String? Function(String artist, String title, {int? seconds})? mapVanBestaande;
 
   DownloadManager(this.online, this.soulseek, this.musicRoot, this.onLibraryChanged);
 
@@ -2106,16 +2139,27 @@ class DownloadManager extends ChangeNotifier {
   /// Add a torrent download. Non-blocking: a "preparing" job shows TorBox's fetch progress
   /// immediately (so a big/low-seed torrent isn't a mystery spinner), then per-file jobs
   /// start once TorBox has it ready.
-  void enqueue(SearchResult result, {int? fileId}) {
+  /// [klaar] is een torrent die de aanroeper AL heeft laten voorbereiden.
+  ///
+  /// Het nummerkeuze-venster wachtte tot TorBox de bron klaar had, liet je kiezen, en gooide dat
+  /// resultaat vervolgens weg: het downloaden begon met een nieuwe `createtorrent` en een nieuwe
+  /// peiling, en bij een RuTracker-bron werd het `.torrent` ook nog een tweede keer opgehaald. Je
+  /// zag dus twee keer hetzelfde wachten voor één klik. Met de torrent erbij is de tweede ronde
+  /// weg.
+  void enqueue(SearchResult result, {int? fileId, TbTorrent? klaar}) {
     final prep = DownloadJob(fileId != null ? result.name : 'Voorbereiden: ${result.name}')..status = 'preparing';
     jobs.insert(0, prep);
     notifyListeners();
     unawaited(() async {
       try {
-        final (torrent, files) = await online.resolveForDownload(result, fileId, onProgress: (p, s) {
-          prep.progress = p;
-          notifyListeners();
-        });
+        final gekozen =
+            klaar == null || fileId == null ? null : klaar.files.where((f) => f.id == fileId).toList();
+        final (torrent, files) = gekozen != null && gekozen.isNotEmpty
+            ? (klaar!, gekozen)
+            : await online.resolveForDownload(result, fileId, onProgress: (p, s) {
+                prep.progress = p;
+                notifyListeners();
+              });
         jobs.remove(prep);
         final destDir = Directory(
             '$musicRoot${Platform.pathSeparator}DebridMusic Downloads${Platform.pathSeparator}${_sanitize(torrent.name)}');

@@ -263,6 +263,15 @@ class TrackTags {
   final int trackTotal;
   final int? year;
 
+  /// Hoe lang dit nummer volgens de uitgave duurt, in seconden. Null als de catalogus het niet zei.
+  ///
+  /// **Waarom dit veld er is.** Zonder looptijd kon de filer niet zien dat een heropname een ándere
+  /// opname is. Gemeld op Sting: *Fields of Gold (My Songs Version)* uit 2019 (3:47) werd gelezen als
+  /// de plaat uit 1993 (3:39) die al in de kast stond — dezelfde artiest, dezelfde titel — en het net
+  /// binnengehaalde bestand werd vervolgens van schijf GEWIST met de melding "had je al". De klok was
+  /// het enige dat die twee kon scheiden en hij kwam nooit aan.
+  final int? seconds;
+
   /// Komen deze tags uit het BESTAND zelf in plaats van uit een officiële uitgave?
   ///
   /// Dit onderscheid was er niet, en werd afgeleid uit "draagt hij albumartiest/totaal/jaar?" — wat
@@ -280,6 +289,7 @@ class TrackTags {
     this.albumArtist,
     this.trackTotal = 0,
     this.year,
+    this.seconds,
     this.vanBestand = false,
   });
 
@@ -294,6 +304,9 @@ class TrackTags {
         if (albumArtist != null) 'albumArtist': albumArtist,
         if (trackTotal > 0) 'trackTotal': trackTotal,
         if (year != null) 'year': year,
+        // Meebewaren, want een download die na een herstart verdergaat moet dezelfde looptijd
+        // meenemen — anders staat de filer straks weer zonder klok en is de reparatie weg.
+        if (seconds != null) 'seconds': seconds,
       };
 
   static TrackTags? fromJson(Map<String, dynamic> j) {
@@ -307,6 +320,7 @@ class TrackTags {
       albumArtist: j['albumArtist']?.toString(),
       trackTotal: (j['trackTotal'] as num?)?.toInt() ?? 0,
       year: (j['year'] as num?)?.toInt(),
+      seconds: (j['seconds'] as num?)?.toInt(),
     );
   }
 
@@ -360,6 +374,9 @@ class ReleaseAuthority {
         trackNo: trackNo,
         trackTotal: tracks.length,
         year: year,
+        // De officiële looptijd gaat mee tot in de filer. Zie [TrackTags.seconds]: zonder dit werd
+        // een heropname voor de oude plaat aangezien en het nieuwe bestand weggegooid.
+        seconds: t.seconds,
       );
 
   /// Which official track a peer's file is, or null when nothing matches well enough.
@@ -699,7 +716,9 @@ class PlaceOutcome {
 /// and the loser is dropped; a different recording that happens to tag identically (a live take,
 /// a remix whose version marker only lives in the filename) is kept alongside it.
 Future<PlaceOutcome> placeFileDetailed(File src, String root,
-    {RelKind? kind, TrackTags? tags, String? Function(String artist, String title)? staatAl}) async {
+    {RelKind? kind,
+    TrackTags? tags,
+    String? Function(String artist, String title, {int? seconds})? staatAl}) async {
   final t = tags ?? readTags(src);
   if (t == null) return PlaceOutcome(src.path, Placement.stuck);
   final base = src.uri.pathSegments.last;
@@ -735,7 +754,10 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
   //
   // De extensie blijft die van de BRON: een FLAC die een mp3 opvolgt hoort .flac te heten, en dan vindt
   // [_sameTrackOtherFormat] hieronder de mp3 als de kopie die vervangen wordt.
-  final bestaand = staatAl?.call(named.artist, named.title);
+  // De looptijd gaat mee, en dat is de hele reparatie van het gemelde Sting-geval. Zonder haar
+  // beantwoordde de bibliotheek "ja, die heb je al" op niets meer dan artiest + titel, en dan werd de
+  // bestemming het bestaande bestand — waarna de heropname als mindere dubbel van schijf verdween.
+  final bestaand = staatAl?.call(named.artist, named.title, seconds: named.seconds);
   final elders = bestaand == null ? null : File(bestaand).parent.path;
   final rel = bestaand == null
       ? _reuseExistingFolders(root, volledig)
@@ -760,7 +782,16 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
     // leest dat als een andere opname, en dan gebeurt er iets ergers dan naast elkaar zetten: in die
     // tak blijft `losers` leeg, dus de oude kopie wordt NIET geparkeerd. Gemeld en nagegaan op
     // Rihanna — Where Have You Been, waar de slechte gewoon bleef staan met de goede ernaast als "(2)".
-    bool same(File a, File b) => t.isAuthoritative || elders != null || _sameRecording(a, b);
+    // DE KLOK KRIJGT ALTIJD EEN STEM. Stond hier niet, en dat is precies waar het misging: met een
+    // uitgave onder de download was `t.isAuthoritative` waar, dus was `same` waar, dus werd
+    // [_sameRecording] — het enige dat naar de looptijd keek — nooit aangeroepen. Een heropname van
+    // 3:47 verdween als "dubbel" van de plaat van 3:39.
+    //
+    // Alleen als BEIDE kanten een leesbare looptijd hebben en die duidelijk verschillen. Kan er niet
+    // gemeten worden, dan blijft alles zoals het was — liever het oude gedrag dan een gok.
+    bool same(File a, File b) =>
+        !_duidelijkAndereLengte(a, b) &&
+        (t.isAuthoritative || elders != null || _sameRecording(a, b));
 
     final losers = <File>[];
     if (await dest.exists()) {
@@ -1078,20 +1109,48 @@ Set<String> versionMarkers(String filename) {
 ///
 /// De looptijd blijft er in [fileOffersTitle] achteraan als tweede slot: een heropname uit 2019 en
 /// de plaat uit 1993 lopen zelden even lang.
-bool versieVolgtUitMap(String titel, String pad) {
+bool versieVolgtUitMap(String titel, String pad) => _merkWijstNaar(
+    titel, fileWords(pad.substring(0, pad.length - baseName(pad).length).replaceAll(RegExp(r'[\\/]'), ' ')));
+
+/// Noemt de versie-aanduiding in [titel] de UITGAVE waar het nummer op staat?
+///
+/// Hetzelfde oordeel als [versieVolgtUitMap], maar tegen een albumtitel in plaats van een pad.
+/// "Fields of Gold (My Songs Version)" op de plaat *My Songs* is geen ruis van de catalogus maar de
+/// identiteit van de opname: het zégt dat dit de heropname van dat album is. "Rock with You (Single
+/// Version)" op *Off the Wall* noemt de plaat níét, en is wél ruis.
+///
+/// Zie [_preferOfficialTracklist] in `main.dart`: dat verschil bepaalt of de titel van de catalogus
+/// vervangen mag worden door die van de persing.
+bool versieNoemtDeUitgave(String titel, String album) => _merkWijstNaar(titel, fileWords(album));
+
+/// Wijzen ALLE versie-merken in [titel] naar iets dat in [woorden] staat?
+///
+/// Van "my songs version" blijft na het generieke woord ("version") "my songs" over, en díé woorden
+/// moeten er zijn. Bij "live" of "radio edit" blijft er niets over om naar te wijzen — dan is het
+/// antwoord nee, en dat hoort: een live-opname is een andere opname, waar hij ook staat.
+bool _merkWijstNaar(String titel, Set<String> woorden) {
   final merken = versionMarkers(titel);
-  if (merken.isEmpty) return false;
-  final mapWoorden = fileWords(
-      pad.substring(0, pad.length - baseName(pad).length).replaceAll(RegExp(r'[\\/]'), ' '));
-  if (mapWoorden.isEmpty) return false;
+  if (merken.isEmpty || woorden.isEmpty) return false;
   for (final merk in merken) {
-    // Het generieke woord eraf — "version", "mix", "edit". Wat overblijft is de naam waar het merk
-    // naar wijst, en díé moet in het pad staan.
     final rest = fileWords(merk).where((w) => !_versionWordRe.hasMatch(w)).toSet();
     if (rest.isEmpty) return false;
-    if (!rest.every(mapWoorden.contains)) return false;
+    if (!rest.every(woorden.contains)) return false;
   }
   return true;
+}
+
+/// Spreken de looptijden van deze twee bestanden elkaar tegen?
+///
+/// Alleen `true` als er aan BEIDE kanten een looptijd te lezen valt én die verder uit elkaar liggen
+/// dan [sameRecordingSlack]. Is er niets te meten, dan is het antwoord `false` en verandert er niets
+/// aan het oude gedrag: dit is een veto, geen oordeel.
+///
+/// Het staat los van [_sameRecording] omdat het op een ander moment moet spreken. Die functie wordt
+/// overgeslagen zodra er een officiële uitgave onder de download hangt; deze niet.
+bool _duidelijkAndereLengte(File a, File b) {
+  final da = readFlacTags(a)?.duration, db = readFlacTags(b)?.duration;
+  if (da == null || db == null) return false;
+  return (da - db).abs() > const Duration(seconds: sameRecordingSlack);
 }
 
 /// Are these two files the same RECORDING (as opposed to two takes of the same song)?

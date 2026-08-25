@@ -318,14 +318,28 @@ class TorBox {
     }
   }
 
-  Future<List<TbTorrent>> listTorrents() async {
+  /// De torrents in je TorBox-account, of — met [id] — alleen die ene.
+  ///
+  /// **[id] meegeven scheelt echt tijd.** Het voorbereiden van één bron haalde bij ELKE peiling je
+  /// hele accountlijst op, met `bypass_cache=true` erbij zodat TorBox zijn eigen geheugen ook nog
+  /// oversloeg — tot honderdtwintig keer voor één torrent, en die lijst groeit met alles wat je ooit
+  /// hebt binnengehaald. Het antwoord werd daarna op de tekenlus uitgepakt. Eén torrent opvragen is
+  /// hetzelfde antwoord zonder de rest.
+  Future<List<TbTorrent>> listTorrents({int? id}) async {
     try {
-      final r = await http
-          .get(Uri.parse('$_base/torrents/mylist?bypass_cache=true'), headers: _auth)
-          .timeout(const Duration(seconds: 15));
+      final vraag = id != null && id > 0
+          ? '$_base/torrents/mylist?bypass_cache=true&id=$id'
+          : '$_base/torrents/mylist?bypass_cache=true';
+      final r = await http.get(Uri.parse(vraag), headers: _auth).timeout(const Duration(seconds: 15));
       if (r.statusCode != 200) return [];
-      final data = (jsonBody(r)['data'] as List?) ?? const [];
-      return data.map((e) => TbTorrent.fromJson(e as Map<String, dynamic>)).toList();
+      // Met `id=` geeft TorBox één object terug in plaats van een lijst. Beide vormen worden hier
+      // gelezen, want een API die van vorm wisselt is niet iets om op te gokken.
+      final body = jsonBody(r)['data'];
+      final data = body is List ? body : (body is Map<String, dynamic> ? [body] : const []);
+      return data
+          .whereType<Map<String, dynamic>>()
+          .map(TbTorrent.fromJson)
+          .toList();
     } catch (_) {
       return [];
     }

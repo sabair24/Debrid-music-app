@@ -267,7 +267,7 @@ void main() {
       // voordat er ook maar één byte binnenkwam.
       final uit = await placeFileDetailed(nieuw, root.path,
           tags: thriller,
-          staatAl: (artiest, titel) =>
+          staatAl: (artiest, titel, {int? seconds}) =>
               titel.toLowerCase().contains('baby be mine') ? oud.path : null);
 
       expect(uit.how, Placement.moved);
@@ -326,7 +326,7 @@ void main() {
           'ALBUM=Thriller (Epic, Mjj Productions - 88875143731, Eu)',
         ], pad: 9000));
 
-      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t) => oud.path);
+      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t, {int? seconds}) => oud.path);
 
       expect(uit.how, Placement.moved);
       final geschreven = readFlacTags(File(uit.path))!;
@@ -376,7 +376,7 @@ void main() {
           'TRACKTOTAL=17', // een andere persing — precies wat de plaat brak
         ], pad: 9000));
 
-      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t) => oud.path);
+      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t, {int? seconds}) => oud.path);
       expect(uit.path, oud.path, reason: 'op het bestaande bestand, niet ernaast');
       expect(map.listSync().whereType<File>().where((f) => f.path.endsWith('.flac')), hasLength(4),
           reason: 'drie buren plus de vervanger — geen vijfde bestand erbij');
@@ -429,7 +429,7 @@ void main() {
             ['TITLE=Escape (Album Version)', 'ARTIST=Enrique', 'ALBUM=Escape'],
             pad: 9000));
 
-      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t) => oud.path);
+      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t, {int? seconds}) => oud.path);
       expect(readFlacTags(File(uit.path))!.artist, 'Enrique Iglesias',
           reason: 'de buren schrijven dezelfde artiest voluit, dus die naam hoort erbij');
     });
@@ -461,7 +461,7 @@ void main() {
           'ALBUM=Escape',
         ], pad: 9000));
 
-      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t) => oud.path);
+      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t, {int? seconds}) => oud.path);
       expect(readFlacTags(File(uit.path))!.artist, contains('Whitney'),
           reason: 'een langere credit is geen slordige schrijfwijze van een kortere');
     });
@@ -486,7 +486,7 @@ void main() {
       final nieuw = File('${staging.path}${sep}02 - Song B.flac')
         ..writeAsBytesSync(_peerFlac(['TITLE=Song B', 'ARTIST=Artist Two', 'ALBUM=Now 42'], pad: 9000));
 
-      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t) => oud.path);
+      final uit = await placeFileDetailed(nieuw, root.path, staatAl: (a, t, {int? seconds}) => oud.path);
       expect(readFlacTags(File(uit.path))!.artist, 'Artist Two',
           reason: 'één buur is geen meerderheid, en op een verzamelaar al helemaal niet');
     });
@@ -510,7 +510,7 @@ void main() {
         ..writeAsBytesSync(_peerFlac(['TITLE=Baby Be Mine', 'ARTIST=Michael Jackson'], pad: 1000));
 
       final uit = await placeFileDetailed(klein, root.path,
-          tags: thriller, staatAl: (artiest, titel) => groot.path);
+          tags: thriller, staatAl: (artiest, titel, {int? seconds}) => groot.path);
 
       expect(uit.how, Placement.duplicate);
       expect(klein.existsSync(), isFalse, reason: 'de mindere kopie is opgeruimd');
