@@ -6780,8 +6780,18 @@ class PlayerBar extends StatelessWidget {
                           ),
                           // What quality am I actually hearing? (local files only — a streamed
                           // source's real quality isn't known here.)
-                          if (t != null) _echtheidMerk(t),
-                          if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
+                          //
+                          // NIET OP EEN TELEVISIE. Deze twee staan niet in de flex, dus ze krijgen
+                          // hun volle breedte en de titel houdt over wat er rest. Op een pc is dat
+                          // ruim; op een tv is dit blok 280 punten breed, waarvan de hoes en de tussen-
+                          // ruimte er 66 nemen, en bij de tekstschaal van 1,35 die een tv krijgt vullen
+                          // "24/44.1" en "FLAC · 24/192" samen de rest. Gemeten op de Shield: de titel
+                          // werd naar nul geknepen, en in de balk stond alleen nog de artiest met twee
+                          // getallen erboven. Van drie meter afstand is de titel juist het enige wat
+                          // telt -- en de kwaliteit staat voluit op het nu-speelt-scherm, één knop weg.
+                          if (t != null && !isTv) _echtheidMerk(t),
+                          if (t != null && !isTv && t.sizeBytes > 0)
+                            _qualityBadge(_trackQuality(t)),
                         ],
                       ),
                       // Een klacht gaat vóór de artiestnaam. Wie hier kijkt omdat er geen geluid
