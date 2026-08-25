@@ -73,9 +73,10 @@ bool ruimerGezocht(String gevraagd, String gebruikt) =>
 ///
 /// - Soulseek eist zijn woorden in het HELE pad, niet in de bestandsnaam. Een treffer op een
 ///   mapnaam sleept dus elk nummer in die map mee.
-/// - De app stuurt naast je vraag ook een variant met een sterretje ervoor — `*ain` voor "Rain" —
-///   omdat Soulseek soms het eerste teken laat vallen. Dat is een echt jokerteken: het vindt ook
-///   Brain, Spain en Train, en die treffers werden op één hoop gegooid met de echte.
+/// - De app stuurt naast je vraag ook een variant met een sterretje ervoor, omdat Soulseek soms het
+///   eerste teken laat vallen. Dat is een echt jokerteken: bij "Rain" ging `*ain` mee en dat vindt
+///   ook Brain, Spain en Train. Dat gaat bij één woord niet meer mee (zie [jokerHelpt]), maar bij
+///   een vraag van meer woorden nog wel — en dan kan één van die woorden nog steeds meeliften.
 ///
 /// De bestandsnaam telt zwaarder dan de map, en dat is precies het onderscheid dat ontbrak: "Rain"
 /// in de titel is wat je zocht, "Rain" in de artiestenmap is context.
@@ -105,3 +106,82 @@ double vraagScore(String vraag, String pad) {
 /// komen — de server eist elk woord ergens in het pad — dus dit is per definitie ruis van de
 /// jokervariant. Wegzeven kan daar niets kosten wat je gevraagd hebt.
 bool volslagenAnders(String vraag, String pad) => vraagScore(vraag, pad) == 0;
+
+
+/// De woorden van [s] in VOLGORDE, met dezelfde regels als [fileWords].
+///
+/// Die functie levert een verzameling, en voor "staat dit achter elkaar?" is de volgorde juist het
+/// hele punt. Dezelfde zeef: kleingeschreven, de extensie eraf, alles wat geen letter of cijfer is
+/// als scheiding, losse letters weg en kale tracknummers weg.
+List<String> woordenOpVolgorde(String s) => s
+    .toLowerCase()
+    .replaceAll(RegExp(r'\.[a-z0-9]{2,4}$'), '')
+    .split(RegExp(r'[^a-z0-9]+'))
+    .where((w) => w.length > 1 && !RegExp(r'^\d{1,3}$').hasMatch(w))
+    .toList();
+
+/// Hoeveel van de vraag ACHTER ELKAAR in de bestandsnaam staat, als deel van het geheel.
+///
+/// **Waarom dekking alleen niet genoeg is.** [vraagScore] telt hoeveel van je woorden érgens
+/// voorkomen, en dat maakt geen verschil tussen een treffer en een toevalstreffer. Op
+/// "mackenzie you all i need" gemeten:
+///
+/// | bestand | dekking | reeks |
+/// |---|---|---|
+/// | `YORK feat. Ginger Mackenzie - I Need You (Remix)` | 0,75 | 0,25 |
+/// | `Mackenzie - You're All I Need` | 1,00 | 0,50 |
+///
+/// De tweede is wat je zocht, en het verschil in dekking is één woord. In de reeks is het verschil
+/// twee keer zo groot: "mackenzie you" en "all need" staan daar in de volgorde waarin je ze typte,
+/// terwijl de eerste ze verspreid door de naam heeft staan.
+///
+/// Alleen de bestandsnaam, niet de mappen: een mapnaam die toevallig jouw woorden op volgorde bevat
+/// zegt iets over het album, niet over dit nummer.
+double reeksScore(String vraag, String pad) {
+  final v = woordenOpVolgorde(vraag);
+  if (v.isEmpty) return 0;
+  final n = woordenOpVolgorde(baseName(pad));
+  if (n.isEmpty) return 0;
+  var langste = 0;
+  for (var i = 0; i < v.length; i++) {
+    for (var j = 0; j < n.length; j++) {
+      var k = 0;
+      while (i + k < v.length && j + k < n.length && v[i + k] == n[j + k]) {
+        k++;
+      }
+      if (k > langste) langste = k;
+    }
+  }
+  return langste / v.length;
+}
+
+/// Mag er naast [vraag] ook een variant met een sterretje ervoor de deur uit?
+///
+/// **Waar dat sterretje vandaan komt.** De app stuurt naast je vraag al jaren ook `*ain` voor
+/// "Rain", omdat Soulseek soms het eerste teken van een vraag laat vallen. Dat is een echt
+/// jokerteken, en het vindt dus ook Brain, Spain en Train.
+///
+/// **Waarom het bij één woord niet meer meegaat.** Soulseek eist élk woord van je vraag ergens in
+/// het pad. Bij "sting fields of gold" wordt de jokervariant `*ting fields of gold`, en die drie
+/// overige woorden houden de ruis vanzelf tegen — daar kost het niets. Bij één woord is er niets
+/// dat hem tegenhoudt: `*ain` is dan de hele vraag, en alles wat de peer heeft dat op "ain"
+/// eindigt komt binnen. Precies de ruis waar je last van had.
+///
+/// De variant gaat NAAST de gewone vraag mee in dezelfde ronde, niet erna. Dat is met opzet:
+/// achteraf sturen zou een tweede ronde van ruim acht seconden kosten, en juist op een vraag die
+/// niets oplevert loopt de app die ladder al tot drie keer af.
+bool jokerHelpt(String vraag) {
+  final woorden = vraag.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+  // Minder dan twee woorden: niets houdt de joker tegen.
+  if (woorden.length < 2) return false;
+  // Het sterretje vervangt het eerste teken van het EERSTE woord. Is dat woord te kort, dan blijft
+  // er van dat woord niets over om op te zoeken — `*` plus één letter is geen vraag meer.
+  return woorden.first.length >= 3;
+}
+
+/// Hoeveel woorden er in de vraag zitten die meetellen — voor "3 van de 4 woorden" op het scherm.
+int telbareWoorden(String vraag) => fileWords(vraag).length;
+
+/// Hoeveel van die woorden dit pad dekt, afgerond op hele woorden.
+int gedekteWoorden(String vraag, String pad) =>
+    (vraagScore(vraag, pad) * telbareWoorden(vraag)).round();

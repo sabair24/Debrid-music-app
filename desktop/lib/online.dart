@@ -617,9 +617,8 @@ class SoulseekService {
     if (!available) return [];
     final q = query.trim();
     if (q.isEmpty) return [];
-    // Soulseek quirk: the first character is often dropped — also try a "*"-prefixed variant.
     final variants = <String>{q};
-    if (q.length > 2) variants.add('*${q.substring(1)}');
+    if (jokerHelpt(q)) variants.add('*${q.substring(1)}');
     try {
       return await withSession((s) => s.search(variants.toList(), onPartial: onPartial));
     } catch (_) {

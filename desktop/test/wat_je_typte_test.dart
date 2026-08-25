@@ -77,7 +77,8 @@ void main() {
     });
 
     test('niets van de vraag in het pad is score nul', () {
-      // Dit is de jokerruis: de app stuurt naast "Rain" ook "*ain", en dat vindt Brain en Spain.
+      // Dit is de jokerruis: de app stuurde naast "Rain" ook "*ain", en dat vindt Brain en Spain.
+      // Bij één woord gaat die variant niet meer mee (zie hieronder), bij meer woorden nog wel.
       expect(vraagScore('rain', r'@@peer\Muziek\Brain Damage.flac'), 0);
       expect(volslagenAnders('rain', r'@@peer\Muziek\Brain Damage.flac'), isTrue);
     });
@@ -103,6 +104,80 @@ void main() {
 
     test('hoofdletters en leestekens maken niet uit', () {
       expect(vraagScore('FIELDS OF GOLD', r'@@p\fields_of_gold.flac'), 1.0);
+    });
+  });
+
+  group('staat het ook ACHTER ELKAAR', () {
+    // Het gemelde geval, met de echte bestandsnamen uit de schermafbeelding. Vier telbare woorden
+    // ("i" valt weg, te kort). Dekking alleen zet YORK op 0,75 en de tapes op 0,50 — dat klopt al,
+    // maar het maakt geen verschil tussen een treffer en een toevalstreffer.
+    const vraag = 'mackenzie you all i need';
+    const york = r'@@p\[PTLC049] YORK\01. YORK feat. Ginger Mackenzie - I Need You (Remix).flac';
+    const tape = r'@@p\Disc 1\05 - Naby Let Me Follow You Down (First MacKenzie Tape).mp3';
+    const echt = r'@@p\Mackenzie\Mackenzie - Youre All I Need.mp3';
+
+    test('vier telbare woorden, want "i" is te kort', () {
+      expect(telbareWoorden(vraag), 4);
+    });
+
+    test('de dekking zet ze al in de goede volgorde', () {
+      expect(gedekteWoorden(vraag, echt), 4);
+      expect(gedekteWoorden(vraag, york), 3);
+      expect(gedekteWoorden(vraag, tape), 2);
+    });
+
+    test('DE KERN: de reeks scheidt de treffer van de toevalstreffer', () {
+      // Bij gelijke dekking is dit wat overblijft. "mackenzie you" en "all need" staan hier in de
+      // volgorde waarin je ze typte; bij YORK staan dezelfde woorden verspreid door de naam.
+      expect(reeksScore(vraag, echt), greaterThan(reeksScore(vraag, york)));
+      expect(reeksScore(vraag, york), reeksScore(vraag, tape),
+          reason: 'allebei één los woord op een rij');
+    });
+
+    test('een naam die je vraag letterlijk bevat haalt de volle reeks', () {
+      expect(reeksScore('fields of gold', r'@@p\07 Fields of Gold.flac'), 1.0);
+    });
+
+    test('dezelfde woorden in omgekeerde volgorde halen de reeks niet', () {
+      expect(reeksScore('need you', r'@@p\You Need.flac'), 0.5,
+          reason: 'hooguit één woord op een rij');
+    });
+
+    test('de mappen tellen hier niet mee', () {
+      // Een mapnaam die toevallig jouw woorden op volgorde draagt zegt iets over het album, niet
+      // over dit nummer.
+      expect(reeksScore('fields of gold', r'@@p\Fields of Gold\01 Iets anders.flac'), 0);
+    });
+
+    test('niets in, niets uit', () {
+      expect(reeksScore('', r'@@p\x.flac'), 0);
+      expect(reeksScore('iets', ''), 0);
+      expect(telbareWoorden(''), 0);
+    });
+  });
+
+  group('het sterretje gaat niet meer overal mee', () {
+    // De app stuurt naast je vraag een variant met een sterretje ervoor, voor het geval Soulseek het
+    // eerste teken laat vallen. Bij één woord IS die variant de hele vraag, en dan houdt niets de
+    // ruis tegen. Bij meer woorden doen de overige woorden dat vanzelf, want de server eist ze alle.
+    test('DE KERN: bij één woord blijft het sterretje thuis', () {
+      expect(jokerHelpt('rain'), isFalse);
+      expect(jokerHelpt('mackenzie'), isFalse);
+      expect(jokerHelpt('  roxanne  '), isFalse, reason: 'spaties eromheen zijn geen tweede woord');
+    });
+
+    test('bij meer woorden mag hij mee, want de rest houdt de ruis tegen', () {
+      expect(jokerHelpt('sting fields of gold'), isTrue);
+      expect(jokerHelpt('mackenzie you all i need'), isTrue);
+    });
+
+    test('een heel korte vraag krijgt er nooit een', () {
+      // Het sterretje vervangt het eerste teken van het eerste woord. Is dat woord één letter, dan
+      // blijft er niets van over: dat is geen zoekvraag meer maar een verzoek om alles.
+      expect(jokerHelpt('ab'), isFalse);
+      expect(jokerHelpt('a b'), isFalse);
+      expect(jokerHelpt(''), isFalse);
+      expect(jokerHelpt('   '), isFalse);
     });
   });
 }
