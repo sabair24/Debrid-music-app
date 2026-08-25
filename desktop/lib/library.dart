@@ -2868,7 +2868,15 @@ class RenumberStep {
   final int? newNo;
   const RenumberStep(this.track, this.official, this.newNo);
 
-  bool get changes => newNo != null && (newNo != track.trackNo || (official?.title ?? track.title) != track.title);
+  /// De titel die deze stap ZOU opleveren.
+  ///
+  /// Niet zomaar die van de persing. Zie [titelNaOvername]: draagt jouw titel een versiemerk dat de
+  /// persing niet heeft, dan blijft die staan. Anders liet dit venster regels zien als
+  /// `7 → 7  Fields Of Gold (My Songs Version) → Fields Of Gold` — het nummer klopte al en het
+  /// enige wat er gebeurde was dat er informatie van af ging.
+  String get nieuweTitel => titelNaOvername(track.title, official?.title);
+
+  bool get changes => newNo != null && (newNo != track.trackNo || nieuweTitel != track.title);
   bool get unmatched => official == null;
 }
 
@@ -2900,7 +2908,7 @@ class RenumberPlan {
   bool get titleCollides {
     final seen = <String>{};
     for (final s in steps) {
-      if (!seen.add(normKey(s.official?.title ?? s.track.title))) return true;
+      if (!seen.add(normKey(s.nieuweTitel))) return true;
     }
     return false;
   }
@@ -3143,8 +3151,12 @@ extension LibraryNormalise on LibraryStore {
         continue;
       }
       pool.remove(best);
+      // Dezelfde regel als bij de nummering, en hier is hij het belangrijkst: DEZE weg schrijft de
+      // titel echt in het bestand. Zie [titelNaOvername] — een persing mag geen versiemerk van jouw
+      // kopie afhalen.
+      final titel = titelNaOvername(t.title, best.title);
       steps.add(NormaliseStep(t, best,
-          title: best.title.trim().isEmpty ? null : best.title.trim(),
+          title: titel.trim().isEmpty ? null : titel.trim(),
           trackNo: trackNoFromPosition(best.position, best.disc, official)));
     }
     return NormalisePlan(
@@ -3590,7 +3602,7 @@ extension LibraryRenumber on LibraryStore {
         final no = s.newNo;
         final id = remoteTrackId(s.track.path);
         if (no == null || id == null) continue;
-        stappen.add({'trackId': id, 'no': no, 'title': s.official?.title});
+        stappen.add({'trackId': id, 'no': no, 'title': s.nieuweTitel});
       }
       if (stappen.isEmpty) return;
       return _editOnPc({'op': 'renumber', 'total': plan.total, 'steps': stappen});
@@ -3598,7 +3610,7 @@ extension LibraryRenumber on LibraryStore {
     await hernummer(
       [
         for (final s in plan.steps)
-          if (s.newNo != null) (path: s.track.path, no: s.newNo!, title: s.official?.title)
+          if (s.newNo != null) (path: s.track.path, no: s.newNo!, title: s.nieuweTitel)
       ],
       plan.total,
     );

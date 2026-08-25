@@ -11,9 +11,11 @@
 /// Fields of Gold" vindt wél iedereen die het album *My Songs* deelt, en dan kan
 /// `fileOffersTitle` (met de map als bewijs) er de goede uit halen.
 ///
-/// Zuivere functie, geen netwerk: hier draait geen Flutter en geen toestel, dus dit is het enige
+/// Zuivere functies, geen netwerk: hier draait geen Flutter en geen toestel, dus dit is het enige
 /// stuk van deze weg dat vóór het uitgeven na te meten is.
 library;
+
+import 'organize.dart' show baseName, fileWords;
 
 /// De haakjes met wat erin staat: "(My Songs Version)", "[Radio Edit]", "{2019}".
 final _haakjes = RegExp(r'[(\[{][^)\]}]*[)\]}]');
@@ -58,3 +60,48 @@ List<String> zoekLadder(String vraag) {
 /// te snappen waarom — precies wat er gebeurde.
 bool ruimerGezocht(String gevraagd, String gebruikt) =>
     gevraagd.trim().replaceAll(RegExp(r'\s+'), ' ') != gebruikt;
+
+
+/// Hoe goed past het pad [pad] bij wat er letterlijk getypt is in [vraag]?
+///
+/// 0 betekent: geen enkel woord uit de vraag komt in dit pad voor. 1 betekent: alles wat je typte
+/// staat in de BESTANDSNAAM. Daartussenin telt een woord dat alleen in een mapnaam staat half mee.
+///
+/// **Waarom dit nodig is.** Bij direct zoeken zat er tot nu toe géén enkele zeef tussen wat de
+/// bronnen teruggeven en wat je ziet, en de rangschikking keek alleen naar geluidskwaliteit. Wat je
+/// typte kwam in de volgorde helemaal niet voor. Twee dingen maakten dat erger:
+///
+/// - Soulseek eist zijn woorden in het HELE pad, niet in de bestandsnaam. Een treffer op een
+///   mapnaam sleept dus elk nummer in die map mee.
+/// - De app stuurt naast je vraag ook een variant met een sterretje ervoor — `*ain` voor "Rain" —
+///   omdat Soulseek soms het eerste teken laat vallen. Dat is een echt jokerteken: het vindt ook
+///   Brain, Spain en Train, en die treffers werden op één hoop gegooid met de echte.
+///
+/// De bestandsnaam telt zwaarder dan de map, en dat is precies het onderscheid dat ontbrak: "Rain"
+/// in de titel is wat je zocht, "Rain" in de artiestenmap is context.
+///
+/// Zuiver en zonder netwerk, dus na te meten zonder toestel.
+double vraagScore(String vraag, String pad) {
+  final gevraagd = fileWords(vraag);
+  if (gevraagd.isEmpty) return 0;
+  final naam = fileWords(baseName(pad));
+  final rest = pad.substring(0, pad.length - baseName(pad).length);
+  final map = fileWords(rest.replaceAll(RegExp(r'[\\/]'), ' '));
+  var punten = 0.0;
+  for (final w in gevraagd) {
+    if (naam.contains(w)) {
+      punten += 1;
+    } else if (map.contains(w)) {
+      punten += 0.5;
+    }
+  }
+  return punten / gevraagd.length;
+}
+
+/// Zegt dit resultaat helemaal niets over wat er gevraagd is?
+///
+/// Alleen bij score nul, en dat is met opzet streng noch soepel maar FEITELIJK: er komt dan geen
+/// enkel woord uit je vraag in het hele pad voor. Bij Soulseek kan dat niet van een echte treffer
+/// komen — de server eist elk woord ergens in het pad — dus dit is per definitie ruis van de
+/// jokervariant. Wegzeven kan daar niets kosten wat je gevraagd hebt.
+bool volslagenAnders(String vraag, String pad) => vraagScore(vraag, pad) == 0;
