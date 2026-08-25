@@ -132,7 +132,8 @@ jobs:
             test/tidal_test.dart test/tidal_zoeken_test.dart \
             test/rutracker_codetabel_test.dart \
             test/slsk_groepen_test.dart \
-            test/versie_uit_map_test.dart test/soulseek_query_test.dart
+            test/versie_uit_map_test.dart test/soulseek_query_test.dart \
+            test/wat_is_nieuw_test.dart
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
       # the app you actually use while the TV work is in progress — shipping that would install a
@@ -342,6 +343,48 @@ jobs:
       # verzoeken (drie in plaats van een handvol, en dat is precies de schaarste hier), en een
       # herhaalde poging wordt hiermee gewoon leesbare shell in plaats van een derde partij die de
       # foutcode achter een groen vinkje kan wegmoffelen.
+      # WAT ER IN DEZE UITGAVE ZIT, in gewone zinnen.
+      #
+      # De melding op de telefoon zei alleen "build 11300 staat klaar" — een nummer, en verder
+      # niets. Je moest maar aannemen dat het de moeite was. De onderwerpsregels van de commits
+      # sinds de vorige uitgave zijn precies wat er nodig is: die staan hier al in gewone taal, dus
+      # er valt niets te vertalen.
+      #
+      # De checkout is ondiep (dat hoort ook, op elke tak-bouw), dus hier wordt hij verdiept — maar
+      # alleen bij het uitgeven, niet bij elke push. Lukt dat niet, dan blijft de lijst leeg en zegt
+      # het venster gewoon niets over de inhoud; dat is beter dan een halve lijst die stellig oogt.
+      - name: Wat er in deze uitgave zit
+        if: startsWith(github.ref, 'refs/tags/win-v')
+        run: |
+          set -uo pipefail
+          git fetch --unshallow --tags --quiet 2>/dev/null || git fetch --tags --quiet 2>/dev/null || true
+
+          DEZE="${GITHUB_REF#refs/tags/}"
+          VORIGE=$(git tag -l 'win-v*' --sort=-v:refname | grep -v "^${DEZE}$" | head -1 || true)
+
+          if [ -z "$VORIGE" ]; then
+            echo "Geen vorige win-v-tag gevonden; dan maar zonder lijst."
+            REGELS=""
+          else
+            echo "Veranderingen tussen $VORIGE en $DEZE:"
+            # Alleen de eerste regel per commit, geen samenvoegingen, en de lege uitgeef-commits
+            # eruit — "Uitgeven: ..." zegt niets over wat de app doet.
+            REGELS=$(git log --no-merges --format='%s' "${VORIGE}..${DEZE}" \
+              | sed 's/ (#[0-9]*)$//' \
+              | grep -v '^Uitgeven:' \
+              | grep -v '^Merge ' \
+              | head -8 || true)
+          fi
+
+          {
+            # De scheider gaat ZONDER aanhalingstekens naar $GITHUB_ENV — dat is de vorm die
+            # GitHub leest. Met aanhalingstekens zoekt hij naar een afsluitregel die er niet komt.
+            echo "WAT_NIEUW<<EOF_WAT_NIEUW"
+            echo "$REGELS"
+            echo "EOF_WAT_NIEUW"
+          } >> "$GITHUB_ENV"
+          echo "$REGELS"
+
       - name: Publish APK to public releases repo
         if: startsWith(github.ref, 'refs/tags/win-v') && env.RELEASES_TOKEN != ''
         env:
@@ -367,6 +410,21 @@ jobs:
 
           Alleen arm64.
           EOF
+
+          # ACHTERAAN, en dat is geen opmaak maar een eis. `watIsNieuw` in updater.dart leest de
+          # regels ónder dit kopje tot het volgende kopje of tot het eind. Staat er daarna nog
+          # gewone tekst, dan komt die als "wijziging" in het updatevenster te staan.
+          #
+          # Het kopje zelf is een AFSPRAAK met de app en moet letterlijk zo blijven: verandert hij
+          # hier, dan valt de lijst op de telefoon stil zonder dat er iets rood wordt.
+          if [ -n "${WAT_NIEUW:-}" ]; then
+            {
+              echo
+              echo "## Wat er nieuw is"
+              echo
+              echo "${WAT_NIEUW}" | sed 's/^/- /'
+            } >> "$RUNNER_TEMP/notities.md"
+          fi
 
           # Wacht tot er weer ruimte is. Geeft 1 terug als het wachten langer zou duren dan een uur —
           # dat kan niet, want een limiet loopt binnen het uur af, dus dan is er iets anders aan de
