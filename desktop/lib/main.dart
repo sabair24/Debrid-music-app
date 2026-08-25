@@ -11239,7 +11239,7 @@ class _SourcesViewState extends State<SourcesView> {
   _SlskKlaar? _klaar;
   _SlskKlaar get _bronnen {
     final k = _klaar;
-    if (k != null && k.geldigVoor(_slsk, _filter)) return k;
+    if (k != null && k.geldigVoor(_slsk, _filter, null)) return k;
     return _klaar = _SlskKlaar.van(_slsk, _filter, past: _pastBijNummer);
   }
 
@@ -11400,22 +11400,40 @@ class _SlskKlaar {
   final List<SoulseekFile> besteMap;
 
   const _SlskKlaar._(this.ruw, this.filter, this.gefilterd, this.gebruikers, this.besteMap,
-      this.passend);
+      this.passend, this.vraag);
 
   /// Welke bestanden echt het gevraagde nummer zijn — leeg als er geen uitgave bekend is.
   ///
   /// Zie [_pastBonus]: die staan bovenaan, hoe goed de rest ook is.
   final Set<SoulseekFile> passend;
 
+  /// [vraag] is de tekst die de gebruiker LETTERLIJK intikte, en alleen bij direct zoeken gevuld.
+  ///
+  /// Daar zat tot nu toe geen enkele zeef tussen de bronnen en het scherm, en de volgorde keek
+  /// alleen naar geluidskwaliteit: wat je typte kwam in de rangschikking helemaal niet voor. Met
+  /// [vraag] erbij gaat wat je vroeg vóór, en valt wat er niets mee te maken heeft weg. Zie
+  /// [vraagScore] en [volslagenAnders].
   factory _SlskKlaar.van(List<SoulseekFile> ruw, QFilter filter,
-      {bool Function(SoulseekFile)? past}) {
+      {bool Function(SoulseekFile)? past, String? vraag}) {
     // De rang van een bestand wordt hier één keer uitgerekend en daarna hergebruikt, door zowel de
     // rangschikking als de groepering. Zie [rangschikSoulseek] voor waarom dat het verschil maakt.
     final onthouden = Map<SoulseekFile, int>.identity();
     final passend = Set<SoulseekFile>.identity();
-    int rang(SoulseekFile f) => onthouden[f] ??= _slskRang(f) + (passend.contains(f) ? _pastBonus : 0);
+    // Wat je vroeg gaat vóór wat goed klinkt. Twintig treden, zodat "alles in de bestandsnaam"
+    // ruim boven "alleen de artiest in de mapnaam" staat en de kwaliteit binnen één trede beslist.
+    int bonus(SoulseekFile f) => vraag == null
+        ? 0
+        : (vraagScore(vraag, f.filename) * 20).round() * _pastBonus;
+    int rang(SoulseekFile f) =>
+        onthouden[f] ??= _slskRang(f) + (passend.contains(f) ? _pastBonus : 0) + bonus(f);
 
-    final over = ruw.where((f) => _filterLaatDoor(filter, f)).toList();
+    // Score nul betekent: geen enkel woord uit je vraag komt ergens in dit pad voor. Bij Soulseek
+    // kan dat niet van een echte treffer komen — de server eist elk woord ergens in het pad — dus
+    // dit is de ruis van de jokervariant `*ain` voor "Rain". Zie [volslagenAnders].
+    final over = ruw
+        .where((f) =>
+            _filterLaatDoor(filter, f) && (vraag == null || !volslagenAnders(vraag, f.filename)))
+        .toList();
     if (past != null) {
       for (final f in over) {
         if (past(f)) passend.add(f);
@@ -11436,10 +11454,14 @@ class _SlskKlaar {
         }
       }
     }
-    return _SlskKlaar._(ruw, filter, gefilterd, gebruikers, beste, passend);
+    return _SlskKlaar._(ruw, filter, gefilterd, gebruikers, beste, passend, vraag);
   }
 
-  bool geldigVoor(List<SoulseekFile> r, QFilter f) => identical(r, ruw) && f == filter;
+  /// De vraag waarop dit gebaseerd is, zodat het geheugen ongeldig wordt als je iets anders typt.
+  final String? vraag;
+
+  bool geldigVoor(List<SoulseekFile> r, QFilter f, String? v) =>
+      identical(r, ruw) && f == filter && v == vraag;
 }
 
 /// Of dit bestand door het gekozen kwaliteitsfilter komt.
@@ -11710,6 +11732,15 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   List<SoulseekFile> _slsk = [];
 
   bool _busy = false, _slskBusy = false;
+
+  /// Wat er letterlijk getypt is bij direct zoeken. Zie [_SlskKlaar.vraag]: dit is het enige wat
+  /// dit scherm heeft om "past dit bij wat ik zocht?" mee te beantwoorden.
+  String? _getypt;
+
+  /// De vraag waarop Soulseek uiteindelijk gezocht heeft — zie [zoekLadder]. Wijkt hij af van
+  /// [_getypt], dan hoort dat erbij te staan; anders sta je naar een ander nummer te kijken.
+  String? _gezochtDirect;
+
   String? _status;
   QFilter _filter = QFilter.all;
   int _searchGen = 0; // guards streaming callbacks from a superseded search
@@ -12057,10 +12088,14 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       _slskBusy = soulseek.available;
       _torrents = [];
       _slsk = [];
+      _getypt = q;
+      _gezochtDirect = null;
       _status = 'Zoeken…';
     });
     if (soulseek.available) {
-      soulseek.search(q, onPartial: (p) {
+      soulseek.search(q, gebruikteVraag: (v) {
+        if (live() && v != _gezochtDirect) setState(() => _gezochtDirect = v);
+      }, onPartial: (p) {
         if (live()) setState(() => _slsk = p); // stream results as peers respond
       }).then((r) {
         if (live()) setState(() { _slsk = r; _slskBusy = false; });
@@ -12608,15 +12643,33 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   }
 
   /// Zelfde geheugen van één als bij [SourcesView] — zie [_SlskKlaar].
+  ///
+  /// Met één verschil dat het hele punt is: hier gaat de LETTERLIJK getypte tekst mee. Dit scherm
+  /// heeft geen uitgave om aan te toetsen, dus is de vraag zelf het enige wat "past dit bij wat ik
+  /// zocht?" kan beantwoorden — en die werd tot nu toe nergens gebruikt.
   _SlskKlaar? _klaar;
   _SlskKlaar get _bronnen {
     final k = _klaar;
-    if (k != null && k.geldigVoor(_slsk, _filter)) return k;
-    return _klaar = _SlskKlaar.van(_slsk, _filter);
+    if (k != null && k.geldigVoor(_slsk, _filter, _getypt)) return k;
+    return _klaar = _SlskKlaar.van(_slsk, _filter, vraag: _getypt);
   }
 
   Widget _directResults(bool soulseekReady) {
+    final vraag = _getypt;
     final torrents = _torrents.where((r) => _filter.matches(qualityFromName(r.name))).toList();
+    // WAT JE TYPTE BOVENAAN. De torrentlijst kwam binnen op "gecacht, dan seeders" en verder
+    // niets: een torrent die de indexer om een los woord teruggaf stond zomaar boven de plaat die
+    // je bedoelde. Hier wordt niets weggegooid — een indexer mag best iets anders spellen — maar
+    // wat je vroeg staat nu wel voorop. Zie [vraagScore].
+    if (vraag != null && vraag.isNotEmpty) {
+      final score = {for (final r in torrents) r: vraagScore(vraag, r.name)};
+      torrents.sort((a, b) {
+        final v = score[b]!.compareTo(score[a]!);
+        if (v != 0) return v;
+        if (a.cached != b.cached) return a.cached ? -1 : 1;
+        return b.seeders.compareTo(a.seeders);
+      });
+    }
     final bronnen = _bronnen;
     final slsk = bronnen.gefilterd;
     return ListView(
@@ -12624,6 +12677,15 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       children: [
         if (_torrents.isNotEmpty || _slsk.isNotEmpty)
           _filterChipsRow(_filter, (f) => setState(() => _filter = f)),
+        // Dezelfde eerlijkheid als in het bronnenscherm: is er ruimer gezocht, dan gaat deze lijst
+        // over een ándere vraag dan die je stelde, en dat hoort er te staan.
+        if (vraag != null && _gezochtDirect != null && ruimerGezocht(vraag, _gezochtDirect!))
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 6, 24, 2),
+            child: Text(
+                'Niets gevonden voor “$vraag”. Dit zijn de treffers voor “$_gezochtDirect”.',
+                style: const TextStyle(color: Color(0xFFE8913A), fontSize: 12.5)),
+          ),
         if (torrents.isNotEmpty) _sourceHeader('Torrents · TorBox', torrents.length, _busy),
         ...torrents.map((r) => _torrentTile(context, r)),
         if (_status == null || _slsk.isNotEmpty || _slskBusy)
@@ -19217,8 +19279,11 @@ class _RenumberDialogState extends State<RenumberDialog> {
                       ),
                       Expanded(
                         child: Text(
-                          st.official != null && st.official!.title != st.track.title
-                              ? '${st.track.title}  →  ${st.official!.title}'
+                          // De titel die er ECHT uit komt, niet die van de persing. Zie
+                          // [RenumberStep.nieuweTitel]: een persing mag geen versiemerk van jouw
+                          // kopie afhalen, en dan hoort dit venster ook geen pijl te tonen.
+                          st.nieuweTitel != st.track.title
+                              ? '${st.track.title}  →  ${st.nieuweTitel}'
                               : st.track.title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,

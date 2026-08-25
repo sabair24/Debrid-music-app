@@ -1112,6 +1112,43 @@ Set<String> versionMarkers(String filename) {
 bool versieVolgtUitMap(String titel, String pad) => _merkWijstNaar(
     titel, fileWords(pad.substring(0, pad.length - baseName(pad).length).replaceAll(RegExp(r'[\\/]'), ' ')));
 
+/// Mag de titel van een PERSING die van jouw eigen bestand vervangen?
+///
+/// **Het gemelde geval.** "Nummering overnemen" liet dit zien:
+///
+/// ```
+/// 7 → 7   Fields Of Gold (My Songs Version)  →  Fields Of Gold
+/// 9 → 9   Shape Of My Heart (My Songs Version)  →  Shape Of My Heart
+/// ```
+///
+/// Het nummer klopte al (7 blijft 7); het énige wat er veranderde was dat er informatie van af
+/// ging. En dat is geen kleinigheid: zodra jouw bestand "Fields Of Gold" heet, zoekt de app daarop,
+/// vindt hij de plaat uit 1993, en schrijft "Tags gelijktrekken" die kale titel ook nog in het
+/// bestand zelf.
+///
+/// **Waarom de koppeling wél goed is en alleen het hernoemen niet.** [matchOfficial] paart deze
+/// twee terecht — het ís nummer 7 van deze plaat. Maar hij paart met [wordSim], en die deelt door
+/// de KÓRTSTE van de twee woordenlijsten: `{fields, of, gold}` zit volledig in
+/// `{fields, of, gold, my, songs, version}`, dus de score is 1,0 en de drie extra woorden kosten
+/// niets. Wat er ontbrak is niet een betere koppeling maar een regel over wie de titel mag zijn.
+///
+/// **De regel.** Draagt jouw titel een versiemerk dat de persing niet heeft, dan blijft jouw titel
+/// staan. Een persing beschrijft één uitgave; dat hij een nummer kaal noemt betekent niet dat jouw
+/// kopie dat ook is. De andere kant op mag wél: heeft de persing een merk dat jij niet hebt, dan is
+/// dat nieuwe informatie en neem je hem over.
+///
+/// Nepmerken tellen niet mee — zie [versionMarkers] en `_geenEchtMerk`: "(Album Version)" mag
+/// gewoon verdwijnen, want dat is precies wat een albumversie is.
+String titelNaOvername(String vanJou, String? vanPersing) {
+  final hunne = vanPersing?.trim() ?? '';
+  if (hunne.isEmpty) return vanJou;
+  final mijne = versionMarkers(vanJou);
+  if (mijne.isEmpty) return hunne;
+  // Alles wat ik zeg en zij niet: dan verliest de overname informatie, en dat mag niet.
+  final hunMerken = versionMarkers(hunne);
+  return mijne.every(hunMerken.contains) ? hunne : vanJou;
+}
+
 /// Noemt de versie-aanduiding in [titel] de UITGAVE waar het nummer op staat?
 ///
 /// Hetzelfde oordeel als [versieVolgtUitMap], maar tegen een albumtitel in plaats van een pad.
