@@ -1421,6 +1421,7 @@ class _HomeShellState extends State<HomeShell> {
   /// Binnen een pagina verandert er dus niets.
   final _tvBalk = FocusScopeNode(debugLabel: 'tv-bovenbalk');
   final _tvInhoud = FocusScopeNode(debugLabel: 'tv-inhoud');
+  final _tvSpeler = FocusScopeNode(debugLabel: 'tv-spelerbalk');
 
   /// Vangt de pijl die de scope uit wil.
   ///
@@ -1580,6 +1581,7 @@ class _HomeShellState extends State<HomeShell> {
     _zoekPauze?.cancel();
     _tvBalk.dispose();
     _tvInhoud.dispose();
+    _tvSpeler.dispose();
     _searchCtl.dispose();
     _searchFocus.dispose();
     _kanTerug.dispose();
@@ -2011,8 +2013,15 @@ class _HomeShellState extends State<HomeShell> {
                     child: _AlleenOpTv(
                       bouw: (kind) => FocusScope(
                         node: _tvInhoud,
-                        onKeyEvent: (_, e) =>
-                            _tvSprong(e, LogicalKeyboardKey.arrowUp, TraversalDirection.up, _tvBalk),
+                        // Omhoog naar de navigatie, omlaag naar de spelerbalk -- allebei liggen ze
+                        // buiten de route waar deze inhoud in zit, en een route laat pijlen niet door.
+                        onKeyEvent: (_, e) {
+                          final omhoog = _tvSprong(
+                              e, LogicalKeyboardKey.arrowUp, TraversalDirection.up, _tvBalk);
+                          if (omhoog != KeyEventResult.ignored) return omhoog;
+                          return _tvSprong(
+                              e, LogicalKeyboardKey.arrowDown, TraversalDirection.down, _tvSpeler);
+                        },
                         child: kind,
                       ),
                       child: Padding(
@@ -2071,7 +2080,19 @@ class _HomeShellState extends State<HomeShell> {
             if (MediaQuery.viewInsetsOf(context).bottom == 0) ...[
               // De inzet voor de systeembalk hoort bij de ONDERSTE balk. Staat de navigatiebalk
               // eronder (alleen op een telefoon), dan rekent die hem al mee.
-              RepaintBoundary(child: PlayerBar(metSysteeminzet: !isCompact(context))),
+              // Op een tv een eigen scope, net als de bovenbalk. Zonder dit is de spelerbalk met de
+              // afstandsbediening niet te bereiken: OMLAAG liep alleen de inhoudsrijen af en hield
+              // daar op. Daarmee waren ook de knoppen onbereikbaar, en de hoes die het nu-speelt-
+              // scherm opent -- door de gebruiker gemeld en op het toestel nagemeten.
+              _AlleenOpTv(
+                bouw: (kind) => FocusScope(
+                  node: _tvSpeler,
+                  onKeyEvent: (_, e) =>
+                      _tvSprong(e, LogicalKeyboardKey.arrowUp, TraversalDirection.up, _tvInhoud),
+                  child: kind,
+                ),
+                child: RepaintBoundary(child: PlayerBar(metSysteeminzet: !isCompact(context))),
+              ),
             ],
             // Een balk onderaan voor de vijf die je constant gebruikt.
             //
