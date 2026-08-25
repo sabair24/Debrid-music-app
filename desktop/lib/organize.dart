@@ -1059,6 +1059,41 @@ Set<String> versionMarkers(String filename) {
   return out;
 }
 
+/// Wijst de versie-aanduiding in [titel] naar de UITGAVE waar dit bestand in ligt?
+///
+/// **Het gemelde geval.** Op *My Songs* van Sting heet nummer 7 "Fields of Gold (My Songs
+/// Version)" — een heropname uit 2019, niet de plaat uit 1993. Op Soulseek heet dat bestand bij
+/// iedereen gewoon `07 Fields of Gold.flac`, want bínnen dat album is er niets om van te
+/// onderscheiden. Het onderscheid zit in de MAP: `Sting - My Songs (2019)`.
+///
+/// [fileOffersTitle] keek alleen naar de bestandsnaam, en dan is "(My Songs Version)" drie woorden
+/// die het bestand niet heeft. Zo werd juist de goede kopie geweigerd, en bleef alleen de gewone
+/// versie over — precies waar de gebruiker nooit aan de heropname geraakte.
+///
+/// **Waarom dit veilig is en niet alles doorlaat.** Er wordt niet gezegd "haakjes tellen niet mee".
+/// Er wordt gezegd: het merk moet de map BENOEMEN. Van "my songs version" blijft na het generieke
+/// woord ("version") "my songs" over, en die woorden moeten dan in het pad staan. Bij "Fields of
+/// Gold (Live)" blijft er niets over om te bewijzen, dus die gaat hier NIET doorheen — en dat hoort,
+/// want een live-opname is een andere opname, waar hij ook ligt.
+///
+/// De looptijd blijft er in [fileOffersTitle] achteraan als tweede slot: een heropname uit 2019 en
+/// de plaat uit 1993 lopen zelden even lang.
+bool versieVolgtUitMap(String titel, String pad) {
+  final merken = versionMarkers(titel);
+  if (merken.isEmpty) return false;
+  final mapWoorden = fileWords(
+      pad.substring(0, pad.length - baseName(pad).length).replaceAll(RegExp(r'[\\/]'), ' '));
+  if (mapWoorden.isEmpty) return false;
+  for (final merk in merken) {
+    // Het generieke woord eraf — "version", "mix", "edit". Wat overblijft is de naam waar het merk
+    // naar wijst, en díé moet in het pad staan.
+    final rest = fileWords(merk).where((w) => !_versionWordRe.hasMatch(w)).toSet();
+    if (rest.isEmpty) return false;
+    if (!rest.every(mapWoorden.contains)) return false;
+  }
+  return true;
+}
+
 /// Are these two files the same RECORDING (as opposed to two takes of the same song)?
 ///
 /// The FILENAME decides first, because that is where the difference usually survives: an uploader
@@ -1616,7 +1651,13 @@ String _ext(String name) {
 /// Unlike [sameRecording] this compares a bare catalogue title against a peer's path, so there is
 /// no second filename to explain the extra words — the artist's own name does that job instead.
 bool fileOffersTitle(String title, int? titleDur, String artist, String path, int? fileDur) {
-  final tw = fileWords(title), fw = fileWords(baseName(path));
+  // Wat de titel over de VERSIE zegt, kan in de map staan in plaats van in de bestandsnaam. Zie
+  // [versieVolgtUitMap]: op *My Songs* heet nummer 7 bij elke peer gewoon "07 Fields of Gold.flac",
+  // en het merk "(My Songs Version)" staat één laag hoger. Zonder deze uitzondering werd juist de
+  // goede kopie geweigerd en bleef alleen de gewone versie over.
+  final uitMap = versieVolgtUitMap(title, path);
+  final vergelijkbaar = uitMap ? withoutVersionText(title) : title;
+  final tw = fileWords(vergelijkbaar), fw = fileWords(baseName(path));
   if (tw.isEmpty || fw.isEmpty) return false;
   if (tw.intersection(fw).length / tw.length < 0.75) return false;
   if (tw.difference(fw).union(fw.difference(tw)).any(_versionWordRe.hasMatch)) return false;

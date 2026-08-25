@@ -11,6 +11,7 @@ import 'rutracker.dart';
 import 'search.dart';
 import 'settings.dart';
 import 'soulseek.dart';
+import 'zoekladder.dart';
 import 'torbox.dart';
 import 'torrentbestand.dart';
 import 'aria2.dart';
@@ -556,18 +557,30 @@ class SoulseekService {
   /// query finds nothing, retry once with just the first two words (usually the artist) rather
   /// than telling the user there are no sources. Both attempts run on the shared connection, so
   /// the retry costs nothing beyond the query itself.
-  Future<List<SoulseekFile>> search(String query, {void Function(List<SoulseekFile>)? onPartial}) async {
+  ///
+  /// **De terugval loopt sinds kort in trappen** — zie [zoekLadder]. Hij sprong van de volledige
+  /// vraag meteen naar de eerste twee woorden, en dat is bij een titel met een versie-aanduiding de
+  /// titel kwijt: "Sting Fields of Gold (My Songs Version)" werd "Sting Fields". Je kreeg dan
+  /// bronnen voor een ander nummer, zonder dat er iets over gezegd werd. De trede ertussen — dezelfde
+  /// vraag zonder de haakjes — is precies de nuttigste.
+  ///
+  /// [gebruikteVraag] meldt op welke trede er uiteindelijk gezocht is, zodat het scherm eerlijk kan
+  /// zeggen waar deze lijst over gaat.
+  Future<List<SoulseekFile>> search(String query,
+      {void Function(List<SoulseekFile>)? onPartial, void Function(String)? gebruikteVraag}) async {
     // An empty result because we couldn't log in is NOT "no sources" — retrying a broader query
     // would just burn another login and still show the user the wrong answer.
     final blocked = client.whyNotLogin;
     if (blocked != null) throw blocked;
-    final first = await _searchOnce(query, onPartial);
-    if (first.isNotEmpty) return first;
-    if (client.whyNotLogin != null) throw client.whyNotLogin!;
-    final words = query.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
-    if (words.length < 3) return first;
-    final broader = words.take(2).join(' ');
-    return _searchOnce(broader, onPartial);
+    final trappen = zoekLadder(query);
+    var laatste = <SoulseekFile>[];
+    for (final vraag in trappen) {
+      gebruikteVraag?.call(vraag);
+      laatste = await _searchOnce(vraag, onPartial);
+      if (laatste.isNotEmpty) return laatste;
+      if (client.whyNotLogin != null) throw client.whyNotLogin!;
+    }
+    return laatste;
   }
 
   Future<List<SoulseekFile>> _searchOnce(String query, void Function(List<SoulseekFile>)? onPartial) async {

@@ -131,7 +131,8 @@ jobs:
             test/hoes_overname_test.dart test/tiddl_test.dart \
             test/tidal_test.dart test/tidal_zoeken_test.dart \
             test/rutracker_codetabel_test.dart \
-            test/slsk_groepen_test.dart
+            test/slsk_groepen_test.dart \
+            test/versie_uit_map_test.dart test/soulseek_query_test.dart
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
       # the app you actually use while the TV work is in progress — shipping that would install a

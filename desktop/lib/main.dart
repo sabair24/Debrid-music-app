@@ -89,6 +89,7 @@ import 'tidal.dart';
 import 'tiddl.dart';
 import 'torbox.dart';
 import 'tv.dart';
+import 'zoekladder.dart';
 import 'updater.dart';
 import 'hartslag.dart';
 import 'ui/binnenkomst.dart';
@@ -11010,7 +11011,7 @@ Widget _torrentTile(BuildContext context, SearchResult r) {
 /// regel onder de tekst. Naast de titel vraten ze de laatste ruimte op die de naam nog had — en een
 /// naam als "Backstreet Boys - …" zonder de rest zegt niets, want dat staat op álle treffers.
 Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> all,
-    {TrackTags? authority, bool toonGebruiker = true, EdgeInsets? marge}) {
+    {TrackTags? authority, bool toonGebruiker = true, bool past = false, EdgeInsets? marge}) {
   final status = f.freeSlots ? 'vrij' : 'wachtrij ${f.queueLength}';
   final q = _slskQuality(f);
   final smal = isCompact(context);
@@ -11041,6 +11042,21 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
   }
 
   final merken = <Widget>[
+    // GROEN, en als enige groen tussen de oranje waarschuwingen: dit is geen twijfel maar een
+    // bevestiging. Het zegt dat de naam én de looptijd van dit bestand kloppen met het nummer dat
+    // je aantikte — inclusief de versie, waarbij de map van de peer als bewijs meetelt. Zie
+    // [versieVolgtUitMap]. Deze bestanden staan bovendien bovenaan; zie [_pastBonus].
+    if (past)
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: _accent2.withValues(alpha: .16),
+          borderRadius: BorderRadius.circular(5),
+          border: Border.all(color: _accent2.withValues(alpha: .45)),
+        ),
+        child: const Text('dit nummer',
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: _accent2)),
+      ),
     if (_surroundMerk(f) != null) merk(_surroundMerk(f)!),
     // TE KLEIN VOOR WAT HET BEWEERT. Meten kan hier niet: je kunt niet in het bestand van een
     // vreemde kijken zonder het eerst binnen te halen. Wat wél kan is de getallen tegen elkaar
@@ -11177,6 +11193,10 @@ class _SourcesViewState extends State<SourcesView> {
   bool _tBusy = true, _sBusy = false;
   QFilter _filter = QFilter.all;
 
+  /// De vraag waarop Soulseek uiteindelijk gezocht heeft. Wijkt hij af van [SourcesView.query], dan
+  /// staat er een regel bij die dat zegt.
+  String? _gezochtOp;
+
   @override
   void initState() {
     super.initState();
@@ -11190,10 +11210,15 @@ class _SourcesViewState extends State<SourcesView> {
       setState(() {
         _tBusy = true;
         _sBusy = soulseek.available;
+        _gezochtOp = null;
       });
     }
     if (soulseek.available) {
-      soulseek.search(widget.query, onPartial: (p) {
+      soulseek.search(widget.query, gebruikteVraag: (v) {
+        // Zodra er op een ruimere trede gezocht wordt, gaat deze lijst over een ándere vraag dan je
+        // stelde. Dat hoort erbij te staan — zie [zoekLadder].
+        if (mounted && v != _gezochtOp) setState(() => _gezochtOp = v);
+      }, onPartial: (p) {
         if (mounted) setState(() => _slsk = p);
       }).then((r) {
         if (mounted) setState(() { _slsk = r; _sBusy = false; });
@@ -11214,7 +11239,19 @@ class _SourcesViewState extends State<SourcesView> {
   _SlskKlaar get _bronnen {
     final k = _klaar;
     if (k != null && k.geldigVoor(_slsk, _filter)) return k;
-    return _klaar = _SlskKlaar.van(_slsk, _filter);
+    return _klaar = _SlskKlaar.van(_slsk, _filter, past: _pastBijNummer);
+  }
+
+  /// Of een aangeboden bestand bewijsbaar het nummer is dat onder deze lijst hangt.
+  ///
+  /// Alleen vanaf een albumpagina, want alleen daar weet de app wat er gevraagd is: de titel mét
+  /// zijn versie-aanduiding, en de officiële looptijd. [fileOffersTitle] neemt de MAP van de peer
+  /// als bewijs mee — zie [versieVolgtUitMap] — en dat is precies waarom "Fields of Gold (My Songs
+  /// Version)" nu wél te vinden is in een map die "My Songs" heet.
+  bool Function(SoulseekFile)? get _pastBijNummer {
+    final a = widget.authority, t = widget.track;
+    if (a == null || t == null) return null;
+    return (f) => fileOffersTitle(t.title, t.seconds, a.artist, f.filename, f.durationSec);
   }
 
   @override
@@ -11246,6 +11283,16 @@ class _SourcesViewState extends State<SourcesView> {
           const Padding(
               padding: EdgeInsets.fromLTRB(24, 2, 24, 6),
               child: Text('Geen Soulseek-bronnen.', style: TextStyle(color: _muted, fontSize: 12.5))),
+        // Eerlijk zeggen waar deze lijst over gaat. Zonder deze regel stond je naar bronnen voor een
+        // ándere vraag te kijken zonder dat er iets over gezegd werd — zie [zoekLadder].
+        if (ready && _gezochtOp != null && ruimerGezocht(widget.query, _gezochtOp!))
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 2, 24, 6),
+            child: Text(
+                'Niets gevonden voor “${widget.query}”. Dit zijn de bronnen voor “$_gezochtOp” — '
+                'kijk dus na of het de juiste versie is.',
+                style: const TextStyle(color: Color(0xFFE8913A), fontSize: 12.5)),
+          ),
         // Whichever copy the user picks, the record decides what it is. That is the whole point:
         // this same song is offered as "13 …", "19. …" and "…The Essential … - 01 - …".
         // De boom houdt zijn eigen openstand en venster bij; [sleutel] is wat hem terugzet als er
@@ -11253,6 +11300,7 @@ class _SourcesViewState extends State<SourcesView> {
         _SoulseekGroepen(
             gebruikers: bronnen.gebruikers,
             slsk: slsk,
+            passend: bronnen.passend,
             sleutel: widget.query,
             authority: _trackAuthority,
             uitgave: widget.authority),
@@ -11309,6 +11357,18 @@ const bronStap = 50;
   return (tot: tot, rest: rest, volgende: rest < bronStap ? rest : bronStap);
 }
 
+/// Hoeveel een bestand erbij krijgt als het bewijsbaar het GEVRAAGDE nummer is.
+///
+/// Groot genoeg om alles te overstemmen: [kwaliteitsRang] komt niet boven de honderd miljoen, dus
+/// een passende MP3 staat hier boven een 24/96 van iets anders. Dat is met opzet de goede kant op.
+/// Bij "Fields of Gold (My Songs Version)" stonden er honderden kopieën van de plaat uit 1993
+/// bovenaan, allemaal in prachtige kwaliteit, en de heropname uit 2019 lag ergens onderin — als hij
+/// er al bij zat. De béste kopie van het verkeerde nummer is geen goede kopie.
+///
+/// Alleen als de app WEET wat er gevraagd is, dus als er een uitgave onder de lijst hangt. Bij een
+/// los zoekscherm gebeurt er niets en blijft de volgorde precies wat hij was.
+const _pastBonus = 1000000000;
+
 /// De bronnenlijst voorgekauwd: gefilterd, gerangschikt en gegroepeerd, in één keer.
 ///
 /// **Waarom hier een geheugen zit.** Dit rekenwerk stond gewoon in `build()`, en `build()` draait
@@ -11338,17 +11398,29 @@ class _SlskKlaar {
   /// bij gelijk aantal de peer die nú uitdeelt.
   final List<SoulseekFile> besteMap;
 
-  const _SlskKlaar._(
-      this.ruw, this.filter, this.gefilterd, this.gebruikers, this.besteMap);
+  const _SlskKlaar._(this.ruw, this.filter, this.gefilterd, this.gebruikers, this.besteMap,
+      this.passend);
 
-  factory _SlskKlaar.van(List<SoulseekFile> ruw, QFilter filter) {
+  /// Welke bestanden echt het gevraagde nummer zijn — leeg als er geen uitgave bekend is.
+  ///
+  /// Zie [_pastBonus]: die staan bovenaan, hoe goed de rest ook is.
+  final Set<SoulseekFile> passend;
+
+  factory _SlskKlaar.van(List<SoulseekFile> ruw, QFilter filter,
+      {bool Function(SoulseekFile)? past}) {
     // De rang van een bestand wordt hier één keer uitgerekend en daarna hergebruikt, door zowel de
     // rangschikking als de groepering. Zie [rangschikSoulseek] voor waarom dat het verschil maakt.
     final onthouden = Map<SoulseekFile, int>.identity();
-    int rang(SoulseekFile f) => onthouden[f] ??= _slskRang(f);
+    final passend = Set<SoulseekFile>.identity();
+    int rang(SoulseekFile f) => onthouden[f] ??= _slskRang(f) + (passend.contains(f) ? _pastBonus : 0);
 
-    final gefilterd =
-        rangschikSoulseek(ruw.where((f) => _filterLaatDoor(filter, f)), rang: rang);
+    final over = ruw.where((f) => _filterLaatDoor(filter, f)).toList();
+    if (past != null) {
+      for (final f in over) {
+        if (past(f)) passend.add(f);
+      }
+    }
+    final gefilterd = rangschikSoulseek(over, rang: rang);
     final gebruikers = groepeerSoulseek(gefilterd, rang: rang);
 
     List<SoulseekFile> beste = const [];
@@ -11363,7 +11435,7 @@ class _SlskKlaar {
         }
       }
     }
-    return _SlskKlaar._(ruw, filter, gefilterd, gebruikers, beste);
+    return _SlskKlaar._(ruw, filter, gefilterd, gebruikers, beste, passend);
   }
 
   bool geldigVoor(List<SoulseekFile> r, QFilter f) => identical(r, ruw) && f == filter;
@@ -11400,6 +11472,9 @@ class _SoulseekGroepen extends StatefulWidget {
   /// Alle overgebleven bestanden, als kandidatenpoel voor een download die bij één peer strandt.
   final List<SoulseekFile> slsk;
 
+  /// De bestanden die bewijsbaar het gevraagde nummer zijn. Leeg als er geen uitgave bekend is.
+  final Set<SoulseekFile> passend;
+
   /// De zoekterm. Wisselt die, dan klapt alles weer dicht en begint het venster opnieuw — anders
   /// zou een nieuwe zoekopdracht de openstand van de vorige erven.
   final String sleutel;
@@ -11412,6 +11487,7 @@ class _SoulseekGroepen extends StatefulWidget {
   const _SoulseekGroepen(
       {required this.gebruikers,
       required this.slsk,
+      required this.passend,
       required this.sleutel,
       this.authority,
       this.uitgave});
@@ -11603,6 +11679,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
   Widget _nummer(SoulseekFile f) => _soulseekTile(context, f, widget.slsk,
       authority: widget.authority,
       toonGebruiker: false,
+      past: widget.passend.contains(f),
       marge: const EdgeInsets.fromLTRB(34, 1, 20, 1));
 }
 
@@ -12558,7 +12635,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         // `_searchGen` telt op bij elke nieuwe zoekopdracht — precies het teken dat de boom nodig
         // heeft om zijn openstand en venster terug te zetten.
         _SoulseekGroepen(
-            gebruikers: bronnen.gebruikers, slsk: slsk, sleutel: '$_searchGen'),
+            gebruikers: bronnen.gebruikers,
+            slsk: slsk,
+            passend: bronnen.passend,
+            sleutel: '$_searchGen'),
       ],
     );
   }
