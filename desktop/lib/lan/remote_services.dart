@@ -370,6 +370,15 @@ class RemoteDownloadManager extends DownloadManager {
     }());
   }
 
+  /// De wenslijst staat op de pc, dus daar hoort dit ook te landen — zie `_jobStopWens`.
+  @override
+  Future<void> stopWens(DownloadJob job) async {
+    try {
+      await _rpc.post('/api/jobs/stopwens', {'key': job.key, 'name': job.name});
+      await refresh();
+    } catch (_) {/* de rij blijft staan; de volgende peiling vertelt de waarheid */}
+  }
+
   @override
   void clearFinished() {
     unawaited(() async {

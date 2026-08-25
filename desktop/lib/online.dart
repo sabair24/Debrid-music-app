@@ -662,6 +662,13 @@ class DownloadJob {
   /// not start five downloads of it.
   String? trackKey;
 
+  /// De sleutel van de WENS die hierbij hoort, zodra deze download op de wenslijst gezet is.
+  ///
+  /// Zonder dit was een wens vanaf het scherm niet meer te bereiken: je zag "Later opnieuw" staan,
+  /// maar de enige manier om ervan af te komen was de rij wegvegen — en dan bleef de wens achter en
+  /// zocht de app door. Zie [DownloadManager.stopWens].
+  String? wensSleutel;
+
   /// Every peer copy this job may fall back on — kept so the job can be written down and picked
   /// up again after a restart.
   List<SoulseekFile> candidates = const [];
@@ -871,12 +878,29 @@ class DownloadManager extends ChangeNotifier {
     unawaited(_savePending());
   }
 
+  /// Stop met dit nummer proberen: van de wenslijst af, en de rij van het scherm.
+  ///
+  /// Dit is het verschil met [clearFinished], en het is een echt verschil. Opruimen haalt rijen weg
+  /// die niets meer van je vragen; dit zegt "hier hoef je niet meer naar te zoeken". Zonder deze
+  /// weg was een eenmaal aangemaakte wens vanaf het scherm onbereikbaar: hij bleef op de
+  /// achtergrond zoeken en er was geen knop die dat kon stoppen.
+  Future<void> stopWens(DownloadJob job) async {
+    final sleutel = job.wensSleutel;
+    if (sleutel != null) {
+      await _ensureWants();
+      if (_wants.forget(sleutel)) await _wants.save();
+    }
+    jobs.remove(job);
+    notifyListeners();
+  }
+
   /// Remove finished (done/failed) jobs from the list; keep anything still in progress.
   void clearFinished() {
-    // Ook 'later' mag weg. Dat haalt de REGEL van het scherm, niet de wens: die staat in
-    // lossless_wants.json en wordt gewoon verder afgewerkt. Zonder dit blijft een rij die niets meer
-    // van je vraagt voor altijd tussen je downloads staan.
-    jobs.removeWhere((j) => j.status == 'done' || j.status == 'failed' || j.status == 'later');
+    // 'later' hoort hier NIET bij, en stond er eerst wel. Zo'n rij is niet afgerond maar wacht op
+    // een volgende poging, en die verdween dus bij het opruimen van wat klaar was. De wens bleef
+    // achter de schermen staan, dus de app bleef zoeken naar iets waarvan jij dacht dat je het had
+    // weggehaald. Wie er echt vanaf wil, gebruikt het kruisje op die rij — zie [stopWens].
+    jobs.removeWhere((j) => j.status == 'done' || j.status == 'failed');
     notifyListeners();
   }
 
@@ -1548,7 +1572,7 @@ class DownloadManager extends ChangeNotifier {
 
     await _ensureWants();
     final nu = DateTime.now().millisecondsSinceEpoch;
-    final nieuw = _wants.want(LosslessWant(
+    final wens = LosslessWant(
       artist: heeftNaam ? t.artist.trim() : '',
       title: heeftNaam ? t.title.trim() : '',
       album: heeftNaam ? t.album : '',
@@ -1570,7 +1594,11 @@ class DownloadManager extends ChangeNotifier {
               sampleRate: keuze.sampleRate,
               bitDepth: keuze.bitDepth,
             ),
-    ));
+    );
+    // Vastleggen vóórdat hij op de lijst gaat, zodat het kruisje op die rij weet wat het moet
+    // vergeten — ook als de wens er al stond.
+    job.wensSleutel = wens.key;
+    final nieuw = _wants.want(wens);
     if (nieuw) {
       await _wants.save();
       _log.line('"${job.name}": niets binnen — op de lijst, volgende poging over '

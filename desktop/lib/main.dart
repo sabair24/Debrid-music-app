@@ -4810,7 +4810,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       final t = s.track;
                       final row = t == null
                           ? MissingTrackRow(
-                              slot: s, jobKey: _jobKey(s.index), onDownload: () => _downloadMissing(s))
+                              slot: s,
+                              jobKey: _jobKey(s.index),
+                              artiest: album.artist,
+                              tags: _authorityFor(s),
+                              onDownload: () => _downloadMissing(s))
                           // The queue is what's playable, so the index has to be this track's place
                           // in the FILES — its place in the release would play the wrong song.
                           : TrackRow(
@@ -4904,6 +4908,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                     official: ChoiceTrack(
                         '', _officialBonus[i].track.title, _officialBonus[i].track.seconds)),
                 jobKey: 'bonus:$_albumKey:$i',
+                artiest: widget.album.artist,
                 note: _officialBonus[i].edition,
                 onDownload: () => _downloadBonus(i),
               ),
@@ -5757,11 +5762,19 @@ class MissingTrackRow extends StatefulWidget {
   /// What the chip says instead of "niet in bibliotheek" — for a track that is on another
   /// pressing, which pressing that is.
   final String? note;
+
+  /// Van wie dit nummer is, voor de zoekvraag en voor "Ga naar artiest" in het menu.
+  final String artiest;
+
+  /// Wélke opname dit is volgens de uitgave, zodat de bronnenlijst de juiste kopieën kan aanwijzen.
+  final TrackTags? tags;
   const MissingTrackRow(
       {super.key,
       required this.slot,
       required this.jobKey,
       required this.onDownload,
+      required this.artiest,
+      this.tags,
       this.note});
   @override
   State<MissingTrackRow> createState() => _MissingTrackRowState();
@@ -5782,6 +5795,14 @@ class _MissingTrackRowState extends State<MissingTrackRow> {
       // hold the highlight. Same gesture as everywhere else: OK downloads the missing track.
       child: Pressable(
         onPressed: widget.onDownload,
+        // Zelfde gebaren als bij een rij die je wél hebt — zie [TrackRow]. Deze rij had als enige
+        // in de lijst geen menu, en daarmee geen weg naar "Zoeken met Soulseek".
+        onLongPress: _menuOpHouden
+            ? () => _toonItemMenu(context, _ontbrekendMenu(context, s, widget.artiest, widget.tags, widget.onDownload))
+            : null,
+        onSecondaryTap: (bij) => _toonItemMenu(
+            context, _ontbrekendMenu(context, s, widget.artiest, widget.tags, widget.onDownload),
+            bij: bij),
         borderRadius: BorderRadius.circular(8),
         scaleOnFocus: false,
         onFocusChange: (v) => setState(() => _hover = v),
@@ -7400,6 +7421,49 @@ Widget _bronnenPagina(String titel, String vraag, {TrackTags? tags}) => Scaffold
       appBar: AppBar(backgroundColor: _bg, title: Text(titel)),
       body: SingleChildScrollView(child: SourcesView(query: vraag, tags: tags)),
     );
+
+/// Het menu voor een nummer dat je NIET hebt.
+///
+/// **Dezelfde vorm en dezelfde volgorde als [_nummerMenu], en dat is het hele punt.** Een
+/// ontbrekende rij had helemaal geen menu: de enige weg naar Soulseek was de downloadknop aan het
+/// eind van de rij, die meteen de béste kopie pakt — zelf kiezen kon niet. Nu opent hij op dezelfde
+/// manier als elke andere rij, met hetzelfde menu.
+///
+/// Wat niet kan, staat er wél in maar grijs — zie [MenuRegel.uit]. Je kunt niets afspelen wat er
+/// niet is, en niets in een afspeellijst zetten dat geen bestand heeft. Die regels weglaten zou een
+/// korter menu geven met elke keer een andere vorm, en dan moet je zoeken waar "Zoeken met
+/// Soulseek" nu weer staat.
+ItemMenu _ontbrekendMenu(
+    BuildContext context, AlbumSlot slot, String artiest, TrackTags? tags, VoidCallback opHalen) {
+  final nav = Navigator.of(context);
+  final vraag = zoekvraagVoorNummer(slot.title, artist: artiest);
+  return ItemMenu(
+    titel: slot.title,
+    ondertitel: artiest,
+    blokken: [
+      [
+        MenuRegel(Icons.favorite_border_rounded, 'Favoriet', () {}, uit: true),
+      ],
+      [
+        MenuRegel(Icons.playlist_play_rounded, 'Hierna spelen', () {}, uit: true),
+        MenuRegel(Icons.playlist_add_rounded, 'Toevoegen aan de wachtrij', () {}, uit: true),
+        MenuRegel(Icons.library_add_outlined, 'Toevoegen aan afspeellijst…', () {}, uit: true),
+      ],
+      [
+        // Deze twee gaan over de ARTIEST, en die heb je wel — ook als dit ene nummer ontbreekt.
+        MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, artiest)),
+        MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, artiest)),
+      ],
+      [
+        // Waar het om begonnen was. [tags] gaat mee zodat de bronnenlijst weet wélke opname dit is
+        // en de juiste kopieën kan aanwijzen — zie `_pastBijNummer`.
+        MenuRegel(Icons.download_rounded, 'Beste kopie downloaden', opHalen),
+        MenuRegel(Icons.travel_explore_rounded, 'Zoeken met Soulseek',
+            () => openOp(nav, (_) => _bronnenPagina(slot.title, vraag, tags: tags))),
+      ],
+    ],
+  );
+}
 
 /// Het menu voor één nummer.
 ItemMenu _nummerMenu(BuildContext context, Track t) {
@@ -9877,7 +9941,11 @@ class DownloadsView extends StatelessWidget {
     return Consumer<DownloadManager>(
       builder: (_, dm, __) {
         final active = dm.jobs.where((j) => j.busy).toList();
-        final finished = dm.jobs.where((j) => !j.busy).toList();
+        // Drie groepen, niet twee. "Later opnieuw" stond onder AFGEROND, en dat is het niet: er
+        // komt nog een poging. Daar hoorde het niet en daar werd het ook door "Wis afgeronde"
+        // meegenomen — zie [DownloadManager.clearFinished].
+        final later = dm.jobs.where((j) => j.status == 'later').toList();
+        final finished = dm.jobs.where((j) => !j.busy && j.status != 'later').toList();
         return ListView(
           padding: const EdgeInsets.fromLTRB(28, 22, 28, 30),
           children: [
@@ -9970,6 +10038,11 @@ class DownloadsView extends StatelessWidget {
               ...active.map((j) => DlRow(job: j)),
               const SizedBox(height: 22),
             ],
+            if (later.isNotEmpty) ...[
+              const _DlHeader('LATER OPNIEUW'),
+              ...later.map((j) => DlRow(job: j)),
+              const SizedBox(height: 22),
+            ],
             if (finished.isNotEmpty) ...[
               const _DlHeader('AFGEROND'),
               ...finished.map((j) => DlRow(job: j)),
@@ -10031,17 +10104,25 @@ class DlRow extends StatelessWidget {
     );
 
     // Stop what you no longer want — a slot freed here is a slot another download gets.
-    final stoppen = job.busy && job.canCancel
+    //
+    // Ook op een rij die op de wenslijst staat. Die vraagt niets meer van je, maar de app zoekt op
+    // de achtergrond door, en daar was geen enkele knop voor: "Wis afgeronde" haalde de rij weg en
+    // liet de wens staan. Nu haalt dit kruisje allebei weg — zie [DownloadManager.stopWens].
+    final opDeLijst = job.status == 'later';
+    final kanStoppen = opDeLijst || (job.busy && job.canCancel);
+    final stopLabel = opDeLijst ? 'Niet meer proberen' : 'Download stoppen';
+    final stoppen = kanStoppen
         ? Consumer<DownloadManager>(
             builder: (_, dm, __) => TvLabelled(
-              label: 'Download stoppen',
+              label: stopLabel,
               child: IconButton(
                 icon: const Icon(Icons.close_rounded, size: 16),
                 color: _muted,
-                tooltip: 'Download stoppen',
+                tooltip: stopLabel,
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(),
-                onPressed: () => dm.cancelJob(job),
+                onPressed: () =>
+                    opDeLijst ? unawaited(dm.stopWens(job)) : dm.cancelJob(job),
               ),
             ),
           )

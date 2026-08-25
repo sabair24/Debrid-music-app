@@ -78,6 +78,35 @@ void main() {
       expect(posten.length, _menu().regels.length + _menu().gevuld.length - 1);
     });
 
+    test('een uitgezette regel telt gewoon mee voor de vorm', () {
+      // Dat is precies waarom hij uitgezet is en niet weggelaten: bij een ontbrekend nummer werkt de
+      // helft van het menu niet, en weglaten zou het menu elke keer een andere vorm geven — dan moet
+      // je zoeken waar "Zoeken met Soulseek" nu weer staat.
+      const half = ItemMenu(titel: 'x', blokken: [
+        [MenuRegel(Icons.circle, 'Hierna spelen', _niets, uit: true)],
+        [MenuRegel(Icons.circle, 'Zoeken met Soulseek', _niets)],
+      ]);
+      expect(half.regels.length, 2);
+      expect(itemMenuPosten(half).whereType<PopupMenuDivider>().length, 1);
+    });
+
+    test('een uitgezette regel is niet te kiezen', () {
+      const half = ItemMenu(titel: 'x', blokken: [
+        [
+          MenuRegel(Icons.circle, 'Hierna spelen', _niets, uit: true),
+          MenuRegel(Icons.circle, 'Zoeken met Soulseek', _niets),
+        ],
+      ]);
+      final posten = itemMenuPosten(half).whereType<PopupMenuItem<MenuRegel>>().toList();
+      expect(posten.length, 2);
+      expect(posten.first.enabled, isFalse, reason: 'grijs én dood');
+      expect(posten.last.enabled, isTrue);
+    });
+
+    test('standaard staat een regel gewoon aan', () {
+      expect(const MenuRegel(Icons.circle, 'x', _niets).uit, isFalse);
+    });
+
     test('een blok dat leegloopt neemt zijn streep mee', () {
       const alleenEen = ItemMenu(titel: 'x', blokken: [
         [MenuRegel(Icons.circle, 'een', _niets)],

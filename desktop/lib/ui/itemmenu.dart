@@ -30,10 +30,18 @@ import 'kleuren.dart';
 /// Eén regel in het menu.
 @immutable
 class MenuRegel {
-  const MenuRegel(this.icoon, this.tekst, this.doen);
+  const MenuRegel(this.icoon, this.tekst, this.doen, {this.uit = false});
 
   final IconData icoon;
   final String tekst;
+
+  /// Zichtbaar maar niet te kiezen, in lichter grijs.
+  ///
+  /// **Waarom tonen en niet weglaten.** Bij een ontbrekend nummer werkt de helft van dit menu niet:
+  /// je kunt niets afspelen wat er niet is. Die regels weglaten zou een kórter menu geven dat elke
+  /// keer een andere vorm heeft, en dan moet je zoeken waar "Zoeken met Soulseek" nu weer staat.
+  /// Grijs laat de vorm staan en zegt meteen wat er wél kan.
+  final bool uit;
 
   /// Al gebonden aan zijn nummer of album op het moment dat het menu wordt samengesteld.
   ///
@@ -100,7 +108,9 @@ Future<void> toonItemMenu(BuildContext context, ItemMenu menu, {Offset? bij}) as
   final keuze = menuVorm(compact: isCompact(context), tv: isTv) == MenuVorm.blad
       ? await _viaBlad(context, menu)
       : await _viaZwever(context, menu, bij);
-  keuze?.doen();
+  // Een uitgeschakelde regel is niet te kiezen, maar hem hier ook weigeren kost niets en houdt de
+  // belofte op één plek staan.
+  if (keuze != null && !keuze.uit) keuze.doen();
 }
 
 Future<MenuRegel?> _viaBlad(BuildContext context, ItemMenu menu) async {
@@ -194,11 +204,14 @@ List<PopupMenuEntry<MenuRegel>> itemMenuPosten(ItemMenu menu) {
       for (final r in blokken[b])
         PopupMenuItem<MenuRegel>(
           value: r,
+          enabled: !r.uit,
           height: 40,
           child: Row(children: [
-            Icon(r.icoon, size: 17, color: kGedempt),
+            Icon(r.icoon, size: 17, color: r.uit ? kUitgezet : kGedempt),
             const SizedBox(width: 10),
-            Expanded(child: Text(r.tekst, style: const TextStyle(fontSize: 13.5))),
+            Expanded(
+                child: Text(r.tekst,
+                    style: TextStyle(fontSize: 13.5, color: r.uit ? kUitgezet : null))),
           ]),
         ),
     ],
@@ -216,8 +229,16 @@ class ItemMenuBlad extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final blokken = menu.gevuld;
-    // Welke regel de markering krijgt op een tv: de eerste van het eerste gevulde blok.
-    final eerste = blokken.isEmpty || blokken.first.isEmpty ? null : blokken.first.first;
+    // Welke regel de markering krijgt op een tv: de eerste die je ook echt kunt kiezen. Zou dat de
+    // allereerste regel zijn, dan begon de markering bij een ontbrekend nummer op iets dat uit
+    // staat, en dan lijkt de afstandsbediening niets te doen.
+    MenuRegel? eerste;
+    for (final r in blokken.expand((b) => b)) {
+      if (!r.uit) {
+        eerste = r;
+        break;
+      }
+    }
     return SafeArea(
       // Een televisie meldt geen inzetten, dus `SafeArea` alleen doet daar niets. Dit is de marge
       // die de onderste regel van de rand van de beeldbuis af houdt.
@@ -260,15 +281,20 @@ class ItemMenuBlad extends StatelessWidget {
                         // de eerste druk op OMLAAG opgaan aan het binnenkomen. Op een telefoon is
                         // dit onzichtbaar: bij aanraking tekent Flutter geen markering.
                         autofocus: isTv && identical(r, eerste),
-                        onTap: () => Navigator.pop(context, r),
+                        // Null en niet een lege functie: dan tekent Flutter ook geen rimpeling, en
+                        // slaat de afstandsbediening hem over in plaats van erop te blijven staan.
+                        onTap: r.uit ? null : () => Navigator.pop(context, r),
                         child: Padding(
                           // GEEN vaste hoogte. Op een tv schaalt de tekst 1,35 keer, en dan knipt
                           // een vast getal de regel af; ruimte eromheen groeit gewoon mee.
                           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                           child: Row(children: [
-                            Icon(r.icoon, size: 20, color: kGedempt),
+                            Icon(r.icoon, size: 20, color: r.uit ? kUitgezet : kGedempt),
                             const SizedBox(width: 16),
-                            Expanded(child: Text(r.tekst, style: const TextStyle(fontSize: 15))),
+                            Expanded(
+                                child: Text(r.tekst,
+                                    style: TextStyle(
+                                        fontSize: 15, color: r.uit ? kUitgezet : null))),
                           ]),
                         ),
                       ),
