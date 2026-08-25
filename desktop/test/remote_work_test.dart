@@ -52,7 +52,8 @@ class FakeSoulseek extends SoulseekService {
 
   @override
   Future<List<SoulseekFile>> search(String query,
-      {void Function(List<SoulseekFile>)? onPartial}) async {
+      {void Function(List<SoulseekFile>)? onPartial,
+      void Function(String)? gebruikteVraag}) async {
     queries.add(query);
     return answer;
   }
@@ -68,7 +69,7 @@ class FakeDownloads extends DownloadManager {
   bool cleared = false;
 
   @override
-  void enqueue(SearchResult result, {int? fileId}) {
+  void enqueue(SearchResult result, {int? fileId, TbTorrent? klaar}) {
     enqueued.add(result);
     jobs.insert(0, DownloadJob(result.name, key: 'k${jobs.length}')..status = 'downloading');
     notifyListeners();

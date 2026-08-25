@@ -119,7 +119,8 @@ class _FakeSoulseek extends SoulseekService {
   bool get available => true;
   @override
   Future<List<SoulseekFile>> search(String query,
-      {void Function(List<SoulseekFile>)? onPartial}) async {
+      {void Function(List<SoulseekFile>)? onPartial,
+      void Function(String)? gebruikteVraag}) async {
     await Future<void>.delayed(const Duration(milliseconds: 300));
     return [
       for (var i = 1; i <= 4; i++)
@@ -140,7 +141,7 @@ class _FakeDownloads extends DownloadManager {
   _FakeDownloads(super.online, super.soulseek, super.musicRoot, super.onLibraryChanged);
 
   @override
-  void enqueue(SearchResult result, {int? fileId}) => _run(result.name);
+  void enqueue(SearchResult result, {int? fileId, TbTorrent? klaar}) => _run(result.name);
 
   @override
   Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,

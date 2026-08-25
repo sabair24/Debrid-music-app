@@ -124,6 +124,15 @@ class _BinnenkomstState extends State<Binnenkomst> with SingleTickerProviderStat
   CurvedAnimation? _curve;
   Animation<Offset>? _schuif;
 
+  /// Het trapje: wachten tot deze tegel aan de beurt is.
+  ///
+  /// Bewaard, en niet als losse `Future.delayed`. Zo'n future is niet af te zeggen, dus na het
+  /// opruimen van de tegel bleef er een wekker lopen die straks in het niets afgaat. In de app viel
+  /// dat niet op -- er staat een `mounted`-controle onder -- maar in een toets is het fataal: die
+  /// eindigt met "Pending timers" en valt om. Precies daarop stond albumraster_ingebed_test.dart
+  /// stuk, en omdat die toets niet in de bouwstraat stond bleef de bouw al die tijd groen.
+  Timer? _wekker;
+
   @override
   void initState() {
     super.initState();
@@ -145,7 +154,7 @@ class _BinnenkomstState extends State<Binnenkomst> with SingleTickerProviderStat
         _schuif = Tween(begin: const Offset(0, .08), end: Offset.zero).animate(curve);
       });
       final wacht = kTrapje * (widget.index < kTrapjeDak ? widget.index : kTrapjeDak);
-      Future<void>.delayed(wacht, () {
+      _wekker = Timer(wacht, () {
         if (mounted) c.forward();
       });
     });
@@ -153,7 +162,9 @@ class _BinnenkomstState extends State<Binnenkomst> with SingleTickerProviderStat
 
   @override
   void dispose() {
-    // De curve eerst: die hangt aan de controller.
+    // De wekker eerst: die zou anders na het opruimen nog afgaan.
+    _wekker?.cancel();
+    // En de curve vóór de controller: die hangt eraan.
     _curve?.dispose();
     _c?.dispose();
     super.dispose();
