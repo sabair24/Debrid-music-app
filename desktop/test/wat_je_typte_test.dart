@@ -114,7 +114,9 @@ void main() {
     const vraag = 'mackenzie you all i need';
     const york = r'@@p\[PTLC049] YORK\01. YORK feat. Ginger Mackenzie - I Need You (Remix).flac';
     const tape = r'@@p\Disc 1\05 - Naby Let Me Follow You Down (First MacKenzie Tape).mp3';
-    const echt = r'@@p\Mackenzie\Mackenzie - Youre All I Need.mp3';
+    const echt = r"@@p\Mackenzie\Mackenzie - You're All I Need.mp3";
+    // Dezelfde plaat bij een peer die de apostrof weglaat. Zie de toets hieronder: dat kost een woord.
+    const echtKaal = r'@@p\Mackenzie\Mackenzie - Youre All I Need.mp3';
 
     test('vier telbare woorden, want "i" is te kort', () {
       expect(telbareWoorden(vraag), 4);
@@ -124,6 +126,16 @@ void main() {
       expect(gedekteWoorden(vraag, echt), 4);
       expect(gedekteWoorden(vraag, york), 3);
       expect(gedekteWoorden(vraag, tape), 2);
+    });
+
+    test('een peer die de apostrof weglaat kost je een woord — en dán telt de reeks', () {
+      // "You're" valt uiteen in "you" en "re", dus je woord "you" komt gewoon voor. "Youre" is één
+      // woord dat op niets van je vraag lijkt. Diezelfde plaat zakt daarmee van 4 naar 3 gedekte
+      // woorden en staat gelijk met YORK — precies het geval waarvoor de reeks bestaat.
+      expect(gedekteWoorden(vraag, echtKaal), 3);
+      expect(gedekteWoorden(vraag, echtKaal), gedekteWoorden(vraag, york));
+      expect(reeksScore(vraag, echtKaal), greaterThan(reeksScore(vraag, york)),
+          reason: 'de reeks moet hem hier alsnog bovenaan zetten');
     });
 
     test('DE KERN: de reeks scheidt de treffer van de toevalstreffer', () {
