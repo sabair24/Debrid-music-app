@@ -35,20 +35,40 @@ final _haakjes = RegExp(r'[(\[{][^)\]}]*[)\]}]');
 ///    laatste tree en niet geschrapt: bij een nummer dat écht nergens onder zijn eigen titel te
 ///    vinden is, is "iets van deze artiest" beter dan een leeg scherm. Maar het is nu wat het hoort
 ///    te zijn — een laatste redmiddel in plaats van de eerste terugval.
-List<String> zoekLadder(String vraag) {
+List<String> zoekLadder(String vraag) => zoekRondes(vraag).expand((r) => r).toList();
+
+/// Diezelfde treden, maar gebundeld per RONDE — en dít is wat er de deur uit gaat.
+///
+/// **Waarom er rondes nodig waren.** De ladder werd trede voor trede afgelopen en stopte bij de
+/// eerste die íéts opleverde. Dat klinkt zuinig en was het niet. Gemeten geval: via het menu
+/// "Zoeken met Soulseek" op *Plaza – Yo-Yo (Dance Version)* gaf trede 1 dertien treffers, dus stopte
+/// het daar. Wie zélf `yo-yo dance version` intikte kreeg er tientallen, met een echte 24/96 ertussen
+/// die via het menu onbereikbaar was. Dertien is "iets", maar het is niet wat er te halen valt.
+///
+/// **Wat er verandert.** De twee treden die over HETZELFDE nummer gaan — de volledige vraag en
+/// dezelfde vraag zonder de haakjes — gaan nu samen in één ronde. Dat kost geen seconde extra:
+/// `SlskSession.search` neemt een lijst vragen aan en zet ze als losse tickets in hetzelfde venster
+/// van acht seconden. De resultaten komen op één hoop, en de rangschikking bepaalt wat bovenaan
+/// staat.
+///
+/// **Wat er niet verandert.** De eerste twee woorden — meestal alleen de artiest — blijven een eigen
+/// ronde, en die gaat alleen de deur uit als de eerste ronde helemaal niets opleverde. Zou die
+/// meegaan met de rest, dan stond de lijst vol met ander werk van dezelfde artiest.
+List<List<String>> zoekRondes(String vraag) {
   final heel = vraag.trim().replaceAll(RegExp(r'\s+'), ' ');
   if (heel.isEmpty) return const [];
-  final uit = <String>[heel];
+  final precies = <String>[heel];
 
   final zonder = heel.replaceAll(_haakjes, ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
   // Niet als er niets overblijft: een titel die HELEMAAL tussen haakjes staat — "(Everything I Do)
   // I Do It for You" bestaat, en "(Reprise)" ook — mag geen lege vraag worden.
-  if (zonder.isNotEmpty && zonder != heel) uit.add(zonder);
+  if (zonder.isNotEmpty && zonder != heel) precies.add(zonder);
 
+  final uit = <List<String>>[precies];
   final woorden = zonder.isEmpty ? heel.split(' ') : zonder.split(' ');
   if (woorden.length >= 3) {
     final twee = woorden.take(2).join(' ');
-    if (!uit.contains(twee)) uit.add(twee);
+    if (!precies.contains(twee)) uit.add([twee]);
   }
   return uit;
 }

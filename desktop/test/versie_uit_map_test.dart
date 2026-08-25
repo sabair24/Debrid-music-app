@@ -55,6 +55,53 @@ void main() {
       expect(zoekLadder('Sting   Fields  of  Gold'), ['Sting Fields of Gold', 'Sting Fields']);
     });
 
+    test('DE KERN: de twee precieze treden gaan SAMEN de deur uit', () {
+      // Het gemelde geval. Via het menu "Zoeken met Soulseek" op *Plaza – Yo-Yo (Dance Version)*
+      // gaf de eerste trede dertien treffers, dus stopte de ladder daar — en werd "Plaza Yo-Yo"
+      // nooit verstuurd. Wie zélf "yo-yo dance version" intikte kreeg tientallen treffers, met een
+      // echte 24/96 ertussen. Dertien is "iets", maar het is niet wat er te halen valt.
+      //
+      // Ze gaan als losse tickets naar dezelfde sessie, dus twee vragen kosten hetzelfde als één.
+      expect(zoekRondes('Plaza Yo-Yo (Dance Version)').first,
+          ['Plaza Yo-Yo (Dance Version)', 'Plaza Yo-Yo']);
+    });
+
+    test('de artiest alleen blijft een APARTE ronde', () {
+      // Anders staat de lijst vol met ander werk van dezelfde artiest. Deze ronde gaat alleen de
+      // deur uit als de eerste helemaal niets opleverde.
+      final rondes = zoekRondes('Sting Fields of Gold (My Songs Version)');
+      expect(rondes.length, 2);
+      expect(rondes.first, ['Sting Fields of Gold (My Songs Version)', 'Sting Fields of Gold']);
+      expect(rondes.last, ['Sting Fields']);
+    });
+
+    test('zonder haakjes is de eerste ronde gewoon één vraag', () {
+      expect(zoekRondes('Sting Fields of Gold'), [
+        ['Sting Fields of Gold'],
+        ['Sting Fields'],
+      ]);
+    });
+
+    test('een korte vraag is één ronde van één vraag', () {
+      expect(zoekRondes('Sting Roxanne'), [
+        ['Sting Roxanne'],
+      ]);
+    });
+
+    test('de rondes en de ladder blijven hetzelfde zeggen', () {
+      // De ladder is nu letterlijk de rondes achter elkaar. Zou dat uit elkaar lopen, dan gaat er
+      // een trede stilletjes verloren.
+      for (final v in [
+        'Plaza Yo-Yo (Dance Version)',
+        'Sting Fields of Gold (My Songs Version)',
+        'Sting Roxanne',
+        '(Reprise)',
+        '',
+      ]) {
+        expect(zoekRondes(v).expand((r) => r).toList(), zoekLadder(v), reason: v);
+      }
+    });
+
     test('er wordt gemeld zodra de lijst over een andere vraag gaat', () {
       expect(ruimerGezocht('Sting Fields of Gold (My Songs Version)', 'Sting Fields of Gold'),
           isTrue);
