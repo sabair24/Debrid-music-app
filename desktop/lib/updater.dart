@@ -50,11 +50,19 @@ class Uitgave {
   final Uri apk;
   final int bytes;
 
+  /// Wat er in deze uitgave zit, in gewone zinnen. Leeg als de release het niet meldt.
+  ///
+  /// Zie [watIsNieuw]: dit zijn de regels onder het kopje "Wat er nieuw is" in de release, en die
+  /// worden door de bouwstraat gevuld met de onderwerpsregels van de commits sinds de vorige
+  /// uitgave. Die zijn al in gewone taal geschreven, dus er valt niets te vertalen.
+  final List<String> nieuw;
+
   const Uitgave({
     required this.versie,
     required this.buildnummer,
     required this.apk,
     required this.bytes,
+    this.nieuw = const [],
   });
 
   String get naam =>
@@ -69,6 +77,48 @@ class Uitgave {
 
   /// Voor de knop: "40 MB" leest, "41943040 bytes" niet.
   String get grootte => bytes <= 0 ? '' : '${(bytes / (1000 * 1000)).toStringAsFixed(0)} MB';
+}
+
+/// Het kopje waaronder de bouwstraat schrijft wat er in een uitgave zit.
+///
+/// Eén afgesproken regel, aan beide kanten letterlijk zo. Er wordt niet geraden welk stuk van de
+/// tekst "de veranderingen" zijn — dat gaat één keer goed en daarna niet meer.
+const kopjeNieuw = '## Wat er nieuw is';
+
+/// De regels onder [kopjeNieuw] in de beschrijving van een release.
+///
+/// **Waarom dit bestaat.** Het updatevenster zei alleen "DebridMusic 3.9.196 (build 11300) staat
+/// klaar" — een nummer, en verder niets. Je moest maar aannemen dat het de moeite was, en je kon
+/// achteraf niet nakijken wat er nou veranderd was. Nu staat er wat erin zit.
+///
+/// Leest tot het volgende kopje of tot het eind, gooit de opsommingsstreepjes en lege regels weg,
+/// en houdt het bij hooguit [_hoogstensRegels] punten: een venster is geen changelog, en wie meer
+/// wil kijkt op de releasepagina.
+///
+/// Een release die dit kopje niet heeft — alles van vóór deze wijziging — levert een lege lijst.
+/// Dat is met opzet geen fout: het venster laat die regel dan gewoon weg.
+const _hoogstensRegels = 8;
+
+List<String> watIsNieuw(String? beschrijving) {
+  final tekst = beschrijving ?? '';
+  if (tekst.isEmpty) return const [];
+  final regels = tekst.replaceAll('\r\n', '\n').split('\n');
+  final start = regels.indexWhere((r) => r.trim().toLowerCase() == kopjeNieuw.toLowerCase());
+  if (start < 0) return const [];
+  final uit = <String>[];
+  for (final ruw in regels.skip(start + 1)) {
+    final r = ruw.trim();
+    if (r.startsWith('#')) break; // het volgende kopje: hier houdt het op
+    if (r.isEmpty) continue;
+    // Het streepje eraf; het venster zet zijn eigen bolletje.
+    final zonder = r.startsWith('- ') || r.startsWith('* ')
+        ? r.substring(2).trim()
+        : (r.startsWith('-') || r.startsWith('*') ? r.substring(1).trim() : r);
+    if (zonder.isEmpty) continue;
+    uit.add(zonder);
+    if (uit.length >= _hoogstensRegels) break;
+  }
+  return uit;
 }
 
 /// Het buildnummer uit de tag van een release.
@@ -297,11 +347,12 @@ class Updater {
 
       final tag = j['tag_name'] as String? ?? '';
       final assets = (j['assets'] as List?) ?? const [];
+      final nieuw = watIsNieuw(j['body'] as String?);
       final uitgave = Platform.isAndroid
-          ? _android(tag, assets)
+          ? _android(tag, assets, nieuw)
           : Platform.isMacOS
-              ? _mac(tag, assets)
-              : _windows(tag, assets);
+              ? _mac(tag, assets, nieuw)
+              : _windows(tag, assets, nieuw);
       if (uitgave == null) return null;
 
       if (!await _isNieuwerDanHier(uitgave)) return null;
@@ -312,7 +363,7 @@ class Updater {
     }
   }
 
-  Uitgave? _android(String tag, List<dynamic> assets) {
+  Uitgave? _android(String tag, List<dynamic> assets, List<String> nieuw) {
     final nummer = buildnummerUit(tag);
     if (nummer == null) return null;
     final asset = apkUit(assets);
@@ -323,10 +374,11 @@ class Updater {
       buildnummer: nummer,
       apk: Uri.parse(url),
       bytes: (asset!['size'] as num?)?.toInt() ?? 0,
+      nieuw: nieuw,
     );
   }
 
-  Uitgave? _windows(String tag, List<dynamic> assets) {
+  Uitgave? _windows(String tag, List<dynamic> assets, List<String> nieuw) {
     final asset = installerUit(assets);
     final url = asset?['browser_download_url'] as String?;
     if (url == null || url.isEmpty) return null;
@@ -338,6 +390,7 @@ class Updater {
       buildnummer: 0,
       apk: Uri.parse(url),
       bytes: (asset!['size'] as num?)?.toInt() ?? 0,
+      nieuw: nieuw,
     );
   }
 
@@ -347,7 +400,7 @@ class Updater {
   /// per release omhoog gaat. `CFBundleVersion` telt wel mee in het pakket, maar dat getal komt uit
   /// het runnummer van de bouwstraat en zegt niets over oud of nieuw ten opzichte van een zip die
   /// je met de hand hebt uitgepakt.
-  Uitgave? _mac(String tag, List<dynamic> assets) {
+  Uitgave? _mac(String tag, List<dynamic> assets, List<String> nieuw) {
     final asset = macZipUit(assets);
     final url = asset?['browser_download_url'] as String?;
     if (url == null || url.isEmpty) return null;
@@ -356,6 +409,7 @@ class Updater {
       buildnummer: 0,
       apk: Uri.parse(url),
       bytes: (asset!['size'] as num?)?.toInt() ?? 0,
+      nieuw: nieuw,
     );
   }
 
@@ -572,17 +626,46 @@ Future<void> toonUpdate(BuildContext context, Uitgave u, {Updater updater = cons
     builder: (d) => AlertDialog(
       backgroundColor: kPaneel,
       title: const Text('Nieuwe versie'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('${u.naam} staat klaar.'),
-          const SizedBox(height: 8),
-          Text(
-            u.grootte.isEmpty ? watErGebeurt() : 'Hij is ${u.grootte} groot. ${watErGebeurt()}',
-            style: const TextStyle(color: Color(0xFF8A90A6), fontSize: 12.5),
+      // Meebewegend en scrollbaar: er staan nu regels in die je niet vooraf kunt afmeten, en een
+      // venster dat te hoog wordt voor een telefoon toont zijn knoppen niet meer.
+      content: SizedBox(
+        width: 340,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('${u.naam} staat klaar.'),
+              // WAT ERIN ZIT, en niet alleen welk nummer het is. Er stond een versienummer en verder
+              // niets, dus je moest maar aannemen dat het de moeite was. Deze regels komen uit de
+              // release zelf — zie [watIsNieuw] — en zijn de onderwerpsregels van wat er gedaan is.
+              if (u.nieuw.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text('Wat er nieuw is',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                const SizedBox(height: 4),
+                for (final regel in u.nieuw)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('• ', style: TextStyle(fontSize: 13, height: 1.35)),
+                        Expanded(
+                          child: Text(regel, style: const TextStyle(fontSize: 13, height: 1.35)),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+              const SizedBox(height: 12),
+              Text(
+                u.grootte.isEmpty ? watErGebeurt() : 'Hij is ${u.grootte} groot. ${watErGebeurt()}',
+                style: const TextStyle(color: Color(0xFF8A90A6), fontSize: 12.5),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
       actions: [
         // "Overslaan" is niet hetzelfde als "Later": deze versie wordt niet meer aangeboden, de

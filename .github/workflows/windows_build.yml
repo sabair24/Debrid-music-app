@@ -239,15 +239,52 @@ jobs:
           path: desktop/installer_output/*.exe
           retention-days: 30
 
+      # Dezelfde lijst als de APK krijgt, om dezelfde reden: het updatevenster zei alleen welk
+      # nummer er klaarstond en niet wat erin zat. Het kopje "## Wat er nieuw is" is een AFSPRAAK
+      # met de app — `watIsNieuw` in updater.dart leest precies dat blok — dus die regel moet
+      # letterlijk zo blijven.
+      - name: Wat er in deze uitgave zit
+        if: startsWith(github.ref, 'refs/tags/win-v')
+        shell: bash
+        run: |
+          set -uo pipefail
+          git fetch --unshallow --tags --quiet 2>/dev/null || git fetch --tags --quiet 2>/dev/null || true
+          DEZE="${GITHUB_REF#refs/tags/}"
+          VORIGE=$(git tag -l 'win-v*' --sort=-v:refname | grep -v "^${DEZE}$" | head -1 || true)
+          if [ -z "$VORIGE" ]; then
+            REGELS=""
+          else
+            REGELS=$(git log --no-merges --format='%s' "${VORIGE}..${DEZE}" \
+              | sed 's/ (#[0-9]*)$//' \
+              | grep -v '^Uitgeven:' \
+              | grep -v '^Merge ' \
+              | head -8 || true)
+          fi
+          {
+            echo "WAT_NIEUW<<EOF_WAT_NIEUW"
+            if [ -n "$REGELS" ]; then
+              echo "## Wat er nieuw is"
+              echo
+              echo "$REGELS" | sed 's/^/- /'
+            fi
+            echo "EOF_WAT_NIEUW"
+          } >> "$GITHUB_ENV"
+          echo "$REGELS"
+
       - name: GitHub Release (on win-v tag)
         if: startsWith(github.ref, 'refs/tags/win-v')
         uses: softprops/action-gh-release@v2
         with:
           files: desktop/installer_output/*.exe
           name: DebridMusic ${{ steps.version.outputs.VERSION }} (Windows)
+          # Het blok "## Wat er nieuw is" staat ACHTERAAN, en dat is geen opmaak maar een eis:
+          # `watIsNieuw` in updater.dart leest tot het volgende kopje of tot het eind, dus alles
+          # wat erna komt zou als wijziging in het updatevenster belanden.
           body: |
             ## DebridMusic v${{ steps.version.outputs.VERSION }} — native Windows app
             Download and run the Setup.exe. Requires Windows 10/11 (64-bit).
+
+            ${{ env.WAT_NIEUW }}
           draft: false
           prerelease: false
         env:

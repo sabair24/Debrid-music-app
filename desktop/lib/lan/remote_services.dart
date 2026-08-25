@@ -160,9 +160,15 @@ class RemoteSoulseekService extends SoulseekService {
   @override
   Duration? get blockedFor => null;
 
+  /// [gebruikteVraag] meldt hier altijd de vraag zoals hij gesteld is: de trappenladder van
+  /// [zoekLadder] wordt aan de PC-kant afgelopen, en welke trede het geworden is komt niet over de
+  /// lijn terug. Liever niets melden dan iets melden dat niet klopt — het scherm zegt dan gewoon
+  /// niets over een ruimere zoekopdracht.
   @override
   Future<List<SoulseekFile>> search(String query,
-      {void Function(List<SoulseekFile>)? onPartial}) async {
+      {void Function(List<SoulseekFile>)? onPartial,
+      void Function(String)? gebruikteVraag}) async {
+    gebruikteVraag?.call(query.trim().replaceAll(RegExp(r'\s+'), ' '));
     final j = await _rpc.get('/api/soulseek/search', query: {'q': query});
     final files = <SoulseekFile>[];
     for (final f in (j['files'] as List? ?? const [])) {
