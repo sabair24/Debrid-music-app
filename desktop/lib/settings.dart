@@ -38,6 +38,22 @@ class AppSettings extends ChangeNotifier {
   /// wordt in plaats van dat de app zelf iets verzint.
   String rutrackerUa = '';
 
+  /// Het adres van je eigen Torznab-dienst (Jackett of Prowlarr), zonder pad.
+  ///
+  /// **Waarom dit erbij hoort.** De bronnen in deze app staan vast in de code. Valt er een om — en
+  /// dat gebeurt met trackers om de paar maanden — dan is er een nieuwe bouw nodig om hem te
+  /// vervangen. Dat is de verkeerde volgorde: jij merkt het, en jij moet wachten.
+  ///
+  /// Torznab is de standaard die Jackett en Prowlarr spreken. Die draaien op je pc, jij zet daar de
+  /// indexers in die op dát moment werken, en de app praat met één adres. Valt er een site om, dan
+  /// vervang je hem daar — zonder mij.
+  ///
+  /// Leeg = uit. Dan verandert er niets aan wat de app al deed.
+  String torznabUrl = '';
+
+  /// De API-sleutel van die dienst. Staat bij Jackett rechtsboven op zijn eigen pagina.
+  String torznabKey = '';
+
   /// Wie de torrent binnenhaalt: `auto`, `torbox` of `lokaal`.
   ///
   /// **Waarom deze keuze bestaat.** TorBox haalt de torrent aan zijn kant op, dus jouw IP komt nooit
@@ -225,6 +241,8 @@ class AppSettings extends ChangeNotifier {
         rutrackerPass = (m['rutracker_pass'] ?? '') as String;
         rutrackerCookie = (m['rutracker_cookie'] ?? '') as String;
         rutrackerUa = (m['rutracker_ua'] ?? '') as String;
+        torznabUrl = (m['torznab_url'] ?? '') as String;
+        torznabKey = (m['torznab_key'] ?? '') as String;
         torrentMotor = (m['torrent_motor'] ?? 'auto') as String;
         tidalClientId = (m['tidal_client_id'] ?? '') as String;
         tidalClientSecret = (m['tidal_client_secret'] ?? '') as String;
@@ -255,6 +273,8 @@ class AppSettings extends ChangeNotifier {
         'rutracker_pass': rutrackerPass,
         'rutracker_cookie': rutrackerCookie,
         'rutracker_ua': rutrackerUa,
+        'torznab_url': torznabUrl,
+        'torznab_key': torznabKey,
         'torrent_motor': torrentMotor,
         'tidal_client_id': tidalClientId,
         'tidal_client_secret': tidalClientSecret,

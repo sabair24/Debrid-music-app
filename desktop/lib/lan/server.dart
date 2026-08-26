@@ -730,6 +730,13 @@ class LanServer {
           'aantal': rt.laatsteAantal,
           'doorZeef': rt.laatsteDoorZeef,
         },
+        // En hoe elke bron het deed. Zonder dit staat op de telefoon één getal en is niet te zien
+        // welke tracker eraan meebetaald heeft — precies waarom "volgens mij is die bron down" hier
+        // niet te bevestigen én niet te weerleggen was.
+        'bronnen': {
+          for (final e in service.aggregator.standen.entries)
+            e.key: {'aantal': e.value.aantal, 'fout': e.value.fout},
+        },
       });
     } catch (e) {
       return _unavailable(req, 'Zoeken mislukte op de pc: $e');

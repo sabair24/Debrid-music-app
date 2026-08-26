@@ -91,6 +91,7 @@ import 'tidal.dart';
 import 'tiddl.dart';
 import 'torbox.dart';
 import 'torbox_stand.dart';
+import 'torznab.dart';
 import 'tv.dart';
 import 'zoekladder.dart';
 import 'zoek_geheugen.dart';
@@ -7658,6 +7659,21 @@ Widget _waaromGeenTorrents(BuildContext context, {required bool leeg}) {
   // er op het toestel stond, en zonder antwoord daarop is een schermafdruk niet te lezen.
   final bouw = gAppBouw.isEmpty ? '' : ' · bouw $gAppBouw';
 
+  // En wat elke ANDERE bron deed. Zonder deze regel staat er één getal op het scherm en is niet te
+  // zien wie eraan meebetaald heeft — waardoor "volgens mij is die tracker down" niet te bevestigen
+  // én niet te weerleggen is. RuTracker heeft hierboven zijn eigen, uitgebreidere zin.
+  const namen = {
+    'apibay': 'PirateBay',
+    'knaben': 'Knaben',
+    'bitsearch': 'BitSearch',
+    'torznab': 'Jouw indexers',
+  };
+  final standen = context.read<OnlineService>().aggregator.standen;
+  final bronnen = [
+    for (final e in namen.entries)
+      if (standen[e.key] case final s?) s.zin(e.value),
+  ];
+
   return Padding(
     padding: const EdgeInsets.fromLTRB(24, 2, 24, 6),
     child: Column(
@@ -7674,6 +7690,11 @@ Widget _waaromGeenTorrents(BuildContext context, {required bool leeg}) {
           style: TextStyle(
               color: reden.isEmpty ? _muted : const Color(0xFFE8913A), fontSize: 11.5),
         ),
+        if (bronnen.isNotEmpty)
+          Text(
+            bronnen.join('  ·  '),
+            style: const TextStyle(color: _muted, fontSize: 11.5),
+          ),
       ],
     ),
   );
@@ -16514,7 +16535,7 @@ class SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
-  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _rtUser, _rtPass, _slskPort, _acoustid, _tidalId, _tidalSecret;
+  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _rtUser, _rtPass, _slskPort, _acoustid, _tidalId, _tidalSecret, _torznabUrl, _torznabKey;
 
   @override
   void initState() {
@@ -16531,10 +16552,52 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _tidalSecret = TextEditingController(text: s.tidalClientSecret);
     _rtUser = TextEditingController(text: s.rutrackerUser);
     _rtPass = TextEditingController(text: s.rutrackerPass);
+    _torznabUrl = TextEditingController(text: s.torznabUrl);
+    _torznabKey = TextEditingController(text: s.torznabKey);
   }
 
   bool _testing = false;
   bool _rtBusy = false;
+
+  /// De uitkomst van "Verbinding proberen" bij de eigen indexers.
+  ///
+  /// Meteen proberen in plaats van bij de eerstvolgende zoekopdracht: een adres dat je bewaart
+  /// zonder het te proberen is een instelling waarvan je pas veel later hoort dat hij niets deed.
+  bool _torznabBusy = false;
+  bool _torznabOk = false;
+  String _torznabUit = '';
+
+  /// Het adres en de sleutel uit de VELDEN proberen, niet uit de bewaarde instellingen.
+  ///
+  /// Anders moet je eerst opslaan om te kunnen proberen, en dan staat er een adres bewaard waarvan
+  /// je nog niet weet of het klopt.
+  Future<void> _proefTorznab() async {
+    final echte = context.read<AppSettings>();
+    final proef = AppSettings()
+      ..torznabUrl = _torznabUrl.text.trim()
+      ..torznabKey = _torznabKey.text.trim();
+    setState(() {
+      _torznabBusy = true;
+      _torznabUit = '';
+    });
+    try {
+      final uit = await TorznabSource(proef).proef();
+      if (!mounted) return;
+      setState(() {
+        _torznabOk = uit.ok;
+        _torznabUit = uit.reden;
+      });
+      // Klopt het, dan meteen bewaren: dan doet hij mee aan je volgende zoekopdracht zonder dat je
+      // eerst nog op Opslaan moet denken.
+      if (uit.ok) {
+        echte.torznabUrl = proef.torznabUrl;
+        echte.torznabKey = proef.torznabKey;
+        await echte.save();
+      }
+    } finally {
+      if (mounted) setState(() => _torznabBusy = false);
+    }
+  }
 
   /// De echtheidsveegbeurt: draait hij, hoe ver, en wat kwam eruit.
   bool _echtBusy = false;
@@ -17150,6 +17213,45 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ],
                       ),
                     ),
+                    // **Je eigen indexers.** Zie `torznab.dart` voor waarom dit erbij hoort: de
+                    // bronnen in deze app staan vast in de code, en een tracker die omvalt kost
+                    // anders een nieuwe bouw. Met Jackett of Prowlarr op je pc bepaal jij de lijst.
+                    const SizedBox(height: 16),
+                    const Text('Eigen indexers (Jackett of Prowlarr)', style: kOpschrift),
+                    const Padding(
+                      padding: EdgeInsets.only(top: 4, bottom: 6),
+                      child: Text(
+                          'Draait op je pc en spreekt Torznab. Laat je dit leeg, dan verandert er '
+                          'niets: de app gebruikt de bronnen die er al in zitten.',
+                          style: TextStyle(color: _muted, fontSize: 11.5)),
+                    ),
+                    _field('Adres, bijvoorbeeld http://127.0.0.1:9117', _torznabUrl),
+                    const SizedBox(height: 8),
+                    _field('API-sleutel', _torznabKey, obscure: true),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6, bottom: 4),
+                      child: Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 10,
+                        runSpacing: 6,
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: _torznabBusy ? null : _proefTorznab,
+                            icon: const Icon(Icons.wifi_tethering_rounded, size: 16),
+                            label: const Text('Verbinding proberen'),
+                          ),
+                          if (_torznabUit.isNotEmpty)
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 340),
+                              child: Text(_torznabUit,
+                                  style: TextStyle(
+                                      color: _torznabOk ? _accent2 : const Color(0xFFE8913A),
+                                      fontSize: 11.5)),
+                            ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
                     _field('Last.fm API-sleutel', _lastfm),
                     const SizedBox(height: 8),
                     // Zonder dit veld was de enige manier om een Client ID in te vullen: het
@@ -17421,6 +17523,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     s.acoustidKey = _acoustid.text.trim();
                     s.tidalClientId = _tidalId.text.trim();
                     s.tidalClientSecret = _tidalSecret.text.trim();
+                    s.torznabUrl = _torznabUrl.text.trim();
+                    s.torznabKey = _torznabKey.text.trim();
                     // Pressing Save here is the deliberate override of the refuse-to-write guard:
                     // these values came from the fields, not from a failed load, so writing them
                     // over a broken file is a repair rather than the loss the guard exists for.
