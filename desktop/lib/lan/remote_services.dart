@@ -96,11 +96,37 @@ class RemoteOnlineService extends OnlineService {
       for (final r in (j['results'] as List? ?? const []))
         if (r is Map<String, dynamic>) SearchResult.fromJson(r),
     ];
+    // De stand van de RuTracker VAN DE PC overnemen. Het zoeken gebeurt daar, dus daar staat ook wat
+    // er misging. Zonder dit las het scherm de RuTracker van dít toestel — die nooit bevraagd wordt —
+    // en dan staat er eeuwig "niet bevraagd" terwijl de echte reden op de pc ligt.
+    final rt = j['rutracker'];
+    if (rt is Map) {
+      rutracker.lastError = (rt['fout'] as String?) ?? '';
+      rutracker.laatsteAantal = (rt['aantal'] as num?)?.toInt() ?? -1;
+      rutracker.laatsteDoorZeef = (rt['doorZeef'] as num?)?.toInt() ?? -1;
+    }
     // The PC streams nothing back mid-search, so the partial callback fires once, with everything.
     // The screens use it to fill the list as results arrive; getting them all at once is a slower
     // first paint, not a broken one.
     onPartial?.call(results);
     return results;
+  }
+
+  /// De RuTracker-aanmelding van dít toestel doorgeven aan de pc.
+  ///
+  /// **Waarom dit nodig is.** Het aanmeldvenster staat op de telefoon; het zoeken en het downloaden
+  /// gebeuren op de pc. Die twee zaten niet aan elkaar vast, dus meldde je je op je telefoon aan
+  /// terwijl de pc geen sessie had en RuTracker niet eens bevroeg. Op het scherm was dat niet te
+  /// onderscheiden van "RuTracker heeft niets".
+  ///
+  /// De pc probeert het koekje meteen; wat eruit komt is de zin die je te lezen krijgt.
+  Future<({bool ok, String reden})> stuurRutrackerSessie(String cookie, String ua) async {
+    try {
+      final j = await _rpc.post('/api/rutracker/sessie', {'cookie': cookie, 'ua': ua});
+      return (ok: j['ok'] == true, reden: (j['reden'] as String?) ?? '');
+    } catch (e) {
+      return (ok: false, reden: 'De pc antwoordde niet: $e');
+    }
   }
 
   @override
