@@ -16,6 +16,7 @@ import 'torbox.dart';
 import 'torznab.dart';
 import 'torrentbestand.dart';
 import 'aria2.dart';
+import 'cue_knippen.dart';
 import 'warm_log.dart';
 import 'werkrij.dart';
 import 'paths.dart';
@@ -2251,18 +2252,32 @@ class DownloadManager extends ChangeNotifier {
           nieuwe.add(job);
           jobs.insert(0, job);
         }
+        // De bladen erbij, zonder eigen regel in de lijst: ze zijn een paar kilobyte groot en het
+        // zou raar staan om "album.cue — klaar" naast je nummers te zien. Zonder deze regel is een
+        // `(image+.cue)` na afloop niet meer op te knippen, want dan ligt het blad er niet.
+        final cues = torrent.files.where((f) => f.isCue).toList();
         notifyListeners();
+        final lopend = <Future<void>>[];
         if (torrent.lokaal) {
           // Eén opdracht voor de hele torrent, niet één per nummer: aria2 kent een torrent aan zijn
           // infohash en zou een tweede aanmelding van dezelfde plaat als dubbel weigeren. De balken
           // per nummer komen uit zijn eigen bestandslijst.
-          _torrentRij.voegToe(() => _downloadLokaal(torrent, files, destDir, nieuwe));
+          lopend.add(_inRij(() => _downloadLokaal(torrent, files, destDir, nieuwe, cues: cues)));
         } else {
           for (var i = 0; i < files.length; i++) {
-            _torrentRij.voegToe(() => _download(torrent.id, files[i], destDir, nieuwe[i]));
+            lopend.add(_inRij(() => _download(torrent.id, files[i], destDir, nieuwe[i])));
+          }
+          for (final c in cues) {
+            // Een eigen taak zonder plek in de lijst: hij mag mislukken zonder dat iemand er iets
+            // van merkt, want dan is er simpelweg niets te knippen.
+            lopend.add(_inRij(() => _download(torrent.id, c, destDir, DownloadJob(c.label))));
           }
         }
         notifyListeners();
+        // Wachten tot ALLES binnen is, en dan pas kijken of dit een image met een cue was. Eerder
+        // kan niet: het blad en het grote bestand komen langs verschillende wegen binnen.
+        await Future.wait(lopend);
+        await _knipImages(destDir, nieuwe);
       } catch (e) {
         prep.status = 'failed';
         notifyListeners();
@@ -2320,7 +2335,8 @@ class DownloadManager extends ChangeNotifier {
   /// gekozen bestanden tegelijk vult, in stukken die zich niets van bestandsgrenzen aantrekken. Wie
   /// dat in dezelfde functie propt krijgt vanzelf een balk die achteruit loopt.
   Future<void> _downloadLokaal(
-      TbTorrent torrent, List<TbFile> files, Directory destDir, List<DownloadJob> jobs) async {
+      TbTorrent torrent, List<TbFile> files, Directory destDir, List<DownloadJob> jobs,
+      {List<TbFile> cues = const []}) async {
     // Een gestopte taak niet opnieuw beschrijven: `cancelJob` heeft daar het laatste woord al
     // gezet ("geannuleerd"), en de lus draait daarna nog minstens één ronde.
     void alle(String status, {String? detail}) {
@@ -2337,8 +2353,11 @@ class DownloadManager extends ChangeNotifier {
       return;
     }
 
+    // De bladen mee in dezelfde zwerm. Ze horen niet bij `files` — daar hangt per element een balk
+    // aan — maar wel bij wat aria2 moet ophalen, anders staat er na afloop geen cue naast het
+    // albumbestand en valt er niets te knippen.
     final gid = await motor.voegTorrentToe(torrent.lokaleTorrent!,
-        map: destDir.path, kies: files.map((f) => f.id).toList());
+        map: destDir.path, kies: [...files.map((f) => f.id), ...cues.map((f) => f.id)]);
     if (gid == null) {
       alle('failed', detail: motor.laatsteFout ?? 'torrent geweigerd');
       return;
@@ -2403,16 +2422,17 @@ class DownloadManager extends ChangeNotifier {
           jobs[i].detail = 'aria2 meldde klaar, maar het bestand staat er niet';
           continue;
         }
-        final doel = File('${destDir.path}${Platform.pathSeparator}${_sanitize(files[i].label)}');
-        try {
-          if (bron.path != doel.path) await bron.rename(doel.path);
-        } catch (_) {
-          // Over een schijfgrens heen kan `rename` niet; dan maar kopiëren en de bron opruimen.
-          await bron.copy(doel.path);
-          await bron.delete().catchError((_) => bron);
-        }
+        await _verhuisNaar(bron, destDir, files[i].label);
         jobs[i].progress = 1;
         jobs[i].status = 'done';
+      }
+      // En de bladen, vóór het opruimen: `ruimOpNaTorrent` gooit de map weg die aria2 aanmaakte, en
+      // een cue die daar blijft staan verdwijnt mét die map — waarna er niets meer te knippen valt.
+      for (final c in cues) {
+        final b = s?.bestand(c.id);
+        if (b == null) continue;
+        final bron = File(b.pad);
+        if (await bron.exists()) await _verhuisNaar(bron, destDir, c.label);
       }
       notifyListeners();
       await ruimOpNaTorrent(destDir, s);
@@ -2480,6 +2500,90 @@ class DownloadManager extends ChangeNotifier {
     job.status = 'done';
     notifyListeners();
     await onLibraryChanged();
+  }
+
+  /// Eén bestand uit aria2's eigen map naar de doelmap halen.
+  ///
+  /// De bibliotheek leest de doelmap; wat in de submap van aria2 blijft staan gaat straks mee in
+  /// [ruimOpNaTorrent] en is dan weg.
+  Future<void> _verhuisNaar(File bron, Directory destDir, String naam) async {
+    final doel = File('${destDir.path}${Platform.pathSeparator}${_sanitize(naam)}');
+    if (bron.path == doel.path) return;
+    try {
+      await bron.rename(doel.path);
+    } catch (_) {
+      // Over een schijfgrens heen kan `rename` niet; dan maar kopiëren en de bron opruimen.
+      await bron.copy(doel.path);
+      await bron.delete().catchError((_) => bron);
+    }
+  }
+
+  /// Werk in de torrentrij zetten en een Future teruggeven die afloopt als het klaar is.
+  ///
+  /// [Werkrij.voegToe] geeft niets terug — met opzet, want de rij hoort niet te weten wie er wacht.
+  /// Maar het knippen moet wél weten wanneer álles binnen is, en de rij laat er meerdere tegelijk
+  /// lopen, dus "de laatste taak" bestaat niet.
+  Future<void> _inRij(Future<void> Function() werk) {
+    final klaar = Completer<void>();
+    _torrentRij.voegToe(() async {
+      try {
+        await werk();
+      } finally {
+        if (!klaar.isCompleted) klaar.complete();
+      }
+    });
+    return klaar.future;
+  }
+
+  /// Is dit één groot albumbestand met een cue? Dan opknippen tot losse nummers.
+  ///
+  /// Zie `cue_knippen.dart` voor het waarom. Hier staat alleen wat de gebruiker ervan ziet, en dat
+  /// is het punt: dit duurt op een plaat van een gigabyte een minuut of twee, en zonder een regel
+  /// die dat zegt lijkt de app in die tijd te hangen.
+  Future<void> _knipImages(Directory destDir, List<DownloadJob> gedaan) async {
+    // Alles mislukt of weggetikt? Dan is er niets binnengekomen om te knippen.
+    if (gedaan.isNotEmpty && gedaan.every((j) => j.cancelled || j.status == 'failed')) return;
+
+    final knipper = Knipper();
+    final job = DownloadJob('Nummers uit het albumbestand halen')..status = 'downloading';
+    var getoond = false;
+
+    try {
+      final uit = await knipper.knipMap(destDir, onVoortgang: (n, totaal) {
+        if (!getoond) {
+          // Pas tonen zodra er écht geknipt wordt: bij een gewone plaat gebeurt hier niets, en dan
+          // hoort er ook geen regel te verschijnen die meteen weer weggaat.
+          jobs.insert(0, job);
+          getoond = true;
+        }
+        job.progress = totaal == 0 ? 0 : n / totaal;
+        job.detail = 'nummer $n van $totaal';
+        notifyListeners();
+      });
+      if (uit.melding.isEmpty) {
+        if (getoond) jobs.remove(job);
+        notifyListeners();
+        return;
+      }
+      // Een melding is er ook als het NIET gelukt is — geen ffmpeg, een blad dat niet klopte. Die
+      // hoort op het scherm te komen: een plaat die stilletjes één blok blijft is precies het soort
+      // stilte waar deze app genoeg van heeft gehad.
+      if (!getoond) {
+        jobs.insert(0, job);
+        getoond = true;
+      }
+      job.progress = 1;
+      job.status = uit.iets ? 'done' : 'failed';
+      job.detail = uit.melding;
+      notifyListeners();
+      if (uit.iets) await onLibraryChanged();
+    } catch (e) {
+      if (getoond) {
+        job.status = 'failed';
+        job.detail = 'knippen mislukt: $e';
+        notifyListeners();
+      }
+    }
   }
 
   String _sanitize(String s) => s.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
