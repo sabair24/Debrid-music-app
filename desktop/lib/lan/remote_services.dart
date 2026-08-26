@@ -108,7 +108,14 @@ class RemoteOnlineService extends OnlineService {
       {void Function(double, String)? onProgress}) async {
     // The PC reports nothing while it waits for TorBox to cache the torrent, so the one progress
     // call here is what stops the dialog opening at a frozen 0%.
-    onProgress?.call(0, 'De pc haalt de tracklijst op…');
+    //
+    // Eerlijk over wat dit is: één regel, en daarna drie minuten stilte. De pc kent de stand van
+    // TorBox wél — hij zit ernaar te kijken — maar er is nog geen weg om die hierheen te sturen.
+    // Zeg dus wat er gebeurt in plaats van te doen alsof het zo klaar is.
+    onProgress?.call(
+        0,
+        'De pc haalt de tracklijst op bij TorBox. Staat de torrent daar nog niet klaar, '
+        'dan moet de pc hem eerst zelf binnenhalen en kan dit even duren.');
     final j = await _rpc.post('/api/online/tracklist', r.toJson(),
         timeout: const Duration(minutes: 3));
     final files = [

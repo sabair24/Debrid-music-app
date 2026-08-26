@@ -90,6 +90,7 @@ import 'soulseek.dart';
 import 'tidal.dart';
 import 'tiddl.dart';
 import 'torbox.dart';
+import 'torbox_stand.dart';
 import 'tv.dart';
 import 'zoekladder.dart';
 import 'zoek_geheugen.dart';
@@ -13210,6 +13211,12 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
   List<TbFile> _files = [];
   double _prep = 0;
 
+  /// Wat TorBox op dit moment doet, in zijn eigen woorden. Zie `torbox_stand.dart`.
+  ///
+  /// Deze zin kwam altijd al binnen en werd weggegooid; op het scherm stond in plaats daarvan een
+  /// vaste regel over "weinig seeders", ook bij een torrent met er veertig.
+  String _stand = '';
+
   @override
   void initState() {
     super.initState();
@@ -13219,7 +13226,12 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
   Future<void> _load() async {
     try {
       final (t, f) = await context.read<OnlineService>().tracklist(widget.result, onProgress: (p, s) {
-        if (mounted) setState(() => _prep = p);
+        if (mounted) {
+          setState(() {
+            _prep = p;
+            _stand = s;
+          });
+        }
       });
       if (!mounted) return;
       setState(() {
@@ -13282,9 +13294,8 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
                     const CircularProgressIndicator(color: _accent),
                     const SizedBox(height: 16),
                     Text(
-                        _prep > 0
-                            ? 'TorBox haalt de torrent op… ${(_prep * 100).round()}%'
-                            : 'Bron voorbereiden bij TorBox…',
+                        _stand.isNotEmpty ? _stand : 'Bron voorbereiden bij TorBox…',
+                        textAlign: TextAlign.center,
                         style: const TextStyle(color: _muted, fontSize: 12.5)),
                     if (_prep > 0) ...[
                       const SizedBox(height: 10),
@@ -13294,10 +13305,14 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
                             value: _prep, minHeight: 4, backgroundColor: _panel2, color: _accent),
                       ),
                     ],
-                    if (!widget.result.cached) ...const [
-                      SizedBox(height: 10),
-                      Text('Niet-gecachte torrents met weinig seeders kunnen even duren.',
-                          textAlign: TextAlign.center, style: TextStyle(color: _muted, fontSize: 11)),
+                    // Waaróm je hierop wacht. Hier stond "niet-gecachte torrents met weinig seeders
+                    // kunnen even duren" — een vaste zin, ook bij veertig seeders. Nu staat er wat
+                    // er werkelijk gebeurt, en geen woord over een aantal dat niet gemeten is.
+                    if (torboxWaarom(gecacht: widget.result.cached).isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Text(torboxWaarom(gecacht: widget.result.cached),
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: _muted, fontSize: 11)),
                     ],
                   ]),
                 ),
