@@ -308,14 +308,35 @@ void _logStapel(WarmLog log, StackTrace? stapel) {
   }
 }
 
-/// Het buildnummer van déze app, zodra het bekend is. Leeg tot [main] het opgehaald heeft.
+/// Welke uitgave van déze app hier draait, zodra het bekend is. Leeg tot [main] het opgehaald heeft.
 ///
 /// **Waarom dit een globale is.** Bij elke terugkoppeling over een schermafdruk was de eerste vraag
 /// welke bouw er op het toestel stond, en dat is van buiten niet te zien. Zonder antwoord daarop is
 /// "ik zie de melding niet" niet te onderscheiden van "die melding zit nog niet in jouw bouw", en
 /// dan gaat er een hele ronde verloren aan de verkeerde reparatie. Het staat daarom achter de
 /// diagnoseregel bij het zoeken, waar het iets oplost in plaats van te versieren.
+///
+/// **Het versienummer hoort erbij, en dat is een reparatie.** Hier stond alleen het buildnummer, en
+/// dat is precies het getal dat op Windows niets zegt: daar komt het uit `pubspec.yaml` en staat het
+/// sinds april stil op 343, terwijl de Android-bouw wél meeloopt. Op 26-08-2026 stond er op een
+/// schermafdruk van de pc "bouw 343" onder een melding die pas dagen later gebouwd was — het getal
+/// dat de ronde moest besparen, kostte er juist een. Het versienummer komt op alle platformen uit de
+/// tag en is dus overal waar.
 String gAppBouw = '';
+
+/// De versieregel zoals hij op het scherm komt: `3.9.220 (11408)`, of alleen wat er is.
+///
+/// Zuiver, want de reden dat dit misging valt hier na te meten en nergens anders: op Windows is het
+/// buildnummer een vast getal uit `pubspec.yaml` en op Android loopt het mee. Alleen het
+/// versienummer is overal waar, dus dat gaat voorop.
+@visibleForTesting
+String versieRegel(String versie, String bouw) {
+  final v = versie.trim();
+  final b = bouw.trim();
+  if (v.isEmpty) return b;
+  if (b.isEmpty || b == v) return v;
+  return '$v ($b)';
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -337,7 +358,8 @@ Future<void> main() async {
   startHartslag(appDir);
   // Het eigen buildnummer, één keer. Zie [gAppBouw] voor waarom dat op het scherm terechtkomt.
   try {
-    gAppBouw = (await PackageInfo.fromPlatform()).buildNumber;
+    final pakket = await PackageInfo.fromPlatform();
+    gAppBouw = versieRegel(pakket.version, pakket.buildNumber);
   } catch (_) {/* geen pakketgegevens is geen reden om niet te starten */}
   // RuTracker mag zijn pagina's door het browservenster halen. Zie rutracker_venster.dart: op een
   // telefoon staat geen curl, en de gewone HTTP-client wordt door Cloudflare met 403 tegengehouden
@@ -7655,9 +7677,10 @@ Widget _waaromGeenTorrents(BuildContext context, {required bool leeg}) {
     rutracker = 'RuTracker: $aantal treffers.';
   }
 
-  // Het buildnummer erbij. Niet als sieraad: bij elke terugkoppeling was de eerste vraag welke bouw
-  // er op het toestel stond, en zonder antwoord daarop is een schermafdruk niet te lezen.
-  final bouw = gAppBouw.isEmpty ? '' : ' · bouw $gAppBouw';
+  // De versie erbij. Niet als sieraad: bij elke terugkoppeling was de eerste vraag welke uitgave er
+  // op het toestel stond, en zonder antwoord daarop is een schermafdruk niet te lezen. Zie
+  // [gAppBouw] voor waarom hier de VERSIE staat en niet alleen het buildnummer.
+  final bouw = gAppBouw.isEmpty ? '' : ' · versie $gAppBouw';
 
   // En wat elke ANDERE bron deed. Zonder deze regel staat er één getal op het scherm en is niet te
   // zien wie eraan meebetaald heeft — waardoor "volgens mij is die tracker down" niet te bevestigen
