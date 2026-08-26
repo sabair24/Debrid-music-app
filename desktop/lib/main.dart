@@ -81,6 +81,7 @@ import 'quality.dart';
 import 'recommend.dart';
 import 'release_format.dart';
 import 'rutracker.dart';
+import 'rutracker_login.dart';
 import 'settings.dart';
 import 'slsk_groepen.dart';
 import 'speakers.dart';
@@ -16369,6 +16370,55 @@ class _SettingsDialogState extends State<SettingsDialog> {
     if (mounted) setState(() => _testing = false);
   }
 
+  /// Aanmelden bij RuTracker in een echt browservenster — zie `rutracker_login.dart`.
+  ///
+  /// **Waarom dit de eerste weg is en niet de tweede.** Het koekje, de Cloudflare-doorgang en het
+  /// browserkenmerk komen hier uit één venster op één IP-adres, en die drie horen onlosmakelijk bij
+  /// elkaar: `cf_clearance` zit vast aan het IP-adres én aan de User-Agent die hem gekregen heeft.
+  /// Bij plakken moet je die met de hand laten kloppen, en klopt er één niet, dan krijg je een 403
+  /// zonder dat iets uitlegt waarom.
+  ///
+  /// Meteen naneuzen met `verify()`: een sessie die je bewaart zonder hem te proberen is een
+  /// instelling waarvan je pas bij de volgende zoekopdracht hoort dat hij niets deed.
+  Future<void> _meldAanInVenster() async {
+    final settings = context.read<AppSettings>();
+    final rt = context.read<OnlineService>().rutracker;
+    final sessie = await meldAanBijRutracker(context);
+    if (!mounted) return;
+    if (sessie == null) {
+      setState(() => _conn['rutracker'] =
+          const ConnResult(ConnState.fail, 'Aanmelden afgebroken — er kwam niets binnen'));
+      return;
+    }
+    if (!sessie.heeftSessie) {
+      // Wél door Cloudflare, niet ingelogd. Dat verschil hoort gezegd te worden, anders zoek je het
+      // in je wachtwoord terwijl je gewoon het venster te vroeg dichtdeed.
+      setState(() => _conn['rutracker'] = ConnResult(
+          ConnState.fail,
+          sessie.heeftClearance
+              ? 'Cloudflare doorlopen, maar nog niet ingelogd — log in het venster echt in'
+              : 'Geen koekje opgehaald'));
+      return;
+    }
+    settings.rutrackerCookie = sessie.cookie;
+    if (sessie.ua.isNotEmpty) settings.rutrackerUa = sessie.ua;
+    await settings.save();
+    if (!mounted) return;
+    setState(() {
+      _rtBusy = true;
+      _conn['rutracker'] = const ConnResult(ConnState.checking);
+    });
+    try {
+      final werkt = await rt.verify();
+      if (!mounted) return;
+      setState(() => _conn['rutracker'] = werkt
+          ? const ConnResult(ConnState.ok, 'Aangemeld — RuTracker antwoordt')
+          : const ConnResult(ConnState.fail, 'Koekje opgehaald, maar RuTracker weigert het nog'));
+    } finally {
+      if (mounted) setState(() => _rtBusy = false);
+    }
+  }
+
   /// Log in to RuTracker (persisting the typed creds first), solving a CAPTCHA if asked.
   Future<void> _rtLogin() async {
     final settings = context.read<AppSettings>();
@@ -16636,19 +16686,35 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // koekje.
                     Padding(
                       padding: const EdgeInsets.only(top: 4, bottom: 4),
-                      child: Row(
+                      // Gevouwen: twee knoppen plus een zin passen op een telefoon niet naast
+                      // elkaar, en een `Row` die niet past geeft de gele overloopbalk.
+                      child: Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 10,
+                        runSpacing: 6,
                         children: [
+                          // De eerste weg, want dit is de enige die zichzelf kan vernieuwen: het
+                          // koekje en het browserkenmerk komen uit hetzelfde venster op hetzelfde
+                          // IP-adres, en die drie horen bij elkaar. Zie rutracker_login.dart.
+                          if (rutrackerVensterKan)
+                            FilledButton.icon(
+                              onPressed: _meldAanInVenster,
+                              icon: const Icon(Icons.lock_open_rounded, size: 16),
+                              label: const Text('Aanmelden…'),
+                            ),
+                          // Blijft staan, en niet als restant: waar geen venster is (een Linux-bouw,
+                          // of een platform waar de koekjeslade ontbreekt) is dit de enige weg.
                           OutlinedButton.icon(
                             onPressed: () => showDialog<void>(
                                 context: context, builder: (_) => const RuTrackerKoekjeDialoog()),
                             icon: const Icon(Icons.cookie_outlined, size: 16),
                             label: const Text('Koekje uit browser…'),
                           ),
-                          const SizedBox(width: 10),
-                          Expanded(
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 320),
                             child: Text(
                                 context.watch<AppSettings>().rutrackerCookie.contains('cf_clearance')
-                                    ? 'Koekje uit je browser staat klaar.'
+                                    ? 'Aangemeld — de sessie staat klaar.'
                                     : 'RuTracker staat achter Cloudflare; inloggen met alleen naam '
                                         'en wachtwoord lukt niet meer.',
                                 style: const TextStyle(color: _muted, fontSize: 11.5)),

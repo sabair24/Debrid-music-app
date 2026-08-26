@@ -52,6 +52,15 @@ dependencies:
   crypto: ^3.0.5
   # Opens the Tidal sign-in page. Replaces spawning rundll32, which existed only on Windows.
   url_launcher: ^6.3.1
+  # Een ECHT browservenster, alleen voor aanmelden bij RuTracker. Zie rutracker_login.dart voor de
+  # meting: elk verzoek aan rutracker.org strandt in een Cloudflare-uitdaging, ook een kale GET, en
+  # koppen nabootsen hielp niet. Een uitdaging is niet te omzeilen maar wel op te lossen - door een
+  # browser, door jou.
+  #
+  # 6.1.5 en niet 6.2.0-beta: de bouwstraat is geen plek voor een voorproef. De ondergrens is
+  # Flutter 3.24 en de bouwstraat draait 3.41, dus dat past - dezelfde val als bij nsd hierboven.
+  # Android, iOS, macOS en Windows; Linux niet, en dat hoeft hier ook niet.
+  flutter_inappwebview: ^6.1.5
   # UPnP device descriptions, for finding Sonos and the KEF on the network.
   xml: ^6.5.0
   # Bonjour/mDNS, so the Mac, iPad and Shield find this PC without anything being typed in.
