@@ -7658,6 +7658,16 @@ Widget _waaromGeenTorrents(BuildContext context, {required bool leeg}) {
   // er op het toestel stond, en zonder antwoord daarop is een schermafdruk niet te lezen.
   final bouw = gAppBouw.isEmpty ? '' : ' · bouw $gAppBouw';
 
+  // En wat elke ANDERE bron deed. Zonder deze regel staat er één getal op het scherm en is niet te
+  // zien wie eraan meebetaald heeft — waardoor "volgens mij is die tracker down" niet te bevestigen
+  // én niet te weerleggen is. RuTracker heeft hierboven zijn eigen, uitgebreidere zin.
+  const namen = {'apibay': 'PirateBay', 'knaben': 'Knaben', 'bitsearch': 'BitSearch'};
+  final standen = context.read<OnlineService>().aggregator.standen;
+  final bronnen = [
+    for (final e in namen.entries)
+      if (standen[e.key] case final s?) s.zin(e.value),
+  ];
+
   return Padding(
     padding: const EdgeInsets.fromLTRB(24, 2, 24, 6),
     child: Column(
@@ -7674,6 +7684,11 @@ Widget _waaromGeenTorrents(BuildContext context, {required bool leeg}) {
           style: TextStyle(
               color: reden.isEmpty ? _muted : const Color(0xFFE8913A), fontSize: 11.5),
         ),
+        if (bronnen.isNotEmpty)
+          Text(
+            bronnen.join('  ·  '),
+            style: const TextStyle(color: _muted, fontSize: 11.5),
+          ),
       ],
     ),
   );

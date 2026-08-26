@@ -20,6 +20,7 @@ import 'package:http/http.dart' as http;
 import '../cloud/queue.dart';
 import '../online.dart';
 import '../organize.dart';
+import '../search.dart';
 import '../soulseek.dart';
 import '../torbox.dart';
 import 'client.dart';
@@ -104,6 +105,18 @@ class RemoteOnlineService extends OnlineService {
       rutracker.lastError = (rt['fout'] as String?) ?? '';
       rutracker.laatsteAantal = (rt['aantal'] as num?)?.toInt() ?? -1;
       rutracker.laatsteDoorZeef = (rt['doorZeef'] as num?)?.toInt() ?? -1;
+    }
+    // Idem voor de andere bronnen: het zoeken gebeurde op de pc, dus daar staat wie er meedeed.
+    final bronnen = j['bronnen'];
+    if (bronnen is Map) {
+      aggregator.standen.clear();
+      bronnen.forEach((sleutel, waarde) {
+        if (sleutel is! String || waarde is! Map) return;
+        aggregator.standen[sleutel] = BronStand(
+          aantal: (waarde['aantal'] as num?)?.toInt() ?? -1,
+          fout: (waarde['fout'] as String?) ?? '',
+        );
+      });
     }
     // The PC streams nothing back mid-search, so the partial callback fires once, with everything.
     // The screens use it to fill the list as results arrive; getting them all at once is a slower

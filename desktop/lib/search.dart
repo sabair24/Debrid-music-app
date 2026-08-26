@@ -13,6 +13,31 @@ abstract class SearchSource {
   Future<List<SearchResult>> search(String query);
 }
 
+/// Wat één bron bij de laatste zoekopdracht deed.
+///
+/// **Waarom dit bestaat.** De zoekverdeler hieronder zwijgt over elke bron die niets oplevert —
+/// `catch (_) {}` en klaar. Op het scherm staat dan één getal, en welke van de vier daaraan meebetaald
+/// heeft is niet te zien. Gemeld als "volgens mij is BitSearch down", terwijl op diezelfde afdruk
+/// alle zichtbare treffers júist van BitSearch kwamen.
+///
+/// Zo'n vermoeden is niet te weerleggen zolang het scherm er niets over zegt, en een tracker die
+/// écht wegvalt is op dezelfde manier onzichtbaar. Vandaar dat elke bron nu zelf vertelt hoe het
+/// ging.
+class BronStand {
+  const BronStand({required this.aantal, this.fout = ''});
+
+  /// Hoeveel treffers deze bron bijdroeg, ná de zeef. -1 betekent: het is niet gelukt.
+  final int aantal;
+
+  /// Waarom het niet lukte. Leeg als er niets misging.
+  final String fout;
+
+  bool get gelukt => fout.isEmpty;
+
+  /// Kort genoeg voor één regel op een telefoon.
+  String zin(String naam) => fout.isEmpty ? '$naam $aantal' : '$naam — $fout';
+}
+
 /// Pirate Bay via apibay.org (keyless).
 class ApibaySource implements SearchSource {
   @override
@@ -209,6 +234,9 @@ class SearchAggregator {
   final List<SearchSource> sources;
   SearchAggregator(this.sources);
 
+  /// Hoe elke bron het bij de laatste zoekopdracht deed. Zie [BronStand].
+  final Map<String, BronStand> standen = {};
+
   /// [onPartial] fires each time a source finishes, so fast indexers (apibay/BitSearch)
   /// show immediately instead of waiting for the slowest (RuTracker's topic lookups).
   Future<List<SearchResult>> search(String query, {void Function(List<SearchResult>)? onPartial}) async {
@@ -216,16 +244,36 @@ class SearchAggregator {
     List<SearchResult> snapshot() =>
         byHash.values.toList()..sort((a, b) => b.seeders.compareTo(a.seeders));
 
+    standen.clear();
     await Future.wait(sources.map((s) async {
       try {
         final list = await s.search(query).timeout(const Duration(seconds: 12));
-        for (final r in list.where((r) => r.hash.isNotEmpty && !isRommel(r.name))) {
+        final door = list.where((r) => r.hash.isNotEmpty && !isRommel(r.name)).toList();
+        for (final r in door) {
           final k = r.hash.toLowerCase();
           final cur = byHash[k];
           if (cur == null || r.seeders > cur.seeders) byHash[k] = r;
         }
+        // Wat de zeef overhield, niet wat de bron stuurde: dat is wat je op het scherm ziet. Gaf hij
+        // wél iets maar bleef er niets van over, dan hoort dat verschil er te staan.
+        standen[s.id] = BronStand(
+          aantal: door.length,
+          fout: list.isNotEmpty && door.isEmpty
+              ? '${list.length} gevonden, alles weggezeefd'
+              : '',
+        );
         if (onPartial != null) onPartial(snapshot());
-      } catch (_) {}
+      } on TimeoutException {
+        standen[s.id] = const BronStand(aantal: -1, fout: 'te traag (12 s)');
+      } catch (e) {
+        // **Hier stond `catch (_) {}`.** Een bron die wegviel liet geen enkel spoor na, en daarmee
+        // was "die tracker is down" niet te bevestigen én niet te weerleggen. De uitzondering zelf
+        // erbij, ingekort: het verschil tussen een naam die niet opgezocht kan worden en een
+        // certificaat dat niet deugt is precies wat je wil weten.
+        final tekst = '$e'.replaceAll(RegExp(r'\s+'), ' ').trim();
+        standen[s.id] =
+            BronStand(aantal: -1, fout: tekst.length > 90 ? '${tekst.substring(0, 90)}…' : tekst);
+      }
     }));
     return snapshot();
   }
