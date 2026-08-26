@@ -6561,12 +6561,17 @@ class ArtistLine extends StatefulWidget {
   final String title;
   final TextStyle style;
   final bool lookup;
+
+  /// Doorgegeven aan [ArtistNames]; zie daar waarom dit standaard uit staat.
+  final bool omvouwen;
+
   const ArtistLine({
     super.key,
     required this.artist,
     required this.title,
     required this.style,
     this.lookup = false,
+    this.omvouwen = false,
   });
 
   @override
@@ -6609,6 +6614,7 @@ class _ArtistLineState extends State<ArtistLine> {
     return ArtistNames(
       names: [lib.displayArtist(split.main), ...split.featured, ..._extra],
       style: widget.style,
+      omvouwen: widget.omvouwen,
     );
   }
 }
@@ -6639,7 +6645,23 @@ Widget _artistLine(({String main, List<String> featured}) who, TextStyle style) 
 class ArtistNames extends StatefulWidget {
   final List<String> names;
   final TextStyle style;
-  const ArtistNames({super.key, required this.names, required this.style});
+
+  /// Mag de lijst naar een tweede regel zakken in plaats van in te korten?
+  ///
+  /// **Standaard niet, en dat is met opzet.** In een nummerlijst heeft elke rij een vaste hoogte;
+  /// een naam die daar naar twee regels loopt duwt de hele lijst uit elkaar. Daar hoort inkorten.
+  ///
+  /// Op het speelscherm is het andersom: daar is ruimte zat en wil je zien wie er meespelen. Drie
+  /// artiesten op één regel werden daar tot puntjes teruggebracht — of erger, zie de begrenzing bij
+  /// de artiestenrij van dat scherm.
+  final bool omvouwen;
+
+  const ArtistNames({
+    super.key,
+    required this.names,
+    required this.style,
+    this.omvouwen = false,
+  });
 
   @override
   State<ArtistNames> createState() => _ArtistNamesState();
@@ -6648,38 +6670,66 @@ class ArtistNames extends StatefulWidget {
 class _ArtistNamesState extends State<ArtistNames> {
   String? _hover;
 
+  /// Eén naam, aantikbaar. Dezelfde vorm in beide indelingen — anders lopen ze uit elkaar.
+  Widget _naam(String naam) => MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = naam),
+        onExit: (_) => setState(() => _hover = _hover == naam ? null : _hover),
+        child: Pressable(
+          onPressed: () => openArtist(context, naam),
+          borderRadius: BorderRadius.circular(6),
+          scaleOnFocus: false,
+          // The name is underlined on hover; focus does the same, so a remote sees the link
+          // as a link rather than as a ring around a piece of prose.
+          onFocusChange: (v) => setState(() => _hover = v ? naam : null),
+          child: Text(
+            naam,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: _hover == naam
+                ? widget.style.copyWith(color: Colors.white, decoration: TextDecoration.underline)
+                : widget.style,
+          ),
+        ),
+      );
+
+  /// Het scheidingsteken tussen twee namen.
+  Widget _punt() =>
+      Text(' · ', style: widget.style.copyWith(color: widget.style.color?.withValues(alpha: .5)));
+
   @override
   Widget build(BuildContext context) {
     final names = widget.names;
+    // Omgevouwen: een `Wrap`, dus zakt de derde naam naar een tweede regel in plaats van te
+    // verdwijnen. `Flexible` bestaat daar niet en hoeft ook niet — een `Wrap` meet elk kind op zijn
+    // eigen breedte en breekt zelf af.
+    if (widget.omvouwen) {
+      // **De `LayoutBuilder` is geen omhaal.** Een kind van een `Wrap` krijgt net zo goed een
+      // ONBEGRENSDE breedte mee als een niet-flexibel kind van een `Row` — dat is precies de fout
+      // die dit hele scherm had. Zonder deze begrenzing zou één naam die in zijn eentje al breder is
+      // dan de regel er weer dwars overheen lopen, in plaats van in te korten.
+      return LayoutBuilder(builder: (context, ruimte) {
+        final maxBreedte = ruimte.maxWidth.isFinite ? ruimte.maxWidth : double.infinity;
+        return Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            for (var i = 0; i < names.length; i++) ...[
+              if (i > 0) _punt(),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: maxBreedte),
+                child: _naam(names[i]),
+              ),
+            ],
+          ],
+        );
+      });
+    }
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         for (var i = 0; i < names.length; i++) ...[
-          if (i > 0)
-            Text(' · ', style: widget.style.copyWith(color: widget.style.color?.withValues(alpha: .5))),
-          Flexible(
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
-              onEnter: (_) => setState(() => _hover = names[i]),
-              onExit: (_) => setState(() => _hover = _hover == names[i] ? null : _hover),
-              child: Pressable(
-                onPressed: () => openArtist(context, names[i]),
-                borderRadius: BorderRadius.circular(6),
-                scaleOnFocus: false,
-                // The name is underlined on hover; focus does the same, so a remote sees the link
-                // as a link rather than as a ring around a piece of prose.
-                onFocusChange: (v) => setState(() => _hover = v ? names[i] : null),
-                child: Text(
-                  names[i],
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: _hover == names[i]
-                      ? widget.style.copyWith(color: Colors.white, decoration: TextDecoration.underline)
-                      : widget.style,
-                ),
-              ),
-            ),
-          ),
+          if (i > 0) _punt(),
+          Flexible(child: _naam(names[i])),
         ],
       ],
     );
@@ -8274,6 +8324,32 @@ double _sleeve(BuildContext context) {
   return smaller.clamp(140.0, narrow ? 360.0 : 520.0);
 }
 
+/// De naam van de plaat, onder de hoes.
+///
+/// **Waarom dit er niet stond.** Op dit scherm was nergens te lezen wélke plaat je zag. De hoes zegt
+/// het aan wie hem herkent, en verder niemand — en bij een verzamelaar of een heruitgave is dat
+/// precies de vraag die je hebt.
+///
+/// Aantikbaar naar de albumpagina, zoals elke naam in deze app de weg is naar het ding zelf. Staat
+/// de plaat niet in je bibliotheek, dan is het gewone tekst: er is dan geen pagina om heen te gaan.
+Widget _albumRegel(BuildContext context, String naam, Album? album,
+    {bool gecentreerd = true}) {
+  final tekst = Text(
+    naam,
+    maxLines: 2,
+    overflow: TextOverflow.ellipsis,
+    textAlign: gecentreerd ? TextAlign.center : TextAlign.left,
+    style: const TextStyle(color: _muted, fontSize: 13.5, fontWeight: FontWeight.w600),
+  );
+  if (album == null) return tekst;
+  return Pressable(
+    onPressed: () => openPagina(context, (_) => AlbumDetailPage(album: album)),
+    borderRadius: BorderRadius.circular(6),
+    scaleOnFocus: false,
+    child: tekst,
+  );
+}
+
 class NowPlayingScreen extends StatefulWidget {
   const NowPlayingScreen({super.key});
 
@@ -8322,6 +8398,14 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
         ? hoesNaast(scherm: schermmaat, reisfactor: discTravelFactor(context))
         : _sleeve(context);
 
+    // De plaat waar dit nummer op staat, één keer opgezocht.
+    //
+    // Dit stond binnen een `Builder` in het hoesblok, en werd daarmee alleen door de hoes gebruikt.
+    // De artiestenkop erboven en de albumnaam eronder hebben hem net zo goed nodig, en drie keer
+    // dezelfde vraag stellen is drie kansen om drie verschillende antwoorden te krijgen.
+    final bib = context.watch<LibraryStore>();
+    final al = t == null ? null : bib.albumForPath(t.path);
+
     // De hoes met de draaiende plaat, één keer beschreven. Hij staat in beide indelingen, en
     // twee kopieën van zeventig regels zouden binnen een maand uit elkaar lopen.
     final hoesBlok = Pressable(
@@ -8363,25 +8447,24 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
           child: t == null
               ? cover(p.currentCover, size: hoesMaat, radius: 16)
               : Builder(builder: (context) {
-                  // Ask the library which album this track is on, rather than resolving
-                  // the record again from its artist and title. Without it this screen
-                  // did its own Discogs lookup and showed a different artist's album
-                  // that shared a title, while the album page had the right one pinned.
-                  final lib = context.watch<LibraryStore>();
-                  final al = lib.albumForPath(t.path);
+                  // De plaat (`al`) komt van boven in `build` — zie daar waarom hij niet meer hier
+                  // wordt opgezocht. Ask the library which album this track is on, rather than
+                  // resolving the record again from its artist and title. Without it this screen did
+                  // its own Discogs lookup and showed a different artist's album that shared a
+                  // title, while the album page had the right one pinned.
                   return AlbumArt(
                     artist: al?.artist ?? t.artist,
                     album: al?.title ?? t.album,
-                    identity: al == null ? '' : lib.uidOf(al),
+                    identity: al == null ? '' : bib.uidOf(al),
                     size: hoesMaat,
                     fallback: p.currentCover,
                     chosen: al?.correctedCover,
                     trackCount: al?.tracks.length ?? 0,
-                    pinned: al == null ? null : lib.pinnedRelease(al),
-                    pinnedMbid: al == null ? null : lib.pinnedMbid(al),
+                    pinned: al == null ? null : bib.pinnedRelease(al),
+                    pinnedMbid: al == null ? null : bib.pinnedMbid(al),
                     roles: al == null
                         ? const {}
-                        : lib.albumArtRoles(al.artist, al.title),
+                        : bib.albumArtRoles(al.artist, al.title),
                     // Out and spinning while a speaker has it too. This device is
                     // deliberately silent then, so p.playing is false — but the record
                     // IS playing, just somewhere else, and that is what you came to
@@ -8398,6 +8481,47 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
       ),
     );
 
+    // De hoes met de artiest erboven en de plaat eronder.
+    //
+    // **Waarom dit één kolom is en niet twee keer los.** Het hoesblok staat in beide indelingen, en
+    // dat staat er bij [hoesBlok] al als waarschuwing: twee kopieën lopen binnen een maand uit
+    // elkaar. Dat geldt voor wat eromheen komt net zo goed.
+    //
+    // **Waarom niet op televisie.** De hoogte is daar al krap tot op de punt — zie de rekensom bij
+    // [_sleeve]: op de Shield kwam deze kolom eens 80 punten te lang uit, en die 80 vielen weg bij
+    // de rij met vorige, afspelen en volgende. Er is geen hoogte om weg te geven, en een logo boven
+    // de hoes is op anderhalve meter afstand ook geen winst.
+    final artiestVanPlaat = al?.artist ?? t?.artist ?? '';
+    final albumNaam = (al?.title ?? t?.album ?? '').trim();
+    final hoesKolom = isTv
+        ? hoesBlok
+        : Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment:
+                naast ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+            children: [
+              if (artiestVanPlaat.trim().isNotEmpty) ...[
+                ArtiestKop(
+                  naam: artiestVanPlaat,
+                  gecentreerd: !naast,
+                  // Naast elkaar de breedte van de HOES, niet die van de tekstkolom ernaast: dan
+                  // staat de kop netjes boven de plaat waar hij over gaat. De loopruimte van de cd
+                  // zit in het blok maar niet onder de hoes zelf.
+                  breedte: naast ? hoesMaat : dialogWidth(context, 540),
+                ),
+                const SizedBox(height: 14),
+              ],
+              hoesBlok,
+              if (albumNaam.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: naast ? hoesMaat : dialogWidth(context, 540),
+                  child: _albumRegel(context, albumNaam, al, gecentreerd: !naast),
+                ),
+              ],
+            ],
+          );
+
     // Alles onder de hoes: titel, artiest, spoelbalk, transport, speakervolume. Als lijst en
     // niet als widget, zodat hij in de gestapelde indeling gewoon in de kolom valt en naast
     // elkaar in de kolom ernaast — zonder een tussenlaag die de hoogte anders zou verdelen.
@@ -8409,19 +8533,39 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
           overflow: isTv ? TextOverflow.ellipsis : null,
           style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w800), textAlign: naast ? TextAlign.left : TextAlign.center),
       const SizedBox(height: 6),
-      Row(
-        mainAxisAlignment: naast ? MainAxisAlignment.start : MainAxisAlignment.center,
-        children: [
-          if (t != null)
-            ArtistLine(
-              artist: t.artist,
-              title: t.title,
-              lookup: true,
-              style: const TextStyle(color: _muted, fontSize: 15),
-            ),
-          if (t != null) _echtheidMerk(t),
-                if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
-        ],
+      // **Waarom hier een breedte omheen staat.** Deze rij had er geen, en dat is precies waarom de
+      // artiestenregel aan twee kanten van het scherm afliep zonder puntjes.
+      //
+      // `ArtistNames` is een `Row` met `Flexible`-kinderen — gebouwd om in te korten. Maar
+      // `Flexible` doet alleen iets als zijn `Row` een begrensde breedte krijgt, en `ArtistLine`
+      // stond hier als NIET-flexibel kind in deze rij. Zo'n kind krijgt in Flutter een onbegrensde
+      // breedte mee, dus kreeg `ArtistNames` daarbinnen oneindig, had `Flexible` niets om tegenaan
+      // te duwen, en werden de namen op volle breedte getekend — gecentreerd, dus links én rechts
+      // eraf. Gemeld op "At The Villa People · Etienne Vandewiele · Bruno Quatresous".
+      //
+      // Dezelfde maat als de spoelbalk eronder: één breedte voor dit hele blok, geen nieuw getal.
+      SizedBox(
+        width: naast ? kSpeelKolom : dialogWidth(context, 540),
+        child: Row(
+          mainAxisAlignment: naast ? MainAxisAlignment.start : MainAxisAlignment.center,
+          children: [
+            if (t != null)
+              // Flexibel, zodat de begrenzing hierboven ook echt bij de namen aankomt. En
+              // omvouwend, want hier is ruimte: drie gasten zakken naar een tweede regel in plaats
+              // van tot puntjes te worden teruggebracht.
+              Flexible(
+                child: ArtistLine(
+                  artist: t.artist,
+                  title: t.title,
+                  lookup: true,
+                  omvouwen: true,
+                  style: const TextStyle(color: _muted, fontSize: 15),
+                ),
+              ),
+            if (t != null) _echtheidMerk(t),
+            if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
+          ],
+        ),
       ),
       SizedBox(height: isTv ? 14 : 26),
       SizedBox(
@@ -8767,7 +8911,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          hoesBlok,
+                          hoesKolom,
                           const SizedBox(width: kSpeelGat),
                           SizedBox(
                             width: kSpeelKolom,
@@ -8783,7 +8927,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                   )
                 else ...[
                   const Spacer(),
-                  hoesBlok,
+                  hoesKolom,
                   SizedBox(height: isTv ? 16 : 30),
                   ...onder,
                   const Spacer(),
@@ -14108,6 +14252,101 @@ class _ArtistHeroState extends State<ArtistHero> {
       style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w800, letterSpacing: -.5));
 }
 
+/// De naam van een artiest in zijn eigen lettering, of anders gewoon in letters.
+///
+/// **Waarom dit los van [ArtistHero] staat.** Die kop is een heel vak: achtergrond, portret, waas,
+/// knoppen, tellingen. Op het speelscherm is daar geen plaats voor en hoort er maar één ding boven
+/// de hoes: van wie is deze plaat. Het logo is precies dat — een afbeelding van de officiële
+/// lettering van de act, en dat is de enige manier om die lettering te tonen, want die letterfonts
+/// worden niet uitgegeven.
+///
+/// Ongeveer één op de vier artiesten heeft er geen. Dan komt de naam als tekst op diezelfde plek —
+/// niet niets, want dan zou de hoes per plaat op een andere hoogte springen.
+///
+/// Dezelfde bron als de artiestenpagina: [CoverEnricher.artistArt] bewaart de bytes op schijf, dus
+/// dit haalt niet bij elk nummer opnieuw iets op.
+class ArtiestKop extends StatefulWidget {
+  const ArtiestKop({
+    super.key,
+    required this.naam,
+    this.hoogte = 64,
+    this.breedte = 320,
+    this.gecentreerd = true,
+  });
+
+  final String naam;
+
+  /// Hoe hoog het logo hoogstens mag worden. De artiestenpagina gunt het 96; hier staat er een hoes
+  /// onder die de hoogte al opeist.
+  final double hoogte;
+  final double breedte;
+  final bool gecentreerd;
+
+  @override
+  State<ArtiestKop> createState() => _ArtiestKopState();
+}
+
+class _ArtiestKopState extends State<ArtiestKop> {
+  Uint8List? _logo;
+
+  @override
+  void initState() {
+    super.initState();
+    _laad();
+  }
+
+  @override
+  void didUpdateWidget(ArtiestKop oud) {
+    super.didUpdateWidget(oud);
+    if (oud.naam != widget.naam) {
+      setState(() => _logo = null);
+      _laad();
+    }
+  }
+
+  Future<void> _laad() async {
+    final naam = widget.naam;
+    if (naam.trim().isEmpty) return;
+    final art = await CoverEnricher(context.read<AppSettings>()).artistArt(naam);
+    if (!mounted || naam != widget.naam) return;
+    setState(() => _logo = art?.logoBytes);
+  }
+
+  Widget _alsTekst() => Text(
+        widget.naam,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        textAlign: widget.gecentreerd ? TextAlign.center : TextAlign.left,
+        style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, letterSpacing: -.3),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.naam.trim().isEmpty) return const SizedBox.shrink();
+    final logo = _logo;
+    return Pressable(
+      onPressed: () => openArtist(context, widget.naam),
+      borderRadius: BorderRadius.circular(8),
+      scaleOnFocus: false,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: widget.breedte),
+        child: logo == null
+            ? _alsTekst()
+            : ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: widget.hoogte),
+                child: Image.memory(
+                  logo,
+                  fit: BoxFit.contain,
+                  alignment: widget.gecentreerd ? Alignment.center : Alignment.centerLeft,
+                  // Een kapot of half binnengehaald bestand mag geen leeg gat geven; dan de naam.
+                  errorBuilder: (_, __, ___) => _alsTekst(),
+                ),
+              ),
+      ),
+    );
+  }
+}
+
 /// What this release IS: the official blurb plus year, genre, label and rating — the album
 /// equivalent of a film's synopsis panel. Silent when nothing is known, so a page never shows
 /// an empty box.
@@ -16538,10 +16777,14 @@ class _SettingsDialogState extends State<SettingsDialog> {
     if (online is RemoteOnlineService) {
       final pc = await online.stuurRutrackerSessie(sessie.cookie, sessie.ua);
       if (!mounted) return;
-      setState(() => _conn['rutracker'] = ConnResult(
-          pc.ok ? ConnState.ok : ConnState.fail,
-          pc.ok ? 'Aangemeld — ook op de pc, die het zoeken doet' : 'Op dit toestel aangemeld, '
-              'maar de pc niet: ${pc.reden}'));
+      final zin = pc.ok
+          ? 'Aangemeld — ook op de pc, die het zoeken doet.'
+          : 'Op dit toestel aangemeld, maar de pc niet: ${pc.reden}';
+      setState(() =>
+          _conn['rutracker'] = ConnResult(pc.ok ? ConnState.ok : ConnState.fail, zin));
+      // Ook hier zichtbaar, en niet alleen in de verbindingsregel die buiten beeld kan staan.
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(zin), duration: const Duration(seconds: 6)));
       return;
     }
     if (!mounted) return;
@@ -16579,6 +16822,15 @@ class _SettingsDialogState extends State<SettingsDialog> {
       if (!mounted) return;
       setState(() => _conn['rutracker'] = ConnResult(
           pc.ok ? ConnState.ok : ConnState.fail, pc.reden));
+      // **En het meteen zeggen, op de plek waar je kijkt.** De uitkomst belandde in de
+      // verbindingsregel bovenaan het RuTracker-blok, en die staat bij een uitgeklapte
+      // instellingenlijst buiten beeld. Een knop die je indrukt en waarna er niets gebeurt is een
+      // knop die stuk lijkt — ook als hij precies deed wat hij moest doen.
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(pc.reden),
+        duration: const Duration(seconds: 6),
+      ));
     } finally {
       if (mounted) setState(() => _rtBusy = false);
     }

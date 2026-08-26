@@ -124,6 +124,19 @@ class RemoteOnlineService extends OnlineService {
     try {
       final j = await _rpc.post('/api/rutracker/sessie', {'cookie': cookie, 'ua': ua});
       return (ok: j['ok'] == true, reden: (j['reden'] as String?) ?? '');
+    } on RemoteException catch (e) {
+      // **404 is hier geen storing maar een versieverschil**, en dat hoort met zoveel woorden
+      // gezegd: dit eindpunt bestaat pas sinds de bouw die deze knop ook introduceerde. Draait de
+      // pc nog een oudere versie, dan is "de pc antwoordde met 404" precies het soort melding
+      // waar je niets aan hebt.
+      if (e.statusCode == 404) {
+        return (
+          ok: false,
+          reden: 'Je pc draait nog een oudere versie van DebridMusic en kent deze weg nog niet. '
+              'Werk de pc bij, of meld je daar rechtstreeks aan bij RuTracker.',
+        );
+      }
+      return (ok: false, reden: 'De pc antwoordde niet: ${e.message}');
     } catch (e) {
       return (ok: false, reden: 'De pc antwoordde niet: $e');
     }
