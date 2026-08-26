@@ -2383,12 +2383,14 @@ class DownloadManager extends ChangeNotifier {
     //
     // De torrent die er al is, is niet in de weg: hij is precies wat we nodig hebben. Er wordt
     // aangehaakt op de lopende taak en het gevraagde nummer wordt aan zijn selectie toegevoegd.
-    var zelfToegevoegd = true;
+    //
+    // Wie er straks mag opruimen wordt niet híer bepaald maar door [_lopersPerTorrent] geteld: ook
+    // de opdracht die de torrent zélf aanmeldde mag de map niet weggooien zolang er nog een tweede
+    // aan hangt.
     if (gid == null) {
       final bestaand = await motor.zoekGidVoor(torrent.hash ?? '');
       if (bestaand != null && await motor.kiesErbij(bestaand, gekozen)) {
         gid = bestaand;
-        zelfToegevoegd = false;
         _log.line('torrent ${torrent.hash} liep al (gid=$bestaand) — aangehaakt in plaats van '
             'opnieuw aangemeld');
       }
