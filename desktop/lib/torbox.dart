@@ -86,6 +86,13 @@ class TbFile {
       (mimeType?.startsWith('audio/') ?? false) ||
       const {'flac', 'mp3', 'm4a', 'aac', 'ogg', 'opus', 'wav', 'alac', 'ape', 'wv'}.contains(_ext);
   bool get isFlac => (mimeType?.contains('flac') ?? false) || name.toLowerCase().endsWith('.flac');
+
+  /// Het blad naast een albumbestand: waar begint welk nummer. Zie `cue_knippen.dart`.
+  ///
+  /// Nadrukkelijk GEEN audio, dus hij komt niet in de nummerkeuze — maar hij moet wél mee naar
+  /// schijf, anders is een `(image+.cue)` na het downloaden niet meer op te knippen. Een paar
+  /// kilobyte naast een gigabyte.
+  bool get isCue => _ext == 'cue';
   String get label => shortName ?? name;
 }
 
