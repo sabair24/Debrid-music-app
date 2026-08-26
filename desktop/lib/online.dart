@@ -13,6 +13,7 @@ import 'settings.dart';
 import 'soulseek.dart';
 import 'zoekladder.dart';
 import 'torbox.dart';
+import 'torznab.dart';
 import 'torrentbestand.dart';
 import 'aria2.dart';
 import 'warm_log.dart';
@@ -59,6 +60,9 @@ class OnlineService {
     BitSearchSource(),
     KnabenSource(),
     RuTrackerSource(rutracker),
+    // Je eigen indexers, als je ze hebt. Leest de instellingen bij elke zoekopdracht opnieuw, zodat
+    // een adres dat je net invulde meteen meedoet zonder de app te herstarten.
+    TorznabSource(settings),
   ]);
 
   OnlineService(this.settings)
