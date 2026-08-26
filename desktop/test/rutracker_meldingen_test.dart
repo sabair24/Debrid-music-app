@@ -110,6 +110,41 @@ void main() {
     });
   });
 
+  group('DE KERN: de drie stiltes die van buiten identiek zijn', () {
+    // Een lege torrentlijst kan drie dingen betekenen, en zolang die alledrie hetzelfde stille
+    // scherm opleveren blijft elke reparatie een gok. Precies zo konden er drie uitgaven overheen
+    // gaan zonder dat er iets te lezen viel. Deze tellers zijn wat ze uit elkaar houdt.
+
+    test('niet bevraagd is -1, en dat is iets anders dan nul', () {
+      final rt = RuTrackerService(AppSettings());
+      expect(rt.laatsteAantal, -1, reason: 'vóór de eerste zoekopdracht is er niets bevraagd');
+    });
+
+    test('geen aanmelding laat hem op niet-bevraagd staan', () async {
+      final rt = RuTrackerService(AppSettings());
+      await rt.search('iets');
+      expect(rt.laatsteAantal, -1);
+      expect(rt.lastError, isNotEmpty);
+    });
+
+    test('en treffers die de zeef niet haalden zijn weer iets anders', () async {
+      // aantal > 0 met doorZeef == 0: RuTracker vond het wél, het kwam alleen niet bij je aan.
+      final rt = _NepRt(AppSettings(), [_treffer('Concert 2011 1080p x264')]);
+      await RuTrackerSource(rt).search('iets');
+      expect(rt.laatsteDoorZeef, 0);
+    });
+
+    test('een oogst die er doorheen komt telt gewoon mee', () async {
+      final rt = _NepRt(AppSettings(), [
+        _treffer('Gala - Come Into My Life [24-96] FLAC'),
+        _treffer('P!nk - I\'m Not Dead (2006) FLAC'),
+      ]);
+      await RuTrackerSource(rt).search('iets');
+      expect(rt.laatsteDoorZeef, 2);
+      expect(rt.lastError, isEmpty);
+    });
+  });
+
   group('de zin bij een Cloudflare-uitdaging wijst naar het venster', () {
     test('niet meer naar de plakweg', () {
       // Het venster ís een echte browser en lost de uitdaging op; een geplakt koekje uit een andere

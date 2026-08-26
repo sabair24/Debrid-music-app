@@ -307,6 +307,15 @@ void _logStapel(WarmLog log, StackTrace? stapel) {
   }
 }
 
+/// Het buildnummer van déze app, zodra het bekend is. Leeg tot [main] het opgehaald heeft.
+///
+/// **Waarom dit een globale is.** Bij elke terugkoppeling over een schermafdruk was de eerste vraag
+/// welke bouw er op het toestel stond, en dat is van buiten niet te zien. Zonder antwoord daarop is
+/// "ik zie de melding niet" niet te onderscheiden van "die melding zit nog niet in jouw bouw", en
+/// dan gaat er een hele ronde verloren aan de verkeerde reparatie. Het staat daarom achter de
+/// diagnoseregel bij het zoeken, waar het iets oplost in plaats van te versieren.
+String gAppBouw = '';
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
@@ -325,6 +334,10 @@ Future<void> main() async {
   // Eén regel per minuut in hartslag.log. Zie hartslag.dart: de pc-app viel zes keer om zonder dat
   // er in enig logboek iets stond over het uur ervóór, en dat gat is waar het onderzoek op vastliep.
   startHartslag(appDir);
+  // Het eigen buildnummer, één keer. Zie [gAppBouw] voor waarom dat op het scherm terechtkomt.
+  try {
+    gAppBouw = (await PackageInfo.fromPlatform()).buildNumber;
+  } catch (_) {/* geen pakketgegevens is geen reden om niet te starten */}
   // RuTracker mag zijn pagina's door het browservenster halen. Zie rutracker_venster.dart: op een
   // telefoon staat geen curl, en de gewone HTTP-client wordt door Cloudflare met 403 tegengehouden
   // — ook mét een geldig koekje. Dit is een haak en geen import in rutracker.dart, zodat dat bestand
@@ -7554,27 +7567,64 @@ Widget _bronnenPagina(String titel, String vraag, {TrackTags? tags}) => Scaffold
 /// Eén regel tekst, in de kleur van een bijzonderheid en niet van een storing: dit is meestal iets
 /// wat je in twee tikken zelf oplost.
 ///
-/// **En hij hing aan de verkeerde voorwaarde.** Dit stond alleen op het scherm als de héle
-/// torrentlijst leeg was. Levert Knaben dertien treffers en RuTracker nul, dan is de lijst niet leeg
-/// — dus verscheen er geen woord, terwijl RuTracker er wel degelijk tussenuit viel. Precies het
-/// geval dat gemeld werd: "hij vindt torrents, maar niet via RuTracker, en ik zie geen foutmelding."
+/// **En hij hing twee keer aan de verkeerde voorwaarde.** Eerst stond hij er alleen als de héle
+/// torrentlijst leeg was — levert een andere tracker treffers, dan verscheen er geen woord. Daarna
+/// stond hij er alleen als er een fóút was. En dat is nog steeds een gat, want een lege lijst kan
+/// drie dingen betekenen die van buiten identiek zijn:
 ///
-/// Nu hangt hij aan waar hij over gaat: is er iets te zeggen over RuTracker, dan staat het er, of er
-/// nu wél of geen andere torrents zijn.
+/// * RuTracker is niet bevraagd (geen aanmelding);
+/// * hij is bevraagd en gaf nul;
+/// * hij gaf treffers die verderop wegvielen — door de zeef, of doordat een andere bron dezelfde
+///   torrent met meer seeders al had.
+///
+/// Zolang die drie hetzelfde stille scherm opleveren blijft elke reparatie een gok, en dat is precies
+/// hoe er drie uitgaven overheen konden gaan zonder dat er iets te lezen viel.
+///
+/// Daarom zegt hij het nu **altijd**, ook als er niets aan de hand is. Een regel die alleen bij
+/// problemen verschijnt is een regel die je nooit vertrouwt.
 Widget _waaromGeenTorrents(BuildContext context, {required bool leeg}) {
-  final reden = context.read<OnlineService>().rutracker.lastError;
-  if (!leeg && reden.isEmpty) return const SizedBox.shrink();
-  final tekst = leeg
-      ? (reden.isEmpty ? 'Geen torrents gevonden.' : 'Geen torrents gevonden — $reden')
-      // Er zijn wél torrents, alleen niet van deze bron. Dat is een aanvulling en geen mislukking,
-      // dus staat er ook bij dat de rest gewoon door is gegaan.
-      : 'RuTracker deed niet mee — $reden';
+  final rt = context.read<OnlineService>().rutracker;
+  final reden = rt.lastError;
+  final aantal = rt.laatsteAantal;
+  final doorZeef = rt.laatsteDoorZeef;
+
+  final String rutracker;
+  if (reden.isNotEmpty) {
+    rutracker = 'RuTracker deed niet mee — $reden';
+  } else if (aantal < 0) {
+    rutracker = 'RuTracker: niet bevraagd.';
+  } else if (aantal == 0) {
+    rutracker = 'RuTracker: bevraagd, nul treffers.';
+  } else if (doorZeef >= 0 && doorZeef < aantal) {
+    // Hier zie je de zeef aan het werk: hij gaf ze wél, ze haalden de lijst niet.
+    rutracker = 'RuTracker: $aantal treffers, $doorZeef door de zeef.';
+  } else {
+    // Staan ze er niet bij, dan had een andere bron dezelfde torrent met meer seeders — de
+    // zoekverdeler ontdubbelt op infohash. Ook dát is een antwoord.
+    rutracker = 'RuTracker: $aantal treffers.';
+  }
+
+  // Het buildnummer erbij. Niet als sieraad: bij elke terugkoppeling was de eerste vraag welke bouw
+  // er op het toestel stond, en zonder antwoord daarop is een schermafdruk niet te lezen.
+  final bouw = gAppBouw.isEmpty ? '' : ' · bouw $gAppBouw';
+
   return Padding(
     padding: const EdgeInsets.fromLTRB(24, 2, 24, 6),
-    child: Text(
-      tekst,
-      style: TextStyle(
-          color: leeg && reden.isEmpty ? _muted : const Color(0xFFE8913A), fontSize: 12.5),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (leeg)
+          Text(
+            reden.isEmpty ? 'Geen torrents gevonden.' : 'Geen torrents gevonden — $reden',
+            style: TextStyle(
+                color: reden.isEmpty ? _muted : const Color(0xFFE8913A), fontSize: 12.5),
+          ),
+        Text(
+          '$rutracker$bouw',
+          style: TextStyle(
+              color: reden.isEmpty ? _muted : const Color(0xFFE8913A), fontSize: 11.5),
+        ),
+      ],
     ),
   );
 }

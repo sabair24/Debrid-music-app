@@ -144,6 +144,7 @@ class RuTrackerSource implements SearchSource {
       final uit = await service.search(query).timeout(const Duration(seconds: 11));
       final overleeft =
           uit.where((r) => r.hash.isNotEmpty && !isRommel(r.name)).length;
+      service.laatsteDoorZeef = overleeft;
       if (uit.isNotEmpty && overleeft == 0) {
         service.lastError = 'RuTracker gaf ${uit.length} resultaten, maar de zeef hield ze '
             'allemaal tegen — die ziet ze als beeld of als rommel.';
