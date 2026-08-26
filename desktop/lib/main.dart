@@ -10462,7 +10462,12 @@ class DlRow extends StatelessWidget {
         if (job.detail != null && job.detail!.isNotEmpty) ...[
           const SizedBox(height: 2),
           Text(job.detail!,
-              maxLines: 1,
+              // Bij een MISLUKKING mag deze regel niet afgekapt worden. Hij is dan het enige dat
+              // zegt waarom, en juist die zinnen zijn lang: "TorBox nam deze bron niet aan — …",
+              // een infohash, een pad. Op 26-08-2026 stond er "InfoHash 5bdcf1b4…" en was de reden
+              // precies achter dat afkapstreepje verdwenen. Bij een lopende download blijft het één
+              // regel: daar staat "12 seeders · 30 verbindingen" en dat past.
+              maxLines: job.status == 'failed' ? 4 : 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(fontSize: 11, color: job.status == 'failed' ? Colors.red.shade300 : _muted)),
         ],
@@ -12913,7 +12918,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                                           style: kTekstBij.copyWith(color: kTekst)),
                                       if (j.detail != null && j.detail!.isNotEmpty)
                                         Text(j.detail!,
-                                            maxLines: 1,
+                                            // Zie `_DlRow`: een mislukking mag zijn reden niet
+                                            // kwijtraken aan een afkapstreepje.
+                                            maxLines: j.status == 'failed' ? 4 : 1,
                                             overflow: TextOverflow.ellipsis,
                                             style: kLabel.copyWith(
                                                 fontWeight: FontWeight.w400,

@@ -142,7 +142,7 @@ jobs:
             test/rutracker_meldingen_test.dart test/torbox_stand_test.dart \
             test/remote_work_test.dart test/nu_speelt_namen_test.dart \
             test/bronnen_stand_test.dart test/torznab_test.dart \
-            test/cue_knippen_test.dart \
+            test/cue_knippen_test.dart test/aria2_selectie_test.dart \
             test/normalise_tags_test.dart
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside

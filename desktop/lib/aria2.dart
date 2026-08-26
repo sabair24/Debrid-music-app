@@ -28,6 +28,32 @@ import 'package:http/http.dart' as http;
 import 'paths.dart';
 import 'warm_log.dart';
 
+/// Wat er in `select-file` moet komen te staan als [erbij] mee moet doen met [huidig].
+///
+/// Null betekent: laat het staan zoals het staat.
+///
+/// **Zuiver en apart, want dit is de regel die stil een download kan afkappen.** Wie de nieuwe
+/// selectie schrijft in plaats van de vereniging te nemen, haalt het nummer weg dat al aan het
+/// binnenkomen was — die download stopt dan halverwege zonder één woord uitleg. En een LEGE
+/// `select-file` betekent bij aria2 "alles": daar iets bij kiezen is niets toevoegen maar juist
+/// alles behalve dat ene weggooien.
+///
+/// Zonder deze functie was dat alleen te toetsen op een machine waar toevallig een aria2 draait.
+String? selectieErbij(String huidig, List<int> erbij) {
+  if (erbij.isEmpty) return null;
+  final nu = <int>{};
+  for (final deel in huidig.split(',')) {
+    final n = int.tryParse(deel.trim());
+    if (n != null) nu.add(n);
+  }
+  if (nu.isEmpty) return null; // leeg = alles; daar valt niets bij te kiezen
+  final voor = nu.length;
+  nu.addAll(erbij.where((n) => n > 0));
+  if (nu.length == voor) return null; // stond er al in; niets te veranderen
+  final samen = nu.toList()..sort();
+  return samen.join(',');
+}
+
 /// Eén bestand binnen een lopende torrent.
 ///
 /// Per bestand, niet alleen per torrent: kies je drie nummers van een plaat, dan hoort de lijst drie
@@ -335,6 +361,68 @@ class Aria2 {
       laatsteFout = '$e';
       _log.line('toevoegen mislukt: $e');
       return null;
+    }
+  }
+
+  /// Het gid van een torrent die aria2 AL heeft, gezocht op infohash. Null als hij hem niet kent.
+  ///
+  /// **Waarom dit moest bestaan.** aria2 kent een torrent aan zijn infohash en weigert een tweede
+  /// aanmelding van dezelfde plaat. Binnen één opdracht was dat ondervangen — één taak voor de hele
+  /// torrent, zie `online.dart` — maar niet tussen twee opdrachten door. Wie nummer 5 van een album
+  /// haalt en daarna nummer 9 van hetzelfde album, meldt dezelfde torrent een tweede keer aan, en
+  /// krijgt een weigering met de infohash erin. Precies de melding die op 26-08-2026 op het scherm
+  /// stond bij "verschillende liedjes van RuTracker".
+  ///
+  /// Actief én wachtend én gestopt, want alle drie tellen mee voor de weigering: een torrent die
+  /// klaar is maar nog in aria2's resultatenlijst staat, blokkeert een nieuwe aanmelding net zo goed.
+  Future<String?> zoekGidVoor(String infohash) async {
+    final gezocht = infohash.toLowerCase();
+    if (gezocht.isEmpty) return null;
+    const velden = <String>['gid', 'infoHash'];
+
+    Future<String?> uit(String methode, List<dynamic> params) async {
+      try {
+        final r = await _roep(methode, params);
+        if (r is! List) return null;
+        for (final item in r) {
+          if (item is! Map) continue;
+          if ('${item['infoHash']}'.toLowerCase() == gezocht) return '${item['gid']}';
+        }
+      } catch (_) {
+        // Eén lijst niet kunnen lezen is geen reden om de andere twee over te slaan.
+      }
+      return null;
+    }
+
+    return await uit('aria2.tellActive', <dynamic>[velden]) ??
+        await uit('aria2.tellWaiting', <dynamic>[0, 200, velden]) ??
+        await uit('aria2.tellStopped', <dynamic>[0, 200, velden]);
+  }
+
+  /// Er bestanden bij kiezen in een torrent die al loopt.
+  ///
+  /// De vereniging, niet de vervanging: wie nummer 9 erbij vraagt terwijl nummer 5 nog binnenkomt,
+  /// mag nummer 5 niet uit de selectie duwen — dan stopt die download halverwege zonder een woord.
+  ///
+  /// Geeft terug of het gelukt is. Niet gelukt betekent dat de aanroeper eerlijk moet melden dat er
+  /// niets bij gekozen kon worden, in plaats van te wachten op bestanden die nooit komen.
+  Future<bool> kiesErbij(String gid, List<int> erbij) async {
+    if (erbij.isEmpty) return true;
+    try {
+      final opties = await _roep('aria2.getOption', [gid]);
+      final huidig = opties is Map ? '${opties['select-file'] ?? ''}' : '';
+      final nieuw = selectieErbij(huidig, erbij);
+      if (nieuw == null) return true;
+      await _roep('aria2.changeOption', [
+        gid,
+        {'select-file': nieuw},
+      ]);
+      _log.line('erbij gekozen in $gid: ${erbij.join(",")} -> $nieuw');
+      return true;
+    } catch (e) {
+      laatsteFout = '$e';
+      _log.line('erbij kiezen mislukt in $gid: $e');
+      return false;
     }
   }
 

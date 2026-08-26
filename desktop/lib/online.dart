@@ -822,6 +822,15 @@ class DownloadManager extends ChangeNotifier {
   /// een uur is er niets meer om naar te kijken. Precies de les die warm.log zelf al opschreef.
   late final WarmLog _log = WarmLog('$appDir${Platform.pathSeparator}downloads.log');
 
+  /// Hoeveel opdrachten er op dezelfde aria2-taak hangen, per gid.
+  ///
+  /// **Waarom er geteld wordt en niet gewoon opgeruimd.** Twee nummers van dezelfde plaat delen één
+  /// aria2-taak (zie het aanhaken in [_downloadLokaal]). Ruimt de eerste die klaar is die taak op,
+  /// dan trekt hij de map onder de tweede vandaan: `ruimOpNaTorrent` gooit aria2's eigen map weg, en
+  /// `verwijder` haalt het gid weg waar de tweede zijn voortgang uit leest. Alleen de laatste die
+  /// vertrekt doet het licht uit.
+  final Map<String, int> _lopersPerTorrent = {};
+
   /// Upgrades take NO download slot, so ze kunnen nooit een nummer ophouden waar je nog niets van
   /// hebt. Queued rather than dropped, so a whole album still gets upgraded.
   ///
@@ -2280,6 +2289,10 @@ class DownloadManager extends ChangeNotifier {
         await _knipImages(destDir, nieuwe);
       } catch (e) {
         prep.status = 'failed';
+        // `_addOrFind` gooit zinnen die precies zeggen wat er misging ("TorBox nam deze bron niet
+        // aan — …", "het torrentbestand kwam niet binnen bij de bron (koekje verlopen?)"). Die
+        // werden hier opgevangen en weggegooid, en op het scherm bleef "Mislukt" staan.
+        prep.detail = '$e';
         notifyListeners();
       }
     }());
@@ -2356,12 +2369,36 @@ class DownloadManager extends ChangeNotifier {
     // De bladen mee in dezelfde zwerm. Ze horen niet bij `files` — daar hangt per element een balk
     // aan — maar wel bij wat aria2 moet ophalen, anders staat er na afloop geen cue naast het
     // albumbestand en valt er niets te knippen.
-    final gid = await motor.voegTorrentToe(torrent.lokaleTorrent!,
-        map: destDir.path, kies: [...files.map((f) => f.id), ...cues.map((f) => f.id)]);
+    final gekozen = [...files.map((f) => f.id), ...cues.map((f) => f.id)];
+    var gid = await motor.voegTorrentToe(torrent.lokaleTorrent!, map: destDir.path, kies: gekozen);
+
+    // AANHAKEN IN PLAATS VAN OPGEVEN.
+    //
+    // aria2 kent een torrent aan zijn infohash en weigert een tweede aanmelding van dezelfde plaat.
+    // Binnen één opdracht was dat ondervangen (één taak voor de hele torrent, zie [enqueue]), maar
+    // niet tussen twee opdrachten door: haal nummer 5 van een album en daarna nummer 9 van
+    // hetzelfde album, en de tweede klik meldt dezelfde torrent opnieuw aan. Dat is de weigering die
+    // op 26-08-2026 als "InfoHash …" onder een mislukte download stond — en het verklaart precies de
+    // klacht dat je van RuTracker geen VERSCHILLENDE nummers kon halen.
+    //
+    // De torrent die er al is, is niet in de weg: hij is precies wat we nodig hebben. Er wordt
+    // aangehaakt op de lopende taak en het gevraagde nummer wordt aan zijn selectie toegevoegd.
+    var zelfToegevoegd = true;
+    if (gid == null) {
+      final bestaand = await motor.zoekGidVoor(torrent.hash ?? '');
+      if (bestaand != null && await motor.kiesErbij(bestaand, gekozen)) {
+        gid = bestaand;
+        zelfToegevoegd = false;
+        _log.line('torrent ${torrent.hash} liep al (gid=$bestaand) — aangehaakt in plaats van '
+            'opnieuw aangemeld');
+      }
+    }
     if (gid == null) {
       alle('failed', detail: motor.laatsteFout ?? 'torrent geweigerd');
       return;
     }
+
+    _lopersPerTorrent.update(gid, (n) => n + 1, ifAbsent: () => 1);
 
     alle('downloading');
     // Dit is de eerste torrentdownload die écht te stoppen is. Bij TorBox loopt het ophalen aan hún
@@ -2393,7 +2430,10 @@ class DownloadManager extends ChangeNotifier {
 
         if (s.klaar) break;
         if (s.stuk) {
-          alle('failed', detail: s.fout.isEmpty ? 'aria2 stopte ermee' : s.fout);
+          // Met "aria2:" ervoor, want zonder die twee woorden is niet te zien wie er spreekt. Op
+          // 26-08-2026 stond er een melding op het scherm die met "InfoHash" begon, en het kostte
+          // een halve avond om te bepalen of dat aria2, TorBox of de app zelf was.
+          alle('failed', detail: s.fout.isEmpty ? 'aria2 stopte ermee' : 'aria2: ${s.fout}');
           return;
         }
         stilStaandeSeconden = s.gedaan > laatstGedaan ? 0 : stilStaandeSeconden + 2;
@@ -2402,7 +2442,8 @@ class DownloadManager extends ChangeNotifier {
         // deze tijd (--bt-stop-timeout), maar dan zonder iemand iets te zeggen.
         if (stilStaandeSeconden >= 900) {
           alle('failed', detail: 'een kwartier lang geen byte — geen bron voor deze torrent');
-          await motor.verwijder(gid);
+          // Niet zelf weghalen: dat doet de `finally`, en alléén als er niemand anders meer op deze
+          // taak hangt. Hier alvast opruimen zou een tweede nummer van dezelfde plaat meesleuren.
           return;
         }
       }
@@ -2435,12 +2476,23 @@ class DownloadManager extends ChangeNotifier {
         if (await bron.exists()) await _verhuisNaar(bron, destDir, c.label);
       }
       notifyListeners();
-      await ruimOpNaTorrent(destDir, s);
+      // Opruimen mag alleen als deze taak van ons alleen is. Hangt er nog een tweede nummer van
+      // dezelfde plaat aan, dan gooit `ruimOpNaTorrent` de map weg waar dat nummer nog in staat.
+      if ((_lopersPerTorrent[gid] ?? 1) <= 1) await ruimOpNaTorrent(destDir, s);
       await onLibraryChanged();
     } finally {
       // De torrent uit aria2 halen zodra hij klaar is: hij seedt toch niet (--seed-time=0) en een
       // lijst die volloopt met afgeronde taken maakt elke volgende vraag trager.
-      await motor.verwijder(gid);
+      //
+      // Maar pas als de laatste loper weg is. Een gid dat weggehaald wordt terwijl een tweede
+      // opdracht er zijn voortgang uit leest, laat die opdracht op niets wachten.
+      final over = (_lopersPerTorrent[gid] ?? 1) - 1;
+      if (over <= 0) {
+        _lopersPerTorrent.remove(gid);
+        await motor.verwijder(gid);
+      } else {
+        _lopersPerTorrent[gid] = over;
+      }
     }
   }
 
@@ -2481,8 +2533,12 @@ class DownloadManager extends ChangeNotifier {
       // length was never announced (total <= 0) is "it ended" all we have to go on.
       complete = total <= 0 ? received > 0 : received >= total;
       if (!complete) throw 'incompleet: $received van $total bytes';
-    } catch (_) {
+    } catch (e) {
       job.status = 'failed';
+      // Hier stond alleen "Mislukt" en verder niets. Een download die afbreekt op een 403, op een
+      // verlopen adres of halverwege de stroom zag er precies hetzelfde uit als een download die
+      // door een tijdslimiet viel — en dan valt er niets te beslissen over wat je nu moet doen.
+      job.detail = 'TorBox: $e';
       notifyListeners();
       return;
     } finally {
