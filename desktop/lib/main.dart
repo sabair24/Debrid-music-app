@@ -9262,7 +9262,19 @@ class TracksView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final lib = context.watch<LibraryStore>();
-    final player = context.watch<PlayerStore>();
+    // `read`, niet `watch` — en dat scheelt hier meer dan waar ook in de app.
+    //
+    // PlayerStore meldt zich vier keer per seconde zolang er iets speelt (player.dart:606-621 remt
+    // de mpv-positiestroom daarop af). Met een `watch` liep dus vier keer per seconde de HELE
+    // `build` hieronder opnieuw: de bibliotheek werd opnieuw gefilterd — bij 1037 nummers duizend
+    // aanroepen van [match] — en de lijst eronder werd ongeldig verklaard, terwijl er alleen een
+    // spoelbalk bewoog.
+    //
+    // Wat dit scherm van de speler nodig heeft is tweeledig, en de twee helften horen niet bij
+    // elkaar: de KNOPPEN roepen hem aan (daar is `read` genoeg, die luistert niet), en één RIJ wil
+    // weten of zij het is die speelt. Dat laatste staat hieronder per rij in een `select`, precies
+    // zoals `TrackRow` het al doet — met dezelfde uitleg erboven.
+    final player = context.read<PlayerStore>();
     final all = lib.tracks;
     final tracks = match == null ? all : all.where(match!).toList();
     if (lib.scanning && all.isEmpty) {
@@ -9348,7 +9360,6 @@ class TracksView extends StatelessWidget {
             itemExtent: isTv || isCompact(context) ? 76 : 56,
             itemBuilder: (_, i) {
               final t = tracks[i];
-              final isCurrent = !player.radioMode && player.current?.path == t.path;
               // EEN `Builder`, en dat is geen omhaal.
               //
               // De context van `itemBuilder` is de sliver zelf, en die van `build` is de HELE
@@ -9359,7 +9370,23 @@ class TracksView extends StatelessWidget {
               return Binnenkomst(
                 index: i,
                 child: Builder(
-                builder: (rij) => InkWell(
+                builder: (rij) {
+                // Hier hoort de vraag "speel ik?" en nergens hoger. De context van `itemBuilder` is
+                // de sliver zelf — daar luisteren zou de hele lijst laten hertekenen — en die van
+                // `build` is de hele pagina. Deze `Builder` is de rij, en dus de enige plek waar een
+                // afhankelijkheid op de speler precies één rij kost.
+                //
+                // `radioMode` moet mee: in de radio staat er geen enkele rij opgelicht, en zonder
+                // die voorwaarde zou de rij van het nummer dat toevallig ook in de radio speelt
+                // alsnog oplichten.
+                // Allebei in één `select`: een record heeft structurele gelijkheid, dus deze rij
+                // tekent alleen opnieuw als er werkelijk iets aan HAAR veranderd is. `playing` moet
+                // mee omdat het luidsprekertje op pauze in een pijltje verandert.
+                final (isCurrent, speeltHier) = rij.select<PlayerStore, (bool, bool)>((p) {
+                  final ik = !p.radioMode && p.current?.path == t.path;
+                  return (ik, ik && p.playing);
+                });
+                return InkWell(
                 onTap: () => player.playQueue(tracks, i),
                 onLongPress:
                     _menuOpHouden ? () => _toonItemMenu(rij, _nummerMenu(rij, t)) : null,
@@ -9440,12 +9467,13 @@ class TracksView extends StatelessWidget {
                                ),
                       ),
                       const SizedBox(width: 2),
-                      Icon(isCurrent && player.playing ? Icons.volume_up_rounded : Icons.play_arrow_rounded,
+                      Icon(speeltHier ? Icons.volume_up_rounded : Icons.play_arrow_rounded,
                           color: isCurrent ? _accent : _muted, size: 19),
                     ],
                   ),
                 ),
-              ),
+              );
+              },
               ),
               );
             },

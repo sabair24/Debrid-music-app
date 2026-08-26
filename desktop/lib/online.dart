@@ -17,6 +17,7 @@ import 'torznab.dart';
 import 'torrentbestand.dart';
 import 'aria2.dart';
 import 'cue_knippen.dart';
+import 'meldrem.dart';
 import 'warm_log.dart';
 import 'werkrij.dart';
 import 'paths.dart';
@@ -900,9 +901,19 @@ class DownloadManager extends ChangeNotifier {
 
   @override
   void dispose() {
+    _rem.stop();
     soulseek.disposeSession();
     super.dispose();
   }
+
+  /// De rem op de voortgangsmeldingen. Zie `meldrem.dart` voor waarom hij er is.
+  ///
+  /// Alleen voor VOORTGANG. Een eindtoestand — klaar, mislukt, gestopt — blijft `notifyListeners()`
+  /// rechtstreeks aanroepen: die gebeurt één keer en hoort meteen op het scherm te staan.
+  late final Meldrem _rem = Meldrem(notifyListeners);
+
+  /// "Er is voortgang." Hoogstens vijf keer per seconde, hoeveel downloads er ook lopen.
+  void _meldVoortgang() => _rem.vraag();
 
   /// The most recent job with this key (or null) — lets a tile/track row show its own progress.
   DownloadJob? jobByKey(String key) {
@@ -1408,7 +1419,7 @@ class DownloadManager extends ChangeNotifier {
         job.progress = 0;
         job.queuePlace = 0;
         job.detail = '$label · $asked van $n gevraagd, $queued in de wachtrij';
-        notifyListeners();
+        _meldVoortgang();
       }
 
       Future<void> run(SoulseekFile f, Completer<void> moveOn) async {
@@ -2207,7 +2218,7 @@ class DownloadManager extends ChangeNotifier {
         final p = (rec / tot).clamp(0.0, 1.0);
         if (p - job.progress > 0.02) {
           job.progress = p;
-          notifyListeners();
+          _meldVoortgang();
         }
       }
     }, onStatus: (q) {
@@ -2221,7 +2232,7 @@ class DownloadManager extends ChangeNotifier {
         job.status = 'waiting';
         job.queuePlace = q.place;
         job.detail = q.place > 0 ? 'wachten op ${file.username} · plaats ${q.place}' : 'wachten op ${file.username}';
-        notifyListeners();
+        _meldVoortgang();
       }
       onQueued();
     }, waitInQueue: waitInQueue, maxWait: maxWait, cancel: cancel));
@@ -2564,7 +2575,7 @@ class DownloadManager extends ChangeNotifier {
           final p = (received / total).clamp(0.0, 1.0);
           if (p - job.progress > 0.02) {
             job.progress = p;
-            notifyListeners();
+            _meldVoortgang();
           }
         }
       }
