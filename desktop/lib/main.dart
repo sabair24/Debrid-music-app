@@ -82,6 +82,7 @@ import 'recommend.dart';
 import 'release_format.dart';
 import 'rutracker.dart';
 import 'rutracker_login.dart';
+import 'rutracker_venster.dart';
 import 'settings.dart';
 import 'slsk_groepen.dart';
 import 'speakers.dart';
@@ -323,6 +324,14 @@ Future<void> main() async {
   // Eén regel per minuut in hartslag.log. Zie hartslag.dart: de pc-app viel zes keer om zonder dat
   // er in enig logboek iets stond over het uur ervóór, en dat gat is waar het onderzoek op vastliep.
   startHartslag(appDir);
+  // RuTracker mag zijn pagina's door het browservenster halen. Zie rutracker_venster.dart: op een
+  // telefoon staat geen curl, en de gewone HTTP-client wordt door Cloudflare met 403 tegengehouden
+  // — ook mét een geldig koekje. Dit is een haak en geen import in rutracker.dart, zodat dat bestand
+  // zonder webview blijft compileren en toetsbaar blijft.
+  if (RutrackerVenster.kan) {
+    RuTrackerService.viaVenster =
+        (url, {referer}) => RutrackerVenster.instantie.haal(url, referer: referer);
+  }
   if (_isDesktop) await windowManager.ensureInitialized();
   if (!await _claimSingleInstance()) {
     exit(0);
@@ -376,6 +385,18 @@ Future<void> main() async {
 
   final settings = AppSettings();
   await settings.load();
+  // Het onzichtbare RuTracker-venster alvast opbouwen, maar alléén als je daar aangemeld bent.
+  //
+  // **Waarom vooraf en niet bij de eerste zoekopdracht.** Het opbouwen kost seconden — de pagina
+  // laden, en zo nodig een Cloudflare-uitdaging oplossen — en de zoekverdeler hakt elke bron na
+  // twaalf seconden af. Wachtte hij tot je zocht, dan leverde juist je éérste zoekopdracht niets op,
+  // en dat is precies de zoekopdracht waarop je oordeelt of het werkt.
+  //
+  // Zonder koekje gebeurt er niets: dan is er niets aan te melden en hoort de app die site ook niet
+  // uit zichzelf te benaderen.
+  if (RutrackerVenster.kan && settings.rutrackerCookie.isNotEmpty) {
+    unawaited(RutrackerVenster.instantie.warmOp());
+  }
   final library = LibraryStore();
   // Before anything reads it: the download manager captures the root by value, and the LAN
   // server derives every track id from paths relative to it.
@@ -16423,6 +16444,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
     settings.rutrackerCookie = sessie.cookie;
     if (sessie.ua.isNotEmpty) settings.rutrackerUa = sessie.ua;
     await settings.save();
+    // Meteen het onzichtbare venster opbouwen, zodat je eerste zoekopdracht niet op die opbouw hoeft
+    // te wachten. Zie rutracker_venster.dart.
+    if (RutrackerVenster.kan) unawaited(RutrackerVenster.instantie.warmOp());
     if (!mounted) return;
     setState(() {
       _rtBusy = true;

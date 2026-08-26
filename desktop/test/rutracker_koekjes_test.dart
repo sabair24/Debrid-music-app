@@ -14,6 +14,7 @@
 library;
 
 import 'package:debridmusic/rutracker_login.dart';
+import 'package:debridmusic/rutracker_venster.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Kort schrijven wat de lade teruggeeft.
@@ -107,6 +108,59 @@ void main() {
       ]);
       expect(kop, contains('cf_clearance=httponly-waarde'));
       expect(kop, contains('bb_session=uit-de-pagina'));
+    });
+  });
+
+  group('het ophalen dóór het venster', () {
+    // De JavaScript zelf is hier niet te draaien — daar hoort een browser bij. Wat wél te toetsen
+    // valt zijn de drie keuzes erin, en dat zijn precies de keuzes die stil fout kunnen gaan: dan
+    // komt er op een telefoon "geen resultaten" uit en is er niets dat de reden noemt.
+
+    test('DE KERN: een omleiding wordt NIET gevolgd', () {
+      // Een omleiding naar login.php ís het antwoord: de sessie is verlopen. Zou de browser hem
+      // volgen, dan kwam er een inlogpagina terug met status 200 — en dat leest als "gelukt, maar
+      // RuTracker heeft niets".
+      expect(RutrackerVenster.jsHaalLichaam, contains("redirect: 'manual'"));
+      expect(RutrackerVenster.jsHaalLichaam, contains('opaqueredirect'));
+      expect(RutrackerVenster.jsHaalLichaam, contains('status: 302'));
+    });
+
+    test('de koekjes gaan mee', () {
+      // Zonder dit is elke pagina die van je sessie afhangt een uitgelogde pagina.
+      expect(RutrackerVenster.jsHaalLichaam, contains("credentials: 'include'"));
+    });
+
+    test('de bytes komen als bytes terug, niet als tekst', () {
+      // RuTracker is windows-1251 en een .torrent is helemaal geen tekst. Alles wat de browser zelf
+      // zou decoderen is schade die je pas merkt als de titels onzin zijn of de torrent stuk is.
+      expect(RutrackerVenster.jsHaalLichaam, contains('arrayBuffer'));
+      expect(RutrackerVenster.jsHaalLichaam, contains('btoa'));
+      expect(RutrackerVenster.jsHaalLichaam.contains('TextDecoder'), isFalse);
+    });
+
+    test('elk antwoord krijgt zijn eigen plek', () {
+      // Er lopen meerdere ophaalacties tegelijk (de infohashes van de topicpagina's). Op één vaste
+      // plek zouden die elkaars antwoord overschrijven.
+      expect(RutrackerVenster.jsHaalLichaam, contains('window.__rtBuf[id]'));
+    });
+
+    test('een mislukking komt terug als een mislukking, niet als een lege pagina', () {
+      expect(RutrackerVenster.jsHaalLichaam, contains('catch'));
+      expect(RutrackerVenster.jsHaalLichaam, contains('status: -1'));
+    });
+
+    test('het venster staat op RuTracker zelf geparkeerd', () {
+      // Een fetch vanaf een andere herkomst wordt door de browser tegengehouden en de koekjes
+      // zouden niet meegaan.
+      expect(kRutrackerThuis, startsWith('https://rutracker.org/'));
+    });
+
+    test('het wachten blijft binnen wat de zoekverdeler gunt', () {
+      // search.dart hakt elke bron na twaalf seconden af. Een geduld dat daar ver overheen gaat
+      // levert nooit iets op — dan is de bron allang weggegooid.
+      expect(kVensterGeduld.inSeconds, lessThanOrEqualTo(20));
+      expect(kStukGrootte, lessThan(1000000),
+          reason: 'Android breekt af rond een megabyte per brok');
     });
   });
 

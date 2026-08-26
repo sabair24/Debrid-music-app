@@ -323,8 +323,53 @@ class RuTrackerService {
     ];
   }
 
-  /// Eén GET, langs curl als die er is en anders langs de gewone client.
+  /// Ophalen dóór het browservenster. Gezet bij het opstarten van de app; null waar dat niet kan.
+  ///
+  /// **Waarom dit erbij moest.** `curl` zit in Windows, macOS en Linux, maar **niet op Android**. Op
+  /// een telefoon viel alles dus terug op de gewone HTTP-client — precies de weg waarvan hierboven
+  /// gemeten staat dat Cloudflare hem met 403 tegenhoudt, óók met een geldig koekje. Dat is de reden
+  /// dat er op het toestel geen enkel resultaat binnenkwam terwijl de aanmelding klopte.
+  ///
+  /// Het staat hier als een losse haak en niet als een `import`, zodat dit bestand geen webview
+  /// nodig heeft om te compileren of om getoetst te worden. Zie `rutracker_venster.dart`.
+  static Future<({int status, List<int> bytes})?> Function(String url, {String? referer})?
+      viaVenster;
+
+  /// Eén GET: langs curl, langs het venster, of langs de gewone client — in die volgorde.
+  ///
+  /// **De volgorde is het hele punt.** `curl` is op een pc het snelst en bewezen. Komt hij er niet
+  /// (403 van Cloudflare) of is hij er niet (een telefoon), dan gaat het door het venster, want dat
+  /// is een échte browser en lost de uitdaging zelf op. Pas als er ook geen venster is, blijft de
+  /// gewone client over — die werkt dan niet beter dan voorheen, maar ook niet slechter.
   Future<({int status, List<int> bytes})?> _haal(String url, {String? referer}) async {
+    final langsCurl = await _haalMetCurl(url, referer: referer);
+    // Een 403 is hier geen antwoord maar een dichte deur: doorlopen naar het venster.
+    if (langsCurl != null && langsCurl.status != 403) return langsCurl;
+
+    final venster = viaVenster;
+    if (venster != null) {
+      final langsVenster = await venster(url, referer: referer);
+      if (langsVenster != null) return langsVenster;
+    }
+    if (langsCurl != null) return langsCurl;
+
+    try {
+      final req = http.Request('GET', Uri.parse(url))
+        ..followRedirects = false
+        ..headers['Cookie'] = settings.rutrackerCookie
+        ..headers['User-Agent'] = _ua;
+      final client = http.Client();
+      final resp = await http.Response.fromStream(await client.send(req))
+          .timeout(const Duration(seconds: 12));
+      client.close();
+      return (status: resp.statusCode, bytes: resp.bodyBytes);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// De curl-weg apart, zodat [_haal] de volgorde kan bepalen. Null als curl er niet is of faalde.
+  Future<({int status, List<int> bytes})?> _haalMetCurl(String url, {String? referer}) async {
     if (await curlBeschikbaar()) {
       Directory? tijdelijk;
       try {
@@ -345,26 +390,14 @@ class RuTrackerService {
         } catch (_) {/* een achtergebleven tijdelijk bestand is geen reden om te falen */}
       }
     }
-    try {
-      final req = http.Request('GET', Uri.parse(url))
-        ..followRedirects = false
-        ..headers['Cookie'] = settings.rutrackerCookie
-        ..headers['User-Agent'] = _ua;
-      final client = http.Client();
-      final resp = await http.Response.fromStream(await client.send(req))
-          .timeout(const Duration(seconds: 12));
-      client.close();
-      return (status: resp.statusCode, bytes: resp.bodyBytes);
-    } catch (_) {
-      return null;
-    }
+    return null;
   }
 
   /// De zin die daarbij hoort. Eén plek, want hij hoort overal hetzelfde te zijn.
   static const uitdagingUitleg =
       'Cloudflare houdt de app tegen met een uitdaging die alleen een echte browser kan oplossen — '
-      'het ligt niet aan je gebruikersnaam of wachtwoord. Open rutracker.org in je browser en geef '
-      'de app het koekje daaruit (Instellingen → RuTracker → Koekje uit browser).';
+      'het ligt niet aan je gebruikersnaam of wachtwoord. Meld je opnieuw aan bij Instellingen → '
+      'RuTracker → Aanmelden; dat venster ís een echte browser en lost de uitdaging op.';
 
   Future<RtLogin> login({String? captchaAnswer, RtCaptcha? captcha}) async {
     // Hier zijn naam en wachtwoord WEL nodig — dit is de weg die zelf een formulier invult. Zie
