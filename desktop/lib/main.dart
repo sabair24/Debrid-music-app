@@ -16538,10 +16538,14 @@ class _SettingsDialogState extends State<SettingsDialog> {
     if (online is RemoteOnlineService) {
       final pc = await online.stuurRutrackerSessie(sessie.cookie, sessie.ua);
       if (!mounted) return;
-      setState(() => _conn['rutracker'] = ConnResult(
-          pc.ok ? ConnState.ok : ConnState.fail,
-          pc.ok ? 'Aangemeld — ook op de pc, die het zoeken doet' : 'Op dit toestel aangemeld, '
-              'maar de pc niet: ${pc.reden}'));
+      final zin = pc.ok
+          ? 'Aangemeld — ook op de pc, die het zoeken doet.'
+          : 'Op dit toestel aangemeld, maar de pc niet: ${pc.reden}';
+      setState(() =>
+          _conn['rutracker'] = ConnResult(pc.ok ? ConnState.ok : ConnState.fail, zin));
+      // Ook hier zichtbaar, en niet alleen in de verbindingsregel die buiten beeld kan staan.
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(zin), duration: const Duration(seconds: 6)));
       return;
     }
     if (!mounted) return;
@@ -16579,6 +16583,15 @@ class _SettingsDialogState extends State<SettingsDialog> {
       if (!mounted) return;
       setState(() => _conn['rutracker'] = ConnResult(
           pc.ok ? ConnState.ok : ConnState.fail, pc.reden));
+      // **En het meteen zeggen, op de plek waar je kijkt.** De uitkomst belandde in de
+      // verbindingsregel bovenaan het RuTracker-blok, en die staat bij een uitgeklapte
+      // instellingenlijst buiten beeld. Een knop die je indrukt en waarna er niets gebeurt is een
+      // knop die stuk lijkt — ook als hij precies deed wat hij moest doen.
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(pc.reden),
+        duration: const Duration(seconds: 6),
+      ));
     } finally {
       if (mounted) setState(() => _rtBusy = false);
     }
