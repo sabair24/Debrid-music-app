@@ -423,6 +423,31 @@ class RuTrackerService {
       'het ligt niet aan je gebruikersnaam of wachtwoord. Meld je opnieuw aan bij Instellingen → '
       'RuTracker → Aanmelden; dat venster ís een echte browser en lost de uitdaging op.';
 
+  /// Dezelfde uitdaging, maar mét wat het verborgen browservenster erover te zeggen had.
+  ///
+  /// **Waarom dit moest bestaan.** De app heeft een verborgen browservenster dat juist gebouwd is om
+  /// deze uitdaging op te lossen. Slaagt dát niet, dan is opnieuw aanmelden zinloos: je krijgt een
+  /// vers koekje en loopt tegen dezelfde muur. Maar het scherm zei alleen "meld je opnieuw aan", ook
+  /// als het venster nog stond op te starten of er helemaal niet was.
+  ///
+  /// Gemeld op 26-08-2026: "ik ben ingelogd bij rutracker" — met daaronder precies de zin die zegt
+  /// dat hij zich opnieuw moet aanmelden. Hij had gelijk, en de app had de reden in handen
+  /// ([haalReden]) en gooide hem weg.
+  ///
+  /// Zuiver, zodat te toetsen valt dat het advies bij de oorzaak past.
+  static String uitdagingZin(String reden) {
+    // Een punt die de reden zelf al draagt niet verdubbelen: ".." op het scherm leest als een fout.
+    final r = reden.trim().replaceFirst(RegExp(r'\.+$'), '');
+    if (r.isEmpty) return uitdagingUitleg;
+    // Ligt het aan het venster zelf, dan is opnieuw aanmelden het verkeerde advies: dat venster is
+    // juist het gereedschap dat de uitdaging zou oplossen, en het was er niet.
+    if (r.contains('browservenster')) {
+      return 'Cloudflare houdt de app tegen met een uitdaging die alleen een echte browser kan '
+          'oplossen. Opnieuw aanmelden helpt hier niet — $r.';
+    }
+    return '$uitdagingUitleg Wat er onderweg misging: $r.';
+  }
+
   Future<RtLogin> login({String? captchaAnswer, RtCaptcha? captcha}) async {
     // Hier zijn naam en wachtwoord WEL nodig — dit is de weg die zelf een formulier invult. Zie
     // [configured]: dat vraagt sinds kort minder, want een koekje uit het venster is ook een
@@ -648,7 +673,10 @@ class RuTrackerService {
       //
       // Op de curl-weg zijn er geen koppen om te wegen, dus daar beslist de wachtpagina zelf.
       if (resp.status == 403) {
-        lastError = uitdagingUitleg;
+        // Mét [haalReden]. Een 403 die hier aankomt betekent dat óók het verborgen browservenster
+        // het niet heeft opgelost — en dán is "meld je opnieuw aan" het verkeerde advies. Wat het
+        // venster erover te zeggen had is het enige dat je verder helpt.
+        lastError = uitdagingZin(haalReden);
         return [];
       }
       if (resp.status == 302) {
@@ -679,7 +707,7 @@ class RuTrackerService {
       // Een 200 hoeft nog geen zoekpagina te zijn. Twee gevallen die er precies zo uitzien als
       // "RuTracker heeft niets", en die alledrie een andere handeling van je vragen.
       if (cloudflareUitdaging(const {}, html)) {
-        lastError = uitdagingUitleg;
+        lastError = uitdagingZin(haalReden);
         return [];
       }
       if (html.contains('login_username') && !html.contains('tracker.php')) {
