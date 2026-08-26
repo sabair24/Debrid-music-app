@@ -331,6 +331,8 @@ Future<void> main() async {
   if (RutrackerVenster.kan) {
     RuTrackerService.viaVenster =
         (url, {referer}) => RutrackerVenster.instantie.haal(url, referer: referer);
+    // En één zin over hoe dat venster ervoor staat, zodat een lege lijst nooit woordloos is.
+    RuTrackerService.vensterStand = () => RutrackerVenster.instantie.stand;
   }
   if (_isDesktop) await windowManager.ensureInitialized();
   if (!await _claimSingleInstance()) {

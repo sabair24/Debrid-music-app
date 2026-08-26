@@ -33,16 +33,36 @@ class OnlineService {
   /// De lokale torrentmotor. Eén per app: hij houdt één proces vast, en twee processen die dezelfde
   /// map vullen vechten om dezelfde bestanden.
   final Aria2 aria2 = Aria2();
-  final SearchAggregator aggregator;
+  /// De zoekverdeler, met **dezelfde** [rutracker] erin als het veld hierboven.
+  ///
+  /// **Waarom dit een laat veld is en geen regel in de constructor.** Hier stonden TWEE
+  /// `RuTrackerService(settings)`: één als veld, en één in de verdeler. Twee losse objecten met elk
+  /// hun eigen geheugen.
+  ///
+  /// Dat is niet netjesheid maar de reden dat je niets te lezen kreeg. Het zoeken liep over het
+  /// object in de verdeler en zette `lastError` daar; het scherm las `lastError` van het véld. Wat
+  /// de app wist over waarom er niets binnenkwam — een verlopen sessie, Cloudflare, een pagina
+  /// zonder rijen — stond dus in een object dat niemand ooit bekeek, en op het scherm bleef "Geen
+  /// torrents gevonden." staan, punt. Alle meldingen die er speciaal voor bijgebouwd waren kwamen
+  /// nergens aan.
+  ///
+  /// Dat het zoeken zélf wél werkte kwam doordat beide objecten hetzelfde `settings` lezen — een
+  /// toevalligheid, geen ontwerp.
+  ///
+  /// Een gewone regel in de constructor kan niet: een initialisatielijst mag niet naar een ander
+  /// veld wijzen. Een fabriek zou het ook oplossen, maar [RemoteOnlineService] erft hiervan met
+  /// `super.settings`, en dat kan niet op een fabriek. Een laat veld mag het wel, en wordt pas
+  /// gemaakt als iemand ernaar vraagt — op een telefoon, die alles aan de pc vraagt, dus nooit.
+  late final SearchAggregator aggregator = SearchAggregator([
+    ApibaySource(),
+    BitSearchSource(),
+    KnabenSource(),
+    RuTrackerSource(rutracker),
+  ]);
+
   OnlineService(this.settings)
       : torbox = TorBox(() => settings.torboxToken),
-        rutracker = RuTrackerService(settings),
-        aggregator = SearchAggregator([
-          ApibaySource(),
-          BitSearchSource(),
-          KnabenSource(),
-          RuTrackerSource(RuTrackerService(settings)),
-        ]);
+        rutracker = RuTrackerService(settings);
 
   bool get torboxReady => torbox.hasKey;
 
