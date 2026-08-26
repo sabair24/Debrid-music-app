@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import 'cp1251.dart';
 import 'settings.dart';
 import 'torbox.dart';
 
@@ -60,7 +61,22 @@ class RuTrackerService {
   /// dat iets uitlegt waarom.
   String get _ua => settings.rutrackerUa.isNotEmpty ? settings.rutrackerUa : _uaStandaard;
 
+  /// Is er iets om mee binnen te komen?
+  ///
+  /// **Een sessie telt, en dat is de reparatie.** Dit vroeg om een ingetypte gebruikersnaam én
+  /// wachtwoord, en `search()` weigerde daarop. Wie zich via het browservenster aanmeldt vult die
+  /// twee velden nooit in — daar meldt hij zich immers in de browser aan — dus stond er een geldig
+  /// koekje klaar terwijl het zoeken meteen een lege lijst teruggaf. Zonder één woord uitleg, en
+  /// Instellingen zei ondertussen "aangemeld", want [verify] kijkt alleen naar het koekje.
+  ///
+  /// Het koekje ÍS de aanmelding. Naam en wachtwoord zijn er alleen nog voor de oude weg, die zelf
+  /// kan inloggen zolang Cloudflare hem doorlaat.
   bool get configured =>
+      settings.rutrackerCookie.isNotEmpty ||
+      (settings.rutrackerUser.trim().isNotEmpty && settings.rutrackerPass.isNotEmpty);
+
+  /// Kan de app zelf een aanmelding proberen? Daar zijn naam en wachtwoord wél voor nodig.
+  bool get kanZelfAanmelden =>
       settings.rutrackerUser.trim().isNotEmpty && settings.rutrackerPass.isNotEmpty;
 
   /// Eén teken naar zijn byte in windows-1251, of null als die codetabel het niet kent.
@@ -98,6 +114,12 @@ class RuTrackerService {
     }
     return uit.toString();
   }
+  /// Hoeveel topicpagina's er hoogstens opgehaald worden om een ontbrekende infohash te vinden.
+  ///
+  /// Ruim, want de klok eronder is de echte rem — zie [search]. Niet oneindig: een zoekopdracht die
+  /// tweehonderd pagina's tegelijk opvraagt is precies het soort burst waar een tracker op afgaat.
+  static const _hashRuimte = 60;
+
   bool get loggedIn => settings.rutrackerCookie.isNotEmpty;
 
   // ── Het koekje uit je eigen browser ───────────────────────────────────────
@@ -345,7 +367,10 @@ class RuTrackerService {
       'de app het koekje daaruit (Instellingen → RuTracker → Koekje uit browser).';
 
   Future<RtLogin> login({String? captchaAnswer, RtCaptcha? captcha}) async {
-    if (!configured) return const RtLogin.failed('Geen RuTracker-login ingevuld');
+    // Hier zijn naam en wachtwoord WEL nodig — dit is de weg die zelf een formulier invult. Zie
+    // [configured]: dat vraagt sinds kort minder, want een koekje uit het venster is ook een
+    // aanmelding, en die heeft geen wachtwoord nodig.
+    if (!kanZelfAanmelden) return const RtLogin.failed('Geen RuTracker-login ingevuld');
     try {
       final naam = cp1251Form(settings.rutrackerUser.trim());
       final woord = cp1251Form(settings.rutrackerPass);
@@ -403,7 +428,7 @@ class RuTrackerService {
         return const RtLogin.success();
       }
 
-      final html = latin1.decode(resp.bodyBytes, allowInvalid: true);
+      final html = cp1251Tekst(resp.bodyBytes);
       // Eerst Cloudflare, want daar strandt het tegenwoordig al vóór het formulier. Zonder deze
       // regel komt zo'n 403 eruit als "controleer je gegevens" en ga je je wachtwoord zitten
       // nakijken terwijl de app RuTracker nooit gesproken heeft.
@@ -515,7 +540,17 @@ class RuTrackerService {
   String lastError = '';
 
   Future<List<SearchResult>> search(String query, {bool allowRelogin = true}) async {
-    if (!configured || settings.rutrackerCookie.isEmpty) return [];
+    // Zwijgen is hier duur gebleken: een lege lijst leest als "RuTracker heeft niets", terwijl de
+    // reden is dat er niets klaarstaat om mee binnen te komen. Zeg het dus.
+    if (settings.rutrackerCookie.isEmpty) {
+      lastError = kanZelfAanmelden
+          ? 'Nog niet aangemeld bij RuTracker — Instellingen → RuTracker → Aanmelden.'
+          : 'Geen RuTracker-aanmelding — Instellingen → RuTracker → Aanmelden.';
+      return [];
+    }
+    // Schoon beginnen. Zonder dit blijft de melding van de vórige poging staan nadat je het
+    // probleem allang verholpen hebt — en dan zegt het scherm iets dat niet meer waar is.
+    lastError = '';
     // De zoekverdeler in search.dart hakt elke bron na 12 seconden af, en slikt de fout. Blijf daar
     // met opzet onder: liever een korte lijst die aankomt dan een volledige die weggegooid wordt.
     final deadline = DateTime.now().add(const Duration(milliseconds: 10500));
@@ -555,19 +590,25 @@ class RuTrackerService {
             : (again.error ?? 'RuTracker-login mislukt.');
         return [];
       }
-      final html = latin1.decode(resp.bytes, allowInvalid: true);
+      final html = cp1251Tekst(resp.bytes);
       final rows = _parseRows(html);
-      // Fill missing infohashes from the topic page (top results only, concurrently).
+      // De ontbrekende infohashes van de topicpagina halen.
       //
       // **Met een eigen klok, en dat is het verschil tussen resultaten en niets.** De zoekverdeler
       // hakt elke bron na 12 seconden af en slikt de fout in stilte. RuTracker had hier een
-      // slechtste geval van 15 seconden voor de lijst plus 12 voor deze twaalf pagina's — samen 27,
-      // ruim over die grens. Dan viel de hele bron weg en zag je "geen resultaten van RuTracker"
-      // terwijl er gewoon een lijst lag.
+      // slechtste geval van 15 seconden voor de lijst plus 12 voor deze pagina's — samen 27, ruim
+      // over die grens. Dan viel de hele bron weg en zag je "geen resultaten van RuTracker" terwijl
+      // er gewoon een lijst lag.
+      //
+      // **De klok is de rem, niet een vast getal.** Hier stond `take(12)` bovenop die klok, en dat
+      // is er één te veel: op een snelle dag stopte hij bij twaalf terwijl er nog seconden over
+      // waren, en op een trage dag deed de klok het werk toch al. Nu is de grens ruim genoeg om
+      // niet te binden en beslist de tijd — precies wat er bedoeld werd.
       //
       // Wat er binnen de tijd is, is binnen. De rest valt af zoals hij altijd al afviel: zonder
-      // infohash valt er niets op te halen.
-      final need = rows.where((r) => r.hash == null).take(12).toList();
+      // infohash valt er niets op te halen, en de zoekverdeler zeeft ze ook zelf weg (zie
+      // `search.dart`, waar op de infohash ontdubbeld wordt).
+      final need = rows.where((r) => r.hash == null).take(_hashRuimte).toList();
       final resterend = deadline.difference(DateTime.now());
       if (need.isNotEmpty && !resterend.isNegative) {
         await Future.wait(need.map((r) async => r.hash = await _hashFromTopic(r.topicId)))
@@ -616,7 +657,7 @@ class RuTrackerService {
   Future<String?> _hashFromTopic(String topicId) async {
     final r = await _haal('$_base/viewtopic.php?t=$topicId');
     if (r == null || r.status != 200) return null;
-    final html = latin1.decode(r.bytes, allowInvalid: true);
+    final html = cp1251Tekst(r.bytes);
     return RegExp(r'urn:btih:([a-fA-F0-9]{40})').firstMatch(html)?.group(1)?.toLowerCase();
   }
 

@@ -7520,6 +7520,27 @@ Widget _bronnenPagina(String titel, String vraag, {TrackTags? tags}) => Scaffold
       body: SingleChildScrollView(child: SourcesView(query: vraag, tags: tags)),
     );
 
+/// Waarom er geen torrents staan — als daar een betere reden voor is dan "die zijn er niet".
+///
+/// **Waarom dit bestaat.** `RuTrackerService` vult `lastError` bij élke reden om niets terug te
+/// geven: niet aangemeld, sessie verlopen, Cloudflare ertussen. Geen van die meldingen werd ooit
+/// getoond. Je zag dus altijd hetzelfde lege lijstje, en ging het zoeken in je wachtwoord, of in de
+/// tracker, of je gaf het op — terwijl de app precies wist wat eraan scheelde.
+///
+/// Eén regel tekst, in de kleur van een bijzonderheid en niet van een storing: dit is meestal iets
+/// wat je in twee tikken zelf oplost.
+Widget _waaromGeenTorrents(BuildContext context) {
+  final reden = context.read<OnlineService>().rutracker.lastError;
+  return Padding(
+    padding: const EdgeInsets.fromLTRB(24, 2, 24, 6),
+    child: Text(
+      reden.isEmpty ? 'Geen torrents gevonden.' : 'Geen torrents gevonden — $reden',
+      style: TextStyle(
+          color: reden.isEmpty ? _muted : const Color(0xFFE8913A), fontSize: 12.5),
+    ),
+  );
+}
+
 /// Het menu voor een nummer dat je NIET hebt.
 ///
 /// **Dezelfde vorm en dezelfde volgorde als [_nummerMenu], en dat is het hele punt.** Een
@@ -11455,10 +11476,7 @@ class _SourcesViewState extends State<SourcesView> {
         if (_torrents.isNotEmpty || _slsk.isNotEmpty)
           _filterChipsRow(_filter, (f) => setState(() => _filter = f)),
         _sourceHeader('Torrents · TorBox', torrents.length, _tBusy),
-        if (torrents.isEmpty && !_tBusy)
-          const Padding(
-              padding: EdgeInsets.fromLTRB(24, 2, 24, 6),
-              child: Text('Geen torrents gevonden.', style: TextStyle(color: _muted, fontSize: 12.5))),
+        if (torrents.isEmpty && !_tBusy) _waaromGeenTorrents(context),
         ...torrents.map((r) => _torrentTile(context, r)),
         if (ready)
           _soulseekHeader(context, slsk, _sBusy, slsk,
@@ -13114,6 +13132,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             );
           }),
         if (torrents.isNotEmpty) _sourceHeader('Torrents · TorBox', torrents.length, _busy),
+        // Stond hier helemaal niet: waren er geen torrents, dan was er ook geen kop en geen woord.
+        if (torrents.isEmpty && !_busy && _getypt != null) _waaromGeenTorrents(context),
         ...torrents.map((r) => _torrentTile(context, r)),
         if (_status == null || _slsk.isNotEmpty || _slskBusy)
           (soulseekReady
