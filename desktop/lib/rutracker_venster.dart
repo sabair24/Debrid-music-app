@@ -44,6 +44,14 @@ const kRutrackerThuis = 'https://rutracker.org/forum/index.php';
 /// twaalf seconden te blijven die de zoekverdeler elke bron gunt.
 const kVensterGeduld = Duration(seconds: 20);
 
+/// Hoe lang een zoekopdracht hoogstens op het opbouwen van het venster wacht.
+///
+/// **Waarom dit korter is dan [kVensterGeduld].** De zoekverdeler hakt elke bron na twaalf seconden
+/// af en slikt de fout in stilte. Wachtte een zoekopdracht hier de volle twintig seconden, dan werd
+/// RuTracker weggegooid vóórdat hij iets kon zeggen — en op het scherm stond "Geen torrents
+/// gevonden.", zonder één woord over de reden. Wachten mag, maar niet langer dan er tijd is.
+const kZoekGeduld = Duration(seconds: 7);
+
 /// Hoeveel tekens er per keer uit het venster gehaald worden.
 ///
 /// Niet in één keer: een zoekpagina is honderden kilobytes, en die gaan als één brok over de brug
@@ -67,8 +75,25 @@ class RutrackerVenster {
   Completer<bool>? _bezigMetOpenen;
   int _teller = 0;
 
+  /// Wat er de laatste keer misging. Leeg als er niets misging.
+  String laatsteFout = '';
+
   /// Is dit toestel er een waar dit kan? Zelfde grens als het aanmeldvenster.
   static bool get kan => rutrackerVensterKan;
+
+  /// Eén zin over hoe het venster ervoor staat, voor op het scherm als het zoeken niets opleverde.
+  ///
+  /// Dit is het verschil tussen "RuTracker heeft niets" en "de app kwam er niet eens langs", en dat
+  /// verschil hoort bij jou te liggen en niet in een logboek dat niemand leest.
+  String get stand {
+    if (!kan) return 'dit toestel heeft geen ingebouwd browservenster';
+    if (_web == null) {
+      return _bezigMetOpenen != null
+          ? 'het browservenster is nog aan het opstarten — probeer over een paar tellen opnieuw'
+          : 'het browservenster kon niet opgebouwd worden';
+    }
+    return laatsteFout.isEmpty ? 'het browservenster gaf niets terug' : laatsteFout;
+  }
 
   /// Het lichaam van de JavaScript die één pagina ophaalt.
   ///
@@ -110,14 +135,18 @@ try {
   ///
   /// Meerdere aanroepen tegelijk wachten op dezelfde opening — anders bouwt elke zoekopdracht zijn
   /// eigen browser op.
-  Future<bool> _zorgVoorVenster() async {
+  Future<bool> _zorgVoorVenster({Duration geduld = kVensterGeduld}) async {
     // Staat het venster er, dan is het goed genoeg — ook als het de vorige keer niet door Cloudflare
     // kwam. Het staat dan nog steeds op rutracker.org, dus een `fetch` gaat gewoon en levert het
     // eerlijke antwoord op: de pagina, of een 403 die het scherm daarna benoemt. Opnieuw twintig
     // seconden staan wachten bij élke zoekopdracht zou juist het zoeken slopen.
     if (_web != null) return true;
+    // Loopt er al een opening, dan meeliften — maar niet langer dan er tijd is. Een zoekopdracht
+    // die op een warmloop van twintig seconden blijft hangen wordt zelf weggegooid.
     final bezig = _bezigMetOpenen;
-    if (bezig != null) return bezig.future;
+    if (bezig != null) {
+      return bezig.future.timeout(geduld, onTimeout: () => false);
+    }
 
     final wacht = Completer<bool>();
     _bezigMetOpenen = wacht;
@@ -143,8 +172,8 @@ try {
       // Wachten tot de pagina er staat én de wachtpagina van Cloudflare voorbij is. Die stuurt
       // zichzelf door, dus er komt daarna vanzelf nog een `onLoadStop` — maar niet altijd, dus er
       // wordt ook gewoon gekeken.
-      final einde = DateTime.now().add(kVensterGeduld);
-      await klaar.future.timeout(kVensterGeduld, onTimeout: () {});
+      final einde = DateTime.now().add(geduld);
+      await klaar.future.timeout(geduld, onTimeout: () {});
       while (DateTime.now().isBefore(einde)) {
         if (await _isDoorgelaten()) {
           wacht.complete(true);
@@ -194,32 +223,41 @@ try {
   /// Eén pagina ophalen. Null als het venster er niet is of het niet lukte.
   Future<({int status, List<int> bytes})?> haal(String url, {String? referer}) async {
     if (!kan) return null;
-    if (!await _zorgVoorVenster()) return null;
+    if (!await _zorgVoorVenster(geduld: kZoekGeduld)) return null;
     final web = _web;
     if (web == null) return null;
 
     final id = 'p${_teller++}';
     try {
+      laatsteFout = '';
       final antwoord = await web
           .callAsyncJavaScript(
             functionBody: jsHaalLichaam,
             arguments: {'url': url, 'referer': referer ?? '', 'id': id},
           )
-          .timeout(kVensterGeduld);
+          .timeout(kZoekGeduld);
       final waarde = antwoord?.value;
-      if (waarde is! Map) return null;
+      if (waarde is! Map) {
+        laatsteFout = 'het browservenster gaf geen bruikbaar antwoord';
+        return null;
+      }
       final status = (waarde['status'] as num?)?.toInt() ?? 0;
       final lengte = (waarde['len'] as num?)?.toInt() ?? 0;
       if (status <= 0) {
-        debugPrint('RuTracker-venster: ophalen mislukte (${waarde['fout']})');
+        laatsteFout = 'het ophalen in het venster mislukte (${waarde['fout']})';
+        debugPrint('RuTracker-venster: $laatsteFout');
         return null;
       }
       if (lengte == 0) return (status: status, bytes: const <int>[]);
 
       final tekst = await _leesInStukken(web, id, lengte);
-      if (tekst == null) return null;
+      if (tekst == null) {
+        laatsteFout = 'de pagina kwam maar half uit het venster';
+        return null;
+      }
       return (status: status, bytes: base64Decode(tekst));
     } catch (e) {
+      laatsteFout = 'het venster gaf: $e';
       debugPrint('RuTracker-venster: ophalen mislukte ($e)');
       return null;
     } finally {

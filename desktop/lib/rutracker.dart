@@ -335,6 +335,21 @@ class RuTrackerService {
   static Future<({int status, List<int> bytes})?> Function(String url, {String? referer})?
       viaVenster;
 
+  /// Eén zin over hoe het browservenster ervoor staat, voor als het ophalen niet lukte.
+  ///
+  /// Zonder dit is "het venster gaf niets terug" het enige wat er te zeggen valt, en dat is precies
+  /// het soort melding waar je niets aan hebt.
+  static String Function()? vensterStand;
+
+  /// Waarom het laatste ophalen niet lukte. Leeg als er niets misging.
+  ///
+  /// **Waarom dit er moest komen.** `_haal` gaf `null` terug voor drie verschillende dingen — geen
+  /// curl, een venster dat niets opleverde, en een verbinding die een uitzondering gooide — en
+  /// [search] maakte daar `return []` van zónder een woord. Op het scherm stond dan "Geen torrents
+  /// gevonden.", punt. Dat is dezelfde stilte als waar deze hele reeks reparaties over ging, en hij
+  /// zat nog één laag dieper.
+  String haalReden = '';
+
   /// Eén GET: langs curl, langs het venster, of langs de gewone client — in die volgorde.
   ///
   /// **De volgorde is het hele punt.** `curl` is op een pc het snelst en bewezen. Komt hij er niet
@@ -342,7 +357,9 @@ class RuTrackerService {
   /// is een échte browser en lost de uitdaging zelf op. Pas als er ook geen venster is, blijft de
   /// gewone client over — die werkt dan niet beter dan voorheen, maar ook niet slechter.
   Future<({int status, List<int> bytes})?> _haal(String url, {String? referer}) async {
-    final langsCurl = await _haalMetCurl(url, referer: referer);
+    haalReden = '';
+    final heeftCurl = await curlBeschikbaar();
+    final langsCurl = heeftCurl ? await _haalMetCurl(url, referer: referer) : null;
     // Een 403 is hier geen antwoord maar een dichte deur: doorlopen naar het venster.
     if (langsCurl != null && langsCurl.status != 403) return langsCurl;
 
@@ -350,6 +367,9 @@ class RuTrackerService {
     if (venster != null) {
       final langsVenster = await venster(url, referer: referer);
       if (langsVenster != null) return langsVenster;
+      haalReden = vensterStand?.call() ?? 'het browservenster gaf niets terug';
+    } else {
+      haalReden = 'dit toestel heeft geen ingebouwd browservenster';
     }
     if (langsCurl != null) return langsCurl;
 
@@ -363,7 +383,11 @@ class RuTrackerService {
           .timeout(const Duration(seconds: 12));
       client.close();
       return (status: resp.statusCode, bytes: resp.bodyBytes);
-    } catch (_) {
+    } catch (e) {
+      // De uitzondering zelf erbij: het verschil tussen een naam die niet opgezocht kan worden en
+      // een verbinding die na twaalf seconden opgeeft is precies wat je wil weten.
+      final erbij = haalReden.isEmpty ? '' : '$haalReden, en ';
+      haalReden = '${erbij}de gewone verbinding gaf: $e';
       return null;
     }
   }
@@ -589,7 +613,15 @@ class RuTrackerService {
     final deadline = DateTime.now().add(const Duration(milliseconds: 10500));
     try {
       final resp = await _haal('$_base/tracker.php?nm=${Uri.encodeComponent(query)}');
-      if (resp == null) return [];
+      // **Hier stond `return []` zonder één woord.** Dat is dezelfde stilte als waar deze hele
+      // reeks over ging, één laag dieper: het scherm zei "Geen torrents gevonden." terwijl de app
+      // RuTracker helemaal niet gesproken had. Zie [haalReden].
+      if (resp == null) {
+        lastError = haalReden.isEmpty
+            ? 'RuTracker antwoordde niet.'
+            : 'RuTracker antwoordde niet — $haalReden.';
+        return [];
+      }
       // Een verlopen cf_clearance ziet er anders uit dan een verlopen sessie: geen omleiding naar
       // login.php, maar dezelfde wachtpagina als bij de deur. Opnieuw inloggen heeft dan geen zin —
       // dat loopt tegen precies dezelfde muur — dus zeg wat er aan de hand is en stop.
@@ -624,7 +656,28 @@ class RuTrackerService {
         return [];
       }
       final html = cp1251Tekst(resp.bytes);
+      // Een 200 hoeft nog geen zoekpagina te zijn. Twee gevallen die er precies zo uitzien als
+      // "RuTracker heeft niets", en die alledrie een andere handeling van je vragen.
+      if (cloudflareUitdaging(const {}, html)) {
+        lastError = uitdagingUitleg;
+        return [];
+      }
+      if (html.contains('login_username') && !html.contains('tracker.php')) {
+        settings.rutrackerCookie = '';
+        await settings.save();
+        lastError = 'Je RuTracker-sessie is verlopen — Instellingen → RuTracker → Aanmelden.';
+        return [];
+      }
       final rows = _parseRows(html);
+      // **Nul rijen uit een pagina die wél binnenkwam.** Dat is iets anders dan "niets gevonden":
+      // het kan de zoekpagina zijn die niets had, maar ook een RuTracker die zijn HTML veranderd
+      // heeft — en dat laatste is het brooste stuk van deze hele bron. Het aantal bytes erbij, want
+      // dat scheidt de twee: een lege uitslag is een halve pagina, een veranderde vorm een hele.
+      if (rows.isEmpty) {
+        lastError = 'RuTracker antwoordde (${resp.status}, ${resp.bytes.length} bytes) maar er '
+            'stond geen enkele resultaatrij in de pagina.';
+        return [];
+      }
       // De ontbrekende infohashes van de topicpagina halen.
       //
       // **Met een eigen klok, en dat is het verschil tussen resultaten en niets.** De zoekverdeler
@@ -647,8 +700,16 @@ class RuTrackerService {
         await Future.wait(need.map((r) async => r.hash = await _hashFromTopic(r.topicId)))
             .timeout(resterend, onTimeout: () => const []);
       }
-      return rows
-          .where((r) => r.hash != null)
+      // Rijen zonder infohash vallen af — daar valt niets mee op te halen. Maar vallen ze ALLEMAAL
+      // af, dan heeft RuTracker wel degelijk gevonden wat je zocht en komt het alleen niet bij je
+      // aan. Dat hoort iets heel anders op het scherm te zetten dan "geen torrents".
+      final metHash = rows.where((r) => r.hash != null).toList();
+      if (metHash.isEmpty) {
+        lastError = 'RuTracker vond ${rows.length} resultaten, maar van geen enkele kwam de '
+            'infohash binnen — de topicpagina\'s haalden de tijd niet.';
+        return [];
+      }
+      return metHash
           .map((r) => SearchResult(
                 name: r.title,
                 size: r.size,
@@ -663,7 +724,10 @@ class RuTrackerService {
                 torrentUrl: '$_base/dl.php?t=${r.topicId}',
               ))
           .toList();
-    } catch (_) {
+    } catch (e) {
+      // Ook hier stond een kale `return []`. Een uitzondering die niemand ooit ziet is een fout die
+      // je nooit vindt.
+      lastError = 'RuTracker liep vast: $e';
       return [];
     }
   }
