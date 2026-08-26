@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'json_body.dart';
@@ -128,8 +129,33 @@ class RuTrackerSource implements SearchSource {
   RuTrackerSource(this.service);
   @override
   String get id => 'rutracker';
+
+  /// **De twee laatste plekken waar RuTracker stil kon wegvallen.**
+  ///
+  /// De zoekverdeler hieronder hakt elke bron na twaalf seconden af en slikt de fout — `catch (_) {}`.
+  /// Duurde RuTracker te lang, dan verdween hij dus zonder dat er ook maar iets stond. En de zeef
+  /// die daar direct achter staat kan een volledige oogst wegwerpen zonder één woord.
+  ///
+  /// Elf seconden, want dat is één onder de kap van de verdeler: zo komt de melding er nog vóórdat
+  /// hij wordt weggegooid.
   @override
-  Future<List<SearchResult>> search(String query) => service.search(query);
+  Future<List<SearchResult>> search(String query) async {
+    try {
+      final uit = await service.search(query).timeout(const Duration(seconds: 11));
+      final overleeft =
+          uit.where((r) => r.hash.isNotEmpty && !isRommel(r.name)).length;
+      if (uit.isNotEmpty && overleeft == 0) {
+        service.lastError = 'RuTracker gaf ${uit.length} resultaten, maar de zeef hield ze '
+            'allemaal tegen — die ziet ze als beeld of als rommel.';
+      }
+      return uit;
+    } on TimeoutException {
+      if (service.lastError.isEmpty) {
+        service.lastError = 'RuTracker was na elf seconden nog bezig; het zoeken wacht niet langer.';
+      }
+      return const [];
+    }
+  }
 }
 
 final _adult = RegExp(

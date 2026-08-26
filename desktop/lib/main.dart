@@ -7552,14 +7552,28 @@ Widget _bronnenPagina(String titel, String vraag, {TrackTags? tags}) => Scaffold
 ///
 /// Eén regel tekst, in de kleur van een bijzonderheid en niet van een storing: dit is meestal iets
 /// wat je in twee tikken zelf oplost.
-Widget _waaromGeenTorrents(BuildContext context) {
+///
+/// **En hij hing aan de verkeerde voorwaarde.** Dit stond alleen op het scherm als de héle
+/// torrentlijst leeg was. Levert Knaben dertien treffers en RuTracker nul, dan is de lijst niet leeg
+/// — dus verscheen er geen woord, terwijl RuTracker er wel degelijk tussenuit viel. Precies het
+/// geval dat gemeld werd: "hij vindt torrents, maar niet via RuTracker, en ik zie geen foutmelding."
+///
+/// Nu hangt hij aan waar hij over gaat: is er iets te zeggen over RuTracker, dan staat het er, of er
+/// nu wél of geen andere torrents zijn.
+Widget _waaromGeenTorrents(BuildContext context, {required bool leeg}) {
   final reden = context.read<OnlineService>().rutracker.lastError;
+  if (!leeg && reden.isEmpty) return const SizedBox.shrink();
+  final tekst = leeg
+      ? (reden.isEmpty ? 'Geen torrents gevonden.' : 'Geen torrents gevonden — $reden')
+      // Er zijn wél torrents, alleen niet van deze bron. Dat is een aanvulling en geen mislukking,
+      // dus staat er ook bij dat de rest gewoon door is gegaan.
+      : 'RuTracker deed niet mee — $reden';
   return Padding(
     padding: const EdgeInsets.fromLTRB(24, 2, 24, 6),
     child: Text(
-      reden.isEmpty ? 'Geen torrents gevonden.' : 'Geen torrents gevonden — $reden',
+      tekst,
       style: TextStyle(
-          color: reden.isEmpty ? _muted : const Color(0xFFE8913A), fontSize: 12.5),
+          color: leeg && reden.isEmpty ? _muted : const Color(0xFFE8913A), fontSize: 12.5),
     ),
   );
 }
@@ -11499,7 +11513,7 @@ class _SourcesViewState extends State<SourcesView> {
         if (_torrents.isNotEmpty || _slsk.isNotEmpty)
           _filterChipsRow(_filter, (f) => setState(() => _filter = f)),
         _sourceHeader('Torrents · TorBox', torrents.length, _tBusy),
-        if (torrents.isEmpty && !_tBusy) _waaromGeenTorrents(context),
+        if (!_tBusy) _waaromGeenTorrents(context, leeg: torrents.isEmpty),
         ...torrents.map((r) => _torrentTile(context, r)),
         if (ready)
           _soulseekHeader(context, slsk, _sBusy, slsk,
@@ -13156,7 +13170,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           }),
         if (torrents.isNotEmpty) _sourceHeader('Torrents · TorBox', torrents.length, _busy),
         // Stond hier helemaal niet: waren er geen torrents, dan was er ook geen kop en geen woord.
-        if (torrents.isEmpty && !_busy && _getypt != null) _waaromGeenTorrents(context),
+        if (!_busy && _getypt != null) _waaromGeenTorrents(context, leeg: torrents.isEmpty),
         ...torrents.map((r) => _torrentTile(context, r)),
         if (_status == null || _slsk.isNotEmpty || _slskBusy)
           (soulseekReady
