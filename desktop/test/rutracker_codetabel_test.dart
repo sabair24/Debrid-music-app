@@ -9,6 +9,7 @@
 /// toekomstige "opruiming" naar `Uri.encodeQueryComponent` meteen rood wordt.
 library;
 
+import 'package:debridmusic/cp1251.dart';
 import 'package:debridmusic/rutracker.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -69,6 +70,34 @@ void main() {
 
     test('leeg blijft leeg', () {
       expect(RuTrackerService.cp1251Form(''), '');
+    });
+  });
+
+  group('en de andere kant op: wat er BINNENKOMT', () {
+    // De helft die ontbrak. Het versturen was hierboven gerepareerd; het antwoord werd nog met
+    // `latin1.decode` gelezen, en latin-1 en cp1251 zijn het alleen over ASCII eens. Elke
+    // Cyrillische byte werd dus een ander teken, en Russische titels kwamen als onzin binnen.
+    test('DE KERN: een Russische titel blijft leesbaar', () {
+      const titel = 'Кино - Группа крови (1988) FLAC';
+      final bytes = titel.runes.map((r) => cp1251Byte(r)!).toList();
+      expect(cp1251Tekst(bytes), titel);
+      // En dit is wat er vóór deze reparatie uit kwam: even lang, maar geen enkel juist teken.
+      final alsLatin = String.fromCharCodes(bytes);
+      expect(alsLatin, isNot(titel));
+      expect(alsLatin.length, titel.length, reason: 'daarom viel het niet op');
+    });
+
+    test('ASCII komt er ongeschonden doorheen', () {
+      const engels = 'Pink Floyd - The Wall (1979) [24bit/96kHz] FLAC';
+      final bytes = engels.runes.map((r) => cp1251Byte(r)!).toList();
+      expect(cp1251Tekst(bytes), engels);
+    });
+
+    test('de leestekens uit de bovenste helft ook', () {
+      // № staat in vrijwel elke Russische releasetitel, en «» rond albumnamen.
+      for (final teken in ['№', '«', '»', '—', '©']) {
+        expect(cp1251Tekst([cp1251Byte(teken.runes.first)!]), teken, reason: teken);
+      }
     });
   });
 }

@@ -82,6 +82,7 @@ import 'recommend.dart';
 import 'release_format.dart';
 import 'rutracker.dart';
 import 'rutracker_login.dart';
+import 'rutracker_venster.dart';
 import 'settings.dart';
 import 'slsk_groepen.dart';
 import 'speakers.dart';
@@ -323,6 +324,14 @@ Future<void> main() async {
   // Eén regel per minuut in hartslag.log. Zie hartslag.dart: de pc-app viel zes keer om zonder dat
   // er in enig logboek iets stond over het uur ervóór, en dat gat is waar het onderzoek op vastliep.
   startHartslag(appDir);
+  // RuTracker mag zijn pagina's door het browservenster halen. Zie rutracker_venster.dart: op een
+  // telefoon staat geen curl, en de gewone HTTP-client wordt door Cloudflare met 403 tegengehouden
+  // — ook mét een geldig koekje. Dit is een haak en geen import in rutracker.dart, zodat dat bestand
+  // zonder webview blijft compileren en toetsbaar blijft.
+  if (RutrackerVenster.kan) {
+    RuTrackerService.viaVenster =
+        (url, {referer}) => RutrackerVenster.instantie.haal(url, referer: referer);
+  }
   if (_isDesktop) await windowManager.ensureInitialized();
   if (!await _claimSingleInstance()) {
     exit(0);
@@ -376,6 +385,18 @@ Future<void> main() async {
 
   final settings = AppSettings();
   await settings.load();
+  // Het onzichtbare RuTracker-venster alvast opbouwen, maar alléén als je daar aangemeld bent.
+  //
+  // **Waarom vooraf en niet bij de eerste zoekopdracht.** Het opbouwen kost seconden — de pagina
+  // laden, en zo nodig een Cloudflare-uitdaging oplossen — en de zoekverdeler hakt elke bron na
+  // twaalf seconden af. Wachtte hij tot je zocht, dan leverde juist je éérste zoekopdracht niets op,
+  // en dat is precies de zoekopdracht waarop je oordeelt of het werkt.
+  //
+  // Zonder koekje gebeurt er niets: dan is er niets aan te melden en hoort de app die site ook niet
+  // uit zichzelf te benaderen.
+  if (RutrackerVenster.kan && settings.rutrackerCookie.isNotEmpty) {
+    unawaited(RutrackerVenster.instantie.warmOp());
+  }
   final library = LibraryStore();
   // Before anything reads it: the download manager captures the root by value, and the LAN
   // server derives every track id from paths relative to it.
@@ -7520,6 +7541,27 @@ Widget _bronnenPagina(String titel, String vraag, {TrackTags? tags}) => Scaffold
       body: SingleChildScrollView(child: SourcesView(query: vraag, tags: tags)),
     );
 
+/// Waarom er geen torrents staan — als daar een betere reden voor is dan "die zijn er niet".
+///
+/// **Waarom dit bestaat.** `RuTrackerService` vult `lastError` bij élke reden om niets terug te
+/// geven: niet aangemeld, sessie verlopen, Cloudflare ertussen. Geen van die meldingen werd ooit
+/// getoond. Je zag dus altijd hetzelfde lege lijstje, en ging het zoeken in je wachtwoord, of in de
+/// tracker, of je gaf het op — terwijl de app precies wist wat eraan scheelde.
+///
+/// Eén regel tekst, in de kleur van een bijzonderheid en niet van een storing: dit is meestal iets
+/// wat je in twee tikken zelf oplost.
+Widget _waaromGeenTorrents(BuildContext context) {
+  final reden = context.read<OnlineService>().rutracker.lastError;
+  return Padding(
+    padding: const EdgeInsets.fromLTRB(24, 2, 24, 6),
+    child: Text(
+      reden.isEmpty ? 'Geen torrents gevonden.' : 'Geen torrents gevonden — $reden',
+      style: TextStyle(
+          color: reden.isEmpty ? _muted : const Color(0xFFE8913A), fontSize: 12.5),
+    ),
+  );
+}
+
 /// Het menu voor een nummer dat je NIET hebt.
 ///
 /// **Dezelfde vorm en dezelfde volgorde als [_nummerMenu], en dat is het hele punt.** Een
@@ -11455,10 +11497,7 @@ class _SourcesViewState extends State<SourcesView> {
         if (_torrents.isNotEmpty || _slsk.isNotEmpty)
           _filterChipsRow(_filter, (f) => setState(() => _filter = f)),
         _sourceHeader('Torrents · TorBox', torrents.length, _tBusy),
-        if (torrents.isEmpty && !_tBusy)
-          const Padding(
-              padding: EdgeInsets.fromLTRB(24, 2, 24, 6),
-              child: Text('Geen torrents gevonden.', style: TextStyle(color: _muted, fontSize: 12.5))),
+        if (torrents.isEmpty && !_tBusy) _waaromGeenTorrents(context),
         ...torrents.map((r) => _torrentTile(context, r)),
         if (ready)
           _soulseekHeader(context, slsk, _sBusy, slsk,
@@ -13114,6 +13153,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             );
           }),
         if (torrents.isNotEmpty) _sourceHeader('Torrents · TorBox', torrents.length, _busy),
+        // Stond hier helemaal niet: waren er geen torrents, dan was er ook geen kop en geen woord.
+        if (torrents.isEmpty && !_busy && _getypt != null) _waaromGeenTorrents(context),
         ...torrents.map((r) => _torrentTile(context, r)),
         if (_status == null || _slsk.isNotEmpty || _slskBusy)
           (soulseekReady
@@ -16403,6 +16444,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
     settings.rutrackerCookie = sessie.cookie;
     if (sessie.ua.isNotEmpty) settings.rutrackerUa = sessie.ua;
     await settings.save();
+    // Meteen het onzichtbare venster opbouwen, zodat je eerste zoekopdracht niet op die opbouw hoeft
+    // te wachten. Zie rutracker_venster.dart.
+    if (RutrackerVenster.kan) unawaited(RutrackerVenster.instantie.warmOp());
     if (!mounted) return;
     setState(() {
       _rtBusy = true;
