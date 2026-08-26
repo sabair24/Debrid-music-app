@@ -18,7 +18,24 @@ import 'package:debridmusic/online.dart';
 import 'package:debridmusic/rutracker.dart';
 import 'package:debridmusic/search.dart';
 import 'package:debridmusic/settings.dart';
+import 'package:debridmusic/torbox.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+/// Een RuTracker die teruggeeft wat de toets nodig heeft, zonder net.
+class _NepRt extends RuTrackerService {
+  _NepRt(super.settings, this.uit);
+  final List<SearchResult> uit;
+  @override
+  Future<List<SearchResult>> search(String query, {bool allowRelogin = true}) async => uit;
+}
+
+SearchResult _treffer(String naam) => SearchResult(
+      name: naam,
+      magnet: 'magnet:?xt=urn:btih:${'a' * 40}',
+      hash: 'a' * 40,
+      source: 'RuTracker',
+      seeders: 3,
+    );
 
 RuTrackerService? uitDeVerdeler(OnlineService online) {
   for (final bron in online.aggregator.sources) {
@@ -63,6 +80,33 @@ void main() {
       settings.rutrackerCookie = 'bb_session=iets';
       expect(rt.configured, isTrue);
       expect(rt.kanZelfAanmelden, isFalse, reason: 'zelf inloggen vraagt wél om naam en wachtwoord');
+    });
+  });
+
+  group('een oogst die de zeef niet overleeft, zegt dat', () {
+    test('DE KERN: alles weggezeefd is iets anders dan niets gevonden', () async {
+      // Zonder deze regel valt RuTracker hier stil weg: de zeef in de zoekverdeler gooit de rijen
+      // weg en `catch (_) {}` eromheen slikt alles. Op het scherm zie je dan treffers van een
+      // ándere bron staan en over RuTracker geen woord — precies wat er gemeld werd.
+      final rt = _NepRt(AppSettings(), [_treffer('Concert 2011 1080p x264')]);
+      final bron = RuTrackerSource(rt);
+      expect(await bron.search('iets'), hasLength(1), reason: 'de bron geeft door wat hij vond');
+      expect(rt.lastError, contains('zeef'));
+      expect(rt.lastError, contains('1 resultaten'));
+    });
+
+    test('en een oogst die er wél doorkomt zegt niets', () async {
+      final rt = _NepRt(AppSettings(), [_treffer('Gala - Come Into My Life [24-96] FLAC')]);
+      await RuTrackerSource(rt).search('iets');
+      expect(rt.lastError, isEmpty);
+    });
+
+    test('een lege oogst laat de melding van search() staan', () async {
+      // search() zet daar zelf al een zin neer (geen aanmelding, sessie verlopen, Cloudflare). Die
+      // mag hier niet overschreven worden door een zeefmelding die nergens over gaat.
+      final rt = _NepRt(AppSettings(), const [])..lastError = 'de sessie is verlopen';
+      await RuTrackerSource(rt).search('iets');
+      expect(rt.lastError, 'de sessie is verlopen');
     });
   });
 
