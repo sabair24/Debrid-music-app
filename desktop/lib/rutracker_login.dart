@@ -24,6 +24,7 @@
 /// plakweg gewoon staan; die wordt niet weggegooid.
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -32,6 +33,55 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 /// Waar de aanmelding begint. `login.php` en niet de voorpagina: dan sta je meteen op het formulier.
 const kRutrackerLoginUrl = 'https://rutracker.org/forum/login.php';
+
+/// De adressen waar de koekjes van RuTracker onder kunnen staan, van smal naar breed.
+///
+/// **Dit is de reparatie, en hij is klein en beslissend.** Een koekje hoort bij een pad. RuTracker
+/// zet `bb_session` onder `/forum/`, want daar staat het hele forum. Vraag je de koekjeslade om
+/// `https://rutracker.org` — dus pad `/` — dan geeft hij dat koekje niet terug: het pad past niet.
+///
+/// Wat je dan ziet is precies wat er gebeurde: je bent aantoonbaar ingelogd (je naam staat
+/// linksboven op de pagina), en het venster blijft zeggen dat het aan het laden is. Er kwam namelijk
+/// een lege lijst terug, en een lege lijst was "nog niets".
+///
+/// Daarom wordt er nu op alle drie gekeken en samengevoegd: het forumpad, de wortel, en het adres
+/// waar je op dat moment staat.
+const kRutrackerKoekjeUrls = <String>[
+  'https://rutracker.org/forum/',
+  'https://rutracker.org/',
+];
+
+/// Voeg koekjeslijsten samen tot één `Cookie:`-kop, zonder herhaling.
+///
+/// De eerste waarde die voor een naam binnenkomt wint — de lijsten komen van smal naar breed, en het
+/// smalste pad is het meest specifieke. Lege waarden tellen niet mee: die zijn een gewiste koekje.
+///
+/// Apart en zuiver, zodat er een toets op past zonder toestel en zonder webview.
+String voegKoekjesSamen(List<List<({String naam, String waarde})>> lijsten) {
+  final gezien = <String, String>{};
+  for (final lijst in lijsten) {
+    for (final k in lijst) {
+      if (k.naam.isEmpty || k.waarde.isEmpty) continue;
+      gezien.putIfAbsent(k.naam, () => k.waarde);
+    }
+  }
+  return gezien.entries.map((e) => '${e.key}=${e.value}').join('; ');
+}
+
+/// Een `document.cookie`-regel uitpluizen naar losse paren.
+///
+/// Dat is de tweede bron naast de koekjeslade: op sommige toestellen geeft de lade minder terug dan
+/// de pagina zelf ziet. Wat HttpOnly is (zoals `cf_clearance`) staat hier niet in — vandaar dat het
+/// een aanvulling is en geen vervanging.
+List<({String naam, String waarde})> leesDocumentCookie(String regel) {
+  final uit = <({String naam, String waarde})>[];
+  for (final deel in regel.split(';')) {
+    final m = RegExp(r'^\s*([A-Za-z0-9_\-\.]+)=(.*)$').firstMatch(deel);
+    if (m == null) continue;
+    uit.add((naam: m.group(1)!, waarde: m.group(2)!.trim()));
+  }
+  return uit;
+}
 
 /// Draagt dit toestel een ingebouwd browservenster?
 ///
@@ -84,6 +134,23 @@ class _RutrackerLoginPaginaState extends State<RutrackerLoginPagina> {
   InAppWebViewController? _web;
   String _stand = 'Bezig met laden…';
   bool _klaar = false;
+  Timer? _klok;
+
+  /// **Waarom er een klok naast `onLoadStop` staat.** De aanmelding zet het koekje soms zonder dat
+  /// er nog een pagina geladen wordt — RuTracker stuurt je door met JavaScript, of Cloudflare doet
+  /// zijn ding op dezelfde pagina. Hing het uitsluitend aan `onLoadStop`, dan bleef het venster
+  /// staan terwijl je allang binnen was. Twee seconden is ruim genoeg en kost niets.
+  @override
+  void initState() {
+    super.initState();
+    _klok = Timer.periodic(const Duration(seconds: 2), (_) => _kijk());
+  }
+
+  @override
+  void dispose() {
+    _klok?.cancel();
+    super.dispose();
+  }
 
   /// Kijk of de oogst binnen is, en sluit als dat zo is.
   ///
@@ -92,24 +159,61 @@ class _RutrackerLoginPaginaState extends State<RutrackerLoginPagina> {
   Future<void> _kijk() async {
     if (_klaar || !mounted) return;
     final sessie = await _oogst();
-    if (sessie == null || !mounted) return;
-    setState(() => _stand = sessie.heeftSessie ? 'Aangemeld ✓' : 'Cloudflare doorlopen…');
-    if (!sessie.heeftSessie) return;
+    if (!mounted) return;
+    // **Altijd zeggen wat er ligt.** Hier stond een stilzwijgende terugkeer bij een lege oogst, en
+    // dat is precies hoe "Bezig met laden…" kon blijven staan terwijl je ingelogd op je eigen
+    // profielpagina keek. Een stand die niet meebeweegt met wat er gebeurt is erger dan geen stand.
+    final nieuw = sessie == null
+        ? 'Nog geen koekje gevonden — log in en tik daarna op Klaar'
+        : sessie.heeftSessie
+            ? 'Aangemeld ✓'
+            : sessie.heeftClearance
+                ? 'Cloudflare doorlopen — nu nog inloggen'
+                : 'Pagina geladen — log in en tik daarna op Klaar';
+    if (nieuw != _stand) setState(() => _stand = nieuw);
+    if (sessie == null || !sessie.heeftSessie) return;
     _klaar = true;
+    _klok?.cancel();
     // Even laten staan, anders knippert het venster weg vóór je gezien hebt dat het gelukt is.
     await Future<void>.delayed(const Duration(milliseconds: 400));
     if (mounted) Navigator.of(context).pop(sessie);
   }
 
   /// De koekjes en het kenmerk van dit venster, samen.
+  ///
+  /// Drie bronnen, samengevoegd: het forumpad, de wortel, en het adres waar je nu staat — plus
+  /// `document.cookie` als aanvulling. Zie [kRutrackerKoekjeUrls] voor waarom dat pad het hele
+  /// verschil maakte.
   Future<RtSessie?> _oogst() async {
     final web = _web;
     if (web == null) return null;
     try {
-      final koekjes =
-          await CookieManager.instance().getCookies(url: WebUri('https://rutracker.org'));
-      if (koekjes.isEmpty) return null;
-      final kop = koekjes.map((c) => '${c.name}=${c.value}').join('; ');
+      final lade = CookieManager.instance();
+      final adressen = <String>[
+        ...kRutrackerKoekjeUrls,
+        (await web.getUrl())?.toString() ?? '',
+      ];
+      final lijsten = <List<({String naam, String waarde})>>[];
+      for (final adres in adressen) {
+        if (adres.isEmpty || !adres.contains('rutracker')) continue;
+        try {
+          final koekjes = await lade.getCookies(url: WebUri(adres));
+          lijsten.add([
+            for (final c in koekjes) (naam: c.name, waarde: '${c.value}'),
+          ]);
+        } catch (_) {
+          // Eén adres dat niets oplevert mag de andere twee niet meenemen.
+        }
+      }
+      // De pagina zelf als aanvulling. Wat HttpOnly is staat hier niet in, dus dit vervangt de lade
+      // niet — het vult hem aan op toestellen waar de lade karig is.
+      try {
+        final regel = await web.evaluateJavascript(source: 'document.cookie');
+        if (regel is String && regel.isNotEmpty) lijsten.add(leesDocumentCookie(regel));
+      } catch (_) {/* geen document.cookie is geen storing */}
+
+      final kop = voegKoekjesSamen(lijsten);
+      if (kop.isEmpty) return null;
       // Het ECHTE kenmerk van dit venster, niet een dat wij verzinnen. Daar hangt `cf_clearance`
       // aan vast; zie de uitleg bovenaan dit bestand.
       final ua = await web.evaluateJavascript(source: 'navigator.userAgent');
@@ -139,6 +243,16 @@ class _RutrackerLoginPaginaState extends State<RutrackerLoginPagina> {
           tooltip: 'Sluiten',
           onPressed: _sluitZelf,
         ),
+        actions: [
+          // **De uitweg die er niet was.** Ziet het venster je aanmelding om welke reden dan ook
+          // niet, dan hoor je niet vast te zitten: hiermee neem je mee wat er ligt en sta je terug
+          // in de app. Wat er ontbreekt zegt Instellingen daarna alsnog.
+          TextButton.icon(
+            onPressed: _sluitZelf,
+            icon: const Icon(Icons.check_rounded),
+            label: const Text('Klaar'),
+          ),
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(24),
           child: Padding(
