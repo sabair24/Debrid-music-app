@@ -22,6 +22,7 @@ import 'echtheid.dart';
 import 'echtheid_meter.dart';
 import 'echtheid_oordelen.dart';
 import 'flac_tags.dart';
+import 'torbox_stand.dart';
 import 'vaste_keuze.dart';
 
 /// TorBox search + resolve + download, ported from the server's OnlineService.
@@ -127,7 +128,10 @@ class OnlineService {
       // Niet gelukt (geen sessie, of de bron gaf een pagina in plaats van een torrent)? Dan
       // alsnog de magneet: die werkt bij een torrent die wél in DHT zit.
     }
-    final uitkomst = await torbox.addMagnet(r.magnet);
+    // Open announce-adressen erbij als de magneet er geen heeft: anders moet TorBox de zwerm
+    // uitsluitend via DHT zien te vinden, en dat is precies waar het bij een index als Knaben
+    // misgaat — daar komt een kale `magnet:?xt=urn:btih:` uit. Zie `magneetMetAnnounce`.
+    final uitkomst = await torbox.addMagnet(magneetMetAnnounce(r.magnet));
     final gevonden = await _uitTorboxAntwoord(uitkomst, r.hash);
     if (gevonden != null) return gevonden;
     if (uitkomst.storing) throw await _storingUitleg(uitkomst);
@@ -211,7 +215,19 @@ class OnlineService {
       final item = list.cast<TbTorrent?>().firstWhere(
           (t) => (id != null && t?.id == id) || (t?.hash?.toLowerCase() == hash.toLowerCase()),
           orElse: () => null);
-      onProgress?.call(item?.progress ?? 0, item?.status ?? 'toevoegen');
+      // **De waarheid doorgeven, niet alleen het percentage.** Deze regel gaf al een status mee, en
+      // het venster gooide die weg voor een vaste zin over "weinig seeders" — op een torrent met er
+      // veertig. Zie `torbox_stand.dart`.
+      onProgress?.call(
+        item?.progress ?? 0,
+        torboxStand(
+          gecacht: item?.cached ?? false,
+          deel: item?.progress ?? 0,
+          status: item?.status ?? 'toevoegen',
+          seeds: item?.seeds ?? 0,
+          grootte: item?.size ?? 0,
+        ),
+      );
       if (item == null) {
         noProgress += delayMs;
       } else if (item.isFailed) {
