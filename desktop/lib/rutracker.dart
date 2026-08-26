@@ -596,7 +596,24 @@ class RuTrackerService {
   RtCaptcha? pendingCaptcha;
   String lastError = '';
 
+  /// Hoeveel treffers RuTracker de laatste keer opleverde. **-1 betekent: niet bevraagd.**
+  ///
+  /// **Waarom dit erbij moest, en waarom -1 apart staat.** Er is een reeks meldingen bijgebouwd voor
+  /// élke reden om niets terug te geven, en op het scherm bleef het stil. Dat kan drie dingen
+  /// betekenen die van buiten identiek zijn: hij is niet bevraagd, hij gaf nul, of hij gaf treffers
+  /// die verderop wegvielen. Zolang die drie hetzelfde lege scherm opleveren blijft elke reparatie
+  /// een gok.
+  ///
+  /// Daarom telt hij nu gewoon, en zegt het scherm het altijd — ook als er niets aan de hand is.
+  int laatsteAantal = -1;
+
+  /// Hoeveel daarvan de zeef in `search.dart` overleefden. Zie [laatsteAantal].
+  int laatsteDoorZeef = -1;
+
   Future<List<SearchResult>> search(String query, {bool allowRelogin = true}) async {
+    // Niet bevraagd, tot het tegendeel blijkt. Zie [laatsteAantal].
+    laatsteAantal = -1;
+    laatsteDoorZeef = -1;
     // Zwijgen is hier duur gebleken: een lege lijst leest als "RuTracker heeft niets", terwijl de
     // reden is dat er niets klaarstaat om mee binnen te komen. Zeg het dus.
     if (settings.rutrackerCookie.isEmpty) {
@@ -608,6 +625,9 @@ class RuTrackerService {
     // Schoon beginnen. Zonder dit blijft de melding van de vórige poging staan nadat je het
     // probleem allang verholpen hebt — en dan zegt het scherm iets dat niet meer waar is.
     lastError = '';
+    // Vanaf hier is hij wél bevraagd. Elke uitgang hieronder zet een reden in [lastError]; dit getal
+    // maakt daarnaast zichtbaar of er iets binnenkwam.
+    laatsteAantal = 0;
     // De zoekverdeler in search.dart hakt elke bron na 12 seconden af, en slikt de fout. Blijf daar
     // met opzet onder: liever een korte lijst die aankomt dan een volledige die weggegooid wordt.
     final deadline = DateTime.now().add(const Duration(milliseconds: 10500));
@@ -709,6 +729,7 @@ class RuTrackerService {
             'infohash binnen — de topicpagina\'s haalden de tijd niet.';
         return [];
       }
+      laatsteAantal = metHash.length;
       return metHash
           .map((r) => SearchResult(
                 name: r.title,
