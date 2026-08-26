@@ -20,6 +20,20 @@ import 'organize.dart' show baseName, fileWords;
 /// De haakjes met wat erin staat: "(My Songs Version)", "[Radio Edit]", "{2019}".
 final _haakjes = RegExp(r'[(\[{][^)\]}]*[)\]}]');
 
+/// De patronen van [vraagScore] en [woordenOpVolgorde], één keer gebouwd.
+///
+/// Ze stonden in de body, en die twee functies draaien PER AANGEBODEN BESTAND per zoekopdracht —
+/// bij Soulseek zijn dat er honderden. Het patroon voor het kale tracknummer stond bovendien binnen
+/// een `where`, dus het werd per WOORD opnieuw gebouwd en gecompileerd. Zie de uitleg boven de
+/// gelijksoortige lijst in `organize.dart`; dit is dezelfde fout in het bestand ernaast.
+///
+/// Eigen namen per bestand: dit bestand importeert al `baseName` en `fileWords` uit `organize.dart`,
+/// en top-level namen mogen daar niet mee botsen.
+final _padScheiding = RegExp(r'[\\/]');
+final _extensie = RegExp(r'\.[a-z0-9]{2,4}$');
+final _woordScheiding = RegExp(r'[^a-z0-9]+');
+final _kaalNummer = RegExp(r'^\d{1,3}$');
+
 /// De vragen die geprobeerd mogen worden, van precies naar ruim, zonder herhalingen.
 ///
 /// Altijd minstens één element zolang [vraag] iets bevat. De aanroeper stopt bij de eerste die
@@ -107,7 +121,7 @@ double vraagScore(String vraag, String pad) {
   if (gevraagd.isEmpty) return 0;
   final naam = fileWords(baseName(pad));
   final rest = pad.substring(0, pad.length - baseName(pad).length);
-  final map = fileWords(rest.replaceAll(RegExp(r'[\\/]'), ' '));
+  final map = fileWords(rest.replaceAll(_padScheiding, ' '));
   var punten = 0.0;
   for (final w in gevraagd) {
     if (naam.contains(w)) {
@@ -135,9 +149,9 @@ bool volslagenAnders(String vraag, String pad) => vraagScore(vraag, pad) == 0;
 /// als scheiding, losse letters weg en kale tracknummers weg.
 List<String> woordenOpVolgorde(String s) => s
     .toLowerCase()
-    .replaceAll(RegExp(r'\.[a-z0-9]{2,4}$'), '')
-    .split(RegExp(r'[^a-z0-9]+'))
-    .where((w) => w.length > 1 && !RegExp(r'^\d{1,3}$').hasMatch(w))
+    .replaceAll(_extensie, '')
+    .split(_woordScheiding)
+    .where((w) => w.length > 1 && !_kaalNummer.hasMatch(w))
     .toList();
 
 /// Hoeveel van de vraag ACHTER ELKAAR in de bestandsnaam staat, als deel van het geheel.

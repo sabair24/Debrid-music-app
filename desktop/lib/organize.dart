@@ -30,6 +30,16 @@ final _langStreepje = RegExp(r'[‐-―−]');
 final _nietAlfanumeriek = RegExp(r'[^a-z0-9]+');
 final _spaties = RegExp(r'\s+');
 
+/// Dezelfde reparatie, voor de drie functies die toen zijn overgeslagen.
+///
+/// [fileWords] en [baseName] zitten in de binnenlus van het zoeken: ze draaien per aangeboden
+/// bestand per zoekopdracht, en [fileWords] bouwde er drie per aanroep — waarvan één (het kale
+/// tracknummer) binnen een closure, dus per WOORD opnieuw. Dat is precies de fout die hierboven
+/// beschreven staat, één bestand verderop blijven staan.
+final _bestandsExtensie = RegExp(r'\.[a-z0-9]{2,4}$');
+final _kaalTracknummer = RegExp(r'^\d{1,3}$');
+final _padScheiding = RegExp(r'[\\/]');
+
 String normKey(String s) {
   final unified = _fold(s
       .toLowerCase()
@@ -1125,7 +1135,7 @@ Set<String> versionMarkers(String filename) {
 /// De looptijd blijft er in [fileOffersTitle] achteraan als tweede slot: een heropname uit 2019 en
 /// de plaat uit 1993 lopen zelden even lang.
 bool versieVolgtUitMap(String titel, String pad) => _merkWijstNaar(
-    titel, fileWords(pad.substring(0, pad.length - baseName(pad).length).replaceAll(RegExp(r'[\\/]'), ' ')));
+    titel, fileWords(pad.substring(0, pad.length - baseName(pad).length).replaceAll(_padScheiding, ' ')));
 
 /// Mag de titel van een PERSING die van jouw eigen bestand vervangen?
 ///
@@ -1672,9 +1682,9 @@ int trackNoFromPosition(String position, int disc, List<ChoiceTrack> all) {
 }
 
 Set<String> fileWords(String displayName) {
-  final noExt = displayName.toLowerCase().replaceAll(RegExp(r'\.[a-z0-9]{2,4}$'), '');
-  final words = noExt.split(RegExp(r'[^a-z0-9]+')).where((w) => w.length > 1).toSet();
-  words.removeWhere((w) => RegExp(r'^\d{1,3}$').hasMatch(w)); // drop bare track numbers
+  final noExt = displayName.toLowerCase().replaceAll(_bestandsExtensie, '');
+  final words = noExt.split(_nietAlfanumeriek).where((w) => w.length > 1).toSet();
+  words.removeWhere(_kaalTracknummer.hasMatch); // drop bare track numbers
   return words;
 }
 
@@ -1689,7 +1699,7 @@ double wordSim(Set<String> a, Set<String> b) {
 
 /// The last segment of a peer's path — the filename as a human would read it.
 String baseName(String path) {
-  final cut = path.lastIndexOf(RegExp(r'[\\/]'));
+  final cut = path.lastIndexOf(_padScheiding);
   return cut < 0 ? path : path.substring(cut + 1);
 }
 
@@ -1700,7 +1710,7 @@ String baseName(String path) {
 /// "daft", "punk" and "discovery" are right there in the first file's folders. Words that appear
 /// nowhere in the other file's path are a different song's title, not a naming habit.
 Set<String> _unexplained(Set<String> mine, Set<String> theirs, String theirPath) {
-  final context = fileWords(theirPath.replaceAll(RegExp(r'[\\/]'), ' '));
+  final context = fileWords(theirPath.replaceAll(_padScheiding, ' '));
   return mine.difference(theirs).where((w) => !context.contains(w)).toSet();
 }
 
@@ -1784,7 +1794,7 @@ bool fileOffersTitle(String title, int? titleDur, String artist, String path, in
   if (tw.difference(fw).union(fw.difference(tw)).any(_versionWordRe.hasMatch)) return false;
   // Anything the filename says beyond the title must be the artist, the album, or the folders it
   // sits in — otherwise it is another song sharing a word with this one.
-  final known = fileWords('$artist ${path.replaceAll(RegExp(r'[\\/]'), ' ')}'.replaceAll(baseName(path), ''));
+  final known = fileWords('$artist ${path.replaceAll(_padScheiding, ' ')}'.replaceAll(baseName(path), ''));
   if (fw.difference(tw).any((w) => !known.contains(w))) return false;
   final a = titleDur ?? 0, b = fileDur ?? 0;
   if (a > 0 && b > 0) return (a - b).abs() <= 12;
