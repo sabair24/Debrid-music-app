@@ -2387,16 +2387,53 @@ class DownloadManager extends ChangeNotifier {
     // Wie er straks mag opruimen wordt niet híer bepaald maar door [_lopersPerTorrent] geteld: ook
     // de opdracht die de torrent zélf aanmeldde mag de map niet weggooien zolang er nog een tweede
     // aan hangt.
+    var aanhaakReden = '';
     if (gid == null) {
       final bestaand = await motor.zoekGidVoor(torrent.hash ?? '');
-      if (bestaand != null && await motor.kiesErbij(bestaand, gekozen)) {
+      if (bestaand == null) {
+        aanhaakReden = (torrent.hash ?? '').isEmpty
+            ? 'deze bron gaf geen infohash mee'
+            : 'aria2 kende hem wel maar wilde hem niet aanwijzen';
+      } else if (await motor.kiesErbij(bestaand, gekozen)) {
         gid = bestaand;
         _log.line('torrent ${torrent.hash} liep al (gid=$bestaand) — aangehaakt in plaats van '
             'opnieuw aangemeld');
+      } else {
+        aanhaakReden = motor.laatsteFout ?? 'er kon niets bij gekozen worden';
       }
     }
+
+    // WACHTEN IS BETER DAN MISLUKKEN.
+    //
+    // Aanhaken is de snelle weg en werkt meestal. Maar aria2 laat `select-file` niet in alle
+    // toestanden veranderen, en dan stond er "Mislukt" op een nummer dat gewoon even had kunnen
+    // wachten tot de rest van de plaat binnen was. Gemeten op 26-08-2026 met Boney M: nummer 3 kwam
+    // binnen, nummer 1 en 2 vielen om met "InfoHash … is already registered".
+    //
+    // Zodra de andere download klaar is haalt [verwijder] de torrent uit aria2, en dan gaat deze
+    // aanmelding alsnog. Vier minuten is ruim voor een nummer, en eindig genoeg om niet voor eeuwig
+    // een plek in de rij te bezetten.
+    if (gid == null && (torrent.hash ?? '').isNotEmpty) {
+      alle('waiting', detail: 'wacht op een andere download van deze plaat');
+      final tot = DateTime.now().add(const Duration(minutes: 4));
+      while (gid == null && DateTime.now().isBefore(tot)) {
+        if (jobs.every((j) => j.cancelled)) return;
+        await Future<void>.delayed(const Duration(seconds: 3));
+        gid = await motor.voegTorrentToe(torrent.lokaleTorrent!,
+            map: destDir.path, kies: gekozen);
+      }
+    }
+
     if (gid == null) {
-      alle('failed', detail: motor.laatsteFout ?? 'torrent geweigerd');
+      // Zeg wat er ECHT gebeurde. "InfoHash … is already registered" laat de gebruiker denken dat
+      // zijn download dubbel is; de waarheid is dat de app hem niet bij de lopende torrent kreeg,
+      // en waarom dat niet lukte is het enige waar iemand iets mee kan.
+      final kaal = motor.laatsteFout ?? 'torrent geweigerd';
+      alle('failed',
+          detail: aanhaakReden.isEmpty
+              ? kaal
+              : 'Deze plaat wordt al opgehaald en dit nummer kon er niet bij — $aanhaakReden. '
+                  '($kaal)');
       return;
     }
 
