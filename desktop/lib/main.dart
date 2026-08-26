@@ -16528,6 +16528,22 @@ class _SettingsDialogState extends State<SettingsDialog> {
     // Meteen het onzichtbare venster opbouwen, zodat je eerste zoekopdracht niet op die opbouw hoeft
     // te wachten. Zie rutracker_venster.dart.
     if (RutrackerVenster.kan) unawaited(RutrackerVenster.instantie.warmOp());
+
+    // **En doorgeven aan de pc, want dáár wordt gezocht.** Dit was het gat waar drie uitgaven in
+    // verdwenen: je meldt je op je telefoon aan, maar zodra die aan je pc gekoppeld is loopt het
+    // zoeken en het downloaden over de pc — en die had geen sessie, dus vroeg hij RuTracker niet
+    // eens. Op het scherm stond dan "RuTracker: niet bevraagd", en dat was waar, alleen ging het
+    // over de verkeerde machine.
+    final online = context.read<OnlineService>();
+    if (online is RemoteOnlineService) {
+      final pc = await online.stuurRutrackerSessie(sessie.cookie, sessie.ua);
+      if (!mounted) return;
+      setState(() => _conn['rutracker'] = ConnResult(
+          pc.ok ? ConnState.ok : ConnState.fail,
+          pc.ok ? 'Aangemeld — ook op de pc, die het zoeken doet' : 'Op dit toestel aangemeld, '
+              'maar de pc niet: ${pc.reden}'));
+      return;
+    }
     if (!mounted) return;
     setState(() {
       _rtBusy = true;
@@ -16539,6 +16555,30 @@ class _SettingsDialogState extends State<SettingsDialog> {
       setState(() => _conn['rutracker'] = werkt
           ? const ConnResult(ConnState.ok, 'Aangemeld — RuTracker antwoordt')
           : const ConnResult(ConnState.fail, 'Koekje opgehaald, maar RuTracker weigert het nog'));
+    } finally {
+      if (mounted) setState(() => _rtBusy = false);
+    }
+  }
+
+  /// De aanmelding die al op dit toestel staat alsnog naar de pc sturen.
+  ///
+  /// Voor wie zich eerder aanmeldde toen die weg er nog niet was. Zie `_meldAanInVenster` voor
+  /// waarom dit moet: gekoppeld aan een pc gebeurt het zoeken daar, en een sessie die hier blijft
+  /// staan doet niets.
+  Future<void> _stuurRtNaarPc() async {
+    final online = context.read<OnlineService>();
+    if (online is! RemoteOnlineService) return;
+    final settings = context.read<AppSettings>();
+    setState(() {
+      _rtBusy = true;
+      _conn['rutracker'] = const ConnResult(ConnState.checking);
+    });
+    try {
+      final pc = await online.stuurRutrackerSessie(
+          settings.rutrackerCookie, settings.rutrackerUa);
+      if (!mounted) return;
+      setState(() => _conn['rutracker'] = ConnResult(
+          pc.ok ? ConnState.ok : ConnState.fail, pc.reden));
     } finally {
       if (mounted) setState(() => _rtBusy = false);
     }
@@ -16835,6 +16875,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             icon: const Icon(Icons.cookie_outlined, size: 16),
                             label: const Text('Koekje uit browser…'),
                           ),
+                          // Alleen als dit toestel aan een pc hangt. Dan gebeurt het zoeken dáár, en
+                          // een aanmelding die hier blijft staan doet niets — precies het gat waar
+                          // drie uitgaven in verdwenen. Voor wie zich al aangemeld had, want die
+                          // hoeft dat niet nog een keer te doen.
+                          if (context.read<OnlineService>() is RemoteOnlineService &&
+                              context.watch<AppSettings>().rutrackerCookie.isNotEmpty)
+                            OutlinedButton.icon(
+                              onPressed: _stuurRtNaarPc,
+                              icon: const Icon(Icons.computer_rounded, size: 16),
+                              label: const Text('Naar de pc sturen'),
+                            ),
                           ConstrainedBox(
                             constraints: const BoxConstraints(maxWidth: 320),
                             child: Text(

@@ -207,6 +207,54 @@ void main() {
     });
   });
 
+  group('DE KERN: RuTracker hangt aan de machine die zoekt', () {
+    // Dit is het gat waar drie uitgaven in verdwenen. Het aanmeldvenster staat op de telefoon; het
+    // zoeken en het downloaden gebeuren op de pc. Die twee zaten niet aan elkaar vast, dus meldde je
+    // je op je telefoon aan terwijl de pc geen sessie had en RuTracker niet eens bevroeg.
+    //
+    // Op het scherm stond "RuTracker: niet bevraagd", en dat was waar — alleen ging het over de
+    // verkeerde machine. Elke reparatie daarvóór zat in code die op de telefoon niet draait.
+
+    test('de stand van de RuTracker VAN DE PC reist mee met de zoekopdracht', () async {
+      online.rutracker.lastError = 'Nog niet aangemeld bij RuTracker.';
+      online.rutracker.laatsteAantal = -1;
+      final service = remoteOnline();
+
+      await service.search('iets');
+
+      expect(service.rutracker.lastError, 'Nog niet aangemeld bij RuTracker.',
+          reason: 'anders leest het scherm de RuTracker van de telefoon, die nooit bevraagd wordt');
+      expect(service.rutracker.laatsteAantal, -1);
+    });
+
+    test('en de tellers ook, zodat "nul treffers" niet op "niet bevraagd" lijkt', () async {
+      online.rutracker.lastError = '';
+      online.rutracker.laatsteAantal = 7;
+      online.rutracker.laatsteDoorZeef = 2;
+      final service = remoteOnline();
+
+      await service.search('iets');
+
+      expect(service.rutracker.laatsteAantal, 7);
+      expect(service.rutracker.laatsteDoorZeef, 2);
+      expect(service.rutracker.lastError, isEmpty);
+    });
+
+    test('een aanmelding zonder bb_session wordt geweigerd', () async {
+      final service = remoteOnline();
+      final uit = await service.stuurRutrackerSessie('cf_clearance=x', 'Mozilla/5.0');
+      expect(uit.ok, isFalse);
+      expect(uit.reden, contains('bb_session'));
+      expect(online.settings.rutrackerCookie, isEmpty,
+          reason: 'niets bewaren wat aantoonbaar geen aanmelding is');
+    });
+
+    // Een sessie die de pc wél aanneemt maar niet aan de praat krijgt staat hier met opzet niet:
+    // die toets zou `verify()` het net op sturen, en een toets die van rutracker.org afhangt zegt
+    // op een bouwstraat niets. Wat er dan gebeurt staat in `_rutrackerSessie`: het koekje wordt
+    // teruggedraaid, zodat er geen dode instelling op de pc achterblijft.
+  });
+
   group('downloading, on the PC', () {
     test('a download started here runs there', () async {
       final manager = remoteDownloads();

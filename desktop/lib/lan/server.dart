@@ -264,6 +264,8 @@ class LanServer {
         return _jobsClear(req);
       case '/api/jobs/stopwens':
         return _jobStopWens(req);
+      case '/api/rutracker/sessie':
+        return _rutrackerSessie(req);
       case '/api/config':
         return _config(req);
       case '/api/corrections':
@@ -716,7 +718,19 @@ class LanServer {
     if (q.trim().isEmpty) return _json(req.response, {'results': []});
     try {
       final results = await service.search(q);
-      return _json(req.response, {'results': [for (final r in results) r.toJson()]});
+      // **De stand van RuTracker reist mee.** Zonder dit stond op de telefoon "RuTracker: niet
+      // bevraagd", en dat kló*pte* — maar het ging over de RuTracker van de telefoon, terwijl het
+      // zoeken hier op de pc gebeurt. Alles wat de pc wist over waarom er niets binnenkwam bleef op
+      // de pc. Zie ook `remote_services.dart`.
+      final rt = service.rutracker;
+      return _json(req.response, {
+        'results': [for (final r in results) r.toJson()],
+        'rutracker': {
+          'fout': rt.lastError,
+          'aantal': rt.laatsteAantal,
+          'doorZeef': rt.laatsteDoorZeef,
+        },
+      });
     } catch (e) {
       return _unavailable(req, 'Zoeken mislukte op de pc: $e');
     }
@@ -908,6 +922,54 @@ class LanServer {
         : manager.jobs.cast<DownloadJob?>().firstWhere((j) => j?.name == name, orElse: () => null);
     if (job != null) await manager.stopWens(job);
     return _json(req.response, {'ok': job != null});
+  }
+
+  /// De RuTracker-aanmelding van een toestel overnemen op de pc.
+  ///
+  /// **Waarom dit moet bestaan.** Het aanmeldvenster staat op het toestel waar je het opent — meestal
+  /// je telefoon. Het zoeken en het downloaden gebeuren op de pc. Die twee zaten niet aan elkaar
+  /// vast: je meldde je op je telefoon aan, en de pc had nog steeds geen sessie, dus vroeg hij
+  /// RuTracker niet eens. Op het scherm was dat niet te onderscheiden van "RuTracker heeft niets".
+  ///
+  /// Het koekje reist over je eigen netwerk, naar je eigen pc, op jouw verzoek. Het wordt hier
+  /// meteen beproefd met [RuTrackerService.verify]: een sessie bewaren zonder hem te proberen is
+  /// precies hoe je er pas bij de volgende zoekopdracht achter komt dat hij niets deed.
+  ///
+  /// **Let op de User-Agent.** Die hoort onlosmakelijk bij het koekje: `cf_clearance` zit vast aan
+  /// het kenmerk van de browser die hem gekregen heeft. Zonder dat kenmerk mee te sturen is het
+  /// koekje op slag waardeloos.
+  Future<void> _rutrackerSessie(HttpRequest req) async {
+    final service = online;
+    if (service == null) return _unavailable(req, 'Deze pc kan niet online zoeken.');
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final cookie = (body['cookie'] as String?)?.trim() ?? '';
+    final ua = (body['ua'] as String?)?.trim() ?? '';
+    if (!cookie.contains('bb_session=')) {
+      return _json(req.response, {
+        'ok': false,
+        'reden': 'Daar zat geen bb_session in — dat is het koekje dat zegt dat je ingelogd bent.',
+      });
+    }
+    final settings = service.settings;
+    final vorigeCookie = settings.rutrackerCookie;
+    final vorigeUa = settings.rutrackerUa;
+    settings.rutrackerCookie = cookie;
+    if (ua.isNotEmpty) settings.rutrackerUa = ua;
+    if (await service.rutracker.verify()) {
+      await settings.save();
+      return _json(req.response, {'ok': true, 'reden': 'De pc is aangemeld bij RuTracker.'});
+    }
+    // Niet bewaren wat aantoonbaar niet werkt: dan staat er een dode instelling op de pc die elke
+    // zoekopdracht stil laat mislukken.
+    settings.rutrackerCookie = vorigeCookie;
+    settings.rutrackerUa = vorigeUa;
+    return _json(req.response, {
+      'ok': false,
+      'reden': 'De pc kreeg het koekje wel, maar RuTracker herkende de sessie daar niet. '
+          'Cloudflare bindt de doorgang aan het IP-adres, en dat van je pc is een ander dan dat van '
+          'je telefoon. Meld je op de pc zelf aan bij Instellingen → RuTracker.',
+    });
   }
 
   Future<void> _jobsClear(HttpRequest req) async {
