@@ -147,6 +147,7 @@ jobs:
             test/meldrem_test.dart test/hoesindex_test.dart \
             test/catalogus_bytes_test.dart test/infohash_bytes_test.dart \
             test/schijf_buiten_test.dart test/bronzeef_test.dart \
+            test/correctie_velden_test.dart \
             test/normalise_tags_test.dart
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside

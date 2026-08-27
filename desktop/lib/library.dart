@@ -1561,25 +1561,47 @@ class LibraryStore extends ChangeNotifier {
   /// mét [_tagUndo], zodat de undo-knop ook hier werkt. De correctie blijft óók staan: schrijven kan
   /// mislukken (bestand op slot, of geen `.flac`/`.mp3` — [writeTagFields] weigert de rest), en dan is
   /// de correctie het enige vangnet. Aanvulling, geen vervanging.
+  /// Welke velden een correctie mag zetten, gegeven waar hij over gaat.
+  ///
+  /// **Waarom dit een eigen functie is en geen twee `if`s.** Het is de regel die drie keer voorkomt
+  /// — in de tags, in de correctie op schijf en in de naam waaronder de plaat straks komt te staan —
+  /// en die op alle drie de plekken hetzelfde moet luiden. Loopt er één uit de pas, dan wordt een
+  /// bestand anders getagd dan het in de app heet, en dat merk je pas als je buiten de app kijkt.
+  ///
+  /// De regel zelf:
+  ///
+  ///  * ALBUM zetten mag bij een gewone plaat. Bij een single niet: die heeft geen album om te
+  ///    zetten. Maar wijst iemand één nummer aan, dan is de plaat juist waar het om gaat — dat is
+  ///    de hele reden dat die knop bestaat.
+  ///  * TITLE zetten mag bij een single, want daar is er precies één. Bij een meersporig album niet:
+  ///    dan zou dezelfde titel op elk nummer landen, en dat is geen bewerking maar schade. Bij één
+  ///    aangewezen nummer is er weer precies één, dus dan mag het weer.
+  @visibleForTesting
+  static ({bool album, bool titel}) veldenBijCorrectie(
+          {required bool isSingle, required bool perNummer}) =>
+      (album: !isSingle || perNummer, titel: isSingle || perNummer);
+
   Future<({int written, List<String> failed})> _schrijfBewerking(
     Album target, {
     String? artist,
     String? albumTitle,
     String? title,
+    List<Track>? alleen,
   }) async {
+    // Eén nummer bewerken is iets anders dan een album bewerken, en dat verandert twee regels
+    // hieronder. Zie [applyCorrection] voor waarom dit bestaat.
+    final mag = veldenBijCorrectie(isSingle: target.isSingle, perNummer: alleen != null);
     final gedeeld = <String, String?>{};
     if (artist != null && artist.trim().isNotEmpty) gedeeld['ARTIST'] = cleanArtistName(artist);
-    if (albumTitle != null && albumTitle.trim().isNotEmpty && !target.isSingle) {
+    if (albumTitle != null && albumTitle.trim().isNotEmpty && mag.album) {
       gedeeld['ALBUM'] = albumTitle.trim();
     }
-    // TITLE alleen bij een single, precies zoals de correctie hierboven. Bij een meersporig album zou
-    // dezelfde titel op elk nummer landen, en dat is geen bewerking maar schade.
-    final losseTitel = title != null && title.trim().isNotEmpty && target.isSingle;
+    final losseTitel = title != null && title.trim().isNotEmpty && mag.titel;
     var written = 0;
     final failed = <String>[];
     if (gedeeld.isEmpty && !losseTitel) return (written: 0, failed: failed);
 
-    for (final t in target.tracks) {
+    for (final t in alleen ?? target.tracks) {
       final velden = {...gedeeld, if (losseTitel) 'TITLE': title.trim()};
       final f = File(t.path);
       // Uit de container die het bestand écht is: een mp3 met de FLAC-lezer komt leeg terug, en "leeg"
@@ -1613,11 +1635,33 @@ class LibraryStore extends ChangeNotifier {
     Uint8List? coverBytes,
     int? discogsRelease,
     String? mbid,
+    List<Track>? alleen,
   }) async {
+    // Eén nummer uit dit album, in plaats van het hele album.
+    //
+    // **Waarvoor dit bestaat.** Onder "Niet op deze uitgave" staan de bestanden die je wél hebt maar
+    // die niet op de aangewezen persing staan. Vaak horen ze bij een ANDERE plaat die je nog niet
+    // hebt — "La Salsa" hoort niet op *Partir un jour* — en dan is er niets om ze naartoe te
+    // verplaatsen: "Naar ander album…" kan alleen kiezen uit albums die er al zijn. Gevraagd op
+    // 27-08-2026: *"liedjes die niet op de uitgave staan moet ik dan wel kunnen metadata voor
+    // zoeken, zodanig dat die wel in de goeie uitgave zit"*.
+    //
+    // Met een naam in plaats van een bestaand album kan het wél: het nummer krijgt de artiest en de
+    // plaat van de uitgave die je aanwijst, en groepeert zich daarmee vanzelf tot zijn eigen tegel.
+    //
+    // **De bestanden blijven staan.** Dit is dezelfde afspraak als bij het corrigeren van een heel
+    // album: de indeling volgt de labels, niet de mappen. Wil je de bestanden óók verhuizen, dan is
+    // "Naar ander album…" daarvoor, en die vraagt het netjes.
+    final perNummer = alleen != null && alleen.isNotEmpty;
     if (isRemote) {
       await _editOnPc({
-        'op': 'correction',
+        // Een EIGEN naam, en dat is met opzet. Zou dit als gewone `correction` met een extra veld
+        // erbij gaan, dan zou een pc die dat veld nog niet kent de correctie op het HELE album
+        // toepassen — alle nummers hernoemd terwijl je er één aanwees. Een pc die deze naam niet
+        // kent doet niets, en dat is het enige veilige antwoord.
+        'op': perNummer ? 'correctionTracks' : 'correction',
         'albumId': remoteAlbumId(target),
+        if (perNummer) 'trackIds': [for (final t in alleen) _remoteTrackId(t.path)],
         'artist': artist,
         'albumTitle': albumTitle,
         'title': title,
@@ -1631,17 +1675,23 @@ class LibraryStore extends ChangeNotifier {
     }
     // Eerst naar de bestanden, dán de correctie. Andersom zou een mislukte schrijfbeurt onzichtbaar
     // blijven achter een correctie die het scherm tóch goed laat lijken.
+    final doel = perNummer ? alleen : target.tracks;
+    final magVeld = veldenBijCorrectie(isSingle: target.isSingle, perNummer: perNummer);
     final uit = await _schrijfBewerking(target,
-        artist: artist, albumTitle: albumTitle, title: title);
-    for (final t in target.tracks) {
+        artist: artist, albumTitle: albumTitle, title: title, alleen: perNummer ? doel : null);
+    for (final t in doel) {
       final c = _corrections.putIfAbsent(t.path, () => {});
       // Discogs numbers artists who share a name and asterisks name variants; neither belongs in
       // a library, let alone on the now-playing bar.
       if (artist != null && artist.trim().isNotEmpty) c['artist'] = cleanArtistName(artist);
-      if (albumTitle != null && albumTitle.trim().isNotEmpty && !target.isSingle) {
+      // Dezelfde regel als in [_schrijfBewerking], uit dezelfde functie: wat er in de tags komt en
+      // wat er in de correctie komt moet gelijk luiden.
+      if (albumTitle != null && albumTitle.trim().isNotEmpty && magVeld.album) {
         c['album'] = albumTitle.trim();
       }
-      if (title != null && title.trim().isNotEmpty && target.isSingle) c['title'] = title.trim();
+      if (title != null && title.trim().isNotEmpty && magVeld.titel) {
+        c['title'] = title.trim();
+      }
       // The exact pressing the user pointed at. Everything else about this album — its edition
       // line, its back cover, its disc — is read from this one release from now on, instead of
       // whichever the app would have picked for itself.
@@ -1674,10 +1724,12 @@ class LibraryStore extends ChangeNotifier {
     // in that same dialog were all lifted off the old key and filed under a dead one: gone, quietly,
     // at the moment the user was told their correction had been applied.
     final newArtist = (artist?.trim().isNotEmpty ?? false) ? cleanArtistName(artist!) : target.artist;
-    final newTitle = target.isSingle
-        ? ((title?.trim().isNotEmpty ?? false) ? title!.trim() : target.title)
-        : ((albumTitle?.trim().isNotEmpty ?? false) ? albumTitle!.trim() : target.title);
-    final paths = target.tracks.map((t) => t.path).toSet();
+    // Onder welke naam de plaat straks staat — en dat volgt uit dezelfde regel: is het ALBUM-veld
+    // gezet, dan is dát de nieuwe naam; anders is het de titel van de single.
+    final newTitle = magVeld.album
+        ? ((albumTitle?.trim().isNotEmpty ?? false) ? albumTitle!.trim() : target.title)
+        : ((title?.trim().isNotEmpty ?? false) ? title!.trim() : target.title);
+    final paths = doel.map((t) => t.path).toSet();
     Album? match;
     for (final a in albums) {
       final sameId = a.artist.toLowerCase() == newArtist.toLowerCase() &&
@@ -1691,7 +1743,12 @@ class LibraryStore extends ChangeNotifier {
       match.correctedCover = coverBytes;
       await CoverEnricher(settings).saveFixedCover(match, coverBytes);
     }
-    await _carryAlbumKeys(settings, target.artist, target.title, newArtist, newTitle);
+    // Alleen als de HELE plaat verhuist. Bij één aangewezen nummer blijft het oude album gewoon
+    // bestaan met de rest erin — zijn hoezen, zijn rollen en zijn samenvoegkeuze meeverhuizen naar
+    // de naam van één weggelopen nummer zou dat album leegroven.
+    if (!perNummer) {
+      await _carryAlbumKeys(settings, target.artist, target.title, newArtist, newTitle);
+    }
     _bumpMeta();
     notifyListeners();
     return uit;
