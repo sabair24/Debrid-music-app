@@ -86,10 +86,12 @@ UitgaveRij bouw({
   bool volledig = true,
   bool vastgezet = false,
   List<String>? getikt,
+  Map<String, ChoiceImage> klaargezet = const {},
 }) =>
     UitgaveRij(
       uitgave: rij(volledig: volledig),
       vastgezet: vastgezet,
+      klaargezet: klaargezet,
       onKiezen: () => getikt?.add('kiezen'),
       onScans: () => getikt?.add('scans'),
       onNummering: () => getikt?.add('nummering'),
@@ -212,5 +214,40 @@ void main() {
       for (final b in tester.widgetList<Image>(find.byType(Image))) adres(b.image),
     ];
     expect(adressen, contains(eigen.thumb));
+  });
+
+  group('een klaargezette scan is zonder twijfel te zien', () {
+    // Gemeld op 27-08-2026: *"nu zit er behoorlijk wat tijd tussen waardoor ik soms twijfel of hij
+    // het wel heeft aangepast"*. Het paarse randje van twee punten om een plaatje van 58 was het
+    // enige teken; er ligt nu een vinkje overheen.
+    //
+    // Op de SLEUTEL en niet op het icoon: de bordjes "achterkant" en "cd-scan" op diezelfde rij
+    // gebruiken hetzelfde vinkje, dus `find.byIcon` vindt die van de bordjes mee. De eerste versie
+    // van deze drie toetsen deed dat en zakte daarop — een fout in de toets, niet in de rij.
+    final vinkje = find.byKey(const Key('scan-klaargezet'));
+
+    testWidgets('zonder keuze staat er geen vinkje', (tester) async {
+      telefoon(tester, breedte: 360);
+      await tester.pumpWidget(omhulsel(bouw(), 360));
+      expect(vinkje, findsNothing);
+    });
+
+    testWidgets('de gekozen scan krijgt er één, en alleen die', (tester) async {
+      telefoon(tester, breedte: 360);
+      await tester.pumpWidget(omhulsel(bouw(klaargezet: const {'front': _plaatje}), 360));
+      // Alle drie de vakjes tonen in deze rij hetzelfde plaatje; alleen de ROL die klaarstaat mag
+      // afgetekend worden. Eén vinkje dus, geen drie.
+      expect(vinkje, findsOneWidget);
+    });
+
+    testWidgets('het vinkje maakt de rij niet breder', (tester) async {
+      // De hele reden dat dit bestand er is: op een toestel tekent Flutter gewoon door als iets
+      // niet past. Het vinkje ligt in een Stack ÓP het vakje en mag er dus niets bij vragen.
+      telefoon(tester, breedte: 360);
+      await tester.pumpWidget(omhulsel(
+          bouw(klaargezet: const {'front': _plaatje, 'back': _plaatje, 'disc': _plaatje}), 360));
+      expect(vinkje, findsNWidgets(3));
+      binnen(tester, vinkje, find.byType(UitgaveRij), 'vinkje');
+    });
   });
 }

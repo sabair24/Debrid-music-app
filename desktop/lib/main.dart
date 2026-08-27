@@ -18661,14 +18661,19 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
 
   @override
   Widget build(BuildContext context) {
-    final lib = context.watch<LibraryStore>();
-    // Both, because an album pinned to a MusicBrainz pressing marked no row at all before: the
-    // gallery only ever asked about the Discogs pin.
-    final pinnedKey = lib.pinnedMbid(widget.album) != null
-        ? 'mb:${lib.pinnedMbid(widget.album)}'
-        : (lib.pinnedRelease(widget.album) != null
-            ? 'dg:${lib.pinnedRelease(widget.album)}'
-            : null);
+    // `select` en geen `watch`: dit venster heeft van de hele bibliotheek maar één ding nodig — welke
+    // uitgave vastgezet is. Met `watch` werd de kiezer opnieuw opgebouwd bij élke melding van de
+    // bibliotheek, en die meldt tijdens het verrijken aan één stuk door. Zo hertekent hij alleen nog
+    // als de vastgezette uitgave werkelijk verandert.
+    //
+    // Beide sleutels, want een album dat op een MusicBrainz-persing is vastgezet markeerde eerder
+    // geen enkele rij: de kiezer vroeg alleen naar de Discogs-speld.
+    final pinnedKey = context.select<LibraryStore, String?>((lib) {
+      final mb = lib.pinnedMbid(widget.album);
+      if (mb != null) return 'mb:$mb';
+      final dg = lib.pinnedRelease(widget.album);
+      return dg != null ? 'dg:$dg' : null;
+    });
     return Dialog(
       backgroundColor: _panel,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -19242,30 +19247,50 @@ class UitgaveRij extends StatelessWidget {
                 ? 'De scans van deze uitgave worden opgehaald…'
                 : 'Deze uitgave heeft geen $label',
         child: Column(children: [
-          Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: chosen ? _accent : Colors.transparent,
-                width: 2,
+          // Een randje van twee punten om een plaatje van 58 was het enige dat "deze heb ik gekozen"
+          // zei, en op een scherm vol miniaturen is dat te weinig. Gemeld op 27-08-2026: *"waardoor
+          // ik soms twijfel of hij het wel heeft aangepast"*. Het vinkje eroverheen laat geen twijfel;
+          // het ligt IN het vakje, dus de rij wordt er geen punt breder van.
+          Stack(children: [
+            Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: chosen ? _accent : Colors.transparent,
+                  width: 2,
+                ),
+              ),
+              padding: const EdgeInsets.all(1),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: img != null
+                    ? _netCover(img.thumb, size: 58, radius: 6)
+                    : Container(
+                        width: 58,
+                        height: 58,
+                        color: Colors.white.withValues(alpha: .04),
+                        // Nothing at all while we wait: an empty frame reads as "not yet", where any
+                        // mark at this size reads as an answer.
+                        child: waiting
+                            ? null
+                            : const Icon(Icons.close_rounded, size: 16, color: _muted)),
               ),
             ),
-            padding: const EdgeInsets.all(1),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: img != null
-                  ? _netCover(img.thumb, size: 58, radius: 6)
-                  : Container(
-                      width: 58,
-                      height: 58,
-                      color: Colors.white.withValues(alpha: .04),
-                      // Nothing at all while we wait: an empty frame reads as "not yet", where any
-                      // mark at this size reads as an answer.
-                      child: waiting
-                          ? null
-                          : const Icon(Icons.close_rounded, size: 16, color: _muted)),
-            ),
-          ),
+            if (chosen)
+              Positioned(
+                right: 0,
+                bottom: 0,
+                // Een sleutel en niet "zoek het vinkje": op deze rij staan al vinkjes van dezelfde
+                // soort — de bordjes "achterkant" en "cd-scan" gebruiken hetzelfde icoon. Een toets
+                // die op het icoon zoekt vindt die van de bordjes en zegt niets over dit vinkje.
+                child: Container(
+                  key: const Key('scan-klaargezet'),
+                  decoration: const BoxDecoration(color: _accent, shape: BoxShape.circle),
+                  padding: const EdgeInsets.all(2),
+                  child: const Icon(Icons.check_rounded, size: 13, color: Colors.white),
+                ),
+              ),
+          ]),
           const SizedBox(height: 3),
           // Het bijschrift mag het vakje niet BREDER maken dan het plaatje.
           //

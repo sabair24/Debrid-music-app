@@ -416,7 +416,9 @@ extension DiscogsBooklet on DiscogsService {
       // Discogs says only "primary" or "secondary", so which scan is the back and which is
       // the disc has to come out of the pixels — the same problem the album page solved.
       // The thumbnails are plenty: looksLikeDisc resizes to 64×64 before it looks.
-      final roles = assignRoles(primary, [for (final s in sheets) s.ratio], thumbs);
+      // Buiten de tekendraad: een boekje kan dertig scans hebben en elke scan wordt hier in pure
+      // Dart ontcijferd en verkleind. Zie [rollenBuitenDeTekendraad].
+      final roles = await rollenBuitenDeTekendraad(primary, [for (final s in sheets) s.ratio], thumbs);
       sheets = [
         for (var i = 0; i < sheets.length; i++)
           BookletSheet(

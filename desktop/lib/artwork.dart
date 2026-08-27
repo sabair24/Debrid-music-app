@@ -306,8 +306,62 @@ int decodeWidth(double logicalSize) {
   return w < 64 ? 64 : w;
 }
 
-/// De vorige kleurberekening. Zie [kleurBuitenDeTekendraad].
-Future<int?> _vorigeKleurberekening = Future<int?>.value();
+/// De vorige zware beeldberekening, wat voor eentje het ook was. Zie [_opDeRij].
+Future<void> _vorigeBeeldberekening = Future<void>.value();
+
+/// Eén zware beeldberekening tegelijk, over ALLE soorten heen.
+///
+/// **Waarom één gedeelde rij en niet één per soort.** De reden staat uitgeschreven bij
+/// [kleurBuitenDeTekendraad]: verse isolates die tegelijk grote plaatjes kopiëren brachten de
+/// Windows-engine zes keer om. Twee rijen naast elkaar zijn geen rij — dan lopen er alsnog twee
+/// isolates tegelijk, en precies dat is wat vermeden moet worden. Dus zit de kleurberekening van een
+/// hoes in dezelfde wachtrij als het herkennen van een schijf.
+///
+/// De staart van de rij is expres een `Future<void>` die NOOIT met een fout eindigt: een mislukte
+/// berekening mag de volgende niet meeslepen, en een niet-afgevangen fout in een veld dat nergens
+/// meer bekeken wordt is een melding in het log die niemand kan plaatsen.
+Future<T> _opDeRij<T>(Future<T> Function() doen) {
+  final volgende = _vorigeBeeldberekening.then((_) => doen());
+  _vorigeBeeldberekening = volgende.then((_) {}, onError: (_) {});
+  return volgende;
+}
+
+/// Welke van deze scans er als eerste als een schijf uitziet, of null als geen enkele dat doet.
+///
+/// De VOLGORDE beslist en niet wie het snelst klaar is — een plaat kan meer dan één ronde scan
+/// hebben (een boekjespagina met een bleke kern haalt het soms), en dan is de eerste de juiste.
+/// Precies wat de lus deed die hier stond; nu op één plek, zodat hij in één keer de isolate in kan.
+int? eersteSchijf(List<Uint8List?> scans) {
+  for (var i = 0; i < scans.length; i++) {
+    final b = scans[i];
+    if (b != null && looksLikeDisc(b)) return i;
+  }
+  return null;
+}
+
+/// [eersteSchijf], maar buiten de tekendraad.
+///
+/// **Waarom dit moest.** `looksLikeDisc` ontcijfert een plaatje met `package:image` — pure Dart —
+/// en verkleint het daarna naar 128×128. Dat is tientallen milliseconden per scan, en het gebeurde
+/// tot ZES keer per uitgave, voor élke rij die in beeld kwam, in een lus die doorloopt zolang de
+/// uitgavekiezer openstaat. Op een telefoon stond de tekendraad daardoor vrijwel onafgebroken stil:
+/// je tikte een scan aan om hem als hoes te kiezen en het paarse randje verscheen pas een tel later.
+/// Gemeld op 27-08-2026: *"ik wil dit instant zien veranderen … nu zit er behoorlijk wat tijd
+/// tussen waardoor ik soms twijfel of hij het wel heeft aangepast"*.
+///
+/// Alles in ÉÉN oversteek: zes miniaturen van een paar kilobyte kosten samen minder dan zes keer
+/// een isolate opstarten, en de volgorde blijft binnen de isolate bewaard.
+Future<int?> eersteSchijfBuitenDeTekendraad(List<Uint8List?> scans) =>
+    _opDeRij(() => Isolate.run(() => eersteSchijf(scans)));
+
+/// [assignRoles], maar buiten de tekendraad. Zelfde reden als hierboven — en hier weegt het zwaarder,
+/// want een boekje van een plaat kan dertig scans hebben en die gingen er allemaal doorheen.
+Future<({int? front, int? back, int? disc})> rollenBuitenDeTekendraad(
+  List<bool> primary,
+  List<double> ratios,
+  List<Uint8List?> datas,
+) =>
+    _opDeRij(() => Isolate.run(() => assignRoles(primary, ratios, datas)));
 
 /// De hoeskleur uitrekenen in een isolate — en dit MOET buiten elke klasse staan.
 ///
@@ -354,10 +408,5 @@ Future<int?> _vorigeKleurberekening = Future<int?>.value();
 /// het mechanisme past, maar bewezen is het niet — de engine valt om zonder te zeggen waaróm. Blijft
 /// hij crashen, dan staat in `ui.log` opnieuw wat er vlak daarvoor gebeurde, en is de volgende
 /// verdachte niet meer deze.
-Future<int?> kleurBuitenDeTekendraad(Uint8List bytes) {
-  final volgende = _vorigeKleurberekening
-      .catchError((_) => null)
-      .then((_) => Isolate.run(() => dominantColour(bytes)));
-  _vorigeKleurberekening = volgende;
-  return volgende;
-}
+Future<int?> kleurBuitenDeTekendraad(Uint8List bytes) =>
+    _opDeRij(() => Isolate.run(() => dominantColour(bytes)));
