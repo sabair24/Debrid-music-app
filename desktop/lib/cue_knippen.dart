@@ -224,6 +224,53 @@ String? _eersteRegel(Object? stderr) {
   return null;
 }
 
+/// Hoe lang ffmpeg zegt dat een bestand duurt, in seconden. Null als hij het niet zegt.
+///
+/// **Waarom uit de foutuitvoer en niet met ffprobe.** ffprobe is een tweede programma en staat lang
+/// niet overal waar ffmpeg staat. `ffmpeg -i bestand` zonder uitvoerbestand schrijft de kop van het
+/// bestand naar stderr en stopt met een foutcode — de duur staat er dan gewoon in. Dat kost het
+/// lezen van een kop en verder niets.
+///
+/// Null bij `Duration: N/A`, want dat is precies wat er staat als er geen bruikbare audio in zit.
+double? duurUitFfmpeg(Object? stderr) {
+  final tekst = stderr is String ? stderr : '';
+  final m = RegExp(r'Duration:\s*(\d+):(\d{2}):(\d{2})(\.\d+)?').firstMatch(tekst);
+  if (m == null) return null;
+  final u = int.parse(m.group(1)!);
+  final min = int.parse(m.group(2)!);
+  final s = int.parse(m.group(3)!);
+  final rest = double.tryParse('0${m.group(4) ?? ''}') ?? 0;
+  return u * 3600 + min * 60 + s + rest;
+}
+
+/// Klopt dit bronbestand met wat het blad erover beweert?
+///
+/// **Waarom deze vraag gesteld moet worden.** Het blad hoort bij de PLAAT; het bestand dat ernaast
+/// ligt hoeft dat niet te zijn. Twee manieren waarop dat misgaat, allebei in het echt gebeurd:
+///
+///  * je haalt via "Kies nummer" één nummer uit een torrent. Het blad komt altijd mee, dus in de map
+///    ligt één cue en één audiobestand — en dan grijpt de laatste weg van [zoekBronbestand] toe en
+///    wijst het hele blad naar dat ene nummer van vijf minuten;
+///  * het albumbestand staat er wél, maar als lege plaatshouder, omdat het niet gekozen was.
+///
+/// In beide gevallen ging ffmpeg aan de slag en kwam er een rauwe foutmelding op het scherm:
+/// *"Knippen mislukt: nummer 1: [out#0/flac @ …] Output file does not contain any stream"*. Gemeld
+/// op 27-08-2026 met precies die schermafdruk.
+///
+/// De duur is het scherpste antwoord dat er is: een blad dat tot 1:12:40 doorloopt kan onmogelijk in
+/// een bestand van vijf minuten staan. [marge] vangt de gevallen op waarin het laatste nummer in het
+/// blad een paar seconden voorbij het einde begint doordat de rip iets korter uitviel.
+bool duurtLangGenoeg(double? duurSeconden, double laatsteStart, {double marge = 5}) =>
+    duurSeconden != null && duurSeconden + marge >= laatsteStart;
+
+/// Seconden als klok, want "4360.0 seconden" zegt niemand iets en "1:12:40" wel.
+String _klok(double seconden) {
+  final t = seconden.round();
+  final u = t ~/ 3600, m = (t % 3600) ~/ 60, s = t % 60;
+  final mm = m.toString().padLeft(u > 0 ? 2 : 1, '0');
+  return u > 0 ? '$u:$mm:${s.toString().padLeft(2, '0')}' : '$mm:${s.toString().padLeft(2, '0')}';
+}
+
 /// Wat het knippen opleverde. Nooit stil: `melding` zegt altijd iets, ook als er niets gebeurd is.
 class KnipUitkomst {
   const KnipUitkomst({this.nummers = 0, this.platen = 0, this.melding = ''});
@@ -322,6 +369,26 @@ class Knipper {
         // heeft het dan al geknipt en opgeruimd; zonder deze regel loopt het tweede stuk op een
         // bestand dat er niet meer is, en staat er een foutmelding onder een download die klopte.
         if (!File(bronPad).existsSync()) continue;
+
+        // Eerst vragen wat dit bestand IS, en pas dan knippen. Zie [duurtLangGenoeg]: het blad hoort
+        // bij de plaat, het bestand ernaast hoeft dat niet te zijn — en zonder deze vraag ging
+        // ffmpeg aan de slag op één nummer of op een lege plaatshouder, en kwam zijn rauwe
+        // foutmelding op het scherm te staan.
+        final laatsteStart = entry.value.fold<double>(0, (m, k) => k.start > m ? k.start : m);
+        final duur = duurUitFfmpeg(
+            (await Process.run(exe, ['-hide_banner', '-nostdin', '-i', bronPad])).stderr);
+        if (!duurtLangGenoeg(duur, laatsteStart)) {
+          klachten.add(duur == null
+              ? '${entry.key} bevat geen leesbare audio — niets uit geknipt'
+              : '${entry.key} duurt ${_klok(duur)} terwijl het blad tot ${_klok(laatsteStart)} '
+                  'doorloopt — dit is niet het albumbestand, dus niets geknipt');
+          // Het blad moet blijven staan. Er is niets uit geknipt, dus hij wijst nog steeds ergens
+          // heen — en haal je het echte albumbestand later alsnog binnen, dan is dit blad het enige
+          // waarmee dat nog op te knippen valt.
+          mislukt = true;
+          continue;
+        }
+
         final gemaakt = <File>[];
         var stuk = '';
 

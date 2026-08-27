@@ -76,6 +76,7 @@ import 'organize.dart';
 import 'echtheid.dart';
 import 'echtheid_oordelen.dart';
 import 'vaste_keuze.dart';
+import 'bronzeef.dart';
 import 'player.dart';
 import 'quality.dart';
 import 'recommend.dart';
@@ -11412,6 +11413,58 @@ Widget _filterChipsRow(QFilter current, ValueChanged<QFilter> onChanged) => Padd
       ),
     );
 
+/// Knoppen om op BRON te zeven: alleen RuTracker, alleen Knaben, enzovoort.
+///
+/// Naast de kwaliteitsknoppen en niet ertussen: het zijn twee losse vragen ("wat voor bestand" en
+/// "van wie"), en ze werken over elkaar heen. Zie [bronnenInResultaten] voor waarom deze rij uit de
+/// resultaten zelf komt en niet uit een vaste lijst.
+///
+/// Niets bij één bron. Een keuze uit één is geen keuze, en een rij knoppen die niets kan veranderen
+/// is precies de ruimte die op een telefoon nergens vandaan komt.
+Widget _bronChipsRow(
+  List<({String bron, int aantal})> bronnen,
+  String? gekozen,
+  ValueChanged<String?> onChanged,
+) {
+  if (bronnen.length < 2) return const SizedBox.shrink();
+  Widget chip(String label, int? aantal, bool sel, VoidCallback doen) => Padding(
+        padding: const EdgeInsets.only(right: 6),
+        child: InkWell(
+          onTap: doen,
+          borderRadius: BorderRadius.circular(20),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+            decoration: BoxDecoration(
+              color: sel ? _accent2.withValues(alpha: .22) : _panel,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: sel ? _accent2 : _line),
+            ),
+            child: Text(aantal == null ? label : '$label $aantal',
+                style: TextStyle(
+                    color: sel ? Colors.white : _muted,
+                    fontSize: 12,
+                    fontWeight: sel ? FontWeight.w600 : FontWeight.w400)),
+          ),
+        ),
+      );
+  return Padding(
+    padding: const EdgeInsets.fromLTRB(22, 2, 20, 2),
+    // `Wrap` om dezelfde reden als bij de kwaliteitsknoppen: vijf bronnen met hun aantal passen op
+    // een staande telefoon niet op één regel, en een `Row` die niet past tekent gewoon door.
+    child: Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      runSpacing: 6,
+      children: [
+        const Icon(Icons.travel_explore_rounded, size: 15, color: _muted),
+        const SizedBox(width: 8),
+        chip('Alle bronnen', null, gekozen == null, () => onChanged(null)),
+        for (final b in bronnen)
+          chip(b.bron, b.aantal, gekozen == b.bron, () => onChanged(b.bron)),
+      ],
+    ),
+  );
+}
+
 Widget _sourceHeader(String title, int count, bool loading) => Padding(
       padding: const EdgeInsets.fromLTRB(24, 14, 24, 6),
       child: Row(
@@ -11759,6 +11812,9 @@ class _SourcesViewState extends State<SourcesView> {
   bool _tBusy = true, _sBusy = false;
   QFilter _filter = QFilter.all;
 
+  /// Op welke bron gezeefd wordt, of null voor alles. Zie [bronnenInResultaten].
+  String? _bron;
+
   /// Zie [_tekenRem]: één per bron, zodat torrents en Soulseek elkaar niet in de weg zitten.
   final _slskRem = _Tekenrem(), _torrentRem = _Tekenrem();
 
@@ -11828,7 +11884,13 @@ class _SourcesViewState extends State<SourcesView> {
   @override
   Widget build(BuildContext context) {
     final ready = context.read<SoulseekService>().available;
-    final torrents = _torrents.where((r) => _filter.matches(qualityFromName(r.name))).toList();
+    // De bronknoppen komen uit de resultaten die de KWALITEITSzeef al doorstonden, zodat het aantal
+    // achter elke bron klopt met wat je te zien krijgt als je erop tikt.
+    final naKwaliteit =
+        _torrents.where((r) => _filter.matches(qualityFromName(r.name))).toList();
+    final bronKeuzes = bronnenInResultaten(naKwaliteit);
+    final bron = geldigeKeuze(_bron, bronKeuzes);
+    final torrents = [for (final r in naKwaliteit) if (pastBijBron(r, bron)) r];
     final bronnen = _bronnen;
     final slsk = bronnen.gefilterd;
     return Column(
@@ -11836,6 +11898,7 @@ class _SourcesViewState extends State<SourcesView> {
       children: [
         if (_torrents.isNotEmpty || _slsk.isNotEmpty)
           _filterChipsRow(_filter, (f) => setState(() => _filter = f)),
+        _bronChipsRow(bronKeuzes, bron, (b) => setState(() => _bron = b)),
         _sourceHeader('Torrents · TorBox', torrents.length, _tBusy),
         if (!_tBusy) _waaromGeenTorrents(context, leeg: torrents.isEmpty),
         ...torrents.map((r) => _torrentTile(context, r)),
@@ -12432,6 +12495,13 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
 
   String? _status = ZoekGeheugen.status;
   QFilter _filter = ZoekGeheugen.filter;
+
+  /// Op welke bron gezeefd wordt, of null voor alles. Zie [bronnenInResultaten].
+  ///
+  /// Niet in [ZoekGeheugen], en dat is met opzet: de kwaliteitskeuze geldt voor élke zoekopdracht
+  /// ("ik wil lossless"), maar een bron kiezen is iets wat je bij één lijst doet. Zou hij blijven
+  /// staan, dan kom je bij de volgende zoekopdracht terug op een lijst die stilletjes ingekort is.
+  String? _bron;
   // tidal
   List<TidalTrack> _tidalTracks = ZoekGeheugen.tidalNummers;
   List<TidalAlbum> _tidalAlbums = ZoekGeheugen.tidalAlbums;
@@ -13458,7 +13528,14 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
 
   Widget _directResults(bool soulseekReady) {
     final vraag = _getypt;
-    final torrents = _torrents.where((r) => _filter.matches(qualityFromName(r.name))).toList();
+    // Zeven op bron gebeurt NA de kwaliteitszeef en VOOR het rangschikken: dan klopt het aantal
+    // achter elke bronknop met wat je te zien krijgt, en blijft "wat je typte bovenaan" gelden
+    // binnen de bron die je koos. Zie [bronnenInResultaten].
+    final naKwaliteit =
+        _torrents.where((r) => _filter.matches(qualityFromName(r.name))).toList();
+    final bronKeuzes = bronnenInResultaten(naKwaliteit);
+    final bron = geldigeKeuze(_bron, bronKeuzes);
+    final torrents = [for (final r in naKwaliteit) if (pastBijBron(r, bron)) r];
     // WAT JE TYPTE BOVENAAN. De torrentlijst kwam binnen op "gecacht, dan seeders" en verder
     // niets: een torrent die de indexer om een los woord teruggaf stond zomaar boven de plaat die
     // je bedoelde. Hier wordt niets weggegooid — een indexer mag best iets anders spellen — maar
@@ -13483,6 +13560,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       children: [
         if (_torrents.isNotEmpty || _slsk.isNotEmpty)
           _filterChipsRow(_filter, (f) => setState(() => _filter = f)),
+        _bronChipsRow(bronKeuzes, bron, (b) => setState(() => _bron = b)),
         // Dezelfde eerlijkheid als in het bronnenscherm: is er ruimer gezocht, dan gaat deze lijst
         // over een ándere vraag dan die je stelde, en dat hoort er te staan.
         if (vraag != null && _gezochtDirect != null && ruimerGezocht(vraag, _gezochtDirect!))
