@@ -86,7 +86,44 @@ class LanCatalog {
   /// tens of thousands of paths.
   final Map<String, String> _trackIdCache = {};
 
-  void _markDirty() => _dirty = true;
+  /// Alleen wat [artwork] nodig heeft: plaat-id → plaat, en artiest-id → naam.
+  ///
+  /// **Waarom dit los van de momentopname staat.** [artwork] riep [snapshot] aan, en die bouwt bij
+  /// de kleinste wijziging in de bibliotheek de HELE catalogus opnieuw: een `AlbumDto` per plaat —
+  /// met `pinnedRelease`, `pinnedMbid`, `isMerged`, `stylesOf`, `albumArtRoles` en een hash over de
+  /// hoesbytes — plus een `TrackDto` per nummer. Bij vierhonderd platen en duizend nummers is dat
+  /// geen opzoeking meer maar werk.
+  ///
+  /// En `_dirty` gaat aan bij ELKE melding van de bibliotheek: een hoes die binnenkomt, een
+  /// download die landt, een verrijking die klaar is. Een telefoon die zijn nu-speelt-scherm opent
+  /// vraagt meerdere hoezen kort na elkaar, precies terwijl de pc bezig is — en dan betaalde elke
+  /// hoes een volledige herbouw. Dat is wat "de covers laden heel traag in" van buiten is, en het
+  /// houdt de pc zo bezig dat het volgende nummer ook later begint.
+  ///
+  /// Hier staan alleen de twee sleutels die een hoesverzoek beantwoordt, met dezelfde id-berekening
+  /// als in [_build] — geen DTO's, geen hashes, geen nummers.
+  Map<String, Album>? _platenPerId;
+  Map<String, String>? _artiestenPerId;
+
+  void _markDirty() {
+    _dirty = true;
+    _platenPerId = null;
+    _artiestenPerId = null;
+  }
+
+  void _bouwHoesIndex() {
+    final platen = <String, Album>{};
+    final artiesten = <String, String>{};
+    for (final album in library.albums) {
+      // Dezelfde uitsluiting als [_build]: een plaat zonder nummers krijgt daar ook geen id.
+      if (album.tracks.isEmpty) continue;
+      final aKey = artistKey(album.artist);
+      artiesten[artistIdFor(aKey)] = album.artist;
+      platen[albumIdFor(aKey, normKey(album.title), album.edition)] = album;
+    }
+    _platenPerId = platen;
+    _artiestenPerId = artiesten;
+  }
 
   void dispose() => library.removeListener(_markDirty);
 
@@ -105,11 +142,14 @@ class LanCatalog {
 
   /// Cover bytes for an artwork ref — an album id, or `artist-<id>` for an artist portrait.
   Uint8List? artwork(String ref) {
+    // Nadrukkelijk NIET via [snapshot]. Zie [_bouwHoesIndex]: dat is een herbouw van de hele
+    // catalogus voor een vraag die maar twee sleutels nodig heeft.
+    if (_platenPerId == null) _bouwHoesIndex();
     if (ref.startsWith('artist-')) {
-      final name = snapshot().artistNameById[ref.substring('artist-'.length)];
+      final name = _artiestenPerId![ref.substring('artist-'.length)];
       return name == null ? null : library.artistImages[name];
     }
-    return snapshot().albumById[ref]?.cover;
+    return _platenPerId![ref]?.cover;
   }
 
   SearchResultDto search(String query, {int limit = 50}) {
