@@ -11959,7 +11959,7 @@ class _SlskKlaar {
   final List<SoulseekFile> besteMap;
 
   const _SlskKlaar._(this.ruw, this.filter, this.gefilterd, this.gebruikers, this.besteMap,
-      this.passend, this.vraag, this.besteDekking, this.rangen);
+      this.passend, this.vraag, this.besteDekking, this.rangen, this.zeef);
 
   /// De rangen die voor deze ronde al uitgerekend zijn, om aan de volgende door te geven.
   ///
@@ -11969,13 +11969,27 @@ class _SlskKlaar {
   /// van wat er nieuw bij kwam.
   final Map<SoulseekFile, int> rangen;
 
-  /// Die rangen, maar alleen als ze voor deze nieuwe lijst nog gelden.
+  /// Wat de ZEEF van elk bestand vond: hoort het bij de vraag, ja of nee.
   ///
-  /// Alleen bij dezelfde vraag (de vraag zit ín de rang) en bij een lijst die alleen maar gegroeid
+  /// **De rangen kregen dit geheugen wel en de zeef niet.** [volslagenAnders] roept [vraagScore]
+  /// aan, en die doet drie keer `fileWords` plus een `baseName` — per bestand. Bij elk stukje dat
+  /// binnenkwam liep dat opnieuw over ÁLLE ruwe treffers, ook over de honderden die er de vorige
+  /// keer ook al in zaten. Dat is precies het werk waar de rangen twee regels hierboven al vanaf
+  /// geholpen zijn.
+  ///
+  /// Alleen de vraag-helft zit erin, NIET het filter. Dat filter kun je aanpassen terwijl je vraag
+  /// gelijk blijft — een kwaliteitsknop omzetten — en dan zou een onthouden uitkomst hem doodleggen.
+  /// Het filter is bovendien goedkoop: een paar veldvergelijkingen.
+  final Map<SoulseekFile, bool> zeef;
+
+  /// Die rangen en die zeefuitslag, maar alleen als ze voor deze nieuwe lijst nog gelden.
+  ///
+  /// Alleen bij dezelfde vraag (de vraag zit ín allebei) en bij een lijst die alleen maar gegroeid
   /// is. Wordt de lijst korter, dan is er een nieuwe zoekopdracht begonnen en beginnen we schoon —
   /// anders blijft het geheugen van elke zoekopdracht van vandaag hangen.
-  Map<SoulseekFile, int>? hergebruikVoor(List<SoulseekFile> nieuw, String? v) =>
-      v == vraag && nieuw.length >= ruw.length ? rangen : null;
+  ({Map<SoulseekFile, int> rangen, Map<SoulseekFile, bool> zeef})? hergebruikVoor(
+          List<SoulseekFile> nieuw, String? v) =>
+      v == vraag && nieuw.length >= ruw.length ? (rangen: rangen, zeef: zeef) : null;
 
   /// Welke bestanden echt het gevraagde nummer zijn — leeg als er geen uitgave bekend is.
   ///
@@ -11991,12 +12005,13 @@ class _SlskKlaar {
   factory _SlskKlaar.van(List<SoulseekFile> ruw, QFilter filter,
       {bool Function(SoulseekFile)? past,
       String? vraag,
-      Map<SoulseekFile, int>? hergebruik}) {
+      ({Map<SoulseekFile, int> rangen, Map<SoulseekFile, bool> zeef})? hergebruik}) {
     // De rang van een bestand wordt hier één keer uitgerekend en daarna hergebruikt, door zowel de
     // rangschikking als de groepering. Zie [rangschikSoulseek] voor waarom dat het verschil maakt.
     // Met [hergebruik] loopt dat geheugen door over de stukjes van één zoekopdracht heen — zie
     // [hergebruikVoor].
-    final onthouden = hergebruik ?? Map<SoulseekFile, int>.identity();
+    final onthouden = hergebruik?.rangen ?? Map<SoulseekFile, int>.identity();
+    final zeefUitslag = hergebruik?.zeef ?? Map<SoulseekFile, bool>.identity();
     final passend = Set<SoulseekFile>.identity();
     // Wat je vroeg gaat vóór wat goed klinkt. Twintig treden, zodat "alles in de bestandsnaam"
     // ruim boven "alleen de artiest in de mapnaam" staat en de kwaliteit binnen één trede beslist.
@@ -12010,10 +12025,12 @@ class _SlskKlaar {
     // Score nul betekent: geen enkel woord uit je vraag komt ergens in dit pad voor. Bij Soulseek
     // kan dat niet van een echte treffer komen — de server eist elk woord ergens in het pad — dus
     // dit is de ruis van de jokervariant `*ain` voor "Rain". Zie [volslagenAnders].
-    final over = ruw
-        .where((f) =>
-            _filterLaatDoor(filter, f) && (vraag == null || !volslagenAnders(vraag, f.filename)))
-        .toList();
+    // Het filter ELKE keer opnieuw, de vraag maar één keer per bestand. Zie [zeef] voor waarom die
+    // twee niet samen in het geheugen mogen: het filter verandert terwijl de vraag gelijk blijft.
+    bool hoortBijDeVraag(SoulseekFile f) =>
+        vraag == null || (zeefUitslag[f] ??= !volslagenAnders(vraag, f.filename));
+    final over =
+        ruw.where((f) => _filterLaatDoor(filter, f) && hoortBijDeVraag(f)).toList();
     if (past != null) {
       for (final f in over) {
         if (past(f)) passend.add(f);
@@ -12038,8 +12055,8 @@ class _SlskKlaar {
     final dekking = vraag == null || gefilterd.isEmpty
         ? -1
         : gedekteWoorden(vraag, gefilterd.first.filename);
-    return _SlskKlaar._(
-        ruw, filter, gefilterd, gebruikers, beste, passend, vraag, dekking, onthouden);
+    return _SlskKlaar._(ruw, filter, gefilterd, gebruikers, beste, passend, vraag, dekking,
+        onthouden, zeefUitslag);
   }
 
   /// De vraag waarop dit gebaseerd is, zodat het geheugen ongeldig wordt als je iets anders typt.
@@ -14269,6 +14286,11 @@ class _ArtistHeroState extends State<ArtistHero> {
                           constraints: const BoxConstraints(maxHeight: 96, maxWidth: 460),
                           child: Image.memory(logo,
                               fit: BoxFit.contain,
+                              // De HOOGTE begrenst hier, niet de breedte: een woordmerk is breed en
+                              // laag, en het vak eromheen is 96 hoog. `cacheHeight` is dus de wenk die
+                              // past — met `cacheWidth` zou een breed logo alsnog op volle hoogte
+                              // gedecodeerd worden.
+                              cacheHeight: decodeWidth(96),
                               alignment: Alignment.centerLeft,
                               errorBuilder: (_, __, ___) => _plainName()),
                         )
@@ -14416,6 +14438,9 @@ class _ArtiestKopState extends State<ArtiestKop> {
                 child: Image.memory(
                   logo,
                   fit: BoxFit.contain,
+                  // Zelfde wenk als bij de artiestenkop, en hier telt hij dubbel: dit staat op het
+                  // speelscherm, dat bij elk nieuw album opnieuw opgebouwd wordt.
+                  cacheHeight: decodeWidth(widget.hoogte),
                   alignment: widget.gecentreerd ? Alignment.center : Alignment.centerLeft,
                   // Een kapot of half binnengehaald bestand mag geen leeg gat geven; dan de naam.
                   errorBuilder: (_, __, ___) => _alsTekst(),
