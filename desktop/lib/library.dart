@@ -1926,7 +1926,13 @@ class LibraryStore extends ChangeNotifier {
   ///
   /// Staat hier zodat wie hem wil bewaren niet zelf terug hoeft te vertalen naar JSON — zie
   /// `CatalogusKopie`. In het geheugen, niet op schijf: schrijven is de keuze van de aanroeper.
-  Map<String, dynamic>? laatsteCatalogus;
+  /// De catalogus zoals de pc hem stuurde, onbewerkt.
+  ///
+  /// **De BYTES en niet de ontlede vorm.** De kopie op dit toestel is letterlijk deze tekst; hem uit
+  /// een ontlede kaart terugcoderen kost `jsonEncode` over megabytes op de tekendraad, elke keer dat
+  /// de catalogus verandert — en tijdens een download is dat om de paar seconden. Zie
+  /// [CatalogusKopie.bewaarBytes].
+  List<int>? laatsteCatalogusBytes;
 
   set remote(RemoteClient? client) {
     _remote = client;
@@ -2002,7 +2008,7 @@ class LibraryStore extends ChangeNotifier {
     }
 
     _adoptCatalog(catalog, client);
-    laatsteCatalogus = res.raw;
+    laatsteCatalogusBytes = res.bytes;
     // Live again: what is on screen is playable, whatever it was a moment ago.
     fromCloudMirror = false;
     mirrorUpdatedAt = null;

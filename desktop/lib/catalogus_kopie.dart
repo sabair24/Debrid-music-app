@@ -49,6 +49,25 @@ class CatalogusKopie {
     }
   }
 
+  /// Hetzelfde, maar met de tekst zoals de pc hem stuurde.
+  ///
+  /// **Dit is de weg die het toestel neemt, en [bewaar] is er nog voor wie alleen de ontlede vorm
+  /// heeft.** De kopie ís letterlijk wat er over de lijn kwam; hem uit de ontlede vorm terugcoderen
+  /// betekent `jsonEncode` over megabytes op de tekendraad. Dat viel niet op zolang de catalogus
+  /// zelden veranderde, maar tijdens een download verandert hij bij élk binnengekomen nummer — en
+  /// dan gebeurde het elke vijftien seconden, náást het ontleden van datzelfde antwoord.
+  ///
+  /// Geen tweede schrijfwijze dus, en ook geen tweede rekensom: de bytes gaan onbewerkt naar schijf.
+  Future<void> bewaarBytes(List<int> bytes) async {
+    if (bytes.isEmpty) return;
+    try {
+      await _tijdelijk.writeAsBytes(bytes, flush: true);
+      await _tijdelijk.rename(_bestand.path);
+    } catch (e) {
+      debugPrint('Catalogus niet bewaard: $e');
+    }
+  }
+
   /// Wat er ligt, met wanneer het geschreven is. Null als er niets is of het onleesbaar is.
   Future<({Map<String, dynamic> json, DateTime bijgewerkt})?> lees() async {
     try {
