@@ -5373,16 +5373,42 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 /// release and apply its cover/artist/title to a wrong album or single.
 class MetadataEditor extends StatefulWidget {
   final Album album;
-  const MetadataEditor(this.album, {super.key});
+
+  /// Eén nummer in plaats van de hele plaat, als de aanroeper er één aanwees.
+  ///
+  /// **Waarvoor dit bestaat.** Onder "Niet op deze uitgave" staan de bestanden die je wél hebt maar
+  /// die niet op de aangewezen persing staan. Die horen vaak bij een ANDERE plaat die je nog niet
+  /// hebt — "La Salsa" hoort niet op *Partir un jour* — en dan valt er niets te verplaatsen, want
+  /// "Naar ander album…" kan alleen kiezen uit albums die er al zijn.
+  ///
+  /// Met dit veld gaat dezelfde zoektocht over één opname: je wijst de juiste uitgave aan, dat ene
+  /// nummer krijgt haar artiest en titel, en groepeert zich daarmee vanzelf tot zijn eigen tegel.
+  /// De rest van dit album blijft onaangeroerd.
+  final Track? nummer;
+
+  const MetadataEditor(this.album, {super.key, this.nummer});
   @override
   State<MetadataEditor> createState() => _MetadataEditorState();
 }
 
 class _MetadataEditorState extends State<MetadataEditor> {
-  late final TextEditingController _artist = TextEditingController(text: widget.album.artist);
-  late final TextEditingController _title = TextEditingController(text: widget.album.title);
-  late final TextEditingController _query =
-      TextEditingController(text: '${widget.album.artist} ${widget.album.title}'.trim());
+  late final TextEditingController _artist =
+      TextEditingController(text: widget.nummer?.artist.isNotEmpty == true
+          ? widget.nummer!.artist
+          : widget.album.artist);
+
+  /// Bij één nummer staat hier de PLAAT waar het op hoort, en die weten we per definitie nog niet —
+  /// dat is de hele vraag. Leeg beginnen dus, en niet met de plaat waar het ten onrechte onder staat:
+  /// die naam overnemen zou het nummer terugzetten waar het al stond.
+  late final TextEditingController _title =
+      TextEditingController(text: widget.nummer != null ? '' : widget.album.title);
+
+  /// Zoeken op het NUMMER als er één aangewezen is. De plaat waar het onder stond zegt hier niets —
+  /// zoeken op "2 Be 3 Partir un jour" levert nooit de plaat waar "La Salsa" wél op staat.
+  late final TextEditingController _query = TextEditingController(
+      text: widget.nummer != null
+          ? '${widget.nummer!.artist} ${widget.nummer!.title}'.trim()
+          : '${widget.album.artist} ${widget.album.title}'.trim());
   /// Standaard alle bronnen tegelijk.
   ///
   /// Stond op Deezer, en dat is de bron die géén persingen kent: geen cd's, geen catalogusnummers,
@@ -5501,15 +5527,23 @@ class _MetadataEditorState extends State<MetadataEditor> {
   }
 
   Future<void> _applyInner() async {
+    // Eén nummer aangewezen? Dan gaat de PLAAT in het albumveld en de opname in het titelveld — ook
+    // als dit album verder geen single is. Zie [MetadataEditor.nummer].
+    final los = widget.nummer;
     final geschreven = await context.read<LibraryStore>().applyCorrection(
           widget.album,
           context.read<AppSettings>(),
           artist: _artist.text,
-          albumTitle: widget.album.isSingle ? null : _title.text,
-          title: widget.album.isSingle ? _title.text : null,
+          albumTitle: (widget.album.isSingle && los == null) ? null : _title.text,
+          title: los != null
+              ? los.title
+              : widget.album.isSingle
+                  ? _title.text
+                  : null,
           coverBytes: _pickedCover,
           discogsRelease: _pickedRelease,
           mbid: _pickedMbid,
+          alleen: los == null ? null : [los],
         );
     // Een bewerking gaat nu ook IN de bestanden, en dat hoort zichtbaar te zijn — anders blijft de app
     // het enige wat de nieuwe naam kent en is het werk buiten de app onvindbaar. Mislukt het schrijven
@@ -5555,9 +5589,18 @@ class _MetadataEditorState extends State<MetadataEditor> {
             children: [
               Row(
                 children: [
-                  const Text('Metadata corrigeren',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-                  const Spacer(),
+                  // Zeggen waar dit venster over gaat. Ging het over één nummer en stond er
+                  // "Metadata corrigeren", dan lijkt het alsof je op het punt staat de hele plaat
+                  // te hernoemen — en dat is precies wat het NIET doet.
+                  Expanded(
+                    child: Text(
+                        widget.nummer == null
+                            ? 'Metadata corrigeren'
+                            : 'Juiste uitgave zoeken voor “${widget.nummer!.title}”',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                  ),
                   IconButton(
                       icon: const Icon(Icons.close_rounded),
                       onPressed: () => Navigator.of(context).pop(false)),
@@ -7886,6 +7929,16 @@ ItemMenu _nummerMenu(BuildContext context, Track t) {
           final van = lib.albumForPath(t.path);
           showDialog<bool>(context: context, builder: (_) => MoveTrackDialog(track: t, from: van));
         }),
+        // De tegenhanger van "Naar ander album…", voor de plaat die je nog NIET hebt.
+        //
+        // Onder "Niet op deze uitgave" staan bestanden die wel van jou zijn maar niet op de
+        // aangewezen persing staan. Vaak horen ze bij een andere plaat, en dan valt er niets te
+        // kiezen: "Naar ander album…" toont alleen albums die er al zijn. Hier zoek je de uitgave op
+        // en gaat dit ene nummer erheen. Zie [MetadataEditor.nummer].
+        if (album != null)
+          MenuRegel(Icons.travel_explore_outlined, 'Juiste uitgave zoeken…',
+              () => showDialog<bool>(
+                  context: context, builder: (_) => MetadataEditor(album, nummer: t))),
         MenuRegel(Icons.delete_outline_rounded, 'Verwijderen…',
             () => _confirmDelete(context, '“${t.title}”', [t.path])),
       ],

@@ -1052,6 +1052,31 @@ class LanServer {
             discogsRelease: (body['discogsRelease'] as num?)?.toInt(),
             mbid: body['mbid'] as String?,
           );
+        case 'correctionTracks':
+          // Eén nummer uit een album op zijn eigen plaat zetten — zie [LibraryStore.applyCorrection].
+          //
+          // Een eigen naam en niet `correction` met een veld erbij: een pc die dit nog niet kent zou
+          // dat veld negeren en de correctie op ALLE nummers toepassen. Nu belandt hij in de
+          // `default` hieronder en zegt hij eerlijk dat hij het niet kan.
+          final teDoen = _tracksFor(body['trackIds']);
+          if (teDoen.isEmpty) {
+            return _json(req.response, {'error': 'Geen nummers opgegeven.'},
+                status: HttpStatus.badRequest);
+          }
+          final hoesB64Nummer = body['cover'] as String?;
+          await library.applyCorrection(
+            album!,
+            config,
+            artist: body['artist'] as String?,
+            albumTitle: body['albumTitle'] as String?,
+            title: body['title'] as String?,
+            coverBytes: hoesB64Nummer == null || hoesB64Nummer.isEmpty
+                ? null
+                : base64Decode(hoesB64Nummer),
+            discogsRelease: (body['discogsRelease'] as num?)?.toInt(),
+            mbid: body['mbid'] as String?,
+            alleen: teDoen,
+          );
         case 'merge':
           await library.mergeEditions(album!);
         case 'unmerge':
