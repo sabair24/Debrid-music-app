@@ -322,4 +322,59 @@ FILE "cd2.flac" WAVE
       expect(a.any((s) => s.startsWith('ALBUMARTIST=')), isFalse);
     });
   });
+
+  group('DE KERN: eerst kijken of dit het albumbestand wél IS', () {
+    // Gemeld op 27-08-2026, met schermafdruk: *"Knippen mislukt: nummer 1: [out#0/flac @ …] Output
+    // file does not contain any stream"*. Het blad hoort bij de plaat, maar het bestand dat ernaast
+    // ligt hoeft dat niet te zijn — haal je via "Kies nummer" één nummer uit een torrent, dan komt
+    // het blad wél mee en staat er één cue naast één audiobestand van vijf minuten.
+
+    /// Zoals ffmpeg het opschrijft als je hem een bestand geeft en geen uitvoer vraagt.
+    String kop(String duur) => '''
+Input #0, flac, from 'CD3.flac':
+  Duration: $duur, start: 0.000000, bitrate: 921 kb/s
+  Stream #0:0: Audio: flac, 44100 Hz, stereo, s16
+At least one output file must be specified''';
+
+    test('de duur wordt uit ffmpegs eigen kop gelezen', () {
+      expect(duurUitFfmpeg(kop('01:12:40.53')), closeTo(4360.53, 0.01));
+      expect(duurUitFfmpeg(kop('00:05:14.00')), closeTo(314, 0.01));
+      expect(duurUitFfmpeg(kop('00:00:00.00')), 0);
+    });
+
+    test('honderdsten mogen ontbreken', () {
+      expect(duurUitFfmpeg(kop('00:03:20')), 200);
+    });
+
+    test('geen duur betekent geen antwoord, geen nul', () {
+      // Het verschil is alles: nul zou "een leeg bestand" zijn, null is "ik weet het niet". Bij
+      // `Duration: N/A` zit er geen bruikbare audio in, en dan mag er zeker niet geknipt worden.
+      expect(duurUitFfmpeg(kop('N/A')), isNull);
+      expect(duurUitFfmpeg('ffmpeg: geen idee wat dit is'), isNull);
+      expect(duurUitFfmpeg(''), isNull);
+      expect(duurUitFfmpeg(null), isNull);
+    });
+
+    test('een blad dat verder loopt dan het bestand is niet dit bestand', () {
+      // Het echte geval: een blad tot 1:12:40 naast een gedownload nummer van 5:14.
+      expect(duurtLangGenoeg(314, 4360), isFalse);
+    });
+
+    test('een bestand dat het hele blad dekt mag geknipt worden', () {
+      expect(duurtLangGenoeg(4400, 4360), isTrue);
+    });
+
+    test('een paar seconden tekort is nog steeds hetzelfde bestand', () {
+      // Een rip die één seconde korter uitviel dan het blad zegt is normaal; daar hoort geen
+      // weigering op te volgen, want dan wordt er nooit meer iets geknipt.
+      expect(duurtLangGenoeg(4358, 4360), isTrue);
+      expect(duurtLangGenoeg(4300, 4360), isFalse, reason: 'een minuut tekort is een ander bestand');
+    });
+
+    test('zonder duur wordt er niet geknipt', () {
+      // Een lege plaatshouder van nul bytes komt hier uit. Daar ging ffmpeg vroeger op stuk.
+      expect(duurtLangGenoeg(null, 0), isFalse);
+      expect(duurtLangGenoeg(null, 4360), isFalse);
+    });
+  });
 }
