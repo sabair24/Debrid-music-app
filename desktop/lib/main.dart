@@ -16218,7 +16218,15 @@ class _SharingSectionState extends State<_SharingSection> {
                   endpoint == null
                       ? ''
                       : '${endpoint.baseUrl.host}:${endpoint.baseUrl.port} · '
-                          '${session.library.tracks.length} nummers',
+                          '${session.library.tracks.length} nummers'
+                          // DE VERSIE VAN DE PC, en dat is geen sieraad.
+                          //
+                          // Bij een koppeling doet de pc het zoeken en het downloaden. Wat je hier
+                          // ziet zijn zíjn taken en zíjn foutmeldingen; de versie bovenaan dit
+                          // scherm is die van DIT toestel en zegt daar niets over. Op 27-08-2026
+                          // stond op de Mac 3.9.223 — mét de reparatie — en verscheen toch een
+                          // melding die in die versie niet meer bestaat. Hij kwam van de pc.
+                          '${session.serverVersie.isEmpty ? '' : ' · ${session.serverVersie}'}',
                   style: const TextStyle(color: _muted, fontSize: 12),
                 ),
               ]),
