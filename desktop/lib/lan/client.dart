@@ -14,6 +14,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
@@ -65,6 +66,39 @@ class RemoteEndpoint {
   int get hashCode => Object.hash(baseUrl, token);
 }
 
+/// Het catalogusantwoord van de pc ontleden, op een ANDERE isolate.
+///
+/// **Waarom dit niet gewoon op de tekendraad mag.** Bij een gekoppeld toestel doet de pc het werk en
+/// stuurt hij zijn hele bibliotheek door: bij duizend nummers is dat megabytes JSON. `utf8.decode` en
+/// `jsonDecode` daarover kosten op een telefoon honderden milliseconden, en al die tijd tekent er
+/// niets.
+///
+/// Dat viel niet op zolang het zelden gebeurde: de telefoon vraagt elke vijftien seconden of er iets
+/// veranderd is, en normaal is het antwoord een lege 304. Maar tijdens een download verandert de
+/// bibliotheek van de pc bij élk binnengekomen nummer — dus komt er elke vijftien seconden een
+/// volledige catalogus binnen, en stond de telefoon vier keer per minuut stil. Gemeld op 27-08-2026:
+/// "vanaf ik download via torrent hapert de app enorm, zelfs roteren is massa's traag". Roteren
+/// bouwt de hele boom opnieuw op, en dat kwam er bovenop.
+///
+/// **De sluiting staat op TOPNIVEAU en met opzet niet in een methode.** Een sluiting die binnen een
+/// instantiemethode gemaakt wordt draagt zijn omgeving mee — inclusief `this` en de luisteraars die
+/// eraan hangen — en dat is niet verzendbaar: de verzending gooit, en van buiten zie je alleen een
+/// lege bibliotheek. Diezelfde uitleg staat bij [scanTagsInIsolate] in `library.dart`, waar het al
+/// een keer misging.
+Future<Map<String, dynamic>?> ontleedCatalogus(Uint8List bytes) =>
+    Isolate.run(() => _ontleedCatalogus(bytes));
+
+Map<String, dynamic>? _ontleedCatalogus(Uint8List bytes) {
+  try {
+    final d = jsonDecode(utf8.decode(bytes));
+    return d is Map<String, dynamic> ? d : null;
+  } catch (_) {
+    // Een onleesbaar antwoord is geen bibliotheek. De aanroeper maakt er een nette melding van;
+    // een uitzondering uit een isolate is dat niet.
+    return null;
+  }
+}
+
 /// A catalogue plus the ETag it came with. [catalog] is null when the PC answered 304, which means
 /// "nothing changed" — the client keeps what it has rather than rebuilding an identical library.
 class CatalogResponse {
@@ -74,11 +108,15 @@ class CatalogResponse {
   /// Wat de pc letterlijk stuurde, onbewerkt.
   ///
   /// Bestaat zodat het toestel de bibliotheek op zijn eigen schijf kan bewaren zonder hem eerst
-  /// terug te vertalen naar JSON. Terugvertalen zou een tweede schrijfwijze zijn die van de echte
-  /// af kan drijven — en dan leest een volgende versie een kopie die net niet meer klopt.
-  final Map<String, dynamic>? raw;
+  /// terug te vertalen naar JSON. Terugvertalen zou een tweede schrijfwijze zijn die van de echte af
+  /// kan drijven — en dan leest een volgende versie een kopie die net niet meer klopt.
+  ///
+  /// **De BYTES, en niet de ontlede kaart die hier eerst stond.** Terugcoderen is `jsonEncode` over
+  /// megabytes op de tekendraad, en dat gebeurde elke keer dat de catalogus veranderde. Tijdens een
+  /// download is dat om de paar seconden.
+  final List<int>? bytes;
 
-  const CatalogResponse(this.catalog, this.etag, {this.raw});
+  const CatalogResponse(this.catalog, this.etag, {this.bytes});
 
   bool get unchanged => catalog == null;
 }
@@ -210,14 +248,15 @@ class RemoteClient {
   Future<CatalogResponse> catalog({String? etag}) async {
     final res = await _get('/api/catalog', etag: etag);
     if (res.statusCode == 304) return CatalogResponse(null, etag);
-    final decoded = jsonDecode(utf8.decode(res.bodyBytes));
-    if (decoded is! Map<String, dynamic>) {
+    // Op een ANDERE isolate. Zie [ontleedCatalogus] voor waarom dat hier het verschil maakt.
+    final decoded = await ontleedCatalogus(res.bodyBytes);
+    if (decoded == null) {
       throw const RemoteException('De pc stuurde geen bibliotheek terug.');
     }
     return CatalogResponse(
       CatalogDto.fromJson(decoded),
       res.headers['etag'],
-      raw: decoded,
+      bytes: res.bodyBytes,
     );
   }
 

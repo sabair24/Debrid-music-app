@@ -145,6 +145,7 @@ jobs:
             test/cue_knippen_test.dart test/aria2_selectie_test.dart \
             test/uitdaging_zin_test.dart test/versieregel_test.dart \
             test/meldrem_test.dart test/hoesindex_test.dart \
+            test/catalogus_bytes_test.dart \
             test/normalise_tags_test.dart
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside

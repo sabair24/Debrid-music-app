@@ -189,7 +189,7 @@ class ClientSession extends ChangeNotifier {
     // En de inhoudsopgave van die pc gaat mee. Wie zegt "vergeet die pc" bedoelt niet "maar hou de
     // lijst van mijn muziek nog even".
     await kopie.wis();
-    library.laatsteCatalogus = null;
+    library.laatsteCatalogusBytes = null;
     library.remote = null;
     applyMediaResolver((p) => p);
     _endpoint = null;
@@ -217,8 +217,11 @@ class ClientSession extends ChangeNotifier {
       // Vers van de pc: leg hem vast op dit toestel. Alleen als er ECHT iets veranderd is — een
       // poll die 304 krijgt hoeft geen bestand van megabytes opnieuw weg te schrijven, en dat
       // gebeurt hier elke vijftien seconden.
-      final vers = library.laatsteCatalogus;
-      if (changed && vers != null) unawaited(kopie.bewaar(vers));
+      // De BYTES, niet de ontlede vorm. Zie [CatalogusKopie.bewaarBytes]: terugcoderen is
+      // `jsonEncode` over megabytes op de tekendraad, en dat gebeurde hier elke keer dat er iets
+      // veranderd was — tijdens een download dus om de vijftien seconden.
+      final vers = library.laatsteCatalogusBytes;
+      if (changed && vers != null) unawaited(kopie.bewaarBytes(vers));
       // Ook de kopie tonen als de pc weigert. "Er staan geen nummers in de lijst" was de vervanger
       // voor "de pc doet het niet", en die twee lopen uiteen zodra er ooit iets geladen is: dan blijft
       // een lijst staan waar je op kunt tikken en die stil niets doet.
