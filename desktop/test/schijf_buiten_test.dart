@@ -45,6 +45,17 @@ Uint8List _hoes(int tint) {
   return _png(im);
 }
 
+/// Een vlak met een echte kleur erin.
+///
+/// Nodig omdat de twee maaksels hierboven grijs zijn, en `dominantColour` grijs juist overslaat —
+/// die zoekt de kleur van een hoes en niet zijn helderheid. Voor het meten van de wachtrij is een
+/// vlak dat wél een antwoord geeft het scherpste geval.
+Uint8List _kleurvlak() {
+  final im = img.Image(width: 300, height: 300);
+  img.fill(im, color: img.ColorRgb8(200, 40, 40));
+  return _png(im);
+}
+
 void main() {
   late Uint8List schijf;
   late Uint8List hoes;
@@ -138,14 +149,21 @@ void main() {
     test('de kleurberekening deelt die rij en blijft werken', () async {
       // Kleur en schijf zitten expres in ÉÉN wachtrij (zie `_opDeRij`): twee rijen naast elkaar
       // zijn geen rij. Dus moeten ze ook door elkaar heen kunnen lopen.
-      final beide = await Future.wait<Object?>([
-        kleurBuitenDeTekendraad(schijf),
+      //
+      // Let op WAT hier gemeten wordt: dat alle vier de vragen antwoord geven. Een grijze plaat
+      // hoort GEEN kleur op te leveren — `dominantColour` slaat bijna-zwart, bijna-wit en alles
+      // onder een verzadiging van .22 over, en dat is precies waar mijn maaksels uit bestaan. De
+      // eerste versie van deze toets verwachtte daar een getal en zakte terecht.
+      final uit = await Future.wait<Object?>([
+        kleurBuitenDeTekendraad(_kleurvlak()),
         eersteSchijfBuitenDeTekendraad([schijf]),
-        kleurBuitenDeTekendraad(hoes),
+        kleurBuitenDeTekendraad(schijf),
+        eersteSchijfBuitenDeTekendraad([hoes]),
       ]);
-      expect(beide[0], isA<int>());
-      expect(beide[1], 0);
-      expect(beide[2], isA<int>());
+      expect(uit[0], isA<int>(), reason: 'een verzadigd vlak heeft wél een hoofdkleur');
+      expect(uit[1], 0);
+      expect(uit[2], isNull, reason: 'grijs heeft geen hoofdkleur — en dat mag de rij niet breken');
+      expect(uit[3], isNull);
     });
 
     test('een mislukte berekening laat de volgende ongemoeid', () async {

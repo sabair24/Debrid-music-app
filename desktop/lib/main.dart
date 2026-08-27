@@ -19280,7 +19280,11 @@ class UitgaveRij extends StatelessWidget {
               Positioned(
                 right: 0,
                 bottom: 0,
+                // Een sleutel en niet "zoek het vinkje": op deze rij staan al vinkjes van dezelfde
+                // soort — de bordjes "achterkant" en "cd-scan" gebruiken hetzelfde icoon. Een toets
+                // die op het icoon zoekt vindt die van de bordjes en zegt niets over dit vinkje.
                 child: Container(
+                  key: const Key('scan-klaargezet'),
                   decoration: const BoxDecoration(color: _accent, shape: BoxShape.circle),
                   padding: const EdgeInsets.all(2),
                   child: const Icon(Icons.check_rounded, size: 13, color: Colors.white),
