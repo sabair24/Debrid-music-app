@@ -1514,7 +1514,7 @@ extension DiscogsArtwork on DiscogsService {
     // Together, not one after another. These are plain image GETs to Discogs' CDN and do NOT go
     // through the rate-limited _get above, so waiting for each in turn bought nothing but delay.
     final datas = await Future.wait([for (var i = 0; i < take; i++) fetchImage(e.images[i].uri)]);
-    final guessed = assignRoles(
+    final guessed = await rollenBuitenDeTekendraad(
       [for (var i = 0; i < take; i++) e.images[i].primary],
       [
         for (var i = 0; i < take; i++)
@@ -1707,10 +1707,12 @@ extension DiscogsArtwork on DiscogsService {
         if (v.id == skip || tried >= 2) continue;
         tried++;
         final other = await release(v.id);
-        for (final img in (other?.images ?? const <DiscogsImage>[]).take(3)) {
-          final bytes = await fetchImage(img.uri);
-          if (bytes != null && looksLikeDisc(bytes)) return bytes;
-        }
+        // De drie tegelijk ophalen en in ÉÉN oversteek laten beoordelen. Los per scan waren dit
+        // drie keer een isolate erbij, en de volgorde beslist toch al — zie [eersteSchijf].
+        final drie = (other?.images ?? const <DiscogsImage>[]).take(3).toList();
+        final bytes = await Future.wait([for (final img in drie) fetchImage(img.uri)]);
+        final k = await eersteSchijfBuitenDeTekendraad(bytes);
+        if (k != null) return bytes[k];
       }
     } catch (_) {
       /* no disc is not an error, just no animation */
@@ -2255,13 +2257,12 @@ extension DiscogsChoices on DiscogsService {
         if (!identical(i, front) && !identical(i, back) && !i.isWide) i
     ].take(6).toList();
     final discBytes = await Future.wait([for (final i in maybeDisc) fetchImage(i.thumb)]);
-    for (var k = 0; k < maybeDisc.length; k++) {
-      final bytes = discBytes[k];
-      if (bytes != null && looksLikeDisc(bytes)) {
-        disc = maybeDisc[k];
-        break;
-      }
-    }
+    // Buiten de tekendraad, en dat is hier geen detail maar het verschil tussen een venster dat
+    // reageert en eentje die stilstaat: dit draait voor élke rij die in de uitgavekiezer in beeld
+    // komt, en `looksLikeDisc` ontcijfert per scan een plaatje in pure Dart. Zie
+    // [eersteSchijfBuitenDeTekendraad].
+    final k = await eersteSchijfBuitenDeTekendraad(discBytes);
+    if (k != null) disc = maybeDisc[k];
     // No inlay-shaped scan: fall back to the convention that the first spare secondary is the back.
     if (back == null) {
       for (final i in imgs) {
