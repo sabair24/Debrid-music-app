@@ -14,6 +14,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:typed_data';
 
 /// De tekens op 0x80–0xBF. Cyrillisch ligt daarboven aaneengesloten en heeft geen tabel nodig.
 ///
@@ -31,19 +32,24 @@ const _hoog = <int>[
 ];
 
 /// Bytes in windows-1251 naar tekst.
+///
+/// **Via een `Uint16List` en niet via een `StringBuffer`, en dat scheelt een veelvoud.** Elke byte
+/// wordt precies één teken — dat staat van tevoren vast — dus de lengte is bekend en er valt niets
+/// te laten groeien. Een `StringBuffer` weet dat niet: die vraagt bij elke `writeCharCode` opnieuw
+/// of er nog plaats is en kopieert zichzelf als dat niet zo is. Op een zoekpagina van RuTracker
+/// gaat het om een half miljoen tekens, en dat op de tekendraad.
 String cp1251Tekst(List<int> bytes) {
-  final uit = StringBuffer();
-  for (final b in bytes) {
-    if (b < 0x80) {
-      uit.writeCharCode(b);
-    } else if (b < 0xC0) {
-      uit.writeCharCode(_hoog[b - 0x80]);
-    } else {
-      // А..я liggen aaneengesloten op 0xC0..0xFF. Dat is het leeuwendeel en het kost geen tabel.
-      uit.writeCharCode(0x410 + (b - 0xC0));
-    }
+  final uit = Uint16List(bytes.length);
+  for (var i = 0; i < bytes.length; i++) {
+    final b = bytes[i];
+    uit[i] = b < 0x80
+        ? b
+        : b < 0xC0
+            ? _hoog[b - 0x80]
+            // А..я liggen aaneengesloten op 0xC0..0xFF. Dat is het leeuwendeel en het kost geen tabel.
+            : 0x410 + (b - 0xC0);
   }
-  return uit.toString();
+  return String.fromCharCodes(uit);
 }
 
 /// Eén teken naar zijn byte in windows-1251, of null als die codetabel het niet kent.

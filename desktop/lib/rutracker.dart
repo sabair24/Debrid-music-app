@@ -803,8 +803,7 @@ class RuTrackerService {
   Future<String?> _hashFromTopic(String topicId) async {
     final r = await _haal('$_base/viewtopic.php?t=$topicId');
     if (r == null || r.status != 200) return null;
-    final html = cp1251Tekst(r.bytes);
-    return RegExp(r'urn:btih:([a-fA-F0-9]{40})').firstMatch(html)?.group(1)?.toLowerCase();
+    return infohashUitBytes(r.bytes);
   }
 
   String _clean(String s) => s
@@ -825,4 +824,55 @@ class _Row {
   final int seeders;
   String? hash;
   _Row(this.topicId, this.title, this.size, this.seeders, this.hash);
+}
+
+/// De infohash uit een RuTracker-pagina, gelezen uit de RUWE bytes.
+///
+/// **Waarom dit niet gewoon een regex over de tekst is.** Zo wás het, en het kostte de app seconden.
+/// Een zoekopdracht die van de lijstpagina komt mist de infohashes, dus haalt de app er tot zestig
+/// topicpagina's bij — en een topicpagina van RuTracker is een half tot een heel megabyte aan
+/// Russische tekst met alle reacties eronder. Voor élke pagina werd die hele inhoud eerst uit
+/// windows-1251 omgezet naar een Dart-tekst (een teken per byte, een half miljoen keer) en daarna
+/// met een regex doorzocht. Zestig keer, op de tekendraad, terwijl je naar de resultaten kijkt.
+///
+/// En dat allemaal voor VEERTIG tekens die gegarandeerd ASCII zijn. Een infohash is hexadecimaal;
+/// geen enkele Cyrillische byte kan er ooit deel van uitmaken. De omzetting was dus niet een beetje
+/// duur maar volstrekt overbodig: hier wordt in de bytes zelf gezocht naar `urn:btih:` en worden de
+/// veertig tekens erachter gelezen. Geen tekst van een megabyte, geen regex, geen tekendraad die
+/// stilstaat.
+///
+/// Gemeld op 27-08-2026: *"als ik dan bij de resultaten ben van de album gaat het ook moeizaam,
+/// blijft de app ook even bevriezen"* — met daarbij een schermafdruk waarop de telefoon zélf aan het
+/// zoeken was, en niet de pc.
+///
+/// Dezelfde uitkomst als de regex die hier stond: hoofdletters worden kleine letters, en bij een
+/// `urn:btih:` waar geen veertig hextekens achter staan wordt verder gezocht in plaats van
+/// opgegeven. Null als er niets in staat.
+String? infohashUitBytes(List<int> bytes) {
+  // "urn:btih:" — hoofdlettergevoelig, net als de regex die hier stond.
+  const naald = <int>[0x75, 0x72, 0x6E, 0x3A, 0x62, 0x74, 0x69, 0x68, 0x3A];
+  const lengte = 40;
+  final laatste = bytes.length - naald.length - lengte;
+  buiten:
+  for (var i = 0; i <= laatste; i++) {
+    for (var j = 0; j < naald.length; j++) {
+      if (bytes[i + j] != naald[j]) continue buiten;
+    }
+    final uit = StringBuffer();
+    for (var k = i + naald.length; k < i + naald.length + lengte; k++) {
+      final c = _hexKlein(bytes[k]);
+      if (c == null) continue buiten;
+      uit.writeCharCode(c);
+    }
+    return uit.toString();
+  }
+  return null;
+}
+
+/// Eén hexteken als kleine letter, of null als deze byte er geen is.
+int? _hexKlein(int b) {
+  if (b >= 0x30 && b <= 0x39) return b; // 0-9
+  if (b >= 0x61 && b <= 0x66) return b; // a-f
+  if (b >= 0x41 && b <= 0x46) return b + 0x20; // A-F wordt a-f
+  return null;
 }
