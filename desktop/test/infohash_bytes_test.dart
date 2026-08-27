@@ -31,11 +31,14 @@ String? viaDeOudeWeg(List<int> bytes) =>
 
 /// Een topicpagina zoals RuTracker hem stuurt: Cyrillisch in windows-1251, met een magneet erin.
 Uint8List pagina(String hash, {String staart = ''}) {
-  final kop = 'Скачать торрент — Кино. Группа крови (1988) [FLAC]';
-  final magneet = '<a href="magnet:?xt=urn:btih:$hash&amp;tr=http://bt.t-ru.org/ann">магнет</a>';
+  // Cyrillisch gaat door [cp1251Byte] en niet door `ascii.encode` — dat laatste gooit erop, en dan
+  // meet de toets zichzelf in plaats van de code.
+  const kop = 'Скачать торрент — Кино. Группа крови (1988) [FLAC]';
   final bytes = <int>[
     for (final r in kop.runes) cp1251Byte(r)!,
-    ...ascii.encode(magneet),
+    ...ascii.encode('<a href="magnet:?xt=urn:btih:$hash&amp;tr=http://bt.t-ru.org/ann">'),
+    for (final r in 'магнет'.runes) cp1251Byte(r)!,
+    ...ascii.encode('</a>'),
     for (final r in 'Комментарии участников$staart'.runes) cp1251Byte(r) ?? 0x3F,
   ];
   return Uint8List.fromList(bytes);
