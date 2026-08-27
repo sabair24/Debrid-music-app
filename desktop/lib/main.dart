@@ -5232,11 +5232,17 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             size: artSize,
             fallback: album.cover,
             chosen: album.correctedCover,
-            pinned: context.watch<LibraryStore>().pinnedRelease(album),
+            // Jouw eigen keuze eerst, dan de persing waar de hoes van deze plaat al vandaan kwam.
+            // Dat tweede is wat dit scherm en het speelscherm op hetzelfde beeld houdt — zie
+            // [persingUitHerkomst].
+            pinned: context.watch<LibraryStore>().pinnedRelease(album) ??
+                persingUitHerkomst(album.resolvedFrom).release,
             // Your own choice still wins; otherwise the pressing this page is describing. Without
             // that the art searched on its own and was steered by the FILE count — three files of a
             // sixteen-track album ruled out every pressing over seven, so it found the single.
-            pinnedMbid: context.watch<LibraryStore>().pinnedMbid(album) ?? _officialMbid,
+            pinnedMbid: context.watch<LibraryStore>().pinnedMbid(album) ??
+                persingUitHerkomst(album.resolvedFrom).mbid ??
+                _officialMbid,
             trackCount: _official.isNotEmpty ? _official.length : album.tracks.length,
             playing: _albumIsPlaying(context),
             roles: context.watch<LibraryStore>().albumArtRoles(album.artist, album.title),
@@ -8557,8 +8563,19 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                     fallback: p.currentCover,
                     chosen: al?.correctedCover,
                     trackCount: al?.tracks.length ?? 0,
-                    pinned: al == null ? null : bib.pinnedRelease(al),
-                    pinnedMbid: al == null ? null : bib.pinnedMbid(al),
+                    // **Dezelfde persing als op de albumpagina, en dat is hier het hele punt.**
+                    //
+                    // Dit scherm kent alleen het aantal BESTANDEN dat je hebt, en dat stuurde de
+                    // zoektocht een andere kant op dan de albumpagina, die het aantal van de
+                    // officiële uitgave kent. Bij één nummer van een plaat van veertien kwam daar
+                    // een promo-persing uit met een sticker op het doosje. Zie
+                    // [persingUitHerkomst] voor het hele verhaal.
+                    pinned: al == null
+                        ? null
+                        : bib.pinnedRelease(al) ?? persingUitHerkomst(al.resolvedFrom).release,
+                    pinnedMbid: al == null
+                        ? null
+                        : bib.pinnedMbid(al) ?? persingUitHerkomst(al.resolvedFrom).mbid,
                     roles: al == null
                         ? const {}
                         : bib.albumArtRoles(al.artist, al.title),

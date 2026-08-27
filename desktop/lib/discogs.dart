@@ -1227,6 +1227,44 @@ String? hoesHerkomst({String? artBron, String? pinnedMbid, int? pinned}) {
   return null;
 }
 
+/// De weg terug: welke persing staat er in deze herkomst?
+///
+/// **Waarom dit moest, en waarom het hier staat en niet elders.** Elk scherm dat een hoes tekent
+/// zocht de persing zelf opnieuw op, en die zoektocht wordt gestuurd door `expectedTracks` — hoeveel
+/// nummers de plaat volgens de aanroeper heeft. De albumpagina weet dat van de OFFICIËLE uitgave;
+/// het speelscherm kent alleen het aantal bestanden dat jij toevallig hebt.
+///
+/// Van *Don't Change* van Worlds Apart stond er één nummer in de bibliotheek. De albumpagina vroeg
+/// dus naar een plaat van veertien en kreeg de gewone cd; het speelscherm vroeg naar een plaat van
+/// één en kreeg een promo-persing — een juwelendoosje met een sticker "NUR FÜR DICH ·
+/// FANGESCHENK". Twee schermen, één plaat, twee hoezen. Gemeld op 27-08-2026: *"waarom zit er nu
+/// nog altijd een verschil van album hoes, dit moet overal gelijk zijn"*.
+///
+/// Het antwoord is niet "beter zoeken" maar "niet nog eens zoeken". Zodra er één keer een hoes van
+/// een aangewezen persing is gekomen, staat die persing opgeschreven in `Album.resolvedFrom` — en
+/// die overleeft ook een herstart. Elk scherm geeft hem vanaf nu mee als speld, en mét een speld
+/// komen artiest, album en het aantal nummers helemaal niet meer aan het antwoord toe (zie
+/// [artCacheKey]). Eén persing, één hoes, overal — en jouw eigen keuze in "Uitgave kiezen" gaat er
+/// nog steeds vóór.
+///
+/// Onbekende of lege vormen geven niets terug: dan blijft alles zoals het was.
+({int? release, String? mbid}) persingUitHerkomst(String? herkomst) {
+  final h = (herkomst ?? '').trim();
+  if (h.isEmpty) return (release: null, mbid: null);
+  if (h.startsWith('mb:')) {
+    final id = h.substring(3).trim();
+    return (release: null, mbid: id.isEmpty ? null : id);
+  }
+  // `rel:` schrijft [hoesHerkomst]; `dg:` is de vorm die de uitgavekiezer gebruikt. Allebei lezen,
+  // want een sleutel die maar half teruggelezen wordt is stiller kapot dan een die gooit.
+  for (final kop in const ['rel:', 'dg:']) {
+    if (!h.startsWith(kop)) continue;
+    final n = int.tryParse(h.substring(kop.length).trim());
+    return (release: n != null && n > 0 ? n : null, mbid: null);
+  }
+  return (release: null, mbid: null);
+}
+
 extension DiscogsArtwork on DiscogsService {
   /// Fetch and identify the front, back and disc scans for an album, cached on disk.
   ///

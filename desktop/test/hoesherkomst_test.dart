@@ -61,4 +61,59 @@ void main() {
       expect(a.isEmpty, isTrue);
     });
   });
+
+  group('DE KERN: de weg terug, zodat elk scherm dezelfde persing gebruikt', () {
+    // Gemeld op 27-08-2026: *"waarom zit er nu nog altijd een verschil van album hoes, dit moet
+    // overal gelijk zijn"*. Van "Don't Change" van Worlds Apart stond er één nummer in de
+    // bibliotheek. De albumpagina vroeg naar een plaat van veertien nummers en kreeg de gewone cd;
+    // het speelscherm kent alleen het aantal BESTANDEN, vroeg dus naar een plaat van één, en kreeg
+    // een promo-persing met een sticker op het doosje.
+    //
+    // De oplossing is niet beter zoeken maar niet nóg eens zoeken: de persing die de hoes al
+    // leverde staat in `Album.resolvedFrom`, en elk scherm geeft hem mee als speld. Deze toets
+    // bewaakt dat die sleutel terug te lezen is — een sleutel die maar half teruggelezen wordt is
+    // stiller kapot dan een die gooit.
+
+    test('een Discogs-persing komt er als nummer uit', () {
+      expect(persingUitHerkomst('rel:12345').release, 12345);
+      expect(persingUitHerkomst('rel:12345').mbid, isNull);
+    });
+
+    test('een MusicBrainz-persing komt er als sleutel uit', () {
+      const id = '76df3287-6cda-33eb-8e9a-044b5e15ffdd';
+      expect(persingUitHerkomst('mb:$id').mbid, id);
+      expect(persingUitHerkomst('mb:$id').release, isNull);
+    });
+
+    test('de vorm die de uitgavekiezer gebruikt wordt ook gelezen', () {
+      // Daar heet hij `dg:`. Twee schrijfwijzen voor hetzelfde ding, dus allebei lezen.
+      expect(persingUitHerkomst('dg:777').release, 777);
+    });
+
+    test('niets, leeg of rommel geeft geen persing', () {
+      for (final h in [null, '', '   ', 'rel:', 'mb:', 'rel:nul', 'rel:0', 'rel:-3', 'iets anders']) {
+        final p = persingUitHerkomst(h);
+        expect(p.release, isNull, reason: 'release uit ${h ?? "null"}');
+        expect(p.mbid, isNull, reason: 'mbid uit ${h ?? "null"}');
+      }
+    });
+
+    test('spaties eromheen doen er niet toe', () {
+      expect(persingUitHerkomst('  rel:88  ').release, 88);
+      expect(persingUitHerkomst(' mb:abc ').mbid, 'abc');
+    });
+
+    test('DE AFSPRAAK: wat hoesHerkomst schrijft is terug te lezen', () {
+      // Dit is het paar dat niet uit elkaar mag lopen. Verandert de ene schrijfwijze en de andere
+      // niet, dan tekenen de schermen weer verschillende hoezen — zonder dat er iets stukgaat.
+      expect(persingUitHerkomst(hoesHerkomst(pinned: 4242)).release, 4242);
+      expect(persingUitHerkomst(hoesHerkomst(pinnedMbid: 'abc-123')).mbid, 'abc-123');
+      expect(persingUitHerkomst(hoesHerkomst(artBron: 'rel:9')).release, 9);
+      expect(persingUitHerkomst(hoesHerkomst(artBron: 'mb:zzz')).mbid, 'zzz');
+      // En niets in, niets uit.
+      final leeg = persingUitHerkomst(hoesHerkomst());
+      expect(leeg.release, isNull);
+      expect(leeg.mbid, isNull);
+    });
+  });
 }
