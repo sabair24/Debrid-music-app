@@ -1538,92 +1538,6 @@ class _HomeShellState extends State<HomeShell> {
 
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  /// The sections, listed rather than squeezed into a strip.
-  ///
-  /// Same seven entries and the same [_NavPills] source of truth, so a section added there appears
-  /// here without anything else being touched.
-  Widget _sectionsDrawer(BuildContext context) {
-    final lib = context.watch<LibraryStore>();
-    final badge = context.watch<DownloadManager>().jobs.where((j) => j.busy).length;
-    return Drawer(
-      backgroundColor: _panel,
-      child: SafeArea(
-          // A television reports no insets, so SafeArea alone is a no-op there; this is the
-          // margin that keeps the back arrow off the part of the picture a set cuts away.
-          minimum: tvOverscan,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 18, 18, 6),
-              child: Row(children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.asset('assets/icon/app_icon.png', width: 30, height: 30),
-                ),
-                const SizedBox(width: 10),
-                const Text('DebridMusic',
-                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-              ]),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-              child: Text('${lib.albums.length} albums · ${lib.tracks.length} nummers',
-                  style: const TextStyle(color: _muted, fontSize: 12.5)),
-            ),
-            const Divider(color: _line, height: 1),
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                children: [
-                  // Op een telefoon staat hier NIET wat al onderaan in de balk staat.
-                  //
-                  // De la had tien regels waarvan er vijf letterlijk dezelfde sectie openden als de
-                  // knop die er op datzelfde scherm onder staat — en die balk laat ook nog zien
-                  // waar je bent. Wat overblijft is precies waar de la voor is: het beheer dat niet
-                  // in vijf knoppen past. Op een pc en een televisie is er geen balk, dus daar
-                  // blijft de la de volledige kaart van de app.
-                  for (final (id, label, icoon)
-                      in NavSections.voorLa(metBalk: isCompact(context)))
-                    ListTile(
-                      selected: _view == id,
-                      selectedTileColor: _accent.withValues(alpha: .16),
-                      selectedColor: Colors.white,
-                      leading: Icon(icoon, size: 20),
-                      title: Text(label),
-                      trailing: id == 6 && badge > 0
-                          ? Container(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                              decoration: BoxDecoration(
-                                  color: _accent, borderRadius: BorderRadius.circular(9)),
-                              child: Text('$badge',
-                                  style: const TextStyle(
-                                      fontSize: 11, fontWeight: FontWeight.w800)),
-                            )
-                          : null,
-                      onTap: () {
-                        _gaNaar(id);
-                        Navigator.pop(context);
-                      },
-                    ),
-                ],
-              ),
-            ),
-            const Divider(color: _line, height: 1),
-            ListTile(
-              leading: const Icon(Icons.settings_rounded, size: 20),
-              title: const Text('Instellingen'),
-              onTap: () {
-                Navigator.pop(context);
-                showDialog(context: context, builder: (_) => const SettingsDialog());
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   /// Ligt er een pagina over de sectie heen?
   ///
@@ -1975,7 +1889,7 @@ class _HomeShellState extends State<HomeShell> {
         // shows all seven at once, says which one you are on, and gives the content back its full
         // width. Only on a phone — a television has 960 points and a desktop has more, and the
         // strip is the better thing there.
-        drawer: isCompact(context) ? _sectionsDrawer(context) : null,
+        drawer: isCompact(context) ? _SectionsDrawer(huidig: _view, gaNaar: _gaNaar) : null,
         // Televisions overscan: a strip around the edge of the picture falls off the screen, and
         // how much differs per set. The margin goes on the CONTENTS of the bars rather than around
         // the whole app, so the top bar's glass and the player bar's surface still reach the panel
@@ -2217,7 +2131,6 @@ class _HomeShellState extends State<HomeShell> {
   /// The section name and a way into the drawer — what a phone gets instead of the pill strip.
   Widget _compactTopBar() {
     final label = NavSections.items.firstWhere((e) => e.$1 == _view, orElse: () => (5, 'Start', Icons.home_rounded)).$2;
-    final badge = context.watch<DownloadManager>().jobs.where((j) => j.busy).length;
     return SizedBox(
       height: 56 + MediaQuery.viewPaddingOf(context).top,
       child: Padding(
@@ -2240,17 +2153,7 @@ class _HomeShellState extends State<HomeShell> {
             ),
             // The one badge worth carrying out of the drawer: a download running while you are
             // somewhere else is the thing you would otherwise have to go looking for.
-            if (badge > 0)
-              Padding(
-                padding: const EdgeInsets.only(right: 4),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration:
-                      BoxDecoration(color: _accent, borderRadius: BorderRadius.circular(10)),
-                  child: Text('$badge',
-                      style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800)),
-                ),
-              ),
+            const _DownloadBadge(marge: EdgeInsets.only(right: 4)),
             TvLabelled(
               label: 'Instellingen',
               child: IconButton(
@@ -2559,6 +2462,153 @@ class _HomeShellState extends State<HomeShell> {
 /// geometry is known in the same frame it animates in — no first-frame jump, no post-frame
 /// measuring pass. That also means the label's weight must not change between states (only its
 /// colour does), or the pill would no longer match what it sits behind.
+/// Hoeveel downloads er lopen, en verder niets.
+///
+/// **Waarom dit een eigen widget is, en geen `final badge = context.watch<DownloadManager>()` in
+/// de schil.** Zo'n `watch` in een methode van `_HomeShellState` hangt niet aan het cijfertje maar
+/// aan de SCHIL: bij elke melding van de downloadlijst wordt `build` van de schil opnieuw gedraaid,
+/// en daarmee de hele pagina die eronder hangt — de albumraster, de speelbalk, alles.
+///
+/// Dat was precies wat er misging tijdens een download. De voortgang schuift constant op, dus de
+/// lijst meldt door: gekoppeld elke twee seconden bij het peilen, en op de pc zelf tot vijf keer
+/// per seconde. Er werd dus vijf keer per seconde een compleet scherm opnieuw opgebouwd om één
+/// getalletje bij te werken. Gemeld op 27-08-2026: *"vanaf ik download via torrent hapert de app
+/// enorm, zelfs roteren van men scherm is massa's traag"* — en roteren bouwt de boom óók opnieuw op,
+/// dus die twee kwamen bovenop elkaar.
+///
+/// `select` in plaats van `watch`, en op een eigen element: hertekend wordt er alleen nog als het
+/// GETAL verandert, en dan alleen dit hoekje. Een download van twintig nummers kost zo twintig
+/// hertekeningen van een pilletje in plaats van duizenden van het hele scherm.
+class _DownloadBadge extends StatelessWidget {
+  const _DownloadBadge({
+    this.horizontaal = 8,
+    this.verticaal = 3,
+    this.tekstmaat = 11.5,
+    this.ronding = 10,
+    this.marge = EdgeInsets.zero,
+  });
+
+  final double horizontaal;
+  final double verticaal;
+  final double tekstmaat;
+  final double ronding;
+
+  /// Ruimte ERNAAST, en die hoort bij het pilletje en niet bij de rij eromheen: stond hij als
+  /// `Padding` in de balk, dan bleef die ruimte staan als er niets te tellen valt.
+  final EdgeInsets marge;
+
+  /// De maat zoals hij in de la staat, naast "Downloads".
+  const _DownloadBadge.la() : this(horizontaal: 7, verticaal: 2, tekstmaat: 11, ronding: 9);
+
+  @override
+  Widget build(BuildContext context) {
+    final n = context.select<DownloadManager, int>((d) => d.jobs.where((j) => j.busy).length);
+    // Niets in plaats van null: waar dit stond werd het al met een `if` weggelaten, en als
+    // `trailing` van een ListTile is een lege doos hetzelfde als geen trailing.
+    if (n == 0) return const SizedBox.shrink();
+    return Container(
+      margin: marge,
+      padding: EdgeInsets.symmetric(horizontal: horizontaal, vertical: verticaal),
+      decoration: BoxDecoration(color: _accent, borderRadius: BorderRadius.circular(ronding)),
+      child: Text('$n', style: TextStyle(fontSize: tekstmaat, fontWeight: FontWeight.w800)),
+    );
+  }
+}
+
+/// The sections, listed rather than squeezed into a strip.
+///
+/// Same seven entries and the same [_NavPills] source of truth, so a section added there appears
+/// here without anything else being touched.
+///
+/// **Waarom dit een eigen widget is en geen methode van de schil.** Als methode werd hij bij ELKE
+/// hertekening van de schil opgebouwd — ook met de la dicht, wat hij vrijwel altijd is — en de twee
+/// `watch`-aanroepen erin hingen daardoor aan de schil in plaats van aan de la. Gevolg: elke keer
+/// dat de bibliotheek iets meldde (tijdens een download bij élk binnengekomen nummer) werd het hele
+/// scherm opnieuw opgebouwd om twee getallen te verversen die niemand op dat moment kon zien.
+///
+/// Nu horen die aanroepen bij dit element, en dat element bestaat alleen zolang de la open staat.
+class _SectionsDrawer extends StatelessWidget {
+  const _SectionsDrawer({required this.huidig, required this.gaNaar});
+
+  final int huidig;
+  final void Function(int) gaNaar;
+
+  @override
+  Widget build(BuildContext context) {
+    // Eén `select` op de twee getallen samen: een record vergelijkt op inhoud, dus een scan die
+    // niets aan de aantallen verandert hertekent ook niets.
+    final maten = context.select<LibraryStore, (int, int)>((l) => (l.albums.length, l.tracks.length));
+    return Drawer(
+      backgroundColor: _panel,
+      child: SafeArea(
+          // A television reports no insets, so SafeArea alone is a no-op there; this is the
+          // margin that keeps the back arrow off the part of the picture a set cuts away.
+          minimum: tvOverscan,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 6),
+              child: Row(children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.asset('assets/icon/app_icon.png', width: 30, height: 30),
+                ),
+                const SizedBox(width: 10),
+                const Text('DebridMusic',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+              ]),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+              child: Text('${maten.$1} albums · ${maten.$2} nummers',
+                  style: const TextStyle(color: _muted, fontSize: 12.5)),
+            ),
+            const Divider(color: _line, height: 1),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                children: [
+                  // Op een telefoon staat hier NIET wat al onderaan in de balk staat.
+                  //
+                  // De la had tien regels waarvan er vijf letterlijk dezelfde sectie openden als de
+                  // knop die er op datzelfde scherm onder staat — en die balk laat ook nog zien
+                  // waar je bent. Wat overblijft is precies waar de la voor is: het beheer dat niet
+                  // in vijf knoppen past. Op een pc en een televisie is er geen balk, dus daar
+                  // blijft de la de volledige kaart van de app.
+                  for (final (id, label, icoon)
+                      in NavSections.voorLa(metBalk: isCompact(context)))
+                    ListTile(
+                      selected: huidig == id,
+                      selectedTileColor: _accent.withValues(alpha: .16),
+                      selectedColor: Colors.white,
+                      leading: Icon(icoon, size: 20),
+                      title: Text(label),
+                      trailing: id == 6 ? const _DownloadBadge.la() : null,
+                      onTap: () {
+                        gaNaar(id);
+                        Navigator.pop(context);
+                      },
+                    ),
+                ],
+              ),
+            ),
+            const Divider(color: _line, height: 1),
+            ListTile(
+              leading: const Icon(Icons.settings_rounded, size: 20),
+              title: const Text('Instellingen'),
+              onTap: () {
+                Navigator.pop(context);
+                showDialog(context: context, builder: (_) => const SettingsDialog());
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Says the library on screen is the cloud copy, not the PC.
 ///
 /// Without it, a tap on play does nothing and there is no way to tell why — the albums are all
@@ -2797,7 +2847,9 @@ class _TvTopBarState extends State<TvTopBar> {
 
   @override
   Widget build(BuildContext context) {
-    final badge = context.watch<DownloadManager>().jobs.where((j) => j.busy).length;
+    // `select` en geen `watch`: deze balk hoeft alleen opnieuw als het GETAL verandert, en de
+    // downloadlijst meldt tijdens het ophalen tot vijf keer per seconde. Zie [_DownloadBadge].
+    final badge = context.select<DownloadManager, int>((d) => d.jobs.where((j) => j.busy).length);
     return Container(
       height: TvTopBar.hoogte + tvOverscan.top,
       padding: EdgeInsets.only(top: tvOverscan.top),
