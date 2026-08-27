@@ -1661,7 +1661,7 @@ class LibraryStore extends ChangeNotifier {
         // kent doet niets, en dat is het enige veilige antwoord.
         'op': perNummer ? 'correctionTracks' : 'correction',
         'albumId': remoteAlbumId(target),
-        if (perNummer) 'trackIds': [for (final t in alleen!) _remoteTrackId(t.path)],
+        if (perNummer) 'trackIds': [for (final t in alleen) _remoteTrackId(t.path)],
         'artist': artist,
         'albumTitle': albumTitle,
         'title': title,
@@ -1675,7 +1675,7 @@ class LibraryStore extends ChangeNotifier {
     }
     // Eerst naar de bestanden, dán de correctie. Andersom zou een mislukte schrijfbeurt onzichtbaar
     // blijven achter een correctie die het scherm tóch goed laat lijken.
-    final doel = perNummer ? alleen! : target.tracks;
+    final doel = perNummer ? alleen : target.tracks;
     final magVeld = veldenBijCorrectie(isSingle: target.isSingle, perNummer: perNummer);
     final uit = await _schrijfBewerking(target,
         artist: artist, albumTitle: albumTitle, title: title, alleen: perNummer ? doel : null);
