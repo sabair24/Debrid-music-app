@@ -75,6 +75,21 @@ class ClientSession extends ChangeNotifier {
   /// How the PC calls itself, for the settings screen.
   String get serverName => _endpoint?.name ?? _endpoint?.baseUrl.host ?? '';
 
+  /// WELKE VERSIE ER OP DE PC DRAAIT. Leeg tot de eerste verbinding.
+  ///
+  /// **Waarom dit op het scherm hoort.** Bij een gekoppeld toestel doet de PC het zoeken én het
+  /// downloaden; wat je hier ziet zijn zíjn taken en zíjn foutmeldingen, doorgegeven over het net.
+  /// De versie in Instellingen is die van DIT toestel, en die zegt dus niets over de code die het
+  /// werk deed.
+  ///
+  /// Op 27-08-2026 kostte dat drie ronden. Op de Mac stond 3.9.223 — de nieuwste, met de reparatie
+  /// erin — en toch verscheen een foutmelding die in die versie niet meer te maken is. Hij kwam van
+  /// de pc, die achterliep. Van buitenaf was dat op geen enkele manier te zien: het scherm zei
+  /// "Verbonden met je pc — Saber · 1024 nummers" en verder niets.
+  ///
+  /// `/health` gaf dit al terug (zie `sharing.version`); het werd alleen weggegooid.
+  String serverVersie = '';
+
   /// Het onthouden adres, of een vers gevonden adres als dat niet meer antwoordt.
   ///
   /// Geeft altijd íets terug — bij twijfel het onthouden adres. Niets vinden is geen reden om de
@@ -120,6 +135,14 @@ class ClientSession extends ChangeNotifier {
     endpoint = werkend;
     _endpoint = endpoint;
     if (remember) await savePairedServer(endpoint);
+
+    // Wie er aan de andere kant staat, en met welke code. Zie [serverVersie]: bij een koppeling doet
+    // de pc het werk, dus zijn versie is de versie die telt.
+    unawaited(RemoteClient.health(endpoint.baseUrl).then((h) {
+      if (h == null || h.version.isEmpty) return;
+      serverVersie = h.version;
+      notifyListeners();
+    }).catchError((_) {/* niet weten is geen reden om niet te verbinden */}));
 
     final client = RemoteClient(endpoint);
     library.remote = client;
