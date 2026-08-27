@@ -832,6 +832,15 @@ class DownloadManager extends ChangeNotifier {
   /// vertrekt doet het licht uit.
   final Map<String, int> _lopersPerTorrent = {};
 
+  /// Welk aria2-gid hoort bij welke infohash, zolang die taak loopt.
+  ///
+  /// **Waarom de app dit zelf bijhoudt.** Een tweede nummer van dezelfde plaat kan niet opnieuw
+  /// aangemeld worden — aria2 kent een torrent aan zijn infohash en weigert dat. De app kwam daar
+  /// eerst achter door de weigering óp te vangen en aria2 daarna te vragen welk gid erbij hoorde:
+  /// drie plekken die stil fout kunnen gaan (de tekst van de weigering, `tellActive`, en of hij die
+  /// taak wil aanwijzen) voor iets wat zij zelf weet, want zij heeft die taak aangemeld.
+  final Map<String, String> _gidPerTorrent = {};
+
   /// Upgrades take NO download slot, so ze kunnen nooit een nummer ophouden waar je nog niets van
   /// hebt. Queued rather than dropped, so a whole album still gets upgraded.
   ///
@@ -2381,7 +2390,26 @@ class DownloadManager extends ChangeNotifier {
     // aan — maar wel bij wat aria2 moet ophalen, anders staat er na afloop geen cue naast het
     // albumbestand en valt er niets te knippen.
     final gekozen = [...files.map((f) => f.id), ...cues.map((f) => f.id)];
-    var gid = await motor.voegTorrentToe(torrent.lokaleTorrent!, map: destDir.path, kies: gekozen);
+    final hash = (torrent.hash ?? '').toLowerCase();
+
+    // EERST KIJKEN OF WE HEM ZELF AL HEBBEN, en pas daarna aanmelden.
+    //
+    // Dit stond andersom: aanmelden, de weigering opvangen, en aan aria2 vragen welk gid daarbij
+    // hoort. Dat werkte, maar het leunde op aria2's foutpad — op de tekst van zijn weigering, op
+    // `tellActive`, op zijn bereidheid een lopende taak aan te wijzen. Drie plekken waar het stil
+    // fout kan gaan, voor iets wat de app zelf gewoon weet: zij heeft die taak zelf aangemeld.
+    //
+    // Nu onthoudt [_gidPerTorrent] dat, en is de gewone weg voor het tweede nummer van een plaat
+    // geen mislukking-met-herstel meer maar één stap.
+    String? gid;
+    if (hash.isNotEmpty) {
+      final lopend = _gidPerTorrent[hash];
+      if (lopend != null && await motor.kiesErbij(lopend, gekozen)) {
+        gid = lopend;
+        _log.line('torrent $hash liep al (gid=$lopend) — erbij gekozen zonder nieuwe aanmelding');
+      }
+    }
+    gid ??= await motor.voegTorrentToe(torrent.lokaleTorrent!, map: destDir.path, kies: gekozen);
 
     // AANHAKEN IN PLAATS VAN OPGEVEN.
     //
@@ -2400,14 +2428,14 @@ class DownloadManager extends ChangeNotifier {
     // aan hangt.
     var aanhaakReden = '';
     if (gid == null) {
-      final bestaand = await motor.zoekGidVoor(torrent.hash ?? '');
+      final bestaand = await motor.zoekGidVoor(hash);
       if (bestaand == null) {
-        aanhaakReden = (torrent.hash ?? '').isEmpty
+        aanhaakReden = hash.isEmpty
             ? 'deze bron gaf geen infohash mee'
             : 'aria2 kende hem wel maar wilde hem niet aanwijzen';
       } else if (await motor.kiesErbij(bestaand, gekozen)) {
         gid = bestaand;
-        _log.line('torrent ${torrent.hash} liep al (gid=$bestaand) — aangehaakt in plaats van '
+        _log.line('torrent $hash liep al (gid=$bestaand) — aangehaakt in plaats van '
             'opnieuw aangemeld');
       } else {
         aanhaakReden = motor.laatsteFout ?? 'er kon niets bij gekozen worden';
@@ -2424,7 +2452,7 @@ class DownloadManager extends ChangeNotifier {
     // Zodra de andere download klaar is haalt [verwijder] de torrent uit aria2, en dan gaat deze
     // aanmelding alsnog. Vier minuten is ruim voor een nummer, en eindig genoeg om niet voor eeuwig
     // een plek in de rij te bezetten.
-    if (gid == null && (torrent.hash ?? '').isNotEmpty) {
+    if (gid == null && hash.isNotEmpty) {
       alle('waiting', detail: 'wacht op een andere download van deze plaat');
       final tot = DateTime.now().add(const Duration(minutes: 4));
       while (gid == null && DateTime.now().isBefore(tot)) {
@@ -2449,6 +2477,10 @@ class DownloadManager extends ChangeNotifier {
     }
 
     _lopersPerTorrent.update(gid, (n) => n + 1, ifAbsent: () => 1);
+    // Onthouden welk gid bij deze plaat hoort, zodat het VOLGENDE nummer er meteen bij kan in
+    // plaats van eerst tegen een weigering aan te lopen. Weggehaald door dezelfde teller die het
+    // opruimen regelt — zolang er nog iemand op deze taak hangt, is hij geldig.
+    if (hash.isNotEmpty) _gidPerTorrent[hash] = gid;
 
     alle('downloading');
     // Dit is de eerste torrentdownload die écht te stoppen is. Bij TorBox loopt het ophalen aan hún
@@ -2539,6 +2571,10 @@ class DownloadManager extends ChangeNotifier {
       final over = (_lopersPerTorrent[gid] ?? 1) - 1;
       if (over <= 0) {
         _lopersPerTorrent.remove(gid);
+        // Ook de snelkoppeling weg, en alléén als hij nog naar ONS gid wijst: een derde nummer dat
+        // ondertussen een nieuwe taak voor dezelfde plaat opzette mag hier zijn ingang niet
+        // kwijtraken.
+        if (_gidPerTorrent[hash] == gid) _gidPerTorrent.remove(hash);
         await motor.verwijder(gid);
       } else {
         _lopersPerTorrent[gid] = over;
