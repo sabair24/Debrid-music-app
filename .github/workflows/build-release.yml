@@ -155,7 +155,7 @@ jobs:
             test/schudvolgorde_test.dart test/cast_control_test.dart \
             test/wachtrij_bewerken_test.dart test/wachtrij_radio_test.dart \
             test/radiovoorraad_test.dart test/radiosessie_test.dart \
-            test/oordelen_test.dart test/duim_test.dart
+            test/oordelen_test.dart test/duim_test.dart test/radioplan_test.dart
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
       # the app you actually use while the TV work is in progress — shipping that would install a

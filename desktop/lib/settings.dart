@@ -10,6 +10,12 @@ class AppSettings extends ChangeNotifier {
   String torboxToken = '';
   String lastfmKey = '';
 
+  /// De sleutel waarmee de app een getypte zin in een radio-opdracht laat omzetten.
+  ///
+  /// Leeg is de gewone toestand: zonder deze sleutel werkt alles behalve "maak me een radio met ...".
+  /// Zie `ai.dart` — het gaat om één aanroep per radio, van een paar honderd tekens.
+  String anthropicKey = '';
+
   /// AcoustID application key, from acoustid.org/new-application. Free, and only needed for records
   /// no catalogue can name by title — the compilations. Everything else fingerprinting does happens
   /// on this machine and needs no key at all.
@@ -206,7 +212,8 @@ class AppSettings extends ChangeNotifier {
 
   /// How many credentials are actually filled in. The measure of "worth keeping".
   static int _filled(Map<String, dynamic> m) => [
-        'discogs_token', 'torbox_token', 'lastfm_key', 'acoustid_key', 'soulseek_user', 'soulseek_pass',
+        'discogs_token', 'torbox_token', 'lastfm_key', 'anthropic_key', 'acoustid_key',
+        'soulseek_user', 'soulseek_pass',
         'rutracker_user', 'rutracker_pass', 'tidal_client_id', 'tidal_client_secret',
         'tidal_refresh_token', 'lan_token', 'music_root',
       ].where((k) => (m[k] ?? '').toString().isNotEmpty).length;
@@ -253,6 +260,7 @@ class AppSettings extends ChangeNotifier {
         discogsToken = (m['discogs_token'] ?? '') as String;
         torboxToken = (m['torbox_token'] ?? '') as String;
         lastfmKey = (m['lastfm_key'] ?? '') as String;
+        anthropicKey = (m['anthropic_key'] ?? '') as String;
         acoustidKey = (m['acoustid_key'] ?? '') as String;
         soulseekUser = (m['soulseek_user'] ?? '') as String;
         soulseekPass = (m['soulseek_pass'] ?? '') as String;
@@ -288,6 +296,7 @@ class AppSettings extends ChangeNotifier {
         'discogs_token': discogsToken,
         'torbox_token': torboxToken,
         'lastfm_key': lastfmKey,
+        'anthropic_key': anthropicKey,
         'acoustid_key': acoustidKey,
         'soulseek_user': soulseekUser,
         'soulseek_pass': soulseekPass,
