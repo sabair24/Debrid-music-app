@@ -149,7 +149,7 @@ jobs:
             test/schijf_buiten_test.dart test/bronzeef_test.dart \
             test/correctie_velden_test.dart test/tragere_klokken_test.dart \
             test/stroomstand_test.dart test/netsoort_test.dart \
-            test/omzetrecept_test.dart \
+            test/omzetrecept_test.dart test/bijwerkstand_test.dart \
             test/stilstandwacht_test.dart test/einde_of_breuk_test.dart \
             test/normalise_tags_test.dart
 

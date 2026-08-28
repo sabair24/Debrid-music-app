@@ -24,6 +24,7 @@ import 'catalog.dart';
 import 'dtos.dart';
 import 'net.dart';
 import 'pairing.dart';
+import 'pc_bijwerker.dart';
 import 'range.dart';
 import 'state_store.dart';
 import 'tokens.dart';
@@ -115,6 +116,9 @@ class LanServer {
   /// to the speaker, and so every device gets the same destination list.
   late final CastManager cast;
   final Transcoder transcoder = Transcoder();
+
+  /// Zichzelf bijwerken op verzoek van een gekoppeld toestel. Zie `pc_bijwerker.dart`.
+  final PcBijwerker bijwerker = PcBijwerker();
   final int port;
   final String version;
   String token;
@@ -275,6 +279,8 @@ class LanServer {
         return _movePlan(req);
       case '/api/move/apply':
         return _moveApply(req);
+      case '/api/update':
+        return _update(req);
     }
 
     if (path.startsWith('/stream/')) return _stream(req);
@@ -1003,6 +1009,24 @@ class LanServer {
       'discogsToken': config.discogsToken,
       'lastfmKey': config.lastfmKey,
     });
+  }
+
+  /// Deze pc bijwerken omdat een gekoppeld toestel erom vraagt. Zie `pc_bijwerker.dart`.
+  ///
+  /// **Waarom dit een eigen weg is en niet een bewerking bij [_corrections].** Die weg gaat over de
+  /// bibliotheek: hij zoekt een album op, hij faalt met "dat album staat hier niet (meer)", en alles
+  /// eraan is geschreven vanuit "verander iets aan de muziek". Dit verandert de app zelf. Een pc die
+  /// deze weg nog niet kent antwoordt 404, en dat leest de telefoon als "kan het niet" — precies wat
+  /// er dan ook aan de hand is.
+  Future<void> _update(HttpRequest req) async {
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final op = (body['op'] ?? 'status') as String;
+    // Alleen de versienaam, zonder het buildnummer erachter: `version` is hier `3.9.236+11471` en
+    // dat is niet wat er straks naast een knop hoort te staan.
+    final hier = version.split('+').first;
+    return _json(req.response,
+        op == 'start' ? await bijwerker.start(hier) : await bijwerker.stand(hier));
   }
 
   Future<void> _corrections(HttpRequest req) async {
