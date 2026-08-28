@@ -92,10 +92,18 @@ class AiFout implements Exception {
 
 /// De vraag stellen.
 class AiService {
-  AiService(this.sleutelVan, {http.Client? client}) : _http = client ?? http.Client();
+  AiService(this.sleutelVan, {String Function()? werkruimteVan, http.Client? client})
+      : werkruimteVan = werkruimteVan ?? _geen,
+        _http = client ?? http.Client();
+
+  static String _geen() => '';
 
   /// De sleutel, als functie: hij komt uit de instellingen en die kunnen tijdens het draaien wijzigen.
   final String Function() sleutelVan;
+
+  /// De werkruimte, als die nodig is. Zie `AppSettings.anthropicWorkspace`.
+  final String Function() werkruimteVan;
+
   final http.Client _http;
 
   bool get beschikbaar => sleutelVan().trim().isNotEmpty;
@@ -108,6 +116,7 @@ class AiService {
           'omzetten in een radio.');
     }
     if (zin.trim().isEmpty) throw const AiFout('Typ eerst wat je wil horen.');
+    final werkruimte = werkruimteVan().trim();
 
     http.Response res;
     try {
@@ -118,6 +127,9 @@ class AiService {
               'content-type': 'application/json',
               'x-api-key': sleutel,
               'anthropic-version': '2023-06-01',
+              // Alleen als hij ingevuld is. Een sleutel die aan een werkruimte hangt heeft deze
+              // kopregel niet nodig; een sleutel die aan een PERSOON hangt weigert zonder.
+              if (werkruimte.isNotEmpty) 'anthropic-workspace-id': werkruimte,
             },
             body: jsonEncode(anthropicBody(zin)),
           )
@@ -137,7 +149,16 @@ class AiService {
       // antwoord waar niemand iets mee kan: de API zegt er zelf bij wát er mis is met het verzoek —
       // een veld dat niet in `required` staat, een schema dat geweigerd wordt — en die zin werd hier
       // weggegooid. Een fout die je niet kunt lezen kost een uur zoeken.
-      throw AiFout('Het taalmodel antwoordde met ${res.statusCode}. ${_reden(res.bodyBytes)}'.trim());
+      final reden = _reden(res.bodyBytes);
+      // Eén fout krijgt een eigen uitleg, want het is de enige waarbij je precies weet wat je moet
+      // doen én waarbij de tekst van de API dat niet zegt in taal die je kunt volgen.
+      if (reden.contains('workspace') && werkruimte.isEmpty) {
+        throw const AiFout('Jouw AI-sleutel hangt aan je account in plaats van aan een werkruimte, '
+            'en dan wil de dienst er een werkruimte-id bij. Vul dat in bij Instellingen, naast de '
+            'sleutel — of maak in de console een gewone sleutel binnen een werkruimte aan; die heeft '
+            'het niet nodig.');
+      }
+      throw AiFout('Het taalmodel antwoordde met ${res.statusCode}. $reden'.trim());
     }
 
     Object? body;

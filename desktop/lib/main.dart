@@ -8825,7 +8825,9 @@ Future<RadioOpdracht> _vraagRadioplan(BuildContext context, String zin) async {
   if (client != null) {
     return leesRadioOpdracht(await client.ask('/api/radio', {'op': 'plan', 'zin': zin}));
   }
-  return AiService(() => context.read<AppSettings>().anthropicKey).maakRadioplan(zin);
+  final cfg = context.read<AppSettings>();
+  return AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace)
+      .maakRadioplan(zin);
 }
 
 /// Van zaadartiesten naar echte nummers.
@@ -17746,7 +17748,7 @@ class SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
-  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _anthropic, _rtUser, _rtPass, _slskPort, _acoustid, _tidalId, _tidalSecret, _torznabUrl, _torznabKey;
+  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _anthropic, _anthropicWs, _rtUser, _rtPass, _slskPort, _acoustid, _tidalId, _tidalSecret, _torznabUrl, _torznabKey;
 
   @override
   void initState() {
@@ -17759,6 +17761,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskPort = TextEditingController(text: s.soulseekPort > 0 ? s.soulseekPort.toString() : "");
     _lastfm = TextEditingController(text: s.lastfmKey);
     _anthropic = TextEditingController(text: s.anthropicKey);
+    _anthropicWs = TextEditingController(text: s.anthropicWorkspace);
     _acoustid = TextEditingController(text: s.acoustidKey);
     _tidalId = TextEditingController(text: s.tidalClientId);
     _tidalSecret = TextEditingController(text: s.tidalClientSecret);
@@ -17932,6 +17935,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskPort.dispose();
     _lastfm.dispose();
     _anthropic.dispose();
+    _anthropicWs.dispose();
     _acoustid.dispose();
     _tidalId.dispose();
     _tidalSecret.dispose();
@@ -18473,6 +18477,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // toestel laat de pc de vraag stellen, net als bij TorBox.
                     _field('AI-sleutel (Anthropic) — voor een radio uit een zin', _anthropic),
                     const SizedBox(height: 8),
+                    // Meestal leeg te laten. Alleen een sleutel die aan je ACCOUNT hangt in plaats
+                    // van aan een werkruimte weigert zonder; de app zegt dat dan ook met zoveel
+                    // woorden in plaats van "antwoordde met 400".
+                    _field('Werkruimte-id — alleen nodig als de app erom vraagt', _anthropicWs),
+                    const SizedBox(height: 8),
                     // Zonder dit veld was de enige manier om een Client ID in te vullen: het
                     // instellingenbestand op schijf met de hand openen. De waarde werd al bewaard —
                     // er was alleen nergens een plek om hem in te typen, en het TIDAL-scherm
@@ -18740,6 +18749,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     s.rutrackerPass = _rtPass.text;
                     s.lastfmKey = _lastfm.text.trim();
                     s.anthropicKey = _anthropic.text.trim();
+                    s.anthropicWorkspace = _anthropicWs.text.trim();
                     s.acoustidKey = _acoustid.text.trim();
                     s.tidalClientId = _tidalId.text.trim();
                     s.tidalClientSecret = _tidalSecret.text.trim();
