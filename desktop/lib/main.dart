@@ -4935,7 +4935,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                         },
                       ),
                       ),
-                    if (!album.isSingle)
+                    if (!isTv && !album.isSingle)
                       TvLabelled(
                         label: 'Uitgave kiezen — met hoes, achterkant en cd',
                         child: IconButton(
@@ -4951,7 +4951,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                     // The only button here that changes the FILES rather than working around them.
                     // Everything else on this page paints over disagreeing tags; this pulls them
                     // into line, so anything else reading the folder sees one record too.
-                    if (!album.isSingle && !context.read<LibraryStore>().isRemote)
+                    if (!isTv && !album.isSingle && !context.read<LibraryStore>().isRemote)
                       TvLabelled(
                         label: 'Tags gelijktrekken — één album, één nummering, in de bestanden',
                         child: IconButton(
@@ -4963,7 +4963,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                     // Deliberately NOT gated on a tracklist: this is what to reach for exactly when
                     // there isn't one. A file whose album is a compilation nobody can find is the
                     // case the catalogues cannot answer and the audio can.
-                    if (!context.read<LibraryStore>().isRemote)
+                    if (!isTv && !context.read<LibraryStore>().isRemote)
                       TvLabelled(
                         label: 'Herkennen op geluid — wat zegt de audio dat dit is?',
                         child: IconButton(
@@ -4980,7 +4980,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       ),
                     // Only appears once there is something to undo. A button that is there but does
                     // nothing teaches you not to trust it.
-                    if (!album.isSingle &&
+                    if (!isTv &&
+                        !album.isSingle &&
                         !context.read<LibraryStore>().isRemote &&
                         context.read<LibraryStore>().undoableTagWrites(album) > 0)
                       TvLabelled(
@@ -4991,7 +4992,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                         onPressed: _undoTagWrites,
                       ),
                       ),
-                    if (!album.isSingle)
+                    if (!isTv && !album.isSingle)
                       TvLabelled(
                         label: 'Een ander album hierin samenvoegen',
                         child: IconButton(
