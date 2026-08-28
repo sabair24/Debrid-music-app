@@ -90,6 +90,22 @@ bool losslessExtensie(String ext) => _lossless.contains(ext.toLowerCase().replac
 ///
 /// Alles wat geen `/stream/`-adres van de eigen pc is — een torrent, de radio, een offline kopie op
 /// `file:` — komt er ongewijzigd uit. Die kent deze zeef niet en hoort er ook niet in.
+/// De naam van de grens zoals hij in de URL staat. Eén plek, want hij wordt geschreven in [metStand]
+/// en gelezen in `player.dart` — en twee losse letterlijke teksten lopen vroeg of laat uiteen.
+const _grensSleutel = 'maxRate';
+
+/// Gaat de pc dit adres eerst helemaal omzetten voordat er één byte vertrekt?
+///
+/// **Waarom de speler dit wil weten.** Een 24/192 van vijf minuten is zo'n 180 MB, en die is pas
+/// klaar na tien tot twintig seconden. In die tijd staat de teller op 0:00 — precies het beeld waar
+/// [Stilstandwacht] anders na tien seconden "Er komt geen geluid" over roept, op een kerngezonde pc.
+/// Dus: meer geduld als dit true is, en zeggen wat er gebeurt in plaats van klagen.
+///
+/// Ook het antwoord op "valt er voor het volgende nummer iets vooruit klaar te zetten": staat er
+/// geen grens op, dan serveert de pc gewoon het origineel en is een `HEAD` vooruit verkeer voor
+/// niets.
+bool omzettenGevraagd(String url) => url.contains('$_grensSleutel=');
+
 String metStand(
   String url, {
   required Stroomstand stand,
@@ -120,7 +136,7 @@ String metStand(
     pathSegments: segmenten,
     queryParameters: {
       ...u.queryParameters,
-      'maxRate': '${grens.rate}',
+      _grensSleutel: '${grens.rate}',
       // Een onbekende diepte is geen diepte. `maxBits=0` zou de server een `-bits_per_raw_sample 0`
       // laten doorgeven aan ffmpeg, en dat is geen grens maar onzin.
       if (grens.bits > 0) 'maxBits': '${grens.bits}',

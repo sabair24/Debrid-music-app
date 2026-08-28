@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'artwork.dart' show kleurBuitenDeTekendraad;
+import 'lan/stroomstand.dart' show omzettenGevraagd;
 import 'models.dart';
 import 'paths.dart';
 import 'warm_log.dart';
@@ -408,7 +409,25 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// Achteraf en niet via [PlayerConfiguration], want die kent ze niet. Alles in een `try`: mislukt
   /// dit, dan speelt de app precies zoals daarvoor — een instelling die het afspelen kan breken is
   /// erger dan geen instelling.
-  Future<void> _zetVooruitlezen() async {
+  /// Hoeveel seconden er nu vooruit gelezen wordt. Zie [zetVooruitlezen].
+  int _vooruit = 300;
+
+  /// Het vooruitlezen bijstellen omdat het toestel op een ander net zit.
+  ///
+  /// **Op wifi moet dit 300 blijven** — dat is de reparatie hierboven, en daar wordt niet aan
+  /// getornd. Op mobiele data is vooruitlezen niet gratis meer: 300 seconden op de cd-stand is
+  /// ruwweg vierendertig megabyte per nummer, en skip je na twintig seconden door, dan gooi je
+  /// tweeëndertig megabyte weg waar je voor betaald hebt. Zie `netsoort.dart`.
+  ///
+  /// `cache` en `stream-buffer-size` blijven altijd staan: dat is de anti-hik-knop en die kost
+  /// niets.
+  Future<void> zetVooruitlezen({required int secs}) async {
+    if (secs == _vooruit) return;
+    _vooruit = secs;
+    await _zetVooruitlezen(secs: secs);
+  }
+
+  Future<void> _zetVooruitlezen({int secs = 300}) async {
     final p = _player.platform;
     if (p is! NativePlayer) return;
     try {
@@ -416,8 +435,8 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       // er voor mpv uit als een lokaal bestand dat geen cache nodig heeft.
       await p.setProperty('cache', 'yes');
       // Vijf minuten vooruit. Bij audio is dat een handvol megabytes.
-      await p.setProperty('cache-secs', '300');
-      await p.setProperty('demuxer-readahead-secs', '300');
+      await p.setProperty('cache-secs', '$secs');
+      await p.setProperty('demuxer-readahead-secs', '$secs');
       // En de leesbuffer van de stroom zelf omhoog (standaard 128 kB): op een schokkerige
       // verbinding scheelt dat het aantal keren dat er helemaal niets binnenkomt.
       await p.setProperty('stream-buffer-size', '4MiB');
@@ -539,6 +558,41 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// A track started playing — feeds the shared play counts and "recently played".
   void Function(Track track)? onPlayed;
 
+  /// Het hapert. Ingehangen vanuit main.dart, precies zoals [mediaResolver] en [onProgress].
+  ///
+  /// De speler leert hiermee niets over instellingen — hij meldt alleen dát het misging, en wat
+  /// daar dan mee gebeurt (één sport lager voor deze sessie) staat in `netsoort.dart`. Twee
+  /// aanroepers: de stilstandwacht, en een stroom die afbreekt voordat het nummer op is.
+  void Function()? onHapering;
+
+  /// Het volgende nummer alvast laten klaarzetten op de pc. Ingehangen vanuit main.dart, dat er een
+  /// `HEAD` op doet: de server zet dan de hele omzetting klaar en stuurt alleen de kop terug.
+  ///
+  /// **Dit is de maatregel die het wachten tussen nummers wegneemt.** Staat er een plafond op de
+  /// URL, dan moet de pc het bestand eerst helemaal omzetten voordat er één byte vertrekt — een paar
+  /// seconden per nummer. Door dat bij het openen van nummer N alvast voor N+1 te vragen wacht je
+  /// één keer, bij het aanzetten, en daarna nooit meer.
+  void Function(String url)? onKlaarzetten;
+
+  /// Staat er een plafond op de lijn, dan zet de pc eerst om en staat de teller even op 0:00.
+  bool _omzetten = false;
+
+  Stilstandwacht _wacht = Stilstandwacht();
+
+  /// De bron zoals libmpv hem krijgt, plus het geduld dat daarbij hoort.
+  ///
+  /// **Waarom het geduld hieraan hangt.** Een 24/192 van vijf minuten is zo'n 180 MB, en die moet
+  /// helemaal omgezet zijn voor er één byte vertrekt. Op een kerngezonde pc duurt dat tien tot
+  /// twintig seconden — en dat is precies het beeld waar de wacht na tien seconden "Er komt geen
+  /// geluid" over zou roepen. Vandaar vijfentwintig zodra er een plafond in de URL staat.
+  String _bron(String path) {
+    final url = mediaResolver(path);
+    _omzetten = omzettenGevraagd(url);
+    _wacht = Stilstandwacht(
+        geduld: Duration(seconds: _omzetten ? 25 : 10));
+    return url;
+  }
+
   /// The queue as it will actually play, shuffle applied.
   List<Track> get queueTracks => List.unmodifiable(_order);
 
@@ -580,7 +634,6 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// Voor de spelerbalk. Zie [Stilstandwacht] voor het geval dat dit veld bestaat.
   String? speelFout;
 
-  final _wacht = Stilstandwacht();
   Timer? _stilstandTikker;
 
   /// Welk kwart seconde er het laatst gemeld is. Zie de positiestroom hieronder.
@@ -634,8 +687,13 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       final vast = _wacht.voeden(speelt: playing, positie: position, nu: DateTime.now());
       if (vast) {
         _meldStilstand('Er komt geen geluid — staat de pc aan?');
+        onHapering?.call();
       } else if (playing && position > Duration.zero) {
         _meldStilstand(null);
+      } else if (playing && _omzetten) {
+        // Teller op 0:00 met een plafond op de lijn: de pc is aan het omzetten. Zeggen wat er
+        // gebeurt is beter dan een lege balk waar iemand op gaat zitten drukken.
+        _meldStilstand('Omzetten op de pc…');
       }
     });
     _player.stream.duration.listen((d) {
@@ -674,6 +732,8 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
         _hervatpogingen++;
         _log?.line('AFGEBROKEN op $position van $duration — poging $_hervatpogingen'
             ' — ${current?.title ?? "?"}');
+        // Een stroom die halverwege afbreekt is de duidelijkste hapering die er is.
+        onHapering?.call();
         unawaited(_hervatOpDezelfdePlek());
       case NaHetEinde.ditNummerOpnieuw:
         _hervatpogingen = 0;
@@ -699,7 +759,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     if (t == null) return;
     final plek = position;
     try {
-      await _player.open(Media(mediaResolver(t.path)), play: true);
+      await _player.open(Media(_bron(t.path)), play: true);
       if (plek <= Duration.zero) return;
 
       // **Een seek vlak na open() wordt stil genegeerd** zolang libmpv het bestand nog niet geladen
@@ -906,7 +966,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
         radioStatus = '';
         currentCover = it.isLocal ? coverResolver?.call(it.local!) : null;
         notifyListeners();
-        await _player.open(Media(mediaResolver(path)), play: true);
+        await _player.open(Media(_bron(path)), play: true);
         if (gen != _radioGen) return; // superseded while opening
         _prefetchNext();
         _maybeExtend();
@@ -1013,10 +1073,25 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _meldStilstand(null);
     _hervatpogingen = 0;
     if (coverResolver != null) currentCover = coverResolver!(t);
-    await _player.open(Media(mediaResolver(t.path)), play: true);
+    await _player.open(Media(_bron(t.path)), play: true);
     _saveProgress(force: true); // track changed → persist the new spot
     onPlayed?.call(t);
+    _zetVolgendeKlaar();
     notifyListeners();
+  }
+
+  /// Het volgende nummer in de rij vast laten klaarzetten. Zie [onKlaarzetten].
+  ///
+  /// Alleen als er echt iets klaar te zetten valt: zonder plafond op de lijn serveert de pc gewoon
+  /// het origineel, en dan is een `HEAD` vooruit verkeer voor niets. Buiten de wachtrij (radio) ook
+  /// niet — daar staat het volgende nummer nog niet vast.
+  void _zetVolgendeKlaar() {
+    if (onKlaarzetten == null || radioMode) return;
+    final volgende = _index + 1;
+    if (volgende < 0 || volgende >= _order.length) return;
+    final url = mediaResolver(_order[volgende].path);
+    if (!omzettenGevraagd(url)) return;
+    onKlaarzetten!(url);
   }
 
   /// De schakelaar van DIT toestel, met opzet niet omgeleid naar de speaker.
@@ -1323,7 +1398,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       final t = current;
       if (t == null) return;
       currentCover = coverResolver?.call(t);
-      await _player.open(Media(mediaResolver(t.path)), play: false); // reopen PAUSED
+      await _player.open(Media(_bron(t.path)), play: false); // reopen PAUSED
       if (posMs > 0) {
         // The seek only sticks once libmpv has loaded the file (duration known);
         // seeking too early is silently dropped → playback would restart at 0.

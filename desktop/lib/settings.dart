@@ -92,6 +92,26 @@ class AppSettings extends ChangeNotifier {
   /// pays for the lookup, every visit after that is free.
   bool warmFacts = true;
 
+  /// Wat je pc naar dit toestel stuurt als je hier muziek van hem afspeelt — thuis en onderweg.
+  ///
+  /// **Waarom dit per TOESTEL staat en niet meereist.** Een iPad op wifi en een telefoon op 4G
+  /// willen een ander antwoord, en de pc heeft er niets over te zeggen. Daarom staan deze drie
+  /// bewust niet in `_synced` (cloud/settings_sync.dart) en niet in `_config` (lan/server.dart) —
+  /// dezelfde redenering die daar al bij `lanToken` en `musicRoot` staat.
+  ///
+  /// Als tekst bewaard, zoals elke keuze in dit bestand: er staat geen enkele Dart-enum in, en een
+  /// naam overleeft het bijwerken van de app beter dan een volgnummer. Zie [Stroomstand].
+  String stroomThuis = 'max';
+
+  /// Zie [stroomThuis]. Standaard de cd-stand: onderweg is een 24/192 van vijf à zes megabit per
+  /// seconde precies wat hapert, en het is ook nog je databundel.
+  String stroomOnderweg = 'cd';
+
+  /// Mag de app zelf wisselen op grond van wifi of mobiel?
+  ///
+  /// Staat dit uit, dan geldt [stroomThuis] altijd en is er één stand en verder niets.
+  bool stroomAdaptief = true;
+
   static File file() {
     return appFile('settings.json');
   }
@@ -257,6 +277,9 @@ class AppSettings extends ChangeNotifier {
         serverId = (m['server_id'] ?? '') as String;
         musicRoot = (m['music_root'] ?? '') as String;
         warmFacts = (m['warm_facts'] ?? true) as bool;
+        stroomThuis = (m['stroom_thuis'] ?? 'max') as String;
+        stroomOnderweg = (m['stroom_onderweg'] ?? 'cd') as String;
+        stroomAdaptief = (m['stroom_adaptief'] ?? true) as bool;
     }
   }
 
@@ -289,6 +312,9 @@ class AppSettings extends ChangeNotifier {
         'server_id': serverId,
         'music_root': musicRoot,
         'warm_facts': warmFacts,
+        'stroom_thuis': stroomThuis,
+        'stroom_onderweg': stroomOnderweg,
+        'stroom_adaptief': stroomAdaptief,
       };
 
   /// Write the settings down.
