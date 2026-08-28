@@ -13,6 +13,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io' show HttpStatus;
 
 import '../library.dart';
 import '../models.dart';
@@ -49,6 +50,14 @@ class PcRadiobron implements Radiobron {
         return null;
       }
       return (a['reden'] as String?) ?? 'Je pc kan nu geen nummers ophalen.';
+    } on RemoteException catch (e) {
+      // 404 betekent hier iets heel bepaalds: de pc kent deze weg nog niet, en dat is de enige
+      // situatie waarin je precies weet wat je moet doen. "Je pc antwoordde met 404" zegt dat niet.
+      if (e.statusCode == HttpStatus.notFound) {
+        return 'Op je pc draait een oudere versie van de app, die de radio nog niet kent. '
+            'Werk hem eerst bij — dan kan hij nummers voor je ophalen.';
+      }
+      return 'Je pc antwoordde niet: ${e.message}';
     } catch (e) {
       return 'Je pc antwoordde niet: $e';
     }

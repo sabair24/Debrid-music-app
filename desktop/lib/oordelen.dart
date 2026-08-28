@@ -13,7 +13,6 @@ library;
 import 'package:flutter/foundation.dart';
 
 import 'gedeelde_ops.dart';
-import 'lan/ids.dart';
 import 'models.dart';
 
 /// Wat je van een nummer vindt.
@@ -54,9 +53,12 @@ double oordeelBonus(Oordeel? o) => switch (o) {
 class Oordelen extends GedeeldeOps {
   Oordelen();
 
-  /// De wortel van de bibliotheek — nodig om van een pad een id te maken. Leeg op een client, waar
-  /// de id's uit de catalogus komen.
-  String Function()? wortel;
+  /// Van een pad naar het gedeelde id.
+  ///
+  /// `library.gedeeldId` en geen eigen wortel, om precies de reden die bij `Speelstanden` staat: een
+  /// wortel wordt alleen op de pc gezet, en dan geeft dit op elke telefoon null — en zijn de duimen
+  /// daar stil dood, terwijl er juist daar geluisterd wordt.
+  String? Function(String pad)? idVanPad;
 
   /// Wat een client van de pc heeft gekregen. Op de pc blijft dit leeg en wordt [winkel] gelezen.
   final Map<String, String> _vanPc = {};
@@ -74,11 +76,7 @@ class Oordelen extends GedeeldeOps {
     notifyListeners();
   }
 
-  String? idVanTrack(Track t) {
-    final r = wortel?.call() ?? '';
-    if (r.isEmpty) return null;
-    return trackIdFor(t.path, r);
-  }
+  String? idVanTrack(Track t) => idVanPad?.call(t.path);
 
   Oordeel? van(String? id) {
     if (id == null) return null;

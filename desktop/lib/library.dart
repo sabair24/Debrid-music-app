@@ -1288,11 +1288,16 @@ class LibraryStore extends ChangeNotifier {
     }
     final list = paths.toList();
     var deleted = 0;
+    // De mappen waar iets uit weggehaald is. Een map die daardoor leegloopt hoort niet te blijven
+    // staan: een radio van vijfhonderd nummers laat anders honderden lege `Singles/<Artiest>`-mappen
+    // achter, en die zie je pas als je zelf in je muziekmap gaat kijken.
+    final mappen = <String>{};
     if (fromDisk) {
       for (final p in list) {
         try {
           final f = File(p);
           if (await f.exists()) {
+            mappen.add(f.parent.path);
             await f.delete();
             deleted++;
             // Het bestand is weg, dus de meting slaat nergens meer op. Zonder dit blijft ze staan
@@ -1304,6 +1309,12 @@ class LibraryStore extends ChangeNotifier {
       }
       // Files are gone, so they can't come back on a rescan; no need to remember them.
       _hidden.removeAll(list);
+      for (final m in mappen) {
+        // Neemt ook de artiestenmap erboven mee als die daardoor leeg raakt, en stopt bij de wortel.
+        try {
+          await pruneVacated(m, rootPath);
+        } catch (_) {/* een map die niet weg wil is geen reden om het wissen te laten mislukken */}
+      }
     } else {
       _hidden.addAll(list);
     }

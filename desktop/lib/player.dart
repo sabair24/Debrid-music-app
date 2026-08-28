@@ -641,6 +641,12 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// een toestel zonder gedeelde staat, en dan is de shuffle gewoon gelijk gewogen.
   Speelstand? Function(Track track)? speelstandVan;
 
+  /// Wat je duim er nog bij optelt: groen zwaarder, rood lichter.
+  ///
+  /// Een FACTOR en geen oordeel, en dat is bewust: zo hoeft de speler niets van duimen te weten en
+  /// blijft `oordeelBonus` op één plek staan. main.dart hangt hem erin.
+  double Function(Track track)? oordeelWeging;
+
   /// Wat er deze sessie geopend werd, ongeacht of het als beluisterd telde. Zie [_gewichtVanNummer].
   final Set<String> _geopendDezeSessie = {};
 
@@ -1236,10 +1242,12 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// zonder gedeelde staat en elke toets krijgt: dan is het gewoon de shuffle die er altijd was.
   double Function(Track)? get _gewichtVanNummer {
     final lees = speelstandVan;
-    if (lees == null) return null;
+    final duim = oordeelWeging;
+    if (lees == null && duim == null) return null;
     final nu = DateTime.now().millisecondsSinceEpoch;
     return (t) {
-      final basis = gewichtVan(lees(t), nuMs: nu);
+      var basis = lees == null ? 1.0 : gewichtVan(lees(t), nuMs: nu);
+      if (duim != null) basis *= duim(t);
       // **Wat deze sessie al geopend werd, weegt lichter — ook als het niet als beluisterd telde.**
       // "Precies één keer" geldt per trekking. Druk je halverwege nog eens op shuffle, dan is dat
       // een nieuwe trekking, en een nummer dat je na twintig seconden wegklikte draagt geen straf

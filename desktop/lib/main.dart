@@ -21,6 +21,9 @@ import 'package:window_manager/window_manager.dart';
 
 import 'acoustid.dart';
 import 'radio.dart';
+import 'oordelen.dart';
+import 'radiosessie.dart';
+import 'ui/duim.dart';
 import 'lan/pc_radiobron.dart';
 import 'auto_hoezen.dart';
 import 'bestandsbeheer.dart';
@@ -689,7 +692,7 @@ Future<void> main() async {
     bron: mode.owner
         ? EigenRadiobron(downloads: downloads, soulseek: soulseek, library: library)
         : PcRadiobron(library: library, clientOf: () => library.remote),
-  );
+  )..idVanPad = library.gedeeldId;
 
   // Share this library with the Mac, the iPad and the Shield. Started before the scan finishes:
   // a device probing /health then gets a real answer straight away, and the catalogue fills in
@@ -733,6 +736,12 @@ Future<void> main() async {
   final speelstanden = Speelstanden()..idVanPad = library.gedeeldId;
   if (mode.owner) speelstanden.winkel = sharing.state;
   player.speelstandVan = speelstanden.standVan;
+  // Duim omhoog of omlaag. Dezelfde vorm, dezelfde weg, en dezelfde `idVanPad` — zie hierboven.
+  final oordelen = Oordelen()..idVanPad = library.gedeeldId;
+  if (mode.owner) oordelen.winkel = sharing.state;
+  // Als FACTOR de speler in: die hoeft niets van duimen te weten, en `oordeelBonus` blijft daardoor
+  // op één plek staan in plaats van in de speler én in het scherm.
+  player.oordeelWeging = (t) => oordeelBonus(oordelen.vanTrack(t));
   // **Buiten `if (mode.owner)`, en dat is de reparatie.** Deze haak hing daarbinnen, dus een
   // gekoppelde telefoon telde nooit een beluistering — terwijl daar het meest geluisterd wordt.
   player.onPlayed = (t) => unawaited(speelstanden.meld(t));
@@ -926,6 +935,7 @@ Future<void> main() async {
         Provider<TidalService>.value(value: tidal),
         ChangeNotifierProvider<DownloadManager>.value(value: downloads),
         ChangeNotifierProvider<RadioBesturing>.value(value: radio),
+        ChangeNotifierProvider<Oordelen>.value(value: oordelen),
         ChangeNotifierProvider<LanSharing>.value(value: sharing),
         ChangeNotifierProvider<ClientSession>.value(value: session),
         ChangeNotifierProvider<CloudSession>.value(value: cloud),
@@ -1010,6 +1020,8 @@ Future<void> main() async {
           // wat de shuffle op een telefoon nodig heeft om te weten wat je al veel gehoord hebt.
           speelstanden.vanServer(
               (s['plays'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{});
+          oordelen.vanServer(
+              (s['ratings'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{});
         } catch (_) {/* geen pc; het hartje blijft staan zoals het stond */}
       }
 
@@ -1026,6 +1038,7 @@ Future<void> main() async {
       favorieten.duwOps = duw;
       lijsten.duwOps = duw;
       speelstanden.duwOps = duw;
+      oordelen.duwOps = duw;
       session.addListener(() {
         if (session.ready) unawaited(haalFavorieten());
       });
@@ -1613,6 +1626,35 @@ class _HomeShellState extends State<HomeShell> {
     // Zodat een leeg scherm een knop kan hebben die ergens heen gaat. Zie `navigatie.dart`.
     gaNaarSectie = _gaNaar;
     _kijkOfErEenNieuweIs();
+    _radio = context.read<RadioBesturing>()..addListener(_kijkNaarRadio);
+    // De notitie van de vorige keer. Legde je je telefoon weg terwijl er een radio liep, dan komt het
+    // overzicht van toen hier alsnog — anders blijven die bestanden voor altijd staan zonder dat
+    // iemand weet waar ze vandaan komen.
+    unawaited(_radio!.laadOpenstaand());
+  }
+
+  RadioBesturing? _radio;
+  bool _overzichtOpen = false;
+
+  /// Er is een radio afgesloten met iets erin dat nagekeken moet worden.
+  ///
+  /// Op de HOOFDnavigator en na het frame: dit vuurt vanuit `notifyListeners()`, dus midden in een
+  /// opbouw, en een blad openen tijdens het tekenen is precies waar Flutter over valt.
+  void _kijkNaarRadio() {
+    final s = _radio?.openstaand;
+    if (s == null || _overzichtOpen || !mounted) return;
+    _overzichtOpen = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        _overzichtOpen = false;
+        return;
+      }
+      try {
+        await toonRadioOverzicht(context, s);
+      } finally {
+        _overzichtOpen = false;
+      }
+    });
   }
 
   /// Eén keer per start kijken of er een nieuwere versie klaarstaat.
@@ -1663,6 +1705,7 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void dispose() {
     _zoekPauze?.cancel();
+    _radio?.removeListener(_kijkNaarRadio);
     _tvBalk.dispose();
     _tvInhoud.dispose();
     _tvSpeler.dispose();
@@ -8410,6 +8453,10 @@ class _WachtrijRij extends StatelessWidget {
               // In een radio staat op diezelfde plek geen knop maar een STAND: heb je dit nummer al,
               // of moet het nog ergens vandaan komen? Dat is het enige wat je van een radioregel wilt
               // weten en het is nergens anders af te lezen.
+              // De kleine duimen, alleen bij een nummer dat DEZE radio ophaalde. Dezelfde knop als op
+              // het speelscherm, alleen ter grootte van een regel — één widget, want twee zouden
+              // betekenen dat er één achterblijft zodra de beweging bijgesteld wordt.
+              if (r != null && r.eigen && !isTv) _RijDuimen(track: track),
               SizedBox(
                 width: 28,
                 child: speeltNu
@@ -8695,6 +8742,343 @@ Widget _albumRegel(BuildContext context, String naam, Album? album,
     scaleOnFocus: false,
     child: tekst,
   );
+}
+
+// ── Het overzicht bij het afsluiten van een radio ────────────────────────────
+
+/// Wat er van deze radio blijft en wat er weggaat, met een kans om je te bedenken.
+///
+/// **Waarom dit scherm er is en niet meteen gewist wordt.** Een duim omlaag betekent "van mijn schijf
+/// af", en wissen heeft geen weg terug. Dat meteen bij de tik doen zou betekenen dat één misgetikte
+/// knop een bestand kost. Dus: opschrijven tijdens het luisteren, en één keer aan het eind laten zien
+/// wat het bij elkaar wordt — met "Toch houden" naast elke regel.
+///
+/// Ook wat je NIET beoordeeld hebt staat hier bij "gaat weg". Dat is met zoveel woorden gekozen, en
+/// het hoort zichtbaar te zijn in plaats van in een instelling te staan: de radio is een manier om
+/// muziek te proberen, en wat je niet hebt aangewezen heb je niet gekozen.
+Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async {
+  final radio = context.read<RadioBesturing>();
+  final lib = context.read<LibraryStore>();
+  final oordelen = context.read<Oordelen>();
+  final fav = context.read<Favorieten>();
+  final lijsten = context.read<Afspeellijsten>();
+  final downloads = context.read<DownloadManager>();
+  final gered = <String>{};
+
+  Track? nummerVan(Gehaald g) => lib.ownedTrack(g.artiest, g.titel);
+
+  // In een afspeellijst? Dan blijft hij, wat er verder ook op staat. Een afspeellijst met een gat
+  // erin is stuk, en dat merk je pas maanden later.
+  final inLijst = <String>{for (final l in lijsten.lijsten) ...l.trackIds};
+
+  Opruimplan maakPlan() => opruimplan(
+        gehaald: sessie.gehaald,
+        oordeel: (g) {
+          final t = nummerVan(g);
+          return t != null ? oordelen.vanTrack(t) : oordelen.van(g.id);
+        },
+        isFavoriet: (g) {
+          final t = nummerVan(g);
+          return t != null && fav.isFavorietTrack(t);
+        },
+        inAfspeellijst: (g) {
+          final t = nummerVan(g);
+          final id = (t != null ? lib.gedeeldId(t.path) : null) ?? g.id;
+          return id != null && inLijst.contains(id);
+        },
+        gered: gered,
+      );
+
+  final doen = await showModalBottomSheet<bool>(
+    context: context,
+    backgroundColor: _panel,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(kHoek18))),
+    builder: (blad) => StatefulBuilder(
+      builder: (blad, herteken) {
+        final plan = maakPlan();
+        return SafeArea(
+          top: false,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(blad).height * .85),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(kRuimte24, kRuimte24, kRuimte24, 0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Radio afsluiten'.toUpperCase(),
+                          style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: .6,
+                              color: _accent)),
+                      const SizedBox(height: kRuimte8),
+                      Text(sessie.naam.isEmpty ? 'Je radio' : sessie.naam,
+                          style: const TextStyle(
+                              fontSize: 25, fontWeight: FontWeight.w700, letterSpacing: -.4)),
+                      const SizedBox(height: kRuimte6),
+                      Text(
+                          'Deze radio haalde ${sessie.gehaald.length} '
+                          '${sessie.gehaald.length == 1 ? "nummer" : "nummers"} voor je op.',
+                          style: const TextStyle(fontSize: 13.5, color: _muted, height: 1.4)),
+                    ],
+                  ),
+                ),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.fromLTRB(kRuimte24, kRuimte16, kRuimte24, 0),
+                    children: [
+                      if (plan.blijft.isNotEmpty) ...[
+                        _overzichtKop('Deze blijven', kHouden, plan.blijft.length),
+                        for (final g in plan.blijft) _overzichtRegel(g, null),
+                      ],
+                      if (plan.weg.isNotEmpty) ...[
+                        if (plan.blijft.isNotEmpty) const SizedBox(height: kRuimte16),
+                        _overzichtKop('Deze gaan weg', kWeg, plan.weg.length),
+                        for (final g in plan.weg)
+                          _overzichtRegel(g, () => herteken(() => gered.add(g.pad))),
+                      ],
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(kRuimte24, kRuimte16, kRuimte24, kRuimte16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                          'Weggaan is van je pc af, niet alleen uit deze lijst. Wat je zelf al had '
+                          'blijft hoe dan ook staan — die raakt de radio niet aan.',
+                          style: TextStyle(fontSize: 11.5, color: _muted, height: 1.45)),
+                      const SizedBox(height: kRuimte12),
+                      FilledButton(
+                        onPressed: () => Navigator.pop(blad, true),
+                        child: Text(plan.weg.isEmpty
+                            ? 'Afsluiten'
+                            : 'Afsluiten en ${plan.weg.length} opruimen'),
+                      ),
+                      const SizedBox(height: kRuimte6),
+                      TextButton(
+                        onPressed: () => Navigator.pop(blad, false),
+                        style: TextButton.styleFrom(foregroundColor: _muted),
+                        child: const Text('Later beslissen'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    ),
+  );
+
+  // "Later beslissen" laat de notitie staan: dan komt hetzelfde overzicht bij de volgende start
+  // gewoon terug. Dat is beter dan hem stil laten verdwijnen met de bestanden er nog.
+  if (doen != true) return;
+
+  final plan = maakPlan();
+  final paden = <String>[];
+  for (final g in plan.weg) {
+    paden.add(nummerVan(g)?.path ?? g.pad);
+    // Van de verlanglijst af. Zonder dit haalt `sweepLosslessWants` twintig minuten later alsnog de
+    // FLAC van een nummer dat je zojuist hebt weggedaan — en dat is niet alleen vervelend maar
+    // onbegrijpelijk: je gooide het weg en het staat er weer.
+    unawaited(downloads.vergeetWens(g.artiest, g.titel).catchError((_) {}));
+  }
+  await radio.vergeetOpenstaand();
+  if (paden.isEmpty) return;
+  final weg = await lib.removeTracks(paden, fromDisk: true);
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+    content: Text('$weg ${weg == 1 ? "nummer" : "nummers"} opgeruimd.'),
+    duration: const Duration(seconds: 4),
+  ));
+}
+
+Widget _overzichtKop(String tekst, Color kleur, int aantal) => Padding(
+      padding: const EdgeInsets.only(bottom: kRuimte8),
+      child: Row(
+        children: [
+          Container(
+              width: 7,
+              height: 7,
+              decoration: BoxDecoration(color: kleur, shape: BoxShape.circle)),
+          const SizedBox(width: kRuimte8),
+          Text(tekst.toUpperCase(),
+              style: const TextStyle(
+                  fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: .6, color: kUitgezet)),
+          const Spacer(),
+          Text('$aantal', style: const TextStyle(fontSize: 12, color: _muted)),
+        ],
+      ),
+    );
+
+Widget _overzichtRegel(Gehaald g, VoidCallback? redden) => Padding(
+      padding: const EdgeInsets.only(bottom: kRuimte8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(g.titel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                Text(g.artiest,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11, color: _muted)),
+              ],
+            ),
+          ),
+          if (redden != null)
+            TextButton(
+              onPressed: redden,
+              style: TextButton.styleFrom(
+                  foregroundColor: kHouden,
+                  padding: const EdgeInsets.symmetric(horizontal: kRuimte12),
+                  minimumSize: const Size(0, 32)),
+              child: const Text('Toch houden', style: TextStyle(fontSize: 11.5)),
+            ),
+        ],
+      ),
+    );
+
+/// De duimen in de radiorij: dezelfde knop, ter grootte van een regel.
+///
+/// Tekent zichzelf weg bij een nummer dat de radio niet heeft opgehaald — de beslissing zit hier en
+/// niet bij de aanroeper, zodat er maar één plek is waar die regel staat.
+class _RijDuimen extends StatelessWidget {
+  const _RijDuimen({required this.track});
+
+  final Track track;
+
+  @override
+  Widget build(BuildContext context) {
+    final radio = context.watch<RadioBesturing>();
+    if (!radio.doorDezeRadio(track.path)) return const SizedBox.shrink();
+    final oordelen = context.watch<Oordelen>();
+    final nu = oordelen.vanTrack(track);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Duim(
+          kant: Duimkant.omlaag,
+          maat: 28,
+          aan: nu == Oordeel.omlaag,
+          gedempt: nu == Oordeel.omhoog,
+          opTik: () => unawaited(oordelen.wissel(track, Oordeel.omlaag)),
+        ),
+        const SizedBox(width: kRuimte4),
+        Duim(
+          kant: Duimkant.omhoog,
+          maat: 28,
+          aan: nu == Oordeel.omhoog,
+          gedempt: nu == Oordeel.omlaag,
+          opTik: () => unawaited(oordelen.wissel(track, Oordeel.omhoog)),
+        ),
+        const SizedBox(width: kRuimte4),
+      ],
+    );
+  }
+}
+
+/// De duimen op het speelscherm.
+///
+/// **Alleen bij een nummer dat DEZE radio heeft opgehaald.** Bij muziek die je zelf al had staat er
+/// niets, en dat is geen zuinigheid: er valt daar niets weg te gooien, en een rode knop die dat wél
+/// suggereert is precies de knop die je een keer per ongeluk raakt. De radio raakt je eigen
+/// verzameling niet aan, en dat hoort ook op het scherm te zien te zijn.
+///
+/// Niet op televisie. Daar is geen aanwijzer, en een oordeel dat je met een afstandsbediening moet
+/// aanklikken tussen zeven andere knoppen door is geen oordeel maar een ongeluk in wording. Het
+/// overzicht bij het afsluiten is daar het vangnet.
+class _RadioOordeel extends StatelessWidget {
+  const _RadioOordeel({required this.track, required this.naast});
+
+  final Track? track;
+  final bool naast;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = track;
+    final radio = context.watch<RadioBesturing>();
+    if (isTv || t == null || !radio.loopt || !radio.doorDezeRadio(t.path)) {
+      return const SizedBox.shrink();
+    }
+    final oordelen = context.watch<Oordelen>();
+    final nu = oordelen.vanTrack(t);
+    return Padding(
+      padding: const EdgeInsets.only(top: kRuimte16, bottom: kRuimte8),
+      child: Column(
+        crossAxisAlignment: naast ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+        children: [
+          const Text('Houden of weg?',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: .6,
+                  color: kUitgezet)),
+          const SizedBox(height: kRuimte8),
+          Row(
+            mainAxisAlignment: naast ? MainAxisAlignment.start : MainAxisAlignment.center,
+            children: [
+              Duim(
+                kant: Duimkant.omlaag,
+                aan: nu == Oordeel.omlaag,
+                gedempt: nu == Oordeel.omhoog,
+                bijschrift: 'Weg, ook van je pc',
+                opTik: () => unawaited(oordelen.wissel(t, Oordeel.omlaag)),
+              ),
+              const SizedBox(width: kRuimte24),
+              Duim(
+                kant: Duimkant.omhoog,
+                aan: nu == Oordeel.omhoog,
+                gedempt: nu == Oordeel.omlaag,
+                bijschrift: 'Houden',
+                opTik: () => unawaited(oordelen.wissel(t, Oordeel.omhoog)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// De weg uit een radio.
+///
+/// Een radio houdt niet vanzelf op — dat is wat hem een radio maakt. Zonder deze knop is de enige
+/// manier om hem te verlaten iets ánders aanklikken, en dan komt het overzicht van wat er opgehaald
+/// is als een verrassing bovenop waar je net op drukte.
+class _RadioAfsluitknop extends StatelessWidget {
+  const _RadioAfsluitknop();
+
+  @override
+  Widget build(BuildContext context) {
+    final radio = context.watch<RadioBesturing>();
+    if (!radio.loopt) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: kRuimte12),
+      child: Center(
+        child: TextButton.icon(
+          onPressed: radio.stop,
+          icon: const Icon(Icons.close_rounded, size: 15),
+          label: const Text('Radio afsluiten'),
+          style: TextButton.styleFrom(foregroundColor: _muted),
+        ),
+      ),
+    );
+  }
 }
 
 class NowPlayingScreen extends StatefulWidget {
@@ -8999,6 +9383,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
           ]),
         );
       }),
+      // De duimen. Alleen bij een nummer dat DEZE radio heeft opgehaald — zie [_RadioOordeel].
+      _RadioOordeel(track: t, naast: naast),
       Row(
         mainAxisAlignment: naast ? MainAxisAlignment.start : MainAxisAlignment.center,
         children: [
@@ -9143,6 +9529,13 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
             ),
           ),
         ),
+      // Onderaan, en alleen tijdens een radio: de weg eruit.
+      //
+      // **Waarom die knop er hoort te zijn.** Een radio houdt niet vanzelf op — dat is precies wat
+      // hem een radio maakt. Zonder deze knop is de enige manier om hem te verlaten iets ánders
+      // aanklikken, en dan komt het overzicht van wat er opgehaald is als een verrassing bovenop
+      // waar je net op drukte.
+      const _RadioAfsluitknop(),
     ];
 
     return Scaffold(
