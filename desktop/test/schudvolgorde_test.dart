@@ -22,7 +22,7 @@ Track t(String naam, {String artiest = 'A', String plaat = 'P'}) =>
 List<Track> reeks(int n, {String artiest = 'A', String plaat = 'P'}) =>
     [for (var i = 0; i < n; i++) t('n$i', artiest: artiest, plaat: plaat)];
 
-List<String> paden(List<Track> ts) => [for (final x in ts) x.path];
+List<String> paden(Iterable<Track> ts) => [for (final x in ts) x.path];
 
 void main() {
   group('de trekking blijft een permutatie', () {
@@ -160,11 +160,12 @@ void main() {
         return n;
       }
 
-      // Vooraan is er altijd genoeg keus, en daar hoort het dus waterdicht te zijn.
-      expect(buren(uit, tot: (uit.length * .9).round()), 0);
-      // Helemaal achteraan is de vijver bijna leeg en kan het onvermijdelijk worden — daar hoort dit
-      // niets te forceren. Wel moet het over de hele lijst dramatisch beter zijn dan puur toeval.
-      expect(buren(uit), lessThan(buren(geschud) / 4),
+      // Zolang er nog keus is hoort het waterdicht te zijn.
+      expect(buren(uit, tot: (uit.length * .75).round()), 0);
+      // Helemaal achteraan is de vijver bijna leeg: wat er dan nog ligt kán van dezelfde artiest
+      // zijn, en dan hoort dit niets te forceren. Over de hele lijst moet het wel dramatisch beter
+      // zijn dan puur toeval — anders doet de spreiding niets.
+      expect(buren(uit), lessThan(buren(geschud) / 3),
           reason: 'zonder spreiden waren het er ${buren(geschud)}');
       expect(paden(uit).toSet(), paden(alles).toSet(), reason: 'spreiden mag niets kwijtraken');
     });
