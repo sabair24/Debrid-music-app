@@ -481,7 +481,23 @@ class LibraryStore extends ChangeNotifier {
   /// find nothing, and show an empty library without a word of explanation. main() now carries
   /// the legacy value over into the settings once, so it is visible and changeable instead of
   /// baked in here.
-  String rootPath = '';
+  String _rootPath = '';
+  String get rootPath => _rootPath;
+
+  /// De muziekmap. Wijzigt hij, dan is elk onthouden id ongeldig — zie [gedeeldId].
+  set rootPath(String v) {
+    if (v == _rootPath) return;
+    _rootPath = v;
+    _idGeheugen.clear();
+  }
+
+  /// Pad → het id waarmee de gedeelde staat dit nummer kent. Zie [gedeeldId].
+  ///
+  /// **Waarom onthouden.** Het id is een SHA-256, en de shuffle vraagt er bij één druk op de knop
+  /// vijfduizend op. Dat is tien tot veertig milliseconden op de tekendraad, elke keer opnieuw —
+  /// terwijl het antwoord voor hetzelfde pad nooit verandert. Een halve megabyte geheugen is die
+  /// milliseconden waard, en `main.dart` bouwt diezelfde hashes vandaag zelfs ín een `build`.
+  final Map<String, String> _idGeheugen = {};
 
   /// Albums/singles found to be entirely duplicates of a real album you own — recomputed after each
   /// full scan, so the library can offer to tidy them without the user going hunting. Empty until a
@@ -2318,13 +2334,24 @@ class LibraryStore extends ChangeNotifier {
   /// net bij was gekomen: de knop verscheen, de speaker werd paars, "Speelt op Sonos Move" stond op het
   /// scherm — en er was in twintig seconden polsen niets naar die speaker gegaan. De muziek liep lokaal
   /// door. Precies de tegenspraak waar de rest van dit bestand tegen gebouwd is.
-  String? castTrackId(String path) {
+  String? castTrackId(String path) => gedeeldId(path);
+
+  /// Hetzelfde antwoord als [castTrackId], onder de naam die zegt waar het voor dient: dit is het id
+  /// waaronder favorieten, afspeellijsten en de speeltelling van dit nummer in de gedeelde staat
+  /// staan. Eén implementatie, want twee zouden uit elkaar lopen.
+  String? gedeeldId(String path) {
+    final onthouden = _idGeheugen[path];
+    if (onthouden != null) return onthouden.isEmpty ? null : onthouden;
     final viaUrl = _remoteTrackId(path);
-    if (viaUrl != null) return viaUrl;
     // Alleen waar de muziek zelf staat: op een client zou de wortel iets anders betekenen en zou dit
     // een id verzinnen dat de pc niet kent.
-    if (remote != null || rootPath.isEmpty) return null;
-    return trackIdFor(path, rootPath);
+    final id = viaUrl ??
+        ((remote != null || rootPath.isEmpty) ? null : trackIdFor(path, rootPath));
+    // Ook "geen id" wordt onthouden — anders wordt er voor elke radiostroom bij elke trekking
+    // opnieuw een URI ontleed. Maar NIET als de wortel simpelweg nog niet gezet is: dat is "nog
+    // niet", geen antwoord, en dat vastleggen zou de hele bibliotheek id-loos houden.
+    if (id != null || remote != null || rootPath.isNotEmpty) _idGeheugen[path] = id ?? '';
+    return id;
   }
 
   /// The PC's id for a track we are showing. Its path is the stream URL, and the id is in it.

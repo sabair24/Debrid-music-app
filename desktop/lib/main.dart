@@ -88,6 +88,7 @@ import 'rutracker_login.dart';
 import 'rutracker_venster.dart';
 import 'netsoort.dart';
 import 'settings.dart';
+import 'speelstanden.dart';
 import 'slsk_groepen.dart';
 import 'speakers.dart';
 import 'soulseek.dart';
@@ -707,6 +708,19 @@ Future<void> main() async {
       ..wortel = () => library.rootPath;
   }
   final lijsten = Afspeellijsten();
+  // Hoe vaak en hoe lang geleden je iets hoorde — de brandstof van de shuffle. Zelfde vorm als de
+  // favorieten hierboven: op de pc rechtstreeks in de gedeelde staat, op een telefoon over de lijn.
+  //
+  // **`idVanPad` en niet een eigen wortel.** `favorieten.wortel` wordt alleen op de pc gezet, en
+  // daardoor geeft `idVanTrack` op elke client null — per-nummer favorieten zijn daar stil dood.
+  // `library.gedeeldId` werkt aan allebei de kanten: uit de stream-URL op een telefoon, uit het pad
+  // op de pc.
+  final speelstanden = Speelstanden()..idVanPad = library.gedeeldId;
+  if (mode.owner) speelstanden.winkel = sharing.state;
+  player.speelstandVan = speelstanden.standVan;
+  // **Buiten `if (mode.owner)`, en dat is de reparatie.** Deze haak hing daarbinnen, dus een
+  // gekoppelde telefoon telde nooit een beluistering — terwijl daar het meest geluisterd wordt.
+  player.onPlayed = (t) => unawaited(speelstanden.meld(t));
 
   // Wat er in de AUTO te bladeren valt. Dit is de enige plek waar de boom aan de echte bibliotheek
   // hangt; de boom zelf staat in auto_bladeren.dart en weet van niets.
@@ -811,14 +825,14 @@ Future<void> main() async {
   }());
   if (mode.owner) {
     unawaited(sharing.applySettings());
-    // What plays here counts too: the position and the play count go into the same shared state
-    // the iPad and the Shield write to, so carrying on elsewhere works in both directions.
+    // Waar je gebleven bent gaat naar dezelfde gedeelde staat die de iPad en de Shield lezen, zodat
+    // verder luisteren op een ander toestel in beide richtingen werkt.
+    //
+    // De speeltelling stond hier ook, en is verhuisd naar `Speelstanden` hierboven: die hoort NIET
+    // achter `mode.owner`, want dan telt een gekoppelde telefoon nooit iets mee.
     player.onProgress = (track, position, playing, queue, index) {
       sharing.reportProgress(
           track.path, position, playing, [for (final t in queue) t.path], index);
-    };
-    player.onPlayed = (track) {
-      sharing.reportPlayed(track.path);
     };
   }
 
@@ -976,6 +990,10 @@ Future<void> main() async {
             [for (final x in (s['favoriteAlbums'] as List? ?? const [])) x.toString()],
           );
           lijsten.vanServer((s['playlists'] as List? ?? const []));
+          // `plays` reisde altijd al mee in dit antwoord en werd hier weggegooid. Dit is het enige
+          // wat de shuffle op een telefoon nodig heeft om te weten wat je al veel gehoord hebt.
+          speelstanden.vanServer(
+              (s['plays'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{});
         } catch (_) {/* geen pc; het hartje blijft staan zoals het stond */}
       }
 
@@ -991,6 +1009,7 @@ Future<void> main() async {
 
       favorieten.duwOps = duw;
       lijsten.duwOps = duw;
+      speelstanden.duwOps = duw;
       session.addListener(() {
         if (session.ready) unawaited(haalFavorieten());
       });
