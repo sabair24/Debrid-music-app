@@ -16,6 +16,7 @@ List<Haalstand> standen(String vorm) => [
           'w' => Haalstand.wacht,
           'o' => Haalstand.onderweg,
           'k' => Haalstand.klaar,
+          'g' => Haalstand.geland,
           'r' => Haalstand.inRij,
           'x' => Haalstand.mislukt,
           _ => throw ArgumentError('onbekende stand: $c'),
@@ -51,7 +52,7 @@ void main() {
       expect(eerst.inRij, [1, 2]);
 
       // Plek 0 is intussen geland, en de rij is leeggelopen tot één.
-      final daarna = voorraadPlan(standen('krr'), vooruitNu: 1, minVooruit: 2);
+      final daarna = voorraadPlan(standen('grr'), vooruitNu: 1, minVooruit: 2);
       expect(daarna.inRij, [0], reason: 'de volgorde van een radio is geen belofte, maar wat '
           'geland is hoort wel gespeeld te worden');
     });
@@ -102,9 +103,40 @@ void main() {
           reason: 'achteraan beginnen zou vijfhonderd nummers ophalen voordat je bij de tweede bent');
     });
 
-    test('een mislukte of gelande plek wordt niet opnieuw gestart', () {
-      final b = voorraadPlan(standen('xkrxkw'), vooruitNu: 9, maxOnderweg: 8);
+    test('een mislukte, klare of gelande plek wordt niet opnieuw gestart', () {
+      final b = voorraadPlan(standen('xkrxgw'), vooruitNu: 9, maxOnderweg: 8);
       expect(b.starten, [5]);
+    });
+  });
+
+  group('wat net opgehaald is, gaat er ALTIJD in', () {
+    // Dit is de fout die op het toestel gemeld werd, en het is de duurste soort: hij ziet er niet uit
+    // als een fout. De radio haalde netjes op, de bestanden stonden er, de schijf liep vol — maar in
+    // de speelrij kwamen ze niet, want er stond altijd wel genoeg eigen muziek vooruit. "Ik zit vol
+    // met gedownloade liedjes die ik niet zag."
+    test('ook als er al ruim genoeg vooruit staat', () {
+      final b = voorraadPlan(standen('gg'), vooruitNu: 20, minVooruit: 6);
+      expect(b.inRij, [0, 1]);
+      expect(b.vooruit, 22);
+    });
+
+    test('en eigen muziek juist niet, in datzelfde geval', () {
+      final b = voorraadPlan(standen('kgk'), vooruitNu: 20, minVooruit: 6);
+      expect(b.inRij, [1], reason: 'alleen het gelande nummer; de rest is vulling die niet nodig is');
+    });
+
+    test('gehaalde nummers gaan vóór de vulling, ook als ze verderop in het plan staan', () {
+      // De volgorde van [inRij] is de volgorde waarin ze klinken. Wat opgehaald is hoort niet achter
+      // een half uur eigen muziek te belanden dat er alleen maar bij kwam om het gat te dichten.
+      final b = voorraadPlan(standen('kkg'), vooruitNu: 0, minVooruit: 3);
+      expect(b.inRij, [2, 0, 1]);
+      expect(b.vooruit, 3);
+    });
+
+    test('telt mee voor het gat, dus er komt minder vulling bij', () {
+      final b = voorraadPlan(standen('ggkkkkkk'), vooruitNu: 0, minVooruit: 4);
+      expect(b.inRij, [0, 1, 2, 3], reason: 'twee geland plus twee eigen nummers is er vier vooruit');
+      expect(b.vooruit, 4);
     });
   });
 

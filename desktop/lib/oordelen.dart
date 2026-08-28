@@ -4,10 +4,16 @@
 /// gedeelde winkel, op een telefoon dezelfde op over de lijn naar `/api/state/ops`. Eén weg, dus geen
 /// tweede waarheid die kan gaan afwijken.
 ///
-/// **Waarom dit iets anders is dan een hartje.** Een favoriet is een lijst waar je zelf naar kijkt.
-/// Een duim omlaag is een OPDRACHT: dat nummer mag straks van je schijf. Dat is de enige knop in deze
-/// app die een bestand weggooit, en daarom wordt hij hier alleen maar OPGESCHREVEN — het wissen zelf
-/// gebeurt pas als je de radio afsluit, en met een overzicht ervóór. Zie `radiosessie.dart`.
+/// **Wat hier wél en niet in staat.** Een duim OMHOOG wordt hier bewaard: dat is een mening over een
+/// nummer dat blijft, en die telt mee bij het schudden — zie [oordeelBonus]. Een duim OMLAAG staat
+/// hier niet meer in. Die wist het bestand meteen (`RadioBesturing.gooiWeg`), en een oordeel bewaren
+/// over een bestand dat er niet meer is heeft geen betekenis: het zou alleen maar klaarliggen om een
+/// nummer dat later toevallig hetzelfde id krijgt te vergiftigen.
+///
+/// Dat rood ooit wél hier stond, en pas bij het afsluiten van de radio werd uitgevoerd, was een
+/// ontwerpkeuze die op het toestel niet standhield: "vanaf ik de duim omlaag doe, moet het direct
+/// verwijderd worden!". [Oordeel.omlaag] blijft bestaan omdat oudere staat hem nog kan bevatten en
+/// een onbekende waarde stil weggegooid zou worden.
 library;
 
 import 'package:flutter/foundation.dart';

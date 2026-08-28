@@ -1070,6 +1070,15 @@ class LanServer {
         return _json(req.response, {'id': h.id});
       case 'stand':
         return _json(req.response, radiohaler.stand((body['id'] ?? '') as String));
+      case 'vergeetwens':
+        // Het WISSEN van het bestand loopt over `/api/library/edit` — dat kan de telefoon al. Wat ze
+        // niet zelf kan is de verlanglijst hier opschonen, en zonder dat haalt `sweepLosslessWants`
+        // twintig minuten later alsnog de FLAC van een nummer dat je net met rood hebt weggedaan.
+        await downloads?.vergeetWens(
+          (body['artiest'] ?? '') as String,
+          (body['titel'] ?? '') as String,
+        );
+        return _json(req.response, {'ok': true});
       case 'plan':
         // De AI-sleutel blijft op de pc, precies zoals de TorBox-sleutel dat doet. Een telefoon hoeft
         // hem dan niet te kennen, en er is één plek waar hij staat.

@@ -20,8 +20,19 @@ enum Haalstand {
   /// Wordt nu opgehaald.
   onderweg,
 
-  /// Het bestand staat er. Mag de speelrij in.
+  /// Het bestand staat er en je had het AL. Vulling: mag de speelrij in als er anders te weinig
+  /// vooruit staat.
   klaar,
+
+  /// Net OPGEHAALD door deze radio, en het bestand staat er.
+  ///
+  /// **Dit gaat meteen de rij in, en dat is het verschil met [klaar].** Zonder dat onderscheid bleef
+  /// een net gehaald nummer in het plan hangen zolang er nog genoeg eigen muziek vooruit stond — en
+  /// dat is bijna altijd. Gemeld op 28-08-2026: "de radio downloadt wel maar ze tonen niet op tijd in
+  /// de queue, waardoor ik vol zit met gedownloade liedjes die ik niet zag." Precies dat. Je hebt er
+  /// schijfruimte voor betaald en erop staan wachten; dan hoort het te klinken, niet in een lijst te
+  /// liggen die niemand ziet.
+  geland,
 
   /// Staat al in de speelrij.
   inRij,
@@ -54,14 +65,19 @@ const int kMaxOnderweg = 8;
 ///
 /// [vooruitNu] is hoeveel speelbare nummers er ná het lopende nummer in de rij staan.
 ///
-/// **De regel die de stilte weghoudt** zit in de lus hieronder: hij loopt het plan in volgorde af en
-/// stapt over een plek heen die nog niet klaar is, in plaats van erop te wachten. Zo schuift een
-/// nummer dat je al hebt naar voren zodra een haal te lang duurt — maar alléén dan, want de lus stopt
-/// zodra er genoeg vooruit staat. Een radio die alles wat je al hebt meteen in de rij zou zetten is
-/// precies het omgekeerde: eerst een uur eigen muziek, daarna pas het nieuwe.
+/// **Twee soorten "klaar", en dat is de hele rekensom.**
 ///
-/// Een plek die is overgeslagen blijft gewoon staan; landt hij later alsnog, dan komt hij daar in de
-/// rij waar de radio op dat moment is. De volgorde van een radio is geen belofte.
+/// Een net GELAND nummer gaat er onvoorwaardelijk in. Het is opgehaald omdat jij een radio vroeg, het
+/// staat op je schijf, en het hoort te klinken — niet in een lijst te liggen die niemand ziet.
+///
+/// Een nummer dat je AL HAD is vulling. Dat gaat er alleen in als er anders te weinig vooruit staat,
+/// en de lus stopt zodra dat opgelost is. Zou alles wat je al hebt er meteen in gaan, dan krijg je
+/// eerst een uur eigen muziek en pas daarna het nieuwe — precies het omgekeerde van de bedoeling.
+///
+/// **De regel die de stilte weghoudt** zit in die tweede lus: hij stapt over een plek heen die nog
+/// niet klaar is in plaats van erop te wachten. Zo schuift eigen muziek naar voren zodra een haal te
+/// lang duurt. Een overgeslagen plek blijft staan; landt hij later alsnog, dan komt hij daar in de rij
+/// waar de radio op dat moment is. De volgorde van een radio is geen belofte.
 Voorraadbesluit voorraadPlan(
   List<Haalstand> standen, {
   required int vooruitNu,
@@ -70,6 +86,13 @@ Voorraadbesluit voorraadPlan(
 }) {
   final inRij = <int>[];
   var vooruit = vooruitNu;
+  // Eerst alles wat net binnengekomen is, ongeacht hoeveel er al vooruit staat.
+  for (var i = 0; i < standen.length; i++) {
+    if (standen[i] != Haalstand.geland) continue;
+    inRij.add(i);
+    vooruit++;
+  }
+  // En daarna eigen muziek, maar alleen zoveel als er nodig is om het gat te dichten.
   for (var i = 0; i < standen.length && vooruit < minVooruit; i++) {
     if (standen[i] != Haalstand.klaar) continue;
     inRij.add(i);
