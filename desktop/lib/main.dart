@@ -9273,6 +9273,30 @@ Widget _overzichtRegel(Gehaald g, VoidCallback? redden) => Padding(
       ),
     );
 
+/// Duim omlaag: dit nummer NU weg.
+///
+/// **Waarom hier geen oordeel meer opgeschreven wordt.** Rood was eerst een notitie: hij werd bewaard
+/// en pas bij "Radio afsluiten" uitgevoerd, met een overzicht en een kans om iets terug te halen. Op
+/// het toestel bleek dat precies het omgekeerde van de bedoeling — *"vanaf ik de duim omlaag doe, moet
+/// het direct verwijderd worden!"*. Een knop met een prullenbakbetekenis die niets zichtbaars doet,
+/// druk je nog een keer in, en dan sta je te twijfelen of hij het wel deed.
+///
+/// Een groen oordeel van eerder gaat wél weg. Zonder dat zou hetzelfde nummer, als het later opnieuw
+/// binnenkomt, die duim omhoog erven — van een keuze die je intussen hebt teruggenomen.
+Future<void> _duimOmlaag(BuildContext context, Track t) async {
+  final radio = context.read<RadioBesturing>();
+  final oordelen = context.read<Oordelen>();
+  final meldingen = ScaffoldMessenger.of(context);
+  final naam = '${t.artist} — ${t.title}';
+  final id = oordelen.idVanTrack(t);
+  if (id != null) unawaited(oordelen.zet(id, null).catchError((_) {}));
+  if (!await radio.gooiWeg(t)) return;
+  meldingen.showSnackBar(SnackBar(
+    content: Text('$naam is weg — ook van je pc.'),
+    duration: const Duration(seconds: 3),
+  ));
+}
+
 /// De duimen in de radiorij: dezelfde knop, ter grootte van een regel.
 ///
 /// Tekent zichzelf weg bij een nummer dat de radio niet heeft opgehaald — de beslissing zit hier en
@@ -9294,9 +9318,11 @@ class _RijDuimen extends StatelessWidget {
         Duim(
           kant: Duimkant.omlaag,
           maat: 28,
-          aan: nu == Oordeel.omlaag,
+          // Nooit ingedrukt: rood wist meteen, dus de regel waar deze duim op staat is er een tel
+          // later niet meer. Een stand die je toch niet ziet, is een stand die niet bestaat.
+          aan: false,
           gedempt: nu == Oordeel.omhoog,
-          opTik: () => unawaited(oordelen.wissel(track, Oordeel.omlaag)),
+          opTik: () => unawaited(_duimOmlaag(context, track)),
         ),
         const SizedBox(width: kRuimte4),
         Duim(
@@ -9354,10 +9380,10 @@ class _RadioOordeel extends StatelessWidget {
             children: [
               Duim(
                 kant: Duimkant.omlaag,
-                aan: nu == Oordeel.omlaag,
+                aan: false,
                 gedempt: nu == Oordeel.omhoog,
                 bijschrift: 'Weg, ook van je pc',
-                opTik: () => unawaited(oordelen.wissel(t, Oordeel.omlaag)),
+                opTik: () => unawaited(_duimOmlaag(context, t)),
               ),
               const SizedBox(width: kRuimte24),
               Duim(

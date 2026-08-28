@@ -121,4 +121,21 @@ class PcRadiobron implements Radiobron {
     }
     return null;
   }
+
+  @override
+  Future<void> vergeet(
+      {required String pad, required String artiest, required String titel}) async {
+    // Twee dingen, en de eerste kan de telefoon zelf: [LibraryStore.removeTracks] stuurt op een
+    // gekoppeld toestel een `removeTracks` naar de pc, met het stream-adres vertaald naar het id dat
+    // de pc kent. Het bestand gaat daar van de schijf en de catalogus is meteen bij.
+    await library.removeTracks([pad], fromDisk: true);
+    // En dan de verlanglijst, want die staat óók op de pc. Zonder dit haalt `sweepLosslessWants`
+    // straks alsnog de FLAC van een nummer dat je zojuist hebt weggegooid. Stil bij een fout: het
+    // bestand is dan al weg, en daar hoort geen melding meer bij.
+    final c = clientOf();
+    if (c == null) return;
+    try {
+      await c.ask('/api/radio', {'op': 'vergeetwens', 'artiest': artiest, 'titel': titel});
+    } catch (_) {/* een oudere pc kent deze op nog niet; het wissen zelf is al gebeurd */}
+  }
 }

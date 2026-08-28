@@ -91,6 +91,13 @@ abstract class Radiobron {
 
   /// Eén nummer halen. Geeft het nummer terug zoals het in de bibliotheek staat, of null.
   Future<Track?> haal(Radioplek plek);
+
+  /// Dit nummer weg: van de schijf, uit de bibliotheek, en van de verlanglijst.
+  ///
+  /// **Ook van de verlanglijst**, en dat is geen bijzaak. Landde de haal als mp3, dan staat het nummer
+  /// op de lijst voor een betere versie; zonder deze regel haalt `sweepLosslessWants` twintig minuten
+  /// later alsnog de FLAC — van een nummer dat je zojuist hebt weggegooid.
+  Future<void> vergeet({required String pad, required String artiest, required String titel});
 }
 
 /// Deze machine haalt zelf: de pc, of een losse installatie zonder koppeling.
@@ -152,6 +159,13 @@ class EigenRadiobron implements Radiobron {
     // landing aantikken kost niets als er niets te doen is.
     if (t != null) unawaited(library.enrichFromWeb(instellingen).catchError((_) {}));
     return t;
+  }
+
+  @override
+  Future<void> vergeet(
+      {required String pad, required String artiest, required String titel}) async {
+    await library.removeTracks([pad], fromDisk: true);
+    await downloads.vergeetWens(artiest, titel);
   }
 }
 
@@ -325,6 +339,51 @@ class RadioBesturing extends ChangeNotifier {
 
   RadioItem _itemVan(Radioplek p) => RadioItem(artist: p.artiest, title: p.titel, local: p.eigen);
 
+  /// Duim omlaag: dit nummer NU weg. Uit de rij, uit het plan, van de schijf.
+  ///
+  /// **Waarom dit meteen gebeurt en niet bij het afsluiten.** Zo was het eerst wel: rood werd
+  /// opgeschreven en pas bij "Radio afsluiten" uitgevoerd, met een overzicht en een kans om iets te
+  /// redden. Op het toestel bleek dat het omgekeerde van wat er gevraagd is — "vanaf ik de duim
+  /// omlaag doe, moet het direct verwijderd worden!" — en het is ook eerlijker: een knop met een
+  /// prullenbakbetekenis die niets zichtbaars doet, druk je nog een keer in.
+  ///
+  /// Alleen wat DEZE radio ophaalde mag hier weg; bij muziek die je zelf al had staat er geen duim.
+  /// Geeft terug of er werkelijk iets weggegooid is.
+  Future<bool> gooiWeg(Track t) async {
+    final pad = t.path;
+    if (!_doorRadio.remove(pad)) return false;
+
+    // Eerst uit het plan, want anders zet de eerstvolgende tik van [_pas] hem gewoon weer in de rij.
+    // `mislukt` en niet iets nieuws: die stand betekent precies dit — deze plek telt nergens meer in
+    // mee en er gebeurt niets meer mee.
+    var artiest = t.artist;
+    var titel = t.title;
+    for (final p in _plan) {
+      if (p.eigen?.path != pad) continue;
+      artiest = p.artiest;
+      titel = p.titel;
+      p.eigen = null;
+      p.doorRadio = false;
+      p.stand = Haalstand.mislukt;
+    }
+
+    // Dan uit de speelrij, en dat is ook wat het bestand loslaat als het net klonk.
+    await speler.haalUitRadio(pad);
+
+    // En uit de notitie: wat weg is hoeft bij het afsluiten niet meer nagekeken te worden. Ook uit
+    // een notitie die al klaarligt — een radio die net gestopt is maar waarvan het overzicht nog
+    // openstaat, hoort geen bestand aan te bieden dat er niet meer is.
+    _lopend?.gehaald.removeWhere((g) => g.pad == pad);
+    openstaand?.gehaald.removeWhere((g) => g.pad == pad);
+    // Eén schrijfbeurt, en die van de LOPENDE radio wint: zo doet [_haal] het ook, en twee keer naar
+    // hetzelfde bestand schrijven is een race die je niet ziet en niet kunt navertellen.
+    unawaited(_bewaar(_lopend ?? openstaand));
+
+    notifyListeners();
+    await bron.vergeet(pad: pad, artiest: artiest, titel: titel);
+    return true;
+  }
+
   /// Kijken wat er nu te doen valt, en het doen.
   void _pas(int sessie) {
     if (sessie != _sessie) return;
@@ -364,7 +423,9 @@ class RadioBesturing extends ChangeNotifier {
     } else {
       p.eigen = t;
       p.doorRadio = true;
-      p.stand = Haalstand.klaar;
+      // `geland` en niet `klaar`: dit gaat meteen de rij in. Zie [Haalstand.geland] — een net
+      // opgehaald nummer dat blijft liggen tot de voorraad opdroogt is een nummer dat je nooit hoort.
+      p.stand = Haalstand.geland;
       _doorRadio.add(t.path);
       _lopend?.gehaald.add(Gehaald(
         pad: t.path,

@@ -1193,6 +1193,45 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     notifyListeners();
   }
 
+  /// Eén nummer uit de LOPENDE radiorij halen. True als er werkelijk iets weg is.
+  ///
+  /// **Waarom dit er is.** Een duim omlaag wist het bestand meteen — zo is het gevraagd. Bleef het
+  /// nummer daarna in de rij staan, dan kwam de radio er even later alsnog bij, vond niets, en stond
+  /// je met een stilte waar je nooit om gevraagd hebt. Weg is weg, ook hier.
+  ///
+  /// **Eerst doorspoelen, dan pas terugmelden.** Speelt het nummer dat weg moet op ditzelfde moment,
+  /// dan gaat de radio eerst een nummer verder. libmpv houdt een bestand open zolang het klinkt, en
+  /// op Windows laat een geopend bestand zich niet wissen — zonder deze volgorde zou de duim omlaag
+  /// er precies bij het nummer dat je hoorde niets doen. Is er niets om naar door te gaan, dan valt
+  /// de radio stil tot er weer iets landt; [voegToeAanRadio] pakt hem daar weer op.
+  Future<bool> haalUitRadio(String pad) async {
+    if (!radioMode) return false;
+    bool ditIsHem(RadioItem it) => it.isLocal && it.local!.path == pad;
+    if (!_radio.any(ditIsHem)) return false;
+
+    if (_radioIndex >= 0 && _radioIndex < _radio.length && ditIsHem(_radio[_radioIndex])) {
+      if (_radioIndex < _radio.length - 1) {
+        await next();
+      } else {
+        if (playing) await _player.pause();
+        _radioDroog = true;
+      }
+      // Een tel om libmpv het bestand te laten loslaten. Zonder dat is het wissen een race die je
+      // een op de vijf keer verliest, en dan blijft er een nummer op je schijf staan dat je hebt
+      // weggegooid.
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    }
+
+    // Het nummer waar de radio NU op staat, als voorwerp: na het weghalen schuiven de indexen op, en
+    // een index die je vasthoudt wijst dan naar de buurman.
+    final hier = _radioIndex >= 0 && _radioIndex < _radio.length ? _radio[_radioIndex] : null;
+    _radio.removeWhere(ditIsHem);
+    final terug = hier == null ? -1 : _radio.indexOf(hier);
+    _radioIndex = terug >= 0 ? terug : _radio.length - 1;
+    notifyListeners();
+    return true;
+  }
+
   /// Warm the next couple of online items so skipping ahead is snappy (shares the call).
   void _prefetchNext() {
     for (var i = 1; i <= 2; i++) {
