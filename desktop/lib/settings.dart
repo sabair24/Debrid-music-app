@@ -16,6 +16,17 @@ class AppSettings extends ChangeNotifier {
   /// Zie `ai.dart` — het gaat om één aanroep per radio, van een paar honderd tekens.
   String anthropicKey = '';
 
+  /// De werkruimte waarin de AI-vraag gesteld wordt, of leeg.
+  ///
+  /// **Alleen nodig bij een sleutel die aan een PERSOON hangt in plaats van aan een werkruimte.** Die
+  /// weigert een verzoek zonder werkruimte-id, en zegt dat ook met zoveel woorden. Een gewone sleutel
+  /// uit de console heeft dit niet nodig, en dan hoort er ook geen kopregel meegestuurd te worden —
+  /// vandaar leeg als normale toestand en niet een of ander standaardwaarde.
+  ///
+  /// Geen geheim, en daarom bewust NIET in [_filled]: die telling beschermt inloggegevens tegen een
+  /// settingsbestand dat er minder bevat dan de reservekopie.
+  String anthropicWorkspace = '';
+
   /// AcoustID application key, from acoustid.org/new-application. Free, and only needed for records
   /// no catalogue can name by title — the compilations. Everything else fingerprinting does happens
   /// on this machine and needs no key at all.
@@ -261,6 +272,7 @@ class AppSettings extends ChangeNotifier {
         torboxToken = (m['torbox_token'] ?? '') as String;
         lastfmKey = (m['lastfm_key'] ?? '') as String;
         anthropicKey = (m['anthropic_key'] ?? '') as String;
+        anthropicWorkspace = (m['anthropic_workspace'] ?? '') as String;
         acoustidKey = (m['acoustid_key'] ?? '') as String;
         soulseekUser = (m['soulseek_user'] ?? '') as String;
         soulseekPass = (m['soulseek_pass'] ?? '') as String;
@@ -297,6 +309,7 @@ class AppSettings extends ChangeNotifier {
         'torbox_token': torboxToken,
         'lastfm_key': lastfmKey,
         'anthropic_key': anthropicKey,
+        'anthropic_workspace': anthropicWorkspace,
         'acoustid_key': acoustidKey,
         'soulseek_user': soulseekUser,
         'soulseek_pass': soulseekPass,

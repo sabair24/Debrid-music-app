@@ -1076,7 +1076,8 @@ class LanServer {
         final config = settings;
         if (config == null) return _unavailable(req, 'Deze pc kan geen radioplan maken.');
         try {
-          final o = await AiService(() => config.anthropicKey)
+          final o = await AiService(() => config.anthropicKey,
+                  werkruimteVan: () => config.anthropicWorkspace)
               .maakRadioplan((body['zin'] ?? '') as String);
           return _json(req.response, {
             'genre': o.genre,
