@@ -55,6 +55,7 @@ import 'lan/cast_receiver.dart';
 import 'lan/client.dart';
 import 'lan/client_mode.dart';
 import 'lan/client_session.dart';
+import 'lan/bijwerkstand.dart';
 import 'lan/remote_services.dart';
 import 'lan/stroomstand.dart';
 import 'now_playing.dart';
@@ -16539,6 +16540,10 @@ class _SharingSectionState extends State<_SharingSection> {
               style: const TextStyle(color: Colors.orangeAccent, fontSize: 12)),
         ],
         const SizedBox(height: 14),
+        // Meteen onder de versie van de pc, want dat is waar dit over gaat. Zie [PcBijwerkenKnop]
+        // — hij tekent niets zolang er niets te melden valt.
+        PcBijwerkenKnop(session: session),
+        const SizedBox(height: 14),
         Text(
           'Je bibliotheek, je covers en je bewerkingen komen van je pc. Aanpassen doe je daar; '
           'hier zie je het resultaat vanzelf terug.',
@@ -21753,6 +21758,185 @@ class _OnlineAlbumCard extends StatelessWidget {
           ])),
         ]),
       );
+}
+
+/// De pc bijwerken zonder erbij te staan.
+///
+/// **Waarom dit bestaat.** Gevraagd op 28-08-2026: *"wel ambetant dat ik de pc niet kan updaten van
+/// op afstand, pc staat aan."* Bij een koppeling doet de pc het zoeken, het downloaden en — sinds
+/// deze week — het omzetten van de stroom. Loopt hij achter, dan loopt de hele app achter, en dat
+/// merk je op een toestel dat helemaal bij is.
+///
+/// **Peilt alleen als er iets te peilen valt.** Eén vraag bij het openen, en daarna een klok van
+/// twee seconden die uitsluitend loopt terwijl de pc werkelijk bezig is. Zie `pc_bijwerker.dart`
+/// voor de andere helft van die afspraak: die kijkt hoogstens eens per tien minuten bij GitHub, hoe
+/// vaak dit ook vraagt.
+class PcBijwerkenKnop extends StatefulWidget {
+  const PcBijwerkenKnop({super.key, required this.session});
+
+  final ClientSession session;
+
+  @override
+  State<PcBijwerkenKnop> createState() => _PcBijwerkenKnopState();
+}
+
+class _PcBijwerkenKnopState extends State<PcBijwerkenKnop> {
+  Map<String, dynamic>? _stand;
+  Timer? _klok;
+  bool _wacht = true;
+
+  /// De pc antwoordt niet. Dat betekent iets anders nadat je op bijwerken hebt gedrukt.
+  bool _stil = false;
+
+  /// Deze pc kent de weg `/api/update` niet — hij is te oud. Een 404 en geen storing.
+  bool _teOud = false;
+
+  /// Er is hier op bijwerken gedrukt. Vanaf dan is een pc die zwijgt geen fout maar het verwachte
+  /// beeld: de installer sluit de app af en start hem daarna weer op.
+  bool _gestart = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_peil());
+  }
+
+  @override
+  void dispose() {
+    _klok?.cancel();
+    _klok = null;
+    super.dispose();
+  }
+
+  Bijwerkbeeld get _beeld => bijwerkbeeldVan(_stand ?? const <String, dynamic>{});
+
+  bool get _bezig {
+    // Wegen en niet casten, om dezelfde reden als in `bijwerkstand.dart`: dit veld komt van een
+    // andere machine met mogelijk een andere versie erop.
+    final v = _stand?['fase'];
+    final fase = faseUitNaam(v is String ? v : null);
+    return fase == Bijwerkfase.halen || fase == Bijwerkfase.installeren;
+  }
+
+  /// Er loopt al een vraag. Zonder dit stapelen de klok van twee seconden en het antwoord op
+  /// `start` — dat tot twintig seconden mag duren — over elkaar heen, en dan zet een status van
+  /// vóór het starten de fase weer terug op stil.
+  bool _vraagtAl = false;
+
+  void _planKlok() {
+    // De klok loopt terwijl er iets gebeurt, en terwijl we wachten tot de pc na het installeren
+    // terugkomt. Verder niet: dan is er niets te zien dat verandert.
+    final nodig = _bezig || (_gestart && _stil);
+    if (!nodig) {
+      _klok?.cancel();
+      _klok = null;
+      return;
+    }
+    _klok ??= Timer.periodic(const Duration(seconds: 2), (_) => unawaited(_peil()));
+  }
+
+  Future<void> _peil({bool start = false}) async {
+    final ep = widget.session.endpoint;
+    // De grendel geldt NIET voor `start`. Anders valt precies de druk op de knop weg zodra er
+    // toevallig een peiling onderweg is, en dan doet hij niets — één keer, zonder uitleg.
+    if (ep == null || (_vraagtAl && !start)) return;
+    _vraagtAl = true;
+    // Ruimer dan de standaard: `start` kijkt eerst bij GitHub wat er klaarstaat, en dat is een
+    // verzoek over het internet bovenop het verzoek over het netwerk.
+    final client = RemoteClient(ep, timeout: const Duration(seconds: 20));
+    try {
+      final j = await client.ask('/api/update', {'op': start ? 'start' : 'status'});
+      if (!mounted) return;
+      setState(() {
+        _stand = j;
+        _wacht = false;
+        _stil = false;
+        _teOud = false;
+      });
+    } on RemoteException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _wacht = false;
+        // 404 is geen storing maar een antwoord: deze pc is van vóór deze voorziening.
+        if (e.statusCode == 404) _teOud = true;
+        _stil = e.statusCode != 404;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _wacht = false;
+        _stil = true;
+      });
+    } finally {
+      _vraagtAl = false;
+      client.close();
+      if (mounted) _planKlok();
+    }
+  }
+
+  Future<void> _start() async {
+    setState(() {
+      _gestart = true;
+      // Meteen iets laten zien. Het antwoord op `start` komt pas terug als de pc bij GitHub is
+      // langsgeweest, en een knop die seconden lang niets doet is een knop waar nog eens op gedrukt
+      // wordt.
+      _stand = {...?_stand, 'fase': 'halen', 'voortgang': 0.0, 'fout': ''};
+    });
+    _planKlok();
+    await _peil(start: true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_wacht) return const SizedBox.shrink();
+
+    // De pc is te oud voor deze weg: zeggen wat er aan de hand is, want dit is precies het geval
+    // waarin iemand zich afvraagt waarom de knop er niet is.
+    if (_teOud) {
+      return const Text(
+        'Deze pc is te oud om zichzelf op afstand bij te werken. Dat moet één keer aan de pc zelf.',
+        style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4),
+      );
+    }
+
+    // Zwijgt hij nadat je op bijwerken drukte, dan is dat het verwachte beeld en geen storing.
+    if (_stil && _gestart) {
+      return const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        LinearProgressIndicator(minHeight: 3),
+        SizedBox(height: 8),
+        Text('De pc installeert en start opnieuw op. Even geduld.',
+            style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4)),
+      ]);
+    }
+    if (_stil && _stand == null) return const SizedBox.shrink();
+
+    final beeld = _beeld;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (beeld.balk != null) ...[
+          LinearProgressIndicator(minHeight: 3, value: beeld.balkOnbepaald ? null : beeld.balk),
+          const SizedBox(height: 8),
+        ],
+        Text(
+          beeld.regel,
+          style: TextStyle(
+            color: beeld.fout ? Colors.orangeAccent : _muted,
+            fontSize: 11.5,
+            height: 1.4,
+          ),
+        ),
+        if (beeld.knop != null) ...[
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () => unawaited(_start()),
+            icon: const Icon(Icons.system_update_alt_rounded, size: 18),
+            label: Text(beeld.knop!),
+          ),
+        ],
+      ],
+    );
+  }
 }
 
 /// Hoeveel je pc over de lijn stuurt als dit toestel van hem afspeelt.
