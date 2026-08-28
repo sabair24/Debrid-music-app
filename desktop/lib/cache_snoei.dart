@@ -122,6 +122,11 @@ const cacheGrenzen = <String, int>{
   // Er stond al een grens van 24 bestanden, maar één omgezette 24/48 is tientallen MB — dus 24
   // stuks kan 1 GB zijn. Dit is de tweede, echte grens.
   'cast_cache': 200 * 1024 * 1024,
+  // Omgezette kopieën voor een gekoppeld toestel op mobiele data. Een eigen map naast `cast_cache`,
+  // en niet omdat de bytes zouden botsen: een avond casten mag niet het album wegdrukken waar de
+  // telefoon halverwege in zit, en andersom net zo. Ruimer dan cast, want dit is een hele plaat die
+  // iemand aan het luisteren is en niet één nummer op een speaker.
+  'stream_cache': 400 * 1024 * 1024,
   // Scans van boekjes bij een album. Groeit met wat je opent, niet met wat je hebt.
   'booklets': 100 * 1024 * 1024,
 };
@@ -133,5 +138,6 @@ const cacheGrenzen = <String, int>{
 /// beweert compleet te zijn maar het niet is — en bij `releaseart` betekende dat een album dat
 /// voorgoed zonder cd zat. Zie [snoeiMap].
 ///
-/// `cast_cache` staat er bewust niet in: dat zijn losse omgezette bestanden zonder onderling verband.
+/// `cast_cache` en `stream_cache` staan er bewust niet in: dat zijn losse omgezette bestanden zonder
+/// onderling verband.
 const cachePerMap = <String>{'releaseart', 'booklets'};

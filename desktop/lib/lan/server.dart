@@ -28,6 +28,7 @@ import 'range.dart';
 import 'state_store.dart';
 import 'tokens.dart';
 import 'transcode.dart';
+import 'upnp.dart';
 
 /// The port the other devices look for. Fixed on purpose — an ephemeral port would mean every
 /// restart hands out a different address, and anything a client saved would go stale.
@@ -613,59 +614,50 @@ class LanServer {
     // morren maar houdt op bij 24 bit; een bestand van 32 bit bleef daar stil, precies zoals een
     // hi-res plaat op een Sonos stil blijft. Zelfde soort mislukking, andere grens.
     final maxBits = int.tryParse(req.uri.queryParameters['maxBits'] ?? '');
-    final teHoog = maxRate != null && track.sampleRate > maxRate;
-    final teDiep = maxBits != null && track.bitsPerSample > maxBits;
-    if (teHoog || teDiep) {
-      // Wat niet overschreden wordt, blijft staan. Alleen de diepte verlagen en de frequentie met
-      // rust laten is precies wat je wilt voor een speaker die 384 kHz best aankan.
-      return _streamResampled(req, file, teHoog ? maxRate : track.sampleRate, maxBits ?? 24);
+    // Dezelfde regel als aan de andere kant, en letterlijk dezelfde functie: wat niet overschreden
+    // wordt blijft staan, en een onbekende diepte is geen te grote diepte. Hier stond een tweede
+    // kopie van dat rekensommetje; twee kopieën van een regel lopen uiteen zodra er één bijgesteld
+    // wordt, en deze is degene die nagemeten is (`test/castgrenzen_test.dart`).
+    final grens = castGrenzen(
+      sampleRate: track.sampleRate,
+      bits: track.bitsPerSample,
+      maxSampleRate: maxRate ?? 0,
+      maxBitDepth: maxBits ?? 0,
+    );
+    if (grens.omzetten) {
+      // Een gekoppeld toestel vraagt om KLEIN (het gaat over iemands databundel), een speaker om
+      // SNEL (de kopie wordt na het spelen weggegooid). Zie [Omzetrecept].
+      final vanSpeaker = req.uri.queryParameters['cast'] == '1';
+      return _streamResampled(req, file, grens.rate, grens.bits <= 0 ? 24 : grens.bits,
+          recept: vanSpeaker ? receptCast : receptStroom);
     }
     return serveFile(req, file, contentType: mimeForExt(track.ext));
   }
 
-  /// Pipe the track through ffmpeg on its way out.
+  /// De omgezette versie serveren — als BESTAND, nooit als pijp.
   ///
-  /// No Content-Length and no Range: the converted size isn't known until it's done. Renderers
-  /// accept a chunked audio stream — the cost is that you cannot seek within a cast hi-res
-  /// track, which beats it not playing at all.
-  Future<void> _streamResampled(HttpRequest req, File file, int maxRate, int maxBits) async {
-    // Converted to a FILE and then served like any other, rather than piped.
-    //
-    // Measured against the Sonos Amp: a piped conversion is sent chunked, without a Content-Length,
-    // and the FLAC in it has an unknown sample count. The speaker takes the URL, says PLAYING, lets
-    // its reported length creep upward, and never leaves 0:00:00 — it treats it as an endless
-    // stream. A file has a length, a real header and Range support, and it simply plays. That is
-    // also why this goes through serveFile: the seeking half comes for free.
+  /// Nagemeten tegen de Sonos Amp: een omzetting die al coderend doorgestuurd wordt gaat zonder
+  /// Content-Length de deur uit, en de FLAC erin heeft een onbekend aantal monsters. De speaker
+  /// neemt de URL aan, zegt PLAYING, laat zijn lengte oplopen en komt nooit van 0:00:00 — hij leest
+  /// het als een eindeloze radiostroom. Een bestand heeft een lengte, een echte kop en Range, en
+  /// speelt gewoon. Daarom loopt dit via [serveFile]: het spoelen komt er gratis bij.
+  ///
+  /// **De pijp die hier als terugval onder hing is weg.** Hij was de oude weg, hij kon niet spoelen
+  /// en hij kon niet zeggen hoe lang iets was — en zolang hij bleef staan was "eerst omzetten, dan
+  /// sturen" een keuze in plaats van een eigenschap. Lukt het omzetten niet, dan gaat het origineel
+  /// de deur uit: dat is bij een gekoppeld toestel gewoon de oude situatie, en bij een speaker met
+  /// een plafond een nummer dat overgeslagen wordt — precies wat er zonder ffmpeg ook al gebeurde.
+  Future<void> _streamResampled(HttpRequest req, File file, int maxRate, int maxBits,
+      {Omzetrecept recept = receptCast}) async {
+    final map = recept.naam == receptCast.naam ? 'cast_cache' : 'stream_cache';
     final klaar = await transcoder.resampleToFile(file,
         maxSampleRate: maxRate,
         maxBits: maxBits,
-        cacheDir: Directory('$appDir${Platform.pathSeparator}cast_cache'));
-    if (klaar != null) return serveFile(req, klaar, contentType: 'audio/flac');
-    final process = await transcoder.resample(file, maxSampleRate: maxRate, maxBits: maxBits);
-    if (process == null) {
-      // No ffmpeg — send the original and let the speaker decide. On a Sonos that means the
-      // track is skipped, but silently degrading is better than refusing every hi-res track.
-      return serveFile(req, file, contentType: 'audio/flac');
-    }
-    final res = req.response;
-    res.statusCode = HttpStatus.ok;
-    res.headers
-      ..set(HttpHeaders.contentTypeHeader, 'audio/flac')
-      ..set(HttpHeaders.acceptRangesHeader, 'none');
-    // Report what ffmpeg says instead of discarding it. Draining this blind is how an empty
-    // stream ("resampling engine unavailable") looked like a mystery rather than a one-line fix.
-    unawaited(process.stderr.transform(utf8.decoder).forEach((line) {
-      final text = line.trim();
-      if (text.isNotEmpty) debugPrint('ffmpeg: $text');
-    }));
-    try {
-      await res.addStream(process.stdout);
-    } catch (_) {
-      // The speaker hung up — normal when you skip a track.
-    }
-    process.kill();
-    await res.close();
+        recept: recept,
+        cacheDir: Directory('$appDir${Platform.pathSeparator}$map'));
+    return serveFile(req, klaar ?? file, contentType: 'audio/flac');
   }
+
 
   // ── Searching and downloading, on behalf of another device ─────────────────
   //
