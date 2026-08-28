@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'organize.dart';
 import 'lossless_want.dart';
 import 'quality.dart';
+import 'radiovoorraad.dart' show kMaxWacht;
 import 'rutracker.dart';
 import 'search.dart';
 import 'settings.dart';
@@ -516,6 +517,25 @@ class SoulseekService {
       // plaats van te wachten tot de gebruiker op "nu opnieuw proberen" drukt.
       _plaatsHerkansing();
     }
+  }
+
+  /// Houd de sessie open zolang de radio loopt. Geeft terug hoe je hem weer loslaat.
+  ///
+  /// **Waarom een radio dit nodig heeft, en waarom het zonder stilletjes fout gaat.** Soulseek staat
+  /// vier aanmeldingen per tien minuten toe en de sessie sluit zichzelf na 120 seconden zonder
+  /// verkeer. Een radio haalt om de paar minuten een nummer, dus elk haaltje zou op een VERSE
+  /// aanmelding vallen — na een klein half uur is het account geblokkeerd. En `_searchOnce` slikt die
+  /// fout: de radio zou dan gewoon weer "alleen wat ik al heb" spelen, zonder dat er ergens iets
+  /// misgaat dat je kunt zien. Precies zoals [DownloadManager._chaseUpgrade] het al doet en uitlegt.
+  ///
+  /// Losser laten is verplicht: zolang deze leen loopt gaat de sessie niet dicht, ook niet als de app
+  /// verder niets doet.
+  void Function() leaseVoorRadio() {
+    final tot = Completer<void>();
+    unawaited(withSession((_) => tot.future).catchError((_) {}));
+    return () {
+      if (!tot.isCompleted) tot.complete();
+    };
   }
 
   /// Wordt één keer aangeroepen zodra er echt een sessie nodig is — de haak waarmee onderbroken
@@ -1913,6 +1933,113 @@ class DownloadManager extends ChangeNotifier {
     _log.line('wens "${w.artist} — ${w.title}": nog niet — volgende poging over '
         '${_kort(wachtVoor(w.tries + 1))}');
     return false;
+  }
+
+  /// Eén nummer voor de RADIO ophalen. Geeft het pad terug waar het geland is, of null.
+  ///
+  /// Alleen een pad terug als het bestand **nieuw** is: een landing die op muziek terechtkwam die je
+  /// al had geldt hier als mislukt. Dat lijkt streng en is de belangrijkste regel van deze functie.
+  /// [placeFileDetailed] buigt de bestemming namelijk om naar je bestaande bestand zodra [staatAl]
+  /// zegt dat je die opname al hebt (zie de uitleg dáár — het is wat een opwaardering naast het
+  /// origineel voorkomt). Wie zo'n landing als "door de radio gehaald" zou noteren, laat het opruimen
+  /// bij het afsluiten straks muziek wissen die je zélf verzameld hebt. Dat mag nooit gebeuren, en
+  /// deze regel is de plek waar dat wordt tegengehouden.
+  ///
+  /// Verder anders dan een gewone download, en telkens met reden:
+  ///
+  /// * **Korte adem** ([kMaxWacht], anderhalve minuut). Een wens uit de verlanglijst mag een half uur
+  ///   in de rij van een uploader staan; hier luister je NU, en zo'n haal houdt al die tijd een van de
+  ///   twaalf Soulseek-plekken bezet.
+  /// * **Geen rij op het scherm.** Deze taak komt niet in [jobs] en dus ook niet in
+  ///   `pending_downloads.json`. Vijfhonderd regels in Mijn downloads is geen informatie, en een
+  ///   herstart hoort geen weesdownloads van een radio van gisteren op te starten.
+  /// * **Gezag met een LEGE albumtitel**, mét jaar en looptijd. Leeg maakt er een single van, dus
+  ///   `Singles/<Artiest>/<Titel>.flac` in plaats van vijfhonderd albumtegels met één nummer erin
+  ///   ([classifyRelease] geeft `album` bij élke niet-lege albumtitel). Het jaar is wat de tags
+  ///   gezaghebbend maakt — zonder dat schrijft [stampTags] niets. De looptijd is de Sting-val: zonder
+  ///   haar denkt de bibliotheek op artiest+titel alleen al dat je iets hebt.
+  Future<String?> haalVoorRadio({
+    required String artiest,
+    required String titel,
+    int? seconden,
+    int? jaar,
+  }) async {
+    if (!soulseek.available) return null;
+    // Heb je dit al? Dan valt er niets te halen — en, net zo belangrijk, dan mag het straks ook niet
+    // opgeruimd worden. De toets staat hier VOORAF, want achteraf is het onderscheid weg.
+    if (mapVanBestaande?.call(artiest, titel, seconds: seconden) != null) return null;
+
+    List<SoulseekFile> hits;
+    try {
+      hits = await soulseek.search(zoekvraagVoorNummer(titel, artist: artiest));
+    } catch (_) {
+      return null; // geen net of geen aanmelding; deze plek in het plan mislukt gewoon
+    }
+    final bruikbaar = hits.where((f) => !isMultichannel(f)).toList()..sort(_rankSlsk);
+    // Lossless eerst, precies zoals overal in deze app. Maar niet lossless-of-niets: een
+    // eurodance-single uit 1993 bestaat op dit netwerk soms alleen als mp3, en dan is die mp3 beter
+    // dan stilte. `_rankSlsk` heeft de beste al vooraan gezet.
+    final kandidaten = [
+      ...bruikbaar.where(isLossless),
+      ...bruikbaar.where((f) => !isLossless(f)),
+    ];
+    if (kandidaten.isEmpty) {
+      _log.line('radio "$artiest — $titel": ${hits.length} treffers, niets bruikbaars');
+      return null;
+    }
+
+    final gezag = TrackTags(
+      title: titel,
+      artist: artiest,
+      album: '',
+      trackNo: 0,
+      year: jaar,
+      seconds: seconden,
+    );
+    final job = DownloadJob(titel); // wegwerp: bewust niet in `jobs`
+    String? geland;
+    try {
+      await _withSlsk<void>((session, _) async {
+        for (final f in kandidaten.take(3)) {
+          final t0 = DateTime.now();
+          SlskResult res;
+          try {
+            res = await _rawTransfer(session, f, job, () {},
+                waitInQueue: true, maxWait: kMaxWacht);
+          } catch (_) {
+            continue;
+          }
+          _log.line('radio "$artiest — $titel": ${f.username} '
+              '${_uitkomst(res)} na ${_kort(DateTime.now().difference(t0))}');
+          if (res is! SlskDone) continue;
+
+          // Nog één keer kijken, vlak vóór het filen. Tussen de toets bovenaan en dit moment kan een
+          // andere haal — of de jacht op een betere kwaliteit — hetzelfde nummer hebben laten landen.
+          final alBekend = mapVanBestaande?.call(artiest, titel, seconds: seconden);
+          PlaceOutcome uit;
+          try {
+            uit = await placeFileDetailed(File(res.path), _downloadsRoot,
+                tags: gezag, staatAl: mapVanBestaande);
+          } catch (_) {
+            continue;
+          }
+          if (alBekend != null || uit.how != Placement.moved) {
+            _log.line('radio "$artiest — $titel": geland op muziek die je al had — '
+                'niet van de radio, wordt straks niet opgeruimd');
+            return;
+          }
+          // Pas NA het landen, en dit ontbrak op de hele downloadweg: `rebuildAlbums` groepeert op de
+          // tags ván het bestand, dus zonder dit vult je raster zich met de rommelalbums van de
+          // uploader.
+          try {
+            await stampTags(File(uit.path), gezag);
+          } catch (_) {/* het bestand staat goed; een mislukte tagschrijf maakt het niet stuk */}
+          geland = uit.path;
+          return;
+        }
+      });
+    } catch (_) {/* niets verloren: deze plek in het plan mislukt gewoon */}
+    return geland;
   }
 
   /// Eén wens om PRECIES dit bestand: opnieuw aankloppen bij dezelfde peer, en niets anders.

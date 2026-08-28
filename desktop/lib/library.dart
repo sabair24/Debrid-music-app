@@ -244,61 +244,93 @@ ScanUitslag _scanTags(String root, String? cachePad) {
       }
     }
     gelezen++;
-
-    // FLAC goes through our own parser first: the package throws on tags it can't parse (a vinyl
-    // "A3" track number is enough) and LEAKS THE FILE HANDLE when it does, which would leave that
-    // track unmovable and undeletable for the rest of the session. See readTags().
-    if (_ext(e.path) == '.flac') {
-      final v = readFlacTags(e);
-      if (v != null && (v.title != null || v.artist != null || v.album != null)) {
-        out.add({
-          'path': e.path,
-          'title': v.title ?? _baseName(e.path),
-          'artist': v.artist ?? 'Onbekende artiest',
-          'album': v.album ?? '',
-          'trackNo': v.trackNo,
-          'trackTotal': v.trackTotal,
-          'durationMs': v.duration?.inMilliseconds ?? 0,
-          'isFlac': true,
-          'year': v.year,
-          'genre': v.genre,
-          'addedMs': addedMs,
-          'sizeBytes': sizeBytes,
-          'sampleRate': v.sampleRate,
-          'bitsPerSample': v.bitsPerSample,
-        });
-        continue;
-      }
-    }
-    // Never hand the package a file it is going to refuse: it opens before it decides, and the
-    // refusal keeps the handle. See tagParserWouldClaim().
-    if (!tagParserWouldClaim(e)) continue;
-    try {
-      final m = readMetadata(e, getImage: false);
-      out.add({
-        'path': e.path,
-        'title': (m.title?.trim().isNotEmpty ?? false) ? m.title!.trim() : _baseName(e.path),
-        'artist': (m.artist?.trim().isNotEmpty ?? false) ? m.artist!.trim() : 'Onbekende artiest',
-        'album': m.album?.trim() ?? '', // empty => single
-        'trackNo': m.trackNumber ?? 0,
-        // The generic reader has no track-total, so a non-FLAC file simply doesn't take part in
-        // edition splitting — it stays with the plain album, which is where it was anyway.
-        'trackTotal': 0,
-        'durationMs': m.duration?.inMilliseconds ?? 0,
-        'isFlac': _ext(e.path) == '.flac',
-        'year': (m.year != null && m.year!.year > 1000) ? m.year!.year : null,
-        'genre': (m.genres.isNotEmpty) ? m.genres.first : null,
-        'addedMs': addedMs,
-        'sizeBytes': sizeBytes,
-        'sampleRate': m.sampleRate ?? 0,
-        // The generic reader doesn't report bit depth; only the FLAC path above can.
-        'bitsPerSample': 0,
-      });
-    } catch (_) {}
+    final rij = _rijVoorBestand(e, addedMs: addedMs, sizeBytes: sizeBytes);
+    if (rij != null) out.add(rij);
   }
   _schrijfTagCache(cachePad, out);
   return (rijen: out, uitCache: uitCache, gelezen: gelezen);
 }
+
+/// De tagrij van ÉÉN bestand, of null als er niets leesbaars in staat.
+///
+/// Uit [_scanTags] gelicht zodat [leesTagrijInIsolate] precies hetzelfde leest als een volledige
+/// scan. Twee lezers die uit elkaar lopen is hier bijzonder naar: een nummer dat via de radio
+/// binnenkomt zou dan andere velden krijgen dan datzelfde nummer na een herstart, en dan verspringt
+/// het van album zodra je de app opnieuw opent.
+Map<String, dynamic>? _rijVoorBestand(File e, {required int addedMs, required int sizeBytes}) {
+  // FLAC goes through our own parser first: the package throws on tags it can't parse (a vinyl
+  // "A3" track number is enough) and LEAKS THE FILE HANDLE when it does, which would leave that
+  // track unmovable and undeletable for the rest of the session. See readTags().
+  if (_ext(e.path) == '.flac') {
+    final v = readFlacTags(e);
+    if (v != null && (v.title != null || v.artist != null || v.album != null)) {
+      return {
+        'path': e.path,
+        'title': v.title ?? _baseName(e.path),
+        'artist': v.artist ?? 'Onbekende artiest',
+        'album': v.album ?? '',
+        'trackNo': v.trackNo,
+        'trackTotal': v.trackTotal,
+        'durationMs': v.duration?.inMilliseconds ?? 0,
+        'isFlac': true,
+        'year': v.year,
+        'genre': v.genre,
+        'addedMs': addedMs,
+        'sizeBytes': sizeBytes,
+        'sampleRate': v.sampleRate,
+        'bitsPerSample': v.bitsPerSample,
+      };
+    }
+  }
+  // Never hand the package a file it is going to refuse: it opens before it decides, and the
+  // refusal keeps the handle. See tagParserWouldClaim().
+  if (!tagParserWouldClaim(e)) return null;
+  try {
+    final m = readMetadata(e, getImage: false);
+    return {
+      'path': e.path,
+      'title': (m.title?.trim().isNotEmpty ?? false) ? m.title!.trim() : _baseName(e.path),
+      'artist': (m.artist?.trim().isNotEmpty ?? false) ? m.artist!.trim() : 'Onbekende artiest',
+      'album': m.album?.trim() ?? '', // empty => single
+      'trackNo': m.trackNumber ?? 0,
+      // The generic reader has no track-total, so a non-FLAC file simply doesn't take part in
+      // edition splitting — it stays with the plain album, which is where it was anyway.
+      'trackTotal': 0,
+      'durationMs': m.duration?.inMilliseconds ?? 0,
+      'isFlac': _ext(e.path) == '.flac',
+      'year': (m.year != null && m.year!.year > 1000) ? m.year!.year : null,
+      'genre': (m.genres.isNotEmpty) ? m.genres.first : null,
+      'addedMs': addedMs,
+      'sizeBytes': sizeBytes,
+      'sampleRate': m.sampleRate ?? 0,
+      // The generic reader doesn't report bit depth; only the FLAC path above can.
+      'bitsPerSample': 0,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Eén bestand lezen, op een andere isolate. Zie [scanTagsInIsolate] voor waarom de closure hier
+/// staat en niet in een methode.
+///
+/// **Waarom niet gewoon op de tekendraad.** Eén bestand lezen kost een paar milliseconden en dat zou
+/// je kunnen wegwuiven — maar dit gaat over bestanden van vreemden, en dat is precies het geval waar
+/// de ontleder blijft hangen of gooit met een open handvat. Op de tekendraad is dat een bevroren app;
+/// hier is het een isolate die omvalt en een null oplevert.
+Future<Map<String, dynamic>?> leesTagrijInIsolate(String pad) => Isolate.run(() {
+      final f = File(pad);
+      var addedMs = 0, sizeBytes = 0;
+      try {
+        final st = f.statSync();
+        addedMs = st.modified.millisecondsSinceEpoch;
+        sizeBytes = st.size;
+      } catch (_) {
+        return null;
+      }
+      if (!_audioExt.contains(_ext(pad))) return null;
+      return _rijVoorBestand(f, addedMs: addedMs, sizeBytes: sizeBytes);
+    });
 
 /// Run pass 1 on another isolate.
 ///
@@ -1540,6 +1572,43 @@ class LibraryStore extends ChangeNotifier {
       return;
     }
     await _writeJson(_correctionsFile, _corrections);
+  }
+
+  /// Eén bestand erbij, zonder de hele bibliotheek opnieuw te lezen.
+  ///
+  /// **Waarom dit bestaat.** Elke download eindigt vandaag op `onLibraryChanged`, en dat is een
+  /// volledige [scan]: de hele muziekmap doorlopen, elk bestand statten, alles hergroeperen. Voor een
+  /// download per paar minuten is dat prima. Voor een radio die er acht per kwartier binnenhaalt is
+  /// het een scan die vrijwel permanent draait, en een scan die permanent draait maakt de app
+  /// schokkerig terwijl je juist naar muziek luistert.
+  ///
+  /// Geeft het nummer terug zoals het in de bibliotheek staat — met correctie erop — of null als er
+  /// niets leesbaars in het bestand stond. Een pad dat er al in staat wordt VERVANGEN en niet
+  /// toegevoegd: twee rijen met hetzelfde pad breekt elke opzoeking die op pad werkt, en dat zijn er
+  /// nogal wat (de hoes, het album, de speeltelling).
+  Future<Track?> voegBestandToe(String pad) async {
+    // Op een gekoppeld toestel staat de bibliotheek op de pc; daar is niets toe te voegen.
+    if (isRemote) return null;
+    if (_hidden.contains(pad)) return null;
+    Map<String, dynamic>? rij;
+    try {
+      rij = await leesTagrijInIsolate(pad);
+    } catch (_) {
+      return null;
+    }
+    if (rij == null) return null;
+    final t = _applyCorrection(_trackFromMap(rij));
+    final al = tracks.indexWhere((x) => x.path == pad);
+    if (al >= 0) {
+      tracks[al] = t;
+    } else {
+      tracks.add(t);
+    }
+    scanned = tracks.length;
+    rebuildAlbums();
+    _bumpMeta();
+    notifyListeners();
+    return t;
   }
 
   Track _applyCorrection(Track t) {
