@@ -17,13 +17,17 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
 import 'library.dart';
 import 'models.dart';
 import 'online.dart';
+import 'paths.dart';
 import 'player.dart';
+import 'radiosessie.dart';
 import 'radiovoorraad.dart';
 
 /// Eén plek in het radioplan: wat er zou moeten spelen, en hoe ver het daarmee is.
@@ -155,11 +159,66 @@ class RadioBesturing extends ChangeNotifier {
   /// Waarmee de radio zichzelf omschrijft, voor op het scherm.
   String naam = '';
 
+  /// Van een pad naar het gedeelde id, om een oordeel te kunnen terugvinden als het bestand er niet
+  /// meer is. Ingehangen vanuit main.dart.
+  String? Function(String pad)? idVanPad;
+
   Timer? _tik;
   int _sessie = 0;
   bool _loopt = false;
 
   bool get loopt => _loopt;
+
+  /// De paden die DEZE radio heeft opgehaald.
+  ///
+  /// Alleen hier mag een duim bij staan. Bij muziek die je zelf al had valt er niets weg te gooien, en
+  /// een knop die dat suggereert is precies de knop die je een keer per ongeluk raakt.
+  final Set<String> _doorRadio = {};
+
+  bool doorDezeRadio(String pad) => _doorRadio.contains(pad);
+
+  /// De radio die gestopt is en nog nagekeken moet worden, of null.
+  ///
+  /// Dit is wat het overzicht bij het afsluiten toont. Het overleeft een herstart, want anders is na
+  /// een telefoon die je weglegt niet meer te achterhalen wélke bestanden er van die radio kwamen —
+  /// en blijven ze voor altijd staan zonder dat iemand weet waar ze vandaan komen.
+  RadioSessie? openstaand;
+
+  RadioSessie? _lopend;
+
+  File get _bestand => File('$appDir${Platform.pathSeparator}radio_sessie.json');
+
+  /// De notitie van de vorige keer. Eén keer bij het opstarten.
+  Future<void> laadOpenstaand() async {
+    try {
+      final f = _bestand;
+      if (!await f.exists()) return;
+      final s = RadioSessie.fromJson(jsonDecode(await f.readAsString()));
+      if (s == null || s.leeg) return;
+      openstaand = s;
+      notifyListeners();
+    } catch (_) {/* een half geschreven notitie is geen reden om niet op te starten */}
+  }
+
+  /// Het overzicht is afgehandeld. Weg ermee.
+  Future<void> vergeetOpenstaand() async {
+    openstaand = null;
+    notifyListeners();
+    try {
+      final f = _bestand;
+      if (await f.exists()) await f.delete();
+    } catch (_) {}
+  }
+
+  Future<void> _bewaar(RadioSessie? s) async {
+    if (s == null) return;
+    try {
+      await Directory(appDir).create(recursive: true);
+      final tmp = File('${_bestand.path}.tmp');
+      await tmp.writeAsString(jsonEncode(s.toJson()));
+      await tmp.rename(_bestand.path);
+    } catch (_) {/* de radio speelt door; de notitie is een vangnet, geen voorwaarde */}
+  }
 
   /// Hoeveel er nog opgehaald wordt, en hoeveel er door deze radio binnengekomen is.
   int get onderweg => _plan.where((p) => p.stand == Haalstand.onderweg).length;
@@ -185,6 +244,8 @@ class RadioBesturing extends ChangeNotifier {
     _plan = nieuw;
     this.naam = naam;
     _loopt = true;
+    _doorRadio.clear();
+    _lopend = RadioSessie(naam: naam, begonnenMs: DateTime.now().millisecondsSinceEpoch);
 
     // De eerste ronde met de hand, want [PlayerStore.voegToeAanRadio] doet niets zolang er nog geen
     // radio loopt.
@@ -225,6 +286,15 @@ class RadioBesturing extends ChangeNotifier {
     final liep = _loopt;
     _loopt = false;
     if (laatLos) bron.einde();
+    // Heeft deze radio iets opgehaald, dan is er iets na te kijken. Zo niet, dan is er niets te
+    // vragen en hoort er ook geen overzicht te komen — dat zou een venster zijn dat alleen maar in
+    // de weg staat.
+    final s = _lopend;
+    if (liep && s != null && !s.leeg) {
+      openstaand = s;
+      unawaited(_bewaar(s));
+    }
+    _lopend = null;
     if (liep) notifyListeners();
   }
 
@@ -277,6 +347,17 @@ class RadioBesturing extends ChangeNotifier {
       p.eigen = t;
       p.doorRadio = true;
       p.stand = Haalstand.klaar;
+      _doorRadio.add(t.path);
+      _lopend?.gehaald.add(Gehaald(
+        pad: t.path,
+        artiest: p.artiest,
+        titel: p.titel,
+        id: idVanPad?.call(t.path),
+        bytes: t.sizeBytes,
+      ));
+      // Meteen op schijf, niet pas bij het afsluiten. Een app die wordt weggehaald terwijl de radio
+      // loopt is precies het geval waarvoor die notitie er is.
+      unawaited(_bewaar(_lopend));
     }
     notifyListeners();
     _pas(sessie);

@@ -1788,6 +1788,22 @@ class DownloadManager extends ChangeNotifier {
   /// Hoeveel nummers wachten er nog op hun FLAC. Voor het scherm en voor het logboek.
   int get losslessWanted => _wants.count;
 
+  /// Hier hoeft niet meer naar gezocht te worden.
+  ///
+  /// **Zonder dit komt een weggegooid nummer terug.** Landt een radiohaal als mp3, dan zet
+  /// [_wantLossless] hem op de verlanglijst; twintig minuten later haalt [sweepLosslessWants] alsnog
+  /// de FLAC — van een nummer dat je zojuist met een rode duim hebt weggedaan. Dat is niet alleen
+  /// vervelend, het is onbegrijpelijk: je hebt het weggegooid en het staat er weer.
+  Future<void> vergeetWens(String artiest, String titel) async {
+    if (titel.trim().isEmpty) return;
+    await _ensureWants();
+    final sleutel = '${normKey(artiest)}|${normKey(titel)}';
+    if (_wants.forget(sleutel)) {
+      await _wants.save();
+      _log.line('wens "$artiest — $titel" vervallen: weggedaan met een duim omlaag');
+    }
+  }
+
   /// Zet dit nummer op de lijst. De TAGS beslissen wat er gezocht wordt, niet de bestandsnaam van de
   /// peer: die heet bij de een "215 - sabien tiels - trein.flac" en bij de ander "5-03 Sabien Tiels -
   /// Trein.mp3", en daar valt geen zoekvraag van te maken.
