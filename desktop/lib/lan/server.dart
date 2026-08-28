@@ -123,7 +123,7 @@ class LanServer {
   final PcBijwerker bijwerker = PcBijwerker();
 
   /// Nummers ophalen voor de radio van een gekoppeld toestel. Zie `radiohaler.dart`.
-  late final Radiohaler radiohaler = Radiohaler(downloads, soulseek);
+  late final Radiohaler radiohaler = Radiohaler(downloads, soulseek, library, settings);
   final int port;
   final String version;
   String token;

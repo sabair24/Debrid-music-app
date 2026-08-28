@@ -14,6 +14,8 @@ library;
 
 import 'dart:async';
 
+import '../library.dart';
+import '../settings.dart';
 import '../online.dart';
 
 /// Hoe lang een afgelopen haal opvraagbaar blijft.
@@ -41,10 +43,23 @@ class Radiohaal {
 
 /// De pc-kant van een radio op een gekoppeld toestel.
 class Radiohaler {
-  Radiohaler(this.downloads, this.soulseek);
+  Radiohaler(this.downloads, this.soulseek, this.library, this.instellingen);
 
   final DownloadManager? downloads;
   final SoulseekService? soulseek;
+
+  /// De bibliotheek van DEZE pc.
+  ///
+  /// **Zonder dit werkt de radio op een telefoon niet, en op een manier die je niet ziet.** Een haal
+  /// landt hier keurig op schijf — maar de bibliotheek van de pc weet daar niets van tot de volgende
+  /// volledige scan. De catalogus die de telefoon ophaalt is dus nog die van vóór de landing, het
+  /// nummer staat er niet in, en de radio noteert de haal als MISLUKT. Het bestand ligt er dan wel,
+  /// en niemand die het weet.
+  final LibraryStore library;
+
+  /// Om een hoes op te halen voor wat er net geland is. Null op een pc zonder instellingen (alleen
+  /// in toetsen); dan komt de hoes er bij de volgende volledige scan alsnog.
+  final AppSettings? instellingen;
 
   final Map<String, Radiohaal> _halen = {};
   void Function()? _los;
@@ -102,6 +117,16 @@ class Radiohaler {
             artiest: artiest, titel: titel, seconden: seconden, jaar: jaar);
       } catch (_) {
         pad = null;
+      }
+      // Meteen de bibliotheek in, en niet wachten op een volledige scan: dat is wat de catalogus
+      // die de telefoon ophaalt actueel maakt. Zie [LibraryStore.voegBestandToe].
+      if (pad != null) {
+        try {
+          await library.voegBestandToe(pad);
+          // En een hoes erbij: het verrijken hangt aan `scan()`, en die draait hier met opzet niet.
+          final cfg = instellingen;
+          if (cfg != null) unawaited(library.enrichFromWeb(cfg).catchError((_) {}));
+        } catch (_) {/* het bestand ligt er; een scan vindt het later alsnog */}
       }
       haal.pad = pad;
       haal.stand = pad == null ? 'mislukt' : 'klaar';
