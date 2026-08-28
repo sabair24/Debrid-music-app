@@ -152,11 +152,28 @@ void main() {
   });
 
   group('het schema dat meegaat', () {
-    test('staat geen onbekende velden toe en eist de drie die ertoe doen', () {
-      final s = radioSchema();
-      expect(s['additionalProperties'], isFalse,
+    test('staat geen onbekende velden toe', () {
+      expect(radioSchema()['additionalProperties'], isFalse,
           reason: 'zonder deze regel weigert de API het schema');
-      expect(s['required'], containsAll(<String>['genre', 'aantal', 'zaadArtiesten']));
+    });
+
+    test('ELK veld staat in required', () {
+      // Dit leverde bij de eerste echte poging een 400 op: `jaarVan`, `jaarTot` en `stemming`
+      // stonden wel in `properties` maar niet in `required`, en dan weigert de API het hele schema.
+      // Er komt dan geen antwoord — niet eens een half antwoord. Een veld dat mag ontbreken hoort
+      // een `anyOf` met `null` te zijn, niet een veld dat je weglaat.
+      final s = radioSchema();
+      final velden = (s['properties'] as Map).keys.map((k) => '$k').toList();
+      expect(s['required'], unorderedEquals(velden));
+    });
+
+    test('wat mag ontbreken is nullbaar in plaats van afwezig', () {
+      final props = radioSchema()['properties'] as Map;
+      for (final veld in ['jaarVan', 'jaarTot']) {
+        final keuzes = (props[veld] as Map)['anyOf'] as List;
+        expect(keuzes.map((k) => (k as Map)['type']), containsAll(<String>['integer', 'null']),
+            reason: '$veld moet null kunnen zijn, want hij staat in required');
+      }
     });
 
     test('draagt GEEN getalgrenzen', () {
