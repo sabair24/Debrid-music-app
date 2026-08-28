@@ -1581,6 +1581,44 @@ class LibraryStore extends ChangeNotifier {
           {required bool isSingle, required bool perNummer}) =>
       (album: !isSingle || perNummer, titel: isSingle || perNummer);
 
+  /// De tags die van de OUDE plaat kwamen en na een verhuizing niet meer waar zijn.
+  ///
+  /// **Waarvoor dit bestaat.** Gemeld op 28-08-2026, met "La Salsa" als voorbeeld: *"hij zet de
+  /// track wel ergens anders, maar de metadata gaat mee van de album waar in hij zat, dat klopt
+  /// niet. De metadata moet mee veranderen."* Dat klopte letterlijk. De correctie zette ARTIST,
+  /// ALBUM en TITLE, en liet alles staan wat de OUDE persing beschreef — dus stond "La Salsa" op
+  /// zijn nieuwe tegel als nummer 7 van 14, met het jaartal van *Partir un jour*.
+  ///
+  /// **Waarom wissen en niet overnemen.** Wat het nummer op zijn nieuwe plaat WÉL is, weet niemand
+  /// hier: dat staat in de tracklijst van de persing die je zojuist aanwees, en die is nog niet
+  /// opgehaald. Een verkeerd getal laten staan is erger dan geen getal — het splitst de plaat in
+  /// twee uitgaven ([editionSplit]), het zet een "14 nummers"-regel onder een tegel met één nummer,
+  /// en het bepaalt de volgorde. Nul betekent hier "niet genummerd", en dat is precies wat
+  /// [editionSplit] en [rebuildAlbums] al veilig behandelen — een ongetagde rip doet hetzelfde.
+  /// Open je daarna de nieuwe tegel, dan haalt de app de tracklijst van de vastgezette persing op
+  /// en zet "Tags gelijktrekken" er de échte nummering in.
+  ///
+  /// **ALBUMARTIST verhuist wél mee**, want die hoort bij de plaat en niet bij de opname. Zonder
+  /// deze regel houdt een nummer dat van een verzamelaar wegloopt de artiest van die verzamelaar.
+  ///
+  /// Alles hier is omkeerbaar: [_schrijfBewerking] legt de oude waarden in [_tagUndo] voordat het
+  /// schrijft, dus de undo-knop zet ze terug.
+  @visibleForTesting
+  static Map<String, String?> veldenVanDeOudePersing(String? nieuweArtiest) => {
+        'TRACKNUMBER': null,
+        'TRACKTOTAL': null,
+        'TOTALTRACKS': null,
+        'DISCNUMBER': null,
+        'DISCTOTAL': null,
+        'TOTALDISCS': null,
+        // Het jaartal van de plaat waar het nummer NIET op hoort. De nieuwe tegel leest zijn jaar
+        // straks uit de vastgezette persing; dit veld zou daar alleen als verkeerde terugval onder
+        // liggen.
+        'DATE': null,
+        if (nieuweArtiest != null && nieuweArtiest.trim().isNotEmpty)
+          'ALBUMARTIST': cleanArtistName(nieuweArtiest),
+      };
+
   Future<({int written, List<String> failed})> _schrijfBewerking(
     Album target, {
     String? artist,
@@ -1597,12 +1635,17 @@ class LibraryStore extends ChangeNotifier {
       gedeeld['ALBUM'] = albumTitle.trim();
     }
     final losseTitel = title != null && title.trim().isNotEmpty && mag.titel;
+    // Verhuist er één nummer, dan gaan de tags van de oude persing mee de deur uit. Zie
+    // [veldenVanDeOudePersing] — dít is de reparatie van "de metadata gaat mee van het album waar
+    // hij in zat".
+    final opruimen =
+        alleen == null ? const <String, String?>{} : veldenVanDeOudePersing(artist);
     var written = 0;
     final failed = <String>[];
-    if (gedeeld.isEmpty && !losseTitel) return (written: 0, failed: failed);
+    if (gedeeld.isEmpty && !losseTitel && opruimen.isEmpty) return (written: 0, failed: failed);
 
     for (final t in alleen ?? target.tracks) {
-      final velden = {...gedeeld, if (losseTitel) 'TITLE': title.trim()};
+      final velden = {...opruimen, ...gedeeld, if (losseTitel) 'TITLE': title.trim()};
       final f = File(t.path);
       // Uit de container die het bestand écht is: een mp3 met de FLAC-lezer komt leeg terug, en "leeg"
       // betekent "dit veld was er niet" — dan zou undo de tags WISSEN in plaats van terugzetten.
@@ -1691,6 +1734,13 @@ class LibraryStore extends ChangeNotifier {
       }
       if (title != null && title.trim().isNotEmpty && magVeld.titel) {
         c['title'] = title.trim();
+      }
+      // Dezelfde opruiming als in de tags, maar dan in de app — anders zou je pas na een herscan
+      // zien dat het klopt, en tot die tijd staat je nummer als "7 van 14" op een plaat waar het
+      // niet op stond. Zie [veldenVanDeOudePersing] voor waarom nul en niet een gokje.
+      if (perNummer) {
+        c['trackNo'] = '0';
+        c['trackTotal'] = '0';
       }
       // The exact pressing the user pointed at. Everything else about this album — its edition
       // line, its back cover, its disc — is read from this one release from now on, instead of
