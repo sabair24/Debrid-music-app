@@ -16512,9 +16512,16 @@ class _SharingSectionState extends State<_SharingSection> {
                 Text(
                   // Deliberately verbatim: a port is a number you type, not one to be shown as
                   // "47.820" by whatever the device's locale thinks a thousands separator is.
+                  //
+                  // **HET ADRES OP ZIJN EIGEN REGEL**, en dat is geen opmaak maar een reparatie.
+                  // Alles achter elkaar is een kleine vijftig tekens, en dat past niet naast de
+                  // knop "Ververs". Flutter breekt een woord dat niet past dan op een willekeurig
+                  // teken — en dat viel op 28-08-2026 middenin het poortnummer: er stond
+                  // "100.97.101.113:4782" en op de volgende regel "0 · 1056 nummers". Een adres
+                  // dat je moet kunnen overtikken mag nooit half op een regel eindigen.
                   endpoint == null
                       ? ''
-                      : '${endpoint.baseUrl.host}:${endpoint.baseUrl.port} · '
+                      : '${endpoint.baseUrl.host}:${endpoint.baseUrl.port}\n'
                           '${session.library.tracks.length} nummers'
                           // DE VERSIE VAN DE PC, en dat is geen sieraad.
                           //
@@ -21893,8 +21900,12 @@ class _PcBijwerkenKnopState extends State<PcBijwerkenKnop> {
     // De pc is te oud voor deze weg: zeggen wat er aan de hand is, want dit is precies het geval
     // waarin iemand zich afvraagt waarom de knop er niet is.
     if (_teOud) {
+      // Zeggen wat je eraan doet, niet alleen dat het niet kan. De pc kijkt bij het opstarten zelf
+      // of er iets klaarstaat en biedt het dan aan — die weg bestaat al sinds 3.9.74. Vandaar
+      // "meestal": wie daar ooit op "overslaan" tikte krijgt juist die uitgave niet meer aangeboden.
       return const Text(
-        'Deze pc is te oud om zichzelf op afstand bij te werken. Dat moet één keer aan de pc zelf.',
+        'Deze pc is te oud om zichzelf op afstand bij te werken — die knop komt vanaf 3.9.237. '
+        'Eén keer aan de pc zelf dus; meestal biedt hij het aan zodra je hem opnieuw opstart.',
         style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4),
       );
     }
