@@ -117,6 +117,12 @@ class LanStateStore {
   final Set<String> favoriteAlbums = {};
   final Map<String, Playlist> playlists = {};
   final Map<String, PlayStat> plays = {};
+
+  /// Duim omhoog of omlaag per nummer: id → `'up'` of `'down'`.
+  ///
+  /// Een kaart en geen twee verzamelingen, want een nummer heeft precies één oordeel — met twee
+  /// verzamelingen kan het in allebei staan en is er geen antwoord op de vraag wat je ervan vindt.
+  final Map<String, String> ratings = {};
   PlaybackProgress progress = PlaybackProgress();
 
   int rev = 0;
@@ -148,6 +154,9 @@ class LanStateStore {
       (m['plays'] as Map?)?.forEach((k, v) {
         plays[k.toString()] = PlayStat.fromJson((v as Map).cast<String, dynamic>());
       });
+      (m['ratings'] as Map?)?.forEach((k, v) {
+        if (v == 'up' || v == 'down') ratings[k.toString()] = v as String;
+      });
       if (m['progress'] != null) {
         progress = PlaybackProgress.fromJson((m['progress'] as Map).cast<String, dynamic>());
       }
@@ -164,6 +173,7 @@ class LanStateStore {
         'favoriteAlbums': favoriteAlbums.toList(),
         'playlists': [for (final p in playlists.values) p.toJson()],
         'plays': {for (final e in plays.entries) e.key: e.value.toJson()},
+        'ratings': ratings,
         'progress': progress.toJson(),
       };
 
@@ -176,6 +186,7 @@ class LanStateStore {
         'favoriteAlbums': favoriteAlbums.toList(),
         'playlists': [for (final p in playlists.values) p.toJson()],
         'plays': {for (final e in plays.entries) e.key: e.value.toJson()},
+        'ratings': ratings,
         'progress': progress.toJson(),
       };
 
@@ -259,6 +270,20 @@ class LanStateStore {
           stat.count += 1;
           if (at > stat.lastPlayedMs) stat.lastPlayedMs = at;
           durableChanged = true;
+
+        case 'rating':
+          // Duim omhoog of omlaag. Een lege waarde is "ik vind er toch niets van" en HAALT het
+          // oordeel weg — dat is geen derde stand maar het ontbreken van een stand, en zo loopt de
+          // kaart niet vol met lege waarden.
+          final id = (op['trackId'] ?? '') as String;
+          if (id.isEmpty) break;
+          final waarde = (op['value'] ?? '') as String;
+          if (waarde == 'up' || waarde == 'down') {
+            durableChanged |= ratings[id] != waarde;
+            ratings[id] = waarde;
+          } else {
+            durableChanged |= ratings.remove(id) != null;
+          }
 
         case 'progress':
           // Only ever moves forward. Two devices both reporting means the most recent one is
