@@ -20,7 +20,9 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'acoustid.dart';
+import 'ai.dart';
 import 'radio.dart';
+import 'radioplan.dart';
 import 'oordelen.dart';
 import 'radiosessie.dart';
 import 'ui/duim.dart';
@@ -8744,6 +8746,300 @@ Widget _albumRegel(BuildContext context, String naam, Album? album,
   );
 }
 
+// ── Een radio uit een getypte zin ────────────────────────────────────────────
+
+/// De kaart op het startscherm: één zin, en er speelt muziek.
+///
+/// Bovenaan, want dit is het snelste wat je op dat scherm kunt doen. Alles eronder vraagt eerst dat
+/// je ergens doorheen bladert om iets te vinden om op te klikken.
+class _RadioUitEenZinKaart extends StatelessWidget {
+  const _RadioUitEenZinKaart();
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(kHoek12),
+      onTap: () => toonRadioUitZin(context),
+      child: Container(
+        padding: const EdgeInsets.all(kRuimte16),
+        decoration: BoxDecoration(
+          color: kVerzonken,
+          borderRadius: BorderRadius.circular(kHoek12),
+          border: Border.all(color: kAccent2.withValues(alpha: .30)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.auto_awesome_rounded, size: 18, color: kAccent2),
+            const SizedBox(width: kRuimte12),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Zeg wat je wil horen',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                  SizedBox(height: kRuimte2),
+                  Text('“maak me een radio met 300 liedjes van de jaren 90, eurodance”',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: _muted)),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, size: 20, color: _muted),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Van een zin naar een opdracht.
+///
+/// Op een gekoppeld toestel gaat de vraag naar de pc, precies zoals zoeken en downloaden dat al doen:
+/// dan staat de AI-sleutel op één plek en hoeft je telefoon hem niet te kennen. Zelfde afspraak als
+/// voor de TorBox-sleutel.
+Future<RadioOpdracht> _vraagRadioplan(BuildContext context, String zin) async {
+  final client = context.read<LibraryStore>().remote;
+  if (client != null) {
+    return leesRadioOpdracht(await client.ask('/api/radio', {'op': 'plan', 'zin': zin}));
+  }
+  return AiService(() => context.read<AppSettings>().anthropicKey).maakRadioplan(zin);
+}
+
+/// Van zaadartiesten naar echte nummers.
+///
+/// **Hier komt de lijst vandaan, en niet uit het taalmodel.** Vijfhonderd tracktitels uit het hoofd
+/// van een model zijn voor een deel verzonnen; Deezer weet wat er bestaat. De artiesten zíjn het
+/// tijdvak: de toppers van 2 Unlimited en Culture Beat zijn jaren negentig, en er is geen jaartal
+/// nodig om dat af te dwingen.
+Future<List<RecTrack>> _nummersVoor(RadioOpdracht o) async {
+  if (o.zaadArtiesten.isEmpty) return const [];
+  final rec = RecommendService();
+  final perArtiest = (o.aantal / o.zaadArtiesten.length).ceil().clamp(3, 25).toInt();
+  final uit = <RecTrack>[];
+  final gezien = <String>{};
+  // Vier tegelijk. Deezer is keyless en veertig verzoeken in één klap is precies hoe je daar tegen
+  // een grens loopt; vier per keer duurt een paar seconden en komt gewoon aan.
+  for (var i = 0; i < o.zaadArtiesten.length && uit.length < o.aantal; i += 4) {
+    final blok = o.zaadArtiesten.skip(i).take(4);
+    final lijsten = await Future.wait(
+        [for (final a in blok) rec.topVan(a, limit: perArtiest).catchError((_) => <RecTrack>[])]);
+    for (final l in lijsten) {
+      for (final t in l) {
+        if (gezien.add('${recNorm(t.artist)}|${recNorm(t.title)}')) uit.add(t);
+      }
+    }
+  }
+  // Door elkaar, anders speelt hij eerst alles van de eerste artiest. Dat is geen radio maar een
+  // discografie.
+  uit.shuffle();
+  return uit.take(o.aantal).toList();
+}
+
+/// Het blad waarin je je zin typt.
+Future<void> toonRadioUitZin(BuildContext context) async {
+  final ctl = TextEditingController();
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: _panel,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(kHoek18))),
+    builder: (blad) => Padding(
+      // Boven het toetsenbord uit, anders typ je blind.
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(blad).bottom),
+      child: _RadioUitZinBlad(ctl: ctl),
+    ),
+  );
+  ctl.dispose();
+}
+
+class _RadioUitZinBlad extends StatefulWidget {
+  const _RadioUitZinBlad({required this.ctl});
+  final TextEditingController ctl;
+
+  @override
+  State<_RadioUitZinBlad> createState() => _RadioUitZinBladState();
+}
+
+class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
+  bool _bezig = false;
+  String? _fout;
+  RadioOpdracht? _begrepen;
+
+  Future<void> _denk() async {
+    setState(() {
+      _bezig = true;
+      _fout = null;
+    });
+    try {
+      final o = await _vraagRadioplan(context, widget.ctl.text);
+      if (!mounted) return;
+      setState(() {
+        _bezig = false;
+        // Zonder artiesten valt er niets op te zoeken, en dan is "ik snapte het niet" het eerlijke
+        // antwoord in plaats van een radio die stil leeg blijft.
+        if (o.bruikbaar) {
+          _begrepen = o;
+        } else {
+          _fout = 'Ik heb er geen artiesten uit kunnen halen. Probeer het wat concreter — '
+              'bijvoorbeeld "eurodance uit de jaren 90, 200 nummers".';
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _fout = e is AiFout ? e.uitleg : '$e';
+        _bezig = false;
+      });
+    }
+  }
+
+  Future<void> _start() async {
+    final o = _begrepen;
+    if (o == null) return;
+    setState(() => _bezig = true);
+    final nummers = await _nummersVoor(o);
+    if (!mounted) return;
+    if (nummers.isEmpty) {
+      setState(() {
+        _bezig = false;
+        _fout = 'Bij die artiesten kwam geen enkel nummer boven. Probeer het anders te zeggen.';
+      });
+      return;
+    }
+    final lib = context.read<LibraryStore>();
+    final radio = context.read<RadioBesturing>();
+    final reden = await radio.start(_radioplan(nummers, lib), naam: o.naam);
+    if (!mounted) return;
+    if (reden != null) {
+      setState(() {
+        _bezig = false;
+        _fout = reden;
+      });
+      return;
+    }
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final o = _begrepen;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.all(kRuimte24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text('NIEUWE RADIO',
+                style: TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: .6, color: kAccent2)),
+            const SizedBox(height: kRuimte8),
+            const Text('Zeg wat je wil horen',
+                style: TextStyle(fontSize: 25, fontWeight: FontWeight.w700, letterSpacing: -.4)),
+            const SizedBox(height: kRuimte6),
+            const Text('Gewoon een zin. De rest zoekt hij zelf uit.',
+                style: TextStyle(fontSize: 13.5, color: _muted)),
+            const SizedBox(height: kRuimte16),
+            TextField(
+              controller: widget.ctl,
+              autofocus: true,
+              maxLines: 3,
+              minLines: 2,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _bezig ? null : _denk(),
+              decoration: const InputDecoration(
+                hintText: 'maak me een radio met 300 liedjes van de jaren 90, genre eurodance',
+                filled: true,
+                fillColor: kVerzonken,
+                border: OutlineInputBorder(borderSide: BorderSide.none),
+              ),
+            ),
+            if (_fout != null) ...[
+              const SizedBox(height: kRuimte12),
+              Text(_fout!, style: const TextStyle(fontSize: 12.5, color: Color(0xFFE8913A))),
+            ],
+            if (o != null) ...[
+              const SizedBox(height: kRuimte16),
+              _begrip(o),
+            ],
+            const SizedBox(height: kRuimte16),
+            FilledButton(
+              onPressed: _bezig ? null : (o == null ? _denk : _start),
+              child: _bezig
+                  ? const SizedBox(
+                      width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  : Text(o == null ? 'Begrijp mijn zin' : 'Radio starten'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Wat het model ervan gemaakt heeft — vóórdat er iets gedownload wordt.
+  ///
+  /// **Waarom dit getoond wordt en er niet meteen gestart wordt.** Vijfhonderd nummers is zo'n
+  /// drieëndertig uur muziek en enkele gigabytes op je pc. Dat hoort niet te beginnen omdat een model
+  /// jouw "vijftig" als "vijfhonderd" las. Boven de honderd staat het er met uren en gigabytes bij, in
+  /// gewone taal.
+  Widget _begrip(RadioOpdracht o) {
+    // Ruw, en dat is genoeg: vier minuten per nummer, en een FLAC van vier minuten is een kleine
+    // veertig megabyte. Het gaat om de orde van grootte, niet om het cijfer achter de komma.
+    final uren = (o.aantal * 4 / 60).round();
+    final gb = (o.aantal * 38 / 1024).toStringAsFixed(1);
+    return Container(
+      padding: const EdgeInsets.all(kRuimte12),
+      decoration: BoxDecoration(
+        color: kVerzonken,
+        borderRadius: BorderRadius.circular(kHoek12),
+        border: Border.all(color: kLijnZacht),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(o.naam, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          const SizedBox(height: kRuimte4),
+          Text('${o.aantal} nummers · begint bij ${o.zaadArtiesten.length} artiesten',
+              style: const TextStyle(fontSize: 12, color: _muted)),
+          const SizedBox(height: kRuimte8),
+          Wrap(
+            spacing: kRuimte6,
+            runSpacing: kRuimte6,
+            children: [
+              for (final a in o.zaadArtiesten.take(7))
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                      color: _panel2,
+                      borderRadius: BorderRadius.circular(kHoekRond),
+                      border: Border.all(color: kLijn)),
+                  child: Text(a, style: const TextStyle(fontSize: 11)),
+                ),
+              if (o.zaadArtiesten.length > 7)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Text('+${o.zaadArtiesten.length - 7} meer',
+                      style: const TextStyle(fontSize: 11, color: _muted)),
+                ),
+            ],
+          ),
+          if (o.aantal > kVraagBovenaantal) ...[
+            const SizedBox(height: kRuimte12),
+            Text(
+                '${o.aantal} nummers is ongeveer $uren uur muziek en zo’n $gb GB op je pc. Hij '
+                'haalt ze pas op terwijl je luistert, en wat je niet groen geeft ruimt hij achteraf '
+                'weer op.',
+                style: const TextStyle(fontSize: 11.5, color: _muted, height: 1.45)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 // ── Het overzicht bij het afsluiten van een radio ────────────────────────────
 
 /// Wat er van deze radio blijft en wat er weggaat, met een kans om je te bedenken.
@@ -10337,6 +10633,12 @@ class _HomeStartViewState extends State<HomeStartView> {
           padding: EdgeInsets.fromLTRB(kGoot, 0, kGoot, kRuimte6),
           child: Text('Ontdek nieuwe muziek en pak op waar je gebleven was',
               style: TextStyle(color: _muted, fontSize: 13.5)),
+        ),
+        // Boven de hitlijsten, want dit is het snelste wat je hier kunt doen: één zin en er speelt
+        // muziek. Alles eronder vraagt eerst dat je ergens doorheen bladert.
+        const Padding(
+          padding: EdgeInsets.fromLTRB(kGoot, kRuimte12, kGoot, kRuimte4),
+          child: _RadioUitEenZinKaart(),
         ),
         if (hero.isNotEmpty)
           Padding(
@@ -17422,7 +17724,7 @@ class SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
-  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _rtUser, _rtPass, _slskPort, _acoustid, _tidalId, _tidalSecret, _torznabUrl, _torznabKey;
+  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _anthropic, _rtUser, _rtPass, _slskPort, _acoustid, _tidalId, _tidalSecret, _torznabUrl, _torznabKey;
 
   @override
   void initState() {
@@ -17434,6 +17736,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskPass = TextEditingController(text: s.soulseekPass);
     _slskPort = TextEditingController(text: s.soulseekPort > 0 ? s.soulseekPort.toString() : "");
     _lastfm = TextEditingController(text: s.lastfmKey);
+    _anthropic = TextEditingController(text: s.anthropicKey);
     _acoustid = TextEditingController(text: s.acoustidKey);
     _tidalId = TextEditingController(text: s.tidalClientId);
     _tidalSecret = TextEditingController(text: s.tidalClientSecret);
@@ -17606,6 +17909,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskPass.dispose();
     _slskPort.dispose();
     _lastfm.dispose();
+    _anthropic.dispose();
     _acoustid.dispose();
     _tidalId.dispose();
     _tidalSecret.dispose();
@@ -18141,6 +18445,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     const SizedBox(height: 8),
                     _field('Last.fm API-sleutel', _lastfm),
                     const SizedBox(height: 8),
+                    // Alleen voor "Zeg wat je wil horen" op het startscherm. Zonder deze sleutel
+                    // werkt de rest van de app precies zoals hij deed; met sleutel kun je een radio
+                    // in gewone taal vragen. Hij staat HIER en niet op je telefoon: een gekoppeld
+                    // toestel laat de pc de vraag stellen, net als bij TorBox.
+                    _field('AI-sleutel (Anthropic) — voor een radio uit een zin', _anthropic),
+                    const SizedBox(height: 8),
                     // Zonder dit veld was de enige manier om een Client ID in te vullen: het
                     // instellingenbestand op schijf met de hand openen. De waarde werd al bewaard —
                     // er was alleen nergens een plek om hem in te typen, en het TIDAL-scherm
@@ -18407,6 +18717,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     s.rutrackerUser = _rtUser.text.trim();
                     s.rutrackerPass = _rtPass.text;
                     s.lastfmKey = _lastfm.text.trim();
+                    s.anthropicKey = _anthropic.text.trim();
                     s.acoustidKey = _acoustid.text.trim();
                     s.tidalClientId = _tidalId.text.trim();
                     s.tidalClientSecret = _tidalSecret.text.trim();

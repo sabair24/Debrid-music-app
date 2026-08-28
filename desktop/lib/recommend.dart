@@ -131,6 +131,17 @@ class RecommendService {
         .toList();
   }
 
+  /// De toppers van één artiest.
+  ///
+  /// De basis van een radio uit een getypte zin: het taalmodel noemt de ARTIESTEN, en hier wordt
+  /// opgezocht welke nummers er van hen werkelijk bestaan. Vijfhonderd tracktitels uit het hoofd van
+  /// een model zijn voor een deel verzonnen; deze lijst niet.
+  Future<List<RecTrack>> topVan(String artiest, {int limit = 15}) async {
+    final id = await _artistId(artiest);
+    if (id == null) return const [];
+    return _tracks(await _get('$_base/artist/$id/top?limit=$limit'));
+  }
+
   /// Radio (~25 tracks) around an artist — the seed artist mixed with similar ones.
   Future<List<RecTrack>> artistRadio(String artist) async {
     final id = await _artistId(artist);

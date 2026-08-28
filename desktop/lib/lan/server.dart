@@ -5,6 +5,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import '../ai.dart';
 import '../album_facts.dart';
 import '../cloud/device_identity.dart';
 import '../album_facts_resolver.dart';
@@ -1069,6 +1070,27 @@ class LanServer {
         return _json(req.response, {'id': h.id});
       case 'stand':
         return _json(req.response, radiohaler.stand((body['id'] ?? '') as String));
+      case 'plan':
+        // De AI-sleutel blijft op de pc, precies zoals de TorBox-sleutel dat doet. Een telefoon hoeft
+        // hem dan niet te kennen, en er is één plek waar hij staat.
+        final config = settings;
+        if (config == null) return _unavailable(req, 'Deze pc kan geen radioplan maken.');
+        try {
+          final o = await AiService(() => config.anthropicKey)
+              .maakRadioplan((body['zin'] ?? '') as String);
+          return _json(req.response, {
+            'genre': o.genre,
+            'aantal': o.aantal,
+            'zaadArtiesten': o.zaadArtiesten,
+            if (o.jaarVan != null) 'jaarVan': o.jaarVan,
+            if (o.jaarTot != null) 'jaarTot': o.jaarTot,
+            'stemming': o.stemming,
+          });
+        } on AiFout catch (e) {
+          return _unavailable(req, e.uitleg);
+        } catch (e) {
+          return _unavailable(req, '$e');
+        }
     }
     return _unavailable(req, 'Onbekende radio-opdracht.');
   }
