@@ -317,6 +317,38 @@ Wachtrij verplaatsInWachtrijLijst(Wachtrij w, int van, int naar, {required bool 
   return (origineel: origineel, volgorde: volgorde, index: index);
 }
 
+/// Eén regel van de radio, zoals een lijst hem toont.
+///
+/// [eigen] is het onderscheid waar alles om draait: staat dit nummer als BESTAND in je bibliotheek,
+/// of is het (nog) niets meer dan een artiest en een titel? Alleen het eerste kan zonder wachten
+/// klinken, en alleen het tweede mag straks weer weg.
+typedef Radioregel = ({Track nummer, bool eigen, bool mislukt});
+
+/// De radio als een lijst nummers, zodat een paneel er niets bijzonders voor hoeft te weten.
+///
+/// **Waarom dit bestond te maken.** [PlayerStore.radioQueue] had tot nu toe geen enkele lezer. Zet
+/// je een radio aan, dan bleef het wachtrijpaneel de lijst tonen van vóór de radio — het toonde dus
+/// iets wat niet ging klinken. Dat is geen ontbrekende voorziening maar een onwaarheid, en die
+/// verdwijnt door de radio in dezelfde vorm aan te bieden als een gewone wachtrij.
+///
+/// Los van [PlayerStore] om dezelfde reden als [ordenVoor] en [voegInWachtrij]: die klasse bouwt een
+/// libmpv-speler in een veld en is in geen enkele toets te maken.
+///
+/// Een nummer dat je niet hebt krijgt een [Track] met het adres als pad, of met een leeg pad als er
+/// nog geen adres is. Leeg is goed: elke opzoeking op pad — de hoes, het echtheidsmerk — vindt dan
+/// niets en toont niets, in plaats van per ongeluk de hoes van een ander nummer te pakken.
+List<Radioregel> radioAlsRij(List<RadioItem> radio) => [
+      for (final it in radio)
+        (
+          nummer: it.local ??
+              Track(path: it.url ?? '', title: it.title, artist: it.artist, album: ''),
+          eigen: it.isLocal,
+          // Mislukt telt alleen als er ook geen bestand ligt: een nummer dat je zelf hebt is er,
+          // wat een eerdere zoektocht online ook gedaan heeft.
+          mislukt: !it.isLocal && it.failed && it.url == null,
+        ),
+    ];
+
 /// Wat er moet gebeuren als de speler zegt dat een nummer afgelopen is.
 enum NaHetEinde {
   /// Gewoon door naar het volgende.
@@ -494,6 +526,15 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   int _radioSession = 0; // bumped per playRadio() so a stale extend can't pollute a new radio
   List<RadioItem> get radioQueue => _radio;
   int get radioIndex => _radioIndex;
+
+  /// De radio is voorbij. Precies één keer, hoe je hem ook verlaat.
+  ///
+  /// **Waarom een haak en geen `if` op de vijf plekken.** Een radio wordt niet afgesloten, hij houdt
+  /// gewoon op: een nummer aantikken, naar een speaker sturen, "Shuffle alles", een adres afspelen,
+  /// of de app opnieuw starten — vijf plekken die alle vijf `radioMode` op false zetten. Wie daar iets
+  /// aan wil hangen (opruimen, een overzicht tonen) moet dat vijf keer doen, en dan denkt er vroeg of
+  /// laat eentje niet aan. Vandaar [_verlaatRadio], die alle vijf aanroepen.
+  void Function(List<RadioItem> gespeeld)? bijRadioEinde;
 
   /// De hoes van wat er NU speelt.
   ///
@@ -906,7 +947,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
 
   Future<void> playQueue(List<Track> tracks, int index, {Uint8List? cover}) async {
     if (await _handedToSpeaker(tracks, index, cover)) return;
-    radioMode = false;
+    _verlaatRadio();
     _resumable = true;
     resumedPaused = false;
     currentCover = cover;
@@ -927,7 +968,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     if (aangenomen == null || aangenomen.isEmpty) return false;
     // Whatever was coming out of this device stops: the point is that it plays THERE.
     if (playing) await _player.pause();
-    radioMode = false;
+    _verlaatRadio();
     _resumable = true;
     resumedPaused = false;
     currentCover = cover;
@@ -1004,7 +1045,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       notifyListeners();
       return;
     }
-    radioMode = false;
+    _verlaatRadio();
     _resumable = true;
     resumedPaused = false;
     shuffle = true;
@@ -1019,7 +1060,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
 
   /// Play a remote URL (e.g. a resolved TorBox stream) as a one-item queue.
   Future<void> playUrl(String url, {required String title, required String artist}) async {
-    radioMode = false;
+    _verlaatRadio();
     _resumable = false;
     currentCover = null;
     _original = [Track(path: url, title: title, artist: artist, album: '')];
@@ -1029,7 +1070,11 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   }
 
   /// Start a Radio / Smart-Shuffle queue of mixed local + online items.
+  ///
+  /// Een lopende radio wordt eerst netjes verlaten. Anders schuift de tweede radio over de eerste
+  /// heen zonder dat er iemand van weet, en blijft alles wat die eerste opgehaald had zwerven.
   Future<void> playRadio(List<RadioItem> items, {int start = 0}) async {
+    _verlaatRadio();
     radioMode = true;
     _resumable = false;
     _radioSession++; // invalidate any in-flight extend from a previous radio
@@ -1038,6 +1083,30 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _radio = items;
     _radioIndex = items.isEmpty ? -1 : start.clamp(0, items.length - 1);
     await _openRadioCurrent();
+  }
+
+  /// Naar een ander nummer in de LOPENDE radio, zonder de radio te verlaten.
+  ///
+  /// Zonder dit deed een tik op een radioregel `playQueue` — en die verlaat de radio. Je klikte op
+  /// het derde nummer van je radio en had er geen radio meer, alleen dat ene nummer.
+  Future<void> springInRadio(int plek) async {
+    if (!radioMode || plek < 0 || plek >= _radio.length) return;
+    _radioIndex = plek;
+    await _openRadioCurrent();
+  }
+
+  /// De radio verlaten. De enige weg naar `radioMode = false`.
+  ///
+  /// Het sessienummer gaat omhoog zodat een aanvulling die nog onderweg is niet alsnog in een lijst
+  /// valt die niemand meer speelt. Wat er gespeeld is blijft staan: [bijRadioEinde] moet erover
+  /// kunnen vertellen, en dat kan niet als het hier al weggegooid is.
+  void _verlaatRadio() {
+    if (!radioMode) return;
+    radioMode = false;
+    radioStatus = '';
+    _radioSession++;
+    _extending = false;
+    bijRadioEinde?.call(List.of(_radio));
   }
 
   /// Resolve an item's URL, sharing a single in-flight call between the foreground
@@ -1540,7 +1609,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       }
       _index = idx.clamp(0, _order.length - 1);
       _resumable = true;
-      radioMode = false;
+      _verlaatRadio();
       final t = current;
       if (t == null) return;
       currentCover = coverResolver?.call(t);
