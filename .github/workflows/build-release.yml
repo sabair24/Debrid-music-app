@@ -151,7 +151,9 @@ jobs:
             test/stroomstand_test.dart test/netsoort_test.dart \
             test/omzetrecept_test.dart test/bijwerkstand_test.dart \
             test/stilstandwacht_test.dart test/einde_of_breuk_test.dart \
-            test/normalise_tags_test.dart
+            test/normalise_tags_test.dart \
+            test/schudvolgorde_test.dart test/cast_control_test.dart \
+            test/wachtrij_bewerken_test.dart
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
       # the app you actually use while the TV work is in progress — shipping that would install a

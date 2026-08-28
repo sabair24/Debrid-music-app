@@ -233,13 +233,11 @@ class LanSharing extends ChangeNotifier {
     ], deviceId: 'pc-${deviceName()}', deviceName: deviceName());
   }
 
-  void reportPlayed(String trackPath) {
-    final id = _trackId(trackPath);
-    if (id == null) return;
-    state.applyOps([
-      {'type': 'played', 'trackId': id, 'at': DateTime.now().millisecondsSinceEpoch}
-    ], deviceId: 'pc-${deviceName()}');
-  }
+  // `reportPlayed` stond hier, en is op 28-08-2026 weggehaald. Hij telde een beluistering bij het
+  // OPENEN van een nummer, hij hing alleen op de pc ingehangen, en hij was een tweede schrijver naar
+  // dezelfde gedeelde staat naast `GedeeldeOps`. Alle drie de bezwaren worden opgelost door
+  // `Speelstanden` (`speelstanden.dart`), die op elk toestel werkt en pas telt als er werkelijk
+  // geluisterd is.
 
   /// A file path back to the id the other devices know it by. Null for anything that isn't a
   /// library file — a radio item resolved to a TorBox URL has no place in the shared state.

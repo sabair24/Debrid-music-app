@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'artwork.dart' show kleurBuitenDeTekendraad;
 import 'lan/stroomstand.dart' show omzettenGevraagd;
 import 'models.dart';
 import 'paths.dart';
+import 'schudvolgorde.dart';
 import 'warm_log.dart';
 
 enum RepeatMode { off, all, one }
@@ -159,12 +161,44 @@ Uint8List? hoesOpScherm(Uint8List? staatEr, Uint8List? gevonden, {required bool 
 ///
 /// Zonder de eerste zou shuffle tijdens het casten het lopende nummer opnieuw laten beginnen; zonder de
 /// tweede zouden de app en de speaker uit elkaar lopen en toont het scherm een ander album dan er klinkt.
-({List<Track> order, int index}) ordenVoor(List<Track> alles, Track? anker, {required bool shuffle}) {
+///
+/// **[reedsGespeeld] is de reparatie van "hij speelt telkens hetzelfde".** Wat al geklonken heeft
+/// blijft vooraan staan en wordt niet opnieuw uitgedeeld; alleen de staart wordt geschud. Zonder dit
+/// bouwde één tik op het shuffle-icoontje een compleet nieuwe volgorde van ALLES met de index terug
+/// op nul — alles wat je net gehoord had stond weer voor je. Android Auto loopt langs diezelfde knop,
+/// dus in de auto was dat één druk.
+///
+/// De prefix blijft ÍN de teruggegeven lijst staan. Dat moet: `cast_control_test.dart` eist dezelfde
+/// lengte en dezelfde verzameling, en de speaker meldt zijn plek terug als index in deze lijst.
+///
+/// **[gewicht] is de weging.** Null betekent gelijk gewicht, en dat is wat een verse installatie en
+/// elke toets krijgt. Zie `schudvolgorde.dart` voor wat er anders gebeurt.
+({List<Track> order, int index}) ordenVoor(
+  List<Track> alles,
+  Track? anker, {
+  required bool shuffle,
+  List<Track> reedsGespeeld = const <Track>[],
+  double Function(Track)? gewicht,
+  Random? toeval,
+}) {
   if (shuffle && alles.isNotEmpty) {
-    final rest = List.of(alles);
-    if (anker != null) rest.removeWhere((t) => t.path == anker.path);
-    rest.shuffle();
-    return (order: [if (anker != null) anker, ...rest], index: 0);
+    // Eerst de prefix eruit, dan pas het anker: staat het anker toevallig ook in de prefix, dan is
+    // dat de vorige beurt van een nummer dat nu opnieuw klinkt, en niet hetzelfde exemplaar.
+    final prefix = zonder(reedsGespeeld, [if (anker != null) anker]);
+    final rest = zonder(alles, [...prefix, if (anker != null) anker]);
+    final geschud = gewicht == null
+        ? (List.of(rest)..shuffle(toeval))
+        : gewogenVolgorde(rest, gewicht: gewicht, toeval: toeval ?? Random());
+    // De kop is wat vaststaat: het verleden, en daarachter wat er nu klinkt.
+    final kop = [...prefix, if (anker != null) anker];
+    // Spreiden over de HELE lijst maar alleen vanaf de staart, zodat het eerste nieuwe nummer ook
+    // niet botst met wat er net klonk — en zodat er in de kop niets meer beweegt.
+    final volledig = uitElkaar([...kop, ...geschud], vanaf: kop.length);
+    return (
+      order: volledig,
+      // Het anker staat achteraan de kop; is er geen anker, dan begint het bij het eerste nieuwe.
+      index: anker == null ? kop.length : kop.length - 1,
+    );
   }
   final order = List.of(alles);
   return (
@@ -555,8 +589,57 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   void Function(Track track, Duration position, bool playing, List<Track> queue, int index)?
       onProgress;
 
-  /// A track started playing — feeds the shared play counts and "recently played".
+  /// A track was actually LISTENED TO — feeds the shared play counts and "recently played".
+  ///
+  /// **Niet meer bij het openen.** Tot 28-08-2026 vuurde dit in [_openCurrent], dus doorskippen op
+  /// zoek naar iets telde vol mee — en die telling is precies wat de shuffle gebruikt om te bepalen
+  /// wat je vaak gehoord hebt. Zie [_telMee] en [telMeeAlsGespeeld].
   void Function(Track track)? onPlayed;
+
+  /// Hoe vaak en hoe lang geleden een nummer geklonken heeft. Ingehangen vanuit main.dart; null op
+  /// een toestel zonder gedeelde staat, en dan is de shuffle gewoon gelijk gewogen.
+  Speelstand? Function(Track track)? speelstandVan;
+
+  /// Wat er deze sessie geopend werd, ongeacht of het als beluisterd telde. Zie [_gewichtVanNummer].
+  final Set<String> _geopendDezeSessie = {};
+
+  /// Opgetelde luistertijd van het lopende nummer — niet de stand van de teller.
+  ///
+  /// **Dat verschil is de hele reparatie.** Naar de stand kijken telt een nummer mee dat je op 80%
+  /// opendraaide en meteen wegklikte, en telt een nummer níét mee dat je twee keer half hoorde.
+  Duration _geluisterd = Duration.zero;
+  Duration? _vorigePositie;
+  bool _geteld = false;
+
+  /// Een sprong groter dan dit is geen luisteren maar slepen.
+  ///
+  /// Ruim genomen, want de twee voedingen tikken heel verschillend: libmpv stuurt tien tot dertig
+  /// keer per seconde, een speaker om de twee seconden. Vijf seconden vangt allebei en laat een
+  /// echte sprong door de balk er niet doorheen.
+  static const _maxStap = Duration(seconds: 5);
+
+  /// Een tik luistertijd erbij, en melden zodra het genoeg is.
+  void _telMee(Duration nu) {
+    final vorig = _vorigePositie;
+    _vorigePositie = nu;
+    if (vorig == null || _geteld) return;
+    final stap = nu - vorig;
+    // Terug gesleept, of een gat: geen van beide is geluisterde tijd.
+    if (stap <= Duration.zero || stap > _maxStap) return;
+    _geluisterd += stap;
+    if (!telMeeAlsGespeeld(geluisterd: _geluisterd, duur: duurErgens)) return;
+    _geteld = true;
+    final t = current;
+    if (t != null) onPlayed?.call(t);
+  }
+
+  /// De teller op nul, bij elk nummer dat werkelijk nieuw is.
+  void _nieuwVoorDeTelling(Track? t) {
+    _geluisterd = Duration.zero;
+    _vorigePositie = null;
+    _geteld = false;
+    if (t != null) _geopendDezeSessie.add(t.path);
+  }
 
   /// Het hapert. Ingehangen vanuit main.dart, precies zoals [mediaResolver] en [onProgress].
   ///
@@ -656,6 +739,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _player.stream.position.listen((p) {
       position = p;
       _saveProgress(); // throttled
+      // Vóór de rem hieronder: die slaat drie van de vier tikken over, en dan zou een nummer pas na
+      // het dubbele van de luistertijd meetellen.
+      _telMee(p);
       // **De melding wél afgeremd, de waarde niet.**
       //
       // media_kit stuurt elke `time-pos`-wijziging van mpv door, ongethrottled — tien tot dertig
@@ -755,6 +841,11 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// "nu gestart" — dan zou een hik onderweg je plek in het nummer kosten én de geschiedenis
   /// vervuilen met een tweede keer hetzelfde liedje.
   Future<void> _hervatOpDezelfdePlek() async {
+    // **De luisterteller wordt hier met opzet NIET teruggezet.** Dit is dezelfde opname die
+    // doorloopt na een afgebroken stroom, geen nieuw nummer: opnieuw beginnen zou de tijd die je al
+    // geluisterd hebt weggooien, en had het al genoeg geteld dan zou het dubbel meetellen. Het
+    // terugspringen naar [plek] komt binnen als één sprong die groter is dan [_maxStap] en wordt
+    // daar genegeerd in plaats van bijgeteld. "Doet niets" is hier de correctheid.
     final t = current;
     if (t == null) return;
     final plek = position;
@@ -875,12 +966,21 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// Zonder dit ververst de mediasessie alleen als libmpv iets doet, en die staat tijdens het casten
   /// stil. De melding en het vergrendelscherm bleven dan hangen op de stand van de overdracht: pauze
   /// je op de Sonos, dan bleef de knop een pauzeknop.
-  void speakerMeldde() => notifyListeners();
+  ///
+  /// **Ook de enige voeding van de luisterteller tijdens het casten**, want
+  /// libmpv staat dan stil en [position] blijft op nul. Tot 28-08-2026 telde een nummer dat je naar
+  /// de Sonos stuurde daardoor helemaal niet mee.
+  void speakerMeldde() {
+    final p = _bijSpeaker?.position;
+    if (p != null) _telMee(p);
+    notifyListeners();
+  }
 
   void followSpeaker(int index) {
     if (index < 0 || index >= _order.length || index == _index) return;
     _index = index;
     position = Duration.zero;
+    _nieuwVoorDeTelling(current);
     // Een ANDER nummer, dus niet via refreshCover: die houdt bij een leeg antwoord vast wat er
     // staat, en dat is hier de hoes van het album waarmee de overdracht begon. Op de Mac naar de
     // Sonos stond zo Whitney Houston boven een nummer van Michael Jackson, hele wachtrij lang.
@@ -893,7 +993,12 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   Future<void> shuffleAll(List<Track> tracks) async {
     // Shuffled HERE and then handed over in that order: the speaker is given one track at a time,
     // so it has no notion of shuffling a queue itself.
-    final shuffled = List.of(tracks)..shuffle();
+    //
+    // **Eén trekking, en die loopt door [ordenVoor].** Hier stond een eigen `..shuffle()` — en een
+    // tweede, verderop, die de lijst nóg eens schudde. Twee shuffle-wegen naast elkaar is precies
+    // hoe er één achterblijft zonder weging: de knop "Shuffle alles" ging langs de ene, het
+    // shuffle-icoontje langs de andere.
+    final shuffled = ordenVoor(tracks, null, shuffle: true, gewicht: _gewichtVanNummer).order;
     if (await _handedToSpeaker(shuffled, 0, null)) {
       shuffle = true;
       notifyListeners();
@@ -905,7 +1010,8 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     shuffle = true;
     currentCover = null;
     _original = List.of(tracks);
-    _order = List.of(_original)..shuffle();
+    // Dezelfde lijst die de speaker hierboven zou hebben gekregen; niet nog een keer schudden.
+    _order = shuffled;
     _index = _order.isEmpty ? -1 : 0;
     await _openCurrent();
     _saveQueue();
@@ -966,6 +1072,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
         radioStatus = '';
         currentCover = it.isLocal ? coverResolver?.call(it.local!) : null;
         notifyListeners();
+        _nieuwVoorDeTelling(it.local);
         await _player.open(Media(_bron(path)), play: true);
         if (gen != _radioGen) return; // superseded while opening
         _prefetchNext();
@@ -1006,10 +1113,41 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     });
   }
 
-  void _rebuildOrder({Track? start}) {
-    final uit = ordenVoor(_original, start ?? current, shuffle: shuffle);
+  /// [behoudGespeeld] laat staan wat al geklonken heeft.
+  ///
+  /// **Dit is de reparatie van "hij speelt telkens hetzelfde".** Zonder dit bouwde één tik op het
+  /// shuffle-icoontje een compleet nieuwe volgorde van ALLES met [_index] terug op nul — alles wat
+  /// je net gehoord had stond weer voor je, en bij vijfduizend nummers is dat het verschil tussen
+  /// een doorloop en een vijver waarin je rondjes zwemt. Android Auto loopt langs diezelfde knop
+  /// (`now_playing.dart`), dus in de auto was het één druk.
+  ///
+  /// Een NIEUWE wachtrij heeft geen verleden; daar blijft dit uit.
+  void _rebuildOrder({Track? start, bool behoudGespeeld = false}) {
+    final prefix =
+        (behoudGespeeld && _index > 0) ? _order.sublist(0, _index) : const <Track>[];
+    final uit = ordenVoor(_original, start ?? current,
+        shuffle: shuffle, reedsGespeeld: prefix, gewicht: _gewichtVanNummer);
     _order = uit.order;
     _index = uit.index;
+  }
+
+  /// Hoe zwaar een nummer weegt in de trekking, of null als er niets te wegen valt.
+  ///
+  /// Null wordt doorgegeven als "gelijk gewicht", en dat is wat een verse installatie, een toestel
+  /// zonder gedeelde staat en elke toets krijgt: dan is het gewoon de shuffle die er altijd was.
+  double Function(Track)? get _gewichtVanNummer {
+    final lees = speelstandVan;
+    if (lees == null) return null;
+    final nu = DateTime.now().millisecondsSinceEpoch;
+    return (t) {
+      final basis = gewichtVan(lees(t), nuMs: nu);
+      // **Wat deze sessie al geopend werd, weegt lichter — ook als het niet als beluisterd telde.**
+      // "Precies één keer" geldt per trekking. Druk je halverwege nog eens op shuffle, dan is dat
+      // een nieuwe trekking, en een nummer dat je na twintig seconden wegklikte draagt geen straf
+      // omdat het de helft niet haalde. Zonder deze regel hoor je bij twee keer drukken dezelfde
+      // handvol nummers. In het geheugen, dus bij een herstart is het weer schoon.
+      return _geopendDezeSessie.contains(t.path) ? basis * .3 : basis;
+    };
   }
 
   /// Ask again what the playing track's cover is.
@@ -1073,9 +1211,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _meldStilstand(null);
     _hervatpogingen = 0;
     if (coverResolver != null) currentCover = coverResolver!(t);
+    _nieuwVoorDeTelling(t);
     await _player.open(Media(_bron(t.path)), play: true);
     _saveProgress(force: true); // track changed → persist the new spot
-    onPlayed?.call(t);
     _zetVolgendeKlaar();
     notifyListeners();
   }
@@ -1157,6 +1295,14 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       _index++;
       await _openCurrent();
     } else if (repeat == RepeatMode.all && _order.isNotEmpty) {
+      // **Ronde twee is een nieuwe trekking, niet dezelfde volgorde nog eens.** Bij vijfduizend
+      // nummers duurt een doorloop dagen, en wie hem uitzit hoort daarna liever niet exact dezelfde
+      // reeks. Alleen bij shuffle: staat die uit, dan is de volgorde van de plaat de bedoeling.
+      // Zonder anker: elk nummer mag ronde twee openen. `_rebuildOrder` zou hier `current` als
+      // anker nemen — het laatste nummer van ronde één — en dat vooraan vastzetten.
+      if (shuffle) {
+        _order = ordenVoor(_original, null, shuffle: true, gewicht: _gewichtVanNummer).order;
+      }
       _index = 0;
       await _openCurrent();
     }
@@ -1237,7 +1383,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       notifyListeners();
       return;
     }
-    _rebuildOrder();
+    _rebuildOrder(behoudGespeeld: true);
     // Heeft een speaker de wachtrij, dan moet DIE dezelfde volgorde krijgen.
     //
     // Zonder deze regel schudde de app haar eigen lijst en liet die van de speaker staan. De index die
@@ -1398,6 +1544,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       final t = current;
       if (t == null) return;
       currentCover = coverResolver?.call(t);
+      _nieuwVoorDeTelling(t);
       await _player.open(Media(_bron(t.path)), play: false); // reopen PAUSED
       if (posMs > 0) {
         // The seek only sticks once libmpv has loaded the file (duration known);
