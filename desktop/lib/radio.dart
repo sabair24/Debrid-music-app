@@ -26,6 +26,7 @@ import 'library.dart';
 import 'models.dart';
 import 'online.dart';
 import 'paths.dart';
+import 'settings.dart';
 import 'player.dart';
 import 'radiosessie.dart';
 import 'radiovoorraad.dart';
@@ -94,11 +95,22 @@ abstract class Radiobron {
 
 /// Deze machine haalt zelf: de pc, of een losse installatie zonder koppeling.
 class EigenRadiobron implements Radiobron {
-  EigenRadiobron({required this.downloads, required this.soulseek, required this.library});
+  EigenRadiobron({
+    required this.downloads,
+    required this.soulseek,
+    required this.library,
+    required this.instellingen,
+  });
 
   final DownloadManager downloads;
   final SoulseekService soulseek;
   final LibraryStore library;
+
+  /// Nodig om een HOES op te halen voor wat er net geland is.
+  ///
+  /// Zonder dit blijft een opgehaald nummer met een grijs notenbalkje staan tot de volgende
+  /// volledige scan: het verrijken van hoezen hangt aan `scan()`, en de radio scant met opzet niet.
+  final AppSettings instellingen;
 
   void Function()? _los;
 
@@ -133,7 +145,13 @@ class EigenRadiobron implements Radiobron {
     // Eén bestand erbij, en niet de hele muziekmap opnieuw lezen. Zie [LibraryStore.voegBestandToe]:
     // bij acht landingen per kwartier zou een volledige scan vrijwel permanent draaien, en dat merk
     // je precies terwijl je naar muziek luistert.
-    return library.voegBestandToe(pad);
+    final t = await library.voegBestandToe(pad);
+    // En dan alsnog een hoes erbij. Dit hing aan `scan()`, en die draait hier juist niet — dus stond
+    // elk opgehaald nummer met een grijs notenbalkje in de rij. De sweep is van zichzelf al begrensd
+    // (één tegelijk, en een album dat al vergeefs gezocht is wordt overgeslagen), dus hem na elke
+    // landing aantikken kost niets als er niets te doen is.
+    if (t != null) unawaited(library.enrichFromWeb(instellingen).catchError((_) {}));
+    return t;
   }
 }
 

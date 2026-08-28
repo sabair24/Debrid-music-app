@@ -692,7 +692,11 @@ Future<void> main() async {
   final radio = RadioBesturing(
     speler: player,
     bron: mode.owner
-        ? EigenRadiobron(downloads: downloads, soulseek: soulseek, library: library)
+        ? EigenRadiobron(
+            downloads: downloads,
+            soulseek: soulseek,
+            library: library,
+            instellingen: settings)
         : PcRadiobron(library: library, clientOf: () => library.remote),
   )..idVanPad = library.gedeeldId;
 
@@ -8263,13 +8267,31 @@ class WachtrijPaneelView extends StatelessWidget {
                         : '${rij.length - nu - 1} hierna',
                     style: const TextStyle(color: _muted, fontSize: 12)),
                 const Spacer(),
+                // De weg uit de radio, hier en niet alleen op het speelscherm.
+                //
+                // **Waarom dit erbij moest.** Het kruisje hiernaast sluit het PANEEL, en dat ziet
+                // er precies zo uit als "stop de radio". Wie de radio wil beëindigen drukt daarop,
+                // ziet de lijst verdwijnen, en de radio speelt gewoon door — met het overzicht van
+                // wat er opgehaald is nog altijd niet in beeld. Gemeld op 28-08-2026, en terecht:
+                // de knop die het wél doet stond op een scherm dat je vanaf hier niet ziet.
+                if (radio)
+                  TextButton(
+                    onPressed: context.read<RadioBesturing>().stop,
+                    style: TextButton.styleFrom(
+                        foregroundColor: _muted,
+                        padding: const EdgeInsets.symmetric(horizontal: kRuimte8),
+                        minimumSize: const Size(0, 30)),
+                    child: const Text('Radio afsluiten', style: TextStyle(fontSize: 12)),
+                  ),
                 if (!inBlad)
                   TvLabelled(
-                    label: 'Sluiten',
+                    label: radio ? 'Paneel sluiten' : 'Sluiten',
                     child: IconButton(
                     icon: const Icon(Icons.close_rounded, size: 18),
                     color: _muted,
-                    tooltip: 'Sluiten',
+                    // Uitgeschreven tijdens een radio, want daar is "Sluiten" dubbelzinnig: het
+                    // sluit de lijst en niet de radio.
+                    tooltip: radio ? 'Paneel sluiten' : 'Sluiten',
                     onPressed: paneel.sluit,
                   ),
                   ),
