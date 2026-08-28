@@ -497,8 +497,11 @@ class CastManager {
         probleem = null;
         // Beide grenzen gaan mee, ook als er maar één overschreden wordt: de omzetter moet weten wat
         // hij mag laten staan.
+        // `cast=1` zegt de server WAARVOOR er omgezet wordt. Een speaker krijgt een weggooikopie en
+        // wil hem snel; een gekoppeld toestel wil hem klein, want die bytes gaan over iemands
+        // databundel. Zie [Omzetrecept] in transcode.dart.
         return 'http://$base:$port/stream/$id.flac'
-            '?token=$token&maxRate=${grens.rate}&maxBits=${grens.bits}';
+            '?token=$token&maxRate=${grens.rate}&maxBits=${grens.bits}&cast=1';
       }
       // Hier ging het mis en zei niemand iets. Een Sonos slaat alles boven 48 kHz over zonder
       // foutmelding, dus zonder omzetter stuurden we een bestand waarvan we wisten dat het stil
