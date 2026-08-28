@@ -2955,7 +2955,7 @@ class _TvTopBarState extends State<TvTopBar> {
         padding: EdgeInsets.symmetric(horizontal: tvOverscan.left),
         children: [
           _item(Icons.search_rounded, 'Zoeken', false, widget.onSearch),
-          for (final (id, label, icoon) in NavSections.items)
+          for (final (id, label, icoon) in NavSections.voorTv)
             _item(icoon, label, widget.view == id, () => widget.onPick(id),
                 badge: id == 6 ? badge : 0),
           _item(Icons.settings_rounded, 'Instellingen', false, widget.onSettings),
@@ -3102,6 +3102,20 @@ class NavSections {
     (9, 'Afspeellijsten', Icons.queue_music_rounded),
     (7, 'Kwaliteit', Icons.high_quality_rounded),
   ];
+
+  /// De secties die op een TELEVISIE in de balk horen.
+  ///
+  /// Een tv is een speler. Downloaden en opruimen doe je op een pc of telefoon, waar je een muis of
+  /// een toetsenbord hebt; met een afstandsbediening is dat werk vooral moeizaam. Drie secties gaan
+  /// er daarom af: **Online zoeken** en **Mijn downloads** halen muziek binnen, en **Kwaliteit**
+  /// spoort bestanden op om te vervangen. Wat overblijft is je eigen bibliotheek, plus Ontdek en Op
+  /// dit toestel -- allebei dingen om iets te laten klinken.
+  ///
+  /// Alleen uit de tv-balk, niet uit de app: op elk ander scherm staat alles er nog.
+  static const _nietOpTv = {2, 6, 7};
+
+  static Iterable<(int, String, IconData)> get voorTv =>
+      items.where((s) => !_nietOpTv.contains(s.$1));
 
   /// De vijf die op een telefoon onderaan in de balk staan.
   ///
@@ -4994,14 +5008,18 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                         },
                       ),
                       ),
-                    TvLabelled(
-                      label: 'Metadata corrigeren',
-                      child: IconButton(
-                      icon: const Icon(Icons.edit_rounded),
-                      tooltip: 'Metadata corrigeren',
-                      onPressed: _edit,
-                    ),
-                    ),
+                    // Corrigeren en verwijderen zijn geen speelwerk, en op een afstandsbediening
+                    // vooral moeizaam. Op een tv staan ze er daarom niet; op elk ander scherm wel.
+                    if (!isTv)
+                      TvLabelled(
+                        label: 'Metadata corrigeren',
+                        child: IconButton(
+                        icon: const Icon(Icons.edit_rounded),
+                        tooltip: 'Metadata corrigeren',
+                        onPressed: _edit,
+                      ),
+                      ),
+                    if (!isTv)
                     TvLabelled(
                       label: album.isSingle ? 'Nummer verwijderen' : 'Album verwijderen',
                       child: IconButton(
@@ -7951,8 +7969,8 @@ ItemMenu _ontbrekendMenu(
       [
         // Waar het om begonnen was. [tags] gaat mee zodat de bronnenlijst weet wélke opname dit is
         // en de juiste kopieën kan aanwijzen — zie `_pastBijNummer`.
-        MenuRegel(Icons.download_rounded, 'Beste kopie downloaden', opHalen),
-        MenuRegel(Icons.travel_explore_rounded, 'Zoeken met Soulseek',
+        if (!isTv) MenuRegel(Icons.download_rounded, 'Beste kopie downloaden', opHalen),
+        if (!isTv) MenuRegel(Icons.travel_explore_rounded, 'Zoeken met Soulseek',
             () => openOp(nav, (_) => _bronnenPagina(slot.title, vraag, tags: tags))),
       ],
     ],
@@ -7999,7 +8017,7 @@ ItemMenu _nummerMenu(BuildContext context, Track t) {
         // Dezelfde lijst die "Ontbrekende downloaden" gebruikt, alleen dan voor een nummer dat je al
         // hebt. De tags gaan mee, zodat een vervangende kopie jouw eigen verbeteringen houdt in
         // plaats van die van de peer.
-        MenuRegel(Icons.travel_explore_rounded, 'Zoeken met Soulseek',
+        if (!isTv) MenuRegel(Icons.travel_explore_rounded, 'Zoeken met Soulseek',
             () => openOp(nav, (_) => _bronnenPagina(t.title, vraag, tags: vervangTags))),
         // Van "dit nummer" naar "dat bestand". De app weet het pad — het staat in `Track.path` en
         // wordt gebruikt om af te spelen, te taggen en te verplaatsen — maar er liep geen enkele weg
@@ -8009,14 +8027,14 @@ ItemMenu _nummerMenu(BuildContext context, Track t) {
         // het pad wel, maar het klopt daar — een Verkenner openen op een telefoon slaat nergens op,
         // en op de Mac zou hij naar een map wijzen die daar niet bestaat.
         if (!lib.isRemote && kanBestandTonen)
-          MenuRegel(Icons.folder_open_rounded, 'Toon in $bestandsbeheerNaam', () async {
+          if (!isTv) MenuRegel(Icons.folder_open_rounded, 'Toon in $bestandsbeheerNaam', () async {
             final fout = await toonInBestandsbeheer(t.path);
             if (fout != null && context.mounted) _srcToast(context, fout);
           }),
         // Stond in het oude tv-dialoogvenster dat dit menu vervangt. Hem hier weglaten zou die actie
         // stilletjes van de afstandsbediening halen — en op de albumpagina zit hij achter `_hover`,
         // dus op een tablet was dit meteen de enige weg ernaartoe.
-        MenuRegel(Icons.drive_file_move_outline, 'Naar ander album…', () {
+        if (!isTv) MenuRegel(Icons.drive_file_move_outline, 'Naar ander album…', () {
           final van = lib.albumForPath(t.path);
           showDialog<bool>(context: context, builder: (_) => MoveTrackDialog(track: t, from: van));
         }),
@@ -8027,10 +8045,10 @@ ItemMenu _nummerMenu(BuildContext context, Track t) {
         // kiezen: "Naar ander album…" toont alleen albums die er al zijn. Hier zoek je de uitgave op
         // en gaat dit ene nummer erheen. Zie [MetadataEditor.nummer].
         if (album != null)
-          MenuRegel(Icons.travel_explore_outlined, 'Juiste uitgave zoeken…',
+          if (!isTv) MenuRegel(Icons.travel_explore_outlined, 'Juiste uitgave zoeken…',
               () => showDialog<bool>(
                   context: context, builder: (_) => MetadataEditor(album, nummer: t))),
-        MenuRegel(Icons.delete_outline_rounded, 'Verwijderen…',
+        if (!isTv) MenuRegel(Icons.delete_outline_rounded, 'Verwijderen…',
             () => _confirmDelete(context, '“${t.title}”', [t.path])),
       ],
     ],
@@ -8070,16 +8088,16 @@ ItemMenu _albumMenu(BuildContext context, Album a) {
       ],
       [
         // Geen tags mee: er wordt hier geen bestand vervangen, er wordt een plaat gezocht.
-        MenuRegel(Icons.travel_explore_rounded, 'Zoeken met Soulseek',
+        if (!isTv) MenuRegel(Icons.travel_explore_rounded, 'Zoeken met Soulseek',
             () => openOp(nav, (_) => _bronnenPagina(a.title, vraag))),
         // De map van de plaat, via het eerste nummer erin. Zelfde voorwaarde als bij een nummer: dit
         // hoort alleen te bestaan waar de bestanden werkelijk staan.
         if (!context.read<LibraryStore>().isRemote && kanBestandTonen && nummers.isNotEmpty)
-          MenuRegel(Icons.folder_open_rounded, 'Toon in $bestandsbeheerNaam', () async {
+          if (!isTv) MenuRegel(Icons.folder_open_rounded, 'Toon in $bestandsbeheerNaam', () async {
             final fout = await toonInBestandsbeheer(nummers.first.path);
             if (fout != null && context.mounted) _srcToast(context, fout);
           }),
-        MenuRegel(
+        if (!isTv) MenuRegel(
             Icons.delete_outline_rounded,
             'Verwijderen…',
             () => _confirmDelete(context, a.isSingle ? '“${a.title}”' : 'het album “${a.title}”',
@@ -10199,14 +10217,17 @@ class _OntdekViewState extends State<OntdekView> {
                       child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))))
                   : TvLabelled(label: 'Afspelen', child: IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, tooltip: 'Afspelen', onPressed: () => _play(i, t))),
               TvLabelled(label: 'Radio', child: IconButton(icon: const Icon(Icons.radio_rounded, size: 20), color: _muted, tooltip: 'Radio hieruit', onPressed: () => startRadio(context, t.artist))),
-              TvLabelled(
-                label: 'Bronnen / download',
-                child: IconButton(
-                  icon: Icon(open ? Icons.expand_less_rounded : Icons.download_rounded, size: 20),
-                  color: _muted,
-                  tooltip: 'Bronnen / download',
-                  onPressed: () => setState(() => _expanded = open ? null : i)),
-              ),
+              // Niet op een tv: daar is dit scherm er om een aanbeveling te laten klínken, en het
+              // ophalen doe je op een pc of telefoon. Afspelen en Radio hiernaast blijven staan.
+              if (!isTv)
+                TvLabelled(
+                  label: 'Bronnen / download',
+                  child: IconButton(
+                    icon: Icon(open ? Icons.expand_less_rounded : Icons.download_rounded, size: 20),
+                    color: _muted,
+                    tooltip: 'Bronnen / download',
+                    onPressed: () => setState(() => _expanded = open ? null : i)),
+                ),
             ],
           ),
         ),
