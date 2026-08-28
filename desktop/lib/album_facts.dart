@@ -350,6 +350,35 @@ Map<String, int> albumsPerDirOf(Iterable<Album> albums) {
   return out;
 }
 
+/// Hoe lang er gewacht wordt voor de index weggeschreven wordt, gegeven wat de vorige keer kostte.
+///
+/// **Waarom dit meebeweegt en geen vast getal is.** Hier stond `Duration(seconds: 2)`, en elke
+/// binnengekomen tracklist zette die klok opnieuw. Tijdens het opwarmen van de feiten komen die aan
+/// één stuk door, dus werd de HELE index elke twee seconden opnieuw opgebouwd, gecodeerd en
+/// weggeschreven — bij een grote bibliotheek bijna tien megabyte — om er één album aan toe te
+/// voegen. `jsonEncode` is gewone Dart-code en draait dus op de tekendraad.
+///
+/// Twee seconden is prima zolang schrijven niets kost. De echte regel is niet "hoe vaak" maar
+/// "hoeveel van de tijd staat de app hiervoor stil", en dat is precies wat hier uitgerekend wordt:
+/// na een beurt die [laatste] duurde mag de volgende pas over twintig keer die duur beginnen. Zo
+/// besteedt de app hooguit een twintigste van zijn tijd aan deze boekhouding, hoe groot de
+/// bibliotheek ook wordt.
+///
+/// De bodem houdt het gedrag van vroeger voor wie een kleine bibliotheek heeft: kost schrijven
+/// niets, dan is het nog steeds twee seconden. Het plafond is er zodat een schijf die even hangt
+/// niet betekent dat je een kwartier op je index wacht.
+///
+/// **Er gaat niets verloren door te wachten.** `flush()` wordt ook rechtstreeks aangeroepen als de
+/// app afsluit en als de feitenveger klaar is, en die twee wachten nergens op.
+Duration wachtVoorIndex(Duration laatste,
+    {Duration bodem = const Duration(seconds: 2),
+    Duration plafond = const Duration(seconds: 60)}) {
+  final voorgesteld = laatste * 20;
+  if (voorgesteld < bodem) return bodem;
+  if (voorgesteld > plafond) return plafond;
+  return voorgesteld;
+}
+
 /// The index, plus write-through to the sidecars.
 class AlbumFactsStore extends ChangeNotifier {
   AlbumFactsStore({required this.dir});
@@ -496,18 +525,33 @@ class AlbumFactsStore extends ChangeNotifier {
     }
   }
 
+  /// Hoe lang de vorige schrijfbeurt duurde. Zie [wachtVoorIndex].
+  Duration _laatsteSchrijf = Duration.zero;
+
   void _scheduleSave() {
     _save?.cancel();
-    _save = Timer(const Duration(seconds: 2), () => unawaited(flush()));
+    _save = Timer(wachtVoorIndex(_laatsteSchrijf), () => unawaited(flush()));
   }
 
   /// Write the index. Temp file then rename, so a crash mid-write cannot leave something
   /// half-parsed — which would mean re-deriving the whole library.
+  ///
+  /// **Wat hier duur is.** De hele index gaat er elke keer opnieuw doorheen: van élk album de
+  /// feiten naar een kaart, en dan `jsonEncode` over het geheel. Bij een grote bibliotheek is dat
+  /// bijna tien megabyte, en `jsonEncode` is gewone Dart-code — die draait dus op de tekendraad.
+  ///
+  /// Dat is te verdragen als het zelden gebeurt. Het gebeurde niet zelden: elke binnengekomen
+  /// tracklist zette de klok op twee seconden, en tijdens het opwarmen komen die aan één stuk door.
+  /// De hele index werd zo elke twee seconden opnieuw opgebouwd, gecodeerd én weggeschreven, terwijl
+  /// er één album bij was gekomen. Zie [wachtVoorIndex] voor wat daarvoor in de plaats kwam.
+  ///
+  /// De duur wordt gemeten en onthouden — dat is wat die klok laat meebewegen.
   Future<void> flush() async {
     if (!_dirty) return;
     _dirty = false;
     _save?.cancel();
     _save = null;
+    final klok = Stopwatch()..start();
     try {
       await Directory(dir()).create(recursive: true);
       final tmp = File('${_indexFile.path}.tmp');
@@ -519,6 +563,10 @@ class AlbumFactsStore extends ChangeNotifier {
     } catch (e) {
       debugPrint('album_facts.json not written: $e');
     }
+    // Ook na een mislukking meten: een schrijfbeurt die op een volle schijf of een weggevallen
+    // netwerkschijf blijft hangen is juist het geval waarin je hem niet elke twee seconden opnieuw
+    // wil proberen.
+    _laatsteSchrijf = klok.elapsed;
   }
 
   /// One sidecar per turn of the event loop. Correcting ten albums in a row should not stall the UI

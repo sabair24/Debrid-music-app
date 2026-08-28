@@ -246,6 +246,30 @@ class RemoteSoulseekService extends SoulseekService {
 ///
 /// [jobs] is the very list the progress rows read, refilled from what the PC reports. Rebuilt in
 /// place rather than replaced, because the base class exposes it as a `final List`.
+/// Hoe lang er tot de volgende peiling gewacht wordt, na [stilteRondes] keer niets te zien.
+///
+/// **Waarom dit bestaat.** Boven `startWatching` stond al jaren: *"Poll while anything is running,
+/// and slowly when nothing is. A download that takes twenty minutes should not cost twenty minutes
+/// of two-second requests once it is done."* Alleen stond eronder een `Timer.periodic` van twee
+/// seconden zonder meer. De belofte was er, de klok niet.
+///
+/// Gevolg op een telefoon: zolang de app open stond ging er élke twee seconden een verzoek naar de
+/// pc — dertig per minuut, de hele dag, voor een lijst die meestal leeg is. Dat kost stroom, het
+/// kost netwerk, en elk antwoord wordt ook nog ontleed en vergeleken.
+///
+/// De ladder: twee seconden zolang er iets loopt, en daarna oplopend tot een halve minuut. Niet in
+/// één sprong, want de eerste rondes na een download zijn juist de rondes waarin er nog iets kan
+/// gebeuren — een nummer dat nakomt, een fout die binnenvalt.
+///
+/// **Een nieuwe download wacht hier nooit op.** `enqueue` roept zelf `refresh()` aan zodra hij
+/// verstuurd is, en die zet de teller meteen weer op nul.
+Duration peilTempo(int stilteRondes) => switch (stilteRondes) {
+      <= 3 => const Duration(seconds: 2),
+      <= 8 => const Duration(seconds: 5),
+      <= 20 => const Duration(seconds: 15),
+      _ => const Duration(seconds: 30),
+    };
+
 class RemoteDownloadManager extends DownloadManager {
   RemoteDownloadManager(
     super.online,
@@ -295,12 +319,32 @@ class RemoteDownloadManager extends DownloadManager {
 
   /// Poll while anything is running, and slowly when nothing is. A download that takes twenty
   /// minutes should not cost twenty minutes of two-second requests once it is done.
+  ///
+  /// **Dat stond hier al, en het gebeurde niet.** Eronder stond een `Timer.periodic` van twee
+  /// seconden zonder meer: zolang de app open was ging er élke twee seconden een verzoek naar de pc,
+  /// of er nu iets liep of niet. Op een telefoon is dat de hele dag door — voor een lijst die
+  /// meestal leeg is. Zie [peilTempo] voor de klok die er nu onder zit.
   void startWatching() {
     // Idempotent: it is hung off a ChangeNotifier that fires more than once, and restarting the
     // timer on every notification would mean the list never settles.
     if (_poll != null) return;
-    _poll = Timer.periodic(const Duration(seconds: 2), (_) => unawaited(refresh()));
+    _planPeiling();
     unawaited(refresh());
+  }
+
+  /// Hoeveel rondes er niets te zien was. Voer voor [peilTempo].
+  int _stilteRondes = 0;
+
+  /// De volgende peiling inplannen, met de klok die bij het moment past.
+  ///
+  /// Eén `Timer` die zichzelf opnieuw zet, en geen `Timer.periodic`: het tempo mag tussen twee
+  /// peilingen door veranderen, en dat kan een periodieke klok niet.
+  void _planPeiling() {
+    _poll?.cancel();
+    _poll = Timer(peilTempo(_stilteRondes), () {
+      unawaited(refresh());
+      if (_poll != null) _planPeiling();
+    });
   }
 
   Future<void> refresh() async {
@@ -329,8 +373,12 @@ class RemoteDownloadManager extends DownloadManager {
         ..cancelled = j['cancelled'] == true
         ..trackKey = j['trackKey'] as String?);
     }
-    // Only notify when something actually moved. This polls every two seconds, and rebuilding the
-    // downloads screen on every tick makes a list that will not hold still under a finger.
+    // Voer voor [peilTempo]. Loopt er iets, dan gaat de teller op nul en peilt de app weer snel; is
+    // er niets te zien, dan telt de stilte op en wordt de klok trager. Een NIEUWE download hoeft
+    // daar niet op te wachten: `enqueue` roept zelf `refresh()` aan zodra hij verstuurd is.
+    _stilteRondes = jobs.any((j) => j.busy) ? 0 : _stilteRondes + 1;
+    // Only notify when something actually moved. Rebuilding the downloads screen on every tick
+    // makes a list that will not hold still under a finger.
     if (_fingerprint() != before) notifyListeners();
   }
 
@@ -456,6 +504,9 @@ class RemoteDownloadManager extends DownloadManager {
   @override
   void dispose() {
     _poll?.cancel();
+    // En op null, want de klok zet zichzelf opnieuw. Alleen afbreken zou betekenen dat de laatste
+    // peiling na het opruimen nog één keer een nieuwe inplant — zie [_planPeiling].
+    _poll = null;
     _rpc.close();
     super.dispose();
   }
