@@ -8156,6 +8156,11 @@ class _WachtrijKnop extends StatelessWidget {
 ///
 /// Een paneel naast de inhoud en geen venster erboven, zodat het open kan blijven terwijl je door je
 /// bibliotheek bladert — dat is het hele verschil met een scherm.
+///
+/// **Tijdens een radio staat hier de radio.** Dat was er niet: `radioQueue` had geen enkele lezer,
+/// dus zette je een radio aan dan bleef dit paneel de lijst van vóór de radio tonen — een lijst die
+/// niet ging klinken. Een radio is geen wachtrij (je kunt er niet in slepen en er niets uit halen)
+/// maar hij lijkt er genoeg op om dezelfde regels te gebruiken; zie [radioAlsRij].
 class WachtrijPaneelView extends StatelessWidget {
   const WachtrijPaneelView({super.key, this.inBlad = false});
 
@@ -8170,7 +8175,9 @@ class WachtrijPaneelView extends StatelessWidget {
     final p = context.watch<PlayerStore>();
     final lib = context.watch<LibraryStore>();
     final paneel = context.read<WachtrijPaneel>();
-    final rij = p.queueTracks;
+    final radio = p.radioMode;
+    final regels = radio ? radioAlsRij(p.radioQueue) : const <Radioregel>[];
+    final rij = radio ? [for (final r in regels) r.nummer] : p.queueTracks;
     final nu = p.currentIndex;
 
     return Container(
@@ -8186,8 +8193,8 @@ class WachtrijPaneelView extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
             child: Row(
               children: [
-                const Text('Wachtrij',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                Text(radio ? 'Radio' : 'Wachtrij',
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                 const SizedBox(width: 8),
                 Text(
                     rij.isEmpty
@@ -8210,15 +8217,34 @@ class WachtrijPaneelView extends StatelessWidget {
           ),
           Expanded(
             child: rij.isEmpty
-                ? const Center(
+                ? Center(
                     child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text('Nog niets in de wachtrij.',
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                          radio
+                              ? 'De radio zoekt nog wat hij zal spelen.'
+                              : 'Nog niets in de wachtrij.',
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: _muted, fontSize: 12.5)),
+                          style: const TextStyle(color: _muted, fontSize: 12.5)),
                     ),
                   )
-                : ReorderableListView.builder(
+                // Een radio is geen wachtrij: je kunt er niet in slepen en er niets uit halen.
+                // Een gewone lijst dus, en een tik springt binnen de radio in plaats van hem te
+                // verlaten — zie [PlayerStore.springInRadio].
+                : radio
+                    ? ListView.builder(
+                        padding: const EdgeInsets.only(bottom: 16),
+                        itemCount: rij.length,
+                        itemBuilder: (_, i) => _WachtrijRij(
+                          key: ValueKey('${rij[i].path}#$i'),
+                          track: rij[i],
+                          plek: i,
+                          speeltNu: i == nu,
+                          cover: regels[i].eigen ? lib.coverForTrack(rij[i]) : null,
+                          regel: regels[i],
+                        ),
+                      )
+                    : ReorderableListView.builder(
                     padding: const EdgeInsets.only(bottom: 16),
                     buildDefaultDragHandles: false,
                     itemCount: rij.length,
@@ -8249,6 +8275,7 @@ class _WachtrijRij extends StatelessWidget {
     required this.plek,
     required this.speeltNu,
     required this.cover,
+    this.regel,
   });
 
   final Track track;
@@ -8256,16 +8283,28 @@ class _WachtrijRij extends StatelessWidget {
   final bool speeltNu;
   final Uint8List? cover;
 
+  /// Niet-null als deze regel bij een RADIO hoort. Dan geen greep, geen kruisje, en een tik springt
+  /// binnen de radio in plaats van hem te verlaten.
+  final Radioregel? regel;
+
   @override
   Widget build(BuildContext context) {
     final p = context.read<PlayerStore>();
+    final r = regel;
+    // Een nummer dat je niet hebt heeft geen pad, en dus geen menu dat ergens over gaat: "in de map
+    // tonen", "verplaatsen", "juiste uitgave zoeken" — allemaal over een bestand dat er niet is.
+    final menu = r != null && !r.eigen
+        ? null
+        : () => _toonItemMenu(context, _nummerMenu(context, track));
     return Container(
       color: speeltNu ? _panel2 : Colors.transparent,
       child: InkWell(
-        onTap: () => p.playQueue(p.queueTracks, plek),
-        onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _nummerMenu(context, track)) : null,
-        onSecondaryTapDown: (d) =>
-            _toonItemMenu(context, _nummerMenu(context, track), bij: d.globalPosition),
+        onTap: () => r != null ? p.springInRadio(plek) : p.playQueue(p.queueTracks, plek),
+        onLongPress: _menuOpHouden ? menu : null,
+        onSecondaryTapDown: menu == null
+            ? null
+            : (d) => _toonItemMenu(context, _nummerMenu(context, track),
+                bij: d.globalPosition),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 7),
           child: Row(
@@ -8277,21 +8316,34 @@ class _WachtrijRij extends StatelessWidget {
               // hand — ik had er zelf drie pogingen voor nodig — en op een tablet is een vinger daar
               // gewoon te grof voor. De streepjes blijven dus even klein, maar wat je kunt raken is
               // 34 breed en de volle rijhoogte.
-              ReorderableDragStartListener(
-                index: plek,
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.grab,
-                  child: Container(
-                    width: 34,
-                    height: 40,
-                    alignment: Alignment.center,
-                    // Zonder kleur vangt een Container geen aanwijzer, en dan is alleen het icoon
-                    // zelf het doelwit — precies wat hier weg moest.
-                    color: Colors.transparent,
-                    child: const Icon(Icons.drag_indicator_rounded, size: 16, color: _muted),
+              if (r != null)
+                // Geen greep maar een volgnummer: een radio is een uitzending, geen lijst waarin je
+                // sleept. Het nummer zegt bovendien hoe ver je bent zonder dat je hoeft te tellen.
+                SizedBox(
+                  width: 34,
+                  height: 40,
+                  child: Center(
+                    child: Text('${plek + 1}',
+                        style: TextStyle(
+                            fontSize: 11, color: speeltNu ? _accent : _muted)),
+                  ),
+                )
+              else
+                ReorderableDragStartListener(
+                  index: plek,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.grab,
+                    child: Container(
+                      width: 34,
+                      height: 40,
+                      alignment: Alignment.center,
+                      // Zonder kleur vangt een Container geen aanwijzer, en dan is alleen het icoon
+                      // zelf het doelwit — precies wat hier weg moest.
+                      color: Colors.transparent,
+                      child: const Icon(Icons.drag_indicator_rounded, size: 16, color: _muted),
+                    ),
                   ),
                 ),
-              ),
               cover != null
                   ? ClipRRect(
                       borderRadius: BorderRadius.circular(4),
@@ -8335,14 +8387,27 @@ class _WachtrijRij extends StatelessWidget {
                   ],
                 ),
               ),
-              _echtheidMerk(track),
+              if (r == null) _echtheidMerk(track),
               // Het lopende nummer heeft geen kruisje: eruit halen zou "stop" of "volgende" moeten
               // betekenen, en die knoppen staan al onderaan. Zie [PlayerStore.haalUitWachtrij].
+              //
+              // In een radio staat op diezelfde plek geen knop maar een STAND: heb je dit nummer al,
+              // of moet het nog ergens vandaan komen? Dat is het enige wat je van een radioregel wilt
+              // weten en het is nergens anders af te lezen.
               SizedBox(
                 width: 28,
                 child: speeltNu
                     ? const Icon(Icons.volume_up_rounded, size: 15, color: _accent)
-                    : TvLabelled(
+                    : r != null
+                        ? Icon(
+                            r.mislukt
+                                ? Icons.report_gmailerrorred_rounded
+                                : r.eigen
+                                    ? Icons.check_rounded
+                                    : Icons.cloud_download_outlined,
+                            size: 15,
+                            color: r.eigen ? _accent2 : _muted)
+                        : TvLabelled(
                         label: 'Uit de wachtrij halen',
                         child: IconButton(
                         icon: const Icon(Icons.close_rounded, size: 15),
