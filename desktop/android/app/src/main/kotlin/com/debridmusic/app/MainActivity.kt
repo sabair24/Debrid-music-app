@@ -1,7 +1,10 @@
 package com.debridmusic.app
 
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -32,6 +35,36 @@ class MainActivity : AudioServiceActivity() {
      * "SM-G991B"). DEVICE_NAME is a plain string key, so reading it is safe on any API level; it
      * simply comes back null where the setting does not exist.
      */
+    /**
+     * Zit dit toestel op wifi of op mobiele data?
+     *
+     * Waarvoor: de app stuurt op mobiel een kleinere versie van je muziek van de pc naar hier. Zie
+     * `lib/netsoort.dart` en `lib/lan/stroomstand.dart`.
+     *
+     * Een telefoon-hotspot meldt zichzelf als WIFI en is toch iemands databundel — vandaar dat
+     * NOT_METERED meeweegt en niet alleen het soort verbinding. Android zelf gebruikt precies dat
+     * vlaggetje om te beslissen of iets mag wachten tot je thuis bent.
+     *
+     * Bij twijfel "onbekend", nooit een gok. De Dart-kant laat onbekend expres naar de THUIS-stand
+     * vallen: een mislukte meting mag je thuis nooit stilletjes je hi-res kosten.
+     */
+    private fun netsoort(): String {
+        return try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return "onbekend"
+            val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return "onbekend"
+            when {
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "mobiel"
+                !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) -> "mobiel"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "wifi"
+                else -> "onbekend"
+            }
+        } catch (e: Exception) {
+            "onbekend"
+        }
+    }
+
     private fun deviceName(): String {
         try {
             val chosen = Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME)
@@ -67,6 +100,7 @@ class MainActivity : AudioServiceActivity() {
                             packageManager.hasSystemFeature("android.hardware.type.television")
                     )
                     "deviceName" -> result.success(deviceName())
+                    "netsoort" -> result.success(netsoort())
                     else -> result.notImplemented()
                 }
             }

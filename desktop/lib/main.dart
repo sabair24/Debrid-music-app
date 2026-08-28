@@ -56,6 +56,7 @@ import 'lan/client.dart';
 import 'lan/client_mode.dart';
 import 'lan/client_session.dart';
 import 'lan/remote_services.dart';
+import 'lan/stroomstand.dart';
 import 'now_playing.dart';
 import 'login_screen.dart';
 import 'lossless_want.dart' show performerFromFilename, zoekvraagVoorAlbum, zoekvraagVoorNummer;
@@ -84,6 +85,7 @@ import 'release_format.dart';
 import 'rutracker.dart';
 import 'rutracker_login.dart';
 import 'rutracker_venster.dart';
+import 'netsoort.dart';
 import 'settings.dart';
 import 'slsk_groepen.dart';
 import 'speakers.dart';
@@ -215,6 +217,31 @@ Future<void> _naVoorgrond(ClientSession session) async {
   try {
     await session.refreshNow();
   } catch (_) {/* de banner vertelt het verhaal al */}
+}
+
+/// Het volgende nummer alvast laten omzetten op de pc, met een `HEAD`.
+///
+/// **Waarom een `HEAD` en niet een halve download.** `serveFile` draait bij een `HEAD` de hele
+/// omzetting en stuurt daarna alleen de kop terug — een paar honderd bytes over de lijn, en het
+/// bestand staat klaar in de cache voordat het gevraagd wordt. Daarmee wacht je één keer, bij het
+/// aanzetten, en nooit meer tussen twee nummers.
+///
+/// Stil bij elke fout, en met een korte klok eromheen: dit is werk dat niemand gevraagd heeft. Gaat
+/// het mis, dan wacht het volgende nummer gewoon zoals het zonder deze regel ook zou doen.
+Future<void> _zetKlaar(String url) async {
+  final u = Uri.tryParse(url);
+  if (u == null) return;
+  HttpClient? klant;
+  try {
+    klant = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+    final verzoek = await klant.openUrl('HEAD', u);
+    final antwoord = await verzoek.close();
+    await antwoord.drain<void>();
+  } catch (_) {
+    // Niets aan de hand: het volgende nummer wacht dan zoals het altijd deed.
+  } finally {
+    klant?.close(force: true);
+  }
 }
 
 Future<void> _flushStores(LibraryStore library) async {
@@ -469,6 +496,10 @@ Future<void> main() async {
   final offline = OfflineStore();
   await offline.load();
 
+  // Waar dit toestel op zit, en dus hoeveel de pc mag sturen. Vóór de ClientSession, want die hangt
+  // de speelweg in en die leest deze winkel. Zie netsoort.dart.
+  final netStore = NetsoortStore();
+  unawaited(netStore.ververs());
 
   final session = ClientSession(
     library: library,
@@ -480,7 +511,21 @@ Future<void> main() async {
     applyMediaResolver: (resolver) => player.mediaResolver = (path) {
       final local = offline.localFor(path);
       if (local != null) return local;
-      return resolver(path);
+      // **Hier en niet in `client.authorized`.** Die wordt ook gebruikt door de knop "Offline
+      // bewaren", en een kopie die je op je toestel zet hoort bit-perfect te blijven — die neem je
+      // juist mee omdat er onderweg geen netwerk is. Dit is de enige plek die alleen over AFSPELEN
+      // gaat: de offline kopie is er hierboven al uit gestapt, en `resolver` heeft vreemde adressen
+      // (torrent, radio) al ongewijzigd doorgelaten.
+      final url = resolver(path);
+      final t = library.trackByPath(path);
+      if (t == null) return url;
+      return metStand(
+        url,
+        stand: netStore.geldendeStand(settings),
+        sampleRate: t.sampleRate,
+        bits: t.bitsPerSample,
+        lossless: losslessExtensie(t.ext),
+      );
     },
     endpoint: mode.endpoint,
   );
@@ -563,6 +608,22 @@ Future<void> main() async {
   library.addListener(() {
     player.refreshCover();
     player.refreshTracks();
+  });
+  // **De vier draden van de streamkwaliteit.** Zie `netsoort.dart` en `lan/stroomstand.dart`.
+  //
+  // Alle vier ook op de pc ingehangen, en dat kost daar niets: `leesNetsoort()` antwoordt buiten
+  // Android altijd `onbekend`, en `onbekend` valt naar de thuisstand — die standaard `max` is, en
+  // dan raakt `metStand` de URL niet aan. Een `if (mode.owner)` eromheen zou alleen een tweede
+  // plek zijn waar dit stuk kapot kan.
+  player.onHapering = netStore.hapering;
+  player.onKlaarzetten = (url) => unawaited(_zetKlaar(url));
+  player.addListener(() {
+    netStore.volgHetSpelen(speelt: player.playing);
+  });
+  // De netsoort bepaalt hoe ver er vooruit gelezen wordt. Eén draad, en `zetVooruitlezen` doet
+  // niets als het getal niet veranderde — dus dit mag bij elke melding langskomen.
+  netStore.addListener(() {
+    unawaited(player.zetVooruitlezen(secs: vooruitleesSeconden(netStore.net)));
   });
   // De speaker vertelt elke twee seconden bij welk nummer hij is; hier gaat dat de speler in. Zonder
   // deze regel werd die index netjes doorgegeven en door niemand gelezen: de app bleef staan op het
@@ -774,8 +835,17 @@ Future<void> main() async {
     // seconden staat stil; wat je bij het ontgrendelen ziet is de toestand van het moment waarop de
     // telefoon in slaap viel — inclusief een melding dat de pc niet reageert terwijl hij dat allang
     // weer doet. Dit is de enige haak die daar iets aan doet, en hij was er niet.
-    onRestart: () => unawaited(_naVoorgrond(session)),
-    onShow: () => unawaited(_naVoorgrond(session)),
+    // Ook de netsoort: wie de app wegleggend op wifi zat en hem in de auto weer openmaakt, zit
+    // ondertussen op mobiele data. De klok van dertig seconden loopt alleen tijdens het spelen, dus
+    // zonder deze twee regels merkt de app dat pas bij het volgende nummer.
+    onRestart: () {
+      unawaited(_naVoorgrond(session));
+      unawaited(netStore.ververs());
+    },
+    onShow: () {
+      unawaited(_naVoorgrond(session));
+      unawaited(netStore.ververs());
+    },
     onHide: () => unawaited(_flushStores(library)),
     onPause: () => unawaited(_flushStores(library)),
     onDetach: () => unawaited(afsluiten(library, soulseek)),
@@ -808,6 +878,7 @@ Future<void> main() async {
         ChangeNotifierProvider<LibraryStore>.value(value: library),
         ChangeNotifierProvider<FactsWarmer>.value(value: warmer),
         ChangeNotifierProvider<PlayerStore>.value(value: player),
+        ChangeNotifierProvider<NetsoortStore>.value(value: netStore),
         ChangeNotifierProvider<WachtrijPaneel>(create: (_) => WachtrijPaneel()),
         // De hoeskleur van de pagina die bovenop ligt. Hoort hier en niet in die pagina, omdat de
         // SCHIL hem tekent — achter de bovenbalk langs tot aan de schermrand. Zie [PaginaWas].
@@ -16473,6 +16544,15 @@ class _SharingSectionState extends State<_SharingSection> {
           'hier zie je het resultaat vanzelf terug.',
           style: TextStyle(color: _muted.withValues(alpha: .85), fontSize: 12, height: 1.45),
         ),
+        // Alleen hier: dit gaat over wat er over de lijn komt, en een gekoppeld toestel is het
+        // enige dat een lijn heeft. De Shield hangt aan een kabel of aan de wifi thuis en heeft
+        // geen databundel — daar zou de keuze alleen maar in de weg staan.
+        if (!isTv) ...[
+          const SizedBox(height: 18),
+          const Divider(height: 1, color: _panel2),
+          const SizedBox(height: 14),
+          const StroomkwaliteitKeuze(),
+        ],
         const SizedBox(height: 14),
         OutlinedButton.icon(
           onPressed: () async {
@@ -21673,6 +21753,116 @@ class _OnlineAlbumCard extends StatelessWidget {
           ])),
         ]),
       );
+}
+
+/// Hoeveel je pc over de lijn stuurt als dit toestel van hem afspeelt.
+///
+/// **Waarom dit alleen op een gekoppeld toestel staat.** Het paneel waar hij in hangt wordt bereikt
+/// via `if (!session.owner)` — op de pc zelf kan hij per constructie niet verschijnen, en dat klopt:
+/// de pc stuurt niets naar zichzelf. En het is bewust géén gesynchroniseerde instelling: een iPad
+/// die altijd op wifi zit en een telefoon op een databundel willen hier een ander antwoord.
+///
+/// **De adaptieve schakelaar en de tweede rij chips staan alleen op telefoon en tablet.** Een Mac
+/// heeft geen mobiele data, dus daar is "onderweg" een keuze zonder betekenis.
+class StroomkwaliteitKeuze extends StatelessWidget {
+  const StroomkwaliteitKeuze({super.key});
+
+  Widget _chips(
+    BuildContext context, {
+    required Stroomstand huidig,
+    required ValueChanged<Stroomstand> kies,
+  }) =>
+      Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          for (final s in Stroomstand.values)
+            ChoiceChip(
+              label: Text(labelVan(s)),
+              selected: huidig == s,
+              onSelected: (aan) {
+                if (!aan) return;
+                kies(s);
+              },
+            ),
+        ],
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = context.watch<AppSettings>();
+    final netStore = context.watch<NetsoortStore>();
+
+    // De verdedigende terugval hoort hier en niet alleen in het bestand: een instellingenbestand van
+    // een oudere of nieuwere uitgave is een voorkeur, geen contract.
+    final thuis = standUitNaam(settings.stroomThuis);
+    final onderweg = standUitNaam(settings.stroomOnderweg, terugval: Stroomstand.cd);
+
+    // Elke aanraking is een verandering waar de gebruiker bij was, dus de noodgrendel gaat los.
+    Future<void> bewaar() async {
+      netStore.grendelLos();
+      await settings.save();
+    }
+
+    final geldend = netStore.geldendeStand(settings);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Streamkwaliteit',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 10),
+          Text(_isTouch ? 'Op wifi' : 'Kwaliteit',
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          _chips(context, huidig: thuis, kies: (s) {
+            settings.stroomThuis = naamVan(s);
+            unawaited(bewaar());
+          }),
+          if (_isTouch) ...[
+            const SizedBox(height: 4),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              value: settings.stroomAdaptief,
+              onChanged: (aan) {
+                settings.stroomAdaptief = aan;
+                unawaited(bewaar());
+              },
+              title: const Text('Onderweg minder gebruiken',
+                  style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+              subtitle: const Text('Schakelt om zodra je op mobiele data zit.',
+                  style: TextStyle(color: _muted, fontSize: 11.5)),
+            ),
+            if (settings.stroomAdaptief) ...[
+              const SizedBox(height: 2),
+              const Text('Op mobiele data',
+                  style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              _chips(context, huidig: onderweg, kies: (s) {
+                settings.stroomOnderweg = naamVan(s);
+                unawaited(bewaar());
+              }),
+            ],
+          ],
+          const SizedBox(height: 8),
+          Text(
+            // De getallen zijn het hele argument. Zonder hen is dit drie namen zonder betekenis.
+            'Alles blijft lossless — er komt geen mp3 aan te pas. Alleen de frequentie en de '
+            'bitdiepte gaan omlaag, en wat al lager staat blijft onaangeroerd.\n'
+            '· ${labelVan(Stroomstand.max)} — het bestand zoals het is, ${tempoVan(Stroomstand.max)}.\n'
+            '· ${labelVan(Stroomstand.hoog)} — ${tempoVan(Stroomstand.hoog)}.\n'
+            '· ${labelVan(Stroomstand.cd)} — ${tempoVan(Stroomstand.cd)}, en nog altijd bit-voor-bit cd.\n'
+            'Nu geldt: ${labelVan(geldend)}${netStore.noodstand ? ' (verlaagd omdat het haperde)' : ''}. '
+            'Een wijziging geldt vanaf het volgende nummer.',
+            style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.4),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// Het koekje uit je eigen browser overnemen, omdat de app zelf niet langs Cloudflare komt.

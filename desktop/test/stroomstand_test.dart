@@ -167,6 +167,47 @@ void main() {
     });
   });
 
+  group('DE KERN: de speler herkent zijn eigen herschrijving terug', () {
+    // Dit is de reden dat `omzettenGevraagd` bestaat in plaats van twee losse `contains('maxRate=')`
+    // in player.dart. De speler hangt er twee dingen aan op: hoeveel geduld de stilstandwacht krijgt
+    // (25 s in plaats van 10, want de pc is dan aan het omzetten en de teller staat op 0:00), en of
+    // het de moeite waard is het volgende nummer met een HEAD vooruit klaar te zetten. Drijft de
+    // naam van de grens uit elkaar, dan valt er niets om: je krijgt alleen weer "Er komt geen
+    // geluid" op een kerngezonde pc, en het wachten tussen nummers is terug.
+    test('wat metStand aanraakt herkent hij als omzetten', () {
+      final uit =
+          metStand(_url, stand: Stroomstand.cd, sampleRate: 192000, bits: 24, lossless: true);
+      expect(omzettenGevraagd(uit), isTrue);
+    });
+
+    test('en wat hij met rust laat niet', () {
+      // Alle vier de gevallen waarin de URL ongemoeid blijft.
+      expect(
+          omzettenGevraagd(
+              metStand(_url, stand: Stroomstand.max, sampleRate: 192000, bits: 24, lossless: true)),
+          isFalse);
+      expect(
+          omzettenGevraagd(metStand(_url,
+              stand: Stroomstand.cd, sampleRate: 44100, bits: 16, lossless: true)),
+          isFalse);
+      expect(
+          omzettenGevraagd(metStand(_url,
+              stand: Stroomstand.cd, sampleRate: 192000, bits: 24, lossless: false)),
+          isFalse);
+      expect(omzettenGevraagd('file:///storage/emulated/0/Music/nummer.flac'), isFalse);
+    });
+
+    test('een adres dat alleen maxBits zou dragen bestaat niet', () {
+      // Er is geen pad waarop `maxBits` er wel staat en `maxRate` niet — `metStand` schrijft ze
+      // samen. Zou dat ooit veranderen, dan valt deze toets om voordat de speler stil geduldig wordt
+      // op een adres dat wél omgezet wordt.
+      final uit =
+          metStand(_url, stand: Stroomstand.cd, sampleRate: 44100, bits: 24, lossless: true);
+      expect(Uri.parse(uit).queryParameters.containsKey('maxBits'), isTrue);
+      expect(omzettenGevraagd(uit), isTrue);
+    });
+  });
+
   group('welke bestanden lossless heten', () {
     test('de containers die de app zelf kan binnenhalen', () {
       for (final e in ['flac', '.flac', 'FLAC', 'wav', 'aiff', 'ape', 'wv', 'tta']) {

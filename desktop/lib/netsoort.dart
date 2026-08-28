@@ -10,7 +10,14 @@
 /// vastgelegd. Het zijn twee eenvoudige regels, en die staan hieronder uitgeschreven.
 library;
 
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+
 import 'lan/stroomstand.dart';
+import 'settings.dart';
 
 /// Waar dit toestel nu op zit.
 ///
@@ -64,3 +71,106 @@ Stroomstand eenSportLager(Stroomstand s) => switch (s) {
 /// megabyte weg waar je voor betaald hebt. Negentig seconden is een kleine tien megabyte en nog
 /// altijd veel langer dan elke realistische dip in een 4G-verbinding.
 int vooruitleesSeconden(Netsoort net) => net == Netsoort.mobiel ? 90 : 300;
+
+/// Hetzelfde kanaal dat `tv.dart` en `cloud/device_identity.dart` al gebruiken. Een MethodChannel is
+/// alleen een naam, dus een tweede handvat kost niets.
+const _kanaal = MethodChannel('debridmusic/device');
+
+/// Wat het toestel zegt dat het nu is.
+///
+/// Alleen Android antwoordt; overal anders komt hier [Netsoort.onbekend] uit en dat is het juiste
+/// antwoord — een pc en een Mac zitten niet op een databundel. Zie [welkeStand] voor wat er met
+/// `onbekend` gebeurt.
+///
+/// Dezelfde vorm als [initDeviceName]: `audio_service` warmt een engine op vóór de activiteit het
+/// kanaal geregistreerd heeft, dus een enkele `MissingPluginException` is geen fout maar "nog niet".
+Future<Netsoort> leesNetsoort() async {
+  if (!Platform.isAndroid) return Netsoort.onbekend;
+  for (var poging = 0; poging < 20; poging++) {
+    try {
+      final soort = await _kanaal.invokeMethod<String>('netsoort');
+      return switch (soort) {
+        'wifi' => Netsoort.wifi,
+        'mobiel' => Netsoort.mobiel,
+        _ => Netsoort.onbekend,
+      };
+    } on MissingPluginException {
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    } catch (e) {
+      debugPrint('Netsoort onbekend: $e');
+      return Netsoort.onbekend;
+    }
+  }
+  return Netsoort.onbekend;
+}
+
+/// Waar dit toestel op zit, en welke stroomstand daar bij hoort.
+///
+/// **Waarom dit zo weinig vraagt.** Eén kanaalsprong, geen schijf en geen netwerk — maar de vraag
+/// stellen kost wél iets, en hem elke seconde stellen zou precies de druk zijn die deze hele
+/// voorziening moet wegnemen. Dus drie momenten en niet meer: bij de start, bij het terugkeren naar
+/// de voorgrond, en een klok van dertig seconden die ALLEEN loopt terwijl er muziek speelt.
+class NetsoortStore extends ChangeNotifier {
+  Netsoort _net = Netsoort.onbekend;
+  Netsoort get net => _net;
+
+  /// De grendel van regel B — zie [eenSportLager]. Blijft staan tot de netsoort verandert, de
+  /// gebruiker de instelling aanraakt, of de app herstart.
+  bool _noodstand = false;
+  bool get noodstand => _noodstand;
+
+  Timer? _klok;
+
+  /// Zet de grendel. Meer dan één hapering in dezelfde sessie zakt niet verder — één sport is één
+  /// sport, en onder de cd-stand is er niets.
+  void hapering() {
+    if (_noodstand) return;
+    _noodstand = true;
+    notifyListeners();
+  }
+
+  /// Laat de grendel los. Hoort bij een verandering waar de gebruiker bij was.
+  void grendelLos() {
+    if (!_noodstand) return;
+    _noodstand = false;
+    notifyListeners();
+  }
+
+  Future<void> ververs() async {
+    final nu = await leesNetsoort();
+    if (nu == _net) return;
+    _net = nu;
+    // Een andere netsoort is een ander netwerk, en dus een nieuwe kans. De grendel gaat los.
+    _noodstand = false;
+    notifyListeners();
+  }
+
+  /// De klok loopt alleen terwijl er speelt: als er niets klinkt verandert er ook niets dat ertoe
+  /// doet, en dan hoeft er niets gevraagd te worden.
+  void volgHetSpelen({required bool speelt}) {
+    if (speelt) {
+      if (_klok != null) return;
+      _klok = Timer.periodic(const Duration(seconds: 30), (_) => unawaited(ververs()));
+      unawaited(ververs());
+    } else {
+      _klok?.cancel();
+      _klok = null;
+    }
+  }
+
+  /// De stand die nu geldt, gegeven wat er in de instellingen staat.
+  Stroomstand geldendeStand(AppSettings s) => welkeStand(
+        thuis: standUitNaam(s.stroomThuis),
+        onderweg: standUitNaam(s.stroomOnderweg, terugval: Stroomstand.cd),
+        adaptief: s.stroomAdaptief,
+        net: _net,
+        noodstand: _noodstand,
+      );
+
+  @override
+  void dispose() {
+    _klok?.cancel();
+    _klok = null;
+    super.dispose();
+  }
+}
