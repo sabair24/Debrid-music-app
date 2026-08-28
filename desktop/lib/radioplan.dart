@@ -74,9 +74,16 @@ class RadioOpdracht {
 
 /// Het schema dat met de vraag meegaat.
 ///
-/// `additionalProperties: false` is verplicht. Getalgrenzen staan er BEWUST niet in: de API weigert
-/// ze, en een schema dat geweigerd wordt levert helemaal geen antwoord op. Het klemmen gebeurt in
-/// [leesRadioOpdracht].
+/// Drie regels, en op alle drie is deze functie een keer gestruikeld:
+///
+/// 1. `additionalProperties: false` is verplicht.
+/// 2. **Élk veld moet in `required` staan.** Dat is wat een 400 opleverde bij de eerste echte
+///    poging: `jaarVan`, `jaarTot` en `stemming` stonden er wel in `properties` maar niet in
+///    `required`, en dan weigert de API het hele schema — dus komt er geen antwoord, niet eens een
+///    half antwoord. Iets dat mag ontbreken wordt daarom een `anyOf` met `null`, en niet een veld
+///    dat je weglaat.
+/// 3. Getalgrenzen staan er BEWUST niet in: `minimum`/`maximum` worden geweigerd. Het klemmen
+///    gebeurt in [leesRadioOpdracht].
 Map<String, dynamic> radioSchema() => {
       'type': 'object',
       'additionalProperties': false,
@@ -85,8 +92,20 @@ Map<String, dynamic> radioSchema() => {
           'type': 'string',
           'description': 'Het genre in één of twee woorden, zoals de gebruiker het noemde.',
         },
-        'jaarVan': {'type': 'integer', 'description': 'Eerste jaar van het tijdvak, of weglaten.'},
-        'jaarTot': {'type': 'integer', 'description': 'Laatste jaar van het tijdvak, of weglaten.'},
+        'jaarVan': {
+          'anyOf': [
+            {'type': 'integer'},
+            {'type': 'null'}
+          ],
+          'description': 'Eerste jaar van het tijdvak, of null als de gebruiker er niets over zei.',
+        },
+        'jaarTot': {
+          'anyOf': [
+            {'type': 'integer'},
+            {'type': 'null'}
+          ],
+          'description': 'Laatste jaar van het tijdvak, of null als de gebruiker er niets over zei.',
+        },
         'aantal': {
           'type': 'integer',
           'description': 'Hoeveel nummers de gebruiker vroeg. Hoogstens $kMaxRadio.',
@@ -103,7 +122,9 @@ Map<String, dynamic> radioSchema() => {
           'description': 'Eén woord over de sfeer, of leeg als de gebruiker daar niets over zei.',
         },
       },
-      'required': ['genre', 'aantal', 'zaadArtiesten'],
+      // Alles, en niet alleen wat verplicht voelt. Zie de kop hierboven: een veld dat in
+      // `properties` staat maar niet hier, laat de API het hele schema weigeren.
+      'required': ['genre', 'jaarVan', 'jaarTot', 'aantal', 'zaadArtiesten', 'stemming'],
     };
 
 /// De vraag aan het model.

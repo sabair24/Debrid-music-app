@@ -70,6 +70,18 @@ Object? jsonUitAntwoord(Object? antwoord) {
   }
 }
 
+/// De uitleg die de API zelf bij een fout meestuurt, of leeg.
+String _reden(List<int> bytes) {
+  try {
+    final j = jsonDecode(utf8.decode(bytes));
+    if (j is Map && j['error'] is Map) {
+      final m = (j['error'] as Map)['message'];
+      if (m is String && m.trim().isNotEmpty) return m.trim();
+    }
+  } catch (_) {/* geen JSON; dan is het getal alles wat er is */}
+  return '';
+}
+
 /// Wat er misging, in gewone taal.
 class AiFout implements Exception {
   const AiFout(this.uitleg);
@@ -121,7 +133,11 @@ class AiService {
       throw const AiFout('Het taalmodel heeft het even te druk. Probeer het zo nog eens.');
     }
     if (res.statusCode != 200) {
-      throw AiFout('Het taalmodel antwoordde met ${res.statusCode}.');
+      // MET de reden erbij. Dit stond er als kaal "antwoordde met 400", en dat is precies het
+      // antwoord waar niemand iets mee kan: de API zegt er zelf bij wát er mis is met het verzoek —
+      // een veld dat niet in `required` staat, een schema dat geweigerd wordt — en die zin werd hier
+      // weggegooid. Een fout die je niet kunt lezen kost een uur zoeken.
+      throw AiFout('Het taalmodel antwoordde met ${res.statusCode}. ${_reden(res.bodyBytes)}'.trim());
     }
 
     Object? body;
