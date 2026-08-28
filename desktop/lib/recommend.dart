@@ -79,7 +79,16 @@ class RecTrack {
   /// screen opens the album; this one now can too.
   final String album;
   final int albumId;
-  const RecTrack(this.artist, this.title, this.cover, {this.album = '', this.albumId = 0});
+
+  /// Hoe lang het nummer duurt, in seconden — 0 als de bron het niet zei.
+  ///
+  /// Stond ook altijd al in het antwoord en werd weggegooid. Het doet er pas toe sinds de radio
+  /// nummers ophaalt: zonder looptijd beantwoordt de bibliotheek "die heb je al" op artiest + titel
+  /// alleen, en dan wordt een heropname als mindere dubbel van schijf gewist. Zie `TrackTags.seconds`
+  /// voor het gemelde Sting-geval.
+  final int seconds;
+  const RecTrack(this.artist, this.title, this.cover,
+      {this.album = '', this.albumId = 0, this.seconds = 0});
 
   /// True when there is a record to open rather than only a song to play.
   bool get hasAlbum => albumId > 0 && album.trim().isNotEmpty && artist.trim().isNotEmpty;
@@ -116,6 +125,7 @@ class RecommendService {
               (t['album']?['cover_medium']) as String?,
               album: ((t['album']?['title']) ?? '') as String,
               albumId: ((t['album']?['id']) as num?)?.toInt() ?? 0,
+              seconds: (t['duration'] as num?)?.toInt() ?? 0,
             ))
         .where((r) => r.title.isNotEmpty)
         .toList();

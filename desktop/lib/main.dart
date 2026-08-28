@@ -20,6 +20,8 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'acoustid.dart';
+import 'radio.dart';
+import 'lan/pc_radiobron.dart';
 import 'auto_hoezen.dart';
 import 'bestandsbeheer.dart';
 import 'cache_snoei.dart';
@@ -676,6 +678,19 @@ Future<void> main() async {
       : RemoteDownloadManager(
           online, soulseek, library.rootPath, onLibraryChanged, () => session.endpoint);
 
+  // De radio die zichzelf aanvult. Eén besturing voor de hele app: hij houdt een plan bij dat een
+  // half uur meegaat, en twee daarvan naast elkaar zouden elk denken dat zij de radio zijn.
+  //
+  // Het verschil tussen de twee bronnen is precies één ding: doet deze machine het halen zelf, of
+  // laat hij het aan de pc over? Alles daarboven — hoeveel er vooruit moet staan, wat er gebeurt als
+  // een haal mislukt — is aan beide kanten dezelfde code.
+  final radio = RadioBesturing(
+    speler: player,
+    bron: mode.owner
+        ? EigenRadiobron(downloads: downloads, soulseek: soulseek, library: library)
+        : PcRadiobron(library: library, clientOf: () => library.remote),
+  );
+
   // Share this library with the Mac, the iPad and the Shield. Started before the scan finishes:
   // a device probing /health then gets a real answer straight away, and the catalogue fills in
   // by itself as the scan lands.
@@ -910,6 +925,7 @@ Future<void> main() async {
         Provider<SoulseekService>.value(value: soulseek),
         Provider<TidalService>.value(value: tidal),
         ChangeNotifierProvider<DownloadManager>.value(value: downloads),
+        ChangeNotifierProvider<RadioBesturing>.value(value: radio),
         ChangeNotifierProvider<LanSharing>.value(value: sharing),
         ChangeNotifierProvider<ClientSession>.value(value: session),
         ChangeNotifierProvider<CloudSession>.value(value: cloud),
@@ -9481,44 +9497,38 @@ void _srcToastAction(BuildContext context, String m, String label, VoidCallback 
 // De normalisatie staat in recommend.dart als [recNorm]: hij beantwoordt overal dezelfde vraag — Radio,
 // Ontdek en "Aanbevolen voor jou" — en drie kopieën van die regel zouden drie antwoorden geven.
 
-/// Build a Radio queue around [artist]: Deezer recommendations, matched against the
-/// local library (owned tracks play instantly; the rest resolve via TorBox on demand).
-List<RadioItem> _radioItemsFor(List<RecTrack> recs, LibraryStore lib) {
+/// Het radioplan: wat er zou moeten spelen, en wat je daarvan al hebt.
+///
+/// De looptijd gaat mee, en die stond er eerst niet in. Hij reist door tot in het gezag van de
+/// download, en zonder hem denkt de bibliotheek op artiest + titel alleen al dat je een heropname
+/// hebt — de Sting-val uit `organize.dart`.
+List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib) {
   final index = <String, Track>{};
   for (final t in lib.tracks) {
     index.putIfAbsent('${recNorm(t.artist)}|${recNorm(t.title)}', () => t);
   }
-  return recs
-      .map((r) => RadioItem(
-            artist: r.artist,
-            title: r.title,
-            local: index['${recNorm(r.artist)}|${recNorm(r.title)}'],
-          ))
-      .toList();
+  return [
+    for (final r in recs)
+      if (r.title.trim().isNotEmpty && r.artist.trim().isNotEmpty)
+        Radioplek(
+          artiest: r.artist,
+          titel: r.title,
+          seconden: r.seconds > 0 ? r.seconds : null,
+          eigen: index['${recNorm(r.artist)}|${recNorm(r.title)}'],
+        ),
+  ];
 }
 
-/// Library-forward ordering for Smart Shuffle: play mostly tracks the listener already
-/// owns (instant, gap-free) with online discovery sprinkled in (~2 owned : 1 online).
-/// Starts on an owned track so there's no first-track sourcing wait, and never leaves a
-/// long silent stretch churning through uncached online tracks. If the seed yields no
-/// owned tracks (e.g. a discovery seed), the mix is returned unchanged (all discovery).
-List<RadioItem> _smartShuffle(List<RadioItem> items) {
-  final owned = items.where((i) => i.isLocal).toList();
-  final online = items.where((i) => !i.isLocal).toList();
-  if (owned.isEmpty || online.isEmpty) return items;
-  final out = <RadioItem>[];
-  var oi = 0, ni = 0;
-  while (oi < owned.length || ni < online.length) {
-    if (oi < owned.length) out.add(owned[oi++]);
-    if (oi < owned.length) out.add(owned[oi++]);
-    if (ni < online.length) out.add(online[ni++]);
-  }
-  return out;
-}
-
+/// Een radio rond [artist].
+///
+/// De aanbevelingen komen nog steeds van Deezer; wat eronder veranderd is, is wat er met een nummer
+/// gebeurt dat je niet hebt. Dat werd als torrent gezocht en gestreamd — een tijdelijke link die
+/// nergens in je bibliotheek terechtkwam, en op een gekoppeld toestel zelfs dat niet. Nu wordt het via
+/// Soulseek OPGEHAALD terwijl je luistert, en komt het pas in de rij als het bestand er werkelijk
+/// staat. Zie `radio.dart`.
 Future<void> startRadio(BuildContext context, String artist) async {
-  final player = context.read<PlayerStore>();
   final lib = context.read<LibraryStore>();
+  final radio = context.read<RadioBesturing>();
   _srcToast(context, '📻 Radio starten voor $artist…');
   final rec = RecommendService();
   List<RecTrack> recs;
@@ -9532,17 +9542,12 @@ Future<void> startRadio(BuildContext context, String artist) async {
     _srcToast(context, 'Geen radio gevonden voor $artist.');
     return;
   }
-  // Library-forward smart shuffle: lead with owned tracks (instant), mix in discovery.
-  final items = _smartShuffle(_radioItemsFor(recs, lib));
-  // Keep it endless: fetch a fresh (also library-forward) batch when the queue runs low.
-  player.radioExtend = () async {
-    try {
-      return _smartShuffle(_radioItemsFor(await rec.mixRadio(artist), lib));
-    } catch (_) {
-      return <RadioItem>[];
-    }
-  };
-  await player.playRadio(items);
+  final reden = await radio.start(_radioplan(recs, lib), naam: artist);
+  if (!context.mounted || reden == null) return;
+  // Weigeren en zeggen waarom, in plaats van stilletjes alleen eigen muziek spelen. Dat laatste is
+  // precies wat de oude radio op een telefoon deed, en het is niet te onderscheiden van een radio die
+  // gewoon niet veel nieuws vindt.
+  _srcToast(context, reden);
 }
 
 bool _genericArtist(String s) {

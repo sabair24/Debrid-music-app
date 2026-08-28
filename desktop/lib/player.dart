@@ -1139,6 +1139,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       final path = it.isLocal ? it.local!.path : it.url;
       if (path != null) {
         radioStatus = '';
+        _radioDroog = false;
         currentCover = it.isLocal ? coverResolver?.call(it.local!) : null;
         notifyListeners();
         _nieuwVoorDeTelling(it.local);
@@ -1153,8 +1154,37 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     }
     _radioIndex = _radio.isEmpty ? -1 : _radioIndex.clamp(0, _radio.length - 1);
     radioStatus = 'Radio klaar';
+    _radioDroog = true;
     notifyListeners();
     _maybeExtend();
+  }
+
+  /// De radio staat droog: hij is door zijn rij heen en wacht op wat er nog komt.
+  ///
+  /// Zonder dit was "de rij is op" niet te onderscheiden van "er speelt gewoon niets", en dan zou een
+  /// nummer dat vijf seconden later alsnog binnenkomt stil achteraan blijven liggen.
+  bool _radioDroog = false;
+
+  /// Nummers achter de radiorij plakken zonder hem te onderbreken.
+  ///
+  /// **Waarom een radio dit nodig heeft.** De rij van een radio is niet vooraf bekend: hij groeit
+  /// terwijl je luistert, telkens als er weer een bestand geland is. Er was hier maar één weg naar
+  /// binnen — [radioExtend], en die vuurt pas als je bijna aan het eind bent. Voor een radio die
+  /// vooruit meeloopt is dat te laat en te weinig.
+  ///
+  /// Stond de radio dróóg, dan begint hij hier meteen weer. Dat is het geval waarin je nog niets van
+  /// de eerste nummers had: dan is de rij bij de start leeg, en zonder deze regel blijft hij dat.
+  void voegToeAanRadio(List<RadioItem> meer) {
+    if (!radioMode || meer.isEmpty) return;
+    final was = _radio.length;
+    _radio.addAll(meer);
+    if (_radioDroog) {
+      _radioDroog = false;
+      _radioIndex = was;
+      unawaited(_openRadioCurrent());
+      return; // die roept zelf notifyListeners aan
+    }
+    notifyListeners();
   }
 
   /// Warm the next couple of online items so skipping ahead is snappy (shares the call).

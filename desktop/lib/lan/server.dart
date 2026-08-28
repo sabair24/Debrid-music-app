@@ -20,6 +20,7 @@ import '../settings.dart';
 import '../soulseek.dart';
 import '../torbox.dart';
 import 'cast_manager.dart';
+import 'radiohaler.dart';
 import 'catalog.dart';
 import 'dtos.dart';
 import 'net.dart';
@@ -119,6 +120,9 @@ class LanServer {
 
   /// Zichzelf bijwerken op verzoek van een gekoppeld toestel. Zie `pc_bijwerker.dart`.
   final PcBijwerker bijwerker = PcBijwerker();
+
+  /// Nummers ophalen voor de radio van een gekoppeld toestel. Zie `radiohaler.dart`.
+  late final Radiohaler radiohaler = Radiohaler(downloads, soulseek);
   final int port;
   final String version;
   String token;
@@ -281,6 +285,8 @@ class LanServer {
         return _moveApply(req);
       case '/api/update':
         return _update(req);
+      case '/api/radio':
+        return _radio(req);
     }
 
     if (path.startsWith('/stream/')) return _stream(req);
@@ -1027,6 +1033,44 @@ class LanServer {
     final hier = version.split('+').first;
     return _json(req.response,
         op == 'start' ? await bijwerker.start(hier) : await bijwerker.stand(hier));
+  }
+
+  /// De radio van een gekoppeld toestel, in vier vragen op één weg.
+  ///
+  /// Vier `op`-waarden en geen vier routes, precies zoals `/api/update` het al doet: het gaat om één
+  /// voorziening, en vier ingangen zouden vier keer dezelfde bewaking en dezelfde foutafhandeling
+  /// nodig hebben.
+  ///
+  /// * `begin` — mag deze pc ophalen? Neemt bij ja meteen de ene Soulseek-aanmelding vast.
+  /// * `einde` — die aanmelding weer los.
+  /// * `haal` — ga dit nummer halen. Keert METEEN terug met een nummer om naar te vragen.
+  /// * `stand` — hoe staat het met dat nummer?
+  Future<void> _radio(HttpRequest req) async {
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final op = (body['op'] ?? '') as String;
+    switch (op) {
+      case 'begin':
+        final tegen = radiohaler.begin();
+        return _json(req.response, {'ok': tegen == null, if (tegen != null) 'reden': tegen});
+      case 'einde':
+        radiohaler.einde();
+        return _json(req.response, {'ok': true});
+      case 'haal':
+        final artiest = (body['artiest'] ?? '') as String;
+        final titel = (body['titel'] ?? '') as String;
+        if (titel.trim().isEmpty) return _unavailable(req, 'Zonder titel valt er niets te halen.');
+        final h = radiohaler.haal(
+          artiest: artiest,
+          titel: titel,
+          seconden: (body['seconden'] as num?)?.toInt(),
+          jaar: (body['jaar'] as num?)?.toInt(),
+        );
+        return _json(req.response, {'id': h.id});
+      case 'stand':
+        return _json(req.response, radiohaler.stand((body['id'] ?? '') as String));
+    }
+    return _unavailable(req, 'Onbekende radio-opdracht.');
   }
 
   Future<void> _corrections(HttpRequest req) async {
