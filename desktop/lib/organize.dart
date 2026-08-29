@@ -1297,6 +1297,32 @@ String trackNameKey(String filename) {
   return normKey(stem);
 }
 
+/// Namen om te proberen als [naam] in de doelmap al bezet is, van beste naar minst mooie.
+///
+/// **Waar dit vandaan komt.** Een torrent wordt PLAT uitgepakt: alle gekozen bestanden gaan naar één
+/// map, met alleen hun eigen bestandsnaam. Bij één album gaat dat goed. Bij een verzamelbox, een
+/// dubbel-cd of een discografie niet: die heet bij elke schijf opnieuw `01 - ….flac`, en `rename`
+/// schrijft zonder één woord over het vorige heen. Je koos honderd nummers, er stonden er twaalf, en
+/// nergens stond dat er iets was overschreven — alle taken meldden "klaar".
+///
+/// Vandaar de MAPNAAM als eerste uitwijk: `CD2 - 01 - Poupée de cire.flac` zegt nog waar het vandaan
+/// komt, wat `01 - Poupée de cire (2).flac` niet doet. Pas als die ook bezet is gaat het tellen.
+///
+/// Zuiver, en de aanroeper toetst zelf wat er vrij is — het verschilt per weg hoe je een naam
+/// vastlegt: een verhuizing kan kijken of hij bestaat, een download die naast tien andere loopt moet
+/// hem vastleggen vóór hij begint.
+Iterable<String> vrijeNamen(String naam, {String submap = ''}) sync* {
+  yield naam;
+  final dot = naam.lastIndexOf('.');
+  final stam = dot > 0 ? naam.substring(0, dot) : naam;
+  final ext = dot > 0 ? naam.substring(dot) : '';
+  final map = submap.trim();
+  if (map.isNotEmpty) yield '$map - $stam$ext';
+  for (var n = 2; n < 100; n++) {
+    yield map.isEmpty ? '$stam ($n)$ext' : '$map - $stam ($n)$ext';
+  }
+}
+
 /// `03 - D.A.N.C.E..flac` → `03 - D.A.N.C.E. (2).flac`, first free number.
 File _sidestep(File dest) {
   final p = dest.path;

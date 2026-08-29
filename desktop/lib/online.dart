@@ -720,6 +720,17 @@ class DownloadJob {
   /// handle, and offering a button that silently does nothing is worse than offering none.
   bool canCancel = false;
 
+  /// De gebruiker heeft deze BRON zelf aangewezen, ook al noemde hij geen los bestand.
+  ///
+  /// Het geval waarvoor dit bestaat is "Download album": je hebt één map van één peer uitgekozen,
+  /// maar per nummer staan er meer kopieën klaar voor als die peer niet levert — dus [exact] kan niet
+  /// gezet worden zonder die uitwijk kwijt te raken. Zonder een eigen vlag telde zo'n download als
+  /// automatisch, en ging de app er achteraf alsnog een "betere" versie voor zoeken.
+  ///
+  /// Wat het doet is precies hetzelfde als [exact]: het bestand wordt een vaste keuze (zie
+  /// `vaste_keuze.dart`) en er komt geen jacht op iets beters achteraan.
+  bool jouwKeuze = false;
+
   /// Identity of the TRACK, not of one peer's copy. Clicking five sources of the same song must
   /// not start five downloads of it.
   String? trackKey;
@@ -1118,7 +1129,11 @@ class DownloadManager extends ChangeNotifier {
   /// hadden gekund. Niet omdat de app het niet kon, maar omdat de aanvrager per stuk stond te
   /// wachten op een antwoord dat pas na afloop kwam.
   Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,
-      {String? key, TrackTags? authority, SoulseekFile? exact, bool wachtOpAfloop = true}) async {
+      {String? key,
+      TrackTags? authority,
+      SoulseekFile? exact,
+      bool jouwKeuze = false,
+      bool wachtOpAfloop = true}) async {
     if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
     if (candidates.isEmpty) return false;
     // Don't start a duplicate if this exact key is already in progress.
@@ -1150,6 +1165,7 @@ class DownloadManager extends ChangeNotifier {
       ..canCancel = true
       ..authority = authority
       ..exact = exact
+      ..jouwKeuze = jouwKeuze || exact != null
       ..candidates = candidates;
     jobs.insert(0, job);
     notifyListeners();
@@ -1196,6 +1212,9 @@ class DownloadManager extends ChangeNotifier {
             if (j.authority != null) 'authority': j.authority!.toJson(),
             // Een pc die middenin uitviel hervat de GEKOZEN kopie, niet de best gerangschikte.
             if (j.exact != null) 'exact': j.exact!.toJson(),
+            // Zonder dit is een albumdownload die een herstart overleeft ineens géén keuze meer, en
+            // gaat de app er alsnog iets "beters" voor zoeken.
+            if (j.jouwKeuze) 'jouwKeuze': true,
           }
       ]));
     } catch (_) {/* losing the note is not worth failing a download over */}
@@ -1244,7 +1263,8 @@ class DownloadManager extends ChangeNotifier {
       unawaited(enqueueSoulseekBest(cands,
               key: e['key'] as String?,
               authority: auth is Map<String, dynamic> ? TrackTags.fromJson(auth) : null,
-              exact: exact is Map<String, dynamic> ? SoulseekFile.fromJson(exact) : null)
+              exact: exact is Map<String, dynamic> ? SoulseekFile.fromJson(exact) : null,
+              jouwKeuze: e['jouwKeuze'] == true)
           .catchError((_) => false));
     }
     wachtendeHervattingen = start ? 0 : n;
@@ -1299,6 +1319,10 @@ class DownloadManager extends ChangeNotifier {
     // hetzelfde bestand, en zijn keuze hoort vooraan. Sorteren op kwaliteit is precies wat hem het
     // verkeerde nummer bezorgde.
     final keuze = job.exact;
+    // Jouw keuze, in de brede zin: een aangewezen BESTAND (`exact`) of een aangewezen BRON — "Download
+    // album" uit een Soulseek-lijst. In beide gevallen geldt hetzelfde: het blijft staan, en er komt
+    // geen jacht op iets wat de app beter vindt. Zie [DownloadJob.jouwKeuze].
+    final vast = job.jouwKeuze;
     final ranked = keuze == null
         ? ([...candidates]..sort(_rankSlsk))
         : [keuze, ...candidates.where((c) => c.username != keuze.username || c.filename != keuze.filename)];
@@ -1336,7 +1360,7 @@ class DownloadManager extends ChangeNotifier {
         // tijdens het filen wordt er al vergeleken. Andersom kwam het net te laat: `placeFileDetailed`
         // zet de nieuwe kopie tegen wat er ligt, en zonder bescherming besliste de grootte. Zo belandde
         // de handmatig gekozen L'été indien in `_dubbel`.
-        if (keuze != null) await onthoudVasteKeuze(staged.path);
+        if (vast) await onthoudVasteKeuze(staged.path);
         // METEN VÓÓR HET FILEN, om exact dezelfde reden als de regel hierboven: `placeFileDetailed`
         // vergelijkt tijdens het landen, en `firstIsBetter` kijkt dan al naar het oordeel. Een mp3 die
         // naar FLAC is omgezet is vaak GROTER dan het origineel — gemeten 76 MB tegen 34 MB — en zou
@@ -1354,7 +1378,7 @@ class DownloadManager extends ChangeNotifier {
         // En na afloop op het pad waar hij écht ligt. `_move` verhuist de markering mee, maar bij
         // `Placement.duplicate` is de bron verwijderd en is `uit.path` de kopie die bleef staan — die
         // hoort de bescherming niet zomaar te erven.
-        if (keuze != null && how == Placement.moved) await onthoudVasteKeuze(uit.path);
+        if (vast && how == Placement.moved) await onthoudVasteKeuze(uit.path);
       } catch (_) {/* leave it where it landed — the scan still finds it */}
       job.progress = 1;
       job.status = 'done';
@@ -1560,7 +1584,11 @@ class DownloadManager extends ChangeNotifier {
       // Bij een handmatige keuze: niets van dit alles. "Beter" is hier een ánder bestand, en de
       // gebruiker heeft juist gezegd dat hij DIT wil. Dagen later alsnog vervangen door een kopie die
       // hoger scoort is dezelfde overrule, alleen trager.
-      if (keuze != null) return ok;
+      //
+      // Sinds 29-08-2026 geldt dat ook voor een heel album dat je zelf uit een lijst koos, en dat is
+      // met zoveel woorden gevraagd. De prijs staat erbij en is echt: haal je een mp3-album omdat er
+      // op dat moment geen lossless was, dan gaat de app er daarna niet meer zelf achteraan.
+      if (vast) return ok;
       var better = ranked.where((f) => clearlyBetter(f, from)).toList();
       // BETRAPT BIJ HET LANDEN. Dan deugt "beter" niet meer als maatstaf, want de kopie die we
       // namen had juist de MEESTE bits — dat is precies waarom hij won. `clearlyBetter` vindt hier
@@ -2531,7 +2559,12 @@ class DownloadManager extends ChangeNotifier {
       final cands = tracks[i];
       if (cands.isEmpty) continue;
       final job = DownloadJob(cands.first.displayName, status: 'queued')
-        ..authority = i < authorities.length ? authorities[i] : null;
+        ..authority = i < authorities.length ? authorities[i] : null
+        // Je hebt deze MAP van deze peer uitgekozen, dus dit is een keuze en geen gok van de app.
+        // `exact` kan hier niet: per nummer staan er meer kopieën klaar voor het geval die ene peer
+        // niet levert, en die uitwijk is juist waarom een albumdownload doorloopt. Zie
+        // [DownloadJob.jouwKeuze].
+        ..jouwKeuze = true;
       jobs.insert(0, job);
       // Start them ALL now — _withSlsk runs up to _slskMaxParallel at once on the ONE shared
       // login and queues the rest, so a whole album downloads in parallel like the native client.
@@ -2735,14 +2768,27 @@ class DownloadManager extends ChangeNotifier {
         // Een nummer dat je onderweg hebt weggetikt hoort niet alsnog in je bibliotheek te landen.
         // Het stuk dat aria2 er al van had blijft in zijn eigen map staan en gaat mee in de
         // opruiming hieronder.
-        if (b == null || jobs[i].cancelled) continue;
+        if (jobs[i].cancelled) continue;
+        if (b == null) {
+          // Stil doorlopen stond hier, en dat is de ergste soort: `ruimOpNaTorrent` gooit aria2's map
+          // zo meteen weg, dus dit nummer is dan wég terwijl zijn regel op "bezig" blijft staan.
+          jobs[i].status = 'failed';
+          jobs[i].detail = 'aria2 kende dit bestand niet meer';
+          continue;
+        }
         final bron = File(b.pad);
         if (!await bron.exists()) {
           jobs[i].status = 'failed';
           jobs[i].detail = 'aria2 meldde klaar, maar het bestand staat er niet';
           continue;
         }
-        await _verhuisNaar(bron, destDir, files[i].label);
+        final geland = await _verhuisNaar(bron, destDir, files[i].label);
+        if (geland == null) {
+          jobs[i].status = 'failed';
+          jobs[i].detail = 'geen vrije naam in de doelmap';
+          continue;
+        }
+        await _jouwKeuze(geland);
         jobs[i].progress = 1;
         jobs[i].status = 'done';
       }
@@ -2783,6 +2829,10 @@ class DownloadManager extends ChangeNotifier {
     http.Client? client;
     IOSink? sink;
     File? dest;
+    // Het pad waar dit bestand terechtkwam, apart bijgehouden. Niet `dest` opnieuw uitlezen na het
+    // `finally`: of dat daar nog als "niet null" geldt hangt af van hoe de analyse door een
+    // try/catch/finally heen redeneert, en dat is geen ding om een bouw op te laten struikelen.
+    var gelandPad = '';
     var complete = false;
     try {
       final url = await online.resolveTrackUrl(torrentId, f.id);
@@ -2791,7 +2841,13 @@ class DownloadManager extends ChangeNotifier {
       final resp = await client.send(req).timeout(_torrentStilte);
       if (resp.statusCode < 200 || resp.statusCode >= 300) throw 'HTTP ${resp.statusCode}';
       final total = resp.contentLength ?? f.size;
-      dest = File('${destDir.path}${Platform.pathSeparator}${_sanitize(f.label)}');
+      // Een vrije naam, en meteen VASTGELEGD. Dezelfde botsing als bij de torrentweg — een
+      // verzamelbox heet bij elke schijf opnieuw `01 - ….flac` — maar hier komen de bestanden náást
+      // elkaar binnen, dus "bestaat hij al?" is geen antwoord: twee downloads kijken dan allebei op
+      // hetzelfde moment en zien allebei niets. `create(exclusive: true)` slaagt maar één keer.
+      dest = await _legVast(destDir, f.label);
+      if (dest == null) throw 'geen vrije naam in de doelmap';
+      gelandPad = dest.path;
       sink = dest.openWrite();
       var received = 0;
       // De wachtklok staat op de STROOM en niet op het geheel: hij slaat toe als er zólang niets
@@ -2835,26 +2891,82 @@ class DownloadManager extends ChangeNotifier {
         await dest.delete().catchError((_) => dest!);
       }
     }
+    // Jouw keuze, dus hij verliest straks niet van iets wat de app beter vindt. Zie [_jouwKeuze].
+    if (gelandPad.isNotEmpty) await _jouwKeuze(gelandPad);
     job.progress = 1;
     job.status = 'done';
     notifyListeners();
     await onLibraryChanged();
   }
 
-  /// Eén bestand uit aria2's eigen map naar de doelmap halen.
+  /// Dit bestand heeft de gebruiker ZELF aangewezen, dus het verliest nooit van een automatische regel.
+  ///
+  /// **Waarom de torrentweg dit nodig heeft en de rest niet.** Bij Soulseek bestond dit al, maar
+  /// alleen voor "haal precies dít bestand van precies díe peer" (`job.exact`). Een torrent is per
+  /// definitie zo'n keuze: je hebt een uitgave uitgezocht, soms zelfs één nummer eruit. En juist die
+  /// stond nergens beschermd — hij landde los in de downloadmap, en de eerstvolgende opruiming of
+  /// dubbelveger liet [firstIsBetter] beslissen. Die kijkt naar formaat en grootte, dus jouw keuze
+  /// verloor van iets wat de app beter vond. Gemeld op 29-08-2026: "als ik manueel download moet dit
+  /// overheersen."
+  ///
+  /// Het kost hier niets aan opwaarderen: de jacht op een betere kwaliteit loopt alleen over Soulseek
+  /// en raakt een torrentbestand nooit.
+  Future<void> _jouwKeuze(String pad) async {
+    try {
+      await onthoudVasteKeuze(pad);
+    } catch (_) {/* de download is geslaagd; de bescherming is geen voorwaarde */}
+  }
+
+  /// Een vrije naam in [destDir] pakken en meteen vastleggen, of null als er geen te vinden is.
+  ///
+  /// Vastleggen en niet alleen kijken: [_download] draait voor elk bestand van een plaat tegelijk,
+  /// en twee downloads die allebei "bestaat hij al?" vragen krijgen allebei "nee" — waarna de een
+  /// over de ander heen schrijft. `create(exclusive: true)` kan maar door één van de twee winnen.
+  Future<File?> _legVast(Directory destDir, String naam) async {
+    for (final kandidaat in vrijeNamen(_sanitize(naam))) {
+      final doel = File('${destDir.path}${Platform.pathSeparator}$kandidaat');
+      try {
+        await doel.create(exclusive: true);
+        return doel;
+      } catch (_) {
+        continue; // bezet — de volgende naam
+      }
+    }
+    return null;
+  }
+
+  /// Eén bestand uit aria2's eigen map naar de doelmap halen. Geeft het pad terug, of null.
   ///
   /// De bibliotheek leest de doelmap; wat in de submap van aria2 blijft staan gaat straks mee in
   /// [ruimOpNaTorrent] en is dan weg.
-  Future<void> _verhuisNaar(File bron, Directory destDir, String naam) async {
-    final doel = File('${destDir.path}${Platform.pathSeparator}${_sanitize(naam)}');
-    if (bron.path == doel.path) return;
-    try {
-      await bron.rename(doel.path);
-    } catch (_) {
-      // Over een schijfgrens heen kan `rename` niet; dan maar kopiëren en de bron opruimen.
-      await bron.copy(doel.path);
-      await bron.delete().catchError((_) => bron);
+  ///
+  /// **Nooit over een ander bestand heen.** Een torrent wordt hier plat uitgepakt, dus alles gaat op
+  /// zijn eigen naam naar dezelfde map — en een verzamelbox of een discografie heet bij elke schijf
+  /// opnieuw `01 - ….flac`. `rename` schrijft daar zonder één woord overheen: je koos honderd
+  /// nummers, er stonden er twaalf, elke taak meldde "klaar", en de originelen waren al door
+  /// [ruimOpNaTorrent] opgeruimd. Zie [vrijeNamen] voor welke naam er dan gekozen wordt.
+  ///
+  /// De aanroepers verhuizen één voor één, dus kijken of een naam vrij is kan hier gewoon.
+  Future<String?> _verhuisNaar(File bron, Directory destDir, String naam) async {
+    // De map waar het bestand IN DE TORRENT stond — dat is wat "CD2" of "1965 - Poupée de cire" van
+    // elkaar onderscheidt zodra de namen erin gelijk zijn.
+    final ouder = bron.parent.path;
+    final delen = ouder.split(Platform.pathSeparator).where((s) => s.isNotEmpty).toList();
+    final submap = ouder == destDir.path || delen.isEmpty ? '' : delen.last;
+    for (final kandidaat in vrijeNamen(_sanitize(naam), submap: _sanitize(submap))) {
+      final doel = File('${destDir.path}${Platform.pathSeparator}$kandidaat');
+      if (bron.path == doel.path) return doel.path;
+      if (await doel.exists()) continue;
+      try {
+        await bron.rename(doel.path);
+      } catch (_) {
+        // Over een schijfgrens heen kan `rename` niet; dan maar kopiëren en de bron opruimen.
+        await bron.copy(doel.path);
+        await bron.delete().catchError((_) => bron);
+      }
+      return doel.path;
     }
+    return null;
   }
 
   /// Werk in de torrentrij zetten en een Future teruggeven die afloopt als het klaar is.
