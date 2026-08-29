@@ -29,6 +29,26 @@ import 'flac_tags.dart';
 import 'torbox_stand.dart';
 import 'vaste_keuze.dart';
 
+/// De KORTE map waarin aria2 mag werken, náást de doelmap in plaats van erin.
+///
+/// **Waarom dit een eigen functie is.** Windows kapt een pad op 260 tekens, en die grens haal je
+/// sneller dan je denkt zodra een plaatnaam twee keer in hetzelfde pad staat. Dat gebeurde:
+///
+///     D:\Flac music 2024\DebridMusic Downloads\Tears For Fears - Songs From The Big Chair (Deluxe
+///     Edition) (Deluxe) (1985 Pop Rock) [Flac 16-44]\Tears For Fears - Songs From The Big Chair
+///     (Deluxe Edition) (Deluxe) (1985 Pop Rock) [Flac 16-44]\01. Tears For Fears - Shout.flac
+///
+/// 234 tekens, en de melding op het scherm was "File I/O error 3" — ERROR_PATH_NOT_FOUND, geen woord
+/// over lengte. De doelmap heet al naar de plaat; aria2 maakt daarin nóg een map met diezelfde naam,
+/// want zo heet de torrent. Dus laten we hem in `.dm-<8 tekens>` werken en verhuizen we de gekozen
+/// nummers daarna. Zelfde schijf, dus dat verhuizen is een hernoeming.
+String werkMapPad(Directory doelMap, String hash, String torrentNaam) {
+  final kort = hash.length >= 8
+      ? hash.substring(0, 8)
+      : torrentNaam.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').padRight(8, 'x').substring(0, 8);
+  return '${doelMap.parent.path}${Platform.pathSeparator}.dm-$kort';
+}
+
 /// Wat er terugkwam toen de app een bron zélf probeerde te pakken.
 ///
 /// Het verschil tussen deze vier is het verschil tussen vier totaal andere adviezen: het lukte,
@@ -2695,11 +2715,29 @@ class DownloadManager extends ChangeNotifier {
       return;
     }
 
+    // WAAR ARIA2 SCHRIJFT IS NIET WAAR HET HEEN MOET, en dat scheelt honderd tekens.
+    //
+    // De doelmap heet al naar de plaat, en aria2 maakt dáárbinnen nog een map met diezelfde naam —
+    // want zo heet de torrent nu eenmaal. Bij een lange naam telt dat dubbel op:
+    //
+    //     D:\Flac music 2024\DebridMusic Downloads\Tears For Fears - Songs From The Big Chair
+    //     (Deluxe Edition) (Deluxe) (1985 Pop Rock) [Flac 16-44]\Tears For Fears - Songs From The
+    //     Big Chair (Deluxe Edition) (Deluxe) (1985 Pop Rock) [Flac 16-44]\01. ... Shout.flac
+    //
+    // Dat is 234 tekens, en Windows kapt op 260. Gemeten op 29-08-2026: "Failed to open the file …
+    // cause: File I/O error 3" — dat is ERROR_PATH_NOT_FOUND, en er stond geen woord bij over
+    // lengte. Daarna liep die hele plaat vast, want het halve bestand bleef staan.
+    //
+    // Dus laat aria2 in een KORTE map werken, met de infohash als naam, en verhuizen we de gekozen
+    // nummers daarna naar de plaat waar ze horen. Dezelfde schijf, dus dat verhuizen kost niets.
     // De bladen mee in dezelfde zwerm. Ze horen niet bij `files` — daar hangt per element een balk
     // aan — maar wel bij wat aria2 moet ophalen, anders staat er na afloop geen cue naast het
     // albumbestand en valt er niets te knippen.
     final gekozen = [...files.map((f) => f.id), ...cues.map((f) => f.id)];
     final hash = (torrent.hash ?? '').toLowerCase();
+
+    final werkMap = Directory(werkMapPad(destDir, hash, torrent.name));
+    await werkMap.create(recursive: true);
 
     // EERST KIJKEN OF WE HEM ZELF AL HEBBEN, en pas daarna aanmelden.
     //
@@ -2718,7 +2756,7 @@ class DownloadManager extends ChangeNotifier {
         _log.line('torrent $hash liep al (gid=$lopend) — erbij gekozen zonder nieuwe aanmelding');
       }
     }
-    gid ??= await motor.voegTorrentToe(torrent.lokaleTorrent!, map: destDir.path, kies: gekozen);
+    gid ??= await motor.voegTorrentToe(torrent.lokaleTorrent!, map: werkMap.path, kies: gekozen);
 
     // AANHAKEN IN PLAATS VAN OPGEVEN.
     //
@@ -2768,7 +2806,7 @@ class DownloadManager extends ChangeNotifier {
         if (jobs.every((j) => j.cancelled)) return;
         await Future<void>.delayed(const Duration(seconds: 3));
         gid = await motor.voegTorrentToe(torrent.lokaleTorrent!,
-            map: destDir.path, kies: gekozen);
+            map: werkMap.path, kies: gekozen);
       }
     }
 
@@ -2882,7 +2920,15 @@ class DownloadManager extends ChangeNotifier {
       notifyListeners();
       // Opruimen mag alleen als deze taak van ons alleen is. Hangt er nog een tweede nummer van
       // dezelfde plaat aan, dan gooit `ruimOpNaTorrent` de map weg waar dat nummer nog in staat.
-      if ((_lopersPerTorrent[gid] ?? 1) <= 1) await ruimOpNaTorrent(destDir, s);
+      if ((_lopersPerTorrent[gid] ?? 1) <= 1) {
+        await ruimOpNaTorrent(werkMap, s);
+        // En de werkmap zelf: hij hoort niet in de muziekmap thuis zodra hij leeg is.
+        try {
+          if (await werkMap.exists()) await werkMap.delete(recursive: true);
+        } catch (_) {
+          // Blijft hij staan, dan is dat hooguit een lege verborgen map.
+        }
+      }
       await onLibraryChanged();
     } finally {
       // De torrent uit aria2 halen zodra hij klaar is: hij seedt toch niet (--seed-time=0) en een

@@ -17839,6 +17839,27 @@ class _SettingsDialogState extends State<SettingsDialog> {
   ///
   /// Meteen proberen in plaats van bij de eerstvolgende zoekopdracht: een adres dat je bewaart
   /// zonder het te proberen is een instelling waarvan je pas veel later hoort dat hij niets deed.
+  bool _fsBezig = false;
+
+  /// Een vers Cloudflare-koekje halen zonder plakwerk.
+  ///
+  /// De uitkomst komt als melding onderin, want dit is precies het soort knop waarvan je anders niet
+  /// weet of hij iets deed: het koekje is onzichtbaar, en "het werkt weer" merk je pas een
+  /// zoekopdracht later.
+  Future<void> _versKoekjeViaFlareSolverr() async {
+    setState(() => _fsBezig = true);
+    final rt = context.read<OnlineService>().rutracker;
+    final uit = await rt.ververViaFlareSolverr();
+    if (!mounted) return;
+    setState(() => _fsBezig = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(uit.ok
+          ? 'Vers koekje opgehaald en getoetst — RuTracker doet het weer.'
+          : (uit.error ?? 'Het lukte niet.')),
+      duration: const Duration(seconds: 6),
+    ));
+  }
+
   bool _torznabBusy = false;
   bool _torznabOk = false;
   String _torznabUit = '';
@@ -18467,6 +18488,19 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 context: context, builder: (_) => const RuTrackerKoekjeDialoog()),
                             icon: const Icon(Icons.cookie_outlined, size: 16),
                             label: const Text('Koekje uit browser…'),
+                          ),
+                          // Hetzelfde koekje, maar dan zonder jou. De app doet dit voortaan ook
+                          // vanzelf zodra RuTracker een 403 geeft; deze knop is er om het NU te
+                          // kunnen, en om te kunnen zien of FlareSolverr eigenlijk wel draait.
+                          OutlinedButton.icon(
+                            onPressed: _fsBezig ? null : _versKoekjeViaFlareSolverr,
+                            icon: _fsBezig
+                                ? const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Icon(Icons.autorenew_rounded, size: 16),
+                            label: const Text('Koekje verversen'),
                           ),
                           // Alleen als dit toestel aan een pc hangt. Dan gebeurt het zoeken dáár, en
                           // een aanmelding die hier blijft staan doet niets — precies het gat waar

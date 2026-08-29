@@ -353,6 +353,19 @@ class Aria2 {
       final opties = <String, String>{
         'dir': map,
         if (kies.isNotEmpty) 'select-file': kies.join(','),
+        // Een half bestand van een vorige poging mag geen blokkade zijn.
+        //
+        // **Gemeten op 29-08-2026** met Tears For Fears — Songs From The Big Chair. Nummer 1 viel om
+        // op een te lang pad; daarna haalde `forceRemove` het `.aria2`-administratiebestand weg maar
+        // bleef het halve bestand staan. Elke volgende poging op diezelfde plaat kreeg toen:
+        //
+        //     "… exists, but a control file(*.aria2) does not exist. Download was canceled in order
+        //      to prevent your file from being truncated to 0."
+        //
+        // Zonder deze vlag is die plaat dus voorgoed dicht voor de app, tot iemand met de hand een
+        // map leegmaakt die hij niet kan vinden. aria2 controleert de stukken toch tegen de hashes
+        // uit de torrent, dus overschrijven kost hooguit werk, nooit juistheid.
+        'allow-overwrite': 'true',
       };
       final gid = await _roep('aria2.addTorrent', [base64Encode(torrent), <String>[], opties]);
       _log.line('torrent toegevoegd: gid=$gid, kies=${kies.isEmpty ? "alles" : kies.join(",")}, map=$map');

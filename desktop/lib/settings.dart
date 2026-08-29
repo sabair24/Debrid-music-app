@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'flaresolverr.dart';
 import 'paths.dart';
 
 /// Local, on-device settings (API tokens / logins). Stored as settings.json in the app's own
@@ -82,6 +83,15 @@ class AppSettings extends ChangeNotifier {
   /// hele torrent ophalen. Gemeten met B.B.E. — Seven Days And One Week: lokaal 26 MB in 73 s uit een
   /// zwerm van drie seeders, tegenover een TorBox die die dag helemaal niet antwoordde.
   String torrentMotor = 'auto';
+
+  /// Waar FlareSolverr luistert. Leeg betekent: niet gebruiken.
+  ///
+  /// **Waarvoor.** RuTracker staat achter Cloudflare, en het `cf_clearance`-koekje dat daar langs
+  /// komt verloopt — gebonden aan IP én User-Agent. Tot nu toe betekende dat plakwerk uit Chrome
+  /// (zie `RuTrackerService.gebruikPlaksel`): netwerktab open, "Kopieer als cURL", plakken. Met dit
+  /// adres ingevuld haalt de app zelf een vers koekje zodra hij een 403 krijgt.
+  String flaresolverrUrl = FlareSolverr.standaardAdres;
+
   // TIDAL: client id/secret entered by the user; the rest is managed by the OAuth flow.
   String tidalClientId = '';
   String tidalClientSecret = '';
@@ -283,6 +293,7 @@ class AppSettings extends ChangeNotifier {
         rutrackerUa = (m['rutracker_ua'] ?? '') as String;
         torznabUrl = (m['torznab_url'] ?? '') as String;
         torznabKey = (m['torznab_key'] ?? '') as String;
+        flaresolverrUrl = (m['flaresolverr_url'] ?? FlareSolverr.standaardAdres) as String;
         torrentMotor = (m['torrent_motor'] ?? 'auto') as String;
         tidalClientId = (m['tidal_client_id'] ?? '') as String;
         tidalClientSecret = (m['tidal_client_secret'] ?? '') as String;
@@ -320,6 +331,7 @@ class AppSettings extends ChangeNotifier {
         'rutracker_ua': rutrackerUa,
         'torznab_url': torznabUrl,
         'torznab_key': torznabKey,
+        'flaresolverr_url': flaresolverrUrl,
         'torrent_motor': torrentMotor,
         'tidal_client_id': tidalClientId,
         'tidal_client_secret': tidalClientSecret,
