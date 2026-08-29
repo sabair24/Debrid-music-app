@@ -5342,7 +5342,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             child: Text(_showMissing ? 'Verberg ontbrekende' : 'Toon ontbrekende',
                 style: const TextStyle(fontSize: 12)),
           ),
-          const SizedBox(width: 6),
+          // De knop niet op een tv: dat is ophalen. De telling ernaast blijft wel staan -- weten
+          // dat een plaat niet compleet is, is nuttig; hem daar completeren niet.
+          if (!isTv) const SizedBox(width: 6),
+          if (!isTv)
           FilledButton.icon(
             style: FilledButton.styleFrom(
                 backgroundColor: _accent,
@@ -6122,7 +6125,12 @@ class _TrackRowState extends State<TrackRow> {
               // scherm dat de app heeft, en dat voor élke nummerrij. Die ruimte gaat nu naar de
               // titel, waar hij te zien is. De functies zelf blijven bereikbaar: lang indrukken
               // opent hetzelfde menu, en dat staat op touch al aan.
-              if (!isCompact(context)) ...[
+              // Op een tv niet. `_hover` wordt hier ook door FOCUS gezet -- zie onFocusChange
+              // hierboven, en dat is met opzet, want met een afstandsbediening kun je een knop
+              // binnen de scherpe regel anders niet bereiken. Gevolg was wel dat verplaatsen en
+              // verwijderen op de tv juist het meest in het oog sprongen: ze verschenen zodra je
+              // een nummer aanwees. Dat is precies wat daar niet hoort.
+              if (!isTv && !isCompact(context)) ...[
               SizedBox(
                 width: 36,
                 child: _hover
@@ -10510,6 +10518,9 @@ class TracksView extends StatelessWidget {
                       // op de televisie draait, en daar bestaat zweven niet. Wel dezelfde bevestiging
                       // met dezelfde twee keuzes — uit de bibliotheek halen en van schijf wissen
                       // horen nooit hetzelfde te betekenen.
+                      // Niet op een tv: daar is de app een speler, en een verwijderknop op elke
+                      // regel is precies wat je met een afstandsbediening niet wilt tegenkomen.
+                      if (!isTv)
                       SizedBox(
                         width: 34,
                         child: TvLabelled(
