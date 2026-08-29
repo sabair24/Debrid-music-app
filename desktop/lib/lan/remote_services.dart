@@ -408,7 +408,11 @@ class RemoteDownloadManager extends DownloadManager {
 
   @override
   Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,
-      {String? key, TrackTags? authority, SoulseekFile? exact, bool wachtOpAfloop = true}) async {
+      {String? key,
+      TrackTags? authority,
+      SoulseekFile? exact,
+      bool jouwKeuze = false,
+      bool wachtOpAfloop = true}) async {
     final payload = <String, dynamic>{
       'candidates': [for (final c in candidates) c.toJson()],
       'key': key,
@@ -419,6 +423,8 @@ class RemoteDownloadManager extends DownloadManager {
       if (authority != null) 'authority': authority.toJson(),
       // Reist mee, anders zou de pc een handmatige keuze van de iPad alsnog herrangschikken.
       if (exact != null) 'exact': exact.toJson(),
+      // En om dezelfde reden: wat je op de iPad zelf aanwees, hoort op de pc een keuze te blijven.
+      if (jouwKeuze) 'jouwKeuze': true,
     };
     try {
       final res = await _rpc.post('/api/soulseek/download', payload);

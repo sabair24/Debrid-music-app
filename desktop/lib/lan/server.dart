@@ -829,6 +829,7 @@ class LanServer {
         key: body['key'] as String?,
         authority: _authorityOf(body),
         exact: gekozen is Map<String, dynamic> ? SoulseekFile.fromJson(gekozen) : null,
+        jouwKeuze: body['jouwKeuze'] == true,
         wachtOpAfloop: false);
   }
 

@@ -720,6 +720,17 @@ class DownloadJob {
   /// handle, and offering a button that silently does nothing is worse than offering none.
   bool canCancel = false;
 
+  /// De gebruiker heeft deze BRON zelf aangewezen, ook al noemde hij geen los bestand.
+  ///
+  /// Het geval waarvoor dit bestaat is "Download album": je hebt één map van één peer uitgekozen,
+  /// maar per nummer staan er meer kopieën klaar voor als die peer niet levert — dus [exact] kan niet
+  /// gezet worden zonder die uitwijk kwijt te raken. Zonder een eigen vlag telde zo'n download als
+  /// automatisch, en ging de app er achteraf alsnog een "betere" versie voor zoeken.
+  ///
+  /// Wat het doet is precies hetzelfde als [exact]: het bestand wordt een vaste keuze (zie
+  /// `vaste_keuze.dart`) en er komt geen jacht op iets beters achteraan.
+  bool jouwKeuze = false;
+
   /// Identity of the TRACK, not of one peer's copy. Clicking five sources of the same song must
   /// not start five downloads of it.
   String? trackKey;
@@ -1118,7 +1129,11 @@ class DownloadManager extends ChangeNotifier {
   /// hadden gekund. Niet omdat de app het niet kon, maar omdat de aanvrager per stuk stond te
   /// wachten op een antwoord dat pas na afloop kwam.
   Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,
-      {String? key, TrackTags? authority, SoulseekFile? exact, bool wachtOpAfloop = true}) async {
+      {String? key,
+      TrackTags? authority,
+      SoulseekFile? exact,
+      bool jouwKeuze = false,
+      bool wachtOpAfloop = true}) async {
     if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
     if (candidates.isEmpty) return false;
     // Don't start a duplicate if this exact key is already in progress.
@@ -1150,6 +1165,7 @@ class DownloadManager extends ChangeNotifier {
       ..canCancel = true
       ..authority = authority
       ..exact = exact
+      ..jouwKeuze = jouwKeuze || exact != null
       ..candidates = candidates;
     jobs.insert(0, job);
     notifyListeners();
@@ -1196,6 +1212,9 @@ class DownloadManager extends ChangeNotifier {
             if (j.authority != null) 'authority': j.authority!.toJson(),
             // Een pc die middenin uitviel hervat de GEKOZEN kopie, niet de best gerangschikte.
             if (j.exact != null) 'exact': j.exact!.toJson(),
+            // Zonder dit is een albumdownload die een herstart overleeft ineens géén keuze meer, en
+            // gaat de app er alsnog iets "beters" voor zoeken.
+            if (j.jouwKeuze) 'jouwKeuze': true,
           }
       ]));
     } catch (_) {/* losing the note is not worth failing a download over */}
@@ -1244,7 +1263,8 @@ class DownloadManager extends ChangeNotifier {
       unawaited(enqueueSoulseekBest(cands,
               key: e['key'] as String?,
               authority: auth is Map<String, dynamic> ? TrackTags.fromJson(auth) : null,
-              exact: exact is Map<String, dynamic> ? SoulseekFile.fromJson(exact) : null)
+              exact: exact is Map<String, dynamic> ? SoulseekFile.fromJson(exact) : null,
+              jouwKeuze: e['jouwKeuze'] == true)
           .catchError((_) => false));
     }
     wachtendeHervattingen = start ? 0 : n;
@@ -1299,6 +1319,10 @@ class DownloadManager extends ChangeNotifier {
     // hetzelfde bestand, en zijn keuze hoort vooraan. Sorteren op kwaliteit is precies wat hem het
     // verkeerde nummer bezorgde.
     final keuze = job.exact;
+    // Jouw keuze, in de brede zin: een aangewezen BESTAND (`exact`) of een aangewezen BRON — "Download
+    // album" uit een Soulseek-lijst. In beide gevallen geldt hetzelfde: het blijft staan, en er komt
+    // geen jacht op iets wat de app beter vindt. Zie [DownloadJob.jouwKeuze].
+    final vast = job.jouwKeuze;
     final ranked = keuze == null
         ? ([...candidates]..sort(_rankSlsk))
         : [keuze, ...candidates.where((c) => c.username != keuze.username || c.filename != keuze.filename)];
@@ -1336,7 +1360,7 @@ class DownloadManager extends ChangeNotifier {
         // tijdens het filen wordt er al vergeleken. Andersom kwam het net te laat: `placeFileDetailed`
         // zet de nieuwe kopie tegen wat er ligt, en zonder bescherming besliste de grootte. Zo belandde
         // de handmatig gekozen L'été indien in `_dubbel`.
-        if (keuze != null) await onthoudVasteKeuze(staged.path);
+        if (vast) await onthoudVasteKeuze(staged.path);
         // METEN VÓÓR HET FILEN, om exact dezelfde reden als de regel hierboven: `placeFileDetailed`
         // vergelijkt tijdens het landen, en `firstIsBetter` kijkt dan al naar het oordeel. Een mp3 die
         // naar FLAC is omgezet is vaak GROTER dan het origineel — gemeten 76 MB tegen 34 MB — en zou
@@ -1354,7 +1378,7 @@ class DownloadManager extends ChangeNotifier {
         // En na afloop op het pad waar hij écht ligt. `_move` verhuist de markering mee, maar bij
         // `Placement.duplicate` is de bron verwijderd en is `uit.path` de kopie die bleef staan — die
         // hoort de bescherming niet zomaar te erven.
-        if (keuze != null && how == Placement.moved) await onthoudVasteKeuze(uit.path);
+        if (vast && how == Placement.moved) await onthoudVasteKeuze(uit.path);
       } catch (_) {/* leave it where it landed — the scan still finds it */}
       job.progress = 1;
       job.status = 'done';
@@ -1560,7 +1584,11 @@ class DownloadManager extends ChangeNotifier {
       // Bij een handmatige keuze: niets van dit alles. "Beter" is hier een ánder bestand, en de
       // gebruiker heeft juist gezegd dat hij DIT wil. Dagen later alsnog vervangen door een kopie die
       // hoger scoort is dezelfde overrule, alleen trager.
-      if (keuze != null) return ok;
+      //
+      // Sinds 29-08-2026 geldt dat ook voor een heel album dat je zelf uit een lijst koos, en dat is
+      // met zoveel woorden gevraagd. De prijs staat erbij en is echt: haal je een mp3-album omdat er
+      // op dat moment geen lossless was, dan gaat de app er daarna niet meer zelf achteraan.
+      if (vast) return ok;
       var better = ranked.where((f) => clearlyBetter(f, from)).toList();
       // BETRAPT BIJ HET LANDEN. Dan deugt "beter" niet meer als maatstaf, want de kopie die we
       // namen had juist de MEESTE bits — dat is precies waarom hij won. `clearlyBetter` vindt hier
@@ -2531,7 +2559,12 @@ class DownloadManager extends ChangeNotifier {
       final cands = tracks[i];
       if (cands.isEmpty) continue;
       final job = DownloadJob(cands.first.displayName, status: 'queued')
-        ..authority = i < authorities.length ? authorities[i] : null;
+        ..authority = i < authorities.length ? authorities[i] : null
+        // Je hebt deze MAP van deze peer uitgekozen, dus dit is een keuze en geen gok van de app.
+        // `exact` kan hier niet: per nummer staan er meer kopieën klaar voor het geval die ene peer
+        // niet levert, en die uitwijk is juist waarom een albumdownload doorloopt. Zie
+        // [DownloadJob.jouwKeuze].
+        ..jouwKeuze = true;
       jobs.insert(0, job);
       // Start them ALL now — _withSlsk runs up to _slskMaxParallel at once on the ONE shared
       // login and queues the rest, so a whole album downloads in parallel like the native client.
