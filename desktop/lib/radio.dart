@@ -89,6 +89,18 @@ abstract class Radiobron {
   /// Loslaten wat [begin] genomen heeft. Mag vaker dan één keer.
   void einde();
 
+  /// Alles wat nu opgehaald wordt onmiddellijk afbreken. Mag vaker dan één keer.
+  ///
+  /// **Los van [einde], want het gebeurt ook zonder dat.** Start je een nieuwe radio, dan houdt de
+  /// vorige op maar blijft de Soulseek-aanmelding staan — die is net opnieuw genomen voor de radio
+  /// die begint. De haaltjes van de vorige radio horen dan wél weg.
+  ///
+  /// Zonder dit liepen ze door: acht haaltjes die minuten na het afsluiten alsnog op je schijf
+  /// landen, van een radio die niet meer bestaat en die ze dus ook nooit meer opruimt of in een rij
+  /// zet. "Vanaf de radio stopt moeten de downloads ook stoppen, want nu zinderen er nog een paar
+  /// achter."
+  void staak();
+
   /// Eén nummer halen. Geeft het nummer terug zoals het in de bibliotheek staat, of null.
   Future<Track?> haal(Radioplek plek);
 
@@ -139,6 +151,9 @@ class EigenRadiobron implements Radiobron {
     _los = null;
     los?.call();
   }
+
+  @override
+  void staak() => downloads.staakRadiohalen();
 
   @override
   Future<Track?> haal(Radioplek plek) async {
@@ -317,6 +332,9 @@ class RadioBesturing extends ChangeNotifier {
     _sessie++; // alles wat nog onderweg is hoort nergens meer bij
     final liep = _loopt;
     _loopt = false;
+    // En "hoort nergens meer bij" is niet genoeg: wat er loopt moet ook OPHOUDEN. Altijd, ook als de
+    // aanmelding blijft staan omdat er een nieuwe radio begint — zie [Radiobron.staak].
+    if (liep) bron.staak();
     if (laatLos) bron.einde();
     // Heeft deze radio iets opgehaald, dan is er iets na te kijken. Zo niet, dan is er niets te
     // vragen en hoort er ook geen overzicht te komen — dat zou een venster zijn dat alleen maar in
@@ -333,6 +351,7 @@ class RadioBesturing extends ChangeNotifier {
   @override
   void dispose() {
     _tik?.cancel();
+    bron.staak();
     bron.einde();
     super.dispose();
   }

@@ -139,7 +139,18 @@ Iemand wil een radio in zijn muziekapp. Dit is wat hij typte:
 Vul het schema in. Noem GEEN titels van nummers — de app zoekt die zelf op bij een muziekcatalogus,
 en verzonnen titels leveren daar niets op. Noem in plaats daarvan twintig tot veertig artiesten die
 echt bestaan en die precies in dit genre en dit tijdvak thuishoren; die artiesten bepalen wat de radio
-wordt. Noemt hij geen aantal, kies dan $kStandaardAantal.''';
+wordt.
+
+Drie dingen die je in de gaten moet houden bij die namen, want de app kan ze niet meer rechtzetten:
+
+1. Elke artiest moet in dit genre thuishoren, niet er vlakbij. Eén rockband tussen de dansplaten
+   levert een radio op die halverwege van kleur verschiet, en dat valt meer op dan tien goede keuzes.
+2. Schrijf de naam zoals hij in een muziekcatalogus staat, voluit en zonder toevoegingen. Een naam
+   die daar niet gevonden wordt, levert niets op.
+3. Vermijd namen die je met één teken verschil met een veel bekendere artiest kunt verwarren, tenzij
+   ze werkelijk in dit genre horen.
+
+Noemt hij geen aantal, kies dan $kStandaardAantal.''';
 
 /// Wat er van het antwoord geloofd wordt.
 ///

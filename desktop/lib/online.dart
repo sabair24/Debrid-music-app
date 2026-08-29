@@ -1974,6 +1974,36 @@ class DownloadManager extends ChangeNotifier {
   ///   ([classifyRelease] geeft `album` bij élke niet-lege albumtitel). Het jaar is wat de tags
   ///   gezaghebbend maakt — zonder dat schrijft [stampTags] niets. De looptijd is de Sting-val: zonder
   ///   haar denkt de bibliotheek op artiest+titel alleen al dat je iets hebt.
+  /// De haaltjes die nu voor een radio lopen.
+  ///
+  /// Ze staan met opzet niet in [jobs] — zie hierboven — en waren daardoor ook met niets te stoppen.
+  /// Sluit je de radio af, dan liepen de laatste acht gewoon door: ze landden minuten later alsnog
+  /// op je schijf, van een radio die niet meer bestond en die ze dus ook nooit meer zou opruimen.
+  /// Gemeld op 29-08-2026: "vanaf de radio stopt moeten de downloads ook stoppen, want nu zinderen
+  /// er nog een paar achter."
+  final Set<DownloadJob> _radiohalen = {};
+
+  /// Alles wat er voor de radio loopt onmiddellijk afbreken. Geeft terug hoeveel er weggehaald zijn.
+  ///
+  /// Het halfbakken bestand ruimt de overdracht zelf op: een afgebroken overdracht eindigt niet als
+  /// [SlskDone], en `_cleanStaging` gooit dan weg wat er in de wachtmap stond. Er blijft dus niets
+  /// achter om met de hand op te ruimen.
+  int staakRadiohalen() {
+    var n = 0;
+    for (final job in _radiohalen) {
+      if (job.cancelled) continue;
+      job.cancelled = true;
+      for (final c in job.live) {
+        c.cancel();
+      }
+      job.live.clear();
+      n++;
+    }
+    _radiohalen.clear();
+    if (n > 0) _log.line('radio gestopt: $n ${n == 1 ? "haal" : "halen"} afgebroken');
+    return n;
+  }
+
   Future<String?> haalVoorRadio({
     required String artiest,
     required String titel,
@@ -1985,12 +2015,27 @@ class DownloadManager extends ChangeNotifier {
     // opgeruimd worden. De toets staat hier VOORAF, want achteraf is het onderscheid weg.
     if (mapVanBestaande?.call(artiest, titel, seconds: seconden) != null) return null;
 
+    // Vanaf hier is er iets te stoppen, dus vanaf hier staat het in de lijst — ook tijdens het
+    // zoeken. Een zoekopdracht duurt seconden, maar het is wél het moment waarop de meeste haaltjes
+    // zich bevinden als je de radio afsluit.
+    final job = DownloadJob(titel); // wegwerp: bewust niet in `jobs`
+    _radiohalen.add(job);
+    try {
+      return await _haalVoorRadio(job, artiest, titel, seconden, jaar);
+    } finally {
+      _radiohalen.remove(job);
+    }
+  }
+
+  Future<String?> _haalVoorRadio(
+      DownloadJob job, String artiest, String titel, int? seconden, int? jaar) async {
     List<SoulseekFile> hits;
     try {
       hits = await soulseek.search(zoekvraagVoorNummer(titel, artist: artiest));
     } catch (_) {
       return null; // geen net of geen aanmelding; deze plek in het plan mislukt gewoon
     }
+    if (job.cancelled) return null; // de radio is afgesloten terwijl we zochten
     final bruikbaar = hits.where((f) => !isMultichannel(f)).toList()..sort(_rankSlsk);
     // Lossless eerst, precies zoals overal in deze app. Maar niet lossless-of-niets: een
     // eurodance-single uit 1993 bestaat op dit netwerk soms alleen als mp3, en dan is die mp3 beter
@@ -2012,19 +2057,28 @@ class DownloadManager extends ChangeNotifier {
       year: jaar,
       seconds: seconden,
     );
-    final job = DownloadJob(titel); // wegwerp: bewust niet in `jobs`
     String? geland;
     try {
       await _withSlsk<void>((session, _) async {
         for (final f in kandidaten.take(3)) {
+          if (job.cancelled) return;
           final t0 = DateTime.now();
           SlskResult res;
+          // De stopschakelaar van DEZE poging, opgeborgen waar [staakRadiohalen] hem kan vinden.
+          // Zonder dit is `job.cancelled` alleen een vlag die pas tússen twee peers gelezen wordt —
+          // en een overdracht die halverwege een bestand van tien megabyte zit, leest hem dan pas
+          // over een minuut.
+          final stop = SlskCancel();
+          job.live.add(stop);
           try {
             res = await _rawTransfer(session, f, job, () {},
-                waitInQueue: true, maxWait: kMaxWacht);
+                waitInQueue: true, maxWait: kMaxWacht, cancel: stop);
           } catch (_) {
             continue;
+          } finally {
+            job.live.remove(stop);
           }
+          if (job.cancelled) return;
           _log.line('radio "$artiest — $titel": ${f.username} '
               '${_uitkomst(res)} na ${_kort(DateTime.now().difference(t0))}');
           if (res is! SlskDone) continue;

@@ -51,9 +51,27 @@ List<RecTrack> nogNietInBezit(List<RecTrack> recs, Set<String> bezit) =>
 /// is a different act, however popular.
 ///
 /// Names are compared through [artistKey], so "Beyonce" finds "Beyoncé".
+///
+/// **En de naam moet er wél iets mee te maken hebben.** Fans beslisten hier tussen ALLE treffers,
+/// ook die waarvan de naam niets met de vraag te maken had — en Deezers zoekfunctie is losjes. Vraag
+/// je een act uit een radioplan op die Deezer niet zo spelt, dan won gewoon de bekendste naam die
+/// toevallig in de uitslag stond. Zo belandde er een traag U2-nummer midden in een eurodance-radio:
+/// niet omdat het model U2 noemde, maar omdat een naam die erop leek nergens te vinden was en U2
+/// vijf miljoen luisteraars heeft. Eén zaadartiest zonder nummers kost niets — er staan er veertig
+/// in een plan — maar de complete discografie van een wildvreemde artiest bederft de hele radio.
 int? pickArtist(List<dynamic> hits, String wanted) {
   final want = artistKey(wanted);
-  final rows = [for (final h in hits) if (h is Map && h['id'] != null) h];
+  final alle = [for (final h in hits) if (h is Map && h['id'] != null) h];
+  // Bij een korte naam alleen een exacte treffer. "U96" en "U2" schelen één teken en zijn twee
+  // verschillende werelden; bij drie tekens zegt "lijkt erop" niets meer.
+  bool verwant(Object? naam) {
+    final k = artistKey('${naam ?? ''}');
+    if (k == want) return true;
+    if (k.length < 4 || want.length < 4) return false;
+    return k.contains(want) || want.contains(k);
+  }
+
+  final rows = [for (final r in alle) if (verwant(r['name'])) r];
   if (rows.isEmpty) return null;
   rows.sort((a, b) {
     final ea = artistKey('${a['name'] ?? ''}') == want;

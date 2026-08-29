@@ -83,12 +83,32 @@ class Radiohaler {
   }
 
   /// De aanmelding weer loslaten. Mag vaker dan één keer.
+  ///
+  /// Staakt ook wat er loopt. Deze weg wordt niet alleen bewandeld als je zelf afsluit maar ook door
+  /// [_leenverloop] — een telefoon die uit je hand valt — en juist dan is doorhalen het laatste wat
+  /// er moet gebeuren: er kijkt niemand meer naar het antwoord.
   void einde() {
     _verloop?.cancel();
     _verloop = null;
+    staak();
     final los = _los;
     _los = null;
     los?.call();
+  }
+
+  /// Alles wat nu loopt afbreken, maar de aanmelding vasthouden.
+  ///
+  /// Dat onderscheid is er omdat een NIEUWE radio op hetzelfde toestel de oude opruimt zonder de
+  /// aanmelding kwijt te willen; zie `Radiobron.staak` aan de andere kant van de lijn.
+  void staak() {
+    downloads?.staakRadiohalen();
+    // En de boekhouding meteen bij: het toestel peilt om de drie seconden, en een haal die
+    // 'onderweg' blijft heten terwijl er niets meer gebeurt laat die peiling acht minuten doorgaan.
+    for (final h in _halen.values) {
+      if (h.stand != 'onderweg') continue;
+      h.stand = 'mislukt';
+      h.klaarOm = DateTime.now();
+    }
   }
 
   /// Eén nummer gaan halen. Keert METEEN terug met een nummer om naar te vragen.
