@@ -5,8 +5,51 @@ import 'json_body.dart';
 import 'rutracker.dart';
 import 'torbox.dart';
 
+/// Openbare trackers die aan een magneet worden geplakt die er zelf geen heeft.
+///
+/// **Waarom dit nodig is.** Pirate Bay en Knaben geven vaak niet meer dan een infohash, en de app
+/// bouwde daar een magneet van met alléén die hash. Zo'n magneet kan maar op één manier zijn zwerm
+/// vinden: DHT. Dat is traag om te beginnen en het is het eerste dat wordt geblokkeerd — precies het
+/// beeld van "de site meldt veertig peers en er komt niets binnen".
+///
+/// Een tracker is geen bron van muziek maar een telefoonboek: hij vertelt wie de stukken heeft.
+/// Deze vijf zijn de gebruikelijke openbare, en ze staan hier bij naam zodat je kunt zien wat de app
+/// aanspreekt in plaats van dat het ergens in een bibliotheek verstopt zit.
+const kOpenbareTrackers = [
+  'udp://tracker.opentrackr.org:1337/announce',
+  'udp://open.stealth.si:80/announce',
+  'udp://tracker.torrent.eu.org:451/announce',
+  'udp://exodus.desync.com:6969/announce',
+  'udp://open.demonii.com:1337/announce',
+];
+
+/// Een magneet uit een infohash, mét telefoonboeken erbij.
+///
+/// De infohash blijft wat hij is — `xt` bepaalt de identiteit, `tr` is niet meer dan een hint — dus
+/// TorBox herkent zo'n magneet nog steeds als dezelfde torrent.
 String _magnetFor(String hash, String name) =>
-    'magnet:?xt=urn:btih:${hash.toLowerCase()}&dn=${Uri.encodeComponent(name)}';
+    'magnet:?xt=urn:btih:${hash.toLowerCase()}&dn=${Uri.encodeComponent(name)}'
+    '${kOpenbareTrackers.map((t) => '&tr=${Uri.encodeComponent(t)}').join()}';
+
+/// De openbare trackers ERBIJ zetten, naast wat de bron zelf al meegaf.
+///
+/// **Eerst sloeg dit over zodra er al één tracker in stond, en dat was precies fout.** De magneet die
+/// Knaben teruggaf voor Robert Miles — Dreamland droeg één tracker: `bt4.t-ru.org`, die van
+/// RuTracker. Eén telefoonboek, van één site. Antwoordt die niet, dan is er niets meer over. Wat de
+/// bron gaf blijft dus staan — die kent zijn eigen zwerm het best — en de openbare komen ernaast.
+///
+/// Dubbel toevoegen heeft geen zin en ziet er slordig uit in een foutmelding, dus wat er al staat
+/// wordt overgeslagen.
+String metTrackers(String magneet) {
+  if (magneet.isEmpty) return magneet;
+  final aanwezig = RegExp(r'[?&]tr=([^&]*)')
+      .allMatches(magneet)
+      .map((m) => Uri.decodeComponent(m.group(1) ?? ''))
+      .toSet();
+  final erbij = kOpenbareTrackers.where((t) => !aanwezig.contains(t));
+  if (erbij.isEmpty) return magneet;
+  return '$magneet${erbij.map((t) => '&tr=${Uri.encodeComponent(t)}').join()}';
+}
 
 abstract class SearchSource {
   String get id;
@@ -137,7 +180,7 @@ class KnabenSource implements SearchSource {
           seeders: (m['seeders'] ?? 0) as int,
           leechers: (m['peers'] ?? 0) as int,
           hash: hash.toLowerCase(),
-          magnet: (magnet != null && magnet.isNotEmpty) ? magnet : _magnetFor(hash, name),
+          magnet: (magnet != null && magnet.isNotEmpty) ? metTrackers(magnet) : _magnetFor(hash, name),
           source: 'Knaben',
         ));
       }

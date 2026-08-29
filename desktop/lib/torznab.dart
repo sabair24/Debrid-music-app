@@ -142,9 +142,12 @@ List<SearchResult> leesTorznab(String xml, {String bron = 'Torznab'}) {
       // laat een torrent met 40 seeders er drukker uitzien dan hij is.
       leechers: peers > seeders ? peers - seeders : 0,
       hash: hash,
-      magnet: magneet.isNotEmpty
+      // Ook hier de openbare trackers erbij als de indexer er zelf geen meegaf: een magneet met
+      // alleen een infohash moet zijn zwerm via DHT zien te vinden, en dat is precies waar het bij
+      // Knaben en Pirate Bay op stukliep.
+      magnet: metTrackers(magneet.isNotEmpty
           ? magneet
-          : 'magnet:?xt=urn:btih:$hash&dn=${Uri.encodeComponent(titel)}',
+          : 'magnet:?xt=urn:btih:$hash&dn=${Uri.encodeComponent(titel)}'),
       source: bron,
     ));
   }

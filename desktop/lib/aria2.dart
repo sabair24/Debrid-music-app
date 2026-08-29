@@ -443,6 +443,73 @@ class Aria2 {
     }
   }
 
+  /// Alleen de INHOUDSOPGAVE van een magneet ophalen: welke bestanden zitten erin.
+  ///
+  /// **Waarom dit apart bestaat.** Een magneet draagt niets dan een infohash. Bij RuTracker halen we
+  /// het `.torrent` gewoon bij de site op, maar Knaben en Pirate Bay geven alleen een magneet — en
+  /// dáár liep alles op stuk: zonder bestandslijst kon de app niets anders dan het aan TorBox vragen
+  /// en wachten. Dat is de "Voorbereiden" die maar bleef staan.
+  ///
+  /// De metadata is een paar tientallen kilobytes en komt van dezelfde peers als de muziek zelf, dus
+  /// wie de zwerm kan bereiken heeft hem binnen enkele seconden. Lukt dat niet, dan wéét je meteen
+  /// dat er niets te halen valt — en dat is oneindig veel beter dan een balk die niet beweegt.
+  ///
+  /// `follow-torrent=false` is hier wezenlijk: anders begint aria2 uit zichzelf de hele plaat te
+  /// downloaden zodra de metadata binnen is, en dan haal je vijf gigabyte op om een lijstje te
+  /// kunnen tonen.
+  Future<List<int>?> haalMetadata(String magneet,
+      {required String map, Duration limiet = const Duration(seconds: 30)}) async {
+    final gid = await _roep('aria2.addUri', [
+      [magneet],
+      {
+        'dir': map,
+        'bt-metadata-only': 'true',
+        'bt-save-metadata': 'true',
+        'follow-torrent': 'false',
+      },
+    ]).then((r) => r as String?).catchError((Object e) {
+      laatsteFout = '$e';
+      return null;
+    });
+    if (gid == null) return null;
+
+    final tot = DateTime.now().add(limiet);
+    try {
+      while (DateTime.now().isBefore(tot)) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        final s = await stand(gid);
+        if (s == null) continue;
+        if (s.stuk) {
+          _log.line('metadata mislukt voor $magneet: ${s.fout}');
+          return null;
+        }
+        if (!s.klaar) continue;
+
+        // aria2 legt hem neer als <infohash>.torrent in de map.
+        final hash = _infohashUit(magneet);
+        final bestand = File('$map${Platform.pathSeparator}$hash.torrent');
+        if (!await bestand.exists()) {
+          _log.line('metadata klaar maar geen bestand: ${bestand.path}');
+          return null;
+        }
+        final bytes = await bestand.readAsBytes();
+        await bestand.delete().catchError((_) => bestand);
+        _log.line('metadata binnen: $hash (${bytes.length} bytes)');
+        return bytes;
+      }
+      _log.line('metadata niet binnen in ${limiet.inSeconds}s: $magneet');
+      return null;
+    } finally {
+      await verwijder(gid);
+    }
+  }
+
+  /// De infohash uit een magneet, kleingeschreven — zoals aria2 zijn bestand noemt.
+  static String _infohashUit(String magneet) {
+    final m = RegExp(r'btih:([0-9a-fA-F]{40})', caseSensitive: false).firstMatch(magneet);
+    return (m?.group(1) ?? '').toLowerCase();
+  }
+
   /// Waar de echte download heen ging nadat een magneet zijn metadata had. aria2 zet het nieuwe gid
   /// in `followedBy`; wie dat niet volgt kijkt voor eeuwig naar een taak die "compleet" heet omdat
   /// het torrentbestand binnen is.

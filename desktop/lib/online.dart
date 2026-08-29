@@ -29,6 +29,26 @@ import 'flac_tags.dart';
 import 'torbox_stand.dart';
 import 'vaste_keuze.dart';
 
+/// Wat er terugkwam toen de app een bron zélf probeerde te pakken.
+///
+/// Het verschil tussen deze vier is het verschil tussen vier totaal andere adviezen: het lukte,
+/// kies een andere treffer, zet aria2 erbij, of er valt hier niets te halen. Eén gedeelde `null`
+/// maakte daar één spinner van die nergens over sprak.
+enum LokaleBron { gelukt, geenZwerm, geenMotor, geenBron }
+
+/// Wat er op het scherm hoort als niemand de torrent nog deelt.
+///
+/// **Waarom deze zin zo uitgebreid is.** De klacht was letterlijk: "Knaben heeft soms heel veel peers
+/// maar wil niet downloaden". Die peers stáán er ook — op de zoeksite. Gemeten op 24-08-2026 met een
+/// treffer die "18 seeders" meldde: vijfenzestig seconden lang nul verbindingen en nul bytes, óók
+/// buiten de app om. De tellers van die sites komen uit hun eigen scrape en lopen maanden achter.
+///
+/// Wie dat niet weet gaat zijn eigen app, zijn eigen internet of zijn eigen instellingen zitten
+/// wantrouwen — en dat is precies de avond die deze melding moet voorkomen.
+const kGeenZwerm = 'Niemand deelt deze torrent op dit moment. De zoeksite meldt wel seeders, maar in '
+    'dertig seconden reageerde er geen enkele — die tellers lopen vaak maanden achter. Kies een '
+    'andere treffer; die met meer seeders bij een ANDERE bron doen het meestal wel.';
+
 /// TorBox search + resolve + download, ported from the server's OnlineService.
 class OnlineService {
   final AppSettings settings;
@@ -357,20 +377,25 @@ class OnlineService {
   /// via DHT vinden, en dat is nu juist wat bij een tracker als RuTracker niet werkt.
   bool lokaalVoor(SearchResult r) => kiesLokaal(
         motor: settings.torrentMotor,
-        heeftTorrentbestand: r.torrentUrl.isNotEmpty,
+        heeftBron: r.torrentUrl.isNotEmpty || r.magnet.isNotEmpty,
         staatKlaarBijTorbox: r.cached,
         motorBeschikbaar: aria2.beschikbaar,
       );
 
   /// De regel zelf, los van waar de feiten vandaan komen — anders valt hij alleen te toetsen op een
   /// machine waar toevallig een aria2 staat, en dat is precies het soort regel dat ongemerkt kantelt.
+  ///
+  /// [heeftBron] telde eerst alleen een `.torrent`-bestand, en daarmee gold dit alleen voor
+  /// RuTracker. Alles van Knaben en Pirate Bay — dus verreweg het meeste — viel terug op TorBox, ook
+  /// wanneer de zwerm veertig seeders had. Een magneet kan hier gewoon mee: aria2 haalt de
+  /// inhoudsopgave uit diezelfde zwerm.
   static bool kiesLokaal({
     required String motor,
-    required bool heeftTorrentbestand,
+    required bool heeftBron,
     required bool staatKlaarBijTorbox,
     required bool motorBeschikbaar,
   }) {
-    if (!heeftTorrentbestand || !motorBeschikbaar) return false;
+    if (!heeftBron || !motorBeschikbaar) return false;
     return switch (motor) {
       'torbox' => false,
       'lokaal' => true,
@@ -378,12 +403,46 @@ class OnlineService {
     };
   }
 
+  /// Het torrentbestand van deze bron, hoe hij ook binnenkomt.
+  ///
+  /// Twee wegen, want de bronnen verschillen: RuTracker geeft een `.torrent` af zodra je ingelogd
+  /// bent, en Knaben en Pirate Bay geven alleen een magneet. Voor die tweede haalt aria2 in enkele
+  /// seconden de inhoudsopgave uit de zwerm zelf.
+  ///
+  /// **Dit is de reparatie van "veel peers, en toch niets".** Een magneet zonder bestandslijst kon de
+  /// app nergens anders heen brengen dan naar TorBox, en die moest dan de hele plaat eerst zelf
+  /// binnenhalen — dat is de "Voorbereiden" die bleef staan terwijl Knaben veertig seeders toonde.
+  Future<({List<int>? bytes, LokaleBron stand})> _torrentBytes(SearchResult r) async {
+    if (r.torrentUrl.isNotEmpty) {
+      final bytes = await rutracker.haalTorrentBestand(r.torrentUrl);
+      if (bytes != null && bytes.isNotEmpty) return (bytes: bytes, stand: LokaleBron.gelukt);
+    }
+    if (r.magnet.isEmpty) return (bytes: null, stand: LokaleBron.geenBron);
+    final map = await Directory.systemTemp.createTemp('dm_meta_');
+    try {
+      if (!await aria2.start(downloadMap: map.path)) {
+        return (bytes: null, stand: LokaleBron.geenMotor);
+      }
+      final bytes = await aria2.haalMetadata(r.magnet, map: map.path);
+      return bytes == null
+          ? (bytes: null, stand: LokaleBron.geenZwerm)
+          : (bytes: bytes, stand: LokaleBron.gelukt);
+    } finally {
+      await map.delete(recursive: true).catchError((_) => map);
+    }
+  }
+
   /// De nummerlijst uit het torrentbestand zelf, zonder iemand iets te hoeven vragen.
   ///
   /// Dit is het stuk dat de nummerkeuze van een halve minuut wachten naar een halve seconde brengt:
   /// wat erin zit staat IN het bestand, en dat hebben we al zodra RuTracker het heeft afgegeven.
   Future<(TbTorrent, List<TbFile>)?> _lokaleTracklist(SearchResult r) async {
-    final bytes = await rutracker.haalTorrentBestand(r.torrentUrl);
+    final (bytes: bytes, stand: stand) = await _torrentBytes(r);
+    // Niemand thuis in de zwerm? Dan heeft doorschuiven naar TorBox geen enkele zin: die moet bij
+    // exact dezelfde peers aankloppen. Gemeten op 24-08-2026 met een BitSearch-treffer die "18
+    // seeders" meldde — vijfenzestig seconden lang nul verbindingen, nul bytes, ook op de kale
+    // opdrachtregel. Precies zo'n torrent bleef bij TorBox uren op "Voorbereiden" staan.
+    if (stand == LokaleBron.geenZwerm) throw kGeenZwerm;
     if (bytes == null || bytes.isEmpty) return null;
     final inhoud = TorrentInhoud.lees(bytes);
     if (inhoud == null) return null;
@@ -394,7 +453,27 @@ class OnlineService {
     final torrent = TbTorrent(0, inhoud.naam, r.hash, 'lokaal', 0, bestanden, false, false,
         size: inhoud.totaleGrootte, seeds: r.seeders, lokaleTorrent: bytes);
     final audio = bestanden.where((f) => f.isAudio).toList();
-    return audio.isEmpty ? null : (torrent, audio);
+    // De inhoudsopgave IS binnen en er zit niets speelbaars in. Dan is TorBox erbij halen zinloos:
+    // die krijgt exact dezelfde lijst te zien.
+    //
+    // Gemeten op 24-08-2026 met een RuTracker-treffer die 29 seeders had: **282 seconden** om
+    // uiteindelijk "geen afspeelbare audio" te melden — vier en een halve minuut wachten op een
+    // antwoord dat na een halve seconde al vaststond. Het was een DSD-rip van vinyl; zeg dan ook
+    // wat er wél in zit, anders lijkt het op een kapotte bron.
+    if (audio.isEmpty) throw 'Geen afspeelbare audio in deze torrent${_watZitErin(bestanden)}.';
+    return (torrent, audio);
+  }
+
+  /// De soorten bestanden in een torrent, kort, voor in een melding: " (wel .dsf, .cue)".
+  String _watZitErin(List<TbFile> bestanden) {
+    final soorten = <String>{};
+    for (final f in bestanden) {
+      final punt = f.name.lastIndexOf('.');
+      if (punt > 0 && punt < f.name.length - 1) soorten.add(f.name.substring(punt).toLowerCase());
+    }
+    if (soorten.isEmpty) return '';
+    final lijst = (soorten.toList()..sort()).take(4).join(', ');
+    return ' (wel $lijst)';
   }
 
   /// (torrent, audio files) for the track picker.

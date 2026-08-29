@@ -128,7 +128,7 @@ void main() {
     bool kies(String motor, {bool bestand = true, bool klaar = false, bool motorEr = true}) =>
         OnlineService.kiesLokaal(
             motor: motor,
-            heeftTorrentbestand: bestand,
+            heeftBron: bestand,
             staatKlaarBijTorbox: klaar,
             motorBeschikbaar: motorEr);
 
@@ -149,9 +149,14 @@ void main() {
       expect(kies('lokaal', klaar: true), isTrue, reason: 'altijd lokaal, ook als TorBox het heeft');
     });
 
-    test('zonder torrentbestand nooit lokaal', () {
-      // Een kale magneet draagt alleen de infohash; de zwerm van een tracker vind je daar niet mee.
-      // Dat is dezelfde reden waarom TorBox op magneten bleef hangen.
+    test('een magneet mag óók lokaal', () {
+      // Dit stond eerst andersom, en dat was de klacht: alles van Knaben en Pirate Bay is een
+      // magneet, dus die vielen állemaal terug op TorBox — ook met veertig seeders in beeld. aria2
+      // haalt de inhoudsopgave uit diezelfde zwerm, dus een magneet is hier genoeg.
+      expect(kies('auto', bestand: true), isTrue);
+    });
+
+    test('zonder magneet én zonder bestand valt er niets te halen', () {
       expect(kies('lokaal', bestand: false), isFalse);
       expect(kies('auto', bestand: false), isFalse);
     });
