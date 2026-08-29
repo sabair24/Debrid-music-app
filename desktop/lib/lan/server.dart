@@ -1057,6 +1057,11 @@ class LanServer {
       case 'einde':
         radiohaler.einde();
         return _json(req.response, {'ok': true});
+      case 'staak':
+        // Ophouden met halen, maar de aanmelding vasthouden: dit komt langs als er op het toestel
+        // een NIEUWE radio begint, en die heeft die aanmelding meteen weer nodig.
+        radiohaler.staak();
+        return _json(req.response, {'ok': true});
       case 'haal':
         final artiest = (body['artiest'] ?? '') as String;
         final titel = (body['titel'] ?? '') as String;

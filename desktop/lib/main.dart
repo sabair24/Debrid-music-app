@@ -22,6 +22,7 @@ import 'package:window_manager/window_manager.dart';
 import 'acoustid.dart';
 import 'ai.dart';
 import 'radio.dart';
+import 'radiokeuze.dart';
 import 'radioplan.dart';
 import 'oordelen.dart';
 import 'radiosessie.dart';
@@ -8839,25 +8840,37 @@ Future<RadioOpdracht> _vraagRadioplan(BuildContext context, String zin) async {
 Future<List<RecTrack>> _nummersVoor(RadioOpdracht o) async {
   if (o.zaadArtiesten.isEmpty) return const [];
   final rec = RecommendService();
-  final perArtiest = (o.aantal / o.zaadArtiesten.length).ceil().clamp(3, 25).toInt();
+  // Ruimer ophalen dan er gevraagd is, want `kiesNummers` haalt er straks de dubbele uitvoeringen en
+  // de overtollige remixen weer uit — en bij dance uit de jaren negentig is dat een flink deel. Wie
+  // hier precies het gevraagde aantal ophaalt, houdt na het zeven twee derde over.
+  final ruim = o.aantal + (o.aantal >> 1);
+  final perArtiest = (ruim / o.zaadArtiesten.length).ceil().clamp(4, 25).toInt();
   final uit = <RecTrack>[];
   final gezien = <String>{};
   // Vier tegelijk. Deezer is keyless en veertig verzoeken in één klap is precies hoe je daar tegen
   // een grens loopt; vier per keer duurt een paar seconden en komt gewoon aan.
-  for (var i = 0; i < o.zaadArtiesten.length && uit.length < o.aantal; i += 4) {
+  for (var i = 0; i < o.zaadArtiesten.length && uit.length < ruim; i += 4) {
     final blok = o.zaadArtiesten.skip(i).take(4);
     final lijsten = await Future.wait(
         [for (final a in blok) rec.topVan(a, limit: perArtiest).catchError((_) => <RecTrack>[])]);
     for (final l in lijsten) {
       for (final t in l) {
-        if (gezien.add('${recNorm(t.artist)}|${recNorm(t.title)}')) uit.add(t);
+        // Op de VOLLEDIGE titel, niet op `recNorm`. Die gooit alles tussen haakjes weg, dus "Mr.
+        // Vain (Radio Edit)" en "Mr. Vain (Club Mix)" zijn daar één sleutel — en dan overleeft
+        // gewoon degene die Deezer toevallig eerst noemde. Hier moeten allebei nog door, want
+        // `kiesNummers` hieronder is wat er verstandig tussen kiest.
+        if (gezien.add('${recNorm(t.artist)}|${t.title.trim().toLowerCase()}')) uit.add(t);
       }
     }
   }
   // Door elkaar, anders speelt hij eerst alles van de eerste artiest. Dat is geen radio maar een
   // discografie.
   uit.shuffle();
-  return uit.take(o.aantal).toList();
+  // Zeven vóór het aftellen. `_radioplan` doet het straks nog een keer — dat is de weg waar élke
+  // radio langskomt — maar als het pas dáár gebeurt is er niets meer om het gat mee te vullen en
+  // levert een radio van driehonderd er tweehonderd op.
+  final gekozen = kiesNummers([for (final t in uit) (artiest: t.artist, titel: t.title)]);
+  return [for (final i in gekozen.take(o.aantal)) uit[i]];
 }
 
 /// Het blad waarin je je zin typt.
@@ -10246,15 +10259,22 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib) {
   for (final t in lib.tracks) {
     index.putIfAbsent('${recNorm(t.artist)}|${recNorm(t.title)}', () => t);
   }
-  return [
+  final bruikbaar = [
     for (final r in recs)
-      if (r.title.trim().isNotEmpty && r.artist.trim().isNotEmpty)
-        Radioplek(
-          artiest: r.artist,
-          titel: r.title,
-          seconden: r.seconds > 0 ? r.seconds : null,
-          eigen: index['${recNorm(r.artist)}|${recNorm(r.title)}'],
-        ),
+      if (r.title.trim().isNotEmpty && r.artist.trim().isNotEmpty) r
+  ];
+  // De ene weg waarlangs elke radio zijn nummers krijgt, dus de plek waar de versiekeuze hoort. Zie
+  // `radiokeuze.dart`: van één liedje één uitvoering, en hoogstens twee bewerkingen per tien.
+  final gekozen = kiesNummers(
+      [for (final r in bruikbaar) (artiest: r.artist, titel: r.title)]);
+  return [
+    for (final i in gekozen)
+      Radioplek(
+        artiest: bruikbaar[i].artist,
+        titel: bruikbaar[i].title,
+        seconden: bruikbaar[i].seconds > 0 ? bruikbaar[i].seconds : null,
+        eigen: index['${recNorm(bruikbaar[i].artist)}|${recNorm(bruikbaar[i].title)}'],
+      ),
   ];
 }
 

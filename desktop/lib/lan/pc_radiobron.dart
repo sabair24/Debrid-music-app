@@ -37,6 +37,12 @@ class PcRadiobron implements Radiobron {
 
   bool _begonnen = false;
 
+  /// Welke radio er nu loopt. Gaat omhoog bij elke [staak], en elke peiling in [haal] kijkt ernaar.
+  ///
+  /// Zonder dit blijft een haal die al gestart is nog acht minuten om de drie seconden aan de pc
+  /// vragen hoe het ermee staat — terwijl daar allang niets meer gebeurt.
+  int _ronde = 0;
+
   @override
   Future<String?> begin() async {
     final c = clientOf();
@@ -65,6 +71,7 @@ class PcRadiobron implements Radiobron {
 
   @override
   void einde() {
+    _ronde++;
     if (!_begonnen) return;
     _begonnen = false;
     final c = clientOf();
@@ -74,9 +81,21 @@ class PcRadiobron implements Radiobron {
   }
 
   @override
+  void staak() {
+    // Hier eerst, want dit werkt ook als de pc niet antwoordt: de peilingen hieronder houden er
+    // meteen mee op, wat er verder ook gebeurt.
+    _ronde++;
+    final c = clientOf();
+    if (c != null) {
+      unawaited(c.ask('/api/radio', {'op': 'staak'}).catchError((_) => <String, dynamic>{}));
+    }
+  }
+
+  @override
   Future<Track?> haal(Radioplek plek) async {
     final c = clientOf();
     if (c == null) return null;
+    final ronde = _ronde;
     final String id;
     try {
       final a = await c.ask('/api/radio', {
@@ -93,9 +112,12 @@ class PcRadiobron implements Radiobron {
       return null;
     }
 
+    if (ronde != _ronde) return null;
+
     final tot = DateTime.now().add(_geduld);
     while (DateTime.now().isBefore(tot)) {
       await Future<void>.delayed(_peilritme);
+      if (ronde != _ronde) return null; // de radio is intussen afgesloten
       Map<String, dynamic> a;
       try {
         a = await c.ask('/api/radio', {'op': 'stand', 'id': id});

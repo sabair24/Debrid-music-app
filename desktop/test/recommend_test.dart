@@ -38,14 +38,36 @@ void main() {
       expect(pickArtist(hits, 'Beyoncé'), 145);
     });
 
-    test('with no exact match at all, the most listened-to hit still wins', () {
+    test('with no exact match at all, the most listened-to RELATED hit still wins', () {
       // Better a near miss than nothing: refusing here would silence Radio for every artist whose
-      // name Deezer spells differently.
+      // name Deezer spells differently. "Related" means the name actually contains the query.
       final hits = [
         {'id': 1, 'name': 'Tribute to Someone', 'nb_fan': 12},
         {'id': 2, 'name': 'Someone & Friends', 'nb_fan': 900},
       ];
       expect(pickArtist(hits, 'Someone'), 2);
+    });
+
+    test('een naam die er niets mee te maken heeft wint nooit, hoe bekend ook', () {
+      // Dit is het gemelde geval: er zat een traag U2-nummer midden in een eurodance-radio. Niet
+      // omdat het model U2 noemde, maar omdat de gevraagde act nergens te vinden was en fans toen
+      // tussen ALLE treffers besliste. Eén zaadartiest zonder nummers kost niets — er staan er
+      // veertig in een plan — de discografie van een wildvreemde artiest bederft de hele radio.
+      final hits = [
+        {'id': 1, 'name': 'U2', 'nb_fan': 5000000},
+        {'id': 2, 'name': 'Nirvana', 'nb_fan': 4000000},
+      ];
+      expect(pickArtist(hits, 'U96'), isNull);
+    });
+
+    test('bij een korte naam telt alleen een exacte treffer', () {
+      // "U96" en "U2" schelen één teken en zijn twee verschillende werelden; bij drie tekens zegt
+      // "lijkt erop" niets meer. Staat de echte er wél bij, dan wint die gewoon.
+      final hits = [
+        {'id': 1, 'name': 'U2', 'nb_fan': 5000000},
+        {'id': 2, 'name': 'U96', 'nb_fan': 24000},
+      ];
+      expect(pickArtist(hits, 'U96'), 2);
     });
 
     test('nothing usable is null, not a crash', () {
