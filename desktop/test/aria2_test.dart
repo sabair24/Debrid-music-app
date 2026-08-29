@@ -67,61 +67,6 @@ void main() {
     });
   });
 
-  group('opruimen na een torrent', () {
-    // Wat er werkelijk in de map stond na één gekozen nummer van B.B.E. — Seven Days And One Week.
-    late Directory map;
-
-    setUp(() {
-      map = Directory.systemTemp.createTempSync('dm_opruim_');
-      Directory('${map.path}${Platform.pathSeparator}Album').createSync();
-      File('${map.path}${Platform.pathSeparator}01 gevraagd.flac').writeAsBytesSync(List.filled(1000, 7));
-      File('${map.path}${Platform.pathSeparator}Album${Platform.pathSeparator}02 niet gevraagd.flac')
-          .writeAsBytesSync(List.filled(2048, 3));
-      File('${map.path}${Platform.pathSeparator}Album.aria2').writeAsBytesSync([1, 2, 3]);
-      File('${map.path}${Platform.pathSeparator}96a14d03.torrent').writeAsBytesSync([4, 5, 6]);
-    });
-
-    tearDown(() {
-      if (map.existsSync()) map.deleteSync(recursive: true);
-    });
-
-    Aria2Stand stand(List<Aria2Bestand> b) => Aria2Stand(
-        gid: 'g', status: 'complete', gedaan: 1, totaal: 1, seeders: 0, verbindingen: 0,
-        fout: '', bestanden: b);
-
-    test('het halve bestand van een nummer dat je NIET koos verdwijnt', () async {
-      await ruimOpNaTorrent(
-          map,
-          stand([
-            Aria2Bestand(2, '${map.path}/Album/02 niet gevraagd.flac', 55000000, 2048, false),
-          ]));
-
-      expect(Directory('${map.path}${Platform.pathSeparator}Album').existsSync(), isFalse,
-          reason: 'anders staat er een FLAC van twee kilobyte in de bibliotheek');
-      // En wat je wél vroeg blijft staan: dat is intussen uit de map van aria2 gehaald.
-      expect(File('${map.path}${Platform.pathSeparator}01 gevraagd.flac').existsSync(), isTrue);
-    });
-
-    test('de administratie van aria2 blijft niet liggen', () async {
-      await ruimOpNaTorrent(map, stand(const []));
-
-      expect(File('${map.path}${Platform.pathSeparator}Album.aria2').existsSync(), isFalse);
-      expect(File('${map.path}${Platform.pathSeparator}96a14d03.torrent').existsSync(), isFalse);
-    });
-
-    test('een pad buiten de doelmap raakt hij niet aan', () async {
-      // Zou hij paden volgen die aria2 ergens anders neerzette, dan verwijdert een download een map
-      // die er niets mee te maken heeft.
-      final elders = Directory.systemTemp.createTempSync('dm_elders_');
-      File('${elders.path}${Platform.pathSeparator}kostbaar.flac').writeAsBytesSync([9]);
-      addTearDown(() => elders.deleteSync(recursive: true));
-
-      await ruimOpNaTorrent(
-          map, stand([Aria2Bestand(1, '${elders.path}/Album/kostbaar.flac', 1, 1, true)]));
-
-      expect(File('${elders.path}${Platform.pathSeparator}kostbaar.flac').existsSync(), isTrue);
-    });
-  });
 
   group('wie haalt deze bron', () {
     // De feiten die tellen: is er een .torrent, staat het al klaar bij TorBox, en is er een motor.

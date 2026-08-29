@@ -1039,7 +1039,7 @@ class DownloadManager extends ChangeNotifier {
   ///
   /// **Waarom er geteld wordt en niet gewoon opgeruimd.** Twee nummers van dezelfde plaat delen één
   /// aria2-taak (zie het aanhaken in [_downloadLokaal]). Ruimt de eerste die klaar is die taak op,
-  /// dan trekt hij de map onder de tweede vandaan: `ruimOpNaTorrent` gooit aria2's eigen map weg, en
+  /// dan trekt hij de map onder de tweede vandaan: het opruimen gooit aria2's eigen map weg, en
   /// `verwijder` haalt het gid weg waar de tweede zijn voortgang uit leest. Alleen de laatste die
   /// vertrekt doet het licht uit.
   final Map<String, int> _lopersPerTorrent = {};
@@ -2978,7 +2978,7 @@ class DownloadManager extends ChangeNotifier {
         // opruiming hieronder.
         if (jobs[i].cancelled) continue;
         if (b == null) {
-          // Stil doorlopen stond hier, en dat is de ergste soort: `ruimOpNaTorrent` gooit aria2's map
+          // Stil doorlopen stond hier, en dat is de ergste soort: het opruimen gooit aria2's map
           // zo meteen weg, dus dit nummer is dan wég terwijl zijn regel op "bezig" blijft staan.
           jobs[i].status = 'failed';
           jobs[i].detail = 'aria2 kende dit bestand niet meer';
@@ -3006,7 +3006,7 @@ class DownloadManager extends ChangeNotifier {
               '(besloten tracker)';
         }
       }
-      // En de bladen, vóór het opruimen: `ruimOpNaTorrent` gooit de map weg die aria2 aanmaakte, en
+      // En de bladen, vóór het opruimen: het opruimen gooit de map weg die aria2 aanmaakte, en
       // een cue die daar blijft staan verdwijnt mét die map — waarna er niets meer te knippen valt.
       for (final c in cues) {
         final b = s?.bestand(c.id);
@@ -3016,7 +3016,7 @@ class DownloadManager extends ChangeNotifier {
       }
       notifyListeners();
       // Opruimen mag alleen als deze taak van ons alleen is. Hangt er nog een tweede nummer van
-      // dezelfde plaat aan, dan gooit `ruimOpNaTorrent` de map weg waar dat nummer nog in staat.
+      // dezelfde plaat aan, dan gooit het opruimen de map weg waar dat nummer nog in staat.
       //
       // En bij een besloten tracker helemaal niet: aria2 deelt uit wat in die map ligt. Wie hier
       // opruimt heeft wel geseed op papier en niets teruggegeven in de praktijk. De map gaat weg
@@ -3024,15 +3024,9 @@ class DownloadManager extends ChangeNotifier {
       if (seedMin != null) {
         _log.line('seeden: ${werkMap.path} blijft staan, nog ${online.settings.seedUren} uur');
         unawaited(_ruimNaSeeden(motor, gid, werkMap, Duration(minutes: seedMin)));
-      } else if ((_lopersPerTorrent[gid] ?? 1) <= 1) {
-        await ruimOpNaTorrent(werkMap, s);
-        // En de werkmap zelf: hij hoort niet in de muziekmap thuis zodra hij leeg is.
-        try {
-          if (await werkMap.exists()) await werkMap.delete(recursive: true);
-        } catch (_) {
-          // Blijft hij staan, dan is dat hooguit een lege verborgen map.
-        }
       }
+      // Het opruimen zelf staat in de `finally` hieronder — daar wordt geteld wie er nog aan deze
+      // torrent hangt, en dat is de enige plek waar dat kloppend gebeurt. Zie de uitleg daar.
       await onLibraryChanged();
     } finally {
       // De torrent uit aria2 halen zodra hij klaar is: hij seedt toch niet (--seed-time=0) en een
@@ -3048,7 +3042,26 @@ class DownloadManager extends ChangeNotifier {
         // kwijtraken.
         if (_gidPerTorrent[hash] == gid) _gidPerTorrent.remove(hash);
         // Behalve wanneer hij nog aan het delen is: weghalen bij aria2 IS stoppen met delen.
-        if (seedMin == null) await motor.verwijder(gid);
+        if (seedMin == null) {
+          await motor.verwijder(gid);
+          // OPRUIMEN HOORT HIER, en niet hierboven bij het verhuizen.
+          //
+          // Daar werd geteld hoeveel opdrachten er nog aan deze torrent hingen, maar de teller gaat
+          // pas hier omlaag. Twee nummers die binnen dezelfde seconde klaar zijn zien dus allebei
+          // "er hangt er nog een aan mij" en ruimen allebei niet op. Gemeten op 29-08-2026 met Tears
+          // For Fears: beide nummers netjes binnen, en de werkmap bleef staan met drie halve
+          // bestanden erin — nummers die niemand had aangeklikt, want een torrentstuk loopt over de
+          // grens van een bestand heen.
+          //
+          // Wat de gebruiker koos is op dit punt allang verhuisd; wat hier nog ligt is per definitie
+          // rommel.
+          try {
+            if (await werkMap.exists()) await werkMap.delete(recursive: true);
+          } catch (_) {
+            // Blijft hij staan, dan is dat hooguit verspilde ruimte in een map die de scanner
+            // overslaat — en de volgende download van dezelfde plaat ruimt hem alsnog op.
+          }
+        }
       } else {
         _lopersPerTorrent[gid] = over;
       }
@@ -3202,13 +3215,13 @@ class DownloadManager extends ChangeNotifier {
   /// Eén bestand uit aria2's eigen map naar de doelmap halen. Geeft het pad terug, of null.
   ///
   /// De bibliotheek leest de doelmap; wat in de submap van aria2 blijft staan gaat straks mee in
-  /// [ruimOpNaTorrent] en is dan weg.
+  /// het opruimen na afloop en is dan weg.
   ///
   /// **Nooit over een ander bestand heen.** Een torrent wordt hier plat uitgepakt, dus alles gaat op
   /// zijn eigen naam naar dezelfde map — en een verzamelbox of een discografie heet bij elke schijf
   /// opnieuw `01 - ….flac`. `rename` schrijft daar zonder één woord overheen: je koos honderd
   /// nummers, er stonden er twaalf, elke taak meldde "klaar", en de originelen waren al door
-  /// [ruimOpNaTorrent] opgeruimd. Zie [vrijeNamen] voor welke naam er dan gekozen wordt.
+  /// het opruimen na afloop al weggegooid. Zie [vrijeNamen] voor welke naam er dan gekozen wordt.
   ///
   /// De aanroepers verhuizen één voor één, dus kijken of een naam vrij is kan hier gewoon.
   /// [kopieer] laat het origineel staan. Dat is nodig bij een besloten tracker: aria2 deelt uit wat
