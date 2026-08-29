@@ -24,7 +24,29 @@ import 'settings.dart';
 import 'vaste_keuze.dart';
 import 'paths.dart';
 
-const _audioExt = {'.flac', '.mp3', '.m4a', '.wav', '.ogg', '.opus', '.aac', '.wma', '.alac'};
+/// Welke bestanden de bibliotheek als muziek beschouwt.
+///
+/// **`.ape` en `.wv` staan er sinds 29-08-2026 bij, en hun afwezigheid was een stille lek.** De
+/// downloadkant nam ze wél aan (`TbFile.isAudio` noemt ape en wv), dus een rip in Monkey's Audio of
+/// WavPack — bij Franse en Russische bronnen doodgewoon — kwam netjes binnen, ging netjes naar je
+/// schijf, en verscheen nergens. Geen fout, geen regel, niets: "waar is de rest?".
+///
+/// Ze kunnen ook echt gespeeld worden: libmpv leest allebei, en het omzetten voor een speaker gaat
+/// via ffmpeg, die ze ook leest. Dat is dezelfde afspraak als voor `.wma` en `.alac`, die hier al
+/// stonden.
+const _audioExt = {
+  '.flac',
+  '.mp3',
+  '.m4a',
+  '.wav',
+  '.ogg',
+  '.opus',
+  '.aac',
+  '.wma',
+  '.alac',
+  '.ape',
+  '.wv',
+};
 
 String _ext(String p) {
   final i = p.lastIndexOf('.');
@@ -284,7 +306,17 @@ Map<String, dynamic>? _rijVoorBestand(File e, {required int addedMs, required in
   }
   // Never hand the package a file it is going to refuse: it opens before it decides, and the
   // refusal keeps the handle. See tagParserWouldClaim().
-  if (!tagParserWouldClaim(e)) return null;
+  //
+  // Maar niet meer WEGGOOIEN als hij het weigert. Hier stond `return null`, en dat is een van de
+  // manieren waarop een download "verdwijnt": het bestand staat op je schijf, de speler kan het
+  // gewoon afspelen — libmpv leest veel meer dan deze tagontleder — maar het komt de bibliotheek
+  // niet in, en er staat nergens waarom. Een rip zonder tags, met tags in een ongewone vorm, of in
+  // een doos die deze ontleder niet kent, was daarmee onvindbaar.
+  //
+  // De prijs is dat er af en toe een regel bij komt die "Onbekende artiest" heet en naar zijn
+  // bestandsnaam luistert. Dat is een regel die je ziet en kunt weggooien; het alternatief is muziek
+  // die je hebt en niet kunt vinden.
+  if (!tagParserWouldClaim(e)) return _kaleRij(e, addedMs: addedMs, sizeBytes: sizeBytes);
   try {
     final m = readMetadata(e, getImage: false);
     return {
@@ -307,9 +339,31 @@ Map<String, dynamic>? _rijVoorBestand(File e, {required int addedMs, required in
       'bitsPerSample': 0,
     };
   } catch (_) {
-    return null;
+    // Ook hier: een ontleder die struikelt is geen reden om het bestand te laten verdwijnen.
+    return _kaleRij(e, addedMs: addedMs, sizeBytes: sizeBytes);
   }
 }
+
+/// Een muziekbestand waar geen tag uit te lezen viel, op zijn bestandsnaam.
+///
+/// Alles wat er niet in staat blijft leeg in plaats van geraden: een verzonnen albumnaam zou het bij
+/// vreemde buren in het raster zetten, en dan ben je het nóg kwijt.
+Map<String, dynamic> _kaleRij(File e, {required int addedMs, required int sizeBytes}) => {
+      'path': e.path,
+      'title': _baseName(e.path),
+      'artist': 'Onbekende artiest',
+      'album': '',
+      'trackNo': 0,
+      'trackTotal': 0,
+      'durationMs': 0,
+      'isFlac': _ext(e.path) == '.flac',
+      'year': null,
+      'genre': null,
+      'addedMs': addedMs,
+      'sizeBytes': sizeBytes,
+      'sampleRate': 0,
+      'bitsPerSample': 0,
+    };
 
 /// Eén bestand lezen, op een andere isolate. Zie [scanTagsInIsolate] voor waarom de closure hier
 /// staat en niet in een methode.

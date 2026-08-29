@@ -2735,14 +2735,25 @@ class DownloadManager extends ChangeNotifier {
         // Een nummer dat je onderweg hebt weggetikt hoort niet alsnog in je bibliotheek te landen.
         // Het stuk dat aria2 er al van had blijft in zijn eigen map staan en gaat mee in de
         // opruiming hieronder.
-        if (b == null || jobs[i].cancelled) continue;
+        if (jobs[i].cancelled) continue;
+        if (b == null) {
+          // Stil doorlopen stond hier, en dat is de ergste soort: `ruimOpNaTorrent` gooit aria2's map
+          // zo meteen weg, dus dit nummer is dan wég terwijl zijn regel op "bezig" blijft staan.
+          jobs[i].status = 'failed';
+          jobs[i].detail = 'aria2 kende dit bestand niet meer';
+          continue;
+        }
         final bron = File(b.pad);
         if (!await bron.exists()) {
           jobs[i].status = 'failed';
           jobs[i].detail = 'aria2 meldde klaar, maar het bestand staat er niet';
           continue;
         }
-        await _verhuisNaar(bron, destDir, files[i].label);
+        if (await _verhuisNaar(bron, destDir, files[i].label) == null) {
+          jobs[i].status = 'failed';
+          jobs[i].detail = 'geen vrije naam in de doelmap';
+          continue;
+        }
         jobs[i].progress = 1;
         jobs[i].status = 'done';
       }
@@ -2791,7 +2802,12 @@ class DownloadManager extends ChangeNotifier {
       final resp = await client.send(req).timeout(_torrentStilte);
       if (resp.statusCode < 200 || resp.statusCode >= 300) throw 'HTTP ${resp.statusCode}';
       final total = resp.contentLength ?? f.size;
-      dest = File('${destDir.path}${Platform.pathSeparator}${_sanitize(f.label)}');
+      // Een vrije naam, en meteen VASTGELEGD. Dezelfde botsing als bij de torrentweg — een
+      // verzamelbox heet bij elke schijf opnieuw `01 - ….flac` — maar hier komen de bestanden náást
+      // elkaar binnen, dus "bestaat hij al?" is geen antwoord: twee downloads kijken dan allebei op
+      // hetzelfde moment en zien allebei niets. `create(exclusive: true)` slaagt maar één keer.
+      dest = await _legVast(destDir, f.label);
+      if (dest == null) throw 'geen vrije naam in de doelmap';
       sink = dest.openWrite();
       var received = 0;
       // De wachtklok staat op de STROOM en niet op het geheel: hij slaat toe als er zólang niets
@@ -2841,20 +2857,56 @@ class DownloadManager extends ChangeNotifier {
     await onLibraryChanged();
   }
 
-  /// Eén bestand uit aria2's eigen map naar de doelmap halen.
+  /// Een vrije naam in [destDir] pakken en meteen vastleggen, of null als er geen te vinden is.
+  ///
+  /// Vastleggen en niet alleen kijken: [_download] draait voor elk bestand van een plaat tegelijk,
+  /// en twee downloads die allebei "bestaat hij al?" vragen krijgen allebei "nee" — waarna de een
+  /// over de ander heen schrijft. `create(exclusive: true)` kan maar door één van de twee winnen.
+  Future<File?> _legVast(Directory destDir, String naam) async {
+    for (final kandidaat in vrijeNamen(_sanitize(naam))) {
+      final doel = File('${destDir.path}${Platform.pathSeparator}$kandidaat');
+      try {
+        await doel.create(exclusive: true);
+        return doel;
+      } catch (_) {
+        continue; // bezet — de volgende naam
+      }
+    }
+    return null;
+  }
+
+  /// Eén bestand uit aria2's eigen map naar de doelmap halen. Geeft het pad terug, of null.
   ///
   /// De bibliotheek leest de doelmap; wat in de submap van aria2 blijft staan gaat straks mee in
   /// [ruimOpNaTorrent] en is dan weg.
-  Future<void> _verhuisNaar(File bron, Directory destDir, String naam) async {
-    final doel = File('${destDir.path}${Platform.pathSeparator}${_sanitize(naam)}');
-    if (bron.path == doel.path) return;
-    try {
-      await bron.rename(doel.path);
-    } catch (_) {
-      // Over een schijfgrens heen kan `rename` niet; dan maar kopiëren en de bron opruimen.
-      await bron.copy(doel.path);
-      await bron.delete().catchError((_) => bron);
+  ///
+  /// **Nooit over een ander bestand heen.** Een torrent wordt hier plat uitgepakt, dus alles gaat op
+  /// zijn eigen naam naar dezelfde map — en een verzamelbox of een discografie heet bij elke schijf
+  /// opnieuw `01 - ….flac`. `rename` schrijft daar zonder één woord overheen: je koos honderd
+  /// nummers, er stonden er twaalf, elke taak meldde "klaar", en de originelen waren al door
+  /// [ruimOpNaTorrent] opgeruimd. Zie [vrijeNamen] voor welke naam er dan gekozen wordt.
+  ///
+  /// De aanroepers verhuizen één voor één, dus kijken of een naam vrij is kan hier gewoon.
+  Future<String?> _verhuisNaar(File bron, Directory destDir, String naam) async {
+    // De map waar het bestand IN DE TORRENT stond — dat is wat "CD2" of "1965 - Poupée de cire" van
+    // elkaar onderscheidt zodra de namen erin gelijk zijn.
+    final ouder = bron.parent.path;
+    final delen = ouder.split(Platform.pathSeparator).where((s) => s.isNotEmpty).toList();
+    final submap = ouder == destDir.path || delen.isEmpty ? '' : delen.last;
+    for (final kandidaat in vrijeNamen(_sanitize(naam), submap: _sanitize(submap))) {
+      final doel = File('${destDir.path}${Platform.pathSeparator}$kandidaat');
+      if (bron.path == doel.path) return doel.path;
+      if (await doel.exists()) continue;
+      try {
+        await bron.rename(doel.path);
+      } catch (_) {
+        // Over een schijfgrens heen kan `rename` niet; dan maar kopiëren en de bron opruimen.
+        await bron.copy(doel.path);
+        await bron.delete().catchError((_) => bron);
+      }
+      return doel.path;
     }
+    return null;
   }
 
   /// Werk in de torrentrij zetten en een Future teruggeven die afloopt als het klaar is.
