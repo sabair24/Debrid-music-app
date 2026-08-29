@@ -5170,7 +5170,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       ),
                     ),
                   ),
-                if (comp != null && !comp.complete)
+                // Niet op een tv. De hele balk bestaat om een plaat te completeren, en dat doe je
+                // op een pc of telefoon; hier is de app een speler. Wat overbleef zonder de
+                // downloadknop was een mededeling over nummers die je niet kunt spelen -- op een
+                // scherm van 540 punten is dat een rij die je alleen maar in de weg zit.
+                if (!isTv && comp != null && !comp.complete)
                   SliverToBoxAdapter(child: _completenessBar(context, comp)),
                 SliverList(
                   delegate: SliverChildBuilderDelegate(
