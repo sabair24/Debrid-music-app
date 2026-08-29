@@ -39,10 +39,45 @@ import 'torbox.dart';
 
 /// De categorie voor geluid in de Torznab-indeling. 3000 is Audio; 3010 lossless, 3040 los nummer.
 ///
-/// De hoofdcategorie meegeven en niet de onderverdelingen: een indexer die zijn FLAC onder 3000 zet
-/// in plaats van 3010 zou anders stil wegvallen, en dat is precies het soort stilte waar deze app
-/// genoeg van heeft gehad.
+/// **Niet meer meegestuurd aan Jackett, en dat is een meting waard.** Gevraagd naar "Robert Miles
+/// Dreamland" op 24-08-2026, met acht indexers ingesteld:
+///
+///     met cat=3000 : 22 treffers — LimeTorrents 10, Pirate Bay 7, Knaben 5
+///     zonder cat   : 49 treffers — daarbij RuTor 8 en Byrutor 12
+///
+/// RuTor levert precies waar het om gaat (Dreamland FLAC, WavPack, MP3) maar zet dat onder
+/// categorie **8000, "Overig"**. Wie op 3000 filtert gooit die tracker dus in zijn geheel weg — en
+/// laat daarmee juist de bron liggen die het meest oplevert. Byrutor, aan de andere kant, gaf
+/// twaalf GAMES terug ("Dreamland Farm", categorie 4050).
+///
+/// Vandaar: alles ophalen, en hier beslissen met [torznabIsMuziek]. De categorie telt waar hij iets
+/// zegt, en de titel beslist waar de indexer "overig" zegt.
 const kTorznabAudio = '3000';
+
+/// Categorieën waarvan we zeker weten dat het geen muziek is: film, pc/games, tv, xxx, boeken.
+const _nietMuziek = [2000, 4000, 5000, 6000, 7000];
+
+/// Woorden die van een titel een plaat maken. Bewust over de vorm en niet over het genre: een
+/// indexer die "overig" zegt vertelt in zijn titel altijd wél in welk formaat het staat.
+final _muziekWoorden = RegExp(
+    r'\b(flac|mp3|m4a|aac|alac|ape|wav|wavpack|ogg|opus|dsd|dsf|dff|lossless|'
+    r'\d{3}\s*kbps|320|v0|24\s*bit|16\s*bit|vinyl|discography|дискография)\b',
+    caseSensitive: false);
+
+/// Is dit een muziektreffer?
+///
+/// [categorieen] zijn de Torznab-categorieën van het item (de eigen nummers van een indexer, die
+/// boven de 100000 liggen, tellen niet mee). [titel] beslist alleen waar de categorie zwijgt.
+///
+/// Zuiver en apart omdat dit de zeef is die bepaalt wat je wél en niet te zien krijgt — en een zeef
+/// die te fijn staat is precies waarom RuTor eerst helemaal ontbrak.
+bool torznabIsMuziek(Iterable<int> categorieen, String titel) {
+  final echte = categorieen.where((c) => c > 0 && c < 100000).toList();
+  if (echte.any((c) => c >= 3000 && c < 4000)) return true;
+  if (echte.any((c) => _nietMuziek.any((n) => c >= n && c < n + 1000))) return false;
+  // Niets bruikbaars gezegd (8000 "overig", of helemaal geen categorie): dan de titel.
+  return _muziekWoorden.hasMatch(titel);
+}
 
 /// Een infohash is veertig tekens hex (of tweeëndertig in base32).
 final _hex40 = RegExp(r'^[0-9a-fA-F]{40}$');
@@ -64,10 +99,11 @@ Uri torznabZoekAdres(String basis, String sleutel, String vraag) {
   b = b.replaceFirst(RegExp(r'/+$'), '');
   final knip = b.indexOf('/api/');
   if (knip > 0) b = b.substring(0, knip);
+  // Zonder `cat`: zie [kTorznabAudio] voor de meting. Het zeven gebeurt hier, niet bij Jackett,
+  // want een indexer die zijn muziek onder "overig" zet valt daar anders volledig weg.
   return Uri.parse('$b/api/v2.0/indexers/all/results/torznab/api').replace(queryParameters: {
     'apikey': sleutel.trim(),
     't': 'search',
-    'cat': kTorznabAudio,
     'q': vraag,
   });
 }
@@ -106,6 +142,15 @@ List<SearchResult> leesTorznab(String xml, {String bron = 'Torznab'}) {
 
     final titel = tekstVan('title');
     if (titel.isEmpty) continue;
+
+    // De categorieën staan als losse `<torznab:attr name="category" …>`-regels; een item heeft er
+    // meestal twee (de Torznab-categorie en het eigen nummer van de indexer).
+    final categorieen = <int>[
+      for (final e in item.childElements)
+        if (e.name.local == 'attr' && e.getAttribute('name')?.toLowerCase() == 'category')
+          int.tryParse(e.getAttribute('value')?.trim() ?? '') ?? 0,
+    ];
+    if (!torznabIsMuziek(categorieen, titel)) continue;
 
     // De magneet kan op drie plekken staan, afhankelijk van de indexer.
     var magneet = attr('magneturl');
