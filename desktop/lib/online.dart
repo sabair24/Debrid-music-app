@@ -2749,11 +2749,13 @@ class DownloadManager extends ChangeNotifier {
           jobs[i].detail = 'aria2 meldde klaar, maar het bestand staat er niet';
           continue;
         }
-        if (await _verhuisNaar(bron, destDir, files[i].label) == null) {
+        final geland = await _verhuisNaar(bron, destDir, files[i].label);
+        if (geland == null) {
           jobs[i].status = 'failed';
           jobs[i].detail = 'geen vrije naam in de doelmap';
           continue;
         }
+        await _jouwKeuze(geland);
         jobs[i].progress = 1;
         jobs[i].status = 'done';
       }
@@ -2851,10 +2853,31 @@ class DownloadManager extends ChangeNotifier {
         await dest.delete().catchError((_) => dest!);
       }
     }
+    // Jouw keuze, dus hij verliest straks niet van iets wat de app beter vindt. Zie [_jouwKeuze].
+    final geland = dest;
+    if (geland != null) await _jouwKeuze(geland.path);
     job.progress = 1;
     job.status = 'done';
     notifyListeners();
     await onLibraryChanged();
+  }
+
+  /// Dit bestand heeft de gebruiker ZELF aangewezen, dus het verliest nooit van een automatische regel.
+  ///
+  /// **Waarom de torrentweg dit nodig heeft en de rest niet.** Bij Soulseek bestond dit al, maar
+  /// alleen voor "haal precies dít bestand van precies díe peer" (`job.exact`). Een torrent is per
+  /// definitie zo'n keuze: je hebt een uitgave uitgezocht, soms zelfs één nummer eruit. En juist die
+  /// stond nergens beschermd — hij landde los in de downloadmap, en de eerstvolgende opruiming of
+  /// dubbelveger liet [firstIsBetter] beslissen. Die kijkt naar formaat en grootte, dus jouw keuze
+  /// verloor van iets wat de app beter vond. Gemeld op 29-08-2026: "als ik manueel download moet dit
+  /// overheersen."
+  ///
+  /// Het kost hier niets aan opwaarderen: de jacht op een betere kwaliteit loopt alleen over Soulseek
+  /// en raakt een torrentbestand nooit.
+  Future<void> _jouwKeuze(String pad) async {
+    try {
+      await onthoudVasteKeuze(pad);
+    } catch (_) {/* de download is geslaagd; de bescherming is geen voorwaarde */}
   }
 
   /// Een vrije naam in [destDir] pakken en meteen vastleggen, of null als er geen te vinden is.

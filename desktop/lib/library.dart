@@ -1358,6 +1358,11 @@ class LibraryStore extends ChangeNotifier {
             // en telt "701 onderzocht" spoken mee — en erger: een pad dat later opnieuw gebruikt
             // wordt zou het oordeel van een héél ander bestand erven.
             vergeetOordeel(p);
+            // En om precies dezelfde reden de bescherming: een pad dat later opnieuw gebruikt wordt
+            // zou anders erven dat JIJ het gekozen had, en dan wint een wildvreemd bestand van alles
+            // wat de app erover weet. Sinds een torrentdownload ook een vaste keuze is, is dat geen
+            // theoretisch geval meer: die lijst groeit met elk nummer dat je binnenhaalt.
+            unawaited(vergeetVasteKeuze(p));
           }
         } catch (_) {/* locked/permission — leave it, it stays visible */}
       }
