@@ -10490,6 +10490,9 @@ class TracksView extends StatelessWidget {
                       // op de televisie draait, en daar bestaat zweven niet. Wel dezelfde bevestiging
                       // met dezelfde twee keuzes — uit de bibliotheek halen en van schijf wissen
                       // horen nooit hetzelfde te betekenen.
+                      // Niet op een tv: daar is de app een speler, en een verwijderknop op elke
+                      // regel is precies wat je met een afstandsbediening niet wilt tegenkomen.
+                      if (!isTv)
                       SizedBox(
                         width: 34,
                         child: TvLabelled(
