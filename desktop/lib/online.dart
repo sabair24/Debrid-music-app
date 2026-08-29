@@ -432,10 +432,38 @@ class OnlineService {
   /// **Dit is de reparatie van "veel peers, en toch niets".** Een magneet zonder bestandslijst kon de
   /// app nergens anders heen brengen dan naar TorBox, en die moest dan de hele plaat eerst zelf
   /// binnenhalen — dat is de "Voorbereiden" die bleef staan terwijl Knaben veertig seeders toonde.
+  /// De torrentbestanden die we in deze zitting al opgehaald hebben, op infohash.
+  ///
+  /// **Niet alleen voor de snelheid.** Bij een magneet haalt aria2 de inhoudsopgave uit de zwerm, en
+  /// zo'n metadata-taak staat bij hem geregistreerd op dezelfde infohash als de echte download.
+  /// Vraagt de app hem twee keer vlak na elkaar — en dat deed hij: één keer voor de nummerlijst en
+  /// nog eens per gekozen nummer — dan botst de tweede op de eerste:
+  ///
+  ///     errorCode=12 InfoHash 6f948bec… is already registered
+  ///
+  /// Gemeten op 29-08-2026 met Tears For Fears: nummer 3 kwam binnen, nummer 1 viel om met die
+  /// melding. Eén keer ophalen en onthouden lost het bij de wortel op, en scheelt bovendien twee
+  /// gangen naar de zwerm.
+  final Map<String, List<int>> _torrentCache = {};
+
   Future<({List<int>? bytes, LokaleBron stand})> _torrentBytes(SearchResult r) async {
+    final sleutel = r.hash.toLowerCase();
+    final bekend = sleutel.isEmpty ? null : _torrentCache[sleutel];
+    if (bekend != null) return (bytes: bekend, stand: LokaleBron.gelukt);
+    void onthoud(List<int> bytes) {
+      if (sleutel.isEmpty) return;
+      // Een handvol volstaat: het gaat om de paar torrents waar je op dit moment mee bezig bent, en
+      // veertig kilobyte per stuk hoeft niet eindeloos mee te reizen.
+      if (_torrentCache.length >= 20) _torrentCache.remove(_torrentCache.keys.first);
+      _torrentCache[sleutel] = bytes;
+    }
+
     if (r.torrentUrl.isNotEmpty) {
       final bytes = await rutracker.haalTorrentBestand(r.torrentUrl);
-      if (bytes != null && bytes.isNotEmpty) return (bytes: bytes, stand: LokaleBron.gelukt);
+      if (bytes != null && bytes.isNotEmpty) {
+        onthoud(bytes);
+        return (bytes: bytes, stand: LokaleBron.gelukt);
+      }
     }
     if (r.magnet.isEmpty) return (bytes: null, stand: LokaleBron.geenBron);
     final map = await Directory.systemTemp.createTemp('dm_meta_');
@@ -444,6 +472,7 @@ class OnlineService {
         return (bytes: null, stand: LokaleBron.geenMotor);
       }
       final bytes = await aria2.haalMetadata(r.magnet, map: map.path);
+      if (bytes != null) onthoud(bytes);
       return bytes == null
           ? (bytes: null, stand: LokaleBron.geenZwerm)
           : (bytes: bytes, stand: LokaleBron.gelukt);

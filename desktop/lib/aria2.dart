@@ -514,6 +514,22 @@ class Aria2 {
       return null;
     } finally {
       await verwijder(gid);
+      // WACHTEN TOT HIJ HEM ÉCHT KWIJT IS.
+      //
+      // aria2 registreert een metadata-taak op dezelfde infohash als de echte download. Meldt de app
+      // de torrent aan terwijl die registratie nog niet opgeruimd is, dan krijgt hij:
+      //
+      //     errorCode=12 InfoHash 6f948bec… is already registered
+      //
+      // Gemeten op 29-08-2026 met Tears For Fears, twaalf milliseconden na het opruimen. Twaalf.
+      // `forceRemove` keert terug voordat de administratie leeg is, dus even kijken tot het zo is.
+      final hash = _infohashUit(magneet);
+      if (hash.isNotEmpty) {
+        for (var i = 0; i < 30; i++) {
+          if (await zoekGidVoor(hash) == null) break;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }
     }
   }
 
