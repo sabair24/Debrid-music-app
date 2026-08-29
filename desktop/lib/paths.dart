@@ -157,3 +157,16 @@ String _fallback() {
   }
   return '${Directory.systemTemp.path}${Platform.pathSeparator}DebridMusic';
 }
+
+/// De map waarin de torrentmotor werkt, onder de downloadmap.
+///
+/// **Waarom hij een eigen naam heeft, en waarom die hier staat.** De scanner leest de hele
+/// muziekmap en sloeg alleen `_inkomend` en de parkeermap over. Alles wat aria2 aan het binnenhalen
+/// was — halve bestanden, en bestanden die hij opnieuw ophaalde omdat een eerdere download ze had
+/// weggehaald — kwam dus gewoon in de bibliotheek terecht. Dat is de klacht van 29-08-2026: "bij het
+/// kiezen komen er liedjes bij die ik nooit heb aangeklikt".
+///
+/// Eén naam, twee plekken: `online.dart` maakt hem, `library.dart` slaat hem over. Zouden die twee
+/// uiteenlopen, dan is het gevolg precies dezelfde stilte als hiervoor — vandaar dat hij hier staat,
+/// in het bestand dat ze allebei al kennen.
+const torrentWerkMap = '_torrentwerk';

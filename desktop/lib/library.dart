@@ -245,6 +245,13 @@ ScanUitslag _scanTags(String root, String? cachePad) {
     // deliberately NOT part of the library — otherwise a parked junk WAV keeps scanning back in as
     // its own single and the duplicate cleanup can never finish.
     if (e.path.contains('${Platform.pathSeparator}$dupeFolder${Platform.pathSeparator}')) continue;
+    // En de map waarin de torrentmotor werkt. Daar staan halve bestanden, en bestanden die aria2
+    // opnieuw ophaalt omdat een eerdere download ze heeft weggehaald. Zonder deze regel komen die
+    // in de bibliotheek — gemeld op 29-08-2026 als "er komen liedjes bij die ik nooit heb
+    // aangeklikt". Zie [torrentWerkMap] in `online.dart`.
+    if (e.path.contains('${Platform.pathSeparator}$torrentWerkMap${Platform.pathSeparator}')) {
+      continue;
+    }
     var addedMs = 0, sizeBytes = 0;
     try {
       final st = e.statSync();

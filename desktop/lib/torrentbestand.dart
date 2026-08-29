@@ -12,6 +12,8 @@ library;
 
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
+
 /// Eén bestand in een torrent.
 class TorrentBestand {
   /// De plaats in de torrent, **vanaf 1 geteld** — dat is de nummering die aria2 gebruikt voor
@@ -43,7 +45,20 @@ class TorrentBestand {
 class TorrentInhoud {
   final String naam;
   final List<TorrentBestand> bestanden;
-  const TorrentInhoud(this.naam, this.bestanden);
+
+  /// De infohash: de SHA-1 over het `info`-woordenboek, precies zoals het in het bestand staat.
+  ///
+  /// **Waarom de app hem zelf uitrekent.** De meeste bronnen geven hem mee in een magneet, maar
+  /// Redacted geeft alleen een torrentbestand — daar staat geen hash bij. Zonder hash kan de app
+  /// niet ontdubbelen, niet zien of TorBox hem al heeft, en niet herkennen dat twee nummers van
+  /// dezelfde plaat bij dezelfde lopende taak horen.
+  ///
+  /// Het moet over de RUWE bytes: opnieuw coderen levert een andere volgorde of andere getallen op,
+  /// en dan klopt de hash niet meer met wat de rest van de wereld gebruikt. Vandaar dat de lezer
+  /// onthoudt waar dat woordenboek begon en eindigde.
+  final String infohash;
+
+  const TorrentInhoud(this.naam, this.bestanden, {this.infohash = ''});
 
   int get totaleGrootte => bestanden.fold(0, (s, f) => s + f.grootte);
   List<TorrentBestand> get audio => bestanden.where((f) => f.isAudio).toList();
@@ -52,18 +67,25 @@ class TorrentInhoud {
   /// een halve download komen hier langs, en die mogen niet als lege torrent doorgaan.
   static TorrentInhoud? lees(List<int> bytes) {
     try {
-      final wortel = _Bencode(bytes).lees();
+      final lezer = _Bencode(bytes);
+      final wortel = lezer.lees();
       if (wortel is! Map) return null;
       final info = wortel['info'];
       if (info is! Map) return null;
       final naam = _tekst(info['name']) ?? 'torrent';
+      final hash = lezer.infoBereik == null
+          ? ''
+          : sha1
+              .convert(bytes.sublist(lezer.infoBereik!.$1, lezer.infoBereik!.$2))
+              .toString()
+              .toLowerCase();
 
       final lijst = info['files'];
       if (lijst is! List) {
         // Eén bestand: de torrentnaam ís de bestandsnaam.
         final lengte = info['length'];
         if (lengte is! int) return null;
-        return TorrentInhoud(naam, [TorrentBestand(1, naam, lengte)]);
+        return TorrentInhoud(naam, [TorrentBestand(1, naam, lengte)], infohash: hash);
       }
 
       final uit = <TorrentBestand>[];
@@ -79,7 +101,7 @@ class TorrentInhoud {
         // `--select-file` stilzwijgend het verkeerde nummer binnen.
         uit.add(TorrentBestand(i + 1, pad, lengte));
       }
-      return uit.isEmpty ? null : TorrentInhoud(naam, uit);
+      return uit.isEmpty ? null : TorrentInhoud(naam, uit, infohash: hash);
     } catch (_) {
       return null;
     }
@@ -141,12 +163,23 @@ class _Bencode {
     return uit;
   }
 
+  /// Waar het `info`-woordenboek in de RUWE bytes begon en eindigde.
+  ///
+  /// De infohash is de SHA-1 over precies dat stuk, byte voor byte zoals het in het bestand staat.
+  /// Zelf opnieuw coderen geeft een andere volgorde of andere getalvormen, en dan komt er een hash
+  /// uit die nergens ter wereld iets betekent.
+  (int, int)? infoBereik;
+
   Map<String, dynamic> _woordenboek() {
     _i++; // d
     final uit = <String, dynamic>{};
     while (_i < _b.length && _b[_i] != _e) {
       final sleutel = utf8.decode(_tekst(), allowMalformed: true);
+      final beginWaarde = _i;
       uit[sleutel] = lees();
+      // Alleen de bovenste `info` telt: een uitgave met een `info` diep in een andere structuur
+      // bestaat niet, maar overschrijven zou hier stil de verkeerde hash opleveren.
+      if (sleutel == 'info' && infoBereik == null) infoBereik = (beginWaarde, _i);
     }
     _i++; // e
     return uit;

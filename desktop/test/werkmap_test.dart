@@ -24,6 +24,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/online.dart';
+import 'package:debridmusic/paths.dart';
 
 void main() {
   // Precies het geval van de melding.
@@ -35,8 +36,12 @@ void main() {
   test('DE KERN: aria2 werkt NAAST de doelmap, niet erin', () {
     final werk = werkMapPad(doel, hash, naam);
 
-    expect(werk, r'D:\Flac music 2024\DebridMusic Downloads\.dm-3b2a1f9e');
+    expect(werk, r'D:\Flac music 2024\DebridMusic Downloads\_torrentwerk\3b2a1f9e');
     expect(werk, isNot(contains(naam)), reason: 'anders staat de plaatnaam er weer dubbel in');
+    // In een map die de bibliotheekscanner overslaat. Zonder dat komen de halve bestanden die aria2
+    // aan het binnenhalen is gewoon in je bibliotheek — gemeld als "er komen liedjes bij die ik
+    // nooit heb aangeklikt".
+    expect(werk, contains('${Platform.pathSeparator}$torrentWerkMap${Platform.pathSeparator}'));
   });
 
   test('en daarmee past het pad ruim binnen wat Windows aankan', () {
@@ -55,8 +60,8 @@ void main() {
     final werk = werkMapPad(doel, '', naam);
 
     expect(werk.length, lessThan(doel.path.length));
-    expect(werk, startsWith(r'D:\Flac music 2024\DebridMusic Downloads\.dm-'));
-    expect(werk.split(Platform.pathSeparator).last.length, 12, reason: '.dm- plus acht tekens');
+    expect(werk, startsWith(r'D:\Flac music 2024\DebridMusic Downloads\_torrentwerk\'));
+    expect(werk.split(Platform.pathSeparator).last.length, 8, reason: 'acht tekens uit de naam');
   });
 
   group('de laatste map van een pad', () {

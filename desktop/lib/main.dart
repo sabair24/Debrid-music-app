@@ -104,6 +104,7 @@ import 'tidal.dart';
 import 'tiddl.dart';
 import 'torbox.dart';
 import 'torbox_stand.dart';
+import 'redacted.dart';
 import 'torznab.dart';
 import 'tv.dart';
 import 'zoekladder.dart';
@@ -7980,6 +7981,7 @@ Widget _waaromGeenTorrents(BuildContext context, {required bool leeg}) {
     'knaben': 'Knaben',
     'bitsearch': 'BitSearch',
     'torznab': 'Jouw indexers',
+    'redacted': 'Redacted',
   };
   final standen = context.read<OnlineService>().aggregator.standen;
   final bronnen = [
@@ -17809,7 +17811,7 @@ class SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
-  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _anthropic, _anthropicWs, _rtUser, _rtPass, _slskPort, _acoustid, _tidalId, _tidalSecret, _torznabUrl, _torznabKey;
+  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _anthropic, _anthropicWs, _rtUser, _rtPass, _slskPort, _acoustid, _tidalId, _tidalSecret, _torznabUrl, _torznabKey, _redacted;
 
   @override
   void initState() {
@@ -17830,6 +17832,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _rtPass = TextEditingController(text: s.rutrackerPass);
     _torznabUrl = TextEditingController(text: s.torznabUrl);
     _torznabKey = TextEditingController(text: s.torznabKey);
+    _redacted = TextEditingController(text: s.redactedKey);
   }
 
   bool _testing = false;
@@ -17868,6 +17871,39 @@ class _SettingsDialogState extends State<SettingsDialog> {
   ///
   /// Anders moet je eerst opslaan om te kunnen proberen, en dan staat er een adres bewaard waarvan
   /// je nog niet weet of het klopt.
+  bool _redBusy = false;
+  bool _redOk = false;
+  String _redUit = '';
+
+  /// De sleutel van Redacted proberen, en bij succes meteen bewaren.
+  ///
+  /// Zelfde vorm als de proef hierboven, en om dezelfde reden: een sleutel die je invult zonder hem
+  /// te proberen is een instelling waarvan je pas bij de volgende zoekopdracht hoort dat hij niets
+  /// deed — en bij een besloten tracker weet je dan nog steeds niet of het aan de sleutel lag of aan
+  /// zijn rechten.
+  Future<void> _proefRedacted() async {
+    final echte = context.read<AppSettings>();
+    final sleutel = _redacted.text.trim();
+    setState(() {
+      _redBusy = true;
+      _redUit = '';
+    });
+    try {
+      final uit = await RedactedApi(() => sleutel).proef();
+      if (!mounted) return;
+      setState(() {
+        _redOk = uit.ok;
+        _redUit = uit.reden;
+      });
+      if (uit.ok) {
+        echte.redactedKey = sleutel;
+        await echte.save();
+      }
+    } finally {
+      if (mounted) setState(() => _redBusy = false);
+    }
+  }
+
   Future<void> _proefTorznab() async {
     final echte = context.read<AppSettings>();
     final proef = AppSettings()
@@ -18563,6 +18599,46 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ],
                       ),
                     ),
+                    // **Redacted.** Een besloten tracker die alleen over muziek gaat: elke uitgave
+                    // is beschreven (formaat, codering, bron) en de zwermen leven — waar de open
+                    // indexen tellers tonen die maanden achterlopen. Zie `redacted.dart`.
+                    const SizedBox(height: 16),
+                    const Text('Redacted', style: kOpschrift),
+                    const Padding(
+                      padding: EdgeInsets.only(top: 4, bottom: 6),
+                      child: Text(
+                          'Maak in je profiel op Redacted een API-sleutel aan (Settings → Access '
+                          'Settings → Create an API key) met de rechten "Torrents" en "User". Zonder '
+                          'account werkt dit niet; er valt er ook geen aan te vragen.',
+                          style: TextStyle(color: _muted, fontSize: 11.5)),
+                    ),
+                    _field('API-sleutel van Redacted', _redacted, obscure: true),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6, bottom: 4),
+                      child: Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 10,
+                        runSpacing: 6,
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: _redBusy ? null : _proefRedacted,
+                            icon: const Icon(Icons.vpn_key_rounded, size: 16),
+                            label: const Text('Sleutel proberen'),
+                          ),
+                          if (_redUit.isNotEmpty)
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 340),
+                              child: Text(_redUit,
+                                  style: TextStyle(
+                                      color: _redOk ? _accent2 : const Color(0xFFE8913A),
+                                      fontSize: 11.5)),
+                            ),
+                        ],
+                      ),
+                    ),
+                    // Het seeden staat hier en niet ergens diep in een menu, want het is de enige
+                    // instelling waar je account op een besloten tracker aan hangt.
+                    const SeedKeuze(),
                     const SizedBox(height: 8),
                     _field('Last.fm API-sleutel', _lastfm),
                     const SizedBox(height: 8),
@@ -18850,6 +18926,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     s.tidalClientSecret = _tidalSecret.text.trim();
                     s.torznabUrl = _torznabUrl.text.trim();
                     s.torznabKey = _torznabKey.text.trim();
+                    s.redactedKey = _redacted.text.trim();
                     // Pressing Save here is the deliberate override of the refuse-to-write guard:
                     // these values came from the fields, not from a failed load, so writing them
                     // over a broken file is a repair rather than the loss the guard exists for.
@@ -23010,6 +23087,57 @@ class StroomkwaliteitKeuze extends StatelessWidget {
 /// User-Agent en met een volledige Chrome inclusief `sec-ch-ua` en `Sec-Fetch-*`, allemaal 403.
 /// Zolang er geen ingebouwde webview is, is dit de enige eerlijke weg: jouw browser lost de
 /// uitdaging op, en de app leent het koekje dat daaruit komt.
+/// Hoe lang de app blijft terugdelen na een download van een besloten tracker.
+///
+/// **Waarom dit zichtbaar moet zijn.** Op Redacted wordt bijgehouden wat je haalt en wat je
+/// teruggeeft. Binnenhalen en meteen stoppen heet daar hit-and-run en kost je je account — dat is
+/// niet iets om stilletjes voor iemand te beslissen. Andersom kost seeden bandbreedte en tijdelijk
+/// dubbele schijfruimte, want aria2 kan alleen uitdelen wat in zijn eigen map ligt.
+class SeedKeuze extends StatelessWidget {
+  const SeedKeuze({super.key});
+
+  static const _keuzes = [(0, 'Niet delen'), (24, '24 uur'), (72, '72 uur'), (168, 'Een week')];
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = context.watch<AppSettings>();
+    return Padding(
+      padding: const EdgeInsets.only(top: 10, bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Terugdelen na een download van een besloten tracker',
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final (uren, naam) in _keuzes)
+                ChoiceChip(
+                  label: Text(naam),
+                  selected: settings.seedUren == uren,
+                  onSelected: (aan) async {
+                    if (!aan) return;
+                    settings.seedUren = uren;
+                    await settings.save();
+                  },
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            settings.seedUren == 0
+                ? 'Uit. Op Redacted heet dat hit-and-run, en daar kun je je account mee kwijtraken.'
+                : 'Zolang de app deelt blijft het bestand ook in de werkmap staan — die ruimte komt '
+                    'daarna vanzelf vrij. Bij Pirate Bay, Knaben en RuTracker verandert er niets.',
+            style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Wie de torrent binnenhaalt: TorBox, deze pc, of de app die kiest.
 ///
 /// **Waarom dit op het scherm staat en niet alleen in een bestand.** Het is de enige instelling die

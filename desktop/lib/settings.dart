@@ -92,6 +92,20 @@ class AppSettings extends ChangeNotifier {
   /// adres ingevuld haalt de app zelf een vers koekje zodra hij een 403 krijgt.
   String flaresolverrUrl = FlareSolverr.standaardAdres;
 
+  /// Je API-sleutel van Redacted (Settings -> Access Settings -> Create an API key).
+  ///
+  /// Een besloten tracker die alleen over muziek gaat: elke uitgave is beschreven en de zwermen
+  /// leven, in tegenstelling tot de open indexen waarvan de tellers maanden achterlopen. De sleutel
+  /// is die van JOUW account; de app doet ermee wat jij met de hand ook zou doen.
+  String redactedKey = '';
+
+  /// Hoe lang de app na een download blijft delen, in uren. 0 is niet delen.
+  ///
+  /// **Op een besloten tracker is dit geen beleefdheid maar een regel.** Wat je binnenhaalt en nooit
+  /// teruggeeft heet daar hit-and-run, en daar staat verlies van je account op. Bij een open bron
+  /// (Pirate Bay, Knaben) maakt het niet uit en blijft alles zoals het was.
+  int seedUren = 72;
+
   // TIDAL: client id/secret entered by the user; the rest is managed by the OAuth flow.
   String tidalClientId = '';
   String tidalClientSecret = '';
@@ -294,6 +308,8 @@ class AppSettings extends ChangeNotifier {
         torznabUrl = (m['torznab_url'] ?? '') as String;
         torznabKey = (m['torznab_key'] ?? '') as String;
         flaresolverrUrl = (m['flaresolverr_url'] ?? FlareSolverr.standaardAdres) as String;
+        redactedKey = (m['redacted_key'] ?? '') as String;
+        seedUren = (m['seed_uren'] as num?)?.toInt() ?? 72;
         torrentMotor = (m['torrent_motor'] ?? 'auto') as String;
         tidalClientId = (m['tidal_client_id'] ?? '') as String;
         tidalClientSecret = (m['tidal_client_secret'] ?? '') as String;
@@ -332,6 +348,8 @@ class AppSettings extends ChangeNotifier {
         'torznab_url': torznabUrl,
         'torznab_key': torznabKey,
         'flaresolverr_url': flaresolverrUrl,
+        'redacted_key': redactedKey,
+        'seed_uren': seedUren,
         'torrent_motor': torrentMotor,
         'tidal_client_id': tidalClientId,
         'tidal_client_secret': tidalClientSecret,

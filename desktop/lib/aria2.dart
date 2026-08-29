@@ -347,12 +347,18 @@ class Aria2 {
 
   /// Zet een torrentbestand klaar en begin. [kies] is de nummering uit de torrent (vanaf 1); leeg
   /// betekent alles.
+  /// [seedMinuten] overschrijft de standaard "klaar is klaar" voor deze ene torrent.
+  ///
+  /// **Waarvoor dat nodig is.** Op een open bron maakt het niet uit; op een BESLOTEN tracker als
+  /// Redacted heet binnenhalen-en-meteen-stoppen "hit and run", en daar staat verlies van je account
+  /// op. Per torrent en niet als startvlag, want in dezelfde app lopen beide soorten door elkaar.
   Future<String?> voegTorrentToe(List<int> torrent,
-      {required String map, List<int> kies = const []}) async {
+      {required String map, List<int> kies = const [], int? seedMinuten}) async {
     try {
       final opties = <String, String>{
         'dir': map,
         if (kies.isNotEmpty) 'select-file': kies.join(','),
+        if (seedMinuten != null && seedMinuten > 0) 'seed-time': '$seedMinuten',
         // Een half bestand van een vorige poging mag geen blokkade zijn.
         //
         // **Gemeten op 29-08-2026** met Tears For Fears — Songs From The Big Chair. Nummer 1 viel om

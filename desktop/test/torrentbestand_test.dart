@@ -107,5 +107,11 @@ void main() {
     expect(t.naam, isNotEmpty);
     expect(t.audio, isNotEmpty, reason: 'een FLAC-album hoort audio te bevatten');
     expect(t.totaleGrootte, greaterThan(100 * 1024 * 1024));
+    // DE INFOHASH, uitgerekend over de ruwe bytes. Deze staat vast: het is dezelfde hash die in de
+    // magneet van dat topic staat (RuTracker 3424450). Zou de app hem anders berekenen — door het
+    // info-woordenboek opnieuw te coderen bijvoorbeeld — dan komt er een getal uit dat nergens ter
+    // wereld iets betekent, en dan herkent TorBox zijn eigen cache niet meer en denkt aria2 dat
+    // twee nummers van dezelfde plaat bij verschillende torrents horen.
+    expect(t.infohash, '73812ba4ac3bb331e8deff00689575cfe2193c73');
   });
 }
