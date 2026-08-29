@@ -29,6 +29,23 @@ import 'flac_tags.dart';
 import 'torbox_stand.dart';
 import 'vaste_keuze.dart';
 
+/// De laatste map van een pad, of het nu met `/` of met `\` geschreven staat.
+///
+/// **Waarom dit geen detail is.** aria2 antwoordt met voorwaartse schuine strepen, ook op Windows:
+/// `D:/Flac music 2024/DebridMusic Downloads/.dm-6f948bec/…`. Splitsen op `Platform.pathSeparator`
+/// levert daar één stuk op — het hele pad — en dat werd vervolgens als mapnaam voor het bestand
+/// gebruikt. Gemeten op 29-08-2026 stond er na een tweede download van hetzelfde nummer:
+///
+///     D__Flac music 2024_DebridMusic Downloads_.dm-6f948bec_Tears For Fears - Songs From The
+///     Big Chair (Deluxe Edition) … - 03. Tears For Fears - Everybody Wants To Rule The World.flac
+///
+/// Een bestand van 29 MB met een naam waar niemand iets aan heeft, in de map waar de bibliotheek uit
+/// leest.
+String laatsteMap(String pad) {
+  final delen = pad.split(RegExp(r'[\\/]')).where((s) => s.isNotEmpty).toList();
+  return delen.isEmpty ? '' : delen.last;
+}
+
 /// De KORTE map waarin aria2 mag werken, náást de doelmap in plaats van erin.
 ///
 /// **Waarom dit een eigen functie is.** Windows kapt een pad op 260 tekens, en die grens haal je
@@ -3105,8 +3122,7 @@ class DownloadManager extends ChangeNotifier {
     // De map waar het bestand IN DE TORRENT stond — dat is wat "CD2" of "1965 - Poupée de cire" van
     // elkaar onderscheidt zodra de namen erin gelijk zijn.
     final ouder = bron.parent.path;
-    final delen = ouder.split(Platform.pathSeparator).where((s) => s.isNotEmpty).toList();
-    final submap = ouder == destDir.path || delen.isEmpty ? '' : delen.last;
+    final submap = ouder == destDir.path ? '' : laatsteMap(ouder);
     for (final kandidaat in vrijeNamen(_sanitize(naam), submap: _sanitize(submap))) {
       final doel = File('${destDir.path}${Platform.pathSeparator}$kandidaat');
       if (bron.path == doel.path) return doel.path;

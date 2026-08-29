@@ -59,6 +59,27 @@ void main() {
     expect(werk.split(Platform.pathSeparator).last.length, 12, reason: '.dm- plus acht tekens');
   });
 
+  group('de laatste map van een pad', () {
+    test('aria2 schrijft met voorwaartse strepen, ook op Windows', () {
+      // Precies wat `tellStatus` teruggeeft. Splitsen op alleen `\` maakt hiervan één stuk, en dan
+      // wordt het HELE pad de mapnaam van het bestand — 29 MB onder een onleesbare naam, in de map
+      // waar de bibliotheek uit leest.
+      expect(
+          laatsteMap('D:/Flac music 2024/DebridMusic Downloads/.dm-6f948bec/'
+              'Tears For Fears - Songs From The Big Chair (Deluxe Edition)'),
+          'Tears For Fears - Songs From The Big Chair (Deluxe Edition)');
+    });
+
+    test('en met terugwaartse strepen ook', () {
+      expect(laatsteMap(r'D:\Muziek\Downloads\CD2'), 'CD2');
+    });
+
+    test('een pad dat op een streep eindigt telt die niet mee', () {
+      expect(laatsteMap('D:/Muziek/CD2/'), 'CD2');
+      expect(laatsteMap(''), '');
+    });
+  });
+
   test('twee nummers van dezelfde plaat delen dezelfde werkmap', () {
     // Anders haalt aria2 dezelfde torrent twee keer binnen, en telt hij hem als dubbel.
     expect(werkMapPad(doel, hash, naam), werkMapPad(doel, hash, 'een andere naam'));
