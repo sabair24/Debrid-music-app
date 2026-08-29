@@ -2829,6 +2829,10 @@ class DownloadManager extends ChangeNotifier {
     http.Client? client;
     IOSink? sink;
     File? dest;
+    // Het pad waar dit bestand terechtkwam, apart bijgehouden. Niet `dest` opnieuw uitlezen na het
+    // `finally`: of dat daar nog als "niet null" geldt hangt af van hoe de analyse door een
+    // try/catch/finally heen redeneert, en dat is geen ding om een bouw op te laten struikelen.
+    var gelandPad = '';
     var complete = false;
     try {
       final url = await online.resolveTrackUrl(torrentId, f.id);
@@ -2843,6 +2847,7 @@ class DownloadManager extends ChangeNotifier {
       // hetzelfde moment en zien allebei niets. `create(exclusive: true)` slaagt maar één keer.
       dest = await _legVast(destDir, f.label);
       if (dest == null) throw 'geen vrije naam in de doelmap';
+      gelandPad = dest.path;
       sink = dest.openWrite();
       var received = 0;
       // De wachtklok staat op de STROOM en niet op het geheel: hij slaat toe als er zólang niets
@@ -2887,8 +2892,7 @@ class DownloadManager extends ChangeNotifier {
       }
     }
     // Jouw keuze, dus hij verliest straks niet van iets wat de app beter vindt. Zie [_jouwKeuze].
-    final geland = dest;
-    if (geland != null) await _jouwKeuze(geland.path);
+    if (gelandPad.isNotEmpty) await _jouwKeuze(gelandPad);
     job.progress = 1;
     job.status = 'done';
     notifyListeners();
