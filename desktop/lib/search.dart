@@ -81,6 +81,46 @@ class BronStand {
   String zin(String naam) => fout.isEmpty ? '$naam $aantal' : '$naam — $fout';
 }
 
+/// Eén verzoek met een korte klok en één herkansing.
+///
+/// **Waarom een herkansing.** Gemeten op 30-08-2026: apibay antwoordt vanaf de opdrachtregel in
+/// 0,098 s en vanuit een kaal Dart-programma in 71 ms — maar in de app liep dezelfde vraag
+/// ("Adele 30") twaalf seconden vast, terwijl de vraag ervóór en erná gewoon in anderhalve seconde
+/// klaar waren. Wisselvallig dus, en met één poging ben je de hele bron kwijt: op het scherm stond
+/// "PirateBay — te traag (12 s)" terwijl die site het prima deed.
+///
+/// Vijf seconden is ruim voor een API die in een tiende antwoordt, en twee pogingen passen samen nog
+/// onder de kap van twaalf die de zoekverdeler aanhoudt. De klok staat hier en niet alleen daar: een
+/// bron die na twaalf seconden wordt afgekapt heeft die twaalf seconden wél gekost, en dan wacht de
+/// hele zoekopdracht op de traagste.
+///
+/// [client] is er voor de toetsen; in de app is het gewoon `http`.
+Future<http.Response> haalMetHerkansing(
+  Uri url, {
+  String? lichaam,
+  Map<String, String>? koppen,
+  Duration per = const Duration(seconds: 5),
+  int pogingen = 2,
+  http.Client? client,
+}) async {
+  for (var poging = 1;; poging++) {
+    try {
+      final f = lichaam == null
+          ? (client?.get(url, headers: koppen) ?? http.get(url, headers: koppen))
+          : (client?.post(url, headers: koppen, body: lichaam) ??
+              http.post(url, headers: koppen, body: lichaam));
+      return await f.timeout(per);
+    } on TimeoutException {
+      if (poging >= pogingen) {
+        // De verdeler zet deze tekst op het scherm. Zeg wat er geprobeerd is, niet alleen dát het
+        // te lang duurde — anders lijkt het alsof de site down is terwijl hij het elders wél doet.
+        throw TimeoutException(
+            'te traag ($pogingen pogingen van ${per.inSeconds} s)');
+      }
+    }
+  }
+}
+
 /// Pirate Bay via apibay.org (keyless).
 class ApibaySource implements SearchSource {
   @override
@@ -88,7 +128,8 @@ class ApibaySource implements SearchSource {
   @override
   Future<List<SearchResult>> search(String query) async {
     try {
-      final r = await http.get(Uri.parse('https://apibay.org/q.php?q=${Uri.encodeComponent(query)}&cat=100'));
+      final r = await haalMetHerkansing(
+          Uri.parse('https://apibay.org/q.php?q=${Uri.encodeComponent(query)}&cat=100'));
       if (r.statusCode != 200) return [];
       final arr = (jsonBody(r) as List?) ?? const [];
       final out = <SearchResult>[];
@@ -110,6 +151,11 @@ class ApibaySource implements SearchSource {
         ));
       }
       return out;
+    } on TimeoutException {
+      // NIET stil nul teruggeven. Dan staat er "PirateBay 0" op het scherm terwijl die site het
+      // gewoon deed en alleen deze ene vraag bleef hangen — precies de stilte waar deze app genoeg
+      // van heeft gehad. De verdeler zet de reden erbij.
+      rethrow;
     } catch (_) {
       return [];
     }
@@ -123,7 +169,9 @@ class BitSearchSource implements SearchSource {
   @override
   Future<List<SearchResult>> search(String query) async {
     try {
-      final r = await http.get(Uri.parse('https://bitsearch.eu/api/v1/search?q=${Uri.encodeComponent(query)}&category=audio&sort=seeders&p=1'));
+      final r = await haalMetHerkansing(Uri.parse(
+          'https://bitsearch.eu/api/v1/search?q=${Uri.encodeComponent(query)}'
+          '&category=audio&sort=seeders&p=1'));
       if (r.statusCode != 200) return [];
       final j = jsonBody(r) as Map<String, dynamic>;
       if (j['success'] != true) return [];
@@ -144,6 +192,11 @@ class BitSearchSource implements SearchSource {
           source: 'BitSearch',
         );
       }).toList();
+    } on TimeoutException {
+      // NIET stil nul teruggeven. Dan staat er "PirateBay 0" op het scherm terwijl die site het
+      // gewoon deed en alleen deze ene vraag bleef hangen — precies de stilte waar deze app genoeg
+      // van heeft gehad. De verdeler zet de reden erbij.
+      rethrow;
     } catch (_) {
       return [];
     }
@@ -163,8 +216,8 @@ class KnabenSource implements SearchSource {
         'order_by': 'seeders', 'order_direction': 'desc', 'size': 50,
         'hide_unsafe': true, 'hide_xxx': true,
       });
-      final r = await http.post(Uri.parse('https://api.knaben.org/v1'),
-          headers: {'Content-Type': 'application/json'}, body: body);
+      final r = await haalMetHerkansing(Uri.parse('https://api.knaben.org/v1'),
+          koppen: {'Content-Type': 'application/json'}, lichaam: body);
       if (r.statusCode != 200) return [];
       final hits = (jsonBody(r)['hits'] as List?) ?? const [];
       final out = <SearchResult>[];
@@ -185,6 +238,11 @@ class KnabenSource implements SearchSource {
         ));
       }
       return out;
+    } on TimeoutException {
+      // NIET stil nul teruggeven. Dan staat er "PirateBay 0" op het scherm terwijl die site het
+      // gewoon deed en alleen deze ene vraag bleef hangen — precies de stilte waar deze app genoeg
+      // van heeft gehad. De verdeler zet de reden erbij.
+      rethrow;
     } catch (_) {
       return [];
     }
