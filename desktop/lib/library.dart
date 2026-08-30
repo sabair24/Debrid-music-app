@@ -1263,10 +1263,14 @@ class LibraryStore extends ChangeNotifier {
   /// naar "Trein" niet. Een verzamelaar waar de artiest-tag "Various Artists" zegt en de uitvoerder in
   /// PERFORMER staat wordt hier niet gevonden; dat is een bekende ondergrens en geen stille aanname.
   bool hasLossless(String artist, String title) {
-    final gezocht = trackIdentity(artist, title);
+    // Via [opnameSleutel] en niet via [trackIdentity]: die tweede beslist of twee bestanden DUBBEL
+    // zijn en hoort streng te zijn. Hier gaat het om "mag de app ophouden met zoeken?", en dan is
+    // `Drunk in Love (feat. JAY-Z)` gewoon `Drunk in Love`. Echte versiemerken blijven wél scheiden —
+    // "Trein (instrumentaal)" vervult de wens naar "Trein" niet.
+    final gezocht = opnameSleutel(artist, title);
     for (final t in tracks) {
       if (!t.isFlac) continue;
-      if (trackIdentity(t.artist, t.title) == gezocht) return true;
+      if (opnameSleutel(t.artist, t.title) == gezocht) return true;
     }
     return false;
   }
