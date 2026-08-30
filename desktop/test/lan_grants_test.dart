@@ -212,4 +212,83 @@ void main() {
       expect(store.all.length, 1, reason: 'twee keer adopteren maakt niet twee rijen');
     });
   });
+
+  group('een server die met een lege administratie opkwam herstelt zichzelf', () {
+    // **Waarom deze groep bestaat.** Op 30-08-2026 weigerde de pc élk verzoek — de telefoon 1189
+    // keer op één dag — en ook de gedeelde sleutel die gewoon in settings.json stond werd afgewezen.
+    // De koppelingen worden één keer ingelezen, bij het opstarten; gaat dat mis of te laat, dan komt
+    // een toestel er uit zichzelf nooit meer in. En in `koppeling.log` stond die hele dag geen
+    // enkele regel, dus van buiten viel er niets vast te stellen.
+
+    ({LanServer server, Directory root}) pcMetLegeAdministratie(GrantStore leeg) {
+      final root = Directory.systemTemp.createTempSync('dm_leegpc_');
+      final dir = Directory('${root.path}/Portishead/Dummy')..createSync(recursive: true);
+      File('${dir.path}/01.flac').writeAsBytesSync(List<int>.generate(2048, (i) => i % 256));
+      final library = LibraryStore()
+        ..rootPath = root.path
+        ..configDirOverride = root.path;
+      library.tracks.add(Track(
+        path: '${dir.path}/01.flac',
+        title: 'Mysterons',
+        artist: 'Portishead',
+        album: 'Dummy',
+        isFlac: true,
+        sizeBytes: 2048,
+      ));
+      library.rebuildAlbums();
+      return (
+        server: LanServer(
+          library: library,
+          // Leeg, zoals wanneer `applySettings` zijn werk niet (op tijd) deed.
+          token: '',
+          state: LanStateStore(File('${root.path}/state.json')),
+          pairing: PairingStore(),
+          port: 0,
+          grants: leeg,
+        ),
+        root: root,
+      );
+    }
+
+    test('DE KERN: een koppeling die op schijf staat maar niet in het geheugen komt er alsnog in',
+        () async {
+      // Op schijf staat een geldige koppeling...
+      final bestand = File('${scratch.path}/grants.json');
+      final opSchijf = GrantStore(file: bestand);
+      final grant = opSchijf.mint(deviceId: 'gsm-1', deviceName: 'Saber ultra 26', platform: 'android');
+      await opSchijf.save();
+
+      // ...maar de server kwam op met een lege administratie.
+      final leeg = GrantStore(file: bestand);
+      final pc = pcMetLegeAdministratie(leeg);
+      expect(leeg.all, isEmpty);
+      expect(await pc.server.start(), isNull);
+      final adres = 'http://127.0.0.1:${pc.server.boundPort}';
+
+      final r = await http.get(Uri.parse('$adres/api/catalog'),
+          headers: {'Authorization': 'Bearer ${grant.token}'});
+
+      expect(r.statusCode, 200,
+          reason: 'de koppeling stond op schijf; hem niet lezen mag geen toestel buitensluiten');
+      expect(leeg.all, hasLength(1), reason: 'en hij is nu ook echt ingelezen');
+
+      await pc.server.dispose();
+      pc.root.deleteSync(recursive: true);
+    });
+
+    test('maar een sleutel die nergens staat komt er nog steeds niet in', () async {
+      final leeg = GrantStore(file: File('${scratch.path}/leeg.json'));
+      final pc = pcMetLegeAdministratie(leeg);
+      expect(await pc.server.start(), isNull);
+
+      final r = await http.get(
+          Uri.parse('http://127.0.0.1:${pc.server.boundPort}/api/catalog'),
+          headers: const {'Authorization': 'Bearer zomaar-iets'});
+
+      expect(r.statusCode, 401);
+
+      await pc.server.dispose();
+      pc.root.deleteSync(recursive: true);
+    });
+  });
 }
