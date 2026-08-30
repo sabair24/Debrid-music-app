@@ -579,9 +579,24 @@ class OnlineService {
   }
 
   /// (torrent, audio files) for the track picker.
+  ///
+  /// **Een bestandslijst uit een `.torrent` gaat ALTIJD voor.** Ook als TorBox de torrent al in zijn
+  /// cache heeft: het bestand hebben we hier, en TorBox moet antwoorden. Gemeten op 30-08-2026 met
+  /// dezelfde zoekopdracht:
+  ///
+  ///     RuTracker, .torrent, niet bij TorBox   ->  0,2 s
+  ///     RuTracker, .torrent, WEL bij TorBox    -> 25,5 s   (want dan ging hij langs TorBox)
+  ///
+  /// Voor het DOWNLOADEN blijft de afweging andersom staan — zie [lokaalVoor]. Wat daar telt is de
+  /// snelheid van de bytes, en die komen bij TorBox van hun eigen schijf in plaats van uit een zwerm.
+  /// Alleen voor het lijstje is "zelf lezen" altijd sneller, en dat kost bovendien niemand iets.
   Future<(TbTorrent, List<TbFile>)> tracklist(SearchResult r,
       {void Function(double, String)? onProgress}) async {
-    if (lokaalVoor(r)) {
+    // Een echt torrentbestand: lezen kan meteen, en daar is geen aria2 en geen net voor nodig.
+    if (r.torrentUrl.isNotEmpty) {
+      final lokaal = await _lokaleTracklist(r);
+      if (lokaal != null) return lokaal;
+    } else if (lokaalVoor(r)) {
       final lokaal = await _lokaleTracklist(r);
       if (lokaal != null) return lokaal;
       // Geen bestand of geen audio erin? Dan alsnog langs TorBox — beter een trage lijst dan geen.
@@ -2669,8 +2684,17 @@ class DownloadManager extends ChangeNotifier {
     notifyListeners();
     unawaited(() async {
       try {
+        // De torrent die het keuzevenster al klaar had gaat mee — behalve wanneer het DOWNLOADEN
+        // beter langs TorBox kan.
+        //
+        // Sinds de nummerlijst altijd uit het torrentbestand zelf komt (zie [tracklist]) is `klaar`
+        // ook lokaal bij een plaat die TorBox al in zijn cache heeft. Voor het lijstje is dat de
+        // snelste weg; voor de bytes niet — die komen bij TorBox van hun eigen schijf in plaats van
+        // uit een zwerm van één seeder. [lokaalVoor] weet dat verschil al, dus die beslist.
+        final magHergebruiken =
+            klaar != null && fileId != null && (!klaar.lokaal || online.lokaalVoor(result));
         final gekozen =
-            klaar == null || fileId == null ? null : klaar.files.where((f) => f.id == fileId).toList();
+            !magHergebruiken ? null : klaar!.files.where((f) => f.id == fileId).toList();
         final (torrent, files) = gekozen != null && gekozen.isNotEmpty
             ? (klaar!, gekozen)
             : await online.resolveForDownload(result, fileId, onProgress: (p, s) {
