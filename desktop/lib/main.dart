@@ -12048,6 +12048,23 @@ class _KwaliteitViewState extends State<KwaliteitView> {
     }
   }
 
+  /// Alles op deze lijst op de verlanglijst zetten.
+  ///
+  /// Eén knop en geen vraag per rij: wie hier komt heeft de lijst al gezien, en per nummer bevestigen
+  /// van veertien afgekapte bestanden is geen keuze maar een klusje. De uitkomst komt onderin te
+  /// staan, want een lijst die er ná het drukken precies hetzelfde uitziet vertelt niets.
+  Future<void> _zoekBeter() async {
+    final lib = context.read<LibraryStore>();
+    final rijen = lib.uitMp3Bestanden();
+    final nieuw = await context.read<DownloadManager>().wensEchteVersies(rijen.map((r) => r.track));
+    if (!mounted) return;
+    setState(() {
+      _uitslag = nieuw == 0
+          ? 'Stonden al op de verlanglijst — de app blijft zoeken.'
+          : '$nieuw op de verlanglijst; de app zoekt er vanzelf naar.';
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     // Beide, en om verschillende redenen. De bibliotheek verandert als een vervanger geland is (de
@@ -12076,6 +12093,19 @@ class _KwaliteitViewState extends State<KwaliteitView> {
                 icon: const Icon(Icons.verified_outlined, size: 16),
                 label: const Text('Opnieuw meten'),
                 style: TextButton.styleFrom(foregroundColor: _muted),
+              ),
+            // De app laten zoeken in plaats van zelf per rij een vervanger aanwijzen.
+            //
+            // Wat hier gebeurt is niet "download nu", maar "zet op de verlanglijst": die probeert het
+            // met een steeds ruimer wordend ritme, overleeft een herstart en onthoudt welke peers al
+            // nee zeiden. Precies wat je nodig hebt voor een nummer waarvoor vandaag geen echte bron
+            // online staat — en dat is bij een afgekapte kopie eerder regel dan uitzondering.
+            if (rijen.isNotEmpty && !_bezig)
+              TextButton.icon(
+                onPressed: _zoekBeter,
+                icon: const Icon(Icons.travel_explore_rounded, size: 16),
+                label: Text('Laat de app zoeken (${rijen.length})'),
+                style: TextButton.styleFrom(foregroundColor: _accent),
               ),
             if (_uitslag != null)
               Text(_uitslag!, style: const TextStyle(color: _muted, fontSize: 12.5)),

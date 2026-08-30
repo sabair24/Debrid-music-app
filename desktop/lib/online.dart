@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import 'models.dart';
 import 'organize.dart';
 import 'lossless_want.dart';
 import 'quality.dart';
@@ -2018,6 +2019,62 @@ class DownloadManager extends ChangeNotifier {
   /// [_wantLossless] hem op de verlanglijst; twintig minuten later haalt [sweepLosslessWants] alsnog
   /// de FLAC — van een nummer dat je zojuist met een rode duim hebt weggedaan. Dat is niet alleen
   /// vervelend, het is onbegrijpelijk: je hebt het weggegooid en het staat er weer.
+  /// Zet betrapte nummers op de verlanglijst, zodat de app zélf een echte kopie gaat zoeken.
+  ///
+  /// **Waarom dit er is.** De kwaliteitslijst toont wat er afgekapt is en laat je zelf een vervanger
+  /// aanwijzen. Dat werkt, maar het vraagt dat jij erbij zit. Gemeld op 30-08-2026 met Gorki — Anja:
+  /// een 24/44.1 die op 17,4 kHz dichtklapt. Liever een echte 16/44.1 dan een opgeblazen 24 — en dan
+  /// moet de app ernaar op zoek, ook als er vandaag geen goede bron is.
+  ///
+  /// Dat zoeken kan de verlanglijst al: hij probeert het opnieuw met een steeds ruimer wordend ritme,
+  /// overleeft een herstart, en houdt bij welke peers al nee zeiden. Wat ontbrak is dat een betrapt
+  /// bestand er ooit op kwam.
+  ///
+  /// Wie er wint als de vervanger binnen is beslist `firstIsBetter`, en die kent `bewezenNep`: een
+  /// betrapt bestand verliest daar ook als het gróter is. Een echte 16/44.1 wint dus van een
+  /// opgeblazen 24/44.1 — precies waar het om gaat.
+  ///
+  /// Geeft terug hoeveel er nieuw op de lijst kwamen.
+  Future<int> wensEchteVersies(Iterable<Track> nummers) async {
+    await _ensureWants();
+    var nieuw = 0;
+    for (final t in nummers) {
+      if (t.artist.trim().isEmpty || t.title.trim().isEmpty) {
+        _log.line('"${t.title}": betrapt, maar zonder artiest+titel valt er niets te zoeken');
+        continue;
+      }
+      // WAT JE ZELF KOOS BLIJFT DE BAAS. Een handmatig aangewezen bestand hoort niet op de jachtlijst:
+      // `firstIsBetter` laat zo'n keuze van niets verliezen, dus alles wat hiervoor binnenkomt wordt
+      // meteen weer geparkeerd. Zoeken naar een vervanger die niet mag vervangen is verspilling.
+      if (isVasteKeuze(t.path)) {
+        _log.line('"${t.artist} — ${t.title}": betrapt, maar door jou zelf gekozen — met rust gelaten');
+        continue;
+      }
+      final erbij = _wants.want(LosslessWant(
+        artist: t.artist.trim(),
+        title: t.title.trim(),
+        album: t.album,
+        sinceMs: DateTime.now().millisecondsSinceEpoch,
+        // Het gezag van wat er NU ligt gaat mee: de vervanger hoort op dezelfde plek en met dezelfde
+        // nummering te belanden, ook als de peer een bestand zonder tags stuurt.
+        authority: TrackTags(
+          artist: t.artist,
+          title: t.title,
+          album: t.album,
+          trackNo: t.trackNo,
+          year: t.year,
+        ),
+      ));
+      if (erbij) nieuw++;
+    }
+    if (nieuw > 0) {
+      await _wants.save();
+      _log.line('$nieuw betrapt(e) nummer(s) op de verlanglijst gezet '
+          '(${_wants.count} op de lijst)');
+    }
+    return nieuw;
+  }
+
   Future<void> vergeetWens(String artiest, String titel) async {
     if (titel.trim().isEmpty) return;
     await _ensureWants();
