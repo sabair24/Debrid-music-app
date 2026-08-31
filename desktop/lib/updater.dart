@@ -437,11 +437,23 @@ class Updater {
     final tijdelijk = await getTemporaryDirectory();
     final map = Directory('${tijdelijk.path}${Platform.pathSeparator}update');
     await map.create(recursive: true);
+    // Elk platform zijn eigen naam, want alleen Android krijgt hier een APK.
+    //
     // Op de Mac is het een zip die zo meteen door `ditto` gaat; die kijkt naar de inhoud en niet
     // naar de naam, maar een bestand `.apk` noemen dat geen APK is leest verkeerd in elke logregel.
+    //
+    // Op Windows is het een Inno-installer, en daar is de naam niet alleen cosmetisch. Wat er op
+    // 31-08-2026 op schijf stond was `DebridMusic-0.apk` — verkeerde extensie én buildnummer nul,
+    // want dat veld hoort bij de Android-uitgave. `Process.start` voert zo'n bestand nog wel uit
+    // (CreateProcess kijkt naar de PE-kop, niet naar de extensie), maar de bijwerkpoging sloot die
+    // avond de app af zonder iets te installeren; hetzelfde bestand als `.exe` draaien lukte meteen.
+    // Een installer die zijn eigen naam niet draagt is bovendien niet te herkennen in %TEMP%, en dat
+    // is precies waar je kijkt als een update halverwege blijft steken.
     final doel = File(Platform.isMacOS
         ? '${map.path}${Platform.pathSeparator}DebridMusic-${u.versie}.zip'
-        : '${map.path}${Platform.pathSeparator}DebridMusic-${u.buildnummer}.apk');
+        : Platform.isWindows
+            ? '${map.path}${Platform.pathSeparator}DebridMusic-Setup-${u.versie}.exe'
+            : '${map.path}${Platform.pathSeparator}DebridMusic-${u.buildnummer}.apk');
 
     // Een half binnengehaald bestand van een vorige poging is geen APK maar ziet er wel zo uit.
     if (await doel.exists()) await doel.delete();
