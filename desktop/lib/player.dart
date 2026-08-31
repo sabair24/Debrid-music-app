@@ -819,7 +819,13 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     // beschreef en nergens werd aangeroepen.
     _player.stream.error.listen((e) {
       if (e.trim().isEmpty) return;
-      _meldStilstand('Dit nummer kan niet worden geopend');
+      // MET de reden erbij. Hier stond alleen de kale zin, en dat is precies het antwoord waar
+      // niemand iets mee kan: mpv zégt waarom het niet lukte — een verbinding die geweigerd werd,
+      // een adres dat niet te bereiken is, een antwoord dat te lang uitbleef — en die zin werd
+      // weggegooid. Dezelfde fout als bij het taalmodel dat alleen "400" mocht zeggen.
+      _log?.line('OPENEN MISLUKT — ${current?.title ?? "?"} — ${e.trim()}');
+      _meldStilstand('Kan dit nummer niet openen — ${_kortereReden(e)}');
+      _probeerNogEens();
     });
     // Twee seconden: vaak genoeg om binnen het geduld van de wacht te vallen, zeldzaam genoeg om
     // niets te kosten. Een timer en niet de positiestroom, want het geval dát dit moet vangen is nu
@@ -848,6 +854,49 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
 
   /// Hoe vaak deze stroom al afgebroken is. Nul bij elk nieuw nummer.
   int _hervatpogingen = 0;
+
+  /// Voor welk nummer er al een tweede poging gedaan is. Hoogstens één per nummer.
+  ///
+  /// Op het PAD en niet op een vlag, en dat is geen smaak. De tweede poging van een radionummer
+  /// loopt via [_openRadioCurrent] — dezelfde weg die ook een nieuw nummer opent — dus een vlag die
+  /// daar teruggezet wordt, wordt door de poging zelf teruggezet. Dan probeert hij elke vier
+  /// seconden opnieuw, voor altijd.
+  String? _tweedePogingVoor;
+
+  /// Nog één keer proberen te openen, na een tel of vier.
+  ///
+  /// **Waarom juist hier, en waarom precies één keer.** Een stroom die HALVERWEGE afbreekt werd al
+  /// hervat (zie [_onCompleted]); een stroom die nooit OPENGING kreeg niets — die bleef als dood
+  /// nummer op 0:00 staan tot je zelf iets aanraakte. En dat is het geval dat onderweg het vaakst
+  /// voorkomt: je pc zet een hi-res bestand eerst helemaal om, stuurt in die tien tot twintig
+  /// seconden nog geen byte, en een verbinding die dan afhaakt levert precies deze fout op.
+  ///
+  /// De tweede poging is bijna altijd raak, want de omgezette kopie staat dan in de cache van de pc
+  /// en komt meteen. Vandaar één poging en geen lus: helpt hij niet, dan is er iets anders aan de
+  /// hand en hoort de melding te blijven staan in plaats van eindeloos te knipperen.
+  void _probeerNogEens() {
+    if (position > Duration.zero) return;
+    final t = current;
+    if (t == null || t.path.isEmpty || _tweedePogingVoor == t.path) return;
+    _tweedePogingVoor = t.path;
+    _log?.line('nog één poging over vier tellen — ${t.title}');
+    Timer(const Duration(seconds: 4), () {
+      // Intussen doorgeklikt of gestopt? Dan hoort deze poging nergens meer bij.
+      if (current?.path != t.path || position > Duration.zero) return;
+      _meldStilstand('Nog een poging…');
+      unawaited(radioMode ? _openRadioCurrent() : _hervatOpDezelfdePlek());
+    });
+  }
+
+  /// De reden van mpv, kort genoeg voor één regel op het scherm.
+  ///
+  /// mpv schrijft er soms een pad of een hele URL bij, en die hoort niet op het speelscherm: hij
+  /// draagt het toegangskoekje van je pc en hij duwt de eigenlijke reden van het scherm af.
+  static String _kortereReden(String rauw) {
+    var s = rauw.trim().replaceAll(RegExp(r'https?://\S+'), 'je pc');
+    s = s.replaceAll(RegExp(r'\s+'), ' ');
+    return s.length <= 70 ? s : '${s.substring(0, 69)}…';
+  }
 
   /// Wat de speler onderweg besluit, in `speler.log` naast de andere staat.
   ///
@@ -1364,6 +1413,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _wacht.reset();
     _meldStilstand(null);
     _hervatpogingen = 0;
+    // Een nummer dat je opnieuw aanzet verdient opnieuw een tweede kans. Alleen hier, want dit is
+    // de weg voor een NIEUW nummer — de tweede poging zelf loopt langs [_hervatOpDezelfdePlek].
+    _tweedePogingVoor = null;
     if (coverResolver != null) currentCover = coverResolver!(t);
     _nieuwVoorDeTelling(t);
     await _player.open(Media(_bron(t.path)), play: true);
