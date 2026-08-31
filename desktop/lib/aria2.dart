@@ -335,6 +335,9 @@ class Aria2 {
         'allow-overwrite': 'true',
       };
       final gid = await _roep('aria2.addTorrent', [base64Encode(torrent), <String>[], opties]);
+      // De beginselectie onthouden, want dit is de enige plek waar hij nog te weten is: zie
+      // [kiesErbij] voor wat aria2 er straks van maakt.
+      if (gid is String && kies.isNotEmpty) _selectiePerGid[gid] = {...kies.where((n) => n > 0)};
       _log.line('torrent toegevoegd: gid=$gid, kies=${kies.isEmpty ? "alles" : kies.join(",")}, map=$map');
       return gid as String?;
     } catch (e) {
@@ -389,14 +392,42 @@ class Aria2 {
   Future<bool> kiesErbij(String gid, List<int> erbij) async {
     if (erbij.isEmpty) return true;
     try {
-      final opties = await _roep('aria2.getOption', [gid]);
-      final huidig = opties is Map ? '${opties['select-file'] ?? ''}' : '';
+      // WAT WIJ ZELF AL GEKOZEN HEBBEN TELT ZWAARDER DAN WAT ARIA2 TERUGZEGT.
+      //
+      // `aria2.getOption` geeft `select-file` terug zoals die bij het AANMELDEN is meegegeven, en
+      // niet zoals `changeOption` hem daarna heeft gezet. Wie dus twee keer iets bij kiest, begint
+      // de tweede keer weer bij de oorspronkelijke lijst -- en gooit de eerste toevoeging eruit.
+      //
+      // **Gemeten op 31-08-2026, zeven nummers van Beyoncé - Dangerously In Love:**
+      //
+      //     23:54:18.731  torrent toegevoegd: gid=98e4..., kies=5,19
+      //     23:54:18.757  erbij gekozen: 10,19 -> 5,10,19
+      //     23:54:18.767  erbij gekozen: 13,19 -> 5,13,19      <- de 10 is weg
+      //     23:54:19.151  erbij gekozen:  7,19 -> 5,7,19       <- 10 en 13 allebei weg
+      //
+      // Er kwamen drie van de zeven bestanden binnen, en de vier andere meldden "0% binnen" over
+      // een torrent die verder gewoon liep. Stil, want niets in dit antwoord zegt dat er iets is
+      // weggevallen.
+      //
+      // De app weet zelf wat ze gevraagd heeft, en dat is de betrouwbare bron. aria2's antwoord
+      // blijft de terugval voor een gid dat we niet zelf hebben aangemeld.
+      final onthouden = _selectiePerGid[gid];
+      String huidig;
+      if (onthouden != null && onthouden.isNotEmpty) {
+        huidig = (onthouden.toList()..sort()).join(',');
+      } else {
+        final opties = await _roep('aria2.getOption', [gid]);
+        huidig = opties is Map ? '${opties['select-file'] ?? ''}' : '';
+      }
       final nieuw = selectieErbij(huidig, erbij);
       if (nieuw == null) return true;
       await _roep('aria2.changeOption', [
         gid,
         {'select-file': nieuw},
       ]);
+      _selectiePerGid[gid] = {
+        for (final deel in nieuw.split(',')) if (int.tryParse(deel) != null) int.parse(deel),
+      };
       _log.line('erbij gekozen in $gid: ${erbij.join(",")} -> $nieuw');
       return true;
     } catch (e) {
@@ -405,6 +436,11 @@ class Aria2 {
       return false;
     }
   }
+
+  /// Welke bestandsnummers er per taak gekozen zijn, zoals DEZE app ze heeft opgegeven.
+  ///
+  /// Zie [kiesErbij] voor waarom dit niet aan aria2 gevraagd kan worden.
+  final Map<String, Set<int>> _selectiePerGid = {};
 
   /// Hetzelfde met een magneet. Levert eerst een taak op die alleen de metadata ophaalt; aria2 zet
   /// daarna zélf de echte download klaar, en die krijgt een ANDER gid — vandaar [volgOp].
@@ -557,6 +593,9 @@ class Aria2 {
   /// Weghalen. `forceRemove` omdat een taak die nog aan het aanmelden is bij de tracker anders
   /// blijft hangen tot die tracker antwoordt — en dat kan minuten duren.
   Future<void> verwijder(String gid) async {
+    // Ook onze eigen boekhouding, anders groeit die met elke plaat mee en zou een hergebruikt gid
+    // een selectie van een vorige torrent erven.
+    _selectiePerGid.remove(gid);
     try {
       await _roep('aria2.forceRemove', [gid]);
     } catch (_) {

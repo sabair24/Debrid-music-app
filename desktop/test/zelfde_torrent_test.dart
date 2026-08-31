@@ -171,4 +171,34 @@ void main() {
     expect(gekozen, containsAll(gevraagd),
         reason: 'select-file hoort samengevoegd te zijn, niet overschreven');
   }, timeout: const Timeout(Duration(minutes: 2)));
+
+  test('DRIE KEER ERBIJ: elke toevoeging blijft staan', () async {
+    // De tweede vondst van diezelfde avond, en de gemenere van de twee. `aria2.getOption` geeft
+    // `select-file` terug zoals hij bij het AANMELDEN meeging, niet zoals `changeOption` hem daarna
+    // heeft gezet. Wie dus twee keer iets bij kiest, begint de tweede keer weer bij de oude lijst:
+    //
+    //     23:54:18.757  erbij gekozen: 10,19 -> 5,10,19
+    //     23:54:18.767  erbij gekozen: 13,19 -> 5,13,19      <- de 10 is weg
+    //
+    // Drie van de zeven nummers kwamen binnen; de rest meldde 0% over een torrent die gewoon liep.
+    // Twee toevoegingen zijn niet genoeg om dit te zien -- de eerste gaat altijd goed -- dus deze
+    // test kiest er drie achter elkaar bij.
+    if (motor.pad == null) {
+      markTestSkipped('aria2 staat niet op deze machine');
+      return;
+    }
+    expect(await motor.start(downloadMap: werk.path), isTrue);
+    final gid = await motor.voegTorrentToe(torrentBytes('drie-keer'), map: werk.path, kies: [5]);
+    expect(gid, isNotNull);
+    gids.add(gid!);
+
+    for (final n in [10, 13, 7]) {
+      expect(await motor.kiesErbij(gid, [n]), isTrue, reason: 'erbij kiezen hoort te lukken');
+    }
+
+    final s = await motor.stand(gid);
+    expect(s, isNotNull);
+    expect(s!.gekozen.map((b) => b.index).toSet(), containsAll([5, 10, 13, 7]),
+        reason: 'alle vier de nummers horen nog gekozen te staan, ook de eerder toegevoegde');
+  }, timeout: const Timeout(Duration(minutes: 2)));
 }

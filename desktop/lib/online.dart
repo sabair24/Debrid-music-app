@@ -2981,7 +2981,12 @@ class DownloadManager extends ChangeNotifier {
     // Alles hieronder is kijken-en-dan-doen: is er al een taak voor deze torrent, en zo nee, meld
     // hem aan. Zonder slot ertussen deden zeven gelijktijdige opdrachten dat alle zeven tegelijk.
     // Zie [_perTorrent] voor de meting.
-    await _perTorrent(hash, () async {
+    //
+    // **Het slot is kort en het wachten staat erbuiten.** Dat is met opzet: in de eerste opzet zat
+    // ook de wachtlus hieronder binnen het slot, en toen bleef één opdracht die niet kon aanhaken
+    // negentien seconden liggen — met de vier opdrachten achter hem erbij. Wie niet naar binnen
+    // kan, hoort de deur niet dicht te houden voor wie dat misschien wel kan.
+    Future<void> poging() => _perTorrent(hash, () async {
       if (hash.isNotEmpty) {
         final lopend = _gidPerTorrent[hash];
         if (lopend != null && await motor.kiesErbij(lopend, gekozen)) {
@@ -3035,30 +3040,6 @@ class DownloadManager extends ChangeNotifier {
         }
       }
 
-    // WACHTEN IS BETER DAN MISLUKKEN.
-    //
-    // Aanhaken is de snelle weg en werkt meestal. Maar aria2 laat `select-file` niet in alle
-    // toestanden veranderen, en dan stond er "Mislukt" op een nummer dat gewoon even had kunnen
-    // wachten tot de rest van de plaat binnen was. Gemeten op 26-08-2026 met Boney M: nummer 3 kwam
-    // binnen, nummer 1 en 2 vielen om met "InfoHash … is already registered".
-    //
-    // Zodra de andere download klaar is haalt [verwijder] de torrent uit aria2, en dan gaat deze
-    // aanmelding alsnog. Vier minuten is ruim voor een nummer, en eindig genoeg om niet voor eeuwig
-    // een plek in de rij te bezetten.
-      if (gid == null && hash.isNotEmpty) {
-        alle('waiting', detail: 'wacht op een andere download van deze plaat');
-        final tot = DateTime.now().add(const Duration(minutes: 4));
-        while (gid == null && DateTime.now().isBefore(tot)) {
-          if (jobs.every((j) => j.cancelled)) {
-            afgebroken = true;
-            return;
-          }
-          await Future<void>.delayed(const Duration(seconds: 3));
-          gid = await motor.voegTorrentToe(torrent.lokaleTorrent!,
-              map: werkMap.path, kies: gekozen, seedMinuten: seedMin);
-        }
-      }
-
       // Nog binnen het slot: pas als dít kaartje ligt mag de volgende opdracht naar binnen, want
       // anders leest die opnieuw een leeg kaartje en meldt hij de torrent alsnog een tweede keer.
       final g = gid;
@@ -3070,6 +3051,33 @@ class DownloadManager extends ChangeNotifier {
         if (hash.isNotEmpty) _gidPerTorrent[hash] = g;
       }
     });
+
+    await poging();
+
+    // WACHTEN IS BETER DAN MISLUKKEN, en dit wachten gebeurt BUITEN het slot.
+    //
+    // Aanhaken is de snelle weg en werkt meestal. Maar aria2 laat `select-file` niet in alle
+    // toestanden veranderen — een taak die net klaar is, neemt er niets meer bij — en dan stond er
+    // "Mislukt" op een nummer dat gewoon even had kunnen wachten tot de rest van de plaat binnen
+    // was. Gemeten op 26-08-2026 met Boney M: nummer 3 kwam binnen, nummer 1 en 2 vielen om met
+    // "InfoHash … is already registered".
+    //
+    // Zodra die andere download klaar is haalt [verwijder] de torrent uit aria2, en dan gaat de
+    // aanmelding alsnog. Elke ronde is een volledige poging: eerst opnieuw kijken of er intussen een
+    // taak ligt om bij aan te haken, en pas daarna zelf aanmelden. Vier minuten is ruim voor één
+    // nummer, en eindig genoeg om niet voor eeuwig een plek in de rij te bezetten.
+    if (gid == null && hash.isNotEmpty) {
+      alle('waiting', detail: 'wacht op een andere download van deze plaat');
+      final tot = DateTime.now().add(const Duration(minutes: 4));
+      while (gid == null && DateTime.now().isBefore(tot)) {
+        if (jobs.every((j) => j.cancelled)) {
+          afgebroken = true;
+          break;
+        }
+        await Future<void>.delayed(const Duration(seconds: 3));
+        await poging();
+      }
+    }
 
     if (afgebroken) return;
     if (gid == null) {
@@ -3174,15 +3182,15 @@ class DownloadManager extends ChangeNotifier {
         // extensie een keurige FLAC is. Dat is de klacht van vandaag, en `08 - Signs` stond er zo
         // bij: 0 B, terwijl aria2 er 32 MiB van had binnengehaald.
         //
-        // aria2 weet zelf precies hoeveel er van dit bestand af is. Dat is het antwoord op de vraag
-        // die hier gesteld hoort te worden, en de schijf krijgt daarna nog het laatste woord.
-        if (!b.klaar) {
-          jobs[i].status = 'failed';
-          jobs[i].detail = b.lengte > 0
-              ? 'nog niet compleet — ${(b.voortgang * 100).round()}% binnen'
-              : 'aria2 gaf geen lengte voor dit bestand';
-          continue;
-        }
+        // **De schijf beslist, niet aria2's boekhouding.** De eerste opzet keek naar zijn
+        // voortgang per bestand (`completedLength`), en dat leek de nette weg. Gemeten op
+        // 31-08-2026 bij zeven nummers tegelijk: nadat een taak klaar is meldt aria2 voor élk
+        // bestand nul, ook voor de bestanden die hij zojuist compleet heeft binnengehaald. Alle
+        // zeven nummers kregen zo "0% binnen" terwijl er drie gewoon op schijf stonden.
+        //
+        // De lengte uit de torrent naast de lengte op schijf is wél te vertrouwen, en beantwoordt
+        // exact dezelfde vraag: is dit bestand af? Een lege huls en een half buurbestand vallen er
+        // allebei op af, en een compleet bestand komt er altijd doorheen.
         final bron = File(b.pad);
         if (!await bron.exists()) {
           jobs[i].status = 'failed';
@@ -3190,9 +3198,11 @@ class DownloadManager extends ChangeNotifier {
           continue;
         }
         final opSchijf = await bron.length();
-        if (opSchijf < b.lengte) {
+        if (b.lengte > 0 && opSchijf < b.lengte) {
           jobs[i].status = 'failed';
-          jobs[i].detail = 'onvolledig op schijf: $opSchijf van ${b.lengte} bytes';
+          jobs[i].detail = opSchijf == 0
+              ? 'leeg gebleven — aria2 had dit nummer niet binnen'
+              : 'onvolledig: ${opSchijf ~/ 1024} van ${b.lengte ~/ 1024} kB binnen';
           continue;
         }
         final geland = await _verhuisNaar(bron, destDir, files[i].label, kopieer: seedNa);
@@ -3215,14 +3225,15 @@ class DownloadManager extends ChangeNotifier {
       // een cue die daar blijft staan verdwijnt mét die map — waarna er niets meer te knippen valt.
       for (final c in cues) {
         final b = s?.bestand(c.id);
-        // Dezelfde regel als hierboven: een blad dat nog nul bytes is, is geen blad. Zo kwamen er
-        // drie lege .cue-bestanden in de albummap terecht — "… - Dangerously In Love (2).cue",
-        // "(3)", "(4)" — allemaal 0 B, allemaal naast elkaar.
-        if (b == null || !b.klaar) continue;
+        // Dezelfde regel als hierboven, en om dezelfde reden op de schijf gemeten: een blad dat nog
+        // nul bytes is, is geen blad. Zo kwamen er drie lege .cue-bestanden in de albummap terecht —
+        // "… - Dangerously In Love (2).cue", "(3)", "(4)" — allemaal 0 B, allemaal naast elkaar.
+        if (b == null) continue;
         final bron = File(b.pad);
-        if (await bron.exists() && await bron.length() >= b.lengte) {
-          await _verhuisNaar(bron, destDir, c.label);
-        }
+        if (!await bron.exists()) continue;
+        final opSchijf = await bron.length();
+        if (opSchijf == 0 || (b.lengte > 0 && opSchijf < b.lengte)) continue;
+        await _verhuisNaar(bron, destDir, c.label);
       }
       notifyListeners();
       // Opruimen mag alleen als deze taak van ons alleen is. Hangt er nog een tweede nummer van
