@@ -526,7 +526,20 @@ class Updater {
     if (Platform.isWindows) {
       await Process.start(
         bestand.path,
-        const [
+        innoVlaggen,
+        mode: ProcessStartMode.detached,
+      );
+      return;
+    }
+    await _kanaal.invokeMethod('installeer', {'pad': bestand.path});
+  }
+
+  /// De vlaggen waarmee de Windows-installer draait.
+  ///
+  /// Apart en openbaar om dezelfde reden als `Aria2.argumenten` in `aria2.dart`: elk van deze
+  /// vlaggen heeft een reden die je nergens meer terugziet zodra het werkt, en alleen zó valt er een
+  /// test op te zetten.
+  static const List<String> innoVlaggen = [
           // Stil, en zonder foutvensters waar niemand bij staat.
           '/SILENT',
           '/SUPPRESSMSGBOXES',
@@ -536,13 +549,25 @@ class Updater {
           // en RESTARTAPPLICATIONS start hem daarna weer op.
           '/CLOSEAPPLICATIONS',
           '/RESTARTAPPLICATIONS',
-        ],
-        mode: ProcessStartMode.detached,
-      );
-      return;
-    }
-    await _kanaal.invokeMethod('installeer', {'pad': bestand.path});
-  }
+          // EN DE DERDE, WANT ZONDER HEM DEED HET BIJWERKEN NIETS.
+          //
+          // Naast de app staat `aria2c.exe` in dezelfde map, en die draait zodra er ooit een
+          // torrent is gehaald. Inno krijgt zo'n proces niet dicht met een venstermelding -- het
+          // heeft er geen -- en meldt dan:
+          //
+          //     "Setup kon niet alle programma's automatisch afsluiten."
+          //
+          // Dat is een Abort/Retry/Ignore-vraag, en met `/SUPPRESSMSGBOXES` erbij kiest Inno
+          // zwijgend Abort. Gemeten op 31-08-2026 om 00:09: "User canceled the installation
+          // process. Rolling back changes." De app was toen al afgesloten en kwam niet terug, en de
+          // versie op schijf bleef staan waar hij stond. Van buiten ziet dat eruit als "de update
+          // heeft mijn app kapotgemaakt".
+          //
+          // Met deze vlag beëindigt Inno wat hij niet netjes dicht krijgt. Voor aria2 is dat geen
+          // verlies: hij laat zijn `.aria2`-administratie staan en pakt na de herstart op waar hij
+          // gebleven was.
+          '/FORCECLOSEAPPLICATIONS',
+  ];
 
   /// De Mac: pakket uitpakken, controleren, en de ruil aan een scriptje overlaten.
   ///
