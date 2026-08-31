@@ -42,7 +42,11 @@ import 'warm_log.dart';
 /// Bumped when the shape below changes in a way that makes stored answers wrong. Everything with an
 /// older number is re-derived on sight — the same trick as `ArtistArt.schema` and the `v5` in the
 /// Discogs art key, because nothing here expires on its own.
-const int kAlbumFactsSchema = 1;
+/// 2 sinds 01-09-2026: de artiestcredit per nummer wordt nu bewaard. Zonder die verhoging blijven
+/// de bestanden die er al liggen hun oude vorm houden -- en dan staat "Crazy In Love (Featuring
+/// Jay-Z)" op de albumpagina onder "Niet op deze uitgave", terwijl de code die dat oplost er wél is.
+/// Zie het veld `a` in [toJson].
+const int kAlbumFactsSchema = 2;
 
 /// Bumped whenever the AUDIO path changes in a way that could turn a "nothing found" into an answer.
 ///
@@ -171,7 +175,24 @@ class AlbumFacts {
         if (tracklist.isNotEmpty)
           'tracks': [
             for (final t in tracklist)
-              {'p': t.position, 't': t.title, if (t.seconds != null) 's': t.seconds, 'd': t.disc},
+              {
+                'p': t.position,
+                't': t.title,
+                if (t.seconds != null) 's': t.seconds,
+                'd': t.disc,
+                // De artiestcredit van dit nummer, en dat is geen sierlijkheid.
+                //
+                // [ChoiceTrack.artist] is precies wat een gastartiest in de titel van een rip
+                // verbindt met een rij die hem niet in de titel zet: MusicBrainz noemt nummer 1
+                // van *Dangerously In Love* gewoon "Crazy in Love" en zet "Beyoncé feat. JAY-Z"
+                // ernaast. `matchAlbumTracks` gebruikt dat veld -- maar de albumpagina leest zijn
+                // uitgave hiervandaan, en hier viel de credit weg.
+                //
+                // Gemeten op 01-09-2026, met tien bestanden van die plaat op schijf: zes ervan
+                // stonden onder "Niet op deze uitgave", en dat waren precies de zes met een gast in
+                // de titel. Het veld eromheen bestond al, alleen de weg naar de schijf niet.
+                if (t.artist.isNotEmpty) 'a': t.artist,
+              },
           ],
         if (bonus.isNotEmpty)
           'bonus': [
@@ -198,6 +219,10 @@ class AlbumFacts {
           unmojibake((m['t'] ?? '').toString()),
           (m['s'] as num?)?.toInt(),
           disc: (m['d'] as num?)?.toInt() ?? 1,
+          // Door dezelfde opschoning als de titel: deze tekst komt van schijf en kan van een oudere
+          // bouw een dubbel gecodeerde accentletter meedragen -- en "Beyoncé feat. JAY-Z" moet wél
+          // gelijk lezen aan wat MusicBrainz vandaag stuurt, anders vergelijkt hij zichzelf weg.
+          artist: unmojibake((m['a'] ?? '').toString()),
         );
     return AlbumFacts(
       uid: uid,

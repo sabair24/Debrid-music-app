@@ -95,8 +95,18 @@ String _fold(String s) {
 /// "feat." and friends, as they appear in an artist tag or a title.
 /// Deliberately NOT "&" or "and": "Simon & Garfunkel" and "Hall & Oates" are single acts, and
 /// splitting those would invent artists that don't exist.
+///
+/// "with" en "duet with" tellen ALLEEN mee als er een haakje voor staat, en dat verschil is de hele
+/// veiligheid. Los in een titel is "with" doodgewoon: "Dancing With Myself" zou dan Myself als
+/// gastartiest krijgen. Achter een haakje is het dat nooit — daar staat een credit.
+///
+/// **Waarom het erbij moest.** Gemeten op 01-09-2026: het bestand "The Closer I Get To You (Duet
+/// With Luther Vandross)" bleef als enige van tien onder "Niet op deze uitgave" staan. MusicBrainz
+/// schrijft die rij als "The Closer I Get to You" met de credit "Beyoncé & Luther Vandross" ernaast,
+/// dus het bewijs lag er — maar zolang hier geen gast uit die titel kwam, kwam de vergelijking die
+/// dat bewijs gebruikt niet eens op gang.
 final _featRe = RegExp(
-  r'\s*[\(\[]?\s*\b(feat\.?|ft\.?|featuring|met|w/)\b\s*\.?\s*',
+  r'\s*(?:[\(\[]\s*(?:duet\s+)?with\b|[\(\[]?\s*\b(?:feat\.?|ft\.?|featuring|met|w/)\b)\s*\.?\s*',
   caseSensitive: false,
 );
 
