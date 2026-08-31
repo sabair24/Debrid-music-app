@@ -114,45 +114,6 @@ class Aria2Stand {
   bool get geenBron => seeders <= 0 && verbindingen <= 0 && gedaan == 0;
 }
 
-/// Alles weghalen wat aria2 achterlaat, zodra de gekozen nummers uit de map gehaald zijn.
-///
-/// **Dit is geen netheid, dit is een reparatie.** Gemeten met B.B.E. — Seven Days And One Week,
-/// waarbij alléén nummer 1 gekozen was; na afloop stond er in de map:
-///
-///     01. ... [Radio Edit].flac                      26 MB   <- het gevraagde nummer
-///     <torrentnaam>/02. ... [Club Mix].flac           2 kB   <- NIET gevraagd, en toch een bestand
-///     <torrentnaam>.aria2                                    <- aria2's eigen administratie
-///     <infohash>.torrent                                     <- het aangeboden torrentbestand
-///
-/// Dat tweede bestand is het gevaarlijke. Torrentstukken trekken zich niets aan van bestandsgrenzen,
-/// dus een stuk dat half in nummer 2 valt schrijft daar een paar kilobytes. De scanner slaat deze map
-/// niet over — en dan staat er een FLAC van twee kilobyte in je bibliotheek die nergens op lijkt en
-/// die je pas hoort als je hem aanklikt.
-///
-/// Welke mappen weg mogen komt uit aria2's eigen opgave en niet uit de torrentnaam: die twee lopen
-/// uiteen zodra er een teken in staat dat Windows niet in een mapnaam duldt.
-Future<void> ruimOpNaTorrent(Directory wortel, Aria2Stand? stand) async {
-  try {
-    final vanAria2 = <String>{};
-    for (final b in stand?.bestanden ?? const <Aria2Bestand>[]) {
-      final rest = b.pad.replaceAll('/', Platform.pathSeparator);
-      if (!rest.startsWith(wortel.path)) continue;
-      final staart = rest.substring(wortel.path.length).split(Platform.pathSeparator)
-        ..removeWhere((s) => s.isEmpty);
-      if (staart.length > 1) vanAria2.add(staart.first);
-    }
-
-    for (final naam in vanAria2) {
-      final map = Directory('${wortel.path}${Platform.pathSeparator}$naam');
-      if (await map.exists()) await map.delete(recursive: true);
-    }
-    for (final e in wortel.listSync().whereType<File>()) {
-      if (e.path.endsWith('.aria2') || e.path.endsWith('.torrent')) await e.delete();
-    }
-  } catch (_) {
-    // Opruimen is nooit een reden om een geslaagde download te laten mislukken.
-  }
-}
 
 /// De motor: één aria2-proces, aangestuurd over JSON-RPC op localhost.
 class Aria2 {
@@ -347,12 +308,31 @@ class Aria2 {
 
   /// Zet een torrentbestand klaar en begin. [kies] is de nummering uit de torrent (vanaf 1); leeg
   /// betekent alles.
+  /// [seedMinuten] overschrijft de standaard "klaar is klaar" voor deze ene torrent.
+  ///
+  /// **Waarvoor dat nodig is.** Op een open bron maakt het niet uit; op een BESLOTEN tracker als
+  /// Redacted heet binnenhalen-en-meteen-stoppen "hit and run", en daar staat verlies van je account
+  /// op. Per torrent en niet als startvlag, want in dezelfde app lopen beide soorten door elkaar.
   Future<String?> voegTorrentToe(List<int> torrent,
-      {required String map, List<int> kies = const []}) async {
+      {required String map, List<int> kies = const [], int? seedMinuten}) async {
     try {
       final opties = <String, String>{
         'dir': map,
         if (kies.isNotEmpty) 'select-file': kies.join(','),
+        if (seedMinuten != null && seedMinuten > 0) 'seed-time': '$seedMinuten',
+        // Een half bestand van een vorige poging mag geen blokkade zijn.
+        //
+        // **Gemeten op 29-08-2026** met Tears For Fears — Songs From The Big Chair. Nummer 1 viel om
+        // op een te lang pad; daarna haalde `forceRemove` het `.aria2`-administratiebestand weg maar
+        // bleef het halve bestand staan. Elke volgende poging op diezelfde plaat kreeg toen:
+        //
+        //     "… exists, but a control file(*.aria2) does not exist. Download was canceled in order
+        //      to prevent your file from being truncated to 0."
+        //
+        // Zonder deze vlag is die plaat dus voorgoed dicht voor de app, tot iemand met de hand een
+        // map leegmaakt die hij niet kan vinden. aria2 controleert de stukken toch tegen de hashes
+        // uit de torrent, dus overschrijven kost hooguit werk, nooit juistheid.
+        'allow-overwrite': 'true',
       };
       final gid = await _roep('aria2.addTorrent', [base64Encode(torrent), <String>[], opties]);
       _log.line('torrent toegevoegd: gid=$gid, kies=${kies.isEmpty ? "alles" : kies.join(",")}, map=$map');
@@ -441,6 +421,89 @@ class Aria2 {
       _log.line('magneet toevoegen mislukt: $e');
       return null;
     }
+  }
+
+  /// Alleen de INHOUDSOPGAVE van een magneet ophalen: welke bestanden zitten erin.
+  ///
+  /// **Waarom dit apart bestaat.** Een magneet draagt niets dan een infohash. Bij RuTracker halen we
+  /// het `.torrent` gewoon bij de site op, maar Knaben en Pirate Bay geven alleen een magneet — en
+  /// dáár liep alles op stuk: zonder bestandslijst kon de app niets anders dan het aan TorBox vragen
+  /// en wachten. Dat is de "Voorbereiden" die maar bleef staan.
+  ///
+  /// De metadata is een paar tientallen kilobytes en komt van dezelfde peers als de muziek zelf, dus
+  /// wie de zwerm kan bereiken heeft hem binnen enkele seconden. Lukt dat niet, dan wéét je meteen
+  /// dat er niets te halen valt — en dat is oneindig veel beter dan een balk die niet beweegt.
+  ///
+  /// `follow-torrent=false` is hier wezenlijk: anders begint aria2 uit zichzelf de hele plaat te
+  /// downloaden zodra de metadata binnen is, en dan haal je vijf gigabyte op om een lijstje te
+  /// kunnen tonen.
+  Future<List<int>?> haalMetadata(String magneet,
+      {required String map, Duration limiet = const Duration(seconds: 30)}) async {
+    final gid = await _roep('aria2.addUri', [
+      [magneet],
+      {
+        'dir': map,
+        'bt-metadata-only': 'true',
+        'bt-save-metadata': 'true',
+        'follow-torrent': 'false',
+      },
+    ]).then((r) => r as String?).catchError((Object e) {
+      laatsteFout = '$e';
+      return null;
+    });
+    if (gid == null) return null;
+
+    final tot = DateTime.now().add(limiet);
+    try {
+      while (DateTime.now().isBefore(tot)) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        final s = await stand(gid);
+        if (s == null) continue;
+        if (s.stuk) {
+          _log.line('metadata mislukt voor $magneet: ${s.fout}');
+          return null;
+        }
+        if (!s.klaar) continue;
+
+        // aria2 legt hem neer als <infohash>.torrent in de map.
+        final hash = _infohashUit(magneet);
+        final bestand = File('$map${Platform.pathSeparator}$hash.torrent');
+        if (!await bestand.exists()) {
+          _log.line('metadata klaar maar geen bestand: ${bestand.path}');
+          return null;
+        }
+        final bytes = await bestand.readAsBytes();
+        await bestand.delete().catchError((_) => bestand);
+        _log.line('metadata binnen: $hash (${bytes.length} bytes)');
+        return bytes;
+      }
+      _log.line('metadata niet binnen in ${limiet.inSeconds}s: $magneet');
+      return null;
+    } finally {
+      await verwijder(gid);
+      // WACHTEN TOT HIJ HEM ÉCHT KWIJT IS.
+      //
+      // aria2 registreert een metadata-taak op dezelfde infohash als de echte download. Meldt de app
+      // de torrent aan terwijl die registratie nog niet opgeruimd is, dan krijgt hij:
+      //
+      //     errorCode=12 InfoHash 6f948bec… is already registered
+      //
+      // Gemeten op 29-08-2026 met Tears For Fears, twaalf milliseconden na het opruimen. Twaalf.
+      // `forceRemove` keert terug voordat de administratie leeg is, dus even kijken tot het zo is.
+      final hash = _infohashUit(magneet);
+      if (hash.isNotEmpty) {
+        for (var i = 0; i < 30; i++) {
+          if (await zoekGidVoor(hash) == null) break;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }
+    }
+  }
+
+  /// De infohash uit een magneet, kleingeschreven — zoals aria2 zijn bestand noemt.
+  static String _infohashUit(String magneet) {
+    final m = RegExp(r'btih:([0-9a-fA-F]{40})', caseSensitive: false).firstMatch(magneet);
+    return (m?.group(1) ?? '').toLowerCase();
   }
 
   /// Waar de echte download heen ging nadat een magneet zijn metadata had. aria2 zet het nieuwe gid

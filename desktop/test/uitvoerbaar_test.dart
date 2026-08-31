@@ -62,8 +62,13 @@ void main() {
       final twee = Directory('${tijdelijk.path}/twee')..createSync();
       File('${een.path}/fpcalc').writeAsStringSync('x');
       File('${twee.path}/fpcalc').writeAsStringSync('x');
-      expect(uitvoerbaarPad('fpcalc', omgeving: {'PATH': '${een.path}:${twee.path}'}),
-          '${een.path}/fpcalc');
+      // Met de scheiding van DIT platform, niet met een vaste dubbelepunt. Windows scheidt zijn PATH
+      // met een puntkomma, en een `C:\...` erin bevat er zelf al een — deze toets stond daardoor
+      // rood op de machine waar hij het vaakst draait, terwijl de code die hij bewaakt gewoon deugt.
+      // En dat is geen kleinigheid: die code is wat de app op een Mac overeind houdt.
+      final scheiding = Platform.isWindows ? ';' : ':';
+      expect(uitvoerbaarPad('fpcalc', omgeving: {'PATH': '${een.path}$scheiding${twee.path}'}),
+          '${een.path}${Platform.pathSeparator}fpcalc');
     });
 
     test('lege PATH, lege naam en losse dubbelepunten leveren niets op', () {

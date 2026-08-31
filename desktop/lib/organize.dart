@@ -559,6 +559,69 @@ String relativePathFor(TrackTags t, {RelKind? kind, required String ext}) {
 /// so ONLY true duplicates collapse — different versions stay separate, as the user asked.
 String trackIdentity(String artist, String title) => '${normKey(artist)}|${normKey(title)}';
 
+/// Wat er achter "feat." staat weghalen — de gastartiest is geen deel van de naam.
+///
+/// **Waarom dit nodig is.** Dezelfde opname heet bij de ene ripper `Drunk in Love` en bij de andere
+/// `Drunk in Love (feat. JAY-Z)`; de artiest staat er soms als `Beyoncé` en soms als
+/// `Beyoncé feat. Jay-Z`. Voor de vraag "heb ik dit al?" is dat hetzelfde nummer, maar op de tekst
+/// vergeleken is het dat niet — en dan blijft de app zoeken naar een FLAC die al op schijf staat.
+/// Geteld in Sabers bibliotheek op 29-08-2026: 22 bestanden met zo'n toevoeging.
+///
+/// Twee vormen, en bewust niet meer dan dat. Tussen haakjes mag ook "with" meetellen; los aan het
+/// eind niet — "Sing With Me" zou dan zijn halve titel verliezen.
+String zonderFeat(String s) {
+  var uit = s.replaceAll(_featHaakje, ' ');
+  uit = uit.replaceAll(_featStaart, '');
+  return uit.trim();
+}
+
+final _featHaakje = RegExp(
+    r'[(\[]\s*(feat\.?|ft\.?|featuring|with|met)\b[^)\]]*[)\]]',
+    caseSensitive: false);
+final _featStaart = RegExp(r'\s+(feat\.?|ft\.?|featuring)\s+.+$', caseSensitive: false);
+
+/// Haakjes die niets over de OPNAME zeggen, alleen over de uitgave of de mastering.
+///
+/// `(2017 Remaster)`, `(Album Version)`, `(Original Mix)` — dat is dezelfde opname, anders
+/// afgewerkt of anders benoemd. `(Live)`, `(Radio Edit)`, `(Instrumental)` juist niet, en die
+/// blijven dus staan.
+///
+/// Nadrukkelijk kort gehouden. Elke uitbreiding hier is een geval waarin de app straks zegt "die heb
+/// je al" over een opname die je NIET hebt — en dan stopt hij met zoeken zonder dat iemand het merkt.
+/// Dat is duurder dan te lang blijven zoeken.
+final _neutraalMerk = RegExp(
+    r'^(?:'
+    r'(?:\d{4}\s+)?(?:digital(?:ly)?\s+)?re-?master(?:ed)?(?:\s+(?:version|\d{4}))?'
+    r'|album\s+(?:version|mix)'
+    r'|original\s+(?:mix|version)'
+    r'|explicit(?:\s+version)?'
+    r'|clean(?:\s+version)?'
+    r'|bonus\s*track'
+    r')$',
+    caseSensitive: false);
+
+/// De titel zonder die neutrale haakjes.
+String zonderNeutraalMerk(String title) => title.replaceAllMapped(_bracketRe, (m) {
+      final binnen = m.group(1)!.replaceAll(RegExp(r'\s+'), ' ').trim();
+      return _neutraalMerk.hasMatch(binnen) ? ' ' : m.group(0)!;
+    });
+
+/// De sleutel voor de vraag **"heb ik deze opname al?"** — ruimer dan [trackIdentity].
+///
+/// Het verschil met [trackIdentity] is de bedoeling. Die beslist of twee bestanden DUBBEL zijn, en
+/// daar hoort strengheid: wie te ruim vergelijkt gooit een opname weg die je wilde houden. Deze
+/// beslist of de app mag ophouden met zoeken, en daar hoort ruimte — te streng betekent eeuwig jagen
+/// op een FLAC die al op schijf staat.
+///
+/// Wat wél samenvalt: gastartiesten (`feat.`), en haakjes die alleen over de mastering of de uitgave
+/// gaan. Wat niet: elke echte versie. `Trein (instrumentaal)` vervult de wens naar `Trein` nog steeds
+/// niet.
+String opnameSleutel(String artist, String title) {
+  final a = normKey(zonderFeat(artist));
+  final t = normKey(zonderNeutraalMerk(zonderFeat(title)));
+  return '$a|$t';
+}
+
 /// Rank of an audio format — higher wins when two copies of the same track exist.
 ///
 /// FLAC/ALAC/APE sit ABOVE WAV even though all four are lossless. WAV is uncompressed, so it is

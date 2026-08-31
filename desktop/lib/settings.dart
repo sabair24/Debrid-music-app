@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'flaresolverr.dart';
 import 'paths.dart';
 
 /// Local, on-device settings (API tokens / logins). Stored as settings.json in the app's own
@@ -82,6 +83,29 @@ class AppSettings extends ChangeNotifier {
   /// hele torrent ophalen. Gemeten met B.B.E. — Seven Days And One Week: lokaal 26 MB in 73 s uit een
   /// zwerm van drie seeders, tegenover een TorBox die die dag helemaal niet antwoordde.
   String torrentMotor = 'auto';
+
+  /// Waar FlareSolverr luistert. Leeg betekent: niet gebruiken.
+  ///
+  /// **Waarvoor.** RuTracker staat achter Cloudflare, en het `cf_clearance`-koekje dat daar langs
+  /// komt verloopt — gebonden aan IP én User-Agent. Tot nu toe betekende dat plakwerk uit Chrome
+  /// (zie `RuTrackerService.gebruikPlaksel`): netwerktab open, "Kopieer als cURL", plakken. Met dit
+  /// adres ingevuld haalt de app zelf een vers koekje zodra hij een 403 krijgt.
+  String flaresolverrUrl = FlareSolverr.standaardAdres;
+
+  /// Je API-sleutel van Redacted (Settings -> Access Settings -> Create an API key).
+  ///
+  /// Een besloten tracker die alleen over muziek gaat: elke uitgave is beschreven en de zwermen
+  /// leven, in tegenstelling tot de open indexen waarvan de tellers maanden achterlopen. De sleutel
+  /// is die van JOUW account; de app doet ermee wat jij met de hand ook zou doen.
+  String redactedKey = '';
+
+  /// Hoe lang de app na een download blijft delen, in uren. 0 is niet delen.
+  ///
+  /// **Op een besloten tracker is dit geen beleefdheid maar een regel.** Wat je binnenhaalt en nooit
+  /// teruggeeft heet daar hit-and-run, en daar staat verlies van je account op. Bij een open bron
+  /// (Pirate Bay, Knaben) maakt het niet uit en blijft alles zoals het was.
+  int seedUren = 72;
+
   // TIDAL: client id/secret entered by the user; the rest is managed by the OAuth flow.
   String tidalClientId = '';
   String tidalClientSecret = '';
@@ -283,6 +307,9 @@ class AppSettings extends ChangeNotifier {
         rutrackerUa = (m['rutracker_ua'] ?? '') as String;
         torznabUrl = (m['torznab_url'] ?? '') as String;
         torznabKey = (m['torznab_key'] ?? '') as String;
+        flaresolverrUrl = (m['flaresolverr_url'] ?? FlareSolverr.standaardAdres) as String;
+        redactedKey = (m['redacted_key'] ?? '') as String;
+        seedUren = (m['seed_uren'] as num?)?.toInt() ?? 72;
         torrentMotor = (m['torrent_motor'] ?? 'auto') as String;
         tidalClientId = (m['tidal_client_id'] ?? '') as String;
         tidalClientSecret = (m['tidal_client_secret'] ?? '') as String;
@@ -320,6 +347,9 @@ class AppSettings extends ChangeNotifier {
         'rutracker_ua': rutrackerUa,
         'torznab_url': torznabUrl,
         'torznab_key': torznabKey,
+        'flaresolverr_url': flaresolverrUrl,
+        'redacted_key': redactedKey,
+        'seed_uren': seedUren,
         'torrent_motor': torrentMotor,
         'tidal_client_id': tidalClientId,
         'tidal_client_secret': tidalClientSecret,

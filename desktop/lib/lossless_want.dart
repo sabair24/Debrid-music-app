@@ -336,13 +336,23 @@ class LosslessWants {
   /// Nodig gebleken uit een echt geval: de gebruiker haalde de FLAC met de native client binnen, in
   /// een map die naar de peer heet en onder een andere albumnaam. Zonder deze controle blijft de app
   /// eeuwig jagen op iets wat al op schijf staat -- en biedt hij het ook nog aan om te downloaden.
+  /// Ook de UITVOERDER telt mee, niet alleen de artiest-tag.
+  ///
+  /// Op een verzamelaar staat in die tag "Various Artists", en dat is geen naam waar iets mee te
+  /// vinden is. De echte uitvoerder staat dan in [LosslessWant.performer] — uit de bestandsnaam van
+  /// de peer, want daar noemen mensen hem wél bij naam. Zonder deze tweede vraag bleef zo'n wens
+  /// eeuwig staan terwijl de FLAC allang op schijf stond, gefiled onder de artiest zelf.
   List<String> forgetWhatWeHave(bool Function(String artist, String title) haveLossless) {
     final weg = <String>[];
     for (final w in _byKey.values.toList()) {
-      // Zonder naam valt er niets op te zoeken in de bibliotheek, en twee lege namen matchen van
+      // Zonder titel valt er niets op te zoeken in de bibliotheek, en twee lege namen matchen van
       // alles. Een wens om één bepaald bestand zonder tags blijft dus gewoon staan.
-      if (w.artist.trim().isEmpty || w.title.trim().isEmpty) continue;
-      if (haveLossless(w.artist, w.title)) {
+      if (w.title.trim().isEmpty) continue;
+      final namen = <String>[
+        if (w.artist.trim().isNotEmpty && !isVerzamelnaam(w.artist)) w.artist,
+        if ((w.performer ?? '').trim().isNotEmpty) w.performer!,
+      ];
+      if (namen.any((n) => haveLossless(n, w.title))) {
         _byKey.remove(w.key);
         weg.add(w.key);
       }

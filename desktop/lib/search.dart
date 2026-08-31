@@ -5,8 +5,51 @@ import 'json_body.dart';
 import 'rutracker.dart';
 import 'torbox.dart';
 
+/// Openbare trackers die aan een magneet worden geplakt die er zelf geen heeft.
+///
+/// **Waarom dit nodig is.** Pirate Bay en Knaben geven vaak niet meer dan een infohash, en de app
+/// bouwde daar een magneet van met alléén die hash. Zo'n magneet kan maar op één manier zijn zwerm
+/// vinden: DHT. Dat is traag om te beginnen en het is het eerste dat wordt geblokkeerd — precies het
+/// beeld van "de site meldt veertig peers en er komt niets binnen".
+///
+/// Een tracker is geen bron van muziek maar een telefoonboek: hij vertelt wie de stukken heeft.
+/// Deze vijf zijn de gebruikelijke openbare, en ze staan hier bij naam zodat je kunt zien wat de app
+/// aanspreekt in plaats van dat het ergens in een bibliotheek verstopt zit.
+const kOpenbareTrackers = [
+  'udp://tracker.opentrackr.org:1337/announce',
+  'udp://open.stealth.si:80/announce',
+  'udp://tracker.torrent.eu.org:451/announce',
+  'udp://exodus.desync.com:6969/announce',
+  'udp://open.demonii.com:1337/announce',
+];
+
+/// Een magneet uit een infohash, mét telefoonboeken erbij.
+///
+/// De infohash blijft wat hij is — `xt` bepaalt de identiteit, `tr` is niet meer dan een hint — dus
+/// TorBox herkent zo'n magneet nog steeds als dezelfde torrent.
 String _magnetFor(String hash, String name) =>
-    'magnet:?xt=urn:btih:${hash.toLowerCase()}&dn=${Uri.encodeComponent(name)}';
+    'magnet:?xt=urn:btih:${hash.toLowerCase()}&dn=${Uri.encodeComponent(name)}'
+    '${kOpenbareTrackers.map((t) => '&tr=${Uri.encodeComponent(t)}').join()}';
+
+/// De openbare trackers ERBIJ zetten, naast wat de bron zelf al meegaf.
+///
+/// **Eerst sloeg dit over zodra er al één tracker in stond, en dat was precies fout.** De magneet die
+/// Knaben teruggaf voor Robert Miles — Dreamland droeg één tracker: `bt4.t-ru.org`, die van
+/// RuTracker. Eén telefoonboek, van één site. Antwoordt die niet, dan is er niets meer over. Wat de
+/// bron gaf blijft dus staan — die kent zijn eigen zwerm het best — en de openbare komen ernaast.
+///
+/// Dubbel toevoegen heeft geen zin en ziet er slordig uit in een foutmelding, dus wat er al staat
+/// wordt overgeslagen.
+String metTrackers(String magneet) {
+  if (magneet.isEmpty) return magneet;
+  final aanwezig = RegExp(r'[?&]tr=([^&]*)')
+      .allMatches(magneet)
+      .map((m) => Uri.decodeComponent(m.group(1) ?? ''))
+      .toSet();
+  final erbij = kOpenbareTrackers.where((t) => !aanwezig.contains(t));
+  if (erbij.isEmpty) return magneet;
+  return '$magneet${erbij.map((t) => '&tr=${Uri.encodeComponent(t)}').join()}';
+}
 
 abstract class SearchSource {
   String get id;
@@ -38,6 +81,46 @@ class BronStand {
   String zin(String naam) => fout.isEmpty ? '$naam $aantal' : '$naam — $fout';
 }
 
+/// Eén verzoek met een korte klok en één herkansing.
+///
+/// **Waarom een herkansing.** Gemeten op 30-08-2026: apibay antwoordt vanaf de opdrachtregel in
+/// 0,098 s en vanuit een kaal Dart-programma in 71 ms — maar in de app liep dezelfde vraag
+/// ("Adele 30") twaalf seconden vast, terwijl de vraag ervóór en erná gewoon in anderhalve seconde
+/// klaar waren. Wisselvallig dus, en met één poging ben je de hele bron kwijt: op het scherm stond
+/// "PirateBay — te traag (12 s)" terwijl die site het prima deed.
+///
+/// Vijf seconden is ruim voor een API die in een tiende antwoordt, en twee pogingen passen samen nog
+/// onder de kap van twaalf die de zoekverdeler aanhoudt. De klok staat hier en niet alleen daar: een
+/// bron die na twaalf seconden wordt afgekapt heeft die twaalf seconden wél gekost, en dan wacht de
+/// hele zoekopdracht op de traagste.
+///
+/// [client] is er voor de toetsen; in de app is het gewoon `http`.
+Future<http.Response> haalMetHerkansing(
+  Uri url, {
+  String? lichaam,
+  Map<String, String>? koppen,
+  Duration per = const Duration(seconds: 5),
+  int pogingen = 2,
+  http.Client? client,
+}) async {
+  for (var poging = 1;; poging++) {
+    try {
+      final f = lichaam == null
+          ? (client?.get(url, headers: koppen) ?? http.get(url, headers: koppen))
+          : (client?.post(url, headers: koppen, body: lichaam) ??
+              http.post(url, headers: koppen, body: lichaam));
+      return await f.timeout(per);
+    } on TimeoutException {
+      if (poging >= pogingen) {
+        // De verdeler zet deze tekst op het scherm. Zeg wat er geprobeerd is, niet alleen dát het
+        // te lang duurde — anders lijkt het alsof de site down is terwijl hij het elders wél doet.
+        throw TimeoutException(
+            'te traag ($pogingen pogingen van ${per.inSeconds} s)');
+      }
+    }
+  }
+}
+
 /// Pirate Bay via apibay.org (keyless).
 class ApibaySource implements SearchSource {
   @override
@@ -45,7 +128,8 @@ class ApibaySource implements SearchSource {
   @override
   Future<List<SearchResult>> search(String query) async {
     try {
-      final r = await http.get(Uri.parse('https://apibay.org/q.php?q=${Uri.encodeComponent(query)}&cat=100'));
+      final r = await haalMetHerkansing(
+          Uri.parse('https://apibay.org/q.php?q=${Uri.encodeComponent(query)}&cat=100'));
       if (r.statusCode != 200) return [];
       final arr = (jsonBody(r) as List?) ?? const [];
       final out = <SearchResult>[];
@@ -67,6 +151,11 @@ class ApibaySource implements SearchSource {
         ));
       }
       return out;
+    } on TimeoutException {
+      // NIET stil nul teruggeven. Dan staat er "PirateBay 0" op het scherm terwijl die site het
+      // gewoon deed en alleen deze ene vraag bleef hangen — precies de stilte waar deze app genoeg
+      // van heeft gehad. De verdeler zet de reden erbij.
+      rethrow;
     } catch (_) {
       return [];
     }
@@ -80,7 +169,9 @@ class BitSearchSource implements SearchSource {
   @override
   Future<List<SearchResult>> search(String query) async {
     try {
-      final r = await http.get(Uri.parse('https://bitsearch.eu/api/v1/search?q=${Uri.encodeComponent(query)}&category=audio&sort=seeders&p=1'));
+      final r = await haalMetHerkansing(Uri.parse(
+          'https://bitsearch.eu/api/v1/search?q=${Uri.encodeComponent(query)}'
+          '&category=audio&sort=seeders&p=1'));
       if (r.statusCode != 200) return [];
       final j = jsonBody(r) as Map<String, dynamic>;
       if (j['success'] != true) return [];
@@ -101,6 +192,11 @@ class BitSearchSource implements SearchSource {
           source: 'BitSearch',
         );
       }).toList();
+    } on TimeoutException {
+      // NIET stil nul teruggeven. Dan staat er "PirateBay 0" op het scherm terwijl die site het
+      // gewoon deed en alleen deze ene vraag bleef hangen — precies de stilte waar deze app genoeg
+      // van heeft gehad. De verdeler zet de reden erbij.
+      rethrow;
     } catch (_) {
       return [];
     }
@@ -120,8 +216,8 @@ class KnabenSource implements SearchSource {
         'order_by': 'seeders', 'order_direction': 'desc', 'size': 50,
         'hide_unsafe': true, 'hide_xxx': true,
       });
-      final r = await http.post(Uri.parse('https://api.knaben.org/v1'),
-          headers: {'Content-Type': 'application/json'}, body: body);
+      final r = await haalMetHerkansing(Uri.parse('https://api.knaben.org/v1'),
+          koppen: {'Content-Type': 'application/json'}, lichaam: body);
       if (r.statusCode != 200) return [];
       final hits = (jsonBody(r)['hits'] as List?) ?? const [];
       final out = <SearchResult>[];
@@ -137,11 +233,16 @@ class KnabenSource implements SearchSource {
           seeders: (m['seeders'] ?? 0) as int,
           leechers: (m['peers'] ?? 0) as int,
           hash: hash.toLowerCase(),
-          magnet: (magnet != null && magnet.isNotEmpty) ? magnet : _magnetFor(hash, name),
+          magnet: (magnet != null && magnet.isNotEmpty) ? metTrackers(magnet) : _magnetFor(hash, name),
           source: 'Knaben',
         ));
       }
       return out;
+    } on TimeoutException {
+      // NIET stil nul teruggeven. Dan staat er "PirateBay 0" op het scherm terwijl die site het
+      // gewoon deed en alleen deze ene vraag bleef hangen — precies de stilte waar deze app genoeg
+      // van heeft gehad. De verdeler zet de reden erbij.
+      rethrow;
     } catch (_) {
       return [];
     }

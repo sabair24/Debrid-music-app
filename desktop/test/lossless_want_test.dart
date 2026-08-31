@@ -84,6 +84,35 @@ void main() {
       expect(lijst.all.single.title, 'Loud');
     });
 
+    test('op een verzamelaar telt de UITVOERDER mee, niet de artiest-tag', () {
+      // Het geval dat in `hasLossless` als bekende ondergrens beschreven stond. Op een verzamelaar
+      // zegt de artiest-tag "Various Artists" — daar is niets mee te vinden in de bibliotheek. De
+      // echte naam staat in de bestandsnaam van de peer, en die wordt als `performer` bewaard.
+      // Zonder deze tweede vraag bleef de wens eeuwig staan terwijl de FLAC er allang was.
+      lijst.want(LosslessWant(
+        artist: 'Various Artists',
+        title: 'Ecstasy',
+        performer: 'Johnny Vicious',
+        sinceMs: 0,
+      ));
+      final gevraagd = <String>[];
+      final weg = lijst.forgetWhatWeHave((a, t) {
+        gevraagd.add(a);
+        return a == 'Johnny Vicious';
+      });
+
+      expect(weg, hasLength(1));
+      // En "Various Artists" wordt niet eens gevraagd: dat is geen naam maar een mededeling.
+      expect(gevraagd, ['Johnny Vicious']);
+    });
+
+    test('zonder uitvoerder blijft een verzamelaarswens gewoon staan', () {
+      lijst.want(LosslessWant(artist: 'Various Artists', title: 'Ecstasy', sinceMs: 0));
+
+      expect(lijst.forgetWhatWeHave((a, t) => true), isEmpty,
+          reason: 'er valt niets te vergelijken, dus niets te laten vervallen');
+    });
+
     test('overleeft een herstart, met ritme en geweigerde peers', () async {
       lijst.want(_w('Sabien Tiels', 'Trein', sinceMs: 42));
       lijst.update(lijst.all.single.met(tries: 2, lastTryMs: 7 * _uur, refused: {'DANY2905': 'banned'}));

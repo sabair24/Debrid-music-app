@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import 'models.dart';
 import 'organize.dart';
 import 'lossless_want.dart';
 import 'quality.dart';
@@ -15,6 +16,7 @@ import 'soulseek.dart';
 import 'zoekladder.dart';
 import 'torbox.dart';
 import 'torznab.dart';
+import 'redacted.dart';
 import 'torrentbestand.dart';
 import 'aria2.dart';
 import 'cue_knippen.dart';
@@ -29,6 +31,75 @@ import 'flac_tags.dart';
 import 'torbox_stand.dart';
 import 'vaste_keuze.dart';
 
+/// Hoort deze bron te worden teruggedeeld nadat je hem hebt binnengehaald?
+///
+/// **Op een besloten tracker is dat geen beleefdheid maar een voorwaarde.** Redacted houdt bij wat
+/// je haalt en wat je teruggeeft; binnenhalen en meteen stoppen heet daar hit-and-run en kost je je
+/// account. Bij Pirate Bay of Knaben kraait er geen haan naar.
+///
+/// Eén functie in plaats van een `==` verspreid over het bestand: komt er ooit een tweede besloten
+/// tracker bij, dan staat op één plek wat "besloten" betekent.
+bool bronVraagtSeeden(String bron) => bron.toLowerCase() == 'redacted';
+
+/// De laatste map van een pad, of het nu met `/` of met `\` geschreven staat.
+///
+/// **Waarom dit geen detail is.** aria2 antwoordt met voorwaartse schuine strepen, ook op Windows:
+/// `D:/Flac music 2024/DebridMusic Downloads/.dm-6f948bec/…`. Splitsen op `Platform.pathSeparator`
+/// levert daar één stuk op — het hele pad — en dat werd vervolgens als mapnaam voor het bestand
+/// gebruikt. Gemeten op 29-08-2026 stond er na een tweede download van hetzelfde nummer:
+///
+///     D__Flac music 2024_DebridMusic Downloads_.dm-6f948bec_Tears For Fears - Songs From The
+///     Big Chair (Deluxe Edition) … - 03. Tears For Fears - Everybody Wants To Rule The World.flac
+///
+/// Een bestand van 29 MB met een naam waar niemand iets aan heeft, in de map waar de bibliotheek uit
+/// leest.
+String laatsteMap(String pad) {
+  final delen = pad.split(RegExp(r'[\\/]')).where((s) => s.isNotEmpty).toList();
+  return delen.isEmpty ? '' : delen.last;
+}
+
+/// De KORTE map waarin aria2 mag werken, náást de doelmap in plaats van erin.
+///
+/// **Waarom dit een eigen functie is.** Windows kapt een pad op 260 tekens, en die grens haal je
+/// sneller dan je denkt zodra een plaatnaam twee keer in hetzelfde pad staat. Dat gebeurde:
+///
+///     D:\Flac music 2024\DebridMusic Downloads\Tears For Fears - Songs From The Big Chair (Deluxe
+///     Edition) (Deluxe) (1985 Pop Rock) [Flac 16-44]\Tears For Fears - Songs From The Big Chair
+///     (Deluxe Edition) (Deluxe) (1985 Pop Rock) [Flac 16-44]\01. Tears For Fears - Shout.flac
+///
+/// 234 tekens, en de melding op het scherm was "File I/O error 3" — ERROR_PATH_NOT_FOUND, geen woord
+/// over lengte. De doelmap heet al naar de plaat; aria2 maakt daarin nóg een map met diezelfde naam,
+/// want zo heet de torrent. Dus laten we hem in `.dm-<8 tekens>` werken en verhuizen we de gekozen
+/// nummers daarna. Zelfde schijf, dus dat verhuizen is een hernoeming.
+String werkMapPad(Directory doelMap, String hash, String torrentNaam) {
+  final kort = hash.length >= 8
+      ? hash.substring(0, 8)
+      : torrentNaam.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').padRight(8, 'x').substring(0, 8);
+  return '${doelMap.parent.path}${Platform.pathSeparator}$torrentWerkMap'
+      '${Platform.pathSeparator}$kort';
+}
+
+
+/// Wat er terugkwam toen de app een bron zélf probeerde te pakken.
+///
+/// Het verschil tussen deze vier is het verschil tussen vier totaal andere adviezen: het lukte,
+/// kies een andere treffer, zet aria2 erbij, of er valt hier niets te halen. Eén gedeelde `null`
+/// maakte daar één spinner van die nergens over sprak.
+enum LokaleBron { gelukt, geenZwerm, geenMotor, geenBron }
+
+/// Wat er op het scherm hoort als niemand de torrent nog deelt.
+///
+/// **Waarom deze zin zo uitgebreid is.** De klacht was letterlijk: "Knaben heeft soms heel veel peers
+/// maar wil niet downloaden". Die peers stáán er ook — op de zoeksite. Gemeten op 24-08-2026 met een
+/// treffer die "18 seeders" meldde: vijfenzestig seconden lang nul verbindingen en nul bytes, óók
+/// buiten de app om. De tellers van die sites komen uit hun eigen scrape en lopen maanden achter.
+///
+/// Wie dat niet weet gaat zijn eigen app, zijn eigen internet of zijn eigen instellingen zitten
+/// wantrouwen — en dat is precies de avond die deze melding moet voorkomen.
+const kGeenZwerm = 'Niemand deelt deze torrent op dit moment. De zoeksite meldt wel seeders, maar in '
+    'dertig seconden reageerde er geen enkele — die tellers lopen vaak maanden achter. Kies een '
+    'andere treffer; die met meer seeders bij een ANDERE bron doen het meestal wel.';
+
 /// TorBox search + resolve + download, ported from the server's OnlineService.
 class OnlineService {
   final AppSettings settings;
@@ -38,6 +109,10 @@ class OnlineService {
   /// De lokale torrentmotor. Eén per app: hij houdt één proces vast, en twee processen die dezelfde
   /// map vullen vechten om dezelfde bestanden.
   final Aria2 aria2 = Aria2();
+
+  /// Redacted, met de sleutel uit de instellingen. Wordt bij elke vraag opnieuw gelezen, zodat een
+  /// net ingevulde sleutel meteen meedoet zonder de app te herstarten.
+  late final RedactedApi redacted = RedactedApi(() => settings.redactedKey);
   /// De zoekverdeler, met **dezelfde** [rutracker] erin als het veld hierboven.
   ///
   /// **Waarom dit een laat veld is en geen regel in de constructor.** Hier stonden TWEE
@@ -66,6 +141,8 @@ class OnlineService {
     // Je eigen indexers, als je ze hebt. Leest de instellingen bij elke zoekopdracht opnieuw, zodat
     // een adres dat je net invulde meteen meedoet zonder de app te herstarten.
     TorznabSource(settings),
+    // Je eigen account op Redacted, als je er een hebt. Zie .
+    RedactedSource(redacted),
   ]);
 
   OnlineService(this.settings)
@@ -357,20 +434,25 @@ class OnlineService {
   /// via DHT vinden, en dat is nu juist wat bij een tracker als RuTracker niet werkt.
   bool lokaalVoor(SearchResult r) => kiesLokaal(
         motor: settings.torrentMotor,
-        heeftTorrentbestand: r.torrentUrl.isNotEmpty,
+        heeftBron: r.torrentUrl.isNotEmpty || r.magnet.isNotEmpty,
         staatKlaarBijTorbox: r.cached,
         motorBeschikbaar: aria2.beschikbaar,
       );
 
   /// De regel zelf, los van waar de feiten vandaan komen — anders valt hij alleen te toetsen op een
   /// machine waar toevallig een aria2 staat, en dat is precies het soort regel dat ongemerkt kantelt.
+  ///
+  /// [heeftBron] telde eerst alleen een `.torrent`-bestand, en daarmee gold dit alleen voor
+  /// RuTracker. Alles van Knaben en Pirate Bay — dus verreweg het meeste — viel terug op TorBox, ook
+  /// wanneer de zwerm veertig seeders had. Een magneet kan hier gewoon mee: aria2 haalt de
+  /// inhoudsopgave uit diezelfde zwerm.
   static bool kiesLokaal({
     required String motor,
-    required bool heeftTorrentbestand,
+    required bool heeftBron,
     required bool staatKlaarBijTorbox,
     required bool motorBeschikbaar,
   }) {
-    if (!heeftTorrentbestand || !motorBeschikbaar) return false;
+    if (!heeftBron || !motorBeschikbaar) return false;
     return switch (motor) {
       'torbox' => false,
       'lokaal' => true,
@@ -378,12 +460,89 @@ class OnlineService {
     };
   }
 
+  /// Het torrentbestand van deze bron, hoe hij ook binnenkomt.
+  ///
+  /// Twee wegen, want de bronnen verschillen: RuTracker geeft een `.torrent` af zodra je ingelogd
+  /// bent, en Knaben en Pirate Bay geven alleen een magneet. Voor die tweede haalt aria2 in enkele
+  /// seconden de inhoudsopgave uit de zwerm zelf.
+  ///
+  /// **Dit is de reparatie van "veel peers, en toch niets".** Een magneet zonder bestandslijst kon de
+  /// app nergens anders heen brengen dan naar TorBox, en die moest dan de hele plaat eerst zelf
+  /// binnenhalen — dat is de "Voorbereiden" die bleef staan terwijl Knaben veertig seeders toonde.
+  /// De torrentbestanden die we in deze zitting al opgehaald hebben, op infohash.
+  ///
+  /// **Niet alleen voor de snelheid.** Bij een magneet haalt aria2 de inhoudsopgave uit de zwerm, en
+  /// zo'n metadata-taak staat bij hem geregistreerd op dezelfde infohash als de echte download.
+  /// Vraagt de app hem twee keer vlak na elkaar — en dat deed hij: één keer voor de nummerlijst en
+  /// nog eens per gekozen nummer — dan botst de tweede op de eerste:
+  ///
+  ///     errorCode=12 InfoHash 6f948bec… is already registered
+  ///
+  /// Gemeten op 29-08-2026 met Tears For Fears: nummer 3 kwam binnen, nummer 1 viel om met die
+  /// melding. Eén keer ophalen en onthouden lost het bij de wortel op, en scheelt bovendien twee
+  /// gangen naar de zwerm.
+  final Map<String, List<int>> _torrentCache = {};
+
+  Future<({List<int>? bytes, LokaleBron stand})> _torrentBytes(SearchResult r) async {
+    // Redacted geeft geen infohash mee, dus daar is het adres de sleutel. Zonder dit valt die bron
+    // buiten de cache en haalt de app hetzelfde bestand drie keer op.
+    final sleutel = r.hash.isNotEmpty ? r.hash.toLowerCase() : r.torrentUrl;
+    final bekend = sleutel.isEmpty ? null : _torrentCache[sleutel];
+    if (bekend != null) return (bytes: bekend, stand: LokaleBron.gelukt);
+    void onthoud(List<int> bytes) {
+      if (sleutel.isEmpty) return;
+      // Een handvol volstaat: het gaat om de paar torrents waar je op dit moment mee bezig bent, en
+      // veertig kilobyte per stuk hoeft niet eindeloos mee te reizen.
+      if (_torrentCache.length >= 20) _torrentCache.remove(_torrentCache.keys.first);
+      _torrentCache[sleutel] = bytes;
+    }
+
+    // Redacted eerst, want daar hoort een sleutel bij en geen koekje: het adres is een API-aanroep
+    // met een `Authorization`-kop, en die kent de RuTracker-weg niet.
+    if (isRedactedAdres(r.torrentUrl)) {
+      final bytes = await redacted.torrentBestand(redactedIdUit(r.torrentUrl));
+      if (bytes != null && bytes.isNotEmpty) {
+        onthoud(bytes);
+        return (bytes: bytes, stand: LokaleBron.gelukt);
+      }
+      // Geen terugval op TorBox: Redacted geeft geen magneet en geen infohash, dus daar valt niets
+      // door te geven. Zeg gewoon wat er is.
+      return (bytes: null, stand: LokaleBron.geenBron);
+    }
+    if (r.torrentUrl.isNotEmpty) {
+      final bytes = await rutracker.haalTorrentBestand(r.torrentUrl);
+      if (bytes != null && bytes.isNotEmpty) {
+        onthoud(bytes);
+        return (bytes: bytes, stand: LokaleBron.gelukt);
+      }
+    }
+    if (r.magnet.isEmpty) return (bytes: null, stand: LokaleBron.geenBron);
+    final map = await Directory.systemTemp.createTemp('dm_meta_');
+    try {
+      if (!await aria2.start(downloadMap: map.path)) {
+        return (bytes: null, stand: LokaleBron.geenMotor);
+      }
+      final bytes = await aria2.haalMetadata(r.magnet, map: map.path);
+      if (bytes != null) onthoud(bytes);
+      return bytes == null
+          ? (bytes: null, stand: LokaleBron.geenZwerm)
+          : (bytes: bytes, stand: LokaleBron.gelukt);
+    } finally {
+      await map.delete(recursive: true).catchError((_) => map);
+    }
+  }
+
   /// De nummerlijst uit het torrentbestand zelf, zonder iemand iets te hoeven vragen.
   ///
   /// Dit is het stuk dat de nummerkeuze van een halve minuut wachten naar een halve seconde brengt:
   /// wat erin zit staat IN het bestand, en dat hebben we al zodra RuTracker het heeft afgegeven.
   Future<(TbTorrent, List<TbFile>)?> _lokaleTracklist(SearchResult r) async {
-    final bytes = await rutracker.haalTorrentBestand(r.torrentUrl);
+    final (bytes: bytes, stand: stand) = await _torrentBytes(r);
+    // Niemand thuis in de zwerm? Dan heeft doorschuiven naar TorBox geen enkele zin: die moet bij
+    // exact dezelfde peers aankloppen. Gemeten op 24-08-2026 met een BitSearch-treffer die "18
+    // seeders" meldde — vijfenzestig seconden lang nul verbindingen, nul bytes, ook op de kale
+    // opdrachtregel. Precies zo'n torrent bleef bij TorBox uren op "Voorbereiden" staan.
+    if (stand == LokaleBron.geenZwerm) throw kGeenZwerm;
     if (bytes == null || bytes.isEmpty) return null;
     final inhoud = TorrentInhoud.lees(bytes);
     if (inhoud == null) return null;
@@ -391,16 +550,54 @@ class OnlineService {
     final bestanden = [
       for (final f in inhoud.bestanden) TbFile(f.index, f.pad, f.naam, f.grootte, null),
     ];
-    final torrent = TbTorrent(0, inhoud.naam, r.hash, 'lokaal', 0, bestanden, false, false,
+    // De hash uit het BESTAND als de bron er geen meegaf (Redacted). Zonder hem denkt aria2 dat
+    // twee nummers van dezelfde plaat bij verschillende torrents horen.
+    final hash = r.hash.isNotEmpty ? r.hash : inhoud.infohash;
+    final torrent = TbTorrent(0, inhoud.naam, hash, 'lokaal', 0, bestanden, false, false,
         size: inhoud.totaleGrootte, seeds: r.seeders, lokaleTorrent: bytes);
     final audio = bestanden.where((f) => f.isAudio).toList();
-    return audio.isEmpty ? null : (torrent, audio);
+    // De inhoudsopgave IS binnen en er zit niets speelbaars in. Dan is TorBox erbij halen zinloos:
+    // die krijgt exact dezelfde lijst te zien.
+    //
+    // Gemeten op 24-08-2026 met een RuTracker-treffer die 29 seeders had: **282 seconden** om
+    // uiteindelijk "geen afspeelbare audio" te melden — vier en een halve minuut wachten op een
+    // antwoord dat na een halve seconde al vaststond. Het was een DSD-rip van vinyl; zeg dan ook
+    // wat er wél in zit, anders lijkt het op een kapotte bron.
+    if (audio.isEmpty) throw 'Geen afspeelbare audio in deze torrent${_watZitErin(bestanden)}.';
+    return (torrent, audio);
+  }
+
+  /// De soorten bestanden in een torrent, kort, voor in een melding: " (wel .dsf, .cue)".
+  String _watZitErin(List<TbFile> bestanden) {
+    final soorten = <String>{};
+    for (final f in bestanden) {
+      final punt = f.name.lastIndexOf('.');
+      if (punt > 0 && punt < f.name.length - 1) soorten.add(f.name.substring(punt).toLowerCase());
+    }
+    if (soorten.isEmpty) return '';
+    final lijst = (soorten.toList()..sort()).take(4).join(', ');
+    return ' (wel $lijst)';
   }
 
   /// (torrent, audio files) for the track picker.
+  ///
+  /// **Een bestandslijst uit een `.torrent` gaat ALTIJD voor.** Ook als TorBox de torrent al in zijn
+  /// cache heeft: het bestand hebben we hier, en TorBox moet antwoorden. Gemeten op 30-08-2026 met
+  /// dezelfde zoekopdracht:
+  ///
+  ///     RuTracker, .torrent, niet bij TorBox   ->  0,2 s
+  ///     RuTracker, .torrent, WEL bij TorBox    -> 25,5 s   (want dan ging hij langs TorBox)
+  ///
+  /// Voor het DOWNLOADEN blijft de afweging andersom staan — zie [lokaalVoor]. Wat daar telt is de
+  /// snelheid van de bytes, en die komen bij TorBox van hun eigen schijf in plaats van uit een zwerm.
+  /// Alleen voor het lijstje is "zelf lezen" altijd sneller, en dat kost bovendien niemand iets.
   Future<(TbTorrent, List<TbFile>)> tracklist(SearchResult r,
       {void Function(double, String)? onProgress}) async {
-    if (lokaalVoor(r)) {
+    // Een echt torrentbestand: lezen kan meteen, en daar is geen aria2 en geen net voor nodig.
+    if (r.torrentUrl.isNotEmpty) {
+      final lokaal = await _lokaleTracklist(r);
+      if (lokaal != null) return lokaal;
+    } else if (lokaalVoor(r)) {
       final lokaal = await _lokaleTracklist(r);
       if (lokaal != null) return lokaal;
       // Geen bestand of geen audio erin? Dan alsnog langs TorBox — beter een trage lijst dan geen.
@@ -858,7 +1055,7 @@ class DownloadManager extends ChangeNotifier {
   ///
   /// **Waarom er geteld wordt en niet gewoon opgeruimd.** Twee nummers van dezelfde plaat delen één
   /// aria2-taak (zie het aanhaken in [_downloadLokaal]). Ruimt de eerste die klaar is die taak op,
-  /// dan trekt hij de map onder de tweede vandaan: `ruimOpNaTorrent` gooit aria2's eigen map weg, en
+  /// dan trekt hij de map onder de tweede vandaan: het opruimen gooit aria2's eigen map weg, en
   /// `verwijder` haalt het gid weg waar de tweede zijn voortgang uit leest. Alleen de laatste die
   /// vertrekt doet het licht uit.
   final Map<String, int> _lopersPerTorrent = {};
@@ -1822,6 +2019,62 @@ class DownloadManager extends ChangeNotifier {
   /// [_wantLossless] hem op de verlanglijst; twintig minuten later haalt [sweepLosslessWants] alsnog
   /// de FLAC — van een nummer dat je zojuist met een rode duim hebt weggedaan. Dat is niet alleen
   /// vervelend, het is onbegrijpelijk: je hebt het weggegooid en het staat er weer.
+  /// Zet betrapte nummers op de verlanglijst, zodat de app zélf een echte kopie gaat zoeken.
+  ///
+  /// **Waarom dit er is.** De kwaliteitslijst toont wat er afgekapt is en laat je zelf een vervanger
+  /// aanwijzen. Dat werkt, maar het vraagt dat jij erbij zit. Gemeld op 30-08-2026 met Gorki — Anja:
+  /// een 24/44.1 die op 17,4 kHz dichtklapt. Liever een echte 16/44.1 dan een opgeblazen 24 — en dan
+  /// moet de app ernaar op zoek, ook als er vandaag geen goede bron is.
+  ///
+  /// Dat zoeken kan de verlanglijst al: hij probeert het opnieuw met een steeds ruimer wordend ritme,
+  /// overleeft een herstart, en houdt bij welke peers al nee zeiden. Wat ontbrak is dat een betrapt
+  /// bestand er ooit op kwam.
+  ///
+  /// Wie er wint als de vervanger binnen is beslist `firstIsBetter`, en die kent `bewezenNep`: een
+  /// betrapt bestand verliest daar ook als het gróter is. Een echte 16/44.1 wint dus van een
+  /// opgeblazen 24/44.1 — precies waar het om gaat.
+  ///
+  /// Geeft terug hoeveel er nieuw op de lijst kwamen.
+  Future<int> wensEchteVersies(Iterable<Track> nummers) async {
+    await _ensureWants();
+    var nieuw = 0;
+    for (final t in nummers) {
+      if (t.artist.trim().isEmpty || t.title.trim().isEmpty) {
+        _log.line('"${t.title}": betrapt, maar zonder artiest+titel valt er niets te zoeken');
+        continue;
+      }
+      // WAT JE ZELF KOOS BLIJFT DE BAAS. Een handmatig aangewezen bestand hoort niet op de jachtlijst:
+      // `firstIsBetter` laat zo'n keuze van niets verliezen, dus alles wat hiervoor binnenkomt wordt
+      // meteen weer geparkeerd. Zoeken naar een vervanger die niet mag vervangen is verspilling.
+      if (isVasteKeuze(t.path)) {
+        _log.line('"${t.artist} — ${t.title}": betrapt, maar door jou zelf gekozen — met rust gelaten');
+        continue;
+      }
+      final erbij = _wants.want(LosslessWant(
+        artist: t.artist.trim(),
+        title: t.title.trim(),
+        album: t.album,
+        sinceMs: DateTime.now().millisecondsSinceEpoch,
+        // Het gezag van wat er NU ligt gaat mee: de vervanger hoort op dezelfde plek en met dezelfde
+        // nummering te belanden, ook als de peer een bestand zonder tags stuurt.
+        authority: TrackTags(
+          artist: t.artist,
+          title: t.title,
+          album: t.album,
+          trackNo: t.trackNo,
+          year: t.year,
+        ),
+      ));
+      if (erbij) nieuw++;
+    }
+    if (nieuw > 0) {
+      await _wants.save();
+      _log.line('$nieuw betrapt(e) nummer(s) op de verlanglijst gezet '
+          '(${_wants.count} op de lijst)');
+    }
+    return nieuw;
+  }
+
   Future<void> vergeetWens(String artiest, String titel) async {
     if (titel.trim().isEmpty) return;
     await _ensureWants();
@@ -2488,8 +2741,17 @@ class DownloadManager extends ChangeNotifier {
     notifyListeners();
     unawaited(() async {
       try {
+        // De torrent die het keuzevenster al klaar had gaat mee — behalve wanneer het DOWNLOADEN
+        // beter langs TorBox kan.
+        //
+        // Sinds de nummerlijst altijd uit het torrentbestand zelf komt (zie [tracklist]) is `klaar`
+        // ook lokaal bij een plaat die TorBox al in zijn cache heeft. Voor het lijstje is dat de
+        // snelste weg; voor de bytes niet — die komen bij TorBox van hun eigen schijf in plaats van
+        // uit een zwerm van één seeder. [lokaalVoor] weet dat verschil al, dus die beslist.
+        final magHergebruiken =
+            klaar != null && fileId != null && (!klaar.lokaal || online.lokaalVoor(result));
         final gekozen =
-            klaar == null || fileId == null ? null : klaar.files.where((f) => f.id == fileId).toList();
+            !magHergebruiken ? null : klaar!.files.where((f) => f.id == fileId).toList();
         final (torrent, files) = gekozen != null && gekozen.isNotEmpty
             ? (klaar!, gekozen)
             : await online.resolveForDownload(result, fileId, onProgress: (p, s) {
@@ -2516,7 +2778,8 @@ class DownloadManager extends ChangeNotifier {
           // Eén opdracht voor de hele torrent, niet één per nummer: aria2 kent een torrent aan zijn
           // infohash en zou een tweede aanmelding van dezelfde plaat als dubbel weigeren. De balken
           // per nummer komen uit zijn eigen bestandslijst.
-          lopend.add(_inRij(() => _downloadLokaal(torrent, files, destDir, nieuwe, cues: cues)));
+          lopend.add(_inRij(() => _downloadLokaal(torrent, files, destDir, nieuwe,
+              cues: cues, seedNa: bronVraagtSeeden(result.source))));
         } else {
           for (var i = 0; i < files.length; i++) {
             lopend.add(_inRij(() => _download(torrent.id, files[i], destDir, nieuwe[i])));
@@ -2597,9 +2860,15 @@ class DownloadManager extends ChangeNotifier {
   /// bestand: één verbinding, één voortgang, klaar is klaar. Een torrent is één zwerm die alle
   /// gekozen bestanden tegelijk vult, in stukken die zich niets van bestandsgrenzen aantrekken. Wie
   /// dat in dezelfde functie propt krijgt vanzelf een balk die achteruit loopt.
+  /// [seedNa] betekent: dit komt van een besloten tracker, dus blijven delen na afloop.
+  ///
+  /// Dat verandert drie dingen, en alle drie zijn nodig — half seeden is niet seeden. De torrent
+  /// krijgt een seed-tijd mee, de bestanden worden GEKOPIEERD in plaats van verplaatst (aria2 blijft
+  /// uitdelen wat in zijn eigen map staat), en er wordt na afloop niets opgeruimd zolang hij deelt.
+  /// Dat kost tijdelijk twee keer de ruimte; dat is de prijs van een account dat blijft bestaan.
   Future<void> _downloadLokaal(
       TbTorrent torrent, List<TbFile> files, Directory destDir, List<DownloadJob> jobs,
-      {List<TbFile> cues = const []}) async {
+      {List<TbFile> cues = const [], bool seedNa = false}) async {
     // Een gestopte taak niet opnieuw beschrijven: `cancelJob` heeft daar het laatste woord al
     // gezet ("geannuleerd"), en de lus draait daarna nog minstens één ronde.
     void alle(String status, {String? detail}) {
@@ -2616,11 +2885,29 @@ class DownloadManager extends ChangeNotifier {
       return;
     }
 
+    // WAAR ARIA2 SCHRIJFT IS NIET WAAR HET HEEN MOET, en dat scheelt honderd tekens.
+    //
+    // De doelmap heet al naar de plaat, en aria2 maakt dáárbinnen nog een map met diezelfde naam —
+    // want zo heet de torrent nu eenmaal. Bij een lange naam telt dat dubbel op:
+    //
+    //     D:\Flac music 2024\DebridMusic Downloads\Tears For Fears - Songs From The Big Chair
+    //     (Deluxe Edition) (Deluxe) (1985 Pop Rock) [Flac 16-44]\Tears For Fears - Songs From The
+    //     Big Chair (Deluxe Edition) (Deluxe) (1985 Pop Rock) [Flac 16-44]\01. ... Shout.flac
+    //
+    // Dat is 234 tekens, en Windows kapt op 260. Gemeten op 29-08-2026: "Failed to open the file …
+    // cause: File I/O error 3" — dat is ERROR_PATH_NOT_FOUND, en er stond geen woord bij over
+    // lengte. Daarna liep die hele plaat vast, want het halve bestand bleef staan.
+    //
+    // Dus laat aria2 in een KORTE map werken, met de infohash als naam, en verhuizen we de gekozen
+    // nummers daarna naar de plaat waar ze horen. Dezelfde schijf, dus dat verhuizen kost niets.
     // De bladen mee in dezelfde zwerm. Ze horen niet bij `files` — daar hangt per element een balk
     // aan — maar wel bij wat aria2 moet ophalen, anders staat er na afloop geen cue naast het
     // albumbestand en valt er niets te knippen.
     final gekozen = [...files.map((f) => f.id), ...cues.map((f) => f.id)];
     final hash = (torrent.hash ?? '').toLowerCase();
+
+    final werkMap = Directory(werkMapPad(destDir, hash, torrent.name));
+    await werkMap.create(recursive: true);
 
     // EERST KIJKEN OF WE HEM ZELF AL HEBBEN, en pas daarna aanmelden.
     //
@@ -2639,7 +2926,9 @@ class DownloadManager extends ChangeNotifier {
         _log.line('torrent $hash liep al (gid=$lopend) — erbij gekozen zonder nieuwe aanmelding');
       }
     }
-    gid ??= await motor.voegTorrentToe(torrent.lokaleTorrent!, map: destDir.path, kies: gekozen);
+    final seedMin = seedNa && online.settings.seedUren > 0 ? online.settings.seedUren * 60 : null;
+    gid ??= await motor.voegTorrentToe(torrent.lokaleTorrent!,
+        map: werkMap.path, kies: gekozen, seedMinuten: seedMin);
 
     // AANHAKEN IN PLAATS VAN OPGEVEN.
     //
@@ -2689,7 +2978,7 @@ class DownloadManager extends ChangeNotifier {
         if (jobs.every((j) => j.cancelled)) return;
         await Future<void>.delayed(const Duration(seconds: 3));
         gid = await motor.voegTorrentToe(torrent.lokaleTorrent!,
-            map: destDir.path, kies: gekozen);
+            map: werkMap.path, kies: gekozen, seedMinuten: seedMin);
       }
     }
 
@@ -2770,7 +3059,7 @@ class DownloadManager extends ChangeNotifier {
         // opruiming hieronder.
         if (jobs[i].cancelled) continue;
         if (b == null) {
-          // Stil doorlopen stond hier, en dat is de ergste soort: `ruimOpNaTorrent` gooit aria2's map
+          // Stil doorlopen stond hier, en dat is de ergste soort: het opruimen gooit aria2's map
           // zo meteen weg, dus dit nummer is dan wég terwijl zijn regel op "bezig" blijft staan.
           jobs[i].status = 'failed';
           jobs[i].detail = 'aria2 kende dit bestand niet meer';
@@ -2782,7 +3071,7 @@ class DownloadManager extends ChangeNotifier {
           jobs[i].detail = 'aria2 meldde klaar, maar het bestand staat er niet';
           continue;
         }
-        final geland = await _verhuisNaar(bron, destDir, files[i].label);
+        final geland = await _verhuisNaar(bron, destDir, files[i].label, kopieer: seedNa);
         if (geland == null) {
           jobs[i].status = 'failed';
           jobs[i].detail = 'geen vrije naam in de doelmap';
@@ -2791,8 +3080,14 @@ class DownloadManager extends ChangeNotifier {
         await _jouwKeuze(geland);
         jobs[i].progress = 1;
         jobs[i].status = 'done';
+        // Zeggen dat er nog gedeeld wordt. Anders staat er "Klaar" terwijl er nog uren
+        // bandbreedte weggaat, en dat hoort niemand te ontdekken via zijn router.
+        if (seedMin != null) {
+          jobs[i].detail = 'klaar — deelt nog ${online.settings.seedUren} uur terug '
+              '(besloten tracker)';
+        }
       }
-      // En de bladen, vóór het opruimen: `ruimOpNaTorrent` gooit de map weg die aria2 aanmaakte, en
+      // En de bladen, vóór het opruimen: het opruimen gooit de map weg die aria2 aanmaakte, en
       // een cue die daar blijft staan verdwijnt mét die map — waarna er niets meer te knippen valt.
       for (final c in cues) {
         final b = s?.bestand(c.id);
@@ -2802,8 +3097,17 @@ class DownloadManager extends ChangeNotifier {
       }
       notifyListeners();
       // Opruimen mag alleen als deze taak van ons alleen is. Hangt er nog een tweede nummer van
-      // dezelfde plaat aan, dan gooit `ruimOpNaTorrent` de map weg waar dat nummer nog in staat.
-      if ((_lopersPerTorrent[gid] ?? 1) <= 1) await ruimOpNaTorrent(destDir, s);
+      // dezelfde plaat aan, dan gooit het opruimen de map weg waar dat nummer nog in staat.
+      //
+      // En bij een besloten tracker helemaal niet: aria2 deelt uit wat in die map ligt. Wie hier
+      // opruimt heeft wel geseed op papier en niets teruggegeven in de praktijk. De map gaat weg
+      // wanneer het seeden afloopt — zie [_ruimNaSeeden].
+      if (seedMin != null) {
+        _log.line('seeden: ${werkMap.path} blijft staan, nog ${online.settings.seedUren} uur');
+        unawaited(_ruimNaSeeden(motor, gid, werkMap, Duration(minutes: seedMin)));
+      }
+      // Het opruimen zelf staat in de `finally` hieronder — daar wordt geteld wie er nog aan deze
+      // torrent hangt, en dat is de enige plek waar dat kloppend gebeurt. Zie de uitleg daar.
       await onLibraryChanged();
     } finally {
       // De torrent uit aria2 halen zodra hij klaar is: hij seedt toch niet (--seed-time=0) en een
@@ -2818,10 +3122,64 @@ class DownloadManager extends ChangeNotifier {
         // ondertussen een nieuwe taak voor dezelfde plaat opzette mag hier zijn ingang niet
         // kwijtraken.
         if (_gidPerTorrent[hash] == gid) _gidPerTorrent.remove(hash);
-        await motor.verwijder(gid);
+        // Behalve wanneer hij nog aan het delen is: weghalen bij aria2 IS stoppen met delen.
+        if (seedMin == null) {
+          await motor.verwijder(gid);
+          // OPRUIMEN HOORT HIER, en niet hierboven bij het verhuizen.
+          //
+          // Daar werd geteld hoeveel opdrachten er nog aan deze torrent hingen, maar de teller gaat
+          // pas hier omlaag. Twee nummers die binnen dezelfde seconde klaar zijn zien dus allebei
+          // "er hangt er nog een aan mij" en ruimen allebei niet op. Gemeten op 29-08-2026 met Tears
+          // For Fears: beide nummers netjes binnen, en de werkmap bleef staan met drie halve
+          // bestanden erin — nummers die niemand had aangeklikt, want een torrentstuk loopt over de
+          // grens van een bestand heen.
+          //
+          // Wat de gebruiker koos is op dit punt allang verhuisd; wat hier nog ligt is per definitie
+          // rommel.
+          try {
+            if (await werkMap.exists()) await werkMap.delete(recursive: true);
+          } catch (_) {
+            // Blijft hij staan, dan is dat hooguit verspilde ruimte in een map die de scanner
+            // overslaat — en de volgende download van dezelfde plaat ruimt hem alsnog op.
+          }
+        }
       } else {
         _lopersPerTorrent[gid] = over;
       }
+    }
+  }
+
+  /// Wachten tot het seeden afgelopen is, en dan pas de werkmap opruimen.
+  ///
+  /// aria2 stopt zelf met delen zodra `seed-time` om is; deze lus kijkt daarnaar in plaats van blind
+  /// een klok af te tellen, want een torrent kan ook eerder klaar zijn (afgebroken, verwijderd, of
+  /// de app die opnieuw start). De bovengrens is er voor het geval aria2 er niet meer is: dan blijft
+  /// er anders voor altijd een map staan.
+  ///
+  /// Gaat de app tussendoor uit, dan blijft de map staan tot de volgende download van dezelfde
+  /// plaat hem overneemt. Een paar honderd megabyte die blijft liggen is minder erg dan een account
+  /// dat wordt ingetrokken.
+  Future<void> _ruimNaSeeden(Aria2 motor, String gid, Directory werkMap, Duration hoelang) async {
+    final tot = DateTime.now().add(hoelang + const Duration(minutes: 5));
+    while (DateTime.now().isBefore(tot)) {
+      await Future<void>.delayed(const Duration(minutes: 1));
+      final s = await motor.stand(gid);
+      // Weg, gestopt of mislukt: dan valt er niets meer te delen.
+      if (s == null || s.stuk || s.status == 'removed') break;
+      if (s.status == 'complete' && s.seeders == 0 && s.verbindingen == 0) {
+        // aria2 laat een afgeronde torrent op `complete` staan; pas als hij ook niemand meer
+        // bedient is het seeden echt voorbij. Nog één ronde wachten om niet te vroeg te zijn.
+        await Future<void>.delayed(const Duration(minutes: 2));
+        final nog = await motor.stand(gid);
+        if (nog == null || nog.verbindingen == 0) break;
+      }
+    }
+    await motor.verwijder(gid);
+    try {
+      if (await werkMap.exists()) await werkMap.delete(recursive: true);
+      _log.line('seeden afgelopen: ${werkMap.path} opgeruimd');
+    } catch (_) {
+      // Een map die blijft staan is geen reden om iets te melden; de volgende download ruimt hem op.
     }
   }
 
@@ -2938,25 +3296,32 @@ class DownloadManager extends ChangeNotifier {
   /// Eén bestand uit aria2's eigen map naar de doelmap halen. Geeft het pad terug, of null.
   ///
   /// De bibliotheek leest de doelmap; wat in de submap van aria2 blijft staan gaat straks mee in
-  /// [ruimOpNaTorrent] en is dan weg.
+  /// het opruimen na afloop en is dan weg.
   ///
   /// **Nooit over een ander bestand heen.** Een torrent wordt hier plat uitgepakt, dus alles gaat op
   /// zijn eigen naam naar dezelfde map — en een verzamelbox of een discografie heet bij elke schijf
   /// opnieuw `01 - ….flac`. `rename` schrijft daar zonder één woord overheen: je koos honderd
   /// nummers, er stonden er twaalf, elke taak meldde "klaar", en de originelen waren al door
-  /// [ruimOpNaTorrent] opgeruimd. Zie [vrijeNamen] voor welke naam er dan gekozen wordt.
+  /// het opruimen na afloop al weggegooid. Zie [vrijeNamen] voor welke naam er dan gekozen wordt.
   ///
   /// De aanroepers verhuizen één voor één, dus kijken of een naam vrij is kan hier gewoon.
-  Future<String?> _verhuisNaar(File bron, Directory destDir, String naam) async {
+  /// [kopieer] laat het origineel staan. Dat is nodig bij een besloten tracker: aria2 deelt uit wat
+  /// in zijn eigen map ligt, en een verplaatst bestand kan hij niet meer uitdelen — dan sta je alsnog
+  /// als hit-and-run te boek terwijl de app "klaar" meldt.
+  Future<String?> _verhuisNaar(File bron, Directory destDir, String naam,
+      {bool kopieer = false}) async {
     // De map waar het bestand IN DE TORRENT stond — dat is wat "CD2" of "1965 - Poupée de cire" van
     // elkaar onderscheidt zodra de namen erin gelijk zijn.
     final ouder = bron.parent.path;
-    final delen = ouder.split(Platform.pathSeparator).where((s) => s.isNotEmpty).toList();
-    final submap = ouder == destDir.path || delen.isEmpty ? '' : delen.last;
+    final submap = ouder == destDir.path ? '' : laatsteMap(ouder);
     for (final kandidaat in vrijeNamen(_sanitize(naam), submap: _sanitize(submap))) {
       final doel = File('${destDir.path}${Platform.pathSeparator}$kandidaat');
       if (bron.path == doel.path) return doel.path;
       if (await doel.exists()) continue;
+      if (kopieer) {
+        await bron.copy(doel.path);
+        return doel.path;
+      }
       try {
         await bron.rename(doel.path);
       } catch (_) {

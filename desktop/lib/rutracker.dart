@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'cp1251.dart';
+import 'flaresolverr.dart';
 import 'settings.dart';
 import 'torbox.dart';
 
@@ -247,6 +248,82 @@ class RuTrackerService {
             'koekje is HttpOnly en staat dus niet in document.cookie.');
   }
 
+  /// Wanneer we voor het laatst zelf een koekje zijn gaan halen.
+  ///
+  /// Een uitdaging die blijft staan zou anders bij elke zoekopdracht een nieuwe browserstart bij
+  /// FlareSolverr uitlokken — tien treffers op een pagina is dan tien keer Chromium opstarten.
+  DateTime? _laatsteVersing;
+
+  Future<bool> _magVersen() async {
+    final l = _laatsteVersing;
+    if (l != null && DateTime.now().difference(l) < const Duration(minutes: 2)) return false;
+    return FlareSolverr(settings.flaresolverrUrl).ingesteld;
+  }
+
+  /// Koekjes samenvoegen: wat er nieuw binnenkomt wint, de rest blijft staan.
+  ///
+  /// **Waarom dit niet gewoon "vervangen" is.** FlareSolverr lost de Cloudflare-uitdaging op en geeft
+  /// daarvan de koekjes terug — `cf_clearance` voorop. Maar hij is niet ingelogd, dus er zit geen
+  /// `bb_session` in. Wie het hele koekje vervangt door wat FlareSolverr teruggaf, komt dus wél langs
+  /// de deur en staat daarna uitgelogd binnen: RuTracker toont dan geen downloadknoppen meer en de
+  /// app kan geen enkel `.torrent` meer ophalen. De sessie is bovendien niet aan een UA gebonden, dus
+  /// hem bewaren is veilig.
+  static String voegKoekjesSamen(String bestaand, String nieuw) {
+    final samen = <String, String>{};
+    for (final regel in [bestaand, nieuw]) {
+      for (final deel in regel.split(';')) {
+        final t = deel.trim();
+        if (t.isEmpty) continue;
+        final is_ = t.indexOf('=');
+        if (is_ <= 0) continue;
+        samen[t.substring(0, is_).trim()] = t.substring(is_ + 1).trim();
+      }
+    }
+    return samen.entries.map((e) => '${e.key}=${e.value}').join('; ');
+  }
+
+  /// Een vers `cf_clearance` halen bij FlareSolverr, zonder plakwerk.
+  ///
+  /// Dezelfde vorm als [gebruikPlaksel], en om dezelfde reden: proberen vóór bewaren, en bij
+  /// mislukking terugdraaien. Een instelling die aantoonbaar niet werkt hoort niet te blijven staan.
+  Future<RtLogin> ververViaFlareSolverr() async {
+    final fs = FlareSolverr(settings.flaresolverrUrl);
+    if (!fs.ingesteld) {
+      return const RtLogin.failed(
+          'Er staat geen adres voor FlareSolverr in de instellingen (meestal http://127.0.0.1:8191).');
+    }
+    final uit = await fs.haal('$_base/index.php');
+    if (uit == null) {
+      return RtLogin.failed(await fs.leeft()
+          ? 'FlareSolverr kon de pagina niet ophalen. Probeer het zo nog eens.'
+          : 'FlareSolverr antwoordt niet op ${settings.flaresolverrUrl}. Draait hij?');
+    }
+    if (!uit.heeftClearance) {
+      return const RtLogin.failed(
+          'FlareSolverr kwam er wel, maar kreeg geen cf_clearance terug. Dat gebeurt als Cloudflare '
+          'op dit moment niemand uitdaagt; dan is er ook niets te verversen.');
+    }
+
+    final vorigeCookie = settings.rutrackerCookie;
+    final vorigeUa = settings.rutrackerUa;
+    // Samenvoegen, niet vervangen: zie [voegKoekjesSamen]. De UA moet wél die van FlareSolverr
+    // worden, want daar is het nieuwe cf_clearance aan gebonden.
+    settings.rutrackerCookie = voegKoekjesSamen(vorigeCookie, uit.cookie);
+    if (uit.ua.isNotEmpty) settings.rutrackerUa = uit.ua;
+
+    if (await verify()) {
+      await settings.save();
+      lastError = '';
+      return const RtLogin.success();
+    }
+
+    settings.rutrackerCookie = vorigeCookie;
+    settings.rutrackerUa = vorigeUa;
+    return const RtLogin.failed(
+        'Het verse koekje kwam binnen, maar RuTracker herkende de sessie daarna niet. Waarschijnlijk '
+        'is je bb_session verlopen: log opnieuw in je browser in en plak het verzoek nog een keer.');
+  }
+
   /// Staat Cloudflare ertussen? Dan is er niets mis met naam, wachtwoord of sessie.
   ///
   /// Drie aanwijzingen, en één is genoeg: de kop die Cloudflare zelf zet, de server die zich noemt,
@@ -362,6 +439,20 @@ class RuTrackerService {
     final langsCurl = heeftCurl ? await _haalMetCurl(url, referer: referer) : null;
     // Een 403 is hier geen antwoord maar een dichte deur: doorlopen naar het venster.
     if (langsCurl != null && langsCurl.status != 403) return langsCurl;
+
+    // Dichte deur, en er staat een sleutelmaker klaar. Zelf een vers koekje halen scheelt de
+    // gebruiker de hele gang naar zijn browser — en dat is precies wat er tot nu toe gebeurde:
+    // netwerktab open, "Kopieer als cURL", plakken in de instellingen, midden in iets anders.
+    if (langsCurl?.status == 403 && heeftCurl && await _magVersen()) {
+      final uitkomst = await ververViaFlareSolverr();
+      _laatsteVersing = DateTime.now();
+      if (uitkomst.ok) {
+        final nogEens = await _haalMetCurl(url, referer: referer);
+        if (nogEens != null && nogEens.status != 403) return nogEens;
+      } else {
+        haalReden = 'een vers koekje halen lukte ook niet: ${uitkomst.error}';
+      }
+    }
 
     final venster = viaVenster;
     if (venster != null) {

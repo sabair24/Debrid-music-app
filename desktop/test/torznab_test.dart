@@ -105,8 +105,11 @@ void main() {
       expect(u.path, '/api/v2.0/indexers/all/results/torznab/api');
       expect(u.queryParameters['apikey'], sleutel);
       expect(u.queryParameters['q'], 'pink trauma');
-      expect(u.queryParameters['cat'], kTorznabAudio);
       expect(u.queryParameters['t'], 'search');
+      // GEEN `cat`. Gemeten op 24-08-2026 met acht indexers: met cat=3000 kwamen er 22 treffers
+      // binnen en zonder 49, want RuTor zet zijn muziek onder categorie 8000 ("overig") en viel er
+      // dus in zijn geheel uit. Het zeven gebeurt in [torznabIsMuziek], waar de titel nog meetelt.
+      expect(u.queryParameters.containsKey('cat'), isFalse);
     });
 
     test('een adres zonder http ervoor werkt ook', () {
@@ -135,6 +138,48 @@ void main() {
     test('geen adres geeft geen adres', () {
       expect(torznabZoekAdres('', sleutel, 'x').toString(), isEmpty);
       expect(torznabZoekAdres('   ', sleutel, 'x').toString(), isEmpty);
+    });
+  });
+
+  group('de zeef: is dit muziek', () {
+    // Alle vier de gevallen hieronder zijn gemeten op 24-08-2026, in één antwoord van Jackett op
+    // de vraag "Robert Miles Dreamland" met acht indexers ingesteld.
+
+    test('een audiocategorie is genoeg', () {
+      expect(torznabIsMuziek([3010, 100042], 'wat dan ook'), isTrue);
+      expect(torznabIsMuziek([3000], 'zonder formaat in de titel'), isTrue);
+    });
+
+    test('DE KERN: "overig" plus een formaat in de titel telt wél mee', () {
+      // Dit is RuTor, en dit is de reden dat die tracker eerst volledig ontbrak: hij zet zijn hele
+      // muzieksectie onder 8000.
+      expect(torznabIsMuziek([8000, 100003], 'Robert Miles - Dreamland (1996) FLAC'), isTrue);
+      expect(torznabIsMuziek([8000, 100003], 'Robert Miles - Dreamland [Reissue] WavPack'), isTrue);
+      expect(torznabIsMuziek([8000], 'Robert Miles - Dreamland (1996) MP3'), isTrue);
+    });
+
+    test('maar een game blijft een game', () {
+      // Byrutor gaf op diezelfde vraag twaalf van deze terug. Een muziekapp heeft er niets aan.
+      expect(torznabIsMuziek([4050, 100001], 'Dreamland Farm'), isFalse);
+      expect(torznabIsMuziek([4050, 100001], 'Eternal Dreamland'), isFalse);
+    });
+
+    test('en film, tv en boeken ook niet', () {
+      expect(torznabIsMuziek([2040], 'Dreamland 2019 1080p BluRay'), isFalse);
+      expect(torznabIsMuziek([5030], 'Dreamland S01E01 HDTV'), isFalse);
+      expect(torznabIsMuziek([7020], 'Dreamland - een roman (epub)'), isFalse);
+    });
+
+    test('een videocategorie wint niet van een audiocategorie', () {
+      // Een concertregistratie kan beide dragen; dan telt dat er audio in zit.
+      expect(torznabIsMuziek([2000, 3010], 'Live in Paris FLAC'), isTrue);
+    });
+
+    test('zonder categorie beslist de titel, en anders valt hij af', () {
+      expect(torznabIsMuziek(const [], 'Iets - Iets (2001) [24 bit]'), isTrue);
+      expect(torznabIsMuziek(const [], 'Iets zonder enige aanwijzing'), isFalse);
+      // Alleen het eigen nummer van een indexer zegt niets; die tellen niet mee.
+      expect(torznabIsMuziek([100003], 'Iets zonder enige aanwijzing'), isFalse);
     });
   });
 }

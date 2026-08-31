@@ -66,7 +66,29 @@ class LanServer {
       port: port,
       logPath: dir.isEmpty ? null : '$dir${Platform.pathSeparator}cast.log',
     );
-    _koppelLog = dir.isEmpty ? null : WarmLog('$dir${Platform.pathSeparator}koppeling.log');
+    // NIET afhankelijk van `configDir`, en dat is een reparatie.
+    //
+    // Stond die map leeg op het moment dat de server werd opgezet — en dat kan, want `applySettings`
+    // loopt naast het inlezen van de bibliotheek — dan was `_koppelLog` null en werd er de hele
+    // sessie GEEN ENKELE weigering opgeschreven. Gemeten op 30-08-2026: elk toestel kreeg 401, ook
+    // met de goede gedeelde sleutel, en in `koppeling.log` stond niets van die dag. Dan is er niets
+    // te onderzoeken; er is alleen een telefoon die niet meer binnenkomt.
+    //
+    // `logDir` bestaat altijd (zie paths.dart), dus dit logboek nu ook.
+    _koppelLog = WarmLog('${dir.isEmpty ? logDir : dir}${Platform.pathSeparator}koppeling.log');
+  }
+
+  /// Eén regel bij het opzetten: waarmee deze server dénkt te mogen werken.
+  ///
+  /// **Waarom dit erbij moet.** Een weigering vertelt wat er geboden werd, maar niet of de server
+  /// überhaupt iets had om mee te vergelijken. Op 30-08-2026 weigerde hij álles — ook zijn eigen
+  /// gedeelde sleutel uit `settings.json` — en er viel van buiten niet vast te stellen of hij nul
+  /// koppelingen had, een lege sleutel, of allebei. Deze regel maakt dat één blik.
+  void _meldStand() {
+    _koppelLog?.line('SERVER OP  poort $port'
+        '  gedeelde sleutel: ${token.isEmpty ? "LEEG" : "${token.substring(0, 4)}… (${token.length})"}'
+        '  koppelingen in geheugen: ${grants.all.length}'
+        '  bibliotheekmap: ${library.configDir.isEmpty ? "(nog leeg)" : library.configDir}');
   }
 
   /// Waarom een verzoek geweigerd werd. Alleen bij een WEIGERING, nooit bij een geslaagd verzoek.
@@ -151,6 +173,7 @@ class LanServer {
           : 'Kon niet starten op poort $port: ${e.osError?.message ?? e.message}';
     }
     _http!.autoCompress = false; // audio and covers are already compressed
+    _meldStand();
     unawaited(_serve(_http!));
     return null;
   }
@@ -215,7 +238,7 @@ class LanServer {
     // Also unauthenticated, necessarily — this is how a device that has no token gets one.
     if (path == '/pair') return _pair(req);
 
-    if (!_authorized(req)) {
+    if (!await _authorizedOfHerstel(req)) {
       res.statusCode = HttpStatus.unauthorized;
       return res.close();
     }
@@ -297,7 +320,42 @@ class LanServer {
     return res.close();
   }
 
-  bool _authorized(HttpRequest req) {
+  /// Eén keer per sessie: misschien staan de koppelingen wél op schijf en niet in het geheugen.
+  ///
+  /// **Waarom dit bestaat.** Op 30-08-2026 weigerde deze server élk verzoek — ook met de gedeelde
+  /// sleutel die gewoon in `settings.json` stond — en `koppeling.log` bevatte die hele dag geen
+  /// regel. Van buiten viel niet vast te stellen of hij nul koppelingen had, een lege sleutel, of
+  /// allebei; van binnen was er niemand die het nakeek. Een telefoon die er zo uit ligt komt er uit
+  /// zichzelf nooit meer in: het inlezen gebeurt één keer, bij het opstarten.
+  ///
+  /// Dit leest hetzelfde bestand dat hij bij het opstarten had moeten lezen. Er komt dus geen enkele
+  /// koppeling bij die er niet al was — het is een herstelpoging, geen achterdeur.
+  bool _koppelingenHerladen = false;
+
+  Future<bool> _herlaadKoppelingen() async {
+    if (_koppelingenHerladen) return false;
+    _koppelingenHerladen = true;
+    final voor = grants.all.length;
+    try {
+      await grants.load();
+    } catch (e) {
+      _koppelLog?.line('KOPPELINGEN HERLADEN mislukt: $e');
+      return false;
+    }
+    final na = grants.all.length;
+    _koppelLog?.line('KOPPELINGEN HERLADEN na een weigering: $voor -> $na');
+    return na > voor;
+  }
+
+  Future<bool> _authorizedOfHerstel(HttpRequest req) async {
+    if (_authorized(req, stil: true)) return true;
+    // Nog één kans, en alleen de eerste keer: opnieuw inlezen en het aanbod nog eens toetsen.
+    if (await _herlaadKoppelingen() && _authorized(req, stil: true)) return true;
+    _authorized(req); // nu mét de regel in het logboek
+    return false;
+  }
+
+  bool _authorized(HttpRequest req, {bool stil = false}) {
     final header = req.headers.value(HttpHeaders.authorizationHeader) ?? '';
     final bearer = header.startsWith('Bearer ') ? header.substring(7).trim() : '';
     // The query form is not laziness: a UPnP renderer and an <audio> tag both fetch the URL
@@ -313,8 +371,15 @@ class LanServer {
       if (grants.touch(offered)) unawaited(grants.save());
       return true;
     }
-    if (token.isNotEmpty && _constantTimeEquals(offered, token)) return true;
-    _noteerWeigering(req, offered);
+    // De gedeelde sleutel, en bij twijfel die uit de instellingen.
+    //
+    // Dit veld wordt gezet door `applySettings`. Loopt dat mis of te laat, dan staat hier een lege
+    // tekst en weigert de server ook de sleutel die gewoon in `settings.json` staat — zonder dat er
+    // iets te zien is. Wat er op schijf staat is de waarheid; dit is dezelfde sleutel, niet een
+    // tweede.
+    final gedeeld = token.isNotEmpty ? token : (settings?.lanToken ?? '');
+    if (gedeeld.isNotEmpty && _constantTimeEquals(offered, gedeeld)) return true;
+    if (!stil) _noteerWeigering(req, offered);
     return false;
   }
 

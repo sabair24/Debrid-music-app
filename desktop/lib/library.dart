@@ -245,6 +245,13 @@ ScanUitslag _scanTags(String root, String? cachePad) {
     // deliberately NOT part of the library — otherwise a parked junk WAV keeps scanning back in as
     // its own single and the duplicate cleanup can never finish.
     if (e.path.contains('${Platform.pathSeparator}$dupeFolder${Platform.pathSeparator}')) continue;
+    // En de map waarin de torrentmotor werkt. Daar staan halve bestanden, en bestanden die aria2
+    // opnieuw ophaalt omdat een eerdere download ze heeft weggehaald. Zonder deze regel komen die
+    // in de bibliotheek — gemeld op 29-08-2026 als "er komen liedjes bij die ik nooit heb
+    // aangeklikt". Zie [torrentWerkMap] in `online.dart`.
+    if (e.path.contains('${Platform.pathSeparator}$torrentWerkMap${Platform.pathSeparator}')) {
+      continue;
+    }
     var addedMs = 0, sizeBytes = 0;
     try {
       final st = e.statSync();
@@ -1256,10 +1263,31 @@ class LibraryStore extends ChangeNotifier {
   /// naar "Trein" niet. Een verzamelaar waar de artiest-tag "Various Artists" zegt en de uitvoerder in
   /// PERFORMER staat wordt hier niet gevonden; dat is een bekende ondergrens en geen stille aanname.
   bool hasLossless(String artist, String title) {
-    final gezocht = trackIdentity(artist, title);
+    // Via [opnameSleutel] en niet via [trackIdentity]: die tweede beslist of twee bestanden DUBBEL
+    // zijn en hoort streng te zijn. Hier gaat het om "mag de app ophouden met zoeken?", en dan is
+    // `Drunk in Love (feat. JAY-Z)` gewoon `Drunk in Love`. Echte versiemerken blijven wél scheiden —
+    // "Trein (instrumentaal)" vervult de wens naar "Trein" niet.
+    final gezocht = opnameSleutel(artist, title);
     for (final t in tracks) {
       if (!t.isFlac) continue;
-      if (trackIdentity(t.artist, t.title) == gezocht) return true;
+      // EEN BETRAPTE FLAC TELT NIET ALS "die heb ik al".
+      //
+      // Gemeld op 30-08-2026 met Gorki — Anja: een bestand van 24/44.1 dat op 17,4 kHz dichtklapt,
+      // dus opgeblazen uit iets lossy. Saber wil dan liever een echte 16/44.1. Maar zolang zo'n
+      // bestand hier meetelt, laat de verlanglijst de wens meteen vervallen ("die FLAC staat al in
+      // de bibliotheek") en gaat de app er dus nooit meer naar zoeken.
+      //
+      // Alleen wat BEWEZEN nep is valt af; ongemeten telt gewoon mee. Anders zou het draaien van een
+      // meting ineens honderd wensen wakker maken.
+      //
+      // MAAR NIET WAT JE ZELF KOOS. Wie op de kwaliteitslijst met de hand een vervanger aanwijst
+      // heeft daarmee beslist, ook als de meting iets anders vindt — misschien is dit de enige
+      // uitgave die bestaat, of klinkt die ene het best. Zou de app daar tóch naar blijven zoeken,
+      // dan haalt hij eindeloos kopieën binnen die `firstIsBetter` meteen weer parkeert, want daar
+      // wint een vaste keuze van alles. Zoeken naar iets wat je niet mag vervangen is verspilling
+      // met een geloofwaardig gezicht.
+      if (bewezenNep(t.path) && !isVasteKeuze(t.path)) continue;
+      if (opnameSleutel(t.artist, t.title) == gezocht) return true;
     }
     return false;
   }
