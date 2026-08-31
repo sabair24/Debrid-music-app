@@ -235,11 +235,31 @@ ScanUitslag _scanTags(String root, String? cachePad) {
       continue;
     }
     var addedMs = 0, sizeBytes = 0;
+    var gestat = false;
     try {
       final st = e.statSync();
       addedMs = st.modified.millisecondsSinceEpoch;
       sizeBytes = st.size;
+      gestat = true;
     } catch (_) {}
+
+    // Een bestand waar geen muziek IN kan zitten hoort hier niet.
+    //
+    // Sinds de France Gall-ronde wordt een bestand niet meer weggegooid als de tagontleder het niet
+    // leest: muziek die je hebt en niet kunt vinden is erger dan een lelijke regel. Maar dat gaat
+    // over bestanden die wél geluid bevatten. Nul bytes bevat niets, en een halve kilobyte ook niet.
+    //
+    // Zulke bestanden bestaan hier echt. Ze zijn het restafval van een mislukte knipbeurt: ffmpeg
+    // maakt zijn uitvoerbestand aan vóórdat hij weet of het lukt, en tot 31-08-2026 bleef juist het
+    // nummer dat mislukte achter. Op het scherm werd dat een tegel met een keurige titel, een hoes,
+    // 0:00, en bij het aantikken "Failed to recognize file format".
+    //
+    // Overslaan is hier geen verlies: er is niets om kwijt te raken. Het bestand blijft gewoon op je
+    // schijf staan — dit gaat alleen over wat de bibliotheek muziek noemt. Dezelfde ondergrens die
+    // `cue_knippen.dart` al hanteert, en om precies dezelfde reden. Een mislukte stat (`gestat`
+    // false) telt NIET als leeg: dan weten we het niet, en dan is het bestand het voordeel van de
+    // twijfel waard.
+    if (gestat && sizeBytes < kMinimumBytes) continue;
 
     // Onveranderd sinds de vorige scan? Dan hoeft het bestand niet open. Dit is de hele winst.
     //

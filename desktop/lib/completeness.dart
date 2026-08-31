@@ -211,6 +211,43 @@ AlbumCompleteness matchAlbumTracks(
     }
   }
 
+  // Dan de gastartiest die maar aan ÉÉN kant genoemd wordt.
+  //
+  // **Gemeld op 31-08-2026, met een schermafdruk van *Dangerously in Love*.** Onder "Niet op deze
+  // uitgave" stonden "Crazy In Love" en "Baby Boy" — twee nummers die nota bene de bekendste van
+  // die plaat zijn. De uitgave schrijft ze als "Crazy in Love (feat. JAY-Z)" en "Baby Boy (feat.
+  // Sean Paul)"; de rip schreef de gast in het ARTIEST-veld en liet de titel kaal.
+  //
+  // Waarom geen van de passen hierboven dat opving: `_words` haalt met opzet alleen VERSIE-merken
+  // weg en laat "(feat. …)" staan, omdat daar een echt verschil in kan zitten — Adele's *30* heeft
+  // "Easy On Me" én "Easy On Me (With Chris Stapleton)", twee opnames. Gevolg is wel dat drie
+  // gedeelde woorden tegen zes gezette woorden op 50% uitkwam, ver onder de vier vijfde.
+  //
+  // **De rem is hier niet een lagere drempel maar UNICITEIT.** De gaststaart mag alleen weg als de
+  // kale titel aan béíde kanten precies één keer voorkomt. In het geval van Adele vallen die twee
+  // rijen samen zodra je "(With Chris Stapleton)" wegdenkt — dan is niet te zeggen welke van de
+  // twee het bestand is, en dan gebeurt er niets. Bij Beyoncé is er maar één "Crazy in Love", en
+  // dan is er ook niets te verwarren. De speelduur moet nog steeds kloppen.
+  for (var i = 0; i < official.length; i++) {
+    if (owned.containsKey(i)) continue;
+    final kaal = normKey(zonderFeat(official[i].title));
+    if (kaal.isEmpty) continue;
+    // Bewust symmetrisch: de gaststaart kan net zo goed in het BESTAND staan en niet op de uitgave.
+    // Een titel die aan allebei de kanten al gelijk was is hierboven al geclaimd, dus deze pas kan
+    // alleen nog paren maken die de exacte vergelijking niet kon zien.
+    if (official.where((o) => normKey(zonderFeat(o.title)) == kaal).length != 1) continue;
+    final passend = [
+      for (final t in tracks)
+        if (!claimed.contains(t.path) &&
+            normKey(zonderFeat(t.title)) == kaal &&
+            durationsAgree(official[i].seconds, t.duration?.inSeconds))
+          t,
+    ];
+    if (passend.length != 1) continue;
+    owned[i] = passend.single;
+    claimed.add(passend.single.path);
+  }
+
   // Very last: an EXACT title match that only the running time rejected.
   //
   // Measured on Het Beste Van Petra. The file is `02 - Laat Je Gaan.flac`, in that album's own
