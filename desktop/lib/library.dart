@@ -303,10 +303,11 @@ Map<String, dynamic>? tagrijVoorBestand(File e,
         'bitsPerSample': v.bitsPerSample,
       };
     }
-  } else if (_ext(e.path) == '.dsf') {
-    // Een SACD-rip. Geen enkele tagontleder hier kent DSD, dus dit bestand belandt hoe dan ook op
-    // zijn bestandsnaam — maar de duur staat in de kop en hoeft niet 0:00 te blijven.
-    final k = readDsfKop(e);
+  } else if (_ext(e.path) == '.dsf' || _ext(e.path) == '.dff') {
+    // Een SACD-rip, in Sony's doos of in die van Philips. Geen enkele tagontleder hier kent DSD, dus
+    // dit bestand belandt hoe dan ook op zijn bestandsnaam — maar de duur staat in de kop en hoeft
+    // niet 0:00 te blijven.
+    final k = _ext(e.path) == '.dsf' ? readDsfKop(e) : readDffKop(e);
     if (k != null) {
       duurMs = k.duration?.inMilliseconds ?? 0;
       hertz = k.sampleRate;

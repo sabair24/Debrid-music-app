@@ -223,4 +223,97 @@ void main() {
       expect(r!['durationMs'], 0);
     });
   });
+
+  group('een SACD-rip in de andere doos (.dff)', () {
+    /// Vier letters, dan de lengte in acht bytes big-endian, dan de inhoud — met een opvulbyte als
+    /// die lengte oneven is. Dat is een DSDIFF-brok.
+    List<int> brok(String naam, List<int> inhoud, {int? beweerdeLengte}) {
+      final len = beweerdeLengte ?? inhoud.length;
+      final uit = <int>[...naam.codeUnits];
+      for (var i = 7; i >= 0; i--) {
+        uit.add((len ~/ _macht(256, i)) % 256);
+      }
+      uit.addAll(inhoud);
+      if (inhoud.length.isOdd) uit.add(0);
+      return uit;
+    }
+
+    List<int> u32be(int v) => [
+          (v >> 24) & 0xFF,
+          (v >> 16) & 0xFF,
+          (v >> 8) & 0xFF,
+          v & 0xFF,
+        ];
+    List<int> u16be(int v) => [(v >> 8) & 0xFF, v & 0xFF];
+
+    /// De eigenschappenbrok: hoeveel hertz, hoeveel kanalen.
+    List<int> prop({int sampleRate = 2822400, int kanalen = 2}) => brok('PROP', [
+          ...'SND '.codeUnits,
+          ...brok('FS  ', u32be(sampleRate)),
+          ...brok('CHNL', [...u16be(kanalen), ...'SLFTSRGT'.codeUnits]),
+        ]);
+
+    /// Een heel bestand. [geluidBytes] wordt alleen BEWEERD, niet geschreven — de lezer hoort de
+    /// geluidsbrok nooit te openen, en een echte van een halve minuut is hier twintig megabyte.
+    List<int> dff({
+      int sampleRate = 2822400,
+      int kanalen = 2,
+      int? geluidBytes,
+      int? dstFrames,
+      int dstPerSeconde = 75,
+      String vorm = 'FRM8',
+    }) {
+      final binnen = <int>[
+        ...'DSD '.codeUnits,
+        ...prop(sampleRate: sampleRate, kanalen: kanalen),
+        if (dstFrames != null)
+          ...brok('DST ', brok('FRTE', [...u32be(dstFrames), ...u16be(dstPerSeconde)]))
+        else
+          ...brok('DSD ', const [], beweerdeLengte: geluidBytes ?? 0),
+      ];
+      return [...vorm.codeUnits, ...u32be(0), ...u32be(binnen.length), ...binnen];
+    }
+
+    test('onverpakt: de duur volgt uit hoeveel bytes geluid erin zit', () {
+      // DSD64 stereo, dertig seconden: 2 × 2822400/8 × 30 bytes.
+      final bytes = 2 * (2822400 ~/ 8) * 30;
+      final r = rij('01 - So What.dff', dff(geluidBytes: bytes))!;
+      expect(r['durationMs'], 30000);
+      expect(r['sampleRate'], 2822400);
+      expect(r['bitsPerSample'], 1);
+      expect(r['title'], '01 - So What');
+    });
+
+    test('en klopt ook voor een meerkanaals-SACD', () {
+      // Zes kanalen op evenveel bytes is een derde van de speeltijd. Wie de kanalen vergeet, leest
+      // hier drie keer te lang.
+      final bytes = 6 * (2822400 ~/ 8) * 10;
+      expect(rij('surround.dff', dff(kanalen: 6, geluidBytes: bytes))!['durationMs'], 10000);
+    });
+
+    test('ingepakt met DST: de duur komt uit het aantal frames', () {
+      // Bij een ingepakte rip zegt de lengte van de brok niets meer — dan telt FRTE.
+      expect(rij('ingepakt.dff', dff(dstFrames: 75 * 213))!['durationMs'], 213000);
+    });
+
+    test('een bestand dat geen DSDIFF is blijft op 0:00', () {
+      final r = rij('nep.dff', dff(geluidBytes: 1000, vorm: 'FORM'));
+      expect(r, isNotNull, reason: 'het bestand verdwijnt niet');
+      expect(r!['durationMs'], 0);
+    });
+
+    test('een lege geluidsbrok verzint geen duur', () {
+      final r = rij('leeg.dff', dff(geluidBytes: 0));
+      expect(r!['durationMs'], 0);
+    });
+  });
+}
+
+/// [grond] tot de macht [n] — de test rekent liever zelf dan een tabel met bytes uit te schrijven.
+int _macht(int grond, int n) {
+  var uit = 1;
+  for (var i = 0; i < n; i++) {
+    uit *= grond;
+  }
+  return uit;
 }
