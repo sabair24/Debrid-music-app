@@ -7,6 +7,7 @@ import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'album_facts.dart';
 import 'album_id.dart';
 import 'completeness.dart';
+import 'discogs.dart' show persingUitHerkomst;
 import 'editions.dart';
 import 'enrichment.dart';
 import 'fingerprint.dart';
@@ -1329,7 +1330,22 @@ class LibraryStore extends ChangeNotifier {
       if (a.tracks.isEmpty) continue;
       if (artistKey(a.artist) != artistKey(artist) || normKey(a.title) != normKey(album)) continue;
       if (a.correctedCover != null) continue;
-      if (from != null) {
+      // **Een persing die JIJ hebt vastgezet wint van elke andere.**
+      //
+      // Dit ontbrak, en het is de klacht: "waarom blijft hij mijn fronthoes veranderen? Dit had ik
+      // niet gekozen en toch staat deze erop." Je zet een uitgave vast — die ene cd uit Canada —
+      // en even later staat de hoes van een héél andere persing op je scherm.
+      //
+      // Hoe dat kon: alleen een hoes die je met de hand in de bewerker koos was beschermd. Een
+      // VASTGEZETTE PERSING niet, terwijl dat net zo goed een keuze is. En de verwarmer loopt op de
+      // achtergrond elke plaat af; kan hij jouw persing niet ophalen, dan valt de opzoeker terug op
+      // een andere (zie `AlbumFactsResolver`) — en die andere schreef hier ongehinderd overheen.
+      //
+      // Alleen de hoes van JOUW persing mag dus voorgaan. Een andere gaat naar [Album.enriched] en
+      // blijft daarmee onder wat er in de bestanden zit: hij is nog steeds bruikbaar voor een plaat
+      // die zelf geen hoes draagt, maar hij kan de jouwe niet meer verdringen.
+      final vastgezet = _pinPastBij(a, from);
+      if (from != null && vastgezet) {
         if (identical(a.resolvedCover, bytes) && a.resolvedFrom == from) continue;
         a.resolvedCover = bytes;
         a.resolvedFrom = from;
@@ -1346,6 +1362,24 @@ class LibraryStore extends ChangeNotifier {
     }
     if (changed) notifyListeners();
     return changed;
+  }
+
+  /// Mag de hoes van [from] vóór de bestanden van dit album gaan?
+  ///
+  /// Ja als er niets vastgezet is — dan is een gevonden persing het beste wat er is. Ja als [from]
+  /// juist díe vastgezette persing IS. Nee bij elke andere: je hebt gezegd welke uitgave je hebt, en
+  /// dan is de hoes van een andere uitgave geen betere gok maar een verkeerd antwoord.
+  ///
+  /// Een pin op MusicBrainz en een pin op Discogs staan los van elkaar ([pinnedRelease] naast
+  /// [pinnedMbid]), dus wordt er van allebei gekeken of ze aanwezig zijn en of ze passen.
+  bool _pinPastBij(Album a, String? from) {
+    final release = pinnedRelease(a);
+    final mbid = pinnedMbid(a);
+    if (release == null && (mbid == null || mbid.isEmpty)) return true;
+    final h = persingUitHerkomst(from);
+    if (release != null && h.release == release) return true;
+    if (mbid != null && mbid.isNotEmpty && h.mbid == mbid) return true;
+    return false;
   }
 
   /// Un-hide everything: the files are still on disk, so a rescan restores them.
@@ -3013,7 +3047,11 @@ class LibraryStore extends ChangeNotifier {
       // rip tagged with the wrong record, `album.cover` is not null, it is confidently wrong.
       if (album.resolvedCover == null) {
         final traced = await enricher.resolvedCover(album);
-        if (traced != null) {
+        // Ook hier de pin nakijken, en niet alleen bij het overnemen. Wat er vóór deze regel al
+        // weggeschreven was blijft anders voor altijd staan: de app zou hem netjes weigeren te
+        // vervangen en tegelijk elke keer de verkeerde inlezen. Zo repareert een plaat die al
+        // omgeslagen is zichzelf bij de eerstvolgende scan.
+        if (traced != null && _pinPastBij(album, traced.$2)) {
           album.resolvedCover = traced.$1;
           album.resolvedFrom = traced.$2;
         }
