@@ -7,7 +7,9 @@ import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'album_facts.dart';
 import 'album_id.dart';
 import 'completeness.dart';
+import 'audioformaten.dart';
 import 'discogs.dart' show persingUitHerkomst;
+import 'dsd_kop.dart';
 import 'editions.dart';
 import 'enrichment.dart';
 import 'fingerprint.dart';
@@ -27,32 +29,11 @@ import 'paths.dart';
 
 /// Welke bestanden de bibliotheek als muziek beschouwt.
 ///
-/// **`.ape` en `.wv` staan er sinds 29-08-2026 bij, en hun afwezigheid was een stille lek.** De
-/// downloadkant nam ze wél aan (`TbFile.isAudio` noemt ape en wv), dus een rip in Monkey's Audio of
-/// WavPack — bij Franse en Russische bronnen doodgewoon — kwam netjes binnen, ging netjes naar je
-/// schijf, en verscheen nergens. Geen fout, geen regel, niets: "waar is de rest?".
-///
-/// Ze kunnen ook echt gespeeld worden: libmpv leest allebei, en het omzetten voor een speaker gaat
-/// via ffmpeg, die ze ook leest. Dat is dezelfde afspraak als voor `.wma` en `.alac`, die hier al
-/// stonden.
-const _audioExt = {
-  '.flac',
-  '.mp3',
-  '.m4a',
-  '.wav',
-  '.ogg',
-  '.opus',
-  '.aac',
-  '.wma',
-  '.alac',
-  '.ape',
-  '.wv',
-};
+/// Stond hier een eigen lijst, en dat was er één van vijf die alle vijf iets anders zeiden. Zie
+/// `audioformaten.dart` voor wat dat kostte.
+final _audioExt = audioExtensies;
 
-String _ext(String p) {
-  final i = p.lastIndexOf('.');
-  return i < 0 ? '' : p.substring(i).toLowerCase();
-}
+String _ext(String p) => extensieVan(p);
 
 String _baseName(String p) {
   final s = p.replaceAll('\\', '/').split('/').last;
@@ -274,7 +255,7 @@ ScanUitslag _scanTags(String root, String? cachePad) {
       }
     }
     gelezen++;
-    final rij = _rijVoorBestand(e, addedMs: addedMs, sizeBytes: sizeBytes);
+    final rij = tagrijVoorBestand(e, addedMs: addedMs, sizeBytes: sizeBytes);
     if (rij != null) out.add(rij);
   }
   _schrijfTagCache(cachePad, out);
@@ -287,12 +268,23 @@ ScanUitslag _scanTags(String root, String? cachePad) {
 /// scan. Twee lezers die uit elkaar lopen is hier bijzonder naar: een nummer dat via de radio
 /// binnenkomt zou dan andere velden krijgen dan datzelfde nummer na een herstart, en dan verspringt
 /// het van album zodra je de app opnieuw opent.
-Map<String, dynamic>? _rijVoorBestand(File e, {required int addedMs, required int sizeBytes}) {
+Map<String, dynamic>? tagrijVoorBestand(File e,
+    {required int addedMs, required int sizeBytes}) {
   // FLAC goes through our own parser first: the package throws on tags it can't parse (a vinyl
   // "A3" track number is enough) and LEAKS THE FILE HANDLE when it does, which would leave that
   // track unmovable and undeletable for the rest of the session. See readTags().
+  //
+  // De kop wordt ook bewaard als er GEEN naam in staat. Een FLAC zonder één tag heeft nog altijd
+  // zijn STREAMINFO, en daar staat de speelduur, de bemonstering en de bitdiepte in — dat zijn
+  // eigenschappen van het geluid, geen tags, en ze zijn er dus altijd. Zie [_kaleRij].
+  var duurMs = 0, hertz = 0, bits = 0;
   if (_ext(e.path) == '.flac') {
     final v = readFlacTags(e);
+    if (v != null) {
+      duurMs = v.duration?.inMilliseconds ?? 0;
+      hertz = v.sampleRate;
+      bits = v.bitsPerSample;
+    }
     if (v != null && (v.title != null || v.artist != null || v.album != null)) {
       return {
         'path': e.path,
@@ -311,6 +303,15 @@ Map<String, dynamic>? _rijVoorBestand(File e, {required int addedMs, required in
         'bitsPerSample': v.bitsPerSample,
       };
     }
+  } else if (_ext(e.path) == '.dsf') {
+    // Een SACD-rip. Geen enkele tagontleder hier kent DSD, dus dit bestand belandt hoe dan ook op
+    // zijn bestandsnaam — maar de duur staat in de kop en hoeft niet 0:00 te blijven.
+    final k = readDsfKop(e);
+    if (k != null) {
+      duurMs = k.duration?.inMilliseconds ?? 0;
+      hertz = k.sampleRate;
+      bits = k.bitsPerSample;
+    }
   }
   // Never hand the package a file it is going to refuse: it opens before it decides, and the
   // refusal keeps the handle. See tagParserWouldClaim().
@@ -324,7 +325,14 @@ Map<String, dynamic>? _rijVoorBestand(File e, {required int addedMs, required in
   // De prijs is dat er af en toe een regel bij komt die "Onbekende artiest" heet en naar zijn
   // bestandsnaam luistert. Dat is een regel die je ziet en kunt weggooien; het alternatief is muziek
   // die je hebt en niet kunt vinden.
-  if (!tagParserWouldClaim(e)) return _kaleRij(e, addedMs: addedMs, sizeBytes: sizeBytes);
+  if (!tagParserWouldClaim(e)) {
+    return _kaleRij(e,
+        addedMs: addedMs,
+        sizeBytes: sizeBytes,
+        durationMs: duurMs,
+        sampleRate: hertz,
+        bitsPerSample: bits);
+  }
   try {
     final m = readMetadata(e, getImage: false);
     return {
@@ -336,19 +344,25 @@ Map<String, dynamic>? _rijVoorBestand(File e, {required int addedMs, required in
       // The generic reader has no track-total, so a non-FLAC file simply doesn't take part in
       // edition splitting — it stays with the plain album, which is where it was anyway.
       'trackTotal': 0,
-      'durationMs': m.duration?.inMilliseconds ?? 0,
+      'durationMs': m.duration?.inMilliseconds ?? duurMs,
       'isFlac': _ext(e.path) == '.flac',
       'year': (m.year != null && m.year!.year > 1000) ? m.year!.year : null,
       'genre': (m.genres.isNotEmpty) ? m.genres.first : null,
       'addedMs': addedMs,
       'sizeBytes': sizeBytes,
-      'sampleRate': m.sampleRate ?? 0,
-      // The generic reader doesn't report bit depth; only the FLAC path above can.
-      'bitsPerSample': 0,
+      'sampleRate': m.sampleRate ?? hertz,
+      // The generic reader doesn't report bit depth. Alleen onze eigen FLAC- en DSD-lezers hierboven
+      // kennen het, en die hebben het al in `bits` gezet als ze iets vonden.
+      'bitsPerSample': bits,
     };
   } catch (_) {
     // Ook hier: een ontleder die struikelt is geen reden om het bestand te laten verdwijnen.
-    return _kaleRij(e, addedMs: addedMs, sizeBytes: sizeBytes);
+    return _kaleRij(e,
+        addedMs: addedMs,
+        sizeBytes: sizeBytes,
+        durationMs: duurMs,
+        sampleRate: hertz,
+        bitsPerSample: bits);
   }
 }
 
@@ -356,21 +370,35 @@ Map<String, dynamic>? _rijVoorBestand(File e, {required int addedMs, required in
 ///
 /// Alles wat er niet in staat blijft leeg in plaats van geraden: een verzonnen albumnaam zou het bij
 /// vreemde buren in het raster zetten, en dan ben je het nóg kwijt.
-Map<String, dynamic> _kaleRij(File e, {required int addedMs, required int sizeBytes}) => {
+///
+/// **Maar de speelduur is geen tag.** Bij een FLAC komt hij uit de STREAMINFO, bij een DSF uit de
+/// fmt-brok — allebei blokken die de decoder nodig heeft om het geluid überhaupt te kunnen afspelen.
+/// Speelduur, bemonstering en bitdiepte staan daar, en die staan er ALTIJD, ook in een rip waar
+/// verder geen letter in geschreven is. Die weggooien leverde de rij op waar de gebruiker naar wees:
+/// 0:00 achter een nummer dat gewoon drie en een halve minuut duurt. En 0:00 is niet alleen lelijk —
+/// `fileOfRecording` gebruikt de duur om twee nummers met dezelfde naam uit elkaar te houden, en
+/// `firstIsBetter` om te kiezen welke versie beter is. Nul is daar niet "onbekend" maar "nul".
+Map<String, dynamic> _kaleRij(File e,
+        {required int addedMs,
+        required int sizeBytes,
+        int durationMs = 0,
+        int sampleRate = 0,
+        int bitsPerSample = 0}) =>
+    {
       'path': e.path,
       'title': _baseName(e.path),
       'artist': 'Onbekende artiest',
       'album': '',
       'trackNo': 0,
       'trackTotal': 0,
-      'durationMs': 0,
+      'durationMs': durationMs,
       'isFlac': _ext(e.path) == '.flac',
       'year': null,
       'genre': null,
       'addedMs': addedMs,
       'sizeBytes': sizeBytes,
-      'sampleRate': 0,
-      'bitsPerSample': 0,
+      'sampleRate': sampleRate,
+      'bitsPerSample': bitsPerSample,
     };
 
 /// Eén bestand lezen, op een andere isolate. Zie [scanTagsInIsolate] voor waarom de closure hier
@@ -391,7 +419,7 @@ Future<Map<String, dynamic>?> leesTagrijInIsolate(String pad) => Isolate.run(() 
         return null;
       }
       if (!_audioExt.contains(_ext(pad))) return null;
-      return _rijVoorBestand(f, addedMs: addedMs, sizeBytes: sizeBytes);
+      return tagrijVoorBestand(f, addedMs: addedMs, sizeBytes: sizeBytes);
     });
 
 /// Run pass 1 on another isolate.

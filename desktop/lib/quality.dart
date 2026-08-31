@@ -2,6 +2,8 @@
 // what they're actually getting. Torrents only expose a name → parsed heuristically;
 // Soulseek files expose real bitrate/duration.
 
+import 'audioformaten.dart';
+
 enum QTier { hires, lossless, lossy, unknown }
 
 class Quality {
@@ -199,8 +201,10 @@ Quality qualityFromFile({
   int? size,
   bool isVbr = false,
 }) {
-  const losslessExt = {'flac', 'alac', 'ape', 'wav', 'wavpack', 'aiff', 'tak', 'tta'};
-  if (isFlac || losslessExt.contains(ext)) {
+  // Uit `audioformaten.dart`, plus één alias: sommige zoekbronnen schrijven "wavpack" voltuit waar
+  // het bestand zelf `.wv` heet. Hier stond een eigen lijstje met precies dát verschil erin — en
+  // daardoor kreeg élke WavPack-rip het etiket "lossy", terwijl er geen bit van af is.
+  if (isFlac || isVerliesvrij(ext) || ext == 'wavpack') {
     var kbps = bitrate ?? 0;
     if (kbps <= 0 && durationSec != null && durationSec > 0 && size != null && size > 0) {
       kbps = (size * 8 / durationSec / 1000).round(); // effective bitrate → 16-bit vs hi-res

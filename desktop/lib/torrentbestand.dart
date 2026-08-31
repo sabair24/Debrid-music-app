@@ -14,6 +14,8 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
+import 'audioformaten.dart';
+
 /// Eén bestand in een torrent.
 class TorrentBestand {
   /// De plaats in de torrent, **vanaf 1 geteld** — dat is de nummering die aria2 gebruikt voor
@@ -37,8 +39,7 @@ class TorrentBestand {
     return i < 0 ? '' : naam.substring(i + 1).toLowerCase();
   }
 
-  bool get isAudio => const {'flac', 'mp3', 'm4a', 'aac', 'ogg', 'opus', 'wav', 'alac', 'ape', 'wv'}
-      .contains(_ext);
+  bool get isAudio => audioSoorten.contains(_ext);
 }
 
 /// Wat er in een torrent zit.
