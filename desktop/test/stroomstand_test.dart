@@ -208,6 +208,72 @@ void main() {
     });
   });
 
+  group('de grens weer uit het adres lezen', () {
+    // Dit is wat het scherm laat zien. Zonder deze weg terug stond er onveranderd "FLAC · 24/96" —
+    // wat het BESTAND is — terwijl de pc 16/44.1 stuurde, en dan is er geen enkele manier om te zien
+    // dat de zuinige stand werkt. Gemeld op 29-08-2026 vanaf 5G: "ik zie niet dat het geconverteerd
+    // wordt."
+    test('heen en terug levert op waar het plafond op gezet is', () {
+      final uit =
+          metStand(_url, stand: Stroomstand.cd, sampleRate: 96000, bits: 24, lossless: true);
+      expect(grensUitUrl(uit), (rate: 44100, bits: 16));
+    });
+
+    test('de middenstand ook', () {
+      final uit =
+          metStand(_url, stand: Stroomstand.hoog, sampleRate: 96000, bits: 24, lossless: true);
+      expect(grensUitUrl(uit), (rate: 48000, bits: 24));
+    });
+
+    test('een adres zonder plafond geeft niets, en dat is het normale geval', () {
+      expect(grensUitUrl(_url), isNull);
+      final onveranderd =
+          metStand(_url, stand: Stroomstand.max, sampleRate: 96000, bits: 24, lossless: true);
+      expect(grensUitUrl(onveranderd), isNull);
+    });
+
+    test('een bestand dat al onder het plafond zit levert ook niets op', () {
+      // `castGrenzen` zegt dan `omzetten: false`, dus er komt geen grens in het adres — en dan hoort
+      // het scherm gewoon het bestand te tonen.
+      final uit =
+          metStand(_url, stand: Stroomstand.cd, sampleRate: 44100, bits: 16, lossless: true);
+      expect(grensUitUrl(uit), isNull);
+    });
+
+    test('rommel in het adres is geen grens', () {
+      for (final u in [
+        'http://x/stream/a.flac?maxRate=',
+        'http://x/stream/a.flac?maxRate=nul',
+        'http://x/stream/a.flac?maxRate=0',
+        'http://x/stream/a.flac?maxRate=-1',
+        'file:///muziek/a.flac',
+        '',
+      ]) {
+        expect(grensUitUrl(u), isNull, reason: u);
+      }
+    });
+
+    test('een grens zonder diepte geeft nul, en dat betekent "onveranderd"', () {
+      // `metStand` laat `maxBits` weg zodra de diepte niet begrensd wordt; het scherm vult dan de
+      // diepte van het bestand in. Nul mag daar dus geen 0-bit gaan tonen.
+      expect(grensUitUrl('http://x/stream/a.flac?maxRate=44100'), (rate: 44100, bits: 0));
+    });
+
+    test('omzettenGevraagd en grensUitUrl zijn het altijd eens', () {
+      // Ze beslissen over hetzelfde: staat er een plafond op de lijn. Lopen ze uiteen, dan wordt de
+      // speler geduldig op een adres dat niet omgezet wordt, of ongeduldig op een adres dat het wel
+      // wordt — en dat laatste is "Er komt geen geluid" op een kerngezonde pc.
+      for (final u in [
+        _url,
+        metStand(_url, stand: Stroomstand.cd, sampleRate: 96000, bits: 24, lossless: true),
+        'http://x/stream/a.flac?maxRate=0',
+        'http://x/stream/a.flac?maxRate=48000&maxBits=24',
+      ]) {
+        expect(omzettenGevraagd(u), grensUitUrl(u) != null, reason: u);
+      }
+    });
+  });
+
   group('welke bestanden lossless heten', () {
     test('de containers die de app zelf kan binnenhalen', () {
       for (final e in ['flac', '.flac', 'FLAC', 'wav', 'aiff', 'ape', 'wv', 'tta']) {
