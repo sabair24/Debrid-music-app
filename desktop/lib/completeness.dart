@@ -223,23 +223,38 @@ AlbumCompleteness matchAlbumTracks(
   // "Easy On Me" én "Easy On Me (With Chris Stapleton)", twee opnames. Gevolg is wel dat drie
   // gedeelde woorden tegen zes gezette woorden op 50% uitkwam, ver onder de vier vijfde.
   //
-  // **De rem is hier niet een lagere drempel maar UNICITEIT.** De gaststaart mag alleen weg als de
-  // kale titel aan béíde kanten precies één keer voorkomt. In het geval van Adele vallen die twee
-  // rijen samen zodra je "(With Chris Stapleton)" wegdenkt — dan is niet te zeggen welke van de
-  // twee het bestand is, en dan gebeurt er niets. Bij Beyoncé is er maar één "Crazy in Love", en
-  // dan is er ook niets te verwarren. De speelduur moet nog steeds kloppen.
+  // **Deze pas loopt maar ÉÉN kant op, en dat is de hele veiligheid ervan.** De gaststaart mag
+  // alleen van de UITGAVE af, nooit van het bestand. De tracklijst van een persing is de autoriteit
+  // over wat er op die plaat staat:
+  //
+  // * noemt de uitgave "Crazy in Love (feat. JAY-Z)" en heet jouw bestand "Crazy In Love", dan héb
+  //   je dat nummer — een ripper heeft de credit gewoon niet overgetypt.
+  // * noemt de uitgave "Easy on Me" en heet jouw bestand "Easy On Me (With Chris Stapleton)", dan
+  //   heb je iets wat die uitgave NIET noemt. Dat is Adele's *30*, waar de solo en het duet twee
+  //   opnames van bijna dezelfde lengte zijn. Het duet op de rij van de albumversie leggen zou het
+  //   ene nummer verbergen en het andere ten onrechte als binnengehaald tellen.
+  //
+  // Die tweede kant is met zoveel woorden een toets in `completeness_test.dart`, en die zakte toen
+  // deze pas nog symmetrisch was. Van buiten zijn de twee gevallen niet te onderscheiden, dus er
+  // valt niets slims te bedenken: één richting is het antwoord.
+  //
+  // Daarnaast UNICITEIT: de kale titel moet op de uitgave precies één rij opleveren, en er mag
+  // precies één vrij bestand op passen. Anders is het een gok tussen twee kandidaten. En de
+  // speelduur moet nog steeds kloppen.
   for (var i = 0; i < official.length; i++) {
     if (owned.containsKey(i)) continue;
+    final vol = normKey(official[i].title);
     final kaal = normKey(zonderFeat(official[i].title));
-    if (kaal.isEmpty) continue;
-    // Bewust symmetrisch: de gaststaart kan net zo goed in het BESTAND staan en niet op de uitgave.
-    // Een titel die aan allebei de kanten al gelijk was is hierboven al geclaimd, dus deze pas kan
-    // alleen nog paren maken die de exacte vergelijking niet kon zien.
+    // Noemt deze rij helemaal geen gast, dan valt er niets weg te denken en heeft de exacte pas
+    // hierboven het laatste woord al gehad.
+    if (kaal.isEmpty || kaal == vol) continue;
     if (official.where((o) => normKey(zonderFeat(o.title)) == kaal).length != 1) continue;
     final passend = [
       for (final t in tracks)
         if (!claimed.contains(t.path) &&
-            normKey(zonderFeat(t.title)) == kaal &&
+            // `== kaal` en niet `zonderFeat(t.title) == kaal`: het bestand moet zélf kaal zijn.
+            // Draagt het een eigen credit, dan is het misschien een andere opname — zie hierboven.
+            normKey(t.title) == kaal &&
             durationsAgree(official[i].seconds, t.duration?.inSeconds))
           t,
     ];

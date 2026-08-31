@@ -118,12 +118,28 @@ void main() {
     });
   });
 
-  group('het werkt beide kanten op', () {
-    test('de gast staat in het BESTAND en niet op de uitgave', () {
+  group('maar het loopt maar één kant op', () {
+    test('een credit die alleen in het BESTAND staat wordt niet weggedacht', () {
+      // Dit is de andere kant, en die is niet veilig. Noemt de uitgave "Easy on Me" en heet jouw
+      // bestand "Easy On Me (With Chris Stapleton)", dan heb je iets wat die uitgave NIET noemt —
+      // Adele's 30 heeft de solo en het duet allebei, met bijna dezelfde lengte. Het duet op de rij
+      // van de albumversie leggen zou het ene verbergen en het andere ten onrechte meetellen.
+      //
+      // Dit stond al als toets in completeness_test.dart, en die zakte toen deze pas nog beide
+      // kanten op liep. Van buiten zijn de twee gevallen niet te onderscheiden, dus er valt niets
+      // slims te bedenken: de tracklijst van de persing is de autoriteit, en dus mag de credit
+      // alleen daarvan af.
+      final lijst = [uitgave('Easy on Me', seconden: 224)];
+      final c = matchAlbumTracks(
+          lijst, [bestand('Easy On Me (With Chris Stapleton)', seconden: 224)], 'Adele');
+      expect(gevonden(c), isEmpty);
+    });
+
+    test('een bestand met een eigen credit vult ook geen kale uitgaverij', () {
       final lijst = [uitgave('Telephone', seconden: 221)];
       final c = matchAlbumTracks(
           lijst, [bestand('Telephone (feat. Beyoncé)', seconden: 221)], 'Lady Gaga');
-      expect(gevonden(c), {'Telephone'});
+      expect(gevonden(c), isEmpty);
     });
 
     test('een versiemerk blijft wél tellen', () {
