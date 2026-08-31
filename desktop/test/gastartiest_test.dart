@@ -20,8 +20,8 @@ import 'package:debridmusic/editions.dart';
 import 'package:debridmusic/models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-ChoiceTrack uitgave(String titel, {int? seconden, String positie = ''}) =>
-    ChoiceTrack(positie, titel, seconden);
+ChoiceTrack uitgave(String titel, {int? seconden, String positie = '', String credit = ''}) =>
+    ChoiceTrack(positie, titel, seconden, artist: credit);
 
 Track bestand(String titel, {int? seconden, String? artiest, String? pad}) => Track(
       path: pad ?? 'C:\\Muziek\\x\\${titel.replaceAll(RegExp(r'[^A-Za-z0-9 ]'), '')}.flac',
@@ -118,6 +118,57 @@ void main() {
     });
   });
 
+  group('MusicBrainz zet de gast NAAST de titel', () {
+    // Dit is de vorm waarin de klacht op de telefoon terugkwam. MusicBrainz noemt de rij gewoon
+    // "Crazy in Love" en zet "Beyoncé feat. JAY-Z" in de artiestcredit ernaast; de rip schreef hem
+    // juist in de titel. Op de titel alleen is dat niet te herkennen — mét de credit wel.
+    test('een bestand dat de gast in de titel draagt vindt zijn plaats', () {
+      final lijst = [
+        uitgave('Crazy in Love', seconden: 236, credit: 'Beyoncé feat. JAY-Z'),
+        uitgave('Baby Boy', seconden: 244, credit: 'Beyoncé feat. Sean Paul'),
+      ];
+      final c = matchAlbumTracks(
+          lijst,
+          [
+            bestand('Crazy in Love (feat. Jay-Z)', seconden: 235),
+            bestand('Baby Boy (feat. Sean Paul)', seconden: 244),
+          ],
+          'Beyoncé');
+      expect(gevonden(c), {'Crazy in Love', 'Baby Boy'});
+      expect(weesjes(c), isEmpty);
+    });
+
+    test('ook als de gast in het ARTIEST-veld staat en niet in de titel', () {
+      final lijst = [uitgave('Crazy in Love', seconden: 236, credit: 'Beyoncé feat. JAY-Z')];
+      final c = matchAlbumTracks(
+          lijst, [bestand('Crazy in Love', seconden: 236, artiest: 'Beyoncé feat. Jay-Z')], 'Beyoncé');
+      expect(gevonden(c), {'Crazy in Love'});
+    });
+
+    test('maar niet als de uitgave die gast NIET noemt', () {
+      // Adele's 30, met de credit erbij: de rij "Easy on Me" staat op naam van Adele alleen. Het
+      // duet is dus een andere opname, en dat is nu een feit in plaats van een gok.
+      final lijst = [uitgave('Easy on Me', seconden: 224, credit: 'Adele')];
+      final c = matchAlbumTracks(
+          lijst, [bestand('Easy On Me (With Chris Stapleton)', seconden: 224)], 'Adele');
+      expect(gevonden(c), isEmpty);
+    });
+
+    test('en niet als de uitgave maar één van de twee gasten noemt', () {
+      final lijst = [uitgave('Song', seconden: 200, credit: 'X feat. A')];
+      final c = matchAlbumTracks(lijst, [bestand('Song (feat. A & B)', seconden: 200)], 'X');
+      expect(gevonden(c), isEmpty);
+    });
+
+    test('zonder credit gebeurt er niets, precies zoals voorheen', () {
+      // Discogs levert dit veld hier niet. Geen bewijs, dus geen treffer.
+      final lijst = [uitgave('Crazy in Love', seconden: 236)];
+      final c = matchAlbumTracks(
+          lijst, [bestand('Crazy in Love (feat. Jay-Z)', seconden: 236)], 'Beyoncé');
+      expect(gevonden(c), isEmpty);
+    });
+  });
+
   group('maar het loopt maar één kant op', () {
     test('een credit die alleen in het BESTAND staat wordt niet weggedacht', () {
       // Dit is de andere kant, en die is niet veilig. Noemt de uitgave "Easy on Me" en heet jouw
@@ -149,6 +200,41 @@ void main() {
       final c = matchAlbumTracks(
           lijst, [bestand('Crazy In Love (Radio Edit)', seconden: 236)], 'Beyoncé');
       expect(gevonden(c), isEmpty);
+    });
+  });
+
+  group('de app zegt waarom een bestand geen plaats kreeg', () {
+    // "Niet op deze uitgave" is een uitkomst, geen uitleg. Het heeft drie ronden raden op
+    // schermafdrukken gekost om erachter te komen dat de nummerrij de "(feat. …)" wegtekent en dat
+    // daar het verschil zat. Eén regel onder de rij was elke keer genoeg geweest.
+    test('een andere lengte wordt met beide tijden benoemd', () {
+      final r = waaromGeenPlaats(
+          [uitgave('Crazy in Love', seconden: 236)], bestand('Crazy in Love', seconden: 400));
+      expect(r, contains('3:56'));
+      expect(r, contains('6:40'));
+    });
+
+    test('een titel die de uitgave niet kent', () {
+      final r = waaromGeenPlaats([uitgave('Halo', seconden: 261)], bestand('Iets Anders'));
+      expect(r, contains('Iets Anders'));
+    });
+
+    test('de RUWE titel komt erin, want de rij tekent de gast weg', () {
+      // Dit is de regel die het hele misverstand had voorkomen: op het scherm stond "Crazy in Love",
+      // in het bestand stond "Crazy in Love (feat. Jay-Z)".
+      final r = waaromGeenPlaats([uitgave('Crazy in Love', seconden: 236)],
+          bestand('Crazy in Love (feat. Jay-Z)', seconden: 236));
+      expect(r, contains('feat. Jay-Z'));
+    });
+
+    test('een nummer dat twee keer op de uitgave staat', () {
+      final r = waaromGeenPlaats(
+          [uitgave('Halo', seconden: 261), uitgave('Halo', seconden: 261)], bestand('Halo'));
+      expect(r, contains('2 keer'));
+    });
+
+    test('zonder tracklijst wordt er niets beweerd', () {
+      expect(waaromGeenPlaats(const [], bestand('Halo')), contains('geen tracklijst'));
     });
   });
 

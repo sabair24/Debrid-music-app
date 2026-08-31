@@ -5207,7 +5207,13 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                               // An extra shows no number at all — not even its own tag's. See
                               // AlbumSlot.label.
                               label: s.index < 0 ? '' : s.label,
-                              uitgaveSeconden: s.andereLengte ? s.official?.seconds : null);
+                              uitgaveSeconden: s.andereLengte ? s.official?.seconds : null,
+                              // Waaróm dit bestand geen plaats kreeg. "Niet op deze uitgave" is een
+                              // uitkomst en geen uitleg; het heeft drie ronden geraden op
+                              // schermafdrukken gekost om erachter te komen dat de nummerrij de
+                              // "(feat. …)" wegtekent en dat dáár het verschil zat. Zie
+                              // [waaromGeenPlaats].
+                              reden: s.index < 0 ? waaromGeenPlaats(_official, t) : null);
 
                       // A double album says which disc you are looking at, and files the pressing
                       // doesn't name say so — left unlabelled the latter read as part of the record,
@@ -5998,6 +6004,10 @@ class TrackRow extends StatefulWidget {
   /// bestand onder "Niet op deze uitgave", wat een veel grotere leugen is.
   final int? uitgaveSeconden;
 
+  /// Waarom dit bestand onder "Niet op deze uitgave" staat, in gewone taal. Null voor elke rij die
+  /// wél een plaats op de uitgave heeft.
+  final String? reden;
+
   const TrackRow(
       {super.key,
       required this.track,
@@ -6005,7 +6015,8 @@ class TrackRow extends StatefulWidget {
       required this.queue,
       this.albumCover,
       this.label,
-      this.uitgaveSeconden});
+      this.uitgaveSeconden,
+      this.reden});
   @override
   State<TrackRow> createState() => _TrackRowState();
 }
@@ -6090,20 +6101,29 @@ class _TrackRowState extends State<TrackRow> {
                       maxLines: titelRegels(context),
                       overflow: TextOverflow.ellipsis,
                       style: isCurrent ? kTekstNormaal.copyWith(color: _accent2) : kTekstNormaal);
-                  if (guests.isEmpty) return title;
+                  // De reden staat vóór de gastnamen: die eerste is waarom je hier kijkt.
+                  final reden = widget.reden == null
+                      ? null
+                      : Text(widget.reden!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: kTekstKlein.copyWith(color: const Color(0xFFE0A33A)));
+                  if (guests.isEmpty && reden == null) return title;
                   return Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       title,
+                      if (reden != null) reden,
                       // Only the guests — the album already belongs to the main artist. Out of the
                       // highlight's path on a television for the same reason as the track lists:
                       // this sits inside a row that is itself the thing you want to press.
-                      _maybeFocusable(
-                        // 11,5 werd 12: het verschil met de 12 een regel hoger was met het oog niet
-                        // te zien, en wat je wél zag was dat één regel vier stemmen had.
-                        ArtistNames(names: guests, style: kTekstKlein),
-                      ),
+                      if (guests.isNotEmpty)
+                        _maybeFocusable(
+                          // 11,5 werd 12: het verschil met de 12 een regel hoger was met het oog
+                          // niet te zien, en wat je wél zag was dat één regel vier stemmen had.
+                          ArtistNames(names: guests, style: kTekstKlein),
+                        ),
                     ],
                   );
                 }),

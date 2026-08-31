@@ -113,7 +113,23 @@ class ChoiceTrack {
 
   /// 1-based. A double album numbers from 1 on each disc, so the position alone is ambiguous.
   final int disc;
-  const ChoiceTrack(this.position, this.title, this.seconds, {this.disc = 1});
+
+  /// Wie de UITGAVE als artiest van dit nummer opgeeft — "Beyoncé feat. JAY-Z". Leeg als de bron het
+  /// niet zegt.
+  ///
+  /// **Waarom dit erbij moest.** MusicBrainz zet een gastartiest in dit veld en niet in de titel:
+  /// de rij heet "Crazy in Love" en de credit staat ernaast. Een rip schrijft hem juist wél in de
+  /// titel. Op de titel alleen is dat bestand dus niet te herkennen als datzelfde nummer — en het
+  /// belandde onder "Niet op deze uitgave" terwijl het een van de bekendste nummers van de plaat is.
+  ///
+  /// En het is precies het veld dat dat geval scheidt van het geval dat er NIET op lijkt: heeft de
+  /// uitgave "Easy on Me" met alleen Adele erbij, en heet jouw bestand "Easy On Me (With Chris
+  /// Stapleton)", dan heb je een andere opname. Zonder dit veld zijn die twee van buiten niet uit
+  /// elkaar te houden; mét is het een feit in plaats van een gok. Zie `matchAlbumTracks`.
+  final String artist;
+
+  const ChoiceTrack(this.position, this.title, this.seconds,
+      {this.disc = 1, this.artist = ''});
 }
 
 class ReleaseChoice {
