@@ -9678,10 +9678,33 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                 ),
               ),
             if (t != null) _echtheidMerk(t),
-            if (t != null && t.sizeBytes > 0) _qualityBadge(_trackQuality(t)),
+            // Wat je NU hoort, en niet wat er op de schijf van de pc staat. Zie [_stroomKwaliteit]:
+            // onderweg stuurt je pc een kleinere versie, en zolang de badge het bestand toonde was
+            // er geen enkele manier om te zien dát dat gebeurde.
+            if (t != null && t.sizeBytes > 0) _qualityBadge(_stroomKwaliteit(p, t)),
           ],
         ),
       ),
+      // Twee regels die hier ontbraken, en allebei om dezelfde reden: dit scherm dekt op een
+      // telefoon de spelerbalk af, en die balk was de ENIGE plek waar ze stonden. Wie hier kijkt
+      // omdat er geen geluid komt, kreeg dus niets te zien — geen fout, geen uitleg, alleen 0:00.
+      if (p.speelFout != null) ...[
+        const SizedBox(height: kRuimte8),
+        SizedBox(
+          width: naast ? kSpeelKolom : dialogWidth(context, 540),
+          child: Text(p.speelFout!,
+              textAlign: naast ? TextAlign.start : TextAlign.center,
+              style: const TextStyle(color: Color(0xFFE0A33A), fontSize: 12.5)),
+        ),
+      ] else if (p.stroomGrens != null && t != null) ...[
+        const SizedBox(height: kRuimte8),
+        SizedBox(
+          width: naast ? kSpeelKolom : dialogWidth(context, 540),
+          child: Text(_stroomUitleg(p, t),
+              textAlign: naast ? TextAlign.start : TextAlign.center,
+              style: const TextStyle(color: kUitgezet, fontSize: 11.5)),
+        ),
+      ],
       SizedBox(height: isTv ? 14 : 26),
       SizedBox(
         width: naast ? kSpeelKolom : dialogWidth(context, 540),
@@ -12326,6 +12349,40 @@ Widget _echtheidMerk(Track? t) {
 /// Het label komt uit de bitrate -- "FLAC · 2788k" zegt meer dan "FLAC" -- maar of het hi-res IS wordt
 /// bepaald door de sample rate en de bitdiepte, want die staan in het bestand. De bitrate is daar maar
 /// een benadering van: een druk gemasterd nummer van 44,1 kHz haalt ook 1500 kbit/s.
+/// De kwaliteit zoals je hem NU hoort, en niet zoals het bestand op de pc is.
+///
+/// **Waarom dat verschil er toe doet.** Onderweg zet je pc de muziek eerst om — een 24/96 gaat als
+/// 16/44.1 de deur uit, wat ruim de helft aan mobiele data scheelt. De badge las alleen het bestand,
+/// dus daar bleef "FLAC · 24/96" staan hoe zuinig de app ook deed. Gemeld op 29-08-2026 vanaf 5G:
+/// "ik zie niet dat het geconverteerd wordt."
+///
+/// Nog altijd goud waar het goud verdient: 24/48 over de lijn is nog steeds hi-res.
+Quality _stroomKwaliteit(PlayerStore p, Track t) {
+  final g = p.stroomGrens;
+  if (g == null) return _trackQuality(t);
+  // Een grens zonder diepte laat de diepte van het bestand staan; zo schrijft `metStand` hem ook.
+  final bits = g.bits > 0 ? g.bits : t.bitsPerSample;
+  return Quality(
+    'FLAC · ${depthRateLabel(sampleRate: g.rate, bitsPerSample: bits)}',
+    isHiRes(sampleRate: g.rate, bitsPerSample: bits) ? QTier.hires : QTier.lossless,
+  );
+}
+
+/// Eén regel die zegt wat er zojuist gebeurd is met je muziek, en waarom.
+String _stroomUitleg(PlayerStore p, Track t) {
+  final g = p.stroomGrens;
+  if (g == null) return '';
+  final bits = g.bits > 0 ? g.bits : t.bitsPerSample;
+  final bron = t.sampleRate > 0 && t.bitsPerSample > 0
+      ? depthRateLabel(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample)
+      : '';
+  final naar = depthRateLabel(sampleRate: g.rate, bitsPerSample: bits);
+  return bron.isEmpty
+      ? 'Onderweg: je pc stuurt $naar om je databundel te sparen. Nog altijd lossless.'
+      : 'Onderweg: je pc stuurt $naar in plaats van $bron om je databundel te sparen. '
+          'Nog altijd lossless.';
+}
+
 Quality _trackQuality(Track t) {
   final basis = qualityFromFile(
     name: t.title,

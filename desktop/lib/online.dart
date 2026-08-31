@@ -2750,8 +2750,11 @@ class DownloadManager extends ChangeNotifier {
         // uit een zwerm van één seeder. [lokaalVoor] weet dat verschil al, dus die beslist.
         final magHergebruiken =
             klaar != null && fileId != null && (!klaar.lokaal || online.lokaalVoor(result));
+        // Zonder `!`: `magHergebruiken` is een final bool die met `klaar != null` begint, en Dart
+        // leidt daaruit af dat `klaar` hier niet null kan zijn. Een uitroepteken dat niets doet is
+        // hier een waarschuwing, en waarschuwingen breken de bouw af.
         final gekozen =
-            !magHergebruiken ? null : klaar!.files.where((f) => f.id == fileId).toList();
+            !magHergebruiken ? null : klaar.files.where((f) => f.id == fileId).toList();
         final (torrent, files) = gekozen != null && gekozen.isNotEmpty
             ? (klaar!, gekozen)
             : await online.resolveForDownload(result, fileId, onProgress: (p, s) {

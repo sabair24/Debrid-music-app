@@ -104,7 +104,25 @@ const _grensSleutel = 'maxRate';
 /// Ook het antwoord op "valt er voor het volgende nummer iets vooruit klaar te zetten": staat er
 /// geen grens op, dan serveert de pc gewoon het origineel en is een `HEAD` vooruit verkeer voor
 /// niets.
-bool omzettenGevraagd(String url) => url.contains('$_grensSleutel=');
+bool omzettenGevraagd(String url) => grensUitUrl(url) != null;
+
+/// Welke grens er in dit adres staat, of null als er geen op staat.
+///
+/// **Het tegendeel van [metStand], en het bestond niet.** De grens werd in de URL geschreven en
+/// daarna las niemand hem meer terug: de speler wist alleen DÁT er omgezet werd (`maxRate=` staat
+/// erin), niet waarnaar. Op het scherm stond daardoor onveranderd wat het BESTAND is — "FLAC · 24/96"
+/// — terwijl je pc 16/44.1 stuurde. Gemeld op 29-08-2026 vanaf 5G: "ik zie niet dat het
+/// geconverteerd wordt."
+///
+/// `bits: 0` betekent "de diepte is niet begrensd", precies zoals [metStand] hem dan ook weglaat.
+({int rate, int bits})? grensUitUrl(String url) {
+  final u = Uri.tryParse(url);
+  if (u == null) return null;
+  final rate = int.tryParse(u.queryParameters[_grensSleutel] ?? '');
+  if (rate == null || rate <= 0) return null;
+  final bits = int.tryParse(u.queryParameters['maxBits'] ?? '') ?? 0;
+  return (rate: rate, bits: bits < 0 ? 0 : bits);
+}
 
 String metStand(
   String url, {

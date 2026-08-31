@@ -5,7 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'artwork.dart' show kleurBuitenDeTekendraad;
-import 'lan/stroomstand.dart' show omzettenGevraagd;
+import 'lan/stroomstand.dart' show grensUitUrl;
 import 'models.dart';
 import 'paths.dart';
 import 'schudvolgorde.dart';
@@ -707,6 +707,13 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// Staat er een plafond op de lijn, dan zet de pc eerst om en staat de teller even op 0:00.
   bool _omzetten = false;
 
+  /// Wat er WERKELIJK over de lijn komt, of null als het bestand onveranderd verstuurd wordt.
+  ///
+  /// Voor het scherm. Zonder dit staat er op "Nu speelt" onveranderd wat het bestand is — "FLAC ·
+  /// 24/96" — terwijl je pc onderweg 16/44.1 stuurt, en dan is er geen enkele manier om te zien dat
+  /// de zuinige stand werkt. Zie `grensUitUrl`.
+  ({int rate, int bits})? stroomGrens;
+
   Stilstandwacht _wacht = Stilstandwacht();
 
   /// De bron zoals libmpv hem krijgt, plus het geduld dat daarbij hoort.
@@ -717,7 +724,8 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// geluid" over zou roepen. Vandaar vijfentwintig zodra er een plafond in de URL staat.
   String _bron(String path) {
     final url = mediaResolver(path);
-    _omzetten = omzettenGevraagd(url);
+    stroomGrens = grensUitUrl(url);
+    _omzetten = stroomGrens != null;
     _wacht = Stilstandwacht(
         geduld: Duration(seconds: _omzetten ? 25 : 10));
     return url;
@@ -1374,7 +1382,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     final volgende = _index + 1;
     if (volgende < 0 || volgende >= _order.length) return;
     final url = mediaResolver(_order[volgende].path);
-    if (!omzettenGevraagd(url)) return;
+    if (grensUitUrl(url) == null) return;
     onKlaarzetten!(url);
   }
 
