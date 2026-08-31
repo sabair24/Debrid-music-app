@@ -183,6 +183,16 @@ void main() {
     // Drie van de zeven nummers kwamen binnen; de rest meldde 0% over een torrent die gewoon liep.
     // Twee toevoegingen zijn niet genoeg om dit te zien -- de eerste gaat altijd goed -- dus deze
     // test kiest er drie achter elkaar bij.
+    //
+    // **WAT DEZE TEST NIET DOET, en dat is met opzet opgeschreven.** Hij REPRODUCEERT de fout niet.
+    // Met de reparatie uitgezet blijft hij groen, want op een torrent die stilstaat -- geen peers,
+    // geen data -- geeft `getOption` wél netjes de bijgewerkte selectie terug. Het scheeflopen is
+    // alleen gezien op een taak die op dat moment aan het downloaden was, en zo'n zwerm valt hier
+    // niet na te bouwen.
+    //
+    // Wat hij dus wel is: een grendel op het gedrag dat we willen -- wat erbij gekozen wordt blijft
+    // erbij -- zodat een herschrijving van [Aria2.kiesErbij] die de vereniging vergeet, hier alsnog
+    // omvalt. Het bewijs dat de fout wég is, komt van de meting op de echte plaat, niet van hier.
     if (motor.pad == null) {
       markTestSkipped('aria2 staat niet op deze machine');
       return;
