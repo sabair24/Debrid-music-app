@@ -86,7 +86,14 @@ class MbTrack {
   /// 1-based. A double album numbers from 1 again on the second disc, so a position on its own
   /// does not say where a track sits on the record.
   final int disc;
-  const MbTrack(this.position, this.title, this.ms, {this.disc = 1});
+
+  /// De artiestcredit van DIT nummer, zoals de uitgave hem schrijft: "Beyonce feat. JAY-Z".
+  ///
+  /// MusicBrainz zet een gastartiest hier en niet in de titel. Zonder dit veld is een bestand dat
+  /// hem juist wel in de titel draagt niet te herkennen als hetzelfde nummer. Zie [ChoiceTrack.artist].
+  final String artist;
+
+  const MbTrack(this.position, this.title, this.ms, {this.disc = 1, this.artist = ''});
 
   int? get seconds => ms == null ? null : (ms! / 1000).round();
 }
@@ -144,6 +151,30 @@ class MbRelease {
         if (year != null) '$year',
       ].join(' · ');
 
+  /// De artiestcredit uit een MusicBrainz-object, of null als er geen staat.
+  ///
+  /// Dezelfde vorm die deze klasse al voor de UITGAVE gebruikt, letterlijk: een lijst van delen met
+  /// `name` (of `artist.name`) plus een `joinphrase` die "feat. " of " & " kan zijn. Die verbindings-
+  /// woorden horen erbij -- ze maken van "Beyonce" en "JAY-Z" de credit "Beyonce feat. JAY-Z".
+  ///
+  /// Op een nummer staat dit veld alleen als de aanvraag `inc=artist-credits` meestuurt; dat doet
+  /// [tracklistFor] al. Staat het er niet, dan komt er null uit en gedraagt alles zich als voorheen.
+  static String? _credit(dynamic j) {
+    if (j is! Map) return null;
+    final credits = j['artist-credit'];
+    if (credits is! List || credits.isEmpty) return null;
+    final uit = StringBuffer();
+    for (final c in credits) {
+      if (c is! Map) continue;
+      final naam = (c['name'] ?? (c['artist'] is Map ? c['artist']['name'] : null) ?? '').toString();
+      if (naam.isEmpty) continue;
+      uit.write(naam);
+      uit.write((c['joinphrase'] ?? '').toString());
+    }
+    final s = uit.toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
   static MbRelease from(Map<String, dynamic> j) {
     final media = (j['media'] as List<dynamic>? ?? const []);
     final formats = <String>[];
@@ -164,6 +195,7 @@ class MbRelease {
           (t['title'] ?? '').toString(),
           (t['length'] as num?)?.toInt(),
           disc: disc < 1 ? 1 : disc,
+          artist: _credit(t) ?? _credit(t['recording']) ?? '',
         ));
       }
     }
@@ -1016,7 +1048,8 @@ class MusicBrainzService {
     final full = r.tracks.isNotEmpty ? r : await release(r.mbid);
     return [
       for (final t in (full?.tracks ?? const <MbTrack>[]))
-        if (t.title.isNotEmpty) ChoiceTrack(t.position, t.title, t.seconds, disc: t.disc)
+        if (t.title.isNotEmpty)
+          ChoiceTrack(t.position, t.title, t.seconds, disc: t.disc, artist: t.artist)
     ];
   }
 

@@ -263,6 +263,40 @@ AlbumCompleteness matchAlbumTracks(
     claimed.add(passend.single.path);
   }
 
+  // En de andere kant: de gast staat in het BESTAND en de uitgave zet hem ergens anders neer.
+  //
+  // **Waarom dit niet zomaar mag, en hier wél.** Hierboven staat waarom de gaststaart nooit van het
+  // bestand af mag op de titel alleen: dan valt Adele's duet op de rij van de albumversie. Maar
+  // MusicBrainz zet een gast helemaal niet in de titel — daar heet de rij gewoon "Crazy in Love" en
+  // staat "Beyoncé feat. JAY-Z" in de artiestcredit ernaast. Een rip schrijft hem juist wél in de
+  // titel. Op de titel alleen zijn die twee gevallen niet te scheiden.
+  //
+  // Met de credit erbij wél, en dan is het een feit in plaats van een gok: de uitgave moet die gast
+  // ZELF noemen. Bij Beyoncé staat JAY-Z in de credit van dat nummer; bij Adele staat er alleen
+  // "Adele" en komt Chris Stapleton er niet in voor. Noemt de bron geen credit — Discogs levert hem
+  // hier niet — dan is er geen bewijs en gebeurt er niets, precies zoals voorheen.
+  for (var i = 0; i < official.length; i++) {
+    if (owned.containsKey(i)) continue;
+    final o = official[i];
+    if (o.artist.trim().isEmpty) continue;
+    final rijTitel = normKey(o.title);
+    // De uitgave moet zelf een KALE titel hebben; draagt zij de credit ook, dan is de pas hierboven
+    // aan zet en heeft die het al bekeken.
+    if (rijTitel != normKey(zonderFeat(o.title))) continue;
+    if (official.where((x) => normKey(x.title) == rijTitel).length != 1) continue;
+    final passend = [
+      for (final t in tracks)
+        if (!claimed.contains(t.path) &&
+            normKey(zonderFeat(t.title)) == rijTitel &&
+            _uitgaveNoemtDeGasten(o.artist, t) &&
+            durationsAgree(o.seconds, t.duration?.inSeconds))
+          t,
+    ];
+    if (passend.length != 1) continue;
+    owned[i] = passend.single;
+    claimed.add(passend.single.path);
+  }
+
   // Very last: an EXACT title match that only the running time rejected.
   //
   // Measured on Het Beste Van Petra. The file is `02 - Laat Je Gaan.flac`, in that album's own
@@ -303,6 +337,77 @@ AlbumCompleteness matchAlbumTracks(
     ],
     source: source,
   );
+}
+
+/// Waarom dit bestand geen plaats op de uitgave kreeg, in gewone taal.
+///
+/// **Waarvoor dit bestaat.** "Niet op deze uitgave" is een uitkomst, geen uitleg. Op 31-08-2026
+/// stonden "Crazy in Love" en "Baby Boy" eronder — twee van de bekendste nummers van die plaat — en
+/// er stond nergens waaróm. Het heeft drie ronden en drie uitgaven gekost om dat uit te zoeken, en
+/// elke ronde begon met raden op een schermafdruk. Eén regel onder de rij was elke keer genoeg
+/// geweest.
+///
+/// Het toont ook de RUWE titel als die anders is dan wat de rij laat zien: de nummerrij haalt de
+/// "(feat. …)" er met opzet af om hem netjes te tekenen, en juist dat verschil was hier het hele
+/// verhaal. Wat je ziet en wat er in het bestand staat mogen niet ongemerkt uit elkaar lopen.
+String waaromGeenPlaats(List<ChoiceTrack> official, Track t) {
+  if (official.isEmpty) return 'er is geen tracklijst opgehaald';
+  final mijn = normKey(t.title);
+  final mijnKaal = normKey(zonderFeat(t.title));
+  final duur = t.duration?.inSeconds ?? 0;
+
+  String tijd(int s) => '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
+
+  // Zelfde titel, andere lengte: dan heb je het nummer wel maar een andere snit. Het meest
+  // voorkomende geval, en het enige waar een getal het antwoord ÍS.
+  for (final o in official) {
+    if (normKey(o.title) != mijn) continue;
+    final os = o.seconds ?? 0;
+    if (os > 0 && duur > 0 && (os - duur).abs() > _slack) {
+      return 'de uitgave geeft ${tijd(os)} op en dit bestand duurt ${tijd(duur)}';
+    }
+  }
+  final gelijk = official.where((o) => normKey(zonderFeat(o.title)) == mijnKaal).toList();
+  if (gelijk.length > 1) {
+    return 'de uitgave noemt dit nummer ${gelijk.length} keer — niet te zeggen welke dit is';
+  }
+  if (gelijk.length == 1) {
+    final o = gelijk.single;
+    final gasten = splitFeatured(t.artist, t.title).featured;
+    if (gasten.isNotEmpty && normKey(o.title) != mijn) {
+      return o.artist.trim().isEmpty
+          ? 'jouw bestand heet "${t.title}"; de uitgave noemt "${o.title}" en zegt niet wie er '
+              'meespeelt'
+          : 'jouw bestand heet "${t.title}"; de uitgave noemt "${o.title}" met ${o.artist}';
+    }
+    return 'jouw bestand heet "${t.title}", de uitgave noemt "${o.title}"';
+  }
+  return 'de uitgave noemt geen nummer dat "${t.title}" heet';
+}
+
+/// Noemt de artiestcredit van de uitgave élke gast die dit bestand noemt?
+///
+/// Alle gasten, niet één ervan: heet jouw bestand "Song (feat. A & B)" en zegt de uitgave alleen
+/// "X feat. A", dan is dat een andere opname en geen slordige tag. En het moet er minstens één zijn,
+/// anders zou een bestand zonder gast langs deze weg binnenkomen — daar is de exacte vergelijking
+/// voor.
+bool _uitgaveNoemtDeGasten(String uitgaveArtiest, Track t) {
+  final gasten = splitFeatured(t.artist, t.title).featured;
+  if (gasten.isEmpty) return false;
+  final genoemd = splitFeatured(uitgaveArtiest, '').featured.map(artistKey).toSet();
+  // Ook de hele credit als losse WOORDEN, want een bron kan "Beyoncé & JAY-Z" schrijven in plaats
+  // van "feat." — dan haalt `splitFeatured` er niets uit terwijl de naam er wel degelijk staat.
+  //
+  // Woorden en geen tekstzoektocht: `contains` zou "Sean" laten passen op een credit waar "seance"
+  // in staat, en één valse treffer hier legt twee opnames op dezelfde rij.
+  final woorden = normKey(uitgaveArtiest).split(' ').where((w) => w.isNotEmpty).toSet();
+  for (final g in gasten) {
+    if (genoemd.contains(artistKey(g))) continue;
+    final delen = normKey(g).split(' ').where((w) => w.isNotEmpty).toList();
+    if (delen.isNotEmpty && delen.every(woorden.contains)) continue;
+    return false;
+  }
+  return true;
 }
 
 /// Seconds two timings may differ and still be the same recording. Matches [fileOffersTitle].
