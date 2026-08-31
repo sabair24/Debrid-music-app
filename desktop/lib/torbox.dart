@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'audioformaten.dart';
 import 'json_body.dart';
 
 /// One torrent hit (from a search source), reused through the TorBox resolve flow.
@@ -84,7 +85,7 @@ class TbFile {
 
   bool get isAudio =>
       (mimeType?.startsWith('audio/') ?? false) ||
-      const {'flac', 'mp3', 'm4a', 'aac', 'ogg', 'opus', 'wav', 'alac', 'ape', 'wv'}.contains(_ext);
+      audioSoorten.contains(_ext);
   bool get isFlac => (mimeType?.contains('flac') ?? false) || name.toLowerCase().endsWith('.flac');
 
   /// Het blad naast een albumbestand: waar begint welk nummer. Zie `cue_knippen.dart`.

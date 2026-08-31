@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
+import 'audioformaten.dart';
 import 'paths.dart';
 import 'warm_log.dart';
 
@@ -85,7 +86,7 @@ class SoulseekFile {
   }
 
   bool get isFlac => ext == 'flac';
-  bool get isAudio => const {'flac', 'mp3', 'm4a', 'ogg', 'opus', 'wav', 'aac', 'alac', 'ape'}.contains(ext);
+  bool get isAudio => audioSoorten.contains(ext);
   /// Everything a download needs to be picked up again after a restart — including the quality
   /// fields, since those are what decide which candidate the race prefers.
   Map<String, dynamic> toJson() => {

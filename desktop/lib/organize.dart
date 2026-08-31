@@ -4,6 +4,7 @@ import 'dart:isolate';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 
+import 'audioformaten.dart';
 import 'editions.dart';
 import 'flac_tags.dart';
 import 'mp3_tags.dart';
@@ -635,10 +636,15 @@ String opnameSleutel(String artist, String title) {
 /// copy the app could never label. This ranking still matters for what is ALREADY on disk, which is
 /// what the duplicate sweep compares.
 int formatRank(String path) {
-  final e = path.toLowerCase();
-  if (e.endsWith('.flac') || e.endsWith('.ape') || e.endsWith('.alac')) return 4;
-  if (e.endsWith('.wav')) return 3; // lossless, but uncompressed and untaggable
-  if (e.endsWith('.m4a') || e.endsWith('.aac') || e.endsWith('.ogg') || e.endsWith('.opus')) return 2;
+  const getagdVerliesvrij = {'.flac', '.ape', '.alac', '.wv', '.tta', '.tak', '.als', '.shn'};
+  // Verliesvrij maar lastig: geen tags die deze app schrijft, en bij DSD ook nog eens gigantisch en
+  // door lang niet elke speaker te spelen. Bewust ONDER FLAC, want anders wint een DSD-rip van vier
+  // gigabyte op grootte van je FLAC en gooit hem weg — precies het omgekeerde van "beste kwaliteit".
+  const lastigVerliesvrij = {'.wav', '.aiff', '.aif', '.aifc', '.dsf', '.dff'};
+  final e = extensieVan(path);
+  if (getagdVerliesvrij.contains(e)) return 4;
+  if (lastigVerliesvrij.contains(e)) return 3;
+  if (const {'.m4a', '.aac', '.ogg', '.oga', '.opus', '.mpc'}.contains(e)) return 2;
   return 1; // mp3 and friends
 }
 
@@ -1314,7 +1320,8 @@ const sameRecordingSlack = 5;
 
 bool _setEquals(Set<String> a, Set<String> b) => a.length == b.length && a.every(b.contains);
 
-const _audioExts = {'.flac', '.mp3', '.m4a', '.ogg', '.opus', '.wav', '.aac', '.alac', '.ape'};
+/// Zie `audioformaten.dart`: deze vraag wordt op één plek beantwoord, niet op vijf.
+final _audioExts = audioExtensies;
 
 /// The same track already filed under a DIFFERENT extension, if there is one.
 ///
@@ -1623,7 +1630,7 @@ Future<TidyReport> tidyDownloads(String downloadsRoot) async {
   final dir = Directory(downloadsRoot);
   if (!await dir.exists()) return report;
 
-  const audio = {'.flac', '.mp3', '.m4a', '.ogg', '.opus', '.wav', '.aac', '.alac', '.ape'};
+  final audio = audioExtensies;
   final files = <File>[];
   await for (final e in dir.list(recursive: true, followLinks: false)) {
     if (e is! File) continue;
