@@ -570,6 +570,12 @@ String trackIdentity(String artist, String title) => '${normKey(artist)}|${normK
 ///
 /// Twee vormen, en bewust niet meer dan dat. Tussen haakjes mag ook "with" meetellen; los aan het
 /// eind niet — "Sing With Me" zou dan zijn halve titel verliezen.
+///
+/// "Duet With" hoort er sinds 31-08-2026 bij. Gemeten op Beyoncé's *Dangerously In Love*: het
+/// bestand heet "The Closer I Get To You (Duet With Luther Vandross)" en de persing schrijft "The
+/// Closer I Get to You" — één haakje verschil, en het nummer stond op de albumpagina onder "Niet op
+/// deze uitgave" terwijl het er wel degelijk op staat. Alleen ACHTER een haakje, dus "Duet" aan het
+/// begin van een titel blijft gewoon staan.
 String zonderFeat(String s) {
   var uit = s.replaceAll(_featHaakje, ' ');
   uit = uit.replaceAll(_featStaart, '');
@@ -577,7 +583,7 @@ String zonderFeat(String s) {
 }
 
 final _featHaakje = RegExp(
-    r'[(\[]\s*(feat\.?|ft\.?|featuring|with|met)\b[^)\]]*[)\]]',
+    r'[(\[]\s*(?:duet\s+)?(feat\.?|ft\.?|featuring|with|met)\b[^)\]]*[)\]]',
     caseSensitive: false);
 final _featStaart = RegExp(r'\s+(feat\.?|ft\.?|featuring)\s+.+$', caseSensitive: false);
 

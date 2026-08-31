@@ -1069,6 +1069,56 @@ class DownloadManager extends ChangeNotifier {
   /// taak wil aanwijzen) voor iets wat zij zelf weet, want zij heeft die taak aangemeld.
   final Map<String, String> _gidPerTorrent = {};
 
+  /// Wie er op dit moment bezig is één torrent bij aria2 aan te melden, per infohash.
+  ///
+  /// **Waarom een slot en niet alleen [_gidPerTorrent].** Dat kaartje wordt pas ingevuld NADAT de
+  /// aanmelding gelukt is. Klik je zeven nummers van één plaat aan, dan starten er zeven opdrachten
+  /// tegelijk, kijken ze alle zeven op een leeg kaartje, en melden ze alle zeven dezelfde torrent
+  /// aan. Kijken-en-dan-doen zonder slot ertussen.
+  ///
+  /// **Gemeten op 31-08-2026, Beyoncé — Dangerously In Love via RuTracker.** Zeven aanvragen binnen
+  /// acht duizendsten van een seconde; aria2 nam er één aan en wees er zes af met "InfoHash …
+  /// is already registered". Erger nog: de zesde en zevende vonden intussen wél een kaartje, maar
+  /// dat wees naar het gid van een AFGEWEZEN aanmelding — vandaar "Cannot change option for GID#…".
+  /// Zes van de zeven nummers mislukten, en dat is precies de klacht "hij pakt er maar één".
+  ///
+  /// Met dit slot meldt de eerste hem aan en wachten de rest op diezelfde taak, waarna ze er met
+  /// `kiesErbij` bij gaan zitten — de weg die er al lag en die nooit aan de beurt kwam.
+  final Map<String, Future<void>> _aanmeldSlot = {};
+
+  /// Leeft deze aria2-taak nog, of is hij binnen een tel omgevallen?
+  ///
+  /// Kort wachten en dan pas oordelen. Meteen na het aanmelden staat een taak op `waiting` — dat
+  /// zegt nog niets — en de weigering die we zoeken komt uit aria2's eigen lus, niet uit het
+  /// antwoord op onze aanroep. Anderhalve seconde is ruim: in de meting van 31-08-2026 stond de
+  /// afwijzing er binnen twee duizendsten.
+  Future<bool> _leeftNog(Aria2 motor, String gid) async {
+    for (var i = 0; i < 5; i++) {
+      final s = await motor.stand(gid);
+      if (s == null) return false;
+      if (s.stuk) return false;
+      if (s.status != 'waiting') return true;
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    }
+    // Nog steeds in de wacht: dat is geen fout, dat is een rij. Die mag gewoon doorlopen.
+    return true;
+  }
+
+  /// Voert [werk] uit met de zekerheid dat geen tweede opdracht voor dezelfde torrent er tegelijk
+  /// in zit. Zonder infohash valt er niets te botsen en gaat het gewoon meteen.
+  Future<T> _perTorrent<T>(String hash, Future<T> Function() werk) {
+    if (hash.isEmpty) return werk();
+    final vorige = _aanmeldSlot[hash] ?? Future<void>.value();
+    final mijn = Completer<void>();
+    _aanmeldSlot[hash] = mijn.future;
+    // `catchError` op de vorige: struikelt die, dan mag de volgende alsnog naar binnen in plaats van
+    // mee om te vallen. Een mislukte aanmelding is geen reden om de rest van de plaat op te geven.
+    return vorige.catchError((_) {}).then((_) => werk()).whenComplete(() {
+      mijn.complete();
+      if (identical(_aanmeldSlot[hash], mijn.future)) _aanmeldSlot.remove(hash);
+    });
+  }
+
   /// Upgrades take NO download slot, so ze kunnen nooit een nummer ophouden waar je nog niets van
   /// hebt. Queued rather than dropped, so a whole album still gets upgraded.
   ///
@@ -2921,17 +2971,39 @@ class DownloadManager extends ChangeNotifier {
     //
     // Nu onthoudt [_gidPerTorrent] dat, en is de gewone weg voor het tweede nummer van een plaat
     // geen mislukking-met-herstel meer maar één stap.
-    String? gid;
-    if (hash.isNotEmpty) {
-      final lopend = _gidPerTorrent[hash];
-      if (lopend != null && await motor.kiesErbij(lopend, gekozen)) {
-        gid = lopend;
-        _log.line('torrent $hash liep al (gid=$lopend) — erbij gekozen zonder nieuwe aanmelding');
-      }
-    }
     final seedMin = seedNa && online.settings.seedUren > 0 ? online.settings.seedUren * 60 : null;
-    gid ??= await motor.voegTorrentToe(torrent.lokaleTorrent!,
-        map: werkMap.path, kies: gekozen, seedMinuten: seedMin);
+    String? gid;
+    var aanhaakReden = '';
+    var afgebroken = false;
+
+    // ÉÉN TEGELIJK PER PLAAT, van hier tot en met het bijhouden van [_gidPerTorrent].
+    //
+    // Alles hieronder is kijken-en-dan-doen: is er al een taak voor deze torrent, en zo nee, meld
+    // hem aan. Zonder slot ertussen deden zeven gelijktijdige opdrachten dat alle zeven tegelijk.
+    // Zie [_perTorrent] voor de meting.
+    await _perTorrent(hash, () async {
+      if (hash.isNotEmpty) {
+        final lopend = _gidPerTorrent[hash];
+        if (lopend != null && await motor.kiesErbij(lopend, gekozen)) {
+          gid = lopend;
+          _log.line('torrent $hash liep al (gid=$lopend) — erbij gekozen zonder nieuwe aanmelding');
+        }
+      }
+      gid ??= await motor.voegTorrentToe(torrent.lokaleTorrent!,
+          map: werkMap.path, kies: gekozen, seedMinuten: seedMin);
+      // EEN GID DAT METEEN OMVALT IS GEEN TAAK.
+      //
+      // `aria2.addTorrent` neemt de aanmelding aan en geeft netjes een gid terug; de weigering komt
+      // pas een tel later uit aria2's eigen lus, als "errorCode=12 InfoHash … is already
+      // registered". De app hield dat gid dan vast, hing zijn balk eraan, en meldde een halve
+      // minuut later "Mislukt" — terwijl de torrent gewoon liep, alleen onder een ander gid.
+      //
+      // Even kijken of hij nog leeft is genoeg. Blijkt hij stuk, dan valt deze opdracht door naar
+      // het aanhaken hieronder, en dát is precies de weg die wél werkt.
+      if (gid != null && !await _leeftNog(motor, gid!)) {
+        _log.line('gid $gid viel meteen om (${motor.laatsteFout ?? 'geweigerd'}) — aanhaken dan');
+        gid = null;
+      }
 
     // AANHAKEN IN PLAATS VAN OPGEVEN.
     //
@@ -2948,21 +3020,20 @@ class DownloadManager extends ChangeNotifier {
     // Wie er straks mag opruimen wordt niet híer bepaald maar door [_lopersPerTorrent] geteld: ook
     // de opdracht die de torrent zélf aanmeldde mag de map niet weggooien zolang er nog een tweede
     // aan hangt.
-    var aanhaakReden = '';
-    if (gid == null) {
-      final bestaand = await motor.zoekGidVoor(hash);
-      if (bestaand == null) {
-        aanhaakReden = hash.isEmpty
-            ? 'deze bron gaf geen infohash mee'
-            : 'aria2 kende hem wel maar wilde hem niet aanwijzen';
-      } else if (await motor.kiesErbij(bestaand, gekozen)) {
-        gid = bestaand;
-        _log.line('torrent $hash liep al (gid=$bestaand) — aangehaakt in plaats van '
-            'opnieuw aangemeld');
-      } else {
-        aanhaakReden = motor.laatsteFout ?? 'er kon niets bij gekozen worden';
+      if (gid == null) {
+        final bestaand = await motor.zoekGidVoor(hash);
+        if (bestaand == null) {
+          aanhaakReden = hash.isEmpty
+              ? 'deze bron gaf geen infohash mee'
+              : 'aria2 kende hem wel maar wilde hem niet aanwijzen';
+        } else if (await motor.kiesErbij(bestaand, gekozen)) {
+          gid = bestaand;
+          _log.line('torrent $hash liep al (gid=$bestaand) — aangehaakt in plaats van '
+              'opnieuw aangemeld');
+        } else {
+          aanhaakReden = motor.laatsteFout ?? 'er kon niets bij gekozen worden';
+        }
       }
-    }
 
     // WACHTEN IS BETER DAN MISLUKKEN.
     //
@@ -2974,17 +3045,33 @@ class DownloadManager extends ChangeNotifier {
     // Zodra de andere download klaar is haalt [verwijder] de torrent uit aria2, en dan gaat deze
     // aanmelding alsnog. Vier minuten is ruim voor een nummer, en eindig genoeg om niet voor eeuwig
     // een plek in de rij te bezetten.
-    if (gid == null && hash.isNotEmpty) {
-      alle('waiting', detail: 'wacht op een andere download van deze plaat');
-      final tot = DateTime.now().add(const Duration(minutes: 4));
-      while (gid == null && DateTime.now().isBefore(tot)) {
-        if (jobs.every((j) => j.cancelled)) return;
-        await Future<void>.delayed(const Duration(seconds: 3));
-        gid = await motor.voegTorrentToe(torrent.lokaleTorrent!,
-            map: werkMap.path, kies: gekozen, seedMinuten: seedMin);
+      if (gid == null && hash.isNotEmpty) {
+        alle('waiting', detail: 'wacht op een andere download van deze plaat');
+        final tot = DateTime.now().add(const Duration(minutes: 4));
+        while (gid == null && DateTime.now().isBefore(tot)) {
+          if (jobs.every((j) => j.cancelled)) {
+            afgebroken = true;
+            return;
+          }
+          await Future<void>.delayed(const Duration(seconds: 3));
+          gid = await motor.voegTorrentToe(torrent.lokaleTorrent!,
+              map: werkMap.path, kies: gekozen, seedMinuten: seedMin);
+        }
       }
-    }
 
+      // Nog binnen het slot: pas als dít kaartje ligt mag de volgende opdracht naar binnen, want
+      // anders leest die opnieuw een leeg kaartje en meldt hij de torrent alsnog een tweede keer.
+      final g = gid;
+      if (g != null) {
+        _lopersPerTorrent.update(g, (n) => n + 1, ifAbsent: () => 1);
+        // Onthouden welk gid bij deze plaat hoort, zodat het VOLGENDE nummer er meteen bij kan in
+        // plaats van eerst tegen een weigering aan te lopen. Weggehaald door dezelfde teller die het
+        // opruimen regelt — zolang er nog iemand op deze taak hangt, is hij geldig.
+        if (hash.isNotEmpty) _gidPerTorrent[hash] = g;
+      }
+    });
+
+    if (afgebroken) return;
     if (gid == null) {
       // Zeg wat er ECHT gebeurde. "InfoHash … is already registered" laat de gebruiker denken dat
       // zijn download dubbel is; de waarheid is dat de app hem niet bij de lopende torrent kreeg,
@@ -2998,11 +3085,10 @@ class DownloadManager extends ChangeNotifier {
       return;
     }
 
-    _lopersPerTorrent.update(gid, (n) => n + 1, ifAbsent: () => 1);
-    // Onthouden welk gid bij deze plaat hoort, zodat het VOLGENDE nummer er meteen bij kan in
-    // plaats van eerst tegen een weigering aan te lopen. Weggehaald door dezelfde teller die het
-    // opruimen regelt — zolang er nog iemand op deze taak hangt, is hij geldig.
-    if (hash.isNotEmpty) _gidPerTorrent[hash] = gid;
+    // Vanaf hier ligt de taak vast. Een eigen naam is nodig, geen `gid!` overal: `gid` wordt door de
+    // closure hierboven beschreven, en Dart laat zo'n variabele daarom nooit naar niet-null
+    // promoveren.
+    final taak = gid!;
 
     alle('downloading');
     // Dit is de eerste torrentdownload die écht te stoppen is. Bij TorBox loopt het ophalen aan hún
@@ -3017,7 +3103,7 @@ class DownloadManager extends ChangeNotifier {
         await Future<void>.delayed(const Duration(seconds: 2));
         // Alles weggetikt? Dan heeft niemand deze zwerm nog nodig.
         if (jobs.every((j) => j.cancelled)) return;
-        final s = await motor.stand(gid);
+        final s = await motor.stand(taak);
         if (s == null) continue;
 
         for (var i = 0; i < files.length; i++) {
@@ -3054,7 +3140,7 @@ class DownloadManager extends ChangeNotifier {
 
       // Binnen. aria2 zet alles onder een map met de torrentnaam; de app verwacht de bestanden los
       // in de doelmap, want dat is wat de bibliotheek straks inleest.
-      final s = await motor.stand(gid);
+      final s = await motor.stand(taak);
       for (var i = 0; i < files.length; i++) {
         final b = s?.bestand(files[i].id);
         // Een nummer dat je onderweg hebt weggetikt hoort niet alsnog in je bibliotheek te landen.
@@ -3068,10 +3154,45 @@ class DownloadManager extends ChangeNotifier {
           jobs[i].detail = 'aria2 kende dit bestand niet meer';
           continue;
         }
+        // BESTAAT IS NIET AF.
+        //
+        // Hier stond alleen een `exists()`, en dat is precies één bit te weinig. aria2 maakt bij het
+        // starten ALLE bestanden aan die hij gaat aanraken — leeg, nul bytes — en vult ze pas
+        // seconden later. Ook de buren van wat je koos: een blok dat over de grens van twee
+        // bestanden valt, laat een half bestand achter waar je niets om vroeg.
+        //
+        // **Gemeten op 31-08-2026, Beyoncé — Dangerously In Love.** Een filmpje van de werkmap, elke
+        // seconde één opname:
+        //
+        //     22:02:46.314  NIEUW            0 B  07 - Yes.flac
+        //     22:02:51.788  0 ->    26.369.312 B  07 - Yes.flac
+        //     22:02:51.788  0 ->       450.051 B  03 - Baby Boy.flac   <- buurbestand, half
+        //
+        // Vijf seconden lang komt een leeg bestand door `exists()` heen. In die spleet verhuisde de
+        // app een FLAC van nul bytes naar de albummap, zette de taak op "Klaar", en zag de
+        // gebruiker een nummer dat 0:00 duurt en niet afspeelt — terwijl het volgens de naam en de
+        // extensie een keurige FLAC is. Dat is de klacht van vandaag, en `08 - Signs` stond er zo
+        // bij: 0 B, terwijl aria2 er 32 MiB van had binnengehaald.
+        //
+        // aria2 weet zelf precies hoeveel er van dit bestand af is. Dat is het antwoord op de vraag
+        // die hier gesteld hoort te worden, en de schijf krijgt daarna nog het laatste woord.
+        if (!b.klaar) {
+          jobs[i].status = 'failed';
+          jobs[i].detail = b.lengte > 0
+              ? 'nog niet compleet — ${(b.voortgang * 100).round()}% binnen'
+              : 'aria2 gaf geen lengte voor dit bestand';
+          continue;
+        }
         final bron = File(b.pad);
         if (!await bron.exists()) {
           jobs[i].status = 'failed';
           jobs[i].detail = 'aria2 meldde klaar, maar het bestand staat er niet';
+          continue;
+        }
+        final opSchijf = await bron.length();
+        if (opSchijf < b.lengte) {
+          jobs[i].status = 'failed';
+          jobs[i].detail = 'onvolledig op schijf: $opSchijf van ${b.lengte} bytes';
           continue;
         }
         final geland = await _verhuisNaar(bron, destDir, files[i].label, kopieer: seedNa);
@@ -3094,9 +3215,14 @@ class DownloadManager extends ChangeNotifier {
       // een cue die daar blijft staan verdwijnt mét die map — waarna er niets meer te knippen valt.
       for (final c in cues) {
         final b = s?.bestand(c.id);
-        if (b == null) continue;
+        // Dezelfde regel als hierboven: een blad dat nog nul bytes is, is geen blad. Zo kwamen er
+        // drie lege .cue-bestanden in de albummap terecht — "… - Dangerously In Love (2).cue",
+        // "(3)", "(4)" — allemaal 0 B, allemaal naast elkaar.
+        if (b == null || !b.klaar) continue;
         final bron = File(b.pad);
-        if (await bron.exists()) await _verhuisNaar(bron, destDir, c.label);
+        if (await bron.exists() && await bron.length() >= b.lengte) {
+          await _verhuisNaar(bron, destDir, c.label);
+        }
       }
       notifyListeners();
       // Opruimen mag alleen als deze taak van ons alleen is. Hangt er nog een tweede nummer van
@@ -3107,7 +3233,7 @@ class DownloadManager extends ChangeNotifier {
       // wanneer het seeden afloopt — zie [_ruimNaSeeden].
       if (seedMin != null) {
         _log.line('seeden: ${werkMap.path} blijft staan, nog ${online.settings.seedUren} uur');
-        unawaited(_ruimNaSeeden(motor, gid, werkMap, Duration(minutes: seedMin)));
+        unawaited(_ruimNaSeeden(motor, taak, werkMap, Duration(minutes: seedMin)));
       }
       // Het opruimen zelf staat in de `finally` hieronder — daar wordt geteld wie er nog aan deze
       // torrent hangt, en dat is de enige plek waar dat kloppend gebeurt. Zie de uitleg daar.
@@ -3118,16 +3244,16 @@ class DownloadManager extends ChangeNotifier {
       //
       // Maar pas als de laatste loper weg is. Een gid dat weggehaald wordt terwijl een tweede
       // opdracht er zijn voortgang uit leest, laat die opdracht op niets wachten.
-      final over = (_lopersPerTorrent[gid] ?? 1) - 1;
+      final over = (_lopersPerTorrent[taak] ?? 1) - 1;
       if (over <= 0) {
-        _lopersPerTorrent.remove(gid);
+        _lopersPerTorrent.remove(taak);
         // Ook de snelkoppeling weg, en alléén als hij nog naar ONS gid wijst: een derde nummer dat
         // ondertussen een nieuwe taak voor dezelfde plaat opzette mag hier zijn ingang niet
         // kwijtraken.
-        if (_gidPerTorrent[hash] == gid) _gidPerTorrent.remove(hash);
+        if (_gidPerTorrent[hash] == taak) _gidPerTorrent.remove(hash);
         // Behalve wanneer hij nog aan het delen is: weghalen bij aria2 IS stoppen met delen.
         if (seedMin == null) {
-          await motor.verwijder(gid);
+          await motor.verwijder(taak);
           // OPRUIMEN HOORT HIER, en niet hierboven bij het verhuizen.
           //
           // Daar werd geteld hoeveel opdrachten er nog aan deze torrent hingen, maar de teller gaat
@@ -3147,7 +3273,7 @@ class DownloadManager extends ChangeNotifier {
           }
         }
       } else {
-        _lopersPerTorrent[gid] = over;
+        _lopersPerTorrent[taak] = over;
       }
     }
   }

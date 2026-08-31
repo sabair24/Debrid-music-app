@@ -5248,8 +5248,13 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         // Ingesprongen tot waar de TITEL van een nummerrij begint: de goot, de vulling van de rij,
         // het nummervakje van 28, en het gat daarachter. Zo staat dit label boven zijn eigen kolom
         // in plaats van ernaast — het stond op 34 terwijl de titels op 76 beginnen.
+        //
+        // Vier keer zoveel lucht bóven als eronder, en dat is de hele bedoeling: dit label hoort bij
+        // wat eronder komt. Op 12 tegen 6 was dat verschil te klein om te zien, en juist doordat het
+        // uitgelijnd staat onder de TITEL van de vorige rij las Saber "Niet op deze uitgave" op
+        // 31-08-2026 als bijschrift van het nummer erbóven — dat nummer stond gewoon op de plaat.
         padding: const EdgeInsets.fromLTRB(
-            kGoot + kRuimte12 + 28 + kRuimte12, kRuimte12, kGoot, kRuimte6),
+            kGoot + kRuimte12 + 28 + kRuimte12, kRuimte24, kGoot, kRuimte6),
         child: Align(
           alignment: Alignment.centerLeft,
           child: Text(text, style: kLabel.copyWith(letterSpacing: .4)),
