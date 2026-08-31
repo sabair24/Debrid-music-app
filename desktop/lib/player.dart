@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'artwork.dart' show kleurBuitenDeTekendraad;
+import 'kapot_bestand.dart' show waaromNietTeOpenen;
 import 'lan/stroomstand.dart' show grensUitUrl;
 import 'models.dart';
 import 'paths.dart';
@@ -824,8 +825,17 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       // een adres dat niet te bereiken is, een antwoord dat te lang uitbleef — en die zin werd
       // weggegooid. Dezelfde fout als bij het taalmodel dat alleen "400" mocht zeggen.
       _log?.line('OPENEN MISLUKT — ${current?.title ?? "?"} — ${e.trim()}');
-      _meldStilstand('Kan dit nummer niet openen — ${_kortereReden(e)}');
-      _probeerNogEens();
+      // Eerst naar het BESTAND kijken, en pas daarna mpv citeren.
+      //
+      // "Failed to recognize file format" is waar en zegt niets. Staat er nul bytes, dan is dát het
+      // antwoord — en de gebruiker weet meteen dat er niets te repareren valt aan de app maar iets
+      // weg te gooien op zijn schijf. Zie `kapot_bestand.dart`.
+      final eigen = _redenUitBestand(current?.path);
+      _meldStilstand('Kan dit nummer niet openen — ${eigen ?? _kortereReden(e)}');
+      // Opnieuw proberen heeft alleen zin bij iets dat over kan gaan — een haperende verbinding, een
+      // pc die net wakker wordt. Een leeg bestand is over vier seconden nog steeds leeg, en dan is
+      // een tweede poging alleen een tweede foutmelding.
+      if (eigen == null) _probeerNogEens();
     });
     // Twee seconden: vaak genoeg om binnen het geduld van de wacht te vallen, zeldzaam genoeg om
     // niets te kosten. Een timer en niet de positiestroom, want het geval dát dit moet vangen is nu
@@ -886,6 +896,35 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       _meldStilstand('Nog een poging…');
       unawaited(radioMode ? _openRadioCurrent() : _hervatOpDezelfdePlek());
     });
+  }
+
+  /// Wat er aan het bestand zelf te zien is, of null als het niets bijzonders laat zien.
+  ///
+  /// Alleen voor een bestand op deze machine. Op een gekoppelde telefoon is [pad] een stroomadres —
+  /// daar valt niets te openen, en dan is mpv's eigen woord het beste dat er is.
+  static String? _redenUitBestand(String? pad) {
+    if (pad == null || pad.isEmpty) return null;
+    if (pad.startsWith('http://') || pad.startsWith('https://')) return null;
+    RandomAccessFile? raf;
+    try {
+      final f = File(pad);
+      if (!f.existsSync()) return 'het bestand staat er niet meer';
+      final grootte = f.lengthSync();
+      var kop = const <int>[];
+      // Alleen openen als er iets te lezen valt. Twaalf bytes is genoeg voor elk herkenningsteken.
+      if (grootte > 0) {
+        raf = f.openSync();
+        kop = raf.readSync(12);
+      }
+      return waaromNietTeOpenen(naam: pad, bytes: grootte, kop: kop);
+    } catch (_) {
+      // Niet kunnen kijken is geen uitspraak. Dan blijft mpv's zin staan.
+      return null;
+    } finally {
+      try {
+        raf?.closeSync();
+      } catch (_) {}
+    }
   }
 
   /// De reden van mpv, kort genoeg voor één regel op het scherm.

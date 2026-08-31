@@ -211,6 +211,58 @@ AlbumCompleteness matchAlbumTracks(
     }
   }
 
+  // Dan de gastartiest die maar aan ÉÉN kant genoemd wordt.
+  //
+  // **Gemeld op 31-08-2026, met een schermafdruk van *Dangerously in Love*.** Onder "Niet op deze
+  // uitgave" stonden "Crazy In Love" en "Baby Boy" — twee nummers die nota bene de bekendste van
+  // die plaat zijn. De uitgave schrijft ze als "Crazy in Love (feat. JAY-Z)" en "Baby Boy (feat.
+  // Sean Paul)"; de rip schreef de gast in het ARTIEST-veld en liet de titel kaal.
+  //
+  // Waarom geen van de passen hierboven dat opving: `_words` haalt met opzet alleen VERSIE-merken
+  // weg en laat "(feat. …)" staan, omdat daar een echt verschil in kan zitten — Adele's *30* heeft
+  // "Easy On Me" én "Easy On Me (With Chris Stapleton)", twee opnames. Gevolg is wel dat drie
+  // gedeelde woorden tegen zes gezette woorden op 50% uitkwam, ver onder de vier vijfde.
+  //
+  // **Deze pas loopt maar ÉÉN kant op, en dat is de hele veiligheid ervan.** De gaststaart mag
+  // alleen van de UITGAVE af, nooit van het bestand. De tracklijst van een persing is de autoriteit
+  // over wat er op die plaat staat:
+  //
+  // * noemt de uitgave "Crazy in Love (feat. JAY-Z)" en heet jouw bestand "Crazy In Love", dan héb
+  //   je dat nummer — een ripper heeft de credit gewoon niet overgetypt.
+  // * noemt de uitgave "Easy on Me" en heet jouw bestand "Easy On Me (With Chris Stapleton)", dan
+  //   heb je iets wat die uitgave NIET noemt. Dat is Adele's *30*, waar de solo en het duet twee
+  //   opnames van bijna dezelfde lengte zijn. Het duet op de rij van de albumversie leggen zou het
+  //   ene nummer verbergen en het andere ten onrechte als binnengehaald tellen.
+  //
+  // Die tweede kant is met zoveel woorden een toets in `completeness_test.dart`, en die zakte toen
+  // deze pas nog symmetrisch was. Van buiten zijn de twee gevallen niet te onderscheiden, dus er
+  // valt niets slims te bedenken: één richting is het antwoord.
+  //
+  // Daarnaast UNICITEIT: de kale titel moet op de uitgave precies één rij opleveren, en er mag
+  // precies één vrij bestand op passen. Anders is het een gok tussen twee kandidaten. En de
+  // speelduur moet nog steeds kloppen.
+  for (var i = 0; i < official.length; i++) {
+    if (owned.containsKey(i)) continue;
+    final vol = normKey(official[i].title);
+    final kaal = normKey(zonderFeat(official[i].title));
+    // Noemt deze rij helemaal geen gast, dan valt er niets weg te denken en heeft de exacte pas
+    // hierboven het laatste woord al gehad.
+    if (kaal.isEmpty || kaal == vol) continue;
+    if (official.where((o) => normKey(zonderFeat(o.title)) == kaal).length != 1) continue;
+    final passend = [
+      for (final t in tracks)
+        if (!claimed.contains(t.path) &&
+            // `== kaal` en niet `zonderFeat(t.title) == kaal`: het bestand moet zélf kaal zijn.
+            // Draagt het een eigen credit, dan is het misschien een andere opname — zie hierboven.
+            normKey(t.title) == kaal &&
+            durationsAgree(official[i].seconds, t.duration?.inSeconds))
+          t,
+    ];
+    if (passend.length != 1) continue;
+    owned[i] = passend.single;
+    claimed.add(passend.single.path);
+  }
+
   // Very last: an EXACT title match that only the running time rejected.
   //
   // Measured on Het Beste Van Petra. The file is `02 - Laat Je Gaan.flac`, in that album's own

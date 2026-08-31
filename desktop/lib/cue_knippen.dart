@@ -17,6 +17,7 @@ library;
 
 import 'dart:io';
 
+import 'audioformaten.dart';
 import 'cuesheet.dart';
 import 'ffmpeg.dart';
 
@@ -28,8 +29,6 @@ const kBeeldExtensies = {
   'flac', 'ape', 'wav', 'wv', 'tta', 'aiff', 'aif', 'alac', 'm4a', 'ogg', 'mp3',
 };
 
-/// Kleiner dan dit is geen nummer maar een mislukking van ffmpeg die niets zei.
-const kMinimumBytes = 1024;
 
 final _verbodenTekens = RegExp(r'[\\/:*?"<>|\x00-\x1f]');
 final _teveelSpaties = RegExp(r'\s+');
@@ -409,7 +408,21 @@ class Knipper {
           } catch (e) {
             stuk = 'ffmpeg liep vast op nummer ${k.nummer}: $e';
           }
-          if (stuk.isNotEmpty) break;
+          if (stuk.isNotEmpty) {
+            // **Ook DIT bestand weg, en dat is de reparatie van 31-08-2026.** Het staat niet in
+            // `gemaakt` — het is juist het nummer dat mislukte — en bleef daardoor als enige van de
+            // hele mislukte beurt achter. ffmpeg maakt zijn uitvoerbestand aan vóórdat hij weet of
+            // het lukt, dus wat er bleef staan was een `.flac` van nul bytes met een keurige naam.
+            //
+            // Dat is precies wat de gebruiker op zijn scherm zag: "15 - Beyoncé - Work It Out",
+            // 0:00, Onbekende artiest, en bij het aantikken "Failed to recognize file format". Geen
+            // kapotte rip van RuTracker dus, maar ons eigen restafval — en de terugdraairegel
+            // hierboven zei al met zoveel woorden dat dat niet mocht blijven staan.
+            try {
+              if (doel.existsSync()) doel.deleteSync();
+            } catch (_) {/* in gebruik — dan is er niets meer aan te doen */}
+            break;
+          }
           onVoortgang?.call(nummers + gemaakt.length, teDoen);
         }
 

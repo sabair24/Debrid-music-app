@@ -92,3 +92,14 @@ bool isVerliesvrij(String soortOfExtensie) {
   final s = soortOfExtensie.toLowerCase();
   return verliesvrijeSoorten.contains(s.startsWith('.') ? s.substring(1) : s);
 }
+
+/// Kleiner dan dit kan geen muziek zijn.
+///
+/// Twee plekken beantwoorden dezelfde vraag en horen dus hetzelfde antwoord te geven. De knipper
+/// gebruikt het om te zien of ffmpeg werkelijk iets heeft gemaakt ("kleiner dan dit is geen nummer
+/// maar een mislukking van ffmpeg die niets zei"), en de bibliotheekscan om zulk restafval niet als
+/// muziek op te nemen.
+///
+/// Een kilobyte is ruim onder het kleinste echte muziekbestand — een seconde stilte in FLAC is al
+/// meer — en ruim boven de nul bytes en losse koppen waar dit tegen beschermt.
+const kMinimumBytes = 1024;
