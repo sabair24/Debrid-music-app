@@ -126,6 +126,7 @@ jobs:
             test/discogs_verwijzing_test.dart test/updater_test.dart \
             test/verhuizing_test.dart test/fingerprint_test.dart \
             test/uitvoerbaar_test.dart test/tv_bovenbalk_test.dart \
+            test/tv_melding_bereikbaar_test.dart test/ingelogd_blijven_test.dart \
             test/albumraster_ingebed_test.dart \
             test/bestandsbeheer_test.dart test/hoesherkomst_test.dart \
             test/metadata_bronnen_test.dart test/castgrenzen_test.dart \

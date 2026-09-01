@@ -24,7 +24,15 @@ class ClientSession extends ChangeNotifier {
     required this.applyMediaResolver,
     RemoteEndpoint? endpoint,
     this.kopie = const CatalogusKopie(),
+    this.verseSleutel,
   }) : _endpoint = endpoint;
+
+  /// Haalt via de cloud een nieuwe sleutel op voor de pc op dit adres. Null = niet gelukt.
+  ///
+  /// Een callback en niet de [CloudSession] zelf, om dezelfde reden als [applyMediaResolver]: deze
+  /// klasse hoort niets van Firebase te weten, en een toets voor het koppelen hoort geen cloud op
+  /// te tuigen.
+  final Future<String?> Function(Uri baseUrl)? verseSleutel;
 
   final LibraryStore library;
   final AppSettings settings;
@@ -172,6 +180,37 @@ class ClientSession extends ChangeNotifier {
     _startPolling();
   }
 
+  /// Hoogstens één keer per zitting een nieuwe sleutel halen.
+  ///
+  /// **Waarom hoogstens één keer.** Deze poll draait elke vijftien seconden. Zonder deze klep zou
+  /// een pc die je toestel écht heeft ingetrokken elke vijftien seconden een nieuw verzoek in
+  /// Firestore krijgen, voor altijd. Eén poging per keer dat de app draait is genoeg: helpt het
+  /// niet, dan is er iets aan de hand waar een herhaling niets aan verandert, en dan staat de knop
+  /// "Opnieuw koppelen" in de meldingsbalk klaar.
+  bool _sleutelGevraagd = false;
+
+  Future<void> _vernieuwSleutel() async {
+    final haal = verseSleutel;
+    final huidig = _endpoint;
+    if (haal == null || huidig == null || _sleutelGevraagd) return;
+    // VÓÓR de await. Anders start elke poll er nog een terwijl de eerste nog wacht.
+    _sleutelGevraagd = true;
+    String? verse;
+    try {
+      verse = await haal(huidig.baseUrl);
+    } catch (e) {
+      debugPrint('Verse sleutel halen mislukte: $e');
+      return;
+    }
+    // Dezelfde sleutel terug betekent dat de pc hem nooit had ingetrokken maar kwijt was; opnieuw
+    // verbinden lost dat niet op en zou alleen het scherm laten knipperen.
+    if (verse == null || verse.isEmpty || verse == huidig.token) return;
+    // Via `connect` en niet met de hand: die legt hem vast, hangt de client aan de bibliotheek,
+    // vertelt de speler hoe hij een pad ondertekent en haalt de catalogus opnieuw op. Dat met de
+    // hand overdoen is precies hoe je er één vergeet.
+    await connect(RemoteEndpoint(baseUrl: huidig.baseUrl, token: verse, name: huidig.name));
+  }
+
   /// Forget the PC and go back to the pairing screen.
   Future<void> unpair() async {
     _poll?.cancel();
@@ -209,6 +248,12 @@ class ClientSession extends ChangeNotifier {
         lastError = library.geenVerbinding == GeenVerbinding.sleutelGeweigerd
             ? 'De pc antwoordt, maar weigert de sleutel van dit toestel.'
             : 'De pc antwoordde niet.';
+        // Een geweigerde sleutel probeert zichzelf te vervangen. NIET afwachten: het toekennen loopt
+        // over de hartslag van de pc en duurt tientallen seconden, en zolang blijft deze poll -- en
+        // daarmee je hele scherm -- niet staan wachten.
+        if (library.geenVerbinding == GeenVerbinding.sleutelGeweigerd) {
+          unawaited(_vernieuwSleutel());
+        }
       }
       if (changed && !first) {
         // New records may have arrived; only the ones without a cover are fetched.

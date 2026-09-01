@@ -133,17 +133,45 @@ class CloudSession extends ChangeNotifier {
     }
     state = CloudState.restoring;
     notifyListeners();
+    ({String uid, String email, String refreshToken})? bewaard;
     try {
       final file = appFile('cloud_session.json');
       if (await file.exists()) {
-        final saved = CloudUser.fromJson(
+        bewaard = CloudUser.fromJson(
             (jsonDecode(await file.readAsString()) as Map).cast<String, dynamic>());
-        if (saved != null) {
-          user = await _auth.refresh(saved.refreshToken, uid: saved.uid, email: saved.email);
+        if (bewaard != null) {
+          user = await _auth.refresh(bewaard.refreshToken, uid: bewaard.uid, email: bewaard.email);
           await _persist(user!);
         }
       }
+    } on CloudAuthException catch (e) {
+      // EEN PLAT NETWERK LOGT JE NIET UIT. Dezelfde regel die [_fresh] al hanteert, en die hier
+      // ontbrak: alles wat de verversing liet struikelen kwam in één `catch` terecht, `user` bleef
+      // null, en de staat werd `signedOut`. Dus stond je op het inlogscherm omdat de wifi net niet
+      // mee wilde — met je verversingssleutel nog gewoon op schijf.
+      //
+      // Gemeten op de Shield, 01-09-2026: bij het opstarten uit slaapstand mislukt de naamopzoeking
+      // van `securetoken.googleapis.com` en meldt hij "Cloud restore failed". Een tv die uit
+      // slaapstand komt heeft zijn netwerk simpelweg nog niet terug; dat is geen uitlogsignaal.
+      //
+      // We houden de sessie dan vast met een id-sleutel die AL verlopen is. Dat is geen truc: het
+      // is precies wat er waar is -- we weten wie je bent, we hebben nog geen verse sleutel. De
+      // eerste de beste [_fresh] haalt hem op zodra het netwerk er weer is, en die weet zelf al dat
+      // NETWORK niet uitloggen betekent.
+      if (e.code == 'NETWORK' && bewaard != null) {
+        user = CloudUser(
+          uid: bewaard.uid,
+          email: bewaard.email,
+          idToken: '',
+          refreshToken: bewaard.refreshToken,
+          expiresAt: DateTime.fromMillisecondsSinceEpoch(0),
+        );
+      } else {
+        // Een echte weigering: de sleutel is ingetrokken, het account uitgezet. Dán ben je uit.
+        lastError = e.message;
+      }
     } catch (e) {
+      // Een onleesbaar of half geschreven bestand. Daar valt niets aan te herstellen.
       debugPrint('Cloud restore failed: $e');
     }
     state = user == null ? CloudState.signedOut : CloudState.signedIn;
@@ -297,6 +325,41 @@ class CloudSession extends ChangeNotifier {
           lastSeen: d.data['lastSeenAt'] is DateTime ? d.data['lastSeenAt'] as DateTime : null,
         ),
     ];
+  }
+
+  /// Een verse sleutel voor de pc die op [baseUrl] antwoordt, zonder dat er iemand zes cijfers
+  /// hoeft over te tikken.
+  ///
+  /// **Waarom dit bestaat.** Een toestel waarvan de sleutel niet meer aanvaard wordt zat vast: het
+  /// koppelscherm komt niet terug zolang er nog een kopie van de bibliotheek ligt, en de enige
+  /// plek die ooit een nieuwe sleutel vroeg was het inlogscherm. Dus moest je naar de pc lopen voor
+  /// een code, terwijl allebei de kanten op hetzelfde account ingelogd zijn en de pc een verzoek
+  /// van je eigen toestel gewoon toekent.
+  ///
+  /// Dit geeft niets weg wat het inlogscherm niet al gaf: hetzelfde account, hetzelfde verzoek,
+  /// dezelfde pc die het toekent. Een toestel dat je bewust hebt ingetrokken blijft ingetrokken --
+  /// [requestAccess] geeft bij `revoked` null terug en vraagt niets opnieuw.
+  Future<String?> verseSleutelVoor(Uri baseUrl, {Duration wacht = const Duration(seconds: 90)}) async {
+    if (state != CloudState.signedIn) return null;
+    final List<CloudServer> lijst;
+    try {
+      lijst = await servers();
+    } catch (e) {
+      debugPrint('Verse sleutel: de serverlijst kwam niet: $e');
+      return null;
+    }
+    if (lijst.isEmpty) return null;
+    // Op adres zoeken, en alleen als er twijfel kan zijn. Bij één pc onder je account is er niets te
+    // verwarren; bij meer moet het ADRES kloppen, anders vraag je toegang aan de verkeerde machine.
+    final passend = [
+      for (final s in lijst)
+        if (s.urls.any((u) => Uri.tryParse(u)?.host == baseUrl.host)) s,
+    ];
+    final doel = passend.length == 1
+        ? passend.first
+        : (passend.isEmpty && lijst.length == 1 ? lijst.first : null);
+    if (doel == null) return null;
+    return awaitAccess(doel.id, timeout: wacht);
   }
 
   /// Ask a PC for access. Returns the token once it has been granted, or null while we are still

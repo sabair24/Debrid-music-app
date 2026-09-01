@@ -512,6 +512,10 @@ Future<void> main() async {
   final netStore = NetsoortStore();
   unawaited(netStore.ververs());
 
+  // Hier al gedeclareerd, verderop pas gemaakt: de sessie hieronder wil hem kunnen vragen om een
+  // verse sleutel, en dat gebeurt pas als er ooit een pc geweigerd heeft -- lang na dit punt.
+  late final CloudSession cloud;
+
   final session = ClientSession(
     library: library,
     settings: settings,
@@ -539,6 +543,9 @@ Future<void> main() async {
       );
     },
     endpoint: mode.endpoint,
+    // Een geweigerde sleutel vervangt zichzelf, zolang dit toestel op hetzelfde account ingelogd is
+    // als de pc. Zie `CloudSession.verseSleutelVoor`.
+    verseSleutel: (basis) => cloud.verseSleutelVoor(basis),
   );
 
   // Searching and downloading. On a Mac or an iPad these are the same classes as far as every
@@ -806,7 +813,7 @@ Future<void> main() async {
   // Signing in. Restoring a saved session is deliberately NOT awaited before the first frame: a
   // slow network would otherwise hold the whole app on a blank screen, and on the PC it would delay
   // serving music for something that has nothing to do with serving music.
-  final cloud = CloudSession();
+  cloud = CloudSession();
 
   // Your service logins, carried by your own account.
   //
@@ -1614,17 +1621,36 @@ class _HomeShellState extends State<HomeShell> {
   final _tvInhoud = FocusScopeNode(debugLabel: 'tv-inhoud');
   final _tvSpeler = FocusScopeNode(debugLabel: 'tv-spelerbalk');
 
+  /// De meldingsbalk tussen de navigatie en de inhoud.
+  ///
+  /// **Waarom die een eigen scope nodig had.** Hij stond in géén enkele scope, en de sprongen
+  /// hieronder gingen van de bovenbalk rechtstreeks naar de inhoud. Op de Shield gemeten op
+  /// 01-09-2026: met een geweigerde sleutel stond "Opnieuw proberen" op het scherm en was hij met
+  /// de afstandsbediening niet te bereiken -- omlaag vanuit het menu sprong eroverheen, omhoog
+  /// vanuit de inhoud ging terug naar het menu. De enige knop die de storing kon verhelpen was
+  /// precies de knop die je niet kon indrukken.
+  final _tvMelding = FocusScopeNode(debugLabel: 'tv-melding');
+
   /// Vangt de pijl die de scope uit wil.
   ///
   /// Eerst de pagina zelf laten proberen: is er binnen de inhoud nog iets boven je, dan hoort de
   /// focus daarheen en niet naar de balk. Pas als dat niets oplevert is de rand bereikt.
-  KeyEventResult _tvSprong(
-      KeyEvent e, LogicalKeyboardKey pijl, TraversalDirection richting, FocusScopeNode naar) {
+  ///
+  /// [naar] is een RIJTJE en geen enkele scope, want de meldingsbalk staat er meestal niet. Een
+  /// scope zonder iets om op te staan wordt overgeslagen: `requestFocus` op een lege scope laat de
+  /// focus staan waar hij stond, en dan doet de pijl niets — precies de klacht die dit oplost.
+  KeyEventResult _tvSprong(KeyEvent e, LogicalKeyboardKey pijl, TraversalDirection richting,
+      List<FocusScopeNode> naar) {
     if (!isTv || e is! KeyDownEvent || e.logicalKey != pijl) return KeyEventResult.ignored;
     if (FocusManager.instance.primaryFocus?.focusInDirection(richting) ?? false) {
       return KeyEventResult.handled;
     }
-    naar.requestFocus();
+    for (final scope in naar) {
+      if (scope.traversalDescendants.isNotEmpty) {
+        scope.requestFocus();
+        break;
+      }
+    }
     return KeyEventResult.handled;
   }
 
@@ -1716,6 +1742,7 @@ class _HomeShellState extends State<HomeShell> {
     _radio?.removeListener(_kijkNaarRadio);
     _tvBalk.dispose();
     _tvInhoud.dispose();
+    _tvMelding.dispose();
     _tvSpeler.dispose();
     _searchCtl.dispose();
     _searchFocus.dispose();
@@ -2118,8 +2145,8 @@ class _HomeShellState extends State<HomeShell> {
               if (isTv)
                 FocusScope(
                   node: _tvBalk,
-                  onKeyEvent: (_, e) =>
-                      _tvSprong(e, LogicalKeyboardKey.arrowDown, TraversalDirection.down, _tvInhoud),
+                  onKeyEvent: (_, e) => _tvSprong(e, LogicalKeyboardKey.arrowDown,
+                      TraversalDirection.down, [_tvMelding, _tvInhoud]),
                   child: RepaintBoundary(
                   child: TvTopBar(
                     view: _view,
@@ -2130,7 +2157,23 @@ class _HomeShellState extends State<HomeShell> {
                   ),
                 ),
                 ),
-              const _OfflineBanner(),
+              // De melding krijgt op een tv een eigen halte tussen de navigatie en de inhoud. Staat
+              // er geen melding, dan is deze scope leeg en slaat [_tvSprong] hem over; je merkt er
+              // dus niets van zolang alles het doet.
+              _AlleenOpTv(
+                bouw: (kind) => FocusScope(
+                  node: _tvMelding,
+                  onKeyEvent: (_, e) {
+                    final omhoog = _tvSprong(
+                        e, LogicalKeyboardKey.arrowUp, TraversalDirection.up, [_tvBalk]);
+                    if (omhoog != KeyEventResult.ignored) return omhoog;
+                    return _tvSprong(e, LogicalKeyboardKey.arrowDown, TraversalDirection.down,
+                        [_tvInhoud, _tvSpeler]);
+                  },
+                  child: kind,
+                ),
+                child: const _OfflineBanner(),
+              ),
               const _TvStatusStrip(),
             ],
             Expanded(
@@ -2148,14 +2191,15 @@ class _HomeShellState extends State<HomeShell> {
                     child: _AlleenOpTv(
                       bouw: (kind) => FocusScope(
                         node: _tvInhoud,
-                        // Omhoog naar de navigatie, omlaag naar de spelerbalk -- allebei liggen ze
-                        // buiten de route waar deze inhoud in zit, en een route laat pijlen niet door.
+                        // Omhoog naar de melding als die er staat, anders naar de navigatie; omlaag
+                        // naar de spelerbalk. Ze liggen alledrie buiten de route waar deze inhoud
+                        // in zit, en een route laat pijlen niet door.
                         onKeyEvent: (_, e) {
-                          final omhoog = _tvSprong(
-                              e, LogicalKeyboardKey.arrowUp, TraversalDirection.up, _tvBalk);
+                          final omhoog = _tvSprong(e, LogicalKeyboardKey.arrowUp,
+                              TraversalDirection.up, [_tvMelding, _tvBalk]);
                           if (omhoog != KeyEventResult.ignored) return omhoog;
-                          return _tvSprong(
-                              e, LogicalKeyboardKey.arrowDown, TraversalDirection.down, _tvSpeler);
+                          return _tvSprong(e, LogicalKeyboardKey.arrowDown, TraversalDirection.down,
+                              [_tvSpeler]);
                         },
                         child: kind,
                       ),
@@ -2222,8 +2266,8 @@ class _HomeShellState extends State<HomeShell> {
               _AlleenOpTv(
                 bouw: (kind) => FocusScope(
                   node: _tvSpeler,
-                  onKeyEvent: (_, e) =>
-                      _tvSprong(e, LogicalKeyboardKey.arrowUp, TraversalDirection.up, _tvInhoud),
+                  onKeyEvent: (_, e) => _tvSprong(e, LogicalKeyboardKey.arrowUp,
+                      TraversalDirection.up, [_tvInhoud, _tvMelding, _tvBalk]),
                   child: kind,
                 ),
                 child: RepaintBoundary(child: PlayerBar(metSysteeminzet: !isCompact(context))),
@@ -2826,20 +2870,86 @@ class _OfflineBanner extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 10),
-        // Bewust "opnieuw proberen" en niet "opnieuw koppelen", ook bij een geweigerde sleutel.
+        // "Opnieuw proberen" blijft de EERSTE knop, en dat is geen opmaak maar de volgorde waarin je
+        // het hoort te proberen.
         //
-        // Gemeten: de sleutel was niet ingetrokken maar uit het geheugen van de pc verdwenen, en na
-        // een herstart van de pc-app werkte diezelfde sleutel meteen weer. Herkoppelen zou dat
-        // maskeren — en het is de enige handeling die je koppeling écht weggooit. Eerst kijken of
-        // hij er gewoon weer is; pas als `koppeling.log` zegt dat hij echt ingetrokken is, hoort
-        // hier een tweede knop.
-        _BannerKnop(
-          label: 'Opnieuw proberen',
-          kleur: kleur,
-          onTap: () => unawaited(context.read<ClientSession>().refreshNow()),
-        ),
+        // Gemeten: de sleutel was toen niet ingetrokken maar uit het geheugen van de pc verdwenen,
+        // en na een herstart van de pc-app werkte diezelfde sleutel meteen weer. Daarom stond hier
+        // één knop, met de aantekening dat een tweede pas hoort als de sleutel écht ingetrokken is.
+        //
+        // Dat geval is er nu. Gemeten op 01-09-2026: de Shield werd geweigerd terwijl de Mac met
+        // zijn eigen sleutel bij dezelfde pc de hele catalogus ophaalde — de lijst op de pc was dus
+        // gezond en deze ene sleutel lag eruit. "Opnieuw proberen" veranderde daar niets aan. Zonder
+        // tweede knop is dat een doodlopende weg: het koppelscherm komt nooit terug zolang er nog
+        // een kopie van de bibliotheek ligt, want dan geldt de zitting als klaar.
+        //
+        // De tweede knop komt er alleen bij een GEWEIGERDE sleutel. Staat de pc simpelweg uit, dan
+        // mankeert je koppeling niets en zou hij je je toegang laten weggooien voor niets.
+        if (!geweigerd)
+          _BannerKnop(
+            label: 'Opnieuw proberen',
+            kleur: kleur,
+            onTap: () => unawaited(context.read<ClientSession>().refreshNow()),
+          )
+        else if (isCompact(context))
+          // Op een telefoon ONDER elkaar. Naast elkaar houden twee knoppen van deze breedte zo
+          // weinig over voor de zin ernaast dat er geen leesbare melding overblijft; zie de meting
+          // hierboven over de 209 punten.
+          Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
+            _BannerKnop(
+              label: 'Opnieuw proberen',
+              kleur: kleur,
+              onTap: () => unawaited(context.read<ClientSession>().refreshNow()),
+            ),
+            const SizedBox(height: 4),
+            _BannerKnop(
+              label: 'Opnieuw koppelen',
+              kleur: kleur,
+              onTap: () => _koppelOpnieuw(context),
+            ),
+          ])
+        else ...[
+          _BannerKnop(
+            label: 'Opnieuw proberen',
+            kleur: kleur,
+            onTap: () => unawaited(context.read<ClientSession>().refreshNow()),
+          ),
+          const SizedBox(width: 8),
+          _BannerKnop(
+            label: 'Opnieuw koppelen',
+            kleur: kleur,
+            onTap: () => _koppelOpnieuw(context),
+          ),
+        ],
       ]),
     );
+  }
+
+  /// Je koppeling weggooien en terug naar het koppelscherm.
+  ///
+  /// Met een dialoog ertussen, want dit is onomkeerbaar zonder de pc erbij: opnieuw koppelen kan
+  /// alleen met de code van zes cijfers die de pc laat zien. Iemand die dit op een tv per ongeluk
+  /// indrukt zit anders zonder bibliotheek én zonder de weg terug.
+  static Future<void> _koppelOpnieuw(BuildContext context) async {
+    final session = context.read<ClientSession>();
+    final ja = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        backgroundColor: _panel,
+        title: const Text('Opnieuw koppelen?'),
+        content: const Text(
+            'Probeer eerst "Opnieuw proberen" — vaak is je pc de koppeling alleen even kwijt.\n\n'
+            'Helpt dat niet, dan vergeet dit toestel je pc. Je hebt dan de code van zes cijfers '
+            'nodig die je pc laat zien om er weer bij te komen, en tot die tijd zie je hier ook de '
+            'kopie van je bibliotheek niet meer. Je muziek blijft gewoon op de pc staan.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Annuleer')),
+          FilledButton(
+              onPressed: () => Navigator.pop(c, true), child: const Text('Opnieuw koppelen')),
+        ],
+      ),
+    );
+    if (ja == true) await session.unpair();
   }
 
   static String _ago(DateTime when) {
