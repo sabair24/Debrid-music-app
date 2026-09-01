@@ -1,5 +1,16 @@
-# Uncomment this line to define a global platform for your project
-# platform :ios, '13.0'
+# De ondergrens voor de PODS, en die hoort gelijk te lopen met het Xcode-project.
+#
+# Stond uitgecommentarieerd, en dan pakken de pods de ondergrens van Flutter zelf. Gemeten in de
+# Apple-bouw van 3.9.278: dat was een mengsel van `arm64-apple-ios12.0` en `13.0`, terwijl het
+# project op 13.0 stond. Zet je alleen het project om, dan blijft die 12.0 gewoon staan.
+#
+# Waarom 15.0: Apple stuurde ITMS-90068 na elke levering — "MinimumOSVersion too low", en vanaf
+# voorjaar 2027 wordt een app met minder dan 15.0 niet meer aangenomen. `MinimumOSVersion` in de
+# gebouwde app komt rechtstreeks uit IPHONEOS_DEPLOYMENT_TARGET; er is geen aparte plek waar dat
+# getal ook nog staat.
+#
+# Zelfde vorm als desktop/macos/Podfile, die al jaren `platform :osx, '10.15'` heeft.
+platform :ios, '15.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
