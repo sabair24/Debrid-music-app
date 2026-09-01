@@ -59,8 +59,14 @@ void main() {
 
   test('de sprong tussen menu en inhoud bestaat, in beide richtingen', () {
     // Zonder deze twee is de balk onbereikbaar, hoe mooi hij ook staat. Zie _tvSprong.
-    expect(bron, contains('LogicalKeyboardKey.arrowUp, TraversalDirection.up, _tvBalk'));
-    expect(bron, contains('LogicalKeyboardKey.arrowDown, TraversalDirection.down, _tvInhoud'));
+    //
+    // Het DOEL is sinds tv_melding_bereikbaar_test.dart een rijtje en geen enkele scope: er kan
+    // een meldingsbalk tussen staan, en die moet als eerste aan de beurt zijn. Wat hier bewaakt
+    // wordt is dat de bestemming er nog in zit, niet hoe het rijtje eruitziet.
+    expect(bron, contains('TraversalDirection.up, [_tvMelding, _tvBalk]'),
+        reason: 'omhoog vanuit de inhoud moet nog steeds bij de bovenbalk uitkomen');
+    expect(bron, contains('TraversalDirection.down, [_tvMelding, _tvInhoud]'),
+        reason: 'omlaag vanuit de bovenbalk moet nog steeds bij de inhoud uitkomen');
   });
 
   test('de sprong laat de pagina eerst zelf proberen', () {
@@ -68,6 +74,6 @@ void main() {
     final start = bron.indexOf('KeyEventResult _tvSprong');
     expect(start, greaterThan(-1));
     final body = bron.substring(start, start + 600);
-    expect(body.indexOf('focusInDirection'), lessThan(body.indexOf('naar.requestFocus')));
+    expect(body.indexOf('focusInDirection'), lessThan(body.indexOf('scope.requestFocus')));
   });
 }
