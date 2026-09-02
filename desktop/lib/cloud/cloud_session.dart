@@ -26,6 +26,7 @@ import 'auth.dart';
 import 'config.dart';
 import 'device_identity.dart';
 import 'firestore.dart';
+import 'zuinig.dart';
 
 enum CloudState {
   /// No Firebase project in this build — the app falls back to pairing codes.
@@ -58,7 +59,9 @@ class CloudServer {
   final bool online;
   final DateTime? lastSeen;
 
-  /// The heartbeat is every 30 s; two minutes of silence means asleep or shut down, not a hiccup.
+  /// De pc bevestigt zijn aanwezigheid hoogstens eens per anderhalve minuut (zie [kHartslagRitme]);
+  /// twee minuten stilte betekent dus slapen of uitgezet, niet een hapering. Mislukt een slag, dan
+  /// gaat de volgende dertig seconden later alsnog — ruim binnen dit venster.
   bool get isFresh {
     final seen = lastSeen;
     if (seen == null) return false;
@@ -204,20 +207,40 @@ class CloudSession extends ChangeNotifier {
     required int Function() trackCount,
   }) {
     _heartbeat?.cancel();
+    // Wat er de vorige keer werkelijk geschreven is, en wanneer. Alleen hierdoor kan de slag
+    // hieronder overgeslagen worden — zie `zuinig.dart` voor wat dat kostte.
+    Map<String, dynamic>? gezet;
+    DateTime? geschrevenOm;
+
     Future<void> beat() async {
       if (!isSignedIn) return;
       try {
         final db = await _db();
         if (db == null) return;
-        await db.set('users/$uid/servers/$serverId', {
+        final nu = DateTime.now().toUtc();
+        final regel = <String, dynamic>{
           'name': serverName,
           'platform': platformName(),
           'port': port,
           'urls': addresses(),
           'online': true,
-          'lastSeenAt': DateTime.now().toUtc(),
           'trackCount': trackCount(),
-        });
+        };
+        // NIET elke slag schrijven. Deze regel bevatte een tijdstempel en werd daarom altijd
+        // opnieuw weggeschreven — 2880 keer per dag voor een pc die niets doet, tegen een gratis
+        // daglimiet van 20 000. Verandert er iets aan het adres, de poort of het aantal nummers,
+        // dan gaat het meteen; anders eens per anderhalve minuut, ruim binnen het venster van twee
+        // minuten waarin een pc als online telt.
+        final veranderd = serverRegelVeranderd(gezet, regel);
+        if (moetServerSchrijven(
+          veranderd: veranderd,
+          sindsLaatsteSchrijf:
+              geschrevenOm == null ? const Duration(days: 1) : nu.difference(geschrevenOm!),
+        )) {
+          await db.set('users/$uid/servers/$serverId', {...regel, 'lastSeenAt': nu});
+          gezet = regel;
+          geschrevenOm = nu;
+        }
         await _grantPending(db, serverId, grants);
         lastError = null;
       } catch (e) {

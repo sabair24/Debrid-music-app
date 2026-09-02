@@ -24,9 +24,30 @@ class FirestoreException implements Exception {
   /// The session expired, or the rules said no. The caller signs in again rather than retrying.
   bool get isUnauthorized => statusCode == 401 || statusCode == 403;
 
+  /// De dagelijkse gratis limiet van de accountdatabase is op. Niets aan de hand met je muziek.
+  bool get isQuotaOp => statusCode == 429;
+
   @override
   String toString() => message;
 }
+
+/// De zin die bij [status] op het scherm hoort, in gewone taal.
+///
+/// **Waarvoor dit bestaat.** Op 31-08-2026 stond er op het inlogscherm: *"Firestore antwoordde met
+/// 429: Quota exceeded.."* — een merknaam, een getal en twee Engelse woorden. Wie dat leest weet
+/// niet of zijn muziek weg is, of zijn account, of dat hij iets fout deed. Geen van drieën.
+///
+/// 429 is bijzonder genoeg om apart te noemen: het gaat vanzelf over, en er is intussen een weg om
+/// je pc wél te bereiken. Dat hoort erbij te staan, want anders zit je te wachten zonder te weten
+/// waarop.
+String firestoreUitleg(int status, String bericht) => switch (status) {
+      401 || 403 => 'Je sessie is verlopen of de toegang is geweigerd.',
+      429 => 'De accountdatabase heeft zijn daglimiet bereikt. Je muziek en je account zijn in orde '
+          '— dit gaat vannacht vanzelf over. Wil je er nu bij: kies "Koppelen met een code", dan '
+          'gaat het rechtstreeks naar je pc over je eigen netwerk.',
+      >= 500 => 'De accountdatabase is even onbereikbaar ($status). Probeer het zo nog eens.',
+      _ => 'Firestore antwoordde met $status${bericht.isEmpty ? '' : ': $bericht'}.',
+    };
 
 /// One document: its id and its fields, already flattened to plain Dart.
 class FirestoreDoc {
@@ -121,9 +142,7 @@ class Firestore {
     if (res.statusCode >= 200 && res.statusCode < 300) return map;
     final message = ((map['error'] as Map?)?['message'] ?? '').toString();
     throw FirestoreException(
-      res.statusCode == 401 || res.statusCode == 403
-          ? 'Je sessie is verlopen of de toegang is geweigerd.'
-          : 'Firestore antwoordde met ${res.statusCode}${message.isEmpty ? '' : ': $message'}.',
+      firestoreUitleg(res.statusCode, message),
       statusCode: res.statusCode,
     );
   }
