@@ -15,7 +15,7 @@
 /// Precies dezelfde fout als "twee klokken die te snel liepen" van 28-08-2026, alleen kostte deze
 /// niets op de pc zelf en dus viel hij pas op toen de deur op slot ging.
 ///
-/// **Waarom dit een toets is en geen kwestie van kijken.** Het verschil tussen 2880 en 960 schrijf-
+/// **Waarom dit een toets is en geen kwestie van kijken.** Het verschil tussen 2880 en 1440 schrijf-
 /// beurten per dag zie je nergens aan de app af. Je merkt het pas als het te laat is, en dan duurt
 /// het tot middernacht.
 library;
@@ -87,30 +87,31 @@ void main() {
 
     test('en zonder verandering pas na het ritme', () {
       expect(
-          moetServerSchrijven(veranderd: false, sindsLaatsteSchrijf: const Duration(seconds: 30)),
+          moetServerSchrijven(veranderd: false, sindsLaatsteSchrijf: const Duration(seconds: 5)),
           isFalse);
       expect(
-          moetServerSchrijven(veranderd: false, sindsLaatsteSchrijf: const Duration(seconds: 60)),
+          moetServerSchrijven(
+              veranderd: false, sindsLaatsteSchrijf: kHartslagRitme - const Duration(seconds: 1)),
           isFalse);
       expect(
           moetServerSchrijven(veranderd: false, sindsLaatsteSchrijf: kHartslagRitme), isTrue);
     });
 
-    test('het ritme past ruim binnen het venster waarin een pc online heet', () {
-      // Twee minuten stilte betekent "uit" (CloudSession.isOnline). Zou het ritme daar overheen
-      // gaan, dan flikkert de pc aan en uit op het koppelscherm — en dat is erger dan het probleem
-      // dat hier opgelost wordt.
-      expect(kHartslagRitme, lessThan(const Duration(minutes: 2)));
-      // En er moet nog een gemiste slag bij kunnen: de klok tikt elke 30 seconden.
-      expect(kHartslagRitme + const Duration(seconds: 30), lessThan(const Duration(minutes: 2)));
+    test('er blijft speling voor één gemiste slag', () {
+      // Dit is de som waar het getal uit volgt, en de toets die hem bewaakte: bij 90 seconden kwam
+      // ritme + tik op precies 120 uit, en dan flikkert een pc na één mislukte slag offline op het
+      // koppelscherm. Erger dan het probleem dat hier opgelost wordt.
+      expect(kHartslagRitme, lessThan(kOnlineVenster));
+      expect(kHartslagRitme + kHartslagTik, lessThan(kOnlineVenster));
     });
 
-    test('drie keer zuiniger dan het was', () {
-      // 30 seconden was 2880 schrijfbeurten per dag. Dit is de winst, uitgerekend.
-      final was = const Duration(days: 1).inSeconds / 30;
-      final wordt = const Duration(days: 1).inSeconds / kHartslagRitme.inSeconds;
-      expect(was ~/ wordt, 3);
-      expect(wordt, lessThan(1000));
+    test('en het is minstens twee keer zuiniger dan het was', () {
+      // 30 seconden was 2880 schrijfbeurten per dag, op een gratis limiet van 20 000.
+      const dag = Duration(days: 1);
+      final was = dag.inSeconds / 30;
+      final wordt = dag.inSeconds / kHartslagRitme.inSeconds;
+      expect(wordt * 2, lessThanOrEqualTo(was));
+      expect(wordt, lessThan(2000));
     });
   });
 

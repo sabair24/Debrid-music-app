@@ -38,10 +38,26 @@ bool moetServerSchrijven({
 
 /// Hoe vaak de pc zijn aanwezigheid bevestigt als er verder niets verandert.
 ///
-/// Negentig seconden tegen een venster van twee minuten (`CloudSession.isOnline`). Ruim genoeg om
-/// nooit onterecht offline te lijken — één gemiste slag mag — en drie keer zuiniger dan de dertig
-/// seconden die hier stonden.
-const Duration kHartslagRitme = Duration(seconds: 90);
+/// **Zestig seconden, en dat getal volgt uit een som.** De klok tikt elke 30 seconden en een pc
+/// telt als online zolang hij binnen 2 minuten iets van zich liet horen. Eén mislukte slag mag geen
+/// pc offline laten lijken, dus: ritme + één tik moet ONDER dat venster blijven. Bij 60 s is dat
+/// 90 tegen 120 — een halve minuut speling.
+///
+/// Hier stond eerst 90 seconden, wat op 90 + 30 = precies 120 uitkwam: geen speling, en dus een pc
+/// die na één gemiste slag op het koppelscherm zou gaan flikkeren. De toets ving dat, en het is de
+/// reden dat dit getal niet naar boven mag zonder het venster mee te verruimen.
+///
+/// De helft van de 2880 schrijfbeurten per dag die de oude dertig seconden kostten. Nog zuiniger
+/// kan alleen door dat venster op te rekken, en dan gaat "staat mijn pc aan?" er trager uitzien —
+/// dat is de verkeerde ruil voor een app waar dat juist de vraag is.
+const Duration kHartslagRitme = Duration(seconds: 60);
+
+/// Hoe vaak de klok tikt. De hartslag kan alleen op een tik geschreven worden, dus dit hoort in de
+/// som hierboven thuis.
+const Duration kHartslagTik = Duration(seconds: 30);
+
+/// Het venster waarbinnen een pc als online telt. Zie `CloudServer.isFresh`.
+const Duration kOnlineVenster = Duration(minutes: 2);
 
 /// Alles wat NIET meetelt bij "is er iets veranderd".
 ///

@@ -59,13 +59,17 @@ class CloudServer {
   final bool online;
   final DateTime? lastSeen;
 
-  /// De pc bevestigt zijn aanwezigheid hoogstens eens per anderhalve minuut (zie [kHartslagRitme]);
-  /// twee minuten stilte betekent dus slapen of uitgezet, niet een hapering. Mislukt een slag, dan
-  /// gaat de volgende dertig seconden later alsnog — ruim binnen dit venster.
+  /// De pc bevestigt zijn aanwezigheid hoogstens eens per minuut (zie [kHartslagRitme]); twee
+  /// minuten stilte betekent dus slapen of uitgezet, niet een hapering. Mislukt een slag, dan gaat
+  /// de volgende dertig seconden later alsnog — een halve minuut binnen dit venster.
+  ///
+  /// Het venster staat als getal in `zuinig.dart`, naast het ritme, want die twee horen bij elkaar:
+  /// verruim je er één zonder de ander, dan flikkert een pc op het koppelscherm of blijft hij juist
+  /// te lang "aan" staan.
   bool get isFresh {
     final seen = lastSeen;
     if (seen == null) return false;
-    return DateTime.now().difference(seen) < const Duration(minutes: 2);
+    return DateTime.now().difference(seen) < kOnlineVenster;
   }
 }
 
@@ -250,7 +254,10 @@ class CloudSession extends ChangeNotifier {
     }
 
     unawaited(beat());
-    _heartbeat = Timer.periodic(const Duration(seconds: 30), (_) => unawaited(beat()));
+    // De tik gebruikt hetzelfde getal waar `kHartslagRitme` mee uitgerekend is. Zouden die twee uit
+    // elkaar lopen, dan klopt de speling voor een gemiste slag niet meer — en dat is precies wat de
+    // toets bewaakt.
+    _heartbeat = Timer.periodic(kHartslagTik, (_) => unawaited(beat()));
   }
 
   /// Answer every device that asked for access while we were looking the other way.
