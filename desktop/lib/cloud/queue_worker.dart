@@ -12,6 +12,7 @@ import 'package:flutter/foundation.dart';
 import '../lan/server.dart';
 import '../online.dart';
 import 'queue.dart';
+import 'zuinig.dart';
 
 class QueueWorker {
   QueueWorker({
@@ -43,13 +44,44 @@ class QueueWorker {
   /// Items whose job has actually been observed at least once.
   final Set<String> _seen = {};
 
-  void start({Duration every = const Duration(seconds: 20)}) {
+  /// Wanneer er voor het laatst iets in de wachtrij stond. Null zolang dat nog nooit zo was.
+  DateTime? _laatsteWerk;
+
+  /// Kijk de wachtrij na — snel zolang er iets gebeurt, trager als het al een tijd stil is.
+  ///
+  /// **Waarom dat laatste erbij moest.** Dit stond op vast elke twintig seconden, ook als de
+  /// wachtrij dagenlang leeg was: 4320 leesbeurten per dag van de accountdatabase, voor een pc die
+  /// niets te doen had. Samen met de hartslag was dat genoeg om de gratis daglimiet op te maken, en
+  /// dan kom je niet meer binnen — precies wat er op 31-08-2026 gebeurde. Zie `zuinig.dart`.
+  ///
+  /// De prijs staat er eerlijk bij: na vijf minuten stilte kan het tot een minuut duren voor een
+  /// nieuwe opdracht wordt opgepikt. Zodra er íéts in de wachtrij staat gaat het meteen weer snel.
+  void start({Duration? every}) {
     _poll?.cancel();
-    unawaited(tick());
-    _poll = Timer.periodic(every, (_) => unawaited(tick()));
+    _vast = every;
+    _gestopt = false;
+    unawaited(_ronde());
   }
 
+  /// Een klok die zichzelf steeds opnieuw zet, en geen `Timer.periodic`: het ritme wordt NA elke
+  /// ronde opnieuw bepaald, want juist die ronde kan werk gevonden hebben.
+  Future<void> _ronde() async {
+    if (_gestopt) return;
+    await tick();
+    if (_gestopt) return;
+    _poll?.cancel();
+    _poll = Timer(_vast ?? wachtrijRitme(_stilte()), () => unawaited(_ronde()));
+  }
+
+  /// Een vast ritme uit [start], voor toetsen die niet op de terugval willen wachten.
+  Duration? _vast;
+  bool _gestopt = false;
+
+  Duration _stilte() =>
+      _laatsteWerk == null ? kStilteVoorTraag : now().difference(_laatsteWerk!);
+
   void stop() {
+    _gestopt = true;
     _poll?.cancel();
     _poll = null;
   }
@@ -58,6 +90,9 @@ class QueueWorker {
   Future<void> tick() async {
     try {
       final items = await backend.list();
+      // Iets in de rij betekent: blijf snel kijken. Ook een item dat al klaar is telt mee -- er is
+      // dan zojuist iets gebeurd, en de kans is groot dat er meer volgt.
+      if (items.isNotEmpty) _laatsteWerk = now();
       for (final item in items) {
         if (_running.contains(item.id)) continue;
         if (item.isFinished) continue;
