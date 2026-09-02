@@ -23071,6 +23071,17 @@ class _PcBijwerkenKnopState extends State<PcBijwerkenKnop> {
             label: Text(beeld.knop!),
           ),
         ],
+        // De kijk-knop. Dezelfde weg naar de pc als hierboven — die kijkt vers bij GitHub en
+        // installeert als er dan toch iets blijkt te staan — maar met een andere belofte op het
+        // label, want er is op dit moment niets bekend om te installeren. Zie [Bijwerkbeeld.kijken].
+        if (beeld.kijken != null) ...[
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () => unawaited(_start()),
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            label: Text(beeld.kijken!),
+          ),
+        ],
       ],
     );
   }

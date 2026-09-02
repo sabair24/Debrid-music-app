@@ -39,13 +39,26 @@ String megabytes(int bytes) => bytes <= 0 ? '' : '${(bytes / (1024 * 1024)).roun
 /// Alles wat het paneel op de telefoon nodig heeft, en niets meer.
 @immutable
 class Bijwerkbeeld {
-  const Bijwerkbeeld({required this.regel, this.knop, this.balk, this.fout = false});
+  const Bijwerkbeeld(
+      {required this.regel, this.knop, this.kijken, this.balk, this.fout = false});
 
   /// De zin die er altijd staat, ook als er niets te doen is.
   final String regel;
 
   /// Wat er op de knop staat, of null als er geen knop hoort te zijn.
   final String? knop;
+
+  /// De KIJK-knop: verse navraag bij GitHub, en installeren als er dan toch iets blijkt te staan.
+  ///
+  /// **Waarom dit apart staat van [knop].** De regel hierboven blijft gelden: er is geen
+  /// BIJWERK-knop als er niets te installeren valt, want dat zou beweren dat er iets klaarstaat.
+  /// Maar zonder enige knop was er ook geen manier om te vrágen: de pc kijkt uit zichzelf hoogstens
+  /// eens per tien minuten, en tot die tijd staat er "de pc is bij" terwijl dat nog niet nagekeken
+  /// is. Gemeld op 02-09-2026: *"waar is men knop om de update te pushen naar pc"* — hij was er
+  /// alleen als de pc toevallig al gekeken had.
+  ///
+  /// Twee knoppen dus, met twee verschillende beloftes, en nooit allebei tegelijk.
+  final String? kijken;
 
   /// De voortgangsbalk: een waarde tussen 0 en 1, of null voor geen balk. Een balk die er is maar
   /// waarvan de waarde onbekend is, loopt onbepaald — daarvoor is [balkOnbepaald].
@@ -63,11 +76,12 @@ class Bijwerkbeeld {
       other is Bijwerkbeeld &&
       other.regel == regel &&
       other.knop == knop &&
+      other.kijken == kijken &&
       other.balk == balk &&
       other.fout == fout;
 
   @override
-  int get hashCode => Object.hash(regel, knop, balk, fout);
+  int get hashCode => Object.hash(regel, knop, kijken, balk, fout);
 }
 
 // **Elk veld wordt gewogen in plaats van gecast.** Dit is een kaart die van een ANDERE machine komt,
@@ -123,8 +137,14 @@ Bijwerkbeeld bijwerkbeeldVan(Map<String, dynamic> j) {
   final daar = _tekst(j['nieuw']);
 
   if (daar.isEmpty) {
+    // Geen BIJWERK-knop — er staat niets klaar — maar wel een manier om het te vragen. Wat hier
+    // stond kwam uit een navraag van hoogstens eens per tien minuten oud, en zolang die niet
+    // gedaan was luidde deze zin "de pc is bij" terwijl dat niemand wist.
     return Bijwerkbeeld(
-      regel: hier.isEmpty ? 'De pc is bij.' : 'De pc draait $hier — dat is de nieuwste.',
+      regel: hier.isEmpty
+          ? 'De pc is bij, voor zover hij weet.'
+          : 'De pc draait $hier — voor zover hij weet de nieuwste.',
+      kijken: 'Nu kijken en bijwerken',
     );
   }
 
