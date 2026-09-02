@@ -149,9 +149,25 @@ class Aria2 {
     ];
   }
 
+  /// Waar `aria2c` staat, of null.
+  ///
+  /// **Alleen een GEVONDEN pad wordt onthouden, een misser niet.** Dat verschil is een hele avond
+  /// waard. De vorige opzet zette `_gezocht = true` vóór het zoeken en liet dat staan, ook als er
+  /// niets uitkwam — en `_gezocht` is statisch, dus dat gold voor de rest van de looptijd van de
+  /// app. Eén keer misgrijpen, bijvoorbeeld omdat het bestand net vervangen werd door een
+  /// installatie of omdat een virusscanner het even vasthield, en er kwam tot de volgende herstart
+  /// geen torrent meer binnen. Zonder melding, want [start] zweeg erover.
+  ///
+  /// **Gemeten op 02-09-2026.** Saber probeerde twee nummers van Linkin Park te halen; het mislukte
+  /// zonder spoor. In `aria2.log` sprong de tijd van 01-09 15:56 naar 02-09 19:11 — zijn hele
+  /// sessie van zes uur ertussen, en in al die tijd is aria2 geen enkele keer gestart. Na een
+  /// herstart van de app lukte exact dezelfde download meteen.
+  ///
+  /// Opnieuw zoeken kost een `--version`-aanroep van een paar milliseconden, en alleen wanneer er
+  /// iets te downloaden valt. Dat is niets vergeleken met stil niets doen.
   String? get pad {
     if (_opgegeven != null && _opgegeven.isNotEmpty) return _opgegeven;
-    if (_gezocht) return _gevonden;
+    if (_gevonden != null) return _gevonden;
     _gezocht = true;
     final geprobeerd = <String>[];
     for (final k in kandidaten(eigenMap: appDir)) {
@@ -227,7 +243,16 @@ class Aria2 {
   Future<bool> start({String? downloadMap}) async {
     if (_proces != null) return true;
     final exe = pad;
-    if (exe == null) return false;
+    if (exe == null) {
+      // ZEG HET, want dit is de stilste manier waarop het downloaden kan stoppen.
+      //
+      // Hier stond kaal `return false`. De opdracht kreeg dan wel "Mislukt" op het scherm, maar in
+      // `aria2.log` bleef het leeg — en dat is precies het logboek waar je gaat kijken. Op
+      // 02-09-2026 leverde dat een sessie van zes uur op waarin geen enkele torrent binnenkwam en
+      // nergens stond waarom. Eén regel had dat een minuut gekost in plaats van een avond.
+      _log.line(laatsteFout ?? 'aria2c niet gevonden');
+      return false;
+    }
 
     _poort = await _vrijePoort();
     _geheim = _geheimpje();
