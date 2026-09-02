@@ -277,11 +277,23 @@ class _LoginScreenState extends State<LoginScreen> {
                         style: const TextStyle(color: _muted),
                       ),
                     ),
-                    if (widget.onUseCode != null) ...[
+                    // **De koppelcode staat er PAS als inloggen niet lukte.**
+                    //
+                    // Gevraagd op 02-09-2026: *"ik wil verlost zijn van die code koppeling, dit is
+                    // veel te ingewikkeld, het moet simpel: ik log overal in met gebruikersnaam en
+                    // wachtwoord en that's it."* Volkomen terecht — inloggen is al de gewone weg en
+                    // de code was alleen het vangnet. Maar hij stond er wél naast, even groot, op
+                    // het allereerste scherm, en dan lijkt het een keuze die je moet maken.
+                    //
+                    // Weghalen kan niet: hij is er precies voor het geval dat de andere weg niet
+                    // werkt — geen internet, of de accountdatabase die zijn daglimiet bereikt heeft,
+                    // zoals op 31-08. Wie dat overkomt zit anders volledig vast. Dus: onzichtbaar
+                    // tot je hem nodig hebt, en dán met de reden erbij.
+                    if (widget.onUseCode != null && _error != null) ...[
                       const Text('·', style: TextStyle(color: _muted)),
                       TextButton(
                         onPressed: _busy ? null : widget.onUseCode,
-                        child: const Text('Koppelen met een code',
+                        child: const Text('Lukt inloggen niet? Koppel met een code',
                             style: TextStyle(color: _muted)),
                       ),
                     ],

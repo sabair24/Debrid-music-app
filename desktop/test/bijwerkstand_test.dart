@@ -60,10 +60,31 @@ void main() {
       expect(b.balk, isNull);
     });
 
-    test('niets nieuws geeft GEEN knop', () {
+    test('niets nieuws geeft GEEN bijwerkknop, maar wel een kijkknop', () {
+      // De bijwerkknop blijft weg: er staat niets klaar, en beweren van wel is de fout waar dit
+      // hele bestand voor bestaat. Maar er moet wél iets te DRUKKEN zijn, want de pc kijkt uit
+      // zichzelf hoogstens eens per tien minuten. Gemeld op 02-09-2026: "waar is men knop om de
+      // update te pushen naar pc" — hij was er alleen als de pc toevallig al gekeken had.
       final b = bijwerkbeeldVan(stand(nieuw: ''));
       expect(b.knop, isNull);
-      expect(b.regel, contains('nieuwste'));
+      expect(b.kijken, isNotNull);
+      expect(b.regel, contains('voor zover hij weet'),
+          reason: 'niet beweren dat de pc bij is als dat nog niet nagekeken is');
+    });
+
+    test('een pc die het niet kan krijgt ook geen kijkknop', () {
+      // Een knop die naar een pc wijst die zichzelf toch niet kan bijwerken, is een knop die niets
+      // doet. Zeggen dat het niet kan is het hele antwoord.
+      expect(bijwerkbeeldVan(stand(kan: false)).kijken, isNull);
+      expect(bijwerkbeeldVan(const {}).kijken, isNull);
+    });
+
+    test('en er staan nooit twee knoppen tegelijk', () {
+      for (final j in [stand(), stand(nieuw: ''), stand(kan: false), const <String, dynamic>{}]) {
+        final b = bijwerkbeeldVan(j);
+        expect(b.knop != null && b.kijken != null, isFalse,
+            reason: 'twee knoppen met twee beloftes naast elkaar is een keuze die niemand kan maken');
+      }
     });
 
     test('een pc die het niet kan geeft geen knop', () {
@@ -92,6 +113,7 @@ void main() {
     test('binnenhalen toont een balk die telt en geen knop', () {
       final b = bijwerkbeeldVan(stand(fase: 'halen', voortgang: .42));
       expect(b.knop, isNull, reason: 'twee installers naast elkaar is het ergste dat kan gebeuren');
+      expect(b.kijken, isNull, reason: 'ook niet via de achterdeur');
       expect(b.balk, closeTo(.42, .001));
       expect(b.balkOnbepaald, isFalse);
       expect(b.regel, contains('42%'));
