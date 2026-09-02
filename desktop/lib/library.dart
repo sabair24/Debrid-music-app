@@ -3158,9 +3158,36 @@ class LibraryStore extends ChangeNotifier {
         final batch = todo.skip(i).take(atOnce).toList();
         await Future.wait([
           for (final album in batch)
-            enricher.fetchAndCache(album).then((bytes) {
-              if (bytes != null) album.enriched = bytes;
-            }).catchError((_) {}),
+            () {
+              // HET ALBUM WAAR DE HOES HEEN MOET, IS MISSCHIEN NIET MEER HETZELFDE OBJECT.
+              //
+              // Deze lus houdt een Album vast en schrijft de bytes er straks in. Maar een scan
+              // vervangt élk Album-object (zie [rebuildAlbums]), en zo'n scan loopt juist op het
+              // moment dat dit gebeurt: na een download wordt er opnieuw ingelezen én verrijkt.
+              // Komt de hoes een seconde ná die herbouw binnen, dan landt hij op een object dat
+              // niemand meer gebruikt. Op schijf staat hij dan keurig; op het scherm blijft de
+              // tegel leeg tot de volgende start, want pas dan leest fase 1 de cache.
+              //
+              // **Gemeten op 02-09-2026, Linkin Park — Hybrid Theory (Deluxe Edition).** De hoes
+              // werd om 19:11:45 opgehaald en bewaard (`covers/2e3dc76b.jpg`, 44 kB), maar
+              // `/art/<album>` bleef 404 geven; corrigeren van de metadata hielp niets, want de
+              // hoes was al binnen. Eén herstart en hij stond er.
+              //
+              // De uid overleeft een herbouw wél — die is er juist voor gemaakt, zie [uidOf] — dus
+              // die wijst na afloop het album aan dat er nu ís.
+              final uid = uidOf(album);
+              return enricher.fetchAndCache(album).then((bytes) {
+                if (bytes == null) return;
+                album.enriched = bytes;
+                if (uid.isEmpty) return;
+                for (final nu in albums) {
+                  if (identical(nu, album)) continue;
+                  if (uidOf(nu) != uid) continue;
+                  nu.enriched ??= bytes;
+                  break;
+                }
+              }).catchError((_) {});
+            }(),
         ]);
         notifyListeners();
       }
