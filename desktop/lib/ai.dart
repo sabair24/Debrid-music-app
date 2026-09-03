@@ -12,6 +12,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'aanbevelingplan.dart';
 import 'radioplan.dart';
 
 /// Het model. Klein werk, dus lage inspanning; zie [anthropicBody].
@@ -118,6 +119,58 @@ class AiService {
     if (zin.trim().isEmpty) throw const AiFout('Typ eerst wat je wil horen.');
     final werkruimte = werkruimteVan().trim();
 
+    final body = await _verstuur(anthropicBody(zin), sleutel, werkruimte);
+    final opdracht = leesRadioOpdracht(jsonUitAntwoord(body));
+    if (!opdracht.bruikbaar) {
+      throw const AiFout('Ik heb er geen artiesten uit kunnen halen. Probeer het wat concreter — '
+          'bijvoorbeeld "eurodance uit de jaren 90, 200 nummers".');
+    }
+    return opdracht;
+  }
+
+  /// Albums die bij een smaakprofiel passen, met een reden erbij.
+  ///
+  /// **Wat het model hier wél mag beslissen.** Het kiest wélke platen worden voorgesteld en waarom.
+  /// Wat het NIET doet, is bewijzen dat ze bestaan: elk voorstel wordt daarna bij Deezer nageslagen
+  /// door de aanroeper, en wat daar niet gevonden wordt valt weg. Dezelfde afspraak als bij de
+  /// radio, en om dezelfde reden: een model dat een titel verzint doet dat overtuigend.
+  ///
+  /// Zonder sleutel komt hier een lege lijst uit en géén uitzondering. Dit is een rij op een
+  /// startpagina, geen knop die iemand indrukte — er hoort dus niets te knallen als de sleutel niet
+  /// is ingevuld; de rij blijft simpelweg weg.
+  Future<List<AiVoorstel>> maakAanbevelingen(SmaakProfiel profiel) async {
+    final sleutel = sleutelVan().trim();
+    if (sleutel.isEmpty || profiel.leeg) return const [];
+    final werkruimte = werkruimteVan().trim();
+    final body = await _verstuur(
+      {
+        'model': kRadioModel,
+        'max_tokens': kRadioMaxTokens,
+        'output_config': {
+          // Net als bij de radio: dit is opzoekwerk, geen puzzel. Hoge inspanning kost hier alleen
+          // tijd en geld.
+          'effort': 'low',
+          'format': {'type': 'json_schema', 'schema': aanbevelingSchema()},
+        },
+        'messages': [
+          {'role': 'user', 'content': aanbevelingPrompt(profiel)}
+        ],
+      },
+      sleutel,
+      werkruimte,
+    );
+    return leesVoorstellen(jsonUitAntwoord(body));
+  }
+
+  /// Eén vraag aan de Messages-API, met alle antwoorden die fout kunnen gaan.
+  ///
+  /// **Apart, omdat deze foutmeldingen duur verdiend zijn.** Ze stonden in `maakRadioplan` en zijn
+  /// stuk voor stuk het resultaat van een keer zoeken: de 400 die zijn reden meekreeg, de sleutel
+  /// die aan een persoon hangt in plaats van aan een werkruimte, de weigering die als 200 met
+  /// `stop_reason: refusal` binnenkomt. Ze een tweede keer overtypen betekent dat ze na de eerste
+  /// verbetering uit elkaar gaan lopen.
+  Future<Object?> _verstuur(
+      Map<String, dynamic> vraag, String sleutel, String werkruimte) async {
     http.Response res;
     try {
       res = await _http
@@ -131,7 +184,7 @@ class AiService {
               // kopregel niet nodig; een sleutel die aan een PERSOON hangt weigert zonder.
               if (werkruimte.isNotEmpty) 'anthropic-workspace-id': werkruimte,
             },
-            body: jsonEncode(anthropicBody(zin)),
+            body: jsonEncode(vraag),
           )
           .timeout(const Duration(seconds: 60));
     } catch (e) {
@@ -172,11 +225,6 @@ class AiService {
     if (body is Map && body['stop_reason'] == 'refusal') {
       throw const AiFout('Het taalmodel wilde hier niet op antwoorden. Probeer het anders te zeggen.');
     }
-    final opdracht = leesRadioOpdracht(jsonUitAntwoord(body));
-    if (!opdracht.bruikbaar) {
-      throw const AiFout('Ik heb er geen artiesten uit kunnen halen. Probeer het wat concreter — '
-          'bijvoorbeeld "eurodance uit de jaren 90, 200 nummers".');
-    }
-    return opdracht;
+    return body;
   }
 }

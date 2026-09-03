@@ -20,6 +20,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'acoustid.dart';
+import 'aanbevelingplan.dart';
 import 'ai.dart';
 import 'radio.dart';
 import 'radiokeuze.dart';
@@ -10766,6 +10767,9 @@ class _StartCache {
   /// Hoe vaak er al ververst is. Zo gaat de rij bij elke ronde over iemand anders — anders is het
   /// een stempel in plaats van een suggestie.
   static int ronde = 0;
+
+  /// Wat het taalmodel uitzocht, met de reden erbij.
+  static List<({CatalogAlbumHit hit, String reden})> uitgezocht = [];
   static bool geladen = false;
 
   /// Wanneer er voor het laatst iets is opgehaald, in millisdeconden sinds 1970.
@@ -10786,6 +10790,7 @@ class _StartCache {
     genres = [];
     omdatArtiest = '';
     omdat = [];
+    uitgezocht = [];
     ronde++;
     geladen = false;
     opgehaaldMs = 0;
@@ -10813,6 +10818,7 @@ class _HomeStartViewState extends State<HomeStartView> {
   String _omdatArtiest = _StartCache.omdatArtiest;
   List<RecTrack> _omdat = _StartCache.omdat;
   int get _ronde => _StartCache.ronde;
+  List<({CatalogAlbumHit hit, String reden})> _uitgezocht = _StartCache.uitgezocht;
   bool _chartsLoading = !_StartCache.geladen;
   bool _seedsRequested = false; // the library's artists have been used to load the personal rows
   bool _seedsLoading = false;
@@ -10908,6 +10914,48 @@ class _HomeStartViewState extends State<HomeStartView> {
           (artiest: t.artist, aantal: s.aantal, laatstMs: s.laatstMs),
     ];
     final omdat = meestGespeeldeArtiest(beurten, nuMs: nuMs, overslaan: _ronde);
+
+    // HET SMAAKPROFIEL VOOR HET TAALMODEL.
+    //
+    // Een profiel en niet de bibliotheek: 1239 nummers passen niet in één vraag en zijn ook niet
+    // nodig. Wat telt is de vorm — wie er bovenaan staat, uit welke jaren het komt, en wat er de
+    // laatste tijd gedraaid is.
+    //
+    // Alleen op de pc. Op een gekoppeld toestel staat de AI-sleutel niet, precies zoals bij de
+    // radio: die vraag gaat daar naar de pc. Voor een rij op een startpagina is dat het niet waard.
+    final cfg = context.read<AppSettings>();
+    final perArtiest = <String, int>{};
+    for (final t in lib.tracks) {
+      final k = t.artist.trim();
+      if (k.isEmpty || _genericArtist(k)) continue;
+      perArtiest[k] = (perArtiest[k] ?? 0) + 1;
+    }
+    final top = perArtiest.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    final perDecennium = <int, int>{};
+    for (final t in lib.tracks) {
+      final j = t.year;
+      if (j == null || j < 1900 || j > 2100) continue;
+      final d = (j ~/ 10) * 10;
+      perDecennium[d] = (perDecennium[d] ?? 0) + 1;
+    }
+    final gespeeldeNamen = <String>[];
+    for (var i = 0; i < 10; i++) {
+      final n = meestGespeeldeArtiest(beurten, nuMs: nuMs, overslaan: i);
+      if (n != null && !gespeeldeNamen.contains(n)) gespeeldeNamen.add(n);
+    }
+    final profielVoorAi = SmaakProfiel(
+      topArtiesten: [for (final e in top.take(30)) '${e.key} (${e.value})'],
+      perDecennium: perDecennium,
+      gespeeld: gespeeldeNamen,
+      genres: [
+        for (final t in lib.tracks.take(400))
+          if (t.genre != null && t.genre!.trim().isNotEmpty) t.genre!.trim(),
+      ].toSet().take(12).toList(),
+    );
+    final aiF = (lib.isRemote || cfg.anthropicKey.trim().isEmpty)
+        ? Future.value(<AiVoorstel>[])
+        : AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace)
+            .maakAanbevelingen(profielVoorAi);
     final relF = _catalog.latestFromArtists(seeds);
     final fyF = _rec.discover(seeds.take(6).toList());
     final genreF = profiel.isEmpty
@@ -10931,6 +10979,22 @@ class _HomeStartViewState extends State<HomeStartView> {
     try {
       omdatRij = await omdatF;
     } catch (_) {}
+    // Het model kiest, Deezer bewijst. Elk voorstel wordt nageslagen; wat niet bestaat verdwijnt
+    // zonder een woord. Een tegel op grond van een verzonnen titel gaat nergens heen, en dat is
+    // erger dan een kortere rij.
+    final uitgezocht = <({CatalogAlbumHit hit, String reden})>[];
+    try {
+      final voorstellen = await aiF;
+      for (final v in voorstellen) {
+        final hit = await _catalog.zoekAlbum(v.artiest, v.album);
+        if (hit == null) continue;
+        // En niets voorstellen wat hij al heeft — dat was de klacht bij de andere rijen ook.
+        if (eigenPlaten.contains(bezitssleutel(hit.artist, hit.album.title))) continue;
+        uitgezocht.add((hit: hit, reden: v.reden));
+      }
+    } catch (_) {
+      // Een AI die niet antwoordt hoort de rest van de pagina niet mee te nemen.
+    }
     if (!mounted) return;
     // Wat je al hebt gaat eruit. Zonder dit stond deze rij vol met je eigen platen: hij komt via
     // verwante artiesten binnen, en de verwanten van jouw bibliotheek zijn geregeld je bibliotheek.
@@ -10961,6 +11025,7 @@ class _HomeStartViewState extends State<HomeStartView> {
       _StartCache.omdatArtiest = omdat;
       _StartCache.omdat = omdatSchoon;
     }
+    if (uitgezocht.isNotEmpty) _StartCache.uitgezocht = uitgezocht;
     _StartCache.opgehaaldMs = DateTime.now().millisecondsSinceEpoch;
     setState(() {
       _releases = _StartCache.releases;
@@ -10969,6 +11034,7 @@ class _HomeStartViewState extends State<HomeStartView> {
       _genres = _StartCache.genres;
       _omdatArtiest = _StartCache.omdatArtiest;
       _omdat = _StartCache.omdat;
+      _uitgezocht = _StartCache.uitgezocht;
       _seedsLoading = false;
     });
   }
@@ -11140,6 +11206,11 @@ class _HomeStartViewState extends State<HomeStartView> {
         // controleerbaar waaróm iets wordt voorgesteld, en dat was precies de klacht.
         if (_omdat.isNotEmpty && _omdatArtiest.isNotEmpty)
           _section('Omdat je $_omdatArtiest draaide', _recRow(_omdat.take(20).toList())),
+        // De rij van het taalmodel. Blijft weg zonder AI-sleutel, en dat is geen fout maar de
+        // afspraak: zie [AiService.maakAanbevelingen].
+        if (_uitgezocht.isNotEmpty)
+          _section('Voor jou uitgezocht', _aiRow(_uitgezocht),
+              bij: 'met een reden erbij'),
         // [_komtNog] en niet alleen _seedsLoading: die laatste gaat pas omhoog zodra de bibliotheek
         // artiesten heeft, en tot dat moment stond deze sectie er HELEMAAL NIET. Ze verscheen dus
         // midden in het lezen en duwde alles eronder omlaag — de rij is 204 punten plus zijn kop.
@@ -11236,6 +11307,31 @@ class _HomeStartViewState extends State<HomeStartView> {
               _netCover(hits[i].album.cover, size: kTegelHoes), hits[i].album.title, hits[i].artist,
               () => openPagina(context, (_) => AlbumBrowsePage(hits[i].artist, hits[i].album)),
               artist: hits[i].artist),
+        ),
+      );
+
+  /// De rij van het taalmodel: album, en daaronder waaróm.
+  ///
+  /// **Het verschil met [_catalogRow] is die tweede regel.** Daar staat normaal de artiest; hier
+  /// staat de reden — "omdat je veel Belgische pop draait". Dat was precies de klacht: de
+  /// aanbevelingen leken niets met zijn muziek te maken te hebben, en een rij zonder uitleg is niet
+  /// te controleren. Met de reden erbij kun je zien of de app je begrepen heeft, en dat is meer
+  /// waard dan een naam die je toch al op de hoes ziet staan.
+  Widget _aiRow(List<({CatalogAlbumHit hit, String reden})> items) => ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: kGoot),
+        itemCount: items.length,
+        separatorBuilder: (_, __) => const SizedBox(width: kRuimte12),
+        itemBuilder: (_, i) => Binnenkomst(
+          index: i,
+          child: _card(
+            _netCover(items[i].hit.album.cover, size: kTegelHoes),
+            items[i].hit.album.title,
+            // Geen reden meegekregen? Dan de artiest, zodat er nooit een lege regel staat.
+            items[i].reden.isEmpty ? items[i].hit.artist : items[i].reden,
+            () => openPagina(
+                context, (_) => AlbumBrowsePage(items[i].hit.artist, items[i].hit.album)),
+          ),
         ),
       );
 

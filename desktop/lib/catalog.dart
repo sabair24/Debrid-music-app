@@ -131,6 +131,13 @@ class CatalogAlbumHit {
 List<CatalogAlbumHit> uitJaar(List<CatalogAlbumHit> hits, int jaar) =>
     [for (final h in hits) if (int.tryParse(h.album.year ?? '') == jaar) h];
 
+/// Een albumtitel zonder hoofdletters en leestekens, om er losjes op te kunnen vergelijken.
+///
+/// Klein en van hier, in plaats van `normKey` uit `organize.dart` te lenen: dat bestand sleept
+/// `dart:io` en `dart:isolate` mee, en `catalog.dart` is bewust kaal HTTP.
+String _kaleTitel(String s) =>
+    s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
 /// A track search hit — tapped to open torrent/Soulseek sources directly.
 class CatalogTrackHit {
   final String title;
@@ -173,6 +180,36 @@ class CatalogService {
         .map((a) => CatalogAlbumHit(_album(a), (a['artist']?['name'] ?? '') as String))
         .where((h) => h.album.title.isNotEmpty)
         .toList();
+  }
+
+  /// Bestaat dit album van deze artiest? Zo ja, mét hoes en id.
+  ///
+  /// **Waarom dit bestaat.** Een taalmodel dat om albums gevraagd wordt, noemt er af en toe een die
+  /// niet bestaat — overtuigend, met een plausibele titel. Een tegel op grond daarvan gaat nergens
+  /// heen. Dus: het model kiest wélke plaat wordt voorgesteld, en deze functie bewijst dat hij er
+  /// is. Wat hier niet gevonden wordt, verschijnt niet.
+  ///
+  /// Twee verzoeken per voorstel, via dezelfde rijbaan als de rest. Vandaar dat er hoogstens twaalf
+  /// voorstellen gevraagd worden: het budget is gedeeld met de andere rijen.
+  ///
+  /// De titel wordt losjes vergeleken: hoofdletters en leestekens gaan eruit. "Oro Incenso & Birra"
+  /// en "Oro, Incenso e Birra" horen hetzelfde te zijn — het model spelt niet altijd zoals de
+  /// catalogus, en een tegel missen om een komma is zonde.
+  Future<CatalogAlbumHit?> zoekAlbum(String artiest, String titel) async {
+    if (artiest.trim().isEmpty || titel.trim().isEmpty) return null;
+    final gevonden = await searchArtists(artiest);
+    if (gevonden.isEmpty) return null;
+    final albums = await artistAlbums(gevonden.first.id);
+    final wil = _kaleTitel(titel);
+    if (wil.isEmpty) return null;
+    for (final a in albums) {
+      final heeft = _kaleTitel(a.title);
+      if (heeft.isEmpty) continue;
+      if (heeft == wil || heeft.contains(wil) || wil.contains(heeft)) {
+        return CatalogAlbumHit(a, gevonden.first.name);
+      }
+    }
+    return null;
   }
 
   /// De hitlijsten van een handvol genres, om de beurt door elkaar gevlochten.
