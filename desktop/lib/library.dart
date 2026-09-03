@@ -607,6 +607,45 @@ enum GeenVerbinding {
 }
 
 /// Scans the music folder, groups into albums/singles, reads covers, and enriches.
+/// Eén bestand waarvan de titel rechtgezet wordt, en waarheen.
+///
+/// [artiest] blijft null wanneer alleen de titel verandert. Is hij gevuld — bij "gast naar het
+/// artiestveld" — dan is dat de VOLLEDIGE nieuwe artiestregel, inclusief de gast, en niet alleen de
+/// gastnaam. Zie [LibraryStore.veldenBijTitelherstel] voor waarom die staart wél in ARTIST mag en
+/// niet in ALBUMARTIST.
+class TitelStap {
+  final Track track;
+  final String titel;
+  final String? artiest;
+  const TitelStap(this.track, this.titel, {this.artiest});
+}
+
+/// De velden die een TITELHERSTEL in het bestand zet — en verder niets.
+///
+/// **Waarom dit apart staat van [LibraryStore.veldenVanDeOudePersing].** Die functie hoort bij een
+/// verhuizing: een nummer dat naar een andere plaat gaat, moet zijn oude nummering en jaartal kwijt,
+/// want die zijn dan niet meer waar. Zie de uitleg daar, met "La Salsa" als gemeten aanleiding.
+///
+/// **Bij een titelherstel verhuist er niets.** Het nummer blijft op dezelfde plaat, op dezelfde
+/// plaats; alleen de spelling van de titel klopt niet met de persing. Zou de weg langs
+/// `applyCorrection(alleen:)` gelopen worden, dan zou die opruiming `TRACKNUMBER`, `TRACKTOTAL`,
+/// `DISCNUMBER`, `DISCTOTAL` en `DATE` uit het bestand wissen en `trackNo` op 0 zetten — en omdat
+/// `rebuildAlbums` op `trackNo` sorteert, schiet het nummer daarna naar de kop van de tracklijst.
+/// Bij een bewerking die alleen de spelling raakt.
+///
+/// **ALBUMARTIST staat er nadrukkelijk NIET in**, ook niet wanneer er een artiest geschreven wordt.
+/// Dat is het verschil dat een plaat heel houdt: het groeperen kijkt naar het artiestveld, dus
+/// "Missy Elliott feat. Ludacris" in ARTIST is één ding — dezelfde staart in ALBUMARTIST zou de
+/// tegel in tweeën trekken. `applyCorrection` maakt van een meegegeven artiest wél een ALBUMARTIST,
+/// en dat is precies waarom deze weg apart bestaat.
+///
+/// Een LEGE titel schrijft niets in plaats van hem te wissen: anders zou een leeg tekstveld de
+/// titel uit het bestand halen.
+Map<String, String?> veldenBijTitelherstel({required String titel, String? artiest}) => {
+      if (titel.trim().isNotEmpty) 'TITLE': titel.trim(),
+      if (artiest != null && artiest.trim().isNotEmpty) 'ARTIST': cleanArtistName(artiest),
+    };
+
 class LibraryStore extends ChangeNotifier {
   final List<Track> tracks = [];
   List<Album> albums = [];
@@ -3698,6 +3737,77 @@ extension LibraryNormalise on LibraryStore {
       final c = _corrections[t.path];
       if (c != null) {
         c..remove('title')..remove('artist');
+        if (c.isEmpty) _corrections.remove(t.path);
+      }
+    }
+    if (written > 0) {
+      await _saveTagUndo();
+      await saveCorrectionsNow();
+      await scan();
+    }
+    return (written: written, failed: failed);
+  }
+
+  /// Zet de titel (en desgewenst de artiest) van een paar bestanden recht.
+  ///
+  /// Gebouwd naar [applyRecognised], dat dezelfde vraag beantwoordt voor een andere aanleiding:
+  /// publiek, schrijft precies twee velden, legt de oude waarden in [_tagUndo] zodat de knop "Tags
+  /// terugzetten" het ongedaan maakt, en ruimt alleen de correctiesleutels op die het zelf schreef.
+  ///
+  /// Op een gekoppeld toestel gaat dit naar de pc, met een EIGEN naam voor de bewerking. Dat is
+  /// dezelfde afweging als bij `correctionTracks` (zie [applyCorrection]): een pc die deze naam nog
+  /// niet kent, valt in zijn `default` en zegt eerlijk dat hij het niet kan — in plaats van er
+  /// stilzwijgend een volledige correctie van te maken, met de opruiming die daarbij hoort.
+  Future<({int written, List<String> failed})> pasTitelsAan(List<TitelStap> stappen) async {
+    if (stappen.isEmpty) return (written: 0, failed: const <String>[]);
+    if (isRemote) {
+      await _editOnPc({
+        'op': 'trackTitles',
+        'items': [
+          for (final s in stappen)
+            {
+              'trackId': _remoteTrackId(s.track.path),
+              'title': s.titel,
+              if (s.artiest != null && s.artiest!.trim().isNotEmpty) 'artist': s.artiest,
+            },
+        ],
+      });
+      return (written: 0, failed: const <String>[]);
+    }
+
+    var written = 0;
+    final failed = <String>[];
+    for (final s in stappen) {
+      final t = s.track;
+      final naam = t.path.split(Platform.pathSeparator).last;
+      final laag = t.path.toLowerCase();
+      final mp3 = laag.endsWith('.mp3');
+      if (!mp3 && !laag.endsWith('.flac')) {
+        failed.add('$naam — alleen FLAC en MP3 kan de app veilig herschrijven');
+        continue;
+      }
+      final velden = veldenBijTitelherstel(titel: s.titel, artiest: s.artiest);
+      if (velden.isEmpty) continue;
+      final raw = mp3 ? readMp3RawFields(File(t.path)) : readFlacRawFields(File(t.path));
+      final before = {for (final k in velden.keys) k: raw[k.toLowerCase()]};
+      final redenen = <String>[];
+      final ok = mp3
+          ? writeMp3Fields(File(t.path), velden, trace: redenen.add)
+          : writeFlacFields(File(t.path), velden, trace: redenen.add);
+      if (!ok) {
+        failed.add(redenen.isEmpty ? naam : '$naam — ${redenen.join('; ')}');
+        continue;
+      }
+      written++;
+      // De oudere regel wint, net als in [_schrijfBewerking]: wie twee keer bewerkt, moet naar de
+      // ORIGINELE waarde terug kunnen en niet naar de tussenstap.
+      _tagUndo[t.path] = {...before, ...?_tagUndo[t.path]};
+      // Een correctie die iets anders beweert dan het bestand is vanaf nu een tweede waarheid die
+      // alleen maar uit elkaar kan lopen. De rest van de correcties blijft van de gebruiker.
+      final c = _corrections[t.path];
+      if (c != null) {
+        c.remove('title');
+        if (velden.containsKey('ARTIST')) c.remove('artist');
         if (c.isEmpty) _corrections.remove(t.path);
       }
     }

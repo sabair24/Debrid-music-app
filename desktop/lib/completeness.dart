@@ -350,8 +350,32 @@ AlbumCompleteness matchAlbumTracks(
 /// Het toont ook de RUWE titel als die anders is dan wat de rij laat zien: de nummerrij haalt de
 /// "(feat. …)" er met opzet af om hem netjes te tekenen, en juist dat verschil was hier het hele
 /// verhaal. Wat je ziet en wat er in het bestand staat mogen niet ongemerkt uit elkaar lopen.
-String waaromGeenPlaats(List<ChoiceTrack> official, Track t) {
-  if (official.isEmpty) return 'er is geen tracklijst opgehaald';
+String waaromGeenPlaats(List<ChoiceTrack> official, Track t) =>
+    waaromGeenPlaatsMet(official, t).reden;
+
+/// Dezelfde uitleg, maar mét de rij van de uitgave waar hij over gaat.
+///
+/// **Waarom dit erbij moest.** De uitleg was een doodlopende weg: je las wat er mis was en kon er
+/// niets aan doen. Gevraagd op 02-09-2026: *"zorg dat ik er iets aan kan doen, titel aanpassen met
+/// suggesties wat het dan wel moet zijn officieel"*. Die suggestie IS de officiële titel — en die
+/// stond hier al, in `gelijk.single`, om de zin mee te schrijven. Hij werd alleen weggegooid.
+///
+/// **Eén vergelijking, twee gebruikers.** De uitleg en de suggestie komen uit precies dezelfde
+/// match. Zou de knop zijn eigen vergelijking krijgen, dan kan er een dag komen waarop de regel
+/// eronder "de uitgave noemt X" zegt en de knop iets anders voorstelt — en dat is erger dan geen
+/// knop, want dan is de uitleg niet meer te vertrouwen.
+///
+/// **[uitgave] is alleen gevuld waar er werkelijk iets te kiezen valt**, en dat is nauwer dan waar
+/// er een rij te vinden is:
+///
+/// * bij een LENGTEverschil is de titel al gelijk — een knop "titel rechtzetten" zou daar niets
+///   veranderen;
+/// * bij meer dan één treffer zegt de zin zelf dat niet te bepalen is welke rij het is, en een
+///   suggestie zou die zin tegenspreken;
+/// * bij een lege tracklijst is er niets om naar te wijzen.
+({ChoiceTrack? uitgave, String reden}) waaromGeenPlaatsMet(
+    List<ChoiceTrack> official, Track t) {
+  if (official.isEmpty) return (uitgave: null, reden: 'er is geen tracklijst opgehaald');
   final mijn = normKey(t.title);
   final mijnKaal = normKey(zonderFeat(t.title));
   final duur = t.duration?.inSeconds ?? 0;
@@ -364,25 +388,37 @@ String waaromGeenPlaats(List<ChoiceTrack> official, Track t) {
     if (normKey(o.title) != mijn) continue;
     final os = o.seconds ?? 0;
     if (os > 0 && duur > 0 && (os - duur).abs() > _slack) {
-      return 'de uitgave geeft ${tijd(os)} op en dit bestand duurt ${tijd(duur)}';
+      return (
+        uitgave: null,
+        reden: 'de uitgave geeft ${tijd(os)} op en dit bestand duurt ${tijd(duur)}',
+      );
     }
   }
   final gelijk = official.where((o) => normKey(zonderFeat(o.title)) == mijnKaal).toList();
   if (gelijk.length > 1) {
-    return 'de uitgave noemt dit nummer ${gelijk.length} keer — niet te zeggen welke dit is';
+    return (
+      uitgave: null,
+      reden: 'de uitgave noemt dit nummer ${gelijk.length} keer — niet te zeggen welke dit is',
+    );
   }
   if (gelijk.length == 1) {
     final o = gelijk.single;
     final gasten = splitFeatured(t.artist, t.title).featured;
     if (gasten.isNotEmpty && normKey(o.title) != mijn) {
-      return o.artist.trim().isEmpty
-          ? 'jouw bestand heet "${t.title}"; de uitgave noemt "${o.title}" en zegt niet wie er '
-              'meespeelt'
-          : 'jouw bestand heet "${t.title}"; de uitgave noemt "${o.title}" met ${o.artist}';
+      return (
+        uitgave: o,
+        reden: o.artist.trim().isEmpty
+            ? 'jouw bestand heet "${t.title}"; de uitgave noemt "${o.title}" en zegt niet wie er '
+                'meespeelt'
+            : 'jouw bestand heet "${t.title}"; de uitgave noemt "${o.title}" met ${o.artist}',
+      );
     }
-    return 'jouw bestand heet "${t.title}", de uitgave noemt "${o.title}"';
+    return (
+      uitgave: o,
+      reden: 'jouw bestand heet "${t.title}", de uitgave noemt "${o.title}"',
+    );
   }
-  return 'de uitgave noemt geen nummer dat "${t.title}" heet';
+  return (uitgave: null, reden: 'de uitgave noemt geen nummer dat "${t.title}" heet');
 }
 
 /// Noemt de artiestcredit van de uitgave élke gast die dit bestand noemt?
