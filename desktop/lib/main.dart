@@ -11225,6 +11225,10 @@ class _HomeStartViewState extends State<HomeStartView> {
         if (_releases.isNotEmpty || _komtNog)
           _section('Nieuw van jouw artiesten',
               _releases.isEmpty ? _loadingRow() : _catalogRow(_releases.take(20).toList())),
+        // De rij is streng geworden — alleen dit jaar en vorig jaar, en geen catalogusherleveringen
+        // meer. Dan is leeg een normale uitkomst, en dan hoort er te staan waarom.
+        if (!anyLoading && _seedsRequested && _releases.isEmpty)
+          _legeRij(_waaromLeeg('Geen nieuwe releases van jouw artiesten dit jaar of vorig jaar.')),
         if (!anyLoading && _charts.isEmpty && _releases.isEmpty && _forYou.isEmpty && recent.isEmpty)
           LeegVlak(
             teken: Icons.library_music_rounded,
@@ -11317,6 +11321,33 @@ class _HomeStartViewState extends State<HomeStartView> {
   /// aanbevelingen leken niets met zijn muziek te maken te hebben, en een rij zonder uitleg is niet
   /// te controleren. Met de reden erbij kun je zien of de app je begrepen heeft, en dat is meer
   /// waard dan een naam die je toch al op de hoes ziet staan.
+  /// Een rij die niets opleverde, met de reden erbij.
+  ///
+  /// **Waarom niet gewoon weglaten.** Dat deed hij: `if (_releases.isNotEmpty)` en anders stond er
+  /// niets. Van buiten is "er is deze maand niets nieuws" dan niet te onderscheiden van "Deezer
+  /// weigerde" of "er ging iets stuk" — en sinds de rijbaan (`deezerbaan.dart`) weet de app dat
+  /// verschil wél. Het zou zonde zijn dat niet te zeggen.
+  ///
+  /// `OntdekView` doet dit al goed (zie de statusregel daar); dit is dezelfde afspraak, een scherm
+  /// verderop.
+  Widget _legeRij(String uitleg) => Padding(
+        padding: const EdgeInsets.fromLTRB(kGoot, 0, kGoot, kRuimte12),
+        child: Text(uitleg, style: kTekstKlein.copyWith(color: _muted)),
+      );
+
+  /// Wat er te melden valt over een rij die leeg bleef.
+  ///
+  /// De weigering van Deezer krijgt voorrang op "er is niets": dat is het antwoord waar de
+  /// gebruiker iets aan heeft, en het is ook het antwoord dat te repareren is door even te wachten.
+  String _waaromLeeg(String bijNiets) {
+    final fout = _catalog.laatsteFout.isNotEmpty ? _catalog.laatsteFout : _rec.laatsteFout;
+    if (fout.isEmpty) return bijNiets;
+    if (fout.toLowerCase().contains('quota')) {
+      return 'Even te snel achter elkaar gevraagd — probeer het zo nog eens met de verversknop.';
+    }
+    return 'Deezer gaf niets terug ($fout). Probeer de verversknop.';
+  }
+
   Widget _aiRow(List<({CatalogAlbumHit hit, String reden})> items) => ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: kGoot),
