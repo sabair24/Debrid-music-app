@@ -90,6 +90,7 @@ import 'bronzeef.dart';
 import 'player.dart';
 import 'quality.dart';
 import 'recommend.dart';
+import 'startrijen.dart';
 import 'release_format.dart';
 import 'rutracker.dart';
 import 'rutracker_login.dart';
@@ -10790,6 +10791,16 @@ class _HomeStartViewState extends State<HomeStartView> {
   /// from build via context.watch) — not eagerly with an empty seed list.
   Future<void> _loadSeeds(List<String> seeds) async {
     if (mounted) setState(() => _seedsLoading = true);
+    // De bibliotheek NU lezen, vóór de eerste `await`.
+    //
+    // Hieronder wordt twee keer gewacht op het net, en in dat venster kan een scan de albums
+    // vervangen — `rebuildAlbums` maakt nieuwe objecten. Wie daarna pas leest, houdt zijn antwoord
+    // tegen een bibliotheek die inmiddels een andere is. Zie ook wat er in `_enrichFromWeb` misging.
+    final lib = context.read<LibraryStore>();
+    final bezit = bezitSleutels(lib.tracks);
+    final eigenPlaten = {
+      for (final a in lib.albums) bezitssleutel(a.artist, a.title),
+    };
     final relF = _catalog.latestFromArtists(seeds);
     final fyF = _rec.discover(seeds.take(6).toList());
     List<CatalogAlbumHit> rel = [];
@@ -10805,9 +10816,15 @@ class _HomeStartViewState extends State<HomeStartView> {
     // verwante artiesten binnen, en de verwanten van jouw bibliotheek zijn geregeld je bibliotheek.
     // Dezelfde functie als Ontdek gebruikt, zodat de twee schermen niet elk hun eigen antwoord op
     // "heb ik dit al?" krijgen.
-    final bezit = bezitSleutels(context.read<LibraryStore>().tracks);
-    _StartCache.releases = rel;
-    _StartCache.forYou = nogNietInBezit(fy, bezit);
+    //
+    // En de oogst van "Nieuw van jouw artiesten" gaat door [nieuwVanJouwArtiesten] vóór hij in de
+    // cache belandt. Hier stond `= rel`, rauw, en dat is precies hoe Dr. Alban uit de jaren 90 in
+    // een rij met de kop "Nieuw" terechtkwam. Filteren bij het OPBERGEN en niet bij het tonen: dan
+    // kan geen enkele volgende bewerking de rauwe lijst nog per ongeluk op het scherm zetten.
+    final ditJaar = DateTime.now().year;
+    _StartCache.releases = nieuwVanJouwArtiesten(rel,
+        jaren: {ditJaar, ditJaar - 1}, alInBezit: eigenPlaten);
+    _StartCache.forYou = maxPerArtiest(nogNietInBezit(fy, bezit), (t) => t.artist, 2);
     setState(() {
       _releases = _StartCache.releases;
       _forYou = _StartCache.forYou;
