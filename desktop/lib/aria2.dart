@@ -133,7 +133,6 @@ class Aria2 {
   // ---------------------------------------------------------------- het programma vinden
 
   static String? _gevonden;
-  static bool _gezocht = false;
 
   /// Kandidaten, in volgorde van vertrouwen. Naast de app eerst: daar zet de installer hem neer,
   /// net als `fpcalc.exe`. Daarna de eigen map, waar een handmatig neergezette versie mag staan
@@ -152,11 +151,11 @@ class Aria2 {
   /// Waar `aria2c` staat, of null.
   ///
   /// **Alleen een GEVONDEN pad wordt onthouden, een misser niet.** Dat verschil is een hele avond
-  /// waard. De vorige opzet zette `_gezocht = true` vóór het zoeken en liet dat staan, ook als er
-  /// niets uitkwam — en `_gezocht` is statisch, dus dat gold voor de rest van de looptijd van de
-  /// app. Eén keer misgrijpen, bijvoorbeeld omdat het bestand net vervangen werd door een
-  /// installatie of omdat een virusscanner het even vasthield, en er kwam tot de volgende herstart
-  /// geen torrent meer binnen. Zonder melding, want [start] zweeg erover.
+  /// waard. De vorige opzet hield een statische "al gezocht"-vlag bij, zette die vóór het zoeken en
+  /// liet haar staan ook als er niets uitkwam — en omdat ze statisch was, gold dat voor de rest van
+  /// de looptijd van de app. Eén keer misgrijpen, bijvoorbeeld omdat het bestand net vervangen werd
+  /// door een installatie of omdat een virusscanner het even vasthield, en er kwam tot de volgende
+  /// herstart geen torrent meer binnen. Zonder melding, want [start] zweeg erover.
   ///
   /// **Gemeten op 02-09-2026.** Saber probeerde twee nummers van Linkin Park te halen; het mislukte
   /// zonder spoor. In `aria2.log` sprong de tijd van 01-09 15:56 naar 02-09 19:11 — zijn hele
@@ -168,7 +167,6 @@ class Aria2 {
   String? get pad {
     if (_opgegeven != null && _opgegeven.isNotEmpty) return _opgegeven;
     if (_gevonden != null) return _gevonden;
-    _gezocht = true;
     final geprobeerd = <String>[];
     for (final k in kandidaten(eigenMap: appDir)) {
       try {
@@ -190,10 +188,7 @@ class Aria2 {
   bool get beschikbaar => pad != null;
 
   /// Tests delen dit proces; een gevonden pad uit de vorige laat de volgende iets anders meten.
-  static void resetLookup() {
-    _gevonden = null;
-    _gezocht = false;
-  }
+  static void resetLookup() => _gevonden = null;
 
   // ---------------------------------------------------------------- starten
 
