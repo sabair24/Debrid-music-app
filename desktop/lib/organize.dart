@@ -146,6 +146,18 @@ final _featSplitRe = RegExp(r'\s*(?:,|&|\+|\band\b|\ben\b|\bx\b)\s*', caseSensit
   return (main: main.isEmpty ? artist.trim() : main, featured: featured);
 }
 
+/// De tegenhanger van [splitFeatured]: uit een hoofdartiest en zijn gasten weer één credit.
+///
+/// Bestaat omdat een gastnaam die uit een TITEL verdwijnt ergens anders terug moet komen. Neem je
+/// de officiële titel "One Minute Man" over van een bestand dat "One Minute Man (Feat Ludacris)"
+/// heette, dan is zonder dit nergens meer te zien dat Ludacris meespeelt — en dat is precies het
+/// verlies waar [featStaart] en `_behoudTitel` al tegen beschermen.
+///
+/// Schrijft "feat." voluit met een punt, wat de vorm is die [_featRe] zeker terugleest: wie deze
+/// credit morgen weer splitst, krijgt dezelfde namen terug.
+String gastcredit(String hoofd, List<String> gasten) =>
+    gasten.isEmpty ? hoofd.trim() : '${hoofd.trim()} feat. ${gasten.join(', ')}';
+
 /// The title without its "(feat. …)" tail — for display next to a separate featured-artist line.
 String titleWithoutFeat(String title) {
   if (!_featRe.hasMatch(title)) return title;

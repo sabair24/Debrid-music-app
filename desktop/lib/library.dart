@@ -2939,9 +2939,36 @@ class LibraryStore extends ChangeNotifier {
   /// that isn't FLAC, since the generic reader doesn't report it — stay on the plain album key
   /// exactly as before. Guessing which edition those belong to would scatter a library, and being
   /// wrong there is worse than the merging this fixes.
+  /// Onder welke PLAAT dit nummer valt, los van de vraag welke persing.
+  ///
+  /// **Op de hoofdartiest, en dat was hij niet.** Dit stond op vijf plekken uitgeschreven met
+  /// `artistKey(t.artist)` — het RUWE artiestveld. Vier regels onder een ervan bepaalt
+  /// [rebuildAlbums] de artiest van de tegel juist mét [splitFeatured]. Twee antwoorden op één
+  /// vraag.
+  ///
+  /// **Wat dat kapot maakte, en wat níét.** [mergeEditions] en [isMerged] bouwen hun sleutel uit de
+  /// GETOONDE artiest van de plaat, die dus al gesplitst is. Voor een album waarvan het artiestveld
+  /// een gastcredit draagt, kon die sleutel nooit gelijk zijn aan de sleutel waaronder het album
+  /// lag: "Editions samenvoegen" deed daar stilletjes niets en bleef zichzelf aanbieden. Dat is het
+  /// gemeten gevolg.
+  ///
+  /// Wat het NIET doet is tegels samenvoegen. Gemeten op 03-09-2026 over deze bibliotheek: 12
+  /// nummers dragen een gast in het artiestveld, en het aantal albumsleutels gaat van 469 naar 469
+  /// — elk van die twaalf staat op een plaat waar álle nummers diezelfde credit dragen, dus hun
+  /// sleutel wordt hernoemd en niet samengevoegd. Het plan verwachtte hier twaalf herenigde platen;
+  /// dat bleek niet zo, en het staat hier zodat de volgende die het leest niet opnieuw gaat zoeken.
+  ///
+  /// Het is verder de voorwaarde voor "gast naar het artiestveld" bij [pasTitelsAan]: zolang deze
+  /// regel het ruwe veld leest, zou die bewerking de plaat waar ze op staat in tweeën trekken.
+  ///
+  /// De titel gaat mee omdat [rebuildAlbums] hem ook meegeeft — [splitFeatured] haalt er alleen
+  /// gásten uit en verandert `main` er nooit mee, dus het is dezelfde vraag met dezelfde uitkomst.
+  String _basisSleutel(Track t) =>
+      'album::${artistKey(splitFeatured(t.artist, t.title).main)}|${normKey(t.album)}';
+
   String _groupKey(Track t) {
     if (t.album.isEmpty) return 'single::${t.path}';
-    final base = 'album::${artistKey(t.artist)}|${normKey(t.album)}';
+    final base = _basisSleutel(t);
     // The user's word beats the tags: a record they merged stays merged.
     if (_merged.contains(base)) return base;
     return editionSplit(_byBase[base]) ? '$base|${t.trackTotal}' : base;
@@ -2953,6 +2980,13 @@ class LibraryStore extends ChangeNotifier {
 
   /// Every track filed under one artist+title, whatever edition it belongs to.
   List<Track>? editionsOfRecord(String baseKey) => _byBase[baseKey];
+
+  /// Dezelfde vraag, gesteld met een NUMMER in plaats van met een uitgeschreven sleutel.
+  ///
+  /// Bestaat omdat de twee `recordTracks` die dit nodig hebben allebei hun eigen kopie van
+  /// [_basisSleutel] hadden staan — en toen die regel over de hoofdartiest ging, was dat twee
+  /// plekken die stilletjes de oude sleutel bleven bouwen en dus niets meer zouden vinden.
+  List<Track>? editionsOfTrack(Track t) => _byBase[_basisSleutel(t)];
 
   /// Does this pile of tracks hold more than one EDITION of the record?
   ///
@@ -2990,7 +3024,7 @@ class LibraryStore extends ChangeNotifier {
     _byBase.clear();
     for (final t in tracks) {
       if (t.album.isEmpty) continue;
-      _byBase.putIfAbsent('album::${artistKey(t.artist)}|${normKey(t.album)}', () => []).add(t);
+      _byBase.putIfAbsent(_basisSleutel(t), () => []).add(t);
     }
 
     // Snapshot the covers of the CURRENT albums. Rebuilding makes fresh Album objects with null
@@ -3027,7 +3061,7 @@ class LibraryStore extends ChangeNotifier {
       final artist = canonical[artistKey(main)] ?? main;
       final al = Album(single ? ts.first.title : ts.first.album, artist, ts, isSingle: single);
       // Only where the title actually split — a lone album needs no edition label.
-      if (!single && editionSplit(_byBase['album::${artistKey(ts.first.artist)}|${normKey(ts.first.album)}'])) {
+      if (!single && editionSplit(_byBase[_basisSleutel(ts.first)])) {
         final n = ts.first.trackTotal;
         al.edition = n > 0 ? '$n nummers' : 'zonder nummering';
       }
@@ -3577,7 +3611,7 @@ extension LibraryNormalise on LibraryStore {
   List<Track> recordTracks(Album album) {
     final first = album.tracks.firstOrNull;
     if (first == null || first.album.isEmpty) return album.tracks;
-    final all = editionsOfRecord('album::${artistKey(first.artist)}|${normKey(first.album)}');
+    final all = editionsOfTrack(first);
     if (all == null || all.isEmpty) return album.tracks;
     // The clicked tile's own order first, so the list reads like the page it was opened from.
     final seen = {for (final t in album.tracks) t.path};
@@ -4220,8 +4254,7 @@ extension LibraryMove on LibraryStore {
   /// would gather one half of a split record and leave the other exactly where it was.
   List<Track> recordTracks(Album album) {
     if (album.isSingle || album.tracks.isEmpty) return album.tracks;
-    final t = album.tracks.first;
-    return editionsOfRecord('album::${artistKey(t.artist)}|${normKey(t.album)}') ?? album.tracks;
+    return editionsOfTrack(album.tracks.first) ?? album.tracks;
   }
 
   /// Where the files of [album] would go if it were gathered into one folder. Nothing is touched.

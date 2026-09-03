@@ -339,7 +339,8 @@ AlbumCompleteness matchAlbumTracks(
   );
 }
 
-/// Waarom dit bestand geen plaats op de uitgave kreeg, in gewone taal.
+/// Waarom dit bestand geen plaats op de uitgave kreeg, in gewone taal — en op wélke rij het dan wél
+/// had moeten passen.
 ///
 /// **Waarvoor dit bestaat.** "Niet op deze uitgave" is een uitkomst, geen uitleg. Op 31-08-2026
 /// stonden "Crazy in Love" en "Baby Boy" eronder — twee van de bekendste nummers van die plaat — en
@@ -350,12 +351,8 @@ AlbumCompleteness matchAlbumTracks(
 /// Het toont ook de RUWE titel als die anders is dan wat de rij laat zien: de nummerrij haalt de
 /// "(feat. …)" er met opzet af om hem netjes te tekenen, en juist dat verschil was hier het hele
 /// verhaal. Wat je ziet en wat er in het bestand staat mogen niet ongemerkt uit elkaar lopen.
-String waaromGeenPlaats(List<ChoiceTrack> official, Track t) =>
-    waaromGeenPlaatsMet(official, t).reden;
-
-/// Dezelfde uitleg, maar mét de rij van de uitgave waar hij over gaat.
 ///
-/// **Waarom dit erbij moest.** De uitleg was een doodlopende weg: je las wat er mis was en kon er
+/// **Waarom de rij erbij moest.** De uitleg was een doodlopende weg: je las wat er mis was en kon er
 /// niets aan doen. Gevraagd op 02-09-2026: *"zorg dat ik er iets aan kan doen, titel aanpassen met
 /// suggesties wat het dan wel moet zijn officieel"*. Die suggestie IS de officiële titel — en die
 /// stond hier al, in `gelijk.single`, om de zin mee te schrijven. Hij werd alleen weggegooid.
@@ -419,6 +416,39 @@ String waaromGeenPlaats(List<ChoiceTrack> official, Track t) =>
     );
   }
   return (uitgave: null, reden: 'de uitgave noemt geen nummer dat "${t.title}" heet');
+}
+
+/// Wat een titelherstel van dit bestand zou máken: de officiële titel, en waar de gastnaam heen gaat.
+///
+/// **Waarom de artiest hierbij hoort.** De app heeft al een regel dat een persing géén gasten van
+/// jouw titel mag afpakken — zie `_behoudTitel`, geschreven voor "Lose Control (feat. Ciara and Fat
+/// Man Scoop)", met als reden: *dan is niet meer te zien wie er meedoet*. Een knop die de officiële
+/// titel overneemt doet precies dát, tenzij de naam ergens anders terugkomt. Daarom levert deze
+/// functie de twee velden samen: los van elkaar zijn ze een verlies, samen zijn ze een verhuizing.
+///
+/// [artiest] is null als er niets te verhuizen valt — geen gasten, of de officiële titel noemt ze
+/// zelf, of het artiestveld zegt het al. Dan verandert alleen de titel.
+({String titel, String? artiest}) titelherstel(ChoiceTrack uitgave, Track t) => (
+      titel: uitgave.title.trim(),
+      artiest: gastNaarArtiest(t, uitgave.title, uitgaveArtiest: uitgave.artist),
+    );
+
+/// Welke artiestcredit dit bestand moet krijgen als het voortaan [nieuweTitel] heet.
+///
+/// Null als er niets te verhuizen valt: geen gasten, of [nieuweTitel] noemt ze zelf nog, of het
+/// artiestveld zegt het al. Apart van [titelherstel] omdat het venster hier bij ELKE toetsaanslag
+/// om vraagt — typ je zelf een titel die de gast weer noemt, dan hoort de schakelaar meteen te
+/// verdwijnen in plaats van de naam er dubbel in te zetten.
+String? gastNaarArtiest(Track t, String nieuweTitel, {String uitgaveArtiest = ''}) {
+  final gesplitst = splitFeatured(t.artist, t.title);
+  // Draagt de nieuwe titel zelf een "(feat. …)", dan blijven de namen daar staan.
+  if (gesplitst.featured.isEmpty || featStaart(nieuweTitel.trim()).isNotEmpty) return null;
+  // De uitgave gaat vóór onze eigen samenstelling: die credit is wat de plaat zélf zegt, en het is
+  // dezelfde tekst die de gebruiker in de uitleg heeft zien staan ("de uitgave noemt X met Y").
+  final credit = uitgaveArtiest.trim().isNotEmpty
+      ? uitgaveArtiest.trim()
+      : gastcredit(gesplitst.main, gesplitst.featured);
+  return normKey(credit) == normKey(t.artist) ? null : credit;
 }
 
 /// Noemt de artiestcredit van de uitgave élke gast die dit bestand noemt?

@@ -5312,6 +5312,16 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       final s = rows[i];
                       final prev = i == 0 ? null : rows[i - 1];
                       final t = s.track;
+                      // Waaróm dit bestand geen plaats kreeg — en wat het dan wél had moeten heten.
+                      // "Niet op deze uitgave" is een uitkomst en geen uitleg; het heeft drie ronden
+                      // raden op schermafdrukken gekost om erachter te komen dat de nummerrij de
+                      // "(feat. …)" wegtekent en dat dáár het verschil zat.
+                      //
+                      // Eén aanroep voor allebei: zou de knop zijn eigen vergelijking krijgen, dan
+                      // kan er een dag komen waarop de regel "de uitgave noemt X" zegt en het venster
+                      // iets anders voorstelt. Zie [waaromGeenPlaatsMet].
+                      final uitleg =
+                          t != null && s.index < 0 ? waaromGeenPlaatsMet(_official, t) : null;
                       final row = t == null
                           ? MissingTrackRow(
                               slot: s,
@@ -5330,12 +5340,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                               // AlbumSlot.label.
                               label: s.index < 0 ? '' : s.label,
                               uitgaveSeconden: s.andereLengte ? s.official?.seconds : null,
-                              // Waaróm dit bestand geen plaats kreeg. "Niet op deze uitgave" is een
-                              // uitkomst en geen uitleg; het heeft drie ronden geraden op
-                              // schermafdrukken gekost om erachter te komen dat de nummerrij de
-                              // "(feat. …)" wegtekent en dat dáár het verschil zat. Zie
-                              // [waaromGeenPlaats].
-                              reden: s.index < 0 ? waaromGeenPlaats(_official, t) : null);
+                              reden: uitleg?.reden,
+                              uitgaveRij: uitleg?.uitgave);
 
                       // A double album says which disc you are looking at, and files the pressing
                       // doesn't name say so — left unlabelled the latter read as part of the record,
@@ -6135,6 +6141,13 @@ class TrackRow extends StatefulWidget {
   /// wél een plaats op de uitgave heeft.
   final String? reden;
 
+  /// De rij van de uitgave waar [reden] over gaat — en dus wat dit bestand had moeten heten.
+  ///
+  /// Alleen gevuld waar er werkelijk iets te kiezen valt; zie [waaromGeenPlaatsMet], dat hem uit
+  /// dezelfde vergelijking haalt als de zin. Zonder dit is de uitleg een doodlopende weg: mét
+  /// verschijnt "Titel rechtzetten…" in het menu van deze rij.
+  final ChoiceTrack? uitgaveRij;
+
   const TrackRow(
       {super.key,
       required this.track,
@@ -6143,7 +6156,8 @@ class TrackRow extends StatefulWidget {
       this.albumCover,
       this.label,
       this.uitgaveSeconden,
-      this.reden});
+      this.reden,
+      this.uitgaveRij});
   @override
   State<TrackRow> createState() => _TrackRowState();
 }
@@ -6177,8 +6191,12 @@ class _TrackRowState extends State<TrackRow> {
         //
         // Bewust NIET met een muis: daar betekent een ingehouden knop niets, en dan gooit een trage
         // klik ineens een menu open. De muis heeft de rechterknop hieronder.
-        onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _nummerMenu(context, t)) : null,
-        onSecondaryTap: (bij) => _toonItemMenu(context, _nummerMenu(context, t), bij: bij),
+        onLongPress: _menuOpHouden
+            ? () => _toonItemMenu(context, _nummerMenu(context, t, uitgave: widget.uitgaveRij))
+            : null,
+        onSecondaryTap: (bij) => _toonItemMenu(
+            context, _nummerMenu(context, t, uitgave: widget.uitgaveRij),
+            bij: bij),
         borderRadius: BorderRadius.circular(10),
         // A list of rows: one growing would push every row under it down as the highlight runs
         // through the album. The row already lights up on hover, and focus drives that.
@@ -8206,7 +8224,11 @@ ItemMenu _ontbrekendMenu(
 }
 
 /// Het menu voor één nummer.
-ItemMenu _nummerMenu(BuildContext context, Track t) {
+///
+/// [uitgave] is de rij van de persing waar dit bestand op had moeten passen, en is alleen gevuld
+/// voor een nummer onder "Niet op deze uitgave" waarvoor er één te vinden was. Alleen dán valt er
+/// een titel recht te zetten, en alleen dán staat die regel in het menu — zie [waaromGeenPlaatsMet].
+ItemMenu _nummerMenu(BuildContext context, Track t, {ChoiceTrack? uitgave}) {
   final p = context.read<PlayerStore>();
   final lib = context.read<LibraryStore>();
   final nav = Navigator.of(context);
@@ -8266,6 +8288,14 @@ ItemMenu _nummerMenu(BuildContext context, Track t) {
           final van = lib.albumForPath(t.path);
           showDialog<bool>(context: context, builder: (_) => MoveTrackDialog(track: t, from: van));
         }),
+        // De lichtste van de drie, en daarom bovenaan: hier klopt de PLAAT en alleen de naam niet.
+        // Verschijnt uitsluitend waar de uitleg onder de rij een officiële titel heeft kunnen
+        // aanwijzen, zodat het venster nooit iets anders voorstelt dan die regel beweert.
+        if (uitgave != null)
+          if (!isTv) MenuRegel(Icons.title_rounded, 'Titel rechtzetten…',
+              () => showDialog<bool>(
+                  context: context,
+                  builder: (_) => TitelRechtzettenDialog(track: t, uitgave: uitgave))),
         // De tegenhanger van "Naar ander album…", voor de plaat die je nog NIET hebt.
         //
         // Onder "Niet op deze uitgave" staan bestanden die wel van jou zijn maar niet op de
@@ -22714,6 +22744,202 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
               ],
             ]),
           ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// Een titel die niet op de uitgave past, rechtzetten.
+///
+/// **Waar dit vandaan komt.** Onder "Niet op deze uitgave" staat per nummer waaróm het daar staat —
+/// *jouw bestand heet "One Minute Man (Feat Ludacris)"; de uitgave noemt "One Minute Man" en zegt
+/// niet wie er meespeelt*. Dat was een doodlopende weg: je las wat er mis was en kon er niets aan
+/// doen. Gevraagd op 02-09-2026: *"zorg dat ik er iets aan kan doen, titel aanpassen met suggesties
+/// wat het dan wel moet zijn officieel"*.
+///
+/// **De gast verdwijnt niet, hij verhuist.** De app heeft al een regel dat een persing géén gasten
+/// van jouw titel mag afpakken — zie `_behoudTitel`, met als reden: *dan is niet meer te zien wie er
+/// meedoet*. Een venster dat de officiële titel overneemt en verder niets zou precies dat doen.
+/// Daarom staat de schakelaar er standaard áán en gaat de naam naar het artiestveld. Zie
+/// [gastNaarArtiest], en [LibraryStore._basisSleutel] voor waarom dat de plaat niet in tweeën trekt.
+class TitelRechtzettenDialog extends StatefulWidget {
+  final Track track;
+
+  /// De rij van de uitgave waar dit bestand op had moeten passen. Komt uit dezelfde vergelijking die
+  /// de uitleg schrijft — zie [waaromGeenPlaatsMet] — zodat de knop nooit iets anders kan voorstellen
+  /// dan de regel eronder beweert.
+  final ChoiceTrack uitgave;
+
+  const TitelRechtzettenDialog({super.key, required this.track, required this.uitgave});
+
+  @override
+  State<TitelRechtzettenDialog> createState() => _TitelRechtzettenDialogState();
+}
+
+class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
+  late final _titel = TextEditingController(text: widget.uitgave.title.trim());
+  bool _gastMee = true;
+  bool _busy = false;
+  List<String> _mislukt = const [];
+
+  @override
+  void dispose() {
+    _titel.dispose();
+    super.dispose();
+  }
+
+  /// Bij elke toetsaanslag opnieuw: typ je zelf een titel die de gast weer noemt, dan hoort de
+  /// schakelaar te verdwijnen in plaats van de naam er dubbel in te zetten.
+  String? get _credit =>
+      gastNaarArtiest(widget.track, _titel.text, uitgaveArtiest: widget.uitgave.artist);
+
+  Future<void> _pas() async {
+    final titel = _titel.text.trim();
+    if (titel.isEmpty) return;
+    final credit = _gastMee ? _credit : null;
+    setState(() {
+      _busy = true;
+      _mislukt = const [];
+    });
+    final lib = context.read<LibraryStore>();
+    final remote = lib.isRemote;
+    final r = await lib.pasTitelsAan([TitelStap(widget.track, titel, artiest: credit)]);
+    if (!mounted) return;
+    if (r.failed.isEmpty) {
+      // Op een telefoon of Mac schrijft de PC het bestand, en die telt hier niet terug — "0
+      // bijgewerkt" melden zou als mislukking lezen terwijl het gelukt is.
+      _srcToast(
+          context,
+          remote
+              ? 'Naar de pc gestuurd'
+              : '${r.written} bestand bijgewerkt · ongedaan maken kan met "Tags terugzetten"');
+      Navigator.of(context).pop(true);
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _mislukt = r.failed;
+    });
+  }
+
+  /// Eén voorstel: een regel die je aantikt om hem in het tekstveld te zetten.
+  Widget _voorstel(IconData icoon, String bron, String titel) {
+    final gekozen = _titel.text.trim() == titel;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Pressable(
+        onPressed: () => setState(() {
+          _titel.text = titel;
+          _titel.selection = TextSelection.collapsed(offset: titel.length);
+        }),
+        borderRadius: BorderRadius.circular(9),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(11),
+          decoration: BoxDecoration(
+            color: _panel2,
+            borderRadius: BorderRadius.circular(9),
+            border: Border.all(
+                color: gekozen ? _accent.withValues(alpha: .7) : Colors.transparent),
+          ),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(icoon, size: 17, color: gekozen ? _accent : _muted),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(titel, style: const TextStyle(fontSize: 13.5, height: 1.3)),
+                const SizedBox(height: 2),
+                Text(bron, style: const TextStyle(color: _muted, fontSize: 11.5)),
+              ]),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = widget.track;
+    final officieel = widget.uitgave.title.trim();
+    final kaal = zonderFeat(t.title).trim();
+    final credit = _credit;
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: dialogWidth(context, 560),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Titel rechtzetten',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 2),
+              Text('Nu: ${t.title}',
+                  style: const TextStyle(color: _muted, fontSize: 12.5), maxLines: 2),
+              const SizedBox(height: 14),
+              _voorstel(Icons.verified_outlined, 'zoals de uitgave het noemt', officieel),
+              // Alleen als hij écht iets anders zegt. Twee identieke regels onder elkaar zouden de
+              // indruk wekken dat er iets te kiezen valt.
+              if (kaal.isNotEmpty && kaal != officieel)
+                _voorstel(Icons.content_cut_rounded, 'jouw titel zonder de gastnaam', kaal),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _titel,
+                onChanged: (_) => setState(() {}),
+                style: const TextStyle(fontSize: 13.5),
+                decoration: const InputDecoration(
+                  labelText: 'Titel',
+                  labelStyle: TextStyle(color: _muted, fontSize: 12.5),
+                  isDense: true,
+                ),
+              ),
+              if (credit != null) ...[
+                const SizedBox(height: 10),
+                // Standaard aan: zonder dit valt de gastnaam van het bestand af en staat nergens
+                // meer wie er meespeelt.
+                SwitchListTile(
+                  value: _gastMee,
+                  onChanged: (v) => setState(() => _gastMee = v),
+                  activeThumbColor: _accent,
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: const Text('Gastnaam naar het artiestveld',
+                      style: TextStyle(fontSize: 13)),
+                  subtitle: Text(_gastMee ? credit : 'de gastnaam gaat verloren',
+                      style: TextStyle(
+                          color: _gastMee ? _muted : _accent2, fontSize: 11.5)),
+                ),
+              ],
+              for (final f in _mislukt)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(f, style: const TextStyle(color: _accent2, fontSize: 11.5)),
+                ),
+              const SizedBox(height: 12),
+              Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                TextButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: const Text('Annuleren')),
+                const SizedBox(width: 8),
+                FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  onPressed: _busy || _titel.text.trim().isEmpty ? null : _pas,
+                  child: _busy
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child:
+                              CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Text('In het bestand schrijven'),
+                ),
+              ]),
+            ],
+          ),
         ),
       ),
     );

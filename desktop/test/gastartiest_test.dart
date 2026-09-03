@@ -20,6 +20,13 @@ import 'package:debridmusic/editions.dart';
 import 'package:debridmusic/models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+/// Alleen de ZIN, want daar gaan de toetsen hieronder over.
+///
+/// [waaromGeenPlaatsMet] geeft er sinds 03-09-2026 ook de rij van de uitgave bij, zodat "Titel
+/// rechtzetten…" hetzelfde antwoord gebruikt als de regel op het scherm. Die rij wordt in
+/// `titel_rechtzetten_test.dart` gemeten; hier blijft het bij de tekst.
+String waarom(List<ChoiceTrack> official, Track t) => waaromGeenPlaatsMet(official, t).reden;
+
 ChoiceTrack uitgave(String titel, {int? seconden, String positie = '', String credit = ''}) =>
     ChoiceTrack(positie, titel, seconden, artist: credit);
 
@@ -208,33 +215,33 @@ void main() {
     // schermafdrukken gekost om erachter te komen dat de nummerrij de "(feat. …)" wegtekent en dat
     // daar het verschil zat. Eén regel onder de rij was elke keer genoeg geweest.
     test('een andere lengte wordt met beide tijden benoemd', () {
-      final r = waaromGeenPlaats(
+      final r = waarom(
           [uitgave('Crazy in Love', seconden: 236)], bestand('Crazy in Love', seconden: 400));
       expect(r, contains('3:56'));
       expect(r, contains('6:40'));
     });
 
     test('een titel die de uitgave niet kent', () {
-      final r = waaromGeenPlaats([uitgave('Halo', seconden: 261)], bestand('Iets Anders'));
+      final r = waarom([uitgave('Halo', seconden: 261)], bestand('Iets Anders'));
       expect(r, contains('Iets Anders'));
     });
 
     test('de RUWE titel komt erin, want de rij tekent de gast weg', () {
       // Dit is de regel die het hele misverstand had voorkomen: op het scherm stond "Crazy in Love",
       // in het bestand stond "Crazy in Love (feat. Jay-Z)".
-      final r = waaromGeenPlaats([uitgave('Crazy in Love', seconden: 236)],
+      final r = waarom([uitgave('Crazy in Love', seconden: 236)],
           bestand('Crazy in Love (feat. Jay-Z)', seconden: 236));
       expect(r, contains('feat. Jay-Z'));
     });
 
     test('een nummer dat twee keer op de uitgave staat', () {
-      final r = waaromGeenPlaats(
+      final r = waarom(
           [uitgave('Halo', seconden: 261), uitgave('Halo', seconden: 261)], bestand('Halo'));
       expect(r, contains('2 keer'));
     });
 
     test('zonder tracklijst wordt er niets beweerd', () {
-      expect(waaromGeenPlaats(const [], bestand('Halo')), contains('geen tracklijst'));
+      expect(waarom(const [], bestand('Halo')), contains('geen tracklijst'));
     });
   });
 
