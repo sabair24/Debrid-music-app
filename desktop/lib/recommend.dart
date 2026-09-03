@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'deezerbaan.dart';
 
 import 'models.dart' show Track;
@@ -222,13 +224,32 @@ class RecommendService {
     for (final s in seeds.take(6)) {
       final id = await _artistId(s);
       if (id == null) continue;
-      final rel = ((await _get('$_base/artist/$id/related?limit=4'))?['data'] as List?) ?? const [];
-      final tops = await Future.wait(rel.take(4).map((a) => _get('$_base/artist/${a['id']}/top?limit=6')));
+      // TWINTIG OPHALEN EN ER VIER UIT TREKKEN, in plaats van er vier op te halen.
+      //
+      // `related?limit=20` kost exact hetzelfde ene verzoek als `limit=4` — nagemeten: Deezer geeft
+      // er standaard twintig terug. De app vroeg er vier en gebruikte altijd diezelfde vier, dus
+      // zag je bij Backstreet Boys eeuwig *NSYNC, Westlife, Christina Aguilera en Five, terwijl
+      // Spice Girls, Kelly Clarkson, Boyzone, A*Teens en M2M er ook in stonden.
+      //
+      // Dit is de goedkoopste variatiewinst in het hele scherm: nul extra verzoeken, en het is wat
+      // de ververs-knop pas iets laat betekenen — anders komt daar dezelfde lijst terug.
+      final rel = ((await _get('$_base/artist/$id/related?limit=20'))?['data'] as List?) ?? const [];
+      final pool = [...rel]..shuffle(_toeval);
+      final tops = await Future.wait(
+          pool.take(4).map((a) => _get('$_base/artist/${a['id']}/top?limit=6')));
       for (final t in tops) {
         add(_tracks(t));
       }
     }
-    out.shuffle();
+    out.shuffle(_toeval);
     return out;
   }
+
+  /// Waar het schudden zijn toeval vandaan haalt.
+  ///
+  /// Instelbaar zodat een test een verwachting kan uitschrijven; in de app is het gewoon het
+  /// toeval van het systeem.
+  Random? _toevalBron;
+  Random? get _toeval => _toevalBron;
+  set toeval(Random? r) => _toevalBron = r;
 }
