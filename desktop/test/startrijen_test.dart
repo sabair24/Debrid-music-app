@@ -149,6 +149,78 @@ void main() {
     });
   });
 
+  group('deezerGenre', () {
+    test('DE VAL: "Hardcore" is hier techno en geen metal', () {
+      // 85 nummers met deze tag in Sabers bibliotheek, naast 129 Discogs-stijlen "Electronic",
+      // 21 "Euro House" en 21 "Eurodance". Zonder deze regel wordt zijn op één na grootste tag een
+      // metal-hitlijst.
+      expect(deezerGenre('Hardcore'), Genre.dance);
+      expect(deezerGenre('Gabber'), Genre.dance);
+      // En echte metal blijft gewoon metal.
+      expect(deezerGenre('Thrash Metal'), Genre.metal);
+    });
+
+    test('de tags die er in deze bibliotheek werkelijk staan', () {
+      expect(deezerGenre('Pop'), Genre.pop);
+      expect(deezerGenre('Contemporary R&B'), Genre.rnb);
+      expect(deezerGenre('Eurodance'), Genre.dance);
+      expect(deezerGenre('Euro House'), Genre.dance);
+      expect(deezerGenre('Electronic'), Genre.electro);
+      expect(deezerGenre('Synth-pop'), Genre.electro);
+      expect(deezerGenre('Variété française'), Genre.chanson);
+      expect(deezerGenre('Funk / Soul'), Genre.soulFunk);
+      expect(deezerGenre('Reggae'), Genre.reggae);
+      expect(deezerGenre('Pop Rock'), Genre.rock);
+    });
+
+    test('het meest specifieke wint van het bredere', () {
+      // "Dance-pop" bevat zowel "dance" als "pop"; "Contemporary R&B" bevat "r&b" én niets anders
+      // dat eerder komt. Zonder een vaste volgorde is de uitkomst een kwestie van geluk.
+      expect(deezerGenre('Dance-pop'), Genre.dance);
+      expect(deezerGenre('Soul / Funk / R&B'), Genre.rnb);
+    });
+
+    test('onbekend en leeg leveren niets', () {
+      expect(deezerGenre(''), isNull);
+      expect(deezerGenre('Onbekend'), isNull);
+    });
+  });
+
+  group('genreProfiel', () {
+    test('DE KERN: het profiel van deze bibliotheek', () {
+      // De werkelijk gemeten telling: Pop 324, Hardcore 85, Electronic 55, Rock 38, R&B 36,
+      // Contemporary R&B 25, Variété française 24, Dance 22, Eurodance 21.
+      final tags = [
+        for (var i = 0; i < 324; i++) 'Pop',
+        for (var i = 0; i < 85; i++) 'Hardcore',
+        for (var i = 0; i < 55; i++) 'Electronic',
+        for (var i = 0; i < 38; i++) 'Rock',
+        for (var i = 0; i < 36; i++) 'R&B',
+        for (var i = 0; i < 25; i++) 'Contemporary R&B',
+        for (var i = 0; i < 24; i++) 'Variété française',
+        for (var i = 0; i < 22; i++) 'Dance',
+        for (var i = 0; i < 21; i++) 'Eurodance',
+      ];
+      final profiel = genreProfiel(tags);
+      expect(profiel.first, Genre.pop, reason: 'pop is met afstand het grootst');
+      expect(profiel, contains(Genre.dance));
+      expect(profiel, contains(Genre.rnb));
+      expect(profiel, contains(Genre.chanson));
+      expect(profiel, isNot(contains(Genre.metal)),
+          reason: 'er staat geen metal in deze bibliotheek, hoe vaak "Hardcore" er ook staat');
+    });
+
+    test('één raar album kaapt de rij niet', () {
+      final tags = [for (var i = 0; i < 30; i++) 'Pop', 'Death Metal'];
+      expect(genreProfiel(tags), [Genre.pop]);
+    });
+
+    test('een lege bibliotheek geeft een leeg profiel, geen uitzondering', () {
+      expect(genreProfiel(const <String?>[]), isEmpty);
+      expect(genreProfiel([null, '', 'Onbekend']), isEmpty);
+    });
+  });
+
   group('uitJaren', () {
     test('dit jaar en vorig jaar erdoor, de rest niet', () {
       final rij = [

@@ -175,6 +175,48 @@ class CatalogService {
         .toList();
   }
 
+  /// De hitlijsten van een handvol genres, om de beurt door elkaar gevlochten.
+  ///
+  /// **Waarom dit bestaat.** "Top van dit moment" was letterlijk `chart/0/albums`: Deezers algemene
+  /// lijst, zonder één woord over de gebruiker. Bij iemand met 448 nummers uit de jaren 90 en een
+  /// kast vol pop, R&B en dance stonden daar een sludge-metalband en twee musicalopnamen in —
+  /// nagemeten op 02-09-2026, plaats 21 tot 25 van die lijst.
+  ///
+  /// **Om de beurt en niet achter elkaar.** Eerst de nummer 1 van elk genre, dan de nummer 2, enz.
+  /// Plakte je de lijsten achter elkaar, dan zou pop met zijn negenenveertig platen de hele rij
+  /// vullen en zou het kleinste genre er nooit in komen. Zo staat elk genre uit het profiel meteen
+  /// vooraan.
+  ///
+  /// **Één verzoek per genre.** `chart/{id}` zonder subbron geeft albums, nummers én afspeellijsten
+  /// tegelijk; alleen de albums worden hier gebruikt. Gemeten omvang per genre: pop 49, rap 50,
+  /// rock 50, alternative 50, electro 22, jazz 14, R&B 10, dance 8. De kleine genres leveren dus
+  /// weinig, en daarom is de volgorde van vlechten belangrijker dan de lengte.
+  Future<List<CatalogAlbumHit>> chartPerGenre(List<int> genres, {int perGenre = 25}) async {
+    if (genres.isEmpty) return [];
+    final lijsten = await Future.wait(genres.map((g) async {
+      final j = await _get('$_base/chart/$g?limit=$perGenre');
+      final data = ((j?['albums'] as Map?)?['data'] as List?) ?? const [];
+      return data
+          .map((a) => CatalogAlbumHit(_album(a), (a['artist']?['name'] ?? '') as String))
+          .where((h) => h.album.title.isNotEmpty)
+          .toList();
+    }));
+
+    final uit = <CatalogAlbumHit>[];
+    final gezien = <int>{};
+    final diepste = lijsten.fold<int>(0, (m, l) => l.length > m ? l.length : m);
+    for (var rang = 0; rang < diepste; rang++) {
+      for (final lijst in lijsten) {
+        if (rang >= lijst.length) continue;
+        final h = lijst[rang];
+        // Op album-id ontdubbelen: een plaat kan in twee genrelijsten staan, en dan hoort hij er
+        // één keer te staan op zijn beste plaats.
+        if (gezien.add(h.album.id)) uit.add(h);
+      }
+    }
+    return uit;
+  }
+
   /// Newest albums from the artists the user already listens to (Deezer's global "editorial
   /// releases" endpoint is deprecated / empty). This is more personal anyway — "new from your
   /// artists". Runs the per-artist lookups concurrently and returns newest-release-first.

@@ -98,6 +98,102 @@ List<CatalogAlbumHit> uitJaren(List<CatalogAlbumHit> hits, Set<int> jaren) =>
 /// De sleutel waaronder een plaat als "die heb ik al" telt: artiest en titel, allebei gevouwen.
 String bezitssleutel(String artiest, String titel) => '${artistKey(artiest)}|${artistKey(titel)}';
 
+/// Deezers genrenummers, zoals `GET /genre` ze op 02-09-2026 teruggaf.
+///
+/// Als namen en niet als losse getallen, want `chart/113` zegt niemand iets en `dance` wel.
+class Genre {
+  static const pop = 132;
+  static const dance = 113;
+  static const electro = 106;
+  static const rnb = 165;
+  static const soulFunk = 169;
+  static const rock = 152;
+  static const alternative = 85;
+  static const rap = 116;
+  static const chanson = 52;
+  static const reggae = 144;
+  static const latin = 197;
+  static const metal = 464;
+  static const afrikaans = 2;
+  static const arabisch = 12;
+  static const nederlandstalig = 518;
+  static const jazz = 129;
+  static const klassiek = 98;
+  static const blues = 153;
+  static const folk = 466;
+}
+
+/// Van een genretag of Discogs-stijl naar het genre waar Deezer een hitlijst voor heeft.
+///
+/// **Waarom een tabel en geen slimmigheid.** De tags in deze bibliotheek komen uit twee werelden:
+/// wat de ripper in het bestand zette (1063 van de 1239 nummers hebben er een) en de stijlen die
+/// Discogs per album levert. Die schrijven hetzelfde anders — "R&B", "Contemporary R&B",
+/// "Soul / Funk / R&B" — en Deezer kent maar vijfentwintig genres. Een tabel is hier eerlijker dan
+/// een regel: je kunt hem nalezen en er iets aan zien.
+///
+/// **De regel over "Hardcore" gaat tegen zijn eigen woord in, en dat is met opzet.** In deze
+/// bibliotheek staan 85 nummers met die tag, naast 129 Discogs-stijlen "Electronic", 21 "Euro
+/// House" en 21 "Eurodance". Dat is hardcore TECHNO, niet metal. Zonder deze regel wordt de op één
+/// na grootste tag van de gebruiker een metal-hitlijst, en dan gaat de rij nog verder van hem af
+/// staan dan hij al stond.
+int? deezerGenre(String tag) {
+  final t = tag.toLowerCase().trim();
+  if (t.isEmpty) return null;
+  bool bevat(List<String> woorden) => woorden.any(t.contains);
+
+  // Volgorde telt: het meest specifieke eerst. "Contemporary R&B" moet R&B worden en niet
+  // struikelen over een bredere regel erboven.
+  if (bevat(['nederlandstalig', 'nederpop', 'levenslied'])) return Genre.nederlandstalig;
+  if (bevat(['chanson', 'variété', 'variete', 'française', 'francaise'])) return Genre.chanson;
+  if (bevat(['raï', 'rai ', 'arabic', 'arabisch', 'maghreb'])) return Genre.arabisch;
+  if (bevat(['afrobeat', 'african', 'afrikaans', 'soukous'])) return Genre.afrikaans;
+  if (bevat(['r&b', 'rnb', 'rhythm and blues'])) return Genre.rnb;
+  if (bevat(['soul', 'funk', 'disco', 'motown'])) return Genre.soulFunk;
+  if (bevat(['hip hop', 'hip-hop', 'rap', 'trap', 'grime'])) return Genre.rap;
+  if (bevat(['reggae', 'dancehall', 'ragga', 'ska'])) return Genre.reggae;
+  if (bevat(['latin', 'salsa', 'reggaeton', 'bachata', 'merengue'])) return Genre.latin;
+  if (bevat(['jazz', 'bebop', 'swing'])) return Genre.jazz;
+  if (bevat(['blues'])) return Genre.blues;
+  if (bevat(['folk', 'country', 'americana'])) return Genre.folk;
+  if (bevat(['classical', 'klassiek', 'opera', 'baroque'])) return Genre.klassiek;
+  // Hardcore vóór metal, en vóór de brede dance-regel: zie de uitleg hierboven.
+  if (bevat(['hardcore', 'gabber', 'hardstyle'])) return Genre.dance;
+  if (bevat(['metal', 'thrash', 'doom', 'sludge'])) return Genre.metal;
+  if (bevat(['house', 'trance', 'techno', 'dance', 'eurodance', 'garage', 'club'])) {
+    return Genre.dance;
+  }
+  if (bevat(['electro', 'electronic', 'synth', 'downtempo', 'ambient', 'idm'])) {
+    return Genre.electro;
+  }
+  if (bevat(['alternative', 'indie', 'grunge', 'shoegaze'])) return Genre.alternative;
+  if (bevat(['rock', 'punk', 'new wave'])) return Genre.rock;
+  if (bevat(['pop'])) return Genre.pop;
+  return null;
+}
+
+/// De genres waar deze bibliotheek werkelijk over gaat, zwaarste eerst.
+///
+/// **Waarom uit de bibliotheek en niet uit Deezer.** "Top van dit moment" haalde letterlijk
+/// `chart/0/albums` op: Deezers algemene hitlijst, zonder één woord over de gebruiker. Vandaar dat
+/// er bij iemand met 448 nummers uit de jaren 90 en een kast vol pop, R&B en dance een sludge-
+/// metalband en twee musicalopnamen in die rij stonden.
+///
+/// Dit profiel kost nul verzoeken: het telt de tags die er al liggen. [perGenre] is er zodat een
+/// enkel raar album de rij niet kan kapen — één plaat met een tag wordt geen genre.
+List<int> genreProfiel(Iterable<String?> tags, {int max = 6, int drempel = 3}) {
+  final telling = <int, int>{};
+  for (final tag in tags) {
+    final g = deezerGenre(tag ?? '');
+    if (g == null) continue;
+    telling[g] = (telling[g] ?? 0) + 1;
+  }
+  final uit = [
+    for (final e in telling.entries)
+      if (e.value >= drempel) e,
+  ]..sort((a, b) => b.value.compareTo(a.value));
+  return [for (final e in uit.take(max)) e.key];
+}
+
 /// De hele rij "Nieuw van jouw artiesten", van rauwe Deezer-oogst naar wat er op het scherm hoort.
 ///
 /// **Eén regel op één plek, en dat is het punt.** De losse zeven bestonden al of zijn hierboven

@@ -37,6 +37,7 @@ import 'booklet_view.dart';
 import 'catalog.dart';
 import 'completeness.dart';
 import 'credits.dart';
+import 'deezerbaan.dart';
 import 'discogs.dart';
 import 'discography.dart';
 import 'discography_service.dart';
@@ -10744,7 +10745,42 @@ class _StartCache {
   static List<CatalogAlbumHit> charts = [];
   static List<CatalogAlbumHit> releases = [];
   static List<RecTrack> forYou = [];
+
+  /// De genres waarop "Top van dit moment" gefilterd is, zodat de kop kan zeggen waar de rij
+  /// over gaat in plaats van het alleen te beloven.
+  static List<int> genres = [];
   static bool geladen = false;
+
+  /// Wanneer er voor het laatst iets is opgehaald, in millisdeconden sinds 1970.
+  static int opgehaaldMs = 0;
+
+  /// Alles vergeten, zodat de volgende opbouw opnieuw begint.
+  ///
+  /// **Waarom dit erbij moest.** `geladen` ging alleen van false naar true en nooit terug: de
+  /// startpagina laadde exact één keer per app-start en bleef daarna staan zoals hij stond. Wie
+  /// hem twee dagen achter elkaar opent ziet twee dagen dezelfde tegels. Dat is de andere helft van
+  /// "te weinig keuze" — niet dat er te weinig ís, maar dat je altijd hetzelfde deel ervan ziet.
+  ///
+  /// Ook de artiest-id's van de rijbaan gaan mee: die horen bij de vorige trekking.
+  static void leeg() {
+    charts = [];
+    releases = [];
+    forYou = [];
+    genres = [];
+    geladen = false;
+    opgehaaldMs = 0;
+    DeezerBaan.vergeet();
+  }
+
+  /// Ouder dan zes uur? Dan bij het openen zelf opnieuw ophalen.
+  ///
+  /// Zes uur en niet een kwartier: de hitlijst van Deezer verandert niet per uur, en elke
+  /// verversing kost tientallen verzoeken uit hetzelfde budget. Wie sneller iets nieuws wil heeft
+  /// de knop.
+  static bool get verlopen =>
+      geladen &&
+      opgehaaldMs > 0 &&
+      DateTime.now().millisecondsSinceEpoch - opgehaaldMs > const Duration(hours: 6).inMilliseconds;
 }
 
 class _HomeStartViewState extends State<HomeStartView> {
@@ -10753,6 +10789,7 @@ class _HomeStartViewState extends State<HomeStartView> {
   List<CatalogAlbumHit> _charts = _StartCache.charts;
   List<CatalogAlbumHit> _releases = _StartCache.releases;
   List<RecTrack> _forYou = _StartCache.forYou;
+  List<int> _genres = _StartCache.genres;
   bool _chartsLoading = !_StartCache.geladen;
   bool _seedsRequested = false; // the library's artists have been used to load the personal rows
   bool _seedsLoading = false;
@@ -10771,6 +10808,16 @@ class _HomeStartViewState extends State<HomeStartView> {
     // Charts need no library — load them right away. Maar niet opnieuw als ze er al zijn: zie
     // [_StartCache]. Anders haalt elke terugkeer naar Start dezelfde lijst nog een keer op, met een
     // spinner en een andere volgorde dan je net zag.
+    //
+    // En wat er ligt kan te oud zijn. Zonder die tweede voorwaarde blijft de pagina staan zoals
+    // hij bij de eerste opbouw stond, hoe lang de app ook openstaat — zie [_StartCache.verlopen].
+    if (_StartCache.verlopen) {
+      _StartCache.leeg();
+      _charts = [];
+      _releases = [];
+      _forYou = [];
+      _chartsLoading = true;
+    }
     if (!_StartCache.geladen) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadCharts());
     }
@@ -10783,7 +10830,32 @@ class _HomeStartViewState extends State<HomeStartView> {
       if (mounted) setState(() => _charts = c);
     } catch (_) {}
     _StartCache.geladen = true;
+    _StartCache.opgehaaldMs = DateTime.now().millisecondsSinceEpoch;
     if (mounted) setState(() => _chartsLoading = false);
+  }
+
+  /// Alles opnieuw ophalen, met een andere trekking.
+  ///
+  /// **Waarom een knop en niet vanzelf.** De pagina laadde één keer per app-start en bleef daarna
+  /// staan; wie hem twee dagen achter elkaar opende zag twee dagen dezelfde tegels. Vanzelf
+  /// verversen zou tientallen verzoeken kosten telkens als je even naar Albums en terug wisselt —
+  /// zie de rijbaan in `deezerbaan.dart` voor waarom dat budget krap is.
+  ///
+  /// Dat dit ook echt iets ANDERS oplevert, komt van twee dingen die er los van staan: de zaden
+  /// worden opnieuw geschud, en `discover` trekt vier verwante artiesten uit twintig in plaats van
+  /// altijd dezelfde vier te nemen. Zonder die twee gaf een ververs-knop precies dezelfde lijst
+  /// terug, en dat is erger dan geen knop.
+  Future<void> _ververs() async {
+    if (_chartsLoading || _seedsLoading) return;
+    _StartCache.leeg();
+    setState(() {
+      _charts = [];
+      _releases = [];
+      _forYou = [];
+      _chartsLoading = true;
+      _seedsRequested = false;
+    });
+    await _loadCharts();
   }
 
   /// The personal rows depend on the scanned library. On a cold start the scan is still running
@@ -10801,15 +10873,25 @@ class _HomeStartViewState extends State<HomeStartView> {
     final eigenPlaten = {
       for (final a in lib.albums) bezitssleutel(a.artist, a.title),
     };
+    // Het genreprofiel komt uit de tags die er al liggen — nul verzoeken. Zie [genreProfiel] voor
+    // waarom "Top van dit moment" anders over sludge metal en musicals gaat.
+    final profiel = genreProfiel([for (final t in lib.tracks) t.genre]);
     final relF = _catalog.latestFromArtists(seeds);
     final fyF = _rec.discover(seeds.take(6).toList());
+    final genreF = profiel.isEmpty
+        ? Future.value(<CatalogAlbumHit>[])
+        : _catalog.chartPerGenre(profiel);
     List<CatalogAlbumHit> rel = [];
     List<RecTrack> fy = [];
+    List<CatalogAlbumHit> genreLijst = [];
     try {
       rel = await relF;
     } catch (_) {}
     try {
       fy = await fyF;
+    } catch (_) {}
+    try {
+      genreLijst = await genreF;
     } catch (_) {}
     if (!mounted) return;
     // Wat je al hebt gaat eruit. Zonder dit stond deze rij vol met je eigen platen: hij komt via
@@ -10825,11 +10907,55 @@ class _HomeStartViewState extends State<HomeStartView> {
     _StartCache.releases = nieuwVanJouwArtiesten(rel,
         jaren: {ditJaar, ditJaar - 1}, alInBezit: eigenPlaten);
     _StartCache.forYou = maxPerArtiest(nogNietInBezit(fy, bezit), (t) => t.artist, 2);
+    // De hitlijst van JOUW genres vervangt de wereldlijst, zodra er een is. Eén per artiest, want
+    // een hitlijst met dezelfde act op plaats 3 en 7 leest als een fout.
+    //
+    // De wereldlijst blijft staan als het profiel niets opleverde — bij een verse bibliotheek is er
+    // niets om op te filteren, en dan is een algemene lijst beter dan een lege rij.
+    if (genreLijst.isNotEmpty) {
+      _StartCache.charts = maxPerArtiest(genreLijst, (h) => h.artist, 1);
+      _StartCache.genres = profiel;
+    }
+    _StartCache.opgehaaldMs = DateTime.now().millisecondsSinceEpoch;
     setState(() {
       _releases = _StartCache.releases;
       _forYou = _StartCache.forYou;
+      _charts = _StartCache.charts;
+      _genres = _StartCache.genres;
       _seedsLoading = false;
     });
+  }
+
+  /// De genres van "Top van dit moment", uitgeschreven — "Pop · Dance · R&B".
+  ///
+  /// Leeg zolang er geen profiel is; dan staat er alleen de kop en is de rij wat hij altijd was:
+  /// de algemene lijst van Deezer.
+  String? get _genreBijschrift {
+    if (_genres.isEmpty) return null;
+    const namen = {
+      Genre.pop: 'Pop',
+      Genre.dance: 'Dance',
+      Genre.electro: 'Electro',
+      Genre.rnb: 'R&B',
+      Genre.soulFunk: 'Soul & Funk',
+      Genre.rock: 'Rock',
+      Genre.alternative: 'Alternative',
+      Genre.rap: 'Rap',
+      Genre.chanson: 'Chanson',
+      Genre.reggae: 'Reggae',
+      Genre.latin: 'Latin',
+      Genre.metal: 'Metal',
+      Genre.afrikaans: 'Afrikaans',
+      Genre.arabisch: 'Arabisch',
+      Genre.nederlandstalig: 'Nederlandstalig',
+      Genre.jazz: 'Jazz',
+      Genre.klassiek: 'Klassiek',
+      Genre.blues: 'Blues',
+      Genre.folk: 'Folk',
+    };
+    // Vier is genoeg om te zien waar het over gaat; meer maakt van een bijschrift een opsomming.
+    final uit = [for (final g in _genres.take(4)) namen[g]].whereType<String>();
+    return uit.isEmpty ? null : uit.join(' · ');
   }
 
   String _greeting() {
@@ -10889,7 +11015,26 @@ class _HomeStartViewState extends State<HomeStartView> {
         // eronder. Zie `ui/maten.dart`.
         Padding(
           padding: const EdgeInsets.fromLTRB(kGoot, kRuimte24, kGoot, kRuimte2),
-          child: Text('${_greeting()} 👋', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text('${_greeting()} 👋',
+                    style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+              ),
+              // Niet op een tv: daar is dit geen knop maar een extra halte op de weg naar beneden,
+              // en de afstandsbediening heeft er niets aan.
+              if (!isTv)
+                TvLabelled(
+                  label: 'Ververs',
+                  child: IconButton(
+                    onPressed: anyLoading ? null : _ververs,
+                    icon: const Icon(Icons.refresh_rounded),
+                    color: _muted,
+                    tooltip: 'Nieuwe aanbevelingen ophalen',
+                  ),
+                ),
+            ],
+          ),
         ),
         const Padding(
           padding: EdgeInsets.fromLTRB(kGoot, 0, kGoot, kRuimte6),
@@ -10917,7 +11062,8 @@ class _HomeStartViewState extends State<HomeStartView> {
               _forYou.isEmpty ? _loadingRow() : _recRow(_forYou.take(15).toList())),
         if (_charts.isNotEmpty || _chartsLoading)
           _section('Top van dit moment',
-              _charts.isEmpty ? _loadingRow() : _catalogRow(_charts.take(20).toList())),
+              _charts.isEmpty ? _loadingRow() : _catalogRow(_charts.take(20).toList()),
+              bij: _genreBijschrift),
         if (_releases.isNotEmpty || _komtNog)
           _section('Nieuw van jouw artiesten',
               _releases.isEmpty ? _loadingRow() : _catalogRow(_releases.take(20).toList())),
@@ -10937,12 +11083,16 @@ class _HomeStartViewState extends State<HomeStartView> {
     );
   }
 
-  Widget _section(String title, Widget row) => Column(
+  Widget _section(String title, Widget row, {String? bij}) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Stond op `fromLTRB(28, 22, 28, 12)` terwijl de rij eronder op 24 staat: vier punten
           // scheefstand tussen een kop en zijn eigen inhoud, over de hele hoogte van dit scherm.
-          SectieKop(title),
+          //
+          // [bij] zegt waaróp een rij is samengesteld — bij "Top van dit moment" de genres waarop
+          // gefilterd is. Het veld bestond al in `SectieKop` en werd nergens gebruikt; hier is het
+          // het verschil tussen een belofte en een verantwoording.
+          SectieKop(title, bij: bij),
           // Hoger dan de tegel zelf: een liggende `ListView` geeft zijn kinderen een STRAKKE hoogte
           // en knipt ze af, dus zonder lucht wordt de groei bij aanwijzen er boven en onder af
           // gesneden.
