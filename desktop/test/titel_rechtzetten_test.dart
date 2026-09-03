@@ -193,6 +193,76 @@ void main() {
     });
   });
 
+  group('wat andere persingen dit nummer noemen', () {
+    // De persing die de pagina toont is er één van soms tientallen. Noemt die het kaal terwijl jouw
+    // bestand een gast noemt, dan is de vraag niet "wat zegt deze uitgave" maar "wat zeggen ze
+    // allemaal". Gevraagd op 02-09-2026: "haal officiele titels van discogs of musicbrainz".
+    final mijn = bestand('One Minute Man (Feat Ludacris)');
+
+    test('geteld per persing, vaakst eerst', () {
+      final uit = titelsUitPersingen([
+        const [ChoiceTrack('7', 'One Minute Man', 275)],
+        const [ChoiceTrack('7', 'One Minute Man', 275)],
+        const [ChoiceTrack('7', 'One Minute Man (featuring Ludacris)', 275)],
+      ], mijn);
+
+      expect(uit, hasLength(2));
+      expect(uit.first.titel, 'One Minute Man');
+      expect(uit.first.persingen, 2);
+      expect(uit.last.persingen, 1);
+    });
+
+    test('een ANDERE opname is geen andere spelling', () {
+      // "(Video Mix)" is geen gastcredit maar een versiemerk, en `zonderFeat` laat het staan. Zou
+      // die rij hier binnenkomen, dan stelde het venster voor om een remix-titel over te nemen op
+      // een bestand dat de albumversie is.
+      final uit = titelsUitPersingen([
+        const [ChoiceTrack('7', 'One Minute Man (Video Mix)', 240)],
+      ], mijn);
+      expect(uit, isEmpty);
+    });
+
+    test('DE KERN: de eigen spelling telt MEE, en dat is het punt', () {
+      // Dit stond eerst andersom: de huidige titel werd eruit gefilterd omdat hij "geen suggestie"
+      // is. Maar hij is wel het ANTWOORD op de vraag eronder — moet dit überhaupt anders? — en het
+      // is hier het waarschijnlijkste geval: de getoonde persing laat de gast weg, de rest niet.
+      final uit = titelsUitPersingen([
+        const [ChoiceTrack('7', 'One Minute Man (Feat Ludacris)', 275)],
+        const [ChoiceTrack('7', 'One Minute Man (Feat Ludacris)', 275)],
+        const [ChoiceTrack('7', 'One Minute Man', 275)],
+      ], mijn);
+
+      expect(uit.first.titel, 'One Minute Man (Feat Ludacris)');
+      expect(uit.first.persingen, 2, reason: 'twee persingen noemen het zoals het bestand');
+      expect(uit.last.titel, 'One Minute Man');
+    });
+
+    test('een dubbele plaat die het nummer twee keer draagt telt één keer', () {
+      // Eén bron die het zo noemt is één bron, ook als de rij er twee keer op staat.
+      final uit = titelsUitPersingen([
+        const [
+          ChoiceTrack('7', 'One Minute Man (feat. Ludacris)', 275),
+          ChoiceTrack('2-3', 'One Minute Man (feat. Ludacris)', 275),
+        ],
+      ], mijn);
+      expect(uit.single.persingen, 1);
+    });
+
+    test('andere nummers op die persingen blijven buiten beeld', () {
+      final uit = titelsUitPersingen([
+        const [
+          ChoiceTrack('6', 'Get Ur Freak On', 227),
+          ChoiceTrack('7', 'One Minute Man (feat. Ludacris)', 275),
+        ],
+      ], mijn);
+      expect(uit.single.titel, 'One Minute Man (feat. Ludacris)');
+    });
+
+    test('niets gevonden is een antwoord, geen storing', () {
+      expect(titelsUitPersingen(const [], mijn), isEmpty);
+    });
+  });
+
   group('alle titels van een plaat tegelijk', () {
     const lijst = [
       ChoiceTrack('6', 'Get Ur Freak On', 227),

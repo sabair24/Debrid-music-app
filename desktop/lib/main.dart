@@ -5341,7 +5341,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                               label: s.index < 0 ? '' : s.label,
                               uitgaveSeconden: s.andereLengte ? s.official?.seconds : null,
                               reden: uitleg?.reden,
-                              uitgaveRij: uitleg?.uitgave);
+                              uitgaveRij: uitleg?.uitgave,
+                              albumMbid: _officialMbid);
 
                       // A double album says which disc you are looking at, and files the pressing
                       // doesn't name say so — left unlabelled the latter read as part of the record,
@@ -6188,6 +6189,10 @@ class TrackRow extends StatefulWidget {
   /// verschijnt "Titel rechtzetten…" in het menu van deze rij.
   final ChoiceTrack? uitgaveRij;
 
+  /// De MusicBrainz-persing waar de tracklijst van deze pagina vandaan komt, als die er is. Gaat
+  /// mee naar [TitelRechtzettenDialog], dat er de ANDERE persingen van dezelfde plaat mee opvraagt.
+  final String? albumMbid;
+
   const TrackRow(
       {super.key,
       required this.track,
@@ -6197,7 +6202,8 @@ class TrackRow extends StatefulWidget {
       this.label,
       this.uitgaveSeconden,
       this.reden,
-      this.uitgaveRij});
+      this.uitgaveRij,
+      this.albumMbid});
   @override
   State<TrackRow> createState() => _TrackRowState();
 }
@@ -6232,10 +6238,12 @@ class _TrackRowState extends State<TrackRow> {
         // Bewust NIET met een muis: daar betekent een ingehouden knop niets, en dan gooit een trage
         // klik ineens een menu open. De muis heeft de rechterknop hieronder.
         onLongPress: _menuOpHouden
-            ? () => _toonItemMenu(context, _nummerMenu(context, t, uitgave: widget.uitgaveRij))
+            ? () => _toonItemMenu(context,
+                _nummerMenu(context, t, uitgave: widget.uitgaveRij, albumMbid: widget.albumMbid))
             : null,
         onSecondaryTap: (bij) => _toonItemMenu(
-            context, _nummerMenu(context, t, uitgave: widget.uitgaveRij),
+            context,
+            _nummerMenu(context, t, uitgave: widget.uitgaveRij, albumMbid: widget.albumMbid),
             bij: bij),
         borderRadius: BorderRadius.circular(10),
         // A list of rows: one growing would push every row under it down as the highlight runs
@@ -8268,7 +8276,8 @@ ItemMenu _ontbrekendMenu(
 /// [uitgave] is de rij van de persing waar dit bestand op had moeten passen, en is alleen gevuld
 /// voor een nummer onder "Niet op deze uitgave" waarvoor er één te vinden was. Alleen dán valt er
 /// een titel recht te zetten, en alleen dán staat die regel in het menu — zie [waaromGeenPlaatsMet].
-ItemMenu _nummerMenu(BuildContext context, Track t, {ChoiceTrack? uitgave}) {
+ItemMenu _nummerMenu(BuildContext context, Track t,
+    {ChoiceTrack? uitgave, String? albumMbid}) {
   final p = context.read<PlayerStore>();
   final lib = context.read<LibraryStore>();
   final nav = Navigator.of(context);
@@ -8335,7 +8344,8 @@ ItemMenu _nummerMenu(BuildContext context, Track t, {ChoiceTrack? uitgave}) {
           if (!isTv) MenuRegel(Icons.title_rounded, 'Titel rechtzetten…',
               () => showDialog<bool>(
                   context: context,
-                  builder: (_) => TitelRechtzettenDialog(track: t, uitgave: uitgave))),
+                  builder: (_) => TitelRechtzettenDialog(
+                      track: t, uitgave: uitgave, albumMbid: albumMbid))),
         // De tegenhanger van "Naar ander album…", voor de plaat die je nog NIET hebt.
         //
         // Onder "Niet op deze uitgave" staan bestanden die wel van jou zijn maar niet op de
@@ -22811,7 +22821,14 @@ class TitelRechtzettenDialog extends StatefulWidget {
   /// dan de regel eronder beweert.
   final ChoiceTrack uitgave;
 
-  const TitelRechtzettenDialog({super.key, required this.track, required this.uitgave});
+  /// De MusicBrainz-persing waar de pagina zijn tracklijst van heeft, als die er is. Alleen dan kan
+  /// het venster de ANDERE persingen van dezelfde plaat opvragen — zie [_haalPersingen]. Null bij
+  /// een tracklijst van Discogs of uit de eigen tags, en dan blijft die knop weg in plaats van te
+  /// mislukken zodra je erop drukt.
+  final String? albumMbid;
+
+  const TitelRechtzettenDialog(
+      {super.key, required this.track, required this.uitgave, this.albumMbid});
 
   @override
   State<TitelRechtzettenDialog> createState() => _TitelRechtzettenDialogState();
@@ -22833,6 +22850,63 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
   /// schakelaar te verdwijnen in plaats van de naam er dubbel in te zetten.
   String? get _credit =>
       gastNaarArtiest(widget.track, _titel.text, uitgaveArtiest: widget.uitgave.artist);
+
+  /// Wat andere persingen dit nummer noemen. Null zolang er niet gevraagd is — dat verschil telt:
+  /// een lege lijst betekent "gevraagd, en ze noemen het allemaal net zo", en dat is een antwoord.
+  List<({String titel, int persingen})>? _andere;
+  bool _persingBezig = false;
+  String? _persingFout;
+
+  /// Alle persingen van deze plaat, in TWEE verzoeken.
+  ///
+  /// Het plan begrootte hier "één opzoeking per persing", en dat is niet nodig:
+  /// [MusicBrainzService.editionsOf] met `tracklists: true` levert de hele rij persingen mét hun
+  /// nummers in één antwoord (145 kB tegen 18 kB, en nog altijd sneller dan één losse opzoeking).
+  /// Daarvóór staat één lookup om van deze persing naar de RELEASEGROEP te komen.
+  ///
+  /// [MusicBrainzService.tracklistOf] wordt alleen aangeroepen voor persingen die hun nummers al
+  /// bij zich dragen. Dat is geen zuinigheid maar een rem: die functie haalt de persing alsnog op
+  /// als ze leeg is, en bij een afgekapt antwoord zou dat tientallen verzoeken op een baan van
+  /// 1100 ms betekenen — het venster zou minuten staan draaien.
+  Future<void> _haalPersingen() async {
+    final mbid = widget.albumMbid;
+    if (mbid == null || _persingBezig) return;
+    setState(() {
+      _persingBezig = true;
+      _persingFout = null;
+    });
+    try {
+      final mb = context.read<MusicBrainzService>();
+      final groep = (await mb.release(mbid))?.releaseGroupId;
+      if (groep == null || groep.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _persingBezig = false;
+            _persingFout = 'MusicBrainz kent geen andere persingen van deze plaat';
+          });
+        }
+        return;
+      }
+      final persingen = await mb.editionsOf(groep, tracklists: true);
+      final lijsten = <List<ChoiceTrack>>[
+        for (final p in persingen)
+          if (p.tracks.isNotEmpty) await mb.tracklistOf(p),
+      ];
+      final gevonden = titelsUitPersingen(lijsten, widget.track);
+      if (!mounted) return;
+      setState(() {
+        _persingBezig = false;
+        _andere = gevonden;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _persingBezig = false;
+        // De reden erbij: "er gebeurde niets" is precies de melding waar dit venster tegen bestaat.
+        _persingFout = 'Andere persingen ophalen lukte niet — $e';
+      });
+    }
+  }
 
   Future<void> _pas() async {
     final titel = _titel.text.trim();
@@ -22861,6 +22935,27 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
       _busy = false;
       _mislukt = r.failed;
     });
+  }
+
+  /// De spellingen uit andere persingen die het venster nog niet als knop toont.
+  List<({String titel, int persingen})> _nieuweSpellingen(String officieel, String kaal) {
+    final al = {normKey(officieel), normKey(kaal), normKey(widget.track.title)};
+    return [
+      for (final a in _andere ?? const <({String titel, int persingen})>[])
+        if (!al.contains(normKey(a.titel))) a,
+    ];
+  }
+
+  /// Hoeveel persingen dit nummer noemen zoals het bestand het nu heet. Null zolang er niet gevraagd
+  /// is; 0 als geen enkele dat doet.
+  int? get _zoalsJij {
+    final lijst = _andere;
+    if (lijst == null) return null;
+    final mijn = normKey(widget.track.title);
+    for (final a in lijst) {
+      if (normKey(a.titel) == mijn) return a.persingen;
+    }
+    return 0;
   }
 
   /// Eén voorstel: een regel die je aantikt om hem in het tekstveld te zetten.
@@ -22927,6 +23022,70 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
               // indruk wekken dat er iets te kiezen valt.
               if (kaal.isNotEmpty && kaal != officieel)
                 _voorstel(Icons.content_cut_rounded, 'jouw titel zonder de gastnaam', kaal),
+              // Wat de RÉST van de persingen zegt. Achter een knop en niet bij het openen: het kost
+              // twee verzoeken aan MusicBrainz, en meestal is de titel hierboven al het antwoord.
+              //
+              // Alleen spellingen die hierboven nog niet staan worden een knop; de rest zou een
+              // tweede knop met dezelfde tekst zijn.
+              for (final a in _nieuweSpellingen(officieel, kaal))
+                _voorstel(
+                    Icons.library_music_outlined,
+                    a.persingen == 1
+                        ? 'één andere persing noemt het zo'
+                        : '${a.persingen} andere persingen noemen het zo',
+                    a.titel),
+              // En de belangrijkste uitkomst is geen knop maar een mededeling: noemen de meeste
+              // persingen het net zoals jouw bestand, dan is het antwoord op "moet dit wel anders?"
+              // waarschijnlijk nee. Zonder deze regel zou het venster dat verzwijgen.
+              if (_zoalsJij case final n? when n > 0)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                      n == 1
+                          ? 'Eén persing noemt dit nummer al zoals jouw bestand.'
+                          : '$n persingen noemen dit nummer al zoals jouw bestand.',
+                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                ),
+              if (widget.albumMbid != null && _andere == null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    style: TextButton.styleFrom(
+                      foregroundColor: _accent,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    onPressed: _persingBezig ? null : _haalPersingen,
+                    icon: _persingBezig
+                        ? const SizedBox(
+                            width: 13,
+                            height: 13,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
+                        : const Icon(Icons.travel_explore_rounded, size: 16),
+                    label: Text(_persingBezig ? 'Persingen ophalen…' : 'Andere persingen bekijken',
+                        style: const TextStyle(fontSize: 12)),
+                  ),
+                ),
+              // Een lege uitkomst is een ANTWOORD en geen storing, en hoort dus ook gezegd te
+              // worden — anders lijkt de knop niets gedaan te hebben.
+              if (_andere != null &&
+                  _nieuweSpellingen(officieel, kaal).isEmpty &&
+                  (_zoalsJij ?? 0) == 0)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                      _andere!.isEmpty
+                          ? 'Geen andere persing van deze plaat draagt dit nummer.'
+                          : 'Geen andere persing noemt het anders dan hierboven.',
+                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                ),
+              if (_persingFout != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(_persingFout!,
+                      style: const TextStyle(color: _accent2, fontSize: 11.5)),
+                ),
               const SizedBox(height: 6),
               TextField(
                 controller: _titel,

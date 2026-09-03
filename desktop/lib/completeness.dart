@@ -451,6 +451,57 @@ String? gastNaarArtiest(Track t, String nieuweTitel, {String uitgaveArtiest = ''
   return normKey(credit) == normKey(t.artist) ? null : credit;
 }
 
+/// Hoe ANDERE persingen dit ene nummer noemen, met hoeveel er dat zo doen.
+///
+/// **Waarvoor.** De persing die de pagina toont is er één van soms tientallen. Noemt die het nummer
+/// kaal terwijl jouw bestand een gast noemt, dan is de vraag niet alleen "wat zegt deze uitgave"
+/// maar "wat zeggen ze allemaal" — en dan blijkt een andere persing hem vaak wél met de gast te
+/// noemen. Gevraagd op 02-09-2026: *"haal officiele titels van discogs of musicbrainz"*.
+///
+/// Het AANTAL staat erbij omdat één afwijkende persing iets anders betekent dan negen die het eens
+/// zijn. Zonder dat getal is een lijst titels een rij gokjes zonder onderscheid.
+///
+/// **Ook de spelling die jouw bestand al heeft komt terug**, en die weglaten was een fout die pas
+/// bij het toetsen bovenkwam. "Negen van de twaalf persingen noemen het net zoals jij" is namelijk
+/// het antwoord op de vraag die eronder ligt — *moet ik dit überhaupt veranderen?* — en dat is hier
+/// het waarschijnlijkste geval: de getoonde persing laat de gast weg, de rest niet. Deze functie
+/// telt daarom álles, en het venster beslist wat het als knop toont en wat als mededeling.
+///
+/// Vergelijkt op dezelfde manier als [waaromGeenPlaatsMet]: op de titel zonder gastcredit. Een
+/// andere vergelijking hier zou rijen binnenhalen die de uitleg op het scherm niet als ditzelfde
+/// nummer erkent.
+List<({String titel, int persingen})> titelsUitPersingen(
+  Iterable<List<ChoiceTrack>> persingen,
+  Track t,
+) {
+  final mijnKaal = normKey(zonderFeat(t.title));
+  final telling = <String, int>{};
+  final spelling = <String, String>{};
+  for (final lijst in persingen) {
+    // Per PERSING één keer tellen: een dubbele plaat die het nummer twee keer draagt is nog steeds
+    // één bron die het zo noemt.
+    final indeze = <String>{};
+    for (final o in lijst) {
+      if (normKey(zonderFeat(o.title)) != mijnKaal) continue;
+      final titel = o.title.trim();
+      if (titel.isEmpty) continue;
+      final k = normKey(titel);
+      if (!indeze.add(k)) continue;
+      telling[k] = (telling[k] ?? 0) + 1;
+      spelling[k] ??= titel;
+    }
+  }
+  final uit = [
+    for (final e in telling.entries) (titel: spelling[e.key]!, persingen: e.value),
+  ];
+  // Vaakst eerst; bij gelijk spel alfabetisch, zodat dezelfde lijst niet elke keer anders staat.
+  uit.sort((a, b) {
+    final n = b.persingen.compareTo(a.persingen);
+    return n != 0 ? n : a.titel.compareTo(b.titel);
+  });
+  return uit;
+}
+
 /// Eén voorgestelde titelwijziging. Zuiver: er wordt niets geschreven.
 ///
 /// Bewust NIET `TitelStap` genoemd, hoe verleidelijk dat ook is: die klasse bestaat al in
