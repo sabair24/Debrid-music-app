@@ -10758,6 +10758,14 @@ class _StartCache {
   /// De genres waarop "Top van dit moment" gefilterd is, zodat de kop kan zeggen waar de rij
   /// over gaat in plaats van het alleen te beloven.
   static List<int> genres = [];
+
+  /// De rij "Omdat je … draaide": op wie hij slaat, en wat erin staat.
+  static String omdatArtiest = '';
+  static List<RecTrack> omdat = [];
+
+  /// Hoe vaak er al ververst is. Zo gaat de rij bij elke ronde over iemand anders — anders is het
+  /// een stempel in plaats van een suggestie.
+  static int ronde = 0;
   static bool geladen = false;
 
   /// Wanneer er voor het laatst iets is opgehaald, in millisdeconden sinds 1970.
@@ -10776,6 +10784,9 @@ class _StartCache {
     releases = [];
     forYou = [];
     genres = [];
+    omdatArtiest = '';
+    omdat = [];
+    ronde++;
     geladen = false;
     opgehaaldMs = 0;
     DeezerBaan.vergeet();
@@ -10799,6 +10810,9 @@ class _HomeStartViewState extends State<HomeStartView> {
   List<CatalogAlbumHit> _releases = _StartCache.releases;
   List<RecTrack> _forYou = _StartCache.forYou;
   List<int> _genres = _StartCache.genres;
+  String _omdatArtiest = _StartCache.omdatArtiest;
+  List<RecTrack> _omdat = _StartCache.omdat;
+  int get _ronde => _StartCache.ronde;
   bool _chartsLoading = !_StartCache.geladen;
   bool _seedsRequested = false; // the library's artists have been used to load the personal rows
   bool _seedsLoading = false;
@@ -10885,11 +10899,22 @@ class _HomeStartViewState extends State<HomeStartView> {
     // Het genreprofiel komt uit de tags die er al liggen — nul verzoeken. Zie [genreProfiel] voor
     // waarom "Top van dit moment" anders over sludge metal en musicals gaat.
     final profiel = genreProfiel([for (final t in lib.tracks) t.genre]);
+    // En de artiest die je wérkelijk draait, uit de 510 afspeelbeurten die er al lagen.
+    final standen = context.read<Speelstanden>();
+    final nuMs = DateTime.now().millisecondsSinceEpoch;
+    final beurten = <Beurt>[
+      for (final t in lib.tracks)
+        if (standen.standVan(t) case final s?)
+          (artiest: t.artist, aantal: s.aantal, laatstMs: s.laatstMs),
+    ];
+    final omdat = meestGespeeldeArtiest(beurten, nuMs: nuMs, overslaan: _ronde);
     final relF = _catalog.latestFromArtists(seeds);
     final fyF = _rec.discover(seeds.take(6).toList());
     final genreF = profiel.isEmpty
         ? Future.value(<CatalogAlbumHit>[])
         : _catalog.chartPerGenre(profiel);
+    final omdatF =
+        omdat == null ? Future.value(<RecTrack>[]) : _rec.discover([omdat]);
     List<CatalogAlbumHit> rel = [];
     List<RecTrack> fy = [];
     List<CatalogAlbumHit> genreLijst = [];
@@ -10901,6 +10926,10 @@ class _HomeStartViewState extends State<HomeStartView> {
     } catch (_) {}
     try {
       genreLijst = await genreF;
+    } catch (_) {}
+    List<RecTrack> omdatRij = [];
+    try {
+      omdatRij = await omdatF;
     } catch (_) {}
     if (!mounted) return;
     // Wat je al hebt gaat eruit. Zonder dit stond deze rij vol met je eigen platen: hij komt via
@@ -10925,12 +10954,21 @@ class _HomeStartViewState extends State<HomeStartView> {
       _StartCache.charts = maxPerArtiest(genreLijst, (h) => h.artist, 1);
       _StartCache.genres = profiel;
     }
+    // De rij die over je luistergedrag gaat. Alleen als er ook echt iets uit kwam: een kop die
+    // een naam noemt boven een lege rij is erger dan geen rij.
+    final omdatSchoon = maxPerArtiest(nogNietInBezit(omdatRij, bezit), (t) => t.artist, 2);
+    if (omdat != null && omdatSchoon.isNotEmpty) {
+      _StartCache.omdatArtiest = omdat;
+      _StartCache.omdat = omdatSchoon;
+    }
     _StartCache.opgehaaldMs = DateTime.now().millisecondsSinceEpoch;
     setState(() {
       _releases = _StartCache.releases;
       _forYou = _StartCache.forYou;
       _charts = _StartCache.charts;
       _genres = _StartCache.genres;
+      _omdatArtiest = _StartCache.omdatArtiest;
+      _omdat = _StartCache.omdat;
       _seedsLoading = false;
     });
   }
@@ -11098,6 +11136,10 @@ class _HomeStartViewState extends State<HomeStartView> {
         if (vergeten.length >= 4)
           _section('Lang niet gedraaid', _localRow(vergeten.take(20).toList()),
               bij: 'meer dan een half jaar geleden'),
+        // De enige rij die de AANLEIDING erbij zet. Dat is niet alleen aardiger — het maakt ook
+        // controleerbaar waaróm iets wordt voorgesteld, en dat was precies de klacht.
+        if (_omdat.isNotEmpty && _omdatArtiest.isNotEmpty)
+          _section('Omdat je $_omdatArtiest draaide', _recRow(_omdat.take(20).toList())),
         // [_komtNog] en niet alleen _seedsLoading: die laatste gaat pas omhoog zodra de bibliotheek
         // artiesten heeft, en tot dat moment stond deze sectie er HELEMAAL NIET. Ze verscheen dus
         // midden in het lezen en duwde alles eronder omlaag — de rij is 204 punten plus zijn kop.

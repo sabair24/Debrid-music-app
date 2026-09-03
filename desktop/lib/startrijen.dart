@@ -9,6 +9,8 @@
 /// `catalog.dart` blijft daarmee wat het is: kaal HTTP zonder `dart:io`.
 library;
 
+import 'dart:math';
+
 import 'catalog.dart';
 import 'organize.dart' show artistKey;
 
@@ -169,6 +171,47 @@ int? deezerGenre(String tag) {
   if (bevat(['rock', 'punk', 'new wave'])) return Genre.rock;
   if (bevat(['pop'])) return Genre.pop;
   return null;
+}
+
+/// Eén beluisterde artiest: hoe vaak, en wanneer voor het laatst.
+typedef Beurt = ({String artiest, int aantal, int laatstMs});
+
+/// De artiest die je werkelijk het meest draait, met recentheid meegewogen.
+///
+/// **Waarom dit de eerste rij is die naar luistergedrag kijkt.** Alle aanbevelingen op de
+/// startpagina vertrokken vanuit `LibraryStore.artists` — wat er op schijf staat — en dat is iets
+/// anders dan wat je draait. In `state.json` staan 510 afspeelbeurten die nergens voor gebruikt
+/// werden; de enige lezer was de gewogen shuffle.
+///
+/// De weging is dezelfde "druk" die `gewichtVan` in `schudvolgorde.dart` uitrekent — `aantal × vers`
+/// met `vers = 0,5^(dagen/30)` — maar andersom gelezen. Daar is vaak-en-recent een strafpunt zodat
+/// een nummer dieper in de shuffle valt; hier is het juist het signaal. Eén formule, twee vragen.
+///
+/// [overslaan] geeft de tweede, derde… artiest, zodat de rij bij elke verversing over iemand anders
+/// gaat. Een rij die altijd dezelfde naam noemt is een stempel.
+String? meestGespeeldeArtiest(
+  Iterable<Beurt> beurten, {
+  required int nuMs,
+  int overslaan = 0,
+  double halveringDagen = 30,
+}) {
+  final druk = <String, double>{};
+  final naam = <String, String>{};
+  for (final b in beurten) {
+    if (b.aantal <= 0) continue;
+    final sleutel = artistKey(b.artiest);
+    if (sleutel.isEmpty) continue;
+    // Een klok die vooruit staat is "zojuist", niet "over een jaar".
+    final dagen = b.laatstMs <= 0
+        ? halveringDagen * 12
+        : (nuMs - b.laatstMs).clamp(0, 1 << 62) / Duration.millisecondsPerDay;
+    final vers = pow(.5, dagen / halveringDagen).toDouble();
+    druk[sleutel] = (druk[sleutel] ?? 0) + b.aantal * vers;
+    naam[sleutel] ??= b.artiest;
+  }
+  if (druk.isEmpty) return null;
+  final op = druk.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+  return naam[op[overslaan % op.length].key];
 }
 
 /// Het decennium waar deze bibliotheek zijn zwaartepunt heeft.

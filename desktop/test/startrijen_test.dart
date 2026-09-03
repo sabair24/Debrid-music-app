@@ -221,6 +221,65 @@ void main() {
     });
   });
 
+  group('meestGespeeldeArtiest', () {
+    final nu = DateTime(2026, 9, 2).millisecondsSinceEpoch;
+    int dagenGeleden(int d) => nu - Duration(days: d).inMilliseconds;
+
+    test('DE KERN: minder-maar-recent wint van vaker-maar-lang-geleden', () {
+      // Dit is de hele reden dat er recentheid in zit. Wie alleen op de teller kijkt, blijft
+      // eeuwig de artiest voorstellen waar je een half jaar geleden een weekend aan verslingerd
+      // was — en dat is niet waar je nu naar luistert.
+      final beurten = <Beurt>[
+        (artiest: 'Oud Favoriet', aantal: 20, laatstMs: dagenGeleden(200)),
+        (artiest: 'Nu Bezig', aantal: 5, laatstMs: dagenGeleden(1)),
+      ];
+      expect(meestGespeeldeArtiest(beurten, nuMs: nu), 'Nu Bezig');
+    });
+
+    test('maar één keer ooit verslaat vijf keer deze week niet', () {
+      final beurten = <Beurt>[
+        (artiest: 'Vijf Keer', aantal: 5, laatstMs: dagenGeleden(3)),
+        (artiest: 'Eén Keer', aantal: 1, laatstMs: dagenGeleden(0)),
+      ];
+      expect(meestGespeeldeArtiest(beurten, nuMs: nu), 'Vijf Keer');
+    });
+
+    test('de beurten van één artiest tellen bij elkaar op', () {
+      // Elk nummer levert zijn eigen beurt aan; de rij gaat over de ARTIEST.
+      final beurten = <Beurt>[
+        (artiest: 'Backstreet Boys', aantal: 2, laatstMs: dagenGeleden(2)),
+        (artiest: 'Backstreet Boys', aantal: 2, laatstMs: dagenGeleden(2)),
+        (artiest: 'Adele', aantal: 3, laatstMs: dagenGeleden(2)),
+      ];
+      expect(meestGespeeldeArtiest(beurten, nuMs: nu), 'Backstreet Boys');
+    });
+
+    test('overslaan geeft de volgende, zodat de rij niet altijd dezelfde naam noemt', () {
+      final beurten = <Beurt>[
+        (artiest: 'Eerste', aantal: 10, laatstMs: dagenGeleden(1)),
+        (artiest: 'Tweede', aantal: 5, laatstMs: dagenGeleden(1)),
+      ];
+      expect(meestGespeeldeArtiest(beurten, nuMs: nu, overslaan: 1), 'Tweede');
+      expect(meestGespeeldeArtiest(beurten, nuMs: nu, overslaan: 2), 'Eerste');
+    });
+
+    test('zonder beurten is er geen naam', () {
+      expect(meestGespeeldeArtiest(const <Beurt>[], nuMs: nu), isNull);
+      expect(
+          meestGespeeldeArtiest(
+              [(artiest: 'X', aantal: 0, laatstMs: dagenGeleden(1))], nuMs: nu),
+          isNull);
+    });
+
+    test('een klok die vooruit staat is "zojuist", niet "over een jaar"', () {
+      final beurten = <Beurt>[
+        (artiest: 'Toekomst', aantal: 1, laatstMs: nu + Duration(days: 30).inMilliseconds),
+        (artiest: 'Verleden', aantal: 1, laatstMs: dagenGeleden(300)),
+      ];
+      expect(meestGespeeldeArtiest(beurten, nuMs: nu), 'Toekomst');
+    });
+  });
+
   group('zwaartepuntDecennium', () {
     /// De werkelijk gemeten verdeling van deze bibliotheek.
     List<int?> deVerdeling() => [
