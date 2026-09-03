@@ -23120,23 +23120,33 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
                   child: Text(f, style: const TextStyle(color: _accent2, fontSize: 11.5)),
                 ),
               const SizedBox(height: 12),
-              Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                TextButton(
-                    onPressed: () => Navigator.of(context).pop(false),
-                    child: const Text('Annuleren')),
-                const SizedBox(width: 8),
-                FilledButton(
-                  style: FilledButton.styleFrom(backgroundColor: _accent),
-                  onPressed: _busy || _titel.text.trim().isEmpty ? null : _pas,
-                  child: _busy
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child:
-                              CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Text('In het bestand schrijven'),
-                ),
-              ]),
+              // **Een Wrap en geen Row, en dat is geen smaak.** Een Row liet deze twee knoppen 25
+              // punten buiten het venster vallen — betrapt door `titel_venster_test.dart`, niet door
+              // een oog. En dat was op een breed scherm: `dialogWidth` kapt af op schermbreedte min
+              // 32, dus op een telefoon van 360 blijft er 288 over voor knoppen die er samen 545
+              // vragen. Een Wrap zet de tweede dan op een eigen regel in plaats van hem af te
+              // snijden.
+              Wrap(
+                alignment: WrapAlignment.end,
+                spacing: kRuimte8,
+                runSpacing: kRuimte8,
+                children: [
+                  TextButton(
+                      onPressed: () => Navigator.of(context).pop(false),
+                      child: const Text('Annuleren')),
+                  FilledButton(
+                    style: FilledButton.styleFrom(backgroundColor: _accent),
+                    onPressed: _busy || _titel.text.trim().isEmpty ? null : _pas,
+                    child: _busy
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child:
+                                CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Text('In het bestand schrijven'),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
@@ -23324,22 +23334,28 @@ class _AlleTitelsDialogState extends State<AlleTitelsDialog> {
                     style: TextStyle(color: _gastMee ? _muted : _accent2, fontSize: 11.5)),
               ),
             const SizedBox(height: 8),
-            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-              TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
-                  child: const Text('Annuleren')),
-              const SizedBox(width: 8),
-              FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: _accent),
-                onPressed: _busy || geblokkeerd || _gekozen.isEmpty ? null : _pas,
-                child: _busy
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : Text('${_gekozen.length} in de bestanden schrijven'),
-              ),
-            ]),
+            // Een Wrap om dezelfde reden als in [TitelRechtzettenDialog]: op een telefoon past deze
+            // knoppenrij niet op één regel, en een Row snijdt hem dan af.
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: kRuimte8,
+              runSpacing: kRuimte8,
+              children: [
+                TextButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: const Text('Annuleren')),
+                FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  onPressed: _busy || geblokkeerd || _gekozen.isEmpty ? null : _pas,
+                  child: _busy
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : Text('${_gekozen.length} in de bestanden schrijven'),
+                ),
+              ],
+            ),
           ]),
         ),
       ),
