@@ -5353,7 +5353,13 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                         heading = 'Schijf ${s.disc}';
                       }
                       if (heading == null) return row;
-                      return Column(children: [_listLabel(heading), row]);
+                      return Column(children: [
+                        _listLabel(heading,
+                            achter: heading == 'Niet op deze uitgave'
+                                ? _alleTitelsKnop(rows, album)
+                                : null),
+                        row,
+                      ]);
                     },
                     childCount: rows?.length ?? album.tracks.length,
                   ),
@@ -5371,8 +5377,37 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     );
   }
 
+  /// De knop naast "Niet op deze uitgave", en alleen als er werkelijk iets recht te zetten valt.
+  ///
+  /// Null bij nul voorstellen: een knop die een leeg venster opent is erger dan geen knop. De
+  /// voorstellen komen uit dezelfde [waaromGeenPlaatsMet] als de regel onder elke rij, dus het
+  /// overzicht kan nooit iets anders beweren dan wat er op het scherm staat.
+  Widget? _alleTitelsKnop(List<AlbumSlot> rows, Album album) {
+    if (isTv) return null;
+    final weesjes = [
+      for (final s in rows)
+        if (s.index < 0 && s.track != null) s.track!,
+    ];
+    final stappen = titelVoorstellen(_official, weesjes);
+    if (stappen.isEmpty) return null;
+    return TextButton(
+      style: TextButton.styleFrom(
+        foregroundColor: _accent,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      onPressed: () => showDialog<bool>(
+        context: context,
+        builder: (_) => AlleTitelsDialog(stappen: stappen, opDePlaat: album.tracks),
+      ),
+      child: Text('Alle ${stappen.length} rechtzetten…',
+          style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600)),
+    );
+  }
+
   /// A quiet divider inside the tracklist — a disc number, or where the record stops.
-  Widget _listLabel(String text) => Padding(
+  Widget _listLabel(String text, {Widget? achter}) => Padding(
         // Ingesprongen tot waar de TITEL van een nummerrij begint: de goot, de vulling van de rij,
         // het nummervakje van 28, en het gat daarachter. Zo staat dit label boven zijn eigen kolom
         // in plaats van ernaast — het stond op 34 terwijl de titels op 76 beginnen.
@@ -5383,10 +5418,15 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
         // 31-08-2026 als bijschrift van het nummer erbóven — dat nummer stond gewoon op de plaat.
         padding: const EdgeInsets.fromLTRB(
             kGoot + kRuimte12 + 28 + kRuimte12, kRuimte24, kGoot, kRuimte6),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Text(text, style: kLabel.copyWith(letterSpacing: .4)),
-        ),
+        child: Row(children: [
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(text, style: kLabel.copyWith(letterSpacing: .4)),
+            ),
+          ),
+          if (achter != null) achter,
+        ]),
       );
 
   /// What the OTHER pressings of this record hold.
@@ -22940,6 +22980,208 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
               ]),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Alle titels van één plaat tegelijk rechtzetten, met vinkjes vooraf.
+///
+/// De 26 bestanden in deze bibliotheek die een gastcredit in hun TITEL dragen zijn er te veel om één
+/// voor één langs te gaan en te weinig om blind te doen. Vandaar het patroon van
+/// [RecogniseTracksDialog]: zie eerst wat er zou gebeuren, vink weg wat niet moet, en dan pas
+/// schrijven.
+///
+/// **De botsingswacht zit hier en niet in het losse venster**, want alleen hier kunnen twee regels
+/// op dezelfde titel landen. Wat er dan gebeurt is niet zichtbaar: `_dedupeTracks` vouwt twee
+/// bestanden met dezelfde [trackIdentity] samen, en dan verdwijnt er één van de pagina. Anders dan
+/// bij [RenumberDialog] blokkeert een botsing hier niet de héle bewerking — de vinkjes zijn er al,
+/// dus het is genoeg om te zeggen wélke twee botsen zodat je er één uitvinkt.
+class AlleTitelsDialog extends StatefulWidget {
+  /// Wat [titelVoorstellen] voorstelt — al gefilterd op "hier valt iets te doen".
+  final List<Titelvoorstel> stappen;
+
+  /// Alles wat de tegel toont, niet alleen wat er verandert: een weesje kan landen op de titel van
+  /// een nummer dat al netjes op zijn plaats staat, en dat is juist het waarschijnlijke geval.
+  final List<Track> opDePlaat;
+
+  const AlleTitelsDialog({super.key, required this.stappen, required this.opDePlaat});
+
+  @override
+  State<AlleTitelsDialog> createState() => _AlleTitelsDialogState();
+}
+
+class _AlleTitelsDialogState extends State<AlleTitelsDialog> {
+  late final Set<String> _gekozen = {for (final s in widget.stappen) s.track.path};
+  bool _gastMee = true;
+  bool _busy = false;
+  List<String> _mislukt = const [];
+
+  /// Wat er nu daadwerkelijk geschreven zou worden, met de schakelaar meegerekend.
+  List<Titelvoorstel> get _actief => [
+        for (final s in widget.stappen)
+          if (_gekozen.contains(s.track.path))
+            (track: s.track, titel: s.titel, artiest: _gastMee ? s.artiest : null),
+      ];
+
+  /// Heeft ook maar één voorstel een gastnaam te verhuizen? Anders heeft de schakelaar geen zin.
+  bool get _erIsEenGast => widget.stappen.any((s) => s.artiest != null);
+
+  Future<void> _pas() async {
+    final doen = _actief;
+    if (doen.isEmpty) return;
+    setState(() {
+      _busy = true;
+      _mislukt = const [];
+    });
+    final lib = context.read<LibraryStore>();
+    final remote = lib.isRemote;
+    final r = await lib.pasTitelsAan(
+        [for (final s in doen) TitelStap(s.track, s.titel, artiest: s.artiest)]);
+    if (!mounted) return;
+    if (r.failed.isEmpty) {
+      _srcToast(
+          context,
+          remote
+              ? '${doen.length} naar de pc gestuurd'
+              : '${r.written} bijgewerkt · ongedaan maken kan met "Tags terugzetten"');
+      Navigator.of(context).pop(true);
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _mislukt = r.failed;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final botsingen = titelBotsingen(_actief, widget.opDePlaat);
+    final geblokkeerd = botsingen.isNotEmpty;
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: dialogWidth(context, 720),
+        height: dialogHeight(context, 620),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Alle titels rechtzetten',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text(
+              '${widget.stappen.length} ${widget.stappen.length == 1 ? 'nummer krijgt' : 'nummers krijgen'} '
+              'de titel die de uitgave noemt · nummering en jaartal blijven staan',
+              style: const TextStyle(color: _muted, fontSize: 12.5),
+            ),
+            if (geblokkeerd) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(11),
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: .12),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text(
+                    'Geweigerd: twee nummers zouden dezelfde titel krijgen — dan verdwijnt er één uit de lijst.',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  for (final b in botsingen)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text(b, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                    ),
+                  const SizedBox(height: 3),
+                  const Text('Vink er één uit, of zet de gastnaam naar het artiestveld aan.',
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
+                ]),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Expanded(
+              child: ListView(children: [
+                for (final s in widget.stappen)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(11),
+                    decoration:
+                        BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(9)),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Checkbox(
+                        value: _gekozen.contains(s.track.path),
+                        activeColor: _accent,
+                        onChanged: (v) => setState(() => v == true
+                            ? _gekozen.add(s.track.path)
+                            : _gekozen.remove(s.track.path)),
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(s.track.title,
+                              style: const TextStyle(color: _muted, fontSize: 12.5)),
+                          const SizedBox(height: 2),
+                          Row(children: [
+                            const Icon(Icons.subdirectory_arrow_right_rounded,
+                                size: 15, color: _accent),
+                            const SizedBox(width: 5),
+                            Expanded(
+                              child: Text(s.titel,
+                                  style: const TextStyle(fontSize: 13.5, height: 1.3)),
+                            ),
+                          ]),
+                          if (_gastMee && s.artiest != null) ...[
+                            const SizedBox(height: 3),
+                            Text('artiest wordt ${s.artiest}',
+                                style: const TextStyle(color: _muted, fontSize: 11.5)),
+                          ],
+                        ]),
+                      ),
+                    ]),
+                  ),
+                for (final f in _mislukt)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(f, style: const TextStyle(color: _accent2, fontSize: 11.5)),
+                  ),
+              ]),
+            ),
+            if (_erIsEenGast)
+              SwitchListTile(
+                value: _gastMee,
+                onChanged: (v) => setState(() => _gastMee = v),
+                activeThumbColor: _accent,
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: const Text('Gastnamen naar het artiestveld',
+                    style: TextStyle(fontSize: 13)),
+                subtitle: Text(
+                    _gastMee
+                        ? 'anders staat nergens meer wie er meespeelt'
+                        : 'de gastnamen gaan verloren',
+                    style: TextStyle(color: _gastMee ? _muted : _accent2, fontSize: 11.5)),
+              ),
+            const SizedBox(height: 8),
+            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Annuleren')),
+              const SizedBox(width: 8),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: _accent),
+                onPressed: _busy || geblokkeerd || _gekozen.isEmpty ? null : _pas,
+                child: _busy
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : Text('${_gekozen.length} in de bestanden schrijven'),
+              ),
+            ]),
+          ]),
         ),
       ),
     );

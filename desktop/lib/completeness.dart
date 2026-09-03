@@ -451,6 +451,81 @@ String? gastNaarArtiest(Track t, String nieuweTitel, {String uitgaveArtiest = ''
   return normKey(credit) == normKey(t.artist) ? null : credit;
 }
 
+/// Eén voorgestelde titelwijziging. Zuiver: er wordt niets geschreven.
+///
+/// Bewust NIET `TitelStap` genoemd, hoe verleidelijk dat ook is: die klasse bestaat al in
+/// `library.dart` en is wat er daadwerkelijk geschréven wordt. Twee namen die één hoofdletter uit
+/// elkaar liggen en verschillende kanten van dezelfde bewerking betekenen, gaat een keer mis.
+typedef Titelvoorstel = ({Track track, String titel, String? artiest});
+
+/// Wat "alle titels rechtzetten" op deze plaat zou doen.
+///
+/// Alleen weeskinderen waarvoor [waaromGeenPlaatsMet] één rij van de uitgave heeft kunnen aanwijzen
+/// — dezelfde nauwe voorwaarde als bij het losse nummer, zodat het overzicht nooit iets voorstelt
+/// wat de regel onder die rij niet beweert. Nummers waar niets aan verandert vallen weg: een lijst
+/// met regels die niets doen is een lijst waarin je de echte niet meer ziet.
+List<Titelvoorstel> titelVoorstellen(List<ChoiceTrack> official, List<Track> weesjes) {
+  final uit = <Titelvoorstel>[];
+  for (final t in weesjes) {
+    final rij = waaromGeenPlaatsMet(official, t).uitgave;
+    if (rij == null) continue;
+    final v = titelherstel(rij, t);
+    if (v.titel.isEmpty) continue;
+    if (v.titel == t.title.trim() && v.artiest == null) continue;
+    uit.add((track: t, titel: v.titel, artiest: v.artiest));
+  }
+  return uit;
+}
+
+/// Titels die door deze bewerking op elkaar zouden landen — en dan verdwijnt er één uit de lijst.
+///
+/// **En dit is juist de gewone gang van zaken, niet een randgeval.** `_dedupeTracks` vouwt twee
+/// bestanden samen op [trackIdentity], en die is `normKey(artiest)|normKey(titel)` — zonder enige
+/// vergevingsgezindheid. (De sleutel die "(feat. …)" wél wegstript is een ándere, voor de vraag "heb
+/// ik deze opname al?".) Heeft een plaat zowel "One Minute Man" als "One Minute Man (Feat
+/// Ludacris)", dan landen die twee door een titelherstel op dezelfde sleutel en verdwijnt er één van
+/// de pagina.
+///
+/// Waar de schakelaar "gast naar het artiestveld" dus voor een tweede keer zijn nut bewijst: die
+/// verandert de ARTIESThelft van de sleutel mee, en houdt de twee daarmee uit elkaar. Vandaar dat
+/// [sleutelNa] de voorgestelde artiest meeneemt en niet alleen de titel.
+///
+/// [opDePlaat] is alles wat de tegel toont, niet alleen wat er verandert: een weesje kan op de titel
+/// van een nummer landen dat al netjes op zijn plaats staat, en dat is juist het waarschijnlijke
+/// geval. Titels die vóór de bewerking al dubbel waren tellen niet mee — daar zou weigeren de
+/// functie blokkeren op precies de rommelige platen waarvoor ze bestaat. Dezelfde afweging als
+/// `NormalisePlan.clashList`.
+List<String> titelBotsingen(List<Titelvoorstel> stappen, List<Track> opDePlaat) {
+  final nieuw = {for (final s in stappen) s.track.path: s};
+  String sleutelVoor(Track t) => trackIdentity(t.artist, t.title);
+  String sleutelNa(Track t) {
+    final s = nieuw[t.path];
+    return s == null ? sleutelVoor(t) : trackIdentity(s.artiest ?? t.artist, s.titel);
+  }
+
+  final alDubbel = <String>{}, gezien = <String>{};
+  for (final t in opDePlaat) {
+    if (!gezien.add(sleutelVoor(t))) alDubbel.add(sleutelVoor(t));
+  }
+
+  final out = <String>[];
+  final eerste = <String, Track>{};
+  for (final t in opDePlaat) {
+    final k = sleutelNa(t);
+    final prev = eerste[k];
+    if (prev == null) {
+      eerste[k] = t;
+      continue;
+    }
+    if (alDubbel.contains(k)) continue; // stond er al zo in — niet onze schuld
+    // Alleen melden als DEZE bewerking het veroorzaakt.
+    if (!nieuw.containsKey(t.path) && !nieuw.containsKey(prev.path)) continue;
+    final naam = nieuw[t.path]?.titel ?? t.title;
+    out.add('"$naam" — ${prev.title} en ${t.title}');
+  }
+  return out;
+}
+
 /// Noemt de artiestcredit van de uitgave élke gast die dit bestand noemt?
 ///
 /// Alle gasten, niet één ervan: heet jouw bestand "Song (feat. A & B)" en zegt de uitgave alleen

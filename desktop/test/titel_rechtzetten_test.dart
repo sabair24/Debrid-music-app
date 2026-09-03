@@ -26,8 +26,10 @@ import 'package:debridmusic/library.dart';
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/organize.dart';
 
-Track bestand(String titel, {String artiest = 'Missy Elliott', int seconden = 275}) => Track(
-      path: 'D:\\muziek\\$titel.flac',
+Track bestand(String titel,
+        {String artiest = 'Missy Elliott', int seconden = 275, String? pad}) =>
+    Track(
+      path: pad ?? 'D:\\muziek\\$titel.flac',
       title: titel,
       artist: artiest,
       album: 'Miss E... So Addictive',
@@ -188,6 +190,83 @@ void main() {
     test('zonder gast valt er niets te verhuizen', () {
       expect(gastNaarArtiest(bestand('Work It'), 'Work It'), isNull);
       expect(gastcredit('Missy Elliott', const []), 'Missy Elliott');
+    });
+  });
+
+  group('alle titels van een plaat tegelijk', () {
+    const lijst = [
+      ChoiceTrack('6', 'Get Ur Freak On', 227),
+      ChoiceTrack('7', 'One Minute Man', 275),
+      ChoiceTrack('8', 'Lick Shots', 191),
+    ];
+
+    test('alleen weeskinderen met één treffer krijgen een voorstel', () {
+      final stappen = titelVoorstellen(lijst, [
+        bestand('One Minute Man (Feat Ludacris)'),
+        bestand('Iets Wat Er Niet Op Staat'),
+      ]);
+      expect(stappen, hasLength(1));
+      expect(stappen.single.titel, 'One Minute Man');
+      expect(stappen.single.artiest, 'Missy Elliott feat. Ludacris');
+    });
+
+    test('een nummer waar niets aan verandert komt niet in de lijst', () {
+      // Anders staan er regels tussen die niets doen, en dan zie je de echte niet meer.
+      expect(titelVoorstellen(lijst, [bestand('Lick Shots', seconden: 191)]), isEmpty);
+    });
+
+    test('DE VAL: twee regels die op dezelfde titel landen', () {
+      // `_dedupeTracks` vouwt twee bestanden samen op `trackIdentity`, en dan verdwijnt er één van
+      // de pagina. Hier landen twee weesjes op "One Minute Man" met dezelfde artiest.
+      final a = bestand('One Minute Man (Album Version)');
+      final b = bestand('One Minute Man (Radio Edit)');
+      final stappen = [
+        (track: a, titel: 'One Minute Man', artiest: null),
+        (track: b, titel: 'One Minute Man', artiest: null),
+      ];
+      final botsingen = titelBotsingen(stappen, [a, b]);
+      expect(botsingen, hasLength(1));
+      expect(botsingen.single, contains('One Minute Man'));
+    });
+
+    test('en een weesje dat op een nummer landt dat er AL netjes op staat', () {
+      // Het waarschijnlijke geval: de plaat heeft het nummer al, en het weesje is een variant.
+      final staatEr = bestand('One Minute Man', seconden: 275);
+      final wees = bestand('One Minute Man (Album Version)');
+      final botsingen = titelBotsingen(
+          [(track: wees, titel: 'One Minute Man', artiest: null)], [staatEr, wees]);
+      expect(botsingen, hasLength(1));
+    });
+
+    test('DE KERN: de gast naar het artiestveld houdt ze juist UIT ELKAAR', () {
+      // `trackIdentity` is `normKey(artiest)|normKey(titel)` — zonder enige vergevingsgezindheid.
+      // Zet je de gast in het artiestveld, dan verschilt de artiesthelft en botst er niets. Dat is
+      // de tweede reden dat die schakelaar standaard aan staat.
+      final staatEr = bestand('One Minute Man', seconden: 275);
+      final wees = bestand('One Minute Man (Feat Ludacris)');
+      expect(
+          titelBotsingen([
+            (track: wees, titel: 'One Minute Man', artiest: 'Missy Elliott feat. Ludacris')
+          ], [
+            staatEr,
+            wees
+          ]),
+          isEmpty);
+      // …en met de schakelaar UIT botst hetzelfde geval wél.
+      expect(
+          titelBotsingen(
+              [(track: wees, titel: 'One Minute Man', artiest: null)], [staatEr, wees]),
+          hasLength(1));
+    });
+
+    test('wat al dubbel stond telt niet mee', () {
+      // Anders blokkeert de knop op precies de rommelige platen waarvoor hij bestaat.
+      final een = bestand('Halo', pad: r'D:\a.flac');
+      final twee = bestand('Halo', pad: r'D:\b.flac');
+      final drie = bestand('Halo (Live)', pad: r'D:\c.flac');
+      expect(
+          titelBotsingen([(track: drie, titel: 'Halo', artiest: null)], [een, twee, drie]),
+          isEmpty);
     });
   });
 
