@@ -940,6 +940,15 @@ Future<void> main() async {
         // SCHIL hem tekent — achter de bovenbalk langs tot aan de schermrand. Zie [PaginaWas].
         ChangeNotifierProvider<PaginaWas>(create: (_) => PaginaWas()),
         ChangeNotifierProvider<Favorieten>.value(value: favorieten),
+        // Wat je werkelijk gedraaid hebt, bereikbaar voor de schermen.
+        //
+        // Dit object bestond al — het wordt hierboven aan de speler gegeven — maar stond in geen
+        // enkele providerlijst, en daarmee kon geen scherm erbij. Gemeten in `state.json`: 510
+        // afspeelbeurten die nergens voor gebruikt werden. De enige lezer was de gewogen shuffle.
+        //
+        // Met `read` en niet met `watch` gebruiken: dit meldt zich bij elke afgespeelde noot, en de
+        // startpagina hoeft daar niet van te hertekenen.
+        ChangeNotifierProvider<Speelstanden>.value(value: speelstanden),
         ChangeNotifierProvider<Afspeellijsten>.value(value: lijsten),
         ChangeNotifierProvider<OfflineStore>.value(value: offline),
         ChangeNotifierProvider<SpeakerTarget>.value(value: speakers),
@@ -10995,6 +11004,35 @@ class _HomeStartViewState extends State<HomeStartView> {
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadSeeds(seeds));
     }
     final recent = [...lib.albums.where((a) => a.addedMs > 0)]..sort((a, b) => b.addedMs.compareTo(a.addedMs));
+
+    // TWEE RIJEN UIT JE EIGEN KAST, en die kosten geen enkel verzoek.
+    //
+    // Alles hierboven wacht op Deezer. Deze twee staan er meteen, en ze zijn per definitie raak:
+    // het is muziek die je al hebt en die dus meteen speelt. Dat is ook waarom ze bovenaan de
+    // netwerkrijen komen — het eerste wat je ziet hoort niet een skelet te zijn.
+    final decennium = zwaartepuntDecennium([for (final a in lib.albums) a.year]);
+    final uitDecennium = decennium == null
+        ? const <Album>[]
+        : (lib.albums
+            .where((a) => a.year != null && a.year! >= decennium && a.year! < decennium + 10)
+            .toList()
+          ..shuffle());
+
+    // Lang niet gedraaid: albums waarvan geen enkel nummer de laatste honderdtachtig dagen is
+    // gespeeld. Gemeten in deze bibliotheek: 510 afspeelbeurten over 1239 nummers, 0 favorieten en
+    // 1 afspeellijst — het grootste deel van de kast is door de app nooit aangeraakt. Precies
+    // daarom is dit een rij en geen voetnoot.
+    final grens = DateTime.now().millisecondsSinceEpoch - const Duration(days: 180).inMilliseconds;
+    final standen = context.read<Speelstanden>();
+    final vergeten = [
+      for (final a in lib.albums)
+        if (a.tracks.isNotEmpty &&
+            a.tracks.every((t) {
+              final s = standen.standVan(t);
+              return s == null || s.laatstMs < grens;
+            }))
+          a,
+    ]..shuffle();
     final anyLoading = _chartsLoading || _seedsLoading || (!_seedsRequested && lib.scanning);
     // De balk heet NIEUWE RELEASE, dus staat er alleen iets van dit jaar in. Hij toonde albums uit 2011
     // en 2016 omdat er nergens op jaar gefilterd werd: het nieuwste dat er van een artiest te vinden is,
@@ -11053,6 +11091,13 @@ class _HomeStartViewState extends State<HomeStartView> {
             child: HeroCarousel(hits: hero.take(7).toList()),
           ),
         if (recent.isNotEmpty) _section('Recent toegevoegd', _localRow(recent.take(15).toList())),
+        // Boven de netwerkrijen: deze twee staan er meteen en zijn altijd raak.
+        if (uitDecennium.length >= 4)
+          _section('Jouw jaren ${decennium! % 100}', _localRow(uitDecennium.take(20).toList()),
+              bij: '${uitDecennium.length} platen'),
+        if (vergeten.length >= 4)
+          _section('Lang niet gedraaid', _localRow(vergeten.take(20).toList()),
+              bij: 'meer dan een half jaar geleden'),
         // [_komtNog] en niet alleen _seedsLoading: die laatste gaat pas omhoog zodra de bibliotheek
         // artiesten heeft, en tot dat moment stond deze sectie er HELEMAAL NIET. Ze verscheen dus
         // midden in het lezen en duwde alles eronder omlaag — de rij is 204 punten plus zijn kop.

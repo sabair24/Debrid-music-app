@@ -171,6 +171,32 @@ int? deezerGenre(String tag) {
   return null;
 }
 
+/// Het decennium waar deze bibliotheek zijn zwaartepunt heeft.
+///
+/// **Waarom dit een rij waard is.** Gemeten in deze bibliotheek: 6 nummers uit de jaren 60, 17 uit
+/// de 70, 70 uit de 80, **448 uit de 90**, 374 uit de jaren 2000, 203 uit de 10 en 92 uit de 20.
+/// Dat is geen vlakke verdeling maar een duidelijk midden, en een rij die dat midden aanspreekt
+/// raakt vaker doel dan welke aanbeveling ook.
+///
+/// [overslaan] laat de aanroeper om de beurt een ander decennium tonen: eerst de 90, dan de 2000,
+/// dan de 10. Anders staat er elke keer dezelfde rij, en dan is het een stempel in plaats van een
+/// suggestie.
+///
+/// Null als er te weinig is om iets over te zeggen — bij minder dan [drempel] nummers in het
+/// grootste decennium is "jouw jaren 90" een bewering die de bibliotheek niet draagt.
+int? zwaartepuntDecennium(Iterable<int?> jaren, {int drempel = 20, int overslaan = 0}) {
+  final telling = <int, int>{};
+  for (final j in jaren) {
+    if (j == null || j < 1900 || j > 2100) continue;
+    final d = (j ~/ 10) * 10;
+    telling[d] = (telling[d] ?? 0) + 1;
+  }
+  final gesorteerd = telling.entries.where((e) => e.value >= drempel).toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  if (gesorteerd.isEmpty) return null;
+  return gesorteerd[overslaan % gesorteerd.length].key;
+}
+
 /// De genres waar deze bibliotheek werkelijk over gaat, zwaarste eerst.
 ///
 /// **Waarom uit de bibliotheek en niet uit Deezer.** "Top van dit moment" haalde letterlijk

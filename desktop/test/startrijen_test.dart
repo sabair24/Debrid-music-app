@@ -221,6 +221,42 @@ void main() {
     });
   });
 
+  group('zwaartepuntDecennium', () {
+    /// De werkelijk gemeten verdeling van deze bibliotheek.
+    List<int?> deVerdeling() => [
+          for (var i = 0; i < 6; i++) 1965,
+          for (var i = 0; i < 17; i++) 1975,
+          for (var i = 0; i < 70; i++) 1985,
+          for (var i = 0; i < 448; i++) 1995,
+          for (var i = 0; i < 374; i++) 2005,
+          for (var i = 0; i < 203; i++) 2015,
+          for (var i = 0; i < 92; i++) 2022,
+        ];
+
+    test('DE KERN: de jaren 90, met 448 nummers', () {
+      expect(zwaartepuntDecennium(deVerdeling()), 1990);
+    });
+
+    test('en om de beurt een ander decennium', () {
+      // Anders staat er elke keer dezelfde rij, en dan is het een stempel.
+      expect(zwaartepuntDecennium(deVerdeling(), overslaan: 1), 2000);
+      expect(zwaartepuntDecennium(deVerdeling(), overslaan: 2), 2010);
+      // En hij loopt rond in plaats van buiten de lijst te vallen.
+      expect(zwaartepuntDecennium(deVerdeling(), overslaan: 99), isNotNull);
+    });
+
+    test('te weinig muziek is geen bewering waard', () {
+      expect(zwaartepuntDecennium([1995, 1996, 1997]), isNull);
+      expect(zwaartepuntDecennium(const <int?>[]), isNull);
+    });
+
+    test('onmogelijke jaartallen tellen niet mee', () {
+      // Een tag met 0 of 9999 erin komt in elke bibliotheek voor.
+      final jaren = <int?>[0, 9999, null, for (var i = 0; i < 25; i++) 1995];
+      expect(zwaartepuntDecennium(jaren), 1990);
+    });
+  });
+
   group('uitJaren', () {
     test('dit jaar en vorig jaar erdoor, de rest niet', () {
       final rij = [
