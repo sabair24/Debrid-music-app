@@ -1,5 +1,4 @@
-import 'package:http/http.dart' as http;
-import 'json_body.dart';
+import 'deezerbaan.dart';
 
 /// Deezer catalog (keyless) — powers the Stremio-style browse:
 /// search artist → their albums → an album's tracks. Sources (torrents/Soulseek)
@@ -144,13 +143,24 @@ class CatalogTrackHit {
 class CatalogService {
   static const _base = 'https://api.deezer.com';
 
+  /// Waar de laatste aanroep op stukliep, of leeg. Zodat een scherm "Deezer weigerde" kan
+  /// onderscheiden van "er is niets gevonden" — twee antwoorden die er van buiten hetzelfde
+  /// uitzagen zolang beide een lege lijst opleverden.
+  String laatsteFout = '';
+
+  /// Via de gedeelde rijbaan. Zie [DeezerBaan]: de startpagina vuurde eenenzestig verzoeken af waar
+  /// Deezer er vijftig per vijf seconden toestaat, en de weigering kwam als status 200 met een
+  /// foutlichaam binnen — dus als een lege lijst.
   Future<Map<String, dynamic>?> _get(String url) async {
     try {
-      final r = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
-      if (r.statusCode != 200) return null;
-      final j = jsonBody(r);
-      return j is Map<String, dynamic> ? j : null;
-    } catch (_) {
+      final j = await DeezerBaan.haal(url);
+      if (j != null) laatsteFout = '';
+      return j;
+    } on DeezerFout catch (e) {
+      laatsteFout = e.uitleg;
+      return null;
+    } catch (e) {
+      laatsteFout = '$e';
       return null;
     }
   }

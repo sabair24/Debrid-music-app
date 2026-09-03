@@ -1,5 +1,4 @@
-import 'package:http/http.dart' as http;
-import 'json_body.dart';
+import 'deezerbaan.dart';
 
 import 'models.dart' show Track;
 import 'organize.dart' show artistKey;
@@ -118,13 +117,22 @@ class RecTrack {
 class RecommendService {
   static const _base = 'https://api.deezer.com';
 
+  /// Waar de laatste aanroep op stukliep, of leeg. Zie [CatalogService.laatsteFout] — dezelfde
+  /// reden: een weigering en een lege oogst zagen er van buiten hetzelfde uit.
+  String laatsteFout = '';
+
+  /// Via de gedeelde rijbaan, samen met [CatalogService]. Deze twee vuurden hun verzoeken los van
+  /// elkaar af en overschreden zo samen het budget dat elk apart netjes leek te respecteren.
   Future<Map<String, dynamic>?> _get(String url) async {
     try {
-      final r = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
-      if (r.statusCode != 200) return null;
-      final j = jsonBody(r);
-      return j is Map<String, dynamic> ? j : null;
-    } catch (_) {
+      final j = await DeezerBaan.haal(url);
+      if (j != null) laatsteFout = '';
+      return j;
+    } on DeezerFout catch (e) {
+      laatsteFout = e.uitleg;
+      return null;
+    } catch (e) {
+      laatsteFout = '$e';
       return null;
     }
   }
