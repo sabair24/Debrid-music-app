@@ -2533,6 +2533,23 @@ class LibraryStore extends ChangeNotifier {
       ]);
 
     _rebuildTrackIndexes();
+
+    // **De speler moet weten dat namen veranderd kunnen zijn.** Zie [PlayerStore.refreshTracks]:
+    // de wachtrij houdt de `Track`-waarden vast van toen hij gebouwd werd, en hierboven zijn ze
+    // allemaal door NIEUWE objecten vervangen. Zonder deze regel blijft de teller staan, slaat
+    // `refreshTracks` zijn wandeling over, en houden de spelerbalk, het speelscherm en het
+    // vergrendelscherm de oude naam vast tot je de app herstart.
+    //
+    // Gemeld op 04-09-2026: op de pc de metadata rechtgezet, op de telefoon klopte de albumpagina
+    // meteen — en onderin bleef "A1.INXS" staan. *"die loopt achter dan?"* Precies dat, en alleen
+    // op een gekoppeld toestel: de zes plekken die de teller al ophoogden zitten allemaal in de weg
+    // van een pc die zijn eigen schijf leest. De weg van een toestel dat de catalogus binnenkrijgt
+    // was vergeten.
+    //
+    // Onvoorwaardelijk mag hier, en dat is de moeite waard om te weten: deze functie draait alleen
+    // als de pc werkelijk een nieuwe catalogus stuurde -- op "er is niets veranderd" antwoordt hij
+    // 304 en komen we hier niet. Een toets die elke seconde langskomt loopt hier dus niet langs.
+    _bumpMeta();
   }
 
   /// What the PC calls each album we are showing: its id (for a write, in phase C) and the
