@@ -321,6 +321,8 @@ class LanServer {
         return _rutrackerSessie(req);
       case '/api/config':
         return _config(req);
+      case '/api/uitwijk':
+        return _uitwijk(req);
       case '/api/corrections':
         return _corrections(req);
       case '/api/move/plan':
@@ -1169,6 +1171,33 @@ class LanServer {
     return _json(req.response, {
       'discogsToken': config.discogsToken,
       'lastfmKey': config.lastfmKey,
+    });
+  }
+
+  /// Op welke adressen is deze pc te bereiken als je NIET op dit netwerk zit?
+  ///
+  /// In de praktijk: Tailscale. `isRemoteReachable` in `net.dart` weet welke adressen de voordeur
+  /// overleven; hier worden ze doorgegeven aan een toestel dat al binnen is, zodat het ze heeft
+  /// vóórdat het ze nodig heeft. Zie `uitwijk.dart` voor waarom dat het verschil maakt.
+  ///
+  /// **Achter de sleutel en niet bij `/health`.** Dit is het adres van deze machine op een privé
+  /// netwerk. `/health` is met opzet open — zo stelt een toestel vast dat het de juiste machine te
+  /// pakken heeft — en wie op een vreemde wifi poorten afgaat hoort daar niet het tailnet-adres van
+  /// deze pc te vinden. Een toestel dat al een geldige sleutel heeft, mag het weten.
+  ///
+  /// Vers opgevraagd bij elke aanvraag, en dat is goedkoop: het is één opsomming van de
+  /// netwerkkaarten. Bewaren zou betekenen dat Tailscale aanzetten pas na een herstart aankomt.
+  Future<void> _uitwijk(HttpRequest req) async {
+    List<String> overal = const [];
+    try {
+      overal = (await addressesByReach()).overal;
+    } catch (e) {
+      // Geen netwerkkaarten kunnen opsommen is geen reden om het verzoek te laten mislukken; dan
+      // weten we alleen niets, en een lege lijst zegt dat precies.
+      debugPrint('Uitwijkadressen niet op te maken: $e');
+    }
+    return _json(req.response, {
+      'urls': [for (final ip in overal) 'http://$ip:$port'],
     });
   }
 

@@ -31,7 +31,27 @@ class RemoteEndpoint {
   /// What the PC calls itself, for the settings screen. Not used to reach it.
   final String? name;
 
-  const RemoteEndpoint({required this.baseUrl, required this.token, this.name});
+  /// De adressen waarop deze pc óók antwoordt als je niet op zijn netwerk bent — in de praktijk
+  /// Tailscale. Opgehaald bij elke verbinding en hier bewaard, zodat ze er al zijn op het moment
+  /// dat [baseUrl] niet meer werkt. Zie `uitwijk.dart`.
+  ///
+  /// Leeg is de gewone toestand voor een pc zonder Tailscale, en voor een pc die deze weg nog niet
+  /// kent (die antwoordt 404).
+  final List<String> uitwijk;
+
+  const RemoteEndpoint({
+    required this.baseUrl,
+    required this.token,
+    this.name,
+    this.uitwijk = const [],
+  });
+
+  RemoteEndpoint met({Uri? baseUrl, String? name, List<String>? uitwijk}) => RemoteEndpoint(
+        baseUrl: baseUrl ?? this.baseUrl,
+        token: token,
+        name: name ?? this.name,
+        uitwijk: uitwijk ?? this.uitwijk,
+      );
 
   /// Accepts what a person types: `192.168.0.216`, `192.168.0.216:47820`, or a full URL.
   /// Returns null when there is nothing usable in it, so the caller can say so plainly.
@@ -48,14 +68,25 @@ class RemoteEndpoint {
     );
   }
 
-  Map<String, dynamic> toJson() =>
-      {'baseUrl': baseUrl.toString(), 'token': token, 'name': name};
+  Map<String, dynamic> toJson() => {
+        'baseUrl': baseUrl.toString(),
+        'token': token,
+        'name': name,
+        if (uitwijk.isNotEmpty) 'uitwijk': uitwijk,
+      };
 
   static RemoteEndpoint? fromJson(Map<String, dynamic> j) {
     final url = Uri.tryParse((j['baseUrl'] ?? '').toString());
     final token = (j['token'] ?? '').toString();
     if (url == null || url.host.isEmpty || token.isEmpty) return null;
-    return RemoteEndpoint(baseUrl: url, token: token, name: j['name'] as String?);
+    return RemoteEndpoint(
+      baseUrl: url,
+      token: token,
+      name: j['name'] as String?,
+      // Ontbreekt in elk `paired_server.json` van vóór 04-09-2026, en dat hoort geen fout te zijn:
+      // dan is de lijst leeg en wordt hij bij de eerste verbinding alsnog opgehaald.
+      uitwijk: [for (final u in (j['uitwijk'] as List? ?? const [])) '$u'],
+    );
   }
 
   @override
@@ -431,6 +462,23 @@ class RemoteClient {
       // A speaker that did not take it is a speaker that stays silent; the picker says so rather
       // than throwing into a build.
       return false;
+    }
+  }
+
+  /// De adressen waarop deze pc ook van buitenaf antwoordt. Zie `uitwijk.dart`.
+  ///
+  /// Een lege lijst bij álles wat misgaat, en dat is met opzet: een pc zonder Tailscale, een pc van
+  /// vóór deze weg (404) en een pc die net omviel geven hier hetzelfde antwoord — we weten geen
+  /// uitwijkadres. Wat we al hadden wordt daarom door de aanroeper NIET weggegooid op een lege
+  /// lijst; zie `client_session.dart`.
+  Future<List<String>> uitwijkAdressen() async {
+    try {
+      final res = await _get('/api/uitwijk');
+      final j = jsonDecode(utf8.decode(res.bodyBytes));
+      if (j is! Map) return const [];
+      return [for (final u in (j['urls'] as List? ?? const [])) '$u'];
+    } catch (_) {
+      return const [];
     }
   }
 
