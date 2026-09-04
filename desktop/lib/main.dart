@@ -5320,8 +5320,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       // Eén aanroep voor allebei: zou de knop zijn eigen vergelijking krijgen, dan
                       // kan er een dag komen waarop de regel "de uitgave noemt X" zegt en het venster
                       // iets anders voorstelt. Zie [waaromGeenPlaatsMet].
-                      final uitleg =
-                          t != null && s.index < 0 ? waaromGeenPlaatsMet(_official, t) : null;
+                      final uitleg = t != null && s.index < 0
+                          ? waaromGeenPlaatsMet(_official, t, album: album.title)
+                          : null;
                       final row = t == null
                           ? MissingTrackRow(
                               slot: s,
@@ -5389,7 +5390,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       for (final s in rows)
         if (s.index < 0 && s.track != null) s.track!,
     ];
-    final stappen = titelVoorstellen(_official, weesjes);
+    final stappen = titelVoorstellen(_official, weesjes, album: album.title);
     if (stappen.isEmpty) return null;
     return TextButton(
       style: TextButton.styleFrom(

@@ -118,6 +118,40 @@ int albumTrackCount(List<Track> tracks) => tracks.where((t) => !isVariant(t)).le
 ///
 /// Files the release doesn't name are never dropped — they come back at the end as slots with
 /// index -1. A wrong tracklist must not be able to make music you own disappear from its own page.
+/// Wide enough for a wrong printed time AND for a single edit, far too narrow for a different
+/// performance.
+///
+/// Only the last pass of [matchAlbumTracks] uses this, and only on an exact title with a single
+/// candidate. Drie getallen, alle drie verdiend:
+///
+/// * Petra's "Laat Je Gaan" ligt 24 seconden naast een catalogus die 3:10 zegt — een afgeronde of
+///   verkeerd overgetypte tijd. Die moet erdoor.
+/// * Barry White's "You're The First, The Last, My Everything" staat op *Can't Get Enough* als
+///   nummer 2 en duurt daar 4:33; wie de single-edit van 3:25 heeft, heeft dat nummer. Achtenzestig
+///   seconden. Onder de oude grens van zestig viel dat buiten de uitgave — en dan meldde de
+///   albumpagina "niet op deze uitgave" terwijl de nummeringsdialoog van hetzelfde bestand zei
+///   "staat op plaats 2". Twee antwoorden op één vraag, en de gebruiker zag ze allebei.
+/// * RENAISSANCE's "Cozy" heeft een live-opname die zes minuten langer is dan de studioversie. Die
+///   moet ONTBREKEND blijven, anders verschijnt de download die het echte nummer haalt nooit.
+///
+/// Een derde én anderhalve minuut: het deel is wat een andere uitvoering verraadt (een live-versie
+/// of een extended mix scheelt bijna altijd meer dan een derde), en de seconden beschermen het
+/// lange nummer waar een derde alsnog minuten zou zijn.
+///
+/// Dat een gevonden kopie een andere lengte heeft blijft wel zichtbaar — zie [AlbumSlot.andereLengte].
+/// "Je hebt dit nummer, maar niet deze versie" is iets anders dan "je hebt dit nummer niet", en het
+/// is ook iets anders dan stilzwijgend doen alsof het dezelfde opname is.
+///
+/// **Stond als sluiting binnen [matchAlbumTracks] en is naar buiten gehaald**, omdat
+/// [waaromGeenPlaatsMet] precies dezelfde vraag moet stellen: die mag een hernoeming alleen
+/// voorstellen wanneer de laatste pas het resultaat daarna ook aanneemt. Twee kopieën van deze drie
+/// getallen zouden een knop opleveren die iets voorstelt wat daarna alsnog niet past.
+bool _looseEnough(int? off, int? file) {
+  if (off == null || file == null || off <= 0 || file <= 0) return false;
+  final gap = (off - file).abs();
+  return gap <= 90 && gap <= off / 3;
+}
+
 AlbumCompleteness matchAlbumTracks(
   List<ChoiceTrack> official,
   List<Track> tracks,
@@ -129,35 +163,6 @@ AlbumCompleteness matchAlbumTracks(
   final multiDisc = official.map((o) => o.disc).toSet().length > 1;
 
   bool durationsAgree(int? a, int? b) => a == null || b == null || a <= 0 || b <= 0 || (a - b).abs() <= _slack;
-
-  /// Wide enough for a wrong printed time AND for a single edit, far too narrow for a different
-  /// performance.
-  ///
-  /// Only the last pass uses this, and only on an exact title with a single candidate. Drie getallen,
-  /// alle drie verdiend:
-  ///
-  /// * Petra's "Laat Je Gaan" ligt 24 seconden naast een catalogus die 3:10 zegt — een afgeronde of
-  ///   verkeerd overgetypte tijd. Die moet erdoor.
-  /// * Barry White's "You're The First, The Last, My Everything" staat op *Can't Get Enough* als
-  ///   nummer 2 en duurt daar 4:33; wie de single-edit van 3:25 heeft, heeft dat nummer. Achtenzestig
-  ///   seconden. Onder de oude grens van zestig viel dat buiten de uitgave — en dan meldde de
-  ///   albumpagina "niet op deze uitgave" terwijl de nummeringsdialoog van hetzelfde bestand zei
-  ///   "staat op plaats 2". Twee antwoorden op één vraag, en de gebruiker zag ze allebei.
-  /// * RENAISSANCE's "Cozy" heeft een live-opname die zes minuten langer is dan de studioversie. Die
-  ///   moet ONTBREKEND blijven, anders verschijnt de download die het echte nummer haalt nooit.
-  ///
-  /// Een derde én anderhalve minuut: het deel is wat een andere uitvoering verraadt (een live-versie
-  /// of een extended mix scheelt bijna altijd meer dan een derde), en de seconden beschermen het
-  /// lange nummer waar een derde alsnog minuten zou zijn.
-  ///
-  /// Dat een gevonden kopie een andere lengte heeft blijft wel zichtbaar — zie [AlbumSlot.andereLengte].
-  /// "Je hebt dit nummer, maar niet deze versie" is iets anders dan "je hebt dit nummer niet", en het
-  /// is ook iets anders dan stilzwijgend doen alsof het dezelfde opname is.
-  bool looseEnough(int? off, int? file) {
-    if (off == null || file == null || off <= 0 || file <= 0) return false;
-    final gap = (off - file).abs();
-    return gap <= 90 && gap <= off / 3;
-  }
 
   // Exact title first, across the whole list, so a looser match can never steal a file from the
   // entry that names it outright.
@@ -318,7 +323,7 @@ AlbumCompleteness matchAlbumTracks(
       for (final t in tracks)
         if (!claimed.contains(t.path) &&
             normKey(t.title) == want &&
-            looseEnough(official[i].seconds, t.duration?.inSeconds))
+            _looseEnough(official[i].seconds, t.duration?.inSeconds))
           t,
     ];
     // Exactly one candidate, or it is a guess again.
@@ -370,8 +375,13 @@ AlbumCompleteness matchAlbumTracks(
 /// * bij meer dan één treffer zegt de zin zelf dat niet te bepalen is welke rij het is, en een
 ///   suggestie zou die zin tegenspreken;
 /// * bij een lege tracklijst is er niets om naar te wijzen.
+/// [album] is de titel van de PLAAT waar dit bestand op staat. Alleen nodig voor de laatste tak
+/// hieronder: die vraagt of een versiemerk in de titel niets anders doet dan de albumtitel
+/// herhalen. Leeg laten kan, en dan blijft die tak uit — geen enkele bestaande aanroeper verandert
+/// er iets van.
 ({ChoiceTrack? uitgave, String reden}) waaromGeenPlaatsMet(
-    List<ChoiceTrack> official, Track t) {
+    List<ChoiceTrack> official, Track t,
+    {String album = ''}) {
   if (official.isEmpty) return (uitgave: null, reden: 'er is geen tracklijst opgehaald');
   final mijn = normKey(t.title);
   final mijnKaal = normKey(zonderFeat(t.title));
@@ -414,6 +424,44 @@ AlbumCompleteness matchAlbumTracks(
       uitgave: o,
       reden: 'jouw bestand heet "${t.title}", de uitgave noemt "${o.title}"',
     );
+  }
+  // Geen rij die zo heet — maar misschien wel één die alleen een VERSIEMERK verschilt.
+  //
+  // **Gemeld op 04-09-2026, met a-ha's *MTV Unplugged – Summer Solstice*.** Het bestand heet "Take
+  // On Me (MTV Unplugged)", de uitgave noemt rij 1 "Take On Me", en de enige uitleg was "de uitgave
+  // noemt geen nummer dat ... heet" — waar en volstrekt nutteloos, want de app kende die rij.
+  //
+  // **Twee eisen, en de tweede is wat dit veilig maakt.**
+  //
+  // 1. Het merk moet de PLAAT noemen. "(MTV Unplugged)" op *MTV Unplugged – Summer Solstice* is
+  //    geen onderscheid maar een herhaling van de albumtitel; "(Live)" of "(Radio Edit)" noemt de
+  //    plaat niet en is een ándere opname, die ontbrekend hoort te blijven — zie de RENAISSANCE-
+  //    "Cozy"-regel bij [_looseEnough]. Dat oordeel staat al in [versieNoemtDeUitgave] en wordt
+  //    hier niet nagebouwd.
+  // 2. De looptijden moeten door [_looseEnough] komen. Dat is exact de voorwaarde van de laatste
+  //    pas van [matchAlbumTracks], en dus van de vraag die er werkelijk toe doet: zou dit bestand
+  //    ná de hernoeming op zijn plaats vallen? Zo niet, dan is de knop een lege belofte.
+  //
+  // Precies één rij, anders is het opnieuw gokken.
+  if (album.isNotEmpty && versieNoemtDeUitgave(t.title, album)) {
+    final mijnWoorden = _words(t.title);
+    final bijna = [
+      for (final o in official)
+        if (mijnWoorden.isNotEmpty &&
+            _words(o.title).length == mijnWoorden.length &&
+            _words(o.title).containsAll(mijnWoorden) &&
+            _looseEnough(o.seconds, t.duration?.inSeconds))
+          o,
+    ];
+    if (bijna.length == 1) {
+      final o = bijna.single;
+      final os = o.seconds ?? 0;
+      return (
+        uitgave: o,
+        reden: 'jouw bestand heet "${t.title}"; de uitgave noemt "${o.title}" zonder dat merk'
+            '${os > 0 && duur > 0 && (os - duur).abs() > _slack ? ' (en geeft ${tijd(os)} op tegen jouw ${tijd(duur)})' : ''}',
+      );
+    }
   }
   return (uitgave: null, reden: 'de uitgave noemt geen nummer dat "${t.title}" heet');
 }
@@ -515,10 +563,11 @@ typedef Titelvoorstel = ({Track track, String titel, String? artiest});
 /// — dezelfde nauwe voorwaarde als bij het losse nummer, zodat het overzicht nooit iets voorstelt
 /// wat de regel onder die rij niet beweert. Nummers waar niets aan verandert vallen weg: een lijst
 /// met regels die niets doen is een lijst waarin je de echte niet meer ziet.
-List<Titelvoorstel> titelVoorstellen(List<ChoiceTrack> official, List<Track> weesjes) {
+List<Titelvoorstel> titelVoorstellen(List<ChoiceTrack> official, List<Track> weesjes,
+    {String album = ''}) {
   final uit = <Titelvoorstel>[];
   for (final t in weesjes) {
-    final rij = waaromGeenPlaatsMet(official, t).uitgave;
+    final rij = waaromGeenPlaatsMet(official, t, album: album).uitgave;
     if (rij == null) continue;
     final v = titelherstel(rij, t);
     if (v.titel.isEmpty) continue;
