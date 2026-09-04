@@ -577,6 +577,21 @@ void main() {
       expect(RemoteEndpoint.parseHost(''), isNull);
     });
 
+    test('een Tailscale-adres dat je overtikt komt goed aan', () {
+      // Op 04-09-2026 stond de pc aan, draaide Tailscale op allebei (saber-pc, 100.97.101.113) en
+      // zei de telefoon toch "je pc is niet gevonden": een omroep over het lokale netwerk gaat een
+      // tailnet niet over. Sindsdien mag je het adres zelf invullen -- en dan moet elke vorm
+      // waarin dat op je scherm staat werken, want je kiest niet welke je overneemt.
+      const verwacht = 'http://100.97.101.113:47820';
+      expect(RemoteEndpoint.parseHost('100.97.101.113').toString(), verwacht);
+      expect(RemoteEndpoint.parseHost('100.97.101.113:47820').toString(), verwacht);
+      expect(RemoteEndpoint.parseHost('http://100.97.101.113:47820').toString(), verwacht);
+      // Zoals Instellingen op de pc hem toont, met de spaties die een kopieerslag meebrengt.
+      expect(RemoteEndpoint.parseHost('  http://100.97.101.113:47820  ').toString(), verwacht);
+      // En een MagicDNS-naam, want die staat in Tailscale groter dan het nummer.
+      expect(RemoteEndpoint.parseHost('saber-pc').toString(), 'http://saber-pc:47820');
+    });
+
     test('a paired PC survives a restart', () {
       final saved = RemoteEndpoint(
         baseUrl: Uri.parse('http://192.168.0.216:47820'),

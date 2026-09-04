@@ -47,8 +47,10 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _email = TextEditingController();
   final _password = TextEditingController();
+  final _adres = TextEditingController();
   final _emailFocus = FocusNode(skipTraversal: isTv, debugLabel: 'login e-mail');
   final _passwordFocus = FocusNode(skipTraversal: isTv, debugLabel: 'login wachtwoord');
+  final _adresFocus = FocusNode(skipTraversal: isTv, debugLabel: 'login adres');
 
   bool _busy = false;
   bool _register = false;
@@ -65,8 +67,10 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     _email.dispose();
     _password.dispose();
+    _adres.dispose();
     _emailFocus.dispose();
     _passwordFocus.dispose();
+    _adresFocus.dispose();
     super.dispose();
   }
 
@@ -238,6 +242,87 @@ class _LoginScreenState extends State<LoginScreen> {
     return false;
   }
 
+  /// Zelf zeggen waar je pc staat, en binnenkomen op je account.
+  ///
+  /// **Waarom dit er alsnog moest komen, op 04-09-2026.** De ochtend na de vorige uitgave stond er
+  /// op de telefoon: *"En op dit netwerk is je pc ook niet gevonden"* — terwijl de pc aan stond, de
+  /// app draaide en Tailscale op allebei verbonden was (`saber-pc`, 100.97.101.113).
+  ///
+  /// Dat klopte allebei. [_zoekOpNetwerk] zoekt met een omroep over het LOKALE netwerk, en zo'n
+  /// omroep gaat een tailnet niet over: dat is geen wifi maar een reeks rechtstreekse verbindingen.
+  /// Je pc was dus bereikbaar en tegelijk onvindbaar. En de enige twee wegen die zijn adres kenden
+  /// — de accountdatabase, en wat het toestel van een eerdere verbinding onthouden had — waren
+  /// allebei leeg: de eerste zat aan zijn daglimiet, de tweede was er nog nooit geweest.
+  ///
+  /// Eén ding wist jij wél, en de app vroeg het nooit: het adres. Het staat in Tailscale op je pc
+  /// en in Instellingen van de app daar. Dus vraag het.
+  ///
+  /// **Eén keer.** Wat het oplevert wordt bewaard als het adres van deze pc, en de eerste
+  /// verbinding haalt meteen zijn uitwijkadressen op (`uitwijk.dart`). Vanaf dan gaat het vanzelf,
+  /// thuis en op de baan.
+  ///
+  /// Nog steeds geen code en geen gedeelde sleutel: er gaat je inlogsleutel heen, en de pc vraagt
+  /// bij Google van wie die is. Precies dezelfde deur als [_zoekOpNetwerk], alleen weet dit toestel
+  /// nu waar hij zit.
+  Future<void> _probeerAdres() async {
+    final basis = RemoteEndpoint.parseHost(_adres.text);
+    if (basis == null) {
+      setState(() => _error = 'Dat lijkt geen adres. Iets als 100.97.101.113 of 192.168.0.117.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+      _waiting = 'Verbinden met ${basis.host}…';
+    });
+    try {
+      final sleutel = await widget.session.idToken();
+      if (sleutel.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _busy = false;
+          _waiting = null;
+          _error = 'Log eerst in met je e-mailadres en wachtwoord.';
+        });
+        return;
+      }
+      final ik = await thisDevice();
+      final toegang = await RemoteClient.pairMetAccount(
+        basis,
+        idToken: sleutel,
+        deviceId: ik.id,
+        deviceName: ik.name,
+        platform: ik.platform,
+      );
+      if (!mounted) return;
+      if (toegang == null) {
+        setState(() {
+          _busy = false;
+          _waiting = null;
+          _error = 'Op ${basis.host} nam niemand op.\n'
+              'Staat de app op je pc aan, en klopt het adres?';
+        });
+        return;
+      }
+      widget.onConnected(toegang);
+    } on RemoteException catch (e) {
+      // De pc antwoordde en zei nee. Zijn eigen zin is beter dan alles wat we hier kunnen bedenken.
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _waiting = null;
+        _error = e.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _waiting = null;
+        _error = 'Kon ${basis.host} niet bereiken: $e';
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -351,6 +436,61 @@ class _LoginScreenState extends State<LoginScreen> {
                   if (_error != null) ...[
                     const SizedBox(height: 16),
                     _ErrorBox(_error!),
+                    // **Het adres vragen, maar pas als het uitzoeken niet lukte.**
+                    //
+                    // Op 04-09-2026 stond er "je pc is niet gevonden" terwijl hij aan stond en
+                    // Tailscale op allebei verbonden was. Zie [_probeerAdres]: een omroep over het
+                    // lokale netwerk gaat een tailnet niet over, dus je pc was bereikbaar én
+                    // onvindbaar. Jij wist het adres, de app vroeg het nooit.
+                    //
+                    // Onder de foutmelding en niet erboven, om dezelfde reden als de koppelcode:
+                    // op het eerste scherm lijkt het een keuze die je moet maken, en dat is het
+                    // niet — in verreweg de meeste gevallen zoekt de app hem gewoon zelf.
+                    const SizedBox(height: 20),
+                    const Text(
+                      'Weet je waar je pc staat?',
+                      style: TextStyle(color: _text, fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Vul zijn adres in en je komt er rechtstreeks op — nog steeds op je account, '
+                      'zonder code. Gebruik je Tailscale, neem dan dat adres (100.…): dat werkt '
+                      'ook buitenshuis. Je vindt het op je pc in Instellingen, onder '
+                      '"Delen met andere apparaten".',
+                      style: TextStyle(color: _muted, fontSize: 13, height: 1.45),
+                    ),
+                    const SizedBox(height: 12),
+                    MaybePressable(
+                      enabled: isTv,
+                      onPressed: _adresFocus.requestFocus,
+                      borderRadius: BorderRadius.circular(12),
+                      child: TextField(
+                        controller: _adres,
+                        focusNode: _adresFocus,
+                        enabled: !_busy,
+                        autocorrect: false,
+                        keyboardType: TextInputType.url,
+                        style: const TextStyle(color: _text),
+                        decoration: _field('Adres van je pc'),
+                        onSubmitted: (_) => _busy ? null : _probeerAdres(),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    OutlinedButton(
+                      onPressed: (!isTv && _busy)
+                          ? null
+                          : () {
+                              if (_busy) return;
+                              _probeerAdres();
+                            },
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _accent,
+                        side: const BorderSide(color: _accent),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      child: const Text('Verbinden met dit adres',
+                          style: TextStyle(fontWeight: FontWeight.w600)),
+                    ),
                   ],
                   const SizedBox(height: 8),
                   Row(mainAxisAlignment: MainAxisAlignment.center, children: [
