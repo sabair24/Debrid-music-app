@@ -5000,7 +5000,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     // in flips from missing to owned without this page having to be told.
     final comp = _official.isEmpty
         ? null
-        : matchAlbumTracks(_official, album.tracks, album.artist, source: _officialFrom);
+        : matchAlbumTracks(_official, album.tracks, album.artist,
+            source: _officialFrom, album: album.title);
     final rows = comp == null
         ? null
         : (_showMissing ? comp.slots : [for (final s in comp.slots) if (!s.missing) s]);

@@ -135,7 +135,7 @@ Future<AlbumFacts> resolveAlbumFacts(
           if (list.isEmpty) continue;
           tried.add(all[i]);
           lists.add(list);
-          scored.add(matchAlbumTracks(list, album.tracks, album.artist));
+          scored.add(matchAlbumTracks(list, album.tracks, album.artist, album: album.title));
         }
         final pick = pickPressing(scored);
         if (pick >= 0) {
@@ -146,7 +146,7 @@ Future<AlbumFacts> resolveAlbumFacts(
           bonus = bonusTracks(out, album.tracks, album.artist, [
             for (var i = 0; i < tried.length; i++)
               if (i != pick) (tried[i].line, lists[i])
-          ]);
+          ], album: album.title);
         }
       }
     }
@@ -332,7 +332,7 @@ Future<(MbRelease, List<ChoiceTrack>)?> _fromSound(
     if (list.isEmpty) continue;
     tried.add(r);
     lists.add(list);
-    scored.add(matchAlbumTracks(list, album.tracks, album.artist));
+    scored.add(matchAlbumTracks(list, album.tracks, album.artist, album: album.title));
   }
   final pick = pickPressing(scored);
   if (pick < 0) return null;

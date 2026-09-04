@@ -152,11 +152,43 @@ bool _looseEnough(int? off, int? file) {
   return gap <= 90 && gap <= off / 3;
 }
 
+/// Hoort dit bestand op rij [o], terwijl het enige verschil een versiemerk is dat alleen de
+/// ALBUMTITEL herhaalt?
+///
+/// **Gemeld op 04-09-2026 met a-ha's *MTV Unplugged – Summer Solstice*.** Het bestand heet "Take On
+/// Me (MTV Unplugged)", de plaat noemt de rij kaal "Take On Me", en het bestand stond eronder als
+/// "niet op deze uitgave". Ik stelde eerst voor om de titel dan maar in te korten — fout: de
+/// catalogus kent `"Take On Me (MTV Unplugged)"` als **officiële** titel (4:14, op *Acoustic
+/// Classics* en de *Deadpool 2*-soundtrack). Een correcte titel laten wijzigen om een gat in de
+/// vergelijking te omzeilen is de verkeerde kant op repareren.
+///
+/// Drie eisen, en alle drie zijn ze er om iets anders tegen te houden:
+///
+/// * **het merk moet de PLAAT noemen** — "(MTV Unplugged)" op dat album herhaalt alleen de
+///   albumtitel. "(Live)" of "(Radio Edit)" noemt de plaat niet, is een ándere opname, en hoort
+///   ontbrekend te blijven: anders verschijnt de download die het echte nummer haalt nooit. Dat
+///   oordeel staat al in [versieNoemtDeUitgave] en wordt hier niet nagebouwd;
+/// * **de rij zelf mag geen merk dragen** — anders zou een bestand met "(MTV Unplugged)" op een rij
+///   "Take On Me (Live)" vallen, want [_words] haalt aan beide kanten de merken weg en dan lijken ze
+///   gelijk. Twee verschillende opnames op één rij is precies wat dit niet mag doen;
+/// * **de looptijden moeten door [_looseEnough]** — dezelfde marge als de pas hierboven.
+bool _merkHerhaaltAlleenHetAlbum(ChoiceTrack o, Track t, String album) {
+  if (album.isEmpty || !versieNoemtDeUitgave(t.title, album)) return false;
+  if (versionMarkers(o.title).isNotEmpty) return false;
+  final mijn = _words(t.title);
+  if (mijn.isEmpty) return false;
+  final hun = _words(o.title);
+  return hun.length == mijn.length &&
+      hun.containsAll(mijn) &&
+      _looseEnough(o.seconds, t.duration?.inSeconds);
+}
+
 AlbumCompleteness matchAlbumTracks(
   List<ChoiceTrack> official,
   List<Track> tracks,
   String artist, {
   String source = '',
+  String album = '',
 }) {
   final owned = <int, Track>{};
   final claimed = <String>{};
@@ -332,6 +364,34 @@ AlbumCompleteness matchAlbumTracks(
     claimed.add(passend.single.path);
   }
 
+  // Allerlaatst: een bestand waarvan het versiemerk alleen de ALBUMTITEL herhaalt. Zie
+  // [_merkHerhaaltAlleenHetAlbum] voor waarom dat een aanvaarde titel is en geen fout.
+  //
+  // Achter alle andere passen, en alleen op rijen en bestanden die nog vrij zijn: een rij die
+  // letterlijk zo heet moet altijd voorgaan.
+  //
+  // **Beide kanten moeten eenduidig zijn.** Deze lus loopt over de BESTANDEN en niet over de rijen,
+  // en dat is geen smaak: andersom geschreven pakte bij twee rijen die er allebei op lijken gewoon
+  // de eerste, omdat de vraag dan "welk bestand hoort bij deze rij" is in plaats van "welke rij
+  // hoort bij dit bestand". Een toets ving dat. Daarnaast wordt ook de andere kant nagekeken — twee
+  // vrije bestanden die allebei op dezelfde rij passen is net zo goed gokken.
+  for (final t in tracks) {
+    if (claimed.contains(t.path)) continue;
+    final rijen = [
+      for (var i = 0; i < official.length; i++)
+        if (!owned.containsKey(i) && _merkHerhaaltAlleenHetAlbum(official[i], t, album)) i,
+    ];
+    if (rijen.length != 1) continue;
+    final i = rijen.single;
+    final ookMogelijk = tracks.any((a) =>
+        a.path != t.path &&
+        !claimed.contains(a.path) &&
+        _merkHerhaaltAlleenHetAlbum(official[i], a, album));
+    if (ookMogelijk) continue;
+    owned[i] = t;
+    claimed.add(t.path);
+  }
+
   return AlbumCompleteness(
     [
       for (var i = 0; i < official.length; i++)
@@ -425,43 +485,19 @@ AlbumCompleteness matchAlbumTracks(
       reden: 'jouw bestand heet "${t.title}", de uitgave noemt "${o.title}"',
     );
   }
-  // Geen rij die zo heet — maar misschien wel één die alleen een VERSIEMERK verschilt.
+  // Draagt de titel een merk dat alleen de ALBUMTITEL herhaalt, dan is dat geen fout van jou maar
+  // een gat in de vergelijking — en dat wordt in [matchAlbumTracks] gedicht, niet hier met een knop
+  // die je vraagt een officiële titel in te korten. Zie [_merkHerhaaltAlleenHetAlbum].
   //
-  // **Gemeld op 04-09-2026, met a-ha's *MTV Unplugged – Summer Solstice*.** Het bestand heet "Take
-  // On Me (MTV Unplugged)", de uitgave noemt rij 1 "Take On Me", en de enige uitleg was "de uitgave
-  // noemt geen nummer dat ... heet" — waar en volstrekt nutteloos, want de app kende die rij.
-  //
-  // **Twee eisen, en de tweede is wat dit veilig maakt.**
-  //
-  // 1. Het merk moet de PLAAT noemen. "(MTV Unplugged)" op *MTV Unplugged – Summer Solstice* is
-  //    geen onderscheid maar een herhaling van de albumtitel; "(Live)" of "(Radio Edit)" noemt de
-  //    plaat niet en is een ándere opname, die ontbrekend hoort te blijven — zie de RENAISSANCE-
-  //    "Cozy"-regel bij [_looseEnough]. Dat oordeel staat al in [versieNoemtDeUitgave] en wordt
-  //    hier niet nagebouwd.
-  // 2. De looptijden moeten door [_looseEnough] komen. Dat is exact de voorwaarde van de laatste
-  //    pas van [matchAlbumTracks], en dus van de vraag die er werkelijk toe doet: zou dit bestand
-  //    ná de hernoeming op zijn plaats vallen? Zo niet, dan is de knop een lege belofte.
-  //
-  // Precies één rij, anders is het opnieuw gokken.
+  // Komt een bestand ondanks die pas hier terecht, dan is er iets anders aan de hand (twee
+  // kandidaten, of looptijden die te ver uiteenlopen) en zou een hernoeming het óók niet oplossen:
+  // die pas stelt precies dezelfde eisen. Vandaar geen rij, en dus geen knop.
   if (album.isNotEmpty && versieNoemtDeUitgave(t.title, album)) {
-    final mijnWoorden = _words(t.title);
-    final bijna = [
-      for (final o in official)
-        if (mijnWoorden.isNotEmpty &&
-            _words(o.title).length == mijnWoorden.length &&
-            _words(o.title).containsAll(mijnWoorden) &&
-            _looseEnough(o.seconds, t.duration?.inSeconds))
-          o,
-    ];
-    if (bijna.length == 1) {
-      final o = bijna.single;
-      final os = o.seconds ?? 0;
-      return (
-        uitgave: o,
-        reden: 'jouw bestand heet "${t.title}"; de uitgave noemt "${o.title}" zonder dat merk'
-            '${os > 0 && duur > 0 && (os - duur).abs() > _slack ? ' (en geeft ${tijd(os)} op tegen jouw ${tijd(duur)})' : ''}',
-      );
-    }
+    return (
+      uitgave: null,
+      reden: 'jouw bestand heet "${t.title}"; die toevoeging herhaalt alleen de albumtitel, maar '
+          'geen enkele rij past er verder bij',
+    );
   }
   return (uitgave: null, reden: 'de uitgave noemt geen nummer dat "${t.title}" heet');
 }
@@ -919,15 +955,24 @@ List<BonusTrack> bonusTracks(
   List<ChoiceTrack> mine,
   List<Track> onDisk,
   String artist,
-  List<(String, List<ChoiceTrack>)> others,
-) {
+  List<(String, List<ChoiceTrack>)> others, {
+  /// De titel van de PLAAT. Gaat mee zodat "heb ik dit al?" met dezelfde ogen kijkt als de
+  /// tracklijst erboven — zonder dit zou een bestand als "Take On Me (MTV Unplugged)" als bonus
+  /// worden aangeboden terwijl het er gewoon staat.
+  ///
+  /// Benoemd en met een standaardwaarde, net als bij [matchAlbumTracks]: als positionele parameter
+  /// brak dit in één klap zes aanroepen in `completeness_test.dart`, en dat is precies het soort
+  /// wijziging dat een bestaande aanroeper stil iets anders had laten doen als Dart het had
+  /// toegelaten.
+  String album = '',
+}) {
   final out = <BonusTrack>[];
   for (final (edition, tracks) in others) {
     // "Do I have this?" is asked by running the pressing through the ordinary matcher, so a bonus
     // is judged by exactly the same three passes as the tracklist above it. Titles alone were not
     // enough: the radio edit carries its marker in the FILENAME and not in the tag, so on titles
     // it read as a track the user didn't have — and was offered back to them.
-    final c = matchAlbumTracks(tracks, onDisk, artist);
+    final c = matchAlbumTracks(tracks, onDisk, artist, album: album);
     for (final s in c.slots) {
       if (s.index < 0 || !s.missing) continue;
       final t = s.official!;

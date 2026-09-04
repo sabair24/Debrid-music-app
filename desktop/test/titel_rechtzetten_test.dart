@@ -212,51 +212,59 @@ void main() {
           duration: const Duration(seconds: 253),
         );
 
-    test('DE KERN: de uitgave-rij wordt aangewezen in plaats van doodgezwegen', () {
-      final uit = waaromGeenPlaatsMet(const [rij1], unplugged(), album: plaat);
-      expect(uit.uitgave?.title, 'Take On Me');
-      expect(uit.reden, contains('zonder dat merk'));
-      // En de 28 seconden worden erbij gezegd, want dat is het andere halve verhaal.
-      expect(uit.reden, contains('3:45'));
-      expect(uit.reden, contains('4:13'));
+    test('DE KERN: het bestand valt op zijn rij, zónder dat de titel verandert', () {
+      final c = matchAlbumTracks(const [rij1], [unplugged()], 'a-ha', album: plaat);
+      expect(c.slots.where((s) => s.index < 0), isEmpty, reason: 'geen weesje meer');
+      expect(c.slots.first.track?.title, 'Take On Me (MTV Unplugged)',
+          reason: 'de officiële titel blijft staan');
     });
 
-    test('en na die hernoeming valt het bestand écht op zijn plaats', () {
-      // De hele rechtvaardiging van de knop. Zou dit niet zo zijn, dan is het een lege belofte.
-      final na = matchAlbumTracks(const [rij1], [unplugged('Take On Me')], 'a-ha');
-      expect(na.slots.where((s) => s.index < 0), isEmpty);
-      expect(na.slots.first.track?.title, 'Take On Me');
-    });
-
-    test('DE TEGENPROEF: "(Live)" krijgt géén voorstel', () {
+    test('DE TEGENPROEF: "(Live)" blijft er wél buiten', () {
       // Een live-opname is een ándere opname en hoort ontbrekend te blijven — anders verschijnt de
-      // download die het echte nummer haalt nooit. "(Live)" noemt de plaat niet, dus de tak slaat
-      // over. Zou die grens wegvallen, dan zet deze knop live-opnames stilletjes om in albumversies.
-      final uit = waaromGeenPlaatsMet(const [rij1], unplugged('Take On Me (Live)'), album: plaat);
-      expect(uit.uitgave, isNull);
-      expect(uit.reden, contains('geen nummer dat'));
+      // download die het echte nummer haalt nooit ("Cozy" van RENAISSANCE). "(Live)" noemt de plaat
+      // niet, dus de pas slaat over.
+      final c =
+          matchAlbumTracks(const [rij1], [unplugged('Take On Me (Live)')], 'a-ha', album: plaat);
+      expect(c.slots.where((s) => s.index < 0), hasLength(1));
+    });
+
+    test('EN DE ANDERE KANT: een rij mét een merk slokt niets op', () {
+      // `_words` haalt aan beide kanten de merken weg, dus zonder deze eis zou een bestand met
+      // "(MTV Unplugged)" op een rij "Take On Me (Live)" vallen. Twee verschillende opnames op één
+      // rij is precies wat dit niet mag doen.
+      const rijLive = ChoiceTrack('1', 'Take On Me (Live)', 225);
+      final c = matchAlbumTracks(const [rijLive], [unplugged()], 'a-ha', album: plaat);
+      expect(c.slots.where((s) => s.index < 0), hasLength(1));
     });
 
     test('zonder albumtitel blijft alles zoals het was', () {
       // De parameter is optioneel; elke bestaande aanroeper hoort hetzelfde antwoord te krijgen.
-      final uit = waaromGeenPlaatsMet(const [rij1], unplugged());
-      expect(uit.uitgave, isNull);
-      expect(uit.reden, contains('geen nummer dat'));
+      final c = matchAlbumTracks(const [rij1], [unplugged()], 'a-ha');
+      expect(c.slots.where((s) => s.index < 0), hasLength(1));
     });
 
-    test('en een looptijd die te ver uit elkaar ligt ook niet', () {
-      // Voorbij `_looseEnough` neemt de laatste pas van de matcher het resultaat niet aan, dus zou
-      // de hernoeming het bestand alsnog niet op zijn plaats zetten.
+    test('en een looptijd die te ver uit elkaar ligt telt niet mee', () {
       const kort = ChoiceTrack('1', 'Take On Me', 60);
-      final uit = waaromGeenPlaatsMet(const [kort], unplugged(), album: plaat);
-      expect(uit.uitgave, isNull);
+      final c = matchAlbumTracks(const [kort], [unplugged()], 'a-ha', album: plaat);
+      expect(c.slots.where((s) => s.index < 0), hasLength(1));
     });
 
     test('twee rijen die er allebei op lijken: geen gok', () {
-      final uit = waaromGeenPlaatsMet(
-          const [rij1, ChoiceTrack('9', 'Take On Me', 230)], unplugged(),
+      final c = matchAlbumTracks(
+          const [rij1, ChoiceTrack('9', 'Take On Me', 230)], [unplugged()], 'a-ha',
           album: plaat);
+      expect(c.slots.where((s) => s.index < 0), hasLength(1));
+    });
+
+    test('en er wordt geen hernoeming meer voorgesteld voor een correcte titel', () {
+      // Waar dit begon: ik stelde voor om "(MTV Unplugged)" weg te halen. De catalogus kent die
+      // titel officieel — op Acoustic Classics en de Deadpool 2-soundtrack — dus een knop die je
+      // vraagt hem in te korten repareert de verkeerde kant. Bereikt een bestand deze uitleg tóch,
+      // dan zou een hernoeming het ook niet oplossen: de pas hierboven stelt dezelfde eisen.
+      final uit = waaromGeenPlaatsMet(
+          const [ChoiceTrack('1', 'Take On Me', 60)], unplugged(), album: plaat);
       expect(uit.uitgave, isNull);
+      expect(uit.reden, contains('herhaalt alleen de albumtitel'));
     });
   });
 
