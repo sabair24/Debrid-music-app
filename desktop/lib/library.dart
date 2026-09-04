@@ -14,6 +14,7 @@ import 'editions.dart';
 import 'enrichment.dart';
 import 'fingerprint.dart';
 import 'flac_tags.dart';
+import 'kantnummer.dart';
 import 'lan/client.dart';
 import 'lan/dtos.dart';
 import 'lan/ids.dart';
@@ -2910,7 +2911,14 @@ class LibraryStore extends ChangeNotifier {
   Track _trackFromMap(Map<String, dynamic> m) => Track(
         path: m['path'] as String,
         title: m['title'] as String,
-        artist: m['artist'] as String,
+        // De plek op de plaat hoort niet in de artiestnaam. Zie `kantnummer.dart`: "A1.INXS" is
+        // kant A nummer 1 van INXS, en zolang dat als artiestnaam doorging viel de plaat uiteen in
+        // twaalf tegels van één nummer.
+        //
+        // HIER en niet bij het inlezen van de tags, en dat is het verschil tussen "werkt na de
+        // update" en "werkt na een volledige herscan". Elke weg naar een Track loopt hier langs --
+        // een verse scan én de opgeslagen rijen van de vorige keer.
+        artist: zonderKantnummer(m['artist'] as String),
         album: m['album'] as String,
         trackNo: m['trackNo'] as int,
         trackTotal: (m['trackTotal'] as int?) ?? 0,

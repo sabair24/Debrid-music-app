@@ -1,0 +1,62 @@
+/// "A1.INXS" is geen artiest die zo heet.
+///
+/// **Wat er gemeld werd, op 04-09-2026.** Een schermafdruk van het album *X* van INXS: "1 nummers".
+/// En op diezelfde plaat stond "Suicide Blonde" bij de nummers die er *niet* op zouden staan —
+/// terwijl dat kant A, nummer 1 is. *"ik snap er niets van??"*
+///
+/// **Wat er aan de hand was.** Op de albumpagina stond als artiest `INXS`; in de balk onderaan
+/// speelde hetzelfde nummer met als artiest `A1.INXS`. Die twee komen uit hetzelfde veld, dus dat
+/// ze verschilden bewees dat het twee bestanden waren met twee verschillende artiestnamen.
+///
+/// De `A1` is de plek op de vinyl: kant A, eerste nummer. Sommige tagprogramma's plakken die plek
+/// aan de artiestnaam vast, en de app leest dat veld rauw in. Groeperen gaat op artiest + album
+/// (`library.dart`, `_basisSleutel`), dus twaalf nummers met twaalf verschillende "artiesten"
+/// worden twaalf platen van één nummer.
+///
+/// En daarmee kwam de tweede klacht er gratis bij: elke tegel ziet alleen zijn eigen scherfje van
+/// de plaat, dus alles wat in een ándere scherf zit heet "niet op deze uitgave". Eén oorzaak, twee
+/// klachten die niets met elkaar te maken leken te hebben.
+///
+/// **Waarom dit een eigen bestand met een toets is.** Het gevaar zit niet in het opschonen maar in
+/// het te véél opschonen: er zijn echte artiesten die A1, B12, D12 of H2O heten, en die mogen hier
+/// niet gehalveerd worden. Zo'n fout is stil — een groep verdwijnt uit je bibliotheek onder een
+/// naam die je niet kent — en daarom staat de regel hier één keer, met de namen die hem moeten
+/// overleven als toets ernaast.
+library;
+
+/// De plek op de plaat vooraan een artiestnaam weghalen: `A1.INXS` wordt `INXS`.
+///
+/// **De regel is met opzet streng, en die strengheid zit in het scheidingsteken.** Er moet iets
+/// tússen de plek en de naam staan — een punt, een streepje, een haakje of een spatie. Een naam die
+/// alleen maar uit een letter en een cijfer bestaat wordt dus nooit aangeraakt:
+///
+/// * `A1` (de Britse groep) → blijft `A1`;
+/// * `D12`, `B12`, `H2O`, `B2K`, `B1A4` → blijven zoals ze zijn, want er komt geen scheidingsteken
+///   achter het cijfer maar gewoon de rest van de naam.
+///
+/// Wat overblijft moet bovendien op een naam lijken: minstens twee tekens, en er moet een letter in
+/// zitten. `A1.2` levert dus niets op en blijft staan.
+///
+/// Alleen de kanten A tot en met H. Een dubbelalbum heeft vier kanten, een driedubbel zes; verder
+/// dan H komt geen plaat, en elke letter die we erbij nemen is een echte naam die we kapot kunnen
+/// maken. `S1`, `M1` en `T2` blijven daarmee vanzelf buiten schot.
+///
+/// Kleine letters tellen mee (`a1. inxs`), want de ene ripper schrijft het zo en de andere zo.
+String zonderKantnummer(String artiest) {
+  final s = artiest.trim();
+  final m = _kantnummer.firstMatch(s);
+  if (m == null) return s;
+  final rest = (m.group(1) ?? '').trim();
+  if (rest.length < 2) return s;
+  if (!_bevatLetter.hasMatch(rest)) return s;
+  return rest;
+}
+
+/// Kant (A-H, hoogstens twee letters voor de 12"-kanten AA en BB), nummer (één of twee cijfers),
+/// een scheidingsteken, en dan pas de naam.
+final RegExp _kantnummer = RegExp(
+  r'^[A-H]{1,2}[0-9]{1,2}(?:\s*[.\-_:)\]]+\s*|\s+)(.+)$',
+  caseSensitive: false,
+);
+
+final RegExp _bevatLetter = RegExp(r'[A-Za-z]');
