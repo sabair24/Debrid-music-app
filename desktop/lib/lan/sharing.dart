@@ -28,6 +28,8 @@ class LanSharing extends ChangeNotifier {
     this.soulseek,
     this.downloads,
     this.musicbrainz,
+    this.cloudUid,
+    this.uidVanSleutel,
   }) : state = LanStateStore(File('${_appDir()}${Platform.pathSeparator}state.json'));
 
   final LibraryStore library;
@@ -42,6 +44,12 @@ class LanSharing extends ChangeNotifier {
   /// So this PC can work out an album's pressing when a phone or the television asks for it —
   /// once, here, instead of once per device.
   final MusicBrainzService? musicbrainz;
+
+  /// Met welk account deze pc is ingelogd, en hoe je een inlogsleutel nakijkt. Samen laten ze een
+  /// toestel op hetzelfde netwerk binnen op grond van het ACCOUNT, zonder Firestore. Zie
+  /// `accountkoppeling.dart`.
+  final String Function()? cloudUid;
+  final Future<String> Function(String idToken)? uidVanSleutel;
 
   /// Playlists, favourites, play position and counts — shared with every device. Lives here
   /// rather than in the server so switching sharing off doesn't drop what the PC itself knows.
@@ -173,6 +181,8 @@ class LanSharing extends ChangeNotifier {
       downloads: downloads,
       settings: settings,
       musicbrainz: musicbrainz,
+      cloudUid: cloudUid,
+      uidVanSleutel: uidVanSleutel,
       grants: grants,
     );
     _error = await server.start();

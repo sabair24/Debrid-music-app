@@ -600,4 +600,73 @@ class RemoteClient {
       if (client == null) c.close();
     }
   }
+
+  /// Binnenkomen op grond van je ACCOUNT, zonder code en zonder accountdatabase.
+  ///
+  /// Het toestel laat zijn verse inlogsleutel zien; de pc vraagt bij Google van wie die is en
+  /// vergelijkt dat met zijn eigen account. Zie `accountkoppeling.dart` en `server.dart:_pairCloud`.
+  ///
+  /// **Waarom een weigering hier een fout is en geen `null`.** Een pc die zegt "ik hoor bij een
+  /// ander account" of "ik ben zelf niet ingelogd" heeft precies verteld wat er aan de hand is, en
+  /// dat is de enige zin die de gebruiker verder helpt. Wie dat wegslikt tot `null` laat op het
+  /// scherm "geen pc gevonden" staan terwijl de pc gevonden wérd en antwoordde. `null` betekent
+  /// dus alleen: deze machine is geen kandidaat (oudere bouw, kent deze weg nog niet).
+  static Future<RemoteEndpoint?> pairMetAccount(
+    Uri baseUrl, {
+    required String idToken,
+    required String deviceId,
+    required String deviceName,
+    required String platform,
+    http.Client? client,
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    final c = client ?? http.Client();
+    try {
+      final res = await c
+          .post(
+            baseUrl.replace(path: '/pair-cloud'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'idToken': idToken,
+              'deviceId': deviceId,
+              'deviceName': deviceName,
+              'platform': platform,
+            }),
+          )
+          .timeout(timeout);
+
+      // Een pc van vóór deze weg kent `/pair-cloud` niet. Geen fout, gewoon geen kandidaat.
+      if (res.statusCode == 404) return null;
+
+      if (res.statusCode != 200) {
+        // De pc stuurt zijn eigen zin mee, in gewone taal. Die is beter dan alles wat we hier
+        // kunnen verzinnen, want alleen de pc weet of hij zelf ingelogd is.
+        String uitleg = '';
+        try {
+          final j = jsonDecode(res.body);
+          if (j is Map) uitleg = (j['error'] ?? '').toString();
+        } catch (_) {/* geen json terug */}
+        throw RemoteException(
+          uitleg.isEmpty ? 'De pc liet dit toestel niet toe (${res.statusCode}).' : uitleg,
+          statusCode: res.statusCode,
+        );
+      }
+
+      final j = jsonDecode(res.body);
+      final token = (j is Map ? j['token'] : null)?.toString() ?? '';
+      if (token.isEmpty) throw const RemoteException('De pc gaf geen sleutel terug.');
+      return RemoteEndpoint(
+        baseUrl: baseUrl,
+        token: token,
+        name: (j as Map)['name']?.toString(),
+      );
+    } on RemoteException {
+      rethrow;
+    } catch (_) {
+      // Onbereikbaar, of iets anders dat op die poort luistert. Volgende machine.
+      return null;
+    } finally {
+      if (client == null) c.close();
+    }
+  }
 }
