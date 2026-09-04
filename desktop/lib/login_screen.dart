@@ -54,7 +54,17 @@ class _LoginScreenState extends State<LoginScreen> {
 
   bool _busy = false;
   bool _register = false;
-  String? _error;
+
+  /// De laatste foutmelding, of null.
+  ///
+  /// Met een eigen setter, zodat [_toonAdres] omhoog gaat op élke plek waar iets misging — het zijn
+  /// er acht, en de negende die iemand erbij zet zou het anders vergeten.
+  String? _errorVeld;
+  String? get _error => _errorVeld;
+  set _error(String? melding) {
+    _errorVeld = melding;
+    if (melding != null) _toonAdres = true;
+  }
 
   /// Set while the PC has not answered the access request — which is simply what it looks like
   /// when the PC is switched off.
@@ -62,6 +72,17 @@ class _LoginScreenState extends State<LoginScreen> {
 
   /// Wat een pc op dít netwerk zei toen hij dit toestel weigerde. Zie [_zoekOpNetwerk].
   String? _netwerkUitleg;
+
+  /// Staat het adresveld eenmaal open, dan blijft het open. Zie [_probeerAdres].
+  ///
+  /// **Niet aan [_error] hangen, en dat is geen detail.** Dat was de eerste versie, en die at
+  /// zichzelf op: [_probeerAdres] wist de foutmelding voordat hij begint, dus het veld waar je net
+  /// op tikte verdween onder je vingers — inclusief de knop en de melding "verbinden met…". Wat je
+  /// overhoudt is een scherm dat lijkt te doen alsof er niets gebeurde.
+  ///
+  /// Eén kant op: er is geen reden om hem weer weg te halen. Wie hier eenmaal is, heeft het nodig
+  /// gehad, en de volgende poging is er dan meteen.
+  bool _toonAdres = false;
 
   @override
   void dispose() {
@@ -436,6 +457,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   if (_error != null) ...[
                     const SizedBox(height: 16),
                     _ErrorBox(_error!),
+                  ],
+                  if (_toonAdres) ...[
                     // **Het adres vragen, maar pas als het uitzoeken niet lukte.**
                     //
                     // Op 04-09-2026 stond er "je pc is niet gevonden" terwijl hij aan stond en
@@ -518,7 +541,10 @@ class _LoginScreenState extends State<LoginScreen> {
                     // werkt — geen internet, of de accountdatabase die zijn daglimiet bereikt heeft,
                     // zoals op 31-08. Wie dat overkomt zit anders volledig vast. Dus: onzichtbaar
                     // tot je hem nodig hebt, en dán met de reden erbij.
-                    if (widget.onUseCode != null && _error != null) ...[
+                    // Op [_toonAdres] en niet op `_error`, om dezelfde reden: die wordt gewist
+                    // zodra je iets probeert, en dan verdwijnt het vangnet precies terwijl je het
+                    // aan het gebruiken bent.
+                    if (widget.onUseCode != null && _toonAdres) ...[
                       const Text('·', style: TextStyle(color: _muted)),
                       TextButton(
                         onPressed: _busy ? null : widget.onUseCode,
