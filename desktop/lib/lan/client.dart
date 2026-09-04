@@ -31,7 +31,27 @@ class RemoteEndpoint {
   /// What the PC calls itself, for the settings screen. Not used to reach it.
   final String? name;
 
-  const RemoteEndpoint({required this.baseUrl, required this.token, this.name});
+  /// De adressen waarop deze pc óók antwoordt als je niet op zijn netwerk bent — in de praktijk
+  /// Tailscale. Opgehaald bij elke verbinding en hier bewaard, zodat ze er al zijn op het moment
+  /// dat [baseUrl] niet meer werkt. Zie `uitwijk.dart`.
+  ///
+  /// Leeg is de gewone toestand voor een pc zonder Tailscale, en voor een pc die deze weg nog niet
+  /// kent (die antwoordt 404).
+  final List<String> uitwijk;
+
+  const RemoteEndpoint({
+    required this.baseUrl,
+    required this.token,
+    this.name,
+    this.uitwijk = const [],
+  });
+
+  RemoteEndpoint met({Uri? baseUrl, String? name, List<String>? uitwijk}) => RemoteEndpoint(
+        baseUrl: baseUrl ?? this.baseUrl,
+        token: token,
+        name: name ?? this.name,
+        uitwijk: uitwijk ?? this.uitwijk,
+      );
 
   /// Accepts what a person types: `192.168.0.216`, `192.168.0.216:47820`, or a full URL.
   /// Returns null when there is nothing usable in it, so the caller can say so plainly.
@@ -48,14 +68,25 @@ class RemoteEndpoint {
     );
   }
 
-  Map<String, dynamic> toJson() =>
-      {'baseUrl': baseUrl.toString(), 'token': token, 'name': name};
+  Map<String, dynamic> toJson() => {
+        'baseUrl': baseUrl.toString(),
+        'token': token,
+        'name': name,
+        if (uitwijk.isNotEmpty) 'uitwijk': uitwijk,
+      };
 
   static RemoteEndpoint? fromJson(Map<String, dynamic> j) {
     final url = Uri.tryParse((j['baseUrl'] ?? '').toString());
     final token = (j['token'] ?? '').toString();
     if (url == null || url.host.isEmpty || token.isEmpty) return null;
-    return RemoteEndpoint(baseUrl: url, token: token, name: j['name'] as String?);
+    return RemoteEndpoint(
+      baseUrl: url,
+      token: token,
+      name: j['name'] as String?,
+      // Ontbreekt in elk `paired_server.json` van vóór 04-09-2026, en dat hoort geen fout te zijn:
+      // dan is de lijst leeg en wordt hij bij de eerste verbinding alsnog opgehaald.
+      uitwijk: [for (final u in (j['uitwijk'] as List? ?? const [])) '$u'],
+    );
   }
 
   @override
@@ -434,6 +465,23 @@ class RemoteClient {
     }
   }
 
+  /// De adressen waarop deze pc ook van buitenaf antwoordt. Zie `uitwijk.dart`.
+  ///
+  /// Een lege lijst bij álles wat misgaat, en dat is met opzet: een pc zonder Tailscale, een pc van
+  /// vóór deze weg (404) en een pc die net omviel geven hier hetzelfde antwoord — we weten geen
+  /// uitwijkadres. Wat we al hadden wordt daarom door de aanroeper NIET weggegooid op een lege
+  /// lijst; zie `client_session.dart`.
+  Future<List<String>> uitwijkAdressen() async {
+    try {
+      final res = await _get('/api/uitwijk');
+      final j = jsonDecode(utf8.decode(res.bodyBytes));
+      if (j is! Map) return const [];
+      return [for (final u in (j['urls'] as List? ?? const [])) '$u'];
+    } catch (_) {
+      return const [];
+    }
+  }
+
   Future<Map<String, String>> config() async {
     try {
       final res = await _get('/api/config');
@@ -596,6 +644,75 @@ class RemoteClient {
       rethrow;
     } catch (e) {
       throw RemoteException('Kon de pc niet bereiken: $e');
+    } finally {
+      if (client == null) c.close();
+    }
+  }
+
+  /// Binnenkomen op grond van je ACCOUNT, zonder code en zonder accountdatabase.
+  ///
+  /// Het toestel laat zijn verse inlogsleutel zien; de pc vraagt bij Google van wie die is en
+  /// vergelijkt dat met zijn eigen account. Zie `accountkoppeling.dart` en `server.dart:_pairCloud`.
+  ///
+  /// **Waarom een weigering hier een fout is en geen `null`.** Een pc die zegt "ik hoor bij een
+  /// ander account" of "ik ben zelf niet ingelogd" heeft precies verteld wat er aan de hand is, en
+  /// dat is de enige zin die de gebruiker verder helpt. Wie dat wegslikt tot `null` laat op het
+  /// scherm "geen pc gevonden" staan terwijl de pc gevonden wérd en antwoordde. `null` betekent
+  /// dus alleen: deze machine is geen kandidaat (oudere bouw, kent deze weg nog niet).
+  static Future<RemoteEndpoint?> pairMetAccount(
+    Uri baseUrl, {
+    required String idToken,
+    required String deviceId,
+    required String deviceName,
+    required String platform,
+    http.Client? client,
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    final c = client ?? http.Client();
+    try {
+      final res = await c
+          .post(
+            baseUrl.replace(path: '/pair-cloud'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'idToken': idToken,
+              'deviceId': deviceId,
+              'deviceName': deviceName,
+              'platform': platform,
+            }),
+          )
+          .timeout(timeout);
+
+      // Een pc van vóór deze weg kent `/pair-cloud` niet. Geen fout, gewoon geen kandidaat.
+      if (res.statusCode == 404) return null;
+
+      if (res.statusCode != 200) {
+        // De pc stuurt zijn eigen zin mee, in gewone taal. Die is beter dan alles wat we hier
+        // kunnen verzinnen, want alleen de pc weet of hij zelf ingelogd is.
+        String uitleg = '';
+        try {
+          final j = jsonDecode(res.body);
+          if (j is Map) uitleg = (j['error'] ?? '').toString();
+        } catch (_) {/* geen json terug */}
+        throw RemoteException(
+          uitleg.isEmpty ? 'De pc liet dit toestel niet toe (${res.statusCode}).' : uitleg,
+          statusCode: res.statusCode,
+        );
+      }
+
+      final j = jsonDecode(res.body);
+      final token = (j is Map ? j['token'] : null)?.toString() ?? '';
+      if (token.isEmpty) throw const RemoteException('De pc gaf geen sleutel terug.');
+      return RemoteEndpoint(
+        baseUrl: baseUrl,
+        token: token,
+        name: (j as Map)['name']?.toString(),
+      );
+    } on RemoteException {
+      rethrow;
+    } catch (_) {
+      // Onbereikbaar, of iets anders dat op die poort luistert. Volgende machine.
+      return null;
     } finally {
       if (client == null) c.close();
     }

@@ -12,7 +12,9 @@ library;
 import 'package:flutter/material.dart';
 
 import 'cloud/cloud_session.dart';
+import 'cloud/device_identity.dart';
 import 'lan/client.dart';
+import 'lan/discovery.dart';
 import 'tv.dart';
 import 'ui/kleuren.dart';
 
@@ -56,6 +58,9 @@ class _LoginScreenState extends State<LoginScreen> {
   /// when the PC is switched off.
   String? _waiting;
 
+  /// Wat een pc op dít netwerk zei toen hij dit toestel weigerde. Zie [_zoekOpNetwerk].
+  String? _netwerkUitleg;
+
   @override
   void dispose() {
     _email.dispose();
@@ -94,17 +99,40 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   /// After signing in: which PC, and may this device use it?
+  ///
+  /// **Twee wegen, en de tweede is er sinds 02-09-2026.** De eerste vraagt aan de accountdatabase
+  /// welke pc's er onder dit account staan; die werkt overal waar je pc een bereikbaar adres
+  /// publiceerde. Maar toen die dienst zijn daglimiet bereikte, was er GEEN tweede weg — en dan sta
+  /// je buiten je eigen muziek met je pc twee meter verderop. *"dit ben ik echt beu."*
+  ///
+  /// De tweede weg is dat lokale netwerk zelf: de pc roept zich daar toch al om. Zie
+  /// [_zoekOpNetwerk] en `lan/accountkoppeling.dart`.
   Future<void> _findServer() async {
-    final servers = await widget.session.servers();
+    List<CloudServer> servers = const [];
+    Object? databaseFout;
+    try {
+      servers = await widget.session.servers();
+    } catch (e) {
+      // NIET doorgooien. Dat deed hij, en daarmee was een volle database een dichte deur.
+      databaseFout = e;
+    }
     if (!mounted) return;
 
     if (servers.isEmpty) {
-      // Almost always the first-run ordering problem, and worth naming rather than showing a
-      // spinner: the PC has to sign in too before it can hand out anything.
+      // Eerst het netwerk, dán pas een foutmelding. Ook als de database gewoon leeg was: de pc kan
+      // wel degelijk naast je staan zonder ooit iets gepubliceerd te hebben.
+      setState(() => _waiting = 'Zoeken naar je pc op dit netwerk…');
+      if (await _zoekOpNetwerk()) return;
+      if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = 'Nog geen pc gevonden onder dit account.\n'
-            'Log op je pc in met hetzelfde account — daarna verschijnt hij hier vanzelf.';
+        _waiting = null;
+        _error = _netwerkUitleg ??
+            (databaseFout != null
+                ? '$databaseFout\n\nEn op dit netwerk is je pc ook niet gevonden. '
+                    'Staat hij aan en hangt hij aan dezelfde wifi?'
+                : 'Nog geen pc gevonden onder dit account.\n'
+                    'Log op je pc in met hetzelfde account — daarna verschijnt hij hier vanzelf.');
       });
       return;
     }
@@ -121,11 +149,18 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!mounted) return;
 
     if (token == null) {
+      // De aanvraag liep via de accountdatabase en die is niet opgepikt. Dat zegt niets over de
+      // pc: staat hij naast je op hetzelfde wifi, dan kan hij zelf antwoorden. Dit is precies het
+      // geval waarin je vroeger vastliep terwijl alles er stond.
+      setState(() => _waiting = 'Geen antwoord. Zoeken naar je pc op dit netwerk…');
+      if (await _zoekOpNetwerk()) return;
+      if (!mounted) return;
       setState(() {
         _busy = false;
         _waiting = null;
-        _error = 'Je pc heeft nog niet geantwoord. Zet hem aan en probeer opnieuw — '
-            'je aanvraag staat er al, dus hij pikt het vanzelf op.';
+        _error = _netwerkUitleg ??
+            'Je pc heeft nog niet geantwoord. Zet hem aan en probeer opnieuw — '
+                'je aanvraag staat er al, dus hij pikt het vanzelf op.';
       });
       return;
     }
@@ -141,12 +176,66 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     }
 
+    // De pc gaf toegang maar geen van zijn gepubliceerde adressen antwoordt. Dat gebeurt zodra hij
+    // een ander ip kreeg dan hij ooit opschreef — dan is het adres oud, niet de pc weg. Hij roept
+    // zich op dit netwerk gewoon om.
+    setState(() => _waiting = 'Adres klopt niet meer. Zoeken op dit netwerk…');
+    if (await _zoekOpNetwerk()) return;
+    if (!mounted) return;
+
     setState(() {
       _busy = false;
       _waiting = null;
-      _error = 'Je pc gaf toegang, maar is op dit netwerk niet te bereiken.\n'
-          'Hangen beide apparaten aan hetzelfde netwerk?';
+      _error = _netwerkUitleg ??
+          'Je pc gaf toegang, maar is op dit netwerk niet te bereiken.\n'
+              'Hangen beide apparaten aan hetzelfde netwerk?';
     });
+  }
+
+  /// De pc zelf zoeken op het lokale netwerk, en binnenkomen op grond van je ACCOUNT.
+  ///
+  /// Geen zes cijfers en geen accountdatabase: het toestel laat zijn verse inlogsleutel zien en de
+  /// pc vraagt bij Google van wie die is. Zie `lan/accountkoppeling.dart` voor de beslissing aan de
+  /// andere kant.
+  ///
+  /// Geeft true als er verbonden is. Lukt het niet, dan blijft in [_netwerkUitleg] staan wat de pc
+  /// er zélf van zei — dat is de enige zin die verder helpt, en die mag niet in een `catch`
+  /// verdwijnen. Wat er verder misgaat levert false op en geen fout: dit is een tweede kans, en een
+  /// mislukte tweede kans hoort de melding van de eerste niet te overschrijven.
+  Future<bool> _zoekOpNetwerk() async {
+    _netwerkUitleg = null;
+    try {
+      final sleutel = await widget.session.idToken();
+      if (sleutel.isEmpty) return false;
+      final ik = await thisDevice();
+      final gevonden = await LanBrowser.find();
+      for (final pc in gevonden) {
+        RemoteEndpoint? toegang;
+        try {
+          toegang = await RemoteClient.pairMetAccount(
+            pc.baseUrl,
+            idToken: sleutel,
+            deviceId: ik.id,
+            deviceName: ik.name,
+            platform: ik.platform,
+          );
+        } on RemoteException catch (e) {
+          // Deze pc antwoordde en zei nee. Onthouden en verder kijken: op een netwerk met twee
+          // machines kan de volgende wél de jouwe zijn.
+          _netwerkUitleg = '${pc.name}: ${e.message}';
+          continue;
+        }
+        if (toegang == null) continue;
+        if (!mounted) return true;
+        widget.onConnected(RemoteEndpoint(
+          baseUrl: toegang.baseUrl,
+          token: toegang.token,
+          name: toegang.name ?? pc.name,
+        ));
+        return true;
+      }
+    } catch (_) {/* een tweede kans die niet lukte */}
+    return false;
   }
 
   @override

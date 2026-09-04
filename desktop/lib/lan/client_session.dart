@@ -15,6 +15,7 @@ import 'client.dart';
 import 'discovery.dart';
 import '../cloud/catalog_mirror.dart';
 import 'client_mode.dart';
+import 'uitwijk.dart';
 
 class ClientSession extends ChangeNotifier {
   ClientSession({
@@ -98,7 +99,7 @@ class ClientSession extends ChangeNotifier {
   /// `/health` gaf dit al terug (zie `sharing.version`); het werd alleen weggegooid.
   String serverVersie = '';
 
-  /// Het onthouden adres, of een vers gevonden adres als dat niet meer antwoordt.
+  /// Het onthouden adres, of een ander adres van dezelfde pc als dat niet meer antwoordt.
   ///
   /// Geeft altijd íets terug — bij twijfel het onthouden adres. Niets vinden is geen reden om de
   /// verbinding niet eens te proberen: de pc kan gewoon uit staan, en dan hoort de app de kopie te
@@ -106,23 +107,62 @@ class ClientSession extends ChangeNotifier {
   ///
   /// De sleutel gaat mee naar het nieuwe adres. Dat is dezelfde pc met dezelfde koppeling; alleen
   /// zijn plek op het netwerk is veranderd.
+  ///
+  /// **De uitwijkadressen doen het werk als je NIET thuis bent.** Op de baan valt er op het lokale
+  /// netwerk niets te vinden — je pc staat daar niet. Wat wél werkt is het adres dat de pc zelf
+  /// heeft doorgegeven toen je nog verbonden was: zijn Tailscale-adres. Zie `uitwijk.dart` voor de
+  /// volgorde en waarom die zichzelf corrigeert.
   Future<RemoteEndpoint> _bereikbaarAdres(RemoteEndpoint onthouden) async {
     try {
-      if (await RemoteClient.health(onthouden.baseUrl) != null) return onthouden;
+      // Eerst wat we zonder zoeken al weten. Het lokale netwerk afzoeken duurt seconden en levert
+      // op de baan per definitie niets op, dus dat komt achteraan.
+      for (final adres in weguitVolgorde(
+        onthouden: onthouden.baseUrl,
+        uitwijk: leesAdressen(onthouden.uitwijk),
+      )) {
+        if (await RemoteClient.health(adres) == null) continue;
+        if (adres == onthouden.baseUrl) return onthouden;
+        final vers = onthouden.met(baseUrl: adres);
+        // Meteen vastleggen, anders staat hier bij de volgende start weer het oude adres — en
+        // daarmee elke start op de baan opnieuw die ene mislukte poging.
+        await savePairedServer(vers);
+        return vers;
+      }
+
       for (final server in await LanBrowser.find()) {
         if (server.baseUrl == onthouden.baseUrl) continue;
         if (await RemoteClient.health(server.baseUrl) == null) continue;
-        final vers = RemoteEndpoint(
+        final vers = onthouden.met(
           baseUrl: server.baseUrl,
-          token: onthouden.token,
           name: server.name.isEmpty ? onthouden.name : server.name,
         );
-        // Meteen vastleggen, anders staat hier bij de volgende start weer het oude adres.
         await savePairedServer(vers);
         return vers;
       }
     } catch (_) {/* zoeken mag nooit tussen jou en je muziek staan */}
     return onthouden;
+  }
+
+  /// Vragen waar deze pc nog meer te bereiken is, en dat bewaren voor de dag dat je weggaat.
+  ///
+  /// Loopt náást het inladen van de bibliotheek: het antwoord is pas nodig bij een vólgende start,
+  /// dus het mag nooit tussen jou en je muziek staan.
+  ///
+  /// **Een leeg antwoord wist niets.** Een pc van vóór deze weg geeft 404, een pc die net omvalt
+  /// geeft niets — allebei komen hier aan als een lege lijst, en die betekent "ik weet het niet",
+  /// niet "er zijn er geen". Wat er stond blijft dan staan; dat is het adres waarmee je op de baan
+  /// binnenkomt.
+  Future<void> _onthoudUitwijk(RemoteClient client, RemoteEndpoint endpoint) async {
+    try {
+      final verse = await client.uitwijkAdressen();
+      if (verse.isEmpty) return;
+      // Op waarde vergelijken en niet met `==`: twee lijsten met dezelfde inhoud zijn niet hetzelfde
+      // object, en dan zou er bij elke start naar schijf geschreven worden.
+      if (verse.join('\n') == endpoint.uitwijk.join('\n')) return;
+      final bij = endpoint.met(uitwijk: verse);
+      _endpoint = bij;
+      await savePairedServer(bij);
+    } catch (_) {/* volgende keer weer */}
   }
 
   /// Wire an endpoint into the app and pull the library in.
@@ -153,6 +193,9 @@ class ClientSession extends ChangeNotifier {
     }).catchError((_) {/* niet weten is geen reden om niet te verbinden */}));
 
     final client = RemoteClient(endpoint);
+    // Waar deze pc nog meer te bereiken is, voor de dag dat dit adres niet meer werkt. Zie
+    // [_onthoudUitwijk] — bewust niet afgewacht.
+    unawaited(_onthoudUitwijk(client, endpoint));
     library.remote = client;
     // Playing a track means fetching it from the PC, which needs the token — added here, at the
     // last moment, rather than being baked into every stored path.

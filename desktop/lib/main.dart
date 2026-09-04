@@ -734,6 +734,14 @@ Future<void> main() async {
     downloads: mode.owner ? downloads : null,
     // And so it can say what a record IS, once, for every device that asks.
     musicbrainz: mode.owner ? musicbrainz : null,
+    // Zodat een toestel op hetzelfde netwerk binnenkomt op grond van je ACCOUNT, zonder Firestore.
+    // Zie `lan/accountkoppeling.dart` voor waarom dat er moest komen.
+    //
+    // Sluitingen en geen waarden: `cloud` bestaat op dit punt nog niet — hij wordt hieronder pas
+    // gemaakt — en er wordt tijdens het draaien in- en uitgelogd. Beide lezen dus pas op het moment
+    // dat er werkelijk een toestel aanklopt.
+    cloudUid: mode.owner ? () => cloud.uid : null,
+    uidVanSleutel: mode.owner ? (t) => cloud.uidVanSleutel(t) : null,
   );
   // Favorieten. Op de pc rechtstreeks in de gedeelde staat; op een Mac of iPad gaat dezelfde op over
   // de lijn (zie waar `duwOps` gezet wordt). Eén weg, dus geen tweede waarheid die kan afwijken.

@@ -116,6 +116,37 @@ class CloudAuth {
     );
   }
 
+  /// Van wélk account is deze inlogsleutel? Vraagt het aan Google en gelooft het toestel niet.
+  ///
+  /// **Waarvoor dit bestaat.** Zie `lan/accountkoppeling.dart`: de pc moet een toestel op zijn eigen
+  /// netwerk kunnen herkennen zonder Firestore erbij te halen. Dit is de enige stap die daarvoor
+  /// nodig was, en hij loopt over Identity Toolkit — dezelfde dienst als het inloggen zelf, met een
+  /// eigen quotum, dus een volle Firestore raakt hem niet.
+  ///
+  /// **Vragen en niet aannemen.** Het toestel stuurt alleen zijn sleutel; wélk account dat is zegt
+  /// Google. Zou de pc een meegestuurde uid geloven, dan is het genoeg om die van de pc te raden.
+  ///
+  /// Een sleutel die verlopen of ingetrokken is levert hier een lege string op en geen fout: dat is
+  /// geen storing maar een antwoord, en de weigering hoort dezelfde te zijn als bij een verkeerd
+  /// account.
+  Future<String> uidVanIdToken(String idToken) async {
+    _requireConfig();
+    if (idToken.trim().isEmpty) return '';
+    try {
+      final body = await _post(config.authUrl('lookup'), {'idToken': idToken});
+      final users = body['users'];
+      if (users is! List || users.isEmpty) return '';
+      final eerste = users.first;
+      return eerste is Map ? (eerste['localId'] ?? '').toString() : '';
+    } on CloudAuthException catch (e) {
+      // Een NETWERK-storing is iets anders dan een geweigerde sleutel: bij de eerste weten we het
+      // niet, bij de tweede weten we dat het nee is. Voor de beslissing is dat hetzelfde
+      // antwoord — geen toegang — maar de aanroeper mag het verschil zien.
+      if (e.code == 'NETWORK') rethrow;
+      return '';
+    }
+  }
+
   DateTime _expiry(Object? seconds) {
     final s = int.tryParse('${seconds ?? ''}') ?? 3600;
     return DateTime.now().add(Duration(seconds: s));

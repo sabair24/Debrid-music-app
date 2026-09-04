@@ -130,6 +130,22 @@ class CloudSession extends ChangeNotifier {
     }
   }
 
+  /// Een inlogsleutel die NU geldig is, of leeg als we niet ingelogd zijn.
+  ///
+  /// Dit is wat een toestel aan de pc laat zien om op grond van het account binnen te komen
+  /// (`lan/accountkoppeling.dart`). Verlopen wordt hij eerst ververst — een sleutel van een uur oud
+  /// wordt door Google geweigerd, en dan zou de pc denken dat je een ander account had.
+  Future<String> idToken() async {
+    final u = await _fresh();
+    return u?.idToken ?? '';
+  }
+
+  /// Van welk account is deze inlogsleutel? Zie `CloudAuth.uidVanIdToken`.
+  ///
+  /// Doorgegeven en niet zelf uitgevoerd: de LAN-server heeft dit nodig om een toestel op grond van
+  /// het account binnen te laten, en die kent `CloudAuth` niet.
+  Future<String> uidVanSleutel(String idToken) => _auth.uidVanIdToken(idToken);
+
   // ── Signing in ─────────────────────────────────────────────────────────────
 
   Future<void> restore() async {

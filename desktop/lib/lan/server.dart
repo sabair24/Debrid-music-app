@@ -22,6 +22,7 @@ import '../soulseek.dart';
 import '../torbox.dart';
 import 'cast_manager.dart';
 import 'radiohaler.dart';
+import 'accountkoppeling.dart';
 import 'catalog.dart';
 import 'dtos.dart';
 import 'net.dart';
@@ -56,6 +57,8 @@ class LanServer {
     this.downloads,
     this.settings,
     this.musicbrainz,
+    this.cloudUid,
+    this.uidVanSleutel,
     GrantStore? grants,
   })  : grants = grants ?? GrantStore(),
         catalog = LanCatalog(library) {
@@ -77,6 +80,18 @@ class LanServer {
     // `logDir` bestaat altijd (zie paths.dart), dus dit logboek nu ook.
     _koppelLog = WarmLog('${dir.isEmpty ? logDir : dir}${Platform.pathSeparator}koppeling.log');
   }
+
+  /// Met welk account deze pc zelf is ingelogd, of leeg als hij dat niet is.
+  ///
+  /// Een functie en geen waarde: er wordt op de pc in- en uitgelogd terwijl de server draait, en een
+  /// account dat bij het opstarten werd vastgelegd zou daarna blijven staan.
+  final String Function()? cloudUid;
+
+  /// Van welk account is deze inlogsleutel? Zie `CloudAuth.uidVanIdToken`.
+  ///
+  /// Meegegeven en niet hier opgebouwd, zodat een toets deze deur kan uitproberen zonder Google —
+  /// en dat is precies de deur die je wél wil kunnen uitproberen.
+  final Future<String> Function(String idToken)? uidVanSleutel;
 
   /// Eén regel bij het opzetten: waarmee deze server dénkt te mogen werken.
   ///
@@ -238,6 +253,11 @@ class LanServer {
     // Also unauthenticated, necessarily — this is how a device that has no token gets one.
     if (path == '/pair') return _pair(req);
 
+    // Dezelfde soort deur, maar met je account in plaats van zes cijfers. Zie
+    // `accountkoppeling.dart` voor waarom die er moest komen: zonder deze weg sloot één haperende
+    // Firestore je buiten je eigen muziek, ook met de pc op dezelfde wifi.
+    if (path == '/pair-cloud') return _pairCloud(req);
+
     if (!await _authorizedOfHerstel(req)) {
       res.statusCode = HttpStatus.unauthorized;
       return res.close();
@@ -301,6 +321,8 @@ class LanServer {
         return _rutrackerSessie(req);
       case '/api/config':
         return _config(req);
+      case '/api/uitwijk':
+        return _uitwijk(req);
       case '/api/corrections':
         return _corrections(req);
       case '/api/move/plan':
@@ -529,6 +551,74 @@ class LanServer {
     }
     return _json(req.response, {
       'token': token,
+      'name': deviceName(),
+      'trackCount': library.tracks.length,
+    });
+  }
+
+  /// Toegang op grond van het ACCOUNT, over het lokale netwerk, zonder Firestore.
+  ///
+  /// Het toestel stuurt zijn verse inlogsleutel; deze pc vraagt bij Google van wie die is en
+  /// vergelijkt dat met zijn eigen account. Zie `accountkoppeling.dart` voor de beslissing zelf en
+  /// waarom die apart staat.
+  ///
+  /// **Elke weigering wordt opgeschreven.** Dit is een deur naar je hele bibliotheek; als er ooit
+  /// iets vreemds langskomt hoort dat in `koppeling.log` te staan en niet alleen in een 403 die
+  /// niemand ziet.
+  Future<void> _pairCloud(HttpRequest req) async {
+    if (req.method != 'POST') {
+      req.response.statusCode = HttpStatus.methodNotAllowed;
+      return req.response.close();
+    }
+    final opzoeker = uidVanSleutel;
+    final mijn = (cloudUid?.call() ?? '').trim();
+    if (opzoeker == null) {
+      // Deze bouw kent geen Firebase. Dan is de code de enige weg, en dat is een antwoord.
+      _koppelLog?.line('PAIR-CLOUD  geweigerd: deze pc kent geen account-inlog');
+      req.response.statusCode = HttpStatus.forbidden;
+      return _json(req.response, {'error': koppelweigering(uidVanSleutel: '', uidVanPc: '')});
+    }
+
+    final body = await utf8.decoder.bind(req).join();
+    final decoded = jsonDecode(body.isEmpty ? '{}' : body);
+    final map = decoded is Map ? decoded.cast<String, dynamic>() : <String, dynamic>{};
+    final sleutel = (map['idToken'] ?? '').toString();
+
+    String vanWie;
+    try {
+      vanWie = await opzoeker(sleutel);
+    } catch (e) {
+      // Google onbereikbaar. Dat is geen weigering maar een "nu niet", en het verschil hoort op het
+      // scherm van het toestel te staan -- anders ga je een wachtwoord zoeken dat prima was.
+      _koppelLog?.line('PAIR-CLOUD  niet na te kijken: $e');
+      req.response.statusCode = HttpStatus.serviceUnavailable;
+      return _json(req.response, {
+        'error': 'Je pc kon je inlog niet nakijken bij Google. Probeer het zo nog eens.',
+      });
+    }
+
+    if (!magKoppelenOpAccount(uidVanSleutel: vanWie, uidVanPc: mijn)) {
+      _koppelLog?.line('PAIR-CLOUD  geweigerd'
+          '  sleutel van: ${vanWie.isEmpty ? "(onbekend)" : "…${vanWie.substring(vanWie.length > 6 ? vanWie.length - 6 : 0)}"}'
+          '  deze pc: ${mijn.isEmpty ? "(niet ingelogd)" : "…${mijn.substring(mijn.length > 6 ? mijn.length - 6 : 0)}"}');
+      req.response.statusCode = HttpStatus.forbidden;
+      return _json(req.response,
+          {'error': koppelweigering(uidVanSleutel: vanWie, uidVanPc: mijn)});
+    }
+
+    final naam = (map['deviceName'] ?? 'Onbekend apparaat').toString();
+    final grant = grants.mint(
+      deviceId: (map['deviceId'] ?? naam).toString(),
+      deviceName: naam,
+      platform: (map['platform'] ?? '').toString(),
+    );
+    // Eerst naar schijf, dan pas teruggeven. Andersom zou een pc die daarna omvalt een toestel
+    // achterlaten met een sleutel waar hij nooit meer van gehoord heeft. Zelfde volgorde als in
+    // `CloudSession._grantPending`, en om dezelfde reden.
+    await grants.save();
+    _koppelLog?.line('PAIR-CLOUD  toegang gegeven aan "$naam" op grond van het account');
+    return _json(req.response, {
+      'token': grant.token,
       'name': deviceName(),
       'trackCount': library.tracks.length,
     });
@@ -1081,6 +1171,33 @@ class LanServer {
     return _json(req.response, {
       'discogsToken': config.discogsToken,
       'lastfmKey': config.lastfmKey,
+    });
+  }
+
+  /// Op welke adressen is deze pc te bereiken als je NIET op dit netwerk zit?
+  ///
+  /// In de praktijk: Tailscale. `isRemoteReachable` in `net.dart` weet welke adressen de voordeur
+  /// overleven; hier worden ze doorgegeven aan een toestel dat al binnen is, zodat het ze heeft
+  /// vóórdat het ze nodig heeft. Zie `uitwijk.dart` voor waarom dat het verschil maakt.
+  ///
+  /// **Achter de sleutel en niet bij `/health`.** Dit is het adres van deze machine op een privé
+  /// netwerk. `/health` is met opzet open — zo stelt een toestel vast dat het de juiste machine te
+  /// pakken heeft — en wie op een vreemde wifi poorten afgaat hoort daar niet het tailnet-adres van
+  /// deze pc te vinden. Een toestel dat al een geldige sleutel heeft, mag het weten.
+  ///
+  /// Vers opgevraagd bij elke aanvraag, en dat is goedkoop: het is één opsomming van de
+  /// netwerkkaarten. Bewaren zou betekenen dat Tailscale aanzetten pas na een herstart aankomt.
+  Future<void> _uitwijk(HttpRequest req) async {
+    List<String> overal = const [];
+    try {
+      overal = (await addressesByReach()).overal;
+    } catch (e) {
+      // Geen netwerkkaarten kunnen opsommen is geen reden om het verzoek te laten mislukken; dan
+      // weten we alleen niets, en een lege lijst zegt dat precies.
+      debugPrint('Uitwijkadressen niet op te maken: $e');
+    }
+    return _json(req.response, {
+      'urls': [for (final ip in overal) 'http://$ip:$port'],
     });
   }
 
