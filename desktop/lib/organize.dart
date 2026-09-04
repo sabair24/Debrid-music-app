@@ -4,6 +4,7 @@ import 'dart:isolate';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 
+import 'album_facts.dart' show kSidecarName;
 import 'audioformaten.dart';
 import 'editions.dart';
 import 'flac_tags.dart';
@@ -1696,6 +1697,23 @@ Future<TidyReport> tidyDownloads(String downloadsRoot) async {
 /// these was emptied by us; the user never put them there.
 const _osJunk = {'thumbs.db', 'desktop.ini', '.ds_store'};
 
+/// Mag dit bestand mee als de map die het bevat wordt opgeruimd?
+///
+/// **Het zijbestand van de app hoorde hier ook bij, en dat ontbrak.** Wis je het laatste nummer van
+/// een plaat, dan blijft `.debridmusic-album.json` achter; de map telt daardoor als "er staat nog
+/// iets echts in" en blijft staan. GEMETEN op 04-09-2026 over Sabers bibliotheek: **93 mappen**
+/// bevatten niets anders meer dan dat ene bestand. Zijn eigen woorden waren "heb de indruk soms dat
+/// er paar blijven staan" — dit is waar die indruk vandaan komt.
+///
+/// Het onderscheid dat wél blijft gelden: een hoes die JIJ in die map hebt gezet is geen rommel en
+/// houdt de map overeind. Alleen wat het besturingssysteem of de app zélf heeft laten vallen gaat
+/// mee — en het zijbestand is per definitie van de app.
+bool _magMeeBijOpruimen(FileSystemEntity e) {
+  if (e is! File) return false;
+  final naam = e.uri.pathSegments.last;
+  return _osJunk.contains(naam.toLowerCase()) || naam == kSidecarName;
+}
+
 /// True when [child] sits strictly below [root] — never [root] itself.
 bool _under(String child, String root) {
   if (root.trim().isEmpty) return false;
@@ -1734,7 +1752,7 @@ Future<void> pruneVacated(String vacated, String root) async {
     } catch (_) {
       return;
     }
-    final onlyJunk = kids.every((e) => e is File && _osJunk.contains(e.uri.pathSegments.last.toLowerCase()));
+    final onlyJunk = kids.every(_magMeeBijOpruimen);
     if (!onlyJunk) return; // something real is still in there
     try {
       for (final k in kids) {
@@ -1765,9 +1783,7 @@ Future<void> sweepEmptyFolders(String root) async {
       if (!_under(d.path, root)) continue; // never the root itself
       try {
         final kids = await d.list(followLinks: false).toList();
-        if (!kids.every((e) => e is File && _osJunk.contains(e.uri.pathSegments.last.toLowerCase()))) {
-          continue;
-        }
+        if (!kids.every(_magMeeBijOpruimen)) continue;
         for (final k in kids) {
           await k.delete();
         }
