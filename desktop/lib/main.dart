@@ -5912,6 +5912,130 @@ class _MetadataEditorState extends State<MetadataEditor> {
   String? _pickedMbid;
   Uint8List? _pickedCover;
 
+  /// Welke regels je hebt opengeklapt, en wat er onder zit.
+  ///
+  /// **Gevraagd op 05-09-2026.** Saber: *"moet ik ook op voorhand de uitgavens kunnen openklappen,
+  /// zodanig dat ik kan zien of de versies die ik staan heb er ook in staan om zo fouten te
+  /// vermijden"*. Een regel toonde alleen formaat, land, catalogusnummer en jaar — genoeg om
+  /// persingen uit elkaar te houden, niet genoeg om te zien of JOUW nummers erop staan. En dat is
+  /// waarvoor je kiest: kies je de persing zonder de B-kanten, dan staat je halve plaat daarna
+  /// onder "Niet op deze uitgave".
+  ///
+  /// Drie kaarten in plaats van één met een lege waarde erin: "nog niet gevraagd", "aan het halen"
+  /// en "opgehaald, en er zat niets in" zijn drie verschillende dingen om te tekenen.
+  final _open = <String>{};
+  final _lijsten = <String, List<ChoiceTrack>>{};
+  final _laden = <String>{};
+  final _lijstFout = <String, String>{};
+
+  /// Eén regel per persing, ook als de bron er geen id bij gaf.
+  ///
+  /// Op de MetaResult zelf sleutelen kan niet: die objecten worden bij elke zoekactie opnieuw
+  /// gebouwd, dus na "Zoeken" zou alles dichtklappen en opnieuw opgehaald worden.
+  String _sleutel(MetaResult m) =>
+      m.releaseId != null ? 'rel:${m.releaseId}' : (m.mbid != null ? 'mb:${m.mbid}' : 'x:${m.title}·${m.detail ?? ''}');
+
+  Future<void> _klapUit(MetaResult m) async {
+    final k = _sleutel(m);
+    if (_open.contains(k)) {
+      setState(() => _open.remove(k));
+      return;
+    }
+    setState(() => _open.add(k));
+    if (_lijsten.containsKey(k) || _laden.contains(k)) return;
+    setState(() {
+      _laden.add(k);
+      _lijstFout.remove(k);
+    });
+    List<ChoiceTrack> lijst = const [];
+    String? fout;
+    try {
+      lijst = await MetadataSearch(context.read<AppSettings>())
+          .tracklistVan(m)
+          .timeout(const Duration(seconds: 30));
+    } on TimeoutException {
+      fout = 'De bron antwoordde niet op tijd. Probeer het zo opnieuw.';
+    } on StateError catch (e) {
+      // Een mislukte opvraging, niet een persing zónder tracklijst — zie [tracklistVan]. Dat
+      // verschil staat er met opzet, want het eerste is een reden om het opnieuw te proberen en het
+      // tweede een reden om deze persing niet te kiezen.
+      fout = '${e.message} Probeer het zo opnieuw.';
+    } catch (e) {
+      fout = 'Kon de tracklijst niet ophalen: $e';
+    }
+    if (!mounted) return;
+    setState(() {
+      _laden.remove(k);
+      if (fout != null) {
+        _lijstFout[k] = fout;
+      } else {
+        _lijsten[k] = lijst;
+      }
+    });
+  }
+
+  /// De tracklijst van een persing, met per rij of JIJ dat nummer hebt.
+  ///
+  /// Bewust via [matchAlbumTracks] en niet met een eigen vergelijking: dat is exact het oordeel dat
+  /// de albumpagina straks velt als je deze persing kiest. Een tweede, soepelere vergelijking hier
+  /// zou groene vinkjes tonen voor rijen die daarna alsnog leeg blijven — en dan is dit venster
+  /// erger dan geen venster.
+  Widget _tracklijst(List<ChoiceTrack> lijst) {
+    if (lijst.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.fromLTRB(54, 0, 8, 8),
+        child: Text('Deze bron geeft geen tracklijst voor deze uitgave.',
+            style: TextStyle(color: _muted, fontSize: 12)),
+      );
+    }
+    final c = matchAlbumTracks(lijst, widget.album.tracks, widget.album.artist,
+        album: widget.album.title);
+    final rijen = [for (final s in c.slots) if (s.index >= 0) s];
+    final heb = rijen.where((s) => s.track != null).length;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(54, 0, 8, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('je hebt $heb van de ${rijen.length}',
+              style: TextStyle(
+                  color: heb == rijen.length ? Colors.lightGreenAccent : _muted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          for (final s in rijen)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(s.track != null ? Icons.check_rounded : Icons.remove_rounded,
+                      size: 14,
+                      color: s.track != null ? Colors.lightGreenAccent : _muted),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '${s.official!.position.isEmpty ? '' : '${s.official!.position}. '}'
+                      '${s.official!.title}${_duur(s.official!.seconds)}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 12,
+                          height: 1.3,
+                          color: s.track != null ? Colors.white70 : _muted),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  String _duur(int? s) =>
+      (s == null || s <= 0) ? '' : '  ${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
+
   @override
   void dispose() {
     _artist.dispose();
@@ -6174,42 +6298,87 @@ class _MetadataEditorState extends State<MetadataEditor> {
                             itemBuilder: (_, i) {
                               final m = _results[i];
                               final sel = identical(_picked, m);
-                              return InkWell(
-                                onTap: () => _pick(m),
-                                child: Container(
-                                  margin: const EdgeInsets.only(bottom: 6),
-                                  padding: const EdgeInsets.all(6),
-                                  decoration: BoxDecoration(
-                                    color: sel ? _accent.withValues(alpha: 0.18) : _panel2,
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: sel ? _accent : Colors.transparent),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      _netCover(m.coverUrl, size: 44, radius: 6),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
+                              final k = _sleutel(m);
+                              final uit = _open.contains(k);
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 6),
+                                decoration: BoxDecoration(
+                                  color: sel ? _accent.withValues(alpha: 0.18) : _panel2,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: sel ? _accent : Colors.transparent),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    InkWell(
+                                      onTap: () => _pick(m),
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(6),
+                                        child: Row(
                                           children: [
-                                            Text(m.title,
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: const TextStyle(fontWeight: FontWeight.w600)),
-                                            Text(
-                                                // The pressing, where the provider knows it. Five
-                                                // rows reading "30 — Adele" give nothing to choose
-                                                // between; a format and a catalogue number do.
-                                                m.detail ?? (m.artist.isEmpty ? '—' : m.artist),
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: const TextStyle(color: _muted, fontSize: 12)),
+                                            _netCover(m.coverUrl, size: 44, radius: 6),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(m.title,
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow.ellipsis,
+                                                      style: const TextStyle(
+                                                          fontWeight: FontWeight.w600)),
+                                                  Text(
+                                                      // The pressing, where the provider knows it.
+                                                      // Five rows reading "30 — Adele" give nothing
+                                                      // to choose between; a format and a catalogue
+                                                      // number do.
+                                                      m.detail ??
+                                                          (m.artist.isEmpty ? '—' : m.artist),
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow.ellipsis,
+                                                      style: const TextStyle(
+                                                          color: _muted, fontSize: 12)),
+                                                ],
+                                              ),
+                                            ),
+                                            if (sel)
+                                              const Icon(Icons.check_circle_rounded,
+                                                  color: _accent),
+                                            // Een EIGEN raakvlak, naast dat van de regel. Openklappen
+                                            // is kijken; de regel aantikken is kiezen. Zaten die op
+                                            // één knop, dan koos je de persing juist om te
+                                            // controleren of je hem wel wilde.
+                                            IconButton(
+                                              visualDensity: VisualDensity.compact,
+                                              tooltip: uit
+                                                  ? 'Tracklijst verbergen'
+                                                  : 'Tracklijst tonen — staan jouw versies erop?',
+                                              icon: _laden.contains(k)
+                                                  ? const SizedBox(
+                                                      width: 16,
+                                                      height: 16,
+                                                      child: CircularProgressIndicator(
+                                                          strokeWidth: 2, color: _muted))
+                                                  : Icon(
+                                                      uit
+                                                          ? Icons.expand_less_rounded
+                                                          : Icons.expand_more_rounded,
+                                                      color: _muted),
+                                              onPressed: () => _klapUit(m),
+                                            ),
                                           ],
                                         ),
                                       ),
-                                      if (sel) const Icon(Icons.check_circle_rounded, color: _accent),
-                                    ],
-                                  ),
+                                    ),
+                                    if (uit && _lijstFout[k] != null)
+                                      Padding(
+                                        padding: const EdgeInsets.fromLTRB(54, 0, 8, 8),
+                                        child: Text(_lijstFout[k]!,
+                                            style: const TextStyle(
+                                                color: Colors.orangeAccent, fontSize: 12)),
+                                      ),
+                                    if (uit && _lijsten[k] != null) _tracklijst(_lijsten[k]!),
+                                  ],
                                 ),
                               );
                             },

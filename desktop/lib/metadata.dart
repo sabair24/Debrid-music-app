@@ -4,6 +4,7 @@ import 'discogs.dart';
 import 'editions.dart';
 import 'json_body.dart';
 import 'musicbrainz.dart';
+import 'organize.dart' show zonderBeeld;
 import 'settings.dart';
 
 /// One candidate release/track from a metadata provider — used by the manual
@@ -99,6 +100,47 @@ class MetadataSearch {
   /// velden gooien: "Michael Jackson Thriller" als vrije tekst haalt documentaires en tributes
   /// binnen, `artist=Michael Jackson&release_title=Thriller` niet. Precies dat verschil is waarom
   /// deze lijst te kort en te scheef was.
+  /// De tracklijst van één gevonden persing, opgehaald wanneer je hem openklapt.
+  ///
+  /// **Gevraagd op 05-09-2026.** Saber, over "Metadata corrigeren": *"moet ik ook op voorhand de
+  /// uitgavens kunnen openklappen, zodanig dat ik kan zien of de versies die ik staan heb er ook in
+  /// staan om zo fouten te vermijden"*. Het venster toonde per regel alleen formaat, land,
+  /// catalogusnummer en jaar — genoeg om persingen uit elkaar te houden, niet genoeg om te zien of
+  /// JOUW nummers erop staan. En dat laatste is waarvoor je een persing kiest: *Gorillaz &
+  /// G-Sides* heeft persingen met en zonder de B-kanten, en de verkeerde kiezen zet je halve plaat
+  /// onder "Niet op deze uitgave".
+  ///
+  /// Per regel opgehaald en pas bij het openklappen — niet vooraf voor alle regels. Een zoekactie
+  /// levert er tientallen, en dat zouden tientallen aanroepen zijn voor iets wat je meestal maar bij
+  /// twee of drie wilt weten.
+  ///
+  /// Leeg betekent: deze bron kent geen tracklijst voor deze regel. Deezer geeft er nooit een, want
+  /// die kent geen persingen — dat is dezelfde reden waarom "Alles" de standaardbron is.
+  /// **Een MISLUKTE opvraging is geen lege tracklijst**, en dat verschil telt hier zwaarder dan
+  /// gewoonlijk. "Deze uitgave heeft geen tracklijst" leest als een eigenschap van de persing en is
+  /// een reden om hem NIET te kiezen; "de bron antwoordde niet" is een reden om het opnieuw te
+  /// proberen. Bij het uitproberen kwamen allebei voor — MusicBrainz geeft na te snel achter elkaar
+  /// vragen een tijdje niets terug — dus gooit dit een fout in plaats van stilletjes leeg te zijn.
+  Future<List<ChoiceTrack>> tracklistVan(MetaResult m) async {
+    if (m.releaseId != null) {
+      final e = await DiscogsService(settings).release(m.releaseId!);
+      if (e == null) throw StateError('Discogs gaf deze persing niet terug.');
+      final lijst = e.beeldErbij ? zonderBeeld(e.tracklist, (x) => x.position) : e.tracklist;
+      return [
+        for (final t in lijst)
+          if (t.title.trim().isNotEmpty)
+            ChoiceTrack(t.position, t.title, t.seconds, artist: t.artists.join(', ')),
+      ];
+    }
+    if (m.mbid != null) {
+      final mb = MusicBrainzService();
+      final r = await mb.release(m.mbid!);
+      if (r == null) throw StateError('MusicBrainz gaf deze persing niet terug.');
+      return mb.tracklistOf(r);
+    }
+    return const [];
+  }
+
   Future<List<MetaResult>> search(
     String provider,
     String query, {
