@@ -111,6 +111,7 @@ void main() {
       expect(zonderKantnummer('A1.INXS'), zonderKantnummer('INXS'));
     });
   });
+  artiestUitNaam();
   titelUitNaam();
 }
 
@@ -145,6 +146,50 @@ void titelUitNaam() {
       for (final t in ['Mary Jane', 'Just Be', 'Smooth Criminal', '']) {
         expect(titelUitBestandsnaam(t), t, reason: t);
       }
+    });
+  });
+}
+
+/// Artiest én titel uit een bestandsnaam, voor bestanden die GEEN artiest hebben.
+///
+/// Gemeten op 05-09-2026: 8 van de 1255 bestanden hebben er geen, en vier daarvan dragen hem gewoon
+/// in hun naam. Zonder artiest kan zo'n bestand nergens bij horen — niet gegroepeerd, geen hoes, op
+/// geen enkele tracklijst te vinden. Een naam uit de bestandsnaam is dan geen gok tegenover een
+/// feit, maar een gok tegenover niets.
+void artiestUitNaam() {
+  group('artiestEnTitelUitBestandsnaam', () {
+    test('DE KERN: de vier gevallen uit de bibliotheek', () {
+      expect(artiestEnTitelUitBestandsnaam('G1. Tiesto feat. Kirsty Hawkshaw - Just Be'),
+          (artiest: 'Tiesto feat. Kirsty Hawkshaw', titel: 'Just Be'));
+      expect(artiestEnTitelUitBestandsnaam('B1. Tiesto feat. BT - Love Comes Again'),
+          (artiest: 'Tiesto feat. BT', titel: 'Love Comes Again'));
+      expect(artiestEnTitelUitBestandsnaam('08. Enzo - opzij opzij'),
+          (artiest: 'Enzo', titel: 'opzij opzij'));
+      expect(
+          artiestEnTitelUitBestandsnaam(
+              "Alex Carrena, Franck Minaro & Fily - Don't Lose Your Mind (Rachel Ellektra Epic Mix)"),
+          (
+            artiest: 'Alex Carrena, Franck Minaro & Fily',
+            titel: "Don't Lose Your Mind (Rachel Ellektra Epic Mix)"
+          ));
+    });
+
+    test('DE GRENS: op de EERSTE streep, niet de laatste', () {
+      // "Artiest - Titel - Remix" is een titel met een streepje erin, geen artiest die
+      // "Artiest - Titel" heet.
+      expect(artiestEnTitelUitBestandsnaam('Moby - Porcelain - Radio Edit'),
+          (artiest: 'Moby', titel: 'Porcelain - Radio Edit'));
+    });
+
+    test('een koppelteken in een naam doet niets', () {
+      // Spaties rondom de streep zijn verplicht.
+      expect(artiestEnTitelUitBestandsnaam('Jean-Jacques Goldman'), isNull);
+      expect(artiestEnTitelUitBestandsnaam('Mary Jane'), isNull);
+    });
+
+    test('en allebei de helften moeten op een naam lijken', () {
+      expect(artiestEnTitelUitBestandsnaam('A - B'), isNull);
+      expect(artiestEnTitelUitBestandsnaam('12 - 34'), isNull);
     });
   });
 }

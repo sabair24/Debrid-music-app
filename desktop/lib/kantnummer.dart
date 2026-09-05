@@ -96,3 +96,39 @@ final RegExp _plekVoorTitel = RegExp(
   r'^(?:[A-H]{1,2}[0-9]{1,2}|[0-9]{1,2})\s*[.\-_:)\]]+\s*(.+)$',
   caseSensitive: false,
 );
+
+/// Artiest én titel uit een bestandsnaam van de vorm `Artiest - Titel`.
+///
+/// **Alleen voor een bestand dat GEEN artiest heeft.** Dat is de hele rechtvaardiging: bij zo'n
+/// bestand staat er nu "Onbekende artiest", en dan kan het nergens bij horen -- niet gegroepeerd,
+/// geen hoes, op geen enkele tracklijst te vinden. Een naam uit de bestandsnaam is dan geen gok
+/// tegenover een feit maar een gok tegenover niets.
+///
+/// **Gemeten op 05-09-2026:** 8 van de 1255 bestanden hebben geen artiest, en 4 daarvan dragen hem
+/// in hun naam:
+///
+///     G1. Tiesto feat. Kirsty Hawkshaw - Just Be   ->  Tiesto feat. Kirsty Hawkshaw | Just Be
+///     B1. Tiesto feat. BT - Love Comes Again       ->  Tiesto feat. BT              | Love Comes Again
+///     08. Enzo - opzij opzij                       ->  Enzo                         | opzij opzij
+///     Alex Carrena, Franck Minaro & Fily - Don't … ->  Alex Carrena, Franck Minaro & Fily | Don't …
+///
+/// De plek op de plaat gaat er eerst af via [titelUitBestandsnaam], anders wordt "08. Enzo" de
+/// artiest.
+///
+/// **Op de EERSTE " - " en niet de laatste.** "Artiest - Titel - Remix" is een titel met een
+/// streepje erin, geen artiest die "Artiest - Titel" heet. Rondom spaties verplicht, zodat een
+/// koppelteken in een naam ("Jean-Jacques") niets doet.
+({String artiest, String titel})? artiestEnTitelUitBestandsnaam(String naam) {
+  final schoon = titelUitBestandsnaam(naam);
+  final m = _streepjeMetSpaties.firstMatch(schoon);
+  if (m == null) return null;
+  final artiest = schoon.substring(0, m.start).trim();
+  final titel = schoon.substring(m.end).trim();
+  // Allebei moeten op een naam lijken. Anders levert "A - B" twee letters op en is de bibliotheek
+  // een artiest rijker die niet bestaat.
+  if (artiest.length < 2 || titel.length < 2) return null;
+  if (!_bevatLetter.hasMatch(artiest) || !_bevatLetter.hasMatch(titel)) return null;
+  return (artiest: artiest, titel: titel);
+}
+
+final RegExp _streepjeMetSpaties = RegExp(r'\s+[-–]\s+');

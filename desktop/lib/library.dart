@@ -43,6 +43,35 @@ String _baseName(String p) {
   return i < 0 ? s : s.substring(0, i);
 }
 
+/// Titel en artiest, met de BESTANDSNAAM als aanvulling waar de tags zwijgen.
+///
+/// **Een tag wint altijd.** Dit vult alleen in wat er niet is. Gemeten op 05-09-2026: 8 van de 1255
+/// bestanden hebben geen artiest, en vier daarvan dragen hem gewoon in hun naam ("08. Enzo - opzij
+/// opzij", "G1. Tiesto feat. Kirsty Hawkshaw - Just Be"). Zonder artiest kan zo'n bestand nergens
+/// bij horen: niet gegroepeerd, geen hoes, op geen enkele tracklijst te vinden.
+///
+/// **De splitsing gebeurt alleen als er GEEN artiest is**, en als er wél een titel-tag staat moet
+/// het rechterdeel daarmee overeenkomen. Anders is het linkerdeel net zo goed een stuk van de titel,
+/// en dan zet deze regel een artiest in je bibliotheek die niet bestaat. Diezelfde eis staat in
+/// [performerFromFilename], en om dezelfde reden.
+({String titel, String artiest}) _uitNaam(String pad, String? titelTag, String? artiestTag) {
+  final titel = (titelTag ?? '').trim();
+  final artiest = (artiestTag ?? '').trim();
+  if (titel.isNotEmpty && artiest.isNotEmpty) return (titel: titel, artiest: artiest);
+
+  final basis = _baseName(pad);
+  if (artiest.isEmpty) {
+    final uit = artiestEnTitelUitBestandsnaam(basis);
+    if (uit != null && (titel.isEmpty || normKey(uit.titel) == normKey(titel))) {
+      return (titel: titel.isEmpty ? uit.titel : titel, artiest: uit.artiest);
+    }
+  }
+  return (
+    titel: titel.isEmpty ? titelUitBestandsnaam(basis) : titel,
+    artiest: artiest.isEmpty ? 'Onbekende artiest' : artiest,
+  );
+}
+
 /// Pass 1 (runs in a background isolate): read tags only — fast + low memory.
 /// The cover an album already had, carried across a regroup by TRACK PATH.
 ///
@@ -299,6 +328,8 @@ Map<String, dynamic>? tagrijVoorBestand(File e,
   // De kop wordt ook bewaard als er GEEN naam in staat. Een FLAC zonder één tag heeft nog altijd
   // zijn STREAMINFO, en daar staat de speelduur, de bemonstering en de bitdiepte in — dat zijn
   // eigenschappen van het geluid, geen tags, en ze zijn er dus altijd. Zie [_kaleRij].
+  //
+  // Wat de tags niet zeggen, zegt soms de bestandsnaam — zie [_uitNaam].
   var duurMs = 0, hertz = 0, bits = 0;
   if (_ext(e.path) == '.flac') {
     final v = readFlacTags(e);
@@ -310,8 +341,8 @@ Map<String, dynamic>? tagrijVoorBestand(File e,
     if (v != null && (v.title != null || v.artist != null || v.album != null)) {
       return {
         'path': e.path,
-        'title': v.title ?? titelUitBestandsnaam(_baseName(e.path)),
-        'artist': v.artist ?? 'Onbekende artiest',
+        'title': _uitNaam(e.path, v.title, v.artist).titel,
+        'artist': _uitNaam(e.path, v.title, v.artist).artiest,
         'album': v.album ?? '',
         'trackNo': v.trackNo,
         'trackTotal': v.trackTotal,
@@ -360,8 +391,8 @@ Map<String, dynamic>? tagrijVoorBestand(File e,
     final m = readMetadata(e, getImage: false);
     return {
       'path': e.path,
-      'title': (m.title?.trim().isNotEmpty ?? false) ? m.title!.trim() : titelUitBestandsnaam(_baseName(e.path)),
-      'artist': (m.artist?.trim().isNotEmpty ?? false) ? m.artist!.trim() : 'Onbekende artiest',
+      'title': _uitNaam(e.path, m.title, m.artist).titel,
+      'artist': _uitNaam(e.path, m.title, m.artist).artiest,
       'album': m.album?.trim() ?? '', // empty => single
       'trackNo': m.trackNumber ?? 0,
       // The generic reader has no track-total, so a non-FLAC file simply doesn't take part in
@@ -409,8 +440,8 @@ Map<String, dynamic> _kaleRij(File e,
         int bitsPerSample = 0}) =>
     {
       'path': e.path,
-      'title': titelUitBestandsnaam(_baseName(e.path)),
-      'artist': 'Onbekende artiest',
+      'title': _uitNaam(e.path, null, null).titel,
+      'artist': _uitNaam(e.path, null, null).artiest,
       'album': '',
       'trackNo': 0,
       'trackTotal': 0,
