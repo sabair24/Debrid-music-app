@@ -467,6 +467,18 @@ ChoiceTrack? matchOfficial(List<ChoiceTrack> official, String name, int duration
   var bestScore = 0.0;
   final words = fileWords(name);
   for (final o in official) {
+    // **Een versiemerk dat maar aan één kant staat, betekent een andere opname.**
+    //
+    // Dit ontbrak, en `sameTitle` in `completeness.dart` had de regel wél — twee antwoorden op één
+    // vraag, terwijl de uitleg hierboven belooft dat er maar één is. Gemeld op 05-09-2026: de
+    // nummeringsdialoog stelde voor om Sabers "Dip It Low" (de albumversie) te koppelen aan "Dip It
+    // Low (Full Intention Dub)". Drie gedeelde woorden van de zes is 0,50, plus 0,25 omdat de
+    // looptijden toevallig dicht bij elkaar lagen: 0,75, ruim boven de drempel van 0,55. Zo kreeg
+    // een albumversie het nummer van een remix die hij niet eens heeft.
+    //
+    // Nepmerken vallen hier niet onder — [versionMarkers] zeeft "(Album Version)" al weg, dus die
+    // treffer blijft gewoon staan.
+    if (!zelfdeVersiemerken(name, o.title)) continue;
     var score = wordSim(words, fileWords(o.title));
     if (normKey(name) == normKey(o.title)) score = 1;
     // A running time within twelve seconds corroborates a name that merely reads alike; a wildly
@@ -1230,6 +1242,79 @@ Set<String> versionMarkers(String filename) {
   final deel = _partNumber(base);
   if (deel != null) out.add('part $deel');
   return out;
+}
+
+/// True when [a] becomes [b] by changing, adding or removing a single character.
+bool _eenTekenApart(String a, String b) {
+  if ((a.length - b.length).abs() > 1) return false;
+  if (a.length == b.length) {
+    var afwijkend = 0;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i] && ++afwijkend > 1) return false;
+    }
+    return afwijkend == 1;
+  }
+  final lang = a.length > b.length ? a : b, kort = a.length > b.length ? b : a;
+  var i = 0, j = 0, overgeslagen = 0;
+  while (i < lang.length && j < kort.length) {
+    if (lang[i] == kort[j]) {
+      i++;
+      j++;
+      continue;
+    }
+    if (++overgeslagen > 1) return false;
+    i++;
+  }
+  return true;
+}
+
+/// Are these two version markers the same marker, allowing for one slip of the finger?
+///
+/// Gemeten op Technotronic's "Trip on This (The Remixes)": de persing schrijft "(Morales Spinster
+/// mix)" en de rip "(Morales Spineter Mix)" -- één letter -- en daarmee meldde de plaat nummer 2 als
+/// ontbrekend terwijl het bestand er vlak onder stond als "niet op deze uitgave". Twee keer hetzelfde
+/// nummer op één scherm, één keer als gat en één keer als weeskind.
+///
+/// Alleen binnen woorden die lang genoeg zijn om een typfout te herkennen: "mix" tegen "remix" en
+/// "edit" tegen "mix" blijven verschillende markeringen, en dat is precies waar het vergelijken van
+/// markeringen voor bestaat. Een radio-edit wordt hier nooit de albumversie.
+bool _zelfdeMerk(String a, String b) {
+  if (a == b) return true;
+  final aw = a.split(' '), bw = b.split(' ');
+  if (aw.length != bw.length) return false;
+  for (var i = 0; i < aw.length; i++) {
+    if (aw[i] == bw[i]) continue;
+    if (aw[i].length < 6 || bw[i].length < 6) return false;
+    if (!_eenTekenApart(aw[i], bw[i])) return false;
+  }
+  return true;
+}
+
+/// Dragen deze twee titels DEZELFDE versiemerken? "(radio edit)" aan de ene kant en niets aan de
+/// andere betekent twee verschillende opnames, hoe erg de woorden ook op elkaar lijken.
+///
+/// **Stond in `completeness.dart` en hoort hier.** Nepmerken worden al door [versionMarkers]
+/// weggezeefd, dus "Escape (Album Version)" en "Escape" komen hier als gelijk uit; "Escape (Live)"
+/// en "Escape" niet.
+///
+/// **Waarom het verhuisd is.** [matchOfficial] had deze regel NIET, en dat is precies de fout die
+/// Saber op 05-09-2026 zag: de nummeringsdialoog stelde voor om zijn "Dip It Low" (de albumversie)
+/// te koppelen aan "Dip It Low (Full Intention Dub)" — drie van de zes woorden is 0,50, plus 0,25
+/// omdat de looptijden toevallig dichtbij lagen, en dat haalt de drempel van 0,55. Twee functies met
+/// een eigen antwoord op "is dit hetzelfde nummer?", terwijl de doc-comment van [matchOfficial]
+/// nota bene belooft dat er maar één antwoord is. Nu is dat ook zo.
+bool zelfdeVersiemerken(String a, String b) {
+  final x = versionMarkers(a), y = versionMarkers(b);
+  if (x.length != y.length) return false;
+  // Elk merk aan de ene kant moet zijn EIGEN tegenhanger aan de andere kant vinden, anders zouden
+  // twee bijna-gelijke merken allebei op dezelfde partner kunnen matchen.
+  final over = y.toList();
+  for (final m in x) {
+    final i = over.indexWhere((n) => _zelfdeMerk(m, n));
+    if (i < 0) return false;
+    over.removeAt(i);
+  }
+  return true;
 }
 
 /// Wijst de versie-aanduiding in [titel] naar de UITGAVE waar dit bestand in ligt?
