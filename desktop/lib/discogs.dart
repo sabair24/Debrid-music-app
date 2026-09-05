@@ -132,9 +132,18 @@ class DiscogsEdition {
   final List<DiscogsTrack> tracklist;
   final List<DiscogsImage> images;
 
+  /// Zit er naast het geluid ook BEELD in deze uitgave — een dvd of vhs bij de cd?
+  ///
+  /// Alleen dan mag een positie als "DVD-3" als video gelezen worden. Uit de positie alleen is dat
+  /// namelijk niet te zien: een DVD-Audio nummert net zo, en dáár staat wél muziek op. Discogs zegt
+  /// het in `formats[].descriptions`, en die stonden tot nu toe niet in dit object — er werd alleen
+  /// `formats.first['name']` bewaard.
+  final bool beeldErbij;
+
   const DiscogsEdition({
     required this.releaseId,
     required this.format,
+    this.beeldErbij = false,
     this.label,
     this.catno,
     this.country,
@@ -896,6 +905,24 @@ class DiscogsService {
       format: formats.isEmpty
           ? ''
           : ((formats.first as Map<String, dynamic>)['name'] as String? ?? ''),
+      // Elk medium apart bekijken: pas als er zowel geluid als beeld in de doos zit, zegt een
+      // positie als "DVD-3" iets. Zie [DiscogsEdition.beeldErbij].
+      beeldErbij: () {
+        var geluid = false, beeld = false;
+        for (final f in formats) {
+          if (f is! Map<String, dynamic>) continue;
+          final woorden = [
+            (f['name'] ?? '').toString(),
+            for (final d in (f['descriptions'] as List<dynamic>? ?? const [])) d.toString(),
+          ];
+          if (woorden.any(isBeeldFormaat)) {
+            beeld = true;
+          } else {
+            geluid = true;
+          }
+        }
+        return geluid && beeld;
+      }(),
       label: (first?['name'] as String?)?.trim(),
       catno: (first?['catno'] as String?)?.trim(),
       country: (b['country'] as String?)?.trim(),
@@ -2324,7 +2351,11 @@ extension DiscogsChoices on DiscogsService {
       tracks: e.tracklist.isEmpty
           ? null
           : [
-              for (final t in e.tracklist)
+              // Alleen wanneer de uitgave zelf zegt dat er beeld bij zit — zie
+              // [DiscogsEdition.beeldErbij].
+              for (final t in (e.beeldErbij
+                  ? zonderBeeld(e.tracklist, (x) => x.position)
+                  : e.tracklist))
                 ChoiceTrack(t.position, t.title, t.seconds, artist: t.artists.join(', ')),
             ],
     );

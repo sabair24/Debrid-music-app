@@ -4528,7 +4528,15 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
   /// for six seconds — on every single visit, on every device, because none of them kept the answer
   /// and none of them shared it.
   void _adoptFacts(AlbumFacts f) {
-    _official = f.tracklist;
+    // **Ook bij het INLEZEN**, en niet alleen bij het ophalen. De beeldrijen zitten al in elke
+    // tracklijst die de app eerder heeft bewaard, en anders zou je elke plaat met een dvd erbij
+    // handmatig opnieuw moeten laten ophalen voor je er iets van merkt. Zie [zonderBeeld].
+    //
+    // Hier kan alleen de POSITIE het zeggen — een opgeslagen lijst draagt het formaat van de media
+    // niet. Dat is genoeg zolang er ook gewone rijen tussen staan: `zonderBeeld` laat een lijst die
+    // ALLEEN uit beeldrijen bestaat met rust, en dat is precies de dvd-only uitgave waar dit
+    // onderscheid niet te maken valt.
+    _official = zonderBeeld(f.tracklist, (t) => t.position);
     _officialFrom = f.source;
     _officialYear = f.year;
     _officialBonus = f.bonus;

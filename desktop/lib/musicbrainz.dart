@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'editions.dart';
+import 'organize.dart' show isBeeldFormaat;
 import 'release_format.dart';
 import 'paths.dart';
 
@@ -180,9 +181,16 @@ class MbRelease {
     final formats = <String>[];
     var count = 0;
     final tracks = <MbTrack>[];
+    // Beeldmedia tellen niet mee als nummers. Een cd+dvd meldde anders "1 van 31 · 30 ontbreken"
+    // terwijl de plaat 17 nummers heeft, en dezelfde titels stonden er twee keer in — zie
+    // [isBeeldFormaat]. Alleen als er ook een AUDIOmedium is: een uitgave die enkel een dvd is
+    // houdt zijn lijst, want anders verdwijnt er informatie in plaats van ruis.
+    final heeftAudio = media.any((m) =>
+        m is Map && !isBeeldFormaat((m['format'] ?? '').toString()));
     for (final m in media) {
       if (m is! Map) continue;
       final f = (m['format'] ?? '').toString();
+      if (heeftAudio && isBeeldFormaat(f)) continue;
       if (f.isNotEmpty) formats.add(f);
       count += ((m['track-count'] as num?) ?? 0).toInt();
       // Which disc this is. MusicBrainz states it, and without carrying it the two discs of a

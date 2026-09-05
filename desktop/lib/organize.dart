@@ -1252,6 +1252,61 @@ Set<String> versionMarkers(String filename) {
   return out;
 }
 
+/// Beeldmateriaal, geen muziek: media waarvan de nummers nooit als audiobestand op je schijf staan.
+///
+/// **Gevonden bij het doorlichten van de bibliotheek op 05-09-2026.** Boyzone's *Back Again... No
+/// Matter What* is een cd van 17 nummers MÉT een dvd van 14 clips — dezelfde liedjes, als video. De
+/// app telde die dvd-rijen gewoon mee, dus stond er "1 van 31 nummers · 30 ontbreken" op het scherm
+/// en dook elk nummer twee keer op in de tracklijst. Thunderdome *The Best Of '98* deed hetzelfde
+/// met een VHS erbij: 86 rijen, waarvan een flink deel video.
+///
+/// Erger dan alleen een verkeerd getal: die videorijen dragen dezelfde titels, dus ze maakten van
+/// een gewone plaat een plaat met "twee gelijknamige rijen" — precies het geval waarin alleen de
+/// looptijd nog beslist welk bestand waar hoort.
+///
+/// **"DVD-Audio" hoort er NIET bij**, en dat is de reden dat een FORMAAT op `dvd-video` vergeleken
+/// wordt en niet op `dvd`: van een DVD-Audio rip je wel degelijk muziek.
+const _beeldFormaten = {'dvd-video', 'dvdvideo', 'vhs', 'blu-ray', 'bluray', 'video', 'vcd', 'umd'};
+
+/// De medium-namen zoals ze VOOR EEN POSITIE staan: "DVD-3", "VHS-7", "Blu-ray 2".
+///
+/// Losser dan [_beeldFormaten], en dat kan niet anders — een positie schrijft "DVD" en zegt er niet
+/// bij of het een DVD-Video of een DVD-Audio is. Dat verschil komt van de uitgave zelf, en daarom
+/// mag [isBeeldPositie] alléén gebruikt worden op een uitgave die zegt dat er beeld bij zit; zie
+/// `DiscogsEdition.beeldErbij`. Zonder die voorwaarde zou een DVD-Audio zijn muziek kwijtraken.
+const _beeldPrefixen = {'dvd', 'vhs', 'video', 'blu-ray', 'bluray', 'vcd', 'umd'};
+
+/// Wijst deze positie ("DVD-3", "VHS-7") naar een beeldmedium, gegeven dat de uitgave beeld bevat?
+bool isBeeldPositie(String positie) {
+  final p = positie.trim().toLowerCase();
+  final i = p.indexOf(RegExp(r'[-–\s]'));
+  if (i <= 0) return false;
+  // Het cijfer dat een medium nummert hoort er niet bij: "cd1" is "cd", "dvd2" is "dvd".
+  var kop = p.substring(0, i).replaceAll(RegExp(r'\d+$'), '');
+  // "blu-ray 2" heeft zijn streepje IN de naam; dan is de eerste streep niet de scheiding.
+  if (p.startsWith('blu-ray')) kop = 'blu-ray';
+  return _beeldPrefixen.contains(kop);
+}
+
+/// Draagt dit formaat ("DVD-Video", "VHS") beeld en geen geluid?
+bool isBeeldFormaat(String formaat) {
+  final f = formaat.trim().toLowerCase().replaceAll(' ', '');
+  return _beeldFormaten.contains(f);
+}
+
+/// Dezelfde lijst zonder de beeldrijen — tenzij er dan niets overblijft.
+///
+/// Die uitzondering is het halve werk. Een uitgave die ALLEEN een dvd is (een concertregistratie)
+/// zou anders helemaal geen tracklijst meer hebben, en dan verdwijnt er informatie in plaats van
+/// dat er ruis weggaat. Beter een lijst met beeld erin dan geen lijst.
+List<T> zonderBeeld<T>(List<T> rijen, String Function(T) positieVan) {
+  final audio = [
+    for (final r in rijen)
+      if (!isBeeldPositie(positieVan(r))) r,
+  ];
+  return audio.isEmpty ? rijen : audio;
+}
+
 /// True when [a] becomes [b] by changing, adding or removing a single character.
 bool _eenTekenApart(String a, String b) {
   if ((a.length - b.length).abs() > 1) return false;
