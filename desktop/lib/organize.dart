@@ -147,6 +147,36 @@ final _featSplitRe = RegExp(r'\s*(?:,|&|\+|\band\b|\ben\b|\bx\b)\s*', caseSensit
   return (main: main.isEmpty ? artist.trim() : main, featured: featured);
 }
 
+/// De eigen artiestnaam vooraan een titel weghalen: `Whigfield - Sexy Eyes` wordt `Sexy Eyes`.
+///
+/// **De strengheid is hier het hele punt, en dat is GEMETEN.** Op 05-09-2026 over de bibliotheek
+/// (1255 nummers) staat de artiestnaam bij zeven nummers ergens in de titel. Zes daarvan horen daar
+/// gewoon thuis:
+///
+///     "Beyoncé Interlude"                                  [Beyoncé]
+///     "Ho Ho Vengaboys!"                                   [Vengaboys]
+///     "This Beat is Technotronic (Dust Mix)"               [Technotronic]
+///     "Against All Odds (…) (feat. Westlife)"              [Westlife]
+///     "If I Lose Myself (Alesso vs. OneRepublic remix)"    [OneRepublic]
+///     "C U When U Get There (Coolio's Album Version)"      [Coolio Featuring 40 Thevz]
+///
+/// Eén is fout: `Whigfield - Sexy Eyes (David's Epic Edit)`. Een regel die "de artiestnaam komt in
+/// de titel voor" als aanleiding neemt, sloopt dus zes goede titels om één te repareren.
+///
+/// Daarom deze vorm en geen andere: de titel moet BEGINNEN met de artiest, gevolgd door een streepje
+/// mét spaties eromheen, en het linkerdeel moet na [artistKey] gelijk zijn aan de hoofdartiest van
+/// datzelfde bestand. Geen gelijkenis, geen "bevat" — gelijk. Zo blijft "Ho Ho Vengaboys!" heel.
+String zonderArtiestVoorop(String titel, String artiest) {
+  final hoofd = splitFeatured(artiest, titel).main.trim();
+  if (hoofd.length < 2) return titel;
+  final m = RegExp(r'^\s*(.+?)\s+[-–]\s+(.+)$').firstMatch(titel);
+  if (m == null) return titel;
+  if (artistKey(m.group(1)!) != artistKey(hoofd)) return titel;
+  final rest = m.group(2)!.trim();
+  if (rest.length < 2 || !RegExp('[A-Za-z]').hasMatch(rest)) return titel;
+  return rest;
+}
+
 /// De gastnamen die onder een nummerrij horen: die uit je EIGEN tags, aangevuld met die van de
 /// uitgave.
 ///

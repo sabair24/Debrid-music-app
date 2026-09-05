@@ -60,4 +60,55 @@ void main() {
       }
     });
   });
+  artiestVoorop();
+}
+
+/// De eigen artiestnaam vooraan een titel: "Whigfield - Sexy Eyes".
+///
+/// **De strengheid IS de functie, en dat is gemeten.** Over de bibliotheek (1255 nummers) staat de
+/// artiestnaam bij zeven nummers ergens in de titel — en zes daarvan horen daar thuis. Een regel op
+/// "bevat" zou dus zes goede titels slopen om er één te repareren.
+void artiestVoorop() {
+  group('zonderArtiestVoorop', () {
+    test('DE KERN: het ene echte geval uit de bibliotheek', () {
+      expect(zonderArtiestVoorop("Whigfield - Sexy Eyes (David's Epic Edit)", 'Whigfield'),
+          "Sexy Eyes (David's Epic Edit)");
+    });
+
+    test('DE TEGENPROEF: de zes die het NIET mogen raken', () {
+      // Stuk voor stuk uit de doorlichting. Zou de regel op "bevat" gaan, dan gaan deze eraan.
+      expect(zonderArtiestVoorop('Beyoncé Interlude', 'Beyoncé'), 'Beyoncé Interlude');
+      expect(zonderArtiestVoorop('Ho Ho Vengaboys!', 'Vengaboys'), 'Ho Ho Vengaboys!');
+      expect(zonderArtiestVoorop('This Beat is Technotronic (Dust Mix)', 'Technotronic'),
+          'This Beat is Technotronic (Dust Mix)');
+      expect(
+          zonderArtiestVoorop(
+              'Against All Odds (Take A Look at Me Now) (feat. Westlife)', 'Westlife'),
+          'Against All Odds (Take A Look at Me Now) (feat. Westlife)');
+      expect(
+          zonderArtiestVoorop(
+              'If I Lose Myself (Alesso vs. OneRepublic extended remix)', 'OneRepublic'),
+          'If I Lose Myself (Alesso vs. OneRepublic extended remix)');
+      expect(
+          zonderArtiestVoorop(
+              "C U When U Get There (Coolio's Album Version)", 'Coolio Featuring 40 Thevz'),
+          "C U When U Get There (Coolio's Album Version)");
+    });
+
+    test('een ANDERE naam vooraan blijft staan', () {
+      // "Moby - Porcelain" bij een bestand van Air is geen artiestprefix maar iets anders, en dan
+      // weet deze regel het niet. Dan blijft de titel zoals hij is.
+      expect(zonderArtiestVoorop('Moby - Porcelain', 'Air'), 'Moby - Porcelain');
+    });
+
+    test('en een gastcredit telt mee als dezelfde artiest', () {
+      // De hoofdartiest wordt vergeleken, niet de hele credit.
+      expect(zonderArtiestVoorop('Missy Elliott - One Minute Man', 'Missy Elliott feat. Ludacris'),
+          'One Minute Man');
+    });
+
+    test('zonder streepje met spaties gebeurt er niets', () {
+      expect(zonderArtiestVoorop('Whigfield-Sexy Eyes', 'Whigfield'), 'Whigfield-Sexy Eyes');
+    });
+  });
 }

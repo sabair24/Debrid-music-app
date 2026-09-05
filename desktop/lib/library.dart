@@ -2968,7 +2968,10 @@ class LibraryStore extends ChangeNotifier {
         //
         // Veilig voor alles wat niet stuk is: de functie geeft ongewijzigde tekst terug tenzij de
         // hele reeks als verminkte UTF-8 terug te lezen is.
-        title: unmojibake(m['title'] as String),
+        // En de eigen artiestnaam die sommige rippers vooraan de titel plakken -- zie
+        // [zonderArtiestVoorop] voor waarom die regel zo streng is.
+        title: zonderArtiestVoorop(
+            unmojibake(m['title'] as String), unmojibake(m['artist'] as String)),
         // De plek op de plaat hoort niet in de artiestnaam. Zie `kantnummer.dart`: "A1.INXS" is
         // kant A nummer 1 van INXS, en zolang dat als artiestnaam doorging viel de plaat uiteen in
         // twaalf tegels van één nummer.
