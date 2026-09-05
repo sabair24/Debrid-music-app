@@ -591,6 +591,67 @@ AlbumCompleteness matchAlbumTracks(
           'geen enkele rij past er verder bij',
     );
   }
+  // **De uitgave heeft er wél iets staan met dezelfde naam, maar het is een ANDERE OPNAME.**
+  //
+  // Gemeld op 05-09-2026 met Gorillaz' debuut. Het bestand "19-2000" van 3:21 stond onder "Niet op
+  // deze uitgave", met als uitleg *"de uitgave noemt geen nummer dat "19-2000" heet"* — terwijl rij
+  // 1 van die persing "19-2000 (Soul Child Remix)" is. Letterlijk waar, en volstrekt onbruikbaar:
+  // het leest alsof de PLAAT het nummer niet heeft, terwijl de gekozen PERSING gewoon de verkeerde
+  // is. Saber: *"19-2000 niet in deze uitgave ?? staat er letterlijk niet ?"*
+  //
+  // Dat is precies de vergissing die "uitgave openklappen" moet voorkomen, dus hoort dezelfde
+  // informatie hier te staan: welke snit de uitgave dan wél heeft, zodat je weet dat je een andere
+  // persing moet kiezen in plaats van te denken dat je bestand niet deugt.
+  //
+  // Alleen als de merken ECHT verschillen. Zijn ze gelijkwaardig ("(Album Version)" tegenover een
+  // kale rij), dan is het geen andere opname en zou deze zin liegen; dan valt hij door naar de
+  // algemene regel eronder.
+  final kaalVanMij = normKey(zonderFeat(withoutVersionText(t.title)));
+  final andereSnit = [
+    for (final o in official)
+      if (kaalVanMij.isNotEmpty &&
+          normKey(zonderFeat(withoutVersionText(o.title))) == kaalVanMij &&
+          !zelfdeVersiemerken(t.title, o.title))
+        o,
+  ];
+  if (andereSnit.isNotEmpty) {
+    // **Op LOOPTIJD sorteren, niet op volgorde van de uitgave.** Zonder dit noemde de zin de eerste
+    // twee rijen die toevallig langskwamen: bij Hollis P. Monroe's *I'm Lonely* waren dat twee
+    // radio-edits van 3:50, terwijl het bestand van 6:53 overduidelijk de "(original mix)" van 6:54
+    // is die er óók op staat. Een uitleg die de verkeerde rij aanwijst is nauwelijks beter dan geen.
+    if (duur > 0) {
+      andereSnit.sort((a, b) {
+        final da = (a.seconds ?? 0) > 0 ? ((a.seconds! - duur).abs()) : 1 << 30;
+        final db = (b.seconds ?? 0) > 0 ? ((b.seconds! - duur).abs()) : 1 << 30;
+        return da.compareTo(db);
+      });
+    }
+    final dichtste = andereSnit.first;
+    final ds = dichtste.seconds ?? 0;
+
+    // **Even lang is waarschijnlijk gewoon dezelfde opname onder een andere naam**, en dan is een
+    // andere persing zoeken het verkeerde advies: dan wil je hem toewijzen aan die rij. Verschilt de
+    // looptijd wél, dan is het echt een andere snit en is de persing de fout.
+    if (ds > 0 && (ds - duur).abs() <= _slack) {
+      // **Géén rij teruggeven, en dat is met opzet.** Die rij zet "Titel rechtzetten…" aan en zet
+      // dit bestand in het bulkoverzicht — en dan zou één klik 39 bestanden hernoemen naar de
+      // spelling van een persing, terwijl de juiste ingreep TOEWIJZEN is: het bestand blijft heten
+      // zoals het heet en gaat op de goede rij liggen. Renoemen is hier een oplossing voor een
+      // probleem dat je niet hebt, en tags overschrijven doe je niet per ongeluk.
+      return (
+        uitgave: null,
+        reden: 'de uitgave noemt dit "${dichtste.title}" (${tijd(ds)}) en jouw bestand duurt '
+            '${tijd(duur)} — waarschijnlijk dezelfde opname onder een andere naam. Wijs hem toe met '
+            '"Nummers toewijzen…"',
+      );
+    }
+    final namen = andereSnit.take(2).map((o) => '"${o.title}"').join(' en ');
+    return (
+      uitgave: null,
+      reden: 'deze uitgave heeft $namen staan — een andere opname dan jouw "${t.title}". '
+          'Kies een persing die hem wél heeft',
+    );
+  }
   return (uitgave: null, reden: 'de uitgave noemt geen nummer dat "${t.title}" heet');
 }
 

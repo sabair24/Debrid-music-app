@@ -248,6 +248,44 @@ void main() {
       expect(r, isNot(contains('afgebroken')));
     });
 
+    test('en als de uitgave een ANDERE SNIT heeft, zegt hij welke', () {
+      // **Gemeld op 05-09-2026 met Gorillaz' debuut.** Het bestand "19-2000" stond onder "Niet op
+      // deze uitgave" met "de uitgave noemt geen nummer dat "19-2000" heet" — terwijl rij 1 van die
+      // persing "19-2000 (Soul Child Remix)" is. Letterlijk waar, en onbruikbaar: het leest alsof de
+      // PLAAT het nummer niet heeft, terwijl de gekozen PERSING de verkeerde is.
+      final r = waarom(
+          [uitgave('19-2000 (Soul Child Remix)'), uitgave('Clint Eastwood', seconden: 341)],
+          bestand('19-2000', seconden: 201));
+      expect(r, contains('Soul Child Remix'));
+      expect(r, contains('andere opname'));
+      expect(r, isNot(contains('noemt geen nummer')));
+    });
+
+    test('en bij een gelijke lengte wijst hij naar TOEWIJZEN, niet naar hernoemen', () {
+      // Hollis P. Monroe: de uitgave heeft zes mixen, waaronder twee radio-edits van 3:50 en de
+      // "(original mix)" van 6:54. Het bestand duurt 6:53. Zonder sorteren op looptijd noemde de zin
+      // de eerste twee rijen die langskwamen — de radio-edits — en dat is de verkeerde aanwijzing.
+      final uitgaven = [
+        uitgave("I'm Lonely (original radio edit)", seconden: 230),
+        uitgave("I'm Lonely (P.J.'s Radio edit)", seconden: 234),
+        uitgave("I'm Lonely (original mix)", seconden: 414),
+      ];
+      final r = waaromGeenPlaatsMet(uitgaven, bestand("I'm Lonely", seconden: 413));
+      expect(r.reden, contains('original mix'));
+      expect(r.reden, contains('Nummers toewijzen'));
+      expect(r.reden, isNot(contains('radio edit')));
+      // En géén rij, want die zou "Titel rechtzetten…" aanzetten en dit bestand in het
+      // bulkoverzicht zetten — hernoemen is hier de verkeerde ingreep.
+      expect(r.uitgave, isNull);
+    });
+
+    test('maar niet als de merken gelijkwaardig zijn', () {
+      // "(Album Version)" tegenover een kale rij is dezelfde opname. Zou deze zin dán verschijnen,
+      // dan loog hij — en dan stuurt hij je een andere persing zoeken die je niet nodig hebt.
+      final r = waarom([uitgave('Escape', seconden: 240)], bestand('Escape (Album Version)'));
+      expect(r, isNot(contains('andere opname')));
+    });
+
     test('een titel die de uitgave niet kent', () {
       final r = waarom([uitgave('Halo', seconden: 261)], bestand('Iets Anders'));
       expect(r, contains('Iets Anders'));
