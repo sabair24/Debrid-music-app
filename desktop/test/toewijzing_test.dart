@@ -129,4 +129,73 @@ void main() {
       expect(besteToewijzing(const [ChoiceTrack('1', 'Song', 200)], const []), [null]);
     });
   });
+
+  group('de twijfelregel', () {
+    test('DE KERN: twee gelijke kopieën onder één rij is een gok, geen keuze', () {
+      // Een optimale toewijzing kiest altijd, ook als er niets te kiezen valt. Eentje pakken laat
+      // de andere als weeskind achter, alsof die niet op de plaat hoort.
+      const rijen = [ChoiceTrack('1', 'Dip It Low', 198)];
+      expect(besteToewijzing(rijen, [b('Dip It Low', 197), b('Dip It Low', 198)]), [null]);
+    });
+
+    test('maar wie zijn eigen rij krijgt is geen twijfelgeval', () {
+      // Dezelfde twee bestanden, nu met twee rijen: daar heeft de som de twijfel juist OPGELOST.
+      // Zou deze regel ook hier toeslaan, dan sloopte ze het geval waarvoor dit bestand bestaat.
+      const rijen = [
+        ChoiceTrack('1', 'Dip It Low', 198),
+        ChoiceTrack('2', 'Dip It Low', 220),
+      ];
+      expect(besteToewijzing(rijen, [b('Dip It Low', 218), b('Dip It Low', 194)]), [1, 0]);
+    });
+
+    test('en twee rijen die allebei op één bestand passen: ook geen gok', () {
+      // De andere kant: dan blijft er een rij ten onrechte als ONTBREKEND staan, en biedt de app
+      // een download aan voor iets wat je al hebt.
+      const rijen = [ChoiceTrack('1', 'Song', 225), ChoiceTrack('2', 'Song', 230)];
+      expect(besteToewijzing(rijen, [b('Song', 228)]), [null, null]);
+    });
+
+    test('de exacte titel hakt de knoop wél door', () {
+      // Adele's *30* heeft "Easy On Me" én het duet, in bijna dezelfde lengte. Op afstand schelen
+      // die rijen weinig; op naam is het eenduidig, en dan valt er niets te twijfelen.
+      const rijen = [
+        ChoiceTrack('1', 'Easy On Me', 224),
+        ChoiceTrack('2', 'Easy On Me (With Chris Stapleton)', 224),
+      ];
+      expect(besteToewijzing(rijen, [b('Easy On Me', 224, artiest: 'Adele')]), [0, null]);
+    });
+  });
+
+  group('merken en aanhangsels', () {
+    const plaat = 'MTV Unplugged - Summer Solstice';
+    Track unplugged() => Track(
+          path: r'D:\m\x.flac',
+          title: 'Take On Me (MTV Unplugged)',
+          artist: 'a-ha',
+          album: plaat,
+          isFlac: true,
+          duration: const Duration(seconds: 253),
+        );
+
+    test('een merk dat de PLAAT herhaalt maakt een ánder merk niet ongedaan', () {
+      // De plaat noemen is geen verschil...
+      expect(rijAfstand(const ChoiceTrack('1', 'Take On Me', 225), unplugged(), album: plaat),
+          lessThan(1000));
+      // ...maar "(Live)" op de rij is dat wél. Met "als één kant de plaat herhaalt, dan
+      // gelijkwaardig" was die tweede vraag nooit gesteld en vielen twee opnames op één rij.
+      expect(rijAfstand(const ChoiceTrack('1', 'Take On Me (Live)', 225), unplugged(), album: plaat),
+          greaterThan(1000));
+    });
+
+    test('een aanhangsel dat de LOOPTIJD tegenspreekt is geen aanhangsel', () {
+      // Nagekeken bij MusicBrainz: de uitgave is "Turn the Tide Revisited" van *Lowriderz & Sylver*
+      // uit 2023 (3:38), het bestand is Sylvers radio-edit van 4:05. Twee verschillende opnames,
+      // waarvan de ene naam in de andere begint — op tekst alleen niet te zien.
+      expect(rijAfstand(const ChoiceTrack('1', 'Turn the Tide Revisited', 218), b('Turn the Tide', 245)),
+          greaterThan(1000));
+      // Even lang is het wél hetzelfde nummer met een aanhangsel erbij.
+      expect(rijAfstand(const ChoiceTrack('1', 'Turn the Tide Revisited', 245), b('Turn the Tide', 245)),
+          lessThan(1000));
+    });
+  });
 }

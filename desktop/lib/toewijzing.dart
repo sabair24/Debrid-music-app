@@ -54,8 +54,36 @@ const double kMaxAfstand = 0.6;
 /// Zie de tweede harde grens in [rijAfstand] voor de meting die dit getal afdwong.
 const double kMaxKern = 0.4;
 
+/// Hoeveel goedkoper de winnaar moet zijn dan een kandidaat die met lege handen achterblijft.
+///
+/// **Een optimale toewijzing kiest altijd, ook als er niets te kiezen valt.** Liggen er twee
+/// identieke kopieën van "Crazy In Love" onder één rij, dan legt de som er eentje op en houdt de
+/// andere over -- die staat er daarna als weeskind bij, alsof hij niet op de plaat hoort. En bij
+/// twee rijen die allebei "Take On Me" heten blijft er zo eentje ten onrechte als ONTBREKEND staan,
+/// waarna de app een download aanbiedt voor iets wat je al hebt. Allebei een gok, allebei fout te
+/// presenteren als zekerheid.
+///
+/// beets kent dit als `rec_gap_thresh`: is het verschil tussen de beste en de eerstvolgende
+/// kandidaat te klein, dan zakt de aanbeveling. De bestaande passen in [matchAlbumTracks] zeiden
+/// hetzelfde in een andere vorm -- "alleen bij precies één kandidaat" -- en de toetsen die dat
+/// vastleggen zijn de reden dat dit getal er is.
+///
+/// **Alleen wie leeg achterblijft telt mee.** Krijgt de tweede kandidaat zelf een plek, dan heeft de
+/// som de twijfel juist OPGELOST: dat is *Dip It Low (Mixes)*, waar twee rijen van 3:18 en 3:40 twee
+/// bestanden van 3:14 en 3:38 krijgen. Daar mag deze regel niet aankomen, en dat doet ze niet.
+const double kMinKloof = 0.15;
+
 /// Onbereikbaar: dit paar mag nooit gekoppeld worden.
 const double _veto = 1e9;
+
+/// Heet dit bestand precies zoals deze rij? Dan is de keuze door de TITEL beslist, niet door een gok.
+///
+/// Nodig naast [kMinKloof], want anders weigert de twijfelregel het geval waar juist niets aan te
+/// twijfelen valt: Adele's *30* heeft de rijen "Easy On Me" en "Easy On Me (With Chris Stapleton)",
+/// en jouw bestand heet kaal "Easy On Me". Op afstand schelen die rijen weinig -- op naam is het
+/// eenduidig.
+bool _exacteTitel(ChoiceTrack rij, Track bestand) =>
+    normKey(rij.title) == normKey(bestand.title);
 
 /// Levenshtein, met een rij van twee in plaats van een volle matrix.
 int _levenshtein(String a, String b) {
@@ -112,7 +140,9 @@ String _zonderStaart(String s) => s.replaceFirst(RegExp(r'\s+[-–]\s+.*$'), '')
 ///
 /// Losser maakt dit de regel niet waar het op aankomt: "Queen Of Mine" en "Operation Coup De Poing"
 /// liggen in élke lezing ver uit elkaar, en dat is het geval waar deze grens voor bestaat.
-double kernAfstand(String a, String b) {
+/// [looptijdSpreektTegen]: staat vast dat deze twee niet even lang zijn? Dan vervalt de
+/// voorvoegselregel hieronder. Zie daar waarom.
+double kernAfstand(String a, String b, {bool looptijdSpreektTegen = false}) {
   List<String> lezingen(String s) {
     final v = withoutVersionText(s);
     return [zonderFeat(v), zonderFeat(_kern(v)), zonderFeat(_zonderStaart(v))]
@@ -139,8 +169,21 @@ double kernAfstand(String a, String b) {
       // Alleen VOORAAN, niet ergens in het midden: "Love" zit ook in "Endless Love", en dat zijn
       // twee nummers. En dit verlaagt alleen het VETO — in de gewogen som telt het volle
       // titelverschil onverminderd mee, dus bij twee kandidaten wint nog steeds de beste.
+      //
+      // **En de LOOPTIJD moet het bevestigen.** Deze regel verzwakt de identiteitstoets: ze zegt
+      // "die extra woorden zullen wel een aanhangsel zijn" zonder te weten wát er staat. Precies
+      // dat ging mis bij Sylver: de uitgave is "Turn the Tide Revisited" van *Lowriderz & Sylver*
+      // uit 2023 (3:38) en het bestand is de radio-edit van 4:05 — nagekeken bij MusicBrainz, twee
+      // verschillende opnames. Op tekst alleen is dat niet te zien; op tekst plus 27 seconden
+      // verschil wel. Een aanhangsel dat de speling van [kSpeling] overschrijdt is geen aanhangsel.
+      //
+      // Onbekende looptijd telt NIET als tegenspraak — dan blijft de regel gewoon gelden, want
+      // "Nuttin Nuh Go" zonder tijd tegenover "Nuttin Nuh Go So" is nog steeds hetzelfde nummer.
       final nx = normKey(x), ny = normKey(y);
-      if (nx.isNotEmpty && ny.isNotEmpty && (nx.startsWith(ny) || ny.startsWith(nx))) {
+      if (!looptijdSpreektTegen &&
+          nx.isNotEmpty &&
+          ny.isNotEmpty &&
+          (nx.startsWith(ny) || ny.startsWith(nx))) {
         d = math.min(d, 0.2);
       }
       if (d < beste) beste = d;
@@ -179,10 +222,19 @@ double tekstAfstand(String a, String b) {
 ///     `matchAlbumTracks` sinds 3.9.298 gebruikt.
 bool _merkenGelijkwaardig(String a, String b, String album) {
   if (zelfdeVersiemerken(a, b)) return true;
-  if (album.isNotEmpty &&
-      (versieNoemtDeUitgave(a, album) || versieNoemtDeUitgave(b, album))) {
-    return true;
-  }
+
+  // Een merk dat de PLAAT herhaalt telt niet mee -- maar het maakt de rest van de vergelijking ook
+  // niet ongeldig. Dat verschil kostte een toets: met "als één van beide kanten de plaat herhaalt,
+  // dan gelijkwaardig" viel het bestand "Take On Me (MTV Unplugged)" op de rij "Take On Me (Live)",
+  // want de eerste voorwaarde was al waar voordat er ooit naar "(Live)" gekeken werd. Twee
+  // verschillende opnames op één rij, precies wat HARDE GRENS 1 moet tegenhouden.
+  //
+  // Dus wordt zo'n merk WEGGESTREEPT en gaat de vergelijking gewoon door over wat overblijft.
+  // Het oordeel zelf komt onveranderd uit [versieNoemtDeUitgave], per merk gevraagd.
+  Set<String> merkenVan(String titel) => versionMarkers(titel)
+      .where((m) => !(album.isNotEmpty && versieNoemtDeUitgave('x ($m)', album)))
+      .toSet();
+
   // Elk merk dat maar aan één kant staat moet als gewone tekst in de ándere titel voorkomen.
   bool gedektDoor(Set<String> merken, String andere) {
     final woorden = normKey(andere);
@@ -192,7 +244,7 @@ bool _merkenGelijkwaardig(String a, String b, String album) {
     return true;
   }
 
-  final ma = versionMarkers(a), mb = versionMarkers(b);
+  final ma = merkenVan(a), mb = merkenVan(b);
   return gedektDoor(ma.difference(mb), b) && gedektDoor(mb.difference(ma), a);
 }
 
@@ -204,7 +256,39 @@ double rijAfstand(ChoiceTrack rij, Track bestand, {String album = ''}) {
   // HARDE GRENS 1. Zie de klasse-uitleg: een versiemerk aan één kant is een andere opname.
   if (!_merkenGelijkwaardig(bestand.title, rij.title, album)) return _veto;
 
-  // HARDE GRENS 2: de KERN van de titel moet lijken.
+  // HARDE GRENS 2: een gast die alleen het BESTAND noemt.
+  //
+  // **De regel loopt maar één kant op, en dat is de hele veiligheid ervan.** Een gaststaart mag van
+  // de UITGAVE af — noemt de persing "Crazy in Love (feat. JAY-Z)" en heet jouw bestand kaal "Crazy
+  // In Love", dan héb je dat nummer en heeft een ripper de credit niet overgetypt. Andersom niet:
+  // noemt de uitgave "Easy on Me" en heet jouw bestand "Easy On Me (With Chris Stapleton)", dan heb
+  // je iets wat die rij NIET is. Adele's *30* draagt allebei, in bijna dezelfde lengte; het duet op
+  // de rij van de solo leggen verbergt het ene nummer en telt het andere ten onrechte als binnen.
+  //
+  // Dezelfde regel als de gastartiest-pas in `completeness.dart`, en om dezelfde reden. Zonder deze
+  // grens haalde de optimale toewijzing elf toetsen onderuit die stuk voor stuk zo'n weigering
+  // vastleggen -- die toetsen deden precies waarvoor ze geschreven zijn.
+  // De TITEL wordt er apart bij gelezen, en dat is geen omweg. [splitFeatured] schrapt een gast die
+  // dezelfde naam heeft als de hoofdartiest -- terecht, want niemand is zijn eigen gast -- maar dan
+  // valt de claim van de titel weg zodra het artiestveld verkeerd getagd staat. Zo glipte
+  // "Telephone (feat. Beyoncé)" met ARTIST=Beyoncé alsnog op een kale rij "Telephone".
+  final gastenVanBestand = <String>{
+    ...splitFeatured(bestand.artist, bestand.title).featured,
+    ...splitFeatured('', bestand.title).featured,
+  };
+  if (gastenVanBestand.isNotEmpty) {
+    final genoemd = {
+      ...splitFeatured(rij.artist, rij.title).featured.map(artistKey),
+    };
+    final rijTekst = normKey('${rij.title} ${rij.artist}');
+    for (final g in gastenVanBestand) {
+      if (genoemd.contains(artistKey(g))) continue;
+      if (rijTekst.contains(normKey(g))) continue;
+      return _veto;
+    }
+  }
+
+  // HARDE GRENS 3: de KERN van de titel moet lijken.
   //
   // **Gemeten, en het is de reden dat deze grens bestaat.** Zonder hem legde de toewijzing op
   // *2 Belgen* het bestand "Operation Coup De Poing" op de rij "Queen Of Mine", en bij France Gall
@@ -212,15 +296,19 @@ double rijAfstand(ChoiceTrack rij, Track bestand, {String album = ''}) {
   // allebei doorgelaten omdat de LOOPTIJD toevallig klopte: een titelafstand van 0,8 gedeeld door
   // vijf gewichtseenheden komt onder de drempel uit. Een gewogen som alleen is dus niet genoeg —
   // de titel is de identiteit van een nummer, de looptijd is hooguit bevestiging.
-  if (kernAfstand(bestand.title, rij.title) > kMaxKern) return _veto;
+  final oSec = rij.seconds ?? 0, bSec = bestand.duration?.inSeconds ?? 0;
+  final looptijdSpreektTegen = oSec > 0 && bSec > 0 && (oSec - bSec).abs() > kSpeling;
+  if (kernAfstand(bestand.title, rij.title, looptijdSpreektTegen: looptijdSpreektTegen) >
+      kMaxKern) {
+    return _veto;
+  }
 
-  // HARDE GRENS 3: een looptijd die geen andere SNIT meer kan zijn.
+  // HARDE GRENS 4: een looptijd die geen andere SNIT meer kan zijn.
   //
   // Dezelfde marge die `matchAlbumTracks` al hanteert (een derde, en hooguit anderhalve minuut):
   // ruim genoeg voor een single-edit naast een albumversie, veel te krap voor een andere opname.
   // Zonder deze grens kwam op *Serious Beats 100* een dj-mix van 1493 seconden op een rij van 411 te
   // liggen, want de titels waren identiek.
-  final oSec = rij.seconds ?? 0, bSec = bestand.duration?.inSeconds ?? 0;
   if (oSec > 0 && bSec > 0) {
     final gat = (oSec - bSec).abs();
     if (gat > 90 || gat > oSec / 3) return _veto;
@@ -273,15 +361,18 @@ List<int?> besteToewijzing(List<ChoiceTrack> rijen, List<Track> bestanden,
   final n = rijen.length, m = bestanden.length;
   if (n == 0 || m == 0) return List<int?>.filled(n, null);
 
+  // Eén keer meten, twee keer gebruiken: de som hieronder en de twijfelregel eronder.
+  final afstand = List.generate(
+      n, (i) => List<double>.generate(m, (j) => rijAfstand(rijen[i], bestanden[j], album: album)));
+
   // Vierkant maken met een kolom "niet toegewezen", zodat een rij leeg mag blijven.
   final maat = math.max(n, m);
   final kosten = List.generate(
     maat,
     (i) => List<double>.generate(maat, (j) {
       if (i >= n || j >= m) return kMaxAfstand;
-      final d = rijAfstand(rijen[i], bestanden[j], album: album);
       // Boven de grens even duur als niets: dan kiest de oplossing liever leeg.
-      return d > kMaxAfstand ? kMaxAfstand : d;
+      return afstand[i][j] > kMaxAfstand ? kMaxAfstand : afstand[i][j];
     }),
   );
 
@@ -336,8 +427,39 @@ List<int?> besteToewijzing(List<ChoiceTrack> rijen, List<Track> bestanden,
     final rij = p[j] - 1, bestand = j - 1;
     if (rij < 0 || rij >= n || bestand >= m) continue;
     // De vulkolommen kostten kMaxAfstand; een paar dat daar niet onder komt is geen paar.
-    if (rijAfstand(rijen[rij], bestanden[bestand], album: album) > kMaxAfstand) continue;
+    if (afstand[rij][bestand] > kMaxAfstand) continue;
     uit[rij] = bestand;
+  }
+
+  // DE TWIJFELREGEL. Zie [kMinKloof]: een keuze die net zo goed andersom had kunnen uitvallen is
+  // geen keuze. Gemeten tegen de uitkomst van de som, niet tegen elkaar, zodat de volgorde waarin
+  // de paren langskomen er niet toe doet.
+  final bezetteBestanden = {for (final b in uit) if (b != null) b};
+  final gevuldeRijen = {for (var i = 0; i < n; i++) if (uit[i] != null) i};
+  final twijfels = <int>{};
+  for (var i = 0; i < n; i++) {
+    final j = uit[i];
+    if (j == null) continue;
+    final mijn = afstand[i][j];
+    final opNaamBeslist = _exacteTitel(rijen[i], bestanden[j]);
+    var twijfel = false;
+
+    // Een ander BESTAND dat op deze rij past en toch als weeskind achterblijft.
+    for (var j2 = 0; j2 < m && !twijfel; j2++) {
+      if (j2 == j || bezetteBestanden.contains(j2)) continue;
+      if (opNaamBeslist && !_exacteTitel(rijen[i], bestanden[j2])) continue;
+      twijfel = afstand[i][j2] - mijn < kMinKloof;
+    }
+    // Een andere RIJ waar dit bestand op past en die toch als ontbrekend achterblijft.
+    for (var i2 = 0; i2 < n && !twijfel; i2++) {
+      if (i2 == i || gevuldeRijen.contains(i2)) continue;
+      if (opNaamBeslist && !_exacteTitel(rijen[i2], bestanden[j])) continue;
+      twijfel = afstand[i2][j] - mijn < kMinKloof;
+    }
+    if (twijfel) twijfels.add(i);
+  }
+  for (final i in twijfels) {
+    uit[i] = null;
   }
   return uit;
 }

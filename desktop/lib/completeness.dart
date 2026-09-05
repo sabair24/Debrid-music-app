@@ -2,6 +2,7 @@ import 'editions.dart';
 import 'fingerprint.dart';
 import 'models.dart';
 import 'organize.dart';
+import 'toewijzing.dart';
 
 /// One line of a record as the album page shows it: what the release says belongs there, and the
 /// file — if the file is here at all.
@@ -220,6 +221,48 @@ AlbumCompleteness matchAlbumTracks(
         claimed.add(t.path);
         break;
       }
+    }
+  }
+
+  // **En dan de hele plaat in één keer.**
+  //
+  // Dit is de kern, en de passen hieronder zijn sindsdien een vangnet. `besteToewijzing` legt ALLE
+  // vrije bestanden en ALLE vrije rijen tegelijk op tafel en kiest de indeling met de laagste totale
+  // afstand -- het Hongaarse algoritme, zoals beets' `assign_items()`. Zie `toewijzing.dart` voor de
+  // gewichten, de vier harde grenzen en de twijfelregel.
+  //
+  // **Waarom dit vóór de passen staat en niet erna.** Die passen zijn stuk voor stuk gulzig: de
+  // eerste rij die aan de beurt is pakt het eerste bestand dat toevallig past. Dat is aantoonbaar
+  // fout zodra twee rijen op elkaar lijken -- op *Dip It Low (Mixes)* belandde het bestand van 3:14
+  // op "Full Intention Dub" omdat die rij eerder langskwam. Wie eerst gulzig kiest, kan daarna niet
+  // meer optimaal zijn.
+  //
+  // De passen blijven staan omdat ze twee dingen weten die een afstand tussen twee TITELS niet
+  // weet: wat er in het PAD staat (`fileOffersTitle`) en de eenzijdige gastartiest van de uitgave.
+  // Ze draaien nu alleen nog over wat overblijft.
+  //
+  // **Gemeten over deze bibliotheek** (426 platen met een geladen tracklijst), oud tegen nieuw in
+  // één proces: 975 gevulde rijen werden er 999, en geen enkele rij die eerder gevuld was raakte
+  // leeg. De 24 verschillen zijn stuk voor stuk nagekeken -- spellingsvarianten met dezelfde
+  // looptijd ("Boss Machine"/"Bass Machine" op Thunderdome), ondertitels die maar aan één kant
+  // staan ("Burning Heart (From "Rocky IV" Soundtrack)"), en de accenten van *Ce rêve bleu*.
+  {
+    final vrijeRijen = [
+      for (var i = 0; i < official.length; i++)
+        if (!owned.containsKey(i)) i,
+    ];
+    final vrijeBestanden = [
+      for (final t in tracks)
+        if (!claimed.contains(t.path)) t,
+    ];
+    final keuze = besteToewijzing(
+        [for (final i in vrijeRijen) official[i]], vrijeBestanden,
+        album: album);
+    for (var k = 0; k < keuze.length; k++) {
+      final j = keuze[k];
+      if (j == null) continue;
+      owned[vrijeRijen[k]] = vrijeBestanden[j];
+      claimed.add(vrijeBestanden[j].path);
     }
   }
 
