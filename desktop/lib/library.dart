@@ -2309,6 +2309,10 @@ class LibraryStore extends ChangeNotifier {
         final c = covers[a.tracks.first.path];
         if (c != null && c.isNotEmpty) a.embeddedCover = c;
       }
+      // Nu pas, want nu pas zijn ze allemaal bekend — en vóór `enrich`, want die slaat een plaat
+      // over zodra `album.cover` iets teruggeeft. Zonder deze volgorde zou een verdachte hoes wel
+      // zakken maar nooit vervangen worden.
+      _merkVreemdeHoezen();
       notifyListeners();
     } catch (_) {
       // Timed out or failed — cached + web covers still fill in via enrich().
@@ -2850,7 +2854,7 @@ class LibraryStore extends ChangeNotifier {
         final verouderd = merk.isNotEmpty && bewaard != merk;
         // Er staat al iets én het klopt: niets te doen. Deze uitgang stond vroeger in de wachtrij
         // zelf, en daarom werd `verouderd` hierboven nooit voor zo'n album berekend.
-        if (album.cover != null && !verouderd) continue;
+        if (album.zekereHoes != null && !verouderd) continue;
         if (verouderd) {
           // De pc heeft een ANDERE bewuste keuze dan hier ligt, en de pc houdt de boeken bij. Alles
           // wat hier lokaal voorrang had is daarmee achterhaald — laat je dat staan, dan wint het
@@ -3148,6 +3152,7 @@ class LibraryStore extends ChangeNotifier {
       ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
 
     _rebuildTrackIndexes();
+    _merkVreemdeHoezen();
 
     // Put a durable name on whatever grouping just decided. LAST, and reading only — see the header
     // of album_id.dart: the moment identity feeds back into grouping, merge/split/renumber gains a
@@ -3155,6 +3160,14 @@ class LibraryStore extends ChangeNotifier {
     uids.reconcile(albums);
     _albumsPerDir = albumsPerDirOf(albums);
   }
+
+  /// Een ingebakken hoes die óók op een andere plaat van een andere artiest zit, is van geen van
+  /// beide. Zie [Album.embeddedIsVanEenAndere] voor de meting die dit aanwees.
+  ///
+  /// Vergelijkt op de eerste en laatste kilobyte plus de lengte in plaats van op de hele afbeelding:
+  /// dat scheelt megabytes rondsjouwen bij elke herbouw, en twee JPEG's die daarin gelijk zijn maar
+  /// verderop verschillen bestaan in de praktijk niet.
+  void _merkVreemdeHoezen() => markeerVreemdeHoezen(albums);
 
   /// ONE spelling per artist. Tags disagree about capitalisation and accents ("Lady Gaga" vs
   /// "Lady GaGa", "Beyoncé" vs "Beyonce"), which used to put the same person in the artist list
@@ -3248,7 +3261,7 @@ class LibraryStore extends ChangeNotifier {
           album.resolvedFrom = traced.$2;
         }
       }
-      if (album.cover != null) continue;
+      if (album.zekereHoes != null) continue;
       final bytes = await enricher.cached(album);
       if (bytes != null) album.enriched = bytes;
     }
@@ -3292,7 +3305,7 @@ class LibraryStore extends ChangeNotifier {
       // stat, not a request. See [CoverEnricher.searchedAndEmpty].
       final todo = <Album>[];
       for (final a in albums) {
-        if (a.cover != null) continue;
+        if (a.zekereHoes != null) continue;
         if (await enricher.searchedAndEmpty(a)) continue;
         todo.add(a);
       }

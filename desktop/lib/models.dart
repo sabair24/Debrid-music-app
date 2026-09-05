@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'organize.dart' show artistKey, normKey;
+
 /// One playable track. Covers are NOT stored per-track (memory) — they live on the
 /// Album. Only a queued/playing track carries its cover, passed via the player.
 class Track {
@@ -115,9 +117,44 @@ class Album {
   /// survives rescans (a wrong embedded cover must not come back).
   Uint8List? correctedCover;
 
+  /// Staat de hoes in de bestanden ook op een ANDERE plaat, van een andere artiest?
+  ///
+  /// **Dan is het geen hoes van deze plaat.** Gevonden op 05-09-2026 en nagemeten door het plaatje
+  /// met ffmpeg uit de FLAC's te trekken: Christina Aguilera's *Christina Aguilera (Expanded
+  /// Edition)* en \*NSYNC's *No Strings Attached* dragen exact dezelfde 58944 bytes, en dat plaatje
+  /// is de hoes van **BRAVO Hits 00's**. George Michael's *Patience* en Whitney Houston's *Whitney
+  /// The Greatest Hits* delen die van **Sublime Top 1000**. Nummers die uit een verzamelrip komen
+  /// dragen de hoes van die verzamelplaat mee, en die reisde ongemerkt mee naar de echte plaat.
+  ///
+  /// De bestanden zijn fout, maar de app maakte het erger: [cover] liet die ingebakken hoes vóór de
+  /// hoes gaan die de verrijker opzoekt. Beide eisen tellen. Alleen "andere artiest" zou een
+  /// verzamelplaat slopen die per artiest in tegels uiteenvalt (*Thunderdome XXIII* staat er twee
+  /// keer, met dezelfde titel en terecht dezelfde hoes); alleen "andere titel" zou de single naast
+  /// zijn album slopen (*Pon De Replay* bij *Music Of The Sun*).
+  ///
+  /// Gezet door [markeerVreemdeHoezen], want alleen die ziet alle platen tegelijk.
+  bool embeddedIsVanEenAndere = false;
+
   Album(this.title, this.artist, this.tracks, {this.isSingle = false});
 
-  Uint8List? get cover => correctedCover ?? resolvedCover ?? embeddedCover ?? enriched;
+  /// De hoes die op het scherm hoort.
+  ///
+  /// Een verdachte ingebakken hoes zakt onder [enriched] maar blijft wél de laatste terugval: is er
+  /// niets beters, dan is een verkeerde hoes nog altijd zichtbaarder dan een leeg vlak, en zodra de
+  /// verrijker de goede binnenhaalt wint die vanzelf. Zo kan deze regel niets kwijtmaken.
+  Uint8List? get cover => zekereHoes ?? embeddedCover;
+
+  /// De hoes waarvan we durven zeggen dát het deze plaat is — dus zónder de terugval hierboven.
+  ///
+  /// **Twee vragen, en ze zijn niet dezelfde.** "Wat teken ik?" mag eindigen bij een verdachte hoes;
+  /// "moet ik er nog een zoeken?" mag dat niet. Met één getter voor allebei sloeg de verrijker die
+  /// platen over — `album.cover` gaf immers iets terug — en zakte de verdachte hoes wel, maar kwam
+  /// er nooit een goede voor in de plaats. Precies gemeten: vier platen bleven de hoes van *BRAVO
+  /// Hits 00's* en *Sublime Top 1000* dragen.
+  Uint8List? get zekereHoes =>
+      correctedCover ??
+      resolvedCover ??
+      (embeddedIsVanEenAndere ? enriched : (embeddedCover ?? enriched));
 
   int? get year {
     for (final t in tracks) {
@@ -152,4 +189,36 @@ class Album {
     }
     return m;
   }();
+}
+
+/// Zet [Album.embeddedIsVanEenAndere] voor elke plaat wiens ingebakken hoes óók op een plaat staat
+/// die én anders heet én van een andere artiest is.
+///
+/// **Beide eisen tellen, en allebei om een gemeten reden.** Alleen "andere artiest" zou een
+/// verzamelplaat slopen die per artiest in tegels uiteenvalt — *Thunderdome XXIII* staat twee keer
+/// in de bibliotheek, onder "DJ Promo" en onder "The Stunned Guys & DJ Paul", met dezelfde titel en
+/// terecht dezelfde hoes. Alleen "andere titel" zou de single naast zijn album slopen: *Pon De
+/// Replay* draagt de hoes van *Music Of The Sun*, en dat hoort zo.
+///
+/// Vergelijkt op de eerste en laatste 256 bytes plus de lengte in plaats van op de hele afbeelding:
+/// dat scheelt megabytes rondsjouwen bij elke herbouw, en twee JPEG's die daarin gelijk zijn maar
+/// verderop verschillen bestaan in de praktijk niet.
+void markeerVreemdeHoezen(List<Album> albums) {
+  final perBeeld = <String, List<Album>>{};
+  for (final a in albums) {
+    a.embeddedIsVanEenAndere = false;
+    final c = a.embeddedCover;
+    if (c == null || c.length < 512) continue;
+    final kop = c.take(256).join(',');
+    final staart = c.skip(c.length - 256).join(',');
+    perBeeld.putIfAbsent('${c.length}|$kop|$staart', () => []).add(a);
+  }
+  for (final zelfde in perBeeld.values) {
+    if (zelfde.length < 2) continue;
+    for (final a in zelfde) {
+      final vreemd = zelfde.any((b) =>
+          artistKey(b.artist) != artistKey(a.artist) && normKey(b.title) != normKey(a.title));
+      if (vreemd) a.embeddedIsVanEenAndere = true;
+    }
+  }
 }
