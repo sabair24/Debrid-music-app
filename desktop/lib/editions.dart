@@ -158,6 +158,26 @@ class ReleaseChoice {
   /// same lie that had this album reporting no CD scans at all.
   final bool detailed;
 
+  /// Een BOOTLEG: Discogs' "Unofficial Release".
+  ///
+  /// **Gemeld op 05-09-2026, en het kostte twee ronden om te vinden.** Saber's *Gorillaz* stond op
+  /// persing 10367136, en de app meldde onder "19-2000": *"deze uitgave heeft '19-2000 (Soul Child
+  /// Remix)' staan"*. Zijn antwoord: *"dat is niet waar ??? kijk maar eerst bronnen online altijd
+  /// controleren"*. Bij Discogs nagekeken klopte het wél — die rij staat er echt. Maar:
+  ///
+  ///     titel   : Gorillaz / G Sides
+  ///     formaten: [{"name":"CD","descriptions":["Compilation","Unofficial Release"]}]
+  ///     labels  : Parlophone (2) 7243 5 31138 0 3
+  ///
+  /// Het is een bootleg die het catalogusnummer van de echte Parlophone-cd heeft overgenomen, met
+  /// een rommelige tracklijst zonder looptijden. Een terechte weigering, gebouwd op een uitgave die
+  /// je nooit had willen kiezen — en niets op het scherm zei dat het er een was.
+  ///
+  /// Discogs zegt het gewoon, op elke weg: in de zoekresultaten staat "Unofficial Release" in
+  /// `format`, in de persingenlijst in dezelfde string. Het werd alleen weggegooid, want daar werd
+  /// `formats.first` respectievelijk `major_formats` van genomen.
+  final bool onofficieel;
+
   const ReleaseChoice({
     required this.source,
     this.releaseId = 0,
@@ -173,6 +193,7 @@ class ReleaseChoice {
     this.disc,
     this.tracklist = const [],
     this.detailed = true,
+    this.onofficieel = false,
   });
 
   /// The same pressing with its scans filled in.
@@ -203,6 +224,7 @@ class ReleaseChoice {
         disc: disc,
         tracklist: tracks ?? tracklist,
         detailed: true,
+        onofficieel: onofficieel,
       );
 
   bool get hasBack => back != null;
@@ -245,4 +267,14 @@ class ReleaseChoice {
     // Nothing identifying at all — keep it, rather than collapsing every undocumented stub into one.
     return key;
   }
+}
+
+/// Noemt Discogs deze persing een BOOTLEG? Zie [ReleaseChoice.onofficieel] voor het geval.
+///
+/// Werkt op beide vormen waarin Discogs het formaat levert: de zoekresultaten geven een lijst
+/// (`["CD","Album","Unofficial Release"]`), de persingenlijst één string (`"CD, Album, Unofficial
+/// Release"`). Eén oordeel, twee wegen — twee eigen zeven zouden vroeg of laat verschillen.
+bool noemtOnofficieel(Object? formaat) {
+  final tekst = formaat is Iterable ? formaat.join(', ') : (formaat?.toString() ?? '');
+  return tekst.toLowerCase().contains('unofficial');
 }

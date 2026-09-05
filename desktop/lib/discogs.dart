@@ -2192,6 +2192,9 @@ extension DiscogsChoices on DiscogsService {
         source: EditionSource.discogs,
         releaseId: v.id,
         format: v.major.isEmpty ? v.format : v.major,
+        // Uit de VOLLE formaatstring, want daar staat het in. De regel hierboven neemt liever
+        // `major_formats` ("CD"), en juist daar valt "Unofficial Release" af.
+        onofficieel: noemtOnofficieel(v.format),
         label: v.label,
         catno: v.catno,
         country: v.country,

@@ -330,6 +330,9 @@ class MetadataSearch {
   /// "CD · Netherlands · 9902241 · 1995" — waar een rij op te kiezen valt.
   static String? persingRegel(ReleaseChoice k) {
     final bits = <String>[
+      // VOORAAN, want een regel wordt afgekapt aan het eind en dit is het enige woord dat je van
+      // gedachten kan doen veranderen. Zie [ReleaseChoice.onofficieel] voor het gemelde geval.
+      if (k.onofficieel) 'Onofficieel',
       if (k.format.isNotEmpty) k.format,
       if ((k.country ?? '').isNotEmpty) k.country!,
       if ((k.catno ?? '').isNotEmpty) k.catno!,
@@ -359,6 +362,10 @@ class MetadataSearch {
       // and a country, a digital entry usually carries neither.
       final formats = [for (final f in (e['format'] as List? ?? const [])) f.toString()];
       final bits = <String>[
+        // Vóór het formaat. `formats.first` is "CD" en de rest werd weggegooid — precies waar
+        // "Unofficial Release" in staat. Zie [ReleaseChoice.onofficieel]: Saber's *Gorillaz* stond
+        // op een bootleg met het catalogusnummer van de echte Parlophone-cd, en niets zei het.
+        if (noemtOnofficieel(formats)) 'Onofficieel',
         if (formats.isNotEmpty) formats.first,
         if ((e['country'] as String?)?.isNotEmpty ?? false) e['country'] as String,
         if ((e['catno'] as String?)?.isNotEmpty ?? false) e['catno'] as String,

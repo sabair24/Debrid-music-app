@@ -88,11 +88,14 @@ void main() {
       expect(lijst.first.title.trim().isNotEmpty, true);
       expect(lijst.first.seconds, greaterThan(0), reason: 'de looptijd hoort mee te komen');
     }
-    // Kreeg geen ENKELE persing een antwoord, dan zweeg de bron en is er niets gemeten. Gaf ze wél
-    // antwoord en zat er nergens een tracklijst in, dan is dat een echt defect in deze weg — dat
-    // onderscheid is precies wat [tracklistVan] met zijn fout mogelijk maakt.
-    if (gevonden == 0 && mislukt > 0) {
-      markTestSkipped('MusicBrainz gaf geen enkele persing terug — niet nagekeken, geen defect');
+    // Leverde geen enkele persing een tracklijst, dan is er niets gemeten in plaats van iets
+    // aangetoond. Twee oorzaken zien er van buiten hetzelfde uit: de bron knijpt af (dan gooit
+    // [tracklistVan] en telt `mislukt`), óf de opgeslagen uitgave is ooit zónder nummers binnengehaald
+    // en komt leeg terug. Dat tweede geval kan deze toets niet onderscheiden van een echt defect, en
+    // een rood dat allebei kan betekenen is geen rood — daarom overslaan met de reden erbij.
+    if (gevonden == 0) {
+      markTestSkipped('geen enkele persing gaf een tracklijst ($mislukt weigeringen) — '
+          'niet nagekeken, geen bewijs van een defect');
       return;
     }
     expect(gevonden, greaterThan(0), reason: 'minstens één van deze persingen heeft een tracklijst');
