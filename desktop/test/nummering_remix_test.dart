@@ -125,4 +125,36 @@ void mainVersion() {
       expect(zelfdeVersiemerken('Song (Album Version)', 'Song'), isTrue);
     });
   });
+
+  group('een merk achter een streepje', () {
+    // **Gevonden op 05-09-2026 bij het doorlichten van de bibliotheek.** Usher's *More* stond er
+    // twee keer: "01 - More (RedOne Jimmy Joker remix).flac" en "01 - More - RedOne Jimmy Joker
+    // Remix.flac", 219 en 220 seconden. Eén opname, twee schrijfwijzen. `_sameTake` vergelijkt de
+    // merken van de BESTANDSNAAM en zag aan de tweede kant geen enkel merk, dus bleven het twee
+    // "verschillende snits" en stonden ze allebei op de plaat.
+    test('DE KERN: haakjes of een streepje maakt geen verschil', () {
+      expect(versionMarkers('01 - More - RedOne Jimmy Joker Remix.flac'),
+          versionMarkers('01 - More (RedOne Jimmy Joker remix).flac'));
+      expect(zelfdeVersiemerken('More - RedOne Jimmy Joker Remix', 'More (RedOne Jimmy Joker remix)'),
+          isTrue);
+    });
+
+    test('en de gewone vormen worden ook gepakt', () {
+      expect(versionMarkers('Song - Radio Edit.flac'), {'radio edit'});
+      expect(versionMarkers('Song - Extended Version.flac'), {'extended version'});
+      expect(versionMarkers('Song - Live.flac'), {'live'});
+    });
+
+    test('DE REM: op een verzamelplaat is de staart gewoon de TITEL', () {
+      // Elk bestand heet daar "NN - Artiest - Titel". Een titel die toevallig een versiewoord bevat
+      // mag daar geen merk van maken -- daarom moet de staart erop EINDIGEN.
+      expect(versionMarkers('12 - Cassius - Club Mix Anthem.flac'), isEmpty);
+      expect(versionMarkers("58 - Pino D'ambini ft Boy & Da Vinci - Do It Again.flac"), isEmpty);
+      expect(versionMarkers('03 - Rihanna - Don\'t Stop The Music.flac'), isEmpty);
+    });
+
+    test('en een staart zonder versiewoord blijft een staart', () {
+      expect(versionMarkers('Lovestoned - I Think She Knows.flac'), isEmpty);
+    });
+  });
 }

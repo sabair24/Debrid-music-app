@@ -530,6 +530,23 @@ AlbumCompleteness matchAlbumTracks(
     if (normKey(o.title) != mijn) continue;
     final os = o.seconds ?? 0;
     if (os > 0 && duur > 0 && (os - duur).abs() > _slack) {
+      // **Véél te kort is geen andere snit, dat is een kapot bestand — en dat hoort er te staan.**
+      //
+      // Gevonden op 05-09-2026 bij het doorlichten van de bibliotheek, en nagemeten met ffprobe
+      // op de bestanden zelf: `03 - Don't Stop The Music (2).flac` bevat 109 seconden van een
+      // nummer van 4:27, en `60 - ... Do It Again.flac` 128 van 229. Allebei liggen ze naast een
+      // volledige kopie, dus de download is halverwege afgebroken.
+      //
+      // De oude zin ("de uitgave geeft 4:27 op en dit bestand duurt 1:49") klopte wel, maar leest
+      // als "je hebt een andere versie" — precies de verkeerde conclusie. Een radio-edit haalt de
+      // grens hieronder niet: Barry White's "(Edit)" is 205 van 275 seconden, oftewel 75%.
+      if (duur < os * _afgekaptDeel && os - duur >= _afgekaptGat) {
+        return (
+          uitgave: null,
+          reden: 'dit bestand duurt ${tijd(duur)} terwijl de uitgave ${tijd(os)} opgeeft — dat is '
+              'een afgebroken download, geen andere snit',
+        );
+      }
       return (
         uitgave: null,
         reden: 'de uitgave geeft ${tijd(os)} op en dit bestand duurt ${tijd(duur)}',
@@ -787,6 +804,15 @@ bool _uitgaveNoemtDeGasten(String uitgaveArtiest, Track t) {
 
 /// Seconds two timings may differ and still be the same recording. Matches [fileOffersTitle].
 const _slack = 12;
+
+/// Wanneer een bestand niet "een andere snit" is maar gewoon afgebroken. Zie [waaromGeenPlaatsMet].
+///
+/// Twee eisen, want één is niet genoeg. Alleen een PERCENTAGE zou elke korte rij verdacht maken —
+/// een interlude van 7 seconden tegenover 10 is ook 70%, en daar is niets mis mee. Alleen een
+/// AANTAL seconden zou elke lange remix pakken. Samen laten ze precies de twee gevallen over die de
+/// bibliotheek heeft: 41% met 158 seconden weg, en 56% met 101 seconden weg.
+const _afgekaptDeel = 0.7;
+const _afgekaptGat = 45;
 
 /// De woorden van de SONGTITEL, zonder de merken.
 ///

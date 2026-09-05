@@ -221,6 +221,33 @@ void main() {
       expect(r, contains('6:40'));
     });
 
+    test('maar véél te kort heet een afgebroken download, en niet "een andere snit"', () {
+      // Nagemeten met ffprobe op 05-09-2026: `03 - Don't Stop The Music (2).flac` bevat 109 van de
+      // 267 seconden, met een volledige kopie ernaast. De oude zin klopte wel maar las als "je hebt
+      // een andere versie" — precies de verkeerde conclusie om op te handelen.
+      final r = waarom([uitgave('Don\'t Stop the Music', seconden: 267)],
+          bestand('Don\'t Stop the Music', seconden: 109));
+      expect(r, contains('1:49'));
+      expect(r, contains('4:27'));
+      expect(r, contains('afgebroken download'));
+    });
+
+    test('en een radio-edit haalt die grens niet', () {
+      // Barry White: 205 van 275 seconden, en dat is een echte edit. De 70 seconden die eraf zijn
+      // halen de tweede eis ruim; het PERCENTAGE van 75 is hier wat hem tegenhoudt. Daarom staan er
+      // twee eisen: ze remmen elk een ander soort vals alarm.
+      final r = waarom([uitgave('Everything', seconden: 275)], bestand('Everything', seconden: 205));
+      expect(r, isNot(contains('afgebroken')));
+      expect(r, contains('3:25'));
+    });
+
+    test('en een korte rij die een paar tellen scheelt ook niet', () {
+      // Een interlude van 7 seconden tegenover 10 is óók 70%, en daar is niets mis mee. Dat is wat
+      // de eis van 45 seconden tegenhoudt.
+      final r = waarom([uitgave('Intro', seconden: 40)], bestand('Intro', seconden: 20));
+      expect(r, isNot(contains('afgebroken')));
+    });
+
     test('een titel die de uitgave niet kent', () {
       final r = waarom([uitgave('Halo', seconden: 261)], bestand('Iets Anders'));
       expect(r, contains('Iets Anders'));

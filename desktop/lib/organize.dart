@@ -1206,6 +1206,15 @@ final _versionWordRe = RegExp(
     r'\b(live|remix|rmx|edit|extended|radio|demo|instrumental|ac+ap+ell?a|acoustic|reprise|'
     r'unplugged|version|mix|remaster(ed)?|alternate|alt take|session|karaoke|dub|bonus|'
     r'single|club|original|mono|stereo)\b');
+/// Dezelfde woorden, maar dan als SLOT van een naam — zie de staartregel in [versionBrackets].
+final _versionWordEindeRe = RegExp(
+    r'\b(live|remix|rmx|edit|extended|radio|demo|instrumental|ac+ap+ell?a|acoustic|reprise|'
+    r'unplugged|version|mix|remaster(ed)?|alternate|session|karaoke|dub|bonus|'
+    r'single|club|original|mono|stereo)$');
+
+/// De laatste staart achter " - ", zonder haakjes en zonder nog een streepje erin.
+final _streepStaartRe = RegExp(r'\s[-–]\s([^-–()\[\]]{1,60})$');
+
 final _bracketRe = RegExp(r'[(\[]([^)\]]{1,60})[)\]]');
 final _partRe = RegExp(r'\b(?:part|pt\.?)\s*(\d+|[ivx]+)\b', caseSensitive: false);
 
@@ -1280,6 +1289,21 @@ Set<String> versionBrackets(String filename) {
   for (final m in _bracketRe.allMatches(base)) {
     final seg = m.group(1)!.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (_versionWordRe.hasMatch(seg)) out.add(seg);
+  }
+  // **Een merk achter een STREEPJE is hetzelfde merk.** Gevonden op 05-09-2026: Usher's *More* stond
+  // twee keer in de bibliotheek, als "More (RedOne Jimmy Joker remix)" en "More - RedOne Jimmy Joker
+  // Remix", 219 en 220 seconden — één opname, twee schrijfwijzen. `_sameTake` vergelijkt de merken
+  // van de BESTANDSNAAM, zag aan de ene kant één merk en aan de andere kant geen, en hield ze dus
+  // uit elkaar als "twee verschillende snits".
+  //
+  // Alleen de LAATSTE staart, en die moet ÉINDIGEN op een versiewoord. Dat laatste is de rem: op een
+  // verzamelplaat heet elk bestand "NN - Artiest - Titel", en een titel als "Club Mix Anthem" bevat
+  // wel versiewoorden maar is er geen merk. "- Radio Edit", "- Original Mix", "- Extended Version"
+  // eindigen er wél op.
+  final staart = _streepStaartRe.firstMatch(base);
+  if (staart != null) {
+    final seg = staart.group(1)!.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (seg.split(' ').length <= 5 && _versionWordEindeRe.hasMatch(seg)) out.add(seg);
   }
   return out;
 }
