@@ -40,7 +40,14 @@ void main() {
   group('canonicalName picks the spelling to show', () {
     test('the most-used spelling wins', () {
       expect(canonicalName({'Lady GaGa': 1, 'Lady Gaga': 12}), 'Lady Gaga');
-      expect(canonicalName({'BEYONCE': 9, 'Beyoncé': 2}), 'BEYONCE');
+      // Hier stond `{'BEYONCE': 9, 'Beyoncé': 2}` -> 'BEYONCE'. Sinds 05-09-2026 wint een ACCENT van
+      // het aantal, en dat geval dus ook: er staat nu 'Beyoncé'. De reden staat in
+      // `naamschade_test.dart` -- rippers strippen accenten en verzinnen ze nooit, dus bij twee
+      // spellingen die alleen in tekens schelen is de meerderheid het bewijs van de schade.
+      //
+      // Het voorbeeld is vervangen door een dat hetzelfde bewijst zónder accenten in het spel te
+      // brengen, zodat deze toets over het AANTAL blijft gaan.
+      expect(canonicalName({'MICHAEL JACKSON': 9, 'Michael Jackson': 2}), 'MICHAEL JACKSON');
     });
 
     test('on a tie, the tidiest capitalisation wins — not alphabetical luck', () {

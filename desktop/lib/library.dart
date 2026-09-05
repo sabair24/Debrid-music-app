@@ -18,6 +18,7 @@ import 'kantnummer.dart';
 import 'lan/client.dart';
 import 'lan/dtos.dart';
 import 'lan/ids.dart';
+import 'mojibake.dart';
 import 'models.dart';
 import 'mp3_tags.dart';
 import 'echtheid.dart';
@@ -2927,16 +2928,26 @@ class LibraryStore extends ChangeNotifier {
 
   Track _trackFromMap(Map<String, dynamic> m) => Track(
         path: m['path'] as String,
-        title: m['title'] as String,
+        // Tekst die één keer te veel gecodeerd is, wordt hier rechtgezet.
+        //
+        // [unmojibake] bestond al, maar werd alleen op CATALOGUSdata losgelaten -- nooit op de tags
+        // van je eigen bestanden. Gevonden bij het doorlichten van de bibliotheek op 05-09-2026:
+        // "BeyoncÃ©" op *Lemonade* en "Lâ€™Envie" bij Johnny Hallyday. Twee van 1255, maar ze stonden
+        // wél zo op het scherm, en de app kon het al repareren.
+        //
+        // Veilig voor alles wat niet stuk is: de functie geeft ongewijzigde tekst terug tenzij de
+        // hele reeks als verminkte UTF-8 terug te lezen is.
+        title: unmojibake(m['title'] as String),
         // De plek op de plaat hoort niet in de artiestnaam. Zie `kantnummer.dart`: "A1.INXS" is
         // kant A nummer 1 van INXS, en zolang dat als artiestnaam doorging viel de plaat uiteen in
         // twaalf tegels van één nummer.
         //
         // HIER en niet bij het inlezen van de tags, en dat is het verschil tussen "werkt na de
         // update" en "werkt na een volledige herscan". Elke weg naar een Track loopt hier langs --
-        // een verse scan én de opgeslagen rijen van de vorige keer.
-        artist: zonderKantnummer(m['artist'] as String),
-        album: m['album'] as String,
+        // een verse scan én de opgeslagen rijen van de vorige keer. Om diezelfde reden staat de
+        // mojibake-reparatie hierboven ook hier.
+        artist: zonderKantnummer(unmojibake(m['artist'] as String)),
+        album: unmojibake(m['album'] as String),
         trackNo: m['trackNo'] as int,
         trackTotal: (m['trackTotal'] as int?) ?? 0,
         duration: (m['durationMs'] as int) > 0 ? Duration(milliseconds: m['durationMs'] as int) : null,

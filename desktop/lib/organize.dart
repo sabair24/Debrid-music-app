@@ -208,13 +208,41 @@ String artistKey(String s) {
   return k.startsWith('the ') ? k.substring(4) : k;
 }
 
+/// Hoeveel letters met een teken erop deze naam draagt — "Édith Piaf" heeft er één, "Edith Piaf"
+/// geen.
+///
+/// Geteld op de letters zelf en niet op de bytes: een naam met twee accenten hoort te winnen van
+/// een naam met één.
+int _accenten(String s) {
+  var n = 0;
+  for (final r in s.runes) {
+    // Alles buiten ASCII dat een LETTER is. `normKey` vouwt die weg, en juist daarom staan deze
+    // twee spellingen hier naast elkaar.
+    if (r > 127 && String.fromCharCode(r).toLowerCase() != String.fromCharCode(r).toUpperCase()) {
+      n++;
+    }
+  }
+  return n;
+}
+
 /// Given every spelling of one artist found in the library (spelling → how many tracks use it),
 /// pick the one to SHOW. Most-used wins; ties go to the tidiest capitalisation, so "Lady Gaga"
 /// beats "Lady GaGa" rather than the winner depending on alphabetical luck.
+///
+/// **Behalve bij accenten — die gaan vóór het aantal.** Gemeten over Sabers bibliotheek op
+/// 05-09-2026: "Edith Piaf" stond er tien keer en "Édith Piaf" één keer, dus toonde de app *Edith
+/// Piaf*. Hetzelfde bij "Hélène Segara" boven **Ségara** en "Tiesto" boven **Tiësto**.
+///
+/// Tellen helpt hier niet, en dat is geen toeval: rippers en tagprogramma's STRIPPEN accenten, ze
+/// verzinnen ze niet. Staan twee spellingen van dezelfde naam naast elkaar en verschillen ze alleen
+/// in tekens, dan is de accentversie de echte — hoe vaak de kale ook voorkomt. De meerderheid is
+/// juist het bewijs van de schade.
 String canonicalName(Map<String, int> spellings) {
   final names = spellings.keys.toList();
   if (names.length == 1) return names.first;
   names.sort((a, b) {
+    final byAccent = _accenten(b).compareTo(_accenten(a));
+    if (byAccent != 0) return byAccent;
     final byCount = (spellings[b] ?? 0).compareTo(spellings[a] ?? 0);
     if (byCount != 0) return byCount;
     final byOdd = _oddCaps(a).compareTo(_oddCaps(b)); // fewer mid-word capitals first
