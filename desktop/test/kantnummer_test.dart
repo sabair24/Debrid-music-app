@@ -111,4 +111,40 @@ void main() {
       expect(zonderKantnummer('A1.INXS'), zonderKantnummer('INXS'));
     });
   });
+  titelUitNaam();
+}
+
+/// De titel die uit een BESTANDSNAAM komt, zonder de plek op de plaat ervoor.
+///
+/// Gevonden bij het doorlichten van de bibliotheek op 05-09-2026: zes bestanden zónder enige tag
+/// stonden als "B3. Mary Jane", "G1. Tiesto feat. Kirsty Hawkshaw - Just Be" en "08. Enzo - opzij
+/// opzij" in de lijst. De app leidt de titel dan uit de bestandsnaam af, inclusief de kant.
+void titelUitNaam() {
+  group('titelUitBestandsnaam', () {
+    test('DE KERN: de gevallen uit de bibliotheek', () {
+      expect(titelUitBestandsnaam('B3. Mary Jane'), 'Mary Jane');
+      expect(titelUitBestandsnaam('B1. Fair Game'), 'Fair Game');
+      expect(titelUitBestandsnaam('G1. Tiesto feat. Kirsty Hawkshaw - Just Be'),
+          'Tiesto feat. Kirsty Hawkshaw - Just Be');
+      expect(titelUitBestandsnaam('08. Enzo - opzij opzij'), 'Enzo - opzij opzij');
+    });
+
+    test('DE GRENS: een titel zonder scheidingsteken blijft heel', () {
+      // Het scheidingsteken is de hele veiligheid, net als bij zonderKantnummer.
+      expect(titelUitBestandsnaam('99 Luftballons'), '99 Luftballons');
+      expect(titelUitBestandsnaam('7 Seconds'), '7 Seconds');
+      expect(titelUitBestandsnaam('B2 Unit'), 'B2 Unit');
+    });
+
+    test('en wat overblijft moet op een naam lijken', () {
+      expect(titelUitBestandsnaam('A1.2'), 'A1.2');
+      expect(titelUitBestandsnaam('01. 2'), '01. 2');
+    });
+
+    test('een gewone titel verandert niet', () {
+      for (final t in ['Mary Jane', 'Just Be', 'Smooth Criminal', '']) {
+        expect(titelUitBestandsnaam(t), t, reason: t);
+      }
+    });
+  });
 }

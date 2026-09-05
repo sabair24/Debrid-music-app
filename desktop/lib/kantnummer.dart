@@ -60,3 +60,39 @@ final RegExp _kantnummer = RegExp(
 );
 
 final RegExp _bevatLetter = RegExp(r'[A-Za-z]');
+
+/// De TITEL die uit een bestandsnaam komt, zonder de plek op de plaat ervoor.
+///
+/// **Waarom dit apart staat van [zonderKantnummer].** Die regel op élke titel loslaten is niet
+/// veilig: `B2 Unit` is een echte plaat en `1. Outside` een echt album. Maar een titel die uit de
+/// BESTANDSNAAM komt, komt daar alleen terecht omdat het bestand géén titel-tag heeft — en dan is
+/// een `B3. ` of een `08. ` vooraan een ripartefact en geen naam. Alleen op die weg wordt dit dus
+/// gebruikt; een bestand mét tags gaat er nooit langs.
+///
+/// **Gevonden bij het doorlichten van de bibliotheek op 05-09-2026.** Zes bestanden zonder enige tag
+/// stonden als "B3. Mary Jane", "G1. Tiesto feat. Kirsty Hawkshaw - Just Be" en "08. Enzo - opzij
+/// opzij" in de lijst — allemaal met de kant of het nummer erin, en allemaal zonder hoes.
+///
+/// **En strenger dan [zonderKantnummer] op één punt: een kale spatie telt hier niet.** Die regel
+/// laat `A1 INXS` toe, want een artiestnaam begint zelden met een letter-cijfercombinatie. Een
+/// TITEL doet dat wel: `B2 Unit` is een plaat van Ryuichi Sakamoto en `7 Seconds` een nummer van
+/// Youssou N'Dour. Er moet dus een leesteken tussen staan -- een punt, een streepje, een haakje.
+/// Een toets ving dit: `B2 Unit` werd `Unit`.
+///
+/// Wat overblijft moet bovendien op een naam lijken: minstens twee tekens, en er moet een letter in
+/// zitten.
+String titelUitBestandsnaam(String naam) {
+  final s = naam.trim();
+  final m = _plekVoorTitel.firstMatch(s);
+  if (m == null) return s;
+  final rest = (m.group(1) ?? '').trim();
+  if (rest.length < 2 || !_bevatLetter.hasMatch(rest)) return s;
+  return rest;
+}
+
+/// De plek op de plaat vooraan een TITEL: een vinylkant (`B3.`) of een spoornummer (`08.`), gevolgd
+/// door een verplicht leesteken.
+final RegExp _plekVoorTitel = RegExp(
+  r'^(?:[A-H]{1,2}[0-9]{1,2}|[0-9]{1,2})\s*[.\-_:)\]]+\s*(.+)$',
+  caseSensitive: false,
+);

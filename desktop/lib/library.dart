@@ -310,7 +310,7 @@ Map<String, dynamic>? tagrijVoorBestand(File e,
     if (v != null && (v.title != null || v.artist != null || v.album != null)) {
       return {
         'path': e.path,
-        'title': v.title ?? _baseName(e.path),
+        'title': v.title ?? titelUitBestandsnaam(_baseName(e.path)),
         'artist': v.artist ?? 'Onbekende artiest',
         'album': v.album ?? '',
         'trackNo': v.trackNo,
@@ -360,7 +360,7 @@ Map<String, dynamic>? tagrijVoorBestand(File e,
     final m = readMetadata(e, getImage: false);
     return {
       'path': e.path,
-      'title': (m.title?.trim().isNotEmpty ?? false) ? m.title!.trim() : _baseName(e.path),
+      'title': (m.title?.trim().isNotEmpty ?? false) ? m.title!.trim() : titelUitBestandsnaam(_baseName(e.path)),
       'artist': (m.artist?.trim().isNotEmpty ?? false) ? m.artist!.trim() : 'Onbekende artiest',
       'album': m.album?.trim() ?? '', // empty => single
       'trackNo': m.trackNumber ?? 0,
@@ -409,7 +409,7 @@ Map<String, dynamic> _kaleRij(File e,
         int bitsPerSample = 0}) =>
     {
       'path': e.path,
-      'title': _baseName(e.path),
+      'title': titelUitBestandsnaam(_baseName(e.path)),
       'artist': 'Onbekende artiest',
       'album': '',
       'trackNo': 0,

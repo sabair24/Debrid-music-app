@@ -113,7 +113,12 @@ void main() {
     test('komt de bibliotheek in onder zijn bestandsnaam', () {
       final r = rij('05 - Restless.flac', flac());
       expect(r, isNotNull, reason: 'wegdoen is hoe muziek "verdwijnt"');
-      expect(r!['title'], '05 - Restless');
+      // Zónder het spoornummer, sinds 05-09-2026. Dit bestand heet `05 - Restless.flac`; de "05 - "
+      // is de plek op de plaat en geen deel van de naam. Deze toetsen gaan over de SPEELDUUR en
+      // noemen de bestandsnaam-titel hierboven zelf "een lelijke regel" die alleen geaccepteerd
+      // werd omdat muziek kwijtraken erger is — dat stuk is nu een stuk minder lelijk. Zie
+      // `titelUitBestandsnaam`: alleen op deze weg, want een bestand mét tags gaat er nooit langs.
+      expect(r!['title'], 'Restless');
       expect(r['artist'], 'Onbekende artiest');
       expect(r['album'], '', reason: 'een albumnaam raden zet hem bij vreemde buren');
     });
@@ -207,7 +212,7 @@ void main() {
       expect(r['durationMs'], 180000);
       expect(r['sampleRate'], 2822400);
       expect(r['bitsPerSample'], 1);
-      expect(r['title'], '01 - Take Five', reason: 'de naam komt nog uit de bestandsnaam');
+      expect(r['title'], 'Take Five', reason: 'de naam komt nog uit de bestandsnaam, zonder het spoornummer');
     });
 
     test('ook als hij langer duurt dan vier miljard monsters', () {
@@ -281,7 +286,7 @@ void main() {
       expect(r['durationMs'], 30000);
       expect(r['sampleRate'], 2822400);
       expect(r['bitsPerSample'], 1);
-      expect(r['title'], '01 - So What');
+      expect(r['title'], 'So What');
     });
 
     test('en klopt ook voor een meerkanaals-SACD', () {
