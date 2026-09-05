@@ -135,7 +135,13 @@ void main() {
   test('normaliseren blijft doen wat het deed', () {
     // De snelheidsreparatie mag de uitkomst niet veranderen. Dit zijn de gevallen waar normKey en
     // searchKey voor bestaan.
-    expect(normKey('Backstreet’s Back'), 'backstreet s back');
+    //
+    // **Eén uitkomst is sinds 05-09-2026 wél veranderd, en met opzet.** Hier stond
+    // 'backstreet s back': elk leesteken werd een spatie, ook de apostrof, terwijl die juist MIDDEN
+    // in een woord staat. Daardoor stond "Driver's Seed" naast "Drivers Seed" in de artiestenlijst
+    // als twee acts. `searchKey` hieronder deed het al goed -- die geeft 'backstreetsback' -- dus
+    // deze regel haalt normKey bij zijn buurman, in plaats van er iets nieuws te bedenken.
+    expect(normKey('Backstreet’s Back'), 'backstreets back');
     expect(normKey('Beyoncé'), 'beyonce');
     expect(normKey('A—B'), 'a b');
     expect(normKey('  dubbele   spaties  '), 'dubbele spaties');

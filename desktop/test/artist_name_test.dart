@@ -62,4 +62,31 @@ void main() {
       expect(canonicalName({'Røyksopp': 4}), 'Røyksopp');
     });
   });
+
+  group('een apostrof scheidt geen woorden', () {
+    // **Gemeten op 05-09-2026.** Van de 261 namen op het scherm bleef er precies één groep in
+    // tweeën staan: "Driver's Seed" en "Drivers Seed". [normKey] maakte van elk leesteken een
+    // spatie, en een apostrof staat juist MIDDEN in een woord — "driver s" is iets anders dan
+    // "drivers". Na de reparatie: nul paren, en elk ander getal van de meting onveranderd.
+    test('DE KERN: dezelfde naam met en zonder apostrof is één artiest', () {
+      expect(artistKey("Driver's Seed"), artistKey('Drivers Seed'));
+      expect(artistKey("Guns N' Roses"), artistKey('Guns N Roses'));
+    });
+
+    test('en hetzelfde geldt voor titels', () {
+      expect(normKey("Don't Stop the Music"), normKey('Dont Stop the Music'));
+      expect(normKey("Rockin' Robin"), 'rockin robin');
+    });
+
+    test('DE GRENS: andere leestekens scheiden nog steeds wél', () {
+      // Zonder deze grens zou "Love-Song" gelijk worden aan "Lovesong", en dat zijn twee namen.
+      expect(normKey('Love-Song'), 'love song');
+      expect(normKey('Love.Song'), 'love song');
+      expect(normKey('Love/Song'), 'love song');
+    });
+
+    test('en twee echt verschillende namen blijven verschillend', () {
+      expect(artistKey("Driver's Seed") == artistKey('Drivers Creed'), isFalse);
+    });
+  });
 }

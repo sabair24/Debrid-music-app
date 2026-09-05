@@ -48,7 +48,14 @@ String normKey(String s) {
       .replaceAll(_krulQuote, "'")
       .replaceAll(_dubbelQuote, '"')
       .replaceAll(_langStreepje, '-'));
-  final stripped = unified.replaceAll(_nietAlfanumeriek, ' ');
+  // **Een apostrof VERDWIJNT, hij wordt geen spatie.** Elk ander leesteken scheidt twee woorden,
+  // maar een apostrof staat er juist middenin: "Driver's" werd "driver s" en dat is iets anders dan
+  // "drivers". Gemeten op 05-09-2026 stond die groep daardoor twee keer in de artiestenlijst, als
+  // "Driver's Seed" én "Drivers Seed". Dezelfde klasse als "Guns N' Roses" tegen "Guns N Roses".
+  //
+  // Dit verruimt alleen: het voegt precies die twee spellingen samen die enkel in een apostrof
+  // verschillen, en twee ECHT verschillende namen die alleen daarin verschillen bestaan niet.
+  final stripped = unified.replaceAll("'", '').replaceAll(_nietAlfanumeriek, ' ');
   return stripped.trim().replaceAll(_spaties, ' ');
 }
 
