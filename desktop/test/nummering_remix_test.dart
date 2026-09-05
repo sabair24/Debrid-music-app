@@ -94,4 +94,35 @@ void main() {
       expect(zelfdeVersiemerken('Song (Club Mix)', 'Song (Club Remix)'), isFalse);
     });
   });
+  mainVersion();
+}
+
+/// "(Main Version)" is de gewone plaatopname, geen aparte versie.
+///
+/// Gevonden bij het doorlichten van de hele bibliotheek op 05-09-2026: Britney Spears' *Blackout*
+/// komt als "Gimme More (Main Version)", "Piece of Me (Main Version)" en "Radar (Main Version)",
+/// terwijl de persing ze kaal noemt. Alle drie stonden ze onder "Niet op deze uitgave". Na deze
+/// wijziging: 144 losse bestanden in de bibliotheek werden er 141.
+void mainVersion() {
+  group('(Main Version) is geen ander nummer', () {
+    test('DE KERN: hij vindt de kale rij', () {
+      expect(zelfdeVersiemerken('Gimme More (Main Version)', 'Gimme More'), isTrue);
+      expect(matchOfficial(const [ChoiceTrack('1', 'Gimme More', 250)],
+              'Gimme More (Main Version)', 250)
+          ?.title,
+          'Gimme More');
+    });
+
+    test('DE GRENS: "(Main Mix)" blijft wél een aparte versie', () {
+      // In dansmuziek is de main mix één specifieke mix naast de radio-edit en de dub — zie
+      // "Los Chicanos (Main Mix)" in diezelfde doorlichting.
+      expect(zelfdeVersiemerken('Los Chicanos (Main Mix)', 'Los Chicanos'), isFalse);
+    });
+
+    test('en de rest van de merken verandert niet', () {
+      expect(zelfdeVersiemerken('Song (Single Version)', 'Song'), isFalse);
+      expect(zelfdeVersiemerken('Song (Original Mix)', 'Song'), isFalse);
+      expect(zelfdeVersiemerken('Song (Album Version)', 'Song'), isTrue);
+    });
+  });
 }

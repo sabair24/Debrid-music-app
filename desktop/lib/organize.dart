@@ -1199,9 +1199,17 @@ String withoutVersionText(String title) {
 /// (Album Version)" tegen een kale rij) en "Te Amo" één, met dezelfde looptijd aan beide kanten. Het
 /// omgekeerde komt ook voor -- daar staat het merk juist op de UITGAVE en niet op het bestand.
 ///
+/// **"(Main Version)" hoort er ook bij**, gevonden bij het doorlichten van de hele bibliotheek op
+/// 05-09-2026. Britney Spears' *Blackout* komt bij de winkels als "Gimme More (Main Version)",
+/// "Piece of Me (Main Version)", "Radar (Main Version)" — de gewone plaatopname, met een etiket dat
+/// alleen bestaat om hem van de remixen te onderscheiden. De persing noemt ze kaal, dus stonden ze
+/// alle drie onder "Niet op deze uitgave".
+///
 /// Bewust alleen dit. "single version", "original mix" en "club mix" schelen ook maar een woord en
-/// zijn wel degelijk andere opnames; "album" is het enige woord dat de standaardversie aanwijst.
-const _geenEchtMerk = {'album version', 'album mix'};
+/// zijn wel degelijk andere opnames; "album" en "main" zijn de enige woorden die de standaardversie
+/// aanwijzen. En bewust NIET "main mix": in dansmuziek is dat juist één specifieke mix naast de
+/// radio-edit en de dub — zie "Los Chicanos (Main Mix)" in diezelfde doorlichting.
+const _geenEchtMerk = {'album version', 'album mix', 'main version'};
 
 /// Elk haakje dat over een VERSIE gaat, ook de haakjes die geen onderscheid maken.
 ///
