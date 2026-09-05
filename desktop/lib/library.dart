@@ -20,6 +20,7 @@ import 'lan/dtos.dart';
 import 'lan/ids.dart';
 import 'mojibake.dart';
 import 'models.dart';
+import 'mp3_duur.dart';
 import 'mp3_tags.dart';
 import 'echtheid.dart';
 import 'echtheid_meter.dart';
@@ -356,6 +357,12 @@ Map<String, dynamic>? tagrijVoorBestand(File e,
         'bitsPerSample': v.bitsPerSample,
       };
     }
+  } else if (_ext(e.path) == '.mp3') {
+    // Dezelfde reden als bij DSD hieronder: de tagontleder geeft niet voor élke MP3 een duur terug,
+    // en dan staat er 0:00 achter een nummer dat gewoon speelt. Vooraf gelezen en niet achteraf,
+    // want de regel verderop neemt de duur van de ontleder zodra die er een heeft — deze waarde is
+    // alleen de terugval. Zie [readMp3Duur] voor welke bestanden dat treft.
+    duurMs = readMp3Duur(e)?.inMilliseconds ?? 0;
   } else if (_ext(e.path) == '.dsf' || _ext(e.path) == '.dff') {
     // Een SACD-rip, in Sony's doos of in die van Philips. Geen enkele tagontleder hier kent DSD, dus
     // dit bestand belandt hoe dan ook op zijn bestandsnaam — maar de duur staat in de kop en hoeft
