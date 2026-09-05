@@ -68,6 +68,67 @@ void main() {
     });
   });
 
+  group('zelf toewijzen — jouw woord gaat voor', () {
+    // Gevraagd op 05-09-2026: "gebruik een functie uit roon, waar de officiele tracklist wordt
+    // geladen en ik de track moet slepen bij de juiste". De app raadde tot nu toe goed, maar er was
+    // geen beroep — en nergens een plek waar zo'n keuze bleef staan.
+    final solo = bestand('a', 194220); // 3:14
+    final duet = bestand('b', 218640); // 3:38
+
+    test('DE KERN: een toewijzing draait de automatische uitkomst om', () {
+      // Zonder toewijzing komt de solo op rij 1 (de looptijden beslissen dat). Wijs je hem aan rij 2
+      // toe, dan hoort hij daar te staan — ook al spreekt elke automatische regel dat tegen.
+      final c = matchAlbumTracks(kaal, [solo, duet], 'Christina Milian',
+          handmatig: {solo.path: rijSleutel(kaal[1])});
+      expect(c.slots[1].track?.path, solo.path);
+      // En het andere bestand wordt niet stilletijd weggegooid: het schuift naar de vrije rij.
+      expect(c.slots[0].track?.path, duet.path);
+      expect(c.slots.where((s) => s.index < 0), isEmpty);
+    });
+
+    test('de sleutel noemt schijf én positie', () {
+      // Een dubbele plaat nummert op elke schijf opnieuw vanaf 1; op de positie alleen zou "2" twee
+      // rijen aanwijzen.
+      const a = ChoiceTrack('2', 'Iets', 200);
+      const b = ChoiceTrack('2', 'Iets Anders', 200, disc: 2);
+      expect(rijSleutel(a), isNot(rijSleutel(b)));
+
+      final t1 = bestand('x', 200000), t2 = bestand('y', 200000);
+      final c = matchAlbumTracks([a, b], [t1, t2], 'Wie Dan Ook',
+          handmatig: {t1.path: rijSleutel(b)});
+      expect(c.slots[1].track?.path, t1.path, reason: 'schijf 2 nummer 2');
+    });
+
+    test('een toewijzing naar een rij die niet meer bestaat doet niets kwaads', () {
+      // De tracklijst kan tussen twee opzoekingen veranderen. Dan valt de toewijzing terug op de
+      // automatische indeling in plaats van een bestand te laten verdwijnen.
+      final c = matchAlbumTracks(kaal, [solo, duet], 'Christina Milian',
+          handmatig: {solo.path: '9|99'});
+      expect(c.slots[0].track?.path, solo.path);
+      expect(c.slots[1].track?.path, duet.path);
+    });
+
+    test('zonder toewijzingen verandert er niets', () {
+      final met = matchAlbumTracks(kaal, [solo, duet], 'Christina Milian', handmatig: const {});
+      final zonder = matchAlbumTracks(kaal, [solo, duet], 'Christina Milian');
+      expect([for (final s in met.slots) s.track?.path],
+          [for (final s in zonder.slots) s.track?.path]);
+    });
+
+    test('DE VAL: twee bestanden op dezelfde rij mag er geen laten verdwijnen', () {
+      // Dit ging bijna mis. De eerste pas van de matcher keek niet of een rij al bezet was — hij
+      // was tot nu toe altijd zélf de eerste — en overschreef daardoor een handmatige toewijzing.
+      // Het bestand dat die rij had geclaimd was dan én zijn plaats kwijt én geen weeskind meer:
+      // het stond nergens meer op de pagina.
+      final c = matchAlbumTracks(kaal, [solo, duet], 'Christina Milian',
+          handmatig: {solo.path: rijSleutel(kaal[0]), duet.path: rijSleutel(kaal[0])});
+      expect(c.slots[0].track?.path, solo.path, reason: 'de eerste krijgt de rij');
+      final zichtbaar = {for (final s in c.slots) if (s.track != null) s.track!.path};
+      expect(zichtbaar, {solo.path, duet.path},
+          reason: 'allebei nog te zien — op een rij of als weeskind, maar nooit weg');
+    });
+  });
+
   group('wat de rij toont', () {
     // De rij zelf tekenen vraagt een PlayerStore, en die start media_kit op. De twee regels die
     // hier werkelijk iets beslissen staan daarom apart, en worden hier zuiver gemeten.

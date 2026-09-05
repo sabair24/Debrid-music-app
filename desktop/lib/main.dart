@@ -5073,7 +5073,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     final comp = _official.isEmpty
         ? null
         : matchAlbumTracks(_official, album.tracks, album.artist,
-            source: _officialFrom, album: album.title);
+            source: _officialFrom,
+            album: album.title,
+            // Wat jij zelf hebt aangewezen gaat vóór elke vergelijking — zie [RijToewijzenDialog].
+            handmatig: lib.rijToewijzingen(album.tracks));
     final rows = comp == null
         ? null
         : (_showMissing ? comp.slots : [for (final s in comp.slots) if (!s.missing) s]);
@@ -5348,21 +5351,37 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                   SliverToBoxAdapter(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(kRuimte16, 0, kGoot, kRuimte6),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        // A plain TextButton: it already takes focus and already draws the app's
-                        // focus ring from the theme, so a remote reaches it without extra wrapping.
-                        child: TextButton.icon(
-                          onPressed: () => _loadOfficial(force: true),
-                          icon: const Icon(Icons.refresh_rounded, size: 15),
-                          label: Text(
-                            _official.isEmpty
-                                ? 'Geen officiële tracklijst gevonden — opnieuw zoeken'
-                                : 'Tracklijst opnieuw ophalen',
-                            style: const TextStyle(fontSize: 12),
+                      child: Wrap(
+                        spacing: kRuimte8,
+                        children: [
+                          // A plain TextButton: it already takes focus and already draws the app's
+                          // focus ring from the theme, so a remote reaches it without extra wrapping.
+                          TextButton.icon(
+                            onPressed: () => _loadOfficial(force: true),
+                            icon: const Icon(Icons.refresh_rounded, size: 15),
+                            label: Text(
+                              _official.isEmpty
+                                  ? 'Geen officiële tracklijst gevonden — opnieuw zoeken'
+                                  : 'Tracklijst opnieuw ophalen',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                            style: TextButton.styleFrom(foregroundColor: _muted),
                           ),
-                          style: TextButton.styleFrom(foregroundColor: _muted),
-                        ),
+                          // Naast het opnieuw ophalen, want het is hetzelfde soort ingreep: de app
+                          // heeft de plaat naast je bestanden gelegd en jij zegt of dat klopt.
+                          if (!isTv && _official.isNotEmpty)
+                            TextButton.icon(
+                              onPressed: () => showDialog<bool>(
+                                context: context,
+                                builder: (_) =>
+                                    RijToewijzenDialog(official: _official, album: album),
+                              ),
+                              icon: const Icon(Icons.swap_vert_rounded, size: 15),
+                              label: const Text('Nummers toewijzen…',
+                                  style: TextStyle(fontSize: 12)),
+                              style: TextButton.styleFrom(foregroundColor: _muted),
+                            ),
+                        ],
                       ),
                     ),
                   ),
@@ -23479,6 +23498,246 @@ class _AlleTitelsDialogState extends State<AlleTitelsDialog> {
                           height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                       : Text('${_gekozen.length} in de bestanden schrijven'),
+                ),
+              ],
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// De officiële tracklijst met jouw bestanden ernaast, en jij zegt wat waar hoort.
+///
+/// **Gevraagd op 05-09-2026**, met een schermafdruk van Christina Milians *Dip It Low (Mixes)*:
+/// *"gebruik een functie uit roon, waar de officiele tracklist wordt geladen en ik de track moet
+/// slepen bij de juiste"*. De app legde de plaat al naast je bestanden — dat is wat [AlbumSlot] is —
+/// maar er was geen beroep tegen haar oordeel, en nergens een plek waar zo'n keuze bleef staan.
+///
+/// **Twee manieren, want slepen is niet overal een gebaar.** Met de muis sleep je een bestand op een
+/// rij. Zonder muis tik je eerst het bestand aan en dan de rij; dezelfde twee stappen, en het werkt
+/// op een aanraakscherm en met een afstandsbediening. De sleepbare kaart is dezelfde widget als de
+/// aantikbare, zodat de twee wegen niet uit elkaar kunnen lopen.
+///
+/// Wat je hier vastlegt gaat vóór élke automatische vergelijking — zie [matchAlbumTracks.handmatig].
+/// Het staat per BESTAND vast en niet per plaat: wie één rij rechtzet, hoort de rest niet te
+/// bevriezen op wat er op dat moment toevallig stond.
+class RijToewijzenDialog extends StatefulWidget {
+  final List<ChoiceTrack> official;
+  final Album album;
+
+  const RijToewijzenDialog({super.key, required this.official, required this.album});
+
+  @override
+  State<RijToewijzenDialog> createState() => _RijToewijzenDialogState();
+}
+
+class _RijToewijzenDialogState extends State<RijToewijzenDialog> {
+  /// Het bestand dat je hebt aangetikt en nog een rij zoekt. Null zodra het geplaatst is.
+  Track? _gekozen;
+  bool _busy = false;
+
+  /// De indeling wordt hier OPNIEUW uitgerekend, bij elke opbouw.
+  ///
+  /// Een meegegeven momentopname leek genoeg — het venster hoort immers te beginnen bij wat je op
+  /// het scherm zag — maar dan verandert er niets zichtbaars zodra je iets neerlegt: de pagina
+  /// erachter werkt zich bij en dit venster blijft naar de oude indeling kijken. Met een `watch` op
+  /// de bibliotheek verspringt de rij meteen, en dat is het enige wat zegt dat je keuze aankwam.
+  AlbumCompleteness _indeling(LibraryStore lib) =>
+      matchAlbumTracks(widget.official, widget.album.tracks, widget.album.artist,
+          album: widget.album.title,
+          handmatig: lib.rijToewijzingen(widget.album.tracks));
+
+  Future<void> _leg(Track t, int rij) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    await context.read<LibraryStore>().wijsRijToe(t, rijSleutel(widget.official[rij]));
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _gekozen = null;
+    });
+  }
+
+  Future<void> _laatLos(Track t) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    await context.read<LibraryStore>().wijsRijToe(t, null);
+    if (!mounted) return;
+    setState(() => _busy = false);
+  }
+
+  /// Eén bestand, als kaartje. Sleepbaar én aantikbaar — zie de klasse-uitleg.
+  Widget _kaart(Track t, {required bool geplaatst}) {
+    final gekozen = _gekozen?.path == t.path;
+    final kern = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+      decoration: BoxDecoration(
+        color: gekozen ? _accent.withValues(alpha: .22) : _panel2,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: gekozen ? _accent : Colors.transparent),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.drag_indicator_rounded, size: 15, color: _muted),
+        const SizedBox(width: 5),
+        Flexible(
+          child: Text(
+            '${t.title}${t.duration == null ? '' : '  ${_fmt(t.duration)}'}',
+            style: const TextStyle(fontSize: 12.5),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        if (geplaatst) ...[
+          const SizedBox(width: 4),
+          IconButton(
+            tooltip: 'Van deze rij halen',
+            iconSize: 15,
+            visualDensity: VisualDensity.compact,
+            constraints: const BoxConstraints(),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.close_rounded, color: _muted),
+            onPressed: () => _laatLos(t),
+          ),
+        ],
+      ]),
+    );
+    return Draggable<Track>(
+      data: t,
+      feedback: Material(color: Colors.transparent, child: Opacity(opacity: .85, child: kern)),
+      childWhenDragging: Opacity(opacity: .3, child: kern),
+      child: Pressable(
+        onPressed: () => setState(() => _gekozen = gekozen ? null : t),
+        borderRadius: BorderRadius.circular(8),
+        child: kern,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final comp = _indeling(context.watch<LibraryStore>());
+    final opRij = <int, Track>{
+      for (final s in comp.slots)
+        if (s.index >= 0 && s.track != null) s.index: s.track!,
+    };
+    final weesjes = [
+      for (final s in comp.slots)
+        if (s.index < 0 && s.track != null) s.track!,
+    ];
+    return Dialog(
+      backgroundColor: _panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: dialogWidth(context, 760),
+        height: dialogHeight(context, 640),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Nummers toewijzen',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text(
+              _gekozen == null
+                  ? 'Sleep een bestand naar de juiste rij — of tik het aan en daarna de rij.'
+                  : 'Tik nu de rij aan waar “${_gekozen!.title}” hoort.',
+              style: const TextStyle(color: _muted, fontSize: 12.5),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: ListView(children: [
+                for (var i = 0; i < widget.official.length; i++)
+                  DragTarget<Track>(
+                    onWillAcceptWithDetails: (_) => !_busy,
+                    onAcceptWithDetails: (d) => _leg(d.data, i),
+                    builder: (_, kandidaten, __) {
+                      final o = widget.official[i];
+                      final hier = opRij[i];
+                      final wacht = kandidaten.isNotEmpty || (_gekozen != null && hier == null);
+                      return Pressable(
+                        onPressed:
+                            _gekozen == null ? null : () => _leg(_gekozen!, i),
+                        borderRadius: BorderRadius.circular(9),
+                        child: Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: kandidaten.isNotEmpty
+                                ? _accent.withValues(alpha: .18)
+                                : _panel2,
+                            borderRadius: BorderRadius.circular(9),
+                            border: Border.all(
+                                color: wacht ? _accent.withValues(alpha: .6) : Colors.transparent),
+                          ),
+                          child: Row(children: [
+                            SizedBox(
+                              width: 30,
+                              child: Text(o.position.isEmpty ? '${i + 1}' : o.position,
+                                  style: const TextStyle(color: _muted, fontSize: 12.5)),
+                            ),
+                            Expanded(
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(o.title, style: const TextStyle(fontSize: 13.5)),
+                                    if (o.artist.trim().isNotEmpty || o.seconds != null)
+                                      Text(
+                                        [
+                                          if (o.artist.trim().isNotEmpty) o.artist.trim(),
+                                          if (o.seconds != null)
+                                            _fmt(Duration(seconds: o.seconds!)),
+                                        ].join('  ·  '),
+                                        style:
+                                            const TextStyle(color: _muted, fontSize: 11.5),
+                                      ),
+                                  ]),
+                            ),
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 250,
+                              child: hier == null
+                                  ? Text(
+                                      _gekozen == null ? 'leeg' : 'hier neerzetten',
+                                      style: TextStyle(
+                                          color: _gekozen == null ? _muted : _accent,
+                                          fontSize: 11.5),
+                                    )
+                                  : _kaart(hier, geplaatst: true),
+                            ),
+                          ]),
+                        ),
+                      );
+                    },
+                  ),
+              ]),
+            ),
+            if (weesjes.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              // Wat nergens op past. Dit is de stapel waaruit je sleept — en de reden dat dit
+              // venster bestaat.
+              Text('Niet op deze uitgave · ${weesjes.length}',
+                  style: kLabel.copyWith(letterSpacing: .4)),
+              const SizedBox(height: 6),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 120),
+                child: SingleChildScrollView(
+                  child: Wrap(
+                    spacing: kRuimte8,
+                    runSpacing: kRuimte8,
+                    children: [for (final t in weesjes) _kaart(t, geplaatst: false)],
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: kRuimte8,
+              runSpacing: kRuimte8,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('Sluiten'),
                 ),
               ],
             ),

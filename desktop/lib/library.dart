@@ -4222,6 +4222,39 @@ extension LibraryRenumber on LibraryStore {
     await saveCorrectionsNow();
     refreshFromCorrections();
   }
+
+  /// Welke rij van de uitgave de gebruiker met de hand aan welk bestand heeft gehangen.
+  ///
+  /// Leeg voor vrijwel elke plaat: dit vult zich alleen waar iemand het zelf heeft aangewezen.
+  Map<String, String> rijToewijzingen(Iterable<Track> tracks) => {
+        for (final t in tracks)
+          if (_corrections[t.path]?['rij'] case final r? when r.isNotEmpty) t.path: r,
+      };
+
+  /// Dit bestand hoort op díé rij. `null` geeft de beslissing terug aan de app.
+  ///
+  /// Zie [matchAlbumTracks.handmatig] voor waarom deze keuze vóór elke automatische vergelijking
+  /// gaat. Bewust per bestand en niet per plaat: wie één rij rechtzet, hoort de rest niet vast te
+  /// zetten op wat er op dat moment toevallig stond.
+  Future<void> wijsRijToe(Track t, String? sleutel) async {
+    if (isRemote) {
+      return _editOnPc({
+        'op': 'assignRow',
+        'trackId': _remoteTrackId(t.path),
+        'row': sleutel,
+      });
+    }
+    if (sleutel == null || sleutel.isEmpty) {
+      final c = _corrections[t.path];
+      if (c == null) return;
+      c.remove('rij');
+      if (c.isEmpty) _corrections.remove(t.path);
+    } else {
+      _correctionsFor(t.path)['rij'] = sleutel;
+    }
+    await saveCorrectionsNow();
+    refreshFromCorrections();
+  }
 }
 
 extension LibraryMove on LibraryStore {

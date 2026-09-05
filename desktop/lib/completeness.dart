@@ -189,6 +189,19 @@ AlbumCompleteness matchAlbumTracks(
   String artist, {
   String source = '',
   String album = '',
+
+  /// Wat de GEBRUIKER zelf heeft toegewezen: bestandspad → [rijSleutel]. Gaat vóór alles.
+  ///
+  /// **Gevraagd op 05-09-2026.** Saber, over twee gelijknamige rijen: *"gebruik een functie uit
+  /// roon, waar de officiele tracklist wordt geladen en ik de track moet slepen bij de juiste"*.
+  /// Tot nu toe kon de app alleen raden — goed raden, maar zonder beroep. Er was ook nergens een
+  /// plek waar zo'n keuze bleef staan: correcties kennen titel, nummer, plaat, artiest en persing,
+  /// maar geen rij.
+  ///
+  /// Dezelfde afspraak als bij een handmatig samengevoegde plaat: *the user's word beats the tags*.
+  /// Daarom loopt dit vóór elke automatische pas, en niet als laatste redmiddel — anders zou een
+  /// titeltreffer de rij al ingepikt hebben voordat jouw keuze aan bod komt.
+  Map<String, String> handmatig = const {},
 }) {
   final owned = <int, Track>{};
   final claimed = <String>{};
@@ -196,9 +209,28 @@ AlbumCompleteness matchAlbumTracks(
 
   bool durationsAgree(int? a, int? b) => a == null || b == null || a <= 0 || b <= 0 || (a - b).abs() <= _slack;
 
+  // Wat de gebruiker zelf heeft aangewezen, vóór alles. Zie [handmatig].
+  if (handmatig.isNotEmpty) {
+    for (var i = 0; i < official.length; i++) {
+      final wil = rijSleutel(official[i]);
+      for (final t in tracks) {
+        if (claimed.contains(t.path)) continue;
+        if (handmatig[t.path] != wil) continue;
+        owned[i] = t;
+        claimed.add(t.path);
+        break;
+      }
+    }
+  }
+
   // Exact title first, across the whole list, so a looser match can never steal a file from the
   // entry that names it outright.
   for (var i = 0; i < official.length; i++) {
+    // Deze pas was altijd de eerste en had daarom geen reden om te kijken of de rij al bezet was.
+    // Sinds [handmatig] ervóór loopt wél: zonder deze regel overschreef een titeltreffer de keuze
+    // van de gebruiker, en het bestand dat die keuze had geclaimd verdween dan van de pagina —
+    // geclaimd, dus ook niet meer als weeskind. Een toets ving dat meteen.
+    if (owned.containsKey(i)) continue;
     final want = normKey(official[i].title);
     if (want.isEmpty) continue;
     for (final t in tracks) {
@@ -534,6 +566,13 @@ String? gastNaarArtiest(Track t, String nieuweTitel, {String uitgaveArtiest = ''
       : gastcredit(gesplitst.main, gesplitst.featured);
   return normKey(credit) == normKey(t.artist) ? null : credit;
 }
+
+/// De sleutel waarmee een handmatige toewijzing naar precies één rij van de uitgave wijst.
+///
+/// Schijf én positie, want een dubbele plaat nummert op elke schijf opnieuw vanaf 1: op de positie
+/// alleen zou "2" twee rijen aanwijzen. Tekst, omdat een persing niet altijd in gehele getallen
+/// nummert — een vinylkant is "A3".
+String rijSleutel(ChoiceTrack o) => '${o.disc}|${o.position}';
 
 /// Noemt de uitgave deze titel meer dan één keer?
 ///
