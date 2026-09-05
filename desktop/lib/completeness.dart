@@ -535,6 +535,22 @@ String? gastNaarArtiest(Track t, String nieuweTitel, {String uitgaveArtiest = ''
   return normKey(credit) == normKey(t.artist) ? null : credit;
 }
 
+/// Noemt de uitgave deze titel meer dan één keer?
+///
+/// Zo ja, dan is de LOOPTIJD wat bepaald heeft op welke rij een bestand terechtkwam, en hoort dat
+/// getal op het scherm te staan — anders is de indeling niet na te rekenen. Precies het geval van
+/// *Dip It Low (Mixes)*: twee rijen "Dip It Low" van 3:18 en 3:40, en twee bestanden van 3:14 en
+/// 3:38 die daar correct maar onzichtbaar aan gekoppeld werden.
+bool titelKomtVakerVoor(List<ChoiceTrack> official, ChoiceTrack rij) {
+  final k = normKey(rij.title);
+  if (k.isEmpty) return false;
+  var n = 0;
+  for (final o in official) {
+    if (normKey(o.title) == k && ++n > 1) return true;
+  }
+  return false;
+}
+
 /// Hoe ANDERE persingen dit ene nummer noemen, met hoeveel er dat zo doen.
 ///
 /// **Waarvoor.** De persing die de pagina toont is er één van soms tientallen. Noemt die het nummer

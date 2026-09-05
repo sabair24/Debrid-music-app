@@ -4535,6 +4535,70 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     _officialBestFit = f.bestFit;
     _officialMbid = f.mbid;
     _officialFor = _officialVraag;
+    unawaited(_vulOntbrekendeCredits());
+  }
+
+  /// Eén keer per pagina, en alleen als het iets oplost.
+  bool _creditsGevraagd = false;
+
+  /// De artiestcredit per nummer aanvullen uit MusicBrainz, waar de tracklijst er geen heeft.
+  ///
+  /// **Gemeld op 05-09-2026 met Christina Milians *Dip It Low (Mixes)*.** Twee rijen, allebei "Dip
+  /// It Low", allebei zonder credit — terwijl de plaat rij 2 als *feat. Fabolous* uitgeeft. De
+  /// bestanden stonden al op de juiste rij (de looptijden beslisten dat), maar op het scherm waren
+  /// ze niet uit elkaar te houden. Saber: *"ik krijg het maar niet goed"*.
+  ///
+  /// **Alleen waar het verschil máákt, en dat is zeldzaam.** GEMETEN over deze bibliotheek: van 450
+  /// platen met een tracklijst dragen er 319 al een credit per nummer — die hoefden alleen getekend
+  /// te worden. Slechts **acht** noemen een titel meer dan één keer zonder ook maar één credit, en
+  /// dat zijn precies de platen waar je zonder dit niet kunt zien welke rij welke is. Twee verzoeken
+  /// voor acht platen, en alleen wanneer je zo'n plaat opent.
+  ///
+  /// Raakt de INDELING niet aan: alleen het bijschrift van de rijen verandert. De credits worden op
+  /// POSITIE overgenomen, en alleen van een persing die op aantal, titels én looptijden overeenkomt
+  /// — anders zou een andere uitgave hier zijn eigen gastenlijst overheen leggen.
+  Future<void> _vulOntbrekendeCredits() async {
+    if (_creditsGevraagd || _official.isEmpty) return;
+    final perTitel = <String, List<ChoiceTrack>>{};
+    for (final o in _official) {
+      (perTitel[normKey(o.title)] ??= []).add(o);
+    }
+    final onduidelijk = perTitel.values
+        .any((rijen) => rijen.length > 1 && rijen.every((r) => r.artist.trim().isEmpty));
+    if (!onduidelijk) return;
+    final mbid = _officialMbid;
+    if (mbid == null || mbid.isEmpty) return;
+    _creditsGevraagd = true;
+    try {
+      final mb = context.read<MusicBrainzService>();
+      final groep = (await mb.release(mbid))?.releaseGroupId;
+      if (groep == null || groep.isEmpty) return;
+      for (final p in await mb.editionsOf(groep, tracklists: true)) {
+        if (p.tracks.length != _official.length) continue;
+        final rijen = await mb.tracklistOf(p);
+        if (rijen.length != _official.length) continue;
+        var past = true;
+        for (var i = 0; i < rijen.length && past; i++) {
+          final a = rijen[i], b = _official[i];
+          if (normKey(a.title) != normKey(b.title)) past = false;
+          final as = a.seconds ?? 0, bs = b.seconds ?? 0;
+          if (as > 0 && bs > 0 && (as - bs).abs() > 5) past = false;
+        }
+        if (!past || rijen.every((r) => r.artist.trim().isEmpty)) continue;
+        if (!mounted) return;
+        setState(() {
+          _official = [
+            for (var i = 0; i < _official.length; i++)
+              if (_official[i].artist.trim().isEmpty && rijen[i].artist.trim().isNotEmpty)
+                ChoiceTrack(_official[i].position, _official[i].title, _official[i].seconds,
+                    disc: _official[i].disc, artist: rijen[i].artist)
+              else
+                _official[i],
+          ];
+        });
+        return;
+      }
+    } catch (_) {/* geen credits is geen storing — de pagina werkt zonder */}
   }
 
   /// The official tracklist: which pressing of this record you actually own.
@@ -5332,6 +5396,13 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       final uitleg = t != null && s.index < 0
                           ? waaromGeenPlaatsMet(_official, t, album: album.title)
                           : null;
+                      // Noemt de UITGAVE deze titel meer dan één keer? Dan is de looptijd wat
+                      // bepaald heeft op wélke rij dit bestand kwam, en hoort dat getal erbij te
+                      // staan. Anders is de indeling niet na te rekenen — en dat was precies de
+                      // klacht bij "Dip It Low (Mixes)": twee gelijknamige rijen, geen manier om te
+                      // zien welke welke is.
+                      final o = s.official;
+                      final tweelingrij = o != null && titelKomtVakerVoor(_official, o);
                       final row = t == null
                           ? MissingTrackRow(
                               slot: s,
@@ -5349,7 +5420,13 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                               // An extra shows no number at all — not even its own tag's. See
                               // AlbumSlot.label.
                               label: s.index < 0 ? '' : s.label,
-                              uitgaveSeconden: s.andereLengte ? s.official?.seconds : null,
+                              uitgaveSeconden: s.andereLengte || tweelingrij
+                                  ? s.official?.seconds
+                                  : null,
+                              uitgaveTijdWaarschuwt: s.andereLengte,
+                              uitgaveGasten: o == null
+                                  ? const []
+                                  : splitFeatured(o.artist, o.title).featured,
                               reden: uitleg?.reden,
                               uitgaveRij: uitleg?.uitgave,
                               albumMbid: _officialMbid);
@@ -6203,6 +6280,25 @@ class TrackRow extends StatefulWidget {
   /// mee naar [TitelRechtzettenDialog], dat er de ANDERE persingen van dezelfde plaat mee opvraagt.
   final String? albumMbid;
 
+  /// Wie de UITGAVE als gast op dit nummer noemt, voor zover jouw eigen tags dat niet al doen.
+  ///
+  /// **Gemeld op 05-09-2026 met Christina Milians *Dip It Low (Mixes)*.** Twee rijen, allebei
+  /// "Dip It Low", allebei getagd als "Christina Milian" — terwijl de uitgave rij 2 als *feat.
+  /// Fabolous* opgeeft. De toewijzing was al goed (3:14 tegen 3:18, 3:38 tegen 3:40), maar op het
+  /// scherm waren de twee niet uit elkaar te houden: *"ik krijg het maar niet goed"*.
+  ///
+  /// De gastenregel die er al was leest alleen `t.artist` en `t.title` — de tags van het BESTAND.
+  /// Dit is dezelfde regel, aangevuld met wat de plaat zelf zegt. Geen opzoeking: de tracklijst
+  /// staat al in het geheugen van de pagina.
+  final List<String> uitgaveGasten;
+
+  /// Waarschuwt de getoonde uitgave-looptijd ergens voor, of legt hij alleen uit?
+  ///
+  /// Waarschuwing = je hebt een andere snit ([AlbumSlot.andereLengte]). Uitleg = de uitgave noemt
+  /// deze titel meer dan één keer, en dan is de looptijd precies wat bepaald heeft op wélke rij dit
+  /// bestand terechtkwam. Dat hoort zichtbaar te zijn, anders is de indeling niet na te rekenen.
+  final bool uitgaveTijdWaarschuwt;
+
   const TrackRow(
       {super.key,
       required this.track,
@@ -6213,7 +6309,9 @@ class TrackRow extends StatefulWidget {
       this.uitgaveSeconden,
       this.reden,
       this.uitgaveRij,
-      this.albumMbid});
+      this.albumMbid,
+      this.uitgaveGasten = const [],
+      this.uitgaveTijdWaarschuwt = true});
   @override
   State<TrackRow> createState() => _TrackRowState();
 }
@@ -6299,7 +6397,12 @@ class _TrackRowState extends State<TrackRow> {
                 child: Builder(builder: (context) {
                   // Guests named in this track's own tags, shown under the title. No catalogue
                   // lookup here — that would be one network call per row of every album.
-                  final guests = splitFeatured(t.artist, t.title).featured;
+                  //
+                  // Aangevuld met wie de UITGAVE noemt en jouw tags niet. Dat kost ook geen
+                  // opzoeking: die tracklijst staat al op de pagina. Zie [TrackRow.uitgaveGasten]
+                  // voor het geval waar dit uit voortkomt — twee rijen "Dip It Low" waarvan er één
+                  // met Fabolous is, en geen van beide bestanden die dat zegt.
+                  final guests = gastenVoorDeRij(t.artist, t.title, widget.uitgaveGasten);
                   final title = Text(titleWithoutFeat(t.title),
                       maxLines: titelRegels(context),
                       overflow: TextOverflow.ellipsis,
@@ -6340,10 +6443,23 @@ class _TrackRowState extends State<TrackRow> {
                 Padding(
                   padding: const EdgeInsets.only(left: 5),
                   child: Tooltip(
-                    message: 'De uitgave geeft ${_fmt(Duration(seconds: widget.uitgaveSeconden!))} '
-                        'op — je hebt een andere snit van dit nummer.',
-                    child: Text('≠ ${_fmt(Duration(seconds: widget.uitgaveSeconden!))}',
-                        style: kTekstKlein.copyWith(color: const Color(0xFFE0B341))),
+                    message: widget.uitgaveTijdWaarschuwt
+                        ? 'De uitgave geeft ${_fmt(Duration(seconds: widget.uitgaveSeconden!))} '
+                            'op — je hebt een andere snit van dit nummer.'
+                        // Geen waarschuwing maar een verantwoording: de uitgave noemt deze titel
+                        // meer dan één keer, en de looptijd is wat bepaalde op welke rij dit
+                        // bestand kwam. Zonder dat getal is die indeling niet na te rekenen.
+                        : 'De uitgave geeft ${_fmt(Duration(seconds: widget.uitgaveSeconden!))} op. '
+                            'Deze titel staat meer dan één keer op de plaat; de looptijd wijst aan '
+                            'welke rij dit is.',
+                    child: Text(
+                        widget.uitgaveTijdWaarschuwt
+                            ? '≠ ${_fmt(Duration(seconds: widget.uitgaveSeconden!))}'
+                            : '· ${_fmt(Duration(seconds: widget.uitgaveSeconden!))}',
+                        style: kTekstKlein.copyWith(
+                            color: widget.uitgaveTijdWaarschuwt
+                                ? const Color(0xFFE0B341)
+                                : _muted)),
                   ),
                 ),
               // Both appear on hover, so neither can be hit by accident.

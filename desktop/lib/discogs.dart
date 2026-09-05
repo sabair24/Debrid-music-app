@@ -2316,9 +2316,17 @@ extension DiscogsChoices on DiscogsService {
       disc: disc == null ? null : of(disc),
       // The same answer carries the tracklist. Kept rather than discarded: it costs nothing, and
       // without it "take this pressing's numbering" had nothing to take.
+      // De credit per nummer gaat MEE. Hij werd hier weggegooid terwijl `DiscogsTrack.artists` hem
+      // al binnenhaalde — en dat is het veld waarmee de albumpagina twee gelijknamige rijen uit
+      // elkaar houdt ("Dip It Low" tegen "Dip It Low" met Fabolous) en waarmee `matchAlbumTracks`
+      // een bestand op de juiste rij legt. Gemeten over deze bibliotheek: 319 van de 450 platen met
+      // een tracklijst dragen zo'n credit.
       tracks: e.tracklist.isEmpty
           ? null
-          : [for (final t in e.tracklist) ChoiceTrack(t.position, t.title, t.seconds)],
+          : [
+              for (final t in e.tracklist)
+                ChoiceTrack(t.position, t.title, t.seconds, artist: t.artists.join(', ')),
+            ],
     );
   }
 }

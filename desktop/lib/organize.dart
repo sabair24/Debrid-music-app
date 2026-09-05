@@ -147,6 +147,25 @@ final _featSplitRe = RegExp(r'\s*(?:,|&|\+|\band\b|\ben\b|\bx\b)\s*', caseSensit
   return (main: main.isEmpty ? artist.trim() : main, featured: featured);
 }
 
+/// De gastnamen die onder een nummerrij horen: die uit je EIGEN tags, aangevuld met die van de
+/// uitgave.
+///
+/// **Gemeld op 05-09-2026 met Christina Milians *Dip It Low (Mixes)*.** Twee rijen, allebei "Dip It
+/// Low", en beide bestanden getagd als enkel "Christina Milian" — terwijl de plaat rij 2 als *feat.
+/// Fabolous* uitgeeft. De rij las alleen `t.artist` en `t.title`, dus op het scherm waren de twee
+/// niet uit elkaar te houden.
+///
+/// Jouw tags gaan vóór: heet jouw bestand al "(feat. Fabolous)", dan blijft die spelling staan en
+/// komt de naam er niet een tweede keer bij. De uitgave vult alleen aan wat ontbreekt.
+List<String> gastenVoorDeRij(String artiest, String titel, List<String> uitgaveGasten) {
+  final eigen = splitFeatured(artiest, titel).featured;
+  return [
+    ...eigen,
+    for (final g in uitgaveGasten)
+      if (!eigen.any((e) => artistKey(e) == artistKey(g))) g,
+  ];
+}
+
 /// De tegenhanger van [splitFeatured]: uit een hoofdartiest en zijn gasten weer één credit.
 ///
 /// Bestaat omdat een gastnaam die uit een TITEL verdwijnt ergens anders terug moet komen. Neem je
