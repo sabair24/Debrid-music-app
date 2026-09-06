@@ -16843,6 +16843,30 @@ class EditorialeKop extends StatelessWidget {
           child: kind,
         );
 
+    // De onderrand van de figuur oplossen in de achtergrond. GEMETEN, niet bedacht: een uitgeknipte
+    // artiest is zelden een hele persoon — de cutout van Michael Jackson houdt op ter hoogte van de
+    // heup, en tegen de onderrand van de kop gaf dat een kaarsrechte snee dwars door een lichaam.
+    // Een verloop van twaalf procent maakt er een overgang van in plaats van een afgesneden been,
+    // en werkt ongeacht wat er op de plaat staat.
+    //
+    // Op een telefoon staat de figuur ACHTER de tekst en niet ernaast — daar is geen breedte voor.
+    // Dan moet hij ook als achtergrond kijken: op vol vermogen liep "6 albums · 74 nummers" dwars
+    // over een grijs jasje en was het niet meer te lezen. Dit kost niets extra's, want dezelfde
+    // laag doet al het verloop: de dekking gaat gewoon in de witwaarde van de masker-kleur.
+    Widget vervaagOnder(Widget kind) => ShaderMask(
+          shaderCallback: (r) => LinearGradient(
+            begin: Alignment.bottomCenter,
+            end: Alignment.topCenter,
+            colors: [
+              const Color(0x00FFFFFF),
+              smal ? const Color(0x73FFFFFF) : const Color(0xFFFFFFFF),
+            ],
+            stops: const [0, .12],
+          ).createShader(r),
+          blendMode: BlendMode.dstIn,
+          child: kind,
+        );
+
     // Hoeveel van de kop de vrijstaande figuur mag vullen. Op een telefoon staat hij achter de
     // naam en mag hij klein blijven; breed is hij het beeld.
     final figuurHoogte = smal ? 300.0 : (tablet ? 430.0 : 700.0);
@@ -16860,7 +16884,13 @@ class EditorialeKop extends StatelessWidget {
         // MINIMUM, geen vaste maat. Zie de klasse-uitleg: inhoud die meer nodig heeft duwt hem op,
         // dus er kan hier nooit iets buiten het vak vallen.
         constraints: BoxConstraints(
-          minHeight: smal ? 0 : (breedte * .52).clamp(380.0, 820.0),
+          // Zónder vrijstaande figuur hoeft het kader niet even hoog: die 700 punten waren er vóór
+          // de figuur, en zonder hem stond er onder de knoppen honderddertig punten niets.
+          minHeight: smal
+              ? 0
+              : (vrijstaand != null
+                  ? (breedte * .52).clamp(380.0, 820.0)
+                  : (breedte * .40).clamp(340.0, 620.0)),
         ),
         child: Stack(
           fit: StackFit.loose,
@@ -16876,17 +16906,34 @@ class EditorialeKop extends StatelessWidget {
               ),
             Positioned.fill(
               child: DecoratedBox(
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
+                  // Twee sterktes, en dat is GEZIEN en niet bedacht. Met een uitgeknipte figuur
+                  // ervoor is de achtergrond een laag: hij mag door. Zonder figuur wordt diezelfde
+                  // foto het onderwerp — bij Phil Collins een kop van zeshonderd punten die de
+                  // naam wegdrukt. Dan hoort hij verder naar achteren.
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [
-                      Color(0x44000000),
-                      Color(0x66000000),
-                      Color(0xDB07080C),
-                      kAchtergrond,
-                    ],
-                    stops: [0, .30, .58, 1],
+                    colors: vrijstaand != null
+                        ? const [
+                            Color(0x44000000),
+                            Color(0x66000000),
+                            Color(0xDB07080C),
+                            kAchtergrond,
+                            kAchtergrond,
+                          ]
+                        : const [
+                            Color(0xA0000000),
+                            Color(0xBC000000),
+                            Color(0xF207080C),
+                            kAchtergrond,
+                            kAchtergrond,
+                          ],
+                    // De laatste kleur TWEE keer, en dat is de reden: met één stop op 1 is de
+                    // onderrand pas op de allerlaatste rij dekkend, en dan blijft er van de foto
+                    // een paar procent over dat als een streep over het scherm loopt. Vanaf .92 is
+                    // het gewoon de achtergrond.
+                    stops: const [0, .30, .58, .92, 1],
                   ),
                 ),
               ),
@@ -16913,11 +16960,11 @@ class EditorialeKop extends StatelessWidget {
               Positioned(
                 right: smal ? -18 : marge,
                 bottom: 0,
-                child: grijs(Image.memory(vrijstaand,
+                child: vervaagOnder(grijs(Image.memory(vrijstaand,
                     height: figuurHoogte,
                     fit: BoxFit.contain,
                     alignment: Alignment.bottomCenter,
-                    errorBuilder: (_, __, ___) => const SizedBox())),
+                    errorBuilder: (_, __, ___) => const SizedBox()))),
               ),
 
             Padding(
@@ -16957,7 +17004,13 @@ class EditorialeKop extends StatelessWidget {
                   // onderdoor lopen — vandaar de rechtermarge die met de figuur meeschaalt.
                   Padding(
                     padding: EdgeInsets.only(
-                        right: (vrijstaand != null && !smal) ? figuurHoogte * .62 : 0),
+                        right: smal
+                            ? 0
+                            : (vrijstaand != null
+                                ? figuurHoogte * .62
+                                // Trap 3 zet een rond portret van 220 rechtsonder neer. Zonder deze
+                                // marge liep de scheidingslijn er dwars doorheen — over het gezicht.
+                                : (portret != null ? 268.0 : 0.0))),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
@@ -17816,7 +17869,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                     children: [
                       kop,
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(24, 0, 20, 10),
+                        padding: EdgeInsets.fromLTRB(_marge, 0, _marge, 10),
                         child: _sorteerPil(),
                       ),
                     ],
@@ -17826,7 +17879,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                   children: [
                     Expanded(child: kop),
                     Padding(
-                      padding: const EdgeInsets.only(right: 20),
+                      padding: EdgeInsets.only(right: _marge),
                       child: _sorteerPil(),
                     ),
                   ],
@@ -17836,7 +17889,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
             if (_bronRegel() case final regel?)
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+                  padding: EdgeInsets.fromLTRB(_marge, 0, _marge, 8),
                   child: Text(regel, style: const TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               ),
@@ -17847,7 +17900,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
               SliverToBoxAdapter(
                   child: _sectionTitle(blokTitel(blok.soort), '${blok.rijen.length}')),
               SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                padding: EdgeInsets.fromLTRB(_marge, 0, _marge, 24),
                 sliver: SliverGrid(
                   gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                       maxCrossAxisExtent: 180, mainAxisSpacing: 14, crossAxisSpacing: 14, childAspectRatio: .74),
@@ -17875,7 +17928,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                 height: 176,
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  padding: EdgeInsets.symmetric(horizontal: _marge),
                   itemCount: _related.length,
                   separatorBuilder: (_, __) => const SizedBox(width: kRuimte12),
                   itemBuilder: (_, i) {
@@ -18024,9 +18077,16 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   /// een pagina die opent met een naam van honderdtwintig punten en dan secties van zeventien zet,
   /// valt na de kop meteen stil. De telling staat als opschrift rechts, waar hij niet met de kop
   /// om ruimte hoeft te vechten.
+  /// De linkerkant van de hele pagina, en van niets anders afgeleid dan [EditorialeKop].
+  ///
+  /// De kop en de sectiekoppen stonden op 56 en de rasters eronder op 20 — op een breed scherm
+  /// zesendertig punten verschil tussen de titel en de platen die eronder horen. In een ontwerp dat
+  /// het van één rechte linkerlijn moet hebben is dat geen detail.
+  double get _marge => isCompact(context) ? 18.0 : (isTablet(context) ? 28.0 : 56.0);
+
   Widget _sectionTitle(String title, String count) {
     final smal = isCompact(context);
-    final marge = smal ? 18.0 : (isTablet(context) ? 28.0 : 56.0);
+    final marge = _marge;
     final kop = Text(title.toUpperCase(),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
@@ -18063,7 +18123,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   /// [BioText] doet dat inklappen nog steeds, met dezelfde dialoog erachter.
   Widget _overBlok(String tekst) {
     final smal = isCompact(context);
-    final marge = smal ? 18.0 : (isTablet(context) ? 28.0 : 56.0);
+    final marge = _marge;
     final foto = _art?.clearartBytes ?? _art?.backdropBytes;
     final kolommen = smal || isTv ? 1 : 2;
 
