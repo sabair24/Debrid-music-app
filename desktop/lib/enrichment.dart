@@ -7,30 +7,57 @@ import 'json_body.dart';
 import 'discogs.dart';
 import 'models.dart';
 import 'musicbrainz.dart';
+import 'organize.dart' show normKey;
 import 'settings.dart';
 import 'paths.dart';
 
 /// A wide backdrop and the act's official wordmark — what turns an artist page into a banner.
 class ArtistArt {
-  final String? logo, backdrop, thumb;
-  final Uint8List? logoBytes, backdropBytes, thumbBytes;
+  final String? logo, backdrop, thumb, cutout, clearart;
+  final Uint8List? logoBytes, backdropBytes, thumbBytes, cutoutBytes, clearartBytes;
   const ArtistArt({
     this.logo,
     this.backdrop,
     this.thumb,
+    this.cutout,
+    this.clearart,
     this.logoBytes,
     this.backdropBytes,
     this.thumbBytes,
+    this.cutoutBytes,
+    this.clearartBytes,
   });
 
   bool get isEmpty => logo == null && backdrop == null && thumb == null;
 
+  /// De artiest, vrijstaand uitgeknipt op een doorzichtige achtergrond — als die er is.
+  ///
+  /// **Waarom dit een eigen veld is en geen terugval meer.** `strArtistCutout` stond hier alleen
+  /// achteraan bij [thumb], als noodgreep wanneer er geen portret was. Daarmee is hij vrijwel
+  /// onbereikbaar: bijna elke artiest hééft een portret, dus de cutout werd nooit gekozen. En juist
+  /// hij is het interessante beeld — een figuur zónder kader kun je over een titel heen zetten, en
+  /// dat kan een rechthoekige foto niet.
+  ///
+  /// Gemeten op 06-09-2026 over dertien artiesten uit deze bibliotheek: **tien hebben een cutout**
+  /// en elf een clearart. Het is dus geen zeldzaamheid maar de regel — met een terugval voor de
+  /// rest. Zie `ArtistHero` voor de ladder cutout → clearart → portret → alleen letters.
+  ///
+  /// [clearart] is dezelfde gedachte in liggend formaat (1000×562, doorzichtig).
+  bool get heeftVrijstaand => cutout != null || clearart != null;
+
   /// Bumped whenever a new field is added, so entries cached by an older build are refetched
   /// instead of answering forever with a null they never had a chance to fill. Adding `thumb`
   /// without this meant every artist you'd already opened kept showing the old fallback.
-  static const schema = 2;
+  static const schema = 3;
 
-  Map<String, dynamic> toJson() => {'v': schema, 'logo': logo, 'backdrop': backdrop, 'thumb': thumb};
+  Map<String, dynamic> toJson() => {
+        'v': schema,
+        'logo': logo,
+        'backdrop': backdrop,
+        'thumb': thumb,
+        'cutout': cutout,
+        'clearart': clearart,
+      };
 
   /// Null for an entry written by an older build — the caller refetches.
   static ArtistArt? fromJson(Map<String, dynamic> j) {
@@ -39,6 +66,8 @@ class ArtistArt {
       logo: j['logo'] as String?,
       backdrop: j['backdrop'] as String?,
       thumb: j['thumb'] as String?,
+      cutout: j['cutout'] as String?,
+      clearart: j['clearart'] as String?,
     );
   }
 }
@@ -354,28 +383,25 @@ class CoverEnricher {
     if (art == null) {
       if (_generic.contains(name.trim().toLowerCase())) return null;
       try {
-        final r = await http.get(
-          Uri.parse('https://theaudiodb.com/api/v1/json/2/search.php?s=${Uri.encodeComponent(name)}'),
-          headers: {'User-Agent': _ua},
-        ).timeout(const Duration(seconds: 8));
-        if (r.statusCode != 200) return null;
-        final list = (jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true))['artists'] as List?) ?? const [];
-        if (list.isEmpty) return null;
-        final a = list.first as Map<String, dynamic>;
-        String? s(String k) {
-          final v = (a[k] as String?)?.trim();
-          return (v == null || v.isEmpty) ? null : v;
+        // **Een tweede poging met de accenten eraf, en die is niet theoretisch.** TheAudioDB's
+        // zoekfunctie vindt `Beyoncé` niet en `Beyonce` wel; hetzelfde voor Céline Dion. Gemeten op
+        // 06-09-2026: van de 268 artiestnamen in deze bibliotheek dragen er dertien een niet-ASCII
+        // teken — Beyoncé, Céline Dion, Édith Piaf, Tiësto, Alizée, Hélène Ségara, Emeli Sandé,
+        // Chimène Badi, Gérard Lenorman, Âme, en `Lil’ Kim` met een krulapostrof. Die kregen dus
+        // nooit een foto, een logo of een backdrop.
+        //
+        // Wrang genoeg maakte een eerdere reparatie dit erger: sinds `canonicalName` een accent
+        // laat winnen van het aantal, toont de app juist de spelling die deze bron niet kent.
+        //
+        // Via [normKey] en niet met een eigen zeef: die vouwt accenten al plat, haalt de apostrof
+        // weg en normaliseert de spaties — precies wat hier nodig is, en het is één begrip van
+        // "dezelfde naam" in plaats van twee.
+        art = await _zoekArtiestBeeld(name);
+        final plat = normKey(name);
+        if (art == null && plat.isNotEmpty && plat != name.toLowerCase()) {
+          art = await _zoekArtiestBeeld(plat);
         }
-
-        art = ArtistArt(
-          logo: s('strArtistLogo'),
-          // Fanart is the wide, cinematic one; the wide thumb is the next best framing.
-          backdrop: s('strArtistFanart') ?? s('strArtistWideThumb') ?? s('strArtistBanner'),
-          // A proper portrait. A wide backdrop cropped into a banner is a horizontal slice, and
-          // where the face lands in it is luck — this is what guarantees you actually see them.
-          thumb: s('strArtistThumb') ?? s('strArtistCutout'),
-        );
-        if (art.isEmpty) return null;
+        if (art == null) return null;
         await _artistArtDir.create(recursive: true);
         await meta.writeAsString(jsonEncode(art.toJson()));
       } catch (_) {
@@ -386,14 +412,53 @@ class CoverEnricher {
     final logo = await _cachedArt(name, 'logo', art.logo);
     final backdrop = await _cachedArt(name, 'backdrop', art.backdrop);
     final thumb = await _cachedArt(name, 'thumb', art.thumb);
+    final cutout = await _cachedArt(name, 'cutout', art.cutout);
+    final clearart = await _cachedArt(name, 'clearart', art.clearart);
     return ArtistArt(
       logo: art.logo,
       backdrop: art.backdrop,
       thumb: art.thumb,
+      cutout: art.cutout,
+      clearart: art.clearart,
       logoBytes: logo,
       backdropBytes: backdrop,
       thumbBytes: thumb,
+      cutoutBytes: cutout,
+      clearartBytes: clearart,
     );
+  }
+
+  /// Eén zoekopdracht bij TheAudioDB. Null als er niets is — dan probeert de aanroeper het nog
+  /// eens met een platgeslagen naam; zie [artistArt].
+  Future<ArtistArt?> _zoekArtiestBeeld(String q) async {
+    final r = await http.get(
+      Uri.parse('https://theaudiodb.com/api/v1/json/2/search.php?s=${Uri.encodeComponent(q)}'),
+      headers: {'User-Agent': _ua},
+    ).timeout(const Duration(seconds: 8));
+    if (r.statusCode != 200) return null;
+    final list =
+        (jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true))['artists'] as List?) ?? const [];
+    if (list.isEmpty) return null;
+    final a = list.first as Map<String, dynamic>;
+    String? s(String k) {
+      final v = (a[k] as String?)?.trim();
+      return (v == null || v.isEmpty) ? null : v;
+    }
+
+    final art = ArtistArt(
+      logo: s('strArtistLogo'),
+      // Fanart is the wide, cinematic one; the wide thumb is the next best framing.
+      backdrop: s('strArtistFanart') ?? s('strArtistWideThumb') ?? s('strArtistBanner'),
+      // A proper portrait. A wide backdrop cropped into a banner is a horizontal slice, and
+      // where the face lands in it is luck — this is what guarantees you actually see them.
+      //
+      // De cutout staat hier NIET meer als terugval: hij heeft zijn eigen veld gekregen, want als
+      // noodgreep werd hij nooit gekozen. Zie [ArtistArt.heeftVrijstaand].
+      thumb: s('strArtistThumb'),
+      cutout: s('strArtistCutout'),
+      clearart: s('strArtistClearart'),
+    );
+    return art.isEmpty ? null : art;
   }
 
   Directory get _artistArtDir => Directory(_dir('artistart'));

@@ -1120,6 +1120,11 @@ class DiscogsService {
       name: (b['name'] as String?)?.trim() ?? name,
       // Discogs marks up its profiles with [a=Name] and [l=Label] links; readable text wins here.
       profile: _plain((b['profile'] as String?)?.trim() ?? ''),
+      realname: (b['realname'] as String?)?.trim() ?? '',
+      groups: [
+        for (final g in (b['groups'] as List<dynamic>? ?? const []))
+          if (g is Map<String, dynamic> && (g['name'] as String?) != null) g['name'] as String,
+      ],
       members: [
         for (final m in (b['members'] as List<dynamic>? ?? const []))
           if (m is Map<String, dynamic> && (m['name'] as String?) != null) m['name'] as String,
@@ -1150,12 +1155,29 @@ class DiscogsArtist {
   final String name, profile;
   final List<String> members, aliases;
   final List<DiscogsImage> images;
+
+  /// De naam achter de artiestennaam: "Michael Joseph Jackson" bij Michael Jackson.
+  ///
+  /// Leeg als Discogs hem niet kent, en bij een groep vrijwel altijd leeg — een band heeft geen
+  /// burgerlijke naam. De aanroeper hoort hem alleen te tonen als hij iets TOEVOEGT: "Adele" met
+  /// echte naam "Adele" is ruis.
+  final String realname;
+
+  /// De groepen waar deze artiest in speelde: The Jackson 5, The Jacksons, USA For Africa.
+  ///
+  /// De tegenhanger van [members] — die staat op de band en noemt de personen, deze staat op de
+  /// persoon en noemt de banden. Op een artiestpagina is precies één van de twee gevuld, en samen
+  /// vormen ze de rij "Ook in".
+  final List<String> groups;
+
   const DiscogsArtist({
     required this.id,
     required this.name,
     this.profile = '',
+    this.realname = '',
     this.members = const [],
     this.aliases = const [],
+    this.groups = const [],
     this.images = const [],
   });
 

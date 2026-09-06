@@ -22,6 +22,47 @@ import 'package:flutter/material.dart';
 
 import 'kleuren.dart';
 
+/// De naam van een artiest, paginabreed. Alleen daar, en alleen in hoofdletters.
+///
+/// **Waarom deze maat bestaat.** De ladder liep van 11 tot 25, en 71% van al het gebruik zat tussen
+/// 11 en 13,5 — mooi voor een lijst, maar dan is er geen enkel moment van rust. Een artiestpagina
+/// die opent met een naam van 25 punten opent met een tabelkop. Het contrast tussen deze maat en
+/// [kOpschrift] van 11 ís de hiërarchie; alles daartussen blijft zoals het was.
+///
+/// De negatieve spatiëring hoort bij het gewicht: op deze grootte staan letters van 800 anders veel
+/// te ruim. Schaalt mee met de breedte — zie `artiestNaamGrootte`.
+const kDisplay = TextStyle(
+  fontSize: 112,
+  fontWeight: FontWeight.w800,
+  letterSpacing: -3,
+  height: .88,
+  color: kTekst,
+);
+
+/// De kop boven een sectie op een pagina die met [kDisplay] opent — DISCOGRAFIE, OVER.
+const kDisplayKlein = TextStyle(
+  fontSize: 56,
+  fontWeight: FontWeight.w800,
+  letterSpacing: -1.5,
+  height: 1,
+  color: kTekst,
+);
+
+/// Hoe groot de artiestnaam op dít scherm mag zijn.
+///
+/// Eén plek in plaats van vier losse getallen. De maten komen uit de ontwerpschetsen: 132 op een
+/// bureaublad, 84 op een iPad liggend, 76 staand, 46 op een telefoon of televisie. Alles daarbuiten
+/// schaalt mee met de breedte, met een bodem zodat een heel smal venster niet in onleesbaarheid
+/// eindigt.
+double artiestNaamGrootte(double breedte) {
+  if (breedte >= 1280) return 132;
+  if (breedte >= 1100) return 96;
+  if (breedte >= 900) return 84;
+  if (breedte >= 700) return 76;
+  if (breedte >= 500) return 58;
+  return (breedte * .118).clamp(34, 46);
+}
+
 /// De naam van een scherm, of van een album op zijn eigen pagina.
 const kKopGroot = TextStyle(
   fontSize: 25,

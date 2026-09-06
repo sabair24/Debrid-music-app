@@ -77,6 +77,26 @@ void setTvModeForTest(bool value) => _isTv = value;
 /// narrow layout actually works.
 bool isCompact(BuildContext context) => MediaQuery.sizeOf(context).width < 600;
 
+/// Is dit een scherm dat wél naast elkaar past, maar géén bureaublad is?
+///
+/// **Het gat dat dit dicht.** Er was precies één drempel, en alles erboven kreeg dezelfde indeling:
+/// een iPad in portret is 834 punten breed en kwam daarmee in dezelfde bak als een monitor van
+/// 2560. Twee plekken hebben dat opgemerkt en er lokaal omheen gerekend — de spelerbalk
+/// (`main.dart`, "twee blokken van 280 plus de knoppen passen niet op een iPad in portret") en de
+/// bovenbalk — maar de rest van de app weet het niet.
+///
+/// **De grenzen, en waarom juist deze.** Een iPad is 834 (portret) of 1194 (liggend); een Shield
+/// legt op 960 uit maar wordt door [isTv] al apart afgehandeld. Onder de 600 stapelt alles al
+/// ([isCompact]); vanaf 1280 is er ruimte voor een bureaubladindeling met een kolom ernaast. Wat
+/// daartussen zit is breed genoeg voor twee kolommen en te smal voor drie.
+///
+/// Gebruik dit voor RUIMTE — kleinere goten, minder diepe inspringing, minder kolommen — niet om
+/// dingen te verbergen. Een iPad kan alles wat een pc kan; hij heeft alleen minder plek.
+bool isTablet(BuildContext context) {
+  final w = MediaQuery.sizeOf(context).width;
+  return w >= 600 && w < 1280;
+}
+
 /// How far the disc slides out from behind the sleeve, as a fraction of the sleeve's width.
 ///
 /// This is reserved WIDTH: [AlbumArt] lays out `size * (1 + factor)`, so on a phone in portrait

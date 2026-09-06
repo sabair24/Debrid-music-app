@@ -16531,6 +16531,510 @@ class _ArtistHeroState extends State<ArtistHero> {
       style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w800, letterSpacing: -.5));
 }
 
+/// Eén feit onder een klein opschrift: "SOORT / Person · USA · 1964–2009".
+///
+/// Het opschrift is [kOpschrift] — 11 punten, w700, +.6 spatiëring. Dat bestond al en is precies
+/// het kleine gespatieerde label uit het ontwerp; er hoefde niets nieuws voor bedacht te worden.
+class _Feit extends StatelessWidget {
+  const _Feit(this.opschrift, {this.tekst, this.kind});
+  final String opschrift;
+  final String? tekst;
+  final Widget? kind;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(opschrift.toUpperCase(), style: kOpschrift),
+          const SizedBox(height: 6),
+          kind ?? Text(tekst ?? '', style: kTekstNormaal.copyWith(fontSize: 13.5)),
+        ],
+      );
+}
+
+/// Een schijf die er niet is: donker plastic met de hoes als etiket in het midden.
+///
+/// **Alleen als terugval, en met opzet duidelijk anders dan een scan.** Zie de uitleg bij het
+/// gebruik in [AlbumArt]: een echte cd-scan toont de bedrukking van díé persing, en die willen we
+/// tonen als hij er is. Is hij er niet — zes van de tien platen — dan is dit beter dan een lege
+/// hoes zonder gebaar, zolang het maar niet doet alsof.
+///
+/// Het etiket is 34% van de schijf. Op een echte cd is het bedrukte vlak ongeveer 46 van de 120 mm;
+/// iets kleiner leest hier beter, want het is een hoes en geen ronde bedrukking.
+class _GetekendeSchijf extends StatelessWidget {
+  const _GetekendeSchijf({required this.label, required this.maat});
+  final Uint8List label;
+  final double maat;
+
+  @override
+  Widget build(BuildContext context) {
+    final etiket = maat * .34;
+    return SizedBox(
+      width: maat,
+      height: maat,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          DecoratedBox(
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              // Een glans die niet meedraait zou vreemd staan; deze zit ín de schijf en draait mee,
+              // precies zoals het licht over een echte plaat loopt.
+              gradient: RadialGradient(
+                center: Alignment(-.24, -.36),
+                radius: .92,
+                colors: [kBovenop, Color(0xFF12141C), Color(0xFF08090D)],
+                stops: [0, .46, 1],
+              ),
+            ),
+            child: SizedBox(width: maat, height: maat),
+          ),
+          ClipOval(
+            child: Image.memory(label,
+                width: etiket,
+                height: etiket,
+                fit: BoxFit.cover,
+                cacheWidth: decodeWidth(etiket),
+                errorBuilder: (_, __, ___) => const SizedBox()),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// De platen die je van deze artiest hebt, als getrapte genummerde lijst.
+///
+/// **Waarom een lijst en geen raster.** Een raster van vierkante tegels zegt over elke plaat
+/// precies evenveel, en dat is nu juist niet waar: je eigen platen zijn er een handvol, en dan is
+/// een lijst met een titel van dertig punten leesbaarder dan twaalf duimnagels. De VOLLEDIGE
+/// discografie blijft wél een raster — eenenzestig getrapte regels zijn een muur.
+///
+/// **De trap.** Elke regel springt een stukje verder in en dan weer terug: 0 / 72 / 24 / 128 / 48 /
+/// 96, herhalend. Dat ritme komt uit het ontwerp waar Saber om vroeg. Het is versiering, en daarom
+/// gaat hij eraf zodra hij in de weg zit:
+///
+///   * **op een televisie** staat de lijst RECHT. Met vier pijltjes moet de markering
+///     voorspelbaar omlaag lopen; schuin springen is daar geen speelsheid maar een doolhof.
+///   * **op een telefoon** wordt de trap halfzo diep (0 / 20), want meer inspringing eet de titel
+///     op en dan is de speelsheid het lezen niet meer waard.
+class GetrapteLijst extends StatefulWidget {
+  const GetrapteLijst({super.key, required this.albums});
+  final List<Album> albums;
+
+  @override
+  State<GetrapteLijst> createState() => _GetrapteLijstState();
+}
+
+class _GetrapteLijstState extends State<GetrapteLijst> {
+  /// Welke plaat het paneel ernaast toont. Begint bij de nieuwste — de lijst staat op jaar.
+  int _aan = 0;
+
+  static const _trap = [0.0, 72.0, 24.0, 128.0, 48.0, 96.0];
+
+  @override
+  Widget build(BuildContext context) {
+    final smal = isCompact(context);
+    final breed = !smal && !isTv && MediaQuery.sizeOf(context).width >= 1000;
+    final marge = smal ? 18.0 : (isTablet(context) ? 28.0 : 56.0);
+    final aan = _aan.clamp(0, widget.albums.length - 1);
+
+    final lijst = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < widget.albums.length; i++)
+          _rij(context, i, aan, smal: smal, recht: isTv),
+      ],
+    );
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(marge, 8, marge, 24),
+      child: breed
+          ? Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: lijst),
+                const SizedBox(width: 56),
+                _paneel(widget.albums[aan]),
+              ],
+            )
+          : lijst,
+    );
+  }
+
+  Widget _rij(BuildContext context, int i, int aan, {required bool smal, required bool recht}) {
+    final a = widget.albums[i];
+    final gekozen = i == aan;
+    final inspring = recht ? 0.0 : (smal ? (i.isEven ? 0.0 : 20.0) : _trap[i % _trap.length]);
+    final jaar = a.year;
+
+    final regel = Padding(
+      padding: EdgeInsets.only(left: inspring),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: EdgeInsets.only(top: smal ? 7 : 11),
+            child: SizedBox(
+              width: 26,
+              child: Text('${i + 1}'.padLeft(2, '0'),
+                  style: kOpschrift.copyWith(color: gekozen ? kTekst : kUitgezet)),
+            ),
+          ),
+          // Op een televisie een duimnagel erbij: daar is geen paneel ernaast, en zonder beeld is
+          // een lijst met vier pijltjes wel erg kaal.
+          if (recht) ...[
+            SizedBox(
+              width: 44,
+              height: 44,
+              child: cover(a.cover, size: 44, radius: 2),
+            ),
+            const SizedBox(width: 14),
+          ],
+          Flexible(
+            child: Text(
+              a.title.toUpperCase(),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: smal ? 19 : (isTv ? 24 : 34),
+                fontWeight: FontWeight.w700,
+                letterSpacing: smal ? -.4 : -.8,
+                height: 1.05,
+                color: gekozen ? kTekst : kGedempt,
+                decoration: gekozen && !recht ? TextDecoration.underline : null,
+                decorationColor: kTekst,
+                decorationThickness: 2,
+              ),
+            ),
+          ),
+          if (jaar != null) ...[
+            const SizedBox(width: 12),
+            Padding(
+              padding: EdgeInsets.only(top: smal ? 7 : 11),
+              child: Text('[ $jaar ]', style: kOpschrift),
+            ),
+          ],
+        ],
+      ),
+    );
+
+    // MouseRegion buiten de Pressable: aanwijzen is kijken, aantikken is openen. Op een toestel
+    // zonder muis gebeurt het eerste nooit en blijft de nieuwste plaat in het paneel staan.
+    return MouseRegion(
+      onEnter: (_) => setState(() => _aan = i),
+      child: Pressable(
+        onPressed: () => openPagina(context, (_) => AlbumDetailPage(album: a)),
+        borderRadius: BorderRadius.circular(6),
+        // Geen ring om een regel die al onderstreept wordt; op tv wél, want daar is de ring het
+        // enige dat zegt waar je bent.
+        ringOnFocus: isTv,
+        onFocusChange: (heeft) {
+          if (heeft && mounted) setState(() => _aan = i);
+        },
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: smal ? 5 : 9),
+          child: regel,
+        ),
+      ),
+    );
+  }
+
+  Widget _paneel(Album a) => SizedBox(
+        width: 420,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 420 logische punten, dus op een scherm met dubbele dichtheid wordt hij op 840
+            // gedecodeerd — `decodeWidth` doet dat, geklemd op vier keer.
+            cover(a.cover, size: 420, radius: 0),
+            const SizedBox(height: 18),
+            Text(a.title.toUpperCase(),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: kKop.copyWith(letterSpacing: -.4)),
+            const SizedBox(height: 8),
+            Text(
+              [
+                if (a.year != null) '${a.year}',
+                '${a.tracks.length} nummers',
+                if (a.edition != null) a.edition!,
+              ].join(' · '),
+              style: kOpschrift,
+            ),
+          ],
+        ),
+      );
+}
+
+/// De kop van de artiestpagina: de naam paginabreed, met de artiest ernaast uitgeknipt.
+///
+/// **Waarom dit naast [ArtistHero] staat en die niet vervangt.** Die kop wordt ook door de
+/// personenpagina gebruikt en heeft zijn eigen, duur betaalde meetkunde. Deze is een ander ding:
+/// een openingsbeeld in plaats van een kaartje, met een naam van honderd punten in plaats van
+/// vierendertig. Twee vormen naast elkaar is eerlijker dan één vorm met een vlag erin.
+///
+/// **Wat hij wél erft, en dat is het belangrijkste:** de hoogte wordt GEMETEN, nooit begroot. Zie
+/// de uitleg in [ArtistHero] — een knoppenrij die buiten haar eigen vak valt tekent nog wel maar
+/// vángt geen tik, en dat is daar twee keer gebeurd met een berekende hoogte. Hier staat alleen een
+/// MINIMUMhoogte: die kan de inhoud nooit afsnijden, want inhoud die meer nodig heeft duwt hem
+/// gewoon op. `test/artiestkop_knoppen_test.dart` bewaakt dat voor allebei de koppen.
+///
+/// **De beeldladder.** `cutout` → `clearart` → portret in een cirkel → alleen de naam. Gemeten op
+/// 06-09-2026: tien van de dertien artiesten uit deze bibliotheek hebben een cutout, elf een
+/// clearart. De laatste trap moet er dus goed uitzien en niet als een gat — daar draagt de naam
+/// het kader alleen.
+class EditorialeKop extends StatelessWidget {
+  const EditorialeKop({
+    super.key,
+    required this.naam,
+    this.art,
+    this.fallbackImage,
+    this.soort,
+    this.bibliotheek,
+    this.genres = const [],
+    this.groepen = const [],
+    this.onGroep,
+    this.echteNaam,
+    this.actions = const [],
+  });
+
+  final String naam;
+  final ArtistArt? art;
+  final Uint8List? fallbackImage;
+
+  /// "Person · USA · 1964–2009" — `CatalogArtist.detail`, dat tot nu toe nergens getekend werd.
+  final String? soort;
+  final String? bibliotheek;
+  final List<String> genres;
+
+  /// Discogs' `groups` (of `members` bij een band) — opgehaald bij elke opening van de fotokiezer
+  /// en daar meteen weggegooid.
+  final List<String> groepen;
+  final void Function(String)? onGroep;
+  final String? echteNaam;
+  final List<Widget> actions;
+
+  @override
+  Widget build(BuildContext context) {
+    final breedte = MediaQuery.sizeOf(context).width;
+    final smal = isCompact(context);
+    final tablet = isTablet(context);
+    final marge = smal ? 18.0 : (tablet ? 28.0 : 56.0);
+    final naamGrootte = artiestNaamGrootte(breedte);
+
+    final achtergrond = art?.backdropBytes ?? fallbackImage;
+    final vrijstaand = art?.cutoutBytes ?? art?.clearartBytes;
+    final portret = art?.thumbBytes ?? fallbackImage;
+
+    // Zwart-wit, en dat is het ontwerp: de enige kleur op de pagina komt uit de hoezen. Een
+    // matrix en geen tweede afbeelding — dit kost geen geheugen en geen decodering.
+    Widget grijs(Widget kind) => ColorFiltered(
+          colorFilter: const ColorFilter.matrix(<double>[
+            0.2126, 0.7152, 0.0722, 0, 0, //
+            0.2126, 0.7152, 0.0722, 0, 0, //
+            0.2126, 0.7152, 0.0722, 0, 0, //
+            0, 0, 0, 1, 0, //
+          ]),
+          child: kind,
+        );
+
+    // Hoeveel van de kop de vrijstaande figuur mag vullen. Op een telefoon staat hij achter de
+    // naam en mag hij klein blijven; breed is hij het beeld.
+    final figuurHoogte = smal ? 300.0 : (tablet ? 430.0 : 700.0);
+
+    final naamKleur = Theme.of(context).textTheme.bodyLarge?.color ?? kTekst;
+    final woorden = naam.trim().split(RegExp(r'\s+'));
+    // Twee regels met de tweede ingesprongen — het ritme uit het ontwerp. Bij een naam van één
+    // woord blijft het één regel; inspringen heeft dan niets om zich toe te verhouden.
+    final kop = woorden.length > 1
+        ? [woorden.first, woorden.skip(1).join(' ')]
+        : [woorden.first];
+
+    return ClipRect(
+      child: ConstrainedBox(
+        // MINIMUM, geen vaste maat. Zie de klasse-uitleg: inhoud die meer nodig heeft duwt hem op,
+        // dus er kan hier nooit iets buiten het vak vallen.
+        constraints: BoxConstraints(
+          minHeight: smal ? 0 : (breedte * .52).clamp(380.0, 820.0),
+        ),
+        child: Stack(
+          fit: StackFit.loose,
+          children: [
+            if (achtergrond != null)
+              Positioned.fill(
+                child: grijs(Image.memory(achtergrond,
+                    fit: BoxFit.cover,
+                    // Klein gedecodeerd: hier gaat een verloop overheen en de figuur staat ervoor.
+                    cacheWidth: decodeWidth(smal ? 220 : 520),
+                    alignment: const Alignment(0, -.35),
+                    errorBuilder: (_, __, ___) => const SizedBox())),
+              ),
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Color(0x44000000),
+                      Color(0x66000000),
+                      Color(0xDB07080C),
+                      kAchtergrond,
+                    ],
+                    stops: [0, .30, .58, 1],
+                  ),
+                ),
+              ),
+            ),
+            // En van links, zodat de letters altijd op een rustige ondergrond staan — ook als de
+            // foto daar toevallig licht is.
+            if (!smal)
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.centerLeft,
+                      end: Alignment.centerRight,
+                      colors: [kAchtergrond, Color(0x5907080C), Color(0x0007080C)],
+                      stops: [0, .44, .74],
+                    ),
+                  ),
+                ),
+              ),
+
+            // De vrijstaande artiest. Rechts, en met opzet ACHTER de naam in stapelvolgorde op een
+            // telefoon — daar is geen breedte om ze naast elkaar te zetten.
+            if (vrijstaand != null)
+              Positioned(
+                right: smal ? -18 : marge,
+                bottom: 0,
+                child: grijs(Image.memory(vrijstaand,
+                    height: figuurHoogte,
+                    fit: BoxFit.contain,
+                    alignment: Alignment.bottomCenter,
+                    errorBuilder: (_, __, ___) => const SizedBox())),
+              ),
+
+            Padding(
+              padding: EdgeInsets.fromLTRB(marge, smal ? 44 : 56, marge, smal ? 18 : 28),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('[ Artiest ]', style: kOpschrift),
+                  SizedBox(height: smal ? 120 : 150),
+                  // De naam. Geen laatste trap nodig als er geen beeld is: dan draagt hij het
+                  // kader alleen, en dat is een compositie in plaats van een gat.
+                  for (var i = 0; i < kop.length; i++)
+                    Padding(
+                      padding: EdgeInsets.only(left: i == 0 ? 0 : naamGrootte * .52),
+                      child: Text(
+                        kop[i].toUpperCase(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: kDisplay.copyWith(
+                          fontSize: naamGrootte,
+                          letterSpacing: -naamGrootte * .027,
+                          color: naamKleur,
+                        ),
+                      ),
+                    ),
+                  if (echteNaam != null && echteNaam!.trim().isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Padding(
+                      padding: EdgeInsets.only(left: naamGrootte * .55),
+                      child: Text(echteNaam!, style: kOpschrift),
+                    ),
+                  ],
+
+                  SizedBox(height: smal ? 20 : 30),
+                  // Als er een vrijstaande figuur rechts staat, mag de feitenstrook daar niet
+                  // onderdoor lopen — vandaar de rechtermarge die met de figuur meeschaalt.
+                  Padding(
+                    padding: EdgeInsets.only(
+                        right: (vrijstaand != null && !smal) ? figuurHoogte * .62 : 0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Divider(height: 1, thickness: 1, color: kLijn),
+                        const SizedBox(height: 18),
+                        Wrap(
+                          spacing: 40,
+                          runSpacing: 16,
+                          children: [
+                            if (soort != null && soort!.trim().isNotEmpty)
+                              _Feit('Soort', tekst: soort),
+                            if (bibliotheek != null) _Feit('In je bibliotheek', tekst: bibliotheek),
+                            if (genres.isNotEmpty)
+                              _Feit('Genre', tekst: genres.take(3).join(' · ')),
+                            if (groepen.isNotEmpty)
+                              _Feit('Ook in',
+                                  kind: Wrap(
+                                    spacing: 12,
+                                    children: [
+                                      for (final g in groepen.take(3))
+                                        Pressable(
+                                          onPressed: onGroep == null ? null : () => onGroep!(g),
+                                          borderRadius: BorderRadius.circular(4),
+                                          ringOnFocus: true,
+                                          child: Text(g,
+                                              style: kTekstNormaal.copyWith(
+                                                fontSize: 13.5,
+                                                decoration: TextDecoration.underline,
+                                                decorationColor: kLijn,
+                                              )),
+                                        ),
+                                    ],
+                                  )),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  if (actions.isNotEmpty) ...[
+                    SizedBox(height: smal ? 18 : 26),
+                    // Een Wrap, om exact de reden die in [ArtistHero] staat: drie knoppen naast
+                    // elkaar passen niet op 411 punten, en een knop die van het vak afloopt vangt
+                    // geen tik meer.
+                    Wrap(spacing: 10, runSpacing: 10, children: actions),
+                  ],
+
+                  // Alleen als er niets vrijstaands is: dan komt het portret als rond beeld terug,
+                  // zodat de kop niet leeg oogt. Trap 3 van de ladder.
+                  if (vrijstaand == null && portret != null && !smal) ...[
+                    const SizedBox(height: 4),
+                  ],
+                ],
+              ),
+            ),
+
+            if (vrijstaand == null && portret != null && !smal)
+              Positioned(
+                right: marge,
+                bottom: 28,
+                child: ClipOval(
+                  child: grijs(Image.memory(portret,
+                      width: 220,
+                      height: 220,
+                      fit: BoxFit.cover,
+                      cacheWidth: decodeWidth(220),
+                      errorBuilder: (_, __, ___) => const SizedBox())),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// De naam van een artiest in zijn eigen lettering, of anders gewoon in letters.
 ///
 /// **Waarom dit los van [ArtistHero] staat.** Die kop is een heel vak: achtergrond, portret, waas,
@@ -16971,6 +17475,21 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   String? _bio;
   bool _busy = true;
 
+  /// Het beeld van de artiest: backdrop, logo, portret én — nieuw — de vrijstaande cutout.
+  ///
+  /// Stond eerst binnen [ArtistHero], die het zelf ophaalde. De kop is nu een tekenaar en geen
+  /// lader: de pagina weet als enige wanneer de naam verandert, en één ophaler is er één.
+  ArtistArt? _art;
+
+  /// Wat Discogs over de PERSOON weet en de app tot nu toe weggooide.
+  ///
+  /// `DiscogsService.artist()` werd precies één keer aangeroepen — bij het openen van de fotokiezer
+  /// — en daar werd alleen `.images` gebruikt. `realname`, `groups` en `aliases` reisden gratis mee
+  /// en verdwenen. Voor Michael Jackson is dat "Michael Joseph Jackson" en The Jackson 5 · The
+  /// Jacksons · USA For Africa; bij een band levert hetzelfde veld de ledenlijst.
+  String? _echteNaam;
+  List<String> _groepen = const [];
+
   /// "Klinkt als" — overgenomen van de oude, tweede artiestpagina.
   ///
   /// Die pagina kreeg je via Bibliotheek → Artiesten en had als enige dit blok én "Foto kiezen";
@@ -16984,6 +17503,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     _load();
     _loadBio();
     _loadRelated();
+    _loadArt();
+    _loadWie();
   }
 
   DiscographyService get _disco => DiscographyService(
@@ -17056,6 +17577,35 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     if (mounted && bio != null) setState(() => _bio = bio);
   }
 
+  /// Het beeld, en daarna de eigen keuze van de gebruiker eroverheen.
+  Future<void> _loadArt() async {
+    final naam = widget.artist.name;
+    final settings = context.read<AppSettings>();
+    final art = await CoverEnricher(settings).artistArt(naam);
+    if (!mounted || naam != widget.artist.name) return;
+    setState(() => _art = art);
+  }
+
+  /// Wie deze artiest verder nog is: echte naam en de groepen waar hij in speelde.
+  ///
+  /// Kost één Discogs-verzoek, en alleen als er een token is — zonder token doet `artist()` niets
+  /// en blijft de strook gewoon een veld korter. Een pagina zonder deze regel is nog steeds een
+  /// goede pagina.
+  Future<void> _loadWie() async {
+    try {
+      final naam = widget.artist.name;
+      final a = await DiscogsService(context.read<AppSettings>()).artist(naam);
+      if (a == null || !mounted || naam != widget.artist.name) return;
+      setState(() {
+        final echt = a.realname.trim();
+        // Alleen tonen als het iets TOEVOEGT. "Adele" met echte naam "Adele" is ruis.
+        _echteNaam = (echt.isEmpty || artistKey(echt) == artistKey(naam)) ? null : echt;
+        // Precies één van de twee is gevuld: `groups` op een persoon, `members` op een band.
+        _groepen = a.groups.isNotEmpty ? a.groups : a.members;
+      });
+    } catch (_) {/* geen token, of Discogs ligt eruit */}
+  }
+
   /// Verwante artiesten. Alleen Deezer kent die, en alleen op nummer.
   ///
   /// Een pagina die vanuit MusicBrainz of vanuit een kale naam is geopend draagt geen Deezer-id, dus
@@ -17084,6 +17634,30 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
         .where((a) => artistKey(a.artist) == artistKey(widget.artist.name))
         .toList()
       ..sort((a, b) => (b.year ?? 0).compareTo(a.year ?? 0));
+
+    // **Wat je van deze artiest hébt, in één zin.** De grondstof lag er — `Track.duration` staat op
+    // elk nummer — maar er was nergens een optelling, dus de kop kon wel "6 albums" zeggen en niet
+    // "74 nummers · 5u 12m". Een nummer zonder duur telt mee als nummer en niet als tijd; anders
+    // zou één kapot bestand de hele plaat korter maken.
+    final _eigenNummers = mine.fold<int>(0, (n, a) => n + a.tracks.length);
+    final _totaalSec = mine.fold<int>(
+        0, (s, a) => s + a.tracks.fold<int>(0, (t, x) => t + (x.duration?.inSeconds ?? 0)));
+    final _eigenTijd = _totaalSec <= 0
+        ? null
+        : _totaalSec >= 3600
+            ? '${_totaalSec ~/ 3600}u ${(_totaalSec % 3600) ~/ 60}m'
+            : '${_totaalSec ~/ 60}m';
+
+    // De genres van deze artiest bestaan niet als veld — ze worden afgeleid uit de styles die de
+    // albumpagina per plaat heeft onthouden (`rememberStyles`). Meest voorkomend eerst.
+    final _stijlTelling = <String, int>{};
+    for (final a in mine) {
+      for (final s in lib.stylesOf(a)) {
+        _stijlTelling.update(s, (n) => n + 1, ifAbsent: () => 1);
+      }
+    }
+    final _eigenGenres = _stijlTelling.entries.toList()
+      ..sort((x, y) => y.value.compareTo(x.value));
 
     // Samenvoegen gebeurt HIER, bij het tekenen, en niet in `_load`. Zo geeft elke hertekening
     // hetzelfde antwoord ongeacht welke bron het eerst binnenkwam — zie de test daarop.
@@ -17129,15 +17703,21 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           SliverToBoxAdapter(
             child: Stack(
               children: [
-                ArtistHero(
-                  name: widget.artist.name,
-                  ownBackdrop: false,
-                  subtitle: _busy
+                EditorialeKop(
+                  naam: widget.artist.name,
+                  art: _art,
+                  soort: widget.artist.detail,
+                  bibliotheek: _busy
                       ? 'Albums laden…'
                       : [
-                          if (mine.isNotEmpty) '${mine.length} in je bibliotheek',
-                          '${rijen.length} albums',
+                          if (mine.isNotEmpty) '${mine.length} albums',
+                          if (_eigenNummers > 0) '$_eigenNummers nummers',
+                          if (_eigenTijd != null) _eigenTijd,
                         ].join(' · '),
+                  genres: [for (final e in _eigenGenres) e.key],
+                  groepen: _groepen,
+                  onGroep: (g) => openArtist(context, g),
+                  echteNaam: _echteNaam,
                   actions: [
                     FilledButton.icon(
                       style: FilledButton.styleFrom(
@@ -17149,19 +17729,25 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                     ),
                     // De app raadt portret-of-achtergrond uit de vorm van een plaatje, en juist een
                     // gok hoor je te kunnen overrulen.
-                    FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                          backgroundColor: _panel2,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
-                      onPressed: () => showDialog<void>(
-                          context: context, builder: (_) => ArtistArtGallery(widget.artist.name)),
-                      icon: const Icon(Icons.photo_library_outlined, size: 18),
-                      label: const Text('Foto kiezen'),
-                    ),
+                    //
+                    // Niet op een televisie. De albumpagina haalt corrigeren, verwijderen en
+                    // uitgave-kiezen daar al weg — "geen speelwerk, en op een afstandsbediening
+                    // vooral moeizaam" — en deze twee knoppen zijn precies datzelfde soort werk.
+                    // Dat de artiestpagina die uitzondering niet had was een gat, geen keuze.
+                    if (!isTv)
+                      FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                            backgroundColor: _panel2,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+                        onPressed: () => showDialog<void>(
+                            context: context, builder: (_) => ArtistArtGallery(widget.artist.name)),
+                        icon: const Icon(Icons.photo_library_outlined, size: 18),
+                        label: const Text('Foto kiezen'),
+                      ),
                     // Alleen waar er iets te hernoemen valt: een artiest uit de catalogus waarvan
                     // je niets hebt, heeft geen tags om te corrigeren.
-                    if (mine.isNotEmpty) ...[
+                    if (mine.isNotEmpty && !isTv) ...[
                       // Waar een in tweeën gevallen discografie weer één wordt. De naam is het
                       // enige waar groeperen op af kan gaan, dus één album getagd als “Enrique”
                       // tussen een plank “Enrique Iglesias” zijn twee artiesten wat deze app
@@ -17201,27 +17787,15 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
               ],
             ),
           ),
-          if (_bio != null)
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
-                child: BioText(widget.artist.name, _bio!),
-              ),
-            ),
           // What you already own by this artist, first. Reaching an artist from an album used to
           // show only the online discography, so the records sitting on your own disk were the one
           // thing this page would not tell you about.
+          //
+          // Als LIJST en niet meer als raster — zie [GetrapteLijst] voor waarom, en waarom de
+          // volledige discografie hieronder wél een raster blijft.
           if (mine.isNotEmpty) ...[
             SliverToBoxAdapter(child: _sectionTitle('In mijn bibliotheek', '${mine.length}')),
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 18),
-              sliver: SliverGrid(
-                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                    maxCrossAxisExtent: 180, mainAxisSpacing: 14, crossAxisSpacing: 14, childAspectRatio: .74),
-                delegate:
-                    SliverChildBuilderDelegate((_, i) => AlbumCard(album: mine[i]), childCount: mine.length),
-              ),
-            ),
+            SliverToBoxAdapter(child: GetrapteLijst(albums: mine)),
           ],
           if (_busy)
             const SliverToBoxAdapter(
@@ -17283,6 +17857,14 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                 ),
               ),
             ],
+          ],
+          // De biografie ná de platen. Wie deze pagina opent komt voor de muziek; het verhaal is
+          // waar je blijft hangen als je gevonden hebt wat je zocht — dezelfde plek als "ABOUT
+          // ALBUM" in het ontwerp waar dit op gebaseerd is.
+          if (_bio != null) ...[
+            SliverToBoxAdapter(
+                child: _sectionTitle('Over ${widget.artist.name.split(' ').first}', 'TheAudioDB')),
+            SliverToBoxAdapter(child: _overBlok(_bio!)),
           ],
           // Onder de discografie, want dit is de uitgang van de pagina: als je hier niets vond, is de
           // volgende vraag "wie klinkt hier dan op".
@@ -17436,22 +18018,108 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     );
   }
 
-  Widget _sectionTitle(String title, String count) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 10, 24, 10),
-        child: Row(children: [
-          // Flexible, want een Row die niet past tekent gewoon door over wat ernaast staat — geen
-          // melding, geen streepjes, in een release-bouw alleen twee teksten over elkaar heen.
-          // Zo stond "Volledige discografie" op een telefoon dwars door de sorteerpil.
-          Flexible(
-            child: Text(title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-          ),
-          const SizedBox(width: 8),
-          Text(count, style: const TextStyle(color: _muted, fontSize: 13)),
-        ]),
-      );
+  /// Een sectiekop op deze pagina: groot, in hoofdletters, met een haarlijn erboven.
+  ///
+  /// Van 17 punten naar [kDisplayKlein]. Het contrast met [kOpschrift] van 11 ís de hiërarchie —
+  /// een pagina die opent met een naam van honderdtwintig punten en dan secties van zeventien zet,
+  /// valt na de kop meteen stil. De telling staat als opschrift rechts, waar hij niet met de kop
+  /// om ruimte hoeft te vechten.
+  Widget _sectionTitle(String title, String count) {
+    final smal = isCompact(context);
+    final marge = smal ? 18.0 : (isTablet(context) ? 28.0 : 56.0);
+    final kop = Text(title.toUpperCase(),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: kDisplayKlein.copyWith(fontSize: smal ? 28 : (isTv ? 30 : 56)));
+    return Padding(
+      padding: EdgeInsets.fromLTRB(marge, smal ? 26 : 46, marge, smal ? 10 : 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Divider(height: 1, thickness: 1, color: kLijn),
+          SizedBox(height: smal ? 16 : 26),
+          Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            // Flexible, want een Row die niet past tekent gewoon door over wat ernaast staat — geen
+            // melding, geen streepjes, in een release-bouw alleen twee teksten over elkaar heen.
+            // Zo stond "Volledige discografie" op een telefoon dwars door de sorteerpil.
+            Flexible(child: kop),
+            const SizedBox(width: 12),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(count, style: kOpschrift),
+            ),
+          ]),
+        ],
+      ),
+    );
+  }
+
+  /// De biografie als volwaardig blok, in twee kolommen met een foto ernaast.
+  ///
+  /// **Waarom niet meer die drie regels.** [BioText] toonde er drie (~250 tekens) met "Lees meer"
+  /// naar een dialoogvenster. Gemeten op de 29 teksten in Sabers eigen cache: gemiddeld 1980
+  /// tekens, van 180 tot 4683 — er zat dus 85 à 90% van elke biografie achter dat venster. Hier
+  /// staat de tekst zelf op de pagina; alleen de staart van een héél lange blijft ingeklapt, en
+  /// [BioText] doet dat inklappen nog steeds, met dezelfde dialoog erachter.
+  Widget _overBlok(String tekst) {
+    final smal = isCompact(context);
+    final marge = smal ? 18.0 : (isTablet(context) ? 28.0 : 56.0);
+    final foto = _art?.clearartBytes ?? _art?.backdropBytes;
+    final kolommen = smal || isTv ? 1 : 2;
+
+    // In twee kolommen zetten door de tekst op een zinsgrens te breken, niet midden in een woord.
+    final stukken = <String>[];
+    if (kolommen == 2 && tekst.length > 400) {
+      final half = tekst.length ~/ 2;
+      var knip = tekst.indexOf('. ', half);
+      if (knip < 0 || knip > tekst.length - 80) knip = half;
+      stukken.add(tekst.substring(0, knip + 1).trim());
+      stukken.add(tekst.substring(knip + 1).trim());
+    } else {
+      stukken.add(tekst);
+    }
+
+    final tekstBlok = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (stukken.length == 2)
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(child: _bioKolom(stukken[0])),
+            const SizedBox(width: 34),
+            Expanded(child: _bioKolom(stukken[1])),
+          ])
+        else
+          _bioKolom(stukken.first),
+      ],
+    );
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(marge, 0, marge, smal ? 20 : 34),
+      child: (foto == null || smal || isTv)
+          ? tekstBlok
+          : Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ClipRect(
+                  child: SizedBox(
+                    width: 460,
+                    height: 259,
+                    child: Image.memory(foto,
+                        fit: BoxFit.cover,
+                        cacheWidth: decodeWidth(460),
+                        errorBuilder: (_, __, ___) => const SizedBox()),
+                  ),
+                ),
+                const SizedBox(width: 48),
+                Expanded(child: tekstBlok),
+              ],
+            ),
+    );
+  }
+
+  Widget _bioKolom(String t) => Text(t,
+      style: const TextStyle(fontSize: 13.5, height: 1.68, color: Color(0xFFC7CBDA)));
 }
 
 class AlbumBrowsePage extends StatefulWidget {
@@ -20217,7 +20885,28 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     final vliegend =
         widget.heroTag == null ? sleeve : Hero(tag: widget.heroTag!, child: sleeve);
 
-    if (disc == null) return vliegend;
+    // **Geen scan? Dan een schijf met de vóórkant als etiket.**
+    //
+    // Hier stond `if (disc == null) return vliegend;` — geen scan, geen plaat, en dat was een
+    // bewuste keuze: *"een achterkant een cd noemen laat de verkeerde foto ronddraaien"*
+    // (`artwork.dart`). Die redenering blijft staan en wordt hier niet omzeild: dit BEWEERT niet
+    // dat er een scan is. Het is een getekende schijf met de hoes als klein etiket in het midden —
+    // zichtbaar iets anders dan een gefotografeerde cd, en niemand kan het voor een scan aanzien.
+    //
+    // Waarom het de moeite is: gemeten op Sabers bibliotheek heeft 487 van de 1481 opgeslagen
+    // uitgaven een cd-scan, en van veertien platen bij Cover Art Archive hadden er zes er een. Zes
+    // op de tien platen had dus helemaal geen plaat achter de hoes — en dat is precies het gebaar
+    // waar de albumpagina om draait.
+    final schijf = disc != null
+        ? Image.memory(disc,
+            width: s * .92,
+            height: s * .92,
+            fit: BoxFit.cover,
+            // This one rotates sixty times a second. Decoding it at 1200px to spin it inside a
+            // 600px circle is the most expensive picture in the app.
+            cacheWidth: decodeWidth(s * .92))
+        : (front == null ? null : _GetekendeSchijf(label: front, maat: s * .92));
+    if (schijf == null) return vliegend;
 
     // Built once and handed to the animation as a child, so none of this is rebuilt per frame.
     //
@@ -20233,13 +20922,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
       child: RepaintBoundary(
         child: ClipPath(
           clipper: const _DiscClipper(),
-          child: Image.memory(disc,
-              width: s * .92,
-              height: s * .92,
-              fit: BoxFit.cover,
-              // This one rotates sixty times a second. Decoding it at 1200px to spin it inside a
-              // 600px circle is the most expensive picture in the app.
-              cacheWidth: decodeWidth(s * .92)),
+          child: schijf,
         ),
       ),
     );

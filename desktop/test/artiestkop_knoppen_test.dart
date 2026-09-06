@@ -98,4 +98,110 @@ void main() {
 
     expect(tester.getRect(find.byType(ArtistHero)).height, 400);
   });
+
+  // ── En dezelfde garantie voor de kop die de artiestpagina sinds het herontwerp gebruikt ──
+  //
+  // [EditorialeKop] is een tweede vorm naast [ArtistHero], met een naam van honderd punten in
+  // plaats van vierendertig. De les hierboven is duur betaald en geldt daar net zo goed: hij zet
+  // dus geen vaste hoogte maar een MINIMUM, want inhoud die meer nodig heeft duwt een minimum
+  // gewoon op en kan er nooit buiten vallen.
+
+  testWidgets('de editoriale kop houdt zijn knoppen ook op een telefoon binnen', (tester) async {
+    tester.view.physicalSize = const Size(411 * 3, 900 * 3);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+
+    final getikt = <String>[];
+    await tester.pumpWidget(omhulsel(EditorialeKop(
+      naam: 'Enrique Iglesias',
+      soort: 'Person · ES · 1975–',
+      bibliotheek: '2 albums · 31 nummers · 2u 4m',
+      genres: const ['Pop', 'Latin'],
+      groepen: const ['The Beatles'],
+      echteNaam: 'Enrique Miguel Iglesias Preysler',
+      actions: [
+        for (final naam in _knoppen)
+          FilledButton(onPressed: () => getikt.add(naam), child: Text(naam)),
+      ],
+    )));
+    await tester.pump();
+
+    final kop = tester.getRect(find.byType(EditorialeKop));
+    for (final naam in _knoppen) {
+      final knop = tester.getRect(find.widgetWithText(FilledButton, naam));
+      expect(knop.bottom, lessThanOrEqualTo(kop.bottom),
+          reason: '"$naam" steekt onder de kop uit en vangt daar geen tik meer');
+      expect(knop.right, lessThanOrEqualTo(kop.right),
+          reason: '"$naam" loopt rechts van het scherm af');
+    }
+    for (final naam in _knoppen) {
+      await tester.tap(find.text(naam));
+    }
+    expect(getikt, _knoppen);
+  });
+
+  testWidgets('en op een iPad in portret ook — 834 punten is de krapste brede stand',
+      (tester) async {
+    // 834 valt boven de enige drempel die de app kende (600), dus dit scherm kreeg tot nu toe
+    // exact de indeling van een 2560-brede monitor. Juist hier moet het passen.
+    tester.view.physicalSize = const Size(834 * 2, 1194 * 2);
+    tester.view.devicePixelRatio = 2;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(omhulsel(EditorialeKop(
+      naam: 'Michael Jackson',
+      soort: 'Person · USA · 1964–2009',
+      bibliotheek: '6 albums · 74 nummers · 5u 12m',
+      genres: const ['Pop', 'Soul', 'R&B'],
+      actions: [
+        for (final naam in _knoppen)
+          FilledButton(onPressed: () {}, child: Text(naam)),
+      ],
+    )));
+    await tester.pump();
+
+    final kop = tester.getRect(find.byType(EditorialeKop));
+    for (final naam in _knoppen) {
+      final knop = tester.getRect(find.widgetWithText(FilledButton, naam));
+      expect(knop.bottom, lessThanOrEqualTo(kop.bottom), reason: '"$naam" valt uit de kop');
+      expect(knop.right, lessThanOrEqualTo(kop.right), reason: '"$naam" loopt van het scherm');
+    }
+  });
+
+  testWidgets('een naam van één woord springt niet in, en een lange naam wordt niet afgekapt',
+      (tester) async {
+    tester.view.physicalSize = const Size(1440, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    // Twee woorden: tweede regel ingesprongen. Eén woord: niets om je toe te verhouden.
+    await tester.pumpWidget(omhulsel(const EditorialeKop(naam: 'Stromae')));
+    await tester.pump();
+    expect(find.text('STROMAE'), findsOneWidget);
+
+    await tester.pumpWidget(omhulsel(const EditorialeKop(naam: 'Michael Jackson')));
+    await tester.pump();
+    expect(find.text('MICHAEL'), findsOneWidget);
+    expect(find.text('JACKSON'), findsOneWidget);
+  });
+
+  testWidgets('zonder enig beeld blijft de kop een compositie, geen gat', (tester) async {
+    // De laatste trap van de beeldladder: geen cutout, geen clearart, geen portret. Dan draagt de
+    // naam het kader alleen — en dat moet er goed uitzien, niet kapot.
+    tester.view.physicalSize = const Size(1440, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(omhulsel(const EditorialeKop(
+      naam: 'Phil Collins',
+      soort: 'Person · GB · 1951–',
+      bibliotheek: '3 albums · 40 nummers',
+    )));
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    final kop = tester.getRect(find.byType(EditorialeKop));
+    expect(kop.height, greaterThan(300), reason: 'de kop mag niet inzakken tot een regel tekst');
+    expect(find.text('PHIL'), findsOneWidget);
+  });
 }
