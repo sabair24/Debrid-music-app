@@ -224,6 +224,9 @@ class LanCatalog {
         artRoles: library.albumArtRoles(album.artist, album.title),
       ));
 
+      // Wat er per plaat handmatig is aangewezen. Eén keer per album opgevraagd en niet per nummer:
+      // dit draait over de hele bibliotheek bij elke verandering.
+      final rijen = library.rijToewijzingen(album.tracks);
       for (final t in album.tracks) {
         final tId = _trackIdCache.putIfAbsent(t.path, () => trackIdFor(t.path, root));
         trackById[tId] = t;
@@ -256,6 +259,9 @@ class LanCatalog {
           // een iPad heet ditzelfde nummer straks een stream-URL, en dan valt er niets meer te
           // meten of op te zoeken.
           echt: gemeten(t.path)?.toJson(),
+          // Zie [TrackDto.rij]: zonder dit ziet een telefoon nooit terug wat ze zelf heeft
+          // aangewezen, want daar staat de keuze niet — hij staat hier.
+          rij: rijen[t.path],
         ));
       }
     }
@@ -321,7 +327,17 @@ class LanCatalog {
         ..add(a.artRoles.entries.map((e) => '${e.key}=${e.value}').join(','));
     }
     for (final t in tracks) {
-      fingerprint..add(t.id)..add(t.title)..add('${t.trackNo}')..add('${t.sizeBytes}');
+      fingerprint
+        ..add(t.id)
+        ..add(t.title)
+        ..add('${t.trackNo}')
+        ..add('${t.sizeBytes}')
+        // En op welke rij je dit nummer zelf hebt gelegd. Precies dezelfde reden als bij de hoes en
+        // de scans hierboven, en hier gemeten in plaats van beredeneerd: zonder deze regel bleef de
+        // ETag gelijk na een toewijzing, kreeg elk toestel een 304, en zag je je eigen keuze nooit
+        // terug. Een toewijzing verandert geen enkele titel en geen enkel nummer — dat is nu juist
+        // de hele bedoeling ervan.
+        ..add(t.rij ?? '');
     }
 
     return CatalogSnapshot(

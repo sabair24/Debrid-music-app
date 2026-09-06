@@ -23724,26 +23724,66 @@ class _RijToewijzenDialogState extends State<RijToewijzenDialog> {
   AlbumCompleteness _indeling(LibraryStore lib) =>
       matchAlbumTracks(widget.official, widget.album.tracks, widget.album.artist,
           album: widget.album.title,
-          handmatig: lib.rijToewijzingen(widget.album.tracks));
+          handmatig: _metWijzigingen(lib.rijToewijzingen(widget.album.tracks)));
 
-  Future<void> _leg(Track t, int rij) async {
+  /// Wat je hebt aangewezen maar nog niet hebt opgeslagen. Pad → rijsleutel, of null voor losmaken.
+  ///
+  /// **Waarom er nu een opslaanknop is.** Elke losse toewijzing schreef meteen weg, en op een
+  /// telefoon is dat een ronde over het netwerk plus een volledige verversing van de catalogus —
+  /// bij vijf nummers vijf keer, met een venster dat ondertussen niet reageert. Nu is het één ronde
+  /// aan het eind, en kun je je bedenken voordat er iets vastligt. Gevraagd op 06-09-2026.
+  final Map<String, String?> _nogNietOpgeslagen = {};
+
+  bool get _vuil => _nogNietOpgeslagen.isNotEmpty;
+
+  /// De toewijzingen zoals ze er NU uitzien: wat er opgeslagen staat, met jouw wijzigingen eroverheen.
+  Map<String, String> _metWijzigingen(Map<String, String> opgeslagen) {
+    final uit = Map<String, String>.from(opgeslagen);
+    for (final e in _nogNietOpgeslagen.entries) {
+      if (e.value == null) {
+        uit.remove(e.key);
+      } else {
+        uit[e.key] = e.value!;
+      }
+    }
+    return uit;
+  }
+
+  void _leg(Track t, int rij) {
     if (_busy) return;
-    setState(() => _busy = true);
-    await context.read<LibraryStore>().wijsRijToe(t, rijSleutel(widget.official[rij]));
-    if (!mounted) return;
     setState(() {
-      _busy = false;
+      _nogNietOpgeslagen[t.path] = rijSleutel(widget.official[rij]);
       _gekozen = null;
     });
   }
 
-  Future<void> _laatLos(Track t) async {
+  void _laatLos(Track t) {
     if (_busy) return;
-    setState(() => _busy = true);
-    await context.read<LibraryStore>().wijsRijToe(t, null);
-    if (!mounted) return;
-    setState(() => _busy = false);
+    setState(() => _nogNietOpgeslagen[t.path] = null);
   }
+
+  Future<void> _bewaar() async {
+    if (_busy || !_vuil) return;
+    setState(() => _busy = true);
+    String? fout;
+    try {
+      await context.read<LibraryStore>().wijsRijenToe(Map.of(_nogNietOpgeslagen));
+    } catch (e) {
+      fout = '$e';
+    }
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (fout == null) _nogNietOpgeslagen.clear();
+      _fout = fout;
+    });
+    // Alleen sluiten als het écht gelukt is. Sloot dit venster hoe dan ook, dan was een mislukte
+    // opslag op een telefoon niet van een geslaagde te onderscheiden — en dat is precies het geval
+    // dat hier maandenlang stil verkeerd ging.
+    if (fout == null && mounted) Navigator.of(context).pop(true);
+  }
+
+  String? _fout;
 
   /// Eén bestand, als kaartje. Sleepbaar én aantikbaar — zie de klasse-uitleg.
   Widget _kaart(Track t, {required bool geplaatst}) {
@@ -23906,15 +23946,34 @@ class _RijToewijzenDialogState extends State<RijToewijzenDialog> {
                 ),
               ),
             ],
+            if (_fout != null) ...[
+              const SizedBox(height: 8),
+              Text('Opslaan lukte niet: $_fout',
+                  style: const TextStyle(color: Colors.orangeAccent, fontSize: 12)),
+            ],
             const SizedBox(height: 12),
             Wrap(
               alignment: WrapAlignment.end,
               spacing: kRuimte8,
               runSpacing: kRuimte8,
               children: [
+                // "Sluiten" wordt "Annuleren" zodra er iets openstaat, want dan gooit hij wél iets
+                // weg — en een knop die soms bewaart en soms weggooit moet dat zeggen.
                 TextButton(
-                  onPressed: () => Navigator.of(context).pop(true),
-                  child: const Text('Sluiten'),
+                  onPressed: _busy ? null : () => Navigator.of(context).pop(false),
+                  child: Text(_vuil ? 'Annuleren' : 'Sluiten'),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  onPressed: (_busy || !_vuil) ? null : _bewaar,
+                  child: _busy
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : Text(_vuil
+                          ? 'Opslaan (${_nogNietOpgeslagen.length})'
+                          : 'Opslaan'),
                 ),
               ],
             ),

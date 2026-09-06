@@ -1311,6 +1311,7 @@ class LanServer {
         op != 'artistArt' &&
         op != 'albumArtRole' &&
         op != 'renumber' &&
+        op != 'assignRows' &&
         album == null) {
       // The client is looking at a catalogue this PC has moved on from — say so, rather than
       // silently editing the wrong record.
@@ -1425,6 +1426,30 @@ class LanServer {
             await library.setAlbumArtRole(rolArtiest, rolAlbum, (body['role'] ?? '') as String,
                 (body['url'] ?? '') as String);
           }
+        case 'assignRows':
+          // "Nummers toewijzen" namens een ander toestel.
+          //
+          // **Dit ontbrak, en daardoor werkte dat venster alleen op de pc.** De client stuurde al
+          // een bewerking, maar er was niets dat hem aannam: hij belandde in de `default` hieronder
+          // en kreeg "Onbekende bewerking" terug. Op de gsm sleepte je een nummer naar een rij en
+          // er gebeurde niets. Gemeld op 06-09-2026.
+          //
+          // Op NUMMER-ids, net als `renumber` en `removeTracks` — vandaar ook de uitzondering op de
+          // albumcontrole hierboven: een toewijzing hangt aan bestanden, niet aan een album-id.
+          final keuzes = <String, String?>{};
+          for (final rauw in (body['rows'] as List? ?? const [])) {
+            if (rauw is! Map) continue;
+            final t = catalog.track('${rauw['trackId']}');
+            if (t == null) continue;
+            // Een lege rij is een geldige keuze: dat is "geef de beslissing terug aan de app".
+            final rij = rauw['row'] as String?;
+            keuzes[t.path] = (rij == null || rij.isEmpty) ? null : rij;
+          }
+          if (keuzes.isEmpty) {
+            return _json(req.response, {'error': 'Geen nummers gevonden om toe te wijzen.'},
+                status: HttpStatus.badRequest);
+          }
+          await library.wijsRijenToe(keuzes);
         case 'removeTracks':
           final paths = <String>[];
           for (final id in (body['trackIds'] as List? ?? const [])) {

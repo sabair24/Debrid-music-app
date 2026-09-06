@@ -224,6 +224,17 @@ class TrackDto {
   /// als kale map, zodat deze laag niets van de meetlogica hoeft te weten.
   final Map<String, dynamic>? echt;
 
+  /// Op welke RIJ van de uitgave dit bestand hoort, als iemand dat zelf heeft aangewezen.
+  ///
+  /// **Reist mee omdat de keuze op de PC staat en het scherm op een ander toestel.** Een telefoon
+  /// leest zijn eigen `corrections.json`, en daar staat niets in: de bibliotheek komt daar uit deze
+  /// catalogus. Zonder dit veld kwam een toewijzing die je op de gsm maakte wél bij de pc aan, maar
+  /// zag je er nooit iets van terug — de rij bleef leeg en bij de volgende synchronisatie was je
+  /// keuze van het scherm verdwenen.
+  ///
+  /// Null voor alles wat niemand heeft aangewezen, en dat is verreweg het meeste.
+  final String? rij;
+
   const TrackDto({
     required this.id,
     required this.albumId,
@@ -248,6 +259,7 @@ class TrackDto {
     this.artworkRef,
     this.addedMs = 0,
     this.echt,
+    this.rij,
   });
 
   /// True when the file is beyond what Sonos will accept (it plays FLAC/ALAC up to 24-bit but
@@ -279,6 +291,7 @@ class TrackDto {
         artworkRef: j['artworkRef'] as String?,
         addedMs: _int(j['addedMs']),
         echt: j['echt'] is Map ? Map<String, dynamic>.from(j['echt'] as Map) : null,
+        rij: j['rij'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -307,6 +320,7 @@ class TrackDto {
         // Alleen als er iets te melden valt. Bij een verse bibliotheek is dit veld voor bijna elk
         // nummer null, en een null per nummer meesturen kost bytes zonder iets te zeggen.
         if (echt != null) 'echt': echt,
+        if (rij != null && rij!.isNotEmpty) 'rij': rij,
       };
 }
 

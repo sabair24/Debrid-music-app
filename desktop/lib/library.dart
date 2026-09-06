@@ -2730,8 +2730,19 @@ class LibraryStore extends ChangeNotifier {
     // een iPad een stream-URL en geen bestandsnaam.
     final o = d.echt == null ? null : Echtheidsoordeel.fromJson(d.echt!);
     if (o != null) onthoudOordeelVanPc(pad, o);
+    // Dezelfde reden als de meting hierboven: de keuze staat op de pc en het pad heet hier anders.
+    // Zie [rijToewijzingen] — zonder deze regel leest een client een lege verzameling en gedraagt
+    // "Nummers toewijzen" zich alsof je nooit iets hebt aangewezen.
+    if ((d.rij ?? '').isNotEmpty) {
+      _rijenVanPc[pad] = d.rij!;
+    } else {
+      _rijenVanPc.remove(pad);
+    }
     return _trackFromDtoMet(d, pad);
   }
+
+  /// Wat de PC als handmatige rij-toewijzing kent, op het pad zoals dit toestel het noemt.
+  final Map<String, String> _rijenVanPc = {};
 
   Track _trackFromDtoMet(TrackDto d, String pad) => Track(
         path: pad,
@@ -4297,35 +4308,62 @@ extension LibraryRenumber on LibraryStore {
   /// Welke rij van de uitgave de gebruiker met de hand aan welk bestand heeft gehangen.
   ///
   /// Leeg voor vrijwel elke plaat: dit vult zich alleen waar iemand het zelf heeft aangewezen.
+  /// Welke bestanden een handmatig aangewezen rij hebben.
+  ///
+  /// **Op een client komt dat uit de catalogus en niet uit `corrections.json`.** Die staat daar leeg
+  /// — de hele bibliotheek komt van de pc — dus las dit op een telefoon altijd niets, en gedroeg
+  /// "Nummers toewijzen" zich alsof je nooit iets had aangewezen. Zie [TrackDto.rij].
   Map<String, String> rijToewijzingen(Iterable<Track> tracks) => {
         for (final t in tracks)
-          if (_corrections[t.path]?['rij'] case final r? when r.isNotEmpty) t.path: r,
+          if (isRemote) ...{
+            if (_rijenVanPc[t.path] case final r? when r.isNotEmpty) t.path: r,
+          } else ...{
+            if (_corrections[t.path]?['rij'] case final r? when r.isNotEmpty) t.path: r,
+          },
       };
+
+  /// Meer dan één toewijzing in één keer. `null` als waarde geeft die rij terug aan de app.
+  ///
+  /// **Waarom in bulk en niet per stuk.** Elke losse toewijzing is op een client een ronde over het
+  /// netwerk plus een volledige verversing van de catalogus — bij vijf nummers vijf keer, en je zit
+  /// ondertussen naar een venster te kijken dat niet reageert. Met een opslaanknop is het één
+  /// ronde, en heb je bovendien de kans om je te bedenken voordat er iets vastligt.
+  Future<void> wijsRijenToe(Map<String, String?> keuzes) async {
+    if (keuzes.isEmpty) return;
+    if (isRemote) {
+      return _editOnPc({
+        'op': 'assignRows',
+        'rows': [
+          for (final e in keuzes.entries)
+            if (_remoteTrackId(e.key) case final id?) {'trackId': id, 'row': e.value},
+        ],
+      });
+    }
+    for (final e in keuzes.entries) {
+      if (e.value == null || e.value!.isEmpty) {
+        final c = _corrections[e.key];
+        if (c == null) continue;
+        c.remove('rij');
+        if (c.isEmpty) _corrections.remove(e.key);
+      } else {
+        _correctionsFor(e.key)['rij'] = e.value!;
+      }
+    }
+    await saveCorrectionsNow();
+    refreshFromCorrections();
+  }
 
   /// Dit bestand hoort op díé rij. `null` geeft de beslissing terug aan de app.
   ///
   /// Zie [matchAlbumTracks.handmatig] voor waarom deze keuze vóór elke automatische vergelijking
   /// gaat. Bewust per bestand en niet per plaat: wie één rij rechtzet, hoort de rest niet vast te
   /// zetten op wat er op dat moment toevallig stond.
-  Future<void> wijsRijToe(Track t, String? sleutel) async {
-    if (isRemote) {
-      return _editOnPc({
-        'op': 'assignRow',
-        'trackId': _remoteTrackId(t.path),
-        'row': sleutel,
-      });
-    }
-    if (sleutel == null || sleutel.isEmpty) {
-      final c = _corrections[t.path];
-      if (c == null) return;
-      c.remove('rij');
-      if (c.isEmpty) _corrections.remove(t.path);
-    } else {
-      _correctionsFor(t.path)['rij'] = sleutel;
-    }
-    await saveCorrectionsNow();
-    refreshFromCorrections();
-  }
+  ///
+  /// Eén weg naar [wijsRijenToe] en geen eigen kopie. Hier stond een tweede uitvoering die op een
+  /// client een bewerking `assignRow` verstuurde — en die kende de pc niet, dus kwam er "Onbekende
+  /// bewerking" terug en gebeurde er op een telefoon niets. Twee wegen naar hetzelfde, waarvan er
+  /// één doodliep.
+  Future<void> wijsRijToe(Track t, String? sleutel) => wijsRijenToe({t.path: sleutel});
 }
 
 extension LibraryMove on LibraryStore {
