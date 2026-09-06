@@ -5625,12 +5625,20 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                 Text('${c.have} van ${c.total} nummers · ${missing.length} ontbreken',
                     style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                 Text(
-                    _officialBestFit
-                        ? 'Volgens ${c.source.isEmpty ? 'de officiële uitgave' : c.source}'
-                        // No pressing named everything on disk, so this is the closest one rather
-                        // than the record. Say so instead of presenting a near miss as fact.
-                        : 'Volgens de best passende uitgave — niet al je nummers staan erop',
-                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+                    // Eerst de scherpste vaststelling, en die komt uit de indeling die HIER net
+                    // uitgerekend is — niet uit [_officialBestFit], want die vlag is bij het
+                    // ophalen geschreven en zei bij vijf van de tien ergste gevallen niets. Zie
+                    // [AlbumCompleteness.geenEnkeleTreffer].
+                    c.geenEnkeleTreffer
+                        ? 'Geen van je bestanden staat op deze uitgave — kies een andere persing'
+                        : _officialBestFit
+                            ? 'Volgens ${c.source.isEmpty ? 'de officiële uitgave' : c.source}'
+                            // No pressing named everything on disk, so this is the closest one
+                            // rather than the record. Say so instead of presenting a near miss
+                            // as fact.
+                            : 'Volgens de best passende uitgave — niet al je nummers staan erop',
+                    style: TextStyle(
+                        color: c.geenEnkeleTreffer ? Colors.orangeAccent : _muted, fontSize: 11.5)),
               ],
             ),
           ),

@@ -210,6 +210,41 @@ void main() {
     });
   });
 
+  group('past deze uitgave überhaupt bij je bestanden', () {
+    // **Gemeten op 06-09-2026:** bij 43 van de 428 platen met een tracklijst paste géén enkel
+    // bestand op een rij — Janet Jacksons *Janet.* met 0 van 8, *Defected in the House* met 0 van
+    // 47, *Club Sounds* met 0 van 115. Geen daarvan was vastgezet; de app had ze zelf gekozen. Het
+    // scherm zei "0 van 8 nummers · 8 ontbreken · Volgens Discogs", en dat leest als "je mist alles"
+    // terwijl de PERSING de fout is.
+    test('DE KERN: past er niet één, dan is de persing het probleem', () {
+      final c = matchAlbumTracks(
+          [uitgave('Ne Me Quitte Pas', seconden: 232), uitgave('Amsterdam', seconden: 180)],
+          [bestand('Iets Heel Anders', seconden: 300)],
+          'Jacques Brel');
+      expect(c.geenEnkeleTreffer, isTrue);
+    });
+
+    test('maar één treffer is al genoeg om te zwijgen', () {
+      // Van een verzamelplaat van vijftig bezit je er vaak één, en dan is de persing gewoon goed.
+      // Daarom deze scherpe vorm en niet "weinig rijen gevuld".
+      final c = matchAlbumTracks(
+          [
+            uitgave('Halo', seconden: 261),
+            uitgave('Ne Me Quitte Pas', seconden: 232),
+            uitgave('Amsterdam', seconden: 180),
+          ],
+          [bestand('Halo', seconden: 261)],
+          'Beyoncé');
+      expect(c.geenEnkeleTreffer, isFalse);
+    });
+
+    test('en een plaat zonder bestanden meldt niets', () {
+      // Anders zou elke nog-niet-gedownloade plaat zichzelf als "verkeerde persing" aanmerken.
+      final c = matchAlbumTracks([uitgave('Halo', seconden: 261)], const [], 'Beyoncé');
+      expect(c.geenEnkeleTreffer, isFalse);
+    });
+  });
+
   group('de app zegt waarom een bestand geen plaats kreeg', () {
     // "Niet op deze uitgave" is een uitkomst, geen uitleg. Het heeft drie ronden raden op
     // schermafdrukken gekost om erachter te komen dat de nummerrij de "(feat. …)" wegtekent en dat

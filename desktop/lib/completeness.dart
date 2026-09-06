@@ -92,6 +92,25 @@ class AlbumCompleteness {
 
   /// Does this pressing name everything on disk? The question the pressing is chosen on.
   bool get namesEverything => slots.every((s) => s.index >= 0 || s.track == null);
+
+  /// **Geen ENKEL bestand van jou staat op deze uitgave.** Dan is niet jouw muziek het probleem maar
+  /// de gekozen persing.
+  ///
+  /// Gemeten op 06-09-2026 over de bibliotheek: van de 28 platen die nog weeskinderen hadden met
+  /// "de uitgave noemt geen nummer dat X heet", waren er tien waar géén enkel bestand op de rijen
+  /// paste — Janet Jacksons *Janet.* met 0 van 8, *Defected in the House* met 0 van 47, *Club Sounds*
+  /// met 0 van 115. Geen daarvan was vastgezet; de app had ze zelf gekozen.
+  ///
+  /// **En het stond er niet.** Er is al een vlag [AlbumFacts.bestFit] die "niet al je nummers staan
+  /// erop" meldt, maar die wordt bij het OPHALEN geschreven en de pagina rekent daarna zelf opnieuw
+  /// — met andere regels, want de matcher is sindsdien tien versies verder. Twee antwoorden op één
+  /// vraag, en bij vijf van die tien zei de vlag niets terwijl er nul rijen gevuld waren. Vandaar
+  /// dat dit uit de indeling komt die NU op het scherm staat.
+  ///
+  /// Bewust deze scherpe vorm en niet "weinig rijen gevuld": van een verzamelplaat van vijftig
+  /// nummers bezit je er vaak één, en dan is de persing gewoon goed. Past er niet één, dan is er
+  /// geen twijfel.
+  bool get geenEnkeleTreffer => matched == 0 && slots.any((s) => s.track != null);
 }
 
 /// Is this track a marked variant — a radio edit, a live take, a remix?
