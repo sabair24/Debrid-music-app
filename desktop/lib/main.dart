@@ -17015,8 +17015,11 @@ class EditorialeKop extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Divider(height: 1, thickness: 1, color: kLijn),
-                        const SizedBox(height: 18),
+                        // Hier stond een scheidingslijn over de volle breedte van de strook. Saber
+                        // wees hem aan op 06-09-2026: hij loopt dwars door de kop en langs de
+                        // artiest, en hij scheidt niets wat niet al door de witruimte gescheiden is.
+                        // De sectiekoppen hebben er wél een — daar staat hij tússen twee blokken.
+                        const SizedBox(height: 19),
                         Wrap(
                           spacing: 40,
                           runSpacing: 16,
