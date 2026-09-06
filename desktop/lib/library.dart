@@ -2576,6 +2576,12 @@ class LibraryStore extends ChangeNotifier {
       ]);
 
     _rebuildTrackIndexes();
+    // Ook hier, en niet alleen bij een schijfscan. Deze weg bouwt de platen voor de TELEFOON, en die
+    // krijgt zijn ingebakken hoezen van de pc — dus krijgt hij dezelfde verkeerde verzamelhoes te
+    // zien. Gemeld op 06-09-2026: *"kan ik die nieuwe fucties ook doen op de andere platformen ?
+    // want ik zie dit nie op men smartphone?"* Van alles wat er die dag bij kwam was dit het enige
+    // dat de telefoon écht niet haalde; de rest deelt gewoon dezelfde code.
+    _merkVreemdeHoezen();
 
     // **De speler moet weten dat namen veranderd kunnen zijn.** Zie [PlayerStore.refreshTracks]:
     // de wachtrij houdt de `Track`-waarden vast van toen hij gebouwd werd, en hierboven zijn ze

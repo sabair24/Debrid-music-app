@@ -227,7 +227,19 @@ jobs:
       - name: Build release APK
         working-directory: desktop
         run: |
-          VERSION=$(grep -m1 '^version:' pubspec.yaml | sed 's/version: *//' | cut -d+ -f1)
+          # Op een tag IS de tag de versie, net als bij Windows en Apple. Dit las altijd pubspec, en
+          # dat staat al maanden op 3.9.74 — dus noemde elke APK zich 3.9.74 terwijl de pc-installer
+          # 3.9.310 zei. Zelfde code, twee getallen. Gemeld op 06-09-2026: "kan ik die nieuwe fucties
+          # ook doen op de andere platformen ? want ik zie dit nie op men smartphone?" Er kwam wél
+          # elke keer een nieuwe APK; er was alleen niets aan te zien.
+          #
+          # Veilig voor de updater: die vergelijkt op Android uitsluitend het BUILDnummer
+          # (`isNieuwer(hier: huidigBuildnummer(), daar: buildnummerUit(tag))`), en dat blijft
+          # doorlopen. `buildnummerUit` leest `build(\d+)$` en trekt zich van de versienaam niets aan.
+          case "${GITHUB_REF}" in
+            refs/tags/win-v*) VERSION="${GITHUB_REF#refs/tags/win-v}" ;;
+            *) VERSION=$(grep -m1 '^version:' pubspec.yaml | sed 's/version: *//' | cut -d+ -f1) ;;
+          esac
           flutter build apk --release \
             --target-platform android-arm64 \
             --build-name "${VERSION}" \
