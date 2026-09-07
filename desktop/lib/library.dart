@@ -4098,6 +4098,10 @@ extension LibraryNormalise on LibraryStore {
         albumArtist: albumForPath(t.path)?.artist.trim(),
         trackTotal: t.trackTotal,
         year: t.year,
+        // De speelduur mee, want `fileOfRecording` gebruikt hem om te bepalen WELK bestand er
+        // vervangen wordt. Zonder dit matcht hij op artiest+titel alleen, en dan kan een heropname
+        // of een liveversie van hetzelfde nummer het verkeerde bestand raken.
+        seconds: t.duration?.inSeconds,
       );
 
   /// Alleen de bestanden die uit een MP3 komen, het ergste eerst.
@@ -4121,6 +4125,36 @@ extension LibraryNormalise on LibraryStore {
     // maar sorteren mag daar niet op vertrouwen: een oud bestand op schijf uit een vorige versie
     // zou de hele lijst laten crashen in plaats van één rij verkeerd te zetten.
     uit.sort((a, b) => (a.oordeel.afkapHz ?? 0).compareTo(b.oordeel.afkapHz ?? 0));
+    return uit;
+  }
+
+  /// Wat de app zélf mag proberen te vervangen: ALLES wat betrapt is, het ergste eerst.
+  ///
+  /// Een derde vraag naast [uitMp3Bestanden] (wat het SCHERM toont) en [betrapteBestanden] (wat de
+  /// veegbeurt vond), en die scheiding is met opzet. Het scherm toont alleen de AFGEKAPTE bestanden,
+  /// want daar valt met de hand een bron te kiezen en daar hoor je écht verschil. De app mag verder
+  /// gaan: een opgeblazen bestand klinkt hetzelfde als zijn eerlijke tegenhanger, maar het liegt en
+  /// het is vier keer zo groot.
+  ///
+  /// GEMETEN op deze bibliotheek: 1220 nummers, 375 die meer dan 48 kHz claimen, en van de 334
+  /// beoordeelde hebben er 160 een lege bovenband of erger — 90 van de 180 op 96 kHz, 59 van de 121
+  /// op 192 kHz. Via [uitMp3Bestanden] kwam daar géén enkele van op de verlanglijst: die vraagt naar
+  /// een MUUR, en een opgeschaald bestand heeft er geen. Samen goed voor 20,6 GB waar 4,1 GB volstaat.
+  ///
+  /// [isVasteKeuze] valt er hier al af, zodat het getal op de knop klopt met wat er gebeurt.
+  ///
+  /// Gesorteerd op [echteCapaciteit]: dat geeft de gewenste volgorde gratis — een muur op 15,6 kHz
+  /// scoort 499, op 20,5 kHz 656, en opgeschaald 705.
+  List<({Track track, Echtheidsoordeel oordeel})> teVervangenBestanden() {
+    final uit = <({Track track, Echtheidsoordeel oordeel})>[];
+    for (final t in tracks) {
+      final o = gemeten(t.path);
+      if (o == null || !o.isNep || isVasteKeuze(t.path)) continue;
+      uit.add((track: t, oordeel: o));
+    }
+    int capaciteit(({Track track, Echtheidsoordeel oordeel}) r) => echteCapaciteit(r.oordeel,
+        kopSampleRate: r.track.sampleRate, kopBits: r.track.bitsPerSample);
+    uit.sort((a, b) => capaciteit(a).compareTo(capaciteit(b)));
     return uit;
   }
 

@@ -145,6 +145,7 @@ class LosslessWant {
     this.tries = 0,
     this.lastTryMs = 0,
     this.refused = const {},
+    this.nep = const [],
     this.authority,
     this.performer,
     this.exact,
@@ -182,6 +183,20 @@ class LosslessWant {
   /// gemeten is.
   final Map<String, String> refused;
 
+  /// Uploads waarvan de METING bewees dat ze nep zijn: naam, grootte en speelduur.
+  ///
+  /// Het BESTAND en niet de peer, en dat onderscheid is de hele reden dat dit een eigen veld is.
+  /// [refused] betekent "deze peer kan ons niet bedienen" — geband, firewall. Wie één vervalsing
+  /// deelt heeft er tien goede naast, en dezelfde nep-upload staat bij honderd peers tegelijk. Op de
+  /// peer afgaan zou dus de halve Soulseek verbranden én morgen dezelfde bytes weer binnenhalen.
+  ///
+  /// Gedekt op [maxNep] regels: dit staat in een bestand dat bij elke ronde herschreven wordt.
+  final List<VasteBron> nep;
+
+  /// Hoeveel betrapte uploads een wens onthoudt. Genoeg om de bekende vervalsingen over te slaan,
+  /// weinig genoeg om `lossless_wanted.json` klein te houden.
+  static const maxNep = 20;
+
   /// Stabiele naam van de wens. Niet het pad: het bestand verhuist zodra de tags kloppen.
   ///
   /// Een wens om één bepaald bestand heet naar dat bestand. Anders zou hij botsen met de gewone wens
@@ -201,7 +216,9 @@ class LosslessWant {
   /// titel alleen. Een matige zoekvraag is beter dan een vergiftigde.
   String get query => zoekvraagVoorNummer(title, performer: performer, artist: artist);
 
-  LosslessWant met({int? tries, int? lastTryMs, Map<String, String>? refused}) => LosslessWant(
+  LosslessWant met(
+          {int? tries, int? lastTryMs, Map<String, String>? refused, List<VasteBron>? nep}) =>
+      LosslessWant(
         artist: artist,
         title: title,
         album: album,
@@ -209,6 +226,11 @@ class LosslessWant {
         tries: tries ?? this.tries,
         lastTryMs: lastTryMs ?? this.lastTryMs,
         refused: refused ?? this.refused,
+        // Achteraan afkappen: de oudste betrapte uploads mogen vergeten worden, de nieuwste zijn
+        // die van de ronde van zonet.
+        nep: (nep ?? this.nep).length <= maxNep
+            ? (nep ?? this.nep)
+            : (nep ?? this.nep).sublist((nep ?? this.nep).length - maxNep),
         authority: authority,
         performer: performer,
         exact: exact,
@@ -222,6 +244,7 @@ class LosslessWant {
         'tries': tries,
         'lastTryMs': lastTryMs,
         if (refused.isNotEmpty) 'refused': refused,
+        if (nep.isNotEmpty) 'nep': [for (final b in nep) b.toJson()],
         if (authority != null) 'authority': authority!.toJson(),
         if (performer != null && performer!.isNotEmpty) 'performer': performer,
         if (exact != null) 'exact': exact!.toJson(),
@@ -251,6 +274,11 @@ class LosslessWant {
         for (final e in (j['refused'] as Map?)?.entries ?? const <MapEntry>[])
           '${e.key}': '${e.value}',
       },
+      nep: [
+        for (final x in (j['nep'] as List?) ?? const [])
+          if (x is Map)
+            if (VasteBron.fromJson(Map<String, dynamic>.from(x)) case final b?) b,
+      ],
     );
   }
 }

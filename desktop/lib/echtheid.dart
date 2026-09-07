@@ -377,18 +377,61 @@ String? vermoedelijkeBron(double hz) {
 /// ook noemt. Daarom staat de bandbreedte vooraan en niet de bits.
 String? echteResolutie(Echtheidsoordeel o, {required int kopSampleRate, required int kopBits}) {
   final hz = o.afkapHz;
+  // De ZIN blijft zeggen waar de muur zit, ook al rekent [echteWaarden] hem om naar een
+  // bemonstering: "tot 14,0 kHz" vertelt je iets, "16/28" niets.
   if (o.band == Bandbreedte.afgekapt && hz != null) {
     return 'tot ${(hz / 1000).toStringAsFixed(1)} kHz';
   }
-  // Niets boven 22 kHz betekent dat de inhoud niet meer draagt dan wat 44,1 kHz kan bevatten, hoe
-  // hoog de kop ook staat. Dat is de gewone vorm van opgeschaalde hi-res.
-  final echteRate = o.boven == Bovenband.leeg ? 44100 : kopSampleRate;
-  final echteBits = o.bits == Bitdiepte.opgeblazen ? (o.gebruikteBits ?? 16) : kopBits;
-  if (echteRate == kopSampleRate && echteBits == kopBits) return null;
+  final w = echteWaarden(o, kopSampleRate: kopSampleRate, kopBits: kopBits);
+  if (w.rate == kopSampleRate && w.bits == kopBits) return null;
   // Dezelfde notatie als de badge ernaast, uit dezelfde functie. Een eigen kopie zou hier `16/44,1`
   // kunnen gaan schrijven terwijl de badge `16/44` zegt, en dan lezen ze als twee verschillende
   // soorten getallen over hetzelfde bestand.
-  return depthRateLabel(sampleRate: echteRate, bitsPerSample: echteBits);
+  return depthRateLabel(sampleRate: w.rate, bitsPerSample: w.bits);
+}
+
+/// Wat er WERKELIJK in zit, als getallen in plaats van als zin.
+typedef EchteResolutie = ({int bits, int rate, bool uitLossy});
+
+/// Dezelfde waarheid als [echteResolutie], maar te vergelijken.
+///
+/// **Waarom dit erbij moest.** De meting bestond alleen als zin ("24/44.1") en als ja/nee
+/// ([Echtheidsoordeel.isNep]). Daardoor kon niets in de app vragen wélke van twee bestanden er écht
+/// beter is — `firstIsBetter` kende maar "betrapt: ja/nee" en viel daaronder terug op de grootte,
+/// en juist een opgeblazen bestand is GROTER.
+///
+/// De volgorde is die van het hardste gemeten feit, gelijk aan [echteResolutie]: een muur bindt
+/// sterker dan een bemonstering.
+///
+/// **Een afgekapte kopie verliest per constructie van een echte cd, zonder drempel.** De muurzoeker
+/// kijkt niet hoger dan [hoogsteAfkapHz] = 21000, dus twee keer de afkap is hoogstens 42000 — al
+/// minder dan 44100. En de bits worden op zestien geklemd: een uit mp3 omgezet bestand dat 24 bits
+/// beweert zou anders `42000 × 24` scoren en een echte cd verslaan. Die klem is verdedigbaar op de
+/// eigen voorwaarden van dit bestand — [Bitdiepte.spreektNietTegen] bewijst nadrukkelijk nooit dat
+/// er 24 echte bits in zitten.
+///
+/// **Let op wat dit NIET zegt.** Zonder oordeel komt de kop onveranderd terug: dit is geen bewijs
+/// dat een bestand echt is, alleen dat niets het tegensprak.
+EchteResolutie echteWaarden(Echtheidsoordeel? o,
+    {required int kopSampleRate, required int kopBits}) {
+  if (o == null) return (bits: kopBits, rate: kopSampleRate, uitLossy: false);
+  final gemeten = o.bits == Bitdiepte.opgeblazen ? (o.gebruikteBits ?? 16) : kopBits;
+  final hz = o.afkapHz;
+  if (o.band == Bandbreedte.afgekapt && hz != null) {
+    return (bits: math.min(gemeten, 16), rate: (2 * hz).round(), uitLossy: true);
+  }
+  // Niets boven 22 kHz betekent dat de inhoud niet meer draagt dan wat 44,1 kHz kan bevatten, hoe
+  // hoog de kop ook staat. Dat is de gewone vorm van opgeschaalde hi-res.
+  final rate = o.boven == Bovenband.leeg ? 44100 : kopSampleRate;
+  return (bits: gemeten, rate: rate, uitLossy: false);
+}
+
+/// De gemeten waarheid op dezelfde schaal als [capaciteitOpEenSchaal], zodat twee bestanden te
+/// wegen zijn. Een echte cd is 705; alles wat uit een mp3 komt blijft daaronder.
+int echteCapaciteit(Echtheidsoordeel? o, {required int kopSampleRate, required int kopBits}) {
+  final w = echteWaarden(o, kopSampleRate: kopSampleRate, kopBits: kopBits);
+  return capaciteitOpEenSchaal(
+      sampleRate: w.rate, bitDepth: w.bits, kbps: 0, lossless: true);
 }
 
 String waarom(Echtheidsoordeel o) {

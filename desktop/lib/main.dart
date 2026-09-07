@@ -13004,8 +13004,15 @@ class _KwaliteitViewState extends State<KwaliteitView> {
   /// staan, want een lijst die er ná het drukken precies hetzelfde uitziet vertelt niets.
   Future<void> _zoekBeter() async {
     final lib = context.read<LibraryStore>();
-    final rijen = lib.uitMp3Bestanden();
-    final nieuw = await context.read<DownloadManager>().wensEchteVersies(rijen.map((r) => r.track));
+    // ALLES wat betrapt is, niet alleen wat op deze lijst staat. De lijst toont de afgekapte
+    // bestanden omdat je daar met de hand een bron voor kiest en het verschil hóórt; de app mag
+    // verder gaan. Een opgeblazen bestand klinkt hetzelfde als zijn eerlijke tegenhanger, maar het
+    // liegt en het is vier keer zo groot — gemeten 20,6 GB waar 4,1 GB volstaat, over 158 nummers
+    // die via `uitMp3Bestanden` nooit op de verlanglijst kwamen.
+    final rijen = lib.teVervangenBestanden();
+    final nieuw = await context
+        .read<DownloadManager>()
+        .wensEchteVersies(rijen.map((r) => r.track), gezag: lib.tagsVoorVervanger);
     if (!mounted) return;
     setState(() {
       _uitslag = nieuw == 0
@@ -13023,6 +13030,7 @@ class _KwaliteitViewState extends State<KwaliteitView> {
     final lib = context.watch<LibraryStore>();
     context.watch<DownloadManager>();
     final rijen = lib.uitMp3Bestanden();
+    final teVervangen = lib.teVervangenBestanden();
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(28, 22, 28, 30),
@@ -13049,11 +13057,16 @@ class _KwaliteitViewState extends State<KwaliteitView> {
             // met een steeds ruimer wordend ritme, overleeft een herstart en onthoudt welke peers al
             // nee zeiden. Precies wat je nodig hebt voor een nummer waarvoor vandaag geen echte bron
             // online staat — en dat is bij een afgekapte kopie eerder regel dan uitzondering.
-            if (rijen.isNotEmpty && !_bezig)
+            //
+            // Het GETAL is dat van `teVervangenBestanden` en niet van de lijst eronder, want de knop
+            // doet meer dan de lijst toont: ook de opgeblazen bestanden gaan mee. Ze allebei op de
+            // lijst zetten zou de andere belofte breken — daar kies je met de hand een bron, en dat
+            // heeft alleen zin waar je het verschil hóórt.
+            if (teVervangen.isNotEmpty && !_bezig)
               TextButton.icon(
                 onPressed: _zoekBeter,
                 icon: const Icon(Icons.travel_explore_rounded, size: 16),
-                label: Text('Laat de app zoeken (${rijen.length})'),
+                label: Text('Laat de app zoeken (${teVervangen.length})'),
                 style: TextButton.styleFrom(foregroundColor: _accent),
               ),
             if (_uitslag != null)

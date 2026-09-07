@@ -346,4 +346,44 @@ void main() {
       expect(_w('Sabien Tiels', 'Trein').query, 'Sabien Tiels Trein');
     });
   });
+
+  /// Welke uploads de METING al betrapt heeft.
+  ///
+  /// Het BESTAND en niet de peer, en dat onderscheid is de hele reden dat dit een eigen veld is:
+  /// `refused` betekent "deze peer kan ons niet bedienen", en wie één vervalsing deelt heeft er tien
+  /// goede naast. Zonder dit haalt elke ronde dezelfde bytes opnieuw binnen om ze weer weg te gooien.
+  group('betrapte uploads onthouden', () {
+    final betrapt = VasteBron(
+      username: 'djphysicust',
+      filename: r'@@hqibv\shared\Madonna\11 La Isla Bonita.flac',
+      size: 27779158,
+      durationSec: 228,
+    );
+
+    test('ze overleven een herstart', () {
+      final terug = LosslessWant.fromJson(
+          LosslessWant(artist: 'Madonna', title: 'La Isla Bonita', nep: [betrapt]).toJson())!;
+      expect(terug.nep, hasLength(1));
+      expect(terug.nep.single.filename, betrapt.filename);
+      expect(terug.nep.single.size, betrapt.size);
+      expect(terug.nep.single.durationSec, 228);
+    });
+
+    test('een wens zonder betrapte uploads schrijft er geen veld voor', () {
+      // Zodat `lossless_wanted.json` er voor bestaande wensen precies zo uitziet als altijd.
+      expect(_w('Madonna', 'Frozen').toJson().containsKey('nep'), isFalse);
+      expect(LosslessWant.fromJson(_w('Madonna', 'Frozen').toJson())!.nep, isEmpty);
+    });
+
+    test('de lijst loopt niet vol — dit bestand wordt elke ronde herschreven', () {
+      final veel = [
+        for (var i = 0; i < LosslessWant.maxNep + 8; i++)
+          VasteBron(username: 'peer$i', filename: 'a$i.flac', size: 1000 + i, durationSec: 200)
+      ];
+      final w = _w('Madonna', 'Frozen').met(nep: veel);
+      expect(w.nep, hasLength(LosslessWant.maxNep));
+      // De NIEUWSTE blijven staan: die komen uit de ronde van zonet.
+      expect(w.nep.last.filename, veel.last.filename);
+    });
+  });
 }

@@ -1041,6 +1041,33 @@ class DownloadManager extends ChangeNotifier {
   /// Total time spent chasing a better copy after a playable one already landed.
   static const _upgradeBudget = Duration(minutes: 10);
 
+  // ── De klokken van de verlanglijst ──────────────────────────────────────────────────────
+  // Hiervoor stond er `take(4)` met dertig minuten wachten per peer: tot TWEE UUR voor één wens,
+  // en de veegbeurt draait ze SERIEEL af. Met 176 te vervangen bestanden op de lijst is dat ruim
+  // dertien dagen voor één veegbeurt, terwijl `_sweeping` alle volgende blokkeert.
+  //
+  // Alles is nu een klok en geen teller, want dat is de eenheid die telt: een trage peer kost
+  // minuten, niet megabytes.
+
+  /// Alles wat één wens mag kosten, van zoeken tot opbergen.
+  static const _wensBudget = Duration(minutes: 20);
+
+  /// Hoe lang er bij ÉÉN peer in de wachtrij gestaan wordt. Wie je acht minuten laat wachten
+  /// levert over dertig ook niets.
+  static const _maxWachtPerPeer = Duration(minutes: 8);
+
+  /// Hoeveel kandidaten er per ronde geprobeerd worden. Meer dan de vier van hiervoor, omdat elke
+  /// poging nu veel goedkoper is — en omdat een betrapte kopie een poging kost zonder resultaat.
+  static const _maxWensPogingen = 6;
+
+  /// Hoeveel wensen één veegbeurt afwerkt.
+  static const _maxWensenPerVeeg = 6;
+
+  /// En hoe lang die veegbeurt zelf mag duren. BEWUST onder de tik van twintig minuten
+  /// (`main.dart`), zodat een veegbeurt altijd klaar is voor de volgende aan de beurt is en de
+  /// tijdklok zijn betekenis houdt.
+  static const _veegBudget = Duration(minutes: 15);
+
   /// Wat deze weg besloot, in `downloads.log` naast de andere staatbestanden.
   ///
   /// Gebouwd omdat een vraag niet te beantwoorden was. Een FLAC die via de app niet binnenkwam en via
@@ -1535,19 +1562,39 @@ class DownloadManager extends ChangeNotifier {
   /// Bij een zoekresultaat kan dit niet: je kunt niet in het bestand van een vreemde kijken zonder het
   /// eerst binnen te halen. Daar blijft het bij de verhoudingswaarschuwing uit
   /// [verdachtKleinVoorHiRes] — een aanwijzing, geen oordeel.
-  Future<void> _meetEchtheid(File f) async {
+  ///
+  /// Geeft het oordeel ook terug, want op de wensweg wordt er meteen op beslist: een betrapt
+  /// bestand gaat niet de bibliotheek in maar de vuilnisbak. Null betekent "niet te meten" — en dat
+  /// is nooit een reden om iets te weigeren.
+  Future<Echtheidsoordeel?> _meetEchtheid(File f) async {
     try {
       final tags = readFlacTags(f);
-      if (tags == null || tags.sampleRate <= 0) return;
+      if (tags == null || tags.sampleRate <= 0) return null;
       final meter = Echtheidsmeter(cacheMap: '$appDir${Platform.pathSeparator}echtheid');
-      if (!meter.available) return;
+      if (!meter.available) return null;
       final o = await meter.van(f.path,
           kopSampleRate: tags.sampleRate,
           kopBits: tags.bitsPerSample,
           duurSeconden: (tags.duration?.inSeconds ?? 0).toDouble());
       if (o != null) await onthoudOordeel(f.path, o);
-    } catch (_) {/* een meting is een verrijking; hij mag een download nooit breken */}
+      return o;
+    } catch (_) {
+      /* een meting is een verrijking; hij mag een download nooit breken */
+      return null;
+    }
   }
+
+  /// Mag dit binnengehaalde bestand blijven?
+  ///
+  /// **Geen oordeel is JA.** Een mislukte meting — geen ffmpeg, een te kort nummer, een formaat
+  /// waar `readFlacTags` niets van maakt — mag nooit een bestand weigeren. Anders zou het uitvallen
+  /// van een verrijking de hele downloadweg stilleggen, en dat is precies wat de meter zelf ook
+  /// belooft ("nooit hard falen", `echtheid_meter.dart`).
+  ///
+  /// Let op wat dit NIET zegt. Op een bestand van 44,1 kHz kan alleen de muurproef spreken: proef B
+  /// draait pas boven de 48 kHz en proef A pas boven de 16 bits. "Mag blijven" betekent hier dus
+  /// "niets sprak het tegen", niet "bewezen echt".
+  static bool magBlijven(Echtheidsoordeel? o) => o == null || !o.isNep;
 
   /// Everything in staging at startup is a leftover from a session that ended mid-transfer.
   Future<void> _clearStaging() async {
@@ -1999,7 +2046,15 @@ class DownloadManager extends ChangeNotifier {
   }
 
   /// Bin a completed file we turned out not to want, and the staging folder it came in.
+  ///
+  /// Ook het OORDEEL gaat weg. Sinds de wensweg meet vóór het opbergen wordt er een oordeel bewaard
+  /// op het pad in `_inkomend`, en dat pad verdwijnt hier. Zonder dit groeit
+  /// `echtheid_oordelen.json` met elke afgewezen kandidaat — en `nepSleutels()` gaat bij elke scan
+  /// mee naar een isolate.
   Future<void> _discardStaged(String path) async {
+    try {
+      vergeetOordeel(path);
+    } catch (_) {/* er hoefde er geen te staan */}
     try {
       final f = File(path);
       await f.delete();
@@ -2085,7 +2140,12 @@ class DownloadManager extends ChangeNotifier {
   /// opgeblazen 24/44.1 — precies waar het om gaat.
   ///
   /// Geeft terug hoeveel er nieuw op de lijst kwamen.
-  Future<int> wensEchteVersies(Iterable<Track> nummers) async {
+  /// [gezag] bouwt de tags waarmee de vervanger moet landen. Meegeven, want de bibliotheek weet
+  /// meer dan één `Track`: `albumArtist` en `trackTotal` maken `TrackTags.isAuthoritative` waar, en
+  /// dát is wat de vervanger ÓP het origineel laat landen in plaats van ernaast als `(2)`. Zonder
+  /// deze haak bouwde dit met de hand een armere tagset dan `library.tagsVoorVervanger` al kon.
+  Future<int> wensEchteVersies(Iterable<Track> nummers,
+      {TrackTags Function(Track)? gezag}) async {
     await _ensureWants();
     var nieuw = 0;
     for (final t in nummers) {
@@ -2107,13 +2167,14 @@ class DownloadManager extends ChangeNotifier {
         sinceMs: DateTime.now().millisecondsSinceEpoch,
         // Het gezag van wat er NU ligt gaat mee: de vervanger hoort op dezelfde plek en met dezelfde
         // nummering te belanden, ook als de peer een bestand zonder tags stuurt.
-        authority: TrackTags(
-          artist: t.artist,
-          title: t.title,
-          album: t.album,
-          trackNo: t.trackNo,
-          year: t.year,
-        ),
+        authority: gezag?.call(t) ??
+            TrackTags(
+              artist: t.artist,
+              title: t.title,
+              album: t.album,
+              trackNo: t.trackNo,
+              year: t.year,
+            ),
       ));
       if (erbij) nieuw++;
     }
@@ -2186,9 +2247,19 @@ class DownloadManager extends ChangeNotifier {
       final nu = DateTime.now().millisecondsSinceEpoch;
       final rij = _wants.due(nu);
       if (rij.isEmpty) return 0;
-      _log.line('wensen: ${rij.length} van ${_wants.count} aan de beurt');
+      _log.line('wensen: ${rij.length} van ${_wants.count} aan de beurt'
+          '${rij.length > _maxWensenPerVeeg ? " — deze beurt de eerste $_maxWensenPerVeeg" : ""}');
+      // Twee remmen, en ze zijn nodig zodra de lijst groot is. Een veegbeurt die niet terugkomt
+      // blokkeert via `_sweeping` ook alle volgende, dus een verse wens uit een mislukte download
+      // zou dagen kunnen wachten. `due()` sorteert oudste eerst, dus wie blijft staan is de
+      // volgende keer als eerste aan de beurt.
+      final veegEinde = DateTime.now().add(_veegBudget);
       var gehaald = 0;
-      for (final w in rij) {
+      for (final w in rij.take(_maxWensenPerVeeg)) {
+        if (DateTime.now().isAfter(veegEinde)) {
+          _log.line('wensen: beurt vol — de rest komt over twintig minuten');
+          break;
+        }
         if (await _chaseWant(w)) gehaald++;
       }
       await _wants.save();
@@ -2208,14 +2279,11 @@ class DownloadManager extends ChangeNotifier {
     } catch (_) {
       return false; // geen net; de wens blijft staan en het ritme schuift niet op
     }
-    final lossless = hits
-        .where((f) => isLossless(f) && !isMultichannel(f))
-        .where((f) => !w.refused.containsKey(f.username))
-        .toList()
-      ..sort(_rankSlsk);
+    final lossless = kandidatenVoorWens(w, hits);
     _log.line('wens "${w.artist} — ${w.title}": ${hits.length} treffers, '
         '${lossless.length} bruikbaar lossless (poging ${w.tries + 1}'
-        '${w.refused.isEmpty ? "" : ", ${w.refused.length} peers overgeslagen"})');
+        '${w.refused.isEmpty ? "" : ", ${w.refused.length} peers overgeslagen"}'
+        '${w.nep.isEmpty ? "" : ", ${w.nep.length} betrapte uploads overgeslagen"})');
     if (lossless.isEmpty) {
       _wants.update(w.met(tries: w.tries + 1, lastTryMs: DateTime.now().millisecondsSinceEpoch));
       return false;
@@ -2223,17 +2291,32 @@ class DownloadManager extends ChangeNotifier {
 
     final job = DownloadJob(w.title);
     final geweigerd = Map<String, String>.of(w.refused);
+    final betrapt = List<VasteBron>.of(w.nep);
     var goed = false;
+    // Een klok in plaats van een teller, naar het model van [_chaseUpgrade]. Hiervoor stond er
+    // `take(4)` met dertig minuten wachten per peer: tot TWEE UUR voor één wens, terwijl de veegbeurt
+    // serieel is. Nu mogen er meer kandidaten geprobeerd worden, elk veel goedkoper — en een peer die
+    // je acht minuten in de wachtrij laat staan levert over dertig ook niets.
+    final einde = DateTime.now().add(_wensBudget);
+    var geprobeerd = 0;
     try {
       await soulseek.withSession((session) async {
-        for (final f in lossless.take(4)) {
+        for (final f in lossless) {
+          if (geprobeerd >= _maxWensPogingen) break;
+          final over = einde.difference(DateTime.now());
+          if (over <= const Duration(seconds: 30)) {
+            _log.line('   budget op na $geprobeerd poging(en) — de wens blijft staan');
+            break;
+          }
+          geprobeerd++;
           final t0 = DateTime.now();
           SlskResult res;
           try {
             // Ruim wachten mag hier: deze jacht houdt geen downloadslot bezig en er zit niemand op te
             // wachten. Een plaats in een wachtrij is waardevol -- weggooien is wat de app hiervoor deed.
             res = await _rawTransfer(session, f, job, () {},
-                waitInQueue: true, maxWait: const Duration(minutes: 30));
+                waitInQueue: true,
+                maxWait: over < _maxWachtPerPeer ? over : _maxWachtPerPeer);
           } catch (_) {
             continue;
           }
@@ -2251,14 +2334,42 @@ class DownloadManager extends ChangeNotifier {
             continue;
           }
           if (res is! SlskDone) continue;
+
+          // METEN VÓÓR HET OPBERGEN, en dit ontbrak juist op deze weg.
+          //
+          // De twee andere landingswegen doen het al, met de reden erbij: een opgeschaalde of uit
+          // mp3 omgezette kopie is GROTER dan het origineel. Hier was het gevolg nog scherper.
+          // `firstIsBetter` kent de regel "wat bewezen nep is verliest", en die staat bóven de
+          // grootte — maar een ONGEMETEN binnenkomer geldt niet als nep. Dus won elke verse kopie
+          // van het bewezen neppe bestand in de bibliotheek, wat het ook was: de echte kopie ging
+          // naar `_dubbel` om plaats te maken voor de volgende vervalsing, de wens verviel, en
+          // `hasLossless` telde de nieuwe mee. Stilletjes "opgelost", nog steeds nep.
+          final staged = File(res.path);
+          final oordeel = await _meetEchtheid(staged);
+          if (!magBlijven(oordeel)) {
+            _log.line('   ${f.username}: betrapt bij binnenkomst '
+                '(${waarom(oordeel!)}) — weggegooid, volgende kandidaat');
+            betrapt.add(VasteBron(
+                username: f.username,
+                filename: f.filename,
+                size: f.size,
+                durationSec: f.durationSec));
+            await _discardStaged(res.path);
+            continue;
+          }
+
           try {
             // Het gezag van de wens, niet dat van dit wegwerp-job: een peer stuurt geregeld een
             // bestand zonder één tag, en dan landt het als "Onbekende artiest" in Singles. Precies wat
             // de eerste echte vondst deed voordat dit erin stond.
-            await placeFileDetailed(File(res.path), _downloadsRoot,
+            final uit = await placeFileDetailed(staged, _downloadsRoot,
                 tags: w.authority ??
                     TrackTags(title: w.title, artist: w.artist, album: w.album, trackNo: 0),
                 staatAl: mapVanBestaande);
+            // Verloor hij van wat er al lag, dan is er niets opgelost en blijft de wens staan. Dit
+            // stond er niet: `goed` werd gezet ongeacht de uitkomst, dus een kopie die verloor liet
+            // de wens tóch vervallen.
+            if (uit.how == Placement.duplicate) continue;
           } catch (_) {/* de scan vindt hem waar hij ook landde */}
           goed = true;
           return;
@@ -2275,8 +2386,13 @@ class DownloadManager extends ChangeNotifier {
       } catch (_) {}
       return true;
     }
+    // `tries` gaat ook omhoog als er alleen vervalsingen langskwamen. Zonder dat zou de veegbeurt
+    // elke twintig minuten dezelfde ronde overdoen op hetzelfde nummer.
     _wants.update(w.met(
-        tries: w.tries + 1, lastTryMs: DateTime.now().millisecondsSinceEpoch, refused: geweigerd));
+        tries: w.tries + 1,
+        lastTryMs: DateTime.now().millisecondsSinceEpoch,
+        refused: geweigerd,
+        nep: betrapt));
     _log.line('wens "${w.artist} — ${w.title}": nog niet — volgende poging over '
         '${_kort(wachtVoor(w.tries + 1))}');
     return false;
@@ -2679,6 +2795,32 @@ class DownloadManager extends ChangeNotifier {
               !zelfdeBestand(
                   f.filename, f.size, f.durationSec, genomen.filename, genomen.size, genomen.durationSec))
           .toList();
+
+  /// De kandidaten waar het voor deze wens nog zin heeft aan te kloppen.
+  ///
+  /// Drie zeven, en de laatste twee zijn nieuw:
+  ///  - **lossless en stereo**, op de BELOFTE. Voor het binnenhalen valt er niets te meten; zie de
+  ///    aantekening bij [_rankSlsk].
+  ///  - **geen peer die ons niet kan bedienen** — geband of firewall, uit `w.refused`.
+  ///  - **geen upload die de METING al betrapt heeft.** Niet de peer maar het BESTAND: dezelfde
+  ///    vervalsing staat bij honderd peers, en wie er één deelt heeft er tien goede naast. Zelfde
+  ///    vergelijking als [andereKopieDan] gebruikt.
+  ///  - **één bestand per peer.** De top van een hi-res-eerst-ranglijst is precies waar een handvol
+  ///    verzamelaars zit; zonder dit gaan alle pogingen naar dezelfde peer.
+  static List<SoulseekFile> kandidatenVoorWens(LosslessWant w, List<SoulseekFile> hits) {
+    final bruikbaar = hits
+        .where((f) => isLossless(f) && !isMultichannel(f))
+        .where((f) => !w.refused.containsKey(f.username))
+        .where((f) => !w.nep.any((n) =>
+            zelfdeBestand(f.filename, f.size, f.durationSec, n.filename, n.size, n.durationSec)))
+        .toList()
+      ..sort(_rankSlsk);
+    final perPeer = <String>{};
+    return [
+      for (final f in bruikbaar)
+        if (perPeer.add(f.username)) f,
+    ];
+  }
 
   static bool clearlyBetter(SoulseekFile candidate, SoulseekFile settled) {
     final a = _slskScore(candidate), b = _slskScore(settled);

@@ -106,6 +106,28 @@ void main() {
       expect(lib.uitMp3Bestanden().map((e) => e.track.title), ['mp3']);
     });
 
+    test('maar de APP mag ze wél vervangen — de lijst toont niet wat de knop doet', () async {
+      // Het scherm toont de afgekapte bestanden, want dáár kies je met de hand een bron en dáár
+      // hoor je verschil. De app mag verder: een opgeblazen bestand klinkt hetzelfde als zijn
+      // eerlijke tegenhanger, maar het liegt en het is vier keer zo groot. GEMETEN op Sabers
+      // bibliotheek: 158 opgeblazen nummers, samen 20,6 GB waar 4,1 GB volstaat — en géén van ze
+      // kwam ooit op de verlanglijst, want `uitMp3Bestanden` vraagt naar een MUUR.
+      final blaas = _t(r'D:\m\blaas2.flac', title: 'blaas2');
+      final echt = _t(r'D:\m\echt2.flac', title: 'echt2');
+      final mp3 = _t(r'D:\m\mp32.flac', title: 'mp32');
+      lib.tracks.addAll([blaas, echt, mp3]);
+
+      await onthoudOordeel(blaas.path, _opgeblazen);
+      await onthoudOordeel(echt.path, _schoon);
+      await onthoudOordeel(mp3.path, _afgekapt(19000));
+
+      expect(lib.uitMp3Bestanden().map((e) => e.track.title), ['mp32']);
+      expect(lib.teVervangenBestanden().map((e) => e.track.title), containsAll(['mp32', 'blaas2']));
+      expect(lib.teVervangenBestanden().map((e) => e.track.title), isNot(contains('echt2')));
+      // Het ergste eerst: een muur op 19 kHz draagt minder dan een opgeblazen cd.
+      expect(lib.teVervangenBestanden().first.track.title, 'mp32');
+    });
+
     test('een ongemeten bestand komt er niet in', () {
       lib.tracks.add(_t(r'D:\m\onbekend.flac'));
       expect(lib.uitMp3Bestanden(), isEmpty);
