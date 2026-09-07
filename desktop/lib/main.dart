@@ -16891,6 +16891,15 @@ class EditorialeKop extends StatelessWidget {
               : (vrijstaand != null
                   ? (breedte * .52).clamp(380.0, 820.0)
                   : (breedte * .40).clamp(340.0, 620.0)),
+          // En de volle breedte, EXPLICIET. Dit stond nergens: een `Stack` meet zich aan zijn
+          // niet-gepositioneerde kinderen, en `Positioned.fill` telt daarin niet mee. Op de pagina
+          // staat deze kop zélf in een `Stack` (naast de terugpijl), en die geeft LOSSE maten door —
+          // dus de enige reden dat het vak het scherm vulde, was een `Divider` in de feitenstrook die
+          // toevallig oneindig breed wil zijn. Die lijn eruit halen kromp de hele kop tot de breedte
+          // van de tekst, met een harde rand halverwege de achtergrondfoto. Gemeld door Saber op
+          // 07-09-2026; `artiestkop_knoppen_test.dart` bewaakt de breedte nu, mét dezelfde losse
+          // omhulling als de pagina — in een strakke omhulling merk je hier niets van.
+          minWidth: double.infinity,
         ),
         child: Stack(
           fit: StackFit.loose,

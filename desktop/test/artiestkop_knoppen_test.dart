@@ -204,4 +204,39 @@ void main() {
     expect(kop.height, greaterThan(300), reason: 'de kop mag niet inzakken tot een regel tekst');
     expect(find.text('PHIL'), findsOneWidget);
   });
+
+  /// De kop moet ZO BREED zijn als de ruimte die hij krijgt — op elke maat, met en zonder beeld.
+  ///
+  /// **Waarom dit erbij kwam.** Een `Stack` meet zich aan zijn niet-gepositioneerde kinderen, en
+  /// `Positioned.fill` telt daar niet in mee. De enige reden dat deze kop het hele scherm vulde was
+  /// een `Divider` in de feitenstrook, die toevallig oneindig breed wil zijn. Die lijn liep zichtbaar
+  /// dwars door de kop en werd op verzoek verwijderd — waarna het vak kromp tot de breedte van de
+  /// tekst en de achtergrondfoto met een harde rand halverwege het scherm ophield. Zelfde familie als
+  /// de knoppenval hierboven: iets dat er goed uitzag hing aan een maat die niemand had opgeschreven.
+  testWidgets('de kop vult de breedte die hij krijgt, ook zonder scheidingslijn', (tester) async {
+    for (final maat in [const Size(1440, 1000), const Size(834, 1194), const Size(411, 900)]) {
+      tester.view.physicalSize = maat;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      // De omhulling van de PAGINA, en niet die van de andere toetsen hierboven: daar staat de kop
+      // los in een `ListView` en krijgt hij een STRAKKE breedte opgelegd, waardoor er niets te meten
+      // valt. Op de pagina zit hij in een `Stack` met de terugpijl erover — en een `Stack` geeft
+      // losse maten door. Precies dat verschil maakte dat de storing hier onzichtbaar was.
+      await tester.pumpWidget(omhulsel(Stack(children: const [
+        EditorialeKop(
+          naam: 'Michael Jackson',
+          soort: 'Person · USA · 1964–2009',
+          bibliotheek: '6 albums · 74 nummers · 5u 12m',
+        ),
+        Padding(padding: EdgeInsets.fromLTRB(10, 8, 0, 0), child: BackButton()),
+      ])));
+      await tester.pump();
+
+      final kop = tester.getRect(find.byType(EditorialeKop));
+      expect(kop.width, maat.width,
+          reason: 'op ${maat.width.round()} punten is de kop ${kop.width.round()} breed — '
+              'dan houdt de achtergrondfoto halverwege het scherm op');
+    }
+  });
 }
