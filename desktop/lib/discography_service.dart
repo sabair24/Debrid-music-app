@@ -83,7 +83,10 @@ class DiscographyService {
   /// v6: radioplaten (Discogs' formaatkenmerk `Transcription`, MusicBrainz' primary-type
   /// `Broadcast`) krijgen een eigen soort en komen niet meer op de pagina. Bij The Police waren dat
   /// twintig van de drieëndertig "albums" — BBC Rock Hour, Innerview, Off The Record Specials.
-  static const schema = 'disco|v6';
+  /// v7: "Comp" wordt herkend als Compilation — dat is de ENIGE spelling die
+  /// `/artists/{id}/releases` gebruikt, gemeten 1711 keer tegen nul keer "Compilation" voluit — en
+  /// een plaat die aan "Various …" gecrediteerd is gaat naar de verzamelaars.
+  static const schema = 'disco|v7';
 
   /// Hoe lang een bewaard antwoord meegaat voor er bij Deezer opnieuw wordt gekeken.
   ///
