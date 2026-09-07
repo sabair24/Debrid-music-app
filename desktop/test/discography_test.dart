@@ -170,13 +170,26 @@ void main() {
       expect(kindFromDiscogs('CD, Single'), RecordKind.single);
     });
 
-    test('een verzamelaar staat bij MusicBrainz als Album met een tweede etiket', () {
-      // Alleen naar primaryType kijken zet elke verzamelbox tussen de studioalbums — en dat is
-      // precies wat een discografie onleesbaar maakt.
+    test('de tweede lijst van MusicBrainz bepaalt de indeling, niet alleen bij een verzamelaar', () {
+      // Dit stond hier ANDERSOM — "een livealbum blijft een album; alleen compilatie verandert de
+      // indeling" — en dat was precies de klacht: "HIStory Manila 1996", "Bad Live In Yokohama" en
+      // "Heal the World Tour 92" stonden tussen de studioplaten. MusicBrainz zet dat gewoon in
+      // `secondary-types`; de app las er één woord van. Gemeten over de 333 releasegroepen van
+      // Michael Jackson: Live 32, Remix 59, Interview 3, Demo 5.
       expect(kindFromMb('Album', ['Compilation']), RecordKind.compilation);
       expect(kindFromMb('Album', []), RecordKind.album);
-      expect(kindFromMb('Album', ['Live']), RecordKind.album,
-          reason: 'een livealbum blijft een album; alleen compilatie verandert de indeling');
+      expect(kindFromMb('Album', ['Live']), RecordKind.live);
+      expect(kindFromMb('Album', ['Remix']), RecordKind.remix);
+      expect(kindFromMb('Single', ['DJ-mix']), RecordKind.remix);
+      expect(kindFromMb('Album', ['Demo']), RecordKind.demo);
+      expect(kindFromMb('Album', ['Mixtape/Street']), RecordKind.demo);
+      expect(kindFromMb('Album', ['Interview']), RecordKind.gesproken);
+      expect(kindFromMb('Album', ['Spokenword']), RecordKind.gesproken);
+      expect(kindFromMb('Album', ['Live', 'Compilation']), RecordKind.compilation,
+          reason: 'een livecompilatie hoort bij de verzamelaars');
+      expect(kindFromMb('Album', ['Soundtrack']), RecordKind.album,
+          reason: 'een soundtrack die de artiest zélf maakte is een plaat, geen ruis — en de '
+              'samengeraapte dragen bij MusicBrainz óók "Compilation"');
     });
   });
 
@@ -324,6 +337,15 @@ void main() {
       DiscoRelease(title: 'Een verzamelaar', kind: RecordKind.compilation, firstDate: '2003-11-17'),
     ];
 
+    test('de standaardstand zet de OUDSTE plaat vooraan, en ongedateerd blijft achteraan', () {
+      // Saber vroeg om oud→nieuw als stand waarin de pagina opengaat. De tweede helft is de val: een
+      // kale tekstvergelijking op '' zet ongedateerde regels bij oplopend juist VOORAAN, en dan
+      // begint de discografie met de platen waarvan niemand het jaar weet.
+      final uit = sortDiscography(lijst, DiscoSort.datumOud, {});
+      expect(uit.first.title, 'Oud');
+      expect(uit.last.title, 'Zonder datum');
+    });
+
     test('op datum: nieuwste eerst, ongedateerd achteraan', () {
       final uit = sortDiscography(lijst, DiscoSort.datum, {});
       expect(uit.first.title, 'Nieuw');
@@ -364,6 +386,165 @@ void main() {
         expect(sortDiscography([], op, {}), isEmpty);
         expect(sortDiscography([_dz('Solo')], op, {}), hasLength(1));
       }
+    });
+  });
+
+  /// Een UITSPRAAK van de ene bron moet een schouderophalen van de andere overleven.
+  ///
+  /// Dezelfde val als bij de verzamelaar hierboven, maar nu vier keer zo breed. `kindRank` is een
+  /// LEESVOLGORDE en album staat daar op 0 — dus zou een Discogs-formaat dat "LP, Album" zegt élk
+  /// livealbum van MusicBrainz terugtrekken tussen de studioplaten. En "Album" op een Discogs-lp is
+  /// geen uitspraak: dat staat óók op de lp van een concertplaat.
+  group('een uitspraak van de ene bron overleeft de andere', () {
+    test('MusicBrainz zegt live, Discogs zegt alleen "Album"', () {
+      final live = _mb('Live At Wembley', kind: RecordKind.live);
+      final dg = _dg('Live At Wembley');
+      expect(live.mergedWith(dg).kind, RecordKind.live);
+      expect(dg.mergedWith(live).kind, RecordKind.live, reason: 'en in beide volgordes');
+    });
+
+    test('remix, demo en gesproken houden het ook vol tegen een kaal album', () {
+      for (final soort in [RecordKind.remix, RecordKind.demo, RecordKind.gesproken]) {
+        final uitspraak = _mb('Iets', kind: soort);
+        final vorm = _dg('Iets');
+        expect(uitspraak.mergedWith(vorm).kind, soort);
+        expect(vorm.mergedWith(uitspraak).kind, soort);
+      }
+    });
+
+    test('een livecompilatie is een verzamelaar', () {
+      final live = _mb('Best Of Live', kind: RecordKind.live);
+      final verzamel = DiscoRelease(title: 'Best Of Live', kind: RecordKind.compilation);
+      expect(live.mergedWith(verzamel).kind, RecordKind.compilation);
+      expect(verzamel.mergedWith(live).kind, RecordKind.compilation);
+    });
+
+    test('"overig" blijft een afwezigheid en verliest van alles', () {
+      for (final soort in RecordKind.values) {
+        if (soort == RecordKind.other) continue;
+        final iets = _mb('X', kind: soort);
+        final niets = DiscoRelease(title: 'X', kind: RecordKind.other);
+        expect(iets.mergedWith(niets).kind, soort);
+        expect(niets.mergedWith(iets).kind, soort);
+      }
+    });
+
+    test('samenvoegen blijft commutatief voor ELK paar soorten', () {
+      // De eis waar de hele pagina op rust: de drie bronnen komen op willekeurige momenten binnen.
+      for (final a in RecordKind.values) {
+        for (final b in RecordKind.values) {
+          final x = DiscoRelease(title: 'Zelfde', kind: a);
+          final y = DiscoRelease(title: 'Zelfde', kind: b);
+          expect(x.mergedWith(y).kind, y.mergedWith(x).kind,
+              reason: 'samenvoegen van $a en $b hangt van de volgorde af');
+        }
+      }
+    });
+  });
+
+  /// Heruitgaves ZONDER haakjes — "Bad 25", "Thriller 40".
+  ///
+  /// En vooral de grendel eromheen. Zonder die grendel vouwt "Chicago 17" weg, en dat is een
+  /// studioalbum: een verborgen plaat merk je nooit, een dubbele regel zie je meteen.
+  group('heruitgaves zonder haakjes', () {
+    List<String> blokVan(List<DiscoRelease> rijen, RecordKind soort) => [
+          for (final r in vouwHeruitgaves(rijen))
+            if (r.blok == soort) r.title
+        ];
+
+    test('"Thriller 40" verhuist naar Andere uitgaves, want "Thriller" staat er ook', () {
+      final rijen = [_dz('Thriller', datum: '1982'), _dz('Thriller 40', datum: '2022')];
+      expect(blokVan(rijen, RecordKind.album), ['Thriller']);
+      expect(blokVan(rijen, RecordKind.albumVersie), ['Thriller 40']);
+    });
+
+    test('zonder het kale album blijft het een album op zichzelf', () {
+      expect(blokVan([_dz('Thriller 40', datum: '2022')], RecordKind.album), ['Thriller 40']);
+    });
+
+    test('"Bad 25th Anniversary" vouwt op het WOORD, ook zonder jaartallen', () {
+      final rijen = [_dz('Bad'), _dz('Bad 25th Anniversary')];
+      expect(blokVan(rijen, RecordKind.albumVersie), ['Bad 25th Anniversary']);
+    });
+
+    test('"Chicago 17" naast "Chicago" blijft een album — het jaar klopt niet met het getal', () {
+      final rijen = [_dz('Chicago', datum: '1970'), _dz('Chicago 17', datum: '1984')];
+      expect(blokVan(rijen, RecordKind.album), containsAll(['Chicago', 'Chicago 17']));
+      expect(blokVan(rijen, RecordKind.albumVersie), isEmpty);
+    });
+
+    test('een klein getal is nooit een jubileum', () {
+      final rijen = [_dz('Peter Gabriel', datum: '1977'), _dz('Peter Gabriel 3', datum: '1980')];
+      expect(blokVan(rijen, RecordKind.albumVersie), isEmpty);
+    });
+
+    test('"30 ans de succes" naast "30" blijft een eigen plaat', () {
+      final rijen = [_dz('30'), _dz('30 ans de succes')];
+      expect(blokVan(rijen, RecordKind.albumVersie), isEmpty);
+    });
+
+    test('de uitkomst hangt niet af van de aanvoervolgorde, en twee keer vouwen doet niets meer', () {
+      final rijen = [_dz('Thriller', datum: '1982'), _dz('Thriller 40', datum: '2022')];
+      final een = vouwHeruitgaves(rijen).map((r) => '${r.title}=${r.kind}').toList()..sort();
+      final twee = vouwHeruitgaves(rijen.reversed.toList()).map((r) => '${r.title}=${r.kind}').toList()
+        ..sort();
+      expect(twee, een);
+      final nogmaals = vouwHeruitgaves(vouwHeruitgaves(rijen)).map((r) => '${r.title}=${r.kind}').toList()
+        ..sort();
+      expect(nogmaals, een);
+    });
+  });
+
+  /// Wat de pagina weglaat, en of ze dat toegeeft.
+  ///
+  /// Deze zeef haalt bij Michael Jackson 153 van de 252 regels weg. Dat mag — Saber vroeg erom —
+  /// maar niet stilzwijgend: de telling die onder de sectiekop komt moet kloppen, en "toon alles"
+  /// moet écht alles terugzetten. Anders is het geen filter maar een verlies.
+  group('wat de pagina weglaat, en of ze dat toegeeft', () {
+    final rijen = [
+      _dz('Met hoes', cover: 'http://h/1.jpg'),
+      _dz('Zonder hoes'),
+      DiscoRelease(title: 'Rariteit', kind: RecordKind.other, cover: 'http://h/2.jpg'),
+      DiscoRelease(title: 'Praatplaat', kind: RecordKind.gesproken, cover: 'http://h/3.jpg'),
+      DiscoRelease(title: 'Concert', kind: RecordKind.live, cover: 'http://h/4.jpg'),
+      DiscoRelease(title: 'Remixen', kind: RecordKind.remix, cover: 'http://h/5.jpg'),
+    ];
+
+    test('overig, demo en gesproken komen er niet in; live en remix wél', () {
+      final z = zeefDiscografie(rijen);
+      expect(z.rijen.map((r) => r.title), ['Met hoes', 'Concert', 'Remixen']);
+    });
+
+    test('de telling klopt: verborgen + getoond = alles', () {
+      final z = zeefDiscografie(rijen);
+      expect(z.rijen.length + z.verborgen, rijen.length);
+      expect(z.zonderHoes, 1);
+      expect(z.perSoort[RecordKind.other], 1);
+      expect(z.perSoort[RecordKind.gesproken], 1);
+    });
+
+    test('toonAlles geeft alles terug en telt nog steeds wat er wég zou vallen', () {
+      final z = zeefDiscografie(rijen, toonAlles: true);
+      expect(z.rijen.length, rijen.length);
+      expect(z.verborgen, 3, reason: 'de knop hoort te kunnen zeggen wat hij terugzet');
+    });
+
+    test('DE VAL: een regel die pas ná vulHoezenAan een hoes heeft, blijft staan', () {
+      // "Bad" (1987) draagt in de samenvoeging geen hoes en krijgt er pas een uit de Discogs-sweep.
+      // Zeven vóór het aanvullen gooit precies de platen weg die het hardst op de pagina horen.
+      final voor = [_dz('Bad', datum: '1987')];
+      expect(zeefDiscografie(voor).rijen, isEmpty, reason: 'zonder hoes valt hij af');
+      final na = vulHoezenAan(voor, {discoKey('Bad'): 'http://h/bad.jpg'});
+      expect(zeefDiscografie(na).rijen.single.title, 'Bad');
+    });
+
+    test('zonder Discogs-token blijft de hoesregel uit', () {
+      // Geen token betekent geen zoeksweep en dus geen hoezen om mee aan te vullen. Zou de regel dan
+      // tóch draaien, dan verdwijnt élke plaat die alleen MusicBrainz kent — bij deze artiest zijn
+      // dat Off The Wall, Dangerous en Invincible.
+      final z = zeefDiscografie(rijen, zeefHoezen: false);
+      expect(z.rijen.map((r) => r.title), contains('Zonder hoes'));
+      expect(z.zonderHoes, 0);
     });
   });
 }

@@ -14,11 +14,13 @@
 library;
 
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
+import 'package:debridmusic/enrichment.dart';
 import 'package:debridmusic/library.dart';
 import 'package:debridmusic/main.dart';
 import 'package:debridmusic/paths.dart';
@@ -239,4 +241,51 @@ void main() {
               'dan houdt de achtergrondfoto halverwege het scherm op');
     }
   });
+
+  /// De achtergrondfoto decodeert mee met het VENSTER, niet op een vast getal.
+  ///
+  /// Hij stond op 520 pixels — een maat uit de tijd dat dit een smalle strook achter een portret
+  /// was. Sinds de kop het hele scherm vult werd datzelfde plaatje bijna vier keer opgerekt, en dat
+  /// zag Saber meteen: "te onscherp, blokkerig". GEMETEN over de 115 bewaarde achtergronden: 106 zijn
+  /// 1280×720 en negen zijn 1920×1080 — en Michael Jackson is er één van de negen. Vandaar dat het
+  /// plafond op 1920 staat en niet op 1280: dat had bij precies zijn foto 640 pixels weggegooid.
+  testWidgets('de achtergrond decodeert mee met de vensterbreedte', (tester) async {
+    // `cacheWidth` verpakt de bron in een ResizeImage; de gevraagde breedte zit daar in.
+    int? breedteVan(ImageProvider p) => p is ResizeImage ? p.width : null;
+
+    for (final (breedte, dpr) in [(1440.0, 1.0), (411.0, 3.0)]) {
+      tester.view.physicalSize = Size(breedte * dpr, 900 * dpr);
+      tester.view.devicePixelRatio = dpr;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(omhulsel(EditorialeKop(
+        naam: 'Michael Jackson',
+        art: ArtistArt(backdropBytes: _png),
+      )));
+      await tester.pump();
+
+      final gevraagd = [
+        for (final b in tester.widgetList<Image>(find.byType(Image)))
+          if (breedteVan(b.image) case final w?) w
+      ];
+      expect(gevraagd, isNotEmpty, reason: 'de achtergrond vraagt geen decodeerbreedte meer aan');
+      for (final w in gevraagd) {
+        expect(w, greaterThan(520),
+            reason: 'op $breedte punten bij dpr $dpr is $w nog steeds een vast klein getal');
+        expect(w, lessThanOrEqualTo(1920),
+            reason: 'boven de grootste bewaarde bron decodeert Flutter toch niet groter — dat kost '
+                'alleen geheugen');
+      }
+    }
+  });
 }
+
+/// Een geldige 1×1 PNG: klein genoeg om in een toets te staan, echt genoeg om te decoderen.
+final _png = Uint8List.fromList([
+  0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, //
+  0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+  0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00,
+  0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+  0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+  0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+]);

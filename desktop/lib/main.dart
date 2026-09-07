@@ -16908,8 +16908,21 @@ class EditorialeKop extends StatelessWidget {
               Positioned.fill(
                 child: grijs(Image.memory(achtergrond,
                     fit: BoxFit.cover,
-                    // Klein gedecodeerd: hier gaat een verloop overheen en de figuur staat ervoor.
-                    cacheWidth: decodeWidth(smal ? 220 : 520),
+                    // Zo breed als het VENSTER, niet een vaste 520. Dat getal stamt uit de tijd dat
+                    // dit een smalle strook achter een portret was; sinds de kop het hele scherm
+                    // vult werd hetzelfde plaatje bijna vier keer opgerekt, en dat zag Saber meteen
+                    // ("blokkerig").
+                    //
+                    // Het plafond staat op 1920 en niet op 1280, en dat scheelde precies bij de
+                    // artiest waar de klacht over ging. GEMETEN over de 115 bewaarde achtergronden:
+                    // 106 zijn 1280×720 en negen zijn 1920×1080 — en Michael Jackson is er één van
+                    // de negen (`2a6c02d3_backdrop.img`, 1920×1080). Een plafond van 1280 had daar
+                    // dus 640 pixels weggegooid van precies de foto die te grof gevonden werd.
+                    //
+                    // Het kost niets voor de andere honderdzes: `cacheWidth` verkleint alleen, dus
+                    // een 1280 brede bron wordt gewoon op 1280 gedecodeerd. Alleen die negen kosten
+                    // meer geheugen (1920×1080 is 8,3 MB als bitmap), en dat is er één per pagina.
+                    cacheWidth: decodeWidth(breedte).clamp(64, 1920),
                     alignment: const Alignment(0, -.35),
                     errorBuilder: (_, __, ___) => const SizedBox())),
               ),
@@ -17536,7 +17549,14 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   /// laden binnen, want het kost één verzoek per regel die alleen Deezer kent.
   Set<String> _gasten = const {};
 
-  DiscoSort _sort = DiscoSort.datum;
+  DiscoSort _sort = DiscoSort.datumOud;
+
+  /// De discografie ongefilterd tonen. Standaard uit — zie [zeefDiscografie] voor wat er weggaat.
+  ///
+  /// Dit is geen voorkeur maar een uitweg. De zeef haalt bij een grote artiest tweederde van de
+  /// regels weg, en iets wegnemen zonder te zeggen dát je het wegneemt is precies de fout waar
+  /// `discoKey` in discography.dart voor waarschuwt: een verborgen plaat merk je nooit.
+  bool _toonAlles = false;
   String? _bio;
   bool _busy = true;
 
@@ -17732,11 +17752,19 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     final bezit = {for (final a in mine) discoKey(a.title)};
     // Hoezen aanvullen vóór het sorteren, gastoptredens eruit: allebei op de samengevoegde lijst,
     // zodat elke hertekening hetzelfde antwoord geeft ongeacht wat er wanneer binnenkwam.
-    final alles = vulHoezenAan(mergeDiscography([_dz, _mb, _dg]), _hoezen)
+    final samen = vouwHeruitgaves(vulHoezenAan(mergeDiscography([_dz, _mb, _dg]), _hoezen)
         .where((r) => !_gasten.contains(r.key))
-        .toList();
-    final blokken = inBlokken(alles, _sort, bezit);
-    final rijen = alles;
+        .toList());
+    // De hoesregel alleen als er iets IS om hoezen mee aan te vullen. Zonder Discogs-token draait de
+    // zoeksweep niet, en dan zou hij elke plaat wegvegen die alleen MusicBrainz kent — dat zijn bij
+    // Michael Jackson Off The Wall, Dangerous en Invincible. Diezelfde voorwaarde vangt ook de race:
+    // zolang Discogs nog niet geantwoord heeft is `_hoezen` leeg, en dan verschijnen regels alleen,
+    // ze knipperen nooit weg.
+    final zeef = zeefDiscografie(samen,
+        toonAlles: _toonAlles,
+        zeefHoezen: _dgStatus != BronStatus.geenToken && _hoezen.isNotEmpty);
+    final rijen = zeef.rijen;
+    final blokken = inBlokken(rijen, _sort, bezit);
 
     return Scaffold(
       backgroundColor: _bg,
@@ -17905,6 +17933,37 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                   child: Text(regel, style: const TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               ),
+            // Wat de zeef weglaat, en de weg terug. Zie [_toonAlles]: een filter zonder uitweg is
+            // een filter dat je niet kunt controleren, en deze haalt bij een grote artiest
+            // tweederde van de regels weg.
+            if (zeef.verborgen > 0)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(_marge, 0, _marge, 8),
+                  child: Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 12,
+                    runSpacing: 4,
+                    children: [
+                      Text(_verborgenRegel(zeef),
+                          style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      Pressable(
+                        onPressed: () => setState(() => _toonAlles = !_toonAlles),
+                        borderRadius: BorderRadius.circular(4),
+                        ringOnFocus: true,
+                        child: Text(
+                          _toonAlles ? 'Opruimen' : 'Toon alles',
+                          style: kTekstNormaal.copyWith(
+                            fontSize: 11.5,
+                            decoration: TextDecoration.underline,
+                            decorationColor: kLijn,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             // Per soort een eigen blok met een eigen kop. Zonder die scheiding staat een deluxe naast
             // het gewone album met bijna dezelfde naam, en tussen tweehonderd singles zie je niet meer
             // welke platen er eigenlijk zijn.
@@ -17992,6 +18051,23 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
 
   /// Wat de bronnen deden — alleen als er iets te melden valt.
   ///
+  /// Wat de zeef weglaat, uitgesplitst — en in de andere stand wat er wég zou vallen.
+  ///
+  /// Uitgesplitst en niet alleen een getal, want "153 verborgen" zegt niet of je een plaat mist of
+  /// honderd persingen. De woorden komen uit [blokTitel], dus een nieuw soort krijgt hier vanzelf
+  /// zijn naam mee.
+  String _verborgenRegel(DiscoZeef z) {
+    final delen = <String>[
+      if (z.zonderHoes > 0) '${z.zonderHoes} zonder hoes',
+      for (final e in z.perSoort.entries.toList()..sort((a, b) => b.value.compareTo(a.value)))
+        '${e.value} ${blokTitel(e.key).toLowerCase()}',
+    ];
+    final staart = delen.isEmpty ? '' : ' · ${delen.join(' · ')}';
+    return _toonAlles
+        ? 'Alles zichtbaar — ${z.verborgen} vallen normaal weg$staart'
+        : '${z.verborgen} verborgen$staart';
+  }
+
   /// "Geen token", "niet bereikbaar" en "niets gevonden" zien er op een lege lijst hetzelfde uit, en
   /// zonder Discogs-token faalt daar élke aanroep stil. Dat verschil hoort op het scherm te staan.
   String? _bronRegel() {

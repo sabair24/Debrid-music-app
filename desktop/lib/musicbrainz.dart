@@ -828,15 +828,36 @@ class MusicBrainzService {
   }
 
   /// Everything an artist released, by their id. Complete where a streaming catalogue is partial.
-  Future<List<MbReleaseGroup>> discographyOf(String artistMbid, {int max = 100}) async {
+  ///
+  /// **Doorbladeren, want honderd was niet alles.** Michael Jackson heeft er 333 en deze functie
+  /// haalde er 100. Dat kost niet alleen regels maar vooral ETIKETTEN: MusicBrainz levert op dit
+  /// niveau nooit een hoes, dus een groep die niet meesmelt draagt precies één ding bij — zijn
+  /// `secondaryTypes`, en dat is wat live, remix en interview uit het blok Albums houdt.
+  ///
+  /// De EERSTE bladzijde houdt bewust exact dezelfde URL als voorheen. `_get` bewaart per adres en
+  /// die bestanden verlopen nooit, dus elke eerder bezochte artiest kost daar nul verzoeken.
+  ///
+  /// Een halve lijst is beter dan geen lijst: valt een bladzijde weg, dan komt terug wat er al was —
+  /// vroeger leverde één mislukt verzoek nul regels op. `_writeMiss` onthoudt een wankel "nee" maar
+  /// een uur, dus de staart wordt bij het volgende bezoek gewoon opnieuw geprobeerd.
+  Future<List<MbReleaseGroup>> discographyOf(String artistMbid, {int max = 100, int dak = 500}) async {
     if (artistMbid.trim().isEmpty) return const [];
-    final body = await _ws(
-        '$_root/release-group?artist=${artistMbid.trim()}&fmt=json&limit=$max');
-    final list = body?['release-groups'] as List<dynamic>? ?? const [];
-    final out = [
-      for (final g in list)
-        if (g is Map<String, dynamic>) MbReleaseGroup.from(g)
-    ];
+    final out = <MbReleaseGroup>[];
+    final gezien = <String>{};
+    for (var offset = 0; offset < dak; offset += max) {
+      final body = await _ws('$_root/release-group?artist=${artistMbid.trim()}&fmt=json&limit=$max'
+          '${offset == 0 ? '' : '&offset=$offset'}');
+      if (body == null) break;
+      final list = body['release-groups'] as List<dynamic>? ?? const [];
+      for (final g in list) {
+        if (g is! Map<String, dynamic>) continue;
+        final rg = MbReleaseGroup.from(g);
+        if (gezien.add(rg.mbid)) out.add(rg);
+      }
+      if (list.length < max) break;
+      final totaal = (body['release-group-count'] as num?)?.toInt();
+      if (totaal != null && offset + max >= totaal) break;
+    }
     // Albums before singles and compilations, then newest first — the shape a discography reads in.
     out.sort((a, b) {
       final byKind = _kindRank(a.primaryType).compareTo(_kindRank(b.primaryType));

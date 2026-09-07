@@ -49,7 +49,8 @@ void main() {
     print('Discogs     ${dg.status.name}: ${dg.releases.length}');
 
     expect(dz.releases, isNotEmpty, reason: 'Deezer is de bron die het snelst moet antwoorden');
-    expect(mb.releases, isNotEmpty, reason: 'discographyOf is één verzoek en heeft geen token nodig');
+    expect(mb.releases, isNotEmpty,
+        reason: 'discographyOf bladert door de releasegroepen en heeft geen token nodig');
 
     final samen = mergeDiscography([dz.releases, mb.releases, dg.releases]);
     // ignore: avoid_print

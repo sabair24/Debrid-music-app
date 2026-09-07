@@ -70,7 +70,11 @@ class DiscographyService {
   /// v2: Discogs-masters kregen hun soort uit de zoeksweep (waren allemaal `other`), regels zonder
   /// hoes worden aangevuld, en Deezer-gastoptredens vallen af. Zonder deze bump blijft elke eerder
   /// bezochte artiest het oude antwoord serveren — de onderliggende caches verlopen nooit.
-  static const schema = 'disco|v2';
+  /// v3: MusicBrainz' tweede etiketten (Live, Remix, Interview…) worden nu eigen soorten in plaats
+  /// van alles-is-album, en de browse bladert door tot 500 in plaats van bij 100 te stoppen. Drie
+  /// zelfstandige redenen om te bumpen: de bewaarde `k`-waarden zijn verouderd (een livealbum staat
+  /// er als `album`), de regelverzameling is groter, en de indeling zelf is veranderd.
+  static const schema = 'disco|v3';
 
   /// Hoe lang een bewaard antwoord meegaat voor er bij Deezer opnieuw wordt gekeken.
   ///

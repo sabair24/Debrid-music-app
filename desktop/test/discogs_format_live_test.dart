@@ -51,22 +51,32 @@ void main() {
     return alles;
   }
 
-  test('METING: hoeveel staat er nog in Overig, en hoeveel mist een hoes', () async {
+  test('METING: wat de zeef weglaat, en wat er van de Albums overblijft', () async {
+    // Het getal waar deze hele ronde om draait. Saber zag 44 "albums" van Michael Jackson waarvan de
+    // helft live-uitzendingen en tributes waren; de vraag is niet of de code compileert maar hoeveel
+    // er wegvalt en of de ECHTE platen blijven staan.
     final (svc, _) = await maak();
-    for (final naam in ['Sia', 'Céline Dion']) {
-      final alles = await discografie(svc, naam, weerGasten: false);
-      final overig = alles.where((r) => r.blok == RecordKind.other).length;
-      final zonder = alles.where((r) => r.cover == null || r.cover!.isEmpty).length;
+    for (final naam in ['Michael Jackson', 'Sia', 'Céline Dion']) {
+      final ruw = await discografie(svc, naam, weerGasten: false);
+      final samen = vouwHeruitgaves(ruw);
+      final zeef = zeefDiscografie(samen);
       // ignore: avoid_print
-      print('$naam: ${alles.length} regels — Overig $overig '
-          '(${(100 * overig / alles.length).round()}%), zonder hoes $zonder '
-          '(${(100 * zonder / alles.length).round()}%)');
-      for (final blok in inBlokken(alles, DiscoSort.datum, const {})) {
+      print('$naam: ${ruw.length} regels → ${zeef.rijen.length} zichtbaar '
+          '(${zeef.verborgen} verborgen: ${zeef.zonderHoes} zonder hoes, '
+          '${zeef.perSoort.entries.map((e) => '${e.value} ${blokTitel(e.key).toLowerCase()}').join(', ')})');
+      for (final blok in inBlokken(zeef.rijen, DiscoSort.datumOud, const {})) {
         // ignore: avoid_print
         print('   ${blokTitel(blok.soort)}: ${blok.rijen.length}');
       }
+      for (final blok in inBlokken(zeef.rijen, DiscoSort.datumOud, const {})) {
+        if (blok.soort != RecordKind.album) continue;
+        for (final r in blok.rijen) {
+          // ignore: avoid_print
+          print('      ${r.year ?? '----'}  ${r.title}');
+        }
+      }
     }
-  }, timeout: const Timeout(Duration(minutes: 8)));
+  }, timeout: const Timeout(Duration(minutes: 12)));
 
   test('METING: is Pavarotti & Friends weg bij Enrique Iglesias', () async {
     final (svc, _) = await maak();
