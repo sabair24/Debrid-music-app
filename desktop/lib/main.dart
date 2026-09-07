@@ -16784,10 +16784,18 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
 /// MINIMUMhoogte: die kan de inhoud nooit afsnijden, want inhoud die meer nodig heeft duwt hem
 /// gewoon op. `test/artiestkop_knoppen_test.dart` bewaakt dat voor allebei de koppen.
 ///
-/// **De beeldladder.** `cutout` → `clearart` → portret in een cirkel → alleen de naam. Gemeten op
-/// 06-09-2026: tien van de dertien artiesten uit deze bibliotheek hebben een cutout, elf een
-/// clearart. De laatste trap moet er dus goed uitzien en niet als een gat — daar draagt de naam
-/// het kader alleen.
+/// **Eén beeld.** De achtergrondfoto over de volle breedte, en verder niets — geen uitgeknipte
+/// artiest ervoor, geen rond portret rechtsonder.
+///
+/// Hier stond een beeldladder: `cutout` → `clearart` → portret in een cirkel → alleen de naam.
+/// Gemeten op 06-09-2026 had tien van de dertien artiesten uit deze bibliotheek een cutout, dus hij
+/// werkte — maar Saber zag het resultaat en het was niet het goede antwoord: "het is niet mooi te
+/// druk". Twee mensen in één kader, de een scherp uitgeknipt en de ander uit de foto erachter, is
+/// een montage die je maakt als je er twee hébt, niet omdat het beter leest.
+///
+/// Dat de laatste trap meeging is het gevolg van de eerste: dat ronde portret bestónd alleen als
+/// terugval voor artiesten zónder cutout. Met de cutout weg zou hij bij iedereen verschijnen, en
+/// dan is er nog steeds een tweede figuur.
 class EditorialeKop extends StatelessWidget {
   const EditorialeKop({
     super.key,
@@ -16827,9 +16835,20 @@ class EditorialeKop extends StatelessWidget {
     final marge = smal ? 18.0 : (tablet ? 28.0 : 56.0);
     final naamGrootte = artiestNaamGrootte(breedte);
 
+    // Eén beeld en niet twee. Hier stond een BEELDLADDER — de artiest vrijstaand uitgeknipt
+    // (`cutout`, anders `clearart`), en als die er niet was een rond portret rechtsonder. Saber
+    // heeft hem op 07-09-2026 weggevraagd: "het is niet mooi te druk, hou enkel de achtergrond
+    // image in volle breedte lijk het is."
+    //
+    // Dat het ronde portret meeging is geen uitbreiding van die wens maar het gevolg ervan: hij was
+    // de TERUGVAL voor artiesten zonder cutout, dus met de cutout weg zou hij bij iedereen
+    // verschijnen — precies de tweede figuur die eruit moest.
+    //
+    // Ze blijven wél opgehaald en bewaard. `clearartBytes` heeft nog een baan — het OVER-blok
+    // verderop zet hem naast de biografie — en `cutoutBytes` niet meer, maar hij staat al op schijf
+    // en kost daar niets. Hem uit [CoverEnricher.artistArt] slopen zou een schemabump en dus een
+    // nieuwe ophaalronde voor 268 artiesten betekenen, voor een bestand dat we misschien terugwillen.
     final achtergrond = art?.backdropBytes ?? fallbackImage;
-    final vrijstaand = art?.cutoutBytes ?? art?.clearartBytes;
-    final portret = art?.thumbBytes ?? fallbackImage;
 
     // Zwart-wit, en dat is het ontwerp: de enige kleur op de pagina komt uit de hoezen. Een
     // matrix en geen tweede afbeelding — dit kost geen geheugen en geen decodering.
@@ -16842,34 +16861,6 @@ class EditorialeKop extends StatelessWidget {
           ]),
           child: kind,
         );
-
-    // De onderrand van de figuur oplossen in de achtergrond. GEMETEN, niet bedacht: een uitgeknipte
-    // artiest is zelden een hele persoon — de cutout van Michael Jackson houdt op ter hoogte van de
-    // heup, en tegen de onderrand van de kop gaf dat een kaarsrechte snee dwars door een lichaam.
-    // Een verloop van twaalf procent maakt er een overgang van in plaats van een afgesneden been,
-    // en werkt ongeacht wat er op de plaat staat.
-    //
-    // Op een telefoon staat de figuur ACHTER de tekst en niet ernaast — daar is geen breedte voor.
-    // Dan moet hij ook als achtergrond kijken: op vol vermogen liep "6 albums · 74 nummers" dwars
-    // over een grijs jasje en was het niet meer te lezen. Dit kost niets extra's, want dezelfde
-    // laag doet al het verloop: de dekking gaat gewoon in de witwaarde van de masker-kleur.
-    Widget vervaagOnder(Widget kind) => ShaderMask(
-          shaderCallback: (r) => LinearGradient(
-            begin: Alignment.bottomCenter,
-            end: Alignment.topCenter,
-            colors: [
-              const Color(0x00FFFFFF),
-              smal ? const Color(0x73FFFFFF) : const Color(0xFFFFFFFF),
-            ],
-            stops: const [0, .12],
-          ).createShader(r),
-          blendMode: BlendMode.dstIn,
-          child: kind,
-        );
-
-    // Hoeveel van de kop de vrijstaande figuur mag vullen. Op een telefoon staat hij achter de
-    // naam en mag hij klein blijven; breed is hij het beeld.
-    final figuurHoogte = smal ? 300.0 : (tablet ? 430.0 : 700.0);
 
     final naamKleur = Theme.of(context).textTheme.bodyLarge?.color ?? kTekst;
     final woorden = naam.trim().split(RegExp(r'\s+'));
@@ -16884,13 +16875,9 @@ class EditorialeKop extends StatelessWidget {
         // MINIMUM, geen vaste maat. Zie de klasse-uitleg: inhoud die meer nodig heeft duwt hem op,
         // dus er kan hier nooit iets buiten het vak vallen.
         constraints: BoxConstraints(
-          // Zónder vrijstaande figuur hoeft het kader niet even hoog: die 700 punten waren er vóór
-          // de figuur, en zonder hem stond er onder de knoppen honderddertig punten niets.
-          minHeight: smal
-              ? 0
-              : (vrijstaand != null
-                  ? (breedte * .52).clamp(380.0, 820.0)
-                  : (breedte * .40).clamp(340.0, 620.0)),
+          // Die 700 punten waren er vóór de vrijstaande figuur. Nu die weg is, is dit het kader dat
+          // de inhoud zelf nodig heeft — anders staat er onder de knoppen honderddertig punten niets.
+          minHeight: smal ? 0 : (breedte * .40).clamp(340.0, 620.0),
           // En de volle breedte, EXPLICIET. Dit stond nergens: een `Stack` meet zich aan zijn
           // niet-gepositioneerde kinderen, en `Positioned.fill` telt daarin niet mee. Op de pagina
           // staat deze kop zélf in een `Stack` (naast de terugpijl), en die geeft LOSSE maten door —
@@ -16929,28 +16916,22 @@ class EditorialeKop extends StatelessWidget {
             Positioned.fill(
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  // Twee sterktes, en dat is GEZIEN en niet bedacht. Met een uitgeknipte figuur
-                  // ervoor is de achtergrond een laag: hij mag door. Zonder figuur wordt diezelfde
-                  // foto het onderwerp — bij Phil Collins een kop van zeshonderd punten die de
-                  // naam wegdrukt. Dan hoort hij verder naar achteren.
-                  gradient: LinearGradient(
+                  // Eén sterkte, en dat is de lichte. Hier stonden er twee — een donkere voor
+                  // artiesten zónder uitgeknipte figuur, omdat de foto dan zelf het onderwerp werd.
+                  // Nu er nooit meer een figuur voor staat zou die donkere de norm worden, en dat
+                  // is niet wat gevraagd is: "hou enkel de achtergrond image in volle breedte lijk
+                  // het is" — en zoals het IS, is deze. De leesbaarheid van de naam hangt niet aan
+                  // dit verloop maar aan het verloop van links hieronder.
+                  gradient: const LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: vrijstaand != null
-                        ? const [
-                            Color(0x44000000),
-                            Color(0x66000000),
-                            Color(0xDB07080C),
-                            kAchtergrond,
-                            kAchtergrond,
-                          ]
-                        : const [
-                            Color(0xA0000000),
-                            Color(0xBC000000),
-                            Color(0xF207080C),
-                            kAchtergrond,
-                            kAchtergrond,
-                          ],
+                    colors: [
+                      Color(0x44000000),
+                      Color(0x66000000),
+                      Color(0xDB07080C),
+                      kAchtergrond,
+                      kAchtergrond,
+                    ],
                     // De laatste kleur TWEE keer, en dat is de reden: met één stop op 1 is de
                     // onderrand pas op de allerlaatste rij dekkend, en dan blijft er van de foto
                     // een paar procent over dat als een streep over het scherm loopt. Vanaf .92 is
@@ -16976,18 +16957,6 @@ class EditorialeKop extends StatelessWidget {
                 ),
               ),
 
-            // De vrijstaande artiest. Rechts, en met opzet ACHTER de naam in stapelvolgorde op een
-            // telefoon — daar is geen breedte om ze naast elkaar te zetten.
-            if (vrijstaand != null)
-              Positioned(
-                right: smal ? -18 : marge,
-                bottom: 0,
-                child: vervaagOnder(grijs(Image.memory(vrijstaand,
-                    height: figuurHoogte,
-                    fit: BoxFit.contain,
-                    alignment: Alignment.bottomCenter,
-                    errorBuilder: (_, __, ___) => const SizedBox()))),
-              ),
 
             Padding(
               padding: EdgeInsets.fromLTRB(marge, smal ? 44 : 56, marge, smal ? 18 : 28),
@@ -17022,17 +16991,12 @@ class EditorialeKop extends StatelessWidget {
                   ],
 
                   SizedBox(height: smal ? 20 : 30),
-                  // Als er een vrijstaande figuur rechts staat, mag de feitenstrook daar niet
-                  // onderdoor lopen — vandaar de rechtermarge die met de figuur meeschaalt.
+                  // De rechtermarge hield ruimte vrij voor de figuur die hier stond. Nu er niets
+                  // meer rechts staat, mag de feitenstrook de breedte hebben — maar niet de hele:
+                  // vier kolommen over tweeduizend punten lezen als losse eilanden. Een derde vrij
+                  // laten houdt ze bij elkaar, en de foto blijft daar zichtbaar.
                   Padding(
-                    padding: EdgeInsets.only(
-                        right: smal
-                            ? 0
-                            : (vrijstaand != null
-                                ? figuurHoogte * .62
-                                // Trap 3 zet een rond portret van 220 rechtsonder neer. Zonder deze
-                                // marge liep de scheidingslijn er dwars doorheen — over het gezicht.
-                                : (portret != null ? 268.0 : 0.0))),
+                    padding: EdgeInsets.only(right: smal ? 0 : breedte * .30),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
@@ -17083,29 +17047,9 @@ class EditorialeKop extends StatelessWidget {
                     // geen tik meer.
                     Wrap(spacing: 10, runSpacing: 10, children: actions),
                   ],
-
-                  // Alleen als er niets vrijstaands is: dan komt het portret als rond beeld terug,
-                  // zodat de kop niet leeg oogt. Trap 3 van de ladder.
-                  if (vrijstaand == null && portret != null && !smal) ...[
-                    const SizedBox(height: 4),
-                  ],
                 ],
               ),
             ),
-
-            if (vrijstaand == null && portret != null && !smal)
-              Positioned(
-                right: marge,
-                bottom: 28,
-                child: ClipOval(
-                  child: grijs(Image.memory(portret,
-                      width: 220,
-                      height: 220,
-                      fit: BoxFit.cover,
-                      cacheWidth: decodeWidth(220),
-                      errorBuilder: (_, __, ___) => const SizedBox())),
-                ),
-              ),
           ],
         ),
       ),
