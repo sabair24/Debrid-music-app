@@ -170,6 +170,21 @@ void main() {
       expect(kindFromDiscogs('CD, Single'), RecordKind.single);
     });
 
+    test('"Comp" is Discogs\' afkorting van Compilation — en de enige die hij gebruikt', () {
+      // De duurste meting van deze ronde. Op `/artists/{id}/releases` komt `Compilation` VOLUIT nul
+      // keer voor en `Comp` 1711 keer, over 12093 regels. Deze functie zocht alleen het hele woord,
+      // dus die regel heeft daar nooit één keer geraakt: zeventienhonderd verzamelaars stonden
+      // tussen de albums. Saber wees "All About The Police" aan — `Cass, Album, Comp`.
+      expect(kindFromDiscogs('Cass, Album, Comp'), RecordKind.compilation);
+      expect(kindFromDiscogs('2xCDr, Album, Comp'), RecordKind.compilation);
+      expect(kindFromDiscogs('CD, Comp'), RecordKind.compilation);
+      expect(kindFromDiscogs('7xLP + Box, Comp'), RecordKind.compilation);
+      // En het hele woord blijft werken, want de zoek-endpoint schrijft het wél uit.
+      expect(kindFromDiscogs('Vinyl, LP, Album, Compilation'), RecordKind.compilation);
+      // Op velden en niet op deelreeksen: "comp" zit ook in "compact".
+      expect(kindFromDiscogs('Compact Disc, Album'), isNot(RecordKind.compilation));
+    });
+
     /// Film- en dvd-uitgaves horen niet in een discografie, "wel als er officieel een live album
     /// music is". Die tweede helft is de reden dat er op de DRAGER gekeken wordt: een concert
     /// bestaat vaak als dvd én als plaat, en dan hoort de plaat te blijven.

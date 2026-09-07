@@ -1039,34 +1039,45 @@ class DiscogsService {
     final perMaster = <int, String>{};
     final hoesPerSleutel = <String, String>{};
     final hoesPerMaster = <int, String>{};
-    for (var p = 1; p <= pages; p++) {
-      final b = await _get('https://api.discogs.com/database/search'
-          '?artist_id=$artistId&type=master&per_page=100&page=$p');
-      final rijen = b?['results'] as List<dynamic>? ?? const [];
-      if (rijen.isEmpty) break;
-      for (final r in rijen) {
-        if (r is! Map<String, dynamic>) continue;
-        final mid = (r['id'] as num?)?.toInt();
-        final formaat = (r['format'] as List<dynamic>? ?? const []).join(', ');
-        if (mid != null && formaat.isNotEmpty) perMaster[mid] = formaat;
+    // ALLEEN masters, en dat is een meting die tegenviel. `type=master` levert uitsluitend masters
+    // — geprobeerd: 202 masters en nul persingen voor The Police — terwijl de helft van wat
+    // `/artists/{id}/releases` teruggeeft persingen zijn. Een tweede ronde op `type=release` erbij
+    // leek dus gratis winst, en is gebouwd en gemeten: bij The Police en Sia werd het iets beter,
+    // bij Michael Jackson niet, en het verschil kreeg ik in geen enkele volgorde verklaard. Drie
+    // extra verzoeken per artiest voor een uitkomst die je niet kunt uitleggen is geen verbetering,
+    // dus is hij er weer uit. De reparatie die wél werkte staat hierboven: `cover_image` in plaats
+    // van `thumb`.
+    {
+      for (var p = 1; p <= pages; p++) {
+        final b = await _get('https://api.discogs.com/database/search'
+            '?artist_id=$artistId&type=master&per_page=100&page=$p');
+        final rijen = b?['results'] as List<dynamic>? ?? const [];
+        if (rijen.isEmpty) break;
+        for (final r in rijen) {
+          if (r is! Map<String, dynamic>) continue;
+          final id = (r['id'] as num?)?.toInt();
+          final formaat = (r['format'] as List<dynamic>? ?? const []).join(', ');
+          if (id != null && formaat.isNotEmpty) perMaster[id] = formaat;
 
-        // De zoekopdracht schrijft "Céline Dion - The French Collection II"; alleen de titel is de
-        // sleutel waarop de rest van de discografie vergelijkt.
-        var titel = (r['title'] as String? ?? '').trim();
-        final streep = titel.indexOf(' - ');
-        if (streep > 0) titel = titel.substring(streep + 3).trim();
-        // `cover_image` (600×601, q90) en niet `thumb` (150×150, q40). Zie [DiscogsSweep.hoesPerSleutel]
-        // voor de meting; `thumb` blijft als terugval, want een kleine hoes is beter dan geen.
-        final hoes = ((r['cover_image'] as String? ?? '').trim().isNotEmpty
-                ? r['cover_image'] as String
-                : (r['thumb'] as String? ?? ''))
-            .trim();
-        if (hoes.isEmpty || hoes.contains('spacer')) continue;
-        if (titel.isNotEmpty) hoesPerSleutel.putIfAbsent(discoKey(titel), () => hoes);
-        if (mid != null) hoesPerMaster.putIfAbsent(mid, () => hoes);
+          // De zoekopdracht schrijft "Céline Dion - The French Collection II"; alleen de titel is de
+          // sleutel waarop de rest van de discografie vergelijkt.
+          var titel = (r['title'] as String? ?? '').trim();
+          final streep = titel.indexOf(' - ');
+          if (streep > 0) titel = titel.substring(streep + 3).trim();
+          // `cover_image` (600×601, q90) en niet `thumb` (150×150, q40). Zie
+          // [DiscogsSweep.hoesPerSleutel] voor de meting; `thumb` blijft als terugval, want een
+          // kleine hoes is beter dan geen.
+          final hoes = ((r['cover_image'] as String? ?? '').trim().isNotEmpty
+                  ? r['cover_image'] as String
+                  : (r['thumb'] as String? ?? ''))
+              .trim();
+          if (hoes.isEmpty || hoes.contains('spacer')) continue;
+          if (titel.isNotEmpty) hoesPerSleutel.putIfAbsent(discoKey(titel), () => hoes);
+          if (id != null) hoesPerMaster.putIfAbsent(id, () => hoes);
+        }
+        final totaal = (b?['pagination'] as Map<String, dynamic>?)?['pages'] as num?;
+        if (totaal == null || p >= totaal.toInt()) break;
       }
-      final totaal = (b?['pagination'] as Map<String, dynamic>?)?['pages'] as num?;
-      if (totaal == null || p >= totaal.toInt()) break;
     }
     return DiscogsSweep(perMaster, hoesPerSleutel, hoesPerMaster);
   }
@@ -1112,6 +1123,10 @@ class DiscogsService {
         //
         // Eerst op master-id en dan op titel: het zijn andere regels die ze raken. Wat geen van
         // beide kent, houdt zijn miniatuur — kleiner is nog altijd beter dan niets.
+        // Volgorde is hier alles, en ze is GEMETEN. De hoes van de MASTER gaat voor: die is de
+        // canonieke plaat en draagt bijna altijd een `cover_image` van 600. De hoes van één persing
+        // komt daarna, want de zoek-endpoint geeft daar vaak alleen een miniatuur van 150 terug —
+        // hem vooraan zetten haalde bij Michael Jackson het aantal 150px-hoezen van 38 naar 72.
         var thumb = (master ? sweep.hoesPerMaster[rid] : null) ??
             sweep.hoesPerSleutel[discoKey(titel)] ??
             '';
@@ -1121,12 +1136,29 @@ class DiscogsService {
         final jaar = (r['year'] as num?)?.toInt() ?? 0;
         // Een master draagt hier geen formaat; de sweep weet het wel. Zonder deze regel valt een
         // vijfde van de discografie in "Overig".
-        final formaat = (r['format'] as String? ?? '').trim().isNotEmpty
-            ? (r['format'] as String)
-            : (master ? (sweep.formaatPerMaster[rid] ?? '') : '');
+        //
+        // BEKEND GAT: Discogs snijdt deze `format`-tekst af op VIJFTIG tekens. De driedubbele box
+        // van The Police komt binnen als "CD, Album, RE + CD, Album, RE + CD, Album, RE + Bo", en de
+        // staart die eraf viel was `Box Set, Compilation` — dus hij staat tussen de studioalbums.
+        // GEMETEN: 99 van 12093 regels raken die grens. De zoek-endpoint geeft wél een volledige
+        // lijst, maar alleen voor masters, en dit is een persing; hem alsnog opvragen kost één
+        // verzoek per regel op een baan van zestig per minuut.
+        final eigen = (r['format'] as String? ?? '').trim();
+        final formaat = eigen.isNotEmpty ? eigen : (master ? (sweep.formaatPerMaster[rid] ?? '') : '');
+        // Aan wie de plaat gecrediteerd is, en dat veld werd weggegooid. Discogs schrijft bij een
+        // verzamelplaat "Various …" — voor "Brimstone & Treacle (Original Soundtrack Album)" staat
+        // er letterlijk `Various Featuring The Police, Sting, Go.Go's* & Squeeze (2)`. Dat is geen
+        // album van deze artiest maar een verzamelplaat waar hij op staat, en zo stond hij tussen
+        // Zenyatta Mondatta en Synchronicity.
+        //
+        // Naar Verzamelaars en niet weg: er staat wél muziek van hem op, en een plaat verbergen is
+        // de fout die je nooit merkt. GEMETEN: vier regels in de hele cache.
+        final gecrediteerd = (r['artist'] as String? ?? '').trim();
+        final vanVelen = RegExp(r'^various\b', caseSensitive: false).hasMatch(gecrediteerd);
+
         uit.add(DiscoRelease(
           title: titel,
-          kind: kindFromDiscogs(formaat),
+          kind: vanVelen ? RecordKind.compilation : kindFromDiscogs(formaat),
           // Jaar nul betekent hier "onbekend" en niet het jaar nul. Als tekst laten staan zou die
           // regel bij het sorteren op datum onderaan de twintigste eeuw belanden.
           firstDate: jaar > 0 ? '$jaar' : null,

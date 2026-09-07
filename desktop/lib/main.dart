@@ -22931,7 +22931,7 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
               ]),
               Text(widget.artist, style: const TextStyle(color: _muted, fontSize: 12.5)),
               const SizedBox(height: 4),
-              const Text('Klik een foto voor het portret · rechtsklik voor de achtergrond',
+              const Text('Klik een foto voor de achtergrond · rechtsklik voor het portret',
                   style: TextStyle(color: _muted, fontSize: 11.5)),
               const SizedBox(height: 14),
               Expanded(child: _body(portrait, backdrop)),
@@ -22958,25 +22958,33 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
         final isPortrait = portrait == img.uri;
         final isBackdrop = backdrop == img.uri;
         final lib = context.read<LibraryStore>();
+        // DE KLIK ZET DE ACHTERGROND, en dat was andersom. Saber: "foto veranderen doet niets" — en
+        // dat klopte precies. Deze kiezer wordt maar vanaf één plek geopend, de artiestpagina, en
+        // die toont sinds de kop verbouwd werd alleen nog een achtergrond: het ronde portret ging
+        // eruit toen de uitgeknipte figuur eruit ging. Een gewone klik zette dus een portret dat
+        // nergens meer getekend wordt. De knop deed iets, en je zag het nooit.
+        //
+        // Het portret is niet weg — [ArtistHero] op de personenpagina tekent hem nog — dus hij
+        // verhuist naar de tweede knop in plaats van te verdwijnen.
+        //
+        // Rechtsklik heeft geen knop op een afstandsbediening, dus op een televisie doet OK
+        // ingedrukt houden hetzelfde. Afgeschermd, want op een telefoon of iPad is lang drukken op
+        // een foto voor niemand "stel in als portret", en het zou afgaan waar een sleep of een
+        // contextmenu bedoeld was.
         return Pressable(
-          onPressed: () => lib.setArtistArt(widget.artist, 'portrait', img.uri),
-          // Right-click sets the backdrop, and a remote has no right button — so on a television
-          // holding OK does the same thing. Both, not one instead of the other: choosing a backdrop
-          // was something you simply could not do from the sofa, and nothing on screen said why.
-          //
-          // Gated, because on a phone or an iPad a long press on a photo is not "set as backdrop"
-          // to anybody, and it would fire where a drag or a context menu was meant.
-          onSecondaryTap: (_) => lib.setArtistArt(widget.artist, 'backdrop', img.uri),
+          onPressed: () => lib.setArtistArt(widget.artist, 'backdrop', img.uri),
+          onSecondaryTap: (_) => lib.setArtistArt(widget.artist, 'portrait', img.uri),
           onLongPress:
-              isTv ? () => lib.setArtistArt(widget.artist, 'backdrop', img.uri) : null,
+              isTv ? () => lib.setArtistArt(widget.artist, 'portrait', img.uri) : null,
           borderRadius: BorderRadius.circular(10),
           child: Container(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(8),
+              // De achtergrond eerst, want dat is nu de klik en het enige wat de pagina toont.
               border: Border.all(
-                  color: isPortrait
+                  color: isBackdrop
                       ? _accent
-                      : isBackdrop
+                      : isPortrait
                           ? _accent2
                           : Colors.transparent,
                   width: 2),

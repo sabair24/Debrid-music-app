@@ -138,7 +138,15 @@ RecordKind kindFromDiscogs(String format) {
   if (alleenVideo(format)) return RecordKind.video;
   if (isTranscriptie(format)) return RecordKind.uitzending;
   final f = format.toLowerCase();
-  if (f.contains('compilation')) return RecordKind.compilation;
+  // "Comp" is Discogs' AFKORTING van Compilation, en op `/artists/{id}/releases` de enige spelling.
+  // GEMETEN over 12093 regels uit die endpoint: `Compilation` voluit komt er NUL keer voor en `Comp`
+  // 1711 keer. Deze functie zocht alleen het hele woord, dus die regel heeft daar nooit één keer
+  // geraakt en zeventienhonderd verzamelaars stonden tussen de albums. De zoek-endpoint schrijft het
+  // wél voluit — vandaar dat het niemand opviel.
+  //
+  // Op velden en niet op deelreeksen: "comp" zit ook in "compact".
+  final velden = f.split(RegExp(r'[,+]')).map((s) => s.trim());
+  if (velden.any((s) => s == 'comp' || s == 'compilation')) return RecordKind.compilation;
   // Op deelreeksen en niet op hele woorden: "maxi-single" en "single" moeten allebei tellen. Wel EP
   // eerst, want "EP" komt ook naast "Single" voor en is dan het specifiekere antwoord.
   if (RegExp(r'\bep\b').hasMatch(f)) return RecordKind.ep;
