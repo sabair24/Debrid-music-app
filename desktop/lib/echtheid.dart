@@ -414,16 +414,21 @@ typedef EchteResolutie = ({int bits, int rate, bool uitLossy});
 /// dat een bestand echt is, alleen dat niets het tegensprak.
 EchteResolutie echteWaarden(Echtheidsoordeel? o,
     {required int kopSampleRate, required int kopBits}) {
-  if (o == null) return (bits: kopBits, rate: kopSampleRate, uitLossy: false);
-  final gemeten = o.bits == Bitdiepte.opgeblazen ? (o.gebruikteBits ?? 16) : kopBits;
+  // Een kop van nul is geen kop. GEZIEN op Sabers bibliotheek: er staat een bestand met
+  // `bitsPerSample: 0` in het tagbestand, en dat gaf capaciteit NUL — waarmee het bovenaan de lijst
+  // van te vervangen bestanden belandde. Nul is niet "het slechtste", het is "onbekend", en de
+  // gewone aannames horen hier hetzelfde te zijn als overal elders in de app.
+  final bits = kopBits > 0 ? kopBits : 16;
+  final rate = kopSampleRate > 0 ? kopSampleRate : 44100;
+  if (o == null) return (bits: bits, rate: rate, uitLossy: false);
+  final gemeten = o.bits == Bitdiepte.opgeblazen ? (o.gebruikteBits ?? 16) : bits;
   final hz = o.afkapHz;
   if (o.band == Bandbreedte.afgekapt && hz != null) {
     return (bits: math.min(gemeten, 16), rate: (2 * hz).round(), uitLossy: true);
   }
   // Niets boven 22 kHz betekent dat de inhoud niet meer draagt dan wat 44,1 kHz kan bevatten, hoe
   // hoog de kop ook staat. Dat is de gewone vorm van opgeschaalde hi-res.
-  final rate = o.boven == Bovenband.leeg ? 44100 : kopSampleRate;
-  return (bits: gemeten, rate: rate, uitLossy: false);
+  return (bits: gemeten, rate: o.boven == Bovenband.leeg ? 44100 : rate, uitLossy: false);
 }
 
 /// De gemeten waarheid op dezelfde schaal als [capaciteitOpEenSchaal], zodat twee bestanden te

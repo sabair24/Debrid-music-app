@@ -96,6 +96,17 @@ void main() {
       expect(midden, lessThan(hoog));
     });
 
+    test('een kop van NUL is geen kop', () {
+      // GEZIEN op Sabers eigen bibliotheek toen deze reparatie uitgeprobeerd werd: er staat een
+      // bestand met `bitsPerSample: 0` in het tagbestand, en dat kreeg capaciteit NUL — waarmee het
+      // bovenaan de lijst van te vervangen bestanden belandde. Nul is niet "het slechtste", het is
+      // "onbekend", en dan horen hier dezelfde aannames te gelden als overal elders.
+      expect(echteCapaciteit(_opgeschaald(), kopSampleRate: 96000, kopBits: 0), 44100 * 16 ~/ 1000);
+      final w = echteWaarden(null, kopSampleRate: 0, kopBits: 0);
+      expect(w.rate, 44100);
+      expect(w.bits, 16);
+    });
+
     test('zonder oordeel blijft de kop staan — dit bewijst niets, het spreekt alleen niets tegen', () {
       final w = echteWaarden(null, kopSampleRate: 192000, kopBits: 24);
       expect(w.rate, 192000);
