@@ -49,6 +49,7 @@ enum RecordKind {
   demo,
   gesproken,
   video,
+  uitzending,
   other
 }
 
@@ -117,6 +118,11 @@ RecordKind kindFromMb(String primaryType, List<String> secondaryTypes) {
     'album' => RecordKind.album,
     'ep' => RecordKind.ep,
     'single' => RecordKind.single,
+    // MusicBrainz' eigen woord voor een uitgave die gemaakt is om uitgezonden te worden. Viel
+    // hiervoor door naar `other` — dat wérkte, maar per ongeluk: `other` betekent bij het
+    // samenvoegen "ik heb geen mening", dus een radioplaat die Discogs ook als "LP, Album" kent
+    // stond zó terug tussen de albums.
+    'broadcast' => RecordKind.uitzending,
     _ => RecordKind.other,
   };
 }
@@ -130,6 +136,7 @@ RecordKind kindFromMb(String primaryType, List<String> secondaryTypes) {
 /// mist dat allemaal. Een vijfde van de lijst verkeerd indelen maakt sorteren op type waardeloos.
 RecordKind kindFromDiscogs(String format) {
   if (alleenVideo(format)) return RecordKind.video;
+  if (isTranscriptie(format)) return RecordKind.uitzending;
   final f = format.toLowerCase();
   if (f.contains('compilation')) return RecordKind.compilation;
   // Op deelreeksen en niet op hele woorden: "maxi-single" en "single" moeten allebei tellen. Wel EP
@@ -170,6 +177,26 @@ bool alleenVideo(String format) {
   }
   return beeld;
 }
+
+/// Is dit een RADIOPLAAT — een persing die alleen bestond om uitgezonden te worden?
+///
+/// Saber wees ze aan op de pagina van The Police: twintig van de drieëndertig "albums" waren
+/// BBC Rock Hour, Innerview, Off The Record Specials, Legends Of Rock, The Robert Klein Radio Show.
+/// Allemaal met een etiketscan als hoes, want een verkoophoes hebben ze nooit gehad.
+///
+/// Discogs zegt het zelf, in één woord: `Transcription`. GEMETEN over de hele cache — 12093
+/// Discogs-regels, 182 met dat kenmerk, en zonder uitzondering radio ("Superstar Concert Series",
+/// "Brand New Day World Premiere Broadcast"). `kindFromDiscogs` zag alleen de "LP" ernaast en maakte
+/// er een album van.
+///
+/// **`Promo` telt hier NIET mee**, en dat is een meting en geen voorzichtigheid: 1593 regels dragen
+/// Promo zonder Transcription, en dat zijn grotendeels gewone promopersingen van echte singles —
+/// "Breathe", "We've Got Tonight". Die weggooien zou het middel erger maken dan de kwaal.
+bool isTranscriptie(String format) => format
+    .toLowerCase()
+    .split(RegExp(r'[,+]'))
+    .map((s) => s.trim())
+    .any((s) => s == 'transcription');
 
 final _videoDrager = RegExp(r'^(dvd|dvd-?v|dvd-?video|dvdr|blu-?ray|blu-?ray-?r|bd|bdr|vhs|'
     r's-?vhs|betamax|betacam|video ?2000|laserdisc|ld|vcd|s-?vcd|cvd|umd|mini-?dv|vhd|ced|'
@@ -304,7 +331,8 @@ class DiscoRelease {
         RecordKind.remix ||
         RecordKind.demo ||
         RecordKind.gesproken ||
-        RecordKind.video =>
+        RecordKind.video ||
+        RecordKind.uitzending =>
           'album',
         RecordKind.ep => 'ep',
         RecordKind.single => 'single',
@@ -383,8 +411,9 @@ int kindRank(RecordKind k) => switch (k) {
       RecordKind.compilation => 6,
       RecordKind.demo => 7,
       RecordKind.gesproken => 8,
-      RecordKind.video => 9,
-      RecordKind.other => 10,
+      RecordKind.uitzending => 9,
+      RecordKind.video => 10,
+      RecordKind.other => 11,
     };
 
 /// Hoe HARD een bron dit zegt. Laag = een uitspraak, hoog = een vorm of een schouderophalen.
@@ -405,7 +434,13 @@ int _uitspraakRang(RecordKind k) => switch (k) {
       // live album music is". Een concertregistratie die Discogs als dvd kent en MusicBrainz als
       // livealbum is een livealbum — er bestaat een plaat van. Kent alleen Discogs hem, en alleen
       // als dvd, dan is het beeld en verdwijnt hij.
-      RecordKind.video => 6,
+      //
+      // Een radioplaat staat op dezelfde trap, en om dezelfde reden. GEMETEN: van de 182
+      // transcriptieregels in de cache dragen er vier een titel die óók zonder dat kenmerk bestaat
+      // — "Elegantly Wasted" van INXS is een echt album waarvan ook een radiopersing bestaat.
+      // Stond `uitzending` bóven album, dan zou die persing de plaat verbergen. Andersom niet: een
+      // regel die alleen Discogs kent en alleen als transcriptie verdwijnt gewoon.
+      RecordKind.uitzending || RecordKind.video => 6,
       RecordKind.other => 7,
     };
 
@@ -432,6 +467,7 @@ String blokTitel(RecordKind k) => switch (k) {
       RecordKind.compilation => 'Verzamelaars',
       RecordKind.demo => "Demo's",
       RecordKind.gesproken => 'Gesproken',
+      RecordKind.uitzending => 'Radio',
       RecordKind.video => 'Video',
       RecordKind.other => 'Overig',
     };
@@ -581,6 +617,9 @@ const verborgenSoorten = {
   // Dvd's, blu-rays en videobanden: Saber vroeg ze eruit. De live PLATEN blijven staan — dat regelt
   // [_uitspraakRang], waar elke geluidsuitspraak van video wint.
   RecordKind.video,
+  // En radioplaten: BBC Rock Hour, Innerview, Off The Record Specials. Zie [isTranscriptie] — bij
+  // The Police waren dat twintig van de drieëndertig "albums".
+  RecordKind.uitzending,
 };
 
 /// Wat er van de discografie op het scherm hoort te staan — en wat er wegviel, en waarom.

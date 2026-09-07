@@ -80,7 +80,10 @@ class DiscographyService {
   /// v5: de Discogs-hoezen zijn niet langer `thumb` (150×150, q40) maar `cover_image` (600×601,
   /// q90). De URL's staan ín dit bestand, dus zonder bump blijft elke eerder bezochte artiest zijn
   /// miniaturen tonen. GEMETEN: 73% van de Discogs-hoezen wordt hierdoor vier keer zo groot.
-  static const schema = 'disco|v5';
+  /// v6: radioplaten (Discogs' formaatkenmerk `Transcription`, MusicBrainz' primary-type
+  /// `Broadcast`) krijgen een eigen soort en komen niet meer op de pagina. Bij The Police waren dat
+  /// twintig van de drieëndertig "albums" — BBC Rock Hour, Innerview, Off The Record Specials.
+  static const schema = 'disco|v6';
 
   /// Hoe lang een bewaard antwoord meegaat voor er bij Deezer opnieuw wordt gekeken.
   ///

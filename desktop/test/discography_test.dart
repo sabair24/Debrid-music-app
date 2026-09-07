@@ -189,6 +189,43 @@ void main() {
       expect(kindFromDiscogs('CD, Album'), RecordKind.album);
     });
 
+    /// Radioplaten: geperst om uitgezonden te worden, nooit verkocht, en daarom met een etiketscan
+    /// als hoes. Bij The Police waren dat twintig van de drieëndertig "albums".
+    test('een transcriptieplaat is radio, geen album', () {
+      // De echte formaatteksten uit de Discogs-cache van The Police.
+      expect(kindFromDiscogs('LP, Transcription'), RecordKind.uitzending);
+      expect(kindFromDiscogs('LP, Promo, Transcription'), RecordKind.uitzending);
+      expect(kindFromDiscogs('LP, Transcription, Ser'), RecordKind.uitzending);
+      expect(kindFromDiscogs('Vinyl, LP, Transcription'), RecordKind.uitzending);
+      expect(kindFromDiscogs('Reel, 2tr Stereo, 7" Reel, Transcription'), RecordKind.uitzending);
+      expect(kindFromMb('Broadcast', const []), RecordKind.uitzending);
+
+      // Promo telt NIET mee. GEMETEN: 1593 regels dragen Promo zonder Transcription, en dat zijn
+      // grotendeels gewone promopersingen van echte singles.
+      expect(kindFromDiscogs('CD, Single, Promo'), RecordKind.single);
+      expect(kindFromDiscogs('LP, Ltd, Promo'), RecordKind.album);
+    });
+
+    test('DE BOTSING: een radiopersing mag de echte plaat niet verbergen', () {
+      // GEMETEN: van de 182 transcriptieregels dragen er vier een titel die óók zonder dat kenmerk
+      // bestaat — "Elegantly Wasted" van INXS is een echt album waarvan ook een radiopersing is.
+      // Daarom staat `uitzending` ONDER de geluidsuitspraken in de uitspraakrang.
+      final radio = DiscoRelease(title: 'Elegantly Wasted', kind: RecordKind.uitzending);
+      final plaat = _dz('Elegantly Wasted');
+      expect(radio.mergedWith(plaat).kind, RecordKind.album);
+      expect(plaat.mergedWith(radio).kind, RecordKind.album, reason: 'en in beide volgordes');
+
+      // Maar kent alleen Discogs hem, en alleen als transcriptie, dan verdwijnt hij.
+      expect(
+          zeefDiscografie([
+            DiscoRelease(
+                title: 'BBC Rock Hour #207',
+                kind: RecordKind.uitzending,
+                cover: 'http://h/r.jpg'),
+          ]).rijen,
+          isEmpty);
+    });
+
     test('de twee vallen: VCD bevat "CD", en DVD-Audio is geluid', () {
       expect(kindFromDiscogs('VCD, Comp, Promo'), RecordKind.video,
           reason: 'op deelreeksen zou een video-cd voor een gewone cd doorgaan');

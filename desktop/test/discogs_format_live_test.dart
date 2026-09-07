@@ -56,7 +56,7 @@ void main() {
     // helft live-uitzendingen en tributes waren; de vraag is niet of de code compileert maar hoeveel
     // er wegvalt en of de ECHTE platen blijven staan.
     final (svc, _) = await maak();
-    for (final naam in ['Michael Jackson', 'Sia', 'Céline Dion']) {
+    for (final naam in ["The Police", "Michael Jackson", "Sia"]) {
       final ruw = await discografie(svc, naam, weerGasten: false);
       final samen = vouwHeruitgaves(ruw);
       final zeef = zeefDiscografie(samen);

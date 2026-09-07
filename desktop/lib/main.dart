@@ -16802,6 +16802,7 @@ class EditorialeKop extends StatelessWidget {
     required this.naam,
     this.art,
     this.fallbackImage,
+    this.achtergrondKeuze,
     this.soort,
     this.bibliotheek,
     this.genres = const [],
@@ -16814,6 +16815,10 @@ class EditorialeKop extends StatelessWidget {
   final String naam;
   final ArtistArt? art;
   final Uint8List? fallbackImage;
+
+  /// De achtergrond die de gebruiker zelf koos in "Foto kiezen". Wint van [art], want een keuze is
+  /// een uitspraak en TheAudioDB is een gok.
+  final Uint8List? achtergrondKeuze;
 
   /// "Person · USA · 1964–2009" — `CatalogArtist.detail`, dat tot nu toe nergens getekend werd.
   final String? soort;
@@ -16848,7 +16853,7 @@ class EditorialeKop extends StatelessWidget {
     // verderop zet hem naast de biografie — en `cutoutBytes` niet meer, maar hij staat al op schijf
     // en kost daar niets. Hem uit [CoverEnricher.artistArt] slopen zou een schemabump en dus een
     // nieuwe ophaalronde voor 268 artiesten betekenen, voor een bestand dat we misschien terugwillen.
-    final achtergrond = art?.backdropBytes ?? fallbackImage;
+    final achtergrond = achtergrondKeuze ?? art?.backdropBytes ?? fallbackImage;
 
     // Zwart-wit, en dat is het ontwerp: de enige kleur op de pagina komt uit de hoezen. Een
     // matrix en geen tweede afbeelding — dit kost geen geheugen en geen decodering.
@@ -17615,6 +17620,21 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     setState(() => _art = art);
   }
 
+  /// De achtergrond die de gebruiker zelf koos, in bytes. Zie de uitleg in `build`.
+  String? _keuzeUrl;
+  Uint8List? _keuzeBytes;
+
+  Future<void> _laadGekozenAchtergrond(String? url) async {
+    final naam = widget.artist.name;
+    if (url == null) {
+      if (mounted && _keuzeBytes != null) setState(() => _keuzeBytes = null);
+      return;
+    }
+    final bytes = await CoverEnricher(context.read<AppSettings>()).downloadImage(url);
+    if (!mounted || naam != widget.artist.name || bytes == null) return;
+    setState(() => _keuzeBytes = bytes);
+  }
+
   /// Wie deze artiest verder nog is: echte naam en de groepen waar hij in speelde.
   ///
   /// Kost één Discogs-verzoek, en alleen als er een token is — zonder token doet `artist()` niets
@@ -17663,6 +17683,21 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
         .where((a) => artistKey(a.artist) == artistKey(widget.artist.name))
         .toList()
       ..sort((a, b) => (b.year ?? 0).compareTo(a.year ?? 0));
+
+    // Een zelf gekozen achtergrond wint van die van TheAudioDB.
+    //
+    // "Foto kiezen" schreef die keuze al weg — `chosenArtistArt(naam, 'backdrop')` — en
+    // [ArtistBackdrop] en [ArtistHero] lazen hem al. Deze kop niet: die haalde alleen
+    // `CoverEnricher.artistArt` op. Saber zei "de police hun achtergrond foto is niet mooi" en had
+    // gelijk dat er niets aan te doen was: de knop stond er, deed iets, en je zag het nergens.
+    // Zelfde patroon als [ArtistBackdrop]: kijken of de keuze veranderd is en ná dit frame laden.
+    final keuze = lib.chosenArtistArt(widget.artist.name, 'backdrop');
+    if (keuze != _keuzeUrl) {
+      _keuzeUrl = keuze;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _laadGekozenAchtergrond(keuze);
+      });
+    }
 
     // **Wat je van deze artiest hébt, in één zin.** De grondstof lag er — `Track.duration` staat op
     // elk nummer — maar er was nergens een optelling, dus de kop kon wel "6 albums" zeggen en niet
@@ -17743,6 +17778,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                 EditorialeKop(
                   naam: widget.artist.name,
                   art: _art,
+                  achtergrondKeuze: _keuzeBytes,
                   soort: widget.artist.detail,
                   bibliotheek: _busy
                       ? 'Albums laden…'
