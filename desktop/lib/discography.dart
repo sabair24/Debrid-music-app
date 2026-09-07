@@ -38,7 +38,19 @@ enum DiscoSource { deezer, musicbrainz, discogs }
 /// soorten en géén [other]. Dat verschil is niet cosmetisch: `other` betekent bij het samenvoegen
 /// "ik heb geen mening", en dan zou een interviewschijf die Discogs als "LP, Album" kent zó terug
 /// tussen de albums staan.
-enum RecordKind { album, albumVersie, live, ep, single, remix, compilation, demo, gesproken, other }
+enum RecordKind {
+  album,
+  albumVersie,
+  live,
+  ep,
+  single,
+  remix,
+  compilation,
+  demo,
+  gesproken,
+  video,
+  other
+}
 
 /// Draagt deze titel een uitgave-staart — "(Deluxe Edition)", "[2021 Remaster]"?
 ///
@@ -117,6 +129,7 @@ RecordKind kindFromMb(String primaryType, List<String> secondaryTypes) {
 /// schrijft daar "File, MP3, Single" of "Maxi-Single" of "Single, Promo", en op exacte woorden matchen
 /// mist dat allemaal. Een vijfde van de lijst verkeerd indelen maakt sorteren op type waardeloos.
 RecordKind kindFromDiscogs(String format) {
+  if (alleenVideo(format)) return RecordKind.video;
   final f = format.toLowerCase();
   if (f.contains('compilation')) return RecordKind.compilation;
   // Op deelreeksen en niet op hele woorden: "maxi-single" en "single" moeten allebei tellen. Wel EP
@@ -126,6 +139,46 @@ RecordKind kindFromDiscogs(String format) {
   if (f.contains('album') || RegExp(r'\blp\b').hasMatch(f)) return RecordKind.album;
   return RecordKind.other;
 }
+
+/// Draagt dit formaat ALLEEN beeld — een dvd, een blu-ray, een vhs?
+///
+/// Saber vroeg film- en dvd-uitgaves uit de discografie te houden, "wel als er officieel een live
+/// album music is". Dat tweede deel is precies waarom hier op de DRAGER gekeken wordt en niet op de
+/// titel: een concertregistratie bestaat vaak als dvd én als plaat, en dan hoort de plaat te blijven.
+///
+/// GEMETEN op de 200 Discogs-regels van Michael Jackson: twintig noemen een videodrager, en twee
+/// daarvan zijn hybride — `CD, Comp, RE + DVD-V, Comp, RE, NTSC` is een cd-verzamelaar met een dvd
+/// erbij. Vandaar de eis dat er GEEN audiodrager in mag staan; anders gooit deze regel gewone platen
+/// weg omdat er een schijfje bij zat.
+///
+/// Per veld en niet met `contains`, om twee vallen:
+///   * "VCD" bevat "CD" — op deelreeksen zou een video-cd voor een gewone cd doorgaan;
+///   * "DVD-A" is dvd-AUDIO en "Blu-ray Audio" ook. Die staan bewust niet in de videolijst.
+///
+/// Discogs schrijft het formaat als `CD, Album, RE + DVD-V, NTSC`: komma's tussen de kenmerken, een
+/// plus tussen de dragers, en een aantal ervoor (`3xDVD`, `2xDVD-V`).
+bool alleenVideo(String format) {
+  final velden = format
+      .toLowerCase()
+      .split(RegExp(r'[,+]'))
+      .map((s) => s.trim().replaceFirst(RegExp(r'^\d+\s*x\s*'), ''))
+      .where((s) => s.isNotEmpty);
+  var beeld = false;
+  for (final v in velden) {
+    if (_audioDrager.hasMatch(v)) return false;
+    if (_videoDrager.hasMatch(v)) beeld = true;
+  }
+  return beeld;
+}
+
+final _videoDrager = RegExp(r'^(dvd|dvd-?v|dvd-?video|dvdr|blu-?ray|blu-?ray-?r|bd|bdr|vhs|'
+    r's-?vhs|betamax|betacam|video ?2000|laserdisc|ld|vcd|s-?vcd|cvd|umd|mini-?dv|vhd|ced|'
+    r'u-?matic|video ?8|hi-?8|film|hd ?dvd)$');
+
+final _audioDrager = RegExp(r'^(cd|cdr|cd-?r|hdcd|sacd|dvd-?a|dvd-?audio|blu-?ray audio|dualdisc|'
+    r'lp|vinyl|shellac|acetate|flexi-?disc|lathe cut|cass|cassette|microcassette|8-?track|'
+    r'reel-?to-?reel|minidisc|md|file|mp3|flac|wav|aac|wma|alac|aiff|dat|dcc|elcaset|'
+    r'memory stick|sd card|usb|\d+")$');
 
 /// Woorden die alleen iets zeggen over de UITGAVE en niets over de plaat.
 ///
@@ -250,7 +303,8 @@ class DiscoRelease {
         RecordKind.live ||
         RecordKind.remix ||
         RecordKind.demo ||
-        RecordKind.gesproken =>
+        RecordKind.gesproken ||
+        RecordKind.video =>
           'album',
         RecordKind.ep => 'ep',
         RecordKind.single => 'single',
@@ -329,7 +383,8 @@ int kindRank(RecordKind k) => switch (k) {
       RecordKind.compilation => 6,
       RecordKind.demo => 7,
       RecordKind.gesproken => 8,
-      RecordKind.other => 9,
+      RecordKind.video => 9,
+      RecordKind.other => 10,
     };
 
 /// Hoe HARD een bron dit zegt. Laag = een uitspraak, hoog = een vorm of een schouderophalen.
@@ -346,7 +401,12 @@ int _uitspraakRang(RecordKind k) => switch (k) {
       RecordKind.demo => 3,
       RecordKind.gesproken => 4,
       RecordKind.album || RecordKind.albumVersie || RecordKind.ep || RecordKind.single => 5,
-      RecordKind.other => 6,
+      // Video staat ONDER elke geluidsuitspraak, en dat is de halve wens: "wel als er officieel een
+      // live album music is". Een concertregistratie die Discogs als dvd kent en MusicBrainz als
+      // livealbum is een livealbum — er bestaat een plaat van. Kent alleen Discogs hem, en alleen
+      // als dvd, dan is het beeld en verdwijnt hij.
+      RecordKind.video => 6,
+      RecordKind.other => 7,
     };
 
 /// Welk van twee soorten overleeft als twee bronnen het niet eens zijn. Symmetrisch, en dat is de eis.
@@ -372,6 +432,7 @@ String blokTitel(RecordKind k) => switch (k) {
       RecordKind.compilation => 'Verzamelaars',
       RecordKind.demo => "Demo's",
       RecordKind.gesproken => 'Gesproken',
+      RecordKind.video => 'Video',
       RecordKind.other => 'Overig',
     };
 
@@ -513,7 +574,14 @@ List<DiscoRelease> vouwHeruitgaves(List<DiscoRelease> rijen) {
 ///
 /// Los en publiek, want de pagina moet kunnen VERTELLEN wat ze weglaat. Een lijst die stilzwijgend
 /// tweederde overslaat is geen betere lijst, alleen een kortere.
-const verborgenSoorten = {RecordKind.other, RecordKind.demo, RecordKind.gesproken};
+const verborgenSoorten = {
+  RecordKind.other,
+  RecordKind.demo,
+  RecordKind.gesproken,
+  // Dvd's, blu-rays en videobanden: Saber vroeg ze eruit. De live PLATEN blijven staan — dat regelt
+  // [_uitspraakRang], waar elke geluidsuitspraak van video wint.
+  RecordKind.video,
+};
 
 /// Wat er van de discografie op het scherm hoort te staan — en wat er wegviel, en waarom.
 typedef DiscoZeef = ({

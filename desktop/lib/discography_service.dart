@@ -74,7 +74,10 @@ class DiscographyService {
   /// van alles-is-album, en de browse bladert door tot 500 in plaats van bij 100 te stoppen. Drie
   /// zelfstandige redenen om te bumpen: de bewaarde `k`-waarden zijn verouderd (een livealbum staat
   /// er als `album`), de regelverzameling is groter, en de indeling zelf is veranderd.
-  static const schema = 'disco|v3';
+  /// v4: dvd's, blu-rays en videobanden krijgen een eigen soort en komen niet meer op de pagina.
+  /// Onder v3 stonden ze er nog — "Céline Parle D'elle(s)" (`DVD, Single, Promo, PAL`) zelfs tussen
+  /// de singles, omdat het woord "Single" in het formaat stond.
+  static const schema = 'disco|v4';
 
   /// Hoe lang een bewaard antwoord meegaat voor er bij Deezer opnieuw wordt gekeken.
   ///

@@ -170,6 +170,34 @@ void main() {
       expect(kindFromDiscogs('CD, Single'), RecordKind.single);
     });
 
+    /// Film- en dvd-uitgaves horen niet in een discografie, "wel als er officieel een live album
+    /// music is". Die tweede helft is de reden dat er op de DRAGER gekeken wordt: een concert
+    /// bestaat vaak als dvd én als plaat, en dan hoort de plaat te blijven.
+    test('een dvd is geen plaat — maar een cd met een dvd erbij wel', () {
+      // De echte formaatteksten uit Sabers Discogs-cache van Michael Jackson.
+      expect(kindFromDiscogs('DVD-V, PAL'), RecordKind.video);
+      expect(kindFromDiscogs('3xDVD, Comp, NTSC'), RecordKind.video);
+      expect(kindFromDiscogs('2xDVD-V'), RecordKind.video);
+      expect(kindFromDiscogs('DVDr, Promo'), RecordKind.video);
+      expect(kindFromDiscogs('UMD, Ltd'), RecordKind.video);
+      expect(kindFromDiscogs('Blu-ray, Album'), RecordKind.video,
+          reason: 'ook als het woord "Album" er staat — de drager is beeld');
+
+      expect(kindFromDiscogs('CD, Comp, RE + DVD-V, Comp, RE, NTSC'), isNot(RecordKind.video),
+          reason: 'een cd-verzamelaar met een dvd erbij is nog steeds een cd');
+      expect(kindFromDiscogs('CD, Comp + DVD-V, PAL'), isNot(RecordKind.video));
+      expect(kindFromDiscogs('CD, Album'), RecordKind.album);
+    });
+
+    test('de twee vallen: VCD bevat "CD", en DVD-Audio is geluid', () {
+      expect(kindFromDiscogs('VCD, Comp, Promo'), RecordKind.video,
+          reason: 'op deelreeksen zou een video-cd voor een gewone cd doorgaan');
+      expect(alleenVideo('DVD-A, Album'), isFalse, reason: 'dvd-AUDIO is een plaat');
+      expect(alleenVideo('Blu-ray Audio'), isFalse);
+      expect(alleenVideo('CD, Album'), isFalse);
+      expect(alleenVideo(''), isFalse, reason: 'geen formaat is geen uitspraak');
+    });
+
     test('de tweede lijst van MusicBrainz bepaalt de indeling, niet alleen bij een verzamelaar', () {
       // Dit stond hier ANDERSOM — "een livealbum blijft een album; alleen compilatie verandert de
       // indeling" — en dat was precies de klacht: "HIStory Manila 1996", "Bad Live In Yokohama" en
@@ -410,6 +438,27 @@ void main() {
         expect(uitspraak.mergedWith(vorm).kind, soort);
         expect(vorm.mergedWith(uitspraak).kind, soort);
       }
+    });
+
+    test('DE HELFT DIE MOET BLIJVEN: een concert-dvd die óók als plaat bestaat, blijft', () {
+      // "wel als er officieel een Live album music is". Kent MusicBrainz de titel als livealbum en
+      // Discogs alleen als dvd, dan bestaat die plaat — en dan is de dvd niet het hele verhaal.
+      final plaat = _mb('Live In Bucharest', kind: RecordKind.live);
+      final schijf = DiscoRelease(title: 'Live In Bucharest', kind: RecordKind.video);
+      expect(plaat.mergedWith(schijf).kind, RecordKind.live);
+      expect(schijf.mergedWith(plaat).kind, RecordKind.live, reason: 'en in beide volgordes');
+
+      // Maar kent alleen Discogs hem, en alleen als dvd, dan is het beeld.
+      expect(zeefDiscografie([
+        DiscoRelease(title: 'Iets Op Dvd', kind: RecordKind.video, cover: 'http://h/v.jpg'),
+      ]).rijen, isEmpty);
+    });
+
+    test('een gewoon album verslaat video ook', () {
+      final dvd = DiscoRelease(title: 'X', kind: RecordKind.video);
+      final plaat = _dz('X');
+      expect(dvd.mergedWith(plaat).kind, RecordKind.album);
+      expect(plaat.mergedWith(dvd).kind, RecordKind.album);
     });
 
     test('een livecompilatie is een verzamelaar', () {
