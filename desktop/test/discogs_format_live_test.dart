@@ -64,6 +64,18 @@ void main() {
       print('$naam: ${ruw.length} regels → ${zeef.rijen.length} zichtbaar '
           '(${zeef.verborgen} verborgen: ${zeef.zonderHoes} zonder hoes, '
           '${zeef.perSoort.entries.map((e) => '${e.value} ${blokTitel(e.key).toLowerCase()}').join(', ')})');
+      // Hoe scherp de hoezen zijn, want dat was de volgende klacht. Discogs' `thumb` is 150×150 op
+      // kwaliteit 40 en zijn `cover_image` 600×601 op kwaliteit 90; Deezer levert altijd 500×500.
+      final maten = <String, int>{};
+      for (final r in zeef.rijen) {
+        final c = r.cover ?? '';
+        final w = RegExp(r'/w:(\d+)/').firstMatch(c)?.group(1);
+        final dz = RegExp(r'/(\d+)x\d+-').firstMatch(c)?.group(1);
+        final k = w != null ? 'discogs ${w}px' : (dz != null ? 'deezer ${dz}px' : 'anders');
+        maten[k] = (maten[k] ?? 0) + 1;
+      }
+      // ignore: avoid_print
+      print('   hoezen: ${(maten.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).map((e) => '${e.value} ${e.key}').join(' · ')}');
       for (final blok in inBlokken(zeef.rijen, DiscoSort.datumOud, const {})) {
         // ignore: avoid_print
         print('   ${blokTitel(blok.soort)}: ${blok.rijen.length}');

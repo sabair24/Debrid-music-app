@@ -100,11 +100,31 @@ class DiscogsSweep {
   /// Discogs-master-id → zijn formaat als tekst, bijvoorbeeld "Vinyl, LP, Album".
   final Map<int, String> formaatPerMaster;
 
-  /// [discoKey] van de titel → miniatuurhoes. Op sleutel en niet op id, want de regels die een hoes
-  /// missen komen van MusicBrainz en dragen geen Discogs-id.
+  /// [discoKey] van de titel → hoes. Op sleutel en niet op id, want de regels die een hoes missen
+  /// komen van MusicBrainz en dragen geen Discogs-id.
+  ///
+  /// Sinds 07-09-2026 is dit `cover_image` en niet meer `thumb`. GEMETEN over Sabers hele cache: van
+  /// de 14451 hoezen komen er 9022 van Discogs, en die stonden er allemaal als
+  /// `.../q:40/h:150/w:150/...` — een miniatuur van 150 punten op kwaliteit 40, in een tegel die tot
+  /// 178 punten breed is. Deezer levert 500×500, dus naast elkaar zag je het verschil. Elk
+  /// zoekresultaat draagt naast die `thumb` een `cover_image` van 600×601 op kwaliteit 90 (2829
+  /// bytes tegen 82925), en die reisde al die tijd gratis mee en werd weggegooid.
+  ///
+  /// De maat in de URL opschroeven kan niet: `i.discogs.com` ondertekent het hele pad, inclusief
+  /// `h:150/w:150`. Zelf gecontroleerd — dat geeft 403. En het onderliggende bestand
+  /// (`s3://discogs-database-images/R-…jpeg`) is niet publiek: 403, 404 en 500 op de drie hosts die
+  /// het ooit serveerden. De zoek-endpoint is dus de enige weg, en dit is de gratis helft ervan.
   final Map<String, String> hoesPerSleutel;
 
-  const DiscogsSweep(this.formaatPerMaster, this.hoesPerSleutel);
+  /// Discogs-master-id → diezelfde grote hoes.
+  ///
+  /// Naast de titeltabel omdat titels vaak nét niet matchen: `/artists/{id}/releases` levert
+  /// PERSINGEN en de zoek-endpoint MASTERS. GEMETEN op Michael Jackson: op titel matchen 56 van de
+  /// 200 regels, op master-id 43, en samen 57. Twee sleutels omdat ze andere regels raken.
+  final Map<int, String> hoesPerMaster;
+
+  const DiscogsSweep(this.formaatPerMaster, this.hoesPerSleutel,
+      [this.hoesPerMaster = const {}]);
 
   bool get isLeeg => formaatPerMaster.isEmpty && hoesPerSleutel.isEmpty;
 }
@@ -1018,6 +1038,7 @@ class DiscogsService {
   Future<DiscogsSweep> artistSweep(int artistId, {int pages = 3}) async {
     final perMaster = <int, String>{};
     final hoesPerSleutel = <String, String>{};
+    final hoesPerMaster = <int, String>{};
     for (var p = 1; p <= pages; p++) {
       final b = await _get('https://api.discogs.com/database/search'
           '?artist_id=$artistId&type=master&per_page=100&page=$p');
@@ -1034,15 +1055,20 @@ class DiscogsService {
         var titel = (r['title'] as String? ?? '').trim();
         final streep = titel.indexOf(' - ');
         if (streep > 0) titel = titel.substring(streep + 3).trim();
-        final thumb = (r['thumb'] as String? ?? '').trim();
-        if (titel.isNotEmpty && thumb.isNotEmpty && !thumb.contains('spacer')) {
-          hoesPerSleutel.putIfAbsent(discoKey(titel), () => thumb);
-        }
+        // `cover_image` (600×601, q90) en niet `thumb` (150×150, q40). Zie [DiscogsSweep.hoesPerSleutel]
+        // voor de meting; `thumb` blijft als terugval, want een kleine hoes is beter dan geen.
+        final hoes = ((r['cover_image'] as String? ?? '').trim().isNotEmpty
+                ? r['cover_image'] as String
+                : (r['thumb'] as String? ?? ''))
+            .trim();
+        if (hoes.isEmpty || hoes.contains('spacer')) continue;
+        if (titel.isNotEmpty) hoesPerSleutel.putIfAbsent(discoKey(titel), () => hoes);
+        if (mid != null) hoesPerMaster.putIfAbsent(mid, () => hoes);
       }
       final totaal = (b?['pagination'] as Map<String, dynamic>?)?['pages'] as num?;
       if (totaal == null || p >= totaal.toInt()) break;
     }
-    return DiscogsSweep(perMaster, hoesPerSleutel);
+    return DiscogsSweep(perMaster, hoesPerSleutel, hoesPerMaster);
   }
 
   /// Alles wat deze artiest zelf uitbracht, voor de discografie.
@@ -1079,9 +1105,18 @@ class DiscogsService {
         // Een master is de PLAAT, een release één persing ervan. Beide takken bestaan al aan de
         // andere kant, bij het openen van een album.
         final master = (r['type'] as String? ?? '') == 'master';
-        var thumb = (r['thumb'] as String? ?? '').trim();
+        // De GROTE hoes uit de sweep gaat vóór de eigen `thumb` van deze regel, en dat is een
+        // omkering: eerst was de sweep alleen een noodgreep voor regels zónder hoes. Maar `thumb`
+        // is hier altijd 150×150 op kwaliteit 40, en de sweep draagt 600×601 op kwaliteit 90 van
+        // precies dezelfde plaat. Zie [DiscogsSweep.hoesPerSleutel].
+        //
+        // Eerst op master-id en dan op titel: het zijn andere regels die ze raken. Wat geen van
+        // beide kent, houdt zijn miniatuur — kleiner is nog altijd beter dan niets.
+        var thumb = (master ? sweep.hoesPerMaster[rid] : null) ??
+            sweep.hoesPerSleutel[discoKey(titel)] ??
+            '';
         if (thumb.isEmpty || thumb.contains('spacer')) {
-          thumb = sweep.hoesPerSleutel[discoKey(titel)] ?? '';
+          thumb = (r['thumb'] as String? ?? '').trim();
         }
         final jaar = (r['year'] as num?)?.toInt() ?? 0;
         // Een master draagt hier geen formaat; de sweep weet het wel. Zonder deze regel valt een

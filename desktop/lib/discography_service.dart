@@ -77,7 +77,10 @@ class DiscographyService {
   /// v4: dvd's, blu-rays en videobanden krijgen een eigen soort en komen niet meer op de pagina.
   /// Onder v3 stonden ze er nog — "Céline Parle D'elle(s)" (`DVD, Single, Promo, PAL`) zelfs tussen
   /// de singles, omdat het woord "Single" in het formaat stond.
-  static const schema = 'disco|v4';
+  /// v5: de Discogs-hoezen zijn niet langer `thumb` (150×150, q40) maar `cover_image` (600×601,
+  /// q90). De URL's staan ín dit bestand, dus zonder bump blijft elke eerder bezochte artiest zijn
+  /// miniaturen tonen. GEMETEN: 73% van de Discogs-hoezen wordt hierdoor vier keer zo groot.
+  static const schema = 'disco|v5';
 
   /// Hoe lang een bewaard antwoord meegaat voor er bij Deezer opnieuw wordt gekeken.
   ///
