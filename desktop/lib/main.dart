@@ -13136,6 +13136,10 @@ class _KwaliteitViewState extends State<KwaliteitView> {
   @override
   void initState() {
     super.initState();
+    // De verlanglijst wordt lui geladen en de eerste veegbeurt komt pas na drie minuten. Zonder
+    // deze regel staat de strook tot dan op nul en verbergt hij zichzelf — precies het beeld waar
+    // hij tegen gebouwd is. Zie [DownloadManager.ververJachtStand].
+    unawaited(context.read<DownloadManager>().ververJachtStand());
     _tikker = Timer.periodic(const Duration(seconds: 10), (_) {
       if (mounted) setState(() {});
     });

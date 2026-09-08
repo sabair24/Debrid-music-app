@@ -2178,6 +2178,17 @@ class DownloadManager extends ChangeNotifier {
   /// Hoeveel nummers wachten er nog op hun FLAC. Voor het scherm en voor het logboek.
   int get losslessWanted => _wants.count;
 
+  /// Zorg dat de strook op de Kwaliteitspagina een getal heeft.
+  ///
+  /// **Waarom dit nodig is.** De verlanglijst wordt lui geladen: pas als er iets mee gebeurt. De
+  /// eerste veegbeurt komt drie minuten na de start, en tot dan stond [jacht] op nul — waardoor de
+  /// strook zichzelf verborg. Gezien op 08-09-2026 na een verse installatie: de knop zei "Laat de
+  /// app zoeken (165)" en eronder stond niets. Precies het beeld waar die strook tegen gebouwd is.
+  Future<void> ververJachtStand() async {
+    await _ensureWants();
+    jacht.value = jacht.value.met(opDeLijst: _wants.count);
+  }
+
   /// Hier hoeft niet meer naar gezocht te worden.
   ///
   /// **Zonder dit komt een weggegooid nummer terug.** Landt een radiohaal als mp3, dan zet
