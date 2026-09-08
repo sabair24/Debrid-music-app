@@ -1638,6 +1638,16 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
+  /// Hoe lang het bestand op dit pad werkelijk duurt, of null als dat niet te lezen valt.
+  int? _duurVan(String pad) {
+    try {
+      final s = readFlacTags(File(pad))?.duration?.inSeconds;
+      return s == null || s <= 0 ? null : s;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Everything in staging at startup is a leftover from a session that ended mid-transfer.
   Future<void> _clearStaging() async {
     final root = Directory('$_downloadsRoot${Platform.pathSeparator}_inkomend');
@@ -2434,6 +2444,26 @@ class DownloadManager extends ChangeNotifier {
             continue;
           }
 
+          // En het moet DEZELFDE OPNAME zijn. De lengte van de peer is vóór het binnenhalen al
+          // gewogen (zie [zelfdeLengte]), maar lang niet iedereen meldt er een; hier staat het
+          // bestand er, dus hier valt het écht te meten. Zonder deze tweede laag landt een
+          // radio-edit als `(2)` naast het origineel en blijft de vervalsing staan.
+          final lengte = _duurVan(staged.path);
+          if (!zelfdeLengte(w.authority?.seconds, lengte)) {
+            _log.line('   ${f.username}: andere uitgave (${lengte}s tegen '
+                '${w.authority?.seconds}s) — weggegooid, volgende kandidaat');
+            jacht.value = jacht.value.met(
+                weggegooid: jacht.value.weggegooid + 1,
+                regel: 'Andere uitgave bij ${f.username} — weggegooid.');
+            betrapt.add(VasteBron(
+                username: f.username,
+                filename: f.filename,
+                size: f.size,
+                durationSec: f.durationSec));
+            await _discardStaged(res.path);
+            continue;
+          }
+
           // En schoon is niet genoeg: hij moet ook minstens evenveel ECHTE muziek dragen als wat er
           // al ligt. Zie [draagtGenoeg] — bij de proefjacht kwam er een eerlijke 16/48 binnen voor
           // een opgeschaalde 24/96 die in werkelijkheid 24 bits op 44,1 draagt, en dat is minder.
@@ -2912,9 +2942,45 @@ class DownloadManager extends ChangeNotifier {
   ///    vergelijking als [andereKopieDan] gebruikt.
   ///  - **één bestand per peer.** De top van een hi-res-eerst-ranglijst is precies waar een handvol
   ///    verzamelaars zit; zonder dit gaan alle pogingen naar dezelfde peer.
+  /// Hoeveel een vervanger in LENGTE mag afwijken van wat er al ligt.
+  ///
+  /// GEMETEN op 08-09-2026, en dit is de reden dat deze regel bestaat. Van de 22 bestanden die de
+  /// jacht die avond binnenhaalde landden er ELF als `(2)` naast het origineel in plaats van erop,
+  /// en van de zes waar het origineel nog naast lag was het ELKE KEER een andere uitgave:
+  ///
+  ///     Whitney Houston — It's Not Right But It's Okay   3:33 tegen 4:52   79s
+  ///     Natasha St-Pier — Tu trouveras                   3:42 tegen 4:59   77s
+  ///     The Mackenzie — Arpegia (the love mix)           8:26 tegen 7:13   74s
+  ///     Garou — Sous le vent                             4:38 tegen 3:31   67s
+  ///     Janet Jackson — Miss You Much                    3:53 tegen 4:12   20s
+  ///     Whigfield — Saturday Night (radio edit)          3:40 tegen 3:58   18s
+  ///
+  /// Radio-edits, single-versies, remixen. Zo'n bestand KAN het origineel niet vervangen — het is
+  /// een andere opname — dus landt het ernaast, blijft de vervalsing staan, en heeft de
+  /// bibliotheek er een dubbel bij. Precies het omgekeerde van wat de knop belooft.
+  ///
+  /// Zes seconden: twee ripjes van dezelfde plaat verschillen hooguit een tel of twee door een
+  /// andere gapless-snit of wat stilte aan het eind, en de kleinste échte misser hierboven was
+  /// achttien. Streng mogen zijn kost hier niets: er staan honderden kandidaten per wens klaar, en
+  /// eentje te veel weigeren betekent alleen dat de volgende aan de beurt is.
+  static const _duurSpeling = 6;
+
+  /// Is dit dezelfde OPNAME, voor zover de lengte daar iets over zegt?
+  ///
+  /// **Onbekend is JA.** Lang niet elke peer meldt een duur, en een ontbrekende meting mag nooit
+  /// een kandidaat afwijzen — zie [magBlijven] en [draagtGenoeg], dezelfde regel. Wat er zo
+  /// doorheen glipt wordt ná het binnenhalen alsnog aan het echte bestand gemeten.
+  static bool zelfdeLengte(int? gewenst, int? gevonden) =>
+      gewenst == null ||
+      gevonden == null ||
+      gewenst <= 0 ||
+      gevonden <= 0 ||
+      (gewenst - gevonden).abs() <= _duurSpeling;
+
   static List<SoulseekFile> kandidatenVoorWens(LosslessWant w, List<SoulseekFile> hits) {
     final bruikbaar = hits
         .where((f) => isLossless(f) && !isMultichannel(f))
+        .where((f) => zelfdeLengte(w.authority?.seconds, f.durationSec))
         .where((f) => !w.refused.containsKey(f.username))
         .where((f) => !w.nep.any((n) =>
             zelfdeBestand(f.filename, f.size, f.durationSec, n.filename, n.size, n.durationSec)))

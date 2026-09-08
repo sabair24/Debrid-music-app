@@ -16,6 +16,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:debridmusic/echtheid.dart';
 import 'package:debridmusic/lossless_want.dart';
 import 'package:debridmusic/online.dart';
+import 'package:debridmusic/organize.dart';
 import 'package:debridmusic/soulseek.dart';
 
 SoulseekFile _f(String naam,
@@ -132,6 +133,55 @@ void main() {
       // net als bij een mislukte meting.
       expect(DownloadManager.draagtGenoeg(null, 1058), isTrue);
       expect(DownloadManager.draagtGenoeg(768, null), isTrue);
+    });
+  });
+
+  /// Een vervanger moet DEZELFDE OPNAME zijn — anders landt hij ernaast en blijft de nep staan.
+  ///
+  /// GEMETEN op 08-09-2026. Van de 22 bestanden die de jacht die avond binnenhaalde landden er elf
+  /// als `(2)` naast het origineel, en van de zes waar het origineel nog naast lag was het elke
+  /// keer een andere uitgave: Whitney Houston "It's Not Right But It's Okay" 3:33 tegen 4:52,
+  /// Natasha St-Pier "Tu trouveras" 3:42 tegen 4:59, Garou "Sous le vent" 4:38 tegen 3:31, en de
+  /// kleinste misser Whigfield "Saturday Night (radio edit)" 3:40 tegen 3:58 — achttien seconden.
+  group('een vervanger moet dezelfde opname zijn', () {
+    test('een radio-edit vervangt de albumversie NIET', () {
+      expect(DownloadManager.zelfdeLengte(292, 213), isFalse, reason: "It's Not Right, 79s scheelt");
+      expect(DownloadManager.zelfdeLengte(238, 220), isFalse, reason: 'Whigfield, 18s scheelt');
+      expect(DownloadManager.zelfdeLengte(252, 233), isFalse, reason: 'Miss You Much, 20s scheelt');
+    });
+
+    test('twee ripjes van dezelfde plaat mogen een paar tellen schelen', () {
+      // Een andere gapless-snit of wat stilte aan het eind; dat is geen andere uitgave.
+      expect(DownloadManager.zelfdeLengte(292, 292), isTrue);
+      expect(DownloadManager.zelfdeLengte(292, 294), isTrue);
+      expect(DownloadManager.zelfdeLengte(292, 286), isTrue);
+      expect(DownloadManager.zelfdeLengte(292, 285), isFalse, reason: 'zeven is over de grens');
+    });
+
+    test('ONBEKEND IS JA — een peer die geen duur meldt valt daar niet op af', () {
+      // Dezelfde regel als bij `magBlijven` en `draagtGenoeg`: een ontbrekende meting mag nooit
+      // iets weigeren. Wat er zo doorheen glipt wordt ná het binnenhalen alsnog gemeten.
+      expect(DownloadManager.zelfdeLengte(292, null), isTrue);
+      expect(DownloadManager.zelfdeLengte(null, 213), isTrue);
+      expect(DownloadManager.zelfdeLengte(292, 0), isTrue);
+      expect(DownloadManager.zelfdeLengte(0, 213), isTrue);
+    });
+
+    test('en de zeef laat een verkeerde lengte niet eens beginnen', () {
+      final goed = _f('01 It\'s Not Right But It\'s Okay.flac', dur: 292, user: 'a');
+      final edit = _f('It\'s Not Right But It\'s Okay (radio edit).flac', dur: 213, user: 'b');
+      final w = LosslessWant(
+        artist: 'Whitney Houston',
+        title: "It's Not Right But It's Okay",
+        authority: const TrackTags(
+            artist: 'Whitney Houston',
+            title: "It's Not Right But It's Okay",
+            album: 'My Love Is Your Love',
+            trackNo: 1,
+            seconds: 292),
+      );
+      final over = DownloadManager.kandidatenVoorWens(w, [goed, edit]);
+      expect(over.map((f) => f.username), ['a']);
     });
   });
 
