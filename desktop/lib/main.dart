@@ -88,6 +88,7 @@ import 'organize.dart';
 import 'echtheid.dart';
 import 'echtheid_oordelen.dart';
 import 'vaste_keuze.dart';
+import 'vervangjacht.dart';
 import 'bronzeef.dart';
 import 'player.dart';
 import 'quality.dart';
@@ -323,6 +324,22 @@ Future<void> afsluiten(LibraryStore library, SoulseekService soulseek) async {
     soulseek.client.markClosed();
     await soulseek.client.guardSaved();
   } catch (_) {}
+  // HET BROWSERVENSTER OPRUIMEN, en dat is geen nettigheid.
+  //
+  // `RutrackerVenster` houdt zijn headless WebView2 met opzet open zodra Cloudflare hem doorgelaten
+  // heeft: dat koekje kost twintig seconden en een volgende zoekopdracht heeft er baat bij. Dat
+  // betekent wel dat er tot aan het afsluiten een complete browser meedraait — gemeten op
+  // 08-09-2026: `msedgewebview2.exe` als kind van de app, met een renderer, een GPU-proces en een
+  // netwerkdienst eronder. Die wordt nu opgeruimd terwijl de app nog leeft en berichten pompt, in
+  // plaats van halverwege het afbreken van het proces.
+  //
+  // Twee seconden, want dit mag het afsluiten niet gijzelen — precies dezelfde afweging als bij
+  // [_NetjesAfsluiten].
+  if (RutrackerVenster.kan) {
+    try {
+      await RutrackerVenster.instantie.sluit().timeout(const Duration(seconds: 2));
+    } catch (_) {/* een venster dat niet dichtgaat mag het afsluiten niet ophouden */}
+  }
 }
 
 /// De eerste regels van een stapeltrace naar het logboek, zonder de rommel van Flutter zelf.
@@ -415,6 +432,22 @@ Future<void> main() async {
   }
   if (_isDesktop) await windowManager.ensureInitialized();
   if (!await _claimSingleInstance()) {
+    // HARD afkappen, en niet `exit(0)`.
+    //
+    // Er bestaat op dit moment nog geen enkele store — deze kopie sluit zichzelf af voordat er iets
+    // te bewaren valt — maar de Flutter-engine en zijn plug-ins draaien al, inclusief de
+    // compositielaag. `exit(0)` draait DLL_PROCESS_DETACH af en dan valt dezelfde
+    // CoreMessaging-werkdraad om als bij het gewone afsluiten: gemeten op 08-09-2026 om 17:23:34,
+    // twee tellen nadat deze kopie het venster naar voren had gehaald, met precies dezelfde
+    // handtekening `coremessaging.dll+0x16cf4`. Zie de uitleg in `windows/runner/main.cpp`.
+    //
+    // `killPid` met SIGKILL is op Windows `TerminateProcess`; op Linux en macOS gewoon SIGKILL.
+    // `exit(0)` blijft eronder staan als vangnet voor een platform waar dat niet lukt.
+    if (_isDesktop) {
+      try {
+        Process.killPid(pid, ProcessSignal.sigkill);
+      } catch (_) {/* dan maar de gewone weg */}
+    }
     exit(0);
   }
   if (_isDesktop) {
@@ -1204,8 +1237,18 @@ Future<void> main() async {
     downloads.mapVanBestaande = library.fileOfRecording;
     // Niet meteen: dit logde bij het opstarten in zonder dat iemand erom vroeg, en botste dan met de
     // sessie die de vorige keer nooit is afgemeld. Een wens die dagen loopt kan drie minuten wachten.
-    Timer(const Duration(minutes: 3), () => unawaited(downloads.sweepLosslessWants()));
-    Timer.periodic(const Duration(minutes: 20), (_) => unawaited(downloads.sweepLosslessWants()));
+    // Het ritme staat HIER, dus wordt het hier ook aan de strook op de Kwaliteitspagina verteld.
+    // Zonder dat leest "er loopt nu niets" als "er gebeurt niets meer".
+    const veegRitme = Duration(minutes: 20);
+    downloads.volgendeVeegOm = DateTime.now().add(const Duration(minutes: 3));
+    Timer(const Duration(minutes: 3), () {
+      downloads.volgendeVeegOm = DateTime.now().add(veegRitme);
+      unawaited(downloads.sweepLosslessWants());
+    });
+    Timer.periodic(veegRitme, (_) {
+      downloads.volgendeVeegOm = DateTime.now().add(veegRitme);
+      unawaited(downloads.sweepLosslessWants());
+    });
     await fase('enrichArtists', () => library.enrichArtists(settings));
     // Last, deliberately. Everything above this either draws the first screen or fetches something
     // you can see; this is the only part nobody is waiting for. Not awaited either — it runs for as
@@ -12945,6 +12988,132 @@ Widget _qualityBadge(Quality q) {
 /// Alleen de AFGEKAPTE bestanden staan hier, niet alle betrapte. Een opgeblazen bestand is gewoon
 /// cd-kwaliteit in een te grote jas — opnieuw downloaden levert exact hetzelfde geluid en die rijen
 /// zouden dus alleen maar werk beloven dat niets oplevert. Zie [LibraryStore.uitMp3Bestanden].
+/// De strook die laat zien wat de vervangjacht doet — de balk waar het om begonnen was.
+///
+/// **Waarom de balk ook staat als er niets loopt.** De jacht werkt zes wensen per ronde af en wacht
+/// daarna twintig minuten; verreweg de meeste tijd gebeurt er dus niets. Een balk die dan verdwijnt
+/// laat precies in die stilte niets zien, en dat is waar "doet hij nog wat?" ontstaat. Hij telt dan
+/// af naar de volgende ronde — dezelfde balk, andere betekenis, gedempt in plaats van accent, en de
+/// kop zegt welke van de twee je ziet.
+///
+/// [nu] wordt MEEGEGEVEN en niet hier opgehaald: zo is dit een zuivere widget die in een toets te
+/// tekenen en te bekijken valt, zonder op een echte klok te wachten.
+class VervangJachtStrook extends StatelessWidget {
+  const VervangJachtStrook({super.key, required this.jacht, required this.nu});
+  final VervangJacht jacht;
+  final DateTime nu;
+
+  /// Het ritme uit [main]. Alleen om de aftelbalk te schalen; de waarheid staat in `volgendeOm`.
+  static const _ritme = Duration(minutes: 20);
+
+  @override
+  Widget build(BuildContext context) {
+    final j = jacht;
+    // Niets op de lijst, niets gedaan, niets gaande: dan is een strook alleen maar meubilair.
+    if (j.opDeLijst == 0 && !j.loopt && j.binnen == 0 && j.weggegooid == 0) {
+      return const SizedBox.shrink();
+    }
+    final wacht = overTijd(j.volgendeOm, nu);
+
+    double? vulling = j.deel;
+    var kleur = _accent;
+    if (vulling == null) {
+      if (j.opDeLijst == 0) {
+        // Af is af: een lege balk onder "niets meer te vervangen" leest als "nog niets gedaan".
+        vulling = 1.0;
+        kleur = Colors.green.shade400;
+      } else {
+        kleur = _muted;
+        final over = j.volgendeOm?.difference(nu).inSeconds;
+        vulling = over == null
+            ? 0.0
+            : over <= 0
+                ? 1.0
+                : (1 - over / _ritme.inSeconds).clamp(0.0, 1.0);
+      }
+    }
+
+    final kop = j.loopt
+        ? 'Zoekt een echte kopie — ${j.gedaan + 1} van ${j.dezeBeurt} deze ronde'
+        : j.opDeLijst == 0
+            ? 'Niets meer te vervangen'
+            : wacht.isEmpty
+                ? 'Wacht op de volgende ronde'
+                : 'Volgende ronde $wacht';
+
+    return Container(
+      margin: const EdgeInsets.only(top: 14),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(10)),
+      child: Column(
+        // Zo hoog als hij nodig heeft. In de ListView maakt dit niets uit, maar het scheelt een
+        // valse overloop zodra hij ergens met een vaste hoogte terechtkomt.
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(j.loopt ? Icons.travel_explore_rounded : Icons.schedule_rounded,
+                  size: 15, color: kleur),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(kop,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+              if (j.opDeLijst > 0)
+                Text('${j.opDeLijst} op de verlanglijst',
+                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+            ],
+          ),
+          const SizedBox(height: 9),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value: vulling,
+              minHeight: 5,
+              backgroundColor: Colors.white10,
+              valueColor: AlwaysStoppedAnimation<Color>(kleur),
+            ),
+          ),
+          if (j.loopt && (j.bezigMet ?? '').isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              j.maxPoging > 0 && j.poging > 0
+                  ? '${j.bezigMet} · kandidaat ${j.poging} van ${j.maxPoging}'
+                  : j.bezigMet!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+            ),
+          ],
+          if ((j.regel ?? '').isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(j.regel!,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.35)),
+          ],
+          if (j.binnen > 0 || j.weggegooid > 0) ...[
+            const SizedBox(height: 6),
+            Text(
+              [
+                if (j.binnen > 0)
+                  '${j.binnen} echte ${j.binnen == 1 ? "kopie" : "kopieën"} binnen',
+                if (j.weggegooid > 0)
+                  '${j.weggegooid} ${j.weggegooid == 1 ? "vervalsing" : "vervalsingen"} '
+                      'betrapt en weggegooid',
+              ].join(' · '),
+              style: TextStyle(color: Colors.green.shade300, fontSize: 11.5),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class KwaliteitView extends StatefulWidget {
   const KwaliteitView({super.key});
   @override
@@ -12956,6 +13125,27 @@ class _KwaliteitViewState extends State<KwaliteitView> {
   bool _bezig = false;
   int _done = 0, _total = 0;
   String? _uitslag;
+
+  /// Alleen om de aftelbalk te laten lopen terwijl er niets gebeurt.
+  ///
+  /// De jacht zelf meldt zich vanzelf via [DownloadManager.jacht]; wat daar NIET uit komt is het
+  /// verstrijken van de tijd tussen twee rondes. Tien seconden is fijn genoeg voor een balk die er
+  /// twintig minuten over doet, en grof genoeg om niets te kosten. Stopt met de pagina.
+  Timer? _tikker;
+
+  @override
+  void initState() {
+    super.initState();
+    _tikker = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tikker?.cancel();
+    super.dispose();
+  }
 
   /// Waar een nummer lag toen je zijn bronnen openklapte.
   ///
@@ -13072,6 +13262,12 @@ class _KwaliteitViewState extends State<KwaliteitView> {
             if (_uitslag != null)
               Text(_uitslag!, style: const TextStyle(color: _muted, fontSize: 12.5)),
           ],
+        ),
+        // Wat de app zélf aan het doen is. Zonder deze strook zei de knop "op de verlanglijst
+        // gezet" en daarna niets meer, terwijl alles wat er gebeurde alleen in downloads.log stond.
+        ValueListenableBuilder<VervangJacht>(
+          valueListenable: context.read<DownloadManager>().jacht,
+          builder: (context, j, _) => VervangJachtStrook(jacht: j, nu: DateTime.now()),
         ),
         const SizedBox(height: 6),
         Text(

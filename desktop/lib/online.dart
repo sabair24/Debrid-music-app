@@ -30,6 +30,7 @@ import 'echtheid_oordelen.dart';
 import 'flac_tags.dart';
 import 'torbox_stand.dart';
 import 'vaste_keuze.dart';
+import 'vervangjacht.dart';
 
 /// Hoort deze bron te worden teruggedeeld nadat je hem hebt binnengehaald?
 ///
@@ -1077,6 +1078,19 @@ class DownloadManager extends ChangeNotifier {
   /// pending_downloads.json wordt opgeruimd en warm.log gaat alleen over de metadata-warmer, dus na
   /// een uur is er niets meer om naar te kijken. Precies de les die warm.log zelf al opschreef.
   late final WarmLog _log = WarmLog('$appDir${Platform.pathSeparator}downloads.log');
+
+  /// Wat de vervangjacht doet, voor het scherm. Zie [VervangJacht].
+  ///
+  /// Een eigen melder en niet `notifyListeners()`: de Kwaliteitspagina bouwt dan alleen zijn strook
+  /// opnieuw en niet de hele lijst met honderden rijen eronder, en dat scheelt bij een regel per
+  /// paar seconden.
+  final ValueNotifier<VervangJacht> jacht = ValueNotifier(const VervangJacht(opDeLijst: 0));
+
+  /// Wanneer de volgende veegbeurt aan de beurt is. Gezet door de klok in `main.dart`, want die
+  /// bepaalt het ritme — hier weten we alleen wat er ná een tik gebeurt.
+  set volgendeVeegOm(DateTime? wanneer) => jacht.value = jacht.value.met(volgendeOm: wanneer);
+
+  void _jachtRegel(String regel) => jacht.value = jacht.value.met(regel: regel);
 
   /// Hoeveel opdrachten er op dezelfde aria2-taak hangen, per gid.
   ///
@@ -2126,6 +2140,11 @@ class DownloadManager extends ChangeNotifier {
   static String _kort(Duration d) =>
       d.inMinutes >= 1 ? '${d.inMinutes}m${d.inSeconds % 60}s' : '${d.inSeconds}s';
 
+  /// Voor de strook op het scherm: "65,4 MB". Uit de aangekondigde grootte en niet van schijf —
+  /// hier is er nog geen bestand.
+  static String _mb(int bytes) =>
+      bytes <= 0 ? '' : '${(bytes / 1048576).toStringAsFixed(1)} MB';
+
   // ── FLAC is koning: de staande wens ──────────────────────────────────────
   //
   // De eenmalige jacht hierboven blijft staan voor de snelle winst -- als er NU een betere bron is,
@@ -2141,6 +2160,9 @@ class DownloadManager extends ChangeNotifier {
     if (_wantsLoaded) return;
     _wantsLoaded = true;
     await _wants.load();
+    // Meteen op het scherm: de strook hoort na een herstart te zeggen hoeveel er nog openstaat,
+    // niet pas na de eerste veegbeurt twintig minuten later.
+    jacht.value = jacht.value.met(opDeLijst: _wants.count);
   }
 
   /// Hoeveel nummers wachten er nog op hun FLAC. Voor het scherm en voor het logboek.
@@ -2211,6 +2233,8 @@ class DownloadManager extends ChangeNotifier {
       _log.line('$nieuw betrapt(e) nummer(s) op de verlanglijst gezet '
           '(${_wants.count} op de lijst)');
     }
+    // Ook bij nul: dan stonden ze er al, en juist dán moet de strook laten zien HOEVEEL er staan.
+    jacht.value = jacht.value.met(opDeLijst: _wants.count);
     return nieuw;
   }
 
@@ -2274,9 +2298,15 @@ class DownloadManager extends ChangeNotifier {
       }
       final nu = DateTime.now().millisecondsSinceEpoch;
       final rij = _wants.due(nu);
+      jacht.value = jacht.value.met(opDeLijst: _wants.count);
       if (rij.isEmpty) return 0;
       _log.line('wensen: ${rij.length} van ${_wants.count} aan de beurt'
           '${rij.length > _maxWensenPerVeeg ? " — deze beurt de eerste $_maxWensenPerVeeg" : ""}');
+      jacht.value = jacht.value.met(
+          dezeBeurt: rij.length < _maxWensenPerVeeg ? rij.length : _maxWensenPerVeeg,
+          gedaan: 0,
+          poging: 0,
+          maxPoging: 0);
       // Twee remmen, en ze zijn nodig zodra de lijst groot is. Een veegbeurt die niet terugkomt
       // blokkeert via `_sweeping` ook alle volgende, dus een verse wens uit een mislukte download
       // zou dagen kunnen wachten. `due()` sorteert oudste eerst, dus wie blijft staan is de
@@ -2286,14 +2316,19 @@ class DownloadManager extends ChangeNotifier {
       for (final w in rij.take(_maxWensenPerVeeg)) {
         if (DateTime.now().isAfter(veegEinde)) {
           _log.line('wensen: beurt vol — de rest komt over twintig minuten');
+          _jachtRegel('Beurt vol — de rest komt de volgende ronde.');
           break;
         }
         if (await _chaseWant(w)) gehaald++;
+        jacht.value = jacht.value
+            .met(gedaan: jacht.value.gedaan + 1, opDeLijst: _wants.count, poging: 0, maxPoging: 0);
       }
       await _wants.save();
       return gehaald;
     } finally {
       _sweeping = false;
+      // Ook als er onderweg iets omviel: een balk die blijft staan liegt harder dan geen balk.
+      jacht.value = jacht.value.klaar(opDeLijst: _wants.count);
     }
   }
 
@@ -2308,6 +2343,14 @@ class DownloadManager extends ChangeNotifier {
       return false; // geen net; de wens blijft staan en het ritme schuift niet op
     }
     final lossless = kandidatenVoorWens(w, hits);
+    jacht.value = jacht.value.met(
+      bezigMet: '${w.artist} — ${w.title}',
+      poging: 0,
+      maxPoging: lossless.length < _maxWensPogingen ? lossless.length : _maxWensPogingen,
+      regel: lossless.isEmpty
+          ? 'Niets bruikbaars gevonden bij ${hits.length} treffers.'
+          : '${lossless.length} bruikbare lossless kandidaten gevonden.',
+    );
     _log.line('wens "${w.artist} — ${w.title}": ${hits.length} treffers, '
         '${lossless.length} bruikbaar lossless (poging ${w.tries + 1}'
         '${w.refused.isEmpty ? "" : ", ${w.refused.length} peers overgeslagen"}'
@@ -2337,6 +2380,8 @@ class DownloadManager extends ChangeNotifier {
             break;
           }
           geprobeerd++;
+          jacht.value = jacht.value
+              .met(poging: geprobeerd, regel: 'Probeert ${f.username} — ${_mb(f.size)}.');
           final t0 = DateTime.now();
           SlskResult res;
           try {
@@ -2377,6 +2422,9 @@ class DownloadManager extends ChangeNotifier {
           if (!magBlijven(oordeel)) {
             _log.line('   ${f.username}: betrapt bij binnenkomst '
                 '(${waarom(oordeel!)}) — weggegooid, volgende kandidaat');
+            jacht.value = jacht.value.met(
+                weggegooid: jacht.value.weggegooid + 1,
+                regel: 'Vervalsing betrapt bij ${f.username} (${waarom(oordeel)}) — weggegooid.');
             betrapt.add(VasteBron(
                 username: f.username,
                 filename: f.filename,
@@ -2397,6 +2445,9 @@ class DownloadManager extends ChangeNotifier {
           if (!draagtGenoeg(nieuw, oud)) {
             _log.line('   ${f.username}: schoon, maar draagt minder dan wat er ligt '
                 '($nieuw tegen $oud) — weggegooid, volgende kandidaat');
+            jacht.value = jacht.value.met(
+                weggegooid: jacht.value.weggegooid + 1,
+                regel: 'Schoon, maar draagt minder dan wat er ligt — weggegooid.');
             betrapt.add(VasteBron(
                 username: f.username,
                 filename: f.filename,
@@ -2429,6 +2480,10 @@ class DownloadManager extends ChangeNotifier {
       _wants.forget(w.key);
       _log.line('wens "${w.artist} — ${w.title}": FLAC binnen na ${w.tries + 1} '
           'poging${w.tries == 0 ? "" : "en"} — van de lijst');
+      jacht.value = jacht.value.met(
+          binnen: jacht.value.binnen + 1,
+          opDeLijst: _wants.count,
+          regel: 'Echte kopie binnen voor ${w.artist} — ${w.title}.');
       try {
         await onLibraryChanged();
       } catch (_) {}
@@ -2443,6 +2498,8 @@ class DownloadManager extends ChangeNotifier {
         nep: betrapt));
     _log.line('wens "${w.artist} — ${w.title}": nog niet — volgende poging over '
         '${_kort(wachtVoor(w.tries + 1))}');
+    _jachtRegel('${w.artist} — ${w.title}: nog niets echts gevonden, opnieuw over '
+        '${duurTekst(wachtVoor(w.tries + 1))}.');
     return false;
   }
 
