@@ -1596,6 +1596,34 @@ class DownloadManager extends ChangeNotifier {
   /// "niets sprak het tegen", niet "bewezen echt".
   static bool magBlijven(Echtheidsoordeel? o) => o == null || !o.isNep;
 
+  /// Draagt deze vervanger minstens evenveel ECHTE muziek als wat er al ligt?
+  ///
+  /// **Waarom dit erbij moest, en het is aan het echte werk gemeten.** Bij een proefjacht op
+  /// "Madonna — La Isla Bonita" werden twee opgeschaalde kopieën van 146 MB terecht weggegooid, maar
+  /// de derde die binnenkwam was een eerlijke 16/48 — en die is met 768 op de schaal van
+  /// [echteCapaciteit] MINDER dan wat er al lag (een opgeschaalde 24/96 draagt echte 24 bits op
+  /// 44,1: 1058). Een vervalsing wegdoen is goed; hem inruilen voor minder muziek niet.
+  ///
+  /// **Minstens evenveel, niet méér.** Een eerlijke 24/44.1 is precies gelijk aan de opgeschaalde
+  /// 24/96 die hij vervangt — en dat is nou juist de ruil die gevraagd werd: "download soulseek
+  /// 24/44.1". Op "strikt meer" zou die nooit binnenkomen.
+  ///
+  /// Niet te lezen is GEEN nee. Een `.ape` of een bestand zonder leesbare kop levert geen getal, en
+  /// dan hoort de gewone weg te gelden — net als bij [magBlijven].
+  static bool draagtGenoeg(int? nieuw, int? oud) => nieuw == null || oud == null || nieuw >= oud;
+
+  /// De gemeten capaciteit van een bestand op schijf, of null als er niets van te maken is.
+  int? _capaciteitVan(String pad) {
+    try {
+      final t = readFlacTags(File(pad));
+      if (t == null || t.sampleRate <= 0) return null;
+      return echteCapaciteit(gemeten(pad),
+          kopSampleRate: t.sampleRate, kopBits: t.bitsPerSample);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Everything in staging at startup is a leftover from a session that ended mid-transfer.
   Future<void> _clearStaging() async {
     final root = Directory('$_downloadsRoot${Platform.pathSeparator}_inkomend');
@@ -2349,6 +2377,26 @@ class DownloadManager extends ChangeNotifier {
           if (!magBlijven(oordeel)) {
             _log.line('   ${f.username}: betrapt bij binnenkomst '
                 '(${waarom(oordeel!)}) — weggegooid, volgende kandidaat');
+            betrapt.add(VasteBron(
+                username: f.username,
+                filename: f.filename,
+                size: f.size,
+                durationSec: f.durationSec));
+            await _discardStaged(res.path);
+            continue;
+          }
+
+          // En schoon is niet genoeg: hij moet ook minstens evenveel ECHTE muziek dragen als wat er
+          // al ligt. Zie [draagtGenoeg] — bij de proefjacht kwam er een eerlijke 16/48 binnen voor
+          // een opgeschaalde 24/96 die in werkelijkheid 24 bits op 44,1 draagt, en dat is minder.
+          final bestaand = mapVanBestaande?.call(
+              w.authority?.artist ?? w.artist, w.authority?.title ?? w.title,
+              seconds: w.authority?.seconds);
+          final oud = bestaand == null ? null : _capaciteitVan(bestaand);
+          final nieuw = _capaciteitVan(staged.path);
+          if (!draagtGenoeg(nieuw, oud)) {
+            _log.line('   ${f.username}: schoon, maar draagt minder dan wat er ligt '
+                '($nieuw tegen $oud) — weggegooid, volgende kandidaat');
             betrapt.add(VasteBron(
                 username: f.username,
                 filename: f.filename,

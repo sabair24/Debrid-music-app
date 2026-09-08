@@ -97,6 +97,44 @@ void main() {
     });
   });
 
+  /// Schoon zijn is niet genoeg — hij moet ook minstens evenveel ECHTE muziek dragen.
+  ///
+  /// GEMETEN aan het echte werk op 08-09-2026. Een proefjacht op "Madonna — La Isla Bonita" gooide
+  /// twee opgeschaalde kopieën van 146 MB terecht weg, maar nam als derde een eerlijke 16/48 aan —
+  /// en die draagt met 768 MINDER dan wat er al lag: een opgeschaalde 24/96 die in werkelijkheid
+  /// echte 24 bits op 44,1 draagt, dus 1058. Een vervalsing wegdoen is goed; hem inruilen voor
+  /// minder muziek niet. Op datzelfde album staan Holiday, Papa Don't Preach en Open Your Heart als
+  /// ECHTE 24/96, dus zo'n kopie bestaat — het loont om door te zoeken.
+  group('een vervanger moet minstens evenveel dragen', () {
+    test('een eerlijke 16/48 vervangt een opgeschaalde 24/96 NIET', () {
+      const eerlijk48 = 48000 * 16 ~/ 1000; // 768
+      const opgeschaald96 = 44100 * 24 ~/ 1000; // 1058 — echte 24 bits, opgerekte bemonstering
+      expect(DownloadManager.draagtGenoeg(eerlijk48, opgeschaald96), isFalse);
+    });
+
+    test('maar een eerlijke 24/44.1 wél — precies de ruil die gevraagd werd', () {
+      // "download soulseek 24/44.1". Gelijk telt hier als genoeg; op "strikt meer" zou juist die
+      // ruil nooit doorgaan.
+      const eerlijk = 44100 * 24 ~/ 1000;
+      const opgeschaald = 44100 * 24 ~/ 1000;
+      expect(DownloadManager.draagtGenoeg(eerlijk, opgeschaald), isTrue);
+      expect(DownloadManager.draagtGenoeg(96000 * 24 ~/ 1000, opgeschaald), isTrue);
+    });
+
+    test('en een eerlijke cd vervangt wél een uit mp3 omgezette kopie', () {
+      const cd = 44100 * 16 ~/ 1000; // 705
+      const uitMp3 = 2 * 17200 * 16 ~/ 1000; // 550
+      expect(DownloadManager.draagtGenoeg(cd, uitMp3), isTrue);
+    });
+
+    test('niet te lezen is GEEN nee', () {
+      // Een `.ape` of een bestand zonder leesbare kop levert geen getal. Dan geldt de gewone weg,
+      // net als bij een mislukte meting.
+      expect(DownloadManager.draagtGenoeg(null, 1058), isTrue);
+      expect(DownloadManager.draagtGenoeg(768, null), isTrue);
+    });
+  });
+
   group('welke kandidaten een wens nog mag proberen', () {
     test('een betrapte upload wordt de volgende ronde overgeslagen', () {
       final betrapt = _f('11 La Isla Bonita.flac', size: 27 * 1024 * 1024);
