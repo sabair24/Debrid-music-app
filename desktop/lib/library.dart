@@ -2176,7 +2176,17 @@ class LibraryStore extends ChangeNotifier {
     final uit = await _schrijfBewerking(target,
         artist: artist, albumTitle: albumTitle, title: title, alleen: perNummer ? doel : null);
     for (final t in doel) {
-      final c = _corrections.putIfAbsent(t.path, () => {});
+      // Via [_correctionsFor] en niet met een kale `putIfAbsent`: bestaat er al een regel die alleen
+      // in schrijfwijze verschilt, dan is dat DEZELFDE regel.
+      //
+      // Hier stond `_corrections.putIfAbsent(t.path, ...)`, en dat is op 09-09-2026 duur geweest.
+      // Na een correctie schreef de app de titel van de uitgave in het bestand, waardoor het pad van
+      // `01 - Strangers by Nature.flac` naar `01 - Strangers By Nature.flac` ging. De volgende
+      // correctie maakte daar een TWEEDE regel voor, en welke van de twee de pin droeg hing af van
+      // de volgorde in het bestand: een zojuist vastgezette uitgave (21040684) verdween achter de
+      // oude (21021802), zonder één melding. De helper hiernaast bestond al en waarschuwde er zelfs
+      // voor — deze aanroeper ging er alleen omheen.
+      final c = _correctionsFor(t.path);
       // Discogs numbers artists who share a name and asterisks name variants; neither belongs in
       // a library, let alone on the now-playing bar.
       if (artist != null && artist.trim().isNotEmpty) c['artist'] = cleanArtistName(artist);

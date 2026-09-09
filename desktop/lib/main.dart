@@ -87,6 +87,7 @@ import 'online.dart';
 import 'organize.dart';
 import 'echtheid.dart';
 import 'echtheid_oordelen.dart';
+import 'audioformaten.dart';
 import 'vaste_keuze.dart';
 import 'vervangjacht.dart';
 import 'bronzeef.dart';
@@ -13563,7 +13564,16 @@ Quality _trackQuality(Track t) {
   // Het formaat zelf in plaats van de bitrate, en bij ELKE lossless -- ook bij 16/44.1. Een bitrate is
   // de uitkomst van de muziek en de compressie samen en verschilt per nummer; dit zegt wat het bestand
   // is. En één notatie voor de hele lijst leest rustiger dan de ene rij "1433k" en de volgende "24/96".
-  if (t.isFlac && t.sampleRate > 0 && t.bitsPerSample > 0) {
+  //
+  // En bij élk verliesvrij formaat, niet alleen bij FLAC. Hier stond `t.isFlac`, en daardoor kreeg
+  // Snap! *The Power* het merkje `WV · 5569k` terwijl de kop van dat bestand gewoon 32 bits op
+  // 192 kHz zegt — precies het geval waarin de ene rij een bitrate toont en de volgende een
+  // diepte, en je appels met peren vergelijkt.
+  //
+  // `>= 8 bits` sluit DSD uit, en dat is met opzet: één bit op 2.822.400 Hz klopt wel maar leest
+  // als onzin. Daar blijft het formaatetiket het antwoord.
+  final verliesvrij = t.isFlac || isVerliesvrij(t.ext);
+  if (verliesvrij && t.sampleRate > 0 && t.bitsPerSample >= 8) {
     // GEMETEN gaat vóór wat de kop beweert.
     //
     // Zonder deze regel kreeg een opgeblazen bestand het gouden hi-res-merk op grond van getallen
@@ -13574,7 +13584,8 @@ Quality _trackQuality(Track t) {
     final echtHiRes = isHiRes(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample) &&
         !(o?.isNep ?? false);
     return Quality(
-      'FLAC · ${depthRateLabel(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample)}',
+      '${t.isFlac ? "FLAC" : t.ext.toUpperCase()} · '
+      '${depthRateLabel(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample)}',
       echtHiRes ? QTier.hires : QTier.lossless,
     );
   }
