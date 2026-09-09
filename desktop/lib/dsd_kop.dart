@@ -33,11 +33,16 @@ class DsdKop {
   /// 2 voor stereo, 6 voor een meerkanaals-SACD.
   final int channels;
 
+  /// Waar het ID3v2-blok begint, of 0 als er geen is. Alleen een DSF wijst er zelf naar — dat getal
+  /// staat in zijn allereerste brok. Zie [readId3v2].
+  final int metaBegin;
+
   const DsdKop({
     required this.duration,
     required this.sampleRate,
     required this.bitsPerSample,
     required this.channels,
+    this.metaBegin = 0,
   });
 }
 
@@ -52,6 +57,13 @@ DsdKop? readDsfKop(File f) {
     raf = f.openSync();
     // De DSD-brok: "DSD " gevolgd door 24 bytes. Daarna begint de fmt-brok.
     if (String.fromCharCodes(raf.readSync(4)) != 'DSD ') return null;
+    // Brokpositie 20: acht bytes die zeggen waar het ID3v2-blok begint, of nul als er geen is.
+    raf.setPositionSync(20);
+    final w = raf.readSync(8);
+    final metaBegin = w.length < 8
+        ? 0
+        : (w[0] | (w[1] << 8) | (w[2] << 16) | (w[3] << 24)) +
+            (w[4] | (w[5] << 8) | (w[6] << 16) | (w[7] << 24)) * 0x100000000;
     raf.setPositionSync(28);
     if (String.fromCharCodes(raf.readSync(4)) != 'fmt ') return null;
 
@@ -81,6 +93,7 @@ DsdKop? readDsfKop(File f) {
       sampleRate: sampleRate,
       bitsPerSample: bits > 0 ? bits : 1,
       channels: channels > 0 ? channels : 2,
+      metaBegin: metaBegin,
     );
   } catch (_) {
     return null;

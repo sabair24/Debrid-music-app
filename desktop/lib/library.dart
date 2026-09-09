@@ -10,6 +10,8 @@ import 'completeness.dart';
 import 'audioformaten.dart';
 import 'discogs.dart' show persingUitHerkomst;
 import 'dsd_kop.dart';
+import 'id3v2_kop.dart';
+import 'wavpack_kop.dart';
 import 'editions.dart';
 import 'enrichment.dart';
 import 'fingerprint.dart';
@@ -365,13 +367,68 @@ Map<String, dynamic>? tagrijVoorBestand(File e,
     duurMs = readMp3Duur(e)?.inMilliseconds ?? 0;
   } else if (_ext(e.path) == '.dsf' || _ext(e.path) == '.dff') {
     // Een SACD-rip, in Sony's doos of in die van Philips. Geen enkele tagontleder hier kent DSD, dus
-    // dit bestand belandt hoe dan ook op zijn bestandsnaam — maar de duur staat in de kop en hoeft
-    // niet 0:00 te blijven.
+    // de duur, de bemonstering én de tekst moeten uit het bestand zelf komen.
     final k = _ext(e.path) == '.dsf' ? readDsfKop(e) : readDffKop(e);
     if (k != null) {
       duurMs = k.duration?.inMilliseconds ?? 0;
       hertz = k.sampleRate;
       bits = k.bitsPerSample;
+      // Een DSF wijst zelf naar zijn ID3v2-blok. Staat daar een titel in, dan is dat beter dan de
+      // bestandsnaam — en zonder dit kwam elke SACD-rip binnen als "Onbekende artiest".
+      if (k.metaBegin > 0) {
+        final t = readId3v2(e, vanaf: k.metaBegin);
+        if (t != null && !t.leeg) {
+          return _rijUitLosseTags(e,
+              addedMs: addedMs,
+              sizeBytes: sizeBytes,
+              durationMs: duurMs,
+              sampleRate: hertz,
+              bitsPerSample: bits,
+              title: t.title,
+              artist: t.artist,
+              album: t.album,
+              trackNo: t.trackNo,
+              trackTotal: t.trackTotal,
+              year: t.year,
+              genre: t.genre);
+        }
+      }
+    }
+  } else if (_ext(e.path) == '.wv' || _ext(e.path) == '.ape') {
+    // WavPack en Monkey's Audio. Gemeld op 09-09-2026 met een schermafdruk: *"wat is WV, 0:00 min
+    // ????"* — 228 MB Snap! op de schijf, met `WV` en `0:00` erachter.
+    //
+    // De TEKST kwam wél binnen: de tagontleder kent APEv2 en las titel, artiest en jaar. Wat er
+    // ontbrak is alles wat over het GELUID gaat, en dat staat niet in een tag maar in de blokkop —
+    // 65.881.600 monsters op 192 kHz, oftewel 5:43. Zelfde afspraak als bij mp3 en DSD hierboven:
+    // hier alleen de terugval, de ontleder blijft de baas over de namen.
+    if (_ext(e.path) == '.wv') {
+      final k = readWvKop(e);
+      if (k != null) {
+        duurMs = k.duration?.inMilliseconds ?? 0;
+        hertz = k.sampleRate;
+        bits = k.bitsPerSample;
+      }
+    }
+    // En als de ontleder dit bestand NIET wil aannemen, leest de eigen lezer het blok alsnog. Zonder
+    // dit valt zo'n bestand terug op zijn bestandsnaam terwijl de titel er letterlijk in staat.
+    if (!tagParserWouldClaim(e)) {
+      final t = readApeTags(e);
+      if (t != null && !t.leeg) {
+        return _rijUitLosseTags(e,
+            addedMs: addedMs,
+            sizeBytes: sizeBytes,
+            durationMs: duurMs,
+            sampleRate: hertz,
+            bitsPerSample: bits,
+            title: t.title,
+            artist: t.artist,
+            album: t.album,
+            trackNo: t.trackNo,
+            trackTotal: t.trackTotal,
+            year: t.year,
+            genre: t.genre);
+      }
     }
   }
   // Never hand the package a file it is going to refuse: it opens before it decides, and the
@@ -461,6 +518,48 @@ Map<String, dynamic> _kaleRij(File e,
       'sampleRate': sampleRate,
       'bitsPerSample': bitsPerSample,
     };
+
+/// Een rij uit tags die we ZELF gelezen hebben, buiten de tagontleder om.
+///
+/// **Waarvoor dit er is.** Er zijn dozen die de tagontleder van dit project niet kent en die hun
+/// tekst gewoon bij zich dragen: een DSF met een ID3v2-blok, een WavPack of een Monkey's Audio met
+/// een APEv2-blok erachter. Die belandden allemaal op [_kaleRij] — hun bestandsnaam — terwijl de
+/// titel er letterlijk in stond.
+///
+/// Zelfde vorm en zelfde terugval als de FLAC-tak hierboven: [_uitNaam] vult aan wat de tags niet
+/// zeggen, zodat een blok met alleen een album nog steeds een leesbare titel oplevert.
+Map<String, dynamic> _rijUitLosseTags(File e,
+    {required int addedMs,
+    required int sizeBytes,
+    int durationMs = 0,
+    int sampleRate = 0,
+    int bitsPerSample = 0,
+    String? title,
+    String? artist,
+    String? album,
+    int trackNo = 0,
+    int trackTotal = 0,
+    int? year,
+    String? genre}) {
+  final uit = _uitNaam(e.path, title, artist);
+  return {
+    'path': e.path,
+    'title': uit.titel,
+    'artist': uit.artiest,
+    'album': album ?? '',
+    'trackNo': trackNo,
+    'trackTotal': trackTotal,
+    'durationMs': durationMs,
+    // Niet FLAC, maar wél lossless — dat onderscheid maakt [audioformaten.dart], niet deze vlag.
+    'isFlac': false,
+    'year': year,
+    'genre': genre,
+    'addedMs': addedMs,
+    'sizeBytes': sizeBytes,
+    'sampleRate': sampleRate,
+    'bitsPerSample': bitsPerSample,
+  };
+}
 
 /// Eén bestand lezen, op een andere isolate. Zie [scanTagsInIsolate] voor waarom de closure hier
 /// staat en niet in een methode.
