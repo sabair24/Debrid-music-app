@@ -6443,10 +6443,19 @@ class _MetadataEditorState extends State<MetadataEditor> {
                     onPressed: () => Navigator.of(context).pop(false),
                     child: const Text('Annuleren', style: TextStyle(color: _muted)),
                   ),
+                  // Zeggen WAAROM de knop uit staat. Een dode knop zonder uitleg is precies zo
+                  // verwarrend als een knop die "Aangepast" zegt en niets doet.
+                  if (!_kanToepassen)
+                    const Expanded(
+                      child: Text('Kies eerst een uitgave, of vul zelf een album in',
+                          textAlign: TextAlign.right,
+                          maxLines: 2,
+                          style: TextStyle(color: _muted, fontSize: 12)),
+                    ),
                   const SizedBox(width: 8),
                   FilledButton(
                     style: FilledButton.styleFrom(backgroundColor: _accent),
-                    onPressed: _applying ? null : _apply,
+                    onPressed: _applying || !_kanToepassen ? null : _apply,
                     child: _applying
                         ? const SizedBox(
                             width: 18,
@@ -6481,8 +6490,23 @@ class _MetadataEditorState extends State<MetadataEditor> {
           controller: c,
           focusNode: _editFocusFor(c),
           decoration: _inputDeco(label),
+          // Zodat "Toepassen" mee verandert terwijl je typt. Zie [_kanToepassen].
+          onChanged: (_) => setState(() {}),
         ),
       );
+
+  /// Mag "Toepassen" ingedrukt worden?
+  ///
+  /// **Waarom dit er is.** Bij "Juiste uitgave zoeken…" voor ÉÉN nummer begint het albumveld leeg —
+  /// dat is de plaat waar het nummer heen moet, en die weet de app nog niet. Wie dan op Toepassen
+  /// drukt zonder eerst een uitgave te kiezen, kreeg de melding "Aangepast" terwijl er niets
+  /// verhuisde: een lege albumnaam wordt door [LibraryStore.applyCorrection] overgeslagen, dus het
+  /// nummer bleef staan waar het stond — mét `trackNo` op nul geschreven. Gemeld op 09-09-2026:
+  /// *"het lied wordt niet meegepakt naar de nieuwe uitgave, blijft gewoon staan"*.
+  ///
+  /// Handmatig een naam intypen mag wél; het gaat om de LEGE waarde, niet om het ontbreken van een
+  /// gekozen rij. Bij een heel album is er niets te blokkeren: dan staat de bestaande titel er al.
+  bool get _kanToepassen => widget.nummer == null || _title.text.trim().isNotEmpty;
 
   InputDecoration _inputDeco(String label) => InputDecoration(
         labelText: label,
