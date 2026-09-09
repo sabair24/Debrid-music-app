@@ -163,11 +163,33 @@ class Album {
     return null;
   }
 
+  /// Het genre dat de MEESTE nummers dragen, niet dat van het eerste bestand.
+  ///
+  /// **Waarom dat verschil telt.** Hier stond "geef het eerste niet-lege genre terug", en daarmee
+  /// bepaalde één bestand de hele kop. Gezien op 09-09-2026: *Jane Birkin - Serge Gainsbourg* (1969,
+  /// chanson) stond als "Pop", en zodra er één nummer van die plaat wegging sprong de kop naar
+  /// "Alternative And Punk" — het genre van wat toevallig het nieuwe eerste bestand was. De plaat
+  /// veranderde niet, de volgorde wel.
+  ///
+  /// Bij gelijkspel wint wie het eerst voorkomt, zodat de uitkomst niet van de sorteervolgorde
+  /// afhangt. Genres van rippers verschillen vaak alleen in hoofdletters ("Pop" / "pop"), dus die
+  /// tellen als één — met de eerst geziene schrijfwijze als antwoord.
   String? get genre {
+    final telling = <String, int>{};
+    final schrijfwijze = <String, String>{};
     for (final t in tracks) {
-      if (t.genre != null && t.genre!.isNotEmpty) return t.genre;
+      final g = t.genre?.trim();
+      if (g == null || g.isEmpty) continue;
+      final sleutel = g.toLowerCase();
+      telling[sleutel] = (telling[sleutel] ?? 0) + 1;
+      schrijfwijze.putIfAbsent(sleutel, () => g);
     }
-    return null;
+    if (telling.isEmpty) return null;
+    var beste = telling.keys.first;
+    for (final s in telling.keys) {
+      if (telling[s]! > telling[beste]!) beste = s;
+    }
+    return schrijfwijze[beste];
   }
 
   /// Most recent file time among the tracks — "recently added".

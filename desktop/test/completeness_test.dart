@@ -576,4 +576,38 @@ void main() {
       expect(AlbumSlot(index: 0, official: ChoiceTrack('A1', 'Cozy', 209)).number, 1);
     });
   });
+
+  /// De kop telt de UITGAVE, niet de rijen op het scherm.
+  ///
+  /// GEMETEN op 09-09-2026 op *Jane Birkin - Serge Gainsbourg*: er stond "4 van 12 nummers · 8
+  /// ontbreken" terwijl die persing er elf noemt. Het twaalfde was het bestand dat er juist NIET op
+  /// staat — dat telde in de teller én de noemer mee. Verhuisde dat ene nummer naar zijn eigen
+  /// uitgave, dan werd het "3 van 11" zonder dat er iets aan de plaat veranderd was.
+  group('wat de kop over een uitgave zegt', () {
+    test('een bestand dat er niet op staat telt niet mee in de uitgave', () {
+      final c = AlbumCompleteness([
+        AlbumSlot(index: 0, official: _o(1, 'La Chanson De Slogan', 167), track: _t('La Chanson De Slogan', 167)),
+        AlbumSlot(index: 1, official: _o(2, '69 Année Érotique', 197), track: _t('69 Année Érotique', 197)),
+        AlbumSlot(index: 2, official: _o(3, 'Les Sucettes', 154), track: _t('Les Sucettes', 154)),
+        AlbumSlot(index: 3, official: _o(4, 'Jane B.', 200)),
+        AlbumSlot(index: -1, track: _t("Je T'Aime… Moi Non Plus", 264)),
+      ]);
+
+      expect(c.opUitgave, 4, reason: 'de persing noemt er vier');
+      expect(c.matched, 3);
+      expect(c.missing.length, 1);
+      expect(c.matched + c.missing.length, c.opUitgave, reason: 'dit moet altijd optellen');
+      expect(c.erbij, 1, reason: 'het bestand dat er niet op staat, apart geteld');
+    });
+
+    test('zonder vreemde eend verandert er niets aan de telling', () {
+      final c = AlbumCompleteness([
+        AlbumSlot(index: 0, official: _o(1, 'La Chanson De Slogan', 167), track: _t('La Chanson De Slogan', 167)),
+        AlbumSlot(index: 1, official: _o(2, 'Jane B.', 200)),
+      ]);
+      expect(c.opUitgave, 2);
+      expect(c.matched, 1);
+      expect(c.erbij, 0);
+    });
+  });
 }

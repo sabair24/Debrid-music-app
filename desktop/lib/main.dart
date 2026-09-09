@@ -5665,7 +5665,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('${c.have} van ${c.total} nummers · ${missing.length} ontbreken',
+                // Over de UITGAVE, niet over de rijen: zie [AlbumCompleteness.opUitgave]. Wat er
+                // naast staat krijgt zijn eigen woorden, want dat is een ander soort feit.
+                Text(
+                    '${c.matched} van ${c.opUitgave} nummers · ${missing.length} ontbreken'
+                    '${c.erbij == 0 ? "" : " · ${c.erbij} niet op deze uitgave"}',
                     style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                 Text(
                     // Eerst de scherpste vaststelling, en die komt uit de indeling die HIER net

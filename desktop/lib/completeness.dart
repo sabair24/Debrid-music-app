@@ -80,6 +80,20 @@ class AlbumCompleteness {
   /// doesn't list counts towards both, and "3 van 17" always adds up to the list you're reading.
   int get have => slots.where((s) => s.track != null).length;
   int get total => slots.length;
+
+  /// Hoeveel nummers de UITGAVE zelf noemt, en hoeveel bestanden daar niet bij horen.
+  ///
+  /// **Waarom dit naast [have]/[total] staat.** Die twee tellen de rijen op het scherm, zodat de som
+  /// klopt met wat je leest. Maar in de kop las dat als een uitspraak over de PERSING, en dan is het
+  /// onwaar: op 09-09-2026 stond er "4 van 12 nummers" boven *Jane Birkin - Serge Gainsbourg*,
+  /// terwijl die uitgave er elf noemt — het twaalfde was het bestand dat er juist NIET op staat, en
+  /// dat telde in de teller én de noemer mee. Verhuisde dat ene nummer, dan werd het "3 van 11"
+  /// zonder dat er iets aan de plaat veranderd was.
+  ///
+  /// Met deze twee klopt beide: `opUitgave` is wat de persing noemt, `erbij` wat je daarnaast hebt,
+  /// en [matched] + [missing] telt precies op tot `opUitgave`.
+  int get opUitgave => slots.where((s) => s.index >= 0).length;
+  int get erbij => slots.where((s) => s.index < 0 && s.track != null).length;
   List<AlbumSlot> get missing => [for (final s in slots) if (s.missing) s];
   bool get complete => missing.isEmpty;
 
