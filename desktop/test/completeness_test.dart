@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:debridmusic/completeness.dart';
 import 'package:debridmusic/editions.dart';
 import 'package:debridmusic/models.dart';
+import 'package:debridmusic/organize.dart';
 
 const _root = r'D:\Flac music 2024\Albums\Beyoncé\RENAISSANCE';
 
@@ -608,6 +609,60 @@ void main() {
       expect(c.opUitgave, 2);
       expect(c.matched, 1);
       expect(c.erbij, 0);
+    });
+  });
+
+  /// Wat er op Adele *30* misging, en waarom de tweede het ergste was.
+  ///
+  /// GEZIEN op 09-09-2026 op het scherm. Vier bestanden stonden onder "Niet op deze uitgave", met
+  /// een knop "Alle 2 rechtzetten" erboven.
+  group('Adele 30: de gastnaam en de bezette rij', () {
+    test('twee haakjesgroepen leveren één gastnaam op, niet de rest van de titel', () {
+      // Er stond letterlijk `Erroll Garner) (Interlude` onder de rij — de lezer knipte alleen de
+      // LAATSTE haak weg en las de tweede groep mee.
+      final g = splitFeatured('Adele', 'All Night Parking (With Erroll Garner) (Interlude)');
+      expect(g.featured, ['Erroll Garner']);
+    });
+
+    test('een geneste groep blijft heel', () {
+      expect(splitFeatured('X', 'Lied (feat. A (B))').featured, ['A (B)']);
+    });
+
+    test('zonder haakjes verandert er niets', () {
+      expect(splitFeatured('X', 'Lied feat. Iemand').featured, ['Iemand']);
+    });
+
+    test('een titel die naar een BEZETTE rij wijst krijgt geen knop', () {
+      // `Easy On Me (With Chris Stapleton)` is de duetversie; rij 2 "Easy On Me" was al gevuld door
+      // de gewone opname. De app bood tóch aan de titel "recht te zetten" — en dan landen twee
+      // bestanden op één rij en verdwijnt er één uit de lijst.
+      final officieel = [_o(1, 'Strangers by Nature', 182), _o(2, 'Easy On Me', 224)];
+      final duet = _t('Easy On Me (With Chris Stapleton)', 230, no: 0);
+      final bezet = {normKey('Easy On Me')};
+
+      final zonder = waaromGeenPlaatsMet(officieel, duet);
+      expect(zonder.uitgave, isNotNull, reason: 'zonder die kennis stelde hij het wél voor');
+
+      final met = waaromGeenPlaatsMet(officieel, duet, bezet: bezet);
+      expect(met.uitgave, isNull, reason: 'geen knop die twee bestanden op één rij zet');
+      expect(met.reden, contains('al gevuld'));
+      expect(met.reden, contains('andere opname'));
+    });
+
+    test('een VRIJE rij blijft gewoon een voorstel', () {
+      final officieel = [_o(8, 'All Night Parking (Interlude)', 162)];
+      final mijn = _t('All Night Parking (With Erroll Garner) (Interlude)', 162, no: 0);
+      final uit = waaromGeenPlaatsMet(officieel, mijn, bezet: const {});
+      expect(uit.uitgave?.title, 'All Night Parking (Interlude)');
+    });
+
+    test('bezetteRijen telt alleen rijen die de uitgave noemt én die gevuld zijn', () {
+      final rijen = [
+        AlbumSlot(index: 0, official: _o(1, 'Easy On Me', 224), track: _t('Easy On Me', 224)),
+        AlbumSlot(index: 1, official: _o(2, 'Oh My God', 225)), // leeg
+        AlbumSlot(index: -1, track: _t('Wild Wild West', 200)), // hoort er niet op
+      ];
+      expect(bezetteRijen(rijen), {normKey('Easy On Me')});
     });
   });
 }

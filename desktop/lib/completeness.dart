@@ -547,9 +547,19 @@ AlbumCompleteness matchAlbumTracks(
 /// hieronder: die vraagt of een versiemerk in de titel niets anders doet dan de albumtitel
 /// herhalen. Leeg laten kan, en dan blijft die tak uit — geen enkele bestaande aanroeper verandert
 /// er iets van.
+/// Welke rijen van de uitgave al door een ander bestand bezet zijn.
+///
+/// Zie [waaromGeenPlaatsMet]: een hernoeming naar een bezette rij is geen reparatie maar een botsing.
+Set<String> bezetteRijen(List<AlbumSlot> rijen) => {
+      for (final s in rijen)
+        if (s.index >= 0 && s.track != null && s.official != null) normKey(s.official!.title),
+    };
+
+/// [bezet] zijn de rijen die al gevuld zijn — zie [bezetteRijen]. Wijst de vergelijking een bestand
+/// naar zo'n rij, dan is een hernoeming juist het verkeerde antwoord.
 ({ChoiceTrack? uitgave, String reden}) waaromGeenPlaatsMet(
     List<ChoiceTrack> official, Track t,
-    {String album = ''}) {
+    {String album = '', Set<String> bezet = const {}}) {
   if (official.isEmpty) return (uitgave: null, reden: 'er is geen tracklijst opgehaald');
   final mijn = normKey(t.title);
   final mijnKaal = normKey(zonderFeat(t.title));
@@ -595,19 +605,33 @@ AlbumCompleteness matchAlbumTracks(
   }
   if (gelijk.length == 1) {
     final o = gelijk.single;
+    // Staat die rij AL vol, dan is dit geen naamkwestie maar een andere opname — en een hernoeming
+    // zou twee bestanden op één rij zetten, waarna er één uit de lijst verdwijnt.
+    //
+    // Gezien op 09-09-2026 bij Adele *30*: `Easy On Me (With Chris Stapleton)` is de duetversie, en
+    // rij 2 "Easy On Me" was al gevuld door de gewone opname van 3:45. De app bood tóch aan de titel
+    // "recht te zetten", en dat is precies de knop die je bibliotheek kapotmaakt.
+    if (bezet.contains(normKey(o.title))) {
+      return (
+        uitgave: null,
+        reden: 'de uitgave noemt "${o.title.trim()}", maar die rij is al gevuld door een ander '
+            'bestand — dit is dus een andere opname en geen verkeerde naam',
+      );
+    }
     final gasten = splitFeatured(t.artist, t.title).featured;
     if (gasten.isNotEmpty && normKey(o.title) != mijn) {
       return (
         uitgave: o,
         reden: o.artist.trim().isEmpty
-            ? 'jouw bestand heet "${t.title}"; de uitgave noemt "${o.title}" en zegt niet wie er '
-                'meespeelt'
-            : 'jouw bestand heet "${t.title}"; de uitgave noemt "${o.title}" met ${o.artist}',
+            ? 'jouw bestand heet "${t.title.trim()}"; de uitgave noemt "${o.title.trim()}" en zegt '
+                'niet wie er meespeelt'
+            : 'jouw bestand heet "${t.title.trim()}"; de uitgave noemt "${o.title.trim()}" '
+                'met ${o.artist}',
       );
     }
     return (
       uitgave: o,
-      reden: 'jouw bestand heet "${t.title}", de uitgave noemt "${o.title}"',
+      reden: 'jouw bestand heet "${t.title.trim()}", de uitgave noemt "${o.title.trim()}"',
     );
   }
   // Draagt de titel een merk dat alleen de ALBUMTITEL herhaalt, dan is dat geen fout van jou maar
@@ -809,10 +833,10 @@ typedef Titelvoorstel = ({Track track, String titel, String? artiest});
 /// wat de regel onder die rij niet beweert. Nummers waar niets aan verandert vallen weg: een lijst
 /// met regels die niets doen is een lijst waarin je de echte niet meer ziet.
 List<Titelvoorstel> titelVoorstellen(List<ChoiceTrack> official, List<Track> weesjes,
-    {String album = ''}) {
+    {String album = '', Set<String> bezet = const {}}) {
   final uit = <Titelvoorstel>[];
   for (final t in weesjes) {
-    final rij = waaromGeenPlaatsMet(official, t, album: album).uitgave;
+    final rij = waaromGeenPlaatsMet(official, t, album: album, bezet: bezet).uitgave;
     if (rij == null) continue;
     final v = titelherstel(rij, t);
     if (v.titel.isEmpty) continue;

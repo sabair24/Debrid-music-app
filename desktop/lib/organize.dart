@@ -131,9 +131,33 @@ final _featSplitRe = RegExp(r'\s*(?:,|&|\+|\band\b|\ben\b|\bx\b)\s*', caseSensit
   final featured = <String>[];
   var main = artist.trim();
 
+  /// Waar de gastgroep ophoudt: bij het haakje dat het OPENINGShaakje sluit.
+  ///
+  /// **Waarom niet "de laatste haak weghalen".** Dat stond hier, en bij een titel met twee groepen
+  /// las het de tweede mee. Gezien op 09-09-2026 bij Adele *30*: `All Night Parking (With Erroll
+  /// Garner) (Interlude)` leverde als gastnaam `Erroll Garner) (Interlude` op — dat stond zo onder
+  /// de rij, en het is ook wat er in de tags terecht zou komen.
+  ///
+  /// Een teller en niet "de eerste haak": `(feat. A (B))` hoort `A (B)` te geven, niet `A (B`.
+  String totDeSluiting(String s) {
+    var diep = 0;
+    for (var i = 0; i < s.length; i++) {
+      final c = s[i];
+      if (c == '(' || c == '[') {
+        diep++;
+      } else if (c == ')' || c == ']') {
+        if (diep == 0) return s.substring(0, i);
+        diep--;
+      }
+    }
+    return s;
+  }
+
   void harvest(String s) {
     for (final part in s.split(_featRe).skip(1)) {
-      final cleaned = part.replaceAll(RegExp(r'[\)\]]\s*$'), '').trim();
+      // Geen tweede knip meer op een sluithaak: [totDeSluiting] heeft die van de gastgroep al
+      // weggelaten, en nog eens strippen at `A (B)` weer af tot `A (B`.
+      final cleaned = totDeSluiting(part).trim();
       for (final name in cleaned.split(_featSplitRe)) {
         final n = name.trim();
         if (n.isEmpty || n.length > 60) continue;

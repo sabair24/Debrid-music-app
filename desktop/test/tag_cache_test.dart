@@ -133,7 +133,11 @@ void main() {
     _schrijfFlac(nummer('1.flac'), title: 'Een', artist: 'A', album: 'X');
     await scanTagsInIsolate(muziek.path, cachePad);
 
-    final oud = File(cachePad).readAsStringSync().replaceFirst('"v":1', '"v":0');
+    // Het versienummer NIET vastpinnen: dat gaat omhoog zodra er een lezer bijkomt (op 09-09-2026
+    // van 1 naar 2 voor WavPack en DSD), en dan zou deze toets rood worden om de goede reden.
+    final oud = File(cachePad)
+        .readAsStringSync()
+        .replaceFirst(RegExp(r'"v":\d+'), '"v":0');
     File(cachePad).writeAsStringSync(oud);
 
     final na = await scanTagsInIsolate(muziek.path, cachePad);

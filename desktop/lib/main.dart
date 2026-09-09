@@ -5464,7 +5464,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       // kan er een dag komen waarop de regel "de uitgave noemt X" zegt en het venster
                       // iets anders voorstelt. Zie [waaromGeenPlaatsMet].
                       final uitleg = t != null && s.index < 0
-                          ? waaromGeenPlaatsMet(_official, t, album: album.title)
+                          ? waaromGeenPlaatsMet(_official, t,
+                              album: album.title, bezet: bezetteRijen(rows))
                           : null;
                       // Noemt de UITGAVE deze titel meer dan één keer? Dan is de looptijd wat
                       // bepaald heeft op wélke rij dit bestand kwam, en hoort dat getal erbij te
@@ -5546,7 +5547,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       for (final s in rows)
         if (s.index < 0 && s.track != null) s.track!,
     ];
-    final stappen = titelVoorstellen(_official, weesjes, album: album.title);
+    final stappen = titelVoorstellen(_official, weesjes,
+        album: album.title, bezet: bezetteRijen(rows));
     if (stappen.isEmpty) return null;
     return TextButton(
       style: TextButton.styleFrom(
