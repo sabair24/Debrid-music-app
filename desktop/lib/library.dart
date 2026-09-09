@@ -118,7 +118,16 @@ class _Covers {
 /// De cache wordt geschreven uit wat DEZE scan zag, dus een verwijderd bestand valt er vanzelf uit
 /// en het bestand kan niet ongelimiteerd groeien — anders dan `album_facts.json`, dat op 10 MB stond
 /// voor 233 albums.
-const _tagCacheVersie = 1;
+/// Versie 2 sinds 09-09-2026: WavPack leest nu zijn eigen blokkop en een DSF zijn ID3v2-blok.
+///
+/// Zonder deze ophoging verandert er voor bestaande bestanden NIETS. Dat is precies wat er gebeurde:
+/// 3.9.333 leverde de lezers uit, maar Snap! *The Power* bleef `WV · 0:00` tonen — de rij kwam uit
+/// deze cache, want naam en grootte waren onveranderd, en de nieuwe lezer draaide dus nooit. De
+/// speelbalk wist de duur wel (libmpv leest het bestand zelf), en dat verschil was het spoor.
+///
+/// De prijs is één trage start: alle bestanden worden opnieuw gelezen. Dat is precies waar dit veld
+/// voor bedoeld is.
+const _tagCacheVersie = 2;
 
 Map<String, Map<String, dynamic>> _laadTagCache(String? pad) {
   if (pad == null) return const {};
