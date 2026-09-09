@@ -231,6 +231,26 @@ void main() {
       expect(over, isEmpty);
     });
 
+    test('een peer die net nee zei wordt over ALLE wensen heen overgeslagen', () {
+      // GEMETEN op 08-09-2026: `Inhabitantz+` kostte 24,4 minuten, verdeeld over DRIE verschillende
+      // wensen — elke keer acht minuten wachten en dan "Geweigerd: Queued". `refused` staat per
+      // wens, dus elke nieuwe wens ontdekte dezelfde dode peer opnieuw.
+      final dood = _f('a.flac', user: 'Inhabitantz+');
+      final levend = _f('b.flac', user: 'iemand anders');
+      final over = DownloadManager.kandidatenVoorWens(_wens(), [dood, levend],
+          rustendePeers: {'Inhabitantz+'});
+      expect(over.map((f) => f.username), ['iemand anders']);
+    });
+
+    test('maar rust maakt de lijst nooit LEEG', () {
+      // Een optimalisatie mag "een paar kandidaten" niet in "geen enkele" veranderen: dan valt de
+      // wens stil terwijl er wel degelijk iets te proberen viel.
+      final enige = _f('a.flac', user: 'Inhabitantz+');
+      final over = DownloadManager.kandidatenVoorWens(_wens(), [enige],
+          rustendePeers: {'Inhabitantz+'});
+      expect(over.map((f) => f.username), ['Inhabitantz+']);
+    });
+
     test('een mp3 komt er niet in, ook niet als er niets anders is', () {
       // "geen mp3, ten ware ik het manueel download". Vóór het binnenhalen is dit alles wat er te
       // weten valt; de tweede laag is de meting ná het binnenhalen.

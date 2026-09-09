@@ -1064,6 +1064,39 @@ class DownloadManager extends ChangeNotifier {
   /// Hoeveel wensen één veegbeurt afwerkt.
   static const _maxWensenPerVeeg = 6;
 
+  /// Boven welke wachtrijplaats er niet meer gewacht wordt.
+  ///
+  /// GEMETEN op 08-09-2026: de jacht stond acht minuten op plaats **26549**, en een andere keer op
+  /// 2506 en op 84 — alle drie liepen ze het volle wachtbudget uit zonder één byte. Wat er wél
+  /// leverde stond op plaats 5 of 6. De plaats is meteen bekend, dus daar acht minuten op wachten
+  /// is niets anders dan de klok verzetten.
+  ///
+  /// Vijftig en niet vijf: een wachtrij kan snel leeglopen, en er is niets kapot aan even
+  /// aanschuiven. Maar op vijftig is het al uren, en er staan honderden andere kandidaten klaar.
+  static const _maxWachtrijPlaats = 50;
+
+  /// Hoe lang een peer die net "nee" zei met rust gelaten wordt, over ALLE wensen heen.
+  ///
+  /// GEMETEN op 08-09-2026: `Inhabitantz+` kostte 24,4 minuten, verdeeld over DRIE verschillende
+  /// wensen — elke keer acht minuten wachten en dan "Geweigerd: Queued". [LosslessWant.refused] is
+  /// per wens, dus elke nieuwe wens ontdekte dezelfde dode peer opnieuw. Over de hele avond ging
+  /// 41% van de wachttijd naar peers die na het volle wachtbudget niets leverden.
+  ///
+  /// Een uur, want dit is een momentopname en geen oordeel: een wachtrij die nu vol is kan straks
+  /// leeg zijn, en een firewall kan opengaan. Alleen in het geheugen — na een herstart mag iedereen
+  /// weer meedoen.
+  static const _peerRustDuur = Duration(hours: 1);
+
+  /// Wanneer een peer voor het laatst nee zei. Zie [_peerRustDuur].
+  final Map<String, DateTime> _peerRust = {};
+
+  /// De peers die nu even overgeslagen worden. Ruimt zichzelf op.
+  Set<String> _rustendePeers() {
+    final nu = DateTime.now();
+    _peerRust.removeWhere((_, wanneer) => nu.difference(wanneer) > _peerRustDuur);
+    return _peerRust.keys.toSet();
+  }
+
   /// En hoe lang die veegbeurt zelf mag duren. BEWUST onder de tik van twintig minuten
   /// (`main.dart`), zodat een veegbeurt altijd klaar is voor de volgende aan de beurt is en de
   /// tijdklok zijn betekenis houdt.
@@ -2363,7 +2396,8 @@ class DownloadManager extends ChangeNotifier {
     } catch (_) {
       return false; // geen net; de wens blijft staan en het ritme schuift niet op
     }
-    final lossless = kandidatenVoorWens(w, hits);
+    final rustend = _rustendePeers();
+    final lossless = kandidatenVoorWens(w, hits, rustendePeers: rustend);
     jacht.value = jacht.value.met(
       bezigMet: '${w.artist} — ${w.title}',
       poging: 0,
@@ -2375,6 +2409,7 @@ class DownloadManager extends ChangeNotifier {
     _log.line('wens "${w.artist} — ${w.title}": ${hits.length} treffers, '
         '${lossless.length} bruikbaar lossless (poging ${w.tries + 1}'
         '${w.refused.isEmpty ? "" : ", ${w.refused.length} peers overgeslagen"}'
+        '${rustend.isEmpty ? "" : ", ${rustend.length} peers rusten uit"}'
         '${w.nep.isEmpty ? "" : ", ${w.nep.length} betrapte uploads overgeslagen"})');
     if (lossless.isEmpty) {
       _wants.update(w.met(tries: w.tries + 1, lastTryMs: DateTime.now().millisecondsSinceEpoch));
@@ -2410,7 +2445,8 @@ class DownloadManager extends ChangeNotifier {
             // wachten. Een plaats in een wachtrij is waardevol -- weggooien is wat de app hiervoor deed.
             res = await _rawTransfer(session, f, job, () {},
                 waitInQueue: true,
-                maxWait: over < _maxWachtPerPeer ? over : _maxWachtPerPeer);
+                maxWait: over < _maxWachtPerPeer ? over : _maxWachtPerPeer,
+                maxPlaats: _maxWachtrijPlaats);
           } catch (_) {
             continue;
           }
@@ -2425,8 +2461,14 @@ class DownloadManager extends ChangeNotifier {
             } else if (reden.contains('firewall')) {
               geweigerd[f.username] = 'firewall';
             }
+            // En ook over de wensen HEEN, want dit is niet iets van dit nummer. Zie [_peerRustDuur]:
+            // `Inhabitantz+` kostte 24 minuten aan drie verschillende wensen met hetzelfde antwoord.
+            _peerRust[f.username] = DateTime.now();
             continue;
           }
+          // Een afgekapte poging is er ook een: hij stond te ver in de rij of het budget was op.
+          // Diezelfde peer heeft bij de volgende wens dezelfde rij.
+          if (res is SlskCancelled || res is SlskQueued) _peerRust[f.username] = DateTime.now();
           if (res is! SlskDone) continue;
 
           // METEN VÓÓR HET OPBERGEN, en dit ontbrak juist op deze weg.
@@ -2988,15 +3030,22 @@ class DownloadManager extends ChangeNotifier {
       gevonden <= 0 ||
       (gewenst - gevonden).abs() <= _duurSpeling;
 
-  static List<SoulseekFile> kandidatenVoorWens(LosslessWant w, List<SoulseekFile> hits) {
-    final bruikbaar = hits
+  static List<SoulseekFile> kandidatenVoorWens(LosslessWant w, List<SoulseekFile> hits,
+      {Set<String> rustendePeers = const {}}) {
+    List<SoulseekFile> zeef(bool metRust) => hits
         .where((f) => isLossless(f) && !isMultichannel(f))
         .where((f) => zelfdeLengte(w.authority?.seconds, f.durationSec))
         .where((f) => !w.refused.containsKey(f.username))
+        .where((f) => !metRust || !rustendePeers.contains(f.username))
         .where((f) => !w.nep.any((n) =>
             zelfdeBestand(f.filename, f.size, f.durationSec, n.filename, n.size, n.durationSec)))
         .toList()
       ..sort(_rankSlsk);
+    // Een optimalisatie mag "een paar kandidaten" nooit in "geen enkele" veranderen. Blijft er na
+    // het overslaan van de rustende peers niets over, dan tellen ze gewoon weer mee — beter een
+    // kansloze poging dan een wens die stilvalt omdat de lijst op is.
+    var bruikbaar = zeef(true);
+    if (bruikbaar.isEmpty) bruikbaar = zeef(false);
     final perPeer = <String>{};
     return [
       for (final f in bruikbaar)
@@ -3046,6 +3095,7 @@ class DownloadManager extends ChangeNotifier {
       {bool waitInQueue = true,
       Duration maxWait = const Duration(minutes: 30),
       SlskCancel? cancel,
+      int? maxPlaats,
       bool Function()? claim}) async {
     // Land in a staging folder; placeFile() moves it into Albums/Singles/Compilaties after.
     // Per-PEER subfolder: candidates for the same track share a display name, so a slow attempt
@@ -3060,6 +3110,9 @@ class DownloadManager extends ChangeNotifier {
     // download die in een wachtrij staat onzichtbaar in het logboek tot hij eindigt -- en dat is juist
     // het geval dat we willen kunnen nakijken. Bleek bij het uittesten van het logboek zelf.
     var laatstePlaats = -1;
+    // Een eigen stopknop, alleen als er een plaatsgrens is en de aanroeper er niet al een heeft.
+    // Zie [_maxWachtrijPlaats]: acht minuten wachten op plaats 26549 is de klok verzetten.
+    final plaatsStop = maxPlaats != null && cancel == null ? SlskCancel() : null;
     return _cleanStaging(dir, dest, session.download(file, dest, (rec, tot) {
       if (!settled && rec > 0) {
         settled = true;
@@ -3087,6 +3140,10 @@ class DownloadManager extends ChangeNotifier {
         laatstePlaats = q.place;
         _log.line('   ${file.username}: wachtrij${q.place > 0 ? " plaats ${q.place}" : " (plaats onbekend)"}');
       }
+      if (maxPlaats != null && q.place > maxPlaats && plaatsStop != null && !plaatsStop.isCancelled) {
+        _log.line('   ${file.username}: plaats ${q.place} is kansloos — niet op wachten, volgende');
+        plaatsStop.cancel();
+      }
       // In a race the job line belongs to the race, which knows about all the runners; one of
       // twenty peers announcing its queue position would just fight the other nineteen for it.
       if (claim == null) {
@@ -3096,7 +3153,7 @@ class DownloadManager extends ChangeNotifier {
         _meldVoortgang();
       }
       onQueued();
-    }, waitInQueue: waitInQueue, maxWait: maxWait, cancel: cancel));
+    }, waitInQueue: waitInQueue, maxWait: maxWait, cancel: cancel ?? plaatsStop));
   }
 
   /// Add a torrent download. Non-blocking: a "preparing" job shows TorBox's fetch progress
