@@ -16899,33 +16899,50 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
   /// Zodat een tweede tik tijdens het schuiven geen tweede pagina opent.
   bool _bezig = false;
 
-  /// Hoe lang de cd erover doet. Gelijk aan de uitschuif van [AlbumArt] zelf (750 ms) zou hier te
-  /// lang zijn — je wacht erop voor je verder mag. Dit is het punt waarop hij duidelijk uit de hoes
-  /// is; de rest van de beweging loopt door terwijl de pagina opent.
+  /// Hoe lang de cd erover doet als hij nog IN de hoes zat. Gelijk aan de uitschuif van [AlbumArt]
+  /// zelf (750 ms) zou hier te lang zijn — je wacht erop voor je verder mag.
   static const _schuifDuur = Duration(milliseconds: 420);
+
+  /// Hoe ver de plaat naast de hoes mag komen.
+  ///
+  /// Ruimer dan de 0.62 van het speelscherm en de albumpagina: daar deelt de hoes zijn breedte met
+  /// knoppen en tekst, hier staat hij alleen in zijn paneel. Op 0.85 komt bijna de hele plaat vrij,
+  /// en dát is wat het gebaar leesbaar maakt — je ziet een schijf, geen sikkel.
+  static const _reis = 0.85;
 
   static const _trap = [0.0, 72.0, 24.0, 128.0, 48.0, 96.0];
 
-  /// Een plaat openen: eerst de cd eruit, dan de pagina.
+  /// Aanwijzen laat de plaat uit de hoes komen.
   ///
-  /// Alleen waar het paneel er ook IS. Op een smal scherm en op tv staat er geen hoes naast de
-  /// lijst, en dan zou dit een wachttijd zijn zonder dat er iets te zien valt.
+  /// **Waarom aanwijzen en niet aantikken.** Gevraagd op 10-09-2026: *"als ik hover over de album
+  /// moet telkens de cd uitschuiven, meer uitschuiven en met een kwartdraai, alsof ik die zijwaarts
+  /// uit de hoes zou halen"*. Hiervóór gebeurde het bij de klik, en dan zie je het nauwelijks: de
+  /// pagina gaat er meteen overheen. Bij het aanwijzen heb je er de tijd voor, en dan is de tik
+  /// gewoon weer een tik.
+  ///
+  /// Elke plaat schuift OPNIEUW uit; zie [AlbumArt.didUpdateWidget]. Anders zou de tweede plaat die
+  /// je aanwijst er al uit staan omdat de eerste dat deed.
+  void _wijsAan(int i) {
+    if (!mounted) return;
+    setState(() {
+      _aan = i;
+      _schuift = true;
+    });
+  }
+
+  /// Een plaat openen. Staat de cd er al uit (je wees hem net aan), dan hoeft er niets gewacht te
+  /// worden; op een toestel zonder muis is er geen hover geweest en schuift hij eerst nog uit.
   Future<void> _open(Album a, int i, {required bool metPaneel}) async {
-    if (!metPaneel) {
+    if (!metPaneel || _schuift) {
       openPagina(context, (_) => AlbumDetailPage(album: a));
       return;
     }
     if (_bezig) return;
     _bezig = true;
-    setState(() {
-      _aan = i;
-      _schuift = true;
-    });
+    _wijsAan(i);
     await Future<void>.delayed(_schuifDuur);
     if (!mounted) return;
     openPagina(context, (_) => AlbumDetailPage(album: a));
-    // Terug in de hoes, zodat het paneel klaarstaat als je terugkomt.
-    if (mounted) setState(() => _schuift = false);
     _bezig = false;
   }
 
@@ -16951,7 +16968,16 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
           ? Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(child: lijst),
+                // Weg van de lijst is de plaat weer in de hoes. Zonder dit blijft de laatste die je
+                // aanwees eeuwig uitgeschoven staan, en dan is het geen gebaar meer maar een stand.
+                Expanded(
+                  child: MouseRegion(
+                    onExit: (_) {
+                      if (mounted) setState(() => _schuift = false);
+                    },
+                    child: lijst,
+                  ),
+                ),
                 const SizedBox(width: 56),
                 _paneel(widget.albums[aan]),
               ],
@@ -17022,7 +17048,7 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
     // MouseRegion buiten de Pressable: aanwijzen is kijken, aantikken is openen. Op een toestel
     // zonder muis gebeurt het eerste nooit en blijft de nieuwste plaat in het paneel staan.
     return MouseRegion(
-      onEnter: (_) => setState(() => _aan = i),
+      onEnter: (_) => metPaneel ? _wijsAan(i) : setState(() => _aan = i),
       child: Pressable(
         onPressed: () => unawaited(_open(a, i, metPaneel: metPaneel)),
         borderRadius: BorderRadius.circular(6),
@@ -17042,11 +17068,15 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
 
   Widget _paneel(Album a) {
     final bib = context.watch<LibraryStore>();
+    // Breder waar het kan, want de plaat komt nu bijna helemaal vrij en moet ergens heen. Op een
+    // scherm van 1240 punten en meer past 520 zonder dat de titels ernaast in de knel komen; daar
+    // staan namen als "BLOOD ON THE DANCE FLOOR (HISTORY IN THE MIX)" en die zijn lang.
+    final vak = MediaQuery.sizeOf(context).width >= 1240 ? 520.0 : 420.0;
     // De hoes is smaller dan het paneel, want de cd moet ergens heen. Dezelfde rekensom als op het
     // speelscherm: `AlbumArt` reserveert `maat × (1 + reisfactor)` aan breedte.
-    final hoes = 420 / (1 + discTravelFactor(context));
+    final hoes = vak / (1 + _reis);
     return SizedBox(
-        width: 420,
+        width: vak,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
@@ -17066,6 +17096,7 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
               pinnedMbid: bib.pinnedMbid(a) ?? persingUitHerkomst(a.resolvedFrom).mbid,
               roles: bib.albumArtRoles(a.artist, a.title),
               uitgeschoven: _schuift,
+              reisFactor: _reis,
             ),
             const SizedBox(height: 18),
             Text(a.title.toUpperCase(),
@@ -21103,9 +21134,16 @@ class AlbumArt extends StatefulWidget {
   ///
   /// Tot nu toe was uitschuiven en draaien één ding, aan [playing] gekoppeld. Dat klopt op het
   /// speelscherm, maar niet waar het gebaar iets ánders zegt: op de artiestpagina komt de cd uit de
-  /// hoes op het moment dat je de plaat aantikt, als aankondiging van de pagina die opengaat. Hij
-  /// draait daar niet — er speelt niets.
+  /// hoes zodra je een plaat aanwijst. Hij draait daar niet rond — er speelt niets — maar maakt één
+  /// KWARTSLAG mee naar buiten, alsof je hem zijwaarts uit het hoesje trekt.
   final bool uitgeschoven;
+
+  /// Hoeveel ruimte de plaat naast de hoes krijgt, als deel van de hoesbreedte.
+  ///
+  /// Leeg laten geeft [discTravelFactor] — wat het speelscherm en de albumpagina gebruiken, waar de
+  /// breedte gedeeld moet worden met knoppen en tekst. Op de artiestpagina staat de hoes alleen in
+  /// zijn paneel, en daar mag de plaat verder naar buiten: dat is het hele gebaar.
+  final double? reisFactor;
 
   /// The Discogs release the user pinned, if any — see LibraryStore.pinnedRelease.
   final int? pinned;
@@ -21138,6 +21176,7 @@ class AlbumArt extends StatefulWidget {
     this.trackCount = 0,
     this.playing = false,
     this.uitgeschoven = false,
+    this.reisFactor,
     this.pinned,
     this.pinnedMbid,
     this.onFront,
@@ -21235,6 +21274,12 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
       _load();
     }
     if (old.playing != widget.playing || old.uitgeschoven != widget.uitgeschoven) _sync();
+    // Wijs je in een lijst de volgende plaat aan, dan hoort die er ook uit te komen — niet er al
+    // uit te STAAN omdat de vorige dat deed. Vandaar vanaf nul, en niet `forward()`: die doet niets
+    // als hij al op één staat.
+    if (old.album != widget.album && widget.uitgeschoven && !widget.playing) {
+      _slide.forward(from: 0);
+    }
   }
 
   void _sync() {
@@ -21330,7 +21375,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     // percent of it is taken off the sleeve and off whatever sits beside it — and on the player
     // screen that is the row of transport buttons, which has to be there. Sideways and on the TV
     // there is width to spare, so the disc gets its full stride.
-    final travel = s * discTravelFactor(context);
+    final travel = s * (widget.reisFactor ?? discTravelFactor(context));
 
     final sleeve = ClipRRect(
       borderRadius: BorderRadius.circular(10),
@@ -21375,14 +21420,29 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     //
     // With the clip inside a RepaintBoundary and the rotation outside it, the mask is rasterised
     // ONCE into a layer and each frame only moves a transform.
-    final spinningDisc = RotationTransition(
-      turns: _spin,
-      child: RepaintBoundary(
-        child: ClipPath(
-          clipper: const _DiscClipper(),
-          child: schijf,
-        ),
+    // De draaiing is twee dingen bij elkaar, en het kind blijft ongemoeid: het masker wordt nog
+    // steeds één keer gerasterd en er beweegt per beeld alleen een transform. Zie de uitleg
+    // hierboven — dat was een gemeten haperingsoorzaak.
+    //
+    //  * `_spin` draait rond zolang de plaat speelt;
+    //  * de KWARTSLAG hoort bij het uitschuiven zonder spelen. Een plaat die je uit een hoesje
+    //    trekt draait mee met je hand; zonder die slag ziet het eruit alsof hij naar rechts
+    //    glijdt, en dat doet een cd in een hoesje nooit.
+    final gedraaid = RepaintBoundary(
+      child: ClipPath(clipper: const _DiscClipper(), child: schijf),
+    );
+    final spinningDisc = AnimatedBuilder(
+      animation: Listenable.merge([_spin, _slide]),
+      builder: (_, child) => Transform.rotate(
+        angle: (_spin.value +
+                (widget.uitgeschoven && !widget.playing
+                    ? .25 * Curves.easeOutCubic.transform(_slide.value)
+                    : 0)) *
+            2 *
+            math.pi,
+        child: child,
       ),
+      child: gedraaid,
     );
 
     return SizedBox(
