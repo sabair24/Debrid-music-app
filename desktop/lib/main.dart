@@ -16858,192 +16858,6 @@ class _GetekendeSchijf extends StatelessWidget {
   }
 }
 
-/// Een hoes waar bij een tik de cd uit schuift, en die dan pas de plaat opent.
-///
-/// **Waarvoor dit er is.** Gevraagd op 10-09-2026: *"bij artiesten pagina bij hun albums wil ik als
-/// ik op een album klik, de cd uit de albumhoes schuift. nu is er enkel de album hoes."* De
-/// albumpagina waar je daarna belandt heeft de plaat al naast de hoes staan; dit gebaar is dus geen
-/// versiering maar de aankondiging ervan.
-///
-/// **Waarom hij krimpt in plaats van uit te steken.** Een tegel staat in een rastercel en die cel is
-/// precies zo breed als de hoes. Een cd die eruit schuift heeft ruimte nodig die er niet is: hij zou
-/// over de buurtegel heen tekenen, en welke van de twee bovenop komt hangt af van de volgorde in het
-/// raster — dus soms wél en soms niet zichtbaar. Daarom schaalt het geheel terug terwijl de plaat
-/// naar buiten komt: hoes plus cd samen blijven binnen de cel. Het leest als een plaat die je uit de
-/// hoes trekt terwijl de hoes een stapje terugdoet, en het kan nooit iets afsnijden.
-///
-/// **En de schijf is getekend, niet beweerd.** Zie [_GetekendeSchijf]: dit zegt niet dat er een scan
-/// van deze cd bestaat — het is een schijf met de hoes als etiket. Op deze pagina staan platen die
-/// je niet hebt, dus er is per definitie geen scan om te tonen.
-class SchuivendeHoes extends StatefulWidget {
-  const SchuivendeHoes({
-    super.key,
-    required this.maat,
-    required this.hoes,
-    required this.onOpen,
-  });
-
-  final double maat;
-
-  /// De hoes, op de maat die hier bepaald wordt.
-  final Widget Function(double maat) hoes;
-
-  /// Wat er gebeurt zodra de plaat eruit is.
-  final VoidCallback onOpen;
-
-  /// Hoe ver de plaat naar buiten komt, als deel van de hoesbreedte.
-  ///
-  /// Kleiner dan de 0.62 van de albumpagina — dáár is de ruimte gereserveerd, hier gaat elke procent
-  /// van de hoes af — maar niet zó klein dat er niets te zien valt. Eerst op 0.30 gezet en
-  /// getekend: dan blijft er een sikkel van een paar punten over, in het donkerste deel van de
-  /// schijf, en dat las als een schaduw achter de hoes in plaats van als een plaat.
-  ///
-  /// Op 0.44 komt het gat van de cd net vrij, en dat is precies het teken dat een schijf een schijf
-  /// maakt. De hoes staat dan op 69% van zijn maat — merkbaar, maar het gebeurt alleen tijdens de
-  /// drie tienden van een seconde vóór de plaat opengaat.
-  static const reis = 0.44;
-
-  @override
-  State<SchuivendeHoes> createState() => _SchuivendeHoesState();
-}
-
-class _SchuivendeHoesState extends State<SchuivendeHoes> with SingleTickerProviderStateMixin {
-  late final AnimationController _uit = AnimationController(
-    vsync: this,
-    // Kort genoeg om geen wachttijd te zijn, lang genoeg om te zien wat er gebeurt. De weg terug mag
-    // sneller: die kijkt niemand af, hij ruimt alleen op als je terugkomt.
-    duration: const Duration(milliseconds: 300),
-    reverseDuration: const Duration(milliseconds: 180),
-  );
-
-  bool _bezig = false;
-
-  @override
-  void dispose() {
-    _uit.dispose();
-    super.dispose();
-  }
-
-  Future<void> _tik() async {
-    // Twee keer tikken mag geen twee pagina's openen.
-    if (_bezig) return;
-    _bezig = true;
-    try {
-      await _uit.forward();
-    } catch (_) {/* weggehaald tijdens de animatie */}
-    if (!mounted) return;
-    widget.onOpen();
-    // Terug in de hoes, zodat de tegel klaarstaat als je terugkomt.
-    if (mounted) unawaited(_uit.reverse());
-    _bezig = false;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final s = widget.maat;
-    // De hoes op volle maat, en de plaat iets kleiner — zoals een cd in een hoesje past.
-    final hoes = widget.hoes(s);
-    final schijf = _TegelSchijf(maat: s * .92, label: widget.hoes);
-
-    return Semantics(
-      button: true,
-      child: GestureDetector(
-        onTap: _tik,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: AnimatedBuilder(
-            animation: _uit,
-            builder: (_, __) {
-              final t = Curves.easeOutCubic.transform(_uit.value);
-              final reis = s * SchuivendeHoes.reis;
-              // Alles samen blijft binnen de cel: hoe verder de plaat naar buiten komt, hoe verder
-              // het geheel terugschaalt. Om de LINKERrand, want daar blijft de hoes staan.
-              return Transform.scale(
-                scale: 1 / (1 + SchuivendeHoes.reis * t),
-                alignment: Alignment.centerLeft,
-                child: SizedBox(
-                  width: s,
-                  height: s,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      // Achter de hoes, en verticaal gecentreerd zoals een cd in een hoesje ligt.
-                      Positioned(
-                        left: reis * t,
-                        top: s * .04,
-                        child: schijf,
-                      ),
-                      hoes,
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      ),
-    );
-  }
-
-}
-
-/// De schijf zoals hij in een TEGEL nodig is: klein, en met het licht aan de goede kant.
-///
-/// **Waarom niet [_GetekendeSchijf].** Die is gemaakt voor de albumpagina, waar de plaat groot is en
-/// vrij ligt. Zijn glans zit linksboven — precies het deel dat in een tegel áchter de hoes blijft —
-/// en wat eruit komt is de donkerste rand. Getekend en bekeken: dat las als een schaduw achter de
-/// hoes, niet als een cd.
-///
-/// Hier staat het licht dus rechts, waar de plaat vandaan komt, met een dunne lichte rand eromheen.
-/// Dat is ook wat er echt gebeurt: het stuk dat uit de hoes steekt vangt het licht van de kamer.
-class _TegelSchijf extends StatelessWidget {
-  const _TegelSchijf({required this.maat, required this.label});
-  final double maat;
-
-  /// De hoes, die hier als etiket in het midden ligt — zoals de plaat zelf bedrukt is.
-  final Widget Function(double maat) label;
-
-  @override
-  Widget build(BuildContext context) {
-    final etiket = maat * .34;
-    return SizedBox(
-      width: maat,
-      height: maat,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          DecoratedBox(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: const RadialGradient(
-                // Rechtsboven, dus in het deel dat uit de hoes komt.
-                center: Alignment(.42, -.30),
-                radius: .95,
-                colors: [Color(0xFF6E7590), Color(0xFF2A2E3C), Color(0xFF14161E)],
-                stops: [0, .52, 1],
-              ),
-              // De rand is wat een schijf van een schaduw onderscheidt zodra hij klein is.
-              border: Border.all(color: Colors.white.withValues(alpha: .16), width: .8),
-            ),
-            child: SizedBox(width: maat, height: maat),
-          ),
-          ClipOval(child: SizedBox(width: etiket, height: etiket, child: label(etiket))),
-          // Het gat. Dezelfde verhouding als een echte cd: 15 op 120.
-          Container(
-            width: maat * (15 / 120),
-            height: maat * (15 / 120),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: _bg,
-              border: Border.all(color: Colors.white.withValues(alpha: .10), width: .6),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 /// De platen die je van deze artiest hebt, als getrapte genummerde lijst.
 ///
 /// **Waarom een lijst en geen raster.** Een raster van vierkante tegels zegt over elke plaat
@@ -17071,7 +16885,49 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
   /// Welke plaat het paneel ernaast toont. Begint bij de nieuwste — de lijst staat op jaar.
   int _aan = 0;
 
+  /// Of de cd op dit moment uit de hoes in het paneel komt.
+  ///
+  /// **Waarvoor dit er is.** Gevraagd op 10-09-2026: *"doe op deze pagina uit de hoes schuivend bij
+  /// het klikken van de album, gebruik de fotos van cd die ik al heb net zoals bij men draaiende cd
+  /// op now playing screen"*. Het paneel toont de plaat die je aanwijst; tik je hem aan, dan komt de
+  /// cd eruit en gaat de albumpagina daarna pas open — waar diezelfde plaat al naast de hoes staat.
+  ///
+  /// De schijf is hier een echte SCAN en geen tekening: [AlbumArt] zoekt hem op bij de persing die
+  /// voor dit album is vastgezet, precies zoals het speelscherm dat doet.
+  bool _schuift = false;
+
+  /// Zodat een tweede tik tijdens het schuiven geen tweede pagina opent.
+  bool _bezig = false;
+
+  /// Hoe lang de cd erover doet. Gelijk aan de uitschuif van [AlbumArt] zelf (750 ms) zou hier te
+  /// lang zijn — je wacht erop voor je verder mag. Dit is het punt waarop hij duidelijk uit de hoes
+  /// is; de rest van de beweging loopt door terwijl de pagina opent.
+  static const _schuifDuur = Duration(milliseconds: 420);
+
   static const _trap = [0.0, 72.0, 24.0, 128.0, 48.0, 96.0];
+
+  /// Een plaat openen: eerst de cd eruit, dan de pagina.
+  ///
+  /// Alleen waar het paneel er ook IS. Op een smal scherm en op tv staat er geen hoes naast de
+  /// lijst, en dan zou dit een wachttijd zijn zonder dat er iets te zien valt.
+  Future<void> _open(Album a, int i, {required bool metPaneel}) async {
+    if (!metPaneel) {
+      openPagina(context, (_) => AlbumDetailPage(album: a));
+      return;
+    }
+    if (_bezig) return;
+    _bezig = true;
+    setState(() {
+      _aan = i;
+      _schuift = true;
+    });
+    await Future<void>.delayed(_schuifDuur);
+    if (!mounted) return;
+    openPagina(context, (_) => AlbumDetailPage(album: a));
+    // Terug in de hoes, zodat het paneel klaarstaat als je terugkomt.
+    if (mounted) setState(() => _schuift = false);
+    _bezig = false;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -17085,7 +16941,7 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
       mainAxisSize: MainAxisSize.min,
       children: [
         for (var i = 0; i < widget.albums.length; i++)
-          _rij(context, i, aan, smal: smal, recht: isTv),
+          _rij(context, i, aan, smal: smal, recht: isTv, metPaneel: breed),
       ],
     );
 
@@ -17104,7 +16960,8 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
     );
   }
 
-  Widget _rij(BuildContext context, int i, int aan, {required bool smal, required bool recht}) {
+  Widget _rij(BuildContext context, int i, int aan,
+      {required bool smal, required bool recht, required bool metPaneel}) {
     final a = widget.albums[i];
     final gekozen = i == aan;
     final inspring = recht ? 0.0 : (smal ? (i.isEven ? 0.0 : 20.0) : _trap[i % _trap.length]);
@@ -17167,7 +17024,7 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
     return MouseRegion(
       onEnter: (_) => setState(() => _aan = i),
       child: Pressable(
-        onPressed: () => openPagina(context, (_) => AlbumDetailPage(album: a)),
+        onPressed: () => unawaited(_open(a, i, metPaneel: metPaneel)),
         borderRadius: BorderRadius.circular(6),
         // Geen ring om een regel die al onderstreept wordt; op tv wél, want daar is de ring het
         // enige dat zegt waar je bent.
@@ -17183,15 +17040,33 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
     );
   }
 
-  Widget _paneel(Album a) => SizedBox(
+  Widget _paneel(Album a) {
+    final bib = context.watch<LibraryStore>();
+    // De hoes is smaller dan het paneel, want de cd moet ergens heen. Dezelfde rekensom als op het
+    // speelscherm: `AlbumArt` reserveert `maat × (1 + reisfactor)` aan breedte.
+    final hoes = 420 / (1 + discTravelFactor(context));
+    return SizedBox(
         width: 420,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            // 420 logische punten, dus op een scherm met dubbele dichtheid wordt hij op 840
-            // gedecodeerd — `decodeWidth` doet dat, geklemd op vier keer.
-            cover(a.cover, size: 420, radius: 0),
+            // De echte scans, gezocht bij de persing die voor deze plaat is vastgezet — precies
+            // dezelfde weg als de albumpagina en het speelscherm. Zo is de cd die hier uit de hoes
+            // komt jouw cd, en niet een tekening die erop lijkt.
+            AlbumArt(
+              artist: a.artist,
+              album: a.title,
+              identity: bib.uidOf(a),
+              size: hoes,
+              fallback: a.cover,
+              chosen: a.correctedCover,
+              trackCount: a.tracks.length,
+              pinned: bib.pinnedRelease(a) ?? persingUitHerkomst(a.resolvedFrom).release,
+              pinnedMbid: bib.pinnedMbid(a) ?? persingUitHerkomst(a.resolvedFrom).mbid,
+              roles: bib.albumArtRoles(a.artist, a.title),
+              uitgeschoven: _schuift,
+            ),
             const SizedBox(height: 18),
             Text(a.title.toUpperCase(),
                 maxLines: 2,
@@ -17207,8 +17082,8 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
               style: kOpschrift,
             ),
           ],
-        ),
-      );
+        ));
+  }
 }
 
 /// De kop van de artiestpagina: de naam paginabreed, met de artiest ernaast uitgeknipt.
@@ -18544,9 +18419,6 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       if (al.isSingle) 'Single' else if (al.trackCount > 0) '${al.trackCount} nummers',
     ].join(' · ');
     return InkWell(
-      // De hoes heeft zijn eigen gebaar (de cd schuift eruit en opent dán pas); dat wint vanzelf,
-      // want de binnenste gebarenherkenner krijgt de tik. Dit blijft staan voor de TITEL en de
-      // regel eronder — die waren altijd al aanklikbaar en zouden dat anders stilletjes verliezen.
       onTap: () => openPagina(context, (_) => AlbumBrowsePage(widget.artist.name, al)),
       borderRadius: BorderRadius.circular(12),
       child: Column(
@@ -18555,11 +18427,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           Expanded(
             child: LayoutBuilder(
               builder: (_, c) => Stack(children: [
-                SchuivendeHoes(
-                  maat: c.maxWidth,
-                  hoes: (m) => _netCover(al.cover, size: m),
-                  onOpen: () => openPagina(context, (_) => AlbumBrowsePage(widget.artist.name, al)),
-                ),
+                _netCover(al.cover, size: c.maxWidth),
                 // Which of the discography you already hold — so the gap in the collection is the
                 // thing you can see, rather than something to work out by comparing two lists.
                 if (owned)
@@ -21231,6 +21099,14 @@ class AlbumArt extends StatefulWidget {
   final int trackCount;
   final bool playing;
 
+  /// De plaat uit de hoes schuiven ZONDER dat er iets speelt.
+  ///
+  /// Tot nu toe was uitschuiven en draaien één ding, aan [playing] gekoppeld. Dat klopt op het
+  /// speelscherm, maar niet waar het gebaar iets ánders zegt: op de artiestpagina komt de cd uit de
+  /// hoes op het moment dat je de plaat aantikt, als aankondiging van de pagina die opengaat. Hij
+  /// draait daar niet — er speelt niets.
+  final bool uitgeschoven;
+
   /// The Discogs release the user pinned, if any — see LibraryStore.pinnedRelease.
   final int? pinned;
 
@@ -21261,6 +21137,7 @@ class AlbumArt extends StatefulWidget {
     this.chosen,
     this.trackCount = 0,
     this.playing = false,
+    this.uitgeschoven = false,
     this.pinned,
     this.pinnedMbid,
     this.onFront,
@@ -21357,10 +21234,16 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
       // losing the choice that was just made.
       _load();
     }
-    if (old.playing != widget.playing) _sync();
+    if (old.playing != widget.playing || old.uitgeschoven != widget.uitgeschoven) _sync();
   }
 
   void _sync() {
+    // Uitschuiven en draaien zijn twee dingen. Wat speelt doet allebei; wat alleen aangetikt is
+    // schuift enkel uit — zie [AlbumArt.uitgeschoven].
+    if (!widget.playing && widget.uitgeschoven) {
+      _slide.forward();
+      return;
+    }
     if (widget.playing) {
       _slide.forward();
       if (!_spin.isAnimating) {
