@@ -7,6 +7,7 @@ import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'album_facts.dart';
 import 'album_id.dart';
 import 'beeldvorm.dart';
+import 'cachesleutel.dart';
 import 'completeness.dart';
 import 'audioformaten.dart';
 import 'discogs.dart' show persingUitHerkomst;
@@ -644,12 +645,7 @@ String hoesSleutel(String pad, int mtime, int grootte) {
   // Zie [groen-is-niet-goed]: de bank was groen en klopte niet.
   //
   // Mtime en grootte hoeven niet gehasht: dat zijn gewoon getallen.
-  var h = 0x811c9dc5;
-  for (final c in pad.codeUnits) {
-    h ^= c;
-    h = (h * 0x01000193) & 0xFFFFFFFF;
-  }
-  return '${h.toRadixString(16)}_${grootte.toRadixString(36)}_${mtime.toRadixString(36)}';
+  return '${fnv1a(pad)}_${grootte.toRadixString(36)}_${mtime.toRadixString(36)}';
 }
 
 /// [teLezen] zijn de albums die nog geen hoes hebben; [alleEerste] is het eerste nummer van ÉLK

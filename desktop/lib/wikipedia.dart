@@ -31,6 +31,7 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import 'cachesleutel.dart';
 import 'json_body.dart';
 import 'musicbrainz.dart';
 import 'organize.dart' show normKey;
@@ -219,20 +220,10 @@ class WikipediaService {
 
   Directory get _dir => Directory('$appDir${Platform.pathSeparator}wikipedia');
 
-  /// FNV-1a. De zesde kopie in deze repo; zie de losse opruimtaak daarvoor.
-  static String _fnv(String s) {
-    var h = 0x811c9dc5;
-    for (final c in s.codeUnits) {
-      h ^= c;
-      h = (h * 0x01000193) & 0xFFFFFFFF;
-    }
-    return h.toRadixString(16);
-  }
-
   File _naamFile(String naam) =>
-      File('${_dir.path}${Platform.pathSeparator}${_fnv('a1|${naam.toLowerCase()}')}.json');
+      File('${_dir.path}${Platform.pathSeparator}${fnv1a('a1|${naam.toLowerCase()}')}.json');
   File _artikelFile(String taal, String titel) =>
-      File('${_dir.path}${Platform.pathSeparator}${_fnv('t1|$taal|$titel')}.json');
+      File('${_dir.path}${Platform.pathSeparator}${fnv1a('t1|$taal|$titel')}.json');
 
   // ── Mistekens ─────────────────────────────────────────────────────────────
   // Dezelfde vorm als `musicbrainz.dart`: een gewoon JSON-bestand met alleen `_miss`, herkenbaar

@@ -33,6 +33,7 @@ import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 
+import 'cachesleutel.dart';
 import 'completeness.dart';
 import 'editions.dart';
 import 'models.dart';
@@ -313,14 +314,12 @@ bool needsResolve(
 /// re-deriving six requests' worth of answer because a path changed would defeat the point.
 String trackSetHashOf(Iterable<Track> tracks) {
   final names = [for (final t in tracks) _baseName(t.path)]..sort();
-  var h = 0x811c9dc5;
+  var h = fnvBegin;
   for (final n in names) {
-    for (final c in n.codeUnits) {
-      h ^= c;
-      h = (h * 0x01000193) & 0xFFFFFFFF;
-    }
-    h ^= 0x2f; // a separator, so ["ab","c"] and ["a","bc"] are not the same record
-    h = (h * 0x01000193) & 0xFFFFFFFF;
+    // Elke naam MET de schuine streep erachter, ook de laatste: zonder die scheider zijn
+    // ["ab","c"] en ["a","bc"] dezelfde plaat. Het is dezelfde 0x2f als altijd, dus de namen op
+    // schijf blijven staan waar ze stonden.
+    h = fnv1aVan('$n/', h);
   }
   return '${names.length}-${h.toRadixString(16)}';
 }

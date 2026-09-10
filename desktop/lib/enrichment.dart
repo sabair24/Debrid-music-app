@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
+import 'cachesleutel.dart';
 import 'json_body.dart';
 import 'discogs.dart';
 import 'models.dart';
@@ -190,30 +191,11 @@ class CoverEnricher {
   /// dit gebeurt alleen bij het bouwen van een catalogusmomentopname — niet per verzoek.
   static String hoesMerk(List<int>? bytes) {
     if (bytes == null || bytes.length < 100) return '';
-    var h = 0x811c9dc5;
-    for (final c in bytes.length.toString().codeUnits) {
-      h ^= c;
-      h = (h * 0x01000193) & 0xFFFFFFFF;
-    }
-    for (final b in bytes) {
-      h ^= b & 0xff;
-      h = (h * 0x01000193) & 0xFFFFFFFF;
-    }
-    return h.toRadixString(16);
+    // Eerst de lengte als tekst, dan de bytes zelf — twee stukken achter elkaar in dezelfde hash.
+    return fnv1aBytes(bytes, fnv1aVan(bytes.length.toString())).toRadixString(16);
   }
 
-  // Stable FNV-1a hash (Dart's String.hashCode is randomized per run, so it can't
-  // be used for a persistent on-disk cache key).
-  static String _fnv(String s) {
-    var h = 0x811c9dc5;
-    for (final c in s.codeUnits) {
-      h ^= c;
-      h = (h * 0x01000193) & 0xFFFFFFFF;
-    }
-    return h.toRadixString(16);
-  }
-
-  String keyFor(Album a) => _fnv('${a.artist.toLowerCase()}|${a.title.toLowerCase()}');
+  String keyFor(Album a) => fnv1a('${a.artist.toLowerCase()}|${a.title.toLowerCase()}');
 
   /// Het merkteken van de hoes die op de telefoon in [cacheDir] ligt.
   File _merkFile(Album a) => File('${cacheDir.path}${Platform.pathSeparator}${keyFor(a)}.merk');
@@ -294,8 +276,8 @@ class CoverEnricher {
   /// cover the user chose by hand was gone. Nobody would connect that to a rename days earlier.
   Future<void> reKeyFixedCover(
       String oldArtist, String oldTitle, String newArtist, String newTitle) async {
-    final from = _fnv('${oldArtist.toLowerCase()}|${oldTitle.toLowerCase()}');
-    final to = _fnv('${newArtist.toLowerCase()}|${newTitle.toLowerCase()}');
+    final from = fnv1a('${oldArtist.toLowerCase()}|${oldTitle.toLowerCase()}');
+    final to = fnv1a('${newArtist.toLowerCase()}|${newTitle.toLowerCase()}');
     if (from == to) return;
     // Both caches are keyed the same way, so both go stale on the same rename.
     for (final (dir, ext) in [(fixDir, 'jpg'), (resolvedDir, 'jpg'), (resolvedDir, 'from')]) {
@@ -309,8 +291,8 @@ class CoverEnricher {
 
   /// Download raw image bytes for a chosen cover URL (with the right User-Agent).
   Future<Uint8List?> downloadImage(String url) => _download(url);
-  File _artistFile(String name) => File('${artistDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.jpg');
-  File _bioFile(String name) => File('${bioDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.txt');
+  File _artistFile(String name) => File('${artistDir.path}${Platform.pathSeparator}${fnv1a(name.toLowerCase())}.jpg');
+  File _bioFile(String name) => File('${bioDir.path}${Platform.pathSeparator}${fnv1a(name.toLowerCase())}.txt');
 
   /// Put bytes in the cover cache that did not come from the web enricher — on a Mac or an iPad
   /// the covers arrive from the paired PC, and caching them there means the second start shows the
@@ -531,7 +513,7 @@ class CoverEnricher {
 
   Directory get _artistArtDir => Directory(_dir('artistart'));
   File _artistArtFile(String name) =>
-      File('${_artistArtDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.json');
+      File('${_artistArtDir.path}${Platform.pathSeparator}${fnv1a(name.toLowerCase())}.json');
 
   /// Het briefje "hier hebben we gekeken en niets gevonden".
   ///
@@ -544,7 +526,7 @@ class CoverEnricher {
   /// ([searchedAndEmpty]), en om dezelfde reden veertien en niet voorgoed: catalogi krijgen er
   /// beelden bij.
   File _artistArtMissFile(String name) =>
-      File('${_artistArtDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.none');
+      File('${_artistArtDir.path}${Platform.pathSeparator}${fnv1a(name.toLowerCase())}.none');
 
   Future<bool> _artiestBeeldGezochtEnLeeg(String name) async {
     try {
@@ -567,7 +549,7 @@ class CoverEnricher {
 
   Future<Uint8List?> _cachedArt(String name, String kind, String? url) async {
     if (url == null) return null;
-    final f = File('${_artistArtDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}_$kind.img');
+    final f = File('${_artistArtDir.path}${Platform.pathSeparator}${fnv1a(name.toLowerCase())}_$kind.img');
     if (await f.exists()) {
       final b = await f.readAsBytes();
       if (b.length > 100) return b;
@@ -688,7 +670,7 @@ class CoverEnricher {
   /// Same lesson as the artwork key's version, learned twice in one morning: adding a field to a
   /// cached record does nothing until the old records are re-derived.
   File _albumInfoFile(String artist, String album) => File('${_albumInfoDir.path}${Platform.pathSeparator}'
-      '${_fnv('v2|${artist.toLowerCase()}|${album.toLowerCase()}')}.json');
+      '${fnv1a('v2|${artist.toLowerCase()}|${album.toLowerCase()}')}.json');
 
   Future<String?> cachedBio(String name) async {
     final f = _bioFile(name);

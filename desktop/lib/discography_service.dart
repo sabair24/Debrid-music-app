@@ -13,6 +13,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'cachesleutel.dart';
 import 'catalog.dart';
 import 'discography.dart';
 import 'discogs.dart';
@@ -101,12 +102,7 @@ class DiscographyService {
     // artistKey en niet kaal kleine letters: die laat een leidend "the" vallen, zodat "The Doors" en
     // "Doors" — voor de bibliotheek één act — geen twee bestanden krijgen die elkaar tegenspreken.
     final sleutel = '$schema|${artistKey(naam)}';
-    var h = 0x811c9dc5;
-    for (final c in sleutel.codeUnits) {
-      h = (h ^ c) * 0x01000193;
-      h &= 0xFFFFFFFF;
-    }
-    return File('${_dir.path}${Platform.pathSeparator}${h.toRadixString(16)}.json');
+    return File('${_dir.path}${Platform.pathSeparator}${fnv1a(sleutel)}.json');
   }
 
   Future<DiscoCache?> lees(String naam) async {
