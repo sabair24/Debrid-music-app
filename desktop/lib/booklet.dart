@@ -174,6 +174,17 @@ class Booklet {
 /// The Cover Art Archive does not publish image dimensions, and its thumbnails keep the
 /// aspect ratio of the full scan — so reading twenty bytes off each 250px thumbnail is enough
 /// to know which ones are spreads, and costs nothing next to decoding them.
+///
+/// **Waarom dit in het boekje-bestand staat en toch vier formaten kent.** Het is de enige plek in de
+/// app die afmetingen leest zonder te decoderen, en de beeldkiezer voor artiestfoto's heeft precies
+/// dat nodig: een kandidaat rangschikken op resolutie zonder 2291×3046 aan pixels uit te pakken om
+/// twee getallen te leren (28 MB per artiest). Hem verhuizen zou drie aanroepers en een toets
+/// verzetten voor niets, dus hij blijft hier staan en wordt geïmporteerd.
+///
+/// **WebP en GIF zijn er bewust bij gekomen.** `CoverEnricher._isImage` neemt allebei aan, en deze
+/// functie las geen van beide — dus elke WebP-kandidaat kwam stil als afmeting 0 binnen en kon
+/// daarmee nooit gekozen worden. Een kandidaat die nooit kan winnen is hoe een artiest zonder
+/// achtergrond blijft zitten.
 ({int w, int h})? imageSize(Uint8List b) {
   final d = ByteData.sublistView(b);
   // PNG: IHDR is always the first chunk.
@@ -195,6 +206,44 @@ class Booklet {
       final len = d.getUint16(i + 2);
       if (len < 2) return null;
       i += 2 + len;
+    }
+  }
+  // GIF: 'GIF8', dan de logische schermmaat als twee little-endian shorts. Anders dan bij PNG en
+  // JPEG staat er geen lengte omheen — de kop IS de maat.
+  if (b.length > 10 && b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x38) {
+    return (w: d.getUint16(6, Endian.little), h: d.getUint16(8, Endian.little));
+  }
+  // WebP: 'RIFF' … 'WEBP', en dan één van drie brokken die elk hun eigen indeling hebben. Dat is
+  // waarom dit drie takken is en geen één.
+  if (b.length > 30 &&
+      b[0] == 0x52 &&
+      b[1] == 0x49 &&
+      b[2] == 0x46 &&
+      b[3] == 0x46 &&
+      b[8] == 0x57 &&
+      b[9] == 0x45 &&
+      b[10] == 0x42 &&
+      b[11] == 0x50) {
+    final brok = String.fromCharCodes(b, 12, 16);
+    // Verliesgevend: na de framekop (3 bytes) en de synccode 9D 01 2A staan breedte en hoogte elk
+    // in de onderste 14 bits van een short; de twee bits erboven zijn een schaalvlag.
+    if (brok == 'VP8 ') {
+      return (
+        w: d.getUint16(26, Endian.little) & 0x3FFF,
+        h: d.getUint16(28, Endian.little) & 0x3FFF,
+      );
+    }
+    // Verliesloos: één signatuurbyte, dan breedte−1 in 14 bits en hoogte−1 in de 14 daarna,
+    // aaneengepakt in vier bytes.
+    if (brok == 'VP8L') {
+      final bits = d.getUint32(21, Endian.little);
+      return (w: (bits & 0x3FFF) + 1, h: ((bits >> 14) & 0x3FFF) + 1);
+    }
+    // Uitgebreid (doorzichtigheid, animatie): canvasbreedte−1 en canvashoogte−1, elk 24 bits.
+    if (brok == 'VP8X') {
+      final w = b[24] | (b[25] << 8) | (b[26] << 16);
+      final h = b[27] | (b[28] << 8) | (b[29] << 16);
+      return (w: w + 1, h: h + 1);
     }
   }
   return null;

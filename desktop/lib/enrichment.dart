@@ -371,7 +371,32 @@ class CoverEnricher {
   /// wordmark. The logo is the reason this exists — you can't render a name in an artist's
   /// official typography from a font (nobody ships those), but the wordmark itself is a real
   /// image and that IS the official lettering.
-  Future<ArtistArt?> artistArt(String name) async {
+  Future<ArtistArt?> artistArt(String name) {
+    final sleutel = name.toLowerCase();
+    final loopt = _artistArtInFlight[sleutel];
+    if (loopt != null) return loopt;
+    // Een BLOKlichaam, en dat is geen stijlkwestie. Zie `discogs.dart:838-848`: met een pijl
+    // (`() => map.remove(k)`) geeft de opruimer terug wát `remove()` teruggeeft — op een
+    // `Map<String, Future<…>>` is dat de verwijderde Future zélf, en `whenComplete` wacht dan op het
+    // werk dat het net afrondde. Voor altijd, zonder socket, zonder logregel. Die fout kostte daar
+    // zes herschrijvingen; hier staat hij één keer opgeschreven en niet nog eens gemaakt.
+    final werk = _artistArtVers(name).whenComplete(() {
+      _artistArtInFlight.remove(sleutel);
+    });
+    _artistArtInFlight[sleutel] = werk;
+    return werk;
+  }
+
+  /// Wie tegelijk om dezelfde naam vraagt, wacht op hetzelfde antwoord.
+  ///
+  /// **Vijf aanroepers bij één pagina-opening**: de vervaagde wash achter de pagina, de editoriale
+  /// kop, de personenkop, de artiestpagina zelf en de fotokiezer. Zonder deze tabel zijn dat vijf
+  /// zoekopdrachten naar dezelfde artiest, tegelijk, op een bron die al terugduwt — en dan is het
+  /// niet de traagheid maar de leegte die je ziet. `DiscogsArtwork.releaseArt` heeft deze tabel al;
+  /// dit is dezelfde, voor de andere helft van hetzelfde scherm.
+  static final _artistArtInFlight = <String, Future<ArtistArt?>>{};
+
+  Future<ArtistArt?> _artistArtVers(String name) async {
     final meta = _artistArtFile(name);
     ArtistArt? art;
     if (await meta.exists()) {
@@ -382,6 +407,7 @@ class CoverEnricher {
     }
     if (art == null) {
       if (_generic.contains(name.trim().toLowerCase())) return null;
+      if (await _artiestBeeldGezochtEnLeeg(name)) return null;
       try {
         // **Een tweede poging met de accenten eraf, en die is niet theoretisch.** TheAudioDB's
         // zoekfunctie vindt `Beyoncé` niet en `Beyonce` wel; hetzelfde voor Céline Dion. Gemeten op
@@ -401,9 +427,15 @@ class CoverEnricher {
         if (art == null && plat.isNotEmpty && plat != name.toLowerCase()) {
           art = await _zoekArtiestBeeld(plat);
         }
-        if (art == null) return null;
+        if (art == null) {
+          await _onthoudGeenArtiestBeeld(name);
+          return null;
+        }
         await _artistArtDir.create(recursive: true);
         await meta.writeAsString(jsonEncode(art.toJson()));
+        // Wie zojuist gevonden is hoort niet meer op de niet-vragen-lijst te staan.
+        final leeg = _artistArtMissFile(name);
+        if (await leeg.exists()) await leeg.delete().catchError((_) => leeg);
       } catch (_) {
         return null;
       }
@@ -431,6 +463,12 @@ class CoverEnricher {
   /// Eén zoekopdracht bij TheAudioDB. Null als er niets is — dan probeert de aanroeper het nog
   /// eens met een platgeslagen naam; zie [artistArt].
   Future<ArtistArt?> _zoekArtiestBeeld(String q) async {
+    // OP DE RIJ, net als [albumInfo]. Dit was de enige TheAudioDB-aanroeper zónder wachtrij, terwijl
+    // `_enrichArtistsFromWeb` er zes tegelijk afvuurt op precies deze host. De meting bij
+    // [_audioDbGap] gaat over albums, maar er is geen reden waarom het artiesteneindpunt zich anders
+    // gedraagt — en het gevolg is hier erger: een geweigerd antwoord is niet een trage pagina maar
+    // een lege.
+    await _audioDbSlot();
     final r = await http.get(
       Uri.parse('https://theaudiodb.com/api/v1/json/2/search.php?s=${Uri.encodeComponent(q)}'),
       headers: {'User-Agent': _ua},
@@ -442,7 +480,10 @@ class CoverEnricher {
     final a = list.first as Map<String, dynamic>;
     String? s(String k) {
       final v = (a[k] as String?)?.trim();
-      return (v == null || v.isEmpty) ? null : v;
+      // `null` als TEKST van vier letters, en dat stuurt deze bron echt — [albumInfo]'s versie van
+      // deze functie wacht er al op en die hier niet. Zonder de wacht wordt "null" een URL, gaat de
+      // app hem ophalen, krijgt niets terug, en bewaart dat als de achtergrond van de artiest.
+      return (v == null || v.isEmpty || v.toLowerCase() == 'null') ? null : v;
     }
 
     final art = ArtistArt(
@@ -464,6 +505,38 @@ class CoverEnricher {
   Directory get _artistArtDir => Directory(_dir('artistart'));
   File _artistArtFile(String name) =>
       File('${_artistArtDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.json');
+
+  /// Het briefje "hier hebben we gekeken en niets gevonden".
+  ///
+  /// **Zonder dit werd een onbekende artiest voor eeuwig opnieuw bevraagd.** Twee mislukte pogingen
+  /// (de naam, en de naam met de accenten eraf) schreven niets, dus bij élke pagina-opening gingen er
+  /// weer twee verzoeken uit naar een bron die deze act niet kent — en straks doet de voorkiezende
+  /// veeg dat er nog eens overheen, voor alle 268 namen, bij elke start.
+  ///
+  /// Dezelfde vorm en dezelfde [_rememberMiss] van veertien dagen als de hoezenkant
+  /// ([searchedAndEmpty]), en om dezelfde reden veertien en niet voorgoed: catalogi krijgen er
+  /// beelden bij.
+  File _artistArtMissFile(String name) =>
+      File('${_artistArtDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.none');
+
+  Future<bool> _artiestBeeldGezochtEnLeeg(String name) async {
+    try {
+      final f = _artistArtMissFile(name);
+      if (!await f.exists()) return false;
+      if (DateTime.now().difference(await f.lastModified()) <= _rememberMiss) return true;
+      await f.delete().catchError((_) => f);
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _onthoudGeenArtiestBeeld(String name) async {
+    try {
+      await _artistArtDir.create(recursive: true);
+      await _artistArtMissFile(name).writeAsString('');
+    } catch (_) {/* een briefje dat we niet konden schrijven kost één herhaalde zoektocht */}
+  }
 
   Future<Uint8List?> _cachedArt(String name, String kind, String? url) async {
     if (url == null) return null;
@@ -601,6 +674,9 @@ class CoverEnricher {
   Future<String?> fetchArtistBio(String name) async {
     if (_generic.contains(name.trim().toLowerCase())) return null;
     try {
+      // Op de rij, om dezelfde reden als in [_zoekArtiestBeeld]: dit is dezelfde URL naar dezelfde
+      // host, en `_enrichArtistsFromWeb` roept ze allebei aan voor zes artiesten tegelijk.
+      await _audioDbSlot();
       final r = await http.get(
         Uri.parse('https://theaudiodb.com/api/v1/json/2/search.php?s=${Uri.encodeComponent(name)}'),
         headers: {'User-Agent': _ua},
