@@ -216,18 +216,16 @@ class _OverBlokState extends State<OverBlok> with SingleTickerProviderStateMixin
 
   List<WikiAfdeling> get _secties => widget.artikel?.afdelingen ?? const [];
 
-  /// De eerste alinea, die ook ingeklapt te lezen is.
-  String get _eersteAlinea {
-    final t = _inleiding;
-    final knip = t.indexOf('\n');
-    return knip < 0 ? t : t.substring(0, knip).trim();
-  }
-
-  String get _restVanDeInleiding {
-    final t = _inleiding;
-    final knip = t.indexOf('\n');
-    return knip < 0 ? '' : t.substring(knip).trim();
-  }
+  /// Hoeveel regels van de inleiding er ingeklapt te lezen zijn.
+  ///
+  /// **Acht, en dat is geen smaak maar een maat.** De foto ernaast is 460 × 259, en die bepaalt de
+  /// hoogte van de rij. Toonde het blok maar één alinea — vier regels, negentig punten — dan gaapte
+  /// er honderdzeventig punten zwart onder de tekst en stond "Meer lezen" daar ver onder, los van
+  /// de alinea die hij openklapt. Op het scherm gezien op 10-09-2026.
+  ///
+  /// Acht regels van 13,5 punten op regelafstand 1,68 is ongeveer 181 punten: de rij vult zich, en
+  /// er valt meteen iets meer te lezen voordat je hoeft te klikken.
+  static const _regelsDicht = 8;
 
   @override
   Widget build(BuildContext context) {
@@ -266,7 +264,12 @@ class _OverBlokState extends State<OverBlok> with SingleTickerProviderStateMixin
   }) {
     final kolom = ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: kLeesmaat),
-      child: Text(_eersteAlinea, style: _bioStijl),
+      child: Text(
+        _inleiding,
+        style: _bioStijl,
+        maxLines: _open ? null : _regelsDicht,
+        overflow: _open ? TextOverflow.clip : TextOverflow.ellipsis,
+      ),
     );
     if (widget.foto == null || smal || isTv) {
       return Align(alignment: Alignment.topLeft, child: kolom);
@@ -339,13 +342,8 @@ class _OverBlokState extends State<OverBlok> with SingleTickerProviderStateMixin
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (_restVanDeInleiding.isNotEmpty) ...[
-            const SizedBox(height: 14),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: kLeesmaat),
-              child: Text(_restVanDeInleiding, style: _bioStijl),
-            ),
-          ],
+          // De inleiding zelf staat hierboven en verliest bij het openklappen alleen zijn
+          // regelgrens — hem hier nóg eens tonen zou hem verdubbelen.
           if (widget.jaren.isNotEmpty) ...[
             const SizedBox(height: kRuimte24),
             _JaarLint(
