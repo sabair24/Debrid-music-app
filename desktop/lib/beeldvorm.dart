@@ -43,14 +43,14 @@ const double kStaandVanaf = 1.15;
 
 /// De liggende achtergrond. Blijft `'backdrop'` heten: dat staat al in ieders
 /// `artist_art_choice.json` en in elke catalogus die al over het net ging.
-const String kAchtergrond = 'backdrop';
+const String kSoortLiggend = 'backdrop';
 
 /// De staande achtergrond, voor een iPad die je rechtop houdt.
 ///
 /// Niet `'backdrop_portrait'`: `'portrait'` betekent in deze app al iets ánders — het ronde
 /// portret dat `ArtistHero` op de personenpagina tekent. Twee dingen die "portrait" heten en niet
 /// hetzelfde zijn, is precies hoe een sleutel stil de verkeerde foto gaat aanwijzen.
-const String kAchtergrondStaand = 'backdrop_staand';
+const String kSoortStaand = 'backdrop_staand';
 
 /// Elke soort die bewaard én gesynchroniseerd wordt.
 ///
@@ -61,8 +61,8 @@ const String kAchtergrondStaand = 'backdrop_staand';
 /// doorgestuurde map leest en die soort daar niet in staat.
 const List<String> kArtSoorten = <String>[
   'portrait',
-  kAchtergrond,
-  kAchtergrondStaand,
+  kSoortLiggend,
+  kSoortStaand,
   'logo',
 ];
 
@@ -98,6 +98,6 @@ Beeldvorm beeldvormVan({required Size scherm, required bool tv}) {
 /// gaf Stromae een strook voorhoofd. Zonder liggende keuze is TheAudioDB's fanart de juiste
 /// volgende stap — en dat is precies wat de app vandaag al doet, dus dan verandert er niets.
 List<String> achtergrondSoorten(Beeldvorm vorm) => switch (vorm) {
-      Beeldvorm.staand => const <String>[kAchtergrondStaand, kAchtergrond],
-      Beeldvorm.liggend => const <String>[kAchtergrond],
+      Beeldvorm.staand => const <String>[kSoortStaand, kSoortLiggend],
+      Beeldvorm.liggend => const <String>[kSoortLiggend],
     };

@@ -73,6 +73,7 @@ import 'login_screen.dart';
 import 'lossless_want.dart' show performerFromFilename, zoekvraagVoorAlbum, zoekvraagVoorNummer;
 import 'pairing_screen.dart';
 import 'artwork.dart' show decodeWidth, kleurBuitenDeTekendraad;
+import 'beeldvorm.dart';
 import 'fps_probe.dart';
 import 'warm_log.dart' show WarmLog;
 import 'library.dart';
@@ -16445,8 +16446,16 @@ class _ArtistBackdropState extends State<ArtistBackdrop> {
   Uint8List? _chosenBackdrop;
   String? _loadedUrl;
 
+  /// De vorm van dit scherm, gezet in [build] en gelezen in [_load].
+  ///
+  /// Via een veld en niet uit de `context` in `_load`: die methode heeft `await`s, en een
+  /// `MediaQuery` uitlezen ná een await is precies waar `use_build_context_synchronously` over gaat.
+  /// In `build` is het antwoord gratis en altijd vers.
+  Beeldvorm _vorm = Beeldvorm.liggend;
+
   Future<void> _load() async {
     final name = widget.name;
+    final vorm = _vorm;
     final settings = context.read<AppSettings>();
     final art = await CoverEnricher(settings).artistArt(name);
     if (!mounted || name != widget.name) return;
@@ -16454,19 +16463,28 @@ class _ArtistBackdropState extends State<ArtistBackdrop> {
     // A picture the user picked outranks anything the shape heuristic chose. Fetched here rather
     // than stored as bytes, so the choice survives independently of any cache being cleared.
     final lib = context.read<LibraryStore>();
-    for (final kind in const ['backdrop']) {
-      final url = lib.chosenArtistArt(name, kind);
-      if (url == null) continue;
-      final bytes = await CoverEnricher(settings).downloadImage(url);
-      if (!mounted || name != widget.name || bytes == null) continue;
-      if (kind == 'backdrop') setState(() => _chosenBackdrop = bytes);
+    final url = lib.achtergrondVoor(name, vorm);
+    if (url == null) {
+      // Keuze weggehaald? Dan hoort het beeld ook weg. Zonder deze tak bleef de vorige foto staan
+      // en leek "wissen" niets te doen — dezelfde soort storing als de knop die wél schreef maar
+      // waarvan je nooit iets zag.
+      if (_chosenBackdrop != null) setState(() => _chosenBackdrop = null);
+      return;
     }
+    final bytes = await CoverEnricher(settings).downloadImage(url);
+    if (!mounted || name != widget.name || bytes == null) return;
+    setState(() => _chosenBackdrop = bytes);
   }
 
   @override
   Widget build(BuildContext context) {
     // Same as the hero: a fresh pick has to show without leaving the page and coming back.
-    final chosen = context.watch<LibraryStore>().chosenArtistArt(widget.name, 'backdrop');
+    //
+    // En sinds er twee achtergronden per artiest zijn, is DRAAIEN hetzelfde geval: op een iPad die
+    // je rechtop zet verandert de vorm, dus de opgeloste url, dus wordt hieronder een andere foto
+    // opgehaald. Dat is de hele bedraading van het draaien — er is geen aparte luisteraar voor.
+    _vorm = beeldvormVan(scherm: MediaQuery.sizeOf(context), tv: isTv);
+    final chosen = context.watch<LibraryStore>().achtergrondVoor(widget.name, _vorm);
     if (chosen != _loadedUrl) {
       _loadedUrl = chosen;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -16566,8 +16584,10 @@ class _ArtistHeroState extends State<ArtistHero> {
   /// not shown until you left the page and came back — a setting that appears to do nothing.
   void _syncChoice() {
     final lib = context.watch<LibraryStore>();
+    // Zie [_ArtistBackdropState._vorm]: in `build` uitlezen, in `_load` gebruiken.
+    _vorm = beeldvormVan(scherm: MediaQuery.sizeOf(context), tv: isTv);
     final p = lib.chosenArtistArt(widget.name, 'portrait');
-    final b = lib.chosenArtistArt(widget.name, 'backdrop');
+    final b = lib.achtergrondVoor(widget.name, _vorm);
     if (p == _loadedPortraitUrl && b == _loadedBackdropUrl) return;
     _loadedPortraitUrl = p;
     _loadedBackdropUrl = b;
@@ -16579,22 +16599,34 @@ class _ArtistHeroState extends State<ArtistHero> {
 
   Future<void> _load() async {
     final name = widget.name;
+    final vorm = _vorm;
     final settings = context.read<AppSettings>();
     final art = await CoverEnricher(settings).artistArt(name);
     if (!mounted || name != widget.name) return;
     setState(() => _art = art);
     // Same as the page backdrop: a picture the user picked outranks the shape heuristic.
+    //
+    // Het portret blijft één soort — dat is de ronde foto op deze pagina en die heeft geen liggende
+    // en staande variant. Alleen de achtergrond gaat over de ladder.
     final lib = context.read<LibraryStore>();
-    for (final kind in const ['portrait', 'backdrop']) {
-      final url = lib.chosenArtistArt(name, kind);
+    final wensen = <String, String?>{
+      'portrait': lib.chosenArtistArt(name, 'portrait'),
+      'backdrop': lib.achtergrondVoor(name, vorm),
+    };
+    for (final wens in wensen.entries) {
+      final url = wens.value;
       if (url == null) continue;
       final bytes = await CoverEnricher(settings).downloadImage(url);
       if (!mounted || name != widget.name || bytes == null) continue;
-      setState(() => kind == 'portrait' ? _chosenPortrait = bytes : _chosenBackdrop = bytes);
+      setState(() =>
+          wens.key == 'portrait' ? _chosenPortrait = bytes : _chosenBackdrop = bytes);
     }
   }
 
   Uint8List? _chosenPortrait, _chosenBackdrop;
+
+  /// Zie [_ArtistBackdropState._vorm].
+  Beeldvorm _vorm = Beeldvorm.liggend;
 
   @override
   Widget build(BuildContext context) {
@@ -16629,11 +16661,19 @@ class _ArtistHeroState extends State<ArtistHero> {
     final vak = Stack(
         fit: smal ? StackFit.loose : StackFit.expand,
         children: [
-          // Blurred on purpose. Every artist image any database has is 16:9 — fanart, widethumb,
-          // all of it — and a banner this wide can only show a quarter of one. Sharp, that quarter
-          // was a gamble: it framed Michael Jackson but gave Stromae a band of forehead, because his
-          // photo is a close-up that no crop can survive. So the backdrop is atmosphere drawn from
-          // the artist's own colours, and the portrait beside it is what you actually recognise.
+          // Blurred on purpose, en de reden is verschoven — de oude uitleg is niet meer waar.
+          //
+          // Hier stond dat élk artiestbeeld dat een database heeft 16:9 is. Dat klopte zolang de app
+          // maar één bron kende: TheAudioDB's fanart. Het is inmiddels weerlegd. Discogs levert
+          // tientallen foto's per artiest MÉT hun afmetingen, staand zowel als liggend, en sinds
+          // `beeldvorm.dart` bewaart de app een keuze per VORM — een liggende voor een breed venster
+          // en een staande voor een iPad die je rechtop houdt.
+          //
+          // Wat wél waar blijft, en waarom het waas hier staat: dit vak is een BANNER, veel breder
+          // dan hoog, en daar past geen enkele foto scherp in. Scherp was die uitsnede een gok — hij
+          // lijstte Michael Jackson netjes in en gaf Stromae een strook voorhoofd, omdat diens foto
+          // een close-up is die geen uitsnede overleeft. Dus is de achtergrond hier sfeer uit de
+          // eigen kleuren van de artiest, en is het portret ernaast wat je herkent.
           if (backdrop != null && widget.ownBackdrop)
             Positioned.fill(
               child: ImageFiltered(
@@ -18037,7 +18077,12 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     // `CoverEnricher.artistArt` op. Saber zei "de police hun achtergrond foto is niet mooi" en had
     // gelijk dat er niets aan te doen was: de knop stond er, deed iets, en je zag het nergens.
     // Zelfde patroon als [ArtistBackdrop]: kijken of de keuze veranderd is en ná dit frame laden.
-    final keuze = lib.chosenArtistArt(widget.artist.name, 'backdrop');
+    //
+    // Via [LibraryStore.achtergrondVoor] en niet rechtstreeks: sinds er een liggende én een staande
+    // keuze is, hangt het antwoord aan de VORM van dit scherm. Draai je een iPad rechtop, dan
+    // verandert de opgeloste url en haalt de regel hieronder vanzelf de andere foto op.
+    final keuze = lib.achtergrondVoor(
+        widget.artist.name, beeldvormVan(scherm: MediaQuery.sizeOf(context), tv: isTv));
     if (keuze != _keuzeUrl) {
       _keuzeUrl = keuze;
       WidgetsBinding.instance.addPostFrameCallback((_) {

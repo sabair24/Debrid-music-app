@@ -732,16 +732,16 @@ void _editingTests() {
     //
     // Je merkt dat niet meteen en niet op het toestel waar je het deed. Vandaar deze toets: hij
     // legt de hele weg af, van een keuze op de pc tot wat de Mac terugleest.
-    await pcLibrary.setArtistArt('Portishead', kAchtergrond, 'https://example.test/liggend.jpg');
+    await pcLibrary.setArtistArt('Portishead', kSoortLiggend, 'https://example.test/liggend.jpg');
     await pcLibrary.setArtistArt(
-        'Portishead', kAchtergrondStaand, 'https://example.test/staand.jpg');
+        'Portishead', kSoortStaand, 'https://example.test/staand.jpg');
     pcLibrary.notifyListeners();
 
     await mac.loadRemote();
 
-    expect(mac.chosenArtistArt('Portishead', kAchtergrondStaand), 'https://example.test/staand.jpg',
+    expect(mac.chosenArtistArt('Portishead', kSoortStaand), 'https://example.test/staand.jpg',
         reason: 'de staande achtergrond die je koos is op je iPad niet aangekomen');
-    expect(mac.chosenArtistArt('Portishead', kAchtergrond), 'https://example.test/liggend.jpg');
+    expect(mac.chosenArtistArt('Portishead', kSoortLiggend), 'https://example.test/liggend.jpg');
 
     // En de ladder geeft op elk van de twee vormen het goede antwoord — ook op de Mac, waar de
     // keuzes uit de catalogus komen in plaats van uit een eigen bestand.
@@ -750,15 +750,15 @@ void _editingTests() {
   });
 
   test('DE GRENS: zonder staande keuze valt een staand scherm terug op de liggende', () async {
-    await pcLibrary.setArtistArt('Portishead', kAchtergrond, 'https://example.test/alleen.jpg');
+    await pcLibrary.setArtistArt('Portishead', kSoortLiggend, 'https://example.test/alleen.jpg');
     pcLibrary.notifyListeners();
     await mac.loadRemote();
 
     expect(mac.achtergrondVoor('Portishead', Beeldvorm.staand), 'https://example.test/alleen.jpg',
         reason: 'een uitsnede van jouw eigen foto is beter dan een gok van een database');
     // En andersom NIET: een staande 2:3 in een band van 2,5:1 is een reep voorhoofd.
-    await pcLibrary.setArtistArt('Portishead', kAchtergrond, '');
-    await pcLibrary.setArtistArt('Portishead', kAchtergrondStaand, 'https://example.test/hoog.jpg');
+    await pcLibrary.setArtistArt('Portishead', kSoortLiggend, '');
+    await pcLibrary.setArtistArt('Portishead', kSoortStaand, 'https://example.test/hoog.jpg');
     pcLibrary.notifyListeners();
     await mac.loadRemote();
 
@@ -770,19 +770,19 @@ void _editingTests() {
     // `setArtistArt` bewaarde een lege url als de TEKST `''` in plaats van de sleutel te wissen.
     // Met één keuze viel dat niet op; met een ladder eronder wel: de lege eerste sport wint dan van
     // een echte tweede, en het scherm blijft leeg terwijl er een foto gekozen is.
-    await pcLibrary.setArtistArt('Portishead', kAchtergrond, 'https://example.test/liggend.jpg');
-    await pcLibrary.setArtistArt('Portishead', kAchtergrondStaand, 'https://example.test/staand.jpg');
-    await pcLibrary.setArtistArt('Portishead', kAchtergrondStaand, '');
+    await pcLibrary.setArtistArt('Portishead', kSoortLiggend, 'https://example.test/liggend.jpg');
+    await pcLibrary.setArtistArt('Portishead', kSoortStaand, 'https://example.test/staand.jpg');
+    await pcLibrary.setArtistArt('Portishead', kSoortStaand, '');
     pcLibrary.notifyListeners();
 
-    expect(pcLibrary.chosenArtistArt('Portishead', kAchtergrondStaand), isNull,
+    expect(pcLibrary.chosenArtistArt('Portishead', kSoortStaand), isNull,
         reason: 'leeg hoort te betekenen "laat de app maar kiezen", zoals de uitleg belooft');
     expect(pcLibrary.achtergrondVoor('Portishead', Beeldvorm.staand),
         'https://example.test/liggend.jpg',
         reason: 'de lege sport blokkeert de terugval en het scherm blijft zwart');
 
     await mac.loadRemote();
-    expect(mac.chosenArtistArt('Portishead', kAchtergrondStaand), isNull,
+    expect(mac.chosenArtistArt('Portishead', kSoortStaand), isNull,
         reason: 'en een gewiste keuze mag ook niet als lege tekst naar je iPad reizen');
   });
 

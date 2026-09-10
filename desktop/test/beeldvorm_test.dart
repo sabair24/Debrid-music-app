@@ -64,16 +64,16 @@ void main() {
 
   group('de terugvalladder', () {
     test('DE KERN: staand mag terugvallen op liggend, andersom niet', () {
-      expect(achtergrondSoorten(Beeldvorm.staand), [kAchtergrondStaand, kAchtergrond],
+      expect(achtergrondSoorten(Beeldvorm.staand), [kSoortStaand, kSoortLiggend],
           reason: 'zonder staande keuze hoort de foto die je zélf koos alsnog getoond te worden');
-      expect(achtergrondSoorten(Beeldvorm.liggend), [kAchtergrond],
+      expect(achtergrondSoorten(Beeldvorm.liggend), [kSoortLiggend],
           reason: 'een staande 2:3 in een band van 2,5:1 is een reep voorhoofd, geen achtergrond');
     });
 
     test('DE VAL: de staande keuze staat VOORAAN bij een staand scherm', () {
       // Stond hij achteraan, dan zou de liggende altijd winnen en had het kiezen geen zin — het
       // soort storing waarbij de knop werkt en je nooit iets ziet veranderen.
-      expect(achtergrondSoorten(Beeldvorm.staand).first, kAchtergrondStaand);
+      expect(achtergrondSoorten(Beeldvorm.staand).first, kSoortStaand);
     });
   });
 
@@ -94,14 +94,14 @@ void main() {
       // Deze twee staan al in ieders artist_art_choice.json en in elke catalogus die al verstuurd
       // is. Ze hernoemen zou elke bestaande keuze onvindbaar maken.
       expect(kArtSoorten, containsAll(<String>['portrait', 'backdrop', 'logo']));
-      expect(kAchtergrond, 'backdrop');
+      expect(kSoortLiggend, 'backdrop');
       expect(kArtSoorten.toSet().length, kArtSoorten.length, reason: 'geen dubbele soorten');
     });
 
     test('DE VAL: de staande soort heet geen "portrait"', () {
       // `'portrait'` betekent in deze app al iets anders: het ronde portret op de personenpagina.
-      expect(kAchtergrondStaand, isNot('portrait'));
-      expect(kAchtergrondStaand, isNot(kAchtergrond));
+      expect(kSoortStaand, isNot('portrait'));
+      expect(kSoortStaand, isNot(kSoortLiggend));
     });
   });
 }
