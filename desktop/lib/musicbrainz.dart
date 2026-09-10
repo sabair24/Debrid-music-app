@@ -446,7 +446,13 @@ class MusicBrainzService {
   ///
   /// What the lane still guarantees is exactly what the two services ask for: one request STARTED
   /// per [gap]. Overlapping round trips raise the concurrency, not the rate.
-  @visibleForTesting
+  ///
+  /// **Openbaar sinds 10-09-2026, en niet meer alleen voor toetsen.** `wikipedia.dart` gebruikt hem
+  /// voor de `wikimedia`-lane. Dat is met opzet geen vierde eigen wachtrij: deze is generiek over
+  /// een naam, statisch (dus één rij per host in het hele proces), en hij is de enige die een klok
+  /// overleeft die terugloopt — de val die hierboven beschreven staat en die
+  /// `CoverEnricher._audioDbSlot` nog altijd heeft. Elke nieuwe kopie is een plek waar iemand die
+  /// val opnieuw kan zetten.
   static Future<void> laneSlot(String lane, Duration gap) {
     final slot = (_turn[lane] ?? Future.value()).then((_) async {
       final last = _lastCall[lane] ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -561,6 +567,37 @@ class MusicBrainzService {
   static int transportErrors = 0;
 
   Future<Map<String, dynamic>?> _ws(String url) => _get(url, lane: 'ws', gap: _wsGap);
+
+  /// Het Wikidata-nummer van deze artiest, als MusicBrainz er een kent.
+  ///
+  /// **De weg naar een Wikipedia-artikel loopt hierlangs, en niet over de naam.** Zoeken op naam
+  /// levert naamgenoten op — dezelfde val als bij [resolveArtist], waar "Backstreet" niet
+  /// "Backstreet Girls" mag worden. Via het nummer is er niets te raden.
+  ///
+  /// GEMETEN op 10-09-2026: `inc=url-rels` voor Michael Jackson geeft 73 verwijzingen, waaronder
+  /// wél een van het soort `wikidata` (Q2831) en géén van het soort `wikipedia`. Wikidata is dus de
+  /// enige betrouwbare tussenstap; van daaruit geeft één verzoek de titel in elke taal.
+  ///
+  /// **Hier en niet in `wikipedia.dart`.** [_get] bezit de `ws`-lane, de User-Agent, de cache in
+  /// `<appDir>/musicbrainz` en beide misduren. Dat in een tweede bestand overdoen geeft
+  /// musicbrainz.org twee wachtrijen die allebei denken dat ze beleefd zijn — precies de storing
+  /// die honderd regels hierboven beschreven staat.
+  Future<String?> wikidataId(String mbid) async {
+    final id = mbid.trim();
+    if (id.isEmpty) return null;
+    final body = await _ws('$_root/artist/$id?inc=url-rels&fmt=json');
+    final rels = (body?['relations'] as List?) ?? const [];
+    for (final r in rels) {
+      if (r is! Map) continue;
+      if (r['type'] != 'wikidata') continue;
+      final bron = ((r['url'] as Map?)?['resource'] as String?)?.trim() ?? '';
+      // De laatste padstap is de Q. Niet met een reguliere uitdrukking over de hele url: die
+      // verandert wel eens van vorm (http/https, /wiki/ of /entity/), en het laatste stuk niet.
+      final q = Uri.tryParse(bron)?.pathSegments.lastOrNull ?? '';
+      if (q.startsWith('Q') && q.length > 1) return q;
+    }
+    return null;
+  }
 
   // ── Cache ───────────────────────────────────────────────────────────────────
   // The data barely changes and the request budget is the scarce thing, so everything fetched is
