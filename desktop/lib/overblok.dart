@@ -264,12 +264,16 @@ class _OverBlokState extends State<OverBlok> with SingleTickerProviderStateMixin
   }) {
     final kolom = ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: kLeesmaat),
-      child: Text(
-        _inleiding,
-        style: _bioStijl,
-        maxLines: _open ? null : _regelsDicht,
-        overflow: _open ? TextOverflow.clip : TextOverflow.ellipsis,
-      ),
+      // Dicht: één blok met een regelgrens, want daar telt het vullen van de rij. Open: alinea's
+      // met lucht ertussen, want dan is het leesbaarheid die telt.
+      child: _open
+          ? _Alineas(_inleiding)
+          : Text(
+              _inleiding,
+              style: _bioStijl,
+              maxLines: _regelsDicht,
+              overflow: TextOverflow.ellipsis,
+            ),
     );
     if (widget.foto == null || smal || isTv) {
       return Align(alignment: Alignment.topLeft, child: kolom);
@@ -400,6 +404,39 @@ class _OverBlokState extends State<OverBlok> with SingleTickerProviderStateMixin
 
 const TextStyle _bioStijl =
     TextStyle(fontSize: 13.5, height: 1.68, color: Color(0xFFC7CBDA));
+
+/// Tekst met LUCHT tussen de alinea's.
+///
+/// **Waarom niet gewoon één `Text`.** Wikipedia's uittreksel scheidt alinea's met één `\n`, en
+/// Flutter maakt daar een gewone regelovergang van — niet te onderscheiden van het omslaan binnen
+/// een alinea. Op het scherm gezien op 10-09-2026: zevenendertigduizend tekens als één dichte muur,
+/// waarin je na elke regel opnieuw moet zoeken waar een gedachte begint.
+///
+/// Een `Column` en geen `\n\n` in de tekst: dan zou een lege regel meetellen bij het afkappen op
+/// een aantal REGELS, en dan telt het blok lucht in plaats van zinnen.
+class _Alineas extends StatelessWidget {
+  const _Alineas(this.tekst);
+  final String tekst;
+
+  @override
+  Widget build(BuildContext context) {
+    final stukken = [
+      for (final s in tekst.split('\n'))
+        if (s.trim().isNotEmpty) s.trim(),
+    ];
+    if (stukken.length <= 1) return Text(tekst, style: _bioStijl);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < stukken.length; i++) ...[
+          if (i > 0) const SizedBox(height: kRuimte12),
+          Text(stukken[i], style: _bioStijl),
+        ],
+      ],
+    );
+  }
+}
 
 // ── De feiten ───────────────────────────────────────────────────────────────
 
@@ -665,7 +702,7 @@ class _SectieRij extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: kRuimte16),
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: kLeesmaat),
-                child: Text(afdeling.tekst, style: _bioStijl),
+                child: _Alineas(afdeling.tekst),
               ),
             ),
           Container(height: 1, color: kLijnZacht),
