@@ -17893,6 +17893,22 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   /// `discoKey` in discography.dart voor waarschuwt: een verborgen plaat merk je nooit.
   bool _toonAlles = false;
   String? _bio;
+
+  /// Het Wikipedia-artikel, als er een is. Wint van [_bio] — zie `wikipedia.dart` voor de meting.
+  WikiArtikel? _wiki;
+
+  /// Geboren, land, actief, label. Komen mee met de biografie, uit dezelfde respons.
+  ArtiestFeiten? _feiten;
+
+  /// De MBID van deze artiest, als de pagina hem via MusicBrainz geopend heeft.
+  ///
+  /// Daarmee loopt de weg naar het Wikipedia-artikel over Wikidata en valt er niets te raden. Komt
+  /// de artiest van Deezer, dan is er geen nummer en zoekt `WikipediaService` zelf verder — met de
+  /// naamtucht die daar beschreven staat.
+  String? get _mbid {
+    final ref = widget.artist.origin;
+    return ref?.source == CatalogSource.musicbrainz ? ref!.id : null;
+  }
   bool _busy = true;
 
   /// Het beeld van de artiest: backdrop, logo, portret én — nieuw — de vrijstaande cutout.
@@ -17991,10 +18007,199 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   }
 
   Future<void> _loadBio() async {
+    final naam = widget.artist.name;
     final enricher = CoverEnricher(context.read<AppSettings>());
-    var bio = await enricher.cachedBio(widget.artist.name);
-    bio ??= await enricher.fetchArtistBio(widget.artist.name);
+    var bio = await enricher.cachedBio(naam);
+    bio ??= await enricher.fetchArtistBio(naam);
     if (mounted && bio != null) setState(() => _bio = bio);
+
+    // De feiten liggen na `fetchArtistBio` op schijf: hij schrijft ze mee uit dezelfde respons.
+    // Vandaar ná die aanroep en niet ervoor.
+    final feiten = await enricher.artistFeiten(naam);
+    if (mounted && naam == widget.artist.name) setState(() => _feiten = feiten);
+
+    // Wikipedia erbovenop, en dat is met opzet de LAATSTE stap. Van schijf komt hij vrijwel meteen;
+    // is er nog niets, dan kost hij twee tot drie verzoeken over Wikidata — en tot die tijd staat
+    // de tekst van TheAudioDB er al. Zo is er nooit een leeg blok, alleen een dat beter wordt.
+    final wiki = await WikipediaService().artikel(naam, mbid: _mbid);
+    if (mounted && naam == widget.artist.name) setState(() => _wiki = wiki);
+  }
+
+  /// Wat er in de beeldband onder het jaarlint komt te staan.
+  ///
+  /// **Hier en niet in [OverBlok]**, want dit is precies het stuk dat de artiestpagina wél weet en
+  /// een tekstblok niet: welke platen van jou zijn, waar hun hoezen liggen, en welke persing je
+  /// hebt vastgezet. Het blok krijgt een bouwer en hoeft van dit alles niets te weten — dat is ook
+  /// wat zijn widgettoets goedkoop houdt.
+  ///
+  /// Voor een plaat die je NIET hebt is er alleen de hoes-url van de catalogus. Voor de rest valt
+  /// het terug op het beeld van de artiest zelf: bij een geboortejaar is er nu eenmaal geen hoes,
+  /// en een leeg vak zou lezen als een storing.
+  /// De albumteksten die al gevonden zijn, op jaarlint-sleutel. Een sleutel die er staat met `null`
+  /// betekent "gezocht, niets" — anders zou hij elke hertekening opnieuw gezocht worden.
+  final Map<String, AlbumInfo?> _albumTeksten = {};
+  final Set<String> _albumTekstBezig = {};
+
+  /// Zoekt de uitleg bij een plaat op, van schijf en zonder één netwerkverzoek.
+  ///
+  /// **Twee keer vragen, en dat is geen slordigheid.** De 472 bewaarde albumteksten zijn opgeslagen
+  /// onder de titel zoals JOUW bibliotheek hem kent, en het jaarlint draagt de titel zoals de
+  /// CATALOGUS hem kent — "Thriller" tegenover "Thriller (25th Anniversary)". `plainTitle` is
+  /// dezelfde stripper die `albumInfo` zelf gebruikt vóór hij het net op gaat, dus de tweede vraag
+  /// kost een schijflezing en scheelt het verschil tussen een uitleg die er meestal wél en meestal
+  /// niet staat.
+  Future<void> _laadAlbumTekst(String sleutel, String artiest, String titel) async {
+    final e = CoverEnricher(context.read<AppSettings>());
+    var info = await e.albumInfo(artiest, titel, fetch: false);
+    final kaal = DiscogsService.plainTitle(titel);
+    if (info == null && kaal != titel) info = await e.albumInfo(artiest, kaal, fetch: false);
+    // Pas als allebei missen het net op, en dan op de achtergrond: de band staat er al, hij wordt
+    // alleen beter.
+    info ??= await e.albumInfo(artiest, kaal);
+    if (!mounted) return;
+    setState(() => _albumTeksten[sleutel] = info);
+  }
+
+  Widget _jaarBeeld(Jaarpunt punt, int teller, Map<String, Album> eigenPerSleutel) {
+    final eigen = eigenPlaat(punt, eigenPerSleutel);
+    final bytes = eigen?.correctedCover ??
+        eigen?.cover ??
+        (punt.soort == Jaarsoort.geboorte || punt.soort == Jaarsoort.oprichting
+            ? _art?.thumbBytes
+            : _art?.clearartBytes ?? _art?.backdropBytes);
+
+    // Waas eronder en het beeld scherp erop. Een hoes is vierkant en de band is breed: `cover` zou
+    // er een strook uit snijden, en `contain` alleen laat twee zwarte balken staan. De vervaagde
+    // vergroting vult die balken met de kleuren van de plaat zelf — dezelfde greep die de app achter
+    // een artiestpagina al gebruikt.
+    Widget vlak(Widget waas, Widget scherp) => Stack(fit: StackFit.expand, children: [
+          ImageFiltered(
+            imageFilter: ImageFilter.blur(sigmaX: 42, sigmaY: 42),
+            child: Transform.scale(scale: 1.2, child: waas),
+          ),
+          const DecoratedBox(decoration: BoxDecoration(color: Color(0x7307080C))),
+          Center(child: scherp),
+        ]);
+
+    final url = punt.hoesUrl;
+    if (bytes == null && (url == null || url.isEmpty)) return const SizedBox.shrink();
+
+    Widget waas() => bytes != null
+        ? Image.memory(bytes, fit: BoxFit.cover, cacheWidth: 96, filterQuality: FilterQuality.low)
+        : Image.network(url!,
+            fit: BoxFit.cover,
+            cacheWidth: 96,
+            filterQuality: FilterQuality.low,
+            errorBuilder: (_, __, ___) => const SizedBox());
+
+    return vlak(waas(), _bandInhoud(punt, teller, eigen, bytes, url));
+  }
+
+  /// Wat er ín de band staat: de hoes met de cd ernaast, en de uitleg erbij.
+  Widget _bandInhoud(
+      Jaarpunt punt, int teller, Album? eigen, Uint8List? bytes, String? url) {
+    final bib = context.watch<LibraryStore>();
+    // De hoes vult de band op de hoogte; de rest van de breedte is voor de tekst.
+    const hoes = kBandHoogte - 56;
+    const reis = .62;
+
+    // Alleen bij een plaat die je HEBT is [AlbumArt] eerlijk bruikbaar: hij zoekt zijn scans op
+    // naam bij Discogs, en `pinned`/`roles` slaan nergens op voor een uitgave die niet van jou is.
+    // Voor de rest de kale hoes — maar wél in een vak van dezelfde breedte, anders springt het
+    // beeld zijwaarts zodra je van een eigen plaat naar een vreemde gaat.
+    final Widget links = eigen != null
+        ? AlbumArt(
+            artist: eigen.artist,
+            album: eigen.title,
+            identity: bib.uidOf(eigen),
+            size: hoes,
+            fallback: eigen.cover,
+            chosen: eigen.correctedCover,
+            trackCount: eigen.tracks.length,
+            pinned: bib.pinnedRelease(eigen) ?? persingUitHerkomst(eigen.resolvedFrom).release,
+            pinnedMbid: bib.pinnedMbid(eigen) ?? persingUitHerkomst(eigen.resolvedFrom).mbid,
+            roles: bib.albumArtRoles(eigen.artist, eigen.title),
+            uitgeschoven: true,
+            uitschuifTeller: teller,
+            reisFactor: reis,
+          )
+        : SizedBox(
+            width: hoes * (1 + reis),
+            height: hoes,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: SizedBox(
+                  width: hoes,
+                  height: hoes,
+                  child: bytes != null
+                      ? Image.memory(bytes, fit: BoxFit.cover, cacheWidth: decodeWidth(hoes))
+                      : Image.network(url!,
+                          fit: BoxFit.cover,
+                          cacheWidth: decodeWidth(hoes),
+                          errorBuilder: (_, __, ___) => const SizedBox()),
+                ),
+              ),
+            ),
+          );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 28),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          links,
+          const SizedBox(width: 36),
+          Expanded(child: _bandTekst(punt, eigen)),
+        ],
+      ),
+    );
+  }
+
+  /// De uitleg naast het album: titel, de feiten op één regel, en de tekst.
+  Widget _bandTekst(Jaarpunt punt, Album? eigen) {
+    final sleutel = punt.plaatSleutel;
+    AlbumInfo? info;
+    if (sleutel != null && punt.soort == Jaarsoort.plaat) {
+      info = _albumTeksten[sleutel];
+      if (!_albumTeksten.containsKey(sleutel) && _albumTekstBezig.add(sleutel)) {
+        // Buiten dit frame om: `_laadAlbumTekst` leest van schijf en zet daarna `setState`, en dat
+        // mag niet tijdens het bouwen gebeuren. De `await` doet dat vanzelf, de wacht hierboven
+        // zorgt dat het bij één keer blijft.
+        unawaited(_laadAlbumTekst(sleutel, widget.artist.name, eigen?.title ?? punt.label));
+      }
+    }
+
+    final feiten = <String>[
+      '${punt.jaar}',
+      if (info?.label case final l? when l.isNotEmpty) l,
+      if (eigen != null) '${eigen.tracks.length} nummers',
+    ];
+    final tekst = info?.text;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisAlignment: MainAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(punt.label.toUpperCase(),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: kKop.copyWith(letterSpacing: -.4)),
+        const SizedBox(height: 6),
+        Text(feiten.join(' · '), style: kOpschrift),
+        // Geen uitleg? Dan alleen de feitenregel. Nooit een vulzin en nooit een leeg kader — dat is
+        // de regel die elders op deze pagina ook al geldt.
+        if (tekst != null && tekst.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          Text(tekst,
+              maxLines: 6,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 13.5, height: 1.6, color: Color(0xFFC7CBDA))),
+        ],
+      ],
+    );
   }
 
   /// Het beeld, en daarna de eigen keuze van de gebruiker eroverheen.
@@ -18120,6 +18325,11 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     // Bezit langs dezelfde sleutel als de rest, want anders is "heb ik dit" een andere vraag dan "is
     // dit dezelfde plaat" en vink je twee regels af voor één album.
     final bezit = {for (final a in mine) discoKey(a.title)};
+    // Dezelfde sleutel, maar mét de plaat erachter — dat is wat het jaarlint nodig heeft om van een
+    // jaartal naar jouw eigen exemplaar te komen. Bewust uit dezelfde uitdrukking afgeleid: een
+    // tweede idee van "dezelfde plaat" zou een lint kunnen opleveren dat een hoes toont voor een
+    // album waar het vinkje ernaast zegt dat je het niet hebt.
+    final eigenPerSleutel = {for (final a in mine) discoKey(a.title): a};
     // Hoezen aanvullen vóór het sorteren, gastoptredens eruit: allebei op de samengevoegde lijst,
     // zodat elke hertekening hetzelfde antwoord geeft ongeacht wat er wanneer binnenkwam.
     final samen = vouwHeruitgaves(vulHoezenAan(mergeDiscography([_dz, _mb, _dg]), _hoezen)
@@ -18356,10 +18566,24 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           // De biografie ná de platen. Wie deze pagina opent komt voor de muziek; het verhaal is
           // waar je blijft hangen als je gevonden hebt wat je zocht — dezelfde plek als "ABOUT
           // ALBUM" in het ontwerp waar dit op gebaseerd is.
-          if (_bio != null) ...[
+          if (_bio != null || _wiki != null) ...[
             SliverToBoxAdapter(
-                child: _sectionTitle('Over ${widget.artist.name.split(' ').first}', 'TheAudioDB')),
-            SliverToBoxAdapter(child: _overBlok(_bio!)),
+                child: _sectionTitle('Over ${widget.artist.name.split(' ').first}',
+                    _wiki == null ? 'TheAudioDB' : 'Wikipedia')),
+            SliverToBoxAdapter(
+              child: OverBlok(
+                naam: widget.artist.name,
+                artikel: _wiki,
+                audiodbTekst: _bio,
+                feiten: _feiten,
+                foto: _art?.clearartBytes ?? _art?.backdropBytes,
+                marge: _marge,
+                // Het lint uit dezelfde rijen als de discografie hierboven, zodat er geen tweede
+                // idee ontstaat over welke platen van deze artiest zijn.
+                jaren: bouwJaarlint(platen: rijen, feiten: _feiten),
+                beeldVoorJaar: (punt, teller) => _jaarBeeld(punt, teller, eigenPerSleutel),
+              ),
+            ),
           ],
           // Onder de discografie, want dit is de uitgang van de pagina: als je hier niets vond, is de
           // volgende vraag "wie klinkt hier dan op".
@@ -18573,72 +18797,6 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     );
   }
 
-  /// De biografie als volwaardig blok, in twee kolommen met een foto ernaast.
-  ///
-  /// **Waarom niet meer die drie regels.** [BioText] toonde er drie (~250 tekens) met "Lees meer"
-  /// naar een dialoogvenster. Gemeten op de 29 teksten in Sabers eigen cache: gemiddeld 1980
-  /// tekens, van 180 tot 4683 — er zat dus 85 à 90% van elke biografie achter dat venster. Hier
-  /// staat de tekst zelf op de pagina; alleen de staart van een héél lange blijft ingeklapt, en
-  /// [BioText] doet dat inklappen nog steeds, met dezelfde dialoog erachter.
-  Widget _overBlok(String tekst) {
-    final smal = isCompact(context);
-    final marge = _marge;
-    final foto = _art?.clearartBytes ?? _art?.backdropBytes;
-    final kolommen = smal || isTv ? 1 : 2;
-
-    // In twee kolommen zetten door de tekst op een zinsgrens te breken, niet midden in een woord.
-    final stukken = <String>[];
-    if (kolommen == 2 && tekst.length > 400) {
-      final half = tekst.length ~/ 2;
-      var knip = tekst.indexOf('. ', half);
-      if (knip < 0 || knip > tekst.length - 80) knip = half;
-      stukken.add(tekst.substring(0, knip + 1).trim());
-      stukken.add(tekst.substring(knip + 1).trim());
-    } else {
-      stukken.add(tekst);
-    }
-
-    final tekstBlok = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (stukken.length == 2)
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Expanded(child: _bioKolom(stukken[0])),
-            const SizedBox(width: 34),
-            Expanded(child: _bioKolom(stukken[1])),
-          ])
-        else
-          _bioKolom(stukken.first),
-      ],
-    );
-
-    return Padding(
-      padding: EdgeInsets.fromLTRB(marge, 0, marge, smal ? 20 : 34),
-      child: (foto == null || smal || isTv)
-          ? tekstBlok
-          : Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                ClipRect(
-                  child: SizedBox(
-                    width: 460,
-                    height: 259,
-                    child: Image.memory(foto,
-                        fit: BoxFit.cover,
-                        cacheWidth: decodeWidth(460),
-                        errorBuilder: (_, __, ___) => const SizedBox()),
-                  ),
-                ),
-                const SizedBox(width: 48),
-                Expanded(child: tekstBlok),
-              ],
-            ),
-    );
-  }
-
-  Widget _bioKolom(String t) => Text(t,
-      style: const TextStyle(fontSize: 13.5, height: 1.68, color: Color(0xFFC7CBDA)));
 }
 
 class AlbumBrowsePage extends StatefulWidget {
@@ -21183,6 +21341,23 @@ class AlbumArt extends StatefulWidget {
   /// KWARTSLAG mee naar buiten, alsof je hem zijwaarts uit het hoesje trekt.
   final bool uitgeschoven;
 
+  /// Elke verandering hiervan speelt het uitschuiven OPNIEUW af, ook bij dezelfde plaat.
+  ///
+  /// **Waarom dit nodig is.** Het uitschuiven start op twee manieren: [_sync] roept
+  /// `_slide.forward()` aan, en dat doet niets als hij al op één staat; en `didUpdateWidget` begint
+  /// vanaf nul, maar alleen als de PLAAT veranderde. Klik je in het jaarlint een jaartal aan dat
+  /// bij dezelfde plaat hoort als het vorige, dan gebeurt er dus niets en leest het gebaar als
+  /// dood — je klikt en er beweegt niets.
+  ///
+  /// Niet opgelost door [uitgeschoven] over één frame naar false en terug te wippen: `_sync` draait
+  /// dan twee keer, de eerste keert om op 450 ms, één frame beweegt de schijf nauwelijks, en de
+  /// tweede `forward()` is opnieuw een lege handeling omdat de waarde nog vrijwel één is. Het
+  /// stottert zichtbaar.
+  ///
+  /// Standaard nul, en geen enkele bestaande aanroeper geeft hem mee — het speelscherm, de
+  /// albumpagina en de aanwijslijst blijven dus letterlijk hetzelfde doen.
+  final int uitschuifTeller;
+
   /// Hoeveel ruimte de plaat naast de hoes krijgt, als deel van de hoesbreedte.
   ///
   /// Leeg laten geeft [discTravelFactor] — wat het speelscherm en de albumpagina gebruiken, waar de
@@ -21221,6 +21396,7 @@ class AlbumArt extends StatefulWidget {
     this.trackCount = 0,
     this.playing = false,
     this.uitgeschoven = false,
+    this.uitschuifTeller = 0,
     this.reisFactor,
     this.pinned,
     this.pinnedMbid,
@@ -21322,7 +21498,9 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     // Wijs je in een lijst de volgende plaat aan, dan hoort die er ook uit te komen — niet er al
     // uit te STAAN omdat de vorige dat deed. Vandaar vanaf nul, en niet `forward()`: die doet niets
     // als hij al op één staat.
-    if (old.album != widget.album && widget.uitgeschoven && !widget.playing) {
+    if ((old.album != widget.album || old.uitschuifTeller != widget.uitschuifTeller) &&
+        widget.uitgeschoven &&
+        !widget.playing) {
       _slide.forward(from: 0);
     }
   }

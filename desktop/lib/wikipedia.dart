@@ -1,9 +1,10 @@
 /// De biografie van een artiest, uit Wikipedia.
 ///
 /// **Waarom hier een tweede bron bij komt.** De app leest biografieën van TheAudioDB, en die zijn
-/// kort. GEMETEN op 10-09-2026 voor Michael Jackson: de Nederlandse Wikipedia heeft **27.847**
-/// tekens, TheAudioDB **2.357** — en die 2.357 blijken een oudere KOPIE van precies datzelfde
-/// artikel. Waar Wikipedia inmiddels "tussen 400 en 500 miljoen" zegt, staat er bij TheAudioDB nog
+/// kort. GEMETEN op 10-09-2026 door deze cliënt zelf te laten tellen — inleiding plus alle
+/// sectieteksten — heeft de Nederlandse Wikipedia voor Michael Jackson **37.367 tekens in 26
+/// secties**, tegen **2.357** uit TheAudioDB. En die 2.357 blijken een oudere KOPIE van precies
+/// datzelfde artikel. Waar Wikipedia inmiddels "tussen 400 en 500 miljoen" zegt, staat er bij TheAudioDB nog
 /// "tussen 300 en 400 miljoen". Het is dus niet twee bronnen naast elkaar maar dezelfde tekst,
 /// afgeknipt en verouderd.
 ///

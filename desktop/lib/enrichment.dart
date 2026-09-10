@@ -73,6 +73,129 @@ class ArtistArt {
   }
 }
 
+/// Wie een artiest IS in feiten: geboren, opgericht, land, label.
+///
+/// **Dit stond al in de respons en werd weggegooid.** [CoverEnricher.fetchArtistBio] en
+/// [CoverEnricher._zoekArtiestBeeld] halen allebei dezelfde URL op — `search.php?s=<naam>` — en
+/// nemen er elk één ding uit: de eerste de biografie, de tweede de beelden. Alles daarnaast viel
+/// op de grond: `strBorn`, `intBornYear`, `intDiedYear`, `intFormedYear`, `strDisbanded`,
+/// `strCountry`, `strLabel`, `intMembers`. Dat zijn precies de feiten die boven een biografie
+/// horen te staan, en ze kosten nul extra verzoeken.
+///
+/// Een eigen buurcache en NIET een veld erbij op [ArtistArt]: dat is een beeldrecord, en een veld
+/// toevoegen dwingt daar de keuze af tussen een schemabump (herophalen voor 268 artiesten) en
+/// voor altijd `null` antwoorden op elke regel die een oudere bouw schreef. Ook niet bij de
+/// biografie: `bios/<fnv>.txt` is platte tekst, en daar JSON van maken breekt elk bestaand bestand
+/// en [CoverEnricher.cachedBio].
+class ArtiestFeiten {
+  /// `strBorn` zoals hij binnenkomt — vaak "29 August 1958, Gary, Indiana". Ruw bewaard: het is
+  /// vrije tekst in wisselende vorm, en er zelf een datum uit peuteren is raden.
+  final String? geboren;
+  final int? geborenJaar, gestorvenJaar, opgerichtJaar;
+  final String? ontbonden, land, label;
+  final int? aantalLeden;
+
+  const ArtiestFeiten({
+    this.geboren,
+    this.geborenJaar,
+    this.gestorvenJaar,
+    this.opgerichtJaar,
+    this.ontbonden,
+    this.land,
+    this.label,
+    this.aantalLeden,
+  });
+
+  static const schema = 1;
+
+  bool get isEmpty =>
+      geboren == null &&
+      geborenJaar == null &&
+      gestorvenJaar == null &&
+      opgerichtJaar == null &&
+      (ontbonden == null || ontbonden!.isEmpty) &&
+      (land == null || land!.isEmpty) &&
+      (label == null || label!.isEmpty);
+
+  /// "1958 – 2009", "sinds 1993", "1993 – 2011" — of null als er niets te zeggen valt.
+  ///
+  /// Het jaar van oprichting gaat voor het geboortejaar: bij een BAND is dat het jaar dat telt, en
+  /// bij een persoon staat er geen oprichtingsjaar.
+  String? get actief {
+    final van = opgerichtJaar ?? geborenJaar;
+    if (van == null) return null;
+    final tot = gestorvenJaar ?? _jaarUit(ontbonden);
+    return tot == null ? 'sinds $van' : '$van – $tot';
+  }
+
+  /// Alleen een schoon viertal telt. `strDisbanded` is vrije tekst en staat regelmatig vol met
+  /// "still active" of een hele zin; daar een jaartal uit vissen zou een gok zijn die er als een
+  /// feit uitziet.
+  ///
+  /// Openbaar omdat `jaarlint.dart` hem ook nodig heeft. Eén idee over wanneer "ontbonden" een
+  /// jaartal is — anders kan het lint een streepje zetten waar de feitenstrook er geen ziet.
+  static int? jaarUit(String? tekst) => _jaarUit(tekst);
+
+  static int? _jaarUit(String? tekst) {
+    if (tekst == null) return null;
+    final m = RegExp(r'^\s*(\d{4})\s*$').firstMatch(tekst);
+    return m == null ? null : int.tryParse(m.group(1)!);
+  }
+
+  Map<String, dynamic> toJson() => {
+        'v': schema,
+        if (geboren != null) 'geboren': geboren,
+        if (geborenJaar != null) 'gj': geborenJaar,
+        if (gestorvenJaar != null) 'sj': gestorvenJaar,
+        if (opgerichtJaar != null) 'oj': opgerichtJaar,
+        if (ontbonden != null) 'ontbonden': ontbonden,
+        if (land != null) 'land': land,
+        if (label != null) 'label': label,
+        if (aantalLeden != null) 'leden': aantalLeden,
+      };
+
+  /// Null bij een ander schema — dan haalt de aanroeper hem opnieuw op.
+  static ArtiestFeiten? fromJson(Map<String, dynamic> j) {
+    if ((j['v'] as num?)?.toInt() != schema) return null;
+    return ArtiestFeiten(
+      geboren: j['geboren'] as String?,
+      geborenJaar: (j['gj'] as num?)?.toInt(),
+      gestorvenJaar: (j['sj'] as num?)?.toInt(),
+      opgerichtJaar: (j['oj'] as num?)?.toInt(),
+      ontbonden: j['ontbonden'] as String?,
+      land: j['land'] as String?,
+      label: j['label'] as String?,
+      aantalLeden: (j['leden'] as num?)?.toInt(),
+    );
+  }
+
+  /// Uit één rij van TheAudioDB's `search.php`.
+  ///
+  /// De jaartallen komen als TEKST binnen ("1958"), niet als getal — vandaar `int.tryParse` en
+  /// niet een cast. En de `'null'`-wacht, want deze bron stuurt die vier letters echt.
+  static ArtiestFeiten uitAudioDb(Map<String, dynamic> a) {
+    String? s(String k) {
+      final v = (a[k] as String?)?.trim();
+      return (v == null || v.isEmpty || v.toLowerCase() == 'null') ? null : v;
+    }
+
+    int? n(String k) => int.tryParse(s(k) ?? '');
+
+    return ArtiestFeiten(
+      geboren: s('strBornLocation') == null
+          ? s('strBorn')
+          : [s('strBorn'), s('strBornLocation')].whereType<String>().join(' · '),
+      geborenJaar: n('intBornYear'),
+      gestorvenJaar: n('intDiedYear'),
+      opgerichtJaar: n('intFormedYear'),
+      ontbonden: s('strDisbanded'),
+      land: s('strCountry'),
+      label: s('strLabel'),
+      aantalLeden: n('intMembers'),
+    );
+  }
+}
+
 /// What a release IS — the text and facts that make an album page read like a film page
 /// instead of a bare track list.
 class AlbumInfo {
@@ -694,11 +817,51 @@ class CoverEnricher {
       final artists = (jsonBody(r)['artists'] as List?) ?? const [];
       if (artists.isEmpty) return null;
       final a = artists.first as Map<String, dynamic>;
+      // De feiten liggen HIER al op tafel, in dezelfde rij. Ze wegschrijven kost geen verzoek en
+      // geen wachttijd; ze later apart ophalen zou allebei wél kosten. Buiten de bio-tak, want een
+      // artiest zonder biografie heeft vaak wél een geboortejaar en een land.
+      await _schrijfFeiten(name, ArtiestFeiten.uitAudioDb(a));
       final bio = ((a['strBiographyNL'] ?? a['strBiographyEN']) as String?)?.trim();
       if (bio == null || bio.isEmpty) return null;
       await bioDir.create(recursive: true);
       await _bioFile(name).writeAsString(bio);
       return bio;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ── Feiten ────────────────────────────────────────────────────────────────
+
+  Directory get _feitenDir => Directory(_dir('artistfeiten'));
+  File _feitenFile(String name) =>
+      File('${_feitenDir.path}${Platform.pathSeparator}${fnv1a(name.toLowerCase())}.json');
+
+  Future<void> _schrijfFeiten(String name, ArtiestFeiten f) async {
+    if (f.isEmpty) return;
+    try {
+      await _feitenDir.create(recursive: true);
+      await _feitenFile(name).writeAsString(jsonEncode(f.toJson()));
+    } catch (_) {/* een cache die niet geschreven kan worden kost één herhaald verzoek */}
+  }
+
+  /// De feiten van deze artiest, van schijf.
+  ///
+  /// **Alleen lezen.** Ze worden geschreven als bijwerking van [fetchArtistBio], die bij elke
+  /// artiest toch al langskomt via de opstartveeg. Hier zelf gaan ophalen zou een tweede weg naar
+  /// dezelfde URL zijn, en dan is er geen plek meer waar één antwoord over dezelfde artiest staat.
+  ///
+  /// Gevolg dat je moet weten: voor de artiesten waarvan de biografie al vóór vandaag op schijf
+  /// stond komen deze feiten pas binnen als die bio een keer ververst wordt. Dat is de prijs van
+  /// nul extra verzoeken, en het scherm hoort er tegen te kunnen — zie [ArtiestFeiten.isEmpty].
+  Future<ArtiestFeiten?> artistFeiten(String name) async {
+    try {
+      final f = _feitenFile(name);
+      if (!await f.exists()) return null;
+      final j = jsonDecode(await f.readAsString());
+      if (j is! Map<String, dynamic>) return null;
+      final feiten = ArtiestFeiten.fromJson(j);
+      return (feiten == null || feiten.isEmpty) ? null : feiten;
     } catch (_) {
       return null;
     }

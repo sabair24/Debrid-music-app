@@ -125,3 +125,22 @@ const Duration kOvergang = Duration(milliseconds: 260);
 
 /// De kleurwas die van de ene hoes naar de andere loopt.
 const Duration kWas = Duration(milliseconds: 420);
+
+/// Het langzame inzoomen achter het jaarlint.
+///
+/// **Zes seconden, en dat staat bewust ver buiten de ladder hierboven.** [kWas] van 420 ms was het
+/// langste wat deze app kende, en dat is een OVERGANG: iets dat af moet zijn voordat je er weer
+/// iets van vindt. Dit is het tegenovergestelde — een beweging die je niet hoort op te merken
+/// terwijl je zit te lezen. Alles onder de twee seconden leest als een animatie die iets
+/// aankondigt; hierboven leest het als een foto die leeft.
+///
+/// Hij loopt ÉÉN keer per gekozen jaartal en herhaalt niet. Een eeuwig inzoomend beeld is accu op
+/// een laptop en doorlopend hertekenen van een grote afbeelding op een televisie, voor een effect
+/// dat niemand gevraagd heeft te blijven zien.
+const Duration kKenBurns = Duration(seconds: 6);
+
+/// Welk deel van [kKenBurns] de kruisvervaging duurt: precies [kWas].
+///
+/// Afgeleid en niet los ingetypt, zodat de twee nooit uit elkaar kunnen lopen. De vervaging is een
+/// overgang en hoort dus wél op de ladder; alleen de zoom eromheen staat eraf.
+const double kVervaagAandeel = 420 / 6000;
