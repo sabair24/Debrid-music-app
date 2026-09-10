@@ -502,6 +502,33 @@ class CoverEnricher {
     return art.isEmpty ? null : art;
   }
 
+  /// De NOMINALE maat die bij een TheAudioDB-beeldsoort hoort.
+  ///
+  /// **Waarom nominaal en niet gemeten.** TheAudioDB publiceert geen afmetingen, en ze uitlezen zou
+  /// betekenen dat je elke foto eerst binnenhaalt voor je weet in welk vak van de kiezer hij hoort.
+  /// Tegels zouden dan tussen de vakken springen naarmate ze laden — een venster dat onder je hand
+  /// verspringt is erger dan een tegel die er een paar procent naast zit.
+  ///
+  /// **En het lost een echte fout op.** De kiezer bouwde deze regels als `DiscogsImage(url, url, 0,
+  /// 0, false)`, met breedte en hoogte op NUL. `isWide` deelt dan door nul en zegt nee, dus ook een
+  /// fanart van 1280×720 werd als staand ingedeeld — precies het beeld dat er als achtergrond hoort
+  /// te staan.
+  ///
+  /// Deze getallen leven alleen in de lijst van dat venster en worden nergens bewaard. Dat is wat
+  /// "nominaal" hier eerlijk maakt in plaats van een verzonnen meting: het enige wat ze hoeven te
+  /// kloppen is de VORM.
+  ///
+  /// `backdrop` is er drie in één — `strArtistFanart` (1280×720), `strArtistWideThumb` (1000×562) en
+  /// `strArtistBanner` (1000×185) delen dat veld via een `??`-ketting. Alle drie zijn ze liggend, en
+  /// meer dan dat hoeft dit getal niet te weten.
+  static ({int breedte, int hoogte}) audioDbNominaal(String soort) => switch (soort) {
+        'backdrop' => (breedte: 1280, hoogte: 720),
+        'clearart' => (breedte: 1000, hoogte: 562),
+        'logo' => (breedte: 400, hoogte: 155),
+        'thumb' || 'cutout' => (breedte: 1000, hoogte: 1000),
+        _ => (breedte: 0, hoogte: 0),
+      };
+
   Directory get _artistArtDir => Directory(_dir('artistart'));
   File _artistArtFile(String name) =>
       File('${_artistArtDir.path}${Platform.pathSeparator}${_fnv(name.toLowerCase())}.json');

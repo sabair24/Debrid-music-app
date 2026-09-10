@@ -23332,9 +23332,22 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
       final extra = <DiscogsImage>[];
       // TheAudioDB's fanart is the widest thing either source has, and is usually the better
       // backdrop; Discogs almost never has anything that shape.
+      //
+      // Alle vijf de soorten en niet twee: clearart, cutout en logo staan al in hetzelfde bewaarde
+      // record, dus ze kosten geen extra verzoek en het zijn echte foto's van deze artiest. En
+      // MÉT hun nominale maat — zie [CoverEnricher.audioDbNominaal]. Ze kwamen hier als 0×0
+      // binnen, waardoor `isWide` bij álle vijf nee zei, ook bij de fanart van 1280×720.
       final tadb = await CoverEnricher(settings).artistArt(widget.artist);
-      for (final url in [tadb?.backdrop, tadb?.thumb]) {
-        if (url != null && url.isNotEmpty) extra.add(DiscogsImage(url, url, 0, 0, false));
+      for (final (url, soort) in [
+        (tadb?.backdrop, 'backdrop'),
+        (tadb?.clearart, 'clearart'),
+        (tadb?.logo, 'logo'),
+        (tadb?.thumb, 'thumb'),
+        (tadb?.cutout, 'cutout'),
+      ]) {
+        if (url == null || url.isEmpty) continue;
+        final maat = CoverEnricher.audioDbNominaal(soort);
+        extra.add(DiscogsImage(url, url, maat.breedte, maat.hoogte, false));
       }
       if (!mounted) return;
       setState(() => _images = [...a?.images ?? const <DiscogsImage>[], ...extra]);
@@ -23347,13 +23360,17 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
   Widget build(BuildContext context) {
     final lib = context.watch<LibraryStore>();
     final portrait = lib.chosenArtistArt(widget.artist, 'portrait');
-    final backdrop = lib.chosenArtistArt(widget.artist, 'backdrop');
+    final liggend = lib.chosenArtistArt(widget.artist, kSoortLiggend);
+    final staand = lib.chosenArtistArt(widget.artist, kSoortStaand);
     return Dialog(
       backgroundColor: _panel,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SizedBox(
         width: dialogWidth(context, 860),
-        height: dialogHeight(context, 680),
+        // 830 en niet 680: er staan nu twee vakken in plaats van één raster. Nagerekend op het
+        // ontwerpdoek — met twee rijen liggende tegels erbij loopt 720 er 31 punten overheen, en
+        // dan wordt de onderste rij half afgesneden zonder dat iets aangeeft dat er meer is.
+        height: dialogHeight(context, 830),
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
@@ -23366,10 +23383,12 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
               ]),
               Text(widget.artist, style: const TextStyle(color: _muted, fontSize: 12.5)),
               const SizedBox(height: 4),
-              const Text('Klik een foto voor de achtergrond · rechtsklik voor het portret',
+              const Text(
+                  'Klik in LIGGEND voor een breed scherm, in STAAND voor een iPad die je rechtop '
+                  'houdt · rechtsklik voor het portret',
                   style: TextStyle(color: _muted, fontSize: 11.5)),
               const SizedBox(height: 14),
-              Expanded(child: _body(portrait, backdrop)),
+              Expanded(child: _body(portrait, liggend, staand)),
             ],
           ),
         ),
@@ -23377,70 +23396,153 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
     );
   }
 
-  Widget _body(String? portrait, String? backdrop) {
+  Widget _body(String? portrait, String? liggendKeuze, String? staandKeuze) {
     if (_error != null) return Center(child: Text(_error!, style: const TextStyle(color: _muted)));
     final list = _images;
     if (list == null) {
       return const Center(child: CircularProgressIndicator(strokeWidth: 2, color: _accent));
     }
     if (list.isEmpty) return const Center(child: Text('Geen foto\'s gevonden.', style: TextStyle(color: _muted)));
-    return GridView.builder(
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-          maxCrossAxisExtent: 160, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: .82),
-      itemCount: list.length,
-      itemBuilder: (_, i) {
-        final img = list[i];
-        final isPortrait = portrait == img.uri;
-        final isBackdrop = backdrop == img.uri;
-        final lib = context.read<LibraryStore>();
-        // DE KLIK ZET DE ACHTERGROND, en dat was andersom. Saber: "foto veranderen doet niets" — en
-        // dat klopte precies. Deze kiezer wordt maar vanaf één plek geopend, de artiestpagina, en
-        // die toont sinds de kop verbouwd werd alleen nog een achtergrond: het ronde portret ging
-        // eruit toen de uitgeknipte figuur eruit ging. Een gewone klik zette dus een portret dat
-        // nergens meer getekend wordt. De knop deed iets, en je zag het nooit.
-        //
-        // Het portret is niet weg — [ArtistHero] op de personenpagina tekent hem nog — dus hij
-        // verhuist naar de tweede knop in plaats van te verdwijnen.
-        //
-        // Rechtsklik heeft geen knop op een afstandsbediening, dus op een televisie doet OK
-        // ingedrukt houden hetzelfde. Afgeschermd, want op een telefoon of iPad is lang drukken op
-        // een foto voor niemand "stel in als portret", en het zou afgaan waar een sleep of een
-        // contextmenu bedoeld was.
-        return Pressable(
-          onPressed: () => lib.setArtistArt(widget.artist, 'backdrop', img.uri),
-          onSecondaryTap: (_) => lib.setArtistArt(widget.artist, 'portrait', img.uri),
-          onLongPress:
-              isTv ? () => lib.setArtistArt(widget.artist, 'portrait', img.uri) : null,
-          borderRadius: BorderRadius.circular(10),
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8),
-              // De achtergrond eerst, want dat is nu de klik en het enige wat de pagina toont.
-              border: Border.all(
-                  color: isBackdrop
-                      ? _accent
-                      : isPortrait
-                          ? _accent2
-                          : Colors.transparent,
-                  width: 2),
+
+    // Twee vakken in ÉÉN schuiflijst, niet twee losse rasters: met een eigen schuifbalk per vak
+    // staat STAAND achter een balk die je pas vindt als je weet dat hij er is.
+    final vorm = splitsOpVorm(list);
+    return CustomScrollView(
+      slivers: [
+        _sectieKop('LIGGEND', vorm.liggend.length),
+        _raster(vorm.liggend, breed: true, gekozen: liggendKeuze, portrait: portrait),
+        _sectieKop('STAAND', vorm.staand.length),
+        _raster(vorm.staand, breed: false, gekozen: staandKeuze, portrait: portrait),
+        const SliverToBoxAdapter(child: SizedBox(height: 8)),
+      ],
+    );
+  }
+
+  /// Het kopje boven een vak, met de telling ernaast.
+  ///
+  /// Een leeg vak houdt zijn kop plus één gedempte regel. Verbergen laat het venster eruitzien
+  /// alsof het iets kwijt is — en juist bij een artiest zonder liggende foto's is het antwoord
+  /// "die zijn er niet", niet "dit vak bestaat niet".
+  Widget _sectieKop(String naam, int aantal) => SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.only(top: 16, bottom: 10),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
+            Text(naam, style: kOpschrift),
+            const SizedBox(width: 8),
+            Text(aantal == 1 ? '1 foto' : '$aantal foto\'s',
+                style: const TextStyle(fontSize: 11, color: Color(0xFF6C7387))),
+          ]),
+        ),
+      );
+
+  Widget _raster(List<DiscogsImage> beelden,
+      {required bool breed, required String? gekozen, required String? portrait}) {
+    if (beelden.isEmpty) {
+      return SliverToBoxAdapter(
+        child: Text(breed ? 'Geen liggende foto\'s gevonden.' : 'Geen staande foto\'s gevonden.',
+            style: const TextStyle(color: _muted, fontSize: 12)),
+      );
+    }
+    return SliverGrid(
+      // Liggend krijgt bewust GROTERE tegels. Een fanart van 1280×720 op 160 punten breed is niet
+      // te beoordelen — je moet een achtergrond kunnen ZIEN om er een te kiezen.
+      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: breed ? 260 : 160,
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+          childAspectRatio: breed ? 16 / 9 : .72),
+      delegate: SliverChildBuilderDelegate(
+        (_, i) => _tegel(beelden[i],
+            breed: breed, gekozen: gekozen, portrait: portrait),
+        childCount: beelden.length,
+      ),
+    );
+  }
+
+  Widget _tegel(DiscogsImage img,
+      {required bool breed, required String? gekozen, required String? portrait}) {
+    final isPortret = portrait == img.uri;
+    final isGekozen = gekozen == img.uri;
+    final lib = context.read<LibraryStore>();
+    final soort = breed ? kSoortLiggend : kSoortStaand;
+    // DE KLIK ZET DE ACHTERGROND VAN DIT VAK, en dat is wat de kop erboven al zegt — geen
+    // verborgen toets. Hij zette ooit het portret, en dat was de storing: deze kiezer wordt maar
+    // vanaf één plek geopend, de artiestpagina, en die toont sinds de verbouwing alleen nog een
+    // achtergrond. Een gewone klik zette dus een portret dat nergens meer getekend werd. De knop
+    // deed iets, en je zag het nooit.
+    //
+    // Het portret is niet weg — [ArtistHero] op de personenpagina tekent hem nog — dus hij blijft
+    // op de rechtsklik staan, in allebei de vakken.
+    //
+    // Rechtsklik heeft geen knop op een afstandsbediening, dus op een televisie doet OK ingedrukt
+    // houden hetzelfde. Afgeschermd, want op een telefoon of iPad is lang drukken op een foto voor
+    // niemand "stel in als portret".
+    return Pressable(
+      onPressed: () => lib.setArtistArt(widget.artist, soort, img.uri),
+      onSecondaryTap: (_) => lib.setArtistArt(widget.artist, 'portrait', img.uri),
+      onLongPress: isTv ? () => lib.setArtistArt(widget.artist, 'portrait', img.uri) : null,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+              color: isGekozen
+                  ? _accent
+                  : isPortret
+                      ? _accent2
+                      : Colors.transparent,
+              width: 2),
+        ),
+        child: Column(children: [
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: _fotoVlak(img.uri),
             ),
-            child: Column(children: [
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(6),
-                  child: _netCover(img.thumb, size: 150, radius: 6),
-                ),
-              ),
-              if (isPortrait || isBackdrop)
-                Padding(
-                  padding: const EdgeInsets.only(top: 3),
-                  child: Text(isPortrait ? 'portret' : 'achtergrond',
-                      style: TextStyle(fontSize: 10, color: isPortrait ? _accent : _accent2)),
-                ),
-            ]),
           ),
-        );
-      },
+          SizedBox(
+            height: 14,
+            child: isGekozen || isPortret
+                ? Text(isPortret ? 'portret' : (breed ? 'achtergrond' : 'achtergrond staand'),
+                    style: TextStyle(fontSize: 10, color: isPortret ? _accent2 : _accent))
+                : null,
+          ),
+        ]),
+      ),
+    );
+  }
+
+  /// De foto in een tegel, met de vorm van de TEGEL en niet die van een vierkant.
+  ///
+  /// **Dit is de belangrijkste wijziging van dit venster.** [_netCover] legt `width`, `height` en
+  /// `BoxFit.cover` vast, en dat is goed voor een hoes — die ís vierkant. Voor een fotokiezer is het
+  /// een leugen: elke foto kreeg dezelfde vierkante uitsnede, dus je kon niet zien wat je koos.
+  ///
+  /// Géén `width`/`height`: de rastertegel bepaalt de vorm, en die is per vak anders. En `contain`
+  /// in plaats van `cover`: nu de tegelverhouding bij de foto past zijn die twee voor nette foto's
+  /// identiek en verschillen ze alleen bij de uitschieters — waar `contain` een banner van 1000×185
+  /// hééllemaal laat zien in plaats van hem tot een gewone achtergrond bij te snijden.
+  Widget _fotoVlak(String url) {
+    const leeg = ColoredBox(
+      color: kPaneelHoog,
+      child: Center(child: Icon(Icons.image_rounded, color: Color(0xFF3A4054), size: 22)),
+    );
+    return Image.network(
+      url,
+      fit: BoxFit.contain,
+      cacheWidth: decodeWidth(260),
+      errorBuilder: (_, __, ___) => leeg,
+      loadingBuilder: (c, w, p) => p == null ? w : leeg,
+      // Invaden in plaats van inploppen — dezelfde afweging als in `_netCover`: een raster foto's
+      // dat er stuk voor stuk in ploft is een mozaïek dat staat te knipperen.
+      frameBuilder: (c, kind, frame, gesynchroniseerd) => gesynchroniseerd
+          ? kind
+          : AnimatedOpacity(
+              opacity: frame == null ? 0 : 1,
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOut,
+              child: kind,
+            ),
     );
   }
 }

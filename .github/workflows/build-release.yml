@@ -165,7 +165,8 @@ jobs:
             test/zuinig_test.dart test/accountkoppeling_test.dart \
             test/uitwijk_test.dart test/kantnummer_test.dart \
             test/naamteller_test.dart test/beeldmaat_webp_test.dart \
-            test/artiestbeeld_accenten_test.dart test/beeldvorm_test.dart
+            test/artiestbeeld_accenten_test.dart test/beeldvorm_test.dart \
+            test/fotovorm_test.dart
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
       # the app you actually use while the TV work is in progress — shipping that would install a

@@ -1250,12 +1250,45 @@ class DiscogsArtist {
 
   /// The photos that could serve as a portrait, best first — squarish ones, primary before the
   /// rest. Discogs doesn't label them, so this is a shape heuristic, not a promise.
-  List<DiscogsImage> get portraits =>
-      [...images.where((i) => !i.isWide)]
-        ..sort((a, b) => (b.primary ? 1 : 0).compareTo(a.primary ? 1 : 0));
+  List<DiscogsImage> get portraits => splitsOpVorm(images).staand;
 
   /// The ones wide enough to sit behind a page.
-  List<DiscogsImage> get backdrops => images.where((i) => i.isWide).toList();
+  List<DiscogsImage> get backdrops => splitsOpVorm(images).liggend;
+}
+
+/// Splitst foto's in liggend en staand. **De enige plek waar die grens getrokken wordt.**
+///
+/// Stond er tot 10-09-2026 twee keer, als losse getters op [DiscogsArtist], en allebei werden ze
+/// nergens aangeroepen — de fotokiezer gooide alles op één hoop en toonde elke foto als een
+/// vierkant. Je zag dus niet wat je koos, en of een foto liggend of staand was bleek pas als hij op
+/// de pagina stond.
+///
+/// **De liggende worden gesorteerd op hoe dicht ze bij 16:9 zitten**, niet op grootte en niet op
+/// `primary`. Dat is wat een banner van 1000×185 achteraan zet: hij is wel degelijk "wide" (5,4) en
+/// hij zou vooraan komen te staan zodra iemand op breedte sorteert, maar als achtergrond is hij
+/// onbruikbaar. De staande houden de bestaande volgorde: primary eerst, want daar zegt Discogs zelf
+/// iets over.
+///
+/// Twee grensgevallen die bewust zó vallen:
+///
+/// * Een foto van 4:3 (1,33) is noch [DiscogsImage.isSquarish] noch [DiscogsImage.isWide], en
+///   belandt bij STAAND. Dat is de veilige kant: in een staand vak is een 4:3 een nette uitsnede,
+///   in een band van 2,5:1 is hij dat niet.
+/// * Een regel zonder afmetingen (`height == 0`) belandt ook bij staand, om dezelfde reden. Dat
+///   gebeurt echt: de twee TheAudioDB-urls die de kiezer erbij zette kwamen met 0×0 binnen, en
+///   `isWide` zei bij allebei nee — ook bij de fanart van 1280×720. Zie `audioDbNominaal`.
+({List<DiscogsImage> liggend, List<DiscogsImage> staand}) splitsOpVorm(
+    List<DiscogsImage> beelden) {
+  const doel = 16 / 9;
+  final liggend = beelden.where((i) => i.isWide).toList()
+    ..sort((a, b) {
+      final va = (a.width / a.height - doel).abs();
+      final vb = (b.width / b.height - doel).abs();
+      return va.compareTo(vb);
+    });
+  final staand = beelden.where((i) => !i.isWide).toList()
+    ..sort((a, b) => (b.primary ? 1 : 0).compareTo(a.primary ? 1 : 0));
+  return (liggend: liggend, staand: staand);
 }
 
 /// Where an album's scans live on disk, as one name.
