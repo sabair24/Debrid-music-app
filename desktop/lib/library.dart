@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'album_facts.dart';
 import 'album_id.dart';
+import 'beeldvorm.dart';
 import 'completeness.dart';
 import 'audioformaten.dart';
 import 'discogs.dart' show persingUitHerkomst;
@@ -1409,13 +1410,36 @@ class LibraryStore extends ChangeNotifier {
     } catch (_) {}
   }
 
-  /// The image URL the user picked for [kind] — 'portrait' or 'backdrop' — or null.
+  /// The image URL the user picked for [kind] — zie `kArtSoorten` in `beeldvorm.dart` — of null.
+  ///
+  /// **Leeg telt als NIET gekozen, en dat was het niet.** [setArtistArt] schreef een lege url weg
+  /// als de tekst `''` in plaats van de sleutel te verwijderen, dus stond er daarna een keuze die
+  /// geen keuze is. Dat is niet alleen slordig: met de staande achtergrond erbij is er nu een
+  /// LADDER ([achtergrondVoor]), en daarin schaduwt zo'n lege eerste sport een echte tweede. Het
+  /// gevolg zou zijn dat je scherm leeg blijft terwijl er wél een foto gekozen is.
+  ///
+  /// Hier afgevangen en niet in de ladder, zodat elke aanroeper het goede antwoord krijgt.
   String? chosenArtistArt(String artist, String kind) {
     // A statement body rather than an arrow: `cond ? a?[k] : b` makes the parser read that second
     // `?` as another conditional, and no amount of bracketing round the map reads well enough to
     // be worth it.
     final choice = isRemote ? _remoteArtistArt[artistKey(artist)] : _artistArtChoice[artistKey(artist)];
-    return choice?[kind];
+    final url = choice?[kind];
+    return (url == null || url.isEmpty) ? null : url;
+  }
+
+  /// De achtergrond die bij DEZE SCHERMVORM hoort, met de terugval erin.
+  ///
+  /// Eén plek waar de volgorde staat, want hij is bewust asymmetrisch — zie [achtergrondSoorten].
+  /// De drie widgets die een artiestachtergrond tekenen (de vervaagde wash, de editoriale kop en de
+  /// personenkop) horen alle drie hetzelfde antwoord te geven; deden ze dat elk op hun eigen manier,
+  /// dan kan één scherm van vorm wisselen terwijl het andere blijft staan.
+  String? achtergrondVoor(String artist, Beeldvorm vorm) {
+    for (final soort in achtergrondSoorten(vorm)) {
+      final url = chosenArtistArt(artist, soort);
+      if (url != null) return url;
+    }
+    return null;
   }
 
   /// Wie deze artiest IS, in beeld. [url] leeg laat de app weer zelf kiezen.
@@ -1429,7 +1453,16 @@ class LibraryStore extends ChangeNotifier {
     if (isRemote) {
       return _editOnPc({'op': 'artistArt', 'artist': artist, 'kind': kind, 'url': url});
     }
-    _artistArtChoice.putIfAbsent(artistKey(artist), () => {})[kind] = url;
+    // Leeg WIST, en dat stond er al vijf regels hierboven beloofd zonder dat het waar was: een
+    // `putIfAbsent(...)[kind] = ''` bewaart de lege tekst als keuze. Er was dus geen weg terug naar
+    // "laat de app maar kiezen", en de ladder eronder zou op die lege sport blijven staan.
+    final vak = _artistArtChoice.putIfAbsent(artistKey(artist), () => {});
+    if (url.isEmpty) {
+      vak.remove(kind);
+      if (vak.isEmpty) _artistArtChoice.remove(artistKey(artist));
+    } else {
+      vak[kind] = url;
+    }
     await _writeJson(_artistArtChoiceFile, _artistArtChoice);
     notifyListeners();
   }

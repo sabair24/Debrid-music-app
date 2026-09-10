@@ -33,7 +33,10 @@ class ArtistDto {
   final String? artworkRef;
   final int albumCount;
 
-  /// Portraits and backdrops the user picked by hand, by kind ("portrait", "backdrop", "logo").
+  /// Portraits and backdrops the user picked by hand, by kind — zie `kArtSoorten` in
+  /// `beeldvorm.dart` voor de lijst, en `achtergrondSoorten` voor welke soort bij welke SCHERMVORM
+  /// hoort: `backdrop` is liggend, `backdrop_staand` is voor een iPad die je rechtop houdt.
+  ///
   /// Carried so a Mac and an iPad show the picture that was chosen rather than going off and
   /// finding their own — which is the app arguing with its owner.
   final Map<String, String> artChoice;

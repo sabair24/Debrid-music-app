@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+import 'package:debridmusic/beeldvorm.dart';
 import 'package:debridmusic/enrichment.dart';
 import 'package:debridmusic/lan/catalog.dart';
 import 'package:debridmusic/lan/pairing.dart';
@@ -720,6 +721,69 @@ void _editingTests() {
     // The picture you chose, instead of the app going off and finding its own.
     expect(mac.chosenArtistArt('Portishead', 'portrait'), 'https://example.test/p.jpg');
     expect(mac.chosenArtistArt('Portishead', 'backdrop'), isNull);
+  });
+
+  test('DE VAL: de STAANDE achtergrond reist mee, of hij bestaat alleen op de pc', () async {
+    // **De stilste storing van deze hele verbouwing.** `lan/catalog.dart` had één letterlijke lijst
+    // van soorten, en alleen wat daarin staat gaat mee met de catalogus. Een nieuwe soort toevoegen
+    // waar hij gekozen wordt en hem hier vergeten geeft dit: je kiest op de iPad een staande foto,
+    // die reist netjes naar de pc, de pc bewaart hem — en bij de volgende catalogusduw is hij weg,
+    // want een cliënt leest zijn keuzes uit de doorgestuurde map en niet uit zijn eigen bestand.
+    //
+    // Je merkt dat niet meteen en niet op het toestel waar je het deed. Vandaar deze toets: hij
+    // legt de hele weg af, van een keuze op de pc tot wat de Mac terugleest.
+    await pcLibrary.setArtistArt('Portishead', kAchtergrond, 'https://example.test/liggend.jpg');
+    await pcLibrary.setArtistArt(
+        'Portishead', kAchtergrondStaand, 'https://example.test/staand.jpg');
+    pcLibrary.notifyListeners();
+
+    await mac.loadRemote();
+
+    expect(mac.chosenArtistArt('Portishead', kAchtergrondStaand), 'https://example.test/staand.jpg',
+        reason: 'de staande achtergrond die je koos is op je iPad niet aangekomen');
+    expect(mac.chosenArtistArt('Portishead', kAchtergrond), 'https://example.test/liggend.jpg');
+
+    // En de ladder geeft op elk van de twee vormen het goede antwoord — ook op de Mac, waar de
+    // keuzes uit de catalogus komen in plaats van uit een eigen bestand.
+    expect(mac.achtergrondVoor('Portishead', Beeldvorm.staand), 'https://example.test/staand.jpg');
+    expect(mac.achtergrondVoor('Portishead', Beeldvorm.liggend), 'https://example.test/liggend.jpg');
+  });
+
+  test('DE GRENS: zonder staande keuze valt een staand scherm terug op de liggende', () async {
+    await pcLibrary.setArtistArt('Portishead', kAchtergrond, 'https://example.test/alleen.jpg');
+    pcLibrary.notifyListeners();
+    await mac.loadRemote();
+
+    expect(mac.achtergrondVoor('Portishead', Beeldvorm.staand), 'https://example.test/alleen.jpg',
+        reason: 'een uitsnede van jouw eigen foto is beter dan een gok van een database');
+    // En andersom NIET: een staande 2:3 in een band van 2,5:1 is een reep voorhoofd.
+    await pcLibrary.setArtistArt('Portishead', kAchtergrond, '');
+    await pcLibrary.setArtistArt('Portishead', kAchtergrondStaand, 'https://example.test/hoog.jpg');
+    pcLibrary.notifyListeners();
+    await mac.loadRemote();
+
+    expect(mac.achtergrondVoor('Portishead', Beeldvorm.liggend), isNull,
+        reason: 'een liggend scherm hoort dan bij de fanart uit te komen, niet bij een staande foto');
+  });
+
+  test('DE VAL: een leeg gewiste keuze schaduwt de volgende sport niet', () async {
+    // `setArtistArt` bewaarde een lege url als de TEKST `''` in plaats van de sleutel te wissen.
+    // Met één keuze viel dat niet op; met een ladder eronder wel: de lege eerste sport wint dan van
+    // een echte tweede, en het scherm blijft leeg terwijl er een foto gekozen is.
+    await pcLibrary.setArtistArt('Portishead', kAchtergrond, 'https://example.test/liggend.jpg');
+    await pcLibrary.setArtistArt('Portishead', kAchtergrondStaand, 'https://example.test/staand.jpg');
+    await pcLibrary.setArtistArt('Portishead', kAchtergrondStaand, '');
+    pcLibrary.notifyListeners();
+
+    expect(pcLibrary.chosenArtistArt('Portishead', kAchtergrondStaand), isNull,
+        reason: 'leeg hoort te betekenen "laat de app maar kiezen", zoals de uitleg belooft');
+    expect(pcLibrary.achtergrondVoor('Portishead', Beeldvorm.staand),
+        'https://example.test/liggend.jpg',
+        reason: 'de lege sport blokkeert de terugval en het scherm blijft zwart');
+
+    await mac.loadRemote();
+    expect(mac.chosenArtistArt('Portishead', kAchtergrondStaand), isNull,
+        reason: 'en een gewiste keuze mag ook niet als lege tekst naar je iPad reizen');
   });
 
   test('unmerging on the PC reaches the Mac as well', () async {

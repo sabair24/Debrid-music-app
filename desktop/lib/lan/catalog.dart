@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io' show gzip;
 import 'dart:typed_data';
 
+import '../beeldvorm.dart';
 import '../library.dart';
 import '../echtheid_oordelen.dart';
 import '../enrichment.dart';
@@ -274,8 +275,13 @@ class LanCatalog {
           name: a.name,
           artworkRef: a.artworkRef,
           albumCount: albumCounts[a.id] ?? 0,
+          // [kArtSoorten] en geen lijst ter plekke. Die stond hier letterlijk, en dat is precies de
+          // vorm waarin een soort stil verdwijnt: je voegt er een toe waar hij gekozen wordt en
+          // vergeet hem hier. Het toestel maakt de keuze dan wél, stuurt hem naar de pc, die
+          // bewaart hem netjes — en bij de volgende catalogusduw is hij weg, want een cliënt leest
+          // uit deze map. Dagen later, op een ander apparaat, zonder melding.
           artChoice: {
-            for (final kind in const ['portrait', 'backdrop', 'logo'])
+            for (final kind in kArtSoorten)
               if (library.chosenArtistArt(a.name, kind) case final url?) kind: url,
           },
         )
