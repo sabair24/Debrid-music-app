@@ -77,8 +77,12 @@ OverBlok _blok({int secties = 6, bool metBeeld = true}) => OverBlok(
       ),
       // Een stomp: van een jaartal naar een echt beeld komen hoort op de artiestpagina thuis, en
       // dat is precies waarom die bouwer geïnjecteerd wordt.
-      beeldVoorJaar:
-          metBeeld ? (p) => ColoredBox(color: Colors.blue.shade900, child: Text('beeld ${p.jaar}')) : null,
+      beeldVoorJaar: metBeeld
+          ? (p, teller) => ColoredBox(
+                color: Colors.blue.shade900,
+                child: Text('beeld ${p.jaar} tik $teller'),
+              )
+          : null,
     );
 
 void main() {
@@ -166,13 +170,31 @@ void main() {
     await t.tap(find.text('Meer lezen'));
     await t.pumpAndSettle();
 
-    expect(find.text('beeld 1987'), findsOneWidget,
+    expect(find.textContaining('beeld 1987'), findsOneWidget,
         reason: 'de band begint bij de nieuwste plaat, niet bij een leeg vak');
 
     await t.tap(find.text('1982'));
     await t.pump();
     await t.pump(const Duration(seconds: 7));
-    expect(find.text('beeld 1982'), findsOneWidget);
+    expect(find.textContaining('beeld 1982'), findsOneWidget);
+  });
+
+  testWidgets('DE VAL: hetzelfde jaartal opnieuw aanwijzen laat de teller oplopen', (t) async {
+    // Dit is wat de cd opnieuw uit de hoes haalt. Zonder oplopende teller gebeurt er bij een
+    // tweede klik op hetzelfde jaartal niets, en dan leest het gebaar dood — zie
+    // `uitschuif_herhaling_test.dart` voor de andere helft van diezelfde belofte.
+    await pomp(t, _omhulsel(_blok()));
+    await t.tap(find.text('Meer lezen'));
+    await t.pumpAndSettle();
+
+    await t.tap(find.text('1982'));
+    await t.pumpAndSettle();
+    expect(find.textContaining('beeld 1982 tik 1'), findsOneWidget);
+
+    await t.tap(find.text('1982'));
+    await t.pumpAndSettle();
+    expect(find.textContaining('beeld 1982 tik 2'), findsOneWidget,
+        reason: 'een tweede klik op hetzelfde jaartal komt niet bij de beeldband aan');
   });
 
   testWidgets('DE GRENS: zonder animaties opent hij in één pomp en laat geen ticker achter', (t) async {

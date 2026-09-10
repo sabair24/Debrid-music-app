@@ -435,7 +435,7 @@ class _JaarLint extends StatelessWidget {
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: punten.length,
-        separatorBuilder: (_, __) => const SizedBox(width: kRuimte24),
+        separatorBuilder: (_, __) => const SizedBox(width: kRuimte8),
         itemBuilder: (_, i) {
           final p = punten[i];
           final aan = p.jaar == gekozen;
@@ -443,12 +443,20 @@ class _JaarLint extends StatelessWidget {
             onPressed: () => onKies(p.jaar),
             borderRadius: BorderRadius.circular(kHoek4),
             ringOnFocus: true,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 150),
+            // **Een VASTE breedte, en dat is geen detail.** Het gekozen jaartal wordt groter (19
+            // tegen 15), en bij een blokje dat zich naar zijn inhoud voegt duwt dat alles rechts
+            // ervan opzij: je klikt op 1982 en 1987 springt weg onder je muis. Met een vaste maat
+            // groeit de tekst binnen zijn eigen vak en blijft de rij staan.
+            //
+            // En een vaste HOOGTE met de inhoud onderaan, zodat de streepjes onder elkaar op één
+            // lijn liggen. Zonder dat hangt het gekozen streepje lager dan de rest, puur omdat zijn
+            // jaartal een paar punten hoger is.
+            child: SizedBox(
+              width: 132,
+              height: 58,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.end,
-                mainAxisSize: MainAxisSize.min,
                 children: [
                   AnimatedDefaultTextStyle(
                     duration: kGebaar,
