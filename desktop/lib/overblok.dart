@@ -60,10 +60,19 @@ class OverBlok extends StatefulWidget {
     this.audiodbTekst,
     this.feiten,
     this.jaren = const [],
+    this.beginJaar,
     this.beeldVoorJaar,
     this.foto,
     this.marge = 56,
   });
+
+  /// Welk jaartal er aan staat voordat je zelf iets aanwijst.
+  ///
+  /// **Nodig, want "de laatste plaat" is een slechte keuze.** Op het scherm gezien op 10-09-2026:
+  /// bij Michael Jackson landde de band op 2026 — een postume verzamelaar die hij niet in zijn
+  /// bibliotheek heeft, dus zonder hoes en met een Engelse tekst. De pagina wéét welke platen van
+  /// jou zijn en kan dus een betere openingszet doen; dit blok niet.
+  final int? beginJaar;
 
   final String naam;
 
@@ -136,6 +145,10 @@ class _OverBlokState extends State<OverBlok> with SingleTickerProviderStateMixin
   }
 
   void _kiesBeginJaar() {
+    if (widget.beginJaar != null && widget.jaren.any((p) => p.jaar == widget.beginJaar)) {
+      _jaar = widget.beginJaar;
+      return;
+    }
     final platen = widget.jaren.where((p) => p.soort == Jaarsoort.plaat);
     _jaar = platen.isNotEmpty ? platen.last.jaar : widget.jaren.lastOrNull?.jaar;
   }
@@ -258,26 +271,38 @@ class _OverBlokState extends State<OverBlok> with SingleTickerProviderStateMixin
     if (widget.foto == null || smal || isTv) {
       return Align(alignment: Alignment.topLeft, child: kolom);
     }
+    // **De tekst LINKS en de foto rechts.** Andersom stond de tekst ingesprongen achter een beeld
+    // van 460 punten, en dan komt "Meer lezen" — dat onder het hele blok hangt — helemaal links
+    // onder de FOTO te staan, ver van de alinea die hij openklapt. Op het scherm gezien op
+    // 10-09-2026: het leest als een losse link die nergens bij hoort. Zo begint de tekst gewoon bij
+    // de marge en staat de uitklapper eronder waar je hem verwacht.
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ClipRect + Align(widthFactor:) en geen AnimatedContainer: dit is een VERMENIGVULDIGING op
-        // een vaste breedte, dus er wordt niets gemeten. De foto verdwijnt naar links terwijl de
-        // beeldband eronder zijn plek overneemt — één beeld dat verhuist, geen twee die vechten.
+        Expanded(child: Align(alignment: Alignment.topLeft, child: kolom)),
+        // ClipRect + Align en geen AnimatedContainer: dit is een VERMENIGVULDIGING op een vaste
+        // maat, dus er wordt niets gemeten. De foto verdwijnt terwijl de beeldband eronder zijn
+        // plek overneemt — één beeld dat verhuist, geen twee die vechten.
+        //
+        // **Ook `heightFactor`, en dat bleek pas op het scherm.** Met alleen `widthFactor` krimpt
+        // het vak in de breedte maar houdt het zijn HOOGTE: uitgeklapt bleef er een gat van 259
+        // punten naast de eerste alinea staan, alsof er iets niet geladen was.
         AnimatedBuilder(
           animation: deel,
           builder: (_, kind) {
             final over = 1 - (open == null ? deel.value : (open ? 1.0 : 0.0));
+            if (over <= 0) return const SizedBox.shrink();
             return ClipRect(
               child: Align(
-                alignment: Alignment.centerLeft,
+                alignment: Alignment.topRight,
                 widthFactor: over,
+                heightFactor: over,
                 child: Opacity(opacity: over, child: kind),
               ),
             );
           },
           child: Padding(
-            padding: const EdgeInsets.only(right: 48),
+            padding: const EdgeInsets.only(left: 48),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(kHoek4),
               child: SizedBox(
@@ -291,7 +316,6 @@ class _OverBlokState extends State<OverBlok> with SingleTickerProviderStateMixin
             ),
           ),
         ),
-        Expanded(child: Align(alignment: Alignment.topLeft, child: kolom)),
       ],
     );
   }

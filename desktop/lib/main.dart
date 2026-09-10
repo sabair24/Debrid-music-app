@@ -18065,11 +18065,17 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
 
   Widget _jaarBeeld(Jaarpunt punt, int teller, Map<String, Album> eigenPerSleutel) {
     final eigen = eigenPlaat(punt, eigenPerSleutel);
+    // **Geen artiestbeeld als terugval voor een PLAAT.** Dat stond er wel, en op het scherm gezien
+    // op 10-09-2026 was het gevolg dat een plaat die je niet hebt een half uitgesneden woordmerk
+    // naast zijn tekst kreeg — dat leest als een storing, niet als een hoes. Bij een geboortejaar
+    // is er nu eenmaal geen hoes en dan is het artiestbeeld wél het juiste antwoord.
     final bytes = eigen?.correctedCover ??
         eigen?.cover ??
-        (punt.soort == Jaarsoort.geboorte || punt.soort == Jaarsoort.oprichting
-            ? _art?.thumbBytes
-            : _art?.clearartBytes ?? _art?.backdropBytes);
+        (punt.soort == Jaarsoort.plaat
+            ? null
+            : punt.soort == Jaarsoort.geboorte || punt.soort == Jaarsoort.oprichting
+                ? _art?.thumbBytes
+                : _art?.clearartBytes ?? _art?.backdropBytes);
 
     // Waas eronder en het beeld scherp erop. Een hoes is vierkant en de band is breed: `cover` zou
     // er een strook uit snijden, en `contain` alleen laat twee zwarte balken staan. De vervaagde
@@ -18085,22 +18091,36 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
         ]);
 
     final url = punt.hoesUrl;
-    if (bytes == null && (url == null || url.isEmpty)) return const SizedBox.shrink();
+    final heeftHoes = bytes != null || (url != null && url.isNotEmpty);
+    // Geen hoes betekent NIET geen band: de uitleg over de plaat staat er nog, en die is vaak juist
+    // het interessante. Dan draagt het artiestbeeld de waas en krijgt de tekst de volle breedte.
+    final waasBron = bytes ?? _art?.backdropBytes ?? _art?.clearartBytes;
+    if (!heeftHoes && waasBron == null && punt.soort != Jaarsoort.plaat) {
+      return const SizedBox.shrink();
+    }
 
-    Widget waas() => bytes != null
-        ? Image.memory(bytes, fit: BoxFit.cover, cacheWidth: 96, filterQuality: FilterQuality.low)
-        : Image.network(url!,
+    Widget waas() {
+      if (bytes != null) {
+        return Image.memory(bytes, fit: BoxFit.cover, cacheWidth: 96, filterQuality: FilterQuality.low);
+      }
+      if (url != null && url.isNotEmpty) {
+        return Image.network(url,
             fit: BoxFit.cover,
             cacheWidth: 96,
             filterQuality: FilterQuality.low,
             errorBuilder: (_, __, ___) => const SizedBox());
+      }
+      return waasBron == null
+          ? const SizedBox()
+          : Image.memory(waasBron, fit: BoxFit.cover, cacheWidth: 96, filterQuality: FilterQuality.low);
+    }
 
-    return vlak(waas(), _bandInhoud(punt, teller, eigen, bytes, url));
+    return vlak(waas(), _bandInhoud(punt, teller, eigen, bytes, url, heeftHoes));
   }
 
   /// Wat er ín de band staat: de hoes met de cd ernaast, en de uitleg erbij.
-  Widget _bandInhoud(
-      Jaarpunt punt, int teller, Album? eigen, Uint8List? bytes, String? url) {
+  Widget _bandInhoud(Jaarpunt punt, int teller, Album? eigen, Uint8List? bytes, String? url,
+      bool heeftHoes) {
     final bib = context.watch<LibraryStore>();
     // De hoes vult de band op de hoogte; de rest van de breedte is voor de tekst.
     const hoes = kBandHoogte - 56;
@@ -18152,9 +18172,19 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          links,
-          const SizedBox(width: 36),
-          Expanded(child: _bandTekst(punt, eigen)),
+          if (heeftHoes) ...[links, const SizedBox(width: 36)],
+          // De leesmaat ook hier, en dat bleek pas op het scherm: zonder deze grens loopt een
+          // albumtekst over de volle veertienhonderd punten door en wordt hij aan de rechterrand
+          // afgesneden midden in een zin.
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: kLeesmaat),
+                child: _bandTekst(punt, eigen),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -18347,6 +18377,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
         toonAlles: _toonAlles,
         zeefHoezen: _dgStatus != BronStatus.geenToken && _hoezen.isNotEmpty);
     final rijen = zeef.rijen;
+    // Eén keer opbouwen en twee keer gebruiken: het lint zelf, en de openingszet eronder. Twee keer
+    // bouwen zou twee lijsten geven die uit elkaar kunnen lopen zodra er een bron bijkomt.
+    final lint = bouwJaarlint(platen: rijen, feiten: _feiten);
     final blokken = inBlokken(rijen, _sort, bezit);
 
     return Scaffold(
@@ -18583,7 +18616,15 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                 marge: _marge,
                 // Het lint uit dezelfde rijen als de discografie hierboven, zodat er geen tweede
                 // idee ontstaat over welke platen van deze artiest zijn.
-                jaren: bouwJaarlint(platen: rijen, feiten: _feiten),
+                jaren: lint,
+                // De nieuwste plaat die JIJ hebt, als openingszet. De laatste rij van de
+                // discografie is dat zelden: bij Michael Jackson is dat een postume verzamelaar
+                // uit 2026 die niet in de bibliotheek staat, dus zonder hoes en met een Engelse
+                // tekst. Dit blok weet niet wat van jou is; deze pagina wel.
+                beginJaar: lint.lastWhere(
+                  (p) => p.soort == Jaarsoort.plaat && eigenPlaat(p, eigenPerSleutel) != null,
+                  orElse: () => const Jaarpunt(jaar: 0, soort: Jaarsoort.plaat, label: ''),
+                ).jaar,
                 beeldVoorJaar: (punt, teller) => _jaarBeeld(punt, teller, eigenPerSleutel),
               ),
             ),

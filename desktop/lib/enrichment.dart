@@ -845,16 +845,29 @@ class CoverEnricher {
     } catch (_) {/* een cache die niet geschreven kan worden kost één herhaald verzoek */}
   }
 
-  /// De feiten van deze artiest, van schijf.
+  /// De feiten van deze artiest.
   ///
-  /// **Alleen lezen.** Ze worden geschreven als bijwerking van [fetchArtistBio], die bij elke
-  /// artiest toch al langskomt via de opstartveeg. Hier zelf gaan ophalen zou een tweede weg naar
-  /// dezelfde URL zijn, en dan is er geen plek meer waar één antwoord over dezelfde artiest staat.
+  /// Ze worden geschreven als bijwerking van [fetchArtistBio], uit dezelfde respons — dus voor elke
+  /// artiest die vanaf nu opgehaald wordt kost dit niets.
   ///
-  /// Gevolg dat je moet weten: voor de artiesten waarvan de biografie al vóór vandaag op schijf
-  /// stond komen deze feiten pas binnen als die bio een keer ververst wordt. Dat is de prijs van
-  /// nul extra verzoeken, en het scherm hoort er tegen te kunnen — zie [ArtiestFeiten.isEmpty].
-  Future<ArtiestFeiten?> artistFeiten(String name) async {
+  /// **Maar staan ze er niet, dan wordt de bio wél opgehaald, en dat is met opzet.** De eerste
+  /// versie las alleen van schijf, met de gedachte "de opstartveeg komt toch langs". GEMETEN op het
+  /// scherm op 10-09-2026: bij Michael Jackson bleef de feitenstrook leeg en had het jaarlint geen
+  /// geboorte- en sterfjaar. De reden is `_loadBio`, dat `cachedBio` eerst probeert en alleen
+  /// ophaalt als die leeg is — en voor de 29 artiesten wier biografie al op schijf stond gebeurde
+  /// dat nooit. Die feiten zouden dus voor altijd wegblijven, zonder één melding.
+  ///
+  /// [fetch] op false is er voor wie alleen wil kijken wat er ligt.
+  Future<ArtiestFeiten?> artistFeiten(String name, {bool fetch = true}) async {
+    final gelezen = await _leesFeiten(name);
+    if (gelezen != null || !fetch) return gelezen;
+    // De bio ophalen schrijft de feiten mee. Eén weg naar die URL, en dus geen tweede plek waar
+    // een ander antwoord over dezelfde artiest vandaan kan komen.
+    await fetchArtistBio(name);
+    return _leesFeiten(name);
+  }
+
+  Future<ArtiestFeiten?> _leesFeiten(String name) async {
     try {
       final f = _feitenFile(name);
       if (!await f.exists()) return null;
