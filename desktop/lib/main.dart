@@ -18612,7 +18612,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                 artikel: _wiki,
                 audiodbTekst: _bio,
                 feiten: _feiten,
-                foto: _art?.clearartBytes ?? _art?.backdropBytes,
+                // De ACHTERGROND eerst en dan pas de clearart. Andersom stond er bij Michael
+                // Jackson een uitgeknipt woordmerk naast zijn biografie — dat is geen foto van een
+                // artiest maar een logo, en het leest als versiering. De backdrop is wél een foto.
+                foto: _art?.backdropBytes ?? _art?.clearartBytes,
                 marge: _marge,
                 // Het lint uit dezelfde rijen als de discografie hierboven, zodat er geen tweede
                 // idee ontstaat over welke platen van deze artiest zijn.

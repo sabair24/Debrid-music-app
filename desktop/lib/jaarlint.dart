@@ -112,11 +112,25 @@ List<Jaarpunt> bouwJaarlint({
 
   // De ankers: geboorte of oprichting ervóór, overlijden of ontbinding erna. Die twee mogen NOOIT
   // wegvallen bij het uitdunnen — ze zijn het begin en het einde van het verhaal.
+  // Bij een PERSOON is de geboorte het begin, bij een GROEP de oprichting — zie
+  // [ArtiestFeiten.isPersoon]. Andersom begon het lint van Michael Jackson bij "Opgericht 1964",
+  // het jaar van The Jackson 5, terwijl de app 1958 gewoon in huis had.
+  final persoon = feiten?.isPersoon ?? true;
+  final eersteKeus = persoon ? feiten?.geborenJaar : feiten?.opgerichtJaar;
+  final tweedeKeus = persoon ? feiten?.opgerichtJaar : feiten?.geborenJaar;
   Jaarpunt? begin;
-  if (verstandig(feiten?.opgerichtJaar)) {
-    begin = Jaarpunt(jaar: feiten!.opgerichtJaar!, soort: Jaarsoort.oprichting, label: 'Opgericht');
-  } else if (verstandig(feiten?.geborenJaar)) {
-    begin = Jaarpunt(jaar: feiten!.geborenJaar!, soort: Jaarsoort.geboorte, label: 'Geboren');
+  if (verstandig(eersteKeus)) {
+    begin = Jaarpunt(
+      jaar: eersteKeus!,
+      soort: persoon ? Jaarsoort.geboorte : Jaarsoort.oprichting,
+      label: persoon ? 'Geboren' : 'Opgericht',
+    );
+  } else if (verstandig(tweedeKeus)) {
+    begin = Jaarpunt(
+      jaar: tweedeKeus!,
+      soort: persoon ? Jaarsoort.oprichting : Jaarsoort.geboorte,
+      label: persoon ? 'Opgericht' : 'Geboren',
+    );
   }
 
   Jaarpunt? einde;

@@ -167,10 +167,40 @@ void main() {
           reason: 'zonder beginjaar is er geen periode en hoort er geen regel te staan');
     });
 
-    test('DE VAL: een oprichtingsjaar gaat voor een geboortejaar', () {
-      // Bij een band is dat het jaar dat telt. Staan ze er allebei, dan is het een persoon die
-      // ook een groep begon, en dan is de groep het onderwerp van deze pagina.
-      expect(const ArtiestFeiten(geborenJaar: 1975, opgerichtJaar: 1993).actief, 'sinds 1993');
+    test('DE VAL: bij een PERSOON telt het geboortejaar, bij een GROEP de oprichting', () {
+      // Gemeten op het scherm op 10-09-2026: bij Michael Jackson stond er "1964 – 2009" — het jaar
+      // dat The Jackson 5 begon — terwijl de app 1958 gewoon in huis had. TheAudioDB vult
+      // `intFormedYear` ook voor een solo-artiest, met het jaar dat hij begon te spelen, en dat is
+      // niet het begin van zíjn verhaal.
+      //
+      // `intMembers` zegt welk van de twee het is. Staat dat er niet, dan wint de geboorte: een
+      // groep heeft nu eenmaal geen geboortejaar, dus als er een staat is het een persoon.
+      expect(const ArtiestFeiten(geborenJaar: 1958, opgerichtJaar: 1964, aantalLeden: 1).actief,
+          'sinds 1958',
+          reason: 'de loopbaan van een persoon begint niet bij de oprichting van zijn eerste band');
+      expect(const ArtiestFeiten(geborenJaar: 1975, opgerichtJaar: 1993).actief, 'sinds 1975',
+          reason: 'zonder ledental is een geboortejaar het bewijs dat het om een persoon gaat');
+      expect(const ArtiestFeiten(opgerichtJaar: 1993, aantalLeden: 4).actief, 'sinds 1993');
+      expect(const ArtiestFeiten(geborenJaar: 1975, opgerichtJaar: 1993, aantalLeden: 4).actief,
+          'sinds 1993',
+          reason: 'bij vier leden is de oprichting het begin, ook al staat er een geboortejaar bij');
+    });
+
+    test('DE VAL: het lint begint bij de geboorte van een persoon', () {
+      final lint = bouwJaarlint(
+        platen: [plaat('Off the Wall', 1979)],
+        feiten: const ArtiestFeiten(geborenJaar: 1958, opgerichtJaar: 1964, aantalLeden: 1),
+      );
+      expect(lint.first.jaar, 1958);
+      expect(lint.first.soort, Jaarsoort.geboorte);
+      expect(lint.first.label, 'Geboren');
+
+      final groep = bouwJaarlint(
+        platen: [plaat('Homework', 1997)],
+        feiten: const ArtiestFeiten(opgerichtJaar: 1993, aantalLeden: 2),
+      );
+      expect(groep.first.soort, Jaarsoort.oprichting);
+      expect(groep.first.label, 'Opgericht');
     });
 
     test('DE VAL: de letterlijke tekst "null" wordt nooit een waarde', () {

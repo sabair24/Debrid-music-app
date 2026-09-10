@@ -117,12 +117,21 @@ class ArtiestFeiten {
       (land == null || land!.isEmpty) &&
       (label == null || label!.isEmpty);
 
+  /// Of dit één iemand is in plaats van een groep.
+  ///
+  /// TheAudioDB vult `intMembers` met 1 voor een solo-artiest. Dat is precies genoeg om te weten
+  /// welk jaartal het BEGIN van een loopbaan is: bij een groep de oprichting, bij een persoon de
+  /// geboorte. Weet de bron het niet, dan is een geboortejaar het veiligste antwoord — dat klopt
+  /// voor een persoon en is voor een groep meestal simpelweg afwezig.
+  bool get isPersoon => (aantalLeden ?? 1) <= 1;
+
   /// "1958 – 2009", "sinds 1993", "1993 – 2011" — of null als er niets te zeggen valt.
   ///
-  /// Het jaar van oprichting gaat voor het geboortejaar: bij een BAND is dat het jaar dat telt, en
-  /// bij een persoon staat er geen oprichtingsjaar.
+  /// Bij een GROEP telt het jaar van oprichting; bij een PERSOON het geboortejaar. Andersom stond
+  /// er bij Michael Jackson "1964 – 2009" — het jaar dat The Jackson 5 begon, onder een label dat
+  /// over hem gaat.
   String? get actief {
-    final van = opgerichtJaar ?? geborenJaar;
+    final van = isPersoon ? (geborenJaar ?? opgerichtJaar) : (opgerichtJaar ?? geborenJaar);
     if (van == null) return null;
     final tot = gestorvenJaar ?? _jaarUit(ontbonden);
     return tot == null ? 'sinds $van' : '$van – $tot';

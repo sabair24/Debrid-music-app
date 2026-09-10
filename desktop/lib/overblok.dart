@@ -411,9 +411,14 @@ class _FeitenStrook extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // **Geboren gaat vóór opgericht, en het jaartal alleen telt ook.** Op het scherm gezien op
+    // 10-09-2026: bij Michael Jackson stond er "OPGERICHT 1964", terwijl de app 1958 gewoon in
+    // huis had. `strBorn` was leeg maar `intBornYear` niet, en de strook keek alleen naar die
+    // eerste. Voor iemand met één lid leest "opgericht" bovendien als een band.
+    final geboren = feiten.geboren ?? (feiten.geborenJaar == null ? null : '${feiten.geborenJaar}');
     final paren = <(String, String)>[
-      if (feiten.geboren case final g?) ('GEBOREN', g),
-      if (feiten.opgerichtJaar case final j? when feiten.geboren == null) ('OPGERICHT', '$j'),
+      if (geboren != null) ('GEBOREN', geboren),
+      if (feiten.opgerichtJaar case final j? when geboren == null) ('OPGERICHT', '$j'),
       if (feiten.land case final l?) ('LAND', l),
       if (feiten.actief case final a?) ('ACTIEF', a),
       if (feiten.label case final l?) ('LABEL', l),
