@@ -519,11 +519,14 @@ class DiscogsService {
     final strict = await _get(
       'https://api.discogs.com/database/search?type=master&artist=${_q(who)}&release_title=${_q(title)}',
     );
-    final ids = _masters(strict, who, album);
+    final ids = mastersUit(strict, who, album);
     if (ids.isNotEmpty) return ids;
     // Titles disagree about "(Deluxe Edition)", "- EP" and the like far more often than they
     // disagree about the words themselves, so fall back to a loose query.
-    return _masters(
+    // Los zoekt Discogs in ÁLLE velden — credits, nummers, labels. Daarom moet de titel het album
+    // hier ook echt noemen; zie [mastersUit].
+    return mastersUit(
+      los: true,
       await _get("https://api.discogs.com/database/search?type=master&q=${_q("$who $title")}"),
       who,
       album,
@@ -599,7 +602,16 @@ class DiscogsService {
   }
 
   /// Every plausible master for this album, best first.
-  List<int> _masters(Map<String, dynamic>? body, String artist, String album) {
+  ///
+  /// **Met [los] valt wat de titel niet noemt eruit.** De losse zoekvraag (`q=`) zoekt in ÁLLE
+  /// velden en geeft dan ook platen terug die met dit album niets te maken hebben. Voor een plaat
+  /// die Discogs (nog) niet kent is dat het enige antwoord — en dan werd het ook gebruikt: "The
+  /// Sound of Milk" van Camille, die op 18-09-2026 verschijnt, droeg op 11-09-2026 de persing van
+  /// Christina Aguilera's *Back To Basics* (RCA, 82876-82639-2). Wat de titel wél noemt blijft
+  /// staan, ook met een andere schrijfwijze van de artiest; een strenge zoekvraag filtert Discogs
+  /// zelf al op artiest en titel, en daar blijft alles staan.
+  static List<int> mastersUit(Map<String, dynamic>? body, String artist, String album,
+      {bool los = false}) {
     final results = body?['results'] as List<dynamic>? ?? const [];
     final scored = <(int, int)>[]; // (id, score)
     for (var i = 0; i < results.length; i++) {
@@ -608,7 +620,11 @@ class DiscogsService {
       final id = (r['master_id'] as num?)?.toInt() ?? (r['id'] as num?)?.toInt();
       if (id == null || id <= 0) continue;
       final formats = [for (final f in (r['format'] as List<dynamic>? ?? const [])) f.toString()];
-      final s = titleScore(r['title'] as String? ?? '', artist, album) * 10 + albumScore(formats);
+      final titel = titleScore(r['title'] as String? ?? '', artist, album);
+      // Onder "komt erin voor" (-2) zit alleen nog "een andere plaat" of "gebundeld met een
+      // andere" (-6). Uit een losse zoekvraag is dat geen kandidaat maar ruis.
+      if (los && titel < -2) continue;
+      final s = titel * 10 + albumScore(formats);
       // Discogs' own relevance order breaks ties: it is a better judge than anything here.
       scored.add((id, s * 100 - i));
     }
@@ -2564,6 +2580,14 @@ extension DiscogsStyles on DiscogsService {
       '?type=master&style=${_q(style.trim())}&sort=have&sort_order=desc'
       '&per_page=${max * 2}&page=${deep ? 4 : 1}',
     );
+    return stijlTreffers(b, max: max);
+  }
+
+  /// Wat een stijlzoekopdracht oplevert, als albums die de albumpagina kan openen.
+  ///
+  /// Los van het verzoek, zodat de vertaling — en vooral het etiket MASTER op elk album — zonder
+  /// net en zonder token na te rekenen is. Zie `test/discogs_zoektreffers_test.dart`.
+  static List<CatalogAlbumHit> stijlTreffers(Map<String, dynamic>? b, {int max = 24}) {
     final results = b?['results'] as List<dynamic>? ?? const [];
     final out = <CatalogAlbumHit>[];
     final seen = <String>{};
@@ -2591,6 +2615,11 @@ extension DiscogsStyles on DiscogsService {
             (year != null && year.length >= 4) ? year : null,
             0,
             'album',
+            // Een MASTER, geen persing: de zoekvraag hierboven vraagt `type=master`. Zonder dit
+            // etiket las de albumpagina het negatieve id als RELEASE — en release 13814 is Billy
+            // Nasty's technomix, waar master 13814 Nevermind is. Zo stond Nevermind vanaf
+            // Alternative Rock met zesentwintig technonummers (11-09-2026).
+            origin: CatalogRef.discogsMaster(id),
           ),
           artist,
         ),
