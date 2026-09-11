@@ -4488,7 +4488,7 @@ class AlbumDetailPage extends StatefulWidget implements OnderDeBalk {
   State<AlbumDetailPage> createState() => _AlbumDetailPageState();
 }
 
-class _AlbumDetailPageState extends State<AlbumDetailPage> {
+class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumDetailPage> {
   late Album album = widget.album;
 
   /// The record as its label pressed it, so the page can show what is MISSING and not only what
@@ -4563,7 +4563,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     if (nieuw) {
       // En doorgeven aan de schil, die hem over de VOLLE hoogte tekent — achter de bovenbalk langs.
       // Zie [PaginaWas]: deze pagina zit onder die balk in de boom en kan er zelf niet achter komen.
-      context.read<PaginaWas>().toon(kleur);
+      // Via [WasHouder], die hem alleen laat zien zolang deze pagina bovenop ligt: ligt er op dit
+      // moment al een andere pagina op, dan wacht hij tot je terug bent.
+      zetWas(kleur);
     }
   }
 
@@ -4597,29 +4599,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
   @override
   void dispose() {
-    // De kleur weer intrekken, zodat Start en Albums niet in de tint van het laatst bekeken album
-    // blijven staan.
-    //
-    // `wis` en niet `toon(null)`: ga je van album A naar B, dan zet B zijn kleur vóórdat A wordt
-    // opgeruimd — Flutter bouwt de nieuwe route op terwijl de oude nog leeft. Onvoorwaardelijk
-    // wissen haalde dan de kleur van B weg. Zie [PaginaWas.wis].
-    //
-    // Via de State en niet via `context`: bij het opruimen mag er niet meer in de boom gekeken
-    // worden, en dit is een dienst die de hele app deelt.
-    _paginaWas?.wis(_was);
+    // De kleur trekt [WasHouder] zelf in: hier, en al eerder, zodra er een pagina op deze komt.
     _rol.dispose();
     super.dispose();
-  }
-
-  /// De dienst die de schilkleur draagt, vastgehouden zolang deze pagina leeft.
-  ///
-  /// Opgehaald in [didChangeDependencies] omdat `context.read` in [dispose] niet meer mag.
-  PaginaWas? _paginaWas;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _paginaWas = context.read<PaginaWas>();
   }
 
   String get _albumKey => '${artistKey(album.artist)}|${normKey(album.title)}';

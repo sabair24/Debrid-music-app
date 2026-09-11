@@ -321,6 +321,15 @@ class BinnenNavigator extends StatefulWidget {
   final ValueNotifier<bool> kanTerug;
   final Widget wortel;
 
+  /// Wie in deze navigator wil horen dat er een pagina óp hem komt, en er weer af gaat — zie
+  /// `WasHouder` in `ui/paginawas.dart`, de albumpagina die daar haar kleur aan ophangt.
+  ///
+  /// Alleen pagina's ([PageRoute]): een menu of een dialoog legt zich over een pagina heen zonder
+  /// dat je die pagina verlaat. Null buiten deze navigator — het koppel- en aanmeldscherm draaien
+  /// zonder schil — en dan doet een pagina wat ze altijd deed.
+  static RouteObserver<PageRoute<dynamic>>? kijkerVan(BuildContext context) =>
+      context.findAncestorStateOfType<_BinnenNavigatorState>()?._kijker;
+
   @override
   State<BinnenNavigator> createState() => _BinnenNavigatorState();
 }
@@ -328,10 +337,14 @@ class BinnenNavigator extends StatefulWidget {
 class _BinnenNavigatorState extends State<BinnenNavigator> {
   late final StapelDiepte _diepte = StapelDiepte(widget.kanTerug);
 
+  /// Zie [BinnenNavigator.kijkerVan]. Hier en niet globaal zoals [binnenNav]: een observer hangt aan
+  /// één navigator tegelijk, en zo leeft hij met deze mee.
+  final _kijker = RouteObserver<PageRoute<dynamic>>();
+
   @override
   Widget build(BuildContext context) => Navigator(
         key: widget.navigatorKey,
-        observers: [_diepte],
+        observers: [_diepte, _kijker],
         // Geen overgang voor de wortel: de sectiewissel heeft zijn eigen overvloeier, en twee
         // animaties over elkaar leest als een aarzeling.
         onGenerateRoute: (instellingen) => PageRouteBuilder<void>(
