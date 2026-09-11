@@ -446,7 +446,11 @@ class _TvLabelledState extends State<TvLabelled> {
             // a couch, and 11 points on a 960-wide canvas cannot be read from a couch either. It
             // would have been the smallest text on the screen while being the only thing explaining
             // what the icon above it does.
-            height: 20,
+            // En de hoogte in GESCHAALDE punten. Hier stond 20, en op de Shield staat de tekst op
+            // 1,35: 16 × 1,35 × 1,1 is bijna 24 punten tekst in een vak van 20. Een Text met
+            // ellipsis knipt dan af, precies onder de grondlijn -- "Wachtrij" werd "Wachtrii", en
+            // elk onderschrift met een g, j, p of y verloor zijn staart. Gezien op 11-09-2026.
+            height: (MediaQuery.textScalerOf(context).scale(16) * 1.1).ceilToDouble() + 2,
             child: _focused
                 ? Text(
                     widget.label,
