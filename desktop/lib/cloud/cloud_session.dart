@@ -89,6 +89,23 @@ class CloudSession extends ChangeNotifier {
   CloudState state = CloudState.signedOut;
   CloudUser? user;
 
+  /// Klaar met herstellen — of dat nu lukte of niet.
+  ///
+  /// **Waarom dit bestaat.** Het zelfherstel van een geweigerde sleutel vuurde op 11-09-2026 om
+  /// 17:15:56,244, nog geen drie tiende seconde na het opstarten. [restore] wordt bewust niet
+  /// afgewacht voor het eerste beeld, dus stond [user] toen nog op null, gaf [idToken] een lege
+  /// sleutel, en viel de accountweg af met "niet ingelogd" -- over een toestel dat gewoon ingelogd
+  /// was. Wie kort na het opstarten een inlogsleutel nodig heeft, wacht hierop.
+  ///
+  /// Voltooit ook als [restore] niets te herstellen vond of de cloud uit staat: "klaar" betekent
+  /// "je weet nu wat er is", niet "ingelogd".
+  Future<void> get hersteld => _hersteld.future;
+  final _hersteld = Completer<void>();
+
+  void _klaarMetHerstellen() {
+    if (!_hersteld.isCompleted) _hersteld.complete();
+  }
+
   /// The last thing that went wrong, for the screen to show. Never thrown out of here into
   /// `main()` — a cloud that is down must not stop the app from starting.
   String? lastError;
@@ -152,6 +169,7 @@ class CloudSession extends ChangeNotifier {
     if (!config.isConfigured) {
       state = CloudState.disabled;
       notifyListeners();
+      _klaarMetHerstellen();
       return;
     }
     state = CloudState.restoring;
@@ -199,6 +217,7 @@ class CloudSession extends ChangeNotifier {
     }
     state = user == null ? CloudState.signedOut : CloudState.signedIn;
     notifyListeners();
+    _klaarMetHerstellen();
   }
 
   Future<void> signIn(String email, String password) async {
