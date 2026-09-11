@@ -592,7 +592,15 @@ Future<void> main() async {
     verseSleutel: (basis) async {
       final herstel = await herstelSleutel(
         basis: basis,
-        inlogsleutel: () => cloud.idToken(),
+        // Eerst wachten tot de sessie hersteld is. Dit vuurt bij de eerste weigering, en die komt
+        // binnen een halve seconde na het opstarten -- ruim vóórdat `cloud.restore()` klaar is, want
+        // die wordt bewust niet afgewacht. Zonder dit wachten zei het herstel op 11-09-2026 "niet
+        // ingelogd" over een toestel dat gewoon ingelogd was. De dertig seconden zijn voor een
+        // netwerk dat helemaal niet wil; dan zegt `idToken` dat daarna zelf wel.
+        inlogsleutel: () async {
+          await cloud.hersteld.timeout(const Duration(seconds: 30), onTimeout: () {});
+          return cloud.idToken();
+        },
         viaAccount: (pc, inlogsleutel) async {
           final ik = await thisDevice();
           return RemoteClient.pairMetAccount(

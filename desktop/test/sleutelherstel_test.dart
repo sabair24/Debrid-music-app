@@ -158,5 +158,15 @@ void main() {
       expect(lijf, contains('_findServer()'),
           reason: 'anders vraagt het een wachtwoord dat dit toestel al heeft');
     });
+
+    test('het zelfherstel wacht tot de cloudsessie hersteld is', () {
+      final start = hoofd.indexOf('inlogsleutel: () async {');
+      expect(start, greaterThan(-1),
+          reason: 'de inlogsleutel wordt weer meteen gevraagd — dan valt de accountweg vlak na het '
+              'opstarten af met "niet ingelogd", zoals op 11-09-2026 om 17:15:56');
+      final lijf = hoofd.substring(start, start + 200);
+      expect(lijf.indexOf('await cloud.hersteld'), lessThan(lijf.indexOf('cloud.idToken()')),
+          reason: 'eerst wachten op de sessie, dán om een sleutel vragen');
+    });
   });
 }

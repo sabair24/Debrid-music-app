@@ -12,6 +12,7 @@
 /// iemand zes cijfers hoeft over te tikken.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -223,6 +224,40 @@ void main() {
       final s = sessie(ververs: _versGoed);
       expect(s.state, CloudState.signedOut);
       expect(await s.verseSleutelVoor(Uri.parse('http://192.168.0.117:47820')), isNull);
+    });
+  });
+
+  group('hersteld: wanneer je op de sessie kunt rekenen', () {
+    Future<bool> alKlaar(CloudSession s) async {
+      var klaar = false;
+      unawaited(s.hersteld.then((_) => klaar = true));
+      await Future<void>.delayed(Duration.zero);
+      return klaar;
+    }
+
+    test('pas klaar als het herstellen voorbij is — en dan ingelogd', () async {
+      await meldAan();
+      final s = sessie(ververs: _versGoed);
+      expect(await alKlaar(s), isFalse,
+          reason: 'vóór het herstellen is er nog niets om op te rekenen');
+      await s.restore();
+      expect(await alKlaar(s), isTrue);
+      expect(s.isSignedIn, isTrue);
+    });
+
+    test('ook klaar als het netwerk niet wil, en dan nog steeds ingelogd', () async {
+      await meldAan();
+      final s = sessie(ververs: () => throw SocketException('Failed host lookup'));
+      await s.restore();
+      expect(await alKlaar(s), isTrue, reason: 'wie hierop wacht mag niet blijven hangen');
+      expect(s.isSignedIn, isTrue);
+    });
+
+    test('ook klaar als er nooit iemand ingelogd heeft', () async {
+      final s = sessie(ververs: _versGoed);
+      await s.restore();
+      expect(await alKlaar(s), isTrue);
+      expect(s.isSignedIn, isFalse);
     });
   });
 }
