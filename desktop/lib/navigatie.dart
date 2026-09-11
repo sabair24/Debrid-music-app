@@ -18,6 +18,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import 'tv.dart';
 import 'ui/maten.dart';
 
 /// De navigator binnen de schil. De chrome staat erbuiten en blijft dus staan.
@@ -108,7 +109,18 @@ class _Inzet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) =>
-      Padding(padding: EdgeInsets.only(top: BalkRuimte.van(context)), child: child);
+      Padding(
+        // Op een tv ook de overscan opzij: tekst en knoppen blijven uit de rand die een toestel kan
+        // wegsnijden. Hier en niet rond de hele navigator, want daar hield ook de achtergrond van een
+        // [OnderDeBalk]-pagina 48 punten voor de rand op -- en die tekent juist zelf tot de rand.
+        // Buiten een tv is [tvOverscan] nul: daar verandert er niets, ook de vorm van de boom niet.
+        padding: EdgeInsets.only(
+          left: tvOverscan.left,
+          right: tvOverscan.right,
+          top: BalkRuimte.van(context),
+        ),
+        child: child,
+      );
 }
 
 /// De strook van een [OnderDeBalk]-pagina achter de balk trekt zich terug zodra er een andere

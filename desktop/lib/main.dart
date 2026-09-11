@@ -2411,10 +2411,14 @@ class _HomeShellState extends State<HomeShell> {
                         },
                         child: kind,
                       ),
-                      child: Padding(
-                      // De overscan zat vroeger in de rail links; die is er niet meer, dus de
-                      // inhoud houdt hem nu zelf van de schermrand af.
-                      padding: EdgeInsets.symmetric(horizontal: tvOverscan.left),
+                      // Géén zijmarge hier, en dat is met opzet. Op een tv stond hier de overscan
+                      // rond de HELE navigator, en daarmee ook rond de achtergrond van elke pagina:
+                      // die hield 48 punten voor de rand op, en een pagina die zelf ook de marge nam
+                      // kreeg hem twee keer. Op 11-09-2026 gezien: de artiestpagina gebruikte 80%
+                      // van de breedte, met zwarte banden links en rechts. De marge zit nu per
+                      // pagina in `_Inzet` (navigatie.dart); een [OnderDeBalk]-pagina tekent zelf
+                      // tot de rand en houdt alleen haar inhoud binnen de marge.
+                      //
                       // HIER ligt de grens tussen wat blijft staan en wat wisselt.
                       //
                       // Alles hierboven -- de bovenbalk met de pillen, de rail links -- en alles
@@ -2440,7 +2444,6 @@ class _HomeShellState extends State<HomeShell> {
                           kanTerug: _kanTerug,
                           wortel: const _SectieHost(),
                         ),
-                      ),
                       ),
                     ),
                   ),
@@ -5994,7 +5997,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                 const SizedBox(height: 6),
                 // The artist is a link: from a record you're holding, the obvious next question is
                 // "what else did they make".
-                Row(
+                // Een Wrap en geen Row: artiest, jaar, genre en aantal zijn samen soms breder dan de
+                // kolom, en een Row knipte dan af -- "2 nummeı", op de Shield gezien op 11-09-2026.
+                // Zo loopt wat niet past door naar de volgende regel en valt er niets weg.
+                Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     ArtistNames(names: [album.artist], style: const TextStyle(color: _muted)),
                     Text(
@@ -7354,6 +7361,10 @@ class _PersonPageState extends State<PersonPage> {
         children: [
       ArtistBackdrop(
         name: widget.name,
+        // Zelf de marge van de tv, want deze pagina draagt [OnderDeBalk] en krijgt hem dus niet meer
+        // van de navigator: de achtergrond loopt tot de rand, de inhoud blijft erbinnen.
+        child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: tvOverscan.left),
         child: CustomScrollView(
         controller: _rol,
         slivers: [
@@ -7438,6 +7449,7 @@ class _PersonPageState extends State<PersonPage> {
           ],
           const SliverToBoxAdapter(child: SizedBox(height: 24)),
         ],
+        ),
         ),
       ),
           // Het glas achter de zwevende balk, en het hoort bij deze pagina — zie de artiestpagina.
