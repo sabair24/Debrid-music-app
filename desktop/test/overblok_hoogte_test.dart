@@ -23,6 +23,7 @@ import 'package:debridmusic/enrichment.dart';
 import 'package:debridmusic/jaarlint.dart';
 import 'package:debridmusic/overblok.dart';
 import 'package:debridmusic/tv.dart';
+import 'package:debridmusic/ui/maten.dart';
 import 'package:debridmusic/wikipedia.dart';
 
 const _feiten = ArtiestFeiten(
@@ -77,12 +78,15 @@ OverBlok _blok({int secties = 6, bool metBeeld = true}) => OverBlok(
       ),
       // Een stomp: van een jaartal naar een echt beeld komen hoort op de artiestpagina thuis, en
       // dat is precies waarom die bouwer geïnjecteerd wordt.
+      // Twee lagen, want alleen de achtergrond mag inzoomen — zie [Bandlagen]. De voorgrond is wat
+      // deze toets narekent: die hoort NIET mee te bewegen.
       beeldVoorJaar: metBeeld
-          ? (p, teller) => ColoredBox(
-                color: Colors.blue.shade900,
-                child: Text('beeld ${p.jaar} tik $teller'),
+          ? (p, teller) => (
+                achter: ColoredBox(color: Colors.blue.shade900, child: const Text('waas')),
+                voor: Text('beeld ${p.jaar} tik $teller'),
               )
           : null,
+      beeldBijSectie: (afd, i) => Text('sectiebeeld ${afd.kop}'),
     );
 
 void main() {
@@ -177,6 +181,45 @@ void main() {
     await t.pump();
     await t.pump(const Duration(seconds: 7));
     expect(find.textContaining('beeld 1982'), findsOneWidget);
+  });
+
+  testWidgets('DE VAL: de hoes en de tekst bewegen NIET mee met de inzoom', (t) async {
+    // **Aangewezen op 11-09-2026: "bij het lint zoomt de album te veel uit naar links waardoor die
+    // wordt afgesneden".** De Ken Burns stond om het HELE vlak in plaats van alleen om de vervaagde
+    // achtergrond, dus de hoes kroop mee naar buiten en liep links het kader uit.
+    //
+    // Op een band van 1344 punten schuift acht procent zoom de linkerrand vierenvijftig punten
+    // buiten beeld. Dat is met het oog te zien en met geen enkele bestaande toets — vandaar deze:
+    // hij noteert waar de voorgrond staat en laat de inzoom daarna een paar seconden lopen.
+    await pomp(t, _omhulsel(_blok()));
+    await t.tap(find.text('Meer lezen'));
+    await t.pump();
+    await t.pump(kOvergang);
+
+    final beeld = find.textContaining('beeld 1987');
+    expect(beeld, findsOneWidget);
+    final begin = t.getTopLeft(beeld);
+
+    // Halverwege de inzoom van zes seconden.
+    await t.pump(const Duration(seconds: 3));
+    expect(t.getTopLeft(beeld), begin,
+        reason: 'de hoes kruipt tijdens het inzoomen het kader uit en wordt links afgesneden');
+
+    await t.pump(const Duration(seconds: 3));
+    expect(t.getTopLeft(beeld), begin, reason: 'en aan het einde van de inzoom evenmin');
+  });
+
+  testWidgets('DE KERN: een opengeklapt hoofdstuk krijgt zijn beeld ernaast', (t) async {
+    await pomp(t, _omhulsel(_blok()));
+    await t.tap(find.text('Meer lezen'));
+    await t.pumpAndSettle();
+
+    expect(find.textContaining('sectiebeeld'), findsNothing,
+        reason: 'een dicht hoofdstuk hoort geen beeld te tonen');
+
+    await t.tap(find.text('HOOFDSTUK 2'));
+    await t.pumpAndSettle();
+    expect(find.text('sectiebeeld Hoofdstuk 2'), findsOneWidget);
   });
 
   testWidgets('DE VAL: hetzelfde jaartal opnieuw aanwijzen laat de teller oplopen', (t) async {

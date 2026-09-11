@@ -52,6 +52,17 @@ const double kBandHoogte = 340;
 /// Hoe breed de foto naast de tekst staat zolang het blok dicht is.
 const double kZijfoto = 460;
 
+/// Hoe breed het beeld naast een opengeklapt hoofdstuk staat.
+const double kSectiefoto = 300;
+
+/// De twee lagen van de beeldband, apart aangeleverd.
+///
+/// **Apart, omdat alleen de ACHTERGROND mag inzoomen.** De Ken Burns stond eerst om het hele vlak,
+/// en dan kruipt de hoes mee naar buiten: op een breedte van 1344 punten schuift acht procent zoom
+/// de linkerrand vierenvijftig punten buiten beeld, en daar wordt hij afgesneden. Wat je ziet is een
+/// hoes die langzaam zijn eigen kader uit loopt.
+typedef Bandlagen = ({Widget achter, Widget voor});
+
 class OverBlok extends StatefulWidget {
   const OverBlok({
     super.key,
@@ -62,6 +73,7 @@ class OverBlok extends StatefulWidget {
     this.jaren = const [],
     this.beginJaar,
     this.beeldVoorJaar,
+    this.beeldBijSectie,
     this.foto,
     this.marge = 56,
   });
@@ -97,7 +109,14 @@ class OverBlok extends StatefulWidget {
   /// De TELLER erbij is wat een klik van een hertekening onderscheidt. Hij loopt op bij elke tik in
   /// het lint, ook als je hetzelfde jaartal opnieuw aanwijst — en dat is precies het geval waarin de
   /// cd anders niet opnieuw uit de hoes komt en het gebaar dood leest. Zie `AlbumArt.uitschuifTeller`.
-  final Widget Function(Jaarpunt punt, int teller)? beeldVoorJaar;
+  final Bandlagen Function(Jaarpunt punt, int teller)? beeldVoorJaar;
+
+  /// Een beeld naast een opengeklapt hoofdstuk, als er een passend beeld voor is.
+  ///
+  /// Ook geïnjecteerd, en om dezelfde reden: welke hoes bij "Thriller" hoort en welke foto's van
+  /// deze artiest er op schijf staan, weet de pagina — een tekstblok niet. Null teruggeven is
+  /// prima; dan krijgt de tekst gewoon de volle breedte.
+  final Widget? Function(WikiAfdeling afdeling, int index)? beeldBijSectie;
 
   /// Het beeld naast de tekst zolang het blok dicht is. Bij het openklappen schuift het weg en
   /// neemt de beeldband zijn plek over.
@@ -377,6 +396,7 @@ class _OverBlokState extends State<OverBlok> with SingleTickerProviderStateMixin
                 afdeling: _secties[i],
                 open: _openSectie == i,
                 onTik: () => _wisselSectie(i),
+                beeld: widget.beeldBijSectie?.call(_secties[i], i),
               ),
           ],
           if (widget.artikel != null) ...[
@@ -566,7 +586,7 @@ class _JaarBeeld extends StatefulWidget {
       {required this.punt, required this.teller, required this.bouw, required this.beweegt});
   final Jaarpunt punt;
   final int teller;
-  final Widget Function(Jaarpunt, int) bouw;
+  final Bandlagen Function(Jaarpunt, int) bouw;
   final bool beweegt;
 
   @override
@@ -575,7 +595,7 @@ class _JaarBeeld extends StatefulWidget {
 
 class _JaarBeeldState extends State<_JaarBeeld> with SingleTickerProviderStateMixin {
   AnimationController? _c;
-  Widget? _vorig;
+  Bandlagen? _vorig;
 
   /// De zoom die het vertrekkende beeld had bereikt.
   ///
@@ -609,11 +629,26 @@ class _JaarBeeldState extends State<_JaarBeeld> with SingleTickerProviderStateMi
     super.dispose();
   }
 
+  /// Eén stand van de band: de vervaagde vergroting eronder, de hoes en de tekst erop.
+  ///
+  /// **Alleen de ACHTERGROND zoomt.** Dat is de reparatie van 11-09-2026: de zoom stond om het hele
+  /// vlak, dus de hoes en de tekst kropen mee naar buiten en de hoes liep aan de linkerkant het
+  /// kader uit — precies wat Saber aanwees. Een Ken Burns hoort op een foto te staan, niet op een
+  /// bladspiegel.
+  Widget _stand(Bandlagen lagen, double zoom, Widget voor) => Stack(
+        fit: StackFit.expand,
+        children: [Transform.scale(scale: zoom, child: lagen.achter), voor],
+      );
+
   @override
   Widget build(BuildContext context) {
     final nieuw = widget.bouw(widget.punt, widget.teller);
     if (_c == null) {
-      return SizedBox(height: kBandHoogte, width: double.infinity, child: nieuw);
+      return SizedBox(
+        height: kBandHoogte,
+        width: double.infinity,
+        child: ClipRect(child: _stand(nieuw, 1, nieuw.voor)),
+      );
     }
     // Twee FadeTransitions en geen kale Opacity: die laatste zet voor elk frame een `saveLayer` op,
     // en dat is bij een beeld van deze maat het duurste wat er is.
@@ -630,15 +665,15 @@ class _JaarBeeldState extends State<_JaarBeeld> with SingleTickerProviderStateMi
               if (_vorig != null)
                 FadeTransition(
                   opacity: ReverseAnimation(in_),
-                  child: Transform.scale(scale: _vorigeZoom, child: _vorig),
+                  child: _stand(_vorig!, _vorigeZoom, _vorig!.voor),
                 ),
               AnimatedBuilder(
                 animation: _c!,
-                builder: (_, kind) => FadeTransition(
-                  opacity: in_,
-                  child: Transform.scale(scale: _zoom, child: kind),
-                ),
-                child: nieuw,
+                // De voorgrond als `child`: die wordt één keer gebouwd en niet elke frame opnieuw.
+                // Dat is de dure helft — een hoes, een schijf en een alinea tekst.
+                builder: (_, kind) =>
+                    FadeTransition(opacity: in_, child: _stand(nieuw, _zoom, kind!)),
+                child: nieuw.voor,
               ),
             ],
           ),
@@ -656,12 +691,16 @@ class _SectieRij extends StatelessWidget {
     required this.afdeling,
     required this.open,
     required this.onTik,
+    this.beeld,
   });
 
   final GlobalKey sleutel;
   final WikiAfdeling afdeling;
   final bool open;
   final VoidCallback onTik;
+
+  /// Wat er naast dit hoofdstuk staat als het openklapt. Null = alleen tekst.
+  final Widget? beeld;
 
   @override
   Widget build(BuildContext context) {
@@ -700,9 +739,29 @@ class _SectieRij extends StatelessWidget {
           if (open)
             Padding(
               padding: const EdgeInsets.only(bottom: kRuimte16),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: kLeesmaat),
-                child: _Alineas(afdeling.tekst),
+              // Het beeld RECHTS naast de tekst. De leesmaat laat er ruim vierhonderd punten over op
+              // een breed venster, en dat stond leeg — een hoofdstuk over Thriller met de hoes van
+              // Thriller ernaast leest als een artikel in plaats van als een uitklapmenu.
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: kLeesmaat),
+                    child: _Alineas(afdeling.tekst),
+                  ),
+                  if (beeld != null) ...[
+                    const SizedBox(width: kRuimte32),
+                    // Meebuigen en niet vastzetten: op een smal venster is er geen vierhonderd
+                    // punten over, en dan hoort het beeld te krimpen in plaats van de tekst weg te
+                    // duwen.
+                    Flexible(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: kSectiefoto),
+                        child: beeld,
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
           Container(height: 1, color: kLijnZacht),

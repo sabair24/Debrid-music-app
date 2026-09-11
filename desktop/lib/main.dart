@@ -18063,7 +18063,12 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     setState(() => _albumTeksten[sleutel] = info);
   }
 
-  Widget _jaarBeeld(Jaarpunt punt, int teller, Map<String, Album> eigenPerSleutel) {
+  /// De twee lagen van de beeldband: de vervaagde vergroting eronder, de hoes en de tekst erop.
+  ///
+  /// **Apart, want alleen de achtergrond mag inzoomen.** Zat de Ken Burns om het geheel, dan kruipt
+  /// de hoes mee naar buiten en loopt hij links het kader uit — aangewezen op 11-09-2026. Zie
+  /// [Bandlagen].
+  Bandlagen _jaarBeeld(Jaarpunt punt, int teller, Map<String, Album> eigenPerSleutel) {
     final eigen = eigenPlaat(punt, eigenPerSleutel);
     // **Geen artiestbeeld als terugval voor een PLAAT.** Dat stond er wel, en op het scherm gezien
     // op 10-09-2026 was het gevolg dat een plaat die je niet hebt een half uitgesneden woordmerk
@@ -18077,26 +18082,13 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                 ? _art?.thumbBytes
                 : _art?.clearartBytes ?? _art?.backdropBytes);
 
-    // Waas eronder en het beeld scherp erop. Een hoes is vierkant en de band is breed: `cover` zou
-    // er een strook uit snijden, en `contain` alleen laat twee zwarte balken staan. De vervaagde
-    // vergroting vult die balken met de kleuren van de plaat zelf — dezelfde greep die de app achter
-    // een artiestpagina al gebruikt.
-    Widget vlak(Widget waas, Widget scherp) => Stack(fit: StackFit.expand, children: [
-          ImageFiltered(
-            imageFilter: ImageFilter.blur(sigmaX: 42, sigmaY: 42),
-            child: Transform.scale(scale: 1.2, child: waas),
-          ),
-          const DecoratedBox(decoration: BoxDecoration(color: Color(0x7307080C))),
-          Center(child: scherp),
-        ]);
-
     final url = punt.hoesUrl;
     final heeftHoes = bytes != null || (url != null && url.isNotEmpty);
     // Geen hoes betekent NIET geen band: de uitleg over de plaat staat er nog, en die is vaak juist
     // het interessante. Dan draagt het artiestbeeld de waas en krijgt de tekst de volle breedte.
     final waasBron = bytes ?? _art?.backdropBytes ?? _art?.clearartBytes;
     if (!heeftHoes && waasBron == null && punt.soort != Jaarsoort.plaat) {
-      return const SizedBox.shrink();
+      return (achter: const SizedBox.shrink(), voor: const SizedBox.shrink());
     }
 
     Widget waas() {
@@ -18115,7 +18107,56 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           : Image.memory(waasBron, fit: BoxFit.cover, cacheWidth: 96, filterQuality: FilterQuality.low);
     }
 
-    return vlak(waas(), _bandInhoud(punt, teller, eigen, bytes, url, heeftHoes));
+    // De vervaagde vergroting vult de banden die een vierkante hoes in een breed vlak overlaat, met
+    // de kleuren van de plaat zelf — dezelfde greep die de app achter een artiestpagina al gebruikt.
+    return (
+      achter: Stack(fit: StackFit.expand, children: [
+        ImageFiltered(
+          imageFilter: ImageFilter.blur(sigmaX: 42, sigmaY: 42),
+          child: Transform.scale(scale: 1.2, child: waas()),
+        ),
+        const DecoratedBox(decoration: BoxDecoration(color: Color(0x7307080C))),
+      ]),
+      voor: _bandInhoud(punt, teller, eigen, bytes, url, heeftHoes),
+    );
+  }
+
+  /// Wat er naast een opengeklapt hoofdstuk van de biografie staat.
+  ///
+  /// **Eerst de hoes die er ECHT bij hoort.** De hoofdstukken van een muzikantenartikel heten vaak
+  /// naar een plaat — bij Michael Jackson THRILLER, BAD, DANGEROUS, HISTORY, MICHAEL — en dan is de
+  /// hoes van die plaat geen versiering maar precies het juiste beeld. Gematcht op `discoKey`,
+  /// dezelfde sleutel als de rest van deze pagina, dus er ontstaat geen tweede idee van "dezelfde
+  /// plaat".
+  ///
+  /// Lukt dat niet, dan een foto van de artiest zelf, afgewisseld op de index. Géén onderschrift:
+  /// dat zou beweren dat de foto uit die periode komt, en dat weten we niet. Een foto van de
+  /// artiest naast een stuk over de artiest is eerlijk; een jaartal eronder zou een verzinsel zijn.
+  Widget? _sectieBeeld(WikiAfdeling afdeling, int index, Map<String, Album> eigenPerSleutel) {
+    Widget vlak(Uint8List b) => ClipRRect(
+          borderRadius: BorderRadius.circular(kHoek8),
+          child: Image.memory(b,
+              fit: BoxFit.cover,
+              cacheWidth: decodeWidth(kSectiefoto),
+              errorBuilder: (_, __, ___) => const SizedBox()),
+        );
+
+    final plaat = eigenPerSleutel[discoKey(afdeling.kop)];
+    final hoes = plaat?.correctedCover ?? plaat?.cover;
+    if (hoes != null) {
+      return AspectRatio(aspectRatio: 1, child: vlak(hoes));
+    }
+
+    // Wat er van deze artiest op schijf staat, zonder de woordmerken: een logo naast een alinea
+    // over zijn jeugd is geen foto maar een sticker.
+    final fotos = <Uint8List>[
+      if (_art?.backdropBytes case final b?) b,
+      if (_art?.thumbBytes case final b?) b,
+      if (_art?.cutoutBytes case final b?) b,
+    ];
+    if (fotos.isEmpty) return null;
+    final gekozen = fotos[index % fotos.length];
+    return AspectRatio(aspectRatio: gekozen == _art?.backdropBytes ? 16 / 9 : 1, child: vlak(gekozen));
   }
 
   /// Wat er ín de band staat: de hoes met de cd ernaast, en de uitleg erbij.
@@ -18629,6 +18670,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                   orElse: () => const Jaarpunt(jaar: 0, soort: Jaarsoort.plaat, label: ''),
                 ).jaar,
                 beeldVoorJaar: (punt, teller) => _jaarBeeld(punt, teller, eigenPerSleutel),
+                beeldBijSectie: (afd, i) => _sectieBeeld(afd, i, eigenPerSleutel),
               ),
             ),
           ],
