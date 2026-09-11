@@ -4015,20 +4015,15 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
         .firstOrNull;
     final deel = loopt?.progress == null ? '' : ' · ${(loopt!.progress! * 100).round()}%';
 
-    return FilledButton.icon(
-      style: FilledButton.styleFrom(
-        backgroundColor: stuk
-            ? _mislukt.withValues(alpha: .16)
-            : all
-                ? _accent2.withValues(alpha: .18)
-                : _panel2,
-        foregroundColor: stuk
-            ? _mislukt
-            : all
-                ? _accent2
-                : Colors.white,
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-      ),
+    // Glas, zoals elke knop in deze kop (Saber, 11-09-2026: "alles neutraal glas"). De stand zat
+    // hier in een getinte vulling — rood als het mislukte, turkoois als alles er staat. Die betekenis
+    // blijft, maar nu in de letters en het teken: de ruit zelf is voor elke knop dezelfde.
+    return GlasKnop(
+      kleur: stuk
+          ? _mislukt
+          : all
+              ? _accent2
+              : null,
       onPressed: bezig
           ? null
           : () async {
@@ -4043,20 +4038,17 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
               _gemeld = null;
               _fetch(offline, client);
             },
-      icon: Icon(
-        stuk
-            ? Icons.refresh_rounded
-            : bezig
-                ? Icons.downloading_rounded
-                : all
-                    ? Icons.offline_pin_rounded
-                    : Icons.download_for_offline_outlined,
-        size: 20,
-      ),
+      icoon: stuk
+          ? Icons.refresh_rounded
+          : bezig
+              ? Icons.downloading_rounded
+              : all
+                  ? Icons.offline_pin_rounded
+                  : Icons.download_for_offline_outlined,
       // De stand komt uit de winkel en niet uit deze widget: de rij loopt door als je weggaat, dus
       // moet je bij terugkomst zien hoe ver hij is in plaats van "Offline bewaren" alsof er niets
       // gebeurt.
-      label: Text(stuk
+      label: stuk
           ? 'Opnieuw proberen'
           : bezig
               ? 'Ophalen $here/${tracks.length}$deel'
@@ -4066,7 +4058,7 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
                   // behind, and "Offline" would claim more than is true.
                   : here > 0
                       ? 'Offline ($here/${tracks.length})'
-                      : 'Offline bewaren'),
+                      : 'Offline bewaren',
     );
   }
 }
@@ -4460,7 +4452,7 @@ class AlbumCard extends StatelessWidget {
 }
 
 // ── Album detail ─────────────────────────────────────────────────────────────
-class AlbumDetailPage extends StatefulWidget {
+class AlbumDetailPage extends StatefulWidget implements OnderDeBalk {
   final Album album;
   const AlbumDetailPage({super.key, required this.album});
   @override
@@ -4534,8 +4526,12 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     _uiLog.line('was "${album.artist} - ${album.title}": ${bytes.length} bytes → '
         '${kleur == null ? 'geen kleur (te grijs/zwart/wit)' : '#${kleur.toRadixString(16).substring(2)}'}'
         '${mounted ? '' : '  (pagina al gesloten)'}');
-    if (mounted && kleur != _was) {
-      setState(() => _was = kleur);
+    if (!mounted) return;
+    // Altijd opnieuw tekenen, ook als de kleur gelijk bleef: de vervaagde hoes bovenaan de pagina
+    // hoort bij DEZE bytes, en een andere scan met dezelfde tint is nog steeds een ander beeld.
+    final nieuw = kleur != _was;
+    setState(() => _was = kleur);
+    if (nieuw) {
       // En doorgeven aan de schil, die hem over de VOLLE hoogte tekent — achter de bovenbalk langs.
       // Zie [PaginaWas]: deze pagina zit onder die balk in de boom en kan er zelf niet achter komen.
       context.read<PaginaWas>().toon(kleur);
@@ -5230,6 +5226,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     // is precies de rand die je dán ziet. Het recept staat in `ui/vlak.dart`, want het speelscherm
     // gebruikt het ook.
     final wasTop = kleurWas(wasBasis(_was))?.colors.first ?? _bg;
+    // Hoeveel van deze pagina achter de zwevende balk ligt. Nul op een televisie, een telefoon en
+    // zolang de offline-melding er staat — dan begint de pagina gewoon onder de balk.
+    final ruimte = BalkRuimte.van(context);
 
     return Scaffold(
       // Pushed as its own route, so it sits OUTSIDE the shell's overscan margin — its app bar
@@ -5259,7 +5258,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
           // televisie en op een telefoon met een plaat open staat er geen bovenbalk, en dan begint
           // de pagina gewoon bovenaan het venster.
           Positioned(
-            top: -_balkBoven(context),
+            // Onder de zwevende balk begint deze pagina zelf al bovenaan het venster; dan hoeft er
+            // niets omhoog geschoven te worden.
+            top: ruimte > 0 ? 0 : -_balkBoven(context),
             left: 0,
             right: 0,
             height: MediaQuery.sizeOf(context).height,
@@ -5268,6 +5269,19 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                 duration: kWas,
                 curve: Curves.easeOut,
                 decoration: BoxDecoration(gradient: kleurWas(wasBasis(_was))),
+              ),
+            ),
+          ),
+          // De hoes als beeld bovenaan, tot achter de zwevende balk (Saber, 11-09-2026: "zelfde op
+          // album pagina" — en daarbij: de vervaagde hoes). Over de was heen en niet in zijn plaats:
+          // onder de kop lost hij erin op. Zie [HoesAchtergrond].
+          Positioned.fill(
+            child: IgnorePointer(
+              child: HoesAchtergrond(
+                beeld: _wasVan == null ? null : MemoryImage(_wasVan!),
+                hoogte: ruimte + (isCompact(context) ? 640 : 470),
+                balkRuimte: ruimte,
+                rol: _rol,
               ),
             ),
           ),
@@ -5284,7 +5298,17 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                 right: tvOverscan.right,
                 top: tvOverscan.top,
               ),
-              child: CustomScrollView(
+              // De eigen balk van deze pagina onder de zwevende balk — via de inzet die een
+              // `SliverAppBar` altijd al voor een statusbalk vrijhoudt. Hij wordt zo hoog als die
+              // ruimte plus zijn werkbalk en blijft vanaf de bovenrand vastgezet, dus loopt zijn glas
+              // bij scrollen ook áchter de zwevende balk door: één strook in plaats van twee.
+              // `ruimte` en niet erbij opgeteld: op een iPad zit de statusbalk al in die ruimte.
+              child: MediaQuery(
+                data: ruimte > 0
+                    ? MediaQuery.of(context).copyWith(
+                        padding: MediaQuery.paddingOf(context).copyWith(top: ruimte))
+                    : MediaQuery.of(context),
+                child: CustomScrollView(
               controller: _rol,
               slivers: [
                 SliverAppBar(
@@ -5307,11 +5331,14 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                   shadowColor: Colors.transparent,
                   flexibleSpace: _MeeschuivendGlas(tint: wasTop, rol: _rol),
                   pinned: true,
-                  leading: IconButton(
+                  // Glas onder elk pictogram, en de knoppen zelf zoals ze waren. Zie [glasInBalk].
+                  leading: glasInBalk(IconButton(
                     icon: const Icon(Icons.arrow_back_rounded),
+                    tooltip: 'Terug',
                     onPressed: () => Navigator.of(context).pop(),
-                  ),
+                  )),
                   actions: [
+                    for (final actie in <Widget>[
                     if (!album.isSingle)
                       TvLabelled(
                         label: 'Boekje doorbladeren',
@@ -5434,6 +5461,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       },
                     ),
                     ),
+                    ]) glasInBalk(actie),
                     const SizedBox(width: 8),
                   ],
                 ),
@@ -5611,6 +5639,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                 if (_officialBonus.isNotEmpty) SliverToBoxAdapter(child: _bonusSection()),
                 const SliverToBoxAdapter(child: SizedBox(height: 24)),
               ],
+              ),
               ),
             ),
           ),
@@ -5905,18 +5934,16 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                   spacing: narrow ? 8 : 0,
                   runSpacing: 10,
                   children: [
-                    FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: _accent,
-                        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
-                      ),
+                    // Glas, alle knoppen hetzelfde (Saber, 11-09-2026: "alles neutraal glas") — ook
+                    // Afspelen, dat hier paars was.
+                    GlasKnop(
                       // Where the highlight lands when an album opens on a television. Flutter's
                       // default is the first focusable thing in the route, which here is the back
                       // arrow — so opening a record put the highlight on "leave this record".
                       autofocus: isTv,
                       onPressed: () => player.playQueue(album.tracks, 0, cover: album.cover),
-                      icon: const Icon(Icons.play_arrow_rounded),
-                      label: const Text('Afspelen'),
+                      icoon: Icons.play_arrow_rounded,
+                      label: 'Afspelen',
                     ),
                     if (!narrow) const SizedBox(width: 10),
                     // Only where the music lives somewhere else AND where carrying a copy makes
@@ -5928,15 +5955,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       _OfflineAlbumButton(album: album),
                       if (!narrow) const SizedBox(width: 10),
                     ],
-                    FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: _panel2,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                      ),
+                    GlasKnop(
                       onPressed: () => startRadio(context, album.artist),
-                      icon: const Icon(Icons.radio_rounded, size: 20),
-                      label: const Text('Radio'),
+                      icoon: Icons.radio_rounded,
+                      label: 'Radio',
                     ),
                     // Offered only where there is something to merge: the library holds more than
                     // one pressing of this record, or the user already told us to keep them one.
@@ -5944,12 +5966,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                       if (!narrow) const SizedBox(width: 10),
                       Builder(builder: (context) {
                         final merged = context.watch<LibraryStore>().isMerged(album);
-                        return FilledButton.icon(
-                          style: FilledButton.styleFrom(
-                            backgroundColor: _panel2,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                          ),
+                        return GlasKnop(
                           onPressed: () {
                             if (merged) {
                               // Splitting moves nothing, so it needs no plan.
@@ -5961,8 +5978,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                             showDialog<bool>(
                                 context: context, builder: (_) => MergeAlbumsDialog(album: album));
                           },
-                          icon: Icon(merged ? Icons.call_split_rounded : Icons.merge_rounded, size: 20),
-                          label: Text(merged ? 'Uitgaves splitsen' : 'Uitgaves samenvoegen'),
+                          icoon: merged ? Icons.call_split_rounded : Icons.merge_rounded,
+                          label: merged ? 'Uitgaves splitsen' : 'Uitgaves samenvoegen',
                         );
                       }),
                     ],
@@ -7190,7 +7207,7 @@ class _CreditChipState extends State<_CreditChip> {
 
 /// What one person made. Reached by tapping a credit; a name with nothing behind it says so
 /// plainly rather than showing an empty page.
-class PersonPage extends StatefulWidget {
+class PersonPage extends StatefulWidget implements OnderDeBalk {
   final String name;
   final String? role;
   const PersonPage(this.name, {super.key, this.role});
@@ -7208,10 +7225,19 @@ class _PersonPageState extends State<PersonPage> {
   /// naam" about a failure states something about the PERSON that was never established.
   bool _failed = false;
 
+  /// De scroller van deze pagina: het glas achter de zwevende balk komt op naarmate je scrolt.
+  final _rol = ScrollController();
+
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _rol.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -7241,9 +7267,13 @@ class _PersonPageState extends State<PersonPage> {
       // wachtrij- en speakerknop wijst nog naar de goede plek.
       // GEEN eigen spelerbalk meer. De schil tekent hem, en die staat sinds de binnennavigator
       // ónder deze pagina in plaats van erachter — twee balken zouden er twee zijn.
-      body: ArtistBackdrop(
+      // Onder de zwevende balk door, zoals de artiestpagina: dezelfde soort foto, dezelfde plek.
+      body: Stack(
+        children: [
+      ArtistBackdrop(
         name: widget.name,
         child: CustomScrollView(
+        controller: _rol,
         slivers: [
           SliverToBoxAdapter(
             child: Stack(
@@ -7251,6 +7281,7 @@ class _PersonPageState extends State<PersonPage> {
                 ArtistHero(
                   name: widget.name,
                   ownBackdrop: false,
+                  bovenBloed: BalkRuimte.van(context),
                   subtitle: widget.role == null ? null : '${widget.role} · ${_works.length} producties',
                   actions: [
                     // Glas, zoals de knoppen op de artiestpagina: dezelfde plek boven dezelfde soort
@@ -7263,9 +7294,11 @@ class _PersonPageState extends State<PersonPage> {
                   ],
                 ),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(10, 8, 0, 0),
-                  child: IconButton(
-                    icon: const Icon(Icons.arrow_back_rounded),
+                  // Onder de zwevende balk, anders vangt die de tik.
+                  padding: EdgeInsets.fromLTRB(10, 8 + BalkRuimte.van(context), 0, 0),
+                  child: GlasKnop.rond(
+                    icoon: Icons.arrow_back_rounded,
+                    tooltip: 'Terug',
                     onPressed: () => Navigator.pop(context),
                   ),
                 ),
@@ -7324,6 +7357,17 @@ class _PersonPageState extends State<PersonPage> {
           const SliverToBoxAdapter(child: SizedBox(height: 24)),
         ],
         ),
+      ),
+          // Het glas achter de zwevende balk, en het hoort bij deze pagina — zie de artiestpagina.
+          if (BalkRuimte.van(context) > 0)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: BalkRuimte.van(context),
+              child: IgnorePointer(child: _MeeschuivendGlas(tint: _bg, rol: _rol)),
+            ),
+        ],
       ),
     );
   }
@@ -8322,9 +8366,26 @@ class _AfspeellijstRij extends StatelessWidget {
 }
 
 /// Eén afspeellijst, met zijn nummers.
-class AfspeellijstPagina extends StatelessWidget {
+class AfspeellijstPagina extends StatefulWidget {
   const AfspeellijstPagina({super.key, required this.id});
   final String id;
+
+  @override
+  State<AfspeellijstPagina> createState() => _AfspeellijstPaginaState();
+}
+
+class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
+  /// Een toestand alleen voor de scroller: het glas van de balk komt op naarmate de lijst eronder
+  /// doorschuift, zoals op de albumpagina. De lijst zelf leeft in [Afspeellijsten].
+  final _rol = ScrollController();
+
+  @override
+  void dispose() {
+    _rol.dispose();
+    super.dispose();
+  }
+
+  String get id => widget.id;
 
   @override
   Widget build(BuildContext context) {
@@ -8361,10 +8422,25 @@ class AfspeellijstPagina extends StatelessWidget {
       // wachtrij- en speakerknop wijst nog naar de goede plek.
       // GEEN eigen spelerbalk meer. De schil tekent hem, en die staat sinds de binnennavigator
       // ónder deze pagina in plaats van erachter — twee balken zouden er twee zijn.
+      // Een balk van glas dat pas opkomt als de lijst eronder doorschuift, en niet langer een dichte
+      // strook onder de zwevende navigatie — zie [_MeeschuivendGlas]. Daarom mag de lijst er ook
+      // onder door lopen.
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: _bg,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: Colors.transparent,
+        flexibleSpace: _MeeschuivendGlas(tint: _bg, rol: _rol),
+        leading: glasInBalk(IconButton(
+          icon: const Icon(Icons.arrow_back_rounded),
+          tooltip: 'Terug',
+          onPressed: () => Navigator.of(context).pop(),
+        )),
         title: Text(lijst.name),
         actions: [
+          for (final actie in <Widget>[
           if (nummers.isNotEmpty) ...[
             TvLabelled(
               label: 'Afspelen',
@@ -8383,6 +8459,8 @@ class AfspeellijstPagina extends StatelessWidget {
             ),
             ),
           ],
+          ]) glasInBalk(actie),
+          const SizedBox(width: 8),
         ],
       ),
       body: nummers.isEmpty
@@ -8392,7 +8470,11 @@ class AfspeellijstPagina extends StatelessWidget {
               uitleg: 'Kies "Toevoegen aan afspeellijst" in het menu van een nummer of album.',
             )
           : ReorderableListView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              scrollController: _rol,
+              // De lijst loopt onder de doorzichtige balk door, dus de eerste regel begint zelf pas
+              // onder die balk: zijn werkbalk, plus wat er aan statusbalk boven zit.
+              padding: EdgeInsets.fromLTRB(
+                  20, 12 + kToolbarHeight + MediaQuery.paddingOf(context).top, 20, 12),
               itemCount: nummers.length,
               onReorder: (van, naar) {
                 final doel = van < naar ? naar - 1 : naar;
@@ -16629,6 +16711,13 @@ class ArtistHero extends StatefulWidget {
   /// False when an [ArtistBackdrop] is already washing the whole page — the hero then contributes
   /// only the portrait and the wordmark, and doesn't paint a second, differently-cropped copy.
   final bool ownBackdrop;
+
+  /// Hoeveel punten van dit vak achter de zwevende bovenbalk liggen — zie [EditorialeKop.bovenBloed].
+  ///
+  /// Hier eenvoudiger dan daar: op een breed scherm staan naam en knoppen tegen de ONDERrand van een
+  /// vak van 400, dus als het vak zoveel hoger wordt, blijven ze staan waar ze stonden en loopt alleen
+  /// het beeld verder omhoog. Op een telefoon is dit nul: daar zweeft geen balk.
+  final double bovenBloed;
   const ArtistHero({
     super.key,
     required this.name,
@@ -16636,6 +16725,7 @@ class ArtistHero extends StatefulWidget {
     this.fallbackImage,
     this.actions = const [],
     this.ownBackdrop = true,
+    this.bovenBloed = 0,
   });
 
   @override
@@ -16797,6 +16887,8 @@ class _ArtistHeroState extends State<ArtistHero> {
                 ),
               ),
             ),
+          // Achter de zwevende balk de donkere rand die hem leesbaar houdt — zie [randAchterDeBalk].
+          if (widget.bovenBloed > 0) randAchterDeBalk(widget.bovenBloed),
           Builder(builder: (context) {
             // Dezelfde drie waarden als waarmee de hoogte hierboven gerekend is. Eén bron, want
             // gingen die uit elkaar lopen, dan is de kop precies weer te klein voor wat erin staat
@@ -16898,7 +16990,7 @@ class _ArtistHeroState extends State<ArtistHero> {
       // Room for a 270px portrait with the wordmark and buttons beside it. The backdrop is very
       // wide, so every extra pixel of height is another band of it that isn't cropped away. Alleen
       // op een groot scherm: op een telefoon meet de inhoud zichzelf op.
-      child: smal ? vak : SizedBox(height: 400, child: vak),
+      child: smal ? vak : SizedBox(height: 400 + widget.bovenBloed, child: vak),
     );
   }
 
@@ -17433,36 +17525,10 @@ class EditorialeKop extends StatelessWidget {
                 ),
               ),
             ),
-            // Achter de zwevende balk: een donkere rand bovenaan de foto.
-            //
-            // Daar staan de pillen, de tellingen en de vensterknoppen, en een artiestfoto is juist
-            // bovenaan vaak licht — lucht, een studiowand. Hij eindigt op 27 procent zwart, precies
-            // waar het verloop eronder begint, zodat er geen naad over de foto loopt.
-            //
-            // **Een plateau over de hoogte van de knoppen, en geen verloop vanaf de rand.** Eerst liep
-            // hij van 70 naar 55 procent: het donkerst op de bovenste rij, waar niets staat, en al
-            // lichter op de hoogte van de tekst. Bij Usher (11-09-2026, geïnstalleerd en bekeken)
-            // stonden de tellingen, het tandwiel en de vensterknoppen daardoor in gedempt grijs op het
-            // lichtgrijze studiodoek rechtsboven, en was het sluitkruisje nauwelijks te vinden. Nu
-            // houdt hij 85 tot 78 procent tot over het midden van de balk — waar de tekst staat — en
-            // komt de foto pas daaronder terug.
-            if (bovenBloed > 0)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                height: bovenBloed,
-                child: const DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [Color(0xD9000000), Color(0xC7000000), Color(0x44000000)],
-                      stops: [0, .55, 1],
-                    ),
-                  ),
-                ),
-              ),
+            // Achter de zwevende balk: de donkere rand die de pillen, de tellingen en de
+            // vensterknoppen leesbaar houdt — zie [randAchterDeBalk]. Hij eindigt op de 27 procent
+            // waar het verloop hierboven begint, zodat er geen naad over de foto loopt.
+            if (bovenBloed > 0) randAchterDeBalk(bovenBloed, naarWaas: true),
             // En van links, zodat de letters altijd op een rustige ondergrond staan — ook als de
             // foto daar toevallig licht is.
             if (!smal)
@@ -19047,7 +19113,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
 
 }
 
-class AlbumBrowsePage extends StatefulWidget {
+class AlbumBrowsePage extends StatefulWidget implements OnderDeBalk {
   final String artistName;
   final CatalogAlbum album;
   const AlbumBrowsePage(this.artistName, this.album, {super.key});
@@ -19057,6 +19123,9 @@ class AlbumBrowsePage extends StatefulWidget {
 
 class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   static const _albumLevel = -1;
+
+  /// De scroller van deze pagina: de vervaagde hoes schuift mee, en het glas achter de balk komt op.
+  final _rol = ScrollController();
   final _catalog = CatalogService();
   List<CatalogTrack> _tracks = [];
   bool _busy = true;
@@ -19073,6 +19142,12 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     super.initState();
     _load();
     WidgetsBinding.instance.addPostFrameCallback((_) => _preloadSoulseek());
+  }
+
+  @override
+  void dispose() {
+    _rol.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -19436,6 +19511,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   @override
   Widget build(BuildContext context) {
     final al = widget.album;
+    final ruimte = BalkRuimte.van(context);
     return Scaffold(
       backgroundColor: _bg,
       // De spelerbalk hoort op ELKE pagina, niet alleen in de shell.
@@ -19454,20 +19530,39 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       // Its own header rather than an AppBar, so nothing was adding the status bar's height —
       // the cover and the title were drawn UNDER the clock and the wifi icons. The album page
       // escaped this only because a SliverAppBar puts that inset in by itself.
-      body: SafeArea(
+      // Dezelfde kop als je eigen albums: de hoes vervaagd tot achter de zwevende balk, en glas.
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: IgnorePointer(
+              child: HoesAchtergrond(
+                beeld: HoesAchtergrond.uitUrl(al.cover),
+                hoogte: ruimte + 330,
+                balkRuimte: ruimte,
+                rol: _rol,
+              ),
+            ),
+          ),
+      SafeArea(
           // A television reports no insets, so SafeArea alone is a no-op there; this is the
           // margin that keeps the back arrow off the part of the picture a set cuts away.
           minimum: tvOverscan,
         bottom: false,
+        // Niet bovenaan als de balk zweeft: de pagina loopt er juist onderdoor.
+        top: ruimte == 0,
         child: ListView(
+        controller: _rol,
         padding: const EdgeInsets.only(bottom: 40),
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 20, 8),
+            padding: EdgeInsets.fromLTRB(16, 16 + ruimte, 20, 8),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                IconButton(icon: const Icon(Icons.arrow_back_rounded), onPressed: () => Navigator.pop(context)),
+                GlasKnop.rond(
+                    icoon: Icons.arrow_back_rounded,
+                    tooltip: 'Terug',
+                    onPressed: () => Navigator.pop(context)),
                 const SizedBox(width: 4),
                 _netCover(al.cover, size: 128),
                 const SizedBox(width: 16),
@@ -19495,14 +19590,15 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                         ),
                       ])),
                       const SizedBox(height: 12),
-                      FilledButton.icon(
+                      GlasKnop(
                         // The one action of this page, and where the highlight starts on a
                         // television — otherwise the first arrow press finds the back arrow and OK
                         // leaves the record you just opened.
                         autofocus: isTv,
-                        style: FilledButton.styleFrom(backgroundColor: _panel2, foregroundColor: Colors.white),
-                        icon: Icon(_expanded == _albumLevel ? Icons.expand_less_rounded : Icons.travel_explore_rounded, size: 18),
-                        label: const Text('Bronnen voor album'),
+                        icoon: _expanded == _albumLevel
+                            ? Icons.expand_less_rounded
+                            : Icons.travel_explore_rounded,
+                        label: 'Bronnen voor album',
                         onPressed: () => _toggle(_albumLevel),
                       ),
                     ],
@@ -19547,6 +19643,16 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
             ..._tracks.asMap().entries.map((e) => _trackRow(e.key, e.value)),
         ],
         ),
+      ),
+          if (ruimte > 0)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: ruimte,
+              child: IgnorePointer(child: _MeeschuivendGlas(tint: _bg, rol: _rol)),
+            ),
+        ],
       ),
     );
   }
@@ -26261,6 +26367,9 @@ class StylePage extends StatefulWidget {
 class _StylePageState extends State<StylePage> {
   List<CatalogAlbumHit>? _more;
 
+  /// De scroller van deze pagina: het glas van de balk komt op naarmate het raster eronder schuift.
+  final _rol = ScrollController();
+
   /// False shows the records that define a style; true shows what sits behind them.
   bool _deep = false;
 
@@ -26268,6 +26377,12 @@ class _StylePageState extends State<StylePage> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _rol.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -26306,12 +26421,21 @@ class _StylePageState extends State<StylePage> {
       // wachtrij- en speakerknop wijst nog naar de goede plek.
       // GEEN eigen spelerbalk meer. De schil tekent hem, en die staat sinds de binnennavigator
       // ónder deze pagina in plaats van erachter — twee balken zouden er twee zijn.
-      body: CustomScrollView(slivers: [
+      body: CustomScrollView(controller: _rol, slivers: [
         SliverAppBar(
-          backgroundColor: _bg,
+          // Glas dat opkomt als het raster eronder doorschuift, en geen dichte strook onder de
+          // zwevende navigatie — zoals op de albumpagina.
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          surfaceTintColor: Colors.transparent,
+          shadowColor: Colors.transparent,
+          flexibleSpace: _MeeschuivendGlas(tint: _bg, rol: _rol),
           pinned: true,
-          leading: IconButton(
-              icon: const Icon(Icons.arrow_back_rounded), onPressed: () => Navigator.of(context).pop()),
+          leading: glasInBalk(IconButton(
+              icon: const Icon(Icons.arrow_back_rounded),
+              tooltip: 'Terug',
+              onPressed: () => Navigator.of(context).pop())),
           title: Text(widget.style, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
         ),
         if (mine.isNotEmpty) ...[

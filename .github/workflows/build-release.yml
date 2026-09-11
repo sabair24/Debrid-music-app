@@ -171,7 +171,8 @@ jobs:
             test/overblok_hoogte_test.dart test/uitschuif_herhaling_test.dart \
             test/glasschaduw_test.dart \
             test/balkruimte_test.dart test/glasknop_test.dart \
-            test/artiestkop_bloed_test.dart
+            test/artiestkop_bloed_test.dart \
+            test/hoesachtergrond_test.dart
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
       # the app you actually use while the TV work is in progress — shipping that would install a

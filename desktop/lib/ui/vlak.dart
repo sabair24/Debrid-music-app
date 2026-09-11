@@ -404,18 +404,39 @@ class GlasKnop extends StatelessWidget {
     required this.icoon,
     required String this.label,
     required this.onPressed,
+    this.autofocus = false,
+    this.kleur,
   })  : tooltip = null,
+        teken = null,
         _rond = false;
 
   /// Alleen een pictogram, in een rond stukje glas: de terugpijl boven een foto.
-  const GlasKnop.rond({super.key, required this.icoon, required this.onPressed, this.tooltip})
-      : label = null,
+  const GlasKnop.rond({
+    super.key,
+    required this.icoon,
+    required this.onPressed,
+    this.tooltip,
+    this.teken,
+    this.autofocus = false,
+  })  : label = null,
+        kleur = null,
         _rond = true;
 
   final IconData icoon;
   final String? label;
   final String? tooltip;
   final VoidCallback? onPressed;
+
+  /// Waar de markering landt als de pagina op een televisie opent — zie Afspelen op de albumpagina.
+  final bool autofocus;
+
+  /// De kleur van letters en teken, voor een knop waarvan de STAND een kleur is: "Offline bewaren"
+  /// is rood als het mislukte en turkoois als alles er staat. De ruit blijft voor elke knop dezelfde.
+  final Color? kleur;
+
+  /// Iets anders dan een pictogram in het rondje, zoals een draaiend wieltje terwijl er gewerkt wordt.
+  final Widget? teken;
+
   final bool _rond;
 
   @override
@@ -424,24 +445,30 @@ class GlasKnop extends StatelessWidget {
         ? IconButton(
             onPressed: onPressed,
             tooltip: tooltip,
+            autofocus: autofocus,
             style: IconButton.styleFrom(
               foregroundColor: Colors.white,
               minimumSize: const Size(44, 44),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
-            icon: Icon(icoon),
+            icon: teken ?? Icon(icoon),
           )
         : FilledButton.icon(
+            autofocus: autofocus,
             style: FilledButton.styleFrom(
               backgroundColor: Colors.transparent,
               disabledBackgroundColor: Colors.transparent,
-              foregroundColor: Colors.white,
+              foregroundColor: kleur ?? Colors.white,
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
               minimumSize: const Size(64, 44),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
             onPressed: onPressed,
-            icon: Icon(icoon, size: 18),
+            // De kleur ook op het teken zelf. `foregroundColor` kleurt in deze Flutter alleen de
+            // letters; het pictogram hield zijn standaardwit, en dan stond er bij een mislukte
+            // download een rode tekst naast een wit teken. Niet bij een uitgeschakelde knop: die
+            // hoort grijs te worden, en een vaste kleur hier zou dat tegenhouden.
+            icon: Icon(icoon, size: 18, color: onPressed == null ? null : kleur),
             label: Text(label!),
           );
     return Stack(
@@ -449,6 +476,197 @@ class GlasKnop extends StatelessWidget {
         Positioned.fill(child: IgnorePointer(child: glasRuit())),
         knop,
       ],
+    );
+  }
+}
+
+/// Een ruit ONDER een knop die er al is — voor de pictogrammen in een werkbalk.
+///
+/// **Waarom niet overal [GlasKnop.rond].** De werkbalk van de albumpagina heeft tot negen
+/// pictogrammen, elk met een eigen tooltip, een eigen label voor de afstandsbediening, een
+/// uitgeschakelde stand, en één met een draaiend wieltje terwijl hij luistert. Die knoppen deden het
+/// goed; wat ontbrak was het glas. Dus komt het glas eronder, op de maat van de knop, en blijft de
+/// knop zelf zoals hij was.
+///
+/// **Gecentreerd**, want een `AppBar` rekt zijn acties op tot de volle hoogte van de werkbalk — dan
+/// werd de ruit 56 hoog rond een knop van 40. En **met drie punten lucht ernaast**: anders raken de
+/// ruitjes elkaar en leest de rij als een ketting.
+///
+/// **Niet op een televisie.** Daar zet `TvLabelled` een label ónder de knop zodra hij de markering
+/// heeft, en een ruit om die twee samen is geen knop meer maar een tegel.
+Widget glasInBalk(Widget knop) {
+  if (isTv) return knop;
+  return Center(
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 3),
+      child: Stack(
+        children: [
+          Positioned.fill(child: IgnorePointer(child: glasRuit())),
+          knop,
+        ],
+      ),
+    ),
+  );
+}
+
+/// De donkere rand bovenaan een beeld dat onder de zwevende balk door loopt.
+///
+/// Daar staan de pillen, de tellingen en de vensterknoppen, en een foto of hoes is juist bovenaan
+/// vaak licht: lucht, een studiowand, een witte hoes.
+///
+/// **Een plateau over de hoogte van de knoppen, en geen verloop vanaf de rand.** Eerst liep hij van
+/// 70 naar 55 procent: het donkerst op de bovenste rij, waar niets staat, en al lichter op de hoogte
+/// van de tekst. Bij Usher (11-09-2026, geïnstalleerd en bekeken) stonden de tellingen, het tandwiel
+/// en de vensterknoppen daardoor in gedempt grijs op het lichtgrijze studiodoek rechtsboven, en was
+/// het sluitkruisje nauwelijks te vinden. Nu houdt hij 85 tot 78 procent tot over het midden van de
+/// balk — waar de tekst staat — en komt het beeld pas daaronder terug.
+///
+/// [naarWaas] zegt waar hij op uitkomt. De artiestkop legt onder de balk zijn eigen verloop, dat op
+/// 27 procent zwart begint: dan eindigt de rand daarop, en loopt er geen naad. Heeft het beeld eronder
+/// zijn eigen donkering over de volle hoogte, dan eindigt hij doorzichtig — anders telt die donkering
+/// in de balk dubbel en staat er op de onderrand alsnog een streep.
+///
+/// Een `Positioned`: hij hoort als direct kind in de `Stack` van het beeld waar hij bovenop ligt.
+Widget randAchterDeBalk(double hoogte, {bool naarWaas = false}) => Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      height: hoogte,
+      child: IgnorePointer(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                const Color(0xD9000000),
+                const Color(0xC7000000),
+                naarWaas ? const Color(0x44000000) : const Color(0x00000000),
+              ],
+              stops: const [0, .55, 1],
+            ),
+          ),
+        ),
+      ),
+    );
+
+/// De hoes van een plaat als beeld bovenaan zijn pagina: groot, zacht vervaagd, tot achter de
+/// zwevende balk, en onderaan overvloeiend in wat eronder ligt.
+///
+/// **Waarom dit er is.** De artiestpagina kreeg een foto die tot de bovenrand van het venster loopt,
+/// en Saber vroeg daarna (11-09-2026): "zelfde op album pagina en waar het kan" — en koos, van drie
+/// voorstellen, de vervaagde hoes. Een album heeft geen foto; zijn hoes is het beeld.
+///
+/// **Waarom vervaagd en niet scherp.** Een hoes is zelden groter dan 1200 pixels in het vierkant.
+/// Uitgesneden tot een kop over een scherm van 2560 breed wordt hij meer dan twee keer opgerekt, en
+/// dat ziet er korrelig uit. Vervaagd blijft alleen over wat een hoes van ver ook is: zijn kleuren
+/// en zijn grote vlakken. De scherpe hoes staat er naast, op ware grootte.
+///
+/// **Klein gedecodeerd.** Na deze vervaging is er geen detail meer dat een grotere decodering
+/// rechtvaardigt — dezelfde afweging als bij `ArtistBackdrop`, dat op 96 punten decodeert.
+///
+/// **Donker genoeg** dat een witte titel en het glas erop altijd lezen, ook bij een witte hoes; die
+/// donkering hoort bij het beeld en lost er dus mee op.
+///
+/// **Het lost onderaan op met een masker op het beeld zelf** ([vervloeiing]), in de kleurwas van de
+/// albumpagina of gewoon in de achtergrond. Een zwart verloop eroverheen had het beeld donker gemaakt
+/// in plaats van het te laten verdwijnen, en dan stond er waar het ophoudt alsnog een rand.
+///
+/// **Het schuift mee met de pagina** ([rol]): het hoort bij de kop, niet bij het venster. In een
+/// eigen `RepaintBoundary`, zodat scrollen het beeld verschuift in plaats van het elke stap opnieuw
+/// te vervagen.
+class HoesAchtergrond extends StatelessWidget {
+  const HoesAchtergrond({
+    super.key,
+    required this.beeld,
+    required this.hoogte,
+    this.balkRuimte = 0,
+    this.rol,
+  });
+
+  /// De hoes, of null als er (nog) geen is — dan tekent dit niets en blijft de pagina zoals hij was.
+  final ImageProvider? beeld;
+
+  /// Hoe ver het beeld reikt, gemeten vanaf de bovenrand van de pagina.
+  final double hoogte;
+
+  /// Hoeveel ervan achter de zwevende balk ligt; daar komt [randAchterDeBalk] overheen.
+  final double balkRuimte;
+
+  /// De scroller van de pagina, zodat het beeld met de kop mee omhoog gaat.
+  final ScrollController? rol;
+
+  /// Van een adres naar een beeld, en niets bij geen adres — voor de online albumpagina.
+  static ImageProvider? uitUrl(String? url) =>
+      url == null || url.isEmpty ? null : NetworkImage(url);
+
+  /// Hoe sterk de hoes vervaagt.
+  static final ImageFilter vervaging = ImageFilter.blur(sigmaX: 30, sigmaY: 30);
+
+  /// Het masker: tot iets over de helft het volle beeld, daarna naar niets.
+  static const LinearGradient vervloeiing = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [Colors.white, Colors.white, Colors.transparent],
+    stops: [0, .55, 1],
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final b = beeld;
+    if (b == null) return const SizedBox.shrink();
+    final vak = RepaintBoundary(
+      child: SizedBox(
+        height: hoogte,
+        width: double.infinity,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            ShaderMask(
+              blendMode: BlendMode.dstIn,
+              shaderCallback: vervloeiing.createShader,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  ClipRect(
+                    child: ImageFiltered(
+                      imageFilter: vervaging,
+                      // Te ver uitvergroot, want een vervaging trekt aan de randen het zwart van
+                      // buiten het beeld naar binnen.
+                      child: Transform.scale(
+                        scale: 1.2,
+                        child: Image(
+                          image: ResizeImage(b, width: 128),
+                          fit: BoxFit.cover,
+                          filterQuality: FilterQuality.low,
+                          errorBuilder: (_, __, ___) => const SizedBox(),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const ColoredBox(color: Color(0xB307080C)),
+                ],
+              ),
+            ),
+            if (balkRuimte > 0) randAchterDeBalk(balkRuimte),
+          ],
+        ),
+      ),
+    );
+    final rol = this.rol;
+    return Align(
+      alignment: Alignment.topCenter,
+      child: rol == null
+          ? vak
+          : AnimatedBuilder(
+              animation: rol,
+              child: vak,
+              builder: (_, kind) {
+                // Nooit omlaag: trek je een lijst voorbij zijn bovenrand, dan blijft het beeld staan.
+                final schuif = rol.hasClients ? rol.offset.clamp(0.0, hoogte) : 0.0;
+                return Transform.translate(offset: Offset(0, -schuif), child: kind);
+              },
+            ),
     );
   }
 }
