@@ -1763,13 +1763,65 @@ class _HomeShellState extends State<HomeShell> {
     if (FocusManager.instance.primaryFocus?.focusInDirection(richting) ?? false) {
       return KeyEventResult.handled;
     }
+    final vanwaar = FocusManager.instance.primaryFocus?.rect;
     for (final scope in naar) {
       if (scope.traversalDescendants.isNotEmpty) {
         scope.requestFocus();
+        _landingsplek(scope, richting, vanwaar)?.requestFocus();
         break;
       }
     }
     return KeyEventResult.handled;
+  }
+
+  /// Waar de focus na een sprong hoort te landen, of null als [scope] dat zelf goed doet.
+  ///
+  /// **Waarom dit erbij moest.** `requestFocus` op een scope geeft de focus aan wat daar het laatst
+  /// stond -- en als dat er niet meer is, aan de scope zelf. Allebei op de Shield gezien op
+  /// 11-09-2026. In Albums landde omlaag vanuit het menu niet op de eerste plaat maar, een toets
+  /// later, op "Wachtrij" in de spelerbalk: de inhoud onthield een tegel van de vorige sectie. En van
+  /// onderen het menu in lichtte niets op tot je opzij drukte, want een scope tekent geen rand.
+  ///
+  /// Wat onthouden was, wint zolang het in beeld staat: terug naar waar je in een lange lijst was is
+  /// precies goed. Anders het zichtbare element aan de rand waar je binnenkomt -- de bovenste rij bij
+  /// omlaag, de onderste bij omhoog -- en daarvan het element recht onder of boven waar je vandaan
+  /// kwam. Uit het menu op "Albums" naar beneden kom je dan op de plaat eronder, niet op de eerste.
+  FocusNode? _landingsplek(FocusScopeNode scope, TraversalDirection richting, Rect? vanwaar) {
+    final scherm = Offset.zero & MediaQuery.sizeOf(context);
+    bool zichtbaar(FocusNode n) {
+      final r = n.rect;
+      return r.width > 0 && r.height > 0 && scherm.overlaps(r);
+    }
+
+    // Wat `requestFocus` zou herstellen, tot op het echte element: een route is zelf ook een scope.
+    FocusNode? onthouden = scope.focusedChild;
+    while (onthouden is FocusScopeNode) {
+      onthouden = onthouden.focusedChild;
+    }
+    if (onthouden != null && zichtbaar(onthouden)) return null;
+
+    final kandidaten = [
+      for (final n in scope.traversalDescendants)
+        if (n is! FocusScopeNode && zichtbaar(n)) n,
+    ];
+    if (kandidaten.isEmpty) return null;
+    final omlaag = richting == TraversalDirection.down;
+    if (!omlaag && richting != TraversalDirection.up) return kandidaten.first;
+
+    // De rij waar je binnenkomt. Veertig punten speling: tegels in één rij staan niet op de pixel
+    // gelijk, zeker niet als de gefocuste er een tikje groter staat.
+    final rand = kandidaten.fold<double>(
+        omlaag ? double.infinity : double.negativeInfinity,
+        (m, n) => omlaag
+            ? (n.rect.top < m ? n.rect.top : m)
+            : (n.rect.bottom > m ? n.rect.bottom : m));
+    final rij = [
+      for (final n in kandidaten)
+        if (omlaag ? n.rect.top <= rand + 40 : n.rect.bottom >= rand - 40) n,
+    ];
+    final x = vanwaar?.center.dx ?? 0;
+    rij.sort((a, b) => (a.rect.center.dx - x).abs().compareTo((b.rect.center.dx - x).abs()));
+    return rij.first;
   }
 
   @override
@@ -2684,7 +2736,8 @@ class _HomeShellState extends State<HomeShell> {
                                     // about at the wrong moment.
                                     : (warmer.status.isNotEmpty
                                         ? warmer.status
-                                        : '${lib.albums.length} albums · ${lib.tracks.length} nummers')),
+                                        : '${lib.albums.length} ${lib.albums.length == 1 ? 'album' : 'albums'} · '
+                                            '${lib.tracks.length} ${lib.tracks.length == 1 ? 'nummer' : 'nummers'}')),
                             style: TextStyle(color: _muted, fontSize: isTv ? 14 : 11.5),
                           ),
                         ),
@@ -2941,7 +2994,8 @@ class _SectionsDrawer extends StatelessWidget {
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-              child: Text('${maten.$1} albums · ${maten.$2} nummers',
+              child: Text('${maten.$1} ${maten.$1 == 1 ? 'album' : 'albums'} · '
+                  '${maten.$2} ${maten.$2 == 1 ? 'nummer' : 'nummers'}',
                   style: const TextStyle(color: _muted, fontSize: 12.5)),
             ),
             const Divider(color: _line, height: 1),
@@ -5860,9 +5914,22 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
     return now != null && album.tracks.any((t) => t.path == now);
   });
 
-  Widget _header(BuildContext context) {
+  /// De kop van de albumpagina, op de ruimte die hij KRIJGT en niet op die van het scherm.
+  ///
+  /// **Waarom via een LayoutBuilder.** Hier stond `isCompact(context)` en de schermbreedte. Op de
+  /// Shield met het wachtrijpaneel open (340 punten ernaast) is het scherm breed maar de pagina
+  /// niet: de hoes plus de cd die eruit schuift bleven hun 324 punten houden, en de titel kreeg wat
+  /// er overbleef. Op 11-09-2026 was dat een kolom van twee letters breed: "Alb / um / 1 / 9 / 9 / 8".
+  /// Precies het beeld waarvoor de gestapelde vorm hieronder bestaat -- hij werd alleen niet gekozen.
+  Widget _header(BuildContext context) => LayoutBuilder(
+        builder: (context, maat) => _kop(context, maat.maxWidth),
+      );
+
+  /// Minder dan dit naast de hoes, en een albumtitel op 30 punten is niet meer te lezen.
+  static const _minTitelBreedte = 300.0;
+
+  Widget _kop(BuildContext context, double breedte) {
     final player = context.read<PlayerStore>();
-    final narrow = isCompact(context);
     // 18 op een telefoon en 28 op een pc — terwijl de tracklijst eronder op 20 stond en de rest van
     // de app sinds ronde 1 op [kGoot]. Drie gootbreedtes op één pagina, en dat is precies wat je als
     // "het rammelt" ziet zonder te kunnen aanwijzen waarom. De hoes wordt hierdoor op een telefoon
@@ -5875,7 +5942,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
     //
     // Sized from what there actually is rather than from a number chosen for a desktop window, and
     // divided by 1.62 so the disc has somewhere to go instead of sliding off the screen.
-    final available = MediaQuery.sizeOf(context).width - pad * 2;
+    final available = breedte - pad * 2;
+    // Onder elkaar zodra de hoes (200 punten, plus de cd die eruit schuift), de goot en een leesbare
+    // titel er niet naast elkaar in passen: op een telefoon, maar ook naast het wachtrijpaneel.
+    final narrow = isCompact(context) ||
+        available < 200.0 * (1 + discTravelFactor(context)) + 24 + _minTitelBreedte;
     // Divided by what the disc ACTUALLY reserves, not by a number copied here. When the travel was
     // cut to .30 in portrait this still said 1.62, so the sleeve was sized for a stride the disc no
     // longer takes and left a band of empty screen beside it.
@@ -5931,7 +6002,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                         '',
                         if (album.year != null) '${album.year}',
                         if (album.genre != null) album.genre!,
-                        '${album.tracks.length} nummers',
+                        '${album.tracks.length} ${album.tracks.length == 1 ? 'nummer' : 'nummers'}',
                       ].join(' · '),
                       style: const TextStyle(color: _muted),
                     ),
@@ -6001,9 +6072,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
 
     return Padding(
       padding: EdgeInsets.fromLTRB(pad, 8, pad, 24),
-      // Stacked on a phone, side by side everywhere else. The sleeve and a title column simply do
-      // not both fit across 412 points, and squeezing them is what produced a column of single
-      // letters.
+      // Stacked when the sleeve and a readable title do not both fit -- on a phone, and on a wide
+      // screen that the queue panel has made narrow. Squeezing them is what produced a column of
+      // single letters; see [_kop].
       child: narrow
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -8589,7 +8660,8 @@ class FavorietenView extends StatelessWidget {
             const Text('Favorieten',
                 style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
             SizedBox(width: narrow ? 0 : 12, height: narrow ? 4 : 0),
-            Text('${albums.length} albums · ${nummers.length} nummers',
+            Text('${albums.length} ${albums.length == 1 ? 'album' : 'albums'} · '
+                '${nummers.length} ${nummers.length == 1 ? 'nummer' : 'nummers'}',
                 style: const TextStyle(color: _muted, fontSize: 12.5)),
             if (!narrow) const Spacer(),
             if (nummers.isNotEmpty) ...[
@@ -17625,6 +17697,9 @@ class EditorialeKop extends StatelessWidget {
                                           onPressed: onGroep == null ? null : () => onGroep!(g),
                                           borderRadius: BorderRadius.circular(4),
                                           ringOnFocus: true,
+                                          // Een tekstlink en geen tegel: uitvergroot duwt hij tegen zijn buurman en valt de
+                                          // rand scheef over de letters. Gezien op de Shield, 11-09-2026.
+                                          scaleOnFocus: false,
                                           child: Text(g,
                                               style: kTekstNormaal.copyWith(
                                                 fontSize: 13.5,
@@ -18685,8 +18760,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                   bibliotheek: _busy
                       ? 'Albums laden…'
                       : [
-                          if (mine.isNotEmpty) '${mine.length} albums',
-                          if (_eigenNummers > 0) '$_eigenNummers nummers',
+                          if (mine.isNotEmpty) '${mine.length} ${mine.length == 1 ? 'album' : 'albums'}',
+                          if (_eigenNummers > 0) '$_eigenNummers ${_eigenNummers == 1 ? 'nummer' : 'nummers'}',
                           if (_eigenTijd != null) _eigenTijd,
                         ].join(' · '),
                   genres: [for (final e in _eigenGenres) e.key],
@@ -18828,6 +18903,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                         onPressed: () => setState(() => _toonAlles = !_toonAlles),
                         borderRadius: BorderRadius.circular(4),
                         ringOnFocus: true,
+                        // Een tekstlink en geen tegel: uitvergroot duwt hij tegen zijn buurman en valt de
+                        // rand scheef over de letters. Gezien op de Shield, 11-09-2026.
+                        scaleOnFocus: false,
                         child: Text(
                           _toonAlles ? 'Opruimen' : 'Toon alles',
                           style: kTekstNormaal.copyWith(

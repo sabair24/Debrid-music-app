@@ -129,6 +129,7 @@ jobs:
             test/tv_melding_bereikbaar_test.dart test/ingelogd_blijven_test.dart \
             test/ios_ondergrens_test.dart \
             test/sleutelherstel_test.dart \
+            test/shield_rondgang_test.dart \
             test/albumraster_ingebed_test.dart \
             test/bestandsbeheer_test.dart test/hoesherkomst_test.dart \
             test/metadata_bronnen_test.dart test/castgrenzen_test.dart \
