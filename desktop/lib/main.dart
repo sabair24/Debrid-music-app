@@ -17502,7 +17502,9 @@ class EditorialeKop extends StatelessWidget {
     final breedte = MediaQuery.sizeOf(context).width;
     final smal = isCompact(context);
     final tablet = isTablet(context);
-    final marge = smal ? 18.0 : (tablet ? 28.0 : 56.0);
+    // Plus de zijmarge van de tv. De artiestpagina geeft die hier niet meer mee, zodat de foto tot
+    // de rand loopt; de tekst hoort wel binnen wat een tv laat zien. Elders is hij nul.
+    final marge = (smal ? 18.0 : (tablet ? 28.0 : 56.0)) + tvOverscan.left;
     final naamGrootte = artiestNaamGrootte(breedte);
 
     // Eén beeld en niet twee. Hier stond een BEELDLADDER — de artiest vrijstaand uitgeknipt
@@ -18753,7 +18755,13 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
         child: SafeArea(
             // A television reports no insets, so SafeArea alone is a no-op there; this is the
             // margin that keeps the back arrow off the part of the picture a set cuts away.
-            minimum: tvOverscan,
+            //
+            // Alleen de BOVENkant van die marge. Opzij hoort de foto van de kop tot de rand te lopen
+            // ("hou enkel de achtergrond image in volle breedte"); met de hele marge hier hield hij op
+            // een tv 48 punten voor de rand op, met een strook van de schil ernaast -- gezien op de
+            // Shield op 11-09-2026. De zijmarge zit nu op de inhoud: de tekst van de kop, de
+            // terugpijl, en de groep onder de kop.
+            minimum: EdgeInsets.only(top: tvOverscan.top),
         bottom: false,
         // Niet bovenaan als de balk zweeft: die houdt de statusbalk van een iPad al zelf vrij, en de
         // foto hoort daar juist onderdoor te lopen. [EditorialeKop] schuift de tekst omlaag.
@@ -18834,7 +18842,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                 ),
                 Padding(
                   // Onder de zwevende balk, anders vangt die de tik.
-                  padding: EdgeInsets.fromLTRB(10, 8 + ruimte, 0, 0),
+                  // Plus de zijmarge van de tv: de kop loopt tot de rand, de pijl niet.
+                  padding: EdgeInsets.fromLTRB(10 + tvOverscan.left, 8 + ruimte, 0, 0),
                   child: GlasKnop.rond(
                     icoon: Icons.arrow_back_rounded,
                     tooltip: 'Terug',
@@ -18844,6 +18853,11 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
               ],
             ),
           ),
+          // Alles onder de kop in één groep met de zijmarge van de tv: de kop zelf loopt tot de rand,
+          // de rest blijft binnen wat een tv laat zien. Op elk ander toestel is die marge nul.
+          SliverPadding(
+            padding: EdgeInsets.symmetric(horizontal: tvOverscan.left),
+            sliver: SliverMainAxisGroup(slivers: [
           // What you already own by this artist, first. Reaching an artist from an album used to
           // show only the online discography, so the records sitting on your own disk were the one
           // thing this page would not tell you about.
@@ -19011,6 +19025,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
             ),
           ],
           const SliverToBoxAdapter(child: SizedBox(height: 24)),
+            ]),
+          ),
         ],
         ),
         ),
@@ -19676,19 +19692,18 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                       const SizedBox(height: 4),
                       // De naam los van de rest, zodat je van een online album naar de artiest kunt.
                       // Zelfde vorm als de kop van je eigen albumpagina.
-                      _maybeFocusable(Row(mainAxisSize: MainAxisSize.min, children: [
-                        Flexible(
-                            child: ArtistNames(
-                                names: [widget.artistName],
-                                style: const TextStyle(color: _muted, fontSize: 13))),
-                        Flexible(
-                          child: Text(
-                              '${al.year != null ? " · ${al.year}" : ""}'
-                              '${_tracks.isNotEmpty ? " · ${_tracks.length} nummers" : ""}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: _muted, fontSize: 13)),
-                        ),
+                      // Een Wrap en geen Row met een beletselteken: die knipte de regel af zodra
+                      // artiest, jaar en aantal samen breder waren dan de kolom -- en op een tv, met
+                      // de tekst 1,35 keer zo groot, is dat snel. Nu loopt wat niet past door naar de
+                      // volgende regel, net als in de kop van je eigen albums.
+                      _maybeFocusable(Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
+                        ArtistNames(
+                            names: [widget.artistName],
+                            style: const TextStyle(color: _muted, fontSize: 13)),
+                        Text(
+                            '${al.year != null ? " · ${al.year}" : ""}'
+                            '${_tracks.isNotEmpty ? " · ${_tracks.length} ${_tracks.length == 1 ? 'nummer' : 'nummers'}" : ""}',
+                            style: const TextStyle(color: _muted, fontSize: 13)),
                       ])),
                       const SizedBox(height: 12),
                       GlasKnop(

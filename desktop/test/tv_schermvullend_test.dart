@@ -65,4 +65,43 @@ void main() {
     expect(ervoor.lastIndexOf('Wrap('), greaterThan(ervoor.lastIndexOf('Row(')),
         reason: 'een Row knipt artiest · jaar · genre · aantal rechts af zodra het niet past');
   });
+
+  // De tweede ronde, dezelfde dag. Na de eerste reparatie liep de achtergrond van de artiestpagina
+  // wel tot de rand, maar de FOTO van de kop niet: die stond binnen een SafeArea met de hele
+  // tv-marge, en hield 48 punten voor de rand op met een strook van de achtergrond ernaast.
+  test('de foto van de artiestkop loopt tot de rand, de inhoud blijft binnen de marge', () {
+    final a = hoofd.indexOf('class _ArtistBrowsePageState');
+    expect(a, greaterThan(-1), reason: 'de State van ArtistBrowsePage is niet te vinden');
+    final e = hoofd.indexOf('\nclass ', a + 10);
+    final staat = hoofd.substring(a, e < 0 ? hoofd.length : e);
+    expect(staat, isNot(contains('minimum: tvOverscan,')),
+        reason: 'de hele marge op de SafeArea houdt ook de foto van de kop van de rand weg');
+    expect(staat, contains('minimum: EdgeInsets.only(top: tvOverscan.top)'),
+        reason: 'de bovenkant van de marge blijft: daar snijdt een tv net zo goed weg');
+    final g = staat.indexOf('SliverMainAxisGroup(');
+    expect(g, greaterThan(-1), reason: 'de inhoud onder de kop staat niet meer in één groep');
+    expect(staat.substring(g - 200, g), contains('EdgeInsets.symmetric(horizontal: tvOverscan.left)'),
+        reason: 'zonder zijmarge op de groep staan de lijsten op een tv tegen de rand');
+    expect(staat, contains('10 + tvOverscan.left'),
+        reason: 'de terugpijl hoort binnen de marge, ook al loopt de kop erachter tot de rand');
+
+    final k = hoofd.indexOf('class EditorialeKop ');
+    expect(k, greaterThan(-1), reason: 'EditorialeKop is hernoemd of verdwenen');
+    final kop = hoofd.substring(k, hoofd.indexOf('\nclass ', k + 10));
+    expect(kop, contains('+ tvOverscan.left'),
+        reason: 'de naam en de feiten in de kop horen binnen wat een tv laat zien');
+  });
+
+  test('de metaregel van een online album knipt niet meer af', () {
+    final a = hoofd.indexOf('class _AlbumBrowsePageState');
+    expect(a, greaterThan(-1), reason: 'de State van AlbumBrowsePage is niet te vinden');
+    final e = hoofd.indexOf('\nclass ', a + 10);
+    final staat = hoofd.substring(a, e < 0 ? hoofd.length : e);
+    final w = staat.indexOf('_maybeFocusable(Wrap(');
+    expect(w, greaterThan(-1),
+        reason: 'een Row met een beletselteken knipt artiest · jaar · aantal af zodra het niet past');
+    expect(staat.substring(w, w + 300), contains('names: [widget.artistName]'));
+    expect(staat, contains("_tracks.length == 1 ? 'nummer' : 'nummers'"),
+        reason: '"1 nummers" is geen Nederlands');
+  });
 }
