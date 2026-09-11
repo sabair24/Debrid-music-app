@@ -17438,6 +17438,14 @@ class EditorialeKop extends StatelessWidget {
             // Daar staan de pillen, de tellingen en de vensterknoppen, en een artiestfoto is juist
             // bovenaan vaak licht — lucht, een studiowand. Hij eindigt op 27 procent zwart, precies
             // waar het verloop eronder begint, zodat er geen naad over de foto loopt.
+            //
+            // **Een plateau over de hoogte van de knoppen, en geen verloop vanaf de rand.** Eerst liep
+            // hij van 70 naar 55 procent: het donkerst op de bovenste rij, waar niets staat, en al
+            // lichter op de hoogte van de tekst. Bij Usher (11-09-2026, geïnstalleerd en bekeken)
+            // stonden de tellingen, het tandwiel en de vensterknoppen daardoor in gedempt grijs op het
+            // lichtgrijze studiodoek rechtsboven, en was het sluitkruisje nauwelijks te vinden. Nu
+            // houdt hij 85 tot 78 procent tot over het midden van de balk — waar de tekst staat — en
+            // komt de foto pas daaronder terug.
             if (bovenBloed > 0)
               Positioned(
                 top: 0,
@@ -17449,8 +17457,8 @@ class EditorialeKop extends StatelessWidget {
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
-                      colors: [Color(0xB3000000), Color(0x8C000000), Color(0x44000000)],
-                      stops: [0, .5, 1],
+                      colors: [Color(0xD9000000), Color(0xC7000000), Color(0x44000000)],
+                      stops: [0, .55, 1],
                     ),
                   ),
                 ),
