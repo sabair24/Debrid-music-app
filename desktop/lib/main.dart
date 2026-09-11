@@ -1635,15 +1635,30 @@ Widget glassSurface({
         ],
       ),
       border: Border.all(color: Colors.white.withValues(alpha: isTv ? edge + .12 : edge)),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: shadow),
-          blurRadius: shadowBlur,
-          offset: shadowOffset,
-        ),
-      ],
     ),
     child: child,
+  );
+
+  // De schaduw hoort BUITEN de knip, en dat is geen stijlkwestie.
+  //
+  // Hij stond in de decoratie van [surface], en die ligt binnen de ClipRRect hieronder. Een
+  // ClipRRect knipt precies op de ronde rand van zijn kind, en een schaduw valt per definitie
+  // búíten die rand: met de standaardwaarden negen punten omlaag en zesentwintig vervaagd. Wat de
+  // pil van de achtergrond moest tillen werd dus weggeknipt voor het ooit het scherm haalde, en zo
+  // stond het al vóór dit recept een eigen functie werd. Van de vier dingen die hierboven het glas
+  // maken ontbrak er zo vanaf het begin één. Aan de code zag je het niet: daar stond hij gewoon.
+  //
+  // Dus een eigen vlak óm de knip, met dezelfde ronde hoeken: een rechte schaduw zou onder de
+  // ronde uiteinden uitsteken.
+  final schaduw = BoxDecoration(
+    borderRadius: BorderRadius.circular(999),
+    boxShadow: [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: shadow),
+        blurRadius: shadowBlur,
+        offset: shadowOffset,
+      ),
+    ],
   );
 
   // Een telefoon krijgt hem ook zonder blur, en om dezelfde reden als de televisie hierboven.
@@ -1654,13 +1669,19 @@ Widget glassSurface({
   // hertekening, en op een telefoon is dat precies tijdens het scrollen. De uitweg voor de televisie
   // stond er al; die voor een telefoon ontbrak.
   if (isTv || zonderBlur) {
-    return ClipRRect(borderRadius: BorderRadius.circular(999), child: surface);
+    return DecoratedBox(
+      decoration: schaduw,
+      child: ClipRRect(borderRadius: BorderRadius.circular(999), child: surface),
+    );
   }
-  return ClipRRect(
-    borderRadius: BorderRadius.circular(999),
-    child: BackdropFilter(
-      filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-      child: surface,
+  return DecoratedBox(
+    decoration: schaduw,
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(999),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        child: surface,
+      ),
     ),
   );
 }
