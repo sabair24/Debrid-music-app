@@ -287,3 +287,168 @@ Widget balkGlas(Color tint, double op, {bool dicht = false}) {
     ],
   );
 }
+
+// ── Glas voor knoppen ────────────────────────────────────────────────────────
+//
+// **Waarom hier en niet naast `glassSurface` in `main.dart`.** Dit is het bestand van de oppervlakken,
+// en het deelt met [balkGlas] de les over de vulling naast de vervaging en de uitweg voor een
+// televisie. Drie glasrecepten in drie bestanden is precies hoe hun getallen uit elkaar gaan lopen.
+
+/// Wat het glas van een knop met de achtergrond doet: vervagen, en de lichte plekken eerst laten
+/// uitlopen.
+///
+/// **Waarom `dilate` en geen lens.** Letterlijk "de achtergrond licht vervormd" (Saber, 11-09-2026)
+/// is een lens: de achtergrond onder de knop een tikje vergroten met een `ImageFilter.matrix`. Maar
+/// zo'n matrix vergroot de achtergrond zoals die in de scène ligt, en niet om het midden van de knop
+/// — `BackdropFilterLayer` geeft hem geen eigen transformatie mee. Bij zes procent vergroting en een
+/// knop op 650 punten schuift het beeld onder de ruit dan bijna veertig punten weg, en omdat die plek
+/// bij elke scrollstap een andere is, drijft het mee. Niet gemeten; wel reden genoeg om het niet uit
+/// te leveren voor een effect dat `dilate` zonder dat risico geeft.
+///
+/// `dilate` kent geen positie. Hij rekt elke pixel op naar de helderste in zijn straal: de lichte
+/// plekken van de foto lopen uit vóór ze vervagen — wat glas met licht doet. En de vervaging is
+/// scheef, 14 tegen 10: rond vervaagd leest als matglas, een veeg die meer opzij loopt dan omhoog als
+/// een gebogen ruit.
+///
+/// **Waarom 14 en niet de 26 van `glassSurface`.** Die ruit ligt over een rustige strook. Deze knoppen
+/// liggen over een foto waarvan er achter de knoppenrij nog maar een paar procent doorkomt, en sigma
+/// 26 veegt over een pil van veertig punten élk detail weg dat kleiner is dan de pil zelf. Dan valt er
+/// niets meer te vervormen en is het een duurdere manier om een grijs vlak te tekenen.
+final ImageFilter glasVervorming = ImageFilter.compose(
+  outer: ImageFilter.blur(sigmaX: 14, sigmaY: 10),
+  inner: ImageFilter.dilate(radiusX: 2.5, radiusY: 2.5),
+);
+
+/// De ruit onder een [GlasKnop], zonder de knop: vervaging, vulling, rand en schaduw.
+///
+/// **Drie regels, en elk ervan faalt stil als je hem vergeet.**
+/// * De vulling staat NAAST de vervaging, niet erin — de les van [balkGlas]. Laat een toestel de
+///   vervaging vallen, dan gaat een vulling die er kind van is mee, en staat er een onleesbare knop.
+/// * De schaduw valt alleen BUITEN de pil ([BlurStyle.outer]). Een gewone schaduw tekent ook ónder de
+///   ruit, en dan vervaagt het glas een achtergrond die de schaduw al voor een kwart zwart gemaakt
+///   heeft — precies wat het moest laten zien.
+/// * [plat] is de uitweg voor een televisie, om de reden die bij [balkGlas] staat: geen vervaging, wel
+///   meer dekking, met dezelfde ophogingen als `glassSurface` — anders lost de pil van drie meter
+///   afstand op in het donker.
+Widget glasRuit({bool? plat}) {
+  final tv = plat ?? isTv;
+  const hoek = BorderRadius.all(Radius.circular(kHoekRond));
+  final vulling = DecoratedBox(
+    decoration: BoxDecoration(
+      borderRadius: hoek,
+      gradient: LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        // Drie stops en niet twee, om de reden die bij de actieve navigatiepil staat: een
+        // `BoxDecoration` met een `borderRadius` eist een gelijke rand rondom, dus de lichte bovenzijde
+        // — waar glas het licht vangt — moet uit het verloop komen. De getallen zijn die van die pil,
+        // een tikje terug: dáár ligt glas op glas dat zelf al licht geeft.
+        stops: const [0, .10, 1],
+        colors: [
+          Colors.white.withValues(alpha: tv ? .355 : .30),
+          Colors.white.withValues(alpha: tv ? .20 : .17),
+          Colors.white.withValues(alpha: tv ? .10 : .07),
+        ],
+      ),
+      border: Border.all(color: Colors.white.withValues(alpha: tv ? .32 : .20)),
+    ),
+  );
+  return DecoratedBox(
+    decoration: const BoxDecoration(
+      borderRadius: hoek,
+      boxShadow: [
+        BoxShadow(
+          color: Color(0x47000000),
+          blurRadius: 10,
+          offset: Offset(0, 3),
+          blurStyle: BlurStyle.outer,
+        ),
+      ],
+    ),
+    child: ClipRRect(
+      borderRadius: hoek,
+      child: tv
+          ? vulling
+          : Stack(
+              fit: StackFit.expand,
+              children: [
+                // Eerst de vervaging, met een LEEG kind: zij hoeft niets te tekenen, alleen te
+                // vervormen wat erachter ligt.
+                BackdropFilter(filter: glasVervorming, child: const SizedBox.expand()),
+                vulling,
+              ],
+            ),
+    ),
+  );
+}
+
+/// Een knop van glas: de achtergrond vervaagd en licht vervormd, een lichte bovenrand, een haarfijne
+/// rand, en een schaduw die hem van de foto tilt.
+///
+/// **De knop zelf blijft een `FilledButton` — of een `IconButton` voor [GlasKnop.rond].** Doorzichtig,
+/// boven de ruit. Een eigen knop op `Pressable` zou de focusring kwijtraken die `_focusOutline` via
+/// het thema op elke knop van dit soort zet, en daarmee ook de inkt, het toetsenbord en de
+/// uitgeschakelde stand.
+///
+/// **En hij staat BUITEN de afknipping van de ruit.** Flutter tekent een focusring op de rand van de
+/// knopvorm, voor de helft erbuiten; een afknipping op diezelfde rand halveert hem. Met een
+/// afstandsbediening is die ring het enige dat zegt waar je staat.
+///
+/// **Even groot als zijn ruit, overal.** Op een telefoon en een iPad maakt Flutter een knop van 40
+/// punten 48 hoog om hem raakbaar te houden, maar tekent hij zijn inkt op 40 — en dan licht er bij
+/// aanwijzen een kleinere pil op binnen een grotere. Dus een vaste 44, zonder die opvulling: het
+/// kleinste wat Apple een vinger laat raken, en ruit en knop vallen samen.
+class GlasKnop extends StatelessWidget {
+  const GlasKnop({
+    super.key,
+    required this.icoon,
+    required String this.label,
+    required this.onPressed,
+  })  : tooltip = null,
+        _rond = false;
+
+  /// Alleen een pictogram, in een rond stukje glas: de terugpijl boven een foto.
+  const GlasKnop.rond({super.key, required this.icoon, required this.onPressed, this.tooltip})
+      : label = null,
+        _rond = true;
+
+  final IconData icoon;
+  final String? label;
+  final String? tooltip;
+  final VoidCallback? onPressed;
+  final bool _rond;
+
+  @override
+  Widget build(BuildContext context) {
+    final knop = _rond
+        ? IconButton(
+            onPressed: onPressed,
+            tooltip: tooltip,
+            style: IconButton.styleFrom(
+              foregroundColor: Colors.white,
+              minimumSize: const Size(44, 44),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            icon: Icon(icoon),
+          )
+        : FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.transparent,
+              disabledBackgroundColor: Colors.transparent,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+              minimumSize: const Size(64, 44),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: onPressed,
+            icon: Icon(icoon, size: 18),
+            label: Text(label!),
+          );
+    return Stack(
+      children: [
+        Positioned.fill(child: IgnorePointer(child: glasRuit())),
+        knop,
+      ],
+    );
+  }
+}

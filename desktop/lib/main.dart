@@ -2124,6 +2124,22 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
+    // DE BOVENBALK ZWEEFT, op de pc en op een iPad.
+    //
+    // Hij stond als bovenste kind in de kolom hieronder en nam daar 64 punten in, zodat elke pagina
+    // er pas onder begon. Maar hij heeft geen vulling — alleen zijn pillen, en die zijn al van glas —
+    // dus wat hem een STROOK maakte was alleen die plek in de kolom. Nu ligt hij als laatste laag van
+    // de Stack over alles heen, en houdt elke pagina zelf de ruimte eronder vrij (zie [BalkRuimte]).
+    // Een pagina die er onderdoor wil, zoals de artiestpagina met haar foto, laat die ruimte weg.
+    //
+    // Niet op een televisie (daar staat de navigatie in een eigen balk die met de afstandsbediening
+    // bereikbaar moet blijven), niet op een telefoon (daar is het een andere balk, en neemt een open
+    // pagina de bovenkant al over), en niet zolang de melding "je pc is offline" er staat: die hoort
+    // ónder de balk en niet erachter verstopt, dus in die stand valt alles terug op hoe het was.
+    final zweeft = !isTv &&
+        !isCompact(context) &&
+        !context.select<LibraryStore, bool>((l) => l.fromCloudMirror);
+    final ruimte = zweeft ? _breedeBalkHoogte(context) : 0.0;
     // BACK, on a television, must go back.
     //
     // The seven sections are a number in this state, not routes, so Flutter's navigator has
@@ -2200,6 +2216,22 @@ class _HomeShellState extends State<HomeShell> {
                 ),
               ),
             ),
+            // De gloed van het merk, ACHTER de pagina's in plaats van in de balk.
+            //
+            // Hij zat in de balk zelf, en zolang die in de kolom stond lag hij daarmee vanzelf alleen
+            // boven de pagina's. Nu de balk erover zweeft zou hij óók over een pagina met een foto
+            // vallen: een paarse waas bovenaan elke artiest. Hier, achter de pagina's, dekt zo'n foto
+            // hem gewoon af — ook halverwege een overgang, zonder dat iemand hoeft te melden wie er
+            // bovenop ligt. Op elke andere pagina is de strook onder de balk doorzichtig en staat hij
+            // precies waar hij stond. Zie [_merkGloed].
+            if (!isTv && !isCompact(context))
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: _breedeBalkHoogte(context),
+                child: IgnorePointer(child: ClipRect(child: _merkGloed())),
+              ),
             Column(
           children: [
             // Both bars get their own repaint boundary, and the reason is the position ticker.
@@ -2228,7 +2260,9 @@ class _HomeShellState extends State<HomeShell> {
             // dubbel. Op een pc en een tv verandert er niets: daar navigeer je met de bovenbalk of
             // de rail, en die horen juist te blijven staan.
             if (!(isCompact(context) && paginaOpen)) ...[
-              if (!isTv) RepaintBoundary(child: _topBar()),
+              // Alleen nog hier als hij NIET zweeft: op een telefoon, en op de pc zolang de
+              // offline-melding er staat. Anders ligt hij als laatste laag over de Stack heen.
+              if (!isTv && !zweeft) RepaintBoundary(child: _topBar()),
               // Op een tv staat de navigatie BOVENAAN in plaats van in een rail links. Zie TvTopBar
               // voor waarom hij daar weg moest: hij was met de afstandsbediening niet te bereiken.
               if (isTv)
@@ -2271,7 +2305,11 @@ class _HomeShellState extends State<HomeShell> {
               //
               // Op een telefoon zou 340 punten naast een scherm van 411 niets overlaten; daar opent
               // dezelfde lijst als een blad van onderen (zie de knop in `_compactBar`).
-              child: Row(
+              child: BalkRuimte(
+                // Zolang de balk zweeft, houdt elke pagina zelf deze ruimte eronder vrij — per route,
+                // en daarom verspringt er bij een paginawissel niets. Zie [BalkRuimte].
+                hoogte: ruimte,
+                child: Row(
                 children: [
                   Expanded(
                     // Alleen op een tv een eigen scope: op een pc en een telefoon zou een extra
@@ -2325,9 +2363,15 @@ class _HomeShellState extends State<HomeShell> {
                       ),
                     ),
                   ),
+                  // De wachtrij staat NAAST de pagina's en niet in de navigator, dus hij krijgt de
+                  // ruimte onder de balk hier: anders begint zijn kop achter de pillen.
                   if (!isCompact(context) && context.watch<WachtrijPaneel>().open)
-                    const WachtrijPaneelView(),
+                    Padding(
+                      padding: EdgeInsets.only(top: ruimte),
+                      child: const WachtrijPaneelView(),
+                    ),
                 ],
+              ),
               ),
             ),
             // ALLEBEI WEG ZODRA HET TOETSENBORD OPEN IS.
@@ -2378,6 +2422,14 @@ class _HomeShellState extends State<HomeShell> {
               Onderbalk(view: _view, onPick: _gaNaar),
           ],
         ),
+            // DE BALK, BOVEN ALLES — als hij zweeft.
+            //
+            // Als laatste laag, zodat hij óver de pagina's ligt en een foto er gewoon onderdoor loopt.
+            // Zijn eigen `RepaintBoundary` blijft: dit is de balk met de niet-cachebare BackdropFilter
+            // van de pillen, en de reden daarvoor staat hierboven bij de kolom. Hij wordt ook niet per
+            // scrollstap opnieuw gebouwd — het glas dat bij scrollen opkomt hoort bij de pagina zelf.
+            if (zweeft)
+              Positioned(top: 0, left: 0, right: 0, child: RepaintBoundary(child: _topBar())),
           ],
         ),
       ),
@@ -2461,6 +2513,44 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
+  /// De paarse gloed van het merk, bovenaan het venster — sinds de balk zweeft áchter de pagina's.
+  ///
+  /// Zie de laag in de Stack van [build] voor waarom hij daar staat en niet meer in de balk.
+  Widget _merkGloed() => Stack(
+        children: [
+          // De gloed van het merk, maar niet bovenop de kleur van een plaat.
+          //
+          // **Waarom hij wegtrekt.** Deze paarse gloed is er voor Start en Albums, waar niets
+          // anders de bovenkant kleurt. Staat er een plaat open, dan ligt de was van die plaat
+          // achter alles — en dan liggen er twee lichtbronnen over elkaar: paars bovenaan, de
+          // kleur van de hoes eronder. Dat is precies wat de bovenkant van het scherm in banen
+          // deed uiteenvallen in plaats van één geheel te zijn.
+          //
+          // Overvloeien, niet omslaan: hij verdwijnt in hetzelfde tempo als waarin de was opkomt.
+          Positioned(
+            left: 0,
+            right: 0,
+            top: -150,
+            height: 300,
+            child: Consumer<PaginaWas>(
+              builder: (_, paginaWas, __) => AnimatedContainer(
+                duration: kWas,
+                curve: Curves.easeOut,
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    radius: .75,
+                    colors: [
+                      _accent.withValues(alpha: paginaWas.kleur == null ? .34 : 0),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+
   Widget _topBarBody() => SizedBox(
         // The glow keeps running behind the status bar; only the contents move down, so the top of
         // the screen still looks like one piece rather than a black strip above the app.
@@ -2471,38 +2561,7 @@ class _HomeShellState extends State<HomeShell> {
         height: _breedeBalkHoogte(context),
         child: Stack(
           children: [
-            // De gloed van het merk, maar niet bovenop de kleur van een plaat.
-            //
-            // **Waarom hij wegtrekt.** Deze paarse gloed is er voor Start en Albums, waar niets
-            // anders de bovenkant kleurt. Staat er een plaat open, dan ligt de was van die plaat
-            // achter alles — en dan liggen er twee lichtbronnen over elkaar: paars bovenaan, de
-            // kleur van de hoes eronder. Dat is precies wat de bovenkant van het scherm in banen
-            // deed uiteenvallen in plaats van één geheel te zijn.
-            //
-            // Overvloeien, niet omslaan: hij verdwijnt in hetzelfde tempo als waarin de was opkomt.
-            Positioned(
-              left: 0,
-              right: 0,
-              top: -150,
-              height: 300,
-              child: IgnorePointer(
-                child: Consumer<PaginaWas>(
-                  builder: (_, paginaWas, __) => AnimatedContainer(
-                    duration: kWas,
-                    curve: Curves.easeOut,
-                    decoration: BoxDecoration(
-                      gradient: RadialGradient(
-                        radius: .75,
-                        colors: [
-                          _accent.withValues(alpha: paginaWas.kleur == null ? .34 : 0),
-                          Colors.transparent,
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
+            // De gloed van het merk stond hier. Hij ligt nu achter de pagina's — zie [_merkGloed].
             Padding(
               // The glow behind runs to the edge; the contents come in by tvOverscan. 11 points of
               // top inset on a set that overscans 5% puts the navigation strip's top edge off the
@@ -7194,12 +7253,12 @@ class _PersonPageState extends State<PersonPage> {
                   ownBackdrop: false,
                   subtitle: widget.role == null ? null : '${widget.role} · ${_works.length} producties',
                   actions: [
-                    FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                          backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10)),
+                    // Glas, zoals de knoppen op de artiestpagina: dezelfde plek boven dezelfde soort
+                    // foto. Bleef deze paars, dan was hij de enige die anders was.
+                    GlasKnop(
+                      icoon: Icons.person_rounded,
+                      label: 'Als artiest',
                       onPressed: () => openArtist(context, widget.name),
-                      icon: const Icon(Icons.person_rounded, size: 18),
-                      label: const Text('Als artiest'),
                     ),
                   ],
                 ),
@@ -17220,6 +17279,7 @@ class EditorialeKop extends StatelessWidget {
     this.onGroep,
     this.echteNaam,
     this.actions = const [],
+    this.bovenBloed = 0,
   });
 
   final String naam;
@@ -17241,6 +17301,14 @@ class EditorialeKop extends StatelessWidget {
   final void Function(String)? onGroep;
   final String? echteNaam;
   final List<Widget> actions;
+
+  /// Hoeveel punten van dit vak ACHTER de zwevende bovenbalk liggen.
+  ///
+  /// Nul waar er geen balk overheen zweeft — dan is de kop precies zoals hij altijd was. Anders loopt
+  /// de foto zoveel hoger door, tot de bovenrand van het venster, en schuift al het andere evenveel
+  /// omlaag: de tekst, de knoppen én het verloop dat de naam draagt. Zo staat alles onder de balk op
+  /// dezelfde plek in het venster als voordien, en is het enige verschil de foto erboven.
+  final double bovenBloed;
 
   @override
   Widget build(BuildContext context) {
@@ -17292,7 +17360,9 @@ class EditorialeKop extends StatelessWidget {
         constraints: BoxConstraints(
           // Die 700 punten waren er vóór de vrijstaande figuur. Nu die weg is, is dit het kader dat
           // de inhoud zelf nodig heeft — anders staat er onder de knoppen honderddertig punten niets.
-          minHeight: smal ? 0 : (breedte * .40).clamp(340.0, 620.0),
+          // Plus het stuk achter de zwevende balk: de ondergrens zegt hoeveel FOTO je ziet, en de
+          // bloeding voegt foto toe. Zonder dit at de ondergrens het bloeden op waar hij bindt.
+          minHeight: (smal ? 0 : (breedte * .40).clamp(340.0, 620.0)) + bovenBloed,
           // En de volle breedte, EXPLICIET. Dit stond nergens: een `Stack` meet zich aan zijn
           // niet-gepositioneerde kinderen, en `Positioned.fill` telt daarin niet mee. Op de pagina
           // staat deze kop zélf in een `Stack` (naast de terugpijl), en die geeft LOSSE maten door —
@@ -17328,7 +17398,14 @@ class EditorialeKop extends StatelessWidget {
                     alignment: const Alignment(0, -.35),
                     errorBuilder: (_, __, ___) => const SizedBox())),
               ),
-            Positioned.fill(
+            // Het verloop hieronder begint ONDER de balk, niet bovenaan het vak. Het is afgesteld op
+            // waar de naam en de knoppen staan, en die schuiven met [bovenBloed] mee omlaag — dus
+            // zakt het verloop mee, en is alles onder de balk precies wat het was.
+            Positioned(
+              top: bovenBloed,
+              left: 0,
+              right: 0,
+              bottom: 0,
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   // Eén sterkte, en dat is de lichte. Hier stonden er twee — een donkere voor
@@ -17356,6 +17433,28 @@ class EditorialeKop extends StatelessWidget {
                 ),
               ),
             ),
+            // Achter de zwevende balk: een donkere rand bovenaan de foto.
+            //
+            // Daar staan de pillen, de tellingen en de vensterknoppen, en een artiestfoto is juist
+            // bovenaan vaak licht — lucht, een studiowand. Hij eindigt op 27 procent zwart, precies
+            // waar het verloop eronder begint, zodat er geen naad over de foto loopt.
+            if (bovenBloed > 0)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: bovenBloed,
+                child: const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Color(0xB3000000), Color(0x8C000000), Color(0x44000000)],
+                      stops: [0, .5, 1],
+                    ),
+                  ),
+                ),
+              ),
             // En van links, zodat de letters altijd op een rustige ondergrond staan — ook als de
             // foto daar toevallig licht is.
             if (!smal)
@@ -17374,7 +17473,8 @@ class EditorialeKop extends StatelessWidget {
 
 
             Padding(
-              padding: EdgeInsets.fromLTRB(marge, smal ? 44 : 56, marge, smal ? 18 : 28),
+              // Omlaag met [bovenBloed]: het vak begint achter de balk, de tekst hoort eronder.
+              padding: EdgeInsets.fromLTRB(marge, (smal ? 44 : 56) + bovenBloed, marge, smal ? 18 : 28),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -17880,7 +17980,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
 }
 
 // ── Stremio-style online browse: artist → albums → tracks → sources ──────────
-class ArtistBrowsePage extends StatefulWidget {
+class ArtistBrowsePage extends StatefulWidget implements OnderDeBalk {
   final CatalogArtist artist;
   const ArtistBrowsePage(this.artist, {super.key});
   @override
@@ -17957,6 +18057,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   /// waar je vandaan kwam. Nu is er één pagina en staat alles erop.
   List<CatalogArtist> _related = const [];
 
+  /// De scroller van deze pagina: het glas achter de zwevende balk komt op naarmate je scrolt.
+  final _rol = ScrollController();
+
   @override
   void initState() {
     super.initState();
@@ -17965,6 +18068,12 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     _loadRelated();
     _loadArt();
     _loadWie();
+  }
+
+  @override
+  void dispose() {
+    _rol.dispose();
+    super.dispose();
   }
 
   DiscographyService get _disco => DiscographyService(
@@ -18362,6 +18471,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
 
   @override
   Widget build(BuildContext context) {
+    // Hoeveel van deze pagina achter de zwevende balk ligt. Nul op een televisie, een telefoon, en
+    // op de pc zolang de offline-melding er staat — dan is alles hieronder zoals het altijd was.
+    final ruimte = BalkRuimte.van(context);
     // The records of this artist you actually hold. Matched on the normalised artist name, the same
     // key the library groups by, so a stray capital or accent doesn't hide your own albums.
     final lib = context.watch<LibraryStore>();
@@ -18459,7 +18571,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       // wachtrij- en speakerknop wijst nog naar de goede plek.
       // GEEN eigen spelerbalk meer. De schil tekent hem, en die staat sinds de binnennavigator
       // ónder deze pagina in plaats van erachter — twee balken zouden er twee zijn.
-      body: ArtistBackdrop(
+      body: Stack(
+        children: [
+      ArtistBackdrop(
         name: widget.artist.name,
         // Same as the album browse page: this draws its own hero rather than an AppBar, so the
         // status bar had nothing keeping it clear. The backdrop stays behind it — only the
@@ -18469,7 +18583,11 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
             // margin that keeps the back arrow off the part of the picture a set cuts away.
             minimum: tvOverscan,
         bottom: false,
+        // Niet bovenaan als de balk zweeft: die houdt de statusbalk van een iPad al zelf vrij, en de
+        // foto hoort daar juist onderdoor te lopen. [EditorialeKop] schuift de tekst omlaag.
+        top: ruimte == 0,
         child: CustomScrollView(
+        controller: _rol,
         slivers: [
           SliverToBoxAdapter(
             child: Stack(
@@ -18490,14 +18608,15 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                   groepen: _groepen,
                   onGroep: (g) => openArtist(context, g),
                   echteNaam: _echteNaam,
+                  bovenBloed: ruimte,
+                  // Glas, alle drie hetzelfde (Saber, 11-09-2026: "alle drie neutraal glas"). Radio
+                  // was paars; dat kleurverschil is er niet meer, en dat is zijn keuze. Wat Radio nog
+                  // als eerste aanwijst is zijn plek vooraan en zijn pictogram.
                   actions: [
-                    FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                          backgroundColor: _accent,
-                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10)),
+                    GlasKnop(
+                      icoon: Icons.radio_rounded,
+                      label: 'Radio',
                       onPressed: () => startRadio(context, widget.artist.name),
-                      icon: const Icon(Icons.radio_rounded, size: 18),
-                      label: const Text('Radio'),
                     ),
                     // De app raadt portret-of-achtergrond uit de vorm van een plaatje, en juist een
                     // gok hoor je te kunnen overrulen.
@@ -18507,15 +18626,11 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                     // vooral moeizaam" — en deze twee knoppen zijn precies datzelfde soort werk.
                     // Dat de artiestpagina die uitzondering niet had was een gat, geen keuze.
                     if (!isTv)
-                      FilledButton.icon(
-                        style: FilledButton.styleFrom(
-                            backgroundColor: _panel2,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+                      GlasKnop(
+                        icoon: Icons.photo_library_outlined,
+                        label: 'Foto kiezen',
                         onPressed: () => showDialog<void>(
                             context: context, builder: (_) => ArtistArtGallery(widget.artist.name)),
-                        icon: const Icon(Icons.photo_library_outlined, size: 18),
-                        label: const Text('Foto kiezen'),
                       ),
                     // Alleen waar er iets te hernoemen valt: een artiest uit de catalogus waarvan
                     // je niets hebt, heeft geen tags om te corrigeren.
@@ -18524,11 +18639,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                       // enige waar groeperen op af kan gaan, dus één album getagd als “Enrique”
                       // tussen een plank “Enrique Iglesias” zijn twee artiesten wat deze app
                       // betreft — en deze pagina, die er dan de helft van toont, is waar je het ziet.
-                      FilledButton.icon(
-                        style: FilledButton.styleFrom(
-                            backgroundColor: _panel2,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+                      GlasKnop(
+                        icoon: Icons.drive_file_rename_outline_rounded,
+                        label: 'Naam corrigeren',
                         onPressed: () async {
                           final r = await showDialog<({String naam, int geschreven, int mislukt})>(
                               context: context,
@@ -18543,16 +18656,16 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                           // Deze pagina gaat over een naam waar niets meer onder staat.
                           Navigator.pop(context);
                         },
-                        icon: const Icon(Icons.drive_file_rename_outline_rounded, size: 18),
-                        label: const Text('Naam corrigeren'),
                       ),
                     ],
                   ],
                 ),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(10, 8, 0, 0),
-                  child: IconButton(
-                    icon: const Icon(Icons.arrow_back_rounded),
+                  // Onder de zwevende balk, anders vangt die de tik.
+                  padding: EdgeInsets.fromLTRB(10, 8 + ruimte, 0, 0),
+                  child: GlasKnop.rond(
+                    icoon: Icons.arrow_back_rounded,
+                    tooltip: 'Terug',
                     onPressed: () => Navigator.pop(context),
                   ),
                 ),
@@ -18726,6 +18839,23 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
         ],
         ),
         ),
+      ),
+          // Het glas achter de zwevende balk, en het hoort bij DEZE pagina — niet bij de balk.
+          //
+          // Scrol je, dan schuiven de platen onder de pillen door, en dan moet daar matglas komen
+          // zodat je de lijst niet dwars door de knoppen leest. [_MeeschuivendGlas] doet dat al voor
+          // de albumpagina: bij stilstand tekent hij niets, en de foto blijft onaangeroerd. Hij staat
+          // hier en niet in de schil, zodat hij met deze pagina mee in- en uitschuift en nooit bij
+          // een andere pagina achterblijft.
+          if (ruimte > 0)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: ruimte,
+              child: IgnorePointer(child: _MeeschuivendGlas(tint: _bg, rol: _rol)),
+            ),
+        ],
       ),
     );
   }

@@ -44,14 +44,122 @@ PageRoute<T> paginaRoute<T>(WidgetBuilder bouw) => PaginaRoute<T>(bouw);
 ///
 /// Een eigen klasse en geen `PageRouteBuilder` bij de aanroep, zodat `test/overgang_test.dart` erop
 /// kan wijzen zonder een navigator te bouwen.
+///
+/// En de plek waar elke pagina haar [BalkRuimte] krijgt — zie daar waarom dat per route gebeurt.
 class PaginaRoute<T> extends PageRouteBuilder<T> {
   PaginaRoute(WidgetBuilder bouw)
       : super(
-          pageBuilder: (context, _, __) => bouw(context),
+          pageBuilder: (context, _, terug) => _metBalkRuimte(bouw(context), terug),
           transitionDuration: kOvergang,
           reverseTransitionDuration: kOvergang,
           transitionsBuilder: _schuif,
         );
+}
+
+/// Hoeveel ruimte er bovenaan vrij moet blijven voor de balk die OVER de pagina's zweeft.
+///
+/// **Waarom de balk zweeft.** Hij stond als bovenste kind in de kolom van de schil, en elke pagina
+/// leefde in de `Expanded` daaronder. Een kind kan niet boven zijn ouder uit schilderen, dus de foto
+/// van een artiest hield op waar de balk begon — terwijl die balk zelf geen vulling heeft en zijn
+/// pillen al van matglas zijn. Saber op 11-09-2026: "ik wil gewoon af van die bovenbalk". Zwevend is
+/// hij weg als strook, en krijgt het glas van de pillen voor het eerst een foto om te vervagen.
+///
+/// **Waarom de ruimte per ROUTE geregeld wordt en niet één keer rond de navigator.** Dat laatste lag
+/// voor de hand — en had bij elke plaat die je vanaf een artiest opent de pagina's laten springen.
+/// Een pagina schuift in 260 ms naar binnen terwijl die eronder zichtbaar blijft ([_schuif]). Wisselt
+/// op dat moment de ruimte van de hele navigator van 0 naar 64, dan zakt de artiestpagina die je nog
+/// ziet in één beeld 64 punten, en omgekeerd bij het teruggaan. Met de ruimte per route houdt elke
+/// pagina haar eigen maat haar hele leven lang, en kan er in een overgang niets verspringen.
+///
+/// Nul waar er geen zwevende balk is: op een televisie, op een telefoon, in een toets, en op het
+/// koppel- en aanmeldscherm die zonder schil draaien. Daar verandert er dus niets.
+class BalkRuimte extends InheritedWidget {
+  const BalkRuimte({super.key, required this.hoogte, required super.child});
+
+  final double hoogte;
+
+  static double van(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<BalkRuimte>()?.hoogte ?? 0;
+
+  @override
+  bool updateShouldNotify(BalkRuimte oud) => hoogte != oud.hoogte;
+}
+
+/// Een pagina die zelf tot de bovenrand van het venster tekent, ONDER de zwevende balk door.
+///
+/// Een merkteken en verder niets: de pagina zegt het, [PaginaRoute] regelt het. Zo hoeft geen van de
+/// plekken die een artiestpagina openen iets te weten, en doet een volgende pagina met een foto
+/// bovenaan mee met één woord in haar klassekop. Wie dit draagt belooft wel iets: ze houdt zelf haar
+/// knoppen en tekst uit de [BalkRuimte] — die krijgt ze er niet meer gratis bij.
+abstract interface class OnderDeBalk {}
+
+/// Elke pagina schuift onder de balk vandaan, behalve een die er zelf onder door wil.
+///
+/// De vorm van wat hier teruggaat hangt ALLEEN aan het soort pagina, en dat staat per route vast.
+/// Zou ook de hoogte meebeslissen (geen omhulsel bij nul), dan wisselde de boom zodra je het venster
+/// smaller trekt — en dan verliest de pagina alles wat ze onthouden had, tot en met waar je stond.
+Widget _metBalkRuimte(Widget pagina, Animation<double> terug) =>
+    pagina is OnderDeBalk ? _Bloeding(terug: terug, child: pagina) : _Inzet(child: pagina);
+
+class _Inzet extends StatelessWidget {
+  const _Inzet({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) =>
+      Padding(padding: EdgeInsets.only(top: BalkRuimte.van(context)), child: child);
+}
+
+/// De strook van een [OnderDeBalk]-pagina achter de balk trekt zich terug zodra er een andere
+/// pagina overheen komt.
+///
+/// **Zonder dit verdween er iets aan het einde van elke overgang.** Een gewone pagina begint pas
+/// onder de balk; de strook erboven is doorzichtig. Open je vanaf een artiest een plaat, dan blijft
+/// de foto van die artiest dus achter de balk staan terwijl de plaat binnenschuift — en op het moment
+/// dat de overgang klaar is legt de navigator de artiestpagina weg, en is de foto in één beeld weg.
+/// Hier trekt hij zich in hetzelfde tempo terug als de plaat binnenkomt, zodat er aan het einde niets
+/// meer te verdwijnen valt. Bij teruggaan komt hij op dezelfde manier weer tevoorschijn.
+///
+/// Een afknipping en geen vervaging: een `ClipRect` kost niets, een `Opacity` over de hele pagina is
+/// een extra laag in elk beeld van elke overgang. In rust knipt hij niet eens ([Clip.none]).
+class _Bloeding extends StatelessWidget {
+  const _Bloeding({required this.terug, required this.child});
+
+  final Animation<double> terug;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final ruimte = BalkRuimte.van(context);
+    // Zelfde afspraak als in [_schuif]: wie animaties uit heeft, krijgt ook deze meteen.
+    final meteen = MediaQuery.disableAnimationsOf(context);
+    return AnimatedBuilder(
+      animation: terug,
+      child: child,
+      builder: (_, kind) {
+        final t = terug.value;
+        final weg = ruimte * (meteen ? (t > 0 ? 1.0 : 0.0) : Curves.easeOutCubic.transform(t));
+        return ClipRect(
+          clipper: _BovenKnip(weg),
+          clipBehavior: weg <= 0 ? Clip.none : Clip.hardEdge,
+          child: kind,
+        );
+      },
+    );
+  }
+}
+
+class _BovenKnip extends CustomClipper<Rect> {
+  const _BovenKnip(this.boven);
+
+  final double boven;
+
+  @override
+  Rect getClip(Size size) => Rect.fromLTRB(0, boven, size.width, size.height);
+
+  @override
+  bool shouldReclip(_BovenKnip oud) => oud.boven != boven;
 }
 
 /// Zes procent van de breedte, en niet meer.
@@ -230,7 +338,9 @@ class _BinnenNavigatorState extends State<BinnenNavigator> {
           settings: instellingen,
           transitionDuration: Duration.zero,
           reverseTransitionDuration: Duration.zero,
-          pageBuilder: (_, __, ___) => widget.wortel,
+          // Ook de wortel onder de balk vandaan. Hij is geen [PaginaRoute], en juist daarom zou hij
+          // hier vergeten worden — dan schoof het zoekveld van Albums onder de pillen.
+          pageBuilder: (_, __, ___) => _Inzet(child: widget.wortel),
         ),
       );
 }
