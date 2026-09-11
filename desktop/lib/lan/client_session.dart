@@ -238,6 +238,9 @@ class ClientSession extends ChangeNotifier {
     if (haal == null || huidig == null || _sleutelGevraagd) return;
     // VÓÓR de await. Anders start elke poll er nog een terwijl de eerste nog wacht.
     _sleutelGevraagd = true;
+    // Hardop, want op 11-09-2026 ging dit stil: de Shield werd elke vijftien seconden geweigerd, het
+    // herstel kreeg niets terug, en in het logboek stond er geen woord over.
+    debugPrint('Sleutel geweigerd door ${huidig.baseUrl.host} — een nieuwe halen…');
     String? verse;
     try {
       verse = await haal(huidig.baseUrl);
@@ -247,11 +250,24 @@ class ClientSession extends ChangeNotifier {
     }
     // Dezelfde sleutel terug betekent dat de pc hem nooit had ingetrokken maar kwijt was; opnieuw
     // verbinden lost dat niet op en zou alleen het scherm laten knipperen.
-    if (verse == null || verse.isEmpty || verse == huidig.token) return;
+    if (verse == null || verse.isEmpty || verse == huidig.token) {
+      debugPrint('Geen nieuwe sleutel gekregen; "Opnieuw proberen" probeert het nog eens.');
+      return;
+    }
+    debugPrint('Nieuwe sleutel van ${huidig.baseUrl.host} — opnieuw verbinden.');
     // Via `connect` en niet met de hand: die legt hem vast, hangt de client aan de bibliotheek,
     // vertelt de speler hoe hij een pad ondertekent en haalt de catalogus opnieuw op. Dat met de
     // hand overdoen is precies hoe je er één vergeet.
-    await connect(RemoteEndpoint(baseUrl: huidig.baseUrl, token: verse, name: huidig.name));
+    //
+    // De uitwijkadressen gaan mee. Een nieuwe sleutel is geen nieuwe pc: zijn Tailscale-adres is
+    // hetzelfde gebleven, en dat is het adres waarmee je buitenshuis binnenkomt. Hier stond een
+    // `RemoteEndpoint` zonder, en dan was dat adres na het herstel weg.
+    await connect(RemoteEndpoint(
+      baseUrl: huidig.baseUrl,
+      token: verse,
+      name: huidig.name,
+      uitwijk: huidig.uitwijk,
+    ));
   }
 
   /// Forget the PC and go back to the pairing screen.
@@ -364,7 +380,15 @@ class ClientSession extends ChangeNotifier {
 
   /// Called when the app comes back to the foreground — an iPad that was in a pocket for an hour
   /// should not wait out the timer before showing what arrived meanwhile.
-  Future<void> refreshNow() => _refresh();
+  ///
+  /// En het is de knop "Opnieuw proberen" in de meldingsbalk. Daarom mag het sleutelherstel hier nóg
+  /// een keer: na één mislukte poging was die knop anders een knop die de catalogus opnieuw opvroeg
+  /// bij een pc die hem net had geweigerd -- en verder niets. Dat dit ook bij terugkomen naar de
+  /// voorgrond gebeurt is prima: dat is een handvol keer per dag, niet elke vijftien seconden.
+  Future<void> refreshNow() {
+    _sleutelGevraagd = false;
+    return _refresh();
+  }
 
   @override
   void dispose() {

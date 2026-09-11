@@ -84,6 +84,30 @@ class _LoginScreenState extends State<LoginScreen> {
   /// gehad, en de volgende poging is er dan meteen.
   bool _toonAdres = false;
 
+  /// **Al ingelogd? Dan niet om een wachtwoord vragen dat dit toestel al heeft.**
+  ///
+  /// Dit scherm kwam na "Opnieuw koppelen" of "Koppeling verbreken" altijd met een leeg formulier,
+  /// ook op een toestel dat gewoon op je account stond. `_findServer` -- en daarmee de accountweg
+  /// die zonder code en zonder database binnenkomt -- liep alleen ná het invullen van e-mail en
+  /// wachtwoord. Op 11-09-2026 betekende dat voor de Shield: je wachtwoord intikken met een
+  /// afstandsbediening, om iets te bewijzen wat de tv al wist.
+  ///
+  /// Mislukt het zoeken, dan staat alles er gewoon: de melding, het adresveld en "Koppel met een
+  /// code". Het formulier blijft voor wie écht uitgelogd is.
+  @override
+  void initState() {
+    super.initState();
+    if (widget.session.isSignedIn) {
+      _busy = true;
+      _waiting = 'Je bent al ingelogd — je pc zoeken…';
+      // Na de eerste beeldopbouw: `_findServer` zet zelf zijn toestand, en dat hoort niet midden in
+      // het opbouwen van dit scherm te gebeuren.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _findServer();
+      });
+    }
+  }
+
   @override
   void dispose() {
     _email.dispose();

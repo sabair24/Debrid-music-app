@@ -65,6 +65,7 @@ import 'lan/cast_receiver.dart';
 import 'lan/client.dart';
 import 'lan/client_mode.dart';
 import 'lan/client_session.dart';
+import 'lan/sleutelherstel.dart';
 import 'lan/bijwerkstand.dart';
 import 'lan/remote_services.dart';
 import 'lan/stroomstand.dart';
@@ -585,8 +586,28 @@ Future<void> main() async {
     },
     endpoint: mode.endpoint,
     // Een geweigerde sleutel vervangt zichzelf, zolang dit toestel op hetzelfde account ingelogd is
-    // als de pc. Zie `CloudSession.verseSleutelVoor`.
-    verseSleutel: (basis) => cloud.verseSleutelVoor(basis),
+    // als de pc. EERST via het account bij de pc zelf, pas dan via de accountdatabase -- zie
+    // `lan/sleutelherstel.dart` voor waarom die volgorde. Op 11-09-2026 liep dit alleen via de
+    // database, en die zat aan zijn daglimiet: de Shield bleef geweigerd en niemand zei het.
+    verseSleutel: (basis) async {
+      final herstel = await herstelSleutel(
+        basis: basis,
+        inlogsleutel: () => cloud.idToken(),
+        viaAccount: (pc, inlogsleutel) async {
+          final ik = await thisDevice();
+          return RemoteClient.pairMetAccount(
+            pc,
+            idToken: inlogsleutel,
+            deviceId: ik.id,
+            deviceName: ik.name,
+            platform: ik.platform,
+          );
+        },
+        viaDatabase: (pc) => cloud.verseSleutelVoor(pc),
+      );
+      debugPrint('Sleutelherstel: ${herstel.verloop.join(' → ')}');
+      return herstel.sleutel;
+    },
   );
 
   // Searching and downloading. On a Mac or an iPad these are the same classes as far as every
