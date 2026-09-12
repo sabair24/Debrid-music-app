@@ -11331,6 +11331,7 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel}) as
   final standen = context.read<Speelstanden>();
   final nuMs = DateTime.now().millisecondsSinceEpoch;
   Buurtbron? buurt;
+  void Function(String)? buurtSpoor;
   if (!lib.isRemote && cfg.anthropicKey.trim().isNotEmpty) {
     final beurten = <Beurt>[
       for (final t in lib.tracks)
@@ -11350,13 +11351,20 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel}) as
     final ai = AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace);
     // Opschrijven wat het model zei, want "geen extra buren" is van buiten niet te onderscheiden
     // van "de vraag is stukgelopen" — precies het soort stilte dat hier al twee keer een avond
-    // heeft gekost. Eén regel per radio, dus het blijft klein.
+    // heeft gekost. Twee regels per radio, dus het blijft klein.
+    //
+    // ALLE namen, niet de eerste acht. Op 12-09-2026 gaf het model voor Billie Jean onder meer
+    // Quincy Jones, Rockwell, Shalamar en The Time — en uit een afgekapte regel was daarna niet na
+    // te gaan welke daarvan Deezer kende en wat er geland was. Een sterretje betekent: dit is
+    // volgens het model iets NIEUWS voor je; de rest kende je waarschijnlijk al.
     final buurtLog = WarmLog('$appDir${Platform.pathSeparator}warm.log');
+    buurtSpoor = buurtLog.line;
     buurt = (a, t, deezer) async {
       try {
         final b = await ai.maakRadiobuurt(artiest: a, titel: t, profiel: profiel, deezerBuren: deezer);
         buurtLog.line('radio-buurt: ${b.length} namen van het model, '
-            '${b.where((x) => x.bekend).length} bekend — ${b.take(8).map((x) => x.artiest).join(', ')}');
+            '${b.where((x) => x.bekend).length} bekend — '
+            '${b.map((x) => x.bekend ? x.artiest : '${x.artiest}*').join(', ')}');
         return b;
       } catch (e) {
         buurtLog.line('radio-buurt: het model gaf niets — $e');
@@ -11366,7 +11374,7 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel}) as
   }
   List<RecTrack> recs;
   try {
-    recs = await rec.mixRadio(artist, titel: titel, buurt: buurt);
+    recs = await rec.mixRadio(artist, titel: titel, buurt: buurt, spoor: buurtSpoor);
   } catch (_) {
     recs = const [];
   }

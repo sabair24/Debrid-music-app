@@ -226,7 +226,8 @@ class RecommendService {
   /// + a few related artists' top tracks. Including the seed's own catalogue is what
   /// lets Smart Shuffle lead with tracks the listener already owns (instant playback);
   /// the similar/related tracks are the discovery layer.
-  Future<List<RecTrack>> mixRadio(String artist, {String? titel, Buurtbron? buurt}) async {
+  Future<List<RecTrack>> mixRadio(String artist,
+      {String? titel, Buurtbron? buurt, void Function(String)? spoor}) async {
     final id = await _artistId(artist);
     if (id == null) return artistRadio(artist);
     final out = <RecTrack>[];
@@ -263,7 +264,7 @@ class RecommendService {
     for (final t in tops) {
       add(_tracks(t));
     }
-    await _uitDeBuurt(await buurtF, add);
+    await _uitDeBuurt(await buurtF, add, spoor);
     out.shuffle();
     return out;
   }
@@ -274,17 +275,33 @@ class RecommendService {
   /// van de vierentwintig die het model noemt, elke radio een andere greep. Een naam die Deezer niet
   /// kent bestaat niet en valt hier stil weg — dat is precies de reden dat het model artiesten mag
   /// noemen en geen liedjes.
-  Future<void> _uitDeBuurt(List<Buurman> buurt, void Function(Iterable<RecTrack>) add) async {
+  ///
+  /// [spoor] schrijft op WELKE namen Deezer kende en hoeveel nummers ze opleverden. Zonder dat is
+  /// "het model hielp" niet te onderscheiden van "de namen vielen allemaal weg": op 12-09-2026 gaf
+  /// het model voor Billie Jean onder meer Quincy Jones, Rockwell, Shalamar en The Time, en uit het
+  /// logboek was niet op te maken of daar iets van geland was.
+  Future<void> _uitDeBuurt(
+      List<Buurman> buurt, void Function(Iterable<RecTrack>) add, void Function(String)? spoor) async {
     if (buurt.isEmpty) return;
     final gekozen = kiesBuren(buurt, kBurenPerRadio, _toeval);
     final ids = await Future.wait(gekozen.map((b) => _artistId(b.artiest)));
+    final gekend = <String>[], onbekend = <String>[];
+    for (var i = 0; i < gekozen.length; i++) {
+      (ids[i] == null ? onbekend : gekend).add(gekozen[i].artiest);
+    }
     final tops = await Future.wait([
       for (final i in ids)
         if (i != null) _get('$_base/artist/$i/top?limit=4')
     ]);
+    var erbij = 0;
     for (final t in tops) {
-      add(_tracks(t));
+      final lijst = _tracks(t).toList();
+      erbij += lijst.length;
+      add(lijst);
     }
+    spoor?.call('radio-buurt: $erbij nummers uit ${gekend.length} van de ${gekozen.length} gekozen '
+        'namen — ${gekend.join(', ')}'
+        '${onbekend.isEmpty ? '' : ' | Deezer kende niet: ${onbekend.join(', ')}'}');
   }
 
   /// Discovery feed: top tracks from artists related to the given library seeds.
