@@ -104,4 +104,27 @@ void main() {
     expect(staat, contains("_tracks.length == 1 ? 'nummer' : 'nummers'"),
         reason: '"1 nummers" is geen Nederlands');
   });
+
+  // Derde ronde: twee dingen die opvielen tijdens het narekenen van 3.9.357 op de Shield.
+  test('een tegel in de discografie laat zien dat hij de focus heeft', () {
+    final a = hoofd.indexOf('Widget _albumCard(');
+    expect(a, greaterThan(-1), reason: '_albumCard is hernoemd of verdwenen');
+    final kaart = hoofd.substring(a, a + 1600);
+    expect(kaart, contains('Pressable('),
+        reason: 'een kale InkWell tekent op een tv geen ring en geen vergroting: je ziet dan niet '
+            'waar de afstandsbediening staat');
+    expect(kaart, isNot(contains('InkWell(')),
+        reason: 'twee schillen om dezelfde tik laten hem twee keer afgaan');
+    expect(kaart, contains('ringOnFocus: false'),
+        reason: 'een hoes antwoordt met groeien; een ring is een kader om de plaat zelf');
+  });
+
+  test('een sectiekop knipt niet af op een tv', () {
+    final a = hoofd.indexOf('Widget _sectionTitle(');
+    expect(a, greaterThan(-1), reason: '_sectionTitle is hernoemd of verdwenen');
+    final kop = hoofd.substring(a, a + 800);
+    expect(kop, contains('maxLines: isTv ? 2 : 1'),
+        reason: 'op de Shield staat de tekst 1,35 keer zo groot, en dan paste "VOLLEDIGE '
+            'DISCOGRAFIE" niet op één regel naast de telling en de sorteerpil');
+  });
 }

@@ -19149,9 +19149,15 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       if (al.year != null) al.year!,
       if (al.isSingle) 'Single' else if (al.trackCount > 0) '${al.trackCount} nummers',
     ].join(' · ');
-    return InkWell(
-      onTap: () => openPagina(context, (_) => AlbumBrowsePage(widget.artist.name, al)),
+    // Een [Pressable] en geen kale InkWell: die tekent op een tv het antwoord op "waar sta ik".
+    // Zonder dit gaf dit raster geen enkel teken -- twee afdrukken vóór en ná een pijltoets
+    // verschilden 0,00 (Shield, 12-09-2026), terwijl de rij "Klinkt als" ernaast wel meegroeide.
+    // Groeien en geen ring: een lijn om een hoes is een kader om precies datgene waar je naar kijkt
+    // -- zie [Pressable.ringOnFocus].
+    return Pressable(
+      onPressed: () => openPagina(context, (_) => AlbumBrowsePage(widget.artist.name, al)),
       borderRadius: BorderRadius.circular(12),
+      ringOnFocus: false,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -19202,7 +19208,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     final smal = isCompact(context);
     final marge = _marge;
     final kop = Text(title.toUpperCase(),
-        maxLines: 1,
+        // Twee regels op een tv. Een Shield vergroot tekst 1,35 keer, en dan past "VOLLEDIGE
+        // DISCOGRAFIE" niet meer naast de telling en de sorteerpil: er stond "VOLLEDIGE DISCOG..."
+        // (gezien op 12-09-2026). Elders blijft het één regel, want daar past het.
+        maxLines: isTv ? 2 : 1,
         overflow: TextOverflow.ellipsis,
         style: kDisplayKlein.copyWith(fontSize: smal ? 28 : (isTv ? 30 : 56)));
     return Padding(
