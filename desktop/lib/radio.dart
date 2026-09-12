@@ -296,7 +296,8 @@ class RadioBesturing extends ChangeNotifier {
 
     // De eerste ronde met de hand, want [PlayerStore.voegToeAanRadio] doet niets zolang er nog geen
     // radio loopt.
-    final besluit = voorraadPlan([for (final p in nieuw) p.stand], vooruitNu: 0);
+    final besluit = voorraadPlan([for (final p in nieuw) p.stand],
+        artiesten: [for (final p in nieuw) p.artiest], vooruitNu: 0);
     final eerste = <RadioItem>[];
     for (final i in besluit.inRij) {
       nieuw[i].stand = Haalstand.inRij;
@@ -409,6 +410,7 @@ class RadioBesturing extends ChangeNotifier {
     final vooruit = speler.radioQueue.length - speler.radioIndex - 1;
     final besluit = voorraadPlan(
       [for (final p in _plan) p.stand],
+      artiesten: [for (final p in _plan) p.artiest],
       vooruitNu: vooruit < 0 ? 0 : vooruit,
     );
 

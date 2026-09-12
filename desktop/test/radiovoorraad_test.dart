@@ -152,4 +152,47 @@ void main() {
       expect(b.starten.first, 1, reason: 'vooruit meelopen begint bij het eerste gat, niet achteraan');
     });
   });
+
+  group('de vulling spreidt zich over artiesten', () {
+    // Gemeten op 12-09-2026: radio vanaf Michael Jackson - Billie Jean, en van de eerste VIJF
+    // nummers waren er vier van Michael Jackson zelf. Over de hele rit van twee uur viel het mee —
+    // 6 van de 23, met 16 artiesten — maar de scheefheid zat helemaal aan het begin, en daar
+    // beoordeel je een radio op. De oorzaak: alles wat je AL HEBT telt als vulling, en van de
+    // artiest waar de radio omheen gebouwd is heb je het meest (hier zeven albums, 71 nummers).
+    test('DE KERN: zes plekken, zes verschillende artiesten', () {
+      final b = voorraadPlan(standen('kkkkkkkkk'),
+          artiesten: const ['MJ', 'MJ', 'MJ', 'MJ', 'MJ', 'Prince', 'Sade', 'Bee Gees', 'Diana Ross'],
+          vooruitNu: 0,
+          minVooruit: 6);
+
+      final gekozen = [for (final i in b.inRij) ['MJ', 'MJ', 'MJ', 'MJ', 'MJ', 'Prince', 'Sade', 'Bee Gees', 'Diana Ross'][i]];
+      expect(gekozen.toSet(), hasLength(5), reason: 'vijf verschillende namen beschikbaar, dus vijf');
+      expect(gekozen.where((a) => a == 'MJ'), hasLength(2),
+          reason: 'vijf namen op zes plekken: pas de zesde mag herhalen. Was vier van de vijf.');
+      expect(b.vooruit, 6);
+    });
+
+    test('DE VAL: als er niets anders is, vult hij toch aan', () {
+      // Een radio die stil valt omdat hij te kieskeurig is, is erger dan een radio met herhaling.
+      final b = voorraadPlan(standen('kkkkkk'),
+          artiesten: const ['MJ', 'MJ', 'MJ', 'MJ', 'MJ', 'MJ'], vooruitNu: 0, minVooruit: 6);
+
+      expect(b.inRij, [0, 1, 2, 3, 4, 5]);
+      expect(b.vooruit, 6);
+    });
+
+    test('DE KERN: wat net geland is telt mee voor de spreiding', () {
+      // De opgehaalde nummers staan al in de rij; hun artiest hoeft er niet meteen achteraan.
+      final b = voorraadPlan(standen('gkkk'),
+          artiesten: const ['Prince', 'Prince', 'Sade', 'Bee Gees'], vooruitNu: 0, minVooruit: 3);
+
+      expect(b.inRij, [0, 2, 3], reason: 'plek 1 is ook Prince en moet wachten');
+    });
+
+    test('DE GRENS: zonder artiesten gedraagt hij zich exact als voorheen', () {
+      // Elke andere aanroeper in de app en elke toets hierboven geeft ze niet mee.
+      expect(voorraadPlan(standen('kkkkkkkk'), vooruitNu: 0, minVooruit: 6).inRij,
+          [0, 1, 2, 3, 4, 5]);
+    });
+  });
 }

@@ -78,9 +78,26 @@ const int kMaxOnderweg = 8;
 /// niet klaar is in plaats van erop te wachten. Zo schuift eigen muziek naar voren zodra een haal te
 /// lang duurt. Een overgeslagen plek blijft staan; landt hij later alsnog, dan komt hij daar in de rij
 /// waar de radio op dat moment is. De volgorde van een radio is geen belofte.
+///
+/// **En de vulling spreidt zich over artiesten.**
+///
+/// Gemeten op 12-09-2026, radio vanaf Michael Jackson - Billie Jean, twee uur: van de eerste vijf
+/// nummers waren er VIER van Michael Jackson zelf. Over de hele rit viel het mee — 6 van de 23, met
+/// 16 verschillende artiesten — maar de scheefheid zat helemaal aan het begin, en dat is precies
+/// waar je een radio beoordeelt.
+///
+/// De oorzaak zit hier. Een nummer telt als vulling zodra je het AL HEBT, en van de artiest waar de
+/// radio omheen gebouwd is heb je meestal het meest: zeven albums met 71 nummers in dit geval. De
+/// lus liep het plan langs en pakte de eerste zes die klaarstonden, en dat waren er dus vijf van
+/// hemzelf. De opgehaalde nummers landen pas minuten later en kwamen te laat om dat te verdunnen.
+///
+/// Nu gaat de vulling in twee rondes: eerst alleen artiesten die nog niet in de rij staan, en pas
+/// als het gat daarmee niet dicht is, de rest. Geen [artiesten] meegegeven, dan gedraagt hij zich
+/// exact als voorheen — de eerste ronde pakt dan alles.
 Voorraadbesluit voorraadPlan(
   List<Haalstand> standen, {
   required int vooruitNu,
+  List<String> artiesten = const [],
   int minVooruit = kMinVooruit,
   int maxOnderweg = kMaxOnderweg,
 }) {
@@ -93,10 +110,18 @@ Voorraadbesluit voorraadPlan(
     vooruit++;
   }
   // En daarna eigen muziek, maar alleen zoveel als er nodig is om het gat te dichten.
-  for (var i = 0; i < standen.length && vooruit < minVooruit; i++) {
-    if (standen[i] != Haalstand.klaar) continue;
-    inRij.add(i);
-    vooruit++;
+  String naam(int i) => i < artiesten.length ? artiesten[i].trim().toLowerCase() : '';
+  // Wat er net geland is telt mee: staat die artiest er al, dan hoeft zijn eigen werk er niet
+  // meteen achteraan.
+  final gezien = <String>{for (final i in inRij) naam(i)}..remove('');
+  for (var ronde = 0; ronde < 2 && vooruit < minVooruit; ronde++) {
+    for (var i = 0; i < standen.length && vooruit < minVooruit; i++) {
+      if (standen[i] != Haalstand.klaar || inRij.contains(i)) continue;
+      final a = naam(i);
+      if (ronde == 0 && a.isNotEmpty && !gezien.add(a)) continue;
+      inRij.add(i);
+      vooruit++;
+    }
   }
 
   final onderweg = standen.where((s) => s == Haalstand.onderweg).length;
