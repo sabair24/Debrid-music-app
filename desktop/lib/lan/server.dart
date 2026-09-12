@@ -182,7 +182,12 @@ class LanServer {
       // then fails without a single log line. The Android receiver in the media app was bitten by
       // exactly this — see the note in that project's cast receiver.
       _http = await HttpServer.bind(InternetAddress.anyIPv4, port);
+      grants.alleenLezen = false;
     } on SocketException catch (e) {
+      // Deze kopie luistert niet. Dan mag ze ook geen koppelingen meer wegschrijven: zie
+      // [GrantStore.alleenLezen]. Een tweede kopie zette anders haar eigen, oudere beeld over de
+      // lijst heen, en dan moet elk toestel opnieuw koppelen.
+      grants.alleenLezen = true;
       return e.osError?.errorCode == 10048 || e.osError?.errorCode == 48
           ? 'Poort $port is al in gebruik door een ander programma.'
           : 'Kon niet starten op poort $port: ${e.osError?.message ?? e.message}';

@@ -42,6 +42,19 @@ class DeviceGrant {
   /// cutting off an iPad that was working fine yesterday.
   final bool legacy;
 
+  /// Sleutels die dit toestel EERDER van deze pc kreeg, en die geldig BLIJVEN.
+  ///
+  /// **Waarom ze blijven.** Saber op 12-09-2026: "ik ben het beu om na elke update weer te moeten
+  /// ontkoppelen van de pc en weer te koppelen". Eén sleutel per toestel betekent dat elk verlies
+  /// aan deze kant — een tweede instantie die dit bestand overschreef, een pc-app die even uit een
+  /// andere map las — het toestel buitensluit, terwijl het toestel zelf niets verkeerd doet. Gemeten
+  /// op 12-09-2026: van de 45 koppelingen op schijf hield de app er 35 over, en de telefoon werd een
+  /// ochtend lang geweigerd met een sleutel die hij een dag eerder had gekregen.
+  ///
+  /// Hoogstens drie, en ze verdwijnen zodra je het toestel bewust ontkoppelt: [revoke] gooit het
+  /// toestel met al zijn sleutels weg.
+  List<String> oudereTokens = <String>[];
+
   Map<String, dynamic> toJson() => {
         'deviceId': deviceId,
         'deviceName': deviceName,
@@ -50,13 +63,14 @@ class DeviceGrant {
         'grantedAt': grantedAt,
         'lastSeenAt': lastSeenAt,
         'legacy': legacy,
+        if (oudereTokens.isNotEmpty) 'oudereTokens': oudereTokens,
       };
 
   static DeviceGrant? fromJson(Map<String, dynamic> j) {
     final id = (j['deviceId'] ?? '').toString();
     final token = (j['token'] ?? '').toString();
     if (id.isEmpty || token.isEmpty) return null;
-    return DeviceGrant(
+    final g = DeviceGrant(
       deviceId: id,
       deviceName: (j['deviceName'] ?? '').toString(),
       token: token,
@@ -65,6 +79,10 @@ class DeviceGrant {
       lastSeenAt: (j['lastSeenAt'] as num?)?.toInt(),
       legacy: j['legacy'] == true,
     );
+    for (final t in (j['oudereTokens'] as List<dynamic>? ?? const [])) {
+      if (t is String && t.isNotEmpty && t != token) g.oudereTokens.add(t);
+    }
+    return g;
   }
 }
 
@@ -85,6 +103,61 @@ class GrantStore {
   /// token → deviceId. Rebuilt with the map, so accepting a request is a hash lookup rather than a
   /// walk: this runs on every single HTTP request, including every range request of a stream.
   final Map<String, String> _byToken = {};
+
+  /// Toestellen die je met OPZET hebt ontkoppeld. Zonder dit haalt het samenvoegende opslaan ze
+  /// zo weer van schijf terug, en dan doet "ontkoppelen" niets.
+  final Set<String> _ingetrokken = {};
+
+  /// Waar als deze kopie van de app de poort NIET heeft. Dan schrijft ze geen koppelingen weg.
+  ///
+  /// **Waarom dit er is.** Een tweede kopie die aan de poort 10048 kreeg, draait gewoon door en kan
+  /// via de cloud nog koppelingen bijschrijven — met een winkel die niets van de eerste weet. Eén
+  /// `save()` daaruit zet een oudere momentopname over de echte lijst heen. Gemeten op 12-09-2026:
+  /// twee kopieën tegelijk, één met achttien koppelingen en één met vijfendertig, en een telefoon
+  /// die een ochtend lang geweigerd werd.
+  bool alleenLezen = false;
+
+  /// Wat er NU op schijf staat, zonder de winkel in het geheugen aan te raken.
+  Future<List<DeviceGrant>> _vanSchijf() async {
+    try {
+      if (!await _file.exists()) return const [];
+      final decoded = jsonDecode(await _file.readAsString());
+      if (decoded is! List) return const [];
+      final uit = <DeviceGrant>[];
+      for (final e in decoded) {
+        if (e is! Map<String, dynamic>) continue;
+        final g = DeviceGrant.fromJson(e);
+        if (g != null) uit.add(g);
+      }
+      return uit;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Eén koppeling erbij, zonder er een kwijt te raken.
+  ///
+  /// Staat er al iets voor dit toestel, dan wordt de NIEUWSTE de huidige sleutel en verhuist de
+  /// andere naar [DeviceGrant.oudereTokens]. Zo sluit inlezen of samenvoegen geen toestel buiten
+  /// dat nog netjes met zijn sleutel aanklopt.
+  void _neemOp(DeviceGrant g) {
+    final oud = _byDevice[g.deviceId];
+    final nieuw = oud == null || g.grantedAt >= oud.grantedAt ? g : oud;
+    final ander = identical(nieuw, g) ? oud : g;
+    if (ander != null) {
+      for (final t in [ander.token, ...ander.oudereTokens]) {
+        if (t != nieuw.token && !nieuw.oudereTokens.contains(t)) nieuw.oudereTokens.add(t);
+      }
+      nieuw.lastSeenAt = max(nieuw.lastSeenAt ?? 0, ander.lastSeenAt ?? 0);
+    }
+    while (nieuw.oudereTokens.length > 3) {
+      nieuw.oudereTokens.removeAt(0);
+    }
+    _byDevice[g.deviceId] = nieuw;
+    for (final t in [nieuw.token, ...nieuw.oudereTokens]) {
+      _byToken[t] = g.deviceId;
+    }
+  }
 
   List<DeviceGrant> get all => _byDevice.values.toList()
     ..sort((a, b) => b.grantedAt.compareTo(a.grantedAt));
@@ -124,8 +197,7 @@ class GrantStore {
           overgeslagen++;
           continue;
         }
-        _byDevice[g.deviceId] = g;
-        _byToken[g.token] = g.deviceId;
+        _neemOp(g);
       }
       meldlog?.call('koppelingen geladen: ${_byDevice.length} van ${decoded.length}'
           '${overgeslagen == 0 ? '' : ' ($overgeslagen onleesbaar)'}');
@@ -138,6 +210,10 @@ class GrantStore {
   }
 
   Future<void> save() async {
+    if (alleenLezen) {
+      meldlog?.call('koppelingen NIET opgeslagen: deze kopie van de app heeft de poort niet');
+      return;
+    }
     try {
       // LEEG SCHRIJFT NOOIT OVER NIET-LEEG. Dezelfde klep als bij corrections.json en de
       // feitencache: een lege verzameling betekent "ik weet het niet", niet "er is niets".
@@ -162,6 +238,21 @@ class GrantStore {
       }
       // Same tmp-then-rename as the rest of this app's state: a power cut halfway through a write
       // must not leave a truncated file that reads as "no devices".
+      //
+      // EN: eerst lezen wat er op schijf staat, dan pas schrijven. Anders zet deze kopie haar eigen
+      // momentopname over koppelingen heen die zij nooit gezien heeft — van een tweede kopie, of van
+      // een bestand dat buitenom is bijgewerkt. Wat je met opzet ontkoppelde komt niet terug, want
+      // dat staat in [_ingetrokken].
+      var erbij = 0;
+      for (final g in await _vanSchijf()) {
+        if (_ingetrokken.contains(g.deviceId)) continue;
+        if (!_byDevice.containsKey(g.deviceId)) erbij++;
+        _neemOp(g);
+      }
+      if (erbij > 0) {
+        meldlog?.call('koppelingen samengevoegd bij het opslaan: $erbij van schijf erbij '
+            '(nu ${_byDevice.length})');
+      }
       final tmp = File('${_file.path}.tmp');
       await tmp.writeAsString(jsonEncode([for (final g in _byDevice.values) g.toJson()]));
       await tmp.rename(_file.path);
@@ -176,7 +267,13 @@ class GrantStore {
     if (token.isEmpty) return false;
     final deviceId = _byToken[token];
     if (deviceId == null) return false;
-    return _constantTimeEquals(token, _byDevice[deviceId]?.token ?? '');
+    final g = _byDevice[deviceId];
+    if (g == null) return false;
+    // Ook een EERDERE sleutel van ditzelfde toestel telt; zie [DeviceGrant.oudereTokens].
+    for (final geldig in [g.token, ...g.oudereTokens]) {
+      if (_constantTimeEquals(token, geldig)) return true;
+    }
+    return false;
   }
 
   DeviceGrant? grantFor(String token) {
@@ -210,12 +307,19 @@ class GrantStore {
   /// Cut off exactly one device. This is the thing that could not be done before.
   bool revoke(String deviceId) {
     final gone = _byDevice.remove(deviceId);
+    // Onthouden DAT je ontkoppeld hebt: anders haalt het samenvoegende opslaan dit toestel zo weer
+    // van schijf terug, en doet ontkoppelen niets.
+    _ingetrokken.add(deviceId);
     if (gone == null) return false;
     _byToken.remove(gone.token);
+    for (final t in gone.oudereTokens) {
+      _byToken.remove(t);
+    }
     return true;
   }
 
   void revokeAll() {
+    _ingetrokken.addAll(_byDevice.keys);
     _byDevice.clear();
     _byToken.clear();
   }
