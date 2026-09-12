@@ -1487,7 +1487,7 @@ extension DiscogsArtwork on DiscogsService {
     // a miss, and a miss is a network round trip during which the page keeps showing the previous
     // record's scans. Correcting a name is exactly when someone is looking at the sleeve.
     final key = artCacheKey(artist, album, expectedTracks, pinned, pinnedMbid, roles);
-    final dir = Directory('$artDir${Platform.pathSeparator}$key');
+    final dir = artMap(artist, album, expectedTracks, pinned, pinnedMbid, roles);
     // Only a FINISHED entry short-circuits. The warmer may have left images here from the free
     // sources without the marker; those are worth having on screen but they are not the last word, and
     // serving them as the answer would mean the back and the disc never get looked for.
@@ -1641,10 +1641,11 @@ extension DiscogsArtwork on DiscogsService {
     // pressing; only the roles it cannot fill are looked for elsewhere.
     ReleaseArt? caa = partial;
     final needMore = partial == null || partial.back == null || partial.disc == null;
-    if (pinned == null && needMore) {
+    if (pinned == null && needMore && !await breedGezocht(dir)) {
       final wider = await _artFromMusicBrainz(artist, album, expectedTracks);
       step('archief over andere persingen: ${wider == null ? "niets" : "voor=${wider.front != null} "
           "achter=${wider.back != null} cd=${wider.disc != null}"}');
+      if (wider == null) await onthoudBreedGezocht(dir);
       if (wider != null) {
         caa = ReleaseArt(
           front: partial?.front ?? wider.front,
@@ -1957,7 +1958,16 @@ extension DiscogsArtwork on DiscogsService {
   ///
   /// Dezelfde sleutel als [DiscogsArtwork.releaseArt], want het gaat om precies dezelfde map — een
   /// eigen berekening hier zou vroeg of laat uit elkaar lopen met die daar, en dan leest dit
-  /// bestendig de verkeerde map uit zonder dat iets het zegt.
+  /// bestendig de verkeerde map uit zonder dat iets het zegt. Daarom loopt hij via [artMap].
+  ///
+  /// **Tweede reden, erbij op 12-09-2026.** Saber over de cd op "nu speelt": "ik krijg altijd eerst
+  /// dit als cd afbeelding, dan duurt het gemiddeld 10 sec eer de echte afbeelding er op komt, en
+  /// dit op alle platformen" — en daarna: "eens het album al zijn covers heeft, automatisch of door
+  /// mij gekozen, dan is dat toch maar rechtstreeks laden van het geheugen, dat moet instant zijn".
+  /// [DiscogsArtwork.releaseArt] geeft de cache alleen meteen terug als de map AFGEROND heet;
+  /// ontbreekt er nog een rol — een achterkant die deze plaat gewoon niet heeft — dan liep eerst de
+  /// hele zoektocht, en tot die klaar was zag je de hoes als plaatje op de cd staan terwijl het
+  /// echte cd-beeld al op schijf lag. Wie dit eerst aanroept, tekent wat er is.
   Future<ReleaseArt?> cachedReleaseArt(
     String artist,
     String album, {
@@ -1965,10 +1975,8 @@ extension DiscogsArtwork on DiscogsService {
     int? pinned,
     String? pinnedMbid,
     Map<String, String> roles = const {},
-  }) {
-    final key = artCacheKey(artist, album, expectedTracks, pinned, pinnedMbid, roles);
-    return _readArt(Directory('$artDir${Platform.pathSeparator}$key'));
-  }
+  }) =>
+      _readArt(artMap(artist, album, expectedTracks, pinned, pinnedMbid, roles));
 
   Future<ReleaseArt?> _readArt(Directory dir) async {
     try {
@@ -2008,6 +2016,12 @@ extension DiscogsArtwork on DiscogsService {
     }
   }
 
+  /// De map waarin de scans van deze plaat liggen. Zelfde sleutel voor iedereen die ernaar vraagt.
+  Directory artMap(String artist, String album, int expectedTracks, int? pinned, String? pinnedMbid,
+          Map<String, String> roles) =>
+      Directory('$artDir${Platform.pathSeparator}'
+          '${artCacheKey(artist, album, expectedTracks, pinned, pinnedMbid, roles)}');
+
   /// Een door de gebruiker AANGEWEZEN scan ophalen, bij de juiste balie.
   ///
   /// Elk archief bedient zijn eigen afbeeldingen, en Discogs wil zijn sleutel op het verzoek. Die
@@ -2045,6 +2059,32 @@ extension DiscogsArtwork on DiscogsService {
     } catch (_) {
       return true; // een tijd die niet te lezen is, is geen reden om alles opnieuw te doen
     }
+  }
+
+  /// Het briefje "het bredere archief is hier al doorzocht en gaf niets".
+  ///
+  /// **Waarom.** De zoektocht over ANDERE persingen is de duurste stap van de keten: een zoekvraag
+  /// bij MusicBrainz (één per seconde) plus golven van archiefverzoeken. Gemeten op 12-09-2026 in
+  /// `warm.log`: veertig keer "archief over andere persingen: niets" in één veeg, elk tot negentien
+  /// seconden — en de volgende veeg begon er weer aan. Veertien dagen, net als [_onvolledigGeldig]
+  /// en om dezelfde reden: er komen scans bij, maar niet van uur tot uur.
+  Future<bool> breedGezocht(Directory dir) async {
+    try {
+      final f = File('${dir.path}${Platform.pathSeparator}breed-gezocht');
+      if (!await f.exists()) return false;
+      if (DateTime.now().difference((await f.stat()).modified) < _onvolledigGeldig) return true;
+      await f.delete().catchError((_) => f);
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> onthoudBreedGezocht(Directory dir) async {
+    try {
+      await dir.create(recursive: true);
+      await File('${dir.path}${Platform.pathSeparator}breed-gezocht').writeAsString('1');
+    } catch (_) {/* zonder briefje kost het één herhaalde zoektocht */}
   }
 
   Future<void> _writeArt(Directory dir, ReleaseArt art, {bool done = true}) async {

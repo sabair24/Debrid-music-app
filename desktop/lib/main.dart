@@ -18069,6 +18069,19 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
         .edition(artist, album, expectedTracks: widget.trackCount, pinned: widget.pinned)
         .catchError((_) => null);
 
+    // Wat er al op schijf ligt gaat meteen naar het scherm; de zoektocht hieronder mag daarna zijn
+    // tijd nemen. Zie [DiscogsService.cachedReleaseArt].
+    unawaited(discogs
+        .cachedReleaseArt(artist, album,
+            expectedTracks: widget.trackCount,
+            pinned: widget.pinned,
+            pinnedMbid: widget.pinnedMbid,
+            roles: widget.roles)
+        .then((uitCache) {
+          if (uitCache?.back != null && stillHere()) setState(() => _back = uitCache!.back);
+        })
+        .catchError((_) {}));
+
     final scans = discogs
         .releaseArt(artist, album,
             expectedTracks: widget.trackCount,
@@ -22121,7 +22134,18 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     final artist = widget.artist, album = widget.album;
     final mine = ++_gen;
     try {
-      final art = await DiscogsService(context.read<AppSettings>()).releaseArt(artist, album,
+      final dienst = DiscogsService(context.read<AppSettings>());
+      // EERST tekenen wat er al ligt. De zoektocht hieronder duurt seconden zolang er nog een rol
+      // ontbreekt, en zolang stond hier de HOES als plaatje op de cd terwijl het echte cd-beeld al
+      // op schijf lag. Saber op 12-09-2026: "eens de album al zijn covers heeft (...) dat moet
+      // instant zijn zonder enige wachttijd". Zie [DiscogsService.cachedReleaseArt].
+      final uitCache = await dienst.cachedReleaseArt(artist, album,
+          expectedTracks: widget.trackCount,
+          pinned: widget.pinned,
+          pinnedMbid: widget.pinnedMbid,
+          roles: widget.roles);
+      if (uitCache != null && mounted && mine == _gen) setState(() => _art = uitCache);
+      final art = await dienst.releaseArt(artist, album,
           expectedTracks: widget.trackCount,
           pinned: widget.pinned,
           pinnedMbid: widget.pinnedMbid,
