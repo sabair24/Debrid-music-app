@@ -392,6 +392,24 @@ class AppSettings extends ChangeNotifier {
       final tmp = File('${f.path}.tmp');
       await tmp.writeAsString(jsonEncode(toJson()));
       await tmp.rename(f.path);
+      // En de reservekopie meteen mee, niet pas bij de volgende start.
+      //
+      // **Waarom dit erbij moest.** Saber op 12-09-2026: *"zorg dat de app deze altijd onthoudt"*,
+      // over de AI-sleutel. Die stond keurig in `settings.json` — 108 tekens, om 18:35 geschreven —
+      // maar `settings.bak.json` was van 09:33 en wist er niets van. Alleen [load] verving de
+      // reservekopie, dus tussen "jij drukt op Bewaren" en "de app start de volgende keer" bestond
+      // elke net ingetypte sleutel maar op ÉÉN plek. Gaat `settings.json` in dat venster stuk of
+      // weg — een opruimtool, een synchronisatiebotsing, een teruggezet profiel — dan herstelt de
+      // app netjes uit een reservekopie waar jouw sleutel niet in staat, en is hij weg zonder dat
+      // iets het meldt. Precies de verliesvorm waar dit hele bestand tegen verdedigt.
+      //
+      // Dezelfde grendel als bij [load]: een kopie die MINDER gevuld is dan de reservekopie mag hem
+      // niet vervangen. Een bestand vol lege strings is geldige JSON, en zonder die grendel zou een
+      // verdwaalde `AppSettings().save()` de reservekopie met blanco's overschrijven.
+      try {
+        final backup = backupFile();
+        if (await _atLeastAsComplete(backup)) await f.copy(backup.path);
+      } catch (_) {/* een reservekopie die niet te schrijven is, is geen reden om te falen */}
     } catch (e) {
       debugPrint('settings.json not written: $e');
     }

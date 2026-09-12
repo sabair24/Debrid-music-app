@@ -95,6 +95,10 @@ void main() {
 
     test('with no spare, it refuses to write blanks over your passwords', () async {
       await seeded();
+      // De reservekopie met opzet weghalen. Sinds [AppSettings.save] hem meteen meeschrijft is
+      // "geen spare" geen toestand die vanzelf ontstaat — en dat is precies de winst. Wat deze
+      // toets vasthoudt is wat er dan nog moet gelden: een machine waar nooit iets gelukt is.
+      if (AppSettings.backupFile().existsSync()) AppSettings.backupFile().deleteSync();
       final whole = AppSettings.file().readAsStringSync();
       AppSettings.file().writeAsStringSync(whole.substring(0, 20));
       // No backup exists: nothing ever loaded successfully on this machine.
@@ -114,6 +118,7 @@ void main() {
 
     test('and typing them again repairs it — the guard has to end somewhere', () async {
       await seeded();
+      if (AppSettings.backupFile().existsSync()) AppSettings.backupFile().deleteSync();
       final whole = AppSettings.file().readAsStringSync();
       AppSettings.file().writeAsStringSync(whole.substring(0, 20));
 
@@ -219,6 +224,46 @@ void main() {
       for (final key in raw.keys) {
         expect(jsonDecode(jsonEncode(again.toJson()))[key], raw[key], reason: key);
       }
+    });
+  });
+
+  group('een net ingetypte sleutel staat meteen op twee plekken', () {
+    // Saber op 12-09-2026: "zorg dat de app deze altijd onthoudt", over de AI-sleutel. Die stond
+    // keurig in settings.json (108 tekens, 18:35) terwijl settings.bak.json van 09:33 was en er
+    // niets van wist: alleen load() verving de reservekopie. Tussen "jij drukt op Bewaren" en "de
+    // app start de volgende keer" bestond elke verse sleutel dus maar op EEN plek.
+    test('DE KERN: opslaan werkt de reservekopie meteen bij', () async {
+      final s = await seeded();
+      expect(AppSettings.backupFile().existsSync(), isTrue, reason: 'geen reservekopie na opslaan');
+
+      s.anthropicKey = 'sk-ant-api03-verzonnen';
+      await s.save();
+
+      final spare = jsonDecode(AppSettings.backupFile().readAsStringSync()) as Map<String, dynamic>;
+      expect(spare['anthropic_key'], 'sk-ant-api03-verzonnen',
+          reason: 'de sleutel stond alleen in settings.json en zou bij herstel verdwijnen');
+      expect(spare['soulseek_pass'], 'geheim', reason: 'en de rest mag er niet bij inschieten');
+    });
+
+    test('DE VAL: een lege opslag maakt de reservekopie niet leeg', () async {
+      // Een bestand vol lege strings is geldige JSON. Zonder de grendel zou een verdwaalde
+      // AppSettings().save() de reservekopie met blanco's overschrijven - precies de verliesvorm
+      // waar dit bestand tegen verdedigt.
+      await seeded();
+      final blanco = AppSettings();
+      await blanco.load(); // leest wat er staat, zodat loadFailed niet in de weg zit
+      blanco.soulseekPass = '';
+      blanco.rutrackerPass = '';
+      blanco.rutrackerCookie = '';
+      blanco.torboxToken = '';
+      blanco.musicRoot = '';
+      blanco.soulseekUser = '';
+      blanco.rutrackerUser = '';
+      await blanco.save();
+
+      final spare = jsonDecode(AppSettings.backupFile().readAsStringSync()) as Map<String, dynamic>;
+      expect(spare['soulseek_pass'], 'geheim',
+          reason: 'de reservekopie is leeggelopen en dat is niet meer terug te draaien');
     });
   });
 }
