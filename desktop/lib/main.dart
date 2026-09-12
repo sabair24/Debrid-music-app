@@ -2661,7 +2661,31 @@ class _HomeShellState extends State<HomeShell> {
               // decoration (the wordmark, the counts) and lets the sections scroll.
               child: LayoutBuilder(
                 builder: (context, box) {
-                  final compact = box.maxWidth < 1040;
+                  // GEMETEN, niet geraden. Hier stond `box.maxWidth < 1040`, een getal uit de tijd
+                  // dat deze balk zeven secties had. Met elf secties schoof "Kwaliteit" op een Mac
+                  // uit beeld terwijl het woordmerk en de telling er gewoon bij stonden -- de balk
+                  // leek dus compleet en was het niet (Saber, 12-09-2026).
+                  final schaal = MediaQuery.textScalerOf(context);
+                  final secties = _NavPillsState.benodigdeBreedte(schaal: schaal);
+                  // Wat er sowieso naast staat: het icoon, de twee gaten om de secties, het tandwiel
+                  // (44 onder een vinger, 48 onder een muis) en op een pc de vensterknoppen.
+                  final vast = 28 +
+                      10 +
+                      10 +
+                      (_isTouch ? 44.0 : 48.0) +
+                      (_isDesktop ? 4 + _WindowButtonsState.breedte : 0.0);
+                  // Het blok links is zo breed als de breedste van zijn twee regels. De telling meet
+                  // ik op een ruime voorbeeldtekst, zodat de balk niet verspringt als er een album
+                  // bij komt.
+                  final blok = math.max(
+                    _tekstbreedte('DebridMusic',
+                        const TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5), schaal),
+                    isTv
+                        ? 0.0
+                        : _tekstbreedte('8888 albums · 88888 nummers',
+                            const TextStyle(fontSize: 10.5), schaal),
+                  );
+                  final compact = box.maxWidth - vast - secties < blok + 9;
                   return Row(
                     children: [
                       // The app's real icon, not an impression of it. This used to be a gradient
@@ -2674,8 +2698,35 @@ class _HomeShellState extends State<HomeShell> {
                       ),
                       if (!compact) ...[
                         const SizedBox(width: 9),
-                        const Text('DebridMusic',
-                            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5)),
+                        // Het woordmerk en de telling ONDER elkaar, niet links én rechts van de
+                        // secties. Naast elkaar kostten ze samen ruim 250 punten midden in de rij --
+                        // en die punten gingen af van precies het enige dat hier moet staan: de
+                        // secties. Gestapeld kosten ze de breedte van de breedste van de twee, en de
+                        // regel eronder is ook de plek waar "Scannen… 1234" nu verschijnt.
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('DebridMusic',
+                                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5)),
+                            if (!isTv)
+                              Consumer2<LibraryStore, FactsWarmer>(
+                                builder: (_, lib, warmer, __) => Text(
+                                  lib.scanning
+                                      ? 'Scannen… ${lib.scanned}'
+                                      : (lib.enriching
+                                          ? 'Covers ophalen…'
+                                          : (warmer.status.isNotEmpty
+                                              ? warmer.status
+                                              : '${lib.albums.length} ${lib.albums.length == 1 ? 'album' : 'albums'} · '
+                                                  '${lib.tracks.length} ${lib.tracks.length == 1 ? 'nummer' : 'nummers'}')),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: _muted, fontSize: 10.5),
+                                ),
+                              ),
+                          ],
+                        ),
                       ],
                       const SizedBox(width: 10),
                       Expanded(
@@ -2720,7 +2771,9 @@ class _HomeShellState extends State<HomeShell> {
                       // well ate 200 points of a strip that already does not fit ten sections, and
                       // cut "Online zoeken" off mid-word. So: on a TV, speak only when there is
                       // something to say.
-                      if (!compact || isTv)
+                      // Op een pc staat deze regel nu LINKS onder het woordmerk; rechts hield hij de
+                      // secties uit beeld. Op een televisie blijft hij hier, en alleen bij nieuws.
+                      if (isTv)
                         Consumer2<LibraryStore, FactsWarmer>(
                           builder: (_, lib, warmer, __) => (isTv &&
                                   !lib.scanning &&
@@ -2744,7 +2797,7 @@ class _HomeShellState extends State<HomeShell> {
                             style: TextStyle(color: _muted, fontSize: isTv ? 14 : 11.5),
                           ),
                         ),
-                      if (!compact || isTv) const SizedBox(width: 12),
+                      if (isTv) const SizedBox(width: 12),
                       TvLabelled(
                         label: 'Instellingen',
                         child: IconButton(
@@ -3436,6 +3489,33 @@ class _TvTopBarState extends State<TvTopBar> {
 }
 
 
+/// Hoe breed een stuk tekst wordt vóórdat het getekend is.
+///
+/// De bovenbalk moet WETEN of alles past. Hij hing aan een vast getal (1040 punten), en dat klopte
+/// niet meer sinds er elf secties in staan: op een Mac van 1440 punten viel "Kwaliteit" weg terwijl
+/// de balk er volledig op leek te staan. Gemeten tekst weet dat wél, en verandert vanzelf mee als er
+/// een sectie bij komt of als iemand zijn systeemletters groter zet.
+double _tekstbreedte(String tekst, TextStyle stijl, TextScaler schaal) {
+  final tp = TextPainter(
+    text: TextSpan(text: tekst, style: stijl),
+    textScaler: schaal,
+    textDirection: TextDirection.ltr,
+  )..layout();
+  return tp.width;
+}
+
+/// Wat de secties in de bovenbalk samen nodig hebben, in punten.
+///
+/// Publiek zodat een toets het kan narekenen: de balk mag niet stilletjes weer te krap worden als er
+/// een sectie bij komt of als een label langer wordt.
+double sectiesBreedte({TextScaler schaal = TextScaler.noScaling}) =>
+    _NavPillsState.benodigdeBreedte(schaal: schaal);
+
+/// Wat er in de bovenbalk NAAST de secties staat: het icoon, de gaten, het tandwiel en op een pc de
+/// vensterknoppen. Zie [sectiesBreedte].
+double balkVasteBreedte({required bool desktop, required bool touch}) =>
+    28 + 10 + 10 + (touch ? 44.0 : 48.0) + (desktop ? 4 + _WindowButtonsState.breedte : 0.0);
+
 class _NavPills extends StatefulWidget {
   final int active;
   final ValueChanged<int> onSelect;
@@ -3683,13 +3763,35 @@ class _NavPillsState extends State<_NavPills> {
   /// is measured from these, so both have to come from the same place.
   static final _height = _isTouch ? 44.0 : 32.0;
 
-  double _width(int i) {
+  double _width(int i) => pilBreedte(_items[i],
+      metBadge: _items[i].$1 == 6 && widget.badge > 0,
+      schaal: MediaQuery.textScalerOf(context));
+
+  /// Eén pil, gemeten. Statisch, want de balk hierboven moet dezelfde maat kunnen uitrekenen zonder
+  /// deze pillen al te hebben gebouwd -- twee plekken die apart rekenen lopen uiteen.
+  ///
+  /// De tekstschaal telt mee: op een iPad met grotere systeemletters is een pil breder dan zijn
+  /// ontwerpmaat, en een meting zonder die schaal zegt dan dat iets past wat niet past.
+  static double pilBreedte((int, String, IconData) item,
+      {required bool metBadge, required TextScaler schaal}) {
     final tp = TextPainter(
-      text: TextSpan(text: _items[i].$2, style: _style),
+      text: TextSpan(text: item.$2, style: _style),
+      textScaler: schaal,
       textDirection: TextDirection.ltr,
     )..layout();
-    final badge = _items[i].$1 == 6 && widget.badge > 0 ? _badgeW : 0.0;
-    return tp.width + _padH * 2 + badge;
+    return tp.width + _padH * 2 + (metBadge ? _badgeW : 0.0);
+  }
+
+  /// Wat alle secties SAMEN nodig hebben om volledig te passen.
+  ///
+  /// De stip bij "Mijn downloads" telt altijd mee. Anders zou de balk anders gaan staan op het moment
+  /// dat er een download begint, en dat is precies het verkeerde moment om te verspringen.
+  static double benodigdeBreedte({required TextScaler schaal}) {
+    var totaal = 0.0;
+    for (final item in _items) {
+      totaal += pilBreedte(item, metBadge: item.$1 == 6, schaal: schaal);
+    }
+    return totaal;
   }
 
   @override
@@ -7647,6 +7749,9 @@ class _WindowButtons extends StatefulWidget {
 }
 
 class _WindowButtonsState extends State<_WindowButtons> with WindowListener {
+  /// Drie knoppen van 38 punten. De balk rekent hiermee of de secties nog passen; zie [_tekstbreedte].
+  static const breedte = 3 * 38.0;
+
   bool _maximized = false;
 
   @override
