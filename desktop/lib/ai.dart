@@ -203,6 +203,57 @@ class AiService {
     return leesBuurt(jsonUitAntwoord(body), zaadArtiest: artiest);
   }
 
+  /// Werkt deze sleutel? Eén klein verzoek, en een antwoord in gewone taal.
+  ///
+  /// **Waarom dit er is.** Saber op 12-09-2026, met een schermafdruk van de Console erbij: *"maar ik
+  /// heb nog maar een nieuwe gemaakt net ????"*. De sleutel in de app eindigde op `UwAA`, de enige
+  /// sleutel in zijn Console op `mgAA` — een oude, verwijderde sleutel dus, en Anthropic zei
+  /// daarover niets anders dan `401 API key is invalid`. Dat verschil was alleen te zien door het
+  /// bestand op schijf te vergelijken met de Console.
+  ///
+  /// Daarom noemt het antwoord hier ALTIJD de laatste vier tekens. Dat is genoeg om hem naast de
+  /// Console te leggen en te zien of het dezelfde is, en te weinig om er iets mee te kunnen.
+  Future<({bool ok, String reden})> proef() async {
+    final sleutel = sleutelVan().trim();
+    final staart = sleutel.length < 4 ? '' : ' (eindigt op …${sleutel.substring(sleutel.length - 4)})';
+    if (sleutel.isEmpty) {
+      return (ok: false, reden: 'Er staat nog geen sleutel in dit veld.');
+    }
+    if (!sleutel.startsWith('sk-ant-')) {
+      return (
+        ok: false,
+        reden: 'Dit ziet er niet uit als een Anthropic-sleutel$staart — die beginnen met "sk-ant-".'
+      );
+    }
+    try {
+      await _verstuur(
+        {
+          'model': kRadioModel,
+          'max_tokens': 16,
+          'messages': [
+            {'role': 'user', 'content': 'ok'}
+          ],
+        },
+        sleutel,
+        werkruimteVan().trim(),
+      );
+      return (ok: true, reden: 'Sleutel werkt$staart.');
+    } on AiFout catch (e) {
+      // De 401 krijgt zijn eigen zin, want "onjuiste sleutel" en "verwijderde sleutel" geven
+      // allebei dezelfde fout en het verschil zit alleen in die laatste vier tekens.
+      final onbekend = e.uitleg.contains('niet geaccepteerd');
+      return (
+        ok: false,
+        reden: onbekend
+            ? 'Anthropic kent deze sleutel niet$staart. Staat er in je Console een sleutel met '
+                'een ANDER einde? Dan is dit een oude of verwijderde.'
+            : '${e.uitleg}$staart'
+      );
+    } catch (e) {
+      return (ok: false, reden: 'Kon het niet proberen: $e');
+    }
+  }
+
   /// Eén vraag aan de Messages-API, met alle antwoorden die fout kunnen gaan.
   ///
   /// **Apart, omdat deze foutmeldingen duur verdiend zijn.** Ze stonden in `maakRadioplan` en zijn

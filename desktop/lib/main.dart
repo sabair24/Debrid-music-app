@@ -20848,6 +20848,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
   ///
   /// Anders moet je eerst opslaan om te kunnen proberen, en dan staat er een adres bewaard waarvan
   /// je nog niet weet of het klopt.
+  bool _aiBusy = false, _aiOk = false;
+  String _aiUit = '';
+
   bool _redBusy = false;
   bool _redOk = false;
   String _redUit = '';
@@ -20858,6 +20861,35 @@ class _SettingsDialogState extends State<SettingsDialog> {
   /// te proberen is een instelling waarvan je pas bij de volgende zoekopdracht hoort dat hij niets
   /// deed — en bij een besloten tracker weet je dan nog steeds niet of het aan de sleutel lag of aan
   /// zijn rechten.
+  /// De AI-sleutel nakijken zonder er een radio voor te hoeven starten.
+  ///
+  /// Werkt hij, dan wordt hij meteen bewaard — precies zoals bij Redacted en Torznab. Zo is
+  /// "geprobeerd en goed" hetzelfde moment als "opgeslagen", en kan er niets tussen vallen.
+  Future<void> _proefAi() async {
+    final echte = context.read<AppSettings>();
+    final sleutel = _anthropic.text.trim();
+    final werkruimte = _anthropicWs.text.trim();
+    setState(() {
+      _aiBusy = true;
+      _aiUit = '';
+    });
+    try {
+      final uit = await AiService(() => sleutel, werkruimteVan: () => werkruimte).proef();
+      if (!mounted) return;
+      setState(() {
+        _aiOk = uit.ok;
+        _aiUit = uit.reden;
+      });
+      if (uit.ok) {
+        echte.anthropicKey = sleutel;
+        echte.anthropicWorkspace = werkruimte;
+        await echte.save();
+      }
+    } finally {
+      if (mounted) setState(() => _aiBusy = false);
+    }
+  }
+
   Future<void> _proefRedacted() async {
     final echte = context.read<AppSettings>();
     final sleutel = _redacted.text.trim();
@@ -21624,6 +21656,35 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // in gewone taal vragen. Hij staat HIER en niet op je telefoon: een gekoppeld
                     // toestel laat de pc de vraag stellen, net als bij TorBox.
                     _field('AI-sleutel (Anthropic) — voor een radio uit een zin', _anthropic),
+                    // Nakijken zonder er een radio voor te hoeven starten. Zonder deze knop was de
+                    // enige melding een toast diep in een radio, en die zei alleen "wordt niet
+                    // geaccepteerd" — niet WELKE sleutel er geprobeerd werd. Op 12-09-2026 kostte
+                    // dat een hele ronde: in de app stond een verwijderde sleutel op ...UwAA en in
+                    // de Console stond er een op ...mgAA, en dat verschil was alleen te zien door
+                    // het bestand op schijf te vergelijken. Zie [AiService.proef].
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2, bottom: 10),
+                      child: Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 10,
+                        runSpacing: 6,
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: _aiBusy ? null : _proefAi,
+                            icon: const Icon(Icons.vpn_key_rounded, size: 16),
+                            label: Text(_aiBusy ? 'Bezig…' : 'Sleutel proberen'),
+                          ),
+                          if (_aiUit.isNotEmpty)
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 360),
+                              child: Text(_aiUit,
+                                  style: TextStyle(
+                                      color: _aiOk ? _accent2 : const Color(0xFFE8913A),
+                                      fontSize: 11.5)),
+                            ),
+                        ],
+                      ),
+                    ),
                     const SizedBox(height: 8),
                     // Meestal leeg te laten. Alleen een sleutel die aan je ACCOUNT hangt in plaats
                     // van aan een werkruimte weigert zonder; de app zegt dat dan ook met zoveel
