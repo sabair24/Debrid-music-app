@@ -116,6 +116,25 @@ class RecTrack {
 
 /// Recommendation engine (Deezer, keyless): artist radio + related artists,
 /// for Radio / Smart Shuffle / discovery.
+/// Welke buren deze radio meeneemt, uit alles wat het archief aanbiedt.
+///
+/// **Waarom dit een eigen functie is.** Diezelfde winst staat tien regels verderop al uitgeschreven
+/// voor [RecommendService.discover]: *"`related?limit=20` kost exact hetzelfde ene verzoek —
+/// nagemeten: Deezer geeft er standaard twintig terug"*. In de radio was hij nooit toegepast; die
+/// vroeg er vier en gebruikte altijd diezelfde vier.
+///
+/// **Gemeten op 12-09-2026.** Radio vanaf Michael Jackson - Billie Jean, twee uur laten lopen. Het
+/// plan bestond uit de vijftien eigen toppers, de "similar"-stroom van Deezer, en de toppers van
+/// precies VIER buren. Van de eerste zes nummers die klonken waren er vier van Michael Jackson
+/// zelf — de vaste vier buren leveren te weinig om daar tegenop te wegen, en bij de volgende radio
+/// rond dezelfde artiest zijn het opnieuw diezelfde vier.
+///
+/// Nul extra verzoeken, en het is wat een tweede radio rond dezelfde artiest pas anders maakt.
+List<T> kiesBuren<T>(List<T> alle, int hoeveel, Random? toeval) {
+  if (alle.length <= hoeveel) return List<T>.from(alle);
+  return ([...alle]..shuffle(toeval)).take(hoeveel).toList();
+}
+
 class RecommendService {
   static const _base = 'https://api.deezer.com';
 
@@ -197,11 +216,12 @@ class RecommendService {
     // seed, so /top is needed for the seed's own songs to appear in the queue at all.
     final topF = _get('$_base/artist/$id/top?limit=15');
     final radioF = _get('$_base/artist/$id/radio');
-    final relF = _get('$_base/artist/$id/related?limit=4');
+    final relF = _get('$_base/artist/$id/related?limit=20');
     add(_tracks(await topF));
     add(_tracks(await radioF));
     final rel = ((await relF)?['data'] as List?) ?? const [];
-    final tops = await Future.wait(rel.take(4).map((a) => _get('$_base/artist/${a['id']}/top?limit=5')));
+    final tops = await Future.wait(
+        kiesBuren(rel, 4, _toeval).map((a) => _get('$_base/artist/${(a as Map)['id']}/top?limit=5')));
     for (final t in tops) {
       add(_tracks(t));
     }
