@@ -101,6 +101,37 @@ jobs:
       # toets in dát bestand zakte. Het is de toets die de pc en een toestel naast elkaar legt — dus
       # juist het bestand dat merkt wanneer die twee uit elkaar gaan lopen. Hij draait op MockClient,
       # raakt het net niet, en kost een seconde.
+      #
+      # **En sinds 12-09-2026 de rest van de map erbij.** Hierboven stond "een handvol, en met
+      # opzet", maar dat was de lijst allang ontgroeid: 140 bestanden genoemd, 322 in `test/`. Van
+      # de 182 die erbuiten vielen waren 16 `*_live_test.dart` (netwerk) en twee dragen
+      # `@Tags(['live'])` zonder die naam (`dbg2_test.dart`, `flac_write_real_test.dart`) — die
+      # slaat `dart_test.yaml` over, dus in de bouwstraat zouden ze nul toetsen draaien. De overige
+      # 166 draaiden werkelijk nergens: niet hier, en niet in de Apple-bouw met zijn eigen 28.
+      #
+      # Alle 166 zijn los gedraaid. 162 waren groen en staan er nu bij. Niets liep vast en niets
+      # verliep; de hele lijst doet er in één ronde viereneenhalve minuut over (3118 toetsen) en
+      # raakt het net niet. Drie bestanden zijn traag en verklaren de helft daarvan:
+      # `startup_cover_test.dart` (84s), `scan_meting_test.dart` (37s), `scan_test.dart` (35s).
+      #
+      # Twee bleven eruit, en die twee zijn de opbrengst van de exercitie:
+      #
+      #   * `cast_omzetten_test.dart` — deze vindt een ECHTE vastloper. `resampleToFile` doet
+      #     `.whenComplete(() => _bezig.remove(uit.path))`, en `Map.remove` geeft de verwijderde
+      #     waarde terug: dat is de future die `whenComplete` op dat moment zelf aan het maken is.
+      #     Hij wacht dus op zichzelf en komt nooit af. Gemeten: het omzetten lukt en het bestand
+      #     landt in de cache, maar de aanvrager hoort nooit meer iets. De eerste keer hi-res naar
+      #     de Sonos of naar je telefoon loopt daarmee vast; de tweede keer werkt, want dan pakt de
+      #     vroege cache-uitgang het over. Binnengekomen met #129 (28-08-2026) en nooit opgemerkt,
+      #     precies omdat deze toets buiten de lijst stond. Een blokvorm in plaats van de pijlvorm
+      #     is de hele reparatie; zolang die niet gedaan is blijft dit bestand er noodgedwongen uit.
+      #
+      #   * `lan_grants_test.dart` — alle dertien toetsen zelf zijn groen; alleen de `tearDown`
+      #     zakt, en alleen op Windows. Een toegelaten verzoek vuurt `unawaited(grants.save())`
+      #     (server.dart:398), dus `grants.json` staat nog open als de proefmap opgeruimd wordt, en
+      #     Windows weigert een open bestand te wissen. Linux staat dat wél toe, dus op deze
+      #     ubuntu-machine hoort hij groen te zijn. Hij staat er niet in omdat dat hier niet na te
+      #     meten valt: eerst één CI-ronde die het bewijst, dan kan hij erbij.
       - name: Layout and parsing tests
         working-directory: desktop
         run: |
@@ -176,7 +207,88 @@ jobs:
             test/glasschaduw_test.dart \
             test/balkruimte_test.dart test/glasknop_test.dart \
             test/artiestkop_bloed_test.dart \
-            test/hoesachtergrond_test.dart test/paginawas_test.dart test/koppelingen_bewaren_test.dart test/albuminfo_briefje_test.dart test/discogs_zoektreffers_test.dart test/kunstcache_test.dart test/zoekstormloop_test.dart test/lege_peermap_test.dart test/burenkeuze_test.dart test/radiobuurt_test.dart test/smaakprofiel_test.dart test/opruimen_test.dart
+            test/hoesachtergrond_test.dart test/paginawas_test.dart test/koppelingen_bewaren_test.dart test/albuminfo_briefje_test.dart test/discogs_zoektreffers_test.dart test/kunstcache_test.dart test/zoekstormloop_test.dart test/lege_peermap_test.dart test/burenkeuze_test.dart test/radiobuurt_test.dart test/smaakprofiel_test.dart test/opruimen_test.dart \
+            test/aanbevelingplan_test.dart test/afspeellijsten_test.dart \
+            test/aggregator_stream_test.dart test/album_cover_key_test.dart \
+            test/album_facts_test.dart test/album_genre_test.dart \
+            test/album_id_test.dart test/api_url_test.dart \
+            test/aria2_test.dart test/aria2_zoeken_test.dart \
+            test/art_roles_test.dart test/artist_name_test.dart \
+            test/artwork_test.dart test/atomic_state_test.dart \
+            test/audiodb_art_test.dart test/auto_bladeren_test.dart \
+            test/auto_hoezen_test.dart test/beeldmedia_test.dart \
+            test/betrapt_opnieuw_proberen_test.dart test/betrapt_telt_niet_test.dart \
+            test/bio_test.dart test/booklet_test.dart \
+            test/botsing_na_afmelden_test.dart test/busy_line_test.dart \
+            test/cast_discovery_test.dart test/cast_receiver_test.dart \
+            test/catalog_mirror_test.dart test/catalog_search_test.dart \
+            test/catalog_test.dart test/client_session_test.dart \
+            test/cloud_session_test.dart test/correctie_dubbele_regel_test.dart \
+            test/correcties_hoofdletters_test.dart test/corrections_durability_test.dart \
+            test/cover_consistency_test.dart test/credit_overleeft_schijf_test.dart \
+            test/dedupe_index_test.dart test/dedupe_recording_test.dart \
+            test/deezerbaan_test.dart test/device_name_test.dart \
+            test/discography_test.dart test/discogs_edition_test.dart \
+            test/discover_test.dart test/download_regel_test.dart \
+            test/dubbels_isolate_test.dart test/duet_haakje_test.dart \
+            test/duplicate_by_sound_test.dart test/duplicates_test.dart \
+            test/echte_resolutie_test.dart test/echtheid_laden_test.dart \
+            test/echtheid_over_de_lijn_test.dart test/edition_row_loading_test.dart \
+            test/edition_split_test.dart test/edition_tracklist_test.dart \
+            test/enrich_sweep_test.dart test/enrich_test.dart \
+            test/facts_warmer_test.dart test/fake_pc_test.dart \
+            test/favorieten_test.dart test/featured_test.dart \
+            test/flac_tags_test.dart test/flac_write_test.dart \
+            test/flaresolverr_test.dart test/gelijke_titels_test.dart \
+            test/geweigerd_of_stil_test.dart test/handle_leak_test.dart \
+            test/herkansing_test.dart test/hoes_cache_test.dart \
+            test/hoes_na_herbouw_test.dart test/hoesmerk_test.dart \
+            test/inno_vlaggen_test.dart test/json_body_test.dart \
+            test/koppelingen_overleven_test.dart test/kwaliteit_lijst_test.dart \
+            test/la_en_balk_test.dart test/lan_bereik_test.dart \
+            test/lan_facts_test.dart test/lan_pairing_test.dart \
+            test/lan_server_test.dart test/lan_state_test.dart \
+            test/lan_upnp_test.dart test/lane_pacing_test.dart \
+            test/lege_map_test.dart test/library_isolate_test.dart \
+            test/login_budget_test.dart test/magneet_trackers_test.dart \
+            test/mb_browse_recordings_test.dart test/media_keys_cast_test.dart \
+            test/merge_plan_test.dart test/metadata_test.dart \
+            test/mojibake_test.dart test/mp3_duur_test.dart \
+            test/mp3_lezen_vangnet_test.dart test/mp3_write_real_test.dart \
+            test/naamschade_test.dart test/no_wav_download_test.dart \
+            test/now_playing_test.dart test/nummering_remix_test.dart \
+            test/onderbreking_test.dart test/onofficiele_persing_test.dart \
+            test/opnamesleutel_test.dart test/player_cover_test.dart \
+            test/player_refresh_test.dart test/potlood_schrijft_bestand_test.dart \
+            test/pressing_line_test.dart test/prune_empty_folders_test.dart \
+            test/quality_test.dart test/queue_worker_test.dart \
+            test/recognise_write_real_test.dart test/redacted_test.dart \
+            test/release_format_test.dart test/resolved_cover_test.dart \
+            test/resume_downloads_test.dart test/rij_toewijzen_sync_test.dart \
+            test/rutracker_koekje_test.dart test/rutracker_test.dart \
+            test/same_recording_pairs_test.dart test/same_recording_test.dart \
+            test/scan_meting_test.dart test/scan_test.dart \
+            test/schijf_terugval_test.dart test/search_by_track_test.dart \
+            test/settings_durability_test.dart test/settings_recovery_test.dart \
+            test/settings_sync_test.dart test/sharing_grants_test.dart \
+            test/soulseek_guard_test.dart test/soulseek_herstart_test.dart \
+            test/soulseek_pause_test.dart test/soulseek_zombie_test.dart \
+            test/startrijen_test.dart test/startscherm_test.dart \
+            test/startup_cover_test.dart test/step2_test.dart \
+            test/sweep_order_test.dart test/tag_cache_test.dart \
+            test/titel_rechtzetten_test.dart test/titel_venster_test.dart \
+            test/toewijzing_test.dart test/torbox_storing_test.dart \
+            test/torbox_test.dart test/torrentbestand_test.dart \
+            test/transport_errors_test.dart test/tv_album_rows_test.dart \
+            test/tv_test.dart test/twee_persingen_meting_test.dart \
+            test/upgrade_rules_test.dart test/vaste_keuze_beschermd_test.dart \
+            test/vaste_keuze_test.dart test/vervangjacht_strook_test.dart \
+            test/vervangjacht_test.dart test/verwijderen_vergeet_meting_test.dart \
+            test/verzamelbox_test.dart test/vreemde_hoes_test.dart \
+            test/wavpack_dsd_test.dart test/wens_meet_voor_filen_test.dart \
+            test/wens_vervangt_de_nep_test.dart test/werkmap_test.dart \
+            test/werkrij_test.dart test/widget_test.dart \
+            test/zelfde_torrent_test.dart test/zoek_meting_test.dart
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
       # the app you actually use while the TV work is in progress — shipping that would install a
