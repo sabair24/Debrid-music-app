@@ -462,6 +462,30 @@ bool wilZoekantwoord(Uint8List uitgepakt, Set<int> actieveTickets) {
 Duration stilTot({required bool geclaimd}) =>
     geclaimd ? const Duration(seconds: 30) : const Duration(seconds: 5);
 
+/// Een mislukte overdracht laat geen lege map achter.
+///
+/// **Waarom.** [SlskSession._pump] maakt de doelmap aan vóór de eerste byte binnen is, en gooit bij
+/// een mislukking wél het halve bestand weg maar de map niet. Gemeten op 12-09-2026 na twee
+/// radioritten: zes lege mappen in de muziekwortel, allemaal genoemd naar de peer die niet leverde
+/// — impoluto, ssreverb, JGutz40, katakana2025, studio308, superluminaire — en elk daarvan staat in
+/// `downloads.log` als "mislukt: Geweigerd: Queued" of "Uploader niet bereikbaar". In totaal stonden
+/// er elf van die mappen tussen de albums.
+///
+/// Een map die iets bevat blijft staan, altijd: een tweede download die op hetzelfde moment in
+/// dezelfde albummap schrijft heeft daar al een bestand staan, en dan is deze map niet leeg. De
+/// controle is dubbele bodem — `delete()` zonder `recursive` weigert een volle map uit zichzelf —
+/// maar hij staat er zodat dat nooit van een uitzondering hoeft af te hangen: de `catch` hieronder
+/// slikt alles, en dan zou een latere `recursive: true` er stil doorheen glippen.
+Future<void> ruimLegeMapOp(Directory dir) async {
+  try {
+    if (!await dir.exists()) return;
+    if (!await dir.list(followLinks: false).isEmpty) return;
+    await dir.delete();
+  } catch (_) {
+    // Een map die niet weg kan is geen reden om iets te laten mislukken.
+  }
+}
+
 class SoulseekClient {
   static const _host = 'server.slsknet.org';
   static const _port = 2242;
@@ -1367,6 +1391,7 @@ class SoulseekClient {
         onProgress(received, total > 0 ? total : received);
       } else {
         await destFile.delete().catchError((_) => destFile);
+        await ruimLegeMapOp(destFile.parent);
       }
       return ok;
     } catch (_) {
@@ -1380,6 +1405,7 @@ class SoulseekClient {
           await sink.close();
         } catch (_) {}
         await destFile.delete().catchError((_) => destFile);
+        await ruimLegeMapOp(destFile.parent);
       }
     }
   }
