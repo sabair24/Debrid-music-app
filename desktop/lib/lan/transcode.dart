@@ -161,8 +161,16 @@ class Transcoder {
     // beschadigd geluid dat zich nooit laat herhalen. Wie als tweede komt, wacht op de eerste.
     final lopend = _bezig[uit.path];
     if (lopend != null) return lopend;
-    final werk = _zetOm(file, uit, maxSampleRate, maxBits, recept, cacheDir)
-        .whenComplete(() => _bezig.remove(uit.path));
+    // Een BLOKlichaam, en dat is geen stijlkwestie. Met een pijl — `() => _bezig.remove(uit.path)` —
+    // geeft de opruimer terug wát `remove()` teruggeeft, en op een `Map<String, Future<…>>` is dat
+    // de verwijderde Future zélf. `whenComplete` wacht op een Future die zijn opruimer teruggeeft,
+    // en die Future is hier `werk`: werk wachtte op werk. Voor altijd, terwijl ffmpeg gewoon rc=0
+    // gaf in ~55 ms en het omgezette bestand netjes in de cache stond — alleen de vrager hoorde
+    // nooit iets. Dezelfde fout stond al opgeschreven in `discogs.dart` en `enrichment.dart`; de
+    // pijl is nu eenmaal wat je vanzelf schrijft en hij leest als goed. Dit was de derde keer.
+    final werk = _zetOm(file, uit, maxSampleRate, maxBits, recept, cacheDir).whenComplete(() {
+      _bezig.remove(uit.path);
+    });
     _bezig[uit.path] = werk;
     return werk;
   }

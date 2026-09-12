@@ -109,22 +109,26 @@ jobs:
       # slaat `dart_test.yaml` over, dus in de bouwstraat zouden ze nul toetsen draaien. De overige
       # 166 draaiden werkelijk nergens: niet hier, en niet in de Apple-bouw met zijn eigen 28.
       #
-      # Alle 166 zijn los gedraaid. 162 waren groen en staan er nu bij. Niets liep vast en niets
-      # verliep; de hele lijst doet er in één ronde viereneenhalve minuut over (3118 toetsen) en
+      # Alle 166 zijn los gedraaid. 162 waren groen en staan er nu bij — 163 sinds de vastloper
+      # hieronder gerepareerd is en `cast_omzetten_test.dart` mee kon. Niets liep vast en niets
+      # verliep; de hele lijst doet er in één ronde viereneenhalve minuut over (3121 toetsen) en
       # raakt het net niet. Drie bestanden zijn traag en verklaren de helft daarvan:
       # `startup_cover_test.dart` (84s), `scan_meting_test.dart` (37s), `scan_test.dart` (35s).
       #
-      # Twee bleven eruit, en die twee zijn de opbrengst van de exercitie:
+      # Eén bleef eruit; de ander was de opbrengst van de exercitie en staat er nu bij:
       #
-      #   * `cast_omzetten_test.dart` — deze vindt een ECHTE vastloper. `resampleToFile` doet
-      #     `.whenComplete(() => _bezig.remove(uit.path))`, en `Map.remove` geeft de verwijderde
-      #     waarde terug: dat is de future die `whenComplete` op dat moment zelf aan het maken is.
-      #     Hij wacht dus op zichzelf en komt nooit af. Gemeten: het omzetten lukt en het bestand
-      #     landt in de cache, maar de aanvrager hoort nooit meer iets. De eerste keer hi-res naar
-      #     de Sonos of naar je telefoon loopt daarmee vast; de tweede keer werkt, want dan pakt de
-      #     vroege cache-uitgang het over. Binnengekomen met #129 (28-08-2026) en nooit opgemerkt,
-      #     precies omdat deze toets buiten de lijst stond. Een blokvorm in plaats van de pijlvorm
-      #     is de hele reparatie; zolang die niet gedaan is blijft dit bestand er noodgedwongen uit.
+      #   * `cast_omzetten_test.dart` — deze vond een ECHTE vastloper, en die is 12-09-2026
+      #     gerepareerd. `resampleToFile` deed `.whenComplete(() => _bezig.remove(uit.path))`, en
+      #     `Map.remove` geeft de verwijderde waarde terug: dat is de future die `whenComplete` op
+      #     dat moment zelf aan het maken is. Hij wachtte dus op zichzelf en kwam nooit af. Gemeten:
+      #     het omzetten lukte en het bestand landde in de cache, maar de aanvrager hoorde nooit
+      #     meer iets. De eerste keer hi-res naar de Sonos of naar je telefoon liep daarmee vast; de
+      #     tweede keer werkte, want dan pakt de vroege cache-uitgang het over. Binnengekomen met
+      #     #129 (28-08-2026) en nooit opgemerkt, precies omdat deze toets buiten de lijst stond.
+      #     Een blokvorm in plaats van de pijlvorm was de hele reparatie. Sindsdien: drie toetsen
+      #     groen in een seconde elk, waar ze eerst alle drie op de 30-seconden-klok stukliepen. Hij
+      #     staat nu in de lijst hieronder, en daar hoort hij: deze machine heeft `/usr/bin/ffmpeg`,
+      #     dus hij draait hier werkelijk en slaat niet over.
       #
       #   * `lan_grants_test.dart` — alle dertien toetsen zelf zijn groen; alleen de `tearDown`
       #     zakt, en alleen op Windows. Een toegelaten verzoek vuurt `unawaited(grants.save())`
@@ -220,7 +224,8 @@ jobs:
             test/betrapt_opnieuw_proberen_test.dart test/betrapt_telt_niet_test.dart \
             test/bio_test.dart test/booklet_test.dart \
             test/botsing_na_afmelden_test.dart test/busy_line_test.dart \
-            test/cast_discovery_test.dart test/cast_receiver_test.dart \
+            test/cast_discovery_test.dart test/cast_omzetten_test.dart \
+            test/cast_receiver_test.dart \
             test/catalog_mirror_test.dart test/catalog_search_test.dart \
             test/catalog_test.dart test/client_session_test.dart \
             test/cloud_session_test.dart test/correctie_dubbele_regel_test.dart \
