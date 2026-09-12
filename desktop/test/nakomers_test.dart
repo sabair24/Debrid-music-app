@@ -58,14 +58,16 @@ void main() {
     Radioplek gedaan(String a, String t) => Radioplek(artiest: a, titel: t)..stand = Haalstand.inRij;
 
     test('DE KERN: nakomers schuiven om en om tussen wat nog moet komen', () {
-      // Achteraan zou betekenen: pas na veertig nummers - ruim twee uur - hoor je de eerste.
+      // Achteraan zou betekenen: pas na veertig nummers - ruim twee uur - hoor je de eerste. En
+      // met de bekende vooraan kwam er in zeven minuten radio precies EEN van de twaalf voorbij.
       final plan = [_p('Deezer 1', 'a'), _p('Deezer 2', 'b'), _p('Deezer 3', 'c')];
       final nieuw = [_p('Toto', 'Africa'), _p('Rockwell', 'Somebody')];
 
       final uit = mengNakomers(plan, nieuw);
 
       expect([for (final p in uit) p.artiest],
-          ['Deezer 1', 'Toto', 'Deezer 2', 'Rockwell', 'Deezer 3']);
+          ['Toto', 'Deezer 1', 'Rockwell', 'Deezer 2', 'Deezer 3'],
+          reason: 'op de nakomer heb je gewacht; die hoort niet achter de bekende aan te sluiten');
     });
 
     test('DE VAL: wat al speelt of in de rij staat blijft onaangeroerd', () {
@@ -74,14 +76,15 @@ void main() {
 
       final uit = mengNakomers(plan, [_p('Toto', 'Africa')]);
 
-      expect([for (final p in uit) p.artiest], ['Nu', 'Straks', 'Deezer', 'Toto']);
+      expect([for (final p in uit) p.artiest], ['Nu', 'Straks', 'Toto', 'Deezer'],
+          reason: 'Nu en Straks staan al in de rij en mogen niet verschuiven');
     });
 
     test('DE GRENS: meer nakomers dan plekken - dan volgen ze gewoon', () {
       final uit = mengNakomers([_p('Deezer', 'z')],
           [_p('Toto', 'Africa'), _p('Rockwell', 'Somebody'), _p('Shalamar', 'A Night')]);
 
-      expect([for (final p in uit) p.artiest], ['Deezer', 'Toto', 'Rockwell', 'Shalamar']);
+      expect([for (final p in uit) p.artiest], ['Toto', 'Deezer', 'Rockwell', 'Shalamar']);
     });
 
     test('DE GRENS: niets erbij laat het plan precies zoals het was', () {

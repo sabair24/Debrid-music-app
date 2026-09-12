@@ -97,4 +97,45 @@ void main() {
     expect(vraag, contains('Geen liedjestitels'),
         reason: 'een model dat tracktitels verzint stuurt de radio een half uur naar niets');
   });
+
+  group('een naam en geen zin', () {
+    // Gemeten op 12-09-2026: het model gaf als vierentwintigste naam letterlijk
+    // "Lionel Richie is al genoemd, dus: Al Jarreau" - het schreef zijn redenering in het
+    // naamveld. Deezer vindt zoiets niet, dus het valt daarna weg; maar het kost wel een van de
+    // twaalf plekken die per radio opgezocht worden, en dat is een artiest minder.
+    test('DE KERN: een redenering in het naamveld valt weg', () {
+      final uit = leesBuurt({
+        'buren': [
+          _buur('Lionel Richie is al genoemd, dus: Al Jarreau'),
+          _buur('Al Jarreau'),
+        ]
+      });
+
+      expect([for (final b in uit) b.artiest], ['Al Jarreau']);
+    });
+
+    test('DE VAL: rare maar echte bandnamen blijven staan', () {
+      // Hier niet streng zijn kost meteen echte artiesten - en dit zijn er vier die het model
+      // op 12-09-2026 werkelijk voorstelde.
+      const echt = [
+        'Earth, Wind & Fire',
+        'Evelyn "Champagne" King',
+        'Jimmy Jam & Terry Lewis',
+        'Dâm-Funk',
+        'Lisa Lisa & Cult Jam',
+        'Kool & The Gang',
+      ];
+      for (final n in echt) {
+        expect(lijktOpArtiest(n), isTrue, reason: '"$n" is een echte artiest');
+      }
+    });
+
+    test('DE GRENS: een hele zin zonder dubbele punt valt ook weg', () {
+      expect(lijktOpArtiest('deze artiest past hier heel goed bij vind ik'), isFalse);
+      // En kort met een dubbele punt: het model schrijft ook 'Beter: Al Jarreau' of
+      // 'Alternatief: Chic'. Dat is geen naam, en het woordenaantal vangt het niet.
+      expect(lijktOpArtiest('Beter: Al Jarreau'), isFalse);
+      expect(lijktOpArtiest('   '), isFalse);
+    });
+  });
 }

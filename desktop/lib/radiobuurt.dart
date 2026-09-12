@@ -131,6 +131,23 @@ die op een plaat staat. Geen liedjestitels, alleen artiesten.
 ''';
 }
 
+/// Ziet dit eruit als een ARTIESTNAAM en niet als een zin?
+///
+/// **Waarom dit nodig bleek.** Gemeten op 12-09-2026 gaf het model als vierentwintigste naam
+/// letterlijk `Lionel Richie is al genoemd, dus: Al Jarreau` terug — het schreef zijn redenering in
+/// het naamveld. Deezer vindt zoiets niet, dus het valt daarna vanzelf weg; maar het kost wél een
+/// van de twaalf plekken die per radio opgezocht worden, en dat is een artiest minder.
+///
+/// Niet streng zijn: bandnamen mogen best lang en raar zijn — "Earth, Wind & Fire", "Evelyn
+/// "Champagne" King", "Jimmy Jam & Terry Lewis", "Dâm-Funk". Alleen de twee vormen die een naam
+/// nooit heeft: een dubbele punt, en meer dan zes woorden.
+bool lijktOpArtiest(String naam) {
+  final n = naam.trim();
+  if (n.isEmpty || n.length > 120) return false;
+  if (n.contains(':')) return false;
+  return n.split(RegExp(r'\s+')).length <= 6;
+}
+
 /// Wat er van het antwoord geloofd wordt.
 ///
 /// **Dit is de enige grens.** De Messages-API weigert `minItems`/`maxItems` in een schema, net als
@@ -151,7 +168,7 @@ List<Buurman> leesBuurt(Object? json, {String zaadArtiest = ''}) {
     if (uit.length >= kMaxBuren) break;
     if (v is! Map) continue;
     final naam = '${v['artiest'] ?? ''}'.trim();
-    if (naam.isEmpty || naam.length > 120) continue;
+    if (!lijktOpArtiest(naam)) continue;
     final sleutel = naam.toLowerCase();
     if (sleutel == zaad || !gezien.add(sleutel)) continue;
     final reden = '${v['reden'] ?? ''}'.trim();

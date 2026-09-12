@@ -222,8 +222,12 @@ List<Radioplek> mengNakomers(List<Radioplek> plan, List<Radioplek> nieuw) {
   final rest = plan.sublist(grens);
   final uit = [...plan.take(grens)];
   for (var i = 0; i < rest.length || i < nieuw.length; i++) {
-    if (i < rest.length) uit.add(rest[i]);
+    // De nakomer EERST. Gemeten op 12-09-2026: met de plek van Deezer vooraan kwam er in zeven
+    // minuten radio precies EEN van de twaalf namen van het model voorbij (Patrice Rushen) — je
+    // werkt eerst het hele blok af dat al in de rij stond. Op deze nieuwe namen heb je gewacht;
+    // die horen niet achter de bekende aan te sluiten.
     if (i < nieuw.length) uit.add(nieuw[i]);
+    if (i < rest.length) uit.add(rest[i]);
   }
   return uit;
 }
