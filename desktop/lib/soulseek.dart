@@ -328,6 +328,7 @@ class _Inbound {
   int _mode = 0;
 
   _Inbound(this.sock, this.owner) {
+    owner.levendeInbound++;
     _sub = sock.listen(_onData, onError: (_) => _drop(), onDone: _drop);
     _bump(const Duration(seconds: 30));
   }
@@ -392,7 +393,7 @@ class _Inbound {
         }
         continue;
       }
-      _bump(const Duration(seconds: 30));
+      _bump(stilTot(geclaimd: _messages != null));
       if (_messages != null && !_messages!.isClosed) {
         _messages!.add(payload);
       } else {
@@ -424,6 +425,7 @@ class _Inbound {
   void _drop() {
     if (_mode == 3) return;
     _mode = 3;
+    owner.levendeInbound--;
     _idle?.cancel();
     _sub.cancel();
     if (!_raw.isClosed) _raw.close();
@@ -431,6 +433,34 @@ class _Inbound {
     sock.destroy();
   }
 }
+
+/// Wacht er nog iemand op dit uitgepakte zoekantwoord?
+///
+/// Het kaartje staat vooraan: één naam-string, dan vier bytes. Dat aflezen kost niets vergeleken
+/// met [SoulseekClient._parseAny], dat tot vijfhonderd bestandsregels uit elkaar haalt. Zie
+/// [SoulseekClient._onFramed] voor de meting waar dit uit voortkomt.
+///
+/// Bij twijfel wordt er gewoon ontleed: een antwoord dat te kort is om het kaartje uit te lezen
+/// gaat door de gewone weg. Een zoektocht die één treffer mist is erger dan een antwoord dat te
+/// veel werk kost. De lezer zelf gooit nooit — [_R.str] geeft bij te weinig bytes een lege naam en
+/// kapt de lengte af — dus een vangregel hier zou nooit afgaan.
+bool wilZoekantwoord(Uint8List uitgepakt, Set<int> actieveTickets) {
+  if (actieveTickets.isEmpty) return false;
+  final r = _R(uitgepakt);
+  r.str(); // de naam van de peer
+  if (r.remaining < 4) return true;
+  return actieveTickets.contains(r.u32());
+}
+
+/// Hoe lang een BINNENGEKOMEN peerverbinding stil mag blijven voor hij dichtgaat.
+///
+/// Een verbinding die alleen zoekresultaten bracht heeft daarna niets meer te zeggen: de peer belde
+/// aan, leverde zijn lijst en blijft verder zwijgen. Die dertig seconden liet hem al die tijd een
+/// socket, een luisteraar en een buffer vasthouden — met duizenden tegelijk. Een verbinding die een
+/// gesprek voert ([_Inbound.takeMessages], gebruikt bij het opvragen van een bestand) houdt zijn
+/// ruime tijd, want daar wacht wél iemand op een antwoord.
+Duration stilTot({required bool geclaimd}) =>
+    geclaimd ? const Duration(seconds: 30) : const Duration(seconds: 5);
 
 class SoulseekClient {
   static const _host = 'server.slsknet.org';
@@ -491,7 +521,27 @@ class SoulseekClient {
   /// An incoming peer connection. The FIRST message is an init message (1-byte code):
   /// PeerInit(1) = username/type/token, PierceFirewall(0) = token. After that they're ordinary
   /// peer messages, and a 'P' (peer) connection is what carries FileSearchResponse (code 9).
-  void _onInbound(Socket sock) => _Inbound(sock, this);
+  ///
+  /// **De bovengrens is de noodrem, niet het gereedschap.** Wat de stormloop echt kort houdt zijn
+  /// [wilZoekantwoord] en [stilTot]; dit vangt alleen het geval waarin het er tóch te veel worden.
+  /// Gemeten op 12-09-2026 bij het starten van radio: 4678 verbindingen tegelijk op de luisterpoort,
+  /// van 4367 verschillende adressen, en de app stond 7,3 seconden stil. Zeshonderd is ruim — bij
+  /// gewoon gebruik staan er enkele tientallen open — en een geweigerde peer kost hoogstens één
+  /// zoektreffer van de duizenden.
+  void _onInbound(Socket sock) {
+    if (levendeInbound >= maxInbound) {
+      _geweigerdInbound++;
+      sock.destroy();
+      return;
+    }
+    _Inbound(sock, this);
+  }
+
+  /// Hoeveel binnengekomen peerverbindingen er nu openstaan, en hoeveel er geweigerd zijn.
+  static int maxInbound = 600;
+  int levendeInbound = 0;
+  int _geweigerdInbound = 0;
+  int get geweigerdInbound => _geweigerdInbound;
 
   /// Routes a fully-initialised incoming connection. Returns false if nobody wanted it.
   bool _routeInbound(_Inbound c, int initCode, String user, String type, int token) {
@@ -517,7 +567,19 @@ class SoulseekClient {
     if (payload.length < 4) return;
     final code = _R(payload).u32();
     if (code != 9) return; // only search responses are interesting on an inbound connection
-    final (ticket, files) = _parseAny(_zlib(Uint8List.sublistView(payload, 4)));
+    final uitgepakt = _zlib(Uint8List.sublistView(payload, 4));
+    // Eerst kijken of iemand hier nog op wacht, en pas dan ontleden.
+    //
+    // **Waarom deze volgorde alles uitmaakt.** Gemeten op 12-09-2026 bij het starten van radio: de
+    // app ging van 987 naar 9477 handles in vijf seconden, van 690 naar 1271 MB, en stond 7,3
+    // seconden volledig stil (`HAPERING` in hartslag.log, `WACHT OP START` in fps.log). Een
+    // zoekvraag laat duizenden peers zelf aanbellen — 4678 verbindingen op poort 10422 van 4367
+    // verschillende adressen — en elk antwoord werd hier volledig ontleed: tot 500 bestanden per
+    // stuk, met naam, lengte en kenmerken. Een zoektocht stopt bij 400 treffers of na een
+    // tijdslimiet ([_SearchRun.settle]), maar de antwoorden bleven dáárna nog dertig seconden
+    // binnenstromen en werden allemaal uitgepakt, ontleed en weggegooid.
+    if (!wilZoekantwoord(uitgepakt, _searchSinks.keys.toSet())) return;
+    final (ticket, files) = _parseAny(uitgepakt);
     final sink = _searchSinks[ticket];
     if (sink != null && files.isNotEmpty) sink(files);
   }
