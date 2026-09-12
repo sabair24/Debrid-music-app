@@ -157,3 +157,43 @@ List<AiVoorstel> leesVoorstellen(Object? json) {
   }
   return uit;
 }
+
+/// Het profiel uit een bibliotheek, zonder dat dit bestand iets van een bibliotheek hoeft te weten.
+///
+/// **Waarom dit een eigen functie is.** Het stond uitgeschreven in `main.dart`, in de startpagina.
+/// Sinds de radio dezelfde kennis van je kast gebruikt ([RecommendService.mixRadio] via
+/// `radiobuurt.dart`) zouden er twee kopieën zijn, en die lopen uit elkaar: de startpagina zou
+/// straks twintig topartiesten meesturen en de radio dertig, zonder dat iemand het merkt.
+///
+/// Een profiel en niet de bibliotheek: 1273 nummers passen niet in één vraag en zijn ook niet nodig.
+/// Wat telt is de VORM — wie er bovenaan staat, uit welke jaren het komt, en wat er de laatste tijd
+/// gedraaid is.
+SmaakProfiel profielUit({
+  required Iterable<({String artiest, int? jaar, String? genre})> nummers,
+  List<String> gespeeld = const [],
+  bool Function(String)? overslaan,
+}) {
+  final perArtiest = <String, int>{};
+  final perDecennium = <int, int>{};
+  final genres = <String>{};
+  for (final n in nummers) {
+    final a = n.artiest.trim();
+    if (a.isNotEmpty && !(overslaan?.call(a) ?? false)) {
+      perArtiest[a] = (perArtiest[a] ?? 0) + 1;
+    }
+    final j = n.jaar;
+    if (j != null && j >= 1900 && j <= 2100) {
+      final d = (j ~/ 10) * 10;
+      perDecennium[d] = (perDecennium[d] ?? 0) + 1;
+    }
+    final g = n.genre?.trim();
+    if (g != null && g.isNotEmpty && genres.length < 12) genres.add(g);
+  }
+  final top = perArtiest.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+  return SmaakProfiel(
+    topArtiesten: [for (final e in top.take(30)) '${e.key} (${e.value})'],
+    perDecennium: perDecennium,
+    gespeeld: gespeeld,
+    genres: genres.toList(),
+  );
+}

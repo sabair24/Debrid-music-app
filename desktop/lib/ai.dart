@@ -13,6 +13,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'aanbevelingplan.dart';
+import 'radiobuurt.dart';
 import 'radioplan.dart';
 
 /// Het model. Klein werk, dus lage inspanning; zie [anthropicBody].
@@ -160,6 +161,46 @@ class AiService {
       werkruimte,
     );
     return leesVoorstellen(jsonUitAntwoord(body));
+  }
+
+  /// De buurt rond één nummer: wie er naast hoort die Deezer niet noemt.
+  ///
+  /// Zelfde vorm als [maakAanbevelingen] en om dezelfde reden lage inspanning: dit is opzoekwerk in
+  /// wat het model al weet, geen puzzel. Zie `radiobuurt.dart` voor wat er gevraagd wordt en waarom
+  /// er alleen artiesten gevraagd worden.
+  ///
+  /// Geen sleutel of een leeg profiel betekent een lege lijst, en de radio gaat gewoon door met wat
+  /// Deezer geeft. Een radio die niet start omdat een taalmodel niet bereikbaar is, is een radio die
+  /// stuk is.
+  Future<List<Buurman>> maakRadiobuurt({
+    required String artiest,
+    String? titel,
+    required SmaakProfiel profiel,
+    List<String> deezerBuren = const [],
+  }) async {
+    final sleutel = sleutelVan().trim();
+    if (sleutel.isEmpty || artiest.trim().isEmpty || profiel.leeg) return const [];
+    final werkruimte = werkruimteVan().trim();
+    final body = await _verstuur(
+      {
+        'model': kRadioModel,
+        'max_tokens': kRadioMaxTokens,
+        'output_config': {
+          'effort': 'low',
+          'format': {'type': 'json_schema', 'schema': buurtSchema()},
+        },
+        'messages': [
+          {
+            'role': 'user',
+            'content': buurtPrompt(
+                artiest: artiest, titel: titel, profiel: profiel, deezerBuren: deezerBuren)
+          }
+        ],
+      },
+      sleutel,
+      werkruimte,
+    );
+    return leesBuurt(jsonUitAntwoord(body), zaadArtiest: artiest);
   }
 
   /// Eén vraag aan de Messages-API, met alle antwoorden die fout kunnen gaan.

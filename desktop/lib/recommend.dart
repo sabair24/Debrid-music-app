@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'deezerbaan.dart';
+import 'radiobuurt.dart';
 
 import 'models.dart' show Track;
 import 'organize.dart' show artistKey;
@@ -135,6 +136,31 @@ List<T> kiesBuren<T>(List<T> alle, int hoeveel, Random? toeval) {
   return ([...alle]..shuffle(toeval)).take(hoeveel).toList();
 }
 
+/// Waar de radio zijn extra buren vandaan haalt.
+///
+/// Een functie en geen `AiService`, zodat `recommend.dart` niets van taalmodellen hoeft te weten en
+/// een toets hem kan invullen zonder sleutel. `startRadio` vult hem in; op een gekoppeld toestel
+/// staat er geen sleutel en blijft hij leeg.
+typedef Buurtbron = Future<List<Buurman>> Function(
+    String artiest, String? titel, List<String> deezerBuren);
+
+/// Hoelang een radio op het model wacht voor hij zonder hem begint.
+///
+/// **Waarom er een grens op staat.** De radio is een knop die je indrukt omdat je muziek wil. Het
+/// model is het traagste stuk van de keten, en een radio die twintig seconden zwijgt omdat er
+/// nagedacht wordt is stuk — ook als het antwoord goed zou zijn geweest. Acht seconden is ruim voor
+/// een `effort: low`-vraag en kort genoeg om niet als storing te voelen; het Deezer-werk loopt er
+/// toch al naast.
+const Duration kBuurtGeduld = Duration(seconds: 8);
+
+/// Hoeveel van de voorgestelde namen er per radio werkelijk opgezocht worden.
+///
+/// Het model geeft er [kMaxBuren] (24). Elke naam kost bij Deezer twee verzoeken uit hetzelfde
+/// budget als de rest van de app — vijftig per vijf seconden, zie `deezerbaan.dart`. Twaalf is de
+/// helft van die lijst, en omdat het elke keer een ANDERE twaalf zijn levert dezelfde artiest twee
+/// keer achter elkaar een andere radio op.
+const int kBurenPerRadio = 12;
+
 class RecommendService {
   static const _base = 'https://api.deezer.com';
 
@@ -200,7 +226,7 @@ class RecommendService {
   /// + a few related artists' top tracks. Including the seed's own catalogue is what
   /// lets Smart Shuffle lead with tracks the listener already owns (instant playback);
   /// the similar/related tracks are the discovery layer.
-  Future<List<RecTrack>> mixRadio(String artist) async {
+  Future<List<RecTrack>> mixRadio(String artist, {String? titel, Buurtbron? buurt}) async {
     final id = await _artistId(artist);
     if (id == null) return artistRadio(artist);
     final out = <RecTrack>[];
@@ -217,16 +243,48 @@ class RecommendService {
     final topF = _get('$_base/artist/$id/top?limit=15');
     final radioF = _get('$_base/artist/$id/radio');
     final relF = _get('$_base/artist/$id/related?limit=20');
+    // De buurvraag gaat EERST de deur uit, want het model is het traagste stuk van de keten en het
+    // Deezer-werk hieronder kan er gewoon naast lopen. Hij heeft alleen de verwantenlijst nodig, en
+    // dat is één verzoek. Zie [Buurtbron] voor waarom hij een tijdslimiet krijgt.
+    final rel = ((await relF)?['data'] as List?) ?? const [];
+    final relNamen = [
+      for (final a in rel)
+        if (a is Map) '${a['name'] ?? ''}'.trim()
+    ]..removeWhere((s) => s.isEmpty);
+    final buurtF = buurt == null
+        ? Future.value(const <Buurman>[])
+        : buurt(artist, titel, relNamen)
+            .timeout(kBuurtGeduld, onTimeout: () => const <Buurman>[])
+            .catchError((_) => const <Buurman>[]);
     add(_tracks(await topF));
     add(_tracks(await radioF));
-    final rel = ((await relF)?['data'] as List?) ?? const [];
     final tops = await Future.wait(
         kiesBuren(rel, 4, _toeval).map((a) => _get('$_base/artist/${(a as Map)['id']}/top?limit=5')));
     for (final t in tops) {
       add(_tracks(t));
     }
+    await _uitDeBuurt(await buurtF, add);
     out.shuffle();
     return out;
+  }
+
+  /// De namen van het model omzetten in echte nummers — en dat is waar ze bewezen worden.
+  ///
+  /// Elke naam kost twee verzoeken: opzoeken en toppers ophalen. Daarom hoogstens [kBurenPerRadio]
+  /// van de vierentwintig die het model noemt, elke radio een andere greep. Een naam die Deezer niet
+  /// kent bestaat niet en valt hier stil weg — dat is precies de reden dat het model artiesten mag
+  /// noemen en geen liedjes.
+  Future<void> _uitDeBuurt(List<Buurman> buurt, void Function(Iterable<RecTrack>) add) async {
+    if (buurt.isEmpty) return;
+    final gekozen = kiesBuren(buurt, kBurenPerRadio, _toeval);
+    final ids = await Future.wait(gekozen.map((b) => _artistId(b.artiest)));
+    final tops = await Future.wait([
+      for (final i in ids)
+        if (i != null) _get('$_base/artist/$i/top?limit=4')
+    ]);
+    for (final t in tops) {
+      add(_tracks(t));
+    }
   }
 
   /// Discovery feed: top tracks from artists related to the given library seeds.

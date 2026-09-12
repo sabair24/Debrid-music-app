@@ -24,6 +24,7 @@ import 'aanbevelingplan.dart';
 import 'ai.dart';
 import 'radio.dart';
 import 'radiokeuze.dart';
+import 'radiobuurt.dart';
 import 'radioplan.dart';
 import 'oordelen.dart';
 import 'radiosessie.dart';
@@ -9080,7 +9081,7 @@ ItemMenu _nummerMenu(BuildContext context, Track t,
           MenuRegel(Icons.album_rounded, 'Ga naar album',
               () => openOp(nav, (_) => AlbumDetailPage(album: album))),
         MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, t.artist)),
-        MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, t.artist)),
+        MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, t.artist, titel: t.title)),
       ],
       [
         // Dezelfde lijst die "Ontbrekende downloaden" gebruikt, alleen dan voor een nummer dat je al
@@ -11319,14 +11320,53 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib) {
 /// nergens in je bibliotheek terechtkwam, en op een gekoppeld toestel zelfs dat niet. Nu wordt het via
 /// Soulseek OPGEHAALD terwijl je luistert, en komt het pas in de rij als het bestand er werkelijk
 /// staat. Zie `radio.dart`.
-Future<void> startRadio(BuildContext context, String artist) async {
+Future<void> startRadio(BuildContext context, String artist, {String? titel}) async {
   final lib = context.read<LibraryStore>();
   final radio = context.read<RadioBesturing>();
   _srcToast(context, '📻 Radio starten voor $artist…');
   final rec = RecommendService();
+  // De buurt die het model erbij zoekt. Alleen op de pc met een sleutel: op een gekoppeld toestel
+  // staat die niet, en dan is dit gewoon de radio zoals hij was. Zie `radiobuurt.dart`.
+  final cfg = context.read<AppSettings>();
+  final standen = context.read<Speelstanden>();
+  final nuMs = DateTime.now().millisecondsSinceEpoch;
+  Buurtbron? buurt;
+  if (!lib.isRemote && cfg.anthropicKey.trim().isNotEmpty) {
+    final beurten = <Beurt>[
+      for (final t in lib.tracks)
+        if (standen.standVan(t) case final s?)
+          (artiest: t.artist, aantal: s.aantal, laatstMs: s.laatstMs),
+    ];
+    final gespeeld = <String>[];
+    for (var i = 0; i < 10; i++) {
+      final n = meestGespeeldeArtiest(beurten, nuMs: nuMs, overslaan: i);
+      if (n != null && !gespeeld.contains(n)) gespeeld.add(n);
+    }
+    final profiel = profielUit(
+      nummers: [for (final t in lib.tracks) (artiest: t.artist, jaar: t.year, genre: t.genre)],
+      gespeeld: gespeeld,
+      overslaan: _genericArtist,
+    );
+    final ai = AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace);
+    // Opschrijven wat het model zei, want "geen extra buren" is van buiten niet te onderscheiden
+    // van "de vraag is stukgelopen" — precies het soort stilte dat hier al twee keer een avond
+    // heeft gekost. Eén regel per radio, dus het blijft klein.
+    final buurtLog = WarmLog('$appDir${Platform.pathSeparator}warm.log');
+    buurt = (a, t, deezer) async {
+      try {
+        final b = await ai.maakRadiobuurt(artiest: a, titel: t, profiel: profiel, deezerBuren: deezer);
+        buurtLog.line('radio-buurt: ${b.length} namen van het model, '
+            '${b.where((x) => x.bekend).length} bekend — ${b.take(8).map((x) => x.artiest).join(', ')}');
+        return b;
+      } catch (e) {
+        buurtLog.line('radio-buurt: het model gaf niets — $e');
+        return const <Buurman>[];
+      }
+    };
+  }
   List<RecTrack> recs;
   try {
-    recs = await rec.mixRadio(artist);
+    recs = await rec.mixRadio(artist, titel: titel, buurt: buurt);
   } catch (_) {
     recs = const [];
   }
@@ -11774,33 +11814,15 @@ class _HomeStartViewState extends State<HomeStartView> {
     // Alleen op de pc. Op een gekoppeld toestel staat de AI-sleutel niet, precies zoals bij de
     // radio: die vraag gaat daar naar de pc. Voor een rij op een startpagina is dat het niet waard.
     final cfg = context.read<AppSettings>();
-    final perArtiest = <String, int>{};
-    for (final t in lib.tracks) {
-      final k = t.artist.trim();
-      if (k.isEmpty || _genericArtist(k)) continue;
-      perArtiest[k] = (perArtiest[k] ?? 0) + 1;
-    }
-    final top = perArtiest.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-    final perDecennium = <int, int>{};
-    for (final t in lib.tracks) {
-      final j = t.year;
-      if (j == null || j < 1900 || j > 2100) continue;
-      final d = (j ~/ 10) * 10;
-      perDecennium[d] = (perDecennium[d] ?? 0) + 1;
-    }
     final gespeeldeNamen = <String>[];
     for (var i = 0; i < 10; i++) {
       final n = meestGespeeldeArtiest(beurten, nuMs: nuMs, overslaan: i);
       if (n != null && !gespeeldeNamen.contains(n)) gespeeldeNamen.add(n);
     }
-    final profielVoorAi = SmaakProfiel(
-      topArtiesten: [for (final e in top.take(30)) '${e.key} (${e.value})'],
-      perDecennium: perDecennium,
+    final profielVoorAi = profielUit(
+      nummers: [for (final t in lib.tracks) (artiest: t.artist, jaar: t.year, genre: t.genre)],
       gespeeld: gespeeldeNamen,
-      genres: [
-        for (final t in lib.tracks.take(400))
-          if (t.genre != null && t.genre!.trim().isNotEmpty) t.genre!.trim(),
-      ].toSet().take(12).toList(),
+      overslaan: _genericArtist,
     );
     final aiF = (lib.isRemote || cfg.anthropicKey.trim().isEmpty)
         ? Future.value(<AiVoorstel>[])
@@ -12458,7 +12480,7 @@ class _OntdekViewState extends State<OntdekView> {
                       height: 48,
                       child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))))
                   : TvLabelled(label: 'Afspelen', child: IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, tooltip: 'Afspelen', onPressed: () => _play(i, t))),
-              TvLabelled(label: 'Radio', child: IconButton(icon: const Icon(Icons.radio_rounded, size: 20), color: _muted, tooltip: 'Radio hieruit', onPressed: () => startRadio(context, t.artist))),
+              TvLabelled(label: 'Radio', child: IconButton(icon: const Icon(Icons.radio_rounded, size: 20), color: _muted, tooltip: 'Radio hieruit', onPressed: () => startRadio(context, t.artist, titel: t.title))),
               // Niet op een tv: daar is dit scherm er om een aanbeveling te laten klínken, en het
               // ophalen doe je op een pc of telefoon. Afspelen en Radio hiernaast blijven staan.
               if (!isTv)
