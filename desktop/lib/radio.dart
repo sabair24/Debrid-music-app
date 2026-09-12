@@ -189,6 +189,20 @@ class EigenRadiobron implements Radiobron {
 /// Houdt drie dingen bij elkaar: het PLAN (wat er zou moeten spelen), de SPEELRIJ (wat er werkelijk
 /// kan klinken) en de haaltjes die onderweg zijn. Eén klok van vijf seconden plus een aanroep na elke
 /// landing zijn genoeg om die drie gelijk te houden.
+/// Welke nakomers er werkelijk bij het plan mogen.
+///
+/// Los van [RadioBesturing.voegBij] zodat het zonder speler en zonder Soulseek te beproeven is —
+/// en dit is precies de plek waar het stil fout kan gaan: een dubbel nummer in de rij is niet iets
+/// wat een foutmelding oplevert, je hoort het gewoon twee keer.
+List<Radioplek> nieuweNakomers(List<Radioplek> plan, List<Radioplek> extra) {
+  String sleutel(Radioplek p) => '${p.artiest.trim().toLowerCase()}|${p.titel.trim().toLowerCase()}';
+  final bekend = <String>{for (final p in plan) sleutel(p)};
+  return [
+    for (final p in extra)
+      if (p.artiest.trim().isNotEmpty && p.titel.trim().isNotEmpty && bekend.add(sleutel(p))) p
+  ];
+}
+
 class RadioBesturing extends ChangeNotifier {
   RadioBesturing({required this.speler, required this.bron});
 
@@ -322,6 +336,28 @@ class RadioBesturing extends ChangeNotifier {
     _tik = Timer.periodic(const Duration(seconds: 5), (_) => _pas(sessie));
     notifyListeners();
     return null;
+  }
+
+  /// Welke radio er nu loopt. Een nakomer die bij een ANDERE radio hoort mag er niet meer bij.
+  int get sessie => _sessie;
+
+  /// Namen die pas ná de start binnenkwamen er alsnog bij schuiven.
+  ///
+  /// **Waarom bijvoegen en niet wachten.** Gemeten op 12-09-2026: het taalmodel doet er 25 tot 30
+  /// seconden over om vierentwintig artiesten met een reden erbij te noemen. De eerste opzet liet
+  /// [RecommendService.mixRadio] daarop wachten met acht seconden geduld — en dat liep elke keer af
+  /// voor het antwoord er was, dus kwam er geen énkele naam van het model in de rij terecht terwijl
+  /// het logboek keurig meldde dat er vierentwintig waren. Langer wachten kan niet: een radio die
+  /// een halve minuut zwijgt nadat je op de knop drukte is stuk.
+  ///
+  /// Dus begint de radio met wat Deezer meteen geeft, en schuiven deze erbij zodra ze er zijn.
+  /// [_pas] loopt elke vijf seconden en pakt ze vanzelf op — er hoeft hier niets gestart te worden.
+  void voegBij(int sessie, List<Radioplek> extra) {
+    if (sessie != _sessie || !_loopt || extra.isEmpty) return;
+    final nieuw = nieuweNakomers(_plan, extra);
+    if (nieuw.isEmpty) return;
+    _plan = [..._plan, ...nieuw];
+    notifyListeners();
   }
 
   /// Stoppen. Laat het plan staan, want daar valt straks nog over te vertellen.

@@ -144,14 +144,17 @@ List<T> kiesBuren<T>(List<T> alle, int hoeveel, Random? toeval) {
 typedef Buurtbron = Future<List<Buurman>> Function(
     String artiest, String? titel, List<String> deezerBuren);
 
-/// Hoelang een radio op het model wacht voor hij zonder hem begint.
+/// Hoelang een radio op het model wacht voor hij zonder hem begint: NIET.
 ///
-/// **Waarom er een grens op staat.** De radio is een knop die je indrukt omdat je muziek wil. Het
-/// model is het traagste stuk van de keten, en een radio die twintig seconden zwijgt omdat er
-/// nagedacht wordt is stuk — ook als het antwoord goed zou zijn geweest. Acht seconden is ruim voor
-/// een `effort: low`-vraag en kort genoeg om niet als storing te voelen; het Deezer-werk loopt er
-/// toch al naast.
-const Duration kBuurtGeduld = Duration(seconds: 8);
+/// **Waarom deze grens weg is.** Hij stond op acht seconden, en dat leek redelijk. Gemeten op
+/// 12-09-2026 met een werkende sleutel: het model antwoordde na 25 tot 30 seconden — elke keer
+/// ruim ná die grens. Het gevolg was stil en beroerd: `warm.log` meldde keurig "24 namen van het
+/// model", en er kwam er géén enkele in de rij, want `mixRadio` was allang doorgelopen met een lege
+/// lijst. Een tijdslimiet die altijd afloopt is geen tijdslimiet maar een uitschakelaar.
+///
+/// Langer wachten is geen oplossing: een radio die na de knop een halve minuut zwijgt is stuk. De
+/// radio begint daarom meteen met wat Deezer geeft, en [RecommendService.buurtErbij] schuift de
+/// namen van het model erbij zodra ze er zijn — zie [RadioBesturing.voegBij].
 
 /// Hoeveel van de voorgestelde namen er per radio werkelijk opgezocht worden.
 ///
@@ -226,8 +229,7 @@ class RecommendService {
   /// + a few related artists' top tracks. Including the seed's own catalogue is what
   /// lets Smart Shuffle lead with tracks the listener already owns (instant playback);
   /// the similar/related tracks are the discovery layer.
-  Future<List<RecTrack>> mixRadio(String artist,
-      {String? titel, Buurtbron? buurt, void Function(String)? spoor}) async {
+  Future<List<RecTrack>> mixRadio(String artist) async {
     final id = await _artistId(artist);
     if (id == null) return artistRadio(artist);
     final out = <RecTrack>[];
@@ -244,28 +246,53 @@ class RecommendService {
     final topF = _get('$_base/artist/$id/top?limit=15');
     final radioF = _get('$_base/artist/$id/radio');
     final relF = _get('$_base/artist/$id/related?limit=20');
-    // De buurvraag gaat EERST de deur uit, want het model is het traagste stuk van de keten en het
-    // Deezer-werk hieronder kan er gewoon naast lopen. Hij heeft alleen de verwantenlijst nodig, en
-    // dat is één verzoek. Zie [Buurtbron] voor waarom hij een tijdslimiet krijgt.
-    final rel = ((await relF)?['data'] as List?) ?? const [];
-    final relNamen = [
-      for (final a in rel)
-        if (a is Map) '${a['name'] ?? ''}'.trim()
-    ]..removeWhere((s) => s.isEmpty);
-    final buurtF = buurt == null
-        ? Future.value(const <Buurman>[])
-        : buurt(artist, titel, relNamen)
-            .timeout(kBuurtGeduld, onTimeout: () => const <Buurman>[])
-            .catchError((_) => const <Buurman>[]);
     add(_tracks(await topF));
     add(_tracks(await radioF));
+    final rel = ((await relF)?['data'] as List?) ?? const [];
     final tops = await Future.wait(
         kiesBuren(rel, 4, _toeval).map((a) => _get('$_base/artist/${(a as Map)['id']}/top?limit=5')));
     for (final t in tops) {
       add(_tracks(t));
     }
-    await _uitDeBuurt(await buurtF, add, spoor);
     out.shuffle();
+    return out;
+  }
+
+  /// De namen die het TAALMODEL erbij zoekt, omgezet in echte nummers.
+  ///
+  /// **Waarom dit los staat van [mixRadio] en niet erin.** Het model doet er 25 tot 30 seconden over
+  /// (gemeten 12-09-2026, vierentwintig namen met een reden erbij). De eerste opzet liet [mixRadio]
+  /// daarop wachten met acht seconden geduld, en dat liep elke keer af voordat het antwoord er was:
+  /// het logboek meldde keurig vierentwintig namen, en er kwam er géén in de rij terecht. Langer
+  /// wachten kan niet — een radio die na de knop een halve minuut zwijgt is stuk.
+  ///
+  /// Dus draait dit apart, ná de start, en schuift het resultaat erbij via
+  /// [RadioBesturing.voegBij]. De radio speelt intussen al.
+  Future<List<RecTrack>> buurtErbij(String artiest, String? titel, Buurtbron buurt,
+      {void Function(String)? spoor}) async {
+    final id = await _artistId(artiest);
+    if (id == null) return const [];
+    final rel = ((await _get('$_base/artist/$id/related?limit=20'))?['data'] as List?) ?? const [];
+    final namen = [
+      for (final a in rel)
+        if (a is Map) '${a['name'] ?? ''}'.trim()
+    ]..removeWhere((s) => s.isEmpty);
+    List<Buurman> b;
+    try {
+      b = await buurt(artiest, titel, namen);
+    } catch (_) {
+      return const [];
+    }
+    final out = <RecTrack>[];
+    final seen = <String>{};
+    void add(Iterable<RecTrack> ts) {
+      for (final t in ts) {
+        if (seen.add('${t.artist.toLowerCase()}|${t.title.toLowerCase()}')) out.add(t);
+      }
+    }
+
+    await _uitDeBuurt(b, add, spoor);
+    out.shuffle(_toeval);
     return out;
   }
 

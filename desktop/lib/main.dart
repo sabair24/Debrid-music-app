@@ -11374,7 +11374,7 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel}) as
   }
   List<RecTrack> recs;
   try {
-    recs = await rec.mixRadio(artist, titel: titel, buurt: buurt, spoor: buurtSpoor);
+    recs = await rec.mixRadio(artist);
   } catch (_) {
     recs = const [];
   }
@@ -11384,6 +11384,19 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel}) as
     return;
   }
   final reden = await radio.start(_radioplan(recs, lib), naam: artist);
+  // En de namen van het model erbij zodra ze er zijn — de radio speelt intussen al.
+  //
+  // Het model doet er 25 tot 30 seconden over (gemeten 12-09-2026). Daar mag een radio niet op
+  // wachten, en de eerste opzet die dat wél deed liet er stil NIETS van doorkomen: acht seconden
+  // geduld liep elke keer af voor het antwoord er was. Zie [RecommendService.buurtErbij] en
+  // [RadioBesturing.voegBij]; die laatste kijkt zelf of de radio nog dezelfde is.
+  if (buurt != null && reden == null) {
+    final sessie = radio.sessie;
+    unawaited(rec
+        .buurtErbij(artist, titel, buurt, spoor: buurtSpoor)
+        .then((extra) => radio.voegBij(sessie, _radioplan(extra, lib)))
+        .catchError((_) {}));
+  }
   if (!context.mounted || reden == null) return;
   // Weigeren en zeggen waarom, in plaats van stilletjes alleen eigen muziek spelen. Dat laatste is
   // precies wat de oude radio op een telefoon deed, en het is niet te onderscheiden van een radio die
