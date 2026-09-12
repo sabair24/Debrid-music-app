@@ -203,6 +203,31 @@ List<Radioplek> nieuweNakomers(List<Radioplek> plan, List<Radioplek> extra) {
   ];
 }
 
+/// Waar de nakomers in het plan terechtkomen.
+///
+/// **Waarom niet gewoon achteraan.** Gemeten op 12-09-2026: het model leverde 41 nummers uit twaalf
+/// van de twaalf gekozen namen — Toto, Rockwell, Shalamar, The S.O.S. Band, Cheryl Lynn, Paul
+/// McCartney, Jam & Lewis. Achter de veertig die Deezer al had aangedragen betekent dat: pas na
+/// ruim twee uur luisteren hoor je de eerste. Technisch geland, praktisch onzichtbaar.
+///
+/// Dus schuiven ze om en om tussen de plekken die nog niet aan de beurt zijn geweest. Alles wat al
+/// speelt, in de rij staat of onderweg is blijft onaangeroerd staan — daar mag een nakomer niet
+/// tussen springen, want dat is de volgorde die je op dit moment hoort.
+List<Radioplek> mengNakomers(List<Radioplek> plan, List<Radioplek> nieuw) {
+  if (nieuw.isEmpty) return plan;
+  var grens = 0;
+  for (var i = 0; i < plan.length; i++) {
+    if (plan[i].stand != Haalstand.wacht) grens = i + 1;
+  }
+  final rest = plan.sublist(grens);
+  final uit = [...plan.take(grens)];
+  for (var i = 0; i < rest.length || i < nieuw.length; i++) {
+    if (i < rest.length) uit.add(rest[i]);
+    if (i < nieuw.length) uit.add(nieuw[i]);
+  }
+  return uit;
+}
+
 class RadioBesturing extends ChangeNotifier {
   RadioBesturing({required this.speler, required this.bron});
 
@@ -356,7 +381,7 @@ class RadioBesturing extends ChangeNotifier {
     if (sessie != _sessie || !_loopt || extra.isEmpty) return;
     final nieuw = nieuweNakomers(_plan, extra);
     if (nieuw.isEmpty) return;
-    _plan = [..._plan, ...nieuw];
+    _plan = mengNakomers(_plan, nieuw);
     notifyListeners();
   }
 

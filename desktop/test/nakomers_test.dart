@@ -13,6 +13,7 @@
 library;
 
 import 'package:debridmusic/radio.dart';
+import 'package:debridmusic/radiovoorraad.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Radioplek _p(String artiest, String titel) => Radioplek(artiest: artiest, titel: titel);
@@ -51,5 +52,42 @@ void main() {
 
   test('DE GRENS: niets erbij is niets erbij', () {
     expect(nieuweNakomers([_p('Prince', 'Kiss')], const []), isEmpty);
+  });
+
+  group('waar ze terechtkomen', () {
+    Radioplek gedaan(String a, String t) => Radioplek(artiest: a, titel: t)..stand = Haalstand.inRij;
+
+    test('DE KERN: nakomers schuiven om en om tussen wat nog moet komen', () {
+      // Achteraan zou betekenen: pas na veertig nummers - ruim twee uur - hoor je de eerste.
+      final plan = [_p('Deezer 1', 'a'), _p('Deezer 2', 'b'), _p('Deezer 3', 'c')];
+      final nieuw = [_p('Toto', 'Africa'), _p('Rockwell', 'Somebody')];
+
+      final uit = mengNakomers(plan, nieuw);
+
+      expect([for (final p in uit) p.artiest],
+          ['Deezer 1', 'Toto', 'Deezer 2', 'Rockwell', 'Deezer 3']);
+    });
+
+    test('DE VAL: wat al speelt of in de rij staat blijft onaangeroerd', () {
+      // Dat is de volgorde die je op dit moment hoort; daar mag niets tussen springen.
+      final plan = [gedaan('Nu', 'x'), gedaan('Straks', 'y'), _p('Deezer', 'z')];
+
+      final uit = mengNakomers(plan, [_p('Toto', 'Africa')]);
+
+      expect([for (final p in uit) p.artiest], ['Nu', 'Straks', 'Deezer', 'Toto']);
+    });
+
+    test('DE GRENS: meer nakomers dan plekken - dan volgen ze gewoon', () {
+      final uit = mengNakomers([_p('Deezer', 'z')],
+          [_p('Toto', 'Africa'), _p('Rockwell', 'Somebody'), _p('Shalamar', 'A Night')]);
+
+      expect([for (final p in uit) p.artiest], ['Deezer', 'Toto', 'Rockwell', 'Shalamar']);
+    });
+
+    test('DE GRENS: niets erbij laat het plan precies zoals het was', () {
+      final plan = [_p('Deezer 1', 'a'), _p('Deezer 2', 'b')];
+
+      expect(mengNakomers(plan, const []), same(plan));
+    });
   });
 }
