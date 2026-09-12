@@ -275,7 +275,16 @@ class AlbumInfo {
 /// and caches them on disk. Ported from the server's enrichment logic.
 class CoverEnricher {
   final AppSettings settings;
-  CoverEnricher(this.settings);
+  /// Het net — of een nagebootst net in een toets.
+  ///
+  /// Zonder dit is "hij vraagt het NIET nog eens" niet te bewijzen: je kunt alleen zien dat er weer
+  /// niets terugkomt, niet dat er geen verzoek uitging. Zie `test/albuminfo_briefje_test.dart`.
+  CoverEnricher(this.settings, {this.client});
+
+  final http.Client? client;
+
+  Future<http.Response> _haal(Uri u, {Map<String, String>? headers}) =>
+      client == null ? http.get(u, headers: headers) : client!.get(u, headers: headers);
 
   static const _ua = 'DebridMusic/0.1 ( https://github.com/sabair24/Debrid-music-app )';
   static final _albumJunk = RegExp(
@@ -739,6 +748,10 @@ class CoverEnricher {
       } catch (_) {/* corrupt cache entry — refetch */}
     }
     if (!fetch) return null;
+    // Recent al gezocht en niets gevonden? Dan niet opnieuw staan wachten — zie
+    // [albumInfoGezochtEnLeeg]. Dit is het wachten dat op 12-09-2026 zesennegentig keer in één veeg
+    // langskwam als "theaudiodb: GEEN ANTWOORD".
+    if (await albumInfoGezochtEnLeeg(artist, album)) return null;
     if (_generic.contains(artist.trim().toLowerCase()) || album.trim().isEmpty) return null;
     try {
       // Ask for the record, not for the folder name. Measured: "Talk That Talk (Deluxe)" returns no
@@ -747,17 +760,23 @@ class CoverEnricher {
       // so both sides ask the same question.
       final ask = DiscogsService.plainTitle(album);
       await _audioDbSlot();
-      final r = await http.get(
+      final r = await _haal(
         Uri.parse('https://theaudiodb.com/api/v1/json/2/searchalbum.php'
             '?s=${Uri.encodeComponent(artist)}&a=${Uri.encodeComponent(ask)}'),
         headers: {'User-Agent': _ua},
       ).timeout(const Duration(seconds: 8));
-      if (r.statusCode != 200) return null;
+      if (r.statusCode != 200) {
+        await onthoudGeenAlbumInfo(artist, album, stil: true);
+        return null;
+      }
       // Decode as UTF-8 ourselves: the endpoint doesn't always say so in its headers, and the
       // descriptions are full of accented names.
       final j = jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true));
       final list = (j['album'] as List?) ?? const [];
-      if (list.isEmpty) return null;
+      if (list.isEmpty) {
+        await onthoudGeenAlbumInfo(artist, album);
+        return null;
+      }
       final a = list.first as Map<String, dynamic>;
 
       String? s(String k) {
@@ -780,11 +799,19 @@ class CoverEnricher {
         backUrl: s('strAlbumBack'),
         discUrl: s('strAlbumCDart'),
       );
-      if (info.isEmpty) return null;
+      if (info.isEmpty) {
+        await onthoudGeenAlbumInfo(artist, album);
+        return null;
+      }
       await _albumInfoDir.create(recursive: true);
       await f.writeAsString(jsonEncode(info.toJson()));
+      // Wél iets gevonden: het briefje mag weg, anders blijft een oude "niets" nog dagen hangen.
+      final leeg = _albumInfoMissFile(artist, album);
+      if (await leeg.exists()) await leeg.delete().catchError((_) => leeg);
       return info;
     } catch (_) {
+      // Een tijdslimiet of een kapotte verbinding is GEEN antwoord over deze plaat: kort briefje.
+      await onthoudGeenAlbumInfo(artist, album, stil: true);
       return null;
     }
   }
@@ -803,6 +830,46 @@ class CoverEnricher {
   /// cached record does nothing until the old records are re-derived.
   File _albumInfoFile(String artist, String album) => File('${_albumInfoDir.path}${Platform.pathSeparator}'
       '${fnv1a('v2|${artist.toLowerCase()}|${album.toLowerCase()}')}.json');
+
+  /// Het briefje "hier gekeken en niets gevonden", voor de albuminfo van TheAudioDB.
+  ///
+  /// **Waarom dit er moest komen.** Gemeten op 12-09-2026 in `warm.log`: in één veeg over de
+  /// bibliotheek stond er zesennegentig keer "theaudiodb: GEEN ANTWOORD". Alleen een GEVONDEN
+  /// antwoord werd bewaard, dus elke volgende verversing wachtte opnieuw op dezelfde bron — met een
+  /// tijdslimiet van acht seconden en een pauze van drie ertussen. Dat is waar het wachten zat, niet
+  /// bij het uitzoeken van de plaat zelf: dat duurde mediaan 84 ms.
+  ///
+  /// Twee soorten briefjes, want ze zeggen niet hetzelfde. "Die catalogus kent deze plaat niet"
+  /// houdt [_rememberMiss] — veertien dagen, net als bij de artiestbeelden, en om dezelfde reden
+  /// niet voorgoed: catalogi krijgen er platen bij. "De bron bleef stil" (een tijdslimiet of een
+  /// foutcode) zegt niets OVER de plaat, en telt daarom maar een dag.
+  File _albumInfoMissFile(String artist, String album) =>
+      File('${_albumInfoFile(artist, album).path}.none');
+
+  static const _stilKort = Duration(days: 1);
+
+  /// Waar zolang een recente zoektocht naar deze plaat niets opleverde.
+  Future<bool> albumInfoGezochtEnLeeg(String artist, String album) async {
+    try {
+      final f = _albumInfoMissFile(artist, album);
+      if (!await f.exists()) return false;
+      final stil = (await f.readAsString()).trim() == 'stil';
+      final bewaar = stil ? _stilKort : _rememberMiss;
+      if (DateTime.now().difference(await f.lastModified()) <= bewaar) return true;
+      await f.delete().catchError((_) => f);
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Schrijf het briefje. [stil] voor "de bron gaf geen antwoord", anders "die kent deze plaat niet".
+  Future<void> onthoudGeenAlbumInfo(String artist, String album, {bool stil = false}) async {
+    try {
+      await _albumInfoDir.create(recursive: true);
+      await _albumInfoMissFile(artist, album).writeAsString(stil ? 'stil' : '');
+    } catch (_) {/* een briefje dat we niet konden schrijven kost één herhaalde zoektocht */}
+  }
 
   Future<String?> cachedBio(String name) async {
     final f = _bioFile(name);
