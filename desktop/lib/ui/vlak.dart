@@ -241,7 +241,7 @@ Color balkKleur(int? kleur) {
 /// [dicht] maakt het glas sterker, en dat is voor de telefoon. Op een pc is deze balk 64 punten hoog
 /// boven een breed venster; er schuift per keer weinig onderdoor. Op een telefoon staat de tekst van
 /// rand tot rand en is de balk het enige tussen zes witte pictogrammen en een lopende alinea.
-Widget balkGlas(Color tint, double op, {bool dicht = false}) {
+Widget balkGlas(Color tint, double op, {bool dicht = false, bool plat = false}) {
   // Helemaal niets, en niet "een doorzichtig vlak": een BackdropFilter met sigma 0 is nog steeds een
   // laag die de achtergrond leest, en dat is op een Shield het duurste wat er op het scherm staat.
   if (op <= .01) return const SizedBox.shrink();
@@ -270,6 +270,17 @@ Widget balkGlas(Color tint, double op, {bool dicht = false}) {
   // Meer vervaging waar de balk krapper is. Zes punten meer kost niets extra — het is dezelfde ene
   // laag — en het is wat kleine letters van "vager" naar "onleesbaar" brengt.
   final wazig = (dicht ? 30 : 24) * op;
+  // Op een telefoon (en op een televisie) alleen de vulling: geen laag die het scherm terugleest.
+  //
+  // Saber op 12-09-2026 over zijn telefoon: "album pagina heel traag (...) artist pagina scrollen
+  // heel stroef niet vloeiend (...) cd draait niet meer vloeiend". De reden staat al uitgeschreven
+  // bij `glassSurface` in `main.dart`: een BackdropFilter is de enige laag die Flutter niet mag
+  // raster-cachen — hij leest de achtergrond terug en vervaagt hem opnieuw bij élke hertekening. En
+  // [_MeeschuivendGlas] bouwt deze balk bij ELKE scrollstap opnieuw op.
+  //
+  // Het kost daar bijna niets aan uiterlijk: `dicht` zet de vulling op een telefoon al op 78 %
+  // dekking, dus van wat eronder vervaagd werd kwam toch nauwelijks iets door.
+  if (plat || isTv) return vulling;
   return Stack(
     fit: StackFit.expand,
     children: [
@@ -473,7 +484,7 @@ class GlasKnop extends StatelessWidget {
           );
     return Stack(
       children: [
-        Positioned.fill(child: IgnorePointer(child: glasRuit())),
+        Positioned.fill(child: IgnorePointer(child: glasRuit(plat: isTv || isCompact(context)))),
         knop,
       ],
     );
@@ -494,14 +505,14 @@ class GlasKnop extends StatelessWidget {
 ///
 /// **Niet op een televisie.** Daar zet `TvLabelled` een label ónder de knop zodra hij de markering
 /// heeft, en een ruit om die twee samen is geen knop meer maar een tegel.
-Widget glasInBalk(Widget knop) {
+Widget glasInBalk(Widget knop, {bool plat = false}) {
   if (isTv) return knop;
   return Center(
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 3),
       child: Stack(
         children: [
-          Positioned.fill(child: IgnorePointer(child: glasRuit())),
+          Positioned.fill(child: IgnorePointer(child: glasRuit(plat: plat))),
           knop,
         ],
       ),

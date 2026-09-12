@@ -274,7 +274,7 @@ jobs:
             test/same_recording_pairs_test.dart test/same_recording_test.dart \
             test/scan_meting_test.dart test/scan_test.dart \
             test/schijf_terugval_test.dart test/search_by_track_test.dart \
-            test/settings_durability_test.dart test/aisleutel_proef_test.dart test/nakomers_test.dart test/settings_recovery_test.dart \
+            test/settings_durability_test.dart test/aisleutel_proef_test.dart test/nakomers_test.dart test/glas_op_telefoon_test.dart test/settings_recovery_test.dart \
             test/settings_sync_test.dart test/sharing_grants_test.dart \
             test/soulseek_guard_test.dart test/soulseek_herstart_test.dart \
             test/soulseek_pause_test.dart test/soulseek_zombie_test.dart \

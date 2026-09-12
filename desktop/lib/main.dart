@@ -1613,7 +1613,7 @@ class _MeeschuivendGlas extends StatelessWidget {
       animation: rol,
       builder: (_, __) => balkGlas(
           tint, !rol.hasClients ? 0 : (rol.offset / aanloop).clamp(0.0, 1.0),
-          dicht: dicht),
+          dicht: dicht, plat: dicht),
     );
   }
 }
@@ -5503,7 +5503,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                   flexibleSpace: _MeeschuivendGlas(tint: wasTop, rol: _rol),
                   pinned: true,
                   // Glas onder elk pictogram, en de knoppen zelf zoals ze waren. Zie [glasInBalk].
-                  leading: glasInBalk(IconButton(
+                  leading: glasInBalk(plat: isCompact(context), IconButton(
                     icon: const Icon(Icons.arrow_back_rounded),
                     tooltip: 'Terug',
                     onPressed: () => Navigator.of(context).pop(),
@@ -5632,7 +5632,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                       },
                     ),
                     ),
-                    ]) glasInBalk(actie),
+                    ]) glasInBalk(actie, plat: isCompact(context)),
                     const SizedBox(width: 8),
                   ],
                 ),
@@ -8633,7 +8633,7 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
         surfaceTintColor: Colors.transparent,
         shadowColor: Colors.transparent,
         flexibleSpace: _MeeschuivendGlas(tint: _bg, rol: _rol),
-        leading: glasInBalk(IconButton(
+        leading: glasInBalk(plat: isCompact(context), IconButton(
           icon: const Icon(Icons.arrow_back_rounded),
           tooltip: 'Terug',
           onPressed: () => Navigator.of(context).pop(),
@@ -8659,7 +8659,7 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
             ),
             ),
           ],
-          ]) glasInBalk(actie),
+          ]) glasInBalk(actie, plat: isCompact(context)),
           const SizedBox(width: 8),
         ],
       ),
@@ -26790,7 +26790,7 @@ class _StylePageState extends State<StylePage> {
           shadowColor: Colors.transparent,
           flexibleSpace: _MeeschuivendGlas(tint: _bg, rol: _rol),
           pinned: true,
-          leading: glasInBalk(IconButton(
+          leading: glasInBalk(plat: isCompact(context), IconButton(
               icon: const Icon(Icons.arrow_back_rounded),
               tooltip: 'Terug',
               onPressed: () => Navigator.of(context).pop())),
