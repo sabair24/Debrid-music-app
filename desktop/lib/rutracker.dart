@@ -456,6 +456,24 @@ class RuTrackerService {
   /// De argumenten voor één opgehaalde pagina. Apart, zodat er een toets op past zonder curl.
   ///
   /// `--compressed` staat er NIET bij: het antwoord is windows-1251 en wordt hier als losse bytes
+  /// Hoe lang curl op RuTracker wacht.
+  ///
+  /// **Waarom vijfenveertig en niet twintig.** Twintig stond hier vast, en op 13-09-2026 kapte dat
+  /// álles af. De opdeling van één verzoek laat zien waar de tijd blijft:
+  ///
+  ///     dns 0,03 s | verbinden 0,04 s | tls 0,08 s | EERSTE BYTE 21,0 s | totaal 21,3 s
+  ///
+  /// Het is dus niet de verbinding en niet de uitdaging: RuTracker zelf doet er die dag ruim twintig
+  /// seconden over voordat er iets terugkomt. Ook `index.php`, dat helemaal niet uitgedaagd wordt,
+  /// deed er 20,6 s over — terwijl GitHub en Deezer op datzelfde moment in 0,13 s antwoordden. Drie
+  /// zoekopdrachten achter elkaar: 20,55 s, 20,65 s, 20,65 s.
+  ///
+  /// Een limiet moet bóven het waargenomen ergste geval liggen, met marge. Op een snelle dag kost
+  /// dit niets — een snel antwoord komt snel terug. Op een trage dag is dit het verschil tussen een
+  /// zoekopdracht die twintig seconden duurt en een zoekopdracht die niets oplevert, en bij het
+  /// verversen zelfs tussen "bewaard" en "alles teruggedraaid".
+  static const int kCurlSeconden = 45;
+
   /// De argumenten voor curl.
   ///
   /// **Waarom de tijdslimiet instelbaar is.** Hij stond vast op twintig seconden, en dat is precies
@@ -474,7 +492,7 @@ class RuTrackerService {
   /// Eén keer lukte het wél (0,4 s). Het wisselt; daarom is een ruimere limiet nodig en geen
   /// nauwkeuriger getal.
   static List<String> curlArgumenten(String url, String cookie, String ua, String uitPad,
-      {String? koppenPad, String? referer, int maxSeconden = 20}) {
+      {String? koppenPad, String? referer, int maxSeconden = kCurlSeconden}) {
     return [
       '-s',
       '--max-time', '$maxSeconden',
@@ -575,7 +593,7 @@ class RuTrackerService {
   }
 
   /// De curl-weg apart, zodat [_haal] de volgorde kan bepalen. Null als curl er niet is of faalde.
-  Future<({int status, List<int> bytes})?> _haalMetCurl(String url, {String? referer, int maxSeconden = 20}) async {
+  Future<({int status, List<int> bytes})?> _haalMetCurl(String url, {String? referer, int maxSeconden = kCurlSeconden}) async {
     if (await curlBeschikbaar()) {
       Directory? tijdelijk;
       try {
@@ -824,7 +842,7 @@ class RuTrackerService {
   Future<bool> verify() async {
     if (settings.rutrackerCookie.isEmpty) return false;
     final r = await curlBeschikbaar()
-        ? await _haalMetCurl('$_base/tracker.php', maxSeconden: 45)
+        ? await _haalMetCurl('$_base/tracker.php')
         : await viaVenster?.call('$_base/tracker.php');
     // Het getal zelf, want "mislukt" is drie dingen tegelijk: 403 (Cloudflare), 200 maar uitgelogd,
     // of helemaal geen antwoord. Zonder dit onderscheid blijft elke reparatie een gok.

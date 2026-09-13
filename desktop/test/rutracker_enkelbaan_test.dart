@@ -122,34 +122,47 @@ void main() {
   });
 
   group('de tijdslimiet van curl', () {
-    // Drie keer op rij hetzelfde in rutracker.log, exact twintig seconden na het antwoord van
-    // FlareSolverr:
+    // Eerst leek dit alleen de eerste vraag na een verse doorgang te treffen: drie keer op rij
+    // stond in rutracker.log exact twintig seconden na het antwoord van FlareSolverr "toets gaf 0
+    // -> MISLUKT, terugdraaien", en daarmee ging de net gehaalde doorgang weer verloren.
     //
-    //   14:38:19  verversen: antwoord binnen - clearance=true
-    //   14:38:39  toets: tracker.php gaf 0
-    //   14:38:39  MISLUKT, terugdraaien
+    // Op 13-09-2026 bleek het breder. De opdeling van een enkel verzoek:
     //
-    // Met de hand nagemeten met dezelfde verse doorgang: status 200, tijd 20,7 seconden. Cloudflare
-    // laat curl er dus door, maar het eerste verzoek na een nieuwe doorgang kost tientallen
-    // seconden. De limiet zat een halve seconde te krap, en het gevolg was niet "traag" maar
-    // "mislukt, alles terugdraaien" - inclusief het verlies van de doorgang die net gehaald was.
-    test('DE KERN: gewone verzoeken houden hun korte limiet', () {
+    //   dns 0,03 s | verbinden 0,04 s | tls 0,08 s | EERSTE BYTE 21,0 s | totaal 21,3 s
+    //
+    // Niet de verbinding en niet de uitdaging dus - RuTracker zelf laat twintig seconden niets
+    // horen. Ook `index.php`, dat helemaal niet uitgedaagd wordt, deed er 20,6 s over, terwijl
+    // GitHub en Deezer op datzelfde moment in 0,13 s antwoordden. Drie zoekopdrachten na elkaar:
+    // 20,55 s, 20,65 s, 20,65 s - alle drie geslaagd, alle drie net binnen een limiet van 20.
+    //
+    // Een limiet hoort dus boven het waargenomen ergste geval te liggen, met marge, en op elke
+    // weg dezelfde - een aparte ruime limiet voor de toets repareert alleen het verversen en laat
+    // zoeken stuk.
+    test('DE KERN: elk verzoek krijgt de ruime limiet', () {
       final a = RuTrackerService.curlArgumenten('u', 'c', 'ua', 'uit');
-      expect(a[a.indexOf('--max-time') + 1], '20');
+      expect(a[a.indexOf('--max-time') + 1], '${RuTrackerService.kCurlSeconden}');
+      expect(RuTrackerService.kCurlSeconden, greaterThanOrEqualTo(30),
+          reason: 'onder de dertig sneuvelt een zoekopdracht van 21 s alsnog');
     });
 
-    test('DE VAL: de toets na een verse doorgang krijgt ruim de tijd', () {
+    // De storing die hierachter zit was dat verify() zijn eigen ruime getal meekreeg terwijl de
+    // rest op twintig bleef staan. Dan verschijnt in het logboek "GELUKT, bewaren" en geeft de
+    // zoekopdracht er meteen daarna nul treffers - het lastigste soort storing, want de app meldt
+    // dat alles in orde is.
+    test('DE VAL: nergens blijft een eigen, krapper getal staan', () {
       final bron = File('lib/rutracker.dart').readAsStringSync();
-      final begin = bron.indexOf('Future<bool> verify() async {');
-      final blok = bron.substring(begin, begin + 400);
 
-      expect(blok, contains('maxSeconden: 45'),
-          reason: 'met twintig seconden sneuvelt de toets op iets dat 20,7 s duurt');
+      expect(bron, isNot(contains('maxSeconden: 20')),
+          reason: 'een aanroep met twintig kapt een verzoek van 21 s af');
+      expect(bron, isNot(contains('maxSeconden = 20')),
+          reason: 'de standaard hoort de ruime limiet te zijn, niet twintig');
+      expect('maxSeconden = kCurlSeconden'.allMatches(bron).length, 2,
+          reason: 'beide wegen (_haalMetCurl en curlArgumenten) delen een getal');
     });
 
-    test('DE GRENS: de limiet komt er ook echt in te staan', () {
-      final a = RuTrackerService.curlArgumenten('u', 'c', 'ua', 'uit', maxSeconden: 45);
-      expect(a[a.indexOf('--max-time') + 1], '45');
+    test('DE GRENS: een eigen limiet komt er nog steeds in te staan', () {
+      final a = RuTrackerService.curlArgumenten('u', 'c', 'ua', 'uit', maxSeconden: 7);
+      expect(a[a.indexOf('--max-time') + 1], '7');
     });
   });
 }
