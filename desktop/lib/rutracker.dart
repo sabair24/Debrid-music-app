@@ -318,7 +318,45 @@ class RuTrackerService {
   ///
   /// Dezelfde vorm als [gebruikPlaksel], en om dezelfde reden: proberen vóór bewaren, en bij
   /// mislukking terugdraaien. Een instelling die aantoonbaar niet werkt hoort niet te blijven staan.
+  /// De verversing die op dit moment loopt, of niets.
+  ///
+  /// **Waarom een enkelbaansweg.** Gemeten op 13-09-2026 in `rutracker.log`, nadat Saber op "Test
+  /// verbindingen" drukte:
+  ///
+  ///     13:47:21  verversen: vraag aan FlareSolverr
+  ///     13:47:40  verversen: vraag aan FlareSolverr
+  ///     13:47:57  verversen: vraag aan FlareSolverr
+  ///     13:48:20  verversen: vraag aan FlareSolverr
+  ///     13:49:08  toets: tracker.php gaf 0
+  ///     13:49:08  MISLUKT, terugdraaien
+  ///
+  /// Vier tegelijk. Elk schrijft zijn eigen doorgang in `settings.rutrackerCookie` en toetst hem
+  /// daarna — maar tegen die tijd staat die van een ánder erin, gebonden aan een andere
+  /// User-Agent. Dus faalt de toets, en draait elk zijn eigen momentopname terug. De uitkomst was
+  /// erger dan de beginstand: `cf_clearance` verdween helemaal en de User-Agent sprong terug naar
+  /// die van een oud plaksel.
+  ///
+  /// Eén druk werkte wél — dat is het hele bewijs. Dus: loopt er al een, dan wacht je daarop in
+  /// plaats van er nog een te starten. Vier browsers tegelijk bij FlareSolverr is trouwens ook
+  /// waarom de laatste toets `0` gaf: geen antwoord binnen de tijd.
+  Future<RtLogin>? _versingBezig;
+
   Future<RtLogin> ververViaFlareSolverr() async {
+    final loopt = _versingBezig;
+    if (loopt != null) {
+      _spoor('verversen: er loopt er al een — daarop wachten');
+      return loopt;
+    }
+    final werk = _ververNu();
+    _versingBezig = werk;
+    try {
+      return await werk;
+    } finally {
+      _versingBezig = null;
+    }
+  }
+
+  Future<RtLogin> _ververNu() async {
     final fs = FlareSolverr(settings.flaresolverrUrl);
     if (!fs.ingesteld) {
       return const RtLogin.failed(
