@@ -139,7 +139,7 @@ jobs:
       - name: Layout and parsing tests
         working-directory: desktop
         run: |
-          flutter test \
+          flutter test --file-reporter=json:"$RUNNER_TEMP/toetsuitslag.json" \
             test/onderbalk_test.dart test/artiestkop_knoppen_test.dart \
             test/uitgave_rij_test.dart \
             test/offline_test.dart test/catalogus_kopie_test.dart \
@@ -294,6 +294,25 @@ jobs:
             test/wens_vervangt_de_nep_test.dart test/werkmap_test.dart \
             test/werkrij_test.dart test/widget_test.dart \
             test/zelfde_torrent_test.dart test/zoek_meting_test.dart
+
+      # **Wat er precies viel, zonder een logboek open te klikken.**
+      #
+      # De laatste APK is v3.9.367 van 12-09-2026 15:51. Daarna tien uitleveringen lang niets, terwijl
+      # de Windows-installer elke keer wel kwam. De grens ligt exact op win-v3.9.368: de uitlevering
+      # met 6bcb80e erin, die de lijst hierboven van 140 naar 302 bestanden bracht. Alle 302 zijn op
+      # Windows met Flutter 3.35.6 groen; hier draait Linux met 3.41.9. WELKE toets hier viel was van
+      # buitenaf niet te zien - daarvoor moest je het logboek van de vorige stap openklikken.
+      #
+      # Deze stap zet de namen op de samenvattingspagina van de bouw, met bestand en reden. Een
+      # bestand dat niet compileert komt er ook op, en dat is de meest waarschijnlijke vorm van een
+      # verschil tussen die twee Flutters.
+      #
+      # `if: failure()` slaat ook aan als het al bij de analyse misging. Dan is er geen uitslag en
+      # zegt het scriptje dat ook - dat is beter dan een lege samenvatting.
+      - name: Welke toetsen vielen
+        if: failure()
+        working-directory: desktop
+        run: dart run tool/toetsuitslag.dart "$RUNNER_TEMP/toetsuitslag.json" >> "$GITHUB_STEP_SUMMARY"
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
       # the app you actually use while the TV work is in progress — shipping that would install a
