@@ -54,6 +54,19 @@ String metTrackers(String magneet) {
 abstract class SearchSource {
   String get id;
   Future<List<SearchResult>> search(String query);
+
+  /// Hoe lang de verdeler op DEZE bron wacht.
+  ///
+  /// **Waarom per bron en niet een getal voor allemaal.** Twaalf seconden stond hier voor iedereen,
+  /// en dat is ruim voor een indexer die in een halve seconde antwoordt. RuTracker antwoordt op
+  /// 13-09-2026 pas na eenentwintig - en dat is de server zelf, niet de lijn en niet de uitdaging:
+  ///
+  ///     dns 0,03 s | verbinden 0,04 s | tls 0,08 s | EERSTE BYTE 21,0 s | totaal 21,3 s
+  ///
+  /// Een gezamenlijk getal dwingt dan tot kiezen tussen "RuTracker doet nooit mee" en "elke
+  /// zoekopdracht mag op elke bron drie kwartier blijven hangen". Per bron hoeft dat niet: wie snel
+  /// is houdt zijn korte kap, wie traag is krijgt de zijne.
+  Duration get kap => const Duration(seconds: 12);
 }
 
 /// Wat één bron bij de laatste zoekopdracht deed.
@@ -122,7 +135,7 @@ Future<http.Response> haalMetHerkansing(
 }
 
 /// Pirate Bay via apibay.org (keyless).
-class ApibaySource implements SearchSource {
+class ApibaySource extends SearchSource {
   @override
   String get id => 'apibay';
   @override
@@ -163,7 +176,7 @@ class ApibaySource implements SearchSource {
 }
 
 /// BitSearch (keyless JSON).
-class BitSearchSource implements SearchSource {
+class BitSearchSource extends SearchSource {
   @override
   String get id => 'bitsearch';
   @override
@@ -204,7 +217,7 @@ class BitSearchSource implements SearchSource {
 }
 
 /// Knaben (keyless JSON POST).
-class KnabenSource implements SearchSource {
+class KnabenSource extends SearchSource {
   @override
   String get id => 'knaben';
   static final _infohash = RegExp(r'^([0-9a-fA-F]{40}|[A-Za-z2-7]{32})$');
@@ -250,24 +263,45 @@ class KnabenSource implements SearchSource {
 }
 
 /// RuTracker (login + scrape) — only contributes when the user is logged in.
-class RuTrackerSource implements SearchSource {
+class RuTrackerSource extends SearchSource {
   final RuTrackerService service;
   RuTrackerSource(this.service);
   @override
   String get id => 'rutracker';
 
-  /// **De twee laatste plekken waar RuTracker stil kon wegvallen.**
+  /// **De VIJF plekken waar RuTracker stil kon wegvallen.**
   ///
-  /// De zoekverdeler hieronder hakt elke bron na twaalf seconden af en slikt de fout — `catch (_) {}`.
-  /// Duurde RuTracker te lang, dan verdween hij dus zonder dat er ook maar iets stond. En de zeef
-  /// die daar direct achter staat kan een volledige oogst wegwerpen zonder één woord.
+  /// Op 13-09-2026 lagen er vijf tijdslimieten boven elkaar en stonden ze allemaal onder de tijd
+  /// die RuTracker die dag nodig had. Van binnen naar buiten:
   ///
-  /// Elf seconden, want dat is één onder de kap van de verdeler: zo komt de melding er nog vóórdat
-  /// hij wordt weggegooid.
+  ///   | waar                                  | stond op | staat nu |
+  ///   |---------------------------------------|----------|----------|
+  ///   | curl `--max-time`, per verzoek        | 20 s     | 45 s     |
+  ///   | de Dart-kant om dat curl-proces heen  | 25 s     | 60 s     |
+  ///   | het budget voor een HELE zoekopdracht | 10,5 s   | 45 s     |
+  ///   | deze bron                             | 11 s     | 50 s     |
+  ///   | de kap van de verdeler, zie [kap]     | 12 s     | 55 s     |
+  ///
+  /// Ze moeten in DIE volgorde oplopen, en dat is niet cosmetisch: wie het eerst afkapt bepaalt wat
+  /// er op het scherm komt. Kapt de verdeler het eerst af, dan lees je "te traag" en weet je niets;
+  /// kapt deze bron het eerst af, dan lees je dat RuTracker nog bezig was; kapt het zoekbudget het
+  /// eerst af, dan lees je dat de infohashes de tijd niet haalden. Alleen die laatste twee zeggen
+  /// iets waar je wat aan hebt.
+  ///
+  /// Wat er gemeten is, staat bij `RuTrackerService.kZoekSeconden`: de lijst kost twintig seconden,
+  /// een topicpagina die niet in de cache ligt ook, en die twee komen na elkaar.
+  ///
+  /// Eén ophogen is niet genoeg en ziet er wel uit als een fix - dat is precies wat er gebeurde
+  /// toen alleen curl omhoog ging: op het scherm stond daarna gewoon
+  ///
+  ///     RuTracker deed niet mee - RuTracker was na elf seconden nog bezig
+  @override
+  Duration get kap => const Duration(seconds: 55);
+
   @override
   Future<List<SearchResult>> search(String query) async {
     try {
-      final uit = await service.search(query).timeout(const Duration(seconds: 11));
+      final uit = await service.search(query).timeout(const Duration(seconds: 50));
       final overleeft =
           uit.where((r) => r.hash.isNotEmpty && !isRommel(r.name)).length;
       service.laatsteDoorZeef = overleeft;
@@ -278,7 +312,7 @@ class RuTrackerSource implements SearchSource {
       return uit;
     } on TimeoutException {
       if (service.lastError.isEmpty) {
-        service.lastError = 'RuTracker was na elf seconden nog bezig; het zoeken wacht niet langer.';
+        service.lastError = 'RuTracker was na vijftig seconden nog bezig; het zoeken wacht niet langer.';
       }
       return const [];
     }
@@ -348,7 +382,7 @@ class SearchAggregator {
     standen.clear();
     await Future.wait(sources.map((s) async {
       try {
-        final list = await s.search(query).timeout(const Duration(seconds: 12));
+        final list = await s.search(query).timeout(s.kap);
         final door = list.where((r) => r.hash.isNotEmpty && !isRommel(r.name)).toList();
         for (final r in door) {
           final k = r.hash.toLowerCase();
@@ -365,7 +399,7 @@ class SearchAggregator {
         );
         if (onPartial != null) onPartial(snapshot());
       } on TimeoutException {
-        standen[s.id] = const BronStand(aantal: -1, fout: 'te traag (12 s)');
+        standen[s.id] = BronStand(aantal: -1, fout: 'te traag (${s.kap.inSeconds} s)');
       } catch (e) {
         // **Hier stond `catch (_) {}`.** Een bron die wegviel liet geen enkel spoor na, en daarmee
         // was "die tracker is down" niet te bevestigen én niet te weerleggen. De uitzondering zelf

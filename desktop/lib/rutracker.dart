@@ -474,6 +474,33 @@ class RuTrackerService {
   /// verversen zelfs tussen "bewaard" en "alles teruggedraaid".
   static const int kCurlSeconden = 45;
 
+  /// Hoe lang de Dart-kant op het curl-PROCES wacht.
+  ///
+  /// Dit stond op 25 terwijl curl zelf 20 kreeg, en toen de curl-limiet naar 45 ging bleef deze
+  /// staan - dan is die 45 betekenisloos, want het proces wordt er al bij 25 onder weggetrokken.
+  /// Deze hoort dus ALTIJD boven [kCurlSeconden] te liggen: curl mag zelf zeggen dat hij het
+  /// opgeeft, dat leest veel beter dan een doodgeschoten proces.
+  static const int kProcesSeconden = kCurlSeconden + 15;
+
+  /// Het budget voor een HELE zoekopdracht: de lijst plus de topicpagina's.
+  ///
+  /// **Waarom dit tien en een halve seconde was, en waarom dat niet meer kan.** Het was gekozen om
+  /// onder de kap van elf seconden in `search.dart` te passen. Op 13-09-2026 gemeten, met het
+  /// koekje van de app:
+  ///
+  ///     de lijst (tracker.php, 58 rijen)  20,6 s
+  ///     topicpagina 6812335                0,15 s
+  ///     topicpagina 6611078               20,5 s
+  ///
+  /// Wat in de cache ligt komt direct; wat opgehaald moet worden kost twintig seconden. De
+  /// topicpagina's gaan parallel, dus een volledige zoekopdracht is de lijst PLUS een ronde
+  /// topicpagina's - samen zo'n tweeenveertig seconden.
+  ///
+  /// Met tien en een half was dat budget al op voordat de lijst binnen was. Er werd dan geen enkele
+  /// topicpagina meer opgehaald, en zonder infohash valt er niets op te halen: op het scherm stond
+  /// dan "van geen enkele kwam de infohash binnen" terwijl er achtenvijftig rijen lagen.
+  static const int kZoekSeconden = 45;
+
   /// De argumenten voor curl.
   ///
   /// **Waarom de tijdslimiet instelbaar is.** Hij stond vast op twintig seconden, en dat is precies
@@ -580,7 +607,7 @@ class RuTrackerService {
         ..headers['User-Agent'] = _ua;
       final client = http.Client();
       final resp = await http.Response.fromStream(await client.send(req))
-          .timeout(const Duration(seconds: 12));
+          .timeout(const Duration(seconds: kCurlSeconden));
       client.close();
       return (status: resp.statusCode, bytes: resp.bodyBytes);
     } catch (e) {
@@ -601,7 +628,7 @@ class RuTrackerService {
         final uit = '${tijdelijk.path}${Platform.pathSeparator}p';
         final p = await Process.run('curl',
             curlArgumenten(url, settings.rutrackerCookie, _ua, uit, referer: referer, maxSeconden: maxSeconden))
-            .timeout(const Duration(seconds: 25));
+            .timeout(const Duration(seconds: kProcesSeconden));
         final status = int.tryParse((p.stdout as String).trim()) ?? 0;
         final f = File(uit);
         final bytes = await f.exists() ? await f.readAsBytes() : <int>[];
@@ -699,7 +726,7 @@ class RuTrackerService {
         ..bodyBytes = ascii.encode(body);
       final client = http.Client();
       final resp = await http.Response.fromStream(await client.send(req))
-          .timeout(const Duration(seconds: 20));
+          .timeout(const Duration(seconds: kCurlSeconden));
       client.close();
 
       final setCookie = resp.headers['set-cookie'] ?? '';
@@ -784,7 +811,7 @@ class RuTrackerService {
         ..headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
         ..headers['Accept-Language'] = 'ru,en;q=0.9';
       final resp = await http.Response.fromStream(await client.send(req))
-          .timeout(const Duration(seconds: 12));
+          .timeout(const Duration(seconds: kCurlSeconden));
       client.close();
       return _cookiesFrom(resp.headers['set-cookie'] ?? '');
     } catch (_) {
@@ -892,7 +919,7 @@ class RuTrackerService {
     laatsteAantal = 0;
     // De zoekverdeler in search.dart hakt elke bron na 12 seconden af, en slikt de fout. Blijf daar
     // met opzet onder: liever een korte lijst die aankomt dan een volledige die weggegooid wordt.
-    final deadline = DateTime.now().add(const Duration(milliseconds: 10500));
+    final deadline = DateTime.now().add(const Duration(seconds: kZoekSeconden));
     try {
       final resp = await _haal('$_base/tracker.php?nm=${Uri.encodeComponent(query)}');
       // **Hier stond `return []` zonder één woord.** Dat is dezelfde stilte als waar deze hele

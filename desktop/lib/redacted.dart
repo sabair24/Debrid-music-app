@@ -240,7 +240,7 @@ int redactedIdUit(String url) =>
     int.tryParse(RegExp(r'[?&]id=(\d+)').firstMatch(url)?.group(1) ?? '') ?? 0;
 
 /// De bron zoals de zoekverdeler hem kent.
-class RedactedSource implements SearchSource {
+class RedactedSource extends SearchSource {
   RedactedSource(this.api);
   final RedactedApi api;
 

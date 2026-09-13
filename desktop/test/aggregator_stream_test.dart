@@ -2,7 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:debridmusic/search.dart';
 import 'package:debridmusic/torbox.dart';
 
-class _Fake implements SearchSource {
+class _Fake extends SearchSource {
   @override
   final String id;
   final List<SearchResult> results;

@@ -202,7 +202,7 @@ List<SearchResult> leesTorznab(String xml, {String bron = 'Torznab'}) {
 /// De bron zoals de zoekverdeler hem ziet.
 ///
 /// Staat er geen adres in de instellingen, dan doet hij niets en zegt dat ook — zie [BronStand].
-class TorznabSource implements SearchSource {
+class TorznabSource extends SearchSource {
   TorznabSource(this.settings, {http.Client? client}) : _http = client ?? http.Client();
 
   final AppSettings settings;

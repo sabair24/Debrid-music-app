@@ -23,7 +23,7 @@ SearchResult _treffer(String naam, String hash) => SearchResult(
     );
 
 /// Een bron die teruggeeft wat de toets nodig heeft — of stukgaat.
-class _Nep implements SearchSource {
+class _Nep extends SearchSource {
   _Nep(this.id, {this.uit = const [], this.gooit});
   @override
   final String id;

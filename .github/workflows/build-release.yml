@@ -182,7 +182,7 @@ jobs:
             test/zoekzeef_test.dart test/rutracker_koekjes_test.dart test/rutracker_enkelbaan_test.dart \
             test/rutracker_meldingen_test.dart test/torbox_stand_test.dart \
             test/remote_work_test.dart test/nu_speelt_namen_test.dart \
-            test/bronnen_stand_test.dart test/torznab_test.dart \
+            test/bronnen_stand_test.dart test/torznab_test.dart test/bronkap_test.dart \
             test/cue_knippen_test.dart test/aria2_selectie_test.dart \
             test/uitdaging_zin_test.dart test/versieregel_test.dart \
             test/meldrem_test.dart test/hoesindex_test.dart \
@@ -303,7 +303,10 @@ jobs:
       # Windows met Flutter 3.35.6 groen; hier draait Linux met 3.41.9. WELKE toets hier viel was van
       # buitenaf niet te zien - daarvoor moest je het logboek van de vorige stap openklikken.
       #
-      # Deze stap zet de namen op de samenvattingspagina van de bouw, met bestand en reden. Een
+      # Deze stap zet de namen op de samenvattingspagina EN in de annotaties, met bestand en reden.
+      # Annotaties, want van een publieke repo zijn stapnamen en annotaties zonder inloggen op te
+      # vragen; het logboek vraagt beheerrechten en de samenvattingspagina is nergens als tekst op
+      # te halen. Wie er niet zelf in kan klikken ziet dus alleen wat er als annotatie uit komt. Een
       # bestand dat niet compileert komt er ook op, en dat is de meest waarschijnlijke vorm van een
       # verschil tussen die twee Flutters.
       #
@@ -312,7 +315,7 @@ jobs:
       - name: Welke toetsen vielen
         if: failure()
         working-directory: desktop
-        run: dart run tool/toetsuitslag.dart "$RUNNER_TEMP/toetsuitslag.json" >> "$GITHUB_STEP_SUMMARY"
+        run: dart run tool/toetsuitslag.dart "$RUNNER_TEMP/toetsuitslag.json"
 
       # Release, not debug. The debug build carries applicationIdSuffix ".dev" so it can sit beside
       # the app you actually use while the TV work is in progress — shipping that would install a
