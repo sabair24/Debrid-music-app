@@ -456,13 +456,28 @@ class RuTrackerService {
   /// De argumenten voor één opgehaalde pagina. Apart, zodat er een toets op past zonder curl.
   ///
   /// `--compressed` staat er NIET bij: het antwoord is windows-1251 en wordt hier als losse bytes
-  /// gelezen; een gzip-laag zou daar alleen maar tussen zitten.
-  @visibleForTesting
+  /// De argumenten voor curl.
+  ///
+  /// **Waarom de tijdslimiet instelbaar is.** Hij stond vast op twintig seconden, en dat is precies
+  /// de grens waar het eerste verzoek ná een verse `cf_clearance` overheen gaat. Gemeten op
+  /// 13-09-2026, drie keer op rij hetzelfde beeld in `rutracker.log`:
+  ///
+  ///     14:38:19  verversen: antwoord binnen — clearance=true
+  ///     14:38:39  toets: tracker.php gaf 0        (exact twintig seconden later)
+  ///     14:38:39  MISLUKT, terugdraaien
+  ///
+  /// Met de hand nagemeten met dezelfde verse doorgang: `status=200`, **tijd 20,7 s**. Cloudflare
+  /// laat curl er dus gewoon door, maar het eerste verzoek met een nieuwe doorgang kost tientallen
+  /// seconden. De limiet zat een halve seconde te krap, en het gevolg was niet "traag" maar
+  /// "mislukt en alles terugdraaien" — inclusief het verlies van de doorgang die net gehaald was.
+  ///
+  /// Eén keer lukte het wél (0,4 s). Het wisselt; daarom is een ruimere limiet nodig en geen
+  /// nauwkeuriger getal.
   static List<String> curlArgumenten(String url, String cookie, String ua, String uitPad,
-      {String? koppenPad, String? referer}) {
+      {String? koppenPad, String? referer, int maxSeconden = 20}) {
     return [
       '-s',
-      '--max-time', '20',
+      '--max-time', '$maxSeconden',
       // Zelf volgen doen we niet: een 302 naar login.php IS het antwoord (sessie verlopen).
       '--no-location',
       '-A', ua,
@@ -560,14 +575,14 @@ class RuTrackerService {
   }
 
   /// De curl-weg apart, zodat [_haal] de volgorde kan bepalen. Null als curl er niet is of faalde.
-  Future<({int status, List<int> bytes})?> _haalMetCurl(String url, {String? referer}) async {
+  Future<({int status, List<int> bytes})?> _haalMetCurl(String url, {String? referer, int maxSeconden = 20}) async {
     if (await curlBeschikbaar()) {
       Directory? tijdelijk;
       try {
         tijdelijk = await Directory.systemTemp.createTemp('rt_');
         final uit = '${tijdelijk.path}${Platform.pathSeparator}p';
         final p = await Process.run('curl',
-            curlArgumenten(url, settings.rutrackerCookie, _ua, uit, referer: referer))
+            curlArgumenten(url, settings.rutrackerCookie, _ua, uit, referer: referer, maxSeconden: maxSeconden))
             .timeout(const Duration(seconds: 25));
         final status = int.tryParse((p.stdout as String).trim()) ?? 0;
         final f = File(uit);
@@ -809,7 +824,7 @@ class RuTrackerService {
   Future<bool> verify() async {
     if (settings.rutrackerCookie.isEmpty) return false;
     final r = await curlBeschikbaar()
-        ? await _haalMetCurl('$_base/tracker.php')
+        ? await _haalMetCurl('$_base/tracker.php', maxSeconden: 45)
         : await viaVenster?.call('$_base/tracker.php');
     // Het getal zelf, want "mislukt" is drie dingen tegelijk: 403 (Cloudflare), 200 maar uitgelogd,
     // of helemaal geen antwoord. Zonder dit onderscheid blijft elke reparatie een gok.

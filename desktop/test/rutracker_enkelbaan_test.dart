@@ -120,4 +120,36 @@ void main() {
           reason: 'die weg ververst bij een 403 en roept dus zichzelf aan');
     });
   });
+
+  group('de tijdslimiet van curl', () {
+    // Drie keer op rij hetzelfde in rutracker.log, exact twintig seconden na het antwoord van
+    // FlareSolverr:
+    //
+    //   14:38:19  verversen: antwoord binnen - clearance=true
+    //   14:38:39  toets: tracker.php gaf 0
+    //   14:38:39  MISLUKT, terugdraaien
+    //
+    // Met de hand nagemeten met dezelfde verse doorgang: status 200, tijd 20,7 seconden. Cloudflare
+    // laat curl er dus door, maar het eerste verzoek na een nieuwe doorgang kost tientallen
+    // seconden. De limiet zat een halve seconde te krap, en het gevolg was niet "traag" maar
+    // "mislukt, alles terugdraaien" - inclusief het verlies van de doorgang die net gehaald was.
+    test('DE KERN: gewone verzoeken houden hun korte limiet', () {
+      final a = RuTrackerService.curlArgumenten('u', 'c', 'ua', 'uit');
+      expect(a[a.indexOf('--max-time') + 1], '20');
+    });
+
+    test('DE VAL: de toets na een verse doorgang krijgt ruim de tijd', () {
+      final bron = File('lib/rutracker.dart').readAsStringSync();
+      final begin = bron.indexOf('Future<bool> verify() async {');
+      final blok = bron.substring(begin, begin + 400);
+
+      expect(blok, contains('maxSeconden: 45'),
+          reason: 'met twintig seconden sneuvelt de toets op iets dat 20,7 s duurt');
+    });
+
+    test('DE GRENS: de limiet komt er ook echt in te staan', () {
+      final a = RuTrackerService.curlArgumenten('u', 'c', 'ua', 'uit', maxSeconden: 45);
+      expect(a[a.indexOf('--max-time') + 1], '45');
+    });
+  });
 }
