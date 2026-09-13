@@ -199,8 +199,36 @@ Future<void> _claimAudioFocus(NowPlayingSource player) async {
     session.becomingNoisyEventStream.listen((_) {
       // De koptelefoon of de bluetoothspeaker viel weg. Niet hervatten als hij terugkomt: dan
       // begint de muziek uit de telefoonluidspreker in een stille kamer.
+      _audioLog?.line('UITGANG VALT WEG (becomingNoisy) speelt=${player.playing}');
       zelfGepauzeerd = false;
       if (player.playing) player.playPause();
+    });
+
+    // **Welke uitgang er kwam of ging, op dezelfde tijdlijn als de onderbrekingen.**
+    //
+    // Zonder deze regel is `speler.log` de helft van een verhaal. Geteld op 13-09-2026 over een
+    // volle dag luisteren: 145 onderbrekingen van soort `unknown` — definitief focusverlies — en
+    // daar komt per definitie nooit een eindbericht achteraan, dus de muziek bleef 96 keer stil.
+    // Ongeveer dertien per luisteruur, de hele dag door en niet in een piek bij het verbinden.
+    //
+    // Wat er NIET in stond is waardoor. Definitief verlies krijg je als een andere speler de focus
+    // permanent opvraagt (`req=1` in `dumpsys audio`, en dat doen ze allemaal: Tidal, Android Auto,
+    // Instagram) — maar óók bij een routewissel. En de Galaxy Buds3 Pro wisselen: bij het verbinden
+    // staat er eerst klassiek A2DP en één seconde later LE Audio als actieve uitgang.
+    //
+    // Die twee zijn van buitenaf niet te onderscheiden. Met deze regel wel: staat er vlak voor een
+    // `unknown` een uitgangswissel, dan is het de bluetoothroute; staat er niets, dan heeft een
+    // andere app hem overgenomen en klopt het gedrag gewoon. Androids eigen focusgeschiedenis is
+    // hiervoor te kort — die bewaart eenenveertig regels, geen luistersessie.
+    session.devicesChangedEventStream.listen((e) {
+      String noem(Set<AudioDevice> s) => s.isEmpty
+          ? '-'
+          : s.where((d) => d.isOutput).map((d) => '${d.name}(${d.type.name})').join(' + ');
+      final erbij = noem(e.devicesAdded);
+      final eraf = noem(e.devicesRemoved);
+      // Alleen uitgangen: een microfoon die komt en gaat zegt hier niets en verstopt de rest.
+      if (erbij == '-' && eraf == '-') return;
+      _audioLog?.line('UITGANG erbij=[$erbij] eraf=[$eraf] speelt=${player.playing}');
     });
 
     // DE FOCUS OPVRAGEN OP HET MOMENT DAT ER IETS GAAT SPELEN, en niet één keer bij het opstarten.
