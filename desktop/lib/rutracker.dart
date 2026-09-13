@@ -596,7 +596,25 @@ class RuTrackerService {
       final setCookie = resp.headers['set-cookie'] ?? '';
       final sess = RegExp(r'bb_session=([^;,\s]+)').firstMatch(setCookie);
       if (sess != null && sess.group(1)!.length > 8) {
-        settings.rutrackerCookie = 'bb_session=${sess.group(1)}';
+        // SAMENVOEGEN en niet vervangen — anders wist een geslaagde aanmelding je doorgang.
+        //
+        // **Gemeten op 13-09-2026.** Saber: *"RUTRACKER WERKT WEER NIET? wil niet aanmelden
+        // cloudflare"*. Zijn sessie was wél geldig: `index.php` gaf 200 en toonde zijn naam mét
+        // uitloglink. Maar `tracker.php` — de pagina waar de app op zoekt — gaf `403` met
+        // `Cf-Mitigated: challenge` en de "Just a moment…"-pagina. In het bewaarde koekje stonden
+        // alleen `bb_guid`, `bb_session`, `bb_ssl` en `bb_t`; `cf_clearance` was weg.
+        //
+        // Deze regel is waar het verdween. Het inlogantwoord zet alleen een verse `bb_session`, en
+        // die werd hier over het HELE koekje heen geschreven — dus ook over de Cloudflare-doorgang
+        // die er net nog was. Elke keer dat je opnieuw aanmeldt, ben je je doorgang kwijt, en de
+        // eerstvolgende zoekopdracht loopt weer tegen de uitdaging aan. Dat is precies hoe het
+        // voelt: aanmelden lukt, en daarna werkt er niets.
+        //
+        // Bewezen met hetzelfde koekje: mét een vers `cf_clearance` erbij geeft `tracker.php` 200
+        // en staat zijn naam erop; zonder geeft het 403. [voegKoekjesSamen] stond tweehonderd
+        // regels hierboven al klaar, met dezelfde les erbij voor de FlareSolverr-kant.
+        settings.rutrackerCookie =
+            voegKoekjesSamen(settings.rutrackerCookie, 'bb_session=${sess.group(1)}');
         await settings.save();
         return const RtLogin.success();
       }

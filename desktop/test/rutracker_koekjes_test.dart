@@ -13,6 +13,8 @@
 /// gaan. De koekjeslade van het toestel is hier niet te draaien; wat eruit komt wél.
 library;
 
+import 'dart:io';
+import 'package:debridmusic/rutracker.dart';
 import 'package:debridmusic/rutracker_login.dart';
 import 'package:debridmusic/rutracker_venster.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -173,6 +175,46 @@ void main() {
       const binnen = RtSessie(cookie: 'cf_clearance=x; bb_session=y', ua: 'Mozilla/5.0');
       expect(binnen.heeftSessie, isTrue);
       expect(binnen.heeftClearance, isTrue);
+    });
+  });
+
+  group('aanmelden mag je doorgang niet wissen', () {
+    // Saber op 13-09-2026: "RUTRACKER WERKT WEER NIET? wil niet aanmelden cloudflare". Zijn sessie
+    // was gewoon geldig - index.php gaf 200 met zijn naam en een uitloglink - maar tracker.php, de
+    // pagina waar de app op zoekt, gaf 403 met Cf-Mitigated: challenge. In het bewaarde koekje
+    // stonden alleen bb_guid, bb_session, bb_ssl en bb_t; cf_clearance was weg.
+    //
+    // Het inlogantwoord zet alleen een verse bb_session, en die werd over het HELE koekje heen
+    // geschreven. Elke geslaagde aanmelding wiste dus de Cloudflare-doorgang, en de eerstvolgende
+    // zoekopdracht liep weer tegen de uitdaging aan.
+    test('DE KERN: een verse sessie laat cf_clearance staan', () {
+      final uit = RuTrackerService.voegKoekjesSamen(
+          'cf_clearance=abc123; bb_guid=g1; bb_session=OUD; bb_ssl=1', 'bb_session=VERS');
+
+      expect(uit, contains('cf_clearance=abc123'),
+          reason: 'zonder deze doorgang geeft tracker.php 403 met Cf-Mitigated: challenge');
+      expect(uit, contains('bb_session=VERS'), reason: 'en de verse sessie hoort wel te winnen');
+      expect(uit, isNot(contains('bb_session=OUD')));
+      expect(uit, contains('bb_guid=g1'), reason: 'de rest van het plaksel blijft ook staan');
+    });
+
+    test('DE GRENS: zonder eerdere doorgang komt er gewoon de sessie uit', () {
+      expect(RuTrackerService.voegKoekjesSamen('', 'bb_session=VERS'), 'bb_session=VERS');
+    });
+  });
+
+  group('de aanroep zelf', () {
+    // Deze ene regel is niet met een nepclient te beproeven - RuTrackerService maakt zijn eigen
+    // http.Client - en het is precies het soort regel dat stil terugvalt naar "vervangen" bij een
+    // volgende bewerking. Dan is de storing weer onzichtbaar: aanmelden lukt, en daarna werkt er
+    // niets.
+    test('DE VAL: de inlogweg voegt samen en vervangt niet', () {
+      final bron = File('lib/rutracker.dart').readAsStringSync();
+
+      expect(bron, contains("voegKoekjesSamen(settings.rutrackerCookie, 'bb_session="),
+          reason: 'de geslaagde aanmelding moet het bestaande koekje meenemen');
+      expect(bron, isNot(contains("settings.rutrackerCookie = 'bb_session=\${sess.group(1)}';")),
+          reason: 'dit is de regel die de Cloudflare-doorgang wiste');
     });
   });
 }
