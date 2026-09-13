@@ -217,4 +217,44 @@ void main() {
           reason: 'dit is de regel die de Cloudflare-doorgang wiste');
     });
   });
+
+  group('de doorgang wordt langs de juiste pagina gehaald', () {
+    // Saber op 13-09-2026: verversen leek te lukken ("vers koekje opgehaald") en zoeken bleef 403
+    // geven. Twee keer achter elkaar gemeten bij dezelfde FlareSolverr:
+    //
+    //   index.php   -> cf_clearance van 426 tekens -> tracker.php geeft 403
+    //   tracker.php -> cf_clearance van 533 tekens -> tracker.php geeft 200
+    //
+    // De voorpagina staat niet achter de uitdaging: een kale GET geeft daar gewoon 200, ook zonder
+    // doorgang. Cloudflare heeft er dus niets op te lossen en geeft een koekje dat de UITGEDAAGDE
+    // pagina's niet opent.
+    test('DE KERN: niet de voorpagina, maar de pagina die uitgedaagd wordt', () {
+      expect(RuTrackerService.uitdagingsPagina, endsWith('/tracker.php'));
+      expect(RuTrackerService.uitdagingsPagina, isNot(contains('index.php')),
+          reason: 'daar valt niets op te lossen, dus levert het een doorgang die niets opent');
+    });
+
+    test('DE GRENS: het blijft een adres op rutracker zelf', () {
+      // Een doorgang is per domein. Hem op een ander domein halen levert er een voor dat domein.
+      expect(RuTrackerService.uitdagingsPagina, startsWith('https://rutracker.org/forum/'));
+    });
+  });
+
+  group('de knop die bleef draaien', () {
+    // "koekje verversen blijft maar draaien ??" - de vlag werd gezet, de aanroep gedaan, en de vlag
+    // daarna weer uitgezet. Zonder try/finally blijft hij bij elke fout onderweg aan staan, en dan
+    // draait het knopje tot je de app afsluit. Het duurt toch al lang: FlareSolverr deed er op
+    // dezelfde pc 24 tot 47 seconden over.
+    test('DE VAL: de bezig-vlag gaat uit in een finally', () {
+      final bron = File('lib/main.dart').readAsStringSync();
+      final begin = bron.indexOf('Future<void> _versKoekjeViaFlareSolverr() async {');
+      expect(begin, greaterThan(0), reason: 'de knop bestaat niet meer onder deze naam');
+      final blok = bron.substring(begin, begin + 900);
+
+      expect(blok, contains('finally'),
+          reason: 'zonder finally blijft de knop draaien zodra er iets misgaat');
+      expect(blok.indexOf('finally'), lessThan(blok.indexOf('_fsBezig = false')),
+          reason: 'het uitzetten hoort IN die finally te staan');
+    });
+  });
 }

@@ -20847,12 +20847,29 @@ class _SettingsDialogState extends State<SettingsDialog> {
   /// De uitkomst komt als melding onderin, want dit is precies het soort knop waarvan je anders niet
   /// weet of hij iets deed: het koekje is onzichtbaar, en "het werkt weer" merk je pas een
   /// zoekopdracht later.
+  /// Een vers koekje halen, met de draaiende knop die ALTIJD stopt.
+  ///
+  /// **Waarom `finally`.** Saber op 13-09-2026: *"koekje verversen blijft maar draaien ??"*. Hier
+  /// stond `_fsBezig = true`, dan de aanroep, dan `_fsBezig = false` — zonder `try`. Gaat er
+  /// onderweg iets mis, dan wordt die vlag nooit meer uitgezet en draait het knopje tot je de app
+  /// afsluit. `_proefRedacted` en `_proefTorznab` in ditzelfde venster doen het wél met `finally`;
+  /// deze ene was vergeten.
+  ///
+  /// En het duurt lang, dat hoort erbij: gemeten op dezelfde pc deed FlareSolverr er 24 tot 47
+  /// seconden over. Daarom zegt de knop nu ook wat hij aan het doen is, want een knopje dat een
+  /// minuut draait zonder woorden is niet van vastlopen te onderscheiden.
   Future<void> _versKoekjeViaFlareSolverr() async {
     setState(() => _fsBezig = true);
     final rt = context.read<OnlineService>().rutracker;
-    final uit = await rt.ververViaFlareSolverr();
+    RtLogin uit;
+    try {
+      uit = await rt.ververViaFlareSolverr();
+    } catch (e) {
+      uit = RtLogin.failed('Het halen liep vast: $e');
+    } finally {
+      if (mounted) setState(() => _fsBezig = false);
+    }
     if (!mounted) return;
-    setState(() => _fsBezig = false);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(uit.ok
           ? 'Vers koekje opgehaald en getoetst — RuTracker doet het weer.'

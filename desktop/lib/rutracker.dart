@@ -282,6 +282,23 @@ class RuTrackerService {
     return samen.entries.map((e) => '${e.key}=${e.value}').join('; ');
   }
 
+  /// De pagina waarlangs een verse doorgang gehaald wordt.
+  ///
+  /// **Waarom NIET `index.php`.** Dat stond hier, en het is precies waarom een vers koekje niets
+  /// hielp. Gemeten op 13-09-2026, twee keer achter elkaar bij dezelfde FlareSolverr:
+  ///
+  ///     index.php    -> cf_clearance van 426 tekens -> tracker.php geeft 403
+  ///     tracker.php  -> cf_clearance van 533 tekens -> tracker.php geeft 200
+  ///
+  /// De voorpagina staat niet achter de uitdaging — een kale GET van `index.php` geeft gewoon 200,
+  /// ook zonder doorgang. Cloudflare heeft daar dus niets op te lossen en geeft een koekje dat de
+  /// UITGEDAAGDE pagina's niet opent. De app bewaarde dat keurig, meldde "vers koekje opgehaald", en
+  /// het zoeken bleef 403 geven. Saber: *"RUTRACKER WERKT WEER NIET?"*.
+  ///
+  /// Dus halen we hem langs de pagina waar het werkelijk om gaat. Die is uitgedaagd, dus daar lost
+  /// FlareSolverr iets op, en dan is de doorgang ook geldig voor wat de app daarna doet.
+  static const uitdagingsPagina = '$_base/tracker.php';
+
   /// Een vers `cf_clearance` halen bij FlareSolverr, zonder plakwerk.
   ///
   /// Dezelfde vorm als [gebruikPlaksel], en om dezelfde reden: proberen vóór bewaren, en bij
@@ -292,7 +309,7 @@ class RuTrackerService {
       return const RtLogin.failed(
           'Er staat geen adres voor FlareSolverr in de instellingen (meestal http://127.0.0.1:8191).');
     }
-    final uit = await fs.haal('$_base/index.php');
+    final uit = await fs.haal(uitdagingsPagina);
     if (uit == null) {
       return RtLogin.failed(await fs.leeft()
           ? 'FlareSolverr kon de pagina niet ophalen. Probeer het zo nog eens.'
