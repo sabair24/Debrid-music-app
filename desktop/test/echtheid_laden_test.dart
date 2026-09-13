@@ -14,6 +14,17 @@ import 'package:debridmusic/echtheid.dart';
 import 'package:debridmusic/echtheid_oordelen.dart';
 import 'package:debridmusic/paths.dart';
 
+/// Hoe de sleutel op schijf eruitziet, precies zoals `_sleutel` in `echtheid_oordelen.dart` hem maakt.
+///
+/// **Waarom dit niet gewoon `toLowerCase()` mag zijn.** Op Windows en macOS is `Foo.flac` hetzelfde
+/// bestand als `foo.flac`, dus worden sleutels daar naar kleine letters gehaald en de scheidingstekens
+/// gelijkgetrokken. Op Linux is dat een ANDER bestand en gebeurt dat bewust niet. Deze toets nam het
+/// Windows-gedrag onvoorwaardelijk aan en stond daardoor rood in de bouwstraat - een van de zes die
+/// daar vielen terwijl ze hier groen waren, en waardoor er tien uitleveringen lang geen APK kwam.
+String _opSchijf(String pad) => (Platform.isWindows || Platform.isMacOS)
+    ? pad.replaceAll('/', Platform.pathSeparator).replaceAll('\\', Platform.pathSeparator).toLowerCase()
+    : pad;
+
 void main() {
   late Directory scratch;
 
@@ -38,7 +49,7 @@ void main() {
   test('precies de vorm die het kalibratiescript wegschrijft, wordt teruggevonden', () async {
     const pad = r"D:\Flac music 2024\DebridMusic Downloads\Albums\Céline Dion\D'Eux\01 - Pour.flac";
     schrijf({
-      pad.toLowerCase(): {
+      _opSchijf(pad): {
         'bits': 'spreektNietTegen',
         'boven': 'leeg',
         'band': 'afgekapt',
@@ -64,11 +75,21 @@ void main() {
   test('een pad met andere hoofdletters of scheidingstekens vindt hetzelfde oordeel', () async {
     const pad = r'D:\Muziek\A\B.flac';
     schrijf({
-      pad.toLowerCase(): {'bits': 'onbekend', 'boven': 'leeg', 'band': 'onbekend'}
+      _opSchijf(pad): {'bits': 'onbekend', 'boven': 'leeg', 'band': 'onbekend'}
     });
     await laadEchtheid();
-    expect(gemeten(r'D:\MUZIEK\A\B.flac'), isNotNull);
-    expect(gemeten('D:/Muziek/A/B.flac'), isNotNull);
+
+    expect(gemeten(pad), isNotNull, reason: 'dezelfde schrijfwijze hoort altijd terug te vinden');
+
+    if (Platform.isWindows || Platform.isMacOS) {
+      expect(gemeten(r'D:\MUZIEK\A\B.flac'), isNotNull);
+      expect(gemeten('D:/Muziek/A/B.flac'), isNotNull);
+    } else {
+      // DE GRENS: op een hoofdlettergevoelig bestandssysteem is dit een ANDER bestand. Daar
+      // hetzelfde oordeel teruggeven zou juist fout zijn - en precies die aanname maakte deze
+      // toets rood in de bouwstraat.
+      expect(gemeten(r'D:\MUZIEK\A\B.flac'), isNull);
+    }
   });
 
   test('een ongemeten bestand is nadrukkelijk niet nep', () async {

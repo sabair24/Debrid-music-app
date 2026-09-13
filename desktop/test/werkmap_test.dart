@@ -31,12 +31,23 @@ void main() {
   const naam = 'Tears For Fears - Songs From The Big Chair (Deluxe Edition) (Deluxe) '
       '(1985 Pop Rock) [Flac 16-44]';
   const hash = '3b2a1f9e77c04d5188aa2b6c9f0e1d3a4b5c6d7e';
-  final doel = Directory(r'D:\Flac music 2024\DebridMusic Downloads\' + naam);
+
+  // **De paden worden hier met de scheidingsteken van het PLATFORM gebouwd, en dat is niet netjes
+  // doen om het netjes doen.** `werkMapPad` gebruikt `doelMap.parent`, en wat een ouder is bepaalt
+  // het platform: op Linux heeft `D:\Flac music 2024\...` geen enkele scheiding, dus is het hele
+  // ding een bestandsnaam en is de ouder `.`. Deze toets stond daardoor rood in de bouwstraat -
+  // zes toetsen lang, tien uitleveringen lang geen APK - terwijl hij hier op Windows groen was.
+  //
+  // De GRENS waar hij over gaat blijft die van Windows (260 tekens); alleen de vorm van de paden
+  // volgt de machine waarop hij draait.
+  String p(List<String> delen) => delen.join(Platform.pathSeparator);
+  final basis = p(['D:', 'Flac music 2024', 'DebridMusic Downloads']);
+  final doel = Directory(p([basis, naam]));
 
   test('DE KERN: aria2 werkt NAAST de doelmap, niet erin', () {
     final werk = werkMapPad(doel, hash, naam);
 
-    expect(werk, r'D:\Flac music 2024\DebridMusic Downloads\_torrentwerk\3b2a1f9e');
+    expect(werk, p([basis, torrentWerkMap, '3b2a1f9e']));
     expect(werk, isNot(contains(naam)), reason: 'anders staat de plaatnaam er weer dubbel in');
     // In een map die de bibliotheekscanner overslaat. Zonder dat komen de halve bestanden die aria2
     // aan het binnenhalen is gewoon in je bibliotheek — gemeld als "er komen liedjes bij die ik
@@ -47,8 +58,8 @@ void main() {
   test('en daarmee past het pad ruim binnen wat Windows aankan', () {
     final werk = werkMapPad(doel, hash, naam);
     // Wat aria2 er zelf onder zet: zijn eigen map met de torrentnaam, en daarin het bestand.
-    final volledig = '$werk\\$naam\\01. Tears For Fears - Shout.flac';
-    final oud = '${doel.path}\\$naam\\01. Tears For Fears - Shout.flac';
+    final volledig = p([werk, naam, '01. Tears For Fears - Shout.flac']);
+    final oud = p([doel.path, naam, '01. Tears For Fears - Shout.flac']);
 
     expect(oud.length, greaterThan(220), reason: 'zo lang was het pad dat omviel');
     expect(volledig.length, lessThan(230), reason: 'en zoveel korter is het nu');
@@ -60,7 +71,7 @@ void main() {
     final werk = werkMapPad(doel, '', naam);
 
     expect(werk.length, lessThan(doel.path.length));
-    expect(werk, startsWith(r'D:\Flac music 2024\DebridMusic Downloads\_torrentwerk\'));
+    expect(werk, startsWith(p([basis, torrentWerkMap, ''])));
     expect(werk.split(Platform.pathSeparator).last.length, 8, reason: 'acht tekens uit de naam');
   });
 

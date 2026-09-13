@@ -24,6 +24,28 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:debridmusic/aria2.dart';
 import 'package:debridmusic/paths.dart';
 
+/// Staat er op DEZE machine een aria2c in de systeempaden?
+///
+/// **Waarom dat hier uitmaakt.** De twee toetsen hieronder gaan over wat er gebeurt als er NIETS te
+/// vinden is. Op Windows klopt die aanname altijd. Op de ubuntu-machine van de bouwstraat niet:
+/// `aria2` zit in het standaardbeeld van GitHub, en `Aria2.pad` kijkt op Linux ook in `/usr/bin`.
+/// Ze stonden daar dus rood - twee van de zes die van 12-09-2026 tot 13-09-2026 tien uitleveringen
+/// lang de APK tegenhielden - terwijl ze hier groen waren.
+///
+/// Waar niets te missen valt, valt deze storing niet na te spelen. Dan zegt de toets dat, en toetst
+/// hij wat er daar wel geldt - in plaats van iets te beweren dat op die machine niet waar is.
+/// Vindt DEZE machine een aria2c staan?
+///
+/// Niet op vaste paden kijken maar het gedrag zelf vragen: `Aria2.pad` loopt op Linux ook
+/// `/usr/bin`, `/usr/local/bin` en `/opt/homebrew/bin` af en valt daarna terug op PATH, en welke van
+/// die vijf het wordt doet er niet toe - alleen of er iets uit komt.
+bool _vindtEenAria2() {
+  Aria2.resetLookup();
+  final gevonden = Aria2().pad != null;
+  Aria2.resetLookup();
+  return gevonden;
+}
+
 void main() {
   late Directory map;
 
@@ -43,6 +65,12 @@ void main() {
   test('DE KERN: een mislukte zoektocht wordt niet onthouden', () {
     // Niets te vinden: geen aria2c naast de app, geen aria2c in de eigen map.
     final motor = Aria2();
+    if (_vindtEenAria2()) {
+      // DE GRENS: hier valt er niets te missen, dus is er ook geen misser om te onthouden. Wat op
+      // zo'n machine wel geldt: er komt een echt pad uit, en geen null.
+      expect(motor.pad, isNotNull, reason: 'er staat hier een aria2c in de systeempaden');
+      return;
+    }
     expect(motor.pad, isNull, reason: 'er staat hier niets, dus dit hoort te mislukken');
     expect(motor.laatsteFout, contains('niet gevonden'));
 
@@ -66,6 +94,12 @@ void main() {
   });
 
   test('en start() zwijgt niet meer als hij niets kan vinden', () async {
+    if (_vindtEenAria2()) {
+      // Hier zou start() een ECHTE aria2c opstarten. Dat is niet wat deze toets wil weten, en het
+      // laat een proces achter op de bouwmachine.
+      expect(Aria2().pad, isNotNull, reason: 'er staat hier een aria2c in de systeempaden');
+      return;
+    }
     final motor = Aria2();
     expect(await motor.start(downloadMap: map.path), isFalse);
 
