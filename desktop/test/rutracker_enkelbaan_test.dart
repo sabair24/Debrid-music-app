@@ -95,4 +95,29 @@ void main() {
     expect(s.rutrackerCookie, contains('cf_clearance=goud'));
     expect(s.rutrackerUa, 'oude-ua');
   });
+
+  group('de toets repareert niet', () {
+    // Met de grendel erbij werd dit meteen gevaarlijk: verify() liep via _haal, en die weg heeft
+    // ingebouwd "bij een 403 even een vers koekje halen". Maar verify() wordt zelf aangeroepen
+    // VANUIT die verversing - dus kreeg hij de verversing terug waar hij in zat. Werk dat op
+    // zichzelf wacht, tot curl er na twintig seconden mee ophield:
+    //
+    //   14:13:09  verversen: antwoord binnen - clearance=true ua=111
+    //   14:13:29  toets: tracker.php gaf 0
+    //   14:13:29  MISLUKT, terugdraaien
+    //
+    // Niet met een nepclient te beproeven - de dienst maakt zijn eigen curl-proces - en het is
+    // precies het soort regel die stil terugvalt naar de gemakkelijke weg.
+    test('DE VAL: verify gaat niet langs de weg die zelf ververst', () {
+      final bron = File('lib/rutracker.dart').readAsStringSync();
+      final begin = bron.indexOf('Future<bool> verify() async {');
+      expect(begin, greaterThan(0), reason: 'verify bestaat niet meer onder deze naam');
+      final blok = bron.substring(begin, begin + 400);
+
+      expect(blok, contains('_haalMetCurl'),
+          reason: 'de toets hoort kaal te toetsen wat er ligt');
+      expect(blok, isNot(contains('await _haal(')),
+          reason: 'die weg ververst bij een 403 en roept dus zichzelf aan');
+    });
+  });
 }

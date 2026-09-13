@@ -792,9 +792,25 @@ class RuTrackerService {
   }
 
   /// True if the cached cookie still authenticates (tracker.php returns 200, not a 302 to login).
+  /// Werkt het koekje dat er NU staat? Kaal getoetst, zonder omwegen.
+  ///
+  /// **Waarom niet via [_haal].** Die weg heeft ingebouwd "bij een 403 even een vers koekje halen",
+  /// en dat is precies wat een toets niet mag doen: hij wordt zelf aangeroepen vanuit die
+  /// verversing. Sinds er nog maar één verversing tegelijk mag lopen, kreeg hij dan de verversing
+  /// terug waar hij zelf in zat — werk dat op zichzelf wacht, tot de tijdslimiet van twintig
+  /// seconden hem afkapte. In `rutracker.log` van 13-09-2026 zag dat er zo uit:
+  ///
+  ///     14:13:09  verversen: antwoord binnen — clearance=true ua=111
+  ///     14:13:29  toets: tracker.php gaf 0          (20 seconden later: de tijdslimiet)
+  ///     14:13:29  MISLUKT, terugdraaien
+  ///
+  /// Dezelfde soort val als de pijl in `whenComplete` die elders in dit huis al twee keer een avond
+  /// kostte. Een toets hoort te toetsen wat er ligt, en niets te repareren.
   Future<bool> verify() async {
     if (settings.rutrackerCookie.isEmpty) return false;
-    final r = await _haal('$_base/tracker.php');
+    final r = await curlBeschikbaar()
+        ? await _haalMetCurl('$_base/tracker.php')
+        : await viaVenster?.call('$_base/tracker.php');
     // Het getal zelf, want "mislukt" is drie dingen tegelijk: 403 (Cloudflare), 200 maar uitgelogd,
     // of helemaal geen antwoord. Zonder dit onderscheid blijft elke reparatie een gok.
     _spoor('toets: tracker.php gaf ${r == null ? "GEEN ANTWOORD" : r.status}');
