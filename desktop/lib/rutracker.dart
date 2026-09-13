@@ -6,6 +6,8 @@ import 'package:http/http.dart' as http;
 
 import 'cp1251.dart';
 import 'flaresolverr.dart';
+import 'paths.dart';
+import 'warm_log.dart';
 import 'settings.dart';
 import 'torbox.dart';
 
@@ -282,6 +284,19 @@ class RuTrackerService {
     return samen.entries.map((e) => '${e.key}=${e.value}').join('; ');
   }
 
+  /// Eén regel per stap van het verversen, want dit pad was van buiten niet te volgen.
+  ///
+  /// **Waarom dit erbij moest.** Op 13-09-2026 bleef "Koekje verversen" een verse doorgang ophalen
+  /// die niet bewaard werd. Van buiten zag je: de knop draait een halve minuut, er verschijnt geen
+  /// fout, en het koekje op schijf verandert niet. De app praat aantoonbaar met FlareSolverr — een
+  /// open verbinding naar poort 8191, dertig seconden lang — maar wélke stap daarna afketst was
+  /// nergens te zien. Elke verklaring bleef een gok, en daar heeft dit huis een logboek voor.
+  void _spoor(String s) {
+    try {
+      WarmLog('$appDir${Platform.pathSeparator}rutracker.log').line(s);
+    } catch (_) {/* een logboek mag nooit de zaak breken die het bekijkt */}
+  }
+
   /// De pagina waarlangs een verse doorgang gehaald wordt.
   ///
   /// **Waarom NIET `index.php`.** Dat stond hier, en het is precies waarom een vers koekje niets
@@ -309,12 +324,15 @@ class RuTrackerService {
       return const RtLogin.failed(
           'Er staat geen adres voor FlareSolverr in de instellingen (meestal http://127.0.0.1:8191).');
     }
+    _spoor('verversen: vraag aan FlareSolverr voor $uitdagingsPagina');
     final uit = await fs.haal(uitdagingsPagina);
     if (uit == null) {
       return RtLogin.failed(await fs.leeft()
           ? 'FlareSolverr kon de pagina niet ophalen. Probeer het zo nog eens.'
           : 'FlareSolverr antwoordt niet op ${settings.flaresolverrUrl}. Draait hij?');
     }
+    _spoor('verversen: antwoord binnen — koekjes=${uit.cookie.split(";").length} '
+        'clearance=${uit.heeftClearance} ua=${uit.ua.length} tekens');
     if (!uit.heeftClearance) {
       return const RtLogin.failed(
           'FlareSolverr kwam er wel, maar kreeg geen cf_clearance terug. Dat gebeurt als Cloudflare '
@@ -328,7 +346,10 @@ class RuTrackerService {
     settings.rutrackerCookie = voegKoekjesSamen(vorigeCookie, uit.cookie);
     if (uit.ua.isNotEmpty) settings.rutrackerUa = uit.ua;
 
-    if (await verify()) {
+    final goed = await verify();
+    _spoor('verversen: toets op tracker.php -> ${goed ? "GELUKT, bewaren" : "MISLUKT, terugdraaien"}'
+        ' | koekje=${settings.rutrackerCookie.split(";").length} delen, ua=${settings.rutrackerUa.length}');
+    if (goed) {
       await settings.save();
       lastError = '';
       return const RtLogin.success();
@@ -736,6 +757,9 @@ class RuTrackerService {
   Future<bool> verify() async {
     if (settings.rutrackerCookie.isEmpty) return false;
     final r = await _haal('$_base/tracker.php');
+    // Het getal zelf, want "mislukt" is drie dingen tegelijk: 403 (Cloudflare), 200 maar uitgelogd,
+    // of helemaal geen antwoord. Zonder dit onderscheid blijft elke reparatie een gok.
+    _spoor('toets: tracker.php gaf ${r == null ? "GEEN ANTWOORD" : r.status}');
     return r?.status == 200;
   }
 
