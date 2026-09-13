@@ -1579,13 +1579,34 @@ class LanServer {
   ///
   /// Tellen op items klopte ook niet: bij `?w=2048` is een item een veelvoud van de 120 KB waar de
   /// rekensom op stond.
+  ///
+  /// **De grens moet BOVEN de werkverzameling liggen, anders is LRU net zo slecht als FIFO.** Dat
+  /// is precies wat er met 48 MiB gebeurde: de verkleinde bibliotheek is 55,4 MiB, dus paste 87
+  /// procent erin, en bij een vaste doorloopvolgorde gooit elke misser de hoes eruit die zo aan de
+  /// beurt is. Nagebouwd met 43 sleutels van samen 56,6 MiB: tweede ronde nul treffers, 43 missers,
+  /// drieënveertig seconden opnieuw rekenen. Zesennegentig is bijna tweemaal de 55,4 MiB die geteld
+  /// is — ruimte voor een bibliotheek die groeit en voor een tweede formaat ernaast.
+  ///
+  /// Het gaat om geheugen dat er in zekere zin al is: `catalog.artwork` geeft de hoes uit de
+  /// catalogus, en die 172,4 MiB aan originelen staat sowieso in het geheugen van de pc-app.
   final _kleineHoezen = <String, Uint8List?>{};
   var _kleineHoezenBytes = 0;
-  static const _kleineHoezenMaxBytes = 48 * 1024 * 1024;
+  static const _kleineHoezenMaxBytes = 96 * 1024 * 1024;
+
+  /// Wat een plek in de cache minstens weegt.
+  ///
+  /// **Anders is een leeg antwoord onsterfelijk.** Een hoes die niet kleiner wordt levert null op,
+  /// en `null?.length ?? 0` is nul: zulke plekken kwamen nooit in het vizier van de uitwerplus. Bij
+  /// het huidige gebruik zijn het er acht en merkt niemand het, maar `?w=` staat 1921 waarden toe —
+  /// wie er een tweede formaat bij zet vermenigvuldigt dat meteen, en dan is de grens geen grens.
+  static const _kleineHoesMinBytes = 64 * 1024;
 
   /// Wat er NU berekend wordt, op sleutel. Twee toestellen die tegelijk synchroniseren vroegen
   /// anders elke hoes dubbel op en zetten twee volledige verkleiningen in dezelfde rij.
   final _hoesBezig = <String, Future<Uint8List?>>{};
+
+  static int _weegt(Uint8List? w) =>
+      (w?.length ?? 0) < _kleineHoesMinBytes ? _kleineHoesMinBytes : w!.length;
 
   Future<Uint8List?> _kleineHoes(String sleutel, Uint8List bron, int plafond) {
     if (_kleineHoezen.containsKey(sleutel)) {
@@ -1600,10 +1621,10 @@ class LanServer {
       // **Ook een leeg antwoord wordt onthouden.** Een hoes die niet kleiner wordt gaf anders bij
       // elk volgend verzoek opnieuw een volledige decode plus hercodering, voor altijd.
       _kleineHoezen[sleutel] = klein;
-      _kleineHoezenBytes += klein?.length ?? 0;
+      _kleineHoezenBytes += _weegt(klein);
       while (_kleineHoezenBytes > _kleineHoezenMaxBytes && _kleineHoezen.length > 1) {
         final oudste = _kleineHoezen.keys.first;
-        _kleineHoezenBytes -= _kleineHoezen.remove(oudste)?.length ?? 0;
+        _kleineHoezenBytes -= _weegt(_kleineHoezen.remove(oudste));
       }
       return klein;
     });

@@ -451,19 +451,27 @@ const int kHoesPlafond = 1024;
 ///
 /// `yuv420` en niet `yuv444`: zonder chroma-subsampling is voor een foto weggegooide ruimte — het
 /// oog ziet kleurdetail veel grover dan helderheid, en 533 van de 541 hoezen hier ZIJN al JPEG en
-/// dus vrijwel zeker al 4:2:0. Over de hele bibliotheek: 67,5 tegen 53,6 MiB.
+/// dus vrijwel zeker al 4:2:0. Over de hele bibliotheek geteld: 70,1 MiB met yuv444 tegen 57,0 met
+/// yuv420.
 ///
 /// `Interpolation.average` en niet de standaard `nearest`: die laatste gooit bij 2400 naar 1024
 /// tweeëntachtig procent van de pixels weg zonder te middelen. Dat geeft karteling op fijn detail —
 /// op een streepjespatroon bleef de standaardafwijking 120,0 tegen 60,0 bij `average` — én duurdere
 /// bestanden, want karteling is hoogfrequent en dat is precies wat JPEG slecht kan. Gemeten op een
-/// hoes van 2400 pixels: nearest 44 KB tegen average 27 KB. Het kost 34 ms per hoes extra.
+/// hoes van 2400 pixels: nearest 44 KB tegen average 28 KB. Het kost 34 ms per hoes extra, en over
+/// de hele bibliotheek scheelt het 57,0 tegen 55,4 MiB — plus de karteling die niemand wil zien.
+///
+/// **Doorzichtigheid gaat als PNG mee, niet als niets.** JPEG kent geen alfakanaal en zou er wit
+/// van maken: een hoes die op de pc doorzichtig over de achtergrond ligt, zou op de telefoon op een
+/// wit vlak staan. Hem dan maar helemaal overslaan is echter een klif — een hoes van 4000x4000 met
+/// ÉÉN pixel op alfa 254 ging daarmee van 26 KB naar 28 MB, een factor elfhonderd, en er zou niets
+/// over gemeld worden. Een afgeronde hoek of een anti-aliased rand is al genoeg. Dus wordt zo'n hoes
+/// wél verkleind en als PNG teruggegeven: dezelfde doorzichtigheid, dezelfde pixels, en voor die
+/// 4000x4000 nog altijd megabytes minder.
 ///
 /// **Null betekent "laat het origineel staan".** Niet te ontcijferen, het resultaat werd niet
-/// kleiner, of een van deze drie:
+/// kleiner, of een van deze twee:
 ///
-///  * **Er zit echte doorzichtigheid in.** JPEG kent dat niet en maakt er wit van. Een hoes die op
-///    de pc doorzichtig over de achtergrond ligt zou op de telefoon op een wit vlak staan.
 ///  * **Er zit beweging in** (een GIF met meer dan één beeld): `encodeJpg` schrijft er stil het
 ///    eerste beeld van en de rest is weg.
 ///  * **De verhouding is zo extreem dat er een zijde van niets overblijft.** `copyResize(height:)`
@@ -474,7 +482,7 @@ Uint8List? verkleindeHoes(Uint8List bytes, int maxZijde) {
     final im = img.decodeImage(bytes);
     if (im == null || im.width < 8 || im.height < 8) return null;
     if (im.frames.length > 1) return null;
-    if (im.hasAlpha && _heeftEchteDoorzichtigheid(im)) return null;
+    final doorzichtig = im.hasAlpha && _heeftEchteDoorzichtigheid(im);
 
     final grootste = im.width > im.height ? im.width : im.height;
     final t = grootste <= maxZijde
@@ -484,7 +492,9 @@ Uint8List? verkleindeHoes(Uint8List bytes, int maxZijde) {
             : img.copyResize(im, height: maxZijde, interpolation: img.Interpolation.average));
     if (t.width < 8 || t.height < 8) return null;
 
-    final uit = Uint8List.fromList(img.encodeJpg(t, quality: 82, chroma: img.JpegChroma.yuv420));
+    final uit = Uint8List.fromList(doorzichtig
+        ? img.encodePng(t)
+        : img.encodeJpg(t, quality: 82, chroma: img.JpegChroma.yuv420));
     return uit.length < bytes.length ? uit : null;
   } catch (_) {
     // **Alles eromheen, en niet alleen het ontcijferen.** `copyResize` en `bakeOrientation` kunnen

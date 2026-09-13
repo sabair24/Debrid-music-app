@@ -138,6 +138,31 @@ jobs:
           TAG: ${{ steps.nr.outputs.TAG }}
         run: |
           set -euo pipefail
+
+          # **Eerst wachten tot de tag ER IS voor de API, en dat is geen overdreven voorzichtigheid.**
+          #
+          # Op 13-09-2026 kreeg win-v3.9.387 gewoon Apple en Windows op de tag, maar de APK-bouw
+          # landde op `feat/windows-desktop-app`. `gh workflow run` gaf netjes nul terug, dus de
+          # herkansing hieronder sloeg nooit aan — hij had alleen de tag nog niet kunnen vinden en
+          # viel terug op de standaardtak. Gevolg: `github.ref` was geen `refs/tags/win-v…`, en
+          # `Publish APK to public releases repo` sloeg zichzelf over. De bouw was groen, de APK
+          # bestond, en niemand kreeg hem. Precies het soort stilte waar deze hele straat niet tegen
+          # kan.
+          #
+          # build-release.yml wordt als eerste gestart, direct na de push van de tag, en is dus ook
+          # de enige die de race verliest.
+          for poging in $(seq 1 30); do
+            if gh api "repos/$GH_REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
+              echo "$TAG is zichtbaar voor de API (poging $poging)."
+              break
+            fi
+            if [ "$poging" = "30" ]; then
+              echo "::error::$TAG is na twee minuten nog niet zichtbaar voor de API."
+              exit 1
+            fi
+            sleep 4
+          done
+
           # Een net gezette tag is soms een tel of twee later pas te zien voor de API. Dat is geen
           # fout maar een race, dus even opnieuw proberen in plaats van meteen rood worden.
           start() {
@@ -152,9 +177,31 @@ jobs:
             echo "::error::$1 kon niet gestart worden op $TAG."
             return 1
           }
+
+          # **En daarna nakijken dat hij ook echt OP de tag draait.** Een exitcode van nul zegt
+          # alleen dat het verzoek aankwam, niet waarop. Dit is het vangnet onder het wachten
+          # hierboven: is het tóch op de verkeerde tak beland, dan wordt deze release rood in plaats
+          # van stil onvolledig.
+          op_de_tag() {
+            for poging in $(seq 1 20); do
+              if [ -n "$(gh run list --workflow "$1" --branch "$TAG" --limit 1 \
+                          --json databaseId --jq '.[0].databaseId' 2>/dev/null)" ]; then
+                echo "  $1 draait op $TAG"
+                return 0
+              fi
+              sleep 6
+            done
+            echo "::error::$1 is gestart maar niet op $TAG — dan publiceert hij niets."
+            return 1
+          }
+
           start build-release.yml   # Android-telefoon en Android TV
           start windows_build.yml   # Windows, en de release waar de rest aan hangt
           start apple_build.yml     # Mac en iPad
+
+          op_de_tag build-release.yml
+          op_de_tag windows_build.yml
+          op_de_tag apple_build.yml
 
       - name: Schrijf op wat er gebeurd is
         env:

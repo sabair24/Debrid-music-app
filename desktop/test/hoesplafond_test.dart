@@ -29,8 +29,8 @@ import 'package:image/image.dart' as img;
 /// En de VORM is net zo goed het probleem als de maat: er staan zeven PNG's in, samen 32,6 MiB
 /// tegen 1,3 MiB als JPEG - achttien keer zo zwaar per stuk.
 ///
-/// Met [kHoesPlafond] over de hele bibliotheek geteld: **172,4 MiB -> 57,0 MiB**, zevenenzestig
-/// procent minder, 533 van de 541 kleiner, en de grootste van 14,7 MiB naar 203 KiB.
+/// Met [kHoesPlafond] over de hele bibliotheek geteld: **172,4 MiB -> 55,4 MiB**, achtenzestig
+/// procent minder, 532 van de 541 kleiner, en de grootste van 14,7 MiB naar 128 KiB.
 ///
 /// Wat deze toets vasthoudt is niet dat getal maar de regels eronder: verkleinen boven het plafond,
 /// hercoderen ook eronder, het merkteken moet het plafond MEETELLEN, de 304 mag niet rekenen, en
@@ -117,7 +117,7 @@ void main() {
 
     test('DE VAL: een PNG die NIET te groot is wordt toch hercodeerd', () {
       // Dit is het geval dat een plafond alleen niet vangt: 1024x1024 zit precies OP het plafond en
-      // woog toch 2696 KB, puur omdat het een PNG was.
+      // woog toch 2696 KiB, puur omdat het een PNG was.
       final png = _foto(kHoesPlafond, kHoesPlafond);
       final klein = verkleindeHoes(png, kHoesPlafond);
 
@@ -133,7 +133,7 @@ void main() {
       // Een kleine hoes die al zuiniger bewaard is dan waar wij op coderen wordt van hercoderen
       // alleen maar groter. Null betekent hier "niets doen", en dat is beter dan hem nog een
       // generatie door de encoder halen - elke generatie kost zichtbaar detail en levert niets op.
-      // Zeventig van de 541 hoezen in de echte bibliotheek zitten in dit geval.
+      // Negen van de 541 hoezen in de echte bibliotheek zitten in dit geval.
       //
       // Dezelfde chroma-subsampling aan beide kanten, anders vergelijk je twee dingen tegelijk.
       final zuinig = _foto(300, 300, alsPng: false, kwaliteit: 25);
@@ -144,27 +144,39 @@ void main() {
           isNull);
     });
 
-    test('DE VAL: echte doorzichtigheid blijft het origineel', () async {
-      // JPEG kent geen doorzichtigheid en maakt er wit van. Een hoes die op de pc doorzichtig over
-      // de achtergrond ligt zou op de telefoon op een wit vlak staan - en omdat er ook zonder
-      // verkleinen gehercodeerd wordt, trof dat ook hoezen die al onder het plafond zitten.
+    test('DE VAL: doorzichtigheid gaat als PNG mee, niet als niets', () {
+      // Twee fouten na elkaar op deze plek. Eerst: JPEG kent geen alfakanaal, dus werd een
+      // doorzichtige rand stil wit. Toen: zulke hoezen maar helemaal overslaan - en dat is een klif.
+      // Gemeten: een hoes van 4000x4000 met EEN pixel op alfa 254 ging daarmee van 26 KB naar 28 MB.
+      // Een afgeronde hoek of een anti-aliased rand is al genoeg, en er wordt niets over gemeld.
       final im = img.Image(width: 1600, height: 1600, numChannels: 4);
-      for (final p in im) {
-        p.setRgba(200, 100, 50, p.x < 40 ? 0 : 255);
-      }
-      final doorzichtig = Uint8List.fromList(img.encodePng(im));
-      expect(verkleindeHoes(doorzichtig, kHoesPlafond), isNull,
-          reason: 'liever groot en goed dan klein met een witte rand');
-
-      // DE GRENS eronder: een alfakanaal dat nergens gebruikt wordt hoort juist WEL mee te gaan.
-      // Dat zijn de zwaarste bestanden in de bibliotheek.
-      final dekkend = img.Image(width: 1600, height: 1600, numChannels: 4);
       final r = Random(3);
-      for (final p in dekkend) {
-        p.setRgba((p.x % 200) + r.nextInt(8), (p.y % 200) + r.nextInt(8), 90 + r.nextInt(8), 255);
+      for (final p in im) {
+        p.setRgba((p.x % 200) + r.nextInt(8), (p.y % 200) + r.nextInt(8), 90 + r.nextInt(8),
+            p.x < 40 ? 0 : 255);
       }
-      expect(verkleindeHoes(Uint8List.fromList(img.encodePng(dekkend)), kHoesPlafond), isNotNull,
-          reason: 'een ongebruikt alfakanaal is geen doorzichtigheid');
+      final bron = Uint8List.fromList(img.encodePng(im));
+      final klein = verkleindeHoes(bron, kHoesPlafond);
+
+      expect(klein, isNotNull, reason: 'verkleinen kan wel, alleen de vorm moet PNG blijven');
+      expect(klein!.length, lessThan(bron.length));
+      final uit = img.decodeImage(klein)!;
+      expect(uit.width, kHoesPlafond);
+      expect(uit.hasAlpha, isTrue, reason: 'de doorzichtigheid hoort er nog te zijn');
+      expect(uit.getPixel(2, uit.height ~/ 2).a, 0,
+          reason: 'de doorzichtige rand mag geen wit vlak geworden zijn');
+
+      // DE GRENS eronder: een alfakanaal dat nergens gebruikt wordt is geen doorzichtigheid, en die
+      // hoort juist als JPEG mee te gaan - dat zijn de zwaarste bestanden in de bibliotheek.
+      final dekkend = img.Image(width: 1600, height: 1600, numChannels: 4);
+      final r2 = Random(3);
+      for (final p in dekkend) {
+        p.setRgba((p.x % 200) + r2.nextInt(8), (p.y % 200) + r2.nextInt(8), 90 + r2.nextInt(8), 255);
+      }
+      final zonder = verkleindeHoes(Uint8List.fromList(img.encodePng(dekkend)), kHoesPlafond);
+      expect(zonder, isNotNull);
+      expect(img.decodeImage(zonder!)!.hasAlpha, isFalse,
+          reason: 'zonder echte doorzichtigheid is JPEG vele malen zuiniger');
     });
 
     test('DE GRENS: een extreme verhouding levert geen hoes van niets', () {
