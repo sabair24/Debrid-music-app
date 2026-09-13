@@ -410,3 +410,59 @@ Future<({int? front, int? back, int? disc})> rollenBuitenDeTekendraad(
 /// verdachte niet meer deze.
 Future<int?> kleurBuitenDeTekendraad(Uint8List bytes) =>
     _opDeRij(() => Isolate.run(() => dominantColour(bytes)));
+
+/// Hoeveel pixel een hoes hoogstens breed of hoog hoeft te zijn om naar een toestel te sturen.
+///
+/// De grootste plek waar een hoes op een telefoon van 1440 pixels terechtkomt is het nu-spelend
+/// venster: daar is hij ongeveer 975 pixels breed. Duizendvierentwintig is daar net boven en is een
+/// macht van twee, wat het schalen op de GPU niets extra kost.
+const int kHoesPlafond = 1024;
+
+/// Een hoes klein genoeg om over een mobiel netwerk te sturen. Null als er niets te winnen valt.
+///
+/// **Waarom dit bestaat.** Gemeten op 13-09-2026 op de bibliotheek van deze pc: 548 hoezen, samen
+/// **174 MB**. De mediaan is 121 KB en de mediane zijde 600 pixels — dat is prima. Maar de staart
+/// niet:
+///
+///     12487 KB   2815x2802  png
+///      2766 KB   2797x2804  jpg
+///      2696 KB   1024x1024  png     <- niet te groot, wel de verkeerde vorm
+///
+/// Achtenvijftig hoezen zitten boven 500 KB en de grootste is 14,7 MB. Een telefoon haalt die op
+/// volle resolutie op voor een tegel van 390 pixels, één voor één over 5G. Wat je op het scherm ziet
+/// is een raster met titels en zwarte vlakken.
+///
+/// **Twee dingen, en het tweede kost geen enkele pixel.** Boven [kHoesPlafond] wordt er verkleind.
+/// Maar er wordt ALTIJD als JPEG teruggegeven, ook als er niet verkleind hoeft te worden: die
+/// 1024×1024-PNG van 2696 KB is als JPEG ongeveer 120 KB, bij precies dezelfde afmeting. PNG is
+/// voor een foto simpelweg de verkeerde vorm.
+///
+/// Null betekent "laat het origineel staan": niet te ontcijferen, of het resultaat werd niet
+/// kleiner. Een omzetting die niets oplevert is geen omzetting.
+Uint8List? verkleindeHoes(Uint8List bytes, int maxZijde) {
+  img.Image? im;
+  try {
+    im = img.decodeImage(bytes);
+  } catch (_) {
+    return null;
+  }
+  if (im == null || im.width < 8 || im.height < 8) return null;
+  final grootste = im.width > im.height ? im.width : im.height;
+  final t = grootste <= maxZijde
+      ? im
+      : (im.width >= im.height
+          ? img.copyResize(im, width: maxZijde)
+          : img.copyResize(im, height: maxZijde));
+  final Uint8List uit;
+  try {
+    uit = Uint8List.fromList(img.encodeJpg(t, quality: 82));
+  } catch (_) {
+    return null;
+  }
+  return uit.length < bytes.length ? uit : null;
+}
+
+/// [verkleindeHoes], buiten de tekendraad en op dezelfde rij als de rest. Zie [_opDeRij]: een verse
+/// isolate per hoes kopieert megabytes en dat viel samen met zes crashes van de engine.
+Future<Uint8List?> verkleindeHoesBuitenDeTekendraad(Uint8List bytes, int maxZijde) =>
+    _opDeRij(() => Isolate.run(() => verkleindeHoes(bytes, maxZijde)));

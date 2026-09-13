@@ -22181,7 +22181,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
   /// Apart bestand, niet ui.log: die schrijft per hoes een paar regels en zou hierdoor binnen een
   /// minuut zijn eigen kop afkappen. En niet weggelaten na de reparatie — dit is het enige punt waar
   /// "de plaat hapert" van "de plaat is traag" te onderscheiden valt, en dat komt terug.
-  late final FpsProbe _fps = FpsProbe(WarmLog('$appDir${Platform.pathSeparator}fps.log'));
+  late final FpsProbe _fps = FpsProbe(WarmLog('$logDir${Platform.pathSeparator}fps.log'));
 
   @override
   void initState() {

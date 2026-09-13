@@ -33,6 +33,7 @@ import 'organize.dart';
 import 'settings.dart';
 import 'vaste_keuze.dart';
 import 'paths.dart';
+import 'artwork.dart';
 
 /// Welke bestanden de bibliotheek als muziek beschouwt.
 ///
@@ -3050,7 +3051,7 @@ class LibraryStore extends ChangeNotifier {
         // meteen de juiste bytes. Dat is niet duurder dan de download die anders zou volgen.
         if (cached != null && ref != null && pcKentMerken) {
           gevraagd++;
-          final antwoord = await client.artAls(ref, bewaard);
+          final antwoord = await client.artAls(ref, bewaard, maxZijde: kHoesPlafond);
           // Een lege 304 telt hier als geslaagd, en dat is geen boekhoudkundige truc: de vraag die
           // `hoezenMislukt` stelt is "antwoordt de pc nog?". Een bibliotheek die volledig in de cache
           // staat vraagt hier alleen maar na, krijgt alleen maar 304'jes, en zou anders bij elke
@@ -3087,7 +3088,7 @@ class LibraryStore extends ChangeNotifier {
           continue;
         }
         if (ref != null) gevraagd++;
-        final antwoord = ref == null ? null : await client.artAls(ref, '');
+        final antwoord = ref == null ? null : await client.artAls(ref, '', maxZijde: kHoesPlafond);
         if (antwoord != null && antwoord.etag == null) pcKentMerken = false;
         final bytes = antwoord?.bytes;
         if (bytes == null || bytes.isEmpty) continue;

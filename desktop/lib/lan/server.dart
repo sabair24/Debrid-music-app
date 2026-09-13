@@ -33,6 +33,7 @@ import 'state_store.dart';
 import 'tokens.dart';
 import 'transcode.dart';
 import 'upnp.dart';
+import '../artwork.dart';
 
 /// The port the other devices look for. Fixed on purpose — an ephemeral port would mean every
 /// restart hands out a different address, and anything a client saved would go stale.
@@ -1568,9 +1569,17 @@ class LanServer {
     return out;
   }
 
+  /// Verkleinde hoezen, op verwijzing + plafond + merkteken van het origineel.
+  ///
+  /// Begrensd omdat dit anders de hele bibliotheek in het geheugen trekt: bij 1024 pixel is een hoes
+  /// zo'n 120 KB, dus tweehonderd stuks is ongeveer 24 MB. Dat is de prijs voor een raster dat
+  /// meteen vult, en de oudste valt eruit zodra er een nieuwe bij komt.
+  final _kleineHoezen = <String, Uint8List>{};
+  static const _kleineHoezenMax = 200;
+
   Future<void> _art(HttpRequest req) async {
     final ref = Uri.decodeComponent(req.uri.pathSegments.last);
-    final bytes = catalog.artwork(ref);
+    var bytes = catalog.artwork(ref);
     final res = req.response;
     if (bytes == null || bytes.isEmpty) {
       // Not an error: a cover the enricher hasn't reached yet simply isn't there, and the client
@@ -1591,7 +1600,36 @@ class LanServer {
     // Hier kost het niets: dit is één antwoord op één verzoek, geen veld dat elke catalogus naar elk
     // toestel duwt. Het toestel kan met `If-None-Match` in één goedkope 304 te horen krijgen dat het
     // gelijk had — en anders krijgt het meteen de juiste bytes.
-    final etag = '"${CoverEnricher.hoesMerk(bytes)}"';
+    final merk = CoverEnricher.hoesMerk(bytes);
+
+    // **`?w=` — een plafond in pixels.** Zie `verkleindeHoes` in `artwork.dart` voor de meting die
+    // hierachter zit: 548 hoezen van samen 174 MB, met een staart tot 14,7 MB, naar een tegel van
+    // 390 pixels. Wie geen plafond meegeeft krijgt onveranderd wat hij altijd al kreeg — een oudere
+    // app, de pc zelf, en elk toestel dat het origineel wil.
+    //
+    // Het merkteken telt het plafond MEE. Zonder dat zou een toestel dat de volle hoes al in zijn
+    // cache heeft een 304 krijgen op een verzoek om de kleine, en dus voor altijd de grote houden.
+    var etag = '"$merk"';
+    final gevraagd = int.tryParse(req.uri.queryParameters['w'] ?? '');
+    if (gevraagd != null && gevraagd >= 128) {
+      final plafond = gevraagd > 2048 ? 2048 : gevraagd;
+      final sleutel = '$ref|$plafond|$merk';
+      final klaar = _kleineHoezen[sleutel];
+      if (klaar != null) {
+        bytes = klaar;
+      } else {
+        final klein = await verkleindeHoesBuitenDeTekendraad(bytes, plafond);
+        if (klein != null) {
+          if (_kleineHoezen.length >= _kleineHoezenMax) {
+            _kleineHoezen.remove(_kleineHoezen.keys.first);
+          }
+          _kleineHoezen[sleutel] = klein;
+          bytes = klein;
+        }
+      }
+      etag = '"$merk-w$plafond"';
+    }
+
     if (req.headers.value(HttpHeaders.ifNoneMatchHeader) == etag) {
       res.statusCode = HttpStatus.notModified;
       res.headers.set(HttpHeaders.etagHeader, etag);

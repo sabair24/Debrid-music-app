@@ -338,8 +338,15 @@ class RemoteClient {
   }
 
   /// Cover art. Same query-token reason as [streamUrl]: `Image.network` sets no headers.
-  Uri artUrl(String ref) =>
-      endpoint.baseUrl.replace(path: '/art/$ref', queryParameters: {'token': endpoint.token});
+  /// `maxZijde` vraagt de pc om de hoes eerst te verkleinen. Zie `verkleindeHoes` in
+  /// `artwork.dart`: 548 hoezen van samen 174 MB, met een staart tot 14,7 MB, voor een tegel van
+  /// 390 pixels. Laat je hem weg, dan komt onveranderd het origineel — dat is wat de pc zelf en elk
+  /// ouder toestel doen.
+  Uri artUrl(String ref, {int? maxZijde}) =>
+      endpoint.baseUrl.replace(path: '/art/$ref', queryParameters: {
+        'token': endpoint.token,
+        if (maxZijde != null) 'w': '$maxZijde',
+      });
 
   /// Fetch a cover. Null rather than throwing when there simply isn't one — an album without art
   /// is normal, not a failure, and the caller would only swallow the exception anyway.
@@ -374,10 +381,10 @@ class RemoteClient {
   /// `etag` is null als de pc er geen meegaf. Dat is een OUDERE pc, en de beller hoort daaruit af te
   /// leiden dat navragen daar zinloos is — anders haalt hij bij elke ronde elke hoes opnieuw op.
   Future<({bool ongewijzigd, Uint8List? bytes, String? etag})?> artAls(
-      String ref, String merk) async {
+      String ref, String merk, {int? maxZijde}) async {
     try {
       final res = await _http
-          .get(artUrl(ref), headers: merk.isEmpty ? null : {'If-None-Match': '"$merk"'})
+          .get(artUrl(ref, maxZijde: maxZijde), headers: merk.isEmpty ? null : {'If-None-Match': '"$merk"'})
           .timeout(timeout);
       final etag = res.headers['etag']?.replaceAll('"', '');
       if (res.statusCode == 304) return (ongewijzigd: true, bytes: null, etag: etag);
