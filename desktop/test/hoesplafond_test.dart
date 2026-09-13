@@ -6,6 +6,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:debridmusic/artwork.dart';
+import 'package:debridmusic/enrichment.dart';
 import 'package:debridmusic/lan/pairing.dart';
 import 'package:debridmusic/lan/server.dart';
 import 'package:debridmusic/lan/state_store.dart';
@@ -17,23 +18,23 @@ import 'package:image/image.dart' as img;
 /// **GEMETEN OP 13-09-2026, op de bibliotheek van de pc, met de telefoon op 5G.**
 ///
 /// De klacht was "het laden van metadata moet sneller van pc naar smartphone". De metadata was het
-/// niet: de hele catalogus komt over 5G binnen in 0,27 s (211 KB gezipt, 1146 KB onverpakt, eerste
-/// byte na 68 ms). De hoezen waren het wel:
+/// niet: de hele catalogus komt over 5G binnen in 0,27 s (204,8 KiB gezipt, 1112 KiB onverpakt,
+/// eerste byte na 68 ms). De hoezen waren het wel - 544 albums, waarvan 541 een hoes geven:
 ///
-///     548 hoezen, samen 174 MB
-///     mediaan 121 KB / 600 pixel   -- prima
-///     grootste 14,7 MB / 2815 pixel
-///     58 stuks boven 500 KB
+///     samen 172,4 MiB
+///     mediaan 120,6 KiB / 600 pixel   -- prima
+///     grootste 14,70 MiB / 4000x4000 pixel
+///     156 stuks (29 %) boven 1024 pixel
 ///
-/// En de VORM is net zo goed het probleem als de maat: een hoes van 1024x1024 woog 2696 KB omdat hij
-/// als PNG was opgeslagen. Datzelfde plaatje als JPEG is ongeveer 120 KB, zonder ook maar een pixel
-/// te verliezen.
+/// En de VORM is net zo goed het probleem als de maat: er staan zeven PNG's in, samen 32,6 MiB
+/// tegen 1,3 MiB als JPEG - achttien keer zo zwaar per stuk.
 ///
-/// Met [kHoesPlafond] over de hele bibliotheek nagemeten: **172,4 MB -> 70,1 MB**, negenenvijftig
-/// procent minder, 472 van de 544 hoezen kleiner, en de grootste van 14,7 MB naar 306 KB.
+/// Met [kHoesPlafond] over de hele bibliotheek geteld: **172,4 MiB -> 57,0 MiB**, zevenenzestig
+/// procent minder, 533 van de 541 kleiner, en de grootste van 14,7 MiB naar 203 KiB.
 ///
-/// Wat deze toets vasthoudt is niet dat getal maar de drie regels eronder: verkleinen boven het
-/// plafond, hercoderen ook eronder, en - de val - het merkteken moet het plafond MEETELLEN.
+/// Wat deze toets vasthoudt is niet dat getal maar de regels eronder: verkleinen boven het plafond,
+/// hercoderen ook eronder, het merkteken moet het plafond MEETELLEN, de 304 mag niet rekenen, en
+/// wat niets oplevert blijft het origineel.
 
 /// Een plaatje dat zich als HOES gedraagt: vloeiende verlopen met een beetje korrel.
 ///
@@ -53,8 +54,9 @@ Uint8List _foto(int breedte, int hoogte, {bool alsPng = true, int kwaliteit = 92
           blauw.clamp(0, 255).toInt());
     }
   }
-  return Uint8List.fromList(
-      alsPng ? img.encodePng(im) : img.encodeJpg(im, quality: kwaliteit));
+  return Uint8List.fromList(alsPng
+      ? img.encodePng(im)
+      : img.encodeJpg(im, quality: kwaliteit, chroma: img.JpegChroma.yuv420));
 }
 
 ({LibraryStore library, Directory root}) _bibliotheekMetHoes(Uint8List hoes) {
@@ -128,15 +130,52 @@ void main() {
     });
 
     test('DE GRENS: levert het niets op, dan blijft het origineel staan', () {
-      // Een kleine hoes die al zuinig bewaard is wordt van hercoderen alleen maar groter. Null
-      // betekent hier "niets doen", en dat is beter dan hem nog een generatie door de encoder halen
-      // - elke generatie kost zichtbaar detail en levert niets op.
-      final zuinig = _foto(300, 300, alsPng: false, kwaliteit: 45);
+      // Een kleine hoes die al zuiniger bewaard is dan waar wij op coderen wordt van hercoderen
+      // alleen maar groter. Null betekent hier "niets doen", en dat is beter dan hem nog een
+      // generatie door de encoder halen - elke generatie kost zichtbaar detail en levert niets op.
+      // Zeventig van de 541 hoezen in de echte bibliotheek zitten in dit geval.
+      //
+      // Dezelfde chroma-subsampling aan beide kanten, anders vergelijk je twee dingen tegelijk.
+      final zuinig = _foto(300, 300, alsPng: false, kwaliteit: 25);
       expect(verkleindeHoes(zuinig, kHoesPlafond), isNull,
           reason: 'kleiner wordt hij niet, en slechter wel');
       // En wat niet te ontcijferen is ook niet.
       expect(verkleindeHoes(Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]), kHoesPlafond),
           isNull);
+    });
+
+    test('DE VAL: echte doorzichtigheid blijft het origineel', () async {
+      // JPEG kent geen doorzichtigheid en maakt er wit van. Een hoes die op de pc doorzichtig over
+      // de achtergrond ligt zou op de telefoon op een wit vlak staan - en omdat er ook zonder
+      // verkleinen gehercodeerd wordt, trof dat ook hoezen die al onder het plafond zitten.
+      final im = img.Image(width: 1600, height: 1600, numChannels: 4);
+      for (final p in im) {
+        p.setRgba(200, 100, 50, p.x < 40 ? 0 : 255);
+      }
+      final doorzichtig = Uint8List.fromList(img.encodePng(im));
+      expect(verkleindeHoes(doorzichtig, kHoesPlafond), isNull,
+          reason: 'liever groot en goed dan klein met een witte rand');
+
+      // DE GRENS eronder: een alfakanaal dat nergens gebruikt wordt hoort juist WEL mee te gaan.
+      // Dat zijn de zwaarste bestanden in de bibliotheek.
+      final dekkend = img.Image(width: 1600, height: 1600, numChannels: 4);
+      final r = Random(3);
+      for (final p in dekkend) {
+        p.setRgba((p.x % 200) + r.nextInt(8), (p.y % 200) + r.nextInt(8), 90 + r.nextInt(8), 255);
+      }
+      expect(verkleindeHoes(Uint8List.fromList(img.encodePng(dekkend)), kHoesPlafond), isNotNull,
+          reason: 'een ongebruikt alfakanaal is geen doorzichtigheid');
+    });
+
+    test('DE GRENS: een extreme verhouding levert geen hoes van niets', () {
+      // copyResize(height:) rekent de breedte uit als round(plafond * b/h). Bij 8x20000 is dat nul,
+      // en die JPEG van nul pixels breed was kleiner dan de bron en werd dus verstuurd: de telefoon
+      // kreeg een geldig bestand waar niets in stond.
+      final streep = img.Image(width: 8, height: 20000);
+      for (final p in streep) {
+        p.setRgb(p.y % 256, 40, 200);
+      }
+      expect(verkleindeHoes(Uint8List.fromList(img.encodeJpg(streep)), kHoesPlafond), isNull);
     });
   });
 
@@ -201,6 +240,46 @@ void main() {
       final metOud = await _haal(client, '$basis/art/$ref?w=$kHoesPlafond', 'test-token',
           ifNoneMatch: zonder.etag);
       expect(metOud.status, 200, reason: 'het oude merkteken mag de kleine hoes niet tegenhouden');
+    });
+
+    test('DE VAL: de 304 doet het verkleinwerk NIET', () async {
+      // **Gemeten op 13-09-2026, en dit was de duurste fout in deze hele wijziging.** Het verkleinen
+      // stond voor de If-None-Match-vergelijking, terwijl het merkteken op dat moment al bekend is.
+      // Een telefoon die opstart vraagt elke hoes na - bij 544 albums zijn dat 544 lege antwoorden,
+      // en die kostten de pc 292 ms per stuk in plaats van 2. Ruim veertig seconden rekenen om
+      // niets te versturen.
+      //
+      // Op een VERSE server, dus met een koude cache: het merkteken valt hier zelf uit te rekenen,
+      // want het hangt aan de bron en aan het plafond. Er is geen eerder verzoek voor nodig.
+      final bron = await _haal(client, '$basis/art/$ref', 'test-token');
+      final verwacht = '"${CoverEnricher.hoesMerk(bron.bytes)}-w$kHoesPlafond"';
+
+      final klok = Stopwatch()..start();
+      final r = await _haal(client, '$basis/art/$ref?w=$kHoesPlafond', 'test-token',
+          ifNoneMatch: verwacht);
+      klok.stop();
+
+      expect(r.status, 304);
+      expect(r.bytes, isEmpty);
+      // Honderd milliseconden is ruim: de verkleining van deze hoes van 2000 pixels kost er
+      // honderden. Het gaat om de orde van grootte, niet om het getal.
+      expect(klok.elapsedMilliseconds, lessThan(100),
+          reason: 'een 304 die eerst verkleint is geen goedkope 304');
+    });
+
+    test('DE VAL: een hoes die niets oplevert wordt maar EEN keer berekend', () async {
+      // Het lege antwoord werd niet onthouden, alleen het geslaagde. Een hoes die niet kleiner
+      // wordt - acht van de 541 hier - betaalde daardoor bij elk verzoek opnieuw een volledige
+      // decode plus hercodering, voor altijd.
+      final een = Stopwatch()..start();
+      await _haal(client, '$basis/art/$ref?w=1900', 'test-token');
+      een.stop();
+      final twee = Stopwatch()..start();
+      await _haal(client, '$basis/art/$ref?w=1900', 'test-token');
+      twee.stop();
+
+      expect(twee.elapsedMilliseconds * 4, lessThan(een.elapsedMilliseconds + 40),
+          reason: 'het tweede verzoek hoort uit de cache te komen, ook als er niets te winnen viel');
     });
 
     test('DE GRENS: een onzinnig plafond verandert niets', () async {

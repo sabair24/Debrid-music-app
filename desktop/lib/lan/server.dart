@@ -1571,11 +1571,50 @@ class LanServer {
 
   /// Verkleinde hoezen, op verwijzing + plafond + merkteken van het origineel.
   ///
-  /// Begrensd omdat dit anders de hele bibliotheek in het geheugen trekt: bij 1024 pixel is een hoes
-  /// zo'n 120 KB, dus tweehonderd stuks is ongeveer 24 MB. Dat is de prijs voor een raster dat
-  /// meteen vult, en de oudste valt eruit zodra er een nieuwe bij komt.
-  final _kleineHoezen = <String, Uint8List>{};
-  static const _kleineHoezenMax = 200;
+  /// **Op bytes begrensd en niet op aantal, en de oudst GEBRUIKTE valt eruit.** Eerst stonden hier
+  /// tweehonderd plekken met "de eerst ingevoegde eruit". Bij 544 hoezen die in vaste volgorde
+  /// langskomen is dat het slechtste geval dat er bestaat: aan het begin van de tweede ronde zitten
+  /// hoes 345 tot 544 erin, mist het verzoek om hoes 1, en gooit die precies de hoes eruit die zo
+  /// aan de beurt is. Trefkans vrijwel nul, en "eenmalig rekenen" werd elke ronde opnieuw rekenen.
+  ///
+  /// Tellen op items klopte ook niet: bij `?w=2048` is een item een veelvoud van de 120 KB waar de
+  /// rekensom op stond.
+  final _kleineHoezen = <String, Uint8List?>{};
+  var _kleineHoezenBytes = 0;
+  static const _kleineHoezenMaxBytes = 48 * 1024 * 1024;
+
+  /// Wat er NU berekend wordt, op sleutel. Twee toestellen die tegelijk synchroniseren vroegen
+  /// anders elke hoes dubbel op en zetten twee volledige verkleiningen in dezelfde rij.
+  final _hoesBezig = <String, Future<Uint8List?>>{};
+
+  Future<Uint8List?> _kleineHoes(String sleutel, Uint8List bron, int plafond) {
+    if (_kleineHoezen.containsKey(sleutel)) {
+      // Opnieuw invoegen, zodat de volgorde van de map de volgorde van GEBRUIK is.
+      final w = _kleineHoezen.remove(sleutel);
+      _kleineHoezen[sleutel] = w;
+      return Future.value(w);
+    }
+    final loopt = _hoesBezig[sleutel];
+    if (loopt != null) return loopt;
+    final werk = verkleindeHoesBuitenDeTekendraad(bron, plafond).then((klein) {
+      // **Ook een leeg antwoord wordt onthouden.** Een hoes die niet kleiner wordt gaf anders bij
+      // elk volgend verzoek opnieuw een volledige decode plus hercodering, voor altijd.
+      _kleineHoezen[sleutel] = klein;
+      _kleineHoezenBytes += klein?.length ?? 0;
+      while (_kleineHoezenBytes > _kleineHoezenMaxBytes && _kleineHoezen.length > 1) {
+        final oudste = _kleineHoezen.keys.first;
+        _kleineHoezenBytes -= _kleineHoezen.remove(oudste)?.length ?? 0;
+      }
+      return klein;
+    });
+    _hoesBezig[sleutel] = werk;
+    // Een BLOKlichaam en geen pijl: met een pijl geeft de opruimer terug wat `remove` teruggeeft, en
+    // dat is op een map van futures de future zelf. Zie `lan/transcode.dart` voor de keer dat dat
+    // een wachter voor altijd liet wachten.
+    return werk.whenComplete(() {
+      _hoesBezig.remove(sleutel);
+    });
+  }
 
   Future<void> _art(HttpRequest req) async {
     final ref = Uri.decodeComponent(req.uri.pathSegments.last);
@@ -1603,38 +1642,34 @@ class LanServer {
     final merk = CoverEnricher.hoesMerk(bytes);
 
     // **`?w=` — een plafond in pixels.** Zie `verkleindeHoes` in `artwork.dart` voor de meting die
-    // hierachter zit: 548 hoezen van samen 174 MB, met een staart tot 14,7 MB, naar een tegel van
-    // 390 pixels. Wie geen plafond meegeeft krijgt onveranderd wat hij altijd al kreeg — een oudere
-    // app, de pc zelf, en elk toestel dat het origineel wil.
+    // hierachter zit: 544 albums, 541 hoezen van samen 172,4 MiB, met een staart tot 14,7 MiB, naar
+    // een tegel van 390 pixels. Wie geen plafond meegeeft krijgt onveranderd wat hij altijd al
+    // kreeg — een oudere app, de pc zelf, en elk toestel dat het origineel wil.
     //
     // Het merkteken telt het plafond MEE. Zonder dat zou een toestel dat de volle hoes al in zijn
     // cache heeft een 304 krijgen op een verzoek om de kleine, en dus voor altijd de grote houden.
-    var etag = '"$merk"';
     final gevraagd = int.tryParse(req.uri.queryParameters['w'] ?? '');
-    if (gevraagd != null && gevraagd >= 128) {
-      final plafond = gevraagd > 2048 ? 2048 : gevraagd;
-      final sleutel = '$ref|$plafond|$merk';
-      final klaar = _kleineHoezen[sleutel];
-      if (klaar != null) {
-        bytes = klaar;
-      } else {
-        final klein = await verkleindeHoesBuitenDeTekendraad(bytes, plafond);
-        if (klein != null) {
-          if (_kleineHoezen.length >= _kleineHoezenMax) {
-            _kleineHoezen.remove(_kleineHoezen.keys.first);
-          }
-          _kleineHoezen[sleutel] = klein;
-          bytes = klein;
-        }
-      }
-      etag = '"$merk-w$plafond"';
-    }
+    final plafond = gevraagd != null && gevraagd >= 128
+        ? (gevraagd > 2048 ? 2048 : gevraagd)
+        : null;
+    final etag = plafond == null ? '"$merk"' : '"$merk-w$plafond"';
 
+    // **De 304 gaat VOOR het verkleinen, en dat is geen microseconde-werk.** Het merkteken hangt aan
+    // de bron en aan het plafond, en die zijn hier allebei al bekend — er is niets uit de verkleinde
+    // bytes voor nodig. Stond dit erna, dan betaalde de pc voor elk leeg antwoord een volledige
+    // decode plus hercodering: een telefoon die opstart vraagt elke hoes na, dat zijn 544 lege 304's,
+    // en dat was gemeten 292 ms per stuk in plaats van 2.
     if (req.headers.value(HttpHeaders.ifNoneMatchHeader) == etag) {
       res.statusCode = HttpStatus.notModified;
       res.headers.set(HttpHeaders.etagHeader, etag);
       return res.close();
     }
+
+    if (plafond != null) {
+      final klein = await _kleineHoes('$ref|$plafond|$merk', bytes, plafond);
+      if (klein != null) bytes = klein;
+    }
+
     res.statusCode = HttpStatus.ok;
     res.headers
       ..set(HttpHeaders.contentTypeHeader, _imageType(bytes))

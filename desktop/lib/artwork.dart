@@ -420,46 +420,92 @@ const int kHoesPlafond = 1024;
 
 /// Een hoes klein genoeg om over een mobiel netwerk te sturen. Null als er niets te winnen valt.
 ///
-/// **Waarom dit bestaat.** Gemeten op 13-09-2026 op de bibliotheek van deze pc: 548 hoezen, samen
-/// **174 MB**. De mediaan is 121 KB en de mediane zijde 600 pixels — dat is prima. Maar de staart
-/// niet:
+/// **Waarom dit bestaat.** Geteld op 13-09-2026 over de hele bibliotheek van deze pc — 544 albums,
+/// waarvan er 541 een hoes teruggeven, samen **172,4 MiB**. De mediaan is 120,6 KiB en de mediane
+/// langste zijde 600 pixels; dat is prima. De staart niet:
 ///
-///     12487 KB   2815x2802  png
-///      2766 KB   2797x2804  jpg
-///      2696 KB   1024x1024  png     <- niet te groot, wel de verkeerde vorm
+///     14,70 MiB   2780x2780  png
+///     14,65 MiB   4000x4000  jpg
+///      2,63 MiB   1024x1024  png   <- niet te groot, wel de verkeerde vorm
 ///
-/// Achtenvijftig hoezen zitten boven 500 KB en de grootste is 14,7 MB. Een telefoon haalt die op
-/// volle resolutie op voor een tegel van 390 pixels, één voor één over 5G. Wat je op het scherm ziet
-/// is een raster met titels en zwarte vlakken.
+/// Honderdzesenvijftig hoezen (29 %) zitten boven 1024 pixels. Een telefoon haalt die op volle
+/// resolutie op voor een tegel van 390 pixels, over 5G. Wat je op het scherm ziet is een raster met
+/// titels en zwarte vlakken.
 ///
-/// **Twee dingen, en het tweede kost geen enkele pixel.** Boven [kHoesPlafond] wordt er verkleind.
-/// Maar er wordt ALTIJD als JPEG teruggegeven, ook als er niet verkleind hoeft te worden: die
-/// 1024×1024-PNG van 2696 KB is als JPEG ongeveer 120 KB, bij precies dezelfde afmeting. PNG is
-/// voor een foto simpelweg de verkeerde vorm.
+/// **Waar de winst zit, geteld en niet geschat.** Die 156 hoezen boven het plafond gaan samen van
+/// 127,0 naar 30,5 MiB — dat is 96,5 van de ruim honderd MiB die dit oplevert. Verkleinen is dus
+/// het leeuwendeel.
 ///
-/// Null betekent "laat het origineel staan": niet te ontcijferen, of het resultaat werd niet
-/// kleiner. Een omzetting die niets oplevert is geen omzetting.
+/// Maar er wordt ALTIJD als JPEG teruggegeven, ook als er niet verkleind hoeft te worden: er staan
+/// maar zeven PNG's in deze bibliotheek en die wegen samen 32,6 MiB tegen 1,3 MiB als JPEG.
+/// Gemiddeld 4,66 MiB per PNG tegen 261 KiB per JPEG — achttien keer zo zwaar bij dezelfde
+/// afmeting.
+///
+/// **Eerlijk over wat dat kost: JPEG is verliesgevend.** De afmeting blijft, de pixels niet. Van die
+/// 1024x1024-PNG naar JPEG op kwaliteit 82 is nagemeten op 40,4 dB PSNR, en een hoes van 600 pixels
+/// die al JPEG was op 42,7 dB. Dat is ruim boven de grens waar iemand het op een tegel van 390
+/// pixels ziet, maar het is geen kopie. Wie het origineel wil vraagt zonder plafond, en dat blijft
+/// bit voor bit wat het was.
+///
+/// **Twee instellingen die niet de standaard van `package:image` zijn, allebei nagemeten.**
+///
+/// `yuv420` en niet `yuv444`: zonder chroma-subsampling is voor een foto weggegooide ruimte — het
+/// oog ziet kleurdetail veel grover dan helderheid, en 533 van de 541 hoezen hier ZIJN al JPEG en
+/// dus vrijwel zeker al 4:2:0. Over de hele bibliotheek: 67,5 tegen 53,6 MiB.
+///
+/// `Interpolation.average` en niet de standaard `nearest`: die laatste gooit bij 2400 naar 1024
+/// tweeëntachtig procent van de pixels weg zonder te middelen. Dat geeft karteling op fijn detail —
+/// op een streepjespatroon bleef de standaardafwijking 120,0 tegen 60,0 bij `average` — én duurdere
+/// bestanden, want karteling is hoogfrequent en dat is precies wat JPEG slecht kan. Gemeten op een
+/// hoes van 2400 pixels: nearest 44 KB tegen average 27 KB. Het kost 34 ms per hoes extra.
+///
+/// **Null betekent "laat het origineel staan".** Niet te ontcijferen, het resultaat werd niet
+/// kleiner, of een van deze drie:
+///
+///  * **Er zit echte doorzichtigheid in.** JPEG kent dat niet en maakt er wit van. Een hoes die op
+///    de pc doorzichtig over de achtergrond ligt zou op de telefoon op een wit vlak staan.
+///  * **Er zit beweging in** (een GIF met meer dan één beeld): `encodeJpg` schrijft er stil het
+///    eerste beeld van en de rest is weg.
+///  * **De verhouding is zo extreem dat er een zijde van niets overblijft.** `copyResize(height:)`
+///    rekent de breedte uit als `round(maxZijde * b/h)`, en bij 8x20000 is dat nul. Dat leverde een
+///    geldige JPEG van nul pixels breed op, die kleiner was dan de bron en dus verstuurd werd.
 Uint8List? verkleindeHoes(Uint8List bytes, int maxZijde) {
-  img.Image? im;
   try {
-    im = img.decodeImage(bytes);
+    final im = img.decodeImage(bytes);
+    if (im == null || im.width < 8 || im.height < 8) return null;
+    if (im.frames.length > 1) return null;
+    if (im.hasAlpha && _heeftEchteDoorzichtigheid(im)) return null;
+
+    final grootste = im.width > im.height ? im.width : im.height;
+    final t = grootste <= maxZijde
+        ? im
+        : (im.width >= im.height
+            ? img.copyResize(im, width: maxZijde, interpolation: img.Interpolation.average)
+            : img.copyResize(im, height: maxZijde, interpolation: img.Interpolation.average));
+    if (t.width < 8 || t.height < 8) return null;
+
+    final uit = Uint8List.fromList(img.encodeJpg(t, quality: 82, chroma: img.JpegChroma.yuv420));
+    return uit.length < bytes.length ? uit : null;
   } catch (_) {
+    // **Alles eromheen, en niet alleen het ontcijferen.** `copyResize` en `bakeOrientation` kunnen
+    // er ook uit stappen, en dan liep de fout door de isolate en door de server heen tot een 500 —
+    // waarna het toestel de hoes als mislukt telde en niets toonde, terwijl het origineel gewoon
+    // verstuurd had kunnen worden.
     return null;
   }
-  if (im == null || im.width < 8 || im.height < 8) return null;
-  final grootste = im.width > im.height ? im.width : im.height;
-  final t = grootste <= maxZijde
-      ? im
-      : (im.width >= im.height
-          ? img.copyResize(im, width: maxZijde)
-          : img.copyResize(im, height: maxZijde));
-  final Uint8List uit;
-  try {
-    uit = Uint8List.fromList(img.encodeJpg(t, quality: 82));
-  } catch (_) {
-    return null;
+}
+
+/// Is er ook maar één pixel die niet volledig dekkend is?
+///
+/// `hasAlpha` zegt alleen dat er een kanaal is, niet dat het gebruikt wordt — en de meeste PNG's met
+/// een alfakanaal zijn van rand tot rand dekkend. Die willen we juist wél omzetten: zij zijn de
+/// zwaarste bestanden in de bibliotheek.
+bool _heeftEchteDoorzichtigheid(img.Image im) {
+  final max = im.maxChannelValue;
+  for (final p in im) {
+    if (p.a < max) return true;
   }
-  return uit.length < bytes.length ? uit : null;
+  return false;
 }
 
 /// [verkleindeHoes], buiten de tekendraad en op dezelfde rij als de rest. Zie [_opDeRij]: een verse
