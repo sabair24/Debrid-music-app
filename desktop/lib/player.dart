@@ -399,29 +399,39 @@ NaHetEinde watNaHetEinde({
 
 /// Hoe lang een nummer dat niet openging op zijn tweede kans wacht.
 ///
-/// **GETELD OP 14-09-2026 over 23 dagen `speler.log` van de telefoon: 131 keer OPENEN MISLUKT.**
-/// Dat is bijna zes keer per dag stilte waar muziek hoorde te zijn, en het is precies waar "hij
-/// hapert" vandaan komt — niet van de bluetooth, want de buds zaten er de helft van die keren niet
-/// eens in.
+/// **Vier tellen, en dit getal is een keer nagemeten toen iemand het korter wilde maken.**
 ///
-/// Vier tellen stond er voor iedereen, en dat kwam uit een goede waarneming: een pc die een hi-res
-/// bestand eerst helemaal omzet stuurt tien tot twintig seconden lang geen byte, en dan is vier
-/// tellen wachten juist verstandig — de omgezette kopie staat dan in de cache en komt meteen.
+/// De aanleiding klopte: over 23 dagen `speler.log` van de telefoon staan 116 losse openingen die
+/// mislukten, zo'n vijf per actieve dag, en dat is hoorbare stilte. Het voorstel was om alleen te
+/// wachten als de pc stond om te zetten — dan is hij tien tot twintig seconden bezig — en anders na
+/// zevenhonderd milliseconden terug te komen, want een verse verbinding naar de pc kost thuis 5 tot
+/// 17 ms.
 ///
-/// Maar dat geldt maar voor de helft:
+/// **Het logboek zei het tegenovergestelde.** Van alle 69 herkansingen is nagegaan of er binnen
+/// twee minuten opnieuw dezelfde titel omviel:
 ///
-///     60 van de 131 mislukkingen hadden `maxRate` in het adres  -> de pc stond te converteren
-///     71 hadden dat niet                                        -> er hoefde alleen verbonden
+///     oorzaak                          hield stand   weer fout
+///     `maxRate` (pc zet om)                 43           3     -> 93 % raak
+///     adres zonder `maxRate`                 9           5     -> 64 %
+///     helemaal geen adres (tcp-time-out)     0           9     ->  0 %
 ///
-/// En die tweede groep zit vooral aan het begin van een luisterblok: 38 van de 69 mislukkingen
-/// binnen een minuut na het starten vroegen helemaal geen omzetting. Daar is vier seconden geen
-/// geduld maar verspilling — er moest een verbinding opgezet worden, en dat duurt milliseconden.
+/// De twee groepen die versneld zouden worden zijn precies de groepen waar de herkansing het al het
+/// slechtst deed, en de groep die zijn vier tellen zou houden is de enige waar hij bijna altijd
+/// raak is. Korter maken helpt dus juist daar niet waar het pijn doet.
 ///
-/// Zevenhonderd milliseconden is ruim boven wat een verse verbinding kost (thuis gemeten: 5 tot 17
-/// ms naar zowel het lokale adres als dat van Tailscale) en kort genoeg om als een haperinkje te
-/// klinken in plaats van als stilte.
-Duration herkansingNa({required bool pcMoestOmzetten}) =>
-    pcMoestOmzetten ? const Duration(seconds: 4) : const Duration(milliseconds: 700);
+/// En het kost wél iets: er is **één** herkansing per nummer ([_tweedePogingVoor], alleen gewist in
+/// `_openCurrent`). Vuurt die terwijl de pc nog wakker wordt, dan is de enige kans op en blijft het
+/// nummer dood op 0:00 staan — precies waarvoor deze vier tellen ooit zijn ingevoerd. De
+/// overheersende fout in die groep is `Connection timed out`, en opeenvolgende time-outs op
+/// hetzelfde nummer lagen 6, 8, 9 en 12 seconden uit elkaar. Daar is 700 ms niets.
+///
+/// De meting van 5 tot 17 ms was bovendien niet van toepassing: die is thuis gedaan met een wakkere
+/// pc, terwijl bij een time-out juist geen pc heeft geantwoord.
+///
+/// **Wat wél te onderzoeken valt** staat hieronder, niet hier: 93 van de 96 keer dat een definitief
+/// focusverlies de muziek pauzeerde bleef die liggen tot iemand zelf drukte. Dat is vier stiltes per
+/// dag, en dat is een groter gat dan dit getal ooit kan dichten. Zie `now_playing.dart`.
+const kHerkansingNa = Duration(seconds: 4);
 
 /// Bewaakt of "speelt" ook betekent dat er iets speelt.
 ///
@@ -917,10 +927,12 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     final t = current;
     if (t == null || t.path.isEmpty || _tweedePogingVoor == t.path) return;
     _tweedePogingVoor = t.path;
-    final wacht = herkansingNa(pcMoestOmzetten: _omzetten);
-    _log?.line('nog één poging over ${wacht.inMilliseconds} ms'
+    // Wél opschrijven of de pc stond om te zetten: dat scheelde bij het nameten het verschil tussen
+    // een herkansing die 93 % raak was en eentje die het nooit haalde, en zonder die aantekening is
+    // dat achteraf niet uit het logboek te halen.
+    _log?.line('nog één poging over vier tellen'
         '${_omzetten ? " (pc was aan het omzetten)" : ""} — ${t.title}');
-    Timer(wacht, () {
+    Timer(kHerkansingNa, () {
       // Intussen doorgeklikt of gestopt? Dan hoort deze poging nergens meer bij.
       if (current?.path != t.path || position > Duration.zero) return;
       _meldStilstand('Nog een poging…');

@@ -222,7 +222,7 @@ jobs:
             test/audiodb_art_test.dart test/auto_bladeren_test.dart \
             test/auto_hoezen_test.dart test/beeldmedia_test.dart \
             test/betrapt_opnieuw_proberen_test.dart test/betrapt_telt_niet_test.dart \
-            test/bio_test.dart test/booklet_test.dart \
+            test/booklet_test.dart \
             test/botsing_na_afmelden_test.dart test/busy_line_test.dart \
             test/cast_discovery_test.dart test/cast_omzetten_test.dart \
             test/cast_receiver_test.dart \

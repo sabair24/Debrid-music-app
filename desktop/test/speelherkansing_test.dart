@@ -3,50 +3,49 @@ library;
 import 'package:debridmusic/player.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// **GETELD OP 14-09-2026, over 23 dagen `speler.log` van de telefoon.**
+/// **NAGEMETEN OP 14-09-2026, nadat dit getal korter was gemaakt en weer teruggedraaid.**
 ///
-/// De klacht was "de bluetooth-buds haperen". Het logboek zegt iets anders: 131 keer OPENEN
-/// MISLUKT, bijna zes keer per dag, en de helft daarvan met de buds niet eens in. Wat je hoort is
-/// geen bluetooth maar een nummer dat niet opengaat en pas na de herkansing begint.
+/// De aanleiding was goed: over 23 dagen `speler.log` van de telefoon staan 116 losse openingen die
+/// mislukten, zo'n vijf per actieve dag. Het voorstel was om alleen vier tellen te wachten als de
+/// pc stond om te zetten, en anders na zevenhonderd milliseconden terug te komen - een verse
+/// verbinding naar de pc kost thuis immers 5 tot 17 ms.
 ///
-/// Vier tellen stond er voor iedereen, en dat kwam uit een goede waarneming: een pc die een hi-res
-/// bestand eerst helemaal omzet stuurt tien tot twintig seconden lang geen byte. Wie dan te snel
-/// opnieuw vraagt krijgt precies dezelfde fout, en de omgezette kopie staat er na vier tellen wel.
+/// Het logboek zei het omgekeerde. Van alle 69 herkansingen nagegaan of dezelfde titel binnen twee
+/// minuten opnieuw omviel:
 ///
-/// Maar dat geldt maar voor de helft van de gevallen:
+///     oorzaak                            hield stand   weer fout
+///     `maxRate` (pc zet om)                   43           3     -> 93 % raak
+///     adres zonder `maxRate`                   9           5     -> 64 %
+///     helemaal geen adres (tcp-time-out)       0           9     ->  0 %
 ///
-///     60 van de 131 hadden `maxRate` in het adres  -> de pc stond te converteren
-///     71 hadden dat niet                           -> er hoefde alleen verbonden te worden
+/// Versnellen zou precies de twee onderste groepen raken - die waar de herkansing het al het
+/// slechtst deed - en de bovenste, de enige die bijna altijd lukt, zijn vier tellen laten houden.
 ///
-/// En die tweede groep zit vooral vooraan: van de 69 mislukkingen binnen een minuut na het starten
-/// van een luisterblok vroegen er 38 helemaal geen omzetting. Daar is vier seconden geen geduld
-/// maar stilte om niets - een verse verbinding naar de pc kostte thuis gemeten 5 tot 17 ms, naar
-/// zowel het lokale adres als dat van Tailscale.
+/// En er is maar EEN herkansing per nummer. Vuurt die terwijl de pc nog wakker wordt, dan is de
+/// enige kans op en blijft het nummer dood op 0:00 staan. Opeenvolgende time-outs op hetzelfde
+/// nummer lagen 6, 8, 9 en 12 seconden uit elkaar; daar is 700 ms niets. De meting van 5 tot 17 ms
+/// was niet van toepassing: die is thuis gedaan met een wakkere pc, terwijl er bij een time-out
+/// juist geen pc heeft geantwoord.
 ///
-/// Wat deze toets vasthoudt is dat onderscheid. Eén getal voor allebei is per definitie fout voor
-/// een van de twee.
+/// Deze toets bestaat om dat niet nog eens te doen.
 void main() {
   group('de tweede poging op een nummer dat niet openging', () {
-    test('DE KERN: zonder omzetting hoor je een hikje, geen stilte', () {
-      final kort = herkansingNa(pcMoestOmzetten: false);
-
-      expect(kort.inMilliseconds, greaterThan(200),
-          reason: 'onder de tweehonderd ms is het dezelfde mislukte verbinding, alleen sneller');
-      expect(kort.inMilliseconds, lessThan(1000),
-          reason: 'boven een seconde klinkt het als stilte en niet als een hapering');
+    test('DE KERN: vier tellen, en niet korter', () {
+      expect(kHerkansingNa, const Duration(seconds: 4));
     });
 
-    test('DE VAL: mét omzetting blijft het vier tellen', () {
-      // Hier NIET versnellen. De pc zet het bestand eerst helemaal om en stuurt in die tien tot
-      // twintig seconden geen byte; wie na zevenhonderd milliseconden opnieuw vraagt krijgt
-      // gegarandeerd dezelfde fout en verbrandt de enige herkansing die er is.
-      expect(herkansingNa(pcMoestOmzetten: true), const Duration(seconds: 4));
+    test('DE VAL: ruim boven de tijd die een time-out zelf al kost', () {
+      // Opeenvolgende `Connection timed out` op hetzelfde nummer lagen 6, 8, 9 en 12 s uit elkaar.
+      // Een herkansing die binnen die cyclus valt vraagt het aan een pc die nog steeds niet
+      // antwoordt, en verbrandt daarmee de enige poging die er is.
+      expect(kHerkansingNa.inMilliseconds, greaterThanOrEqualTo(2000),
+          reason: 'onder de twee seconden krijg je gegarandeerd dezelfde fout terug');
     });
 
-    test('DE GRENS: de twee zijn echt verschillend', () {
-      expect(herkansingNa(pcMoestOmzetten: false),
-          lessThan(herkansingNa(pcMoestOmzetten: true)),
-          reason: 'een gedeeld getal is voor een van de twee gevallen altijd het verkeerde');
+    test('DE GRENS: en niet zo lang dat het een storing lijkt', () {
+      // Boven een seconde of tien geeft de app geen teken van leven meer en lijkt hij kapot in
+      // plaats van geduldig.
+      expect(kHerkansingNa.inSeconds, lessThanOrEqualTo(10));
     });
   });
 }
