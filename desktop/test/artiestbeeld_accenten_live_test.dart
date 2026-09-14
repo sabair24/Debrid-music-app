@@ -1,3 +1,13 @@
+// **`_live_` in de naam, en daarom niet in de CI-lijst.** Deze toets belt TheAudioDB echt op —
+// `artistArt('Beyonce')` en `artistArt('Beyoncé')` — en dat is ook het hele punt: hij houdt vast wat
+// die dienst met een accent doet. Precies daarom hoort hij niet in de lijst die de APK-bouw
+// tegenhoudt.
+//
+// Niet meegemaakt met dit bestand, wel twee keer met zijn soortgenoten: `bio_test.dart` (TheAudioDB)
+// blokkeerde `win-v3.9.391` en `metadata_test.dart` (MusicBrainz) `win-v3.9.394`. Beide met een
+// tijdslimiet, beide zonder dat er iets aan de code veranderd was. Er staat hieronder al een
+// `markTestSkipped` voor "geen antwoord", maar een verzoek dat HANGT haalt die regel nooit.
+//
 /// Artiesten met een accent in hun naam kregen géén foto, logo of backdrop.
 ///
 /// **Gemeten op 06-09-2026.** TheAudioDB's zoekfunctie vindt `Beyonce` wél en `Beyoncé` niet —

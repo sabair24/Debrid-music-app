@@ -1,3 +1,17 @@
+// Deezer en MusicBrainz écht opbellen.
+//
+// **`_live_` in de naam, en daarom niet in de CI-lijst.** Alle vier de toetsen hier vragen iets aan
+// een vreemde server. Op 14-09-2026 hield dat bestand de APK van `win-v3.9.394` tegen: 3195 toetsen
+// door, deze ene om met `TimeoutException after 0:00:30` op "MusicBrainz search returns releases".
+// Aan de code was niets veranderd — MusicBrainz knipperde.
+//
+// De toetsen hieronder doen al aan `markTestSkipped` als de bron géén treffers geeft, en dat is
+// precies het gat: een bron die niet ANTWOORDT is iets anders dan een bron die niets vindt. Dat
+// eerste loopt in de tijdslimiet en zakt.
+//
+// Dit is dezelfde storing als met `bio_test.dart` twee uitleveringen eerder, en als de reeks van elf
+// van 12-09 tot 13-09: één rode toets in die lijst slaat álles daarna over, publiceren incluis. Een
+// toets die van andermans gratis dienst afhangt meet niet onze code en hoort daar niet in.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:debridmusic/editions.dart';
 import 'package:debridmusic/metadata.dart';
