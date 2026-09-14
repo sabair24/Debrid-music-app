@@ -246,7 +246,7 @@ jobs:
             test/flac_tags_test.dart test/flac_write_test.dart \
             test/flaresolverr_test.dart test/gelijke_titels_test.dart \
             test/geweigerd_of_stil_test.dart test/handle_leak_test.dart \
-            test/herkansing_test.dart test/hoes_cache_test.dart \
+            test/herkansing_test.dart test/speelherkansing_test.dart test/hoes_cache_test.dart \
             test/hoes_na_herbouw_test.dart test/hoesmerk_test.dart \
             test/inno_vlaggen_test.dart test/json_body_test.dart \
             test/koppelingen_overleven_test.dart test/kwaliteit_lijst_test.dart \

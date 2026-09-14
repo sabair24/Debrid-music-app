@@ -397,6 +397,32 @@ NaHetEinde watNaHetEinde({
   return herhaal == RepeatMode.one ? NaHetEinde.ditNummerOpnieuw : NaHetEinde.volgende;
 }
 
+/// Hoe lang een nummer dat niet openging op zijn tweede kans wacht.
+///
+/// **GETELD OP 14-09-2026 over 23 dagen `speler.log` van de telefoon: 131 keer OPENEN MISLUKT.**
+/// Dat is bijna zes keer per dag stilte waar muziek hoorde te zijn, en het is precies waar "hij
+/// hapert" vandaan komt — niet van de bluetooth, want de buds zaten er de helft van die keren niet
+/// eens in.
+///
+/// Vier tellen stond er voor iedereen, en dat kwam uit een goede waarneming: een pc die een hi-res
+/// bestand eerst helemaal omzet stuurt tien tot twintig seconden lang geen byte, en dan is vier
+/// tellen wachten juist verstandig — de omgezette kopie staat dan in de cache en komt meteen.
+///
+/// Maar dat geldt maar voor de helft:
+///
+///     60 van de 131 mislukkingen hadden `maxRate` in het adres  -> de pc stond te converteren
+///     71 hadden dat niet                                        -> er hoefde alleen verbonden
+///
+/// En die tweede groep zit vooral aan het begin van een luisterblok: 38 van de 69 mislukkingen
+/// binnen een minuut na het starten vroegen helemaal geen omzetting. Daar is vier seconden geen
+/// geduld maar verspilling — er moest een verbinding opgezet worden, en dat duurt milliseconden.
+///
+/// Zevenhonderd milliseconden is ruim boven wat een verse verbinding kost (thuis gemeten: 5 tot 17
+/// ms naar zowel het lokale adres als dat van Tailscale) en kort genoeg om als een haperinkje te
+/// klinken in plaats van als stilte.
+Duration herkansingNa({required bool pcMoestOmzetten}) =>
+    pcMoestOmzetten ? const Duration(seconds: 4) : const Duration(milliseconds: 700);
+
 /// Bewaakt of "speelt" ook betekent dat er iets speelt.
 ///
 /// **Gemeten op 12-08-2026, en het is precies hoe een app kapot aanvoelt terwijl er niets kapot is.**
@@ -865,7 +891,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// Hoe vaak deze stroom al afgebroken is. Nul bij elk nieuw nummer.
   int _hervatpogingen = 0;
 
-  /// Voor welk nummer er al een tweede poging gedaan is. Hoogstens één per nummer.
+  /// Voor welk nummer er al een tweede poging gedaan is. Hoogstens een per nummer.
+  ///
+  /// Zie ook [herkansingNa] voor hoe lang die poging op zich laat wachten.
   ///
   /// Op het PAD en niet op een vlag, en dat is geen smaak. De tweede poging van een radionummer
   /// loopt via [_openRadioCurrent] — dezelfde weg die ook een nieuw nummer opent — dus een vlag die
@@ -889,8 +917,10 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     final t = current;
     if (t == null || t.path.isEmpty || _tweedePogingVoor == t.path) return;
     _tweedePogingVoor = t.path;
-    _log?.line('nog één poging over vier tellen — ${t.title}');
-    Timer(const Duration(seconds: 4), () {
+    final wacht = herkansingNa(pcMoestOmzetten: _omzetten);
+    _log?.line('nog één poging over ${wacht.inMilliseconds} ms'
+        '${_omzetten ? " (pc was aan het omzetten)" : ""} — ${t.title}');
+    Timer(wacht, () {
       // Intussen doorgeklikt of gestopt? Dan hoort deze poging nergens meer bij.
       if (current?.path != t.path || position > Duration.zero) return;
       _meldStilstand('Nog een poging…');
