@@ -953,10 +953,12 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       if (!f.existsSync()) return 'het bestand staat er niet meer';
       final grootte = f.lengthSync();
       var kop = const <int>[];
-      // Alleen openen als er iets te lezen valt. Twaalf bytes is genoeg voor elk herkenningsteken.
+      // Alleen openen als er iets te lezen valt. Vierenzestig bytes: twaalf zouden genoeg zijn voor
+      // elk herkenningsteken, maar de STREAMINFO van een FLAC loopt tot byte 42, en dáár staat wat
+      // het bestand zelf belooft te bevatten. Zie `flacOnverpakteBytes`.
       if (grootte > 0) {
         raf = f.openSync();
-        kop = raf.readSync(12);
+        kop = raf.readSync(64);
       }
       return waaromNietTeOpenen(naam: pad, bytes: grootte, kop: kop);
     } catch (_) {
