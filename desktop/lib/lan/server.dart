@@ -10,6 +10,7 @@ import '../album_facts.dart';
 import '../cloud/device_identity.dart';
 import '../album_facts_resolver.dart';
 import '../enrichment.dart';
+import '../kapot_bestand.dart';
 import '../library.dart';
 import '../models.dart';
 import '../musicbrainz.dart';
@@ -343,6 +344,7 @@ class LanServer {
 
     if (path.startsWith('/stream/')) return _stream(req);
     if (path.startsWith('/art/')) return _art(req);
+    if (path.startsWith('/waarom/')) return _waarom(req);
 
     res.statusCode = HttpStatus.notFound;
     return res.close();
@@ -769,6 +771,59 @@ class LanServer {
     await res.done.catchError((Object _) {});
     await sub.cancel();
     beat.cancel();
+  }
+
+  /// Waarom een nummer niet open te krijgen is — gevraagd door een toestel dat het NIET zelf kan
+  /// zien.
+  ///
+  /// **Waarom dit bestaat.** [waaromNietTeOpenen] kijkt naar de bytes van een bestand, en dat kan
+  /// alleen de machine waar dat bestand op staat. Een telefoon die van de pc streamt heeft geen pad
+  /// maar een adres; daar viel niets te kijken, en dus bleef mpv's eigen zin staan. Op 14-09-2026
+  /// stond er om 19:15 en nog eens om 20:08 in `speler.log` van de telefoon "Error decoding audio"
+  /// bij Sommeil — een bestand waarvan hier op schijf te zien is dat er 0,13 % van het geluid in
+  /// staat. De pc wist het, en werd niet gevraagd.
+  ///
+  /// Geeft 204 als er niets bijzonders te melden valt, en dat is verreweg het meest voorkomende
+  /// antwoord: de meeste mislukte openingen liggen aan de verbinding en niet aan het bestand. Dan
+  /// is mpv's eigen woord nog altijd beter dan een verzonnen verklaring.
+  Future<void> _waarom(HttpRequest req) async {
+    final res = req.response;
+    // Zelfde vorm als `/stream/<id>`: de extensie mag erbij staan en hoort er niet bij het zoeken.
+    final rauw = Uri.decodeComponent(req.uri.pathSegments.last);
+    final punt = rauw.lastIndexOf('.');
+    final id = punt > 0 ? rauw.substring(0, punt) : rauw;
+
+    final track = catalog.track(id);
+    if (track == null) {
+      res.statusCode = HttpStatus.notFound;
+      return res.close();
+    }
+    RandomAccessFile? raf;
+    try {
+      final f = File(track.path);
+      if (!f.existsSync()) return _json(res, {'reden': 'het bestand staat er niet meer'});
+      final grootte = f.lengthSync();
+      var kop = const <int>[];
+      // Vierenzestig, net als in `player.dart`: de STREAMINFO van een FLAC loopt tot byte 42.
+      if (grootte > 0) {
+        raf = f.openSync();
+        kop = raf.readSync(64);
+      }
+      final reden = waaromNietTeOpenen(naam: track.path, bytes: grootte, kop: kop);
+      if (reden == null) {
+        res.statusCode = HttpStatus.noContent;
+        return res.close();
+      }
+      return _json(res, {'reden': reden});
+    } catch (_) {
+      // Niet kunnen kijken is geen uitspraak.
+      res.statusCode = HttpStatus.noContent;
+      return res.close();
+    } finally {
+      try {
+        raf?.closeSync();
+      } catch (_) {}
+    }
   }
 
   Future<void> _stream(HttpRequest req) async {

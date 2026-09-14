@@ -705,6 +705,10 @@ Future<void> main() async {
   // dan raakt `metStand` de URL niet aan. Een `if (mode.owner)` eromheen zou alleen een tweede
   // plek zijn waar dit stuk kapot kan.
   player.onHapering = netStore.hapering;
+  // Als het openen mislukt en dit toestel zelf niets kan zien, de pc vragen. Een closure en geen
+  // vaste verwijzing: `library.remote` wordt pas verderop gezet, en op de pc blijft hij null —
+  // daar kijkt de speler rechtstreeks naar het bestand en is er niets te vragen.
+  player.vraagDeBron = (url) async => library.remote?.waarom(url);
   player.onKlaarzetten = (url) => unawaited(_zetKlaar(url));
   player.addListener(() {
     netStore.volgHetSpelen(speelt: player.playing);

@@ -732,6 +732,13 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// aanroepers: de stilstandwacht, en een stroom die afbreekt voordat het nummer op is.
   void Function()? onHapering;
 
+  /// Wie kan navragen wat er mis is met een nummer dat op de PC staat, of null op de pc zelf.
+  ///
+  /// [_redenUitBestand] kan alleen kijken naar een bestand op deze machine. Op de telefoon is het
+  /// pad een stroomadres, en daar bleef het dus bij mpv's eigen woord — terwijl de pc de bytes voor
+  /// zich had liggen. Dit is die vraag, in één draad: url erin, een zin eruit of null.
+  Future<String?> Function(String url)? vraagDeBron;
+
   /// Het volgende nummer alvast laten klaarzetten op de pc. Ingehangen vanuit main.dart, dat er een
   /// `HEAD` op doet: de server zet dan de hele omzetting klaar en stuurt alleen de kop terug.
   ///
@@ -868,6 +875,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       // weg te gooien op zijn schijf. Zie `kapot_bestand.dart`.
       final eigen = _redenUitBestand(current?.path);
       _meldStilstand('Kan dit nummer niet openen — ${eigen ?? _kortereReden(e)}');
+      // Kon HIER niets gezien worden, dan is het een stroomadres en staat het bestand op de pc.
+      // Die kan er wél naar kijken. Zie `vraagDeBron`.
+      if (eigen == null) _vraagHetDeBron(current?.path, current?.title);
       // Opnieuw proberen heeft alleen zin bij iets dat over kan gaan — een haperende verbinding, een
       // pc die net wakker wordt. Een leeg bestand is over vier seconden nog steeds leeg, en dan is
       // een tweede poging alleen een tweede foutmelding.
@@ -938,6 +948,26 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       _meldStilstand('Nog een poging…');
       unawaited(radioMode ? _openRadioCurrent() : _hervatOpDezelfdePlek());
     });
+  }
+
+  /// De pc vragen wat er mis is, en de melding bijstellen als hij iets weet.
+  ///
+  /// **Waarom dit apart staat en niet in de foutafhandeling zelf.** Het antwoord komt over het
+  /// netwerk en dus later — en in de tussentijd is de speler vaak al door. In `speler.log` van de
+  /// telefoon staan drie pogingen op Sommeil BINNEN dezelfde seconde, gevolgd door "OPGEGEVEN na 3
+  /// pogingen — door naar het volgende". De melding bijstellen van een nummer dat niet meer aan de
+  /// beurt is, zou de gebruiker een uitleg geven over het verkeerde nummer. Vandaar de controle
+  /// dat er nog steeds hetzelfde speelt.
+  void _vraagHetDeBron(String? pad, String? titel) {
+    final vraag = vraagDeBron;
+    if (vraag == null || pad == null || !pad.startsWith('http')) return;
+    unawaited(() async {
+      final reden = await vraag(pad);
+      if (reden == null) return;
+      _log?.line('DE PC ZEGT — ${titel ?? "?"} — $reden');
+      if (current?.path != pad) return;
+      _meldStilstand('Kan dit nummer niet openen — $reden');
+    }());
   }
 
   /// Wat er aan het bestand zelf te zien is, of null als het niets bijzonders laat zien.

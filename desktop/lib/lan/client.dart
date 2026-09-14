@@ -337,6 +337,41 @@ class RemoteClient {
         .toString();
   }
 
+  /// Wat de pc over dit nummer te zeggen heeft nadat het openen mislukt is, of null.
+  ///
+  /// [streamUrl] is de url die aan mpv gegeven is. Wijst die niet naar ONZE pc, dan valt er niets
+  /// te vragen: een Radio-wachtrij mengt bibliotheeknummers met opgeloste TorBox-stromen, en de
+  /// eigenaar daarvan weet niets van onze catalogus — dezelfde reden als bij [authorized].
+  ///
+  /// Null bij alles wat misgaat, en dat is met opzet ruim: dit draait NA een mislukking, om een
+  /// foutmelding preciezer te maken. Loopt het hier ook mis, dan blijft de melding staan die er al
+  /// stond. Een tweede foutmelding over de eerste heen helpt niemand.
+  Future<String?> waarom(String streamUrl) async {
+    try {
+      final uri = Uri.tryParse(streamUrl);
+      if (uri == null ||
+          uri.host != endpoint.baseUrl.host ||
+          uri.port != endpoint.baseUrl.port ||
+          !uri.path.startsWith('/stream/')) {
+        return null;
+      }
+      final vraag = endpoint.baseUrl.replace(
+        path: uri.path.replaceFirst('/stream/', '/waarom/'),
+        queryParameters: {'token': endpoint.token},
+      );
+      // Kort: dit hangt aan een foutmelding die al op het scherm staat, en een gebruiker die vier
+      // seconden op een preciezere zin wacht is slechter af dan een die hem niet krijgt.
+      final res = await _http.get(vraag).timeout(const Duration(seconds: 4));
+      if (res.statusCode != 200) return null;
+      final body = jsonDecode(utf8.decode(res.bodyBytes));
+      if (body is! Map) return null;
+      final reden = body['reden'];
+      return reden is String && reden.trim().isNotEmpty ? reden.trim() : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Cover art. Same query-token reason as [streamUrl]: `Image.network` sets no headers.
   /// `maxZijde` vraagt de pc om de hoes eerst te verkleinen. Zie `verkleindeHoes` in
   /// `artwork.dart`: 548 hoezen van samen 174 MB, met een staart tot 14,7 MB, voor een tegel van
