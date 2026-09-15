@@ -433,6 +433,49 @@ NaHetEinde watNaHetEinde({
 /// dag, en dat is een groter gat dan dit getal ooit kan dichten. Zie `now_playing.dart`.
 const kHerkansingNa = Duration(seconds: 4);
 
+/// Hoe lang ffmpeg mag blijven proberen de draad weer op te pakken als de lijn wegvalt.
+///
+/// **Moet KLEINER blijven dan het zuinigste vooruitlezen** (`vooruitleesSeconden(mobiel)` = 90).
+/// Geeft hij later op dan de buffer leeg is, dan staat de muziek stil zonder dat er iets gemeld
+/// wordt en zonder dat de eigen herkansing van de app aan de beurt komt. Zestig past daar met
+/// dertig seconden speling onder.
+const kHerverbindenSeconden = 60;
+
+/// Wat mpv aan de ffmpeg-kant meekrijgt om een weggevallen lijn zélf te herstellen.
+///
+/// **GEMETEN OP 15-09-2026, met een server die er halverwege een nummer uitklapt.** Twee keer
+/// hetzelfde bestand, zestig seconden gevraagd, de lijn onderbroken op byte 3.912.986:
+///
+///     lijn 12 s weg    zonder deze opties   6,4 s muziek, daarna stuk
+///                      met                  60,0 s — alles
+///     lijn 45 s weg    zonder               6,4 s
+///                      met                  60,0 s
+///
+/// `reconnect` staat bij ffmpeg standaard UIT, en daarom stond het ook in deze app uit. Wat je dan
+/// krijgt staat woordelijk in de proef:
+///
+///     Stream ends prematurely at 3912986, should be 129650058
+///     Error during demuxing: I/O error
+///     invalid residual / decode_frame() failed
+///
+/// Die laatste regel is wat mpv naar buiten brengt als **"Error decoding audio"** — niet te
+/// onderscheiden van een kapot bestand. Precies dat stond op 15-09 vier keer in `speler.log` van de
+/// telefoon, tussen 16:50 en 17:15, terwijl Saber onderweg was en de stroom over Tailscale liep:
+/// vier nummers die halverwege stierven (*Together Again* op 2:43 van 5:01, *Got Me Singing* op
+/// 3:21 van 3:42, *Quit Playin' Games* op 3:26 van 3:54). Telkens vier mislukte verbindingen in
+/// zesentwintig seconden en daarna een volle minuut waarin niets meer werd geprobeerd — terwijl de
+/// lijn aantoonbaar terug was, want het vólgende nummer speelde gewoon.
+///
+/// Met deze opties vraagt ffmpeg het stuk vanaf dezelfde byte opnieuw op (`Range: bytes=3912986-`),
+/// en `lan/server.dart` kan dat al — zie `lan/range.dart`.
+///
+/// **Waarom `reconnect_streamed` er NIET bij staat:** dat is voor bronnen zonder Range, en die
+/// beginnen dan van voren af aan. Voor een nummer is halverwege terugspringen naar nul erger dan
+/// stoppen. Onze eigen server kan Range, dus dit is niet nodig.
+const kStroomHerstelOpties = 'reconnect=1,'
+    'reconnect_on_network_error=1,'
+    'reconnect_delay_max=$kHerverbindenSeconden';
+
 /// Bewaakt of "speelt" ook betekent dat er iets speelt.
 ///
 /// **Gemeten op 12-08-2026, en het is precies hoe een app kapot aanvoelt terwijl er niets kapot is.**
@@ -543,6 +586,10 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       // En de leesbuffer van de stroom zelf omhoog (standaard 128 kB): op een schokkerige
       // verbinding scheelt dat het aantal keren dat er helemaal niets binnenkomt.
       await p.setProperty('stream-buffer-size', '4MiB');
+      // De draad weer oppakken als de lijn wegvalt. Zie [kStroomHerstelOpties] voor de meting.
+      // Dit gaat naar de STROOM-laag (`stream-lavf-o`); media_kit zet zelf alleen `demuxer-lavf-o`,
+      // dus er wordt hier niets van hem overschreven.
+      await p.setProperty('stream-lavf-o', kStroomHerstelOpties);
     } catch (e) {
       _log?.line('vooruitlezen niet ingesteld: $e');
     }
