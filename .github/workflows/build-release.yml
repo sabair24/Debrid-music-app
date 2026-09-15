@@ -57,8 +57,44 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # **Geen `android-actions/setup-android` meer, en dat is de reparatie.**
+      #
+      # Op 15-09-2026 leverde `win-v3.9.396` geen APK op: deze stap viel om na zeven seconden, nog
+      # voor Flutter was opgezet. Een dag eerder deed hij er twintig seconden over en slaagde hij; er
+      # was hier niets veranderd. Eerst gedacht aan de node20-waarschuwing die GitHub erbij zette, dus
+      # naar `@v4` (node24) gebracht — die viel net zo hard om. Daarna de bouwstraat zichzelf laten
+      # beschrijven, want joblogs zijn zonder token niet te lezen en foutmeldingen zijn het enige
+      # kanaal dat wél anoniem leesbaar is (zelfde truc als `toetsuitslag.dart`). Wat eruit kwam:
+      #
+      #     Ubuntu 24.04.5 LTS, x86_64        (dus GEEN nieuwe runner-image)
+      #     ANDROID_HOME = ANDROID_SDK_ROOT = /usr/local/lib/android/sdk
+      #     daarin al aanwezig, VOOR de actie: build-tools cmake cmdline-tools extras
+      #                                        licenses ndk platform-tools platforms
+      #     sdkmanager staat er: cmdline-tools/latest/bin/sdkmanager
+      #
+      # De SDK stond er dus compleet op. Die actie installeerde niets wat er niet al was — na afloop
+      # was het enige verschil een `repositories.cfg`. We hingen onze uitleveringen aan een derde
+      # partij die we niet nodig hadden, en toen die omviel viel de APK mee.
+      #
+      # Wat hieronder staat doet het werk dat wél nodig is: de SDK vinden, zijn gereedschap op het
+      # PATH zetten, en de licenties bevestigen. En het KLAAGT met een leesbare melding als de
+      # runner-image ooit werkelijk verandert, in plaats van in zeven seconden stil om te vallen.
+      - name: Android SDK klaarzetten
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          if [ ! -d "$SDK/platform-tools" ] || [ ! -d "$SDK/build-tools" ]; then
+            echo "::error title=Android SDK ontbreekt::niets bruikbaars op $SDK — de runner-image is veranderd. Wat er wel staat: $(ls "$SDK" 2>&1 | tr '\n' ' ' | cut -c1-250)"
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          for d in "$SDK"/cmdline-tools/*/bin; do
+            [ -d "$d" ] && echo "$d" >> "$GITHUB_PATH"
+          done
+          # Bevestigen kan al bevestigd zijn; dat is geen fout en mag de bouw niet tegenhouden.
+          yes 2>/dev/null | "$SDK"/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true
+          echo "::notice title=Android SDK::$(. /etc/os-release && echo "$PRETTY_NAME") | platforms: $(ls "$SDK/platforms" 2>/dev/null | tr '\n' ' ') | build-tools: $(ls "$SDK/build-tools" 2>/dev/null | tr '\n' ' ')"
 
       # Pinned to the same version this app is developed against. url_launcher_ios needs 3.38+,
       # and a floating "stable" would move under us.
