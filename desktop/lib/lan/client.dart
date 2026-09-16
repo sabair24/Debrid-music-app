@@ -647,6 +647,30 @@ class RemoteClient {
     }
   }
 
+  /// De sleutel uit een koppelantwoord, of een fout met de zin die de pc zelf meestuurde.
+  ///
+  /// **Waarom dit niet gewoon `j['token']` is.** Een pc kan een weigering met de goede uitleg
+  /// erin sturen en tóch status 200 zetten — dat deed hij tot 16-09-2026 bij élke koppelweigering,
+  /// zie `_json` in `server.dart`. Kijk je dan alleen naar de sleutel, dan hou je over: *"De pc gaf
+  /// geen sleutel terug"*, terwijl er in datzelfde antwoord *"Je pc is niet ingelogd"* stond. Saber
+  /// heeft die ochtend zeven keer geprobeerd te koppelen zonder ooit te lezen wat eraan scheelde.
+  ///
+  /// De pc is gerepareerd, maar een telefoon praat ook met pc's die nog niet bijgewerkt zijn. Deze
+  /// kant kijkt daarom eerst of er een `error` in staat, wat de statuscode ook zegt.
+  static String _sleutelUit(dynamic body) {
+    final map = body is Map ? body : const <String, dynamic>{};
+    final uitleg = (map['error'] ?? '').toString().trim();
+    if (uitleg.isNotEmpty) throw RemoteException(uitleg);
+    final token = (map['token'] ?? '').toString();
+    if (token.isEmpty) {
+      throw const RemoteException(
+        'De pc antwoordde wel, maar gaf geen sleutel en ook geen reden. '
+        'Staat er op de pc een nieuwere versie van DebridMusic?',
+      );
+    }
+    return token;
+  }
+
   /// Redeem the six digits shown on the PC. Throws with a message meant to be read by the person
   /// holding the iPad, not by a log.
   static Future<RemoteEndpoint> pair(
@@ -675,12 +699,10 @@ class RemoteClient {
         throw RemoteException('Koppelen mislukte (${res.statusCode}).', statusCode: res.statusCode);
       }
       final j = jsonDecode(res.body);
-      final token = (j is Map ? j['token'] : null)?.toString() ?? '';
-      if (token.isEmpty) throw const RemoteException('De pc gaf geen sleutel terug.');
       return RemoteEndpoint(
         baseUrl: baseUrl,
-        token: token,
-        name: (j as Map)['name']?.toString(),
+        token: _sleutelUit(j),
+        name: (j is Map ? j['name'] : null)?.toString(),
       );
     } on RemoteException {
       rethrow;
@@ -743,12 +765,10 @@ class RemoteClient {
       }
 
       final j = jsonDecode(res.body);
-      final token = (j is Map ? j['token'] : null)?.toString() ?? '';
-      if (token.isEmpty) throw const RemoteException('De pc gaf geen sleutel terug.');
       return RemoteEndpoint(
         baseUrl: baseUrl,
-        token: token,
-        name: (j as Map)['name']?.toString(),
+        token: _sleutelUit(j),
+        name: (j is Map ? j['name'] : null)?.toString(),
       );
     } on RemoteException {
       rethrow;

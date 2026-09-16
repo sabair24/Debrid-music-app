@@ -592,8 +592,8 @@ class LanServer {
     if (opzoeker == null) {
       // Deze bouw kent geen Firebase. Dan is de code de enige weg, en dat is een antwoord.
       _koppelLog?.line('PAIR-CLOUD  geweigerd: deze pc kent geen account-inlog');
-      req.response.statusCode = HttpStatus.forbidden;
-      return _json(req.response, {'error': koppelweigering(uidVanSleutel: '', uidVanPc: '')});
+      return _json(req.response, {'error': koppelweigering(uidVanSleutel: '', uidVanPc: '')},
+          status: HttpStatus.forbidden);
     }
 
     final body = await utf8.decoder.bind(req).join();
@@ -608,19 +608,20 @@ class LanServer {
       // Google onbereikbaar. Dat is geen weigering maar een "nu niet", en het verschil hoort op het
       // scherm van het toestel te staan -- anders ga je een wachtwoord zoeken dat prima was.
       _koppelLog?.line('PAIR-CLOUD  niet na te kijken: $e');
-      req.response.statusCode = HttpStatus.serviceUnavailable;
-      return _json(req.response, {
-        'error': 'Je pc kon je inlog niet nakijken bij Google. Probeer het zo nog eens.',
-      });
+      return _json(
+        req.response,
+        {'error': 'Je pc kon je inlog niet nakijken bij Google. Probeer het zo nog eens.'},
+        status: HttpStatus.serviceUnavailable,
+      );
     }
 
     if (!magKoppelenOpAccount(uidVanSleutel: vanWie, uidVanPc: mijn)) {
       _koppelLog?.line('PAIR-CLOUD  geweigerd'
           '  sleutel van: ${vanWie.isEmpty ? "(onbekend)" : "…${vanWie.substring(vanWie.length > 6 ? vanWie.length - 6 : 0)}"}'
           '  deze pc: ${mijn.isEmpty ? "(niet ingelogd)" : "…${mijn.substring(mijn.length > 6 ? mijn.length - 6 : 0)}"}');
-      req.response.statusCode = HttpStatus.forbidden;
       return _json(req.response,
-          {'error': koppelweigering(uidVanSleutel: vanWie, uidVanPc: mijn)});
+          {'error': koppelweigering(uidVanSleutel: vanWie, uidVanPc: mijn)},
+          status: HttpStatus.forbidden);
     }
 
     final naam = (map['deviceName'] ?? 'Onbekend apparaat').toString();
@@ -657,8 +658,7 @@ class LanServer {
     } catch (e) {
       // A speaker that has gone off the network, or a track that isn't there any more. The
       // client shows this, so it must read like something a person can act on.
-      req.response.statusCode = HttpStatus.badRequest;
-      return _json(req.response, {'error': '$e'});
+      return _json(req.response, {'error': '$e'}, status: HttpStatus.badRequest);
     }
   }
 
@@ -677,8 +677,7 @@ class LanServer {
       );
       return _json(req.response, {'ok': true});
     } catch (e) {
-      req.response.statusCode = HttpStatus.badRequest;
-      return _json(req.response, {'error': '$e'});
+      return _json(req.response, {'error': '$e'}, status: HttpStatus.badRequest);
     }
   }
 
@@ -696,8 +695,7 @@ class LanServer {
       );
       return _json(req.response, {'ok': true});
     } catch (e) {
-      req.response.statusCode = HttpStatus.badRequest;
-      return _json(req.response, {'error': '$e'});
+      return _json(req.response, {'error': '$e'}, status: HttpStatus.badRequest);
     }
   }
 
@@ -1762,9 +1760,24 @@ class LanServer {
   /// quietly turned every error body into a successful empty answer: a client asking a PC that
   /// cannot search got `{"error": "..."}` with a 200, read no results in it, and showed "niets
   /// gevonden" instead of the reason.
-  Future<void> _json(HttpResponse res, Object body, {int status = HttpStatus.ok}) async {
+  /// Een JSON-antwoord, met de statuscode die de aanroeper wil.
+  ///
+  /// **[status] is bewust nullable, en dat is een reparatie.** Hier stond
+  /// `{int status = HttpStatus.ok}` met een onvoorwaardelijke `res.statusCode = status`. Wie de code
+  /// ERVOOR zette — en dat deden zes plekken in dit bestand — zag hem stil op 200 terugvallen. Op
+  /// 16-09-2026 kwam Saber daardoor zijn telefoon niet meer binnen: `/pair-cloud` antwoordde
+  ///
+  ///     HTTP 200  {"error":"Je pc is niet ingelogd. Log op de pc in met hetzelfde account."}
+  ///
+  /// terwijl er in de code `statusCode = HttpStatus.forbidden` boven stond. De telefoon zag een
+  /// GESLAAGD antwoord zonder sleutel erin en zei *"De pc gaf geen sleutel terug"* — een zin die
+  /// nergens heen wijst, terwijl de pc precies verteld had wat eraan scheelde.
+  ///
+  /// Niets meegeven laat de code staan die er al stond; dat kan geen enkele weigering meer
+  /// wegpoetsen. De zes plekken hieronder geven hem nu expliciet mee.
+  Future<void> _json(HttpResponse res, Object body, {int? status}) async {
     final bytes = utf8.encode(jsonEncode(body));
-    res.statusCode = status;
+    if (status != null) res.statusCode = status;
     res.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
     res.headers.contentLength = bytes.length;
     res.add(bytes);

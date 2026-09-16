@@ -73,6 +73,11 @@ void main() {
       final zin = koppelweigering(uidVanSleutel: 'k7Yq2mB1', uidVanPc: '');
       expect(zin.toLowerCase(), contains('pc'));
       expect(zin.toLowerCase(), contains('niet ingelogd'));
+      // **En de uitweg erbij.** Een zin die alleen de dichte deur aanwijst laat je staan. De zes
+      // cijfers hangen aan de gedeelde sleutel en niet aan een account, dus die werken juist in
+      // precies dit geval. Op 16-09-2026 probeerde Saber het zeven keer zonder dat ooit te lezen.
+      expect(zin.toLowerCase(), contains('zes cijfers'),
+          reason: 'de enige weg die hier WEL openstaat hoort in de zin te staan');
     });
 
     test('een sleutel die niet nagekeken kon worden vraagt om opnieuw inloggen', () {

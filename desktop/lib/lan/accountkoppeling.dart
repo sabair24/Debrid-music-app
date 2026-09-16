@@ -54,7 +54,12 @@ bool magKoppelenOpAccount({required String uidVanSleutel, required String uidVan
 /// heel verschillende dingen, met twee heel verschillende oplossingen.
 String koppelweigering({required String uidVanSleutel, required String uidVanPc}) {
   if (uidVanPc.trim().isEmpty) {
-    return 'Je pc is niet ingelogd. Log op de pc in met hetzelfde account.';
+    // **Met de uitweg erbij, en dat is een reparatie van 16-09-2026.** Deze zin klopte al, maar hij
+    // liet je staan met één weg die dicht zat. Terwijl de zes cijfers er náást liggen en wél werken:
+    // die hangen aan de gedeelde sleutel en niet aan een account. Saber probeerde die ochtend zeven
+    // keer te koppelen; met deze zin op zijn scherm was hij er in één keer in geweest.
+    return 'Je pc is niet ingelogd. Log op de pc in met hetzelfde account, '
+        'of koppel met de zes cijfers uit Instellingen op de pc.';
   }
   if (uidVanSleutel.trim().isEmpty) {
     return 'Je inlogsleutel kon niet nagekeken worden. Log opnieuw in en probeer het nog eens.';
