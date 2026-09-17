@@ -12,6 +12,7 @@ import 'mp3_tags.dart';
 import 'echtheid.dart';
 import 'echtheid_oordelen.dart';
 import 'vaste_keuze.dart';
+import 'wavpack_kop.dart' show readWvKop;
 
 /// Where a downloaded release belongs in the folder tree.
 enum RelKind { album, single, compilation }
@@ -1935,8 +1936,56 @@ class TidyReport {
 /// duplicates (same artist+title, keeping the best format/size). Only ever touches files
 /// INSIDE [downloadsRoot] — the user's own collection elsewhere is never moved.
 Future<TidyReport> tidyDownloads(String downloadsRoot) async {
+  final report = await bergMapOp(downloadsRoot, downloadsRoot);
+  // Sweep up the now-empty folders left behind.
+  await sweepEmptyFolders(downloadsRoot);
+  return report;
+}
+
+/// Alle muziek in [map] opbergen in de nette boom onder [downloadsRoot] — wat [tidyDownloads] voor
+/// de hele downloadmap doet, maar dan voor één download.
+///
+/// **Waarom dit bestaat.** Een Soulseek-nummer wordt bij binnenkomst meteen opgeborgen, via
+/// [placeFileDetailed], en komt dus in dezelfde albummap te staan als een eerdere kopie — waar
+/// [firstIsBetter] kiest welke blijft. Een torrent werd NOOIT opgeborgen: hij bleef liggen in
+/// `DebridMusic Downloads\<torrentnaam>\`, tot iemand in Instellingen op "Opruimen" drukte. Daardoor
+/// kwamen de twee nooit tegenover elkaar te staan, in geen van beide richtingen.
+///
+/// Gemeten op 17-09-2026. James Blunt — 1973 kwam die ochtend als torrent binnen in een eigen map
+/// met de torrentnaam, náást de plaat waar hij bij hoort — een identieke 24/96 van wat er al lag.
+/// Culture Beat — Mr. Vain lag sinds 14-09 als schone 24/192 in `DebridMusic Downloads\Culture
+/// Beat\`, terwijl in `Albums\` de Soulseek-kopie bleef staan die als opgeblazen gemeten was.
+///
+/// Dat laatste bestand lost dit NIET op, en dat hoort erbij: het heeft geen enkele tag, dus
+/// [placeFileDetailed] weet niet waar het heen moet en laat het liggen. Een getagde torrent — en dat
+/// is het gewone geval — wordt wél opgeborgen.
+///
+/// Wat hier NIET gebeurt, en dat is met opzet: twee uitgaven samenvoegen. [placeFileDetailed]
+/// vergelijkt alleen binnen dezelfde albummap, dus een Deluxe Edition vervangt de gewone plaat niet.
+/// Dat is dezelfde grens die [tidyDownloads] al trok nadat hij een live-opname had weggegooid omdat
+/// de studioversie dezelfde artiest en titel droeg.
+/// Hoe lang dit nummer duurt volgens zijn eigen kop, of null als dat er niet uit te halen valt.
+///
+/// FLAC uit STREAMINFO, WavPack uit zijn blokkop. De rest levert null, en dat is een antwoord: zie
+/// [bergMapOp] voor wat er dan NIET gebeurt. Een schatting uit de bestandsgrootte zou er hier juist
+/// een gok van maken, en een gok die "dit is dezelfde opname" zegt kost een bestand.
+int? looptijdInSeconden(File f) {
+  final laag = f.path.toLowerCase();
+  Duration? d;
+  try {
+    if (laag.endsWith('.flac')) d = readFlacTags(f)?.duration;
+    if (laag.endsWith('.wv')) d = readWvKop(f)?.duration;
+  } catch (_) {
+    return null;
+  }
+  if (d == null || d.inMilliseconds <= 0) return null;
+  return (d.inMilliseconds / 1000).round();
+}
+
+Future<TidyReport> bergMapOp(String map, String downloadsRoot,
+    {String? Function(String artist, String title, {int? seconds})? staatAl}) async {
   final report = TidyReport();
-  final dir = Directory(downloadsRoot);
+  final dir = Directory(map);
   if (!await dir.exists()) return report;
 
   final audio = audioExtensies;
@@ -1957,7 +2006,30 @@ Future<TidyReport> tidyDownloads(String downloadsRoot) async {
   // as "Justice | D.A.N.C.E." — only the album differs — so the live version was thrown away.
   for (final f in files) {
     final before = f.path;
-    final out = await placeFileDetailed(f, downloadsRoot);
+    // **De looptijd uit het bestand zelf, en [staatAl] alleen als die er is.** [staatAl] is de weg
+    // waarlangs een betere kopie ÓP het bestand landt dat er al ligt — precies het vervangen waar dit
+    // om draait. Maar zonder looptijd antwoordt die weg op niets meer dan artiest + titel, en dat is
+    // het Sting-geval: *Fields of Gold (My Songs Version)* van 2019 werd daar als mindere dubbel van
+    // de plaat uit 1993 weggezet. Een Soulseek-download heeft de looptijd uit de catalogus; een
+    // torrent heeft alleen zijn eigen kop. Staat die er niet in, dan wordt er gewoon op de eigen
+    // albumtag opgeborgen en niets vervangen — liever een kopie te veel dan een opname te weinig.
+    final eigen = readTags(f);
+    final sec = looptijdInSeconden(f);
+    final metDuur = eigen == null || sec == null
+        ? eigen
+        : TrackTags(
+            title: eigen.title,
+            artist: eigen.artist,
+            album: eigen.album,
+            trackNo: eigen.trackNo,
+            albumArtist: eigen.albumArtist,
+            trackTotal: eigen.trackTotal,
+            year: eigen.year,
+            seconds: sec,
+            vanBestand: eigen.vanBestand,
+          );
+    final out = await placeFileDetailed(f, downloadsRoot,
+        tags: metDuur, staatAl: sec == null ? null : staatAl);
     switch (out.how) {
       case Placement.moved:
         if (out.path != before) report.moved++;
@@ -1967,9 +2039,6 @@ Future<TidyReport> tidyDownloads(String downloadsRoot) async {
         report.skipped++;
     }
   }
-
-  // Sweep up the now-empty folders left behind.
-  await sweepEmptyFolders(dir.path);
   return report;
 }
 

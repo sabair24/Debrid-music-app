@@ -2332,6 +2332,53 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
+  /// Wensen laten vallen waarvan een verliesvrije kopie inmiddels in de bibliotheek staat.
+  ///
+  /// Stond alleen bovenaan [sweepLosslessWants], en die draait om de twintig minuten. Een torrent die
+  /// net een hele plaat heeft opgeborgen hoort de jacht op die plaat METEEN te stoppen, niet pas een
+  /// kwartier later — anders haalt Soulseek er intussen nog een kopie van binnen die daarna naar
+  /// `_dubbel` gaat. Zie [_bergTorrentOp].
+  Future<int> vergeetWatErAlIs() async {
+    await _ensureWants();
+    final have = haveLossless;
+    if (have == null) return 0;
+    final weg = _wants.forgetWhatWeHave(have);
+    if (weg.isEmpty) return 0;
+    await _wants.save();
+    jacht.value = jacht.value.met(opDeLijst: _wants.count);
+    _log.line('wensen: ${weg.length} vervallen — die staat al verliesvrij in de bibliotheek');
+    return weg.length;
+  }
+
+  /// Een binnengekomen torrent opbergen zoals een Soulseek-download dat al werd.
+  ///
+  /// **Waarom dit er moest komen.** Soulseek en torrent hielden geen rekening met elkaar, en Saber
+  /// zag dat zelf: *"torrent vervangt de soulseek download niet, en anders om ook niet"*. Klopt, en
+  /// de oorzaak was één ontbrekende stap. Een Soulseek-nummer gaat bij binnenkomst door
+  /// [placeFileDetailed] en landt in de albummap, waar [firstIsBetter] kiest wat blijft. Een torrent
+  /// bleef liggen in `DebridMusic Downloads\<torrentnaam>\` tot iemand in Instellingen op
+  /// "Opruimen" drukte — dus stonden de twee nooit tegenover elkaar.
+  ///
+  /// Gemeten op 17-09-2026: Culture Beat — Mr. Vain lag sinds 14-09 als schone 24/192 van een
+  /// torrent náást de bibliotheek, terwijl in `Albums\` de Soulseek-kopie bleef staan die als
+  /// opgeblazen gemeten was — en Soulseek jaagde er drie dagen later nog op.
+  ///
+  /// Wie er wint beslist nog steeds [firstIsBetter], met dezelfde regels voor allebei: wat je zelf
+  /// koos wint, wat als nep gemeten is verliest. De verliezer gaat naar `_dubbel` en niet weg.
+  Future<void> _bergTorrentOp(Directory destDir, String naam) async {
+    try {
+      final r = await bergMapOp(destDir.path, _downloadsRoot, staatAl: mapVanBestaande);
+      _log.line('torrent "$naam" opgeborgen: $r');
+      if (r.moved + r.duplicates == 0) return;
+      await onLibraryChanged();
+      await vergeetWatErAlIs();
+    } catch (e) {
+      // Blijft liggen waar hij lag. Dat is niet erger dan hoe het was, en de knop "Opruimen" in
+      // Instellingen doet nog altijd hetzelfde werk.
+      _log.line('torrent "$naam" opbergen mislukt: $e — hij blijft in de downloadmap staan');
+    }
+  }
+
   /// Loop de wensen af die aan de beurt zijn, met een VERSE zoekopdracht per wens.
   ///
   /// Vers zoeken is het hele punt. De opgeslagen kandidaten van gisteren zijn de peers van gisteren;
@@ -2341,15 +2388,7 @@ class DownloadManager extends ChangeNotifier {
     if (_sweeping) return 0;
     _sweeping = true;
     try {
-      await _ensureWants();
-      final have = haveLossless;
-      if (have != null) {
-        final weg = _wants.forgetWhatWeHave(have);
-        if (weg.isNotEmpty) {
-          await _wants.save();
-          _log.line('wensen: ${weg.length} vervallen — die FLAC staat al in de bibliotheek');
-        }
-      }
+      await vergeetWatErAlIs();
       final nu = DateTime.now().millisecondsSinceEpoch;
       final rij = _wants.due(nu);
       jacht.value = jacht.value.met(opDeLijst: _wants.count);
@@ -3229,6 +3268,9 @@ class DownloadManager extends ChangeNotifier {
         // kan niet: het blad en het grote bestand komen langs verschillende wegen binnen.
         await Future.wait(lopend);
         await _knipImages(destDir, nieuwe);
+        // Pas NA het knippen: een image met een cue is vóór deze regel één groot bestand, en dat
+        // hoort niet als één nummer in je bibliotheek te belanden.
+        await _bergTorrentOp(destDir, torrent.name);
       } catch (e) {
         prep.status = 'failed';
         // `_addOrFind` gooit zinnen die precies zeggen wat er misging ("TorBox nam deze bron niet

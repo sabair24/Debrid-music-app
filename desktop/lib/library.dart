@@ -1536,7 +1536,18 @@ class LibraryStore extends ChangeNotifier {
     // "Trein (instrumentaal)" vervult de wens naar "Trein" niet.
     final gezocht = opnameSleutel(artist, title);
     for (final t in tracks) {
-      if (!t.isFlac) continue;
+      // VERLIESVRIJ, niet alleen FLAC — en dat was de reden dat de jacht nooit ophield.
+      //
+      // Hier stond `if (!t.isFlac) continue`, en `isFlac` is letterlijk `ext == 'flac'`. Een
+      // verliesvrije kopie in APE, WavPack of ALAC kon een wens dus nooit laten vallen, hoe goed hij
+      // ook was. RuTracker levert veel in die formaten.
+      //
+      // Aan het licht gekomen op 17-09-2026 met Culture Beat — Mr. Vain: een schone 24/192 APE van
+      // een torrent op schijf, en Soulseek die er drie dagen later nog op jaagde. Eerlijk erbij: dát
+      // bestand had geen enkele tag, dus of het met deze regel nu herkend wordt hangt af van wat de
+      // scan uit de bestandsnaam haalt. De regel zelf klopte hoe dan ook niet — elders in de app
+      // staat deze vraag al als `t.isFlac || isVerliesvrij(t.ext)`, en hier ontbrak de tweede helft.
+      if (!t.isFlac && !isVerliesvrij(t.ext)) continue;
       // EEN BETRAPTE FLAC TELT NIET ALS "die heb ik al".
       //
       // Gemeld op 30-08-2026 met Gorki — Anja: een bestand van 24/44.1 dat op 17,4 kHz dichtklapt,
