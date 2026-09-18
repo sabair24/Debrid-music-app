@@ -24,6 +24,7 @@ import 'meldrem.dart';
 import 'warm_log.dart';
 import 'werkrij.dart';
 import 'paths.dart';
+import 'audioformaten.dart' show isVerliesvrij;
 import 'echtheid.dart';
 import 'echtheid_meter.dart';
 import 'echtheid_oordelen.dart';
@@ -2365,8 +2366,43 @@ class DownloadManager extends ChangeNotifier {
   ///
   /// Wie er wint beslist nog steeds [firstIsBetter], met dezelfde regels voor allebei: wat je zelf
   /// koos wint, wat als nep gemeten is verliest. De verliezer gaat naar `_dubbel` en niet weg.
+  /// Elk verliesvrij bestand dat een torrent net afleverde door de echtheidsmeter halen.
+  ///
+  /// [_meetEchtheid] onthoudt het oordeel op het huidige pad, en het verplaatsen neemt het mee
+  /// (`herNoemOordeel` in `_move`). Wat de meter niet kan lezen — een APE, een WavPack — levert geen
+  /// oordeel, en dat is geen nee: zie [magBlijven].
+  Future<void> _meetBinnengekomen(Directory destDir, String naam) async {
+    final bestanden = <File>[];
+    try {
+      await for (final e in destDir.list(recursive: true, followLinks: false)) {
+        if (e is File && isVerliesvrij(e.path.split('.').last)) bestanden.add(e);
+      }
+    } catch (_) {
+      return;
+    }
+    for (final f in bestanden) {
+      final o = await _meetEchtheid(f);
+      if (o != null && o.isNep) {
+        _log.line('torrent "$naam": ${f.uri.pathSegments.last} — ${waarom(o)}');
+      }
+    }
+  }
+
   Future<void> _bergTorrentOp(Directory destDir, String naam) async {
     try {
+      // **METEN VÓÓR HET OPBERGEN, net als elke Soulseek-landingsweg.** Zonder dit geldt een
+      // torrent als "ongemeten", en een ongemeten bestand is nooit nep — dus beslist bij het
+      // vergelijken de GROOTTE in plaats van de kwaliteit. Gemeten op 18-09-2026 met Kings of Leon
+      // — Sex On Fire: een 24/192-vinylrip van RuTracker, 114 MB, die de meter van deze app zelf
+      // "niets boven 22 kHz — opgeschaald, geen echte hi-res" noemt. Via Soulseek was hij bij
+      // binnenkomst betrapt; via de torrent stond hij als "nog niet gemeten" in de bibliotheek, en
+      // een eerlijke cd-kopie die daarna binnenkwam zou op grootte hebben verloren.
+      //
+      // Er wordt hier NIETS geweigerd, en dat is het verschil met Soulseek. Daar kiest de jacht
+      // zelf een kandidaat en is er altijd een volgende; een torrent heb je zelf aangewezen. Het
+      // oordeel wordt alleen onthouden — en [firstIsBetter] doet er vervolgens hetzelfde mee als bij
+      // een Soulseek-download: wat als nep gemeten is, verliest.
+      await _meetBinnengekomen(destDir, naam);
       final r = await bergMapOp(destDir.path, _downloadsRoot, staatAl: mapVanBestaande);
       _log.line('torrent "$naam" opgeborgen: $r');
       if (r.moved + r.duplicates == 0) return;

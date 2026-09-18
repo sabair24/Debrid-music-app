@@ -359,6 +359,30 @@ void main() {
           reason: 'zonder staatAl landt een betere kopie NAAST de oude in plaats van erop');
     });
 
+    test('DE KERN: een torrent wordt GEMETEN vóór hij wordt opgeborgen, net als Soulseek', () {
+      // Gevonden bij de proef op 18-09-2026 met Kings of Leon — Sex On Fire. De 24/192-vinylrip van
+      // RuTracker stond als "nog niet gemeten" in de bibliotheek, terwijl de meter van deze app hem
+      // "niets boven 22 kHz — opgeschaald, geen echte hi-res" noemt. Soulseek meet op al zijn
+      // landingswegen bij binnenkomst; zonder meting is een bestand nooit nep, en beslist bij het
+      // vergelijken de GROOTTE — zodat een eerlijke cd-kopie daarna had verloren van 114 MB lucht.
+      final i = bron.indexOf('Future<void> _bergTorrentOp(');
+      final lijf = bron.substring(i, bron.indexOf('\n  }\n', i));
+      final meet = lijf.indexOf('await _meetBinnengekomen(');
+      final berg = lijf.indexOf('await bergMapOp(');
+      expect(meet, greaterThan(0), reason: 'zonder meting telt een torrent altijd als "echt"');
+      expect(berg, greaterThan(meet), reason: 'meten NA het opbergen is te laat: dan heeft grootte al beslist');
+    });
+
+    test('DE GRENS: meten weigert niets — een torrent heb je zelf gekozen', () {
+      // Soulseek gooit een betrapte kandidaat weg en neemt de volgende; een torrent die je zelf
+      // aanwees heeft geen volgende. Het oordeel wordt alleen onthouden.
+      final i = bron.indexOf('Future<void> _meetBinnengekomen(');
+      expect(i, greaterThan(0));
+      final lijf = bron.substring(i, bron.indexOf('\n  }\n', i));
+      expect(lijf, isNot(contains('.delete(')), reason: 'meten mag niets van schijf halen');
+      expect(lijf, contains('_meetEchtheid('), reason: 'dezelfde meting als op de Soulseek-wegen');
+    });
+
     test('DE VAL: en de jacht stopt meteen, niet pas bij de volgende veegbeurt', () {
       final i = bron.indexOf('Future<void> _bergTorrentOp(');
       final lijf = bron.substring(i, bron.indexOf('\n  }\n', i));
