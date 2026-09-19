@@ -11,6 +11,7 @@ import 'flac_tags.dart';
 import 'mp3_tags.dart';
 import 'echtheid.dart';
 import 'echtheid_oordelen.dart';
+import 'paths.dart' show torrentWerkMap;
 import 'vaste_keuze.dart';
 import 'wavpack_kop.dart' show readWvKop;
 
@@ -2015,11 +2016,23 @@ Future<TidyReport> bergMapOp(String map, String downloadsRoot,
 
   final audio = audioExtensies;
   final files = <File>[];
+  final sep = Platform.pathSeparator;
   await for (final e in dir.list(recursive: true, followLinks: false)) {
     if (e is! File) continue;
     final p = e.path.toLowerCase();
     final dot = p.lastIndexOf('.');
     if (dot < 0 || !audio.contains(p.substring(dot))) continue;
+    // **De werkmappen van de app zelf zijn geen los bestand.** Dezelfde drie die de scanner overslaat
+    // (`_scanTags` in library.dart): wat in `_inkomend` staat komt nog binnen, wat in de torrentmap
+    // staat deelt aria2 nog uit, en `_dubbel` is het vangnet. "Opruimen" loopt met deze functie over
+    // de hele downloadmap, en liep dus ook dáárdoor. Gemeten op 19-09-2026: 185 bestanden in
+    // `_dubbel`, 8 in `_inkomend`, 10 in `_torrentwerk`. Een geparkeerde kopie die nog steeds verloor,
+    // werd tot en met 3.9.400 bij elke druk op de knop GEWIST — het vangnet leegde zichzelf.
+    if (e.path.contains('${sep}_inkomend$sep') ||
+        e.path.contains('$sep$parkeerMap$sep') ||
+        e.path.contains('$sep$torrentWerkMap$sep')) {
+      continue;
+    }
     files.add(e);
   }
 

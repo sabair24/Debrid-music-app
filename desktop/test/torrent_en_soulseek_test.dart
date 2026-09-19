@@ -550,4 +550,43 @@ void main() {
       expect(alles('$downloads${sep}Albums'), hasLength(1), reason: 'opgeborgen in de nette boom');
     });
   });
+
+  group('6 — Opruimen laat de werkmappen van de app met rust', () {
+    // "Opruimen" in Instellingen roept [tidyDownloads] aan, en die loopt met [bergMapOp] over de HELE
+    // downloadmap — ook door de drie mappen die de scanner met opzet overslaat. Op Sabers schijf op
+    // 19-09-2026: 185 bestanden in `_dubbel`, 8 in `_inkomend`, 10 in `_torrentwerk`.
+    test('DE VAL: een geparkeerde kopie in _dubbel blijft waar hij is', () async {
+      final echte = schrijf('Albums/Culture Beat/Serenity/02 - Mr. Vain.flac', flac(_mrVain, opvulling: 900000));
+      final geparkeerd = schrijf('$parkeerMap/02 - Mr. Vain.flac', flac(_mrVain));
+
+      await tidyDownloads(downloads);
+
+      expect(geparkeerd.existsSync(), isTrue,
+          reason: 'tot en met 3.9.400 werd hij GEWIST: het vangnet leegde zichzelf bij elke druk op de knop');
+      expect(alles('$downloads$sep$parkeerMap'), hasLength(1),
+          reason: 'en ook niet bij elke druk opnieuw geparkeerd als "(2) …"');
+      expect(File(echte.path).lengthSync(), greaterThan(900000));
+    });
+
+    test('DE VAL: wat nog binnenkomt, en wat aria2 nog uitdeelt, blijft staan', () async {
+      schrijf('Albums/Culture Beat/Serenity/02 - Mr. Vain.flac', flac(_mrVain, opvulling: 900000));
+      final inAanmaak = schrijf('_inkomend/een-peer/02 - Mr. Vain.flac', flac(_mrVain));
+      final werk = schrijf('$torrentWerkMap/abc123/02 - Mr. Vain.flac', flac(_mrVain));
+
+      await tidyDownloads(downloads);
+
+      expect(inAanmaak.existsSync(), isTrue, reason: 'een Soulseek-download in aanmaak hoort niemand te verplaatsen');
+      expect(werk.existsSync(), isTrue, reason: 'aria2 deelt dit bestand nog uit');
+    });
+
+    test('DE GRENS: een gewone losse map wordt wél opgeborgen', () async {
+      final los = schrijf('Culture Beat - Serenity/02 - Mr. Vain.flac', flac(_mrVain));
+
+      final r = await tidyDownloads(downloads);
+
+      expect(r.moved, 1);
+      expect(los.existsSync(), isFalse);
+      expect(alles('$downloads${sep}Albums'), hasLength(1));
+    });
+  });
 }
