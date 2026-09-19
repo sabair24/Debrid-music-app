@@ -2009,7 +2009,8 @@ int? looptijdInSeconden(File f) {
 }
 
 Future<TidyReport> bergMapOp(String map, String downloadsRoot,
-    {String? Function(String artist, String title, {int? seconds})? staatAl}) async {
+    {String? Function(String artist, String title, {int? seconds})? staatAl,
+    bool Function(String pad)? slaOver}) async {
   final report = TidyReport();
   final dir = Directory(map);
   if (!await dir.exists()) return report;
@@ -2033,6 +2034,9 @@ Future<TidyReport> bergMapOp(String map, String downloadsRoot,
         e.path.contains('$sep$torrentWerkMap$sep')) {
       continue;
     }
+    // Wat de aanroeper nog niet af vindt — een download die er nog in schrijft. Zie `_inAanmaak` in
+    // online.dart: een half bestand opbergen levert een afgekapt nummer in je bibliotheek.
+    if (slaOver != null && slaOver(e.path)) continue;
     files.add(e);
   }
 

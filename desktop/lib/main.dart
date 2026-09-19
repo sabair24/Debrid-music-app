@@ -16381,7 +16381,9 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
 
   Future<void> _play(TbFile f) async {
     try {
-      final url = await context.read<OnlineService>().resolveTrackUrl(_torrent!.id, f.id);
+      // Niet `resolveTrackUrl(_torrent!.id, f.id)`: bij een lijst uit het torrentbestand is die
+      // torrent 0 en nummert hij anders dan TorBox — elke ▶ gaf "Lege download-URL".
+      final url = await context.read<OnlineService>().speelUrl(widget.result, _torrent!, f);
       if (!mounted) return;
       context.read<PlayerStore>().playUrl(url, title: f.label, artist: widget.result.source);
       Navigator.pop(context);
@@ -16393,7 +16395,8 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
   void _download(TbFile f) {
     // De torrent die dit venster al heeft laten voorbereiden gaat mee. Zonder dat begon het
     // downloaden met precies hetzelfde wachten er nog een keer overheen.
-    context.read<DownloadManager>().enqueue(widget.result, fileId: f.id, klaar: _torrent);
+    // Het bestand zelf gaat mee, niet alleen zijn nummer: zie `zelfdeBestandIn`.
+    context.read<DownloadManager>().enqueue(widget.result, fileId: f.id, bestand: f, klaar: _torrent);
     _snack('“${f.label}” naar downloads');
   }
 

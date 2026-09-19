@@ -141,7 +141,7 @@ class _FakeDownloads extends DownloadManager {
   _FakeDownloads(super.online, super.soulseek, super.musicRoot, super.onLibraryChanged);
 
   @override
-  void enqueue(SearchResult result, {int? fileId, TbTorrent? klaar}) => _run(result.name);
+  void enqueue(SearchResult result, {int? fileId, TbFile? bestand, TbTorrent? klaar}) => _run(result.name);
 
   @override
   Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,

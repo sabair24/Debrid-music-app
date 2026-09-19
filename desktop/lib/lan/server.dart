@@ -1026,9 +1026,16 @@ class LanServer {
     final manager = downloads;
     if (manager == null) return;
     final fileId = (body['fileId'] as num?)?.toInt();
+    // Het gekozen bestand zoals de lijst op het toestel het toonde. Met alleen het nummer koos de
+    // pc bij een torrent die via TorBox binnenkomt een ánder liedje — zie `zelfdeBestandIn`. Een
+    // toestel van vóór deze versie stuurt dit niet mee; dan zoekt de pc het nummer zelf op.
+    final naam = body['fileName'];
+    final bestand = fileId != null && naam is String && naam.isNotEmpty
+        ? TbFile(fileId, naam, body['fileShortName'] as String?, (body['fileSize'] as num?)?.toInt() ?? 0, null)
+        : null;
     // Deliberately not awaited: enqueue starts the work and returns, and the caller watches
     // /api/jobs. Holding a request open for a download would time out long before it finished.
-    manager.enqueue(SearchResult.fromJson(body), fileId: fileId);
+    manager.enqueue(SearchResult.fromJson(body), fileId: fileId, bestand: bestand);
   }
 
   /// The body of `POST /api/soulseek/download`. False when nothing usable was in it.

@@ -192,6 +192,11 @@ class RemoteOnlineService extends OnlineService {
       throw const RemoteWorkException(
           'Online meespelen kan alleen op de pc. Download het nummer; het verschijnt daarna vanzelf hier.');
 
+  @override
+  Future<String> speelUrl(SearchResult r, TbTorrent lijst, TbFile f) =>
+      throw const RemoteWorkException(
+          'Online meespelen kan alleen op de pc. Download het nummer; het verschijnt daarna vanzelf hier.');
+
   /// Radio resolves an online stream per track, which is the same thing again. Null rather than a
   /// throw: the radio queue treats it as "this one could not be found" and moves on, which is
   /// exactly right — the local tracks in the queue keep playing.
@@ -389,10 +394,22 @@ class RemoteDownloadManager extends DownloadManager {
   /// [klaar] wordt hier bewust genegeerd. Het is een torrent die de PC-kant al heeft laten
   /// voorbereiden bij TorBox; over de lijn heeft dat geen betekenis, want de PC bereidt hem daar
   /// zelf voor en kent zijn eigen TorBox-sessie. Meesturen zou een tweede waarheid zijn.
+  ///
+  /// [bestand] gaat wél mee, als naam en grootte: de pc koppelt daarmee het nummer dat je aanwees,
+  /// ook als zijn download een andere nummering volgt dan de lijst die je zag. Zie
+  /// [OnlineService.resolveForDownload].
   @override
-  void enqueue(SearchResult result, {int? fileId, TbTorrent? klaar}) {
+  void enqueue(SearchResult result, {int? fileId, TbFile? bestand, TbTorrent? klaar}) {
     unawaited(() async {
-      final payload = {...result.toJson(), 'fileId': fileId};
+      final payload = {
+        ...result.toJson(),
+        'fileId': fileId,
+        if (bestand != null) ...{
+          'fileName': bestand.name,
+          'fileShortName': bestand.shortName,
+          'fileSize': bestand.size,
+        },
+      };
       try {
         await _rpc.post('/api/online/download', payload);
         await refresh();

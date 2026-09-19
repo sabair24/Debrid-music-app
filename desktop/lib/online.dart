@@ -618,9 +618,52 @@ class OnlineService {
     return url;
   }
 
+  /// De stream-URL voor één nummer uit de keuzelijst.
+  ///
+  /// [resolveTrackUrl] alleen was genoeg zolang die lijst van TorBox kwam. Voor een `.torrent` komt
+  /// hij sinds 30-08-2026 uit het bestand zelf ([tracklist]), en dan is [lijst] een torrent zonder
+  /// TorBox-nummer (0) en nummeren de bestanden zoals het torrentbestand. Gemeten op 19-09-2026:
+  /// elke ▶ in zo'n lijst gaf "Afspelen mislukt: Lege download-URL". Afspelen gaat via TorBox, dus
+  /// daar wordt de torrent opgezocht en het bestand op naam en grootte gekoppeld.
+  Future<String> speelUrl(SearchResult r, TbTorrent lijst, TbFile f) async {
+    if (!lijst.lokaal) return resolveTrackUrl(lijst.id, f.id);
+    if (!torbox.hasKey) throw 'Afspelen gaat via TorBox — stel eerst je TorBox-sleutel in (Instellingen).';
+    final (id, hash) = await _addOrFind(r);
+    final item = await _pollReady(id, hash, patient: !r.cached);
+    final bij = zelfdeBestandIn(item.files, f);
+    if (bij == null) throw 'Dit nummer staat niet in de lijst van TorBox';
+    return resolveTrackUrl(item.id, bij.id);
+  }
+
+  /// Het bestand met dit nummer in de lijst die [tracklist] liet zien — maar alleen als die lijst
+  /// uit het torrentbestand zelf kwam. Anders null: dan nummerde de lijst al zoals TorBox.
+  ///
+  /// Voor wie alleen het nummer kent. Een telefoon van vóór 3.9.403 stuurt niets anders mee.
+  Future<TbFile?> _uitEigenLijst(SearchResult r, int fileId) async {
+    if (r.torrentUrl.isEmpty) return null;
+    try {
+      final lokaal = await _lokaleTracklist(r);
+      if (lokaal == null) return null;
+      for (final f in lokaal.$1.files) {
+        if (f.id == fileId) return f;
+      }
+    } catch (_) {/* geen lijst uit het bestand — dan ook geen andere nummering */}
+    return null;
+  }
+
   /// Resolve the torrent + the files to download (all audio, or one file).
+  ///
+  /// [bestand] is het bestand zoals de keuzelijst het TOONDE. Geef het mee waar je het hebt: dan
+  /// wordt er op naam en grootte gekozen en doet de nummering er niet meer toe — zie
+  /// [zelfdeBestandIn] voor wat er misging toen alleen [fileId] meeging.
   Future<(TbTorrent, List<TbFile>)> resolveForDownload(SearchResult r, int? fileId,
-      {void Function(double, String)? onProgress}) async {
+      {TbFile? bestand, void Function(double, String)? onProgress}) async {
+    List<TbFile> kies(List<TbFile> lijst, TbFile? bedoeld) {
+      if (bedoeld == null) return lijst.where((f) => f.id == fileId).toList();
+      final bij = zelfdeBestandIn(lijst, bedoeld);
+      return bij == null ? const [] : [bij];
+    }
+
     if (lokaalVoor(r)) {
       final lokaal = await _lokaleTracklist(r);
       if (lokaal != null) {
@@ -628,16 +671,23 @@ class OnlineService {
         // Er valt hier niets te wachten: aria2 begint pas als de downloadlijst hem de opdracht
         // geeft. Dat is meteen het verschil met TorBox, waar dit punt betekende dat de torrent daar
         // al helemaal binnen moest zijn voordat de eerste byte deze kant op kwam.
-        final gekozen =
-            fileId != null ? torrent.files.where((f) => f.id == fileId).toList() : audio;
+        final gekozen = fileId != null ? kies(torrent.files, bestand) : audio;
         if (gekozen.isNotEmpty) return (torrent, gekozen);
       }
     }
     if (!torbox.hasKey) throw 'Stel eerst je TorBox-sleutel in (Instellingen).';
+    // **Het nummer uit de keuzelijst geldt hier niet.** Voor een `.torrent` kwam die lijst uit het
+    // bestand zelf en nummert hij zoals dat bestand; TorBox nummert anders. Hier stond
+    // `item.files.where((f) => f.id == fileId)`, en dat haalde een ánder nummer binnen. Gemeten op
+    // 19-09-2026 met Stevie Wonder — Talking Book: Superstition aangeklikt, Lookin For Another Pure
+    // Love binnengekregen; Sunshine aangeklikt, Maybe Your Baby binnengekregen.
+    final bedoeld = fileId == null ? null : bestand ?? await _uitEigenLijst(r, fileId);
     final (id, hash) = await _addOrFind(r);
     final item = await _pollReady(id, hash, patient: !r.cached, onProgress: onProgress);
-    final files = fileId != null ? item.files.where((f) => f.id == fileId).toList() : _sortedAudio(item);
-    if (files.isEmpty) throw 'Geen audio gevonden';
+    final files = fileId != null ? kies(item.files, bedoeld) : _sortedAudio(item);
+    if (files.isEmpty) {
+      throw fileId != null ? 'Dit nummer staat niet in de lijst van TorBox' : 'Geen audio gevonden';
+    }
     return (item, files);
   }
 }
@@ -992,6 +1042,17 @@ class DownloadManager extends ChangeNotifier {
   /// [nietIn] is de map die net wordt opgeborgen; wat daar ligt is het binnenkomende zelf, niet
   /// "wat je al hebt". Zie [_bergTorrentOp].
   String? Function(String artist, String title, {int? seconds, String? nietIn})? mapVanBestaande;
+
+  /// Bestanden in een torrentmap die op dit moment nog GESCHREVEN worden — tot ze helemaal binnen
+  /// zijn en als jouw keuze vastliggen.
+  ///
+  /// Een TorBox-download schrijft rechtstreeks onder zijn definitieve naam in de torrentmap, en
+  /// twee keuzes uit dezelfde torrent delen die map. Wie als eerste klaar was, borg de hele map op
+  /// ([_bergTorrentOp]) — ook het bestand dat de ander nog aan het schrijven was. Gemeten op
+  /// 19-09-2026: een "02 - Maybe Your Baby.flac" van 162 MB kwam als afgekapte kopie van 71,5 MB in
+  /// de bibliotheek (3:00 van de 6:50 speelbaar), omdat een ander nummer uit dezelfde torrent
+  /// negen seconden eerder klaar was.
+  final Set<String> _inAanmaak = {};
 
   DownloadManager(this.online, this.soulseek, this.musicRoot, this.onLibraryChanged);
 
@@ -2362,7 +2423,10 @@ class DownloadManager extends ChangeNotifier {
     final bestanden = <File>[];
     try {
       await for (final e in destDir.list(recursive: true, followLinks: false)) {
-        if (e is File && isVerliesvrij(e.path.split('.').last)) bestanden.add(e);
+        // Wat nog binnenkomt niet: een halve FLAC meten levert een oordeel over een half bestand.
+        if (e is File && isVerliesvrij(e.path.split('.').last) && !_inAanmaak.contains(e.path)) {
+          bestanden.add(e);
+        }
       }
     } catch (_) {
       return;
@@ -2426,7 +2490,10 @@ class DownloadManager extends ChangeNotifier {
           staatAl: zoek == null
               ? null
               : (artist, title, {int? seconds}) =>
-                  zoek(artist, title, seconds: seconds, nietIn: destDir.path));
+                  zoek(artist, title, seconds: seconds, nietIn: destDir.path),
+          // Een ander nummer uit dezelfde torrent dat nog binnenkomt blijft staan; zijn eigen
+          // download bergt het op als het klaar is. Zie [_inAanmaak].
+          slaOver: _inAanmaak.contains);
       _log.line('torrent "$naam" opgeborgen: $r');
       if (r.moved + r.duplicates == 0) return;
       await onLibraryChanged();
@@ -3264,7 +3331,10 @@ class DownloadManager extends ChangeNotifier {
   /// peiling, en bij een RuTracker-bron werd het `.torrent` ook nog een tweede keer opgehaald. Je
   /// zag dus twee keer hetzelfde wachten voor één klik. Met de torrent erbij is de tweede ronde
   /// weg.
-  void enqueue(SearchResult result, {int? fileId, TbTorrent? klaar}) {
+  ///
+  /// [bestand] is het gekozen bestand zoals de keuzelijst het toonde. Het nummer alleen is niet
+  /// genoeg zodra de download een ándere weg neemt dan de lijst — zie [OnlineService.resolveForDownload].
+  void enqueue(SearchResult result, {int? fileId, TbFile? bestand, TbTorrent? klaar}) {
     final prep = DownloadJob(fileId != null ? result.name : 'Voorbereiden: ${result.name}')..status = 'preparing';
     jobs.insert(0, prep);
     notifyListeners();
@@ -3286,7 +3356,7 @@ class DownloadManager extends ChangeNotifier {
             !magHergebruiken ? null : klaar.files.where((f) => f.id == fileId).toList();
         final (torrent, files) = gekozen != null && gekozen.isNotEmpty
             ? (klaar!, gekozen)
-            : await online.resolveForDownload(result, fileId, onProgress: (p, s) {
+            : await online.resolveForDownload(result, fileId, bestand: bestand, onProgress: (p, s) {
                 prep.progress = p;
                 notifyListeners();
               });
@@ -3694,6 +3764,8 @@ class DownloadManager extends ChangeNotifier {
           continue;
         }
         await _jouwKeuze(geland);
+        // Heel, en als jouw keuze vastgelegd: nu mag hij opgeborgen worden. Zie [_inAanmaak].
+        _inAanmaak.remove(geland);
         jobs[i].progress = 1;
         jobs[i].status = 'done';
         // Zeggen dat er nog gedeeld wordt. Anders staat er "Klaar" terwijl er nog uren
@@ -3715,7 +3787,8 @@ class DownloadManager extends ChangeNotifier {
         if (!await bron.exists()) continue;
         final opSchijf = await bron.length();
         if (opSchijf == 0 || (b.lengte > 0 && opSchijf < b.lengte)) continue;
-        await _verhuisNaar(bron, destDir, c.label);
+        final blad = await _verhuisNaar(bron, destDir, c.label);
+        if (blad != null) _inAanmaak.remove(blad);
       }
       notifyListeners();
       // Opruimen mag alleen als deze taak van ons alleen is. Hangt er nog een tweede nummer van
@@ -3828,6 +3901,8 @@ class DownloadManager extends ChangeNotifier {
       dest = await _legVast(destDir, f.label);
       if (dest == null) throw 'geen vrije naam in de doelmap';
       gelandPad = dest.path;
+      // Vanaf nu tot hij als jouw keuze vastligt: niet opbergen. Zie [_inAanmaak].
+      _inAanmaak.add(gelandPad);
       sink = dest.openWrite();
       var received = 0;
       // De wachtklok staat op de STROOM en niet op het geheel: hij slaat toe als er zólang niets
@@ -3870,9 +3945,14 @@ class DownloadManager extends ChangeNotifier {
       if (!complete && dest != null) {
         await dest.delete().catchError((_) => dest!);
       }
+      if (!complete) _inAanmaak.remove(gelandPad);
     }
     // Jouw keuze, dus hij verliest straks niet van iets wat de app beter vindt. Zie [_jouwKeuze].
     if (gelandPad.isNotEmpty) await _jouwKeuze(gelandPad);
+    // Pas NU mag hij opgeborgen worden: helemaal binnen, en als jouw keuze vastgelegd. Eén regel
+    // eerder zou een ander nummer uit dezelfde torrent hem kunnen opbergen vóór de bescherming
+    // erop zit — en dan verliest hij van wat er al lag.
+    _inAanmaak.remove(gelandPad);
     job.progress = 1;
     job.status = 'done';
     notifyListeners();
@@ -3940,6 +4020,9 @@ class DownloadManager extends ChangeNotifier {
       final doel = File('${destDir.path}${Platform.pathSeparator}$kandidaat');
       if (bron.path == doel.path) return doel.path;
       if (await doel.exists()) continue;
+      // Tijdens het kopiëren staat hier een half bestand. De aanroeper haalt hem uit [_inAanmaak]
+      // zodra hij heel is en vastligt — niet deze functie, want die weet niet wanneer dat is.
+      _inAanmaak.add(doel.path);
       if (kopieer) {
         await bron.copy(doel.path);
         return doel.path;

@@ -64,13 +64,15 @@ class FakeDownloads extends DownloadManager {
   FakeDownloads(super.online, super.soulseek, super.musicRoot, super.onLibraryChanged);
 
   final List<SearchResult> enqueued = [];
+  final List<({int? fileId, TbFile? bestand})> gekozen = [];
   final List<List<SoulseekFile>> slskEnqueued = [];
   final List<DownloadJob> cancelled = [];
   bool cleared = false;
 
   @override
-  void enqueue(SearchResult result, {int? fileId, TbTorrent? klaar}) {
+  void enqueue(SearchResult result, {int? fileId, TbFile? bestand, TbTorrent? klaar}) {
     enqueued.add(result);
+    gekozen.add((fileId: fileId, bestand: bestand));
     jobs.insert(0, DownloadJob(result.name, key: 'k${jobs.length}')..status = 'downloading');
     notifyListeners();
   }
@@ -273,6 +275,33 @@ void main() {
       await _until(() => manager.jobs.isNotEmpty);
       expect(manager.jobs.single.name, 'Portishead - Dummy [FLAC]');
       expect(manager.jobs.single.status, 'downloading');
+      manager.dispose();
+    });
+
+    test('DE VAL: het gekozen nummer gaat mee als naam en grootte, niet alleen als nummer', () async {
+      // Gemeten op 19-09-2026: met alleen het nummer koos de pc bij een torrent die via TorBox
+      // binnenkomt een ánder liedje — de lijst op het toestel nummerde zoals het torrentbestand,
+      // TorBox nummert anders. Zie `zelfdeBestandIn` en `torrent_nummering_test.dart`.
+      final manager = remoteDownloads();
+      manager.enqueue(_hit('Stevie Wonder - Talking Book'),
+          fileId: 5, bestand: TbFile(5, '06 - Superstition.flac', '06 - Superstition.flac', 102991331, null));
+
+      await _until(() => downloads.gekozen.isNotEmpty);
+      final aangekomen = downloads.gekozen.single;
+      expect(aangekomen.fileId, 5);
+      expect(aangekomen.bestand, isNotNull, reason: 'zonder naam en grootte kan de pc alleen op nummer kiezen');
+      expect(aangekomen.bestand!.label, '06 - Superstition.flac');
+      expect(aangekomen.bestand!.size, 102991331);
+      manager.dispose();
+    });
+
+    test('DE GRENS: een oud toestel stuurt alleen het nummer, en dat blijft werken', () async {
+      final manager = remoteDownloads();
+      manager.enqueue(_hit('Portishead - Dummy [FLAC]'), fileId: 7);
+      await _until(() => downloads.gekozen.isNotEmpty);
+      expect(downloads.gekozen.single.fileId, 7);
+      expect(downloads.gekozen.single.bestand, isNull,
+          reason: 'dan zoekt de pc het nummer zelf op in de lijst van het torrentbestand');
       manager.dispose();
     });
 

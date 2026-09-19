@@ -66,7 +66,7 @@ class FakeDownloads extends DownloadManager {
   final List<TrackTags?> authorities = [];
 
   @override
-  void enqueue(SearchResult result, {int? fileId, TbTorrent? klaar}) {
+  void enqueue(SearchResult result, {int? fileId, TbFile? bestand, TbTorrent? klaar}) {
     torrents.add(result);
     jobs.insert(0, DownloadJob(result.name)..status = 'downloading');
   }

@@ -589,4 +589,29 @@ void main() {
       expect(alles('$downloads${sep}Albums'), hasLength(1));
     });
   });
+
+  group('7 — wat nog binnenkomt blijft liggen', () {
+    // Twee nummers uit één torrent delen één map, en wie eerst klaar was borg de hele map op — ook
+    // het bestand dat de ander nog schreef. Gemeten op 19-09-2026: een afgekapte "02 - Maybe Your
+    // Baby.flac" van 71,5 MB (3:00 van de 6:50) in `_dubbel`. Zie `_inAanmaak` in online.dart.
+    test('DE VAL: een bestand dat nog geschreven wordt gaat niet mee', () async {
+      final af = schrijf('Culture Beat/02. Mr. Vain.flac', flac(_mrVain));
+      final bezig = schrijf('Culture Beat/03. Rhythm Of The Night.flac',
+          flac(['TITLE=Rhythm Of The Night', 'ARTIST=Culture Beat', 'ALBUM=Serenity', 'TRACKNUMBER=3']));
+      final grootte = bezig.lengthSync();
+
+      final r = await bergMapOp('$downloads${sep}Culture Beat', downloads, slaOver: (p) => p == bezig.path);
+
+      expect(r.moved, 1, reason: 'wat af is wordt gewoon opgeborgen');
+      expect(af.existsSync(), isFalse);
+      expect(bezig.existsSync(), isTrue, reason: 'zijn eigen download bergt hem op als hij af is');
+      expect(bezig.lengthSync(), grootte, reason: 'en niemand heeft eraan gezeten');
+    });
+
+    test('DE GRENS: zonder slaOver verandert er niets', () async {
+      schrijf('Culture Beat/02. Mr. Vain.flac', flac(_mrVain));
+      final r = await bergMapOp('$downloads${sep}Culture Beat', downloads);
+      expect(r.moved, 1);
+    });
+  });
 }

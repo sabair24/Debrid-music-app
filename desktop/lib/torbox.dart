@@ -97,6 +97,40 @@ class TbFile {
   String get label => shortName ?? name;
 }
 
+/// Hetzelfde bestand in een ANDERE lijst van dezelfde torrent — op naam en grootte, nooit op nummer.
+///
+/// **Twee lijsten van één torrent nummeren niet hetzelfde.** De nummerkeuze leest een `.torrent`
+/// zelf en nummert naar de plaats in dat bestand (`_lokaleTracklist`); TorBox deelt eigen nummers
+/// uit. Wie het nummer uit de ene lijst in de andere opzoekt, krijgt een ánder liedje. Gemeten op
+/// 19-09-2026 met Stevie Wonder — Talking Book (RuTracker, 24/96 LP): "06 - Superstition" staat in
+/// het torrentbestand op plaats 5 en heeft bij TorBox nummer 9, en TorBox' nummer 5 is "09 - Lookin
+/// For Another Pure Love". Aangeklikt: Superstition. Binnengekomen: Lookin For.
+///
+/// Eerst naam én grootte. Zijn er twee met dezelfde naam en grootte — een box met schijfmappen
+/// waarin "01 - Intro.flac" twee keer voorkomt — dan beslist het pad. Daarna alleen de grootte (een
+/// naam kan onderweg gesaneerd zijn) of alleen de naam, maar alleen als die op één bestand wijst.
+/// Valt er niets eenduidigs te kiezen, dan null: liever geen download dan het verkeerde nummer.
+TbFile? zelfdeBestandIn(List<TbFile> lijst, TbFile bedoeld) {
+  String naam(TbFile f) => f.label.split(RegExp(r'[\\/]')).last.trim().toLowerCase();
+  String pad(TbFile f) => f.name.replaceAll('\\', '/').toLowerCase();
+
+  final gezocht = naam(bedoeld);
+  final beide = [for (final f in lijst) if (naam(f) == gezocht && f.size == bedoeld.size) f];
+  if (beide.length == 1) return beide.single;
+  if (beide.length > 1) {
+    // Het pad van TorBox begint met de torrentnaam, dat uit het torrentbestand niet; vergelijk dus
+    // het staartstuk.
+    final staart = pad(bedoeld);
+    final opPad = [for (final f in beide) if (pad(f) == staart || pad(f).endsWith('/$staart')) f];
+    return opPad.length == 1 ? opPad.single : null;
+  }
+  final opGrootte = [for (final f in lijst) if (bedoeld.size > 0 && f.size == bedoeld.size) f];
+  if (opGrootte.length == 1) return opGrootte.single;
+  final opNaam = [for (final f in lijst) if (naam(f) == gezocht) f];
+  if (opNaam.length == 1) return opNaam.single;
+  return null;
+}
+
 class TbTorrent {
   final int id;
   final String name;
