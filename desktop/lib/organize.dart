@@ -959,10 +959,20 @@ class PlaceOutcome {
 /// failure — never loses the file). If the SAME RECORDING is already there, the better copy wins
 /// and the loser is dropped; a different recording that happens to tag identically (a live take,
 /// a remix whose version marker only lives in the filename) is kept alongside it.
+///
+/// **[parkeerAltijd]: niets gaat de vuilnisbak in, ook het binnenkomende niet.** Voor de downloadweg
+/// staat hij uit, en daar klopt dat: wat Soulseek net ophaalde en meteen verliest is afval van die
+/// download. Maar [bergMapOp] bergt bestanden op die al op je schijf STONDEN — een torrent die je zelf
+/// koos, of een los bestand dat "Opruimen" tegenkomt — en dan is elke verliezer van jou. Zonder deze
+/// vlag hing het parkeren van de oude kopie aan [staatAl]: kwam de nieuwe via zijn eigen tags op
+/// dezelfde plek terecht, dan werd de oude GEWIST. Nagespeeld op 19-09-2026: een APE-torrent (geen
+/// leesbare looptijd, dus geen [staatAl]) voor een nummer dat al als FLAC in `Albums` stond — de FLAC
+/// was weg, en niet in `_dubbel`.
 Future<PlaceOutcome> placeFileDetailed(File src, String root,
     {RelKind? kind,
     TrackTags? tags,
-    String? Function(String artist, String title, {int? seconds})? staatAl}) async {
+    String? Function(String artist, String title, {int? seconds})? staatAl,
+    bool parkeerAltijd = false}) async {
   final t = tags ?? readTags(src);
   if (t == null) return PlaceOutcome(src.path, Placement.stuck);
   final base = src.uri.pathSegments.last;
@@ -1037,12 +1047,22 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
         !_duidelijkAndereLengte(a, b) &&
         (t.isAuthoritative || elders != null || _sameRecording(a, b));
 
+    final parkeerIn = elders != null || parkeerAltijd ? '$root${Platform.pathSeparator}$parkeerMap' : null;
+    // Het binnenkomende dat verliest: weg op de downloadweg, opzij als het al van jou was.
+    Future<void> ruimBinnenkomendOp() async {
+      if (parkeerAltijd) {
+        await _parkeer(src, parkeerIn!);
+      } else {
+        await src.delete().catchError((_) => src);
+      }
+    }
+
     final losers = <File>[];
     if (await dest.exists()) {
       if (same(src, dest)) {
         if (!newWins(dest)) {
           final gone = src.parent.path;
-          await src.delete().catchError((_) => src);
+          await ruimBinnenkomendOp();
           await pruneVacated(gone, root);
           return PlaceOutcome(dest.path, Placement.duplicate);
         }
@@ -1058,7 +1078,7 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
       if (rival != null && same(src, rival)) {
         if (!newWins(rival)) {
           final gone = src.parent.path;
-          await src.delete().catchError((_) => src);
+          await ruimBinnenkomendOp();
           await pruneVacated(gone, root);
           return PlaceOutcome(rival.path, Placement.duplicate);
         }
@@ -1067,11 +1087,10 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
     }
     final srcDir = src.parent.path;
     final loserDirs = [for (final l in losers) l.parent.path];
-    // Alleen parkeren als we NAAR een bestaand album zijn gestuurd: dan is de verliezer een bestand dat
-    // al in de bibliotheek stond, en dat is van jou. Op de gewone weg is de verliezer iets wat deze
-    // download zelf net ophaalde, en dat mag gewoon weg.
-    final landed = await _install(src, dest, losers,
-        parkeerIn: elders == null ? null : '$root${Platform.pathSeparator}$parkeerMap');
+    // Parkeren als we NAAR een bestaand album zijn gestuurd: dan is de verliezer een bestand dat al in
+    // de bibliotheek stond, en dat is van jou. Op de gewone downloadweg is de verliezer iets wat deze
+    // download zelf net ophaalde, en dat mag gewoon weg — behalve met [parkeerAltijd], zie boven.
+    final landed = await _install(src, dest, losers, parkeerIn: parkeerIn);
     // Soulseek delivered the audio; the record's identity comes from here. Without this the file
     // sits under the right name in the right folder while its TAGS still say it is track 1 of
     // "The Essential Backstreet Boys" — and the tags are what the library and Roon actually read.
@@ -1846,6 +1865,18 @@ bool _naamDekt(String ruimer, String smaller) {
 /// één naam is en niet twee die kunnen gaan verschillen.
 const parkeerMap = '_dubbel';
 
+/// [f] opzij zetten in [parkeerIn], onder een vrije naam. Nooit overschrijven: twee verliezers met
+/// dezelfde bestandsnaam zijn twee bestanden.
+Future<void> _parkeer(File f, String parkeerIn) async {
+  final naam = f.uri.pathSegments.last;
+  await Directory(parkeerIn).create(recursive: true);
+  var doel = File('$parkeerIn${Platform.pathSeparator}$naam');
+  for (var n = 2; await doel.exists(); n++) {
+    doel = File('$parkeerIn${Platform.pathSeparator}($n) $naam');
+  }
+  await _move(f, doel);
+}
+
 Future<String> _install(File src, File dest, List<File> losers, {String? parkeerIn}) async {
   if (losers.isEmpty) return _move(src, dest);
   // Land beside the target first, so nothing is destroyed until the new file is really here.
@@ -1855,17 +1886,11 @@ Future<String> _install(File src, File dest, List<File> losers, {String? parkeer
     try {
       // Wat de app zelf net binnenhaalde en meteen weer verloor, mag weg -- dat is afval van deze
       // download. Maar een bestand dat AL in de bibliotheek stond is van de gebruiker, en dat wordt
-      // geparkeerd in plaats van gewist. Zo werkt Opruimen ook: de mindere gaat naar `_dubbel`, nooit
-      // de vuilnisbak in.
+      // geparkeerd in plaats van gewist: de mindere gaat naar `_dubbel`, nooit de vuilnisbak in.
+      // Hier stond "zo werkt Opruimen ook", en dat klopte niet: Opruimen gaf geen [parkeerIn] mee en
+      // wiste dus. Sinds 19-09-2026 geeft [bergMapOp] — ook de weg van Opruimen — `parkeerAltijd`.
       if (parkeerIn != null) {
-        final naam = l.uri.pathSegments.last;
-        final dir = Directory(parkeerIn);
-        await dir.create(recursive: true);
-        var doel = File('$parkeerIn${Platform.pathSeparator}$naam');
-        for (var n = 2; await doel.exists(); n++) {
-          doel = File('$parkeerIn${Platform.pathSeparator}($n) $naam');
-        }
-        await _move(l, doel);
+        await _parkeer(l, parkeerIn);
       } else {
         await l.delete();
       }
@@ -2028,8 +2053,10 @@ Future<TidyReport> bergMapOp(String map, String downloadsRoot,
             seconds: sec,
             vanBestand: eigen.vanBestand,
           );
+    // `parkeerAltijd`: alles wat hier langskomt stond al op je schijf, dus elke verliezer — de oude
+    // kopie én het binnenkomende — gaat naar `_dubbel` en niet weg. Zie [placeFileDetailed].
     final out = await placeFileDetailed(f, downloadsRoot,
-        tags: metDuur, staatAl: sec == null ? null : staatAl);
+        tags: metDuur, staatAl: sec == null ? null : staatAl, parkeerAltijd: true);
     switch (out.how) {
       case Placement.moved:
         if (out.path != before) report.moved++;

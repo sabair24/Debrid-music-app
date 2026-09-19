@@ -26,6 +26,17 @@
 /// De tagbibliotheek leest APEv2 al, voor `.ape` én `.wv`. Dat bestand bleef liggen omdat er
 /// helemaal GEEN tags in stonden. Groep 2 hieronder houdt vast dat die lezing blijft werken, want
 /// het opbergen van een torrent hangt er nu van af.
+///
+/// **Wat de eerste reparatie miste (19-09-2026), en groep 5 en 3 houden het vast.**
+///
+/// * Het opbergen deed bij de meeste torrents NIETS. Elk afgerond nummer laat de bibliotheek opnieuw
+///   inlezen, dus bij het opbergen kende ze het torrentbestand al — en "waar staat deze opname al?"
+///   wees naar dat bestand zelf. In het logboek: vijf platen van Justin Bieber, Justin Timberlake en
+///   Vanessa Carlton, allemaal "0 verplaatst · 0 dubbel opgeruimd · 0 overgeslagen". Kings of Leon
+///   lukte alleen omdat het inlezen toen nog niet klaar was.
+/// * En waar het wél iets deed, kon het wissen. Een torrent zonder leesbare looptijd (APE) die op
+///   zijn eigen tags bij een bestaande FLAC uitkwam, verdreef die FLAC — en die ging niet naar
+///   `_dubbel` maar de vuilnisbak in. Nagespeeld, niet vermoed.
 library;
 
 import 'dart:convert';
@@ -38,6 +49,7 @@ import 'package:debridmusic/library.dart';
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/organize.dart';
 import 'package:debridmusic/paths.dart';
+import 'package:debridmusic/vaste_keuze.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Een geldige FLAC-kop met STREAMINFO (voor de looptijd) en tags, zonder geluid.
@@ -51,7 +63,7 @@ Uint8List flac(List<String> tags, {int seconden = 337, int opvulling = 0}) {
   si[10] = (rate >> 12) & 0xFF;
   si[11] = (rate >> 4) & 0xFF;
   si[12] = ((rate & 0x0F) << 4) | (1 << 1); // stereo, zodat geen van beide "surround" is
-  si[13] = (totaal >> 32) & 0x0F;
+  si[13] = 0xF0 | ((totaal >> 32) & 0x0F); // 16 bits: de onderste vier van (bits - 1) = 15
   si[14] = (totaal >> 24) & 0xFF;
   si[15] = (totaal >> 16) & 0xFF;
   si[16] = (totaal >> 8) & 0xFF;
@@ -130,6 +142,7 @@ void main() {
 
   tearDown(() {
     resetEchtheidVoorTest();
+    resetVasteKeuzesForTest();
     try {
       wortel.deleteSync(recursive: true);
     } catch (_) {}
@@ -278,8 +291,12 @@ void main() {
           reason: 'een radio-edit mag de albumversie nooit wegduwen');
     });
 
-    test('DE VAL: een nep torrent verdrijft een echte FLAC niet', () async {
-      // De andere richting. RuTracker is meestal goed, maar niet altijd.
+    test('DE VAL: zonder eigen keuze verdrijft een nep kopie een echte FLAC niet — en wordt geparkeerd',
+        () async {
+      // De regel van [bergMapOp] zelf, zoals "Opruimen" hem toepast op een los bestand dat je niet
+      // zelf koos. Een torrent uit de downloadmotor IS je eigen keuze, en die wint wél — zie de
+      // volgende toets. Hier stond eerst "een nep torrent verdrijft een echte FLAC niet", en dat was
+      // voor een echte torrent niet waar.
       final oud = schrijf('Albums/Culture Beat/Serenity/02 - Mr. Vain.flac', flac(_mrVain));
       final nieuw = schrijf('Culture Beat/02. Mr. Vain.flac', flac(_mrVain, opvulling: 900000));
       onthoudOordeelVanPc(nieuw.path, _opgeblazen);
@@ -287,13 +304,66 @@ void main() {
       await bergMapOp('$downloads${sep}Culture Beat', downloads, staatAl: staatAlVoor(oud.path, 337));
 
       expect(File(oud.path).lengthSync(), lessThan(900000), reason: 'de echte bleef staan');
-      // Zelfde beleid als voor een Soulseek-download, en dat staat zo in `placeFileDetailed`: wat al
-      // in je bibliotheek stond en verliest gaat naar `_dubbel`, want dat is van jou. Wat deze
-      // download zelf net ophaalde en verliest, mag weg. In `downloads.log` staat dat al maanden als
-      // "schoon, maar draagt minder dan wat er ligt — weggegooid".
-      expect(nieuw.existsSync(), isFalse, reason: 'de mindere binnenkomende kopie wordt niet bewaard');
-      expect(alles('$downloads$sep$parkeerMap'), isEmpty,
-          reason: '_dubbel is voor wat JIJ had, niet voor wat er net binnenkwam');
+      expect(nieuw.existsSync(), isFalse, reason: 'de verliezer staat niet meer naast de bibliotheek');
+      // Opzij en niet weg: alles wat hier langskomt stond al op je schijf. Op de Soulseek-weg is dat
+      // anders — daar is een verliezer afval van de download zelf, en die mag weg.
+      final dubbel = alles('$downloads$sep$parkeerMap');
+      expect(dubbel, hasLength(1), reason: 'een bestand van jou verdwijnt niet in de vuilnisbak');
+      expect(dubbel.single.lengthSync(), greaterThan(900000), reason: 'het is de nep kopie die opzij ging');
+    });
+
+    test('DE KERN: een torrent is je eigen keuze, en verdrijft dus ook een echte FLAC', () async {
+      // Het gedrag zoals het werkelijk is, en zoals Saber het op 29-08-2026 vroeg: "als ik manueel
+      // download moet dit overheersen". Ook als de meter de torrent nep noemt — gemeten op 18-09 met
+      // Kings of Leon, 24/192 op de kop en 24/44.1 in werkelijkheid. De meting wordt getoond, maar
+      // beslist hier niet.
+      final oud = schrijf('Albums/Culture Beat/Serenity/02 - Mr. Vain.flac', flac(_mrVain));
+      final nieuw = schrijf('Culture Beat/02. Mr. Vain.flac', flac(_mrVain, opvulling: 900000));
+      onthoudOordeelVanPc(nieuw.path, _opgeblazen);
+      await onthoudVasteKeuze(nieuw.path); // wat `_jouwKeuze` bij binnenkomst doet
+
+      await bergMapOp('$downloads${sep}Culture Beat', downloads, staatAl: staatAlVoor(oud.path, 337));
+
+      expect(File(oud.path).lengthSync(), greaterThan(900000), reason: 'jouw torrent staat nu op die plek');
+      expect(isVasteKeuze(oud.path), isTrue,
+          reason: 'de bescherming verhuist mee — anders verliest hij bij de eerstvolgende veegbeurt');
+      final dubbel = alles('$downloads$sep$parkeerMap');
+      expect(dubbel, hasLength(1));
+      expect(dubbel.single.lengthSync(), lessThan(900000), reason: 'de echte FLAC staat opzij, niet weg');
+    });
+
+    test('DE GRENS: tegen een ándere eigen keuze beslissen de gewone regels', () async {
+      // Twee keer zelf gekozen: dan valt er geen voorkeur af te lezen, en verliest wat nep is.
+      final oud = schrijf('Albums/Culture Beat/Serenity/02 - Mr. Vain.flac', flac(_mrVain));
+      final nieuw = schrijf('Culture Beat/02. Mr. Vain.flac', flac(_mrVain, opvulling: 900000));
+      onthoudOordeelVanPc(nieuw.path, _opgeblazen);
+      await onthoudVasteKeuze(oud.path);
+      await onthoudVasteKeuze(nieuw.path);
+
+      await bergMapOp('$downloads${sep}Culture Beat', downloads, staatAl: staatAlVoor(oud.path, 337));
+
+      expect(File(oud.path).lengthSync(), lessThan(900000), reason: 'de echte eigen keuze bleef staan');
+      expect(alles('$downloads$sep$parkeerMap').single.lengthSync(), greaterThan(900000),
+          reason: 'en de nep eigen keuze staat opzij, niet weg');
+    });
+
+    test('DE VAL: een APE-torrent wist een FLAC die er al stond niet meer', () async {
+      // Nagespeeld op 19-09-2026 tegen de code van toen: de FLAC was weg, en niet in `_dubbel`. Een
+      // APE heeft hier geen looptijdlezer, dus geen [staatAl] — de torrent kwam op zijn eigen tags bij
+      // "02 - Mr. Vain.flac" uit, won als jouw keuze, en het parkeren hing aan [staatAl].
+      final oud = schrijf('Albums/Culture Beat/Serenity/02 - Mr. Vain.flac', flac(_mrVain));
+      final apeF = schrijf('Culture Beat/02 - Mr. Vain.ape',
+          ape({'Title': 'Mr. Vain', 'Artist': 'Culture Beat', 'Album': 'Serenity', 'Track': '2'}));
+      await onthoudVasteKeuze(apeF.path);
+
+      await bergMapOp('$downloads${sep}Culture Beat', downloads,
+          staatAl: staatAlVoor('mag-niet-gebruikt-worden', 337));
+
+      expect(File(oud.path).existsSync(), isFalse, reason: 'de torrent heeft zijn plek ingenomen');
+      expect(alles('$downloads${sep}Albums').single.path, endsWith('.ape'));
+      final dubbel = alles('$downloads$sep$parkeerMap');
+      expect(dubbel, hasLength(1), reason: 'de FLAC die er al stond hoort opzij te staan, niet gewist');
+      expect(dubbel.single.path, endsWith('Mr. Vain.flac'));
     });
 
     test('DE GRENS: zonder leesbare looptijd wordt staatAl niet gebruikt', () async {
@@ -351,26 +421,34 @@ void main() {
           reason: 'er hoort niets tussen het knippen en het opbergen te gebeuren');
     });
 
-    test('DE VAL: het opbergen geeft staatAl mee, net als een Soulseek-download', () {
+    test('DE VAL: het opbergen vraagt de bibliotheek waar de opname al staat — BUITEN de torrentmap', () {
       final i = bron.indexOf('Future<void> _bergTorrentOp(');
       expect(i, greaterThan(0));
       final lijf = bron.substring(i, bron.indexOf('\n  }\n', i));
-      expect(lijf, contains('staatAl: mapVanBestaande'),
+      expect(lijf, contains('mapVanBestaande'),
           reason: 'zonder staatAl landt een betere kopie NAAST de oude in plaats van erop');
+      // Zonder deze uitzondering wijst de bibliotheek naar het torrentbestand zelf, want elk afgerond
+      // nummer liet haar al opnieuw inlezen. Groep 5 speelt dat na.
+      expect(lijf, contains('nietIn: destDir.path'),
+          reason: 'dan blijft de torrent liggen met "0 verplaatst · 0 dubbel opgeruimd · 0 overgeslagen"');
     });
 
     test('DE KERN: een torrent wordt GEMETEN vóór hij wordt opgeborgen, net als Soulseek', () {
       // Gevonden bij de proef op 18-09-2026 met Kings of Leon — Sex On Fire. De 24/192-vinylrip van
       // RuTracker stond als "nog niet gemeten" in de bibliotheek, terwijl de meter van deze app hem
-      // "niets boven 22 kHz — opgeschaald, geen echte hi-res" noemt. Soulseek meet op al zijn
-      // landingswegen bij binnenkomst; zonder meting is een bestand nooit nep, en beslist bij het
-      // vergelijken de GROOTTE — zodat een eerlijke cd-kopie daarna had verloren van 114 MB lucht.
+      // "niets boven 22 kHz — opgeschaald, geen echte hi-res" noemt.
+      //
+      // Wat het WEL en NIET doet. Het verandert niet wie wint tegen iets wat je niet zelf koos — een
+      // torrent is je eigen keuze en die gaat vóór alles (groep 3). Het oordeel is er meteen, en het
+      // verhuist mee met het bestand. En tegen een ándere eigen keuze beslissen de gewone regels, waar
+      // "wat als nep gemeten is verliest" wel meetelt — dáár moet de meting er vóór het opbergen zijn.
       final i = bron.indexOf('Future<void> _bergTorrentOp(');
       final lijf = bron.substring(i, bron.indexOf('\n  }\n', i));
       final meet = lijf.indexOf('await _meetBinnengekomen(');
       final berg = lijf.indexOf('await bergMapOp(');
-      expect(meet, greaterThan(0), reason: 'zonder meting telt een torrent altijd als "echt"');
-      expect(berg, greaterThan(meet), reason: 'meten NA het opbergen is te laat: dan heeft grootte al beslist');
+      expect(meet, greaterThan(0), reason: 'zonder meting staat een torrent als "nog niet gemeten" in beeld');
+      expect(berg, greaterThan(meet),
+          reason: 'meten NA het opbergen is te laat voor de vergelijking tussen twee eigen keuzes');
     });
 
     test('DE GRENS: meten weigert niets — een torrent heb je zelf gekozen', () {
@@ -388,6 +466,88 @@ void main() {
       final lijf = bron.substring(i, bron.indexOf('\n  }\n', i));
       expect(lijf, contains('await vergeetWatErAlIs()'),
           reason: 'anders haalt Soulseek er in de tussentijd nog een kopie van binnen');
+    });
+  });
+
+  group('5 — de bibliotheek kent het torrentbestand al', () {
+    // Elk afgerond nummer laat de bibliotheek opnieuw inlezen ([onLibraryChanged] aan het eind van
+    // elke loper), dus bij het opbergen staat het torrentbestand er al in — op zijn plek in de
+    // torrentmap. Precies daar liep het op 17 en 18-09-2026 mis.
+    Track spoor(String pad) => Track(
+          path: pad,
+          title: 'Intentions',
+          artist: 'Justin Bieber',
+          album: 'Changes',
+          trackNo: 1,
+          duration: const Duration(seconds: 212),
+          isFlac: true,
+        );
+
+    test('DE KERN: de map die opgeborgen wordt telt niet als "die heb je al"', () {
+      final torrentMap = '$downloads${sep}Justin Bieber - Changes (2020)';
+      final los = '$torrentMap${sep}01 - Intentions.flac';
+      final lib = LibraryStore();
+      lib.tracks.add(spoor(los));
+      lib.rebuildAlbums();
+
+      expect(lib.fileOfRecording('Justin Bieber', 'Intentions', seconds: 212), los,
+          reason: 'zo antwoordde de bibliotheek — en dan is de bestemming de plek waar hij al ligt');
+      expect(lib.fileOfRecording('Justin Bieber', 'Intentions', seconds: 212, nietIn: torrentMap), isNull,
+          reason: 'buiten de torrentmap is er niets, dus opbergen op de eigen tags');
+    });
+
+    test('DE VAL: onthoudt de bibliotheek het torrentbestand als "de" kopie, dan wordt verder gezocht', () {
+      // [LibraryStore.ownedTrack] kent per opname maar één bestand: het eerste dat de scan tegenkwam.
+      // Staat het torrentbestand vooraan, dan moet de kopie in Albums tóch gevonden worden — anders
+      // vervangt een torrent nooit wat Soulseek eerder bracht, en dat was de oorspronkelijke klacht.
+      final torrentMap = '$downloads${sep}Justin Bieber - Changes (2020)';
+      // Echt op schijf: met twee kopieën van één opname vergelijkt de bibliotheek de bestanden zelf.
+      const tags = ['TITLE=Intentions', 'ARTIST=Justin Bieber', 'ALBUM=Changes', 'TRACKNUMBER=1'];
+      final los = schrijf('Justin Bieber - Changes (2020)/01 - Intentions.flac', flac(tags, seconden: 212)).path;
+      final inAlbums =
+          schrijf('Albums/Justin Bieber/Changes/01 - Intentions.flac', flac(tags, seconden: 212)).path;
+      final lib = LibraryStore();
+      lib.tracks.addAll([spoor(los), spoor(inAlbums)]); // de torrent vooraan: de lastige volgorde
+      lib.rebuildAlbums();
+
+      expect(lib.ownedTrack('Justin Bieber', 'Intentions')?.path, los, reason: 'de opzet van deze toets');
+      expect(lib.fileOfRecording('Justin Bieber', 'Intentions', seconds: 212, nietIn: torrentMap), inAlbums);
+    });
+
+    test('DE GRENS: een map die alleen met dezelfde letters BEGINT is een andere map', () {
+      final torrentMap = '$downloads${sep}Justin Bieber - Changes (2020)';
+      final buur = '$downloads${sep}Justin Bieber - Changes (2020) [Deluxe]${sep}01 - Intentions.flac';
+      final lib = LibraryStore();
+      lib.tracks.add(spoor(buur));
+      lib.rebuildAlbums();
+      expect(lib.fileOfRecording('Justin Bieber', 'Intentions', seconds: 212, nietIn: torrentMap), buur);
+    });
+
+    test('DE VAL: met een echte scan — eerst blijft hij liggen, met nietIn wordt hij opgeborgen', () async {
+      final torrentMap = '$downloads${sep}Justin Bieber - Changes (2020)';
+      final los = schrijf(
+          'Justin Bieber - Changes (2020)/01 - Intentions.flac',
+          // Boven de ondergrens van de scan (`kMinimumBytes`), anders telt hij niet als muziek.
+          flac(['TITLE=Intentions', 'ARTIST=Justin Bieber', 'ALBUM=Changes', 'TRACKNUMBER=1'],
+              seconden: 212, opvulling: 70000));
+      await onthoudVasteKeuze(los.path); // wat `_jouwKeuze` bij binnenkomst doet
+      final lib = LibraryStore()
+        ..configDirOverride = wortel.path
+        ..rootPath = wortel.path;
+      await lib.scan(); // wat `onLibraryChanged` doet vóór het opbergen
+
+      // Zoals het tot en met 3.9.400 ging: de bibliotheek wijst naar het bestand zelf.
+      final zonder = await bergMapOp(torrentMap, downloads, staatAl: lib.fileOfRecording);
+      expect('$zonder', '0 verplaatst · 0 dubbel opgeruimd · 0 overgeslagen',
+          reason: 'de regel uit downloads.log van 18-09-2026');
+      expect(los.existsSync(), isTrue);
+
+      // En met de uitzondering die `_bergTorrentOp` nu meegeeft.
+      final met = await bergMapOp(torrentMap, downloads,
+          staatAl: (a, t, {int? seconds}) => lib.fileOfRecording(a, t, seconds: seconds, nietIn: torrentMap));
+      expect(met.moved, 1);
+      expect(los.existsSync(), isFalse);
+      expect(alles('$downloads${sep}Albums'), hasLength(1), reason: 'opgeborgen in de nette boom');
     });
   });
 }

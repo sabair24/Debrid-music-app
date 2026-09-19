@@ -880,10 +880,37 @@ class LibraryStore extends ChangeNotifier {
   /// dubbel. [recordingElsewhere] paste die grens al toe; hier kwam hij nooit aan.
   ///
   /// Blijft [seconds] leeg — de catalogus zei niets — dan verandert er niets aan het oude gedrag.
-  String? fileOfRecording(String artist, String title, {int? seconds}) {
+  ///
+  /// **[nietIn] is de map die op dit moment wordt opgeborgen, en wat daarin ligt telt niet mee.**
+  /// Een torrent landt in `DebridMusic Downloads\<torrentnaam>\`, en elk afgerond nummer laat de
+  /// bibliotheek opnieuw inlezen — dus tegen de tijd dat het opbergen begint, KENT de bibliotheek
+  /// dat bestand al. Zonder deze uitzondering antwoordde deze functie "die heb je al: hier" met het
+  /// binnengekomen bestand zelf, en dan is de bestemming de plek waar het al ligt: niets verhuisd,
+  /// niets vervangen. Gemeten op 18-09-2026: vijf platen van Justin Bieber en één van Justin
+  /// Timberlake bleven zo naast `Albums` liggen, met "0 verplaatst · 0 dubbel opgeruimd · 0
+  /// overgeslagen" in het logboek. Kings of Leon lukte die ochtend alleen omdat het inlezen nog niet
+  /// klaar was.
+  ///
+  /// Ook als de bibliotheek het torrentbestand als "de" kopie onthoudt — [ownedTrack] kent er per
+  /// opname maar één — wordt verder gezocht, zodat de kopie die al in `Albums` stond gevonden wordt
+  /// en vervangen kan worden.
+  String? fileOfRecording(String artist, String title, {int? seconds, String? nietIn}) {
     final eigen = ownedTrack(artist, title);
-    if (eigen != null && _zelfdeLengte(eigen, seconds)) return eigen.path;
-    return recordingElsewhere(artist, title, seconds: seconds)?.path;
+    if (eigen != null && !_ligtIn(eigen.path, nietIn) && _zelfdeLengte(eigen, seconds)) {
+      return eigen.path;
+    }
+    return recordingElsewhere(artist, title, seconds: seconds, nietIn: nietIn)?.path;
+  }
+
+  /// Ligt [pad] in [map] of een van zijn submappen? Zonder [map] nooit.
+  ///
+  /// Hoofdletterongevoelig en met beide scheidingstekens, want Windows schrijft één pad op meer dan
+  /// één manier, en een map die net niet herkend wordt is precies de fout hierboven.
+  static bool _ligtIn(String pad, String? map) {
+    if (map == null || map.isEmpty) return false;
+    String n(String s) => s.replaceAll('/', r'\').toLowerCase();
+    final m = n(map);
+    return n(pad).startsWith(m.endsWith(r'\') ? m : '$m\\');
   }
 
   /// Kan dit bestand de opname van [seconds] zijn?
@@ -913,8 +940,9 @@ class LibraryStore extends ChangeNotifier {
   /// duplicate, so a running time that disagrees means "not this recording, fetch it".
   ///
   /// [exclude] holds the paths already on the page — a file cannot be elsewhere than where it is.
+  /// [nietIn] is een hele map die niet meetelt; zie [fileOfRecording].
   Track? recordingElsewhere(String artist, String title,
-      {int? seconds, Set<String> exclude = const {}}) {
+      {int? seconds, Set<String> exclude = const {}, String? nietIn}) {
     // Eerst de nepmerken eruit. `normKey` haalt haakjes en streepjes weg maar laat de WOORDEN staan,
     // dus "Escape (Album Version)" en "Escape" landen nog steeds op twee sleutels — terwijl het één
     // opname is. Zie [withoutFakeVersion]: die laat een écht merk als "(Live)" juist staan, zodat een
@@ -923,7 +951,8 @@ class LibraryStore extends ChangeNotifier {
     if (wantTitle.isEmpty) return null;
     final wantArtist = artistKey(splitFeatured(artist, title).main);
     for (final t in tracks) {
-      if (exclude.contains(t.path) || normKey(withoutFakeVersion(t.title)) != wantTitle) continue;
+      if (exclude.contains(t.path) || _ligtIn(t.path, nietIn)) continue;
+      if (normKey(withoutFakeVersion(t.title)) != wantTitle) continue;
       if (!_artistCovers(artistKey(splitFeatured(t.artist, t.title).main), wantArtist)) continue;
       final secs = t.duration?.inSeconds ?? 0;
       if (seconds != null &&

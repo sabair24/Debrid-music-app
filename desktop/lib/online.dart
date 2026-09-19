@@ -989,7 +989,9 @@ class DownloadManager extends ChangeNotifier {
   /// [seconds] is de looptijd volgens de UITGAVE. Zonder haar antwoordde de bibliotheek "die heb je
   /// al" op enkel artiest + titel, en werd een heropname als mindere dubbel van schijf gewist. Zie
   /// [LibraryStore.fileOfRecording].
-  String? Function(String artist, String title, {int? seconds})? mapVanBestaande;
+  /// [nietIn] is de map die net wordt opgeborgen; wat daar ligt is het binnenkomende zelf, niet
+  /// "wat je al hebt". Zie [_bergTorrentOp].
+  String? Function(String artist, String title, {int? seconds, String? nietIn})? mapVanBestaande;
 
   DownloadManager(this.online, this.soulseek, this.musicRoot, this.onLibraryChanged);
 
@@ -2351,21 +2353,6 @@ class DownloadManager extends ChangeNotifier {
     return weg.length;
   }
 
-  /// Een binnengekomen torrent opbergen zoals een Soulseek-download dat al werd.
-  ///
-  /// **Waarom dit er moest komen.** Soulseek en torrent hielden geen rekening met elkaar, en Saber
-  /// zag dat zelf: *"torrent vervangt de soulseek download niet, en anders om ook niet"*. Klopt, en
-  /// de oorzaak was één ontbrekende stap. Een Soulseek-nummer gaat bij binnenkomst door
-  /// [placeFileDetailed] en landt in de albummap, waar [firstIsBetter] kiest wat blijft. Een torrent
-  /// bleef liggen in `DebridMusic Downloads\<torrentnaam>\` tot iemand in Instellingen op
-  /// "Opruimen" drukte — dus stonden de twee nooit tegenover elkaar.
-  ///
-  /// Gemeten op 17-09-2026: Culture Beat — Mr. Vain lag sinds 14-09 als schone 24/192 van een
-  /// torrent náást de bibliotheek, terwijl in `Albums\` de Soulseek-kopie bleef staan die als
-  /// opgeblazen gemeten was — en Soulseek jaagde er drie dagen later nog op.
-  ///
-  /// Wie er wint beslist nog steeds [firstIsBetter], met dezelfde regels voor allebei: wat je zelf
-  /// koos wint, wat als nep gemeten is verliest. De verliezer gaat naar `_dubbel` en niet weg.
   /// Elk verliesvrij bestand dat een torrent net afleverde door de echtheidsmeter halen.
   ///
   /// [_meetEchtheid] onthoudt het oordeel op het huidige pad, en het verplaatsen neemt het mee
@@ -2388,22 +2375,58 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
+  /// Een binnengekomen torrent opbergen zoals een Soulseek-download dat al werd.
+  ///
+  /// **Waarom dit er moest komen.** Soulseek en torrent hielden geen rekening met elkaar, en Saber
+  /// zag dat zelf: *"torrent vervangt de soulseek download niet, en anders om ook niet"*. Klopt, en
+  /// de oorzaak was één ontbrekende stap. Een Soulseek-nummer gaat bij binnenkomst door
+  /// [placeFileDetailed] en landt in de albummap, waar [firstIsBetter] kiest wat blijft. Een torrent
+  /// bleef liggen in `DebridMusic Downloads\<torrentnaam>\` tot iemand in Instellingen op
+  /// "Opruimen" drukte — dus stonden de twee nooit tegenover elkaar.
+  ///
+  /// Gemeten op 17-09-2026: Culture Beat — Mr. Vain lag sinds 14-09 als schone 24/192 van een
+  /// torrent náást de bibliotheek, terwijl in `Albums\` de Soulseek-kopie bleef staan die als
+  /// opgeblazen gemeten was — en Soulseek jaagde er drie dagen later nog op.
+  ///
+  /// Wie er wint beslist [firstIsBetter], en daar gaat "wat je zelf koos" vóór alles. Een
+  /// torrentbestand IS je eigen keuze — dat regelt [_jouwKeuze] al bij binnenkomst, en `_move`
+  /// neemt die bescherming mee naar de albummap — dus het wint van alles wat je níét zelf koos: ook
+  /// van een eerlijke kopie, en ook als het zelf als nep gemeten wordt. Alleen tegen een ándere
+  /// eigen keuze (een eerdere torrent, een exacte Soulseek-download) beslissen de gewone regels.
+  /// Wat er lag gaat naar `_dubbel` en niet weg. De Soulseek-jacht raakt een torrentbestand nooit.
   Future<void> _bergTorrentOp(Directory destDir, String naam) async {
     try {
-      // **METEN VÓÓR HET OPBERGEN, net als elke Soulseek-landingsweg.** Zonder dit geldt een
-      // torrent als "ongemeten", en een ongemeten bestand is nooit nep — dus beslist bij het
-      // vergelijken de GROOTTE in plaats van de kwaliteit. Gemeten op 18-09-2026 met Kings of Leon
-      // — Sex On Fire: een 24/192-vinylrip van RuTracker, 114 MB, die de meter van deze app zelf
-      // "niets boven 22 kHz — opgeschaald, geen echte hi-res" noemt. Via Soulseek was hij bij
-      // binnenkomst betrapt; via de torrent stond hij als "nog niet gemeten" in de bibliotheek, en
-      // een eerlijke cd-kopie die daarna binnenkwam zou op grootte hebben verloren.
+      // **Meten vóór het opbergen, net als elke Soulseek-landingsweg — maar met een ander gevolg.**
+      // Gemeten op 18-09-2026 met Kings of Leon — Sex On Fire: een 24/192-vinylrip van RuTracker
+      // die de meter van deze app "niets boven 22 kHz — opgeschaald, geen echte hi-res" noemt. Via
+      // de torrent stond hij als "nog niet gemeten" in de bibliotheek; nu is het oordeel er meteen,
+      // en toont het scherm zijn werkelijke resolutie (24/44.1) naast wat de kop belooft.
       //
-      // Er wordt hier NIETS geweigerd, en dat is het verschil met Soulseek. Daar kiest de jacht
-      // zelf een kandidaat en is er altijd een volgende; een torrent heb je zelf aangewezen. Het
-      // oordeel wordt alleen onthouden — en [firstIsBetter] doet er vervolgens hetzelfde mee als bij
-      // een Soulseek-download: wat als nep gemeten is, verliest.
+      // **Wat dit NIET doet, en dat stond hier eerst verkeerd.** Het verandert niet welk bestand
+      // blijft staan. Elk torrentbestand is al een vaste keuze vóór het hier aankomt ([_jouwKeuze],
+      // op Sabers eigen verzoek: "als ik manueel download moet dit overheersen"), en in
+      // [firstIsBetter] gaat een vaste keuze vóór "wat als nep gemeten is verliest". Een torrent wint
+      // dus van alles wat je niet zelf koos, ook als hij nep blijkt, en de Soulseek-jacht raakt hem
+      // niet. Nagegaan op 19-09-2026: beide Kings of Leon-nummers staan tussen de vaste keuzes en
+      // kwamen daarom ook niet mee toen de knop "zoek beter" 27 betrapte nummers op de verlanglijst
+      // zette.
+      //
+      // Er wordt dus ook niets geweigerd: een torrent heb je zelf aangewezen. Het oordeel wordt
+      // alleen onthouden.
       await _meetBinnengekomen(destDir, naam);
-      final r = await bergMapOp(destDir.path, _downloadsRoot, staatAl: mapVanBestaande);
+      // **`nietIn: destDir` is wat het opbergen laat werken.** Elk afgerond nummer heeft de
+      // bibliotheek al laten inlezen ([onLibraryChanged] aan het eind van elke loper), dus hier kent
+      // ze het torrentbestand al — in DEZE map. Zonder uitzondering wees "waar staat deze opname al?"
+      // naar het bestand zelf, en dan is er niets te verhuizen. Gemeten op 17 en 18-09-2026: Justin
+      // Bieber (vijf platen), Justin Timberlake en Vanessa Carlton bleven zo naast `Albums` liggen,
+      // elk met "0 verplaatst · 0 dubbel opgeruimd · 0 overgeslagen". Zie
+      // [LibraryStore.fileOfRecording].
+      final zoek = mapVanBestaande;
+      final r = await bergMapOp(destDir.path, _downloadsRoot,
+          staatAl: zoek == null
+              ? null
+              : (artist, title, {int? seconds}) =>
+                  zoek(artist, title, seconds: seconds, nietIn: destDir.path));
       _log.line('torrent "$naam" opgeborgen: $r');
       if (r.moved + r.duplicates == 0) return;
       await onLibraryChanged();
