@@ -10,6 +10,7 @@ import 'lan/stroomstand.dart' show grensUitUrl;
 import 'models.dart';
 import 'paths.dart';
 import 'schudvolgorde.dart';
+import 'vaste_keuze.dart' show sleutelVoor;
 import 'warm_log.dart';
 
 enum RepeatMode { off, all, one }
@@ -78,6 +79,34 @@ abstract interface class NowPlayingSource implements Listenable {
 /// shuffle applied. Replacing values position by position therefore preserves the permutation
 /// exactly, which is what keeps the playing index pointing at the playing song. Rebuilding order
 /// from the resolver instead would silently unshuffle the queue.
+/// De wachtrij zonder de bestanden die weggaan, met de index die naar hetzelfde nummer blijft wijzen.
+///
+/// Apart en zuiver, want de speler zelf is in een toets niet te maken: libmpv laadt daar niet. Dit
+/// is het rekenwerk waar het mis kan gaan — de index verschuift als er iets vóór het spelende nummer
+/// wegvalt, en `original` en `order` dragen dezelfde instanties in een andere volgorde (shuffle),
+/// dus ze moeten allebei dezelfde nummers verliezen.
+///
+/// Het spelende nummer is het anker. Valt dát zelf weg — de speler is er dan al vanaf gestapt — dan
+/// blijft de index op zijn plek in de lijst staan, geknepen binnen wat er over is.
+({List<Track> original, List<Track> order, int index}) rijZonderPaden(
+  List<Track> original,
+  List<Track> order,
+  int index,
+  bool Function(String pad) isWeg,
+) {
+  final anker = (index >= 0 && index < order.length) ? order[index] : null;
+  final nieuwOriginal = [for (final t in original) if (!isWeg(t.path)) t];
+  final nieuwOrder = [for (final t in order) if (!isWeg(t.path)) t];
+  int nieuweIndex;
+  if (nieuwOrder.isEmpty || index < 0) {
+    nieuweIndex = -1;
+  } else {
+    final i = anker == null ? -1 : nieuwOrder.indexWhere((t) => identical(t, anker));
+    nieuweIndex = i >= 0 ? i : index.clamp(0, nieuwOrder.length - 1);
+  }
+  return (original: nieuwOriginal, order: nieuwOrder, index: nieuweIndex);
+}
+
 ({List<Track> original, List<Track> order})? remapQueue(
   List<Track> original,
   List<Track> order,
@@ -1563,6 +1592,52 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     if (next == null) return;
     _original = next.original;
     _order = next.order;
+    notifyListeners();
+  }
+
+  /// Deze bestanden bestaan straks niet meer: uit de wachtrij, en speelt er één van, dan door naar
+  /// het volgende nummer.
+  ///
+  /// **Waarom dit er moest komen.** Saber op 20-09-2026: *"ik wil als ik een liedje verwijder, het
+  /// naar volgende liedje gaat, nu loopt het liedje verder, maar dat kan toch niet? verwijderen is
+  /// verwijderen"*. Het wissen zit in de bibliotheek en die kent de speler niet, dus bleef mpv het
+  /// bestand gewoon uitspelen. Op Windows is dat erger dan vreemd: een bestand dat mpv open heeft
+  /// staan láát zich niet wissen — `removeTracks` vangt die fout op en laat het nummer staan, dus
+  /// bleef het óók nog op schijf.
+  ///
+  /// **Eerst doorschakelen, dan pas wissen.** Daarom roept [LibraryStore.removeTracks] dit aan
+  /// vóórdat er iets van schijf gaat: pas als de speler het bestand heeft losgelaten, kan het weg.
+  Future<void> vergeetPaden(Iterable<String> paden) async {
+    final weg = {for (final p in paden) sleutelVoor(p)};
+    if (weg.isEmpty) return;
+    bool isWeg(String? pad) => pad != null && pad.isNotEmpty && weg.contains(sleutelVoor(pad));
+
+    if (isWeg(current?.path)) {
+      if (hasNext) {
+        await next();
+      } else {
+        // Niets meer om naar door te gaan: stoppen, en het bestand loslaten.
+        await _player.stop();
+        if (radioMode) {
+          _radioIndex = -1;
+        } else {
+          _index = -1;
+        }
+      }
+    }
+
+    // En uit de lijsten, zodat er straks niet alsnog naar een verdwenen bestand gesprongen wordt.
+    final uit = rijZonderPaden(_original, _order, _index, (pad) => isWeg(pad));
+    _original = uit.original;
+    _order = uit.order;
+    _index = uit.index;
+
+    if (_radio.isNotEmpty) {
+      final huidig = (_radioIndex >= 0 && _radioIndex < _radio.length) ? _radio[_radioIndex] : null;
+      _radio = [for (final it in _radio) if (!isWeg(it.local?.path)) it];
+      final nieuw = huidig == null ? -1 : _radio.indexWhere((it) => identical(it, huidig));
+      _radioIndex = _radio.isEmpty ? -1 : (nieuw >= 0 ? nieuw : _radioIndex.clamp(0, _radio.length - 1));
+    }
     notifyListeners();
   }
 

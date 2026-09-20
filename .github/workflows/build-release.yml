@@ -240,7 +240,7 @@ jobs:
             test/afgekapte_flac_test.dart test/stroomherstel_test.dart \
             test/waarom_vragen_test.dart test/waarom_server_test.dart \
             test/koppelweigering_komt_aan_test.dart test/torrent_en_soulseek_test.dart \
-            test/torrent_nummering_test.dart \
+            test/torrent_nummering_test.dart test/verwijderen_en_eigen_keuze_test.dart \
             test/zuinig_test.dart test/accountkoppeling_test.dart \
             test/uitwijk_test.dart test/kantnummer_test.dart \
             test/naamteller_test.dart test/beeldmaat_webp_test.dart \

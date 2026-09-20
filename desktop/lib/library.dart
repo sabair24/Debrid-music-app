@@ -1695,6 +1695,12 @@ class LibraryStore extends ChangeNotifier {
     await scan();
   }
 
+  /// Wat de speler met deze bestanden moet doen vóórdat ze weggaan. Zie [PlayerStore.vergeetPaden].
+  ///
+  /// Een haak en geen aanroep: deze laag kent de speler niet, en zou hem niet moeten kennen. Gezet
+  /// in `main.dart`, naast de andere haken.
+  Future<void> Function(List<String> paden)? speelNietMeer;
+
   /// Remove tracks from the library. With [fromDisk] the files are DELETED permanently;
   /// otherwise they're only excluded from the library and stay on disk.
   /// Returns how many files were actually deleted from disk.
@@ -1709,6 +1715,12 @@ class LibraryStore extends ChangeNotifier {
       return fromDisk ? ids.length : 0;
     }
     final list = paths.toList();
+    // **Eerst de speler, dan pas de schijf.** Verwijderen is verwijderen: wat je weggooit hoort niet
+    // uit te blijven spelen. En het is niet alleen netjes — op Windows laat een bestand dat mpv open
+    // heeft staan zich niet wissen, dus bleef het nummer klinken én staan.
+    try {
+      await speelNietMeer?.call(list);
+    } catch (_) {/* de speler mag het wissen nooit tegenhouden */}
     var deleted = 0;
     // De mappen waar iets uit weggehaald is. Een map die daardoor leegloopt hoort niet te blijven
     // staan: een radio van vijfhonderd nummers laat anders honderden lege `Singles/<Artiest>`-mappen
@@ -4344,6 +4356,46 @@ extension LibraryNormalise on LibraryStore {
         kopSampleRate: r.track.sampleRate, kopBits: r.track.bitsPerSample);
     uit.sort((a, b) => capaciteit(a).compareTo(capaciteit(b)));
     return uit;
+  }
+
+  /// Wat je ZELF koos en tóch als nep gemeten is.
+  ///
+  /// [teVervangenBestanden] laat deze er met opzet buiten: wat jij koos wint van elke automatische
+  /// regel, dus de jacht raakt ze niet aan. Maar dan hoort er wél een weg terug te zijn. Saber op
+  /// 20-09-2026, over twee Madonna-nummers die 24/192 beloven en 24/44,1 dragen: *"die zijn nog
+  /// fake? waarom staan die er nog?"* Gemeten op zijn schijf: 87 van de 582 eigen keuzes.
+  ///
+  /// Zelfde volgorde als [teVervangenBestanden]: het ergste geval bovenaan.
+  List<({Track track, Echtheidsoordeel oordeel})> eigenKeuzesDieNepZijn() {
+    final uit = <({Track track, Echtheidsoordeel oordeel})>[];
+    for (final t in tracks) {
+      final o = gemeten(t.path);
+      if (o == null || !o.isNep || !isVasteKeuze(t.path)) continue;
+      uit.add((track: t, oordeel: o));
+    }
+    int capaciteit(({Track track, Echtheidsoordeel oordeel}) r) => echteCapaciteit(r.oordeel,
+        kopSampleRate: r.track.sampleRate, kopBits: r.track.bitsPerSample);
+    uit.sort((a, b) => capaciteit(a).compareTo(capaciteit(b)));
+    return uit;
+  }
+
+  /// De bescherming van deze bestanden eraf halen, zodat de jacht ze wél mag vervangen.
+  ///
+  /// Alleen dit, en met opzet niets meer: de wens erbij zetten is werk van de downloadlijst
+  /// ([DownloadManager.wensEchteVersies]), en die kent deze laag niet. Geeft terug hoeveel er
+  /// werkelijk beschermd wáren.
+  ///
+  /// Geen `notifyListeners` — dit is een uitbreiding op de bibliotheek en daarbinnen mag dat niet
+  /// (de analyse maakt er een waarschuwing van, en op de Android- en Apple-bouw is dat fataal). Het
+  /// scherm dat de knop draagt ververst zichzelf al met zijn eigen `setState`.
+  Future<int> geefEigenKeuzeVrij(Iterable<Track> tracks) async {
+    var vrij = 0;
+    for (final t in tracks) {
+      if (!isVasteKeuze(t.path)) continue;
+      await vergeetVasteKeuze(t.path);
+      vrij++;
+    }
+    return vrij;
   }
 
   /// Alles wat de proef niet doorstond, met de reden erbij — voor het overzicht na de veegbeurt.

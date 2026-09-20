@@ -1274,6 +1274,9 @@ Future<void> main() async {
     // zijn eigen albumtag volgt en ook niet ernaast onder een andere naam. Zie
     // [LibraryStore.fileOfRecording].
     downloads.mapVanBestaande = library.fileOfRecording;
+    // Verwijderen is verwijderen: wat je weggooit hoort niet uit te blijven spelen, en een bestand
+    // dat mpv open heeft laat zich op Windows niet eens wissen. Zie [PlayerStore.vergeetPaden].
+    library.speelNietMeer = player.vergeetPaden;
     // Niet meteen: dit logde bij het opstarten in zonder dat iemand erom vroeg, en botste dan met de
     // sessie die de vorige keer nooit is afgemeld. Een wens die dagen loopt kan drie minuten wachten.
     // Het ritme staat HIER, dus wordt het hier ook aan de strook op de Kwaliteitspagina verteld.
@@ -13635,6 +13638,47 @@ class _KwaliteitViewState extends State<KwaliteitView> {
     }
   }
 
+  /// Ook de bestanden die JIJ koos toch laten vervangen.
+  ///
+  /// Die staan overal buiten ([LibraryStore.eigenKeuzesDieNepZijn]): een torrent die je zelf aanwees
+  /// wint van elke automatische regel, en de jacht raakt hem niet aan. Dat is precies wat je wilde —
+  /// tot je op de albumpagina twee nummers ziet staan die 24/192 beloven en 24/44,1 dragen. Saber op
+  /// 20-09-2026: *"die zijn nog fake? waarom staan die er nog?"*
+  ///
+  /// Wél met een vraag vooraf, anders dan bij [_zoekBeter]: dit haalt een bescherming weg die je
+  /// zelf hebt aangezet, en dat hoort geen knop te zijn waar je per ongeluk op drukt.
+  Future<void> _vervangOokEigenKeuzes() async {
+    final lib = context.read<LibraryStore>();
+    final rijen = lib.eigenKeuzesDieNepZijn();
+    if (rijen.isEmpty) return;
+    final ja = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _panel,
+        title: Text('${rijen.length} nummers die je zelf koos'),
+        content: const Text(
+            'Deze nummers heb je zelf binnengehaald, meestal via een torrent. Daarom laat de app ze '
+            'met rust — ook al zijn ze als opgeschaald of afgekapt gemeten.\n\n'
+            'Wil je ze tóch laten vervangen? De bescherming gaat eraf en ze komen op de verlanglijst. '
+            'Wat er al ligt blijft staan tot er een betere kopie binnen is.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Laat maar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Toch vervangen')),
+        ],
+      ),
+    );
+    if (ja != true || !mounted) return;
+    final vrij = await lib.geefEigenKeuzeVrij(rijen.map((r) => r.track));
+    if (!mounted) return;
+    final nieuw = await context
+        .read<DownloadManager>()
+        .wensEchteVersies(rijen.map((r) => r.track), gezag: lib.tagsVoorVervanger);
+    if (!mounted) return;
+    setState(() {
+      _uitslag = '$vrij vrijgegeven · $nieuw op de verlanglijst; de app zoekt er vanzelf naar.';
+    });
+  }
+
   /// Alles op deze lijst op de verlanglijst zetten.
   ///
   /// Eén knop en geen vraag per rij: wie hier komt heeft de lijst al gezien, en per nummer bevestigen
@@ -13669,6 +13713,7 @@ class _KwaliteitViewState extends State<KwaliteitView> {
     context.watch<DownloadManager>();
     final rijen = lib.uitMp3Bestanden();
     final teVervangen = lib.teVervangenBestanden();
+    final eigenKeuzes = lib.eigenKeuzesDieNepZijn();
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(28, 22, 28, 30),
@@ -13706,6 +13751,15 @@ class _KwaliteitViewState extends State<KwaliteitView> {
                 icon: const Icon(Icons.travel_explore_rounded, size: 16),
                 label: Text('Laat de app zoeken (${teVervangen.length})'),
                 style: TextButton.styleFrom(foregroundColor: _accent),
+              ),
+            // En wat je ZELF koos, apart, want dat is een andere belofte. Zie
+            // [_vervangOokEigenKeuzes]: de app laat die met rust, en hier staat de weg terug.
+            if (eigenKeuzes.isNotEmpty && !_bezig)
+              TextButton.icon(
+                onPressed: _vervangOokEigenKeuzes,
+                icon: const Icon(Icons.lock_open_rounded, size: 16),
+                label: Text('Ook wat je zelf koos (${eigenKeuzes.length})'),
+                style: TextButton.styleFrom(foregroundColor: _muted),
               ),
             if (_uitslag != null)
               Text(_uitslag!, style: const TextStyle(color: _muted, fontSize: 12.5)),
