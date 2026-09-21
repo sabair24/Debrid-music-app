@@ -18695,51 +18695,34 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
 
     // Alleen bij een plaat die je HEBT is [AlbumArt] eerlijk bruikbaar: hij zoekt zijn scans op
     // naam bij Discogs, en `pinned`/`roles` slaan nergens op voor een uitgave die niet van jou is.
-    // Voor de rest de kale hoes — maar wél in een vak van dezelfde breedte, anders springt het
-    // beeld zijwaarts zodra je van een eigen plaat naar een vreemde gaat.
-    final Widget links = eigen != null
-        ? AlbumArt(
-            artist: eigen.artist,
-            album: eigen.title,
-            identity: bib.uidOf(eigen),
-            size: hoes,
-            fallback: eigen.cover,
-            chosen: eigen.correctedCover,
-            trackCount: eigen.tracks.length,
-            pinned: bib.pinnedRelease(eigen) ?? persingUitHerkomst(eigen.resolvedFrom).release,
-            pinnedMbid: bib.pinnedMbid(eigen) ?? persingUitHerkomst(eigen.resolvedFrom).mbid,
-            roles: bib.albumArtRoles(eigen.artist, eigen.title),
-            uitgeschoven: true,
-            uitschuifTeller: teller,
-            reisFactor: reis,
-          )
-        : SizedBox(
-            width: hoes * (1 + reis),
-            height: hoes,
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: SizedBox(
-                  width: hoes,
-                  height: hoes,
-                  child: bytes != null
-                      ? Image.memory(bytes, fit: BoxFit.cover, cacheWidth: decodeWidth(hoes))
-                      : Image.network(url!,
-                          fit: BoxFit.cover,
-                          cacheWidth: decodeWidth(hoes),
-                          errorBuilder: (_, __, ___) => const SizedBox()),
-                ),
-              ),
-            ),
-          );
+    // Voor de rest de kale hoes, en die kan er ook NIET zijn — zie [kaleBandHoes] voor wat er
+    // gebeurde toen dit vak daar niet op rekende.
+    final Widget? links = !heeftHoes
+        ? null
+        : eigen != null
+            ? AlbumArt(
+                artist: eigen.artist,
+                album: eigen.title,
+                identity: bib.uidOf(eigen),
+                size: hoes,
+                fallback: eigen.cover,
+                chosen: eigen.correctedCover,
+                trackCount: eigen.tracks.length,
+                pinned: bib.pinnedRelease(eigen) ?? persingUitHerkomst(eigen.resolvedFrom).release,
+                pinnedMbid: bib.pinnedMbid(eigen) ?? persingUitHerkomst(eigen.resolvedFrom).mbid,
+                roles: bib.albumArtRoles(eigen.artist, eigen.title),
+                uitgeschoven: true,
+                uitschuifTeller: teller,
+                reisFactor: reis,
+              )
+            : kaleBandHoes(bytes: bytes, url: url, maat: hoes, reis: reis);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 28),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          if (heeftHoes) ...[links, const SizedBox(width: 36)],
+          if (links != null) ...[links, const SizedBox(width: 36)],
           // De leesmaat ook hier, en dat bleek pas op het scherm: zonder deze grens loopt een
           // albumtekst over de volle veertienhonderd punten door en wordt hij aan de rechterrand
           // afgesneden midden in een zin.

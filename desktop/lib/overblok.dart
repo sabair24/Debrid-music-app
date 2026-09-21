@@ -580,6 +580,39 @@ class _JaarLint extends StatelessWidget {
   }
 }
 
+/// De hoes van een plaat die je NIET hebt, in een vak van [maat] hoog en `maat * (1 + reis)` breed
+/// — even breed als het vak van een eigen plaat, waar de cd uit de hoes schuift, zodat het beeld
+/// niet zijwaarts springt als je van de een naar de ander gaat. Null als er niets te tonen is.
+///
+/// **Null, en geen `url!`.** Een plaat die je niet hebt en waar de catalogus geen hoes voor kent,
+/// heeft geen bytes én geen url. Toen dit vak nog in de artiestpagina stond, werd het ook
+/// opgebouwd als het niet getekend werd, met een `url!` erin — en op 21-09-2026 viel daarop bij
+/// Oasis de hele band om. Null betekent: de tekst krijgt de volle breedte.
+Widget? kaleBandHoes({Uint8List? bytes, String? url, required double maat, required double reis}) {
+  final Widget beeld;
+  if (bytes != null) {
+    beeld = Image.memory(bytes, fit: BoxFit.cover, cacheWidth: decodeWidth(maat));
+  } else if (url != null && url.isNotEmpty) {
+    beeld = Image.network(url,
+        fit: BoxFit.cover,
+        cacheWidth: decodeWidth(maat),
+        errorBuilder: (_, __, ___) => const SizedBox());
+  } else {
+    return null;
+  }
+  return SizedBox(
+    width: maat * (1 + reis),
+    height: maat,
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: SizedBox(width: maat, height: maat, child: beeld),
+      ),
+    ),
+  );
+}
+
 /// Het beeld onder het lint: traag inzoomend, kruisvervagend bij een nieuw jaartal.
 class _JaarBeeld extends StatefulWidget {
   const _JaarBeeld(
@@ -616,9 +649,34 @@ class _JaarBeeldState extends State<_JaarBeeld> with SingleTickerProviderStateMi
     super.didUpdateWidget(oud);
     if (oud.punt.jaar == widget.punt.jaar) return;
     _vorigeZoom = _zoom;
-    _vorig = oud.bouw(oud.punt, oud.teller);
+    _vorig = _bouw(oud.bouw, oud.punt, oud.teller);
     _c?.forward(from: 0);
     if (_c == null) setState(() {});
+  }
+
+  /// De lagen voor [punt], of een lege band als de bouwer omvalt.
+  ///
+  /// **Een fout in de band mag de pagina niet meenemen.** De band woont in een `SliverToBoxAdapter`,
+  /// die zijn kind een onbegrensde hoogte geeft, en een widget die tijdens het bouwen omvalt wordt in
+  /// een release-bouw een grijs vlak dat die hoogte helemaal opeist: honderdduizend punten. Zo was op
+  /// 21-09-2026 bij Oasis alles onder het jaarlint weg, door één `url!` in de bouwer van de
+  /// artiestpagina — en klikte je daarna een ander jaartal aan, dan viel hij opnieuw om, want hier
+  /// wordt ook het vertrekkende beeld nog eens gebouwd.
+  ///
+  /// De fout wordt nog steeds gemeld, en komt dus in `start.log`; alleen het beeld blijft leeg, op
+  /// de hoogte van een gewone band.
+  Bandlagen _bouw(Bandlagen Function(Jaarpunt, int) bouw, Jaarpunt punt, int teller) {
+    try {
+      return bouw(punt, teller);
+    } catch (fout, stapel) {
+      FlutterError.reportError(FlutterErrorDetails(
+        exception: fout,
+        stack: stapel,
+        library: 'overblok',
+        context: ErrorDescription('bij het bouwen van de beeldband voor ${punt.jaar}'),
+      ));
+      return (achter: const SizedBox.shrink(), voor: const SizedBox.shrink());
+    }
   }
 
   double get _zoom => 1 + .08 * (_c?.value ?? 1);
@@ -642,7 +700,7 @@ class _JaarBeeldState extends State<_JaarBeeld> with SingleTickerProviderStateMi
 
   @override
   Widget build(BuildContext context) {
-    final nieuw = widget.bouw(widget.punt, widget.teller);
+    final nieuw = _bouw(widget.bouw, widget.punt, widget.teller);
     if (_c == null) {
       return SizedBox(
         height: kBandHoogte,

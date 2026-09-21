@@ -65,6 +65,69 @@ void main() {
       expect(lint.last.jaar, 2021);
     });
 
+    test('DE VAL: een band gaat uit elkaar, hij overlijdt niet', () {
+      // Aangewezen op 21-09-2026: bij Oasis stond er "Overleden 2009". TheAudioDB zet bij een GROEP
+      // het jaar van de split in `intDiedYear`, met in `strDisbanded` alleen "Yes" — en zo komen de
+      // feiten van Oasis echt binnen. Op Sabers pc gold het voor 17 van de 70 groepen.
+      final oasis = ArtiestFeiten.uitAudioDb({
+        'intFormedYear': '1991',
+        'intDiedYear': '2009',
+        'strDisbanded': 'Yes',
+        'intMembers': '4',
+      });
+      final lint = bouwJaarlint(
+        platen: [plaat('Definitely Maybe', 1994), plaat('Dig Out Your Soul', 2008)],
+        feiten: oasis,
+      );
+      expect(lint.last.soort, Jaarsoort.ontbinding, reason: 'een band overlijdt niet');
+      expect(lint.last.label, 'Uit elkaar');
+      expect(lint.last.jaar, 2009);
+
+      // Staat er wél een jaartal in `strDisbanded`, dan is dat het einde: dat veld is er voor.
+      final beide = bouwJaarlint(
+        platen: [plaat('Homework', 1997)],
+        feiten: const ArtiestFeiten(
+            opgerichtJaar: 1993, gestorvenJaar: 2009, ontbonden: '2021', aantalLeden: 2),
+      );
+      expect(beide.last.jaar, 2021);
+
+      // En een persoon overlijdt nog steeds.
+      final mj = bouwJaarlint(platen: [plaat('Thriller', 1982)], feiten: _mj);
+      expect(mj.last.label, 'Overleden');
+    });
+
+    test('DE VAL: wat na het einde verscheen, staat er ook na', () {
+      // Oasis ging in 2009 uit elkaar, en "Knebworth 1996" kwam uit in 2021. Met het einde vast
+      // achteraan las het lint "2008 · 2021 · 2009" — aangewezen op 21-09-2026.
+      final oasis = bouwJaarlint(
+        platen: [
+          plaat('Definitely Maybe', 1994),
+          plaat('Dig Out Your Soul', 2008),
+          plaat('Knebworth 1996', 2021),
+        ],
+        feiten: const ArtiestFeiten(
+            opgerichtJaar: 1991, gestorvenJaar: 2009, ontbonden: 'Yes', aantalLeden: 4),
+        nu: 2026,
+      );
+      expect(oasis.map((p) => p.jaar).toList(), [1991, 1994, 2008, 2009, 2021],
+          reason: 'een tijdlijn die terug in de tijd springt leest als een fout');
+
+      // Bij een persoon hetzelfde, en een plaat uit het sterfjaar gaat vóór het overlijden:
+      // Blackstar kwam twee dagen voor Bowies dood uit, Toy vijf jaar erna.
+      final bowie = bouwJaarlint(
+        platen: [plaat('The Next Day', 2013), plaat('Blackstar', 2016), plaat('Toy', 2021)],
+        feiten: const ArtiestFeiten(geborenJaar: 1947, gestorvenJaar: 2016, aantalLeden: 1),
+        nu: 2026,
+      );
+      expect(bowie.map((p) => '${p.jaar} ${p.label}').toList(), [
+        '1947 Geboren',
+        '2013 The Next Day',
+        '2016 Blackstar',
+        '2016 Overleden',
+        '2021 Toy',
+      ]);
+    });
+
     test('DE VAL: alleen albums, tenzij dat te weinig oplevert', () {
       // Zonder deze zeef is het lint voor een artiest met veel singles geen tijdlijn meer.
       final lint = bouwJaarlint(platen: [

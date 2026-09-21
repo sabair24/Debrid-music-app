@@ -16,6 +16,8 @@
 /// waar het lint stáát, klapt een sectie open, en meet opnieuw.
 library;
 
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -65,7 +67,8 @@ Widget _omhulsel(Widget kind, {bool zonderAnimatie = false}) => MaterialApp(
       ),
     );
 
-OverBlok _blok({int secties = 6, bool metBeeld = true}) => OverBlok(
+OverBlok _blok({int secties = 6, bool metBeeld = true, Bandlagen Function(Jaarpunt, int)? beeld}) =>
+    OverBlok(
       naam: 'Michael Jackson',
       feiten: _feiten,
       jaren: _jaren,
@@ -80,12 +83,13 @@ OverBlok _blok({int secties = 6, bool metBeeld = true}) => OverBlok(
       // dat is precies waarom die bouwer geïnjecteerd wordt.
       // Twee lagen, want alleen de achtergrond mag inzoomen — zie [Bandlagen]. De voorgrond is wat
       // deze toets narekent: die hoort NIET mee te bewegen.
-      beeldVoorJaar: metBeeld
-          ? (p, teller) => (
-                achter: ColoredBox(color: Colors.blue.shade900, child: const Text('waas')),
-                voor: Text('beeld ${p.jaar} tik $teller'),
-              )
-          : null,
+      beeldVoorJaar: beeld ??
+          (metBeeld
+              ? (p, teller) => (
+                    achter: ColoredBox(color: Colors.blue.shade900, child: const Text('waas')),
+                    voor: Text('beeld ${p.jaar} tik $teller'),
+                  )
+              : null),
       beeldBijSectie: (afd, i) => Text('sectiebeeld ${afd.kop}'),
     );
 
@@ -207,6 +211,51 @@ void main() {
 
     await t.pump(const Duration(seconds: 3));
     expect(t.getTopLeft(beeld), begin, reason: 'en aan het einde van de inzoom evenmin');
+  });
+
+  testWidgets('DE VAL: een beeld dat omvalt neemt de pagina niet mee', (t) async {
+    // **Aangewezen op 21-09-2026 bij Oasis: een jaartal aanklikken gaf "een groot wit oppervlak".**
+    // De bouwer van de artiestpagina viel om op één `url!`, en een widget die tijdens het bouwen
+    // omvalt wordt in een release-bouw een grijs vlak. In deze `SliverToBoxAdapter` is dat vlak
+    // honderdduizend punten hoog, en alles onder het lint staat dan buiten bereik. Een ander
+    // jaartal aanklikken hielp niet: het vertrekkende beeld wordt dan nog een keer gebouwd.
+    await pomp(
+      t,
+      _omhulsel(_blok(
+        beeld: (p, teller) => p.jaar == 1982
+            ? throw StateError('geen hoes en geen url')
+            : (achter: const SizedBox(), voor: Text('beeld ${p.jaar} tik $teller')),
+      )),
+    );
+    await t.tap(find.text('Meer lezen'));
+    await t.pumpAndSettle();
+    final onder = t.getTopLeft(find.text('HOOFDSTUK 0')).dy;
+
+    await t.tap(find.text('1982'));
+    await t.pumpAndSettle();
+    expect(t.takeException(), isA<StateError>(),
+        reason: 'de fout hoort gemeld te blijven — anders staat hij niet in start.log');
+    expect(find.byType(ErrorWidget), findsNothing,
+        reason: 'een grijs vlak in plaats van de band, zoals bij Oasis');
+    expect(t.getTopLeft(find.text('HOOFDSTUK 0')).dy, onder,
+        reason: 'alles onder het jaarlint schuift van de pagina af');
+
+    await t.tap(find.text('1987'));
+    await t.pumpAndSettle();
+    expect(t.takeException(), isA<StateError>(),
+        reason: 'weggaan bouwt het kapotte beeld nog één keer, en ook dat hoort gemeld');
+    expect(find.byType(ErrorWidget), findsNothing,
+        reason: 'wie na het kapotte jaartal een ander aanklikt, hoort de band terug te krijgen');
+    expect(find.textContaining('beeld 1987'), findsOneWidget);
+  });
+
+  test('DE GRENS: een plaat zonder hoes en zonder url krijgt geen vak', () {
+    // De regel waar Oasis op omviel: een plaat die je niet hebt, waar de catalogus geen hoes van
+    // kent. Dan hoort er niets te komen — geen fout, en ook geen leeg vak naast de tekst.
+    expect(kaleBandHoes(maat: 284, reis: .62), isNull);
+    expect(kaleBandHoes(url: '', maat: 284, reis: .62), isNull);
+    expect(kaleBandHoes(url: 'https://voorbeeld.nl/hoes.jpg', maat: 284, reis: .62), isNotNull);
+    expect(kaleBandHoes(bytes: Uint8List(4), maat: 284, reis: .62), isNotNull);
   });
 
   testWidgets('DE KERN: een opengeklapt hoofdstuk krijgt zijn beeld ernaast', (t) async {

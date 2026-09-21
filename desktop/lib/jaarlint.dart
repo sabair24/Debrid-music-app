@@ -110,8 +110,8 @@ List<Jaarpunt> bouwJaarlint({
       ),
   ]..sort((a, b) => a.jaar.compareTo(b.jaar));
 
-  // De ankers: geboorte of oprichting ervóór, overlijden of ontbinding erna. Die twee mogen NOOIT
-  // wegvallen bij het uitdunnen — ze zijn het begin en het einde van het verhaal.
+  // De ankers: geboorte of oprichting ervóór, overlijden of ontbinding op hun jaar. Die twee mogen
+  // NOOIT wegvallen bij het uitdunnen — ze zijn het begin en het einde van het verhaal.
   // Bij een PERSOON is de geboorte het begin, bij een GROEP de oprichting — zie
   // [ArtiestFeiten.isPersoon]. Andersom begon het lint van Michael Jackson bij "Opgericht 1964",
   // het jaar van The Jackson 5, terwijl de app 1958 gewoon in huis had.
@@ -133,22 +133,34 @@ List<Jaarpunt> bouwJaarlint({
     );
   }
 
+  // Het einde. Bij een PERSOON is dat het sterfjaar, bij een GROEP niet: daar zet TheAudioDB in
+  // `intDiedYear` het jaar waarin ze uit elkaar gingen, met in `strDisbanded` alleen "Yes" — geen
+  // jaartal. Zo stond er bij Oasis "Overleden 2009" (aangewezen op 21-09-2026), en in de feiten op
+  // Sabers pc gold dat voor 17 van de 70 groepen.
+  final sterfjaar = verstandig(feiten?.gestorvenJaar) ? feiten!.gestorvenJaar : null;
+  final ontbondenJaar = ArtiestFeiten.jaarUit(feiten?.ontbonden);
+  final uitElkaar = verstandig(ontbondenJaar) ? ontbondenJaar : (persoon ? null : sterfjaar);
   Jaarpunt? einde;
-  if (verstandig(feiten?.gestorvenJaar)) {
-    einde = Jaarpunt(jaar: feiten!.gestorvenJaar!, soort: Jaarsoort.overlijden, label: 'Overleden');
-  } else {
-    final ontbonden = ArtiestFeiten.jaarUit(feiten?.ontbonden);
-    if (verstandig(ontbonden)) {
-      einde = Jaarpunt(jaar: ontbonden!, soort: Jaarsoort.ontbinding, label: 'Uit elkaar');
-    }
+  if (persoon && sterfjaar != null) {
+    einde = Jaarpunt(jaar: sterfjaar, soort: Jaarsoort.overlijden, label: 'Overleden');
+  } else if (uitElkaar != null) {
+    einde = Jaarpunt(jaar: uitElkaar, soort: Jaarsoort.ontbinding, label: 'Uit elkaar');
   }
 
   final middenIn = _dun(punten, maximum - (begin == null ? 0 : 1) - (einde == null ? 0 : 1));
-  return [
+  final lint = [
     if (begin != null) begin,
     ...middenIn,
-    if (einde != null) einde,
   ];
+  // Het einde op zijn plek in de TIJD, niet vast achteraan. Er verschijnt vaak nog wat na: een
+  // postuum album, een live-opname uit het archief, een reünie. Met het einde achteraan las het lint
+  // van Oasis "2008 · 2021 · 2009". Een plaat uit hetzelfde jaar gaat er wél vóór.
+  final e = einde;
+  if (e != null) {
+    final later = lint.indexWhere((p) => p.jaar > e.jaar);
+    lint.insert(later < 0 ? lint.length : later, e);
+  }
+  return lint;
 }
 
 /// Dunt de middenmoot uit tot er [ruimte] over is, met de eerste en de laatste altijd erin.
