@@ -301,6 +301,72 @@ void main() {
       ..tick();
     expect(handler.mediaItem.valueOrNull, isNull);
   });
+
+  group('wachten op stilte na een blijvend verlies', () {
+    // Gemeten op 22-09-2026 met 3.9.406: bij "gepauzeerd" verliet de mediadienst de voorgrond, en
+    // bij het hervatten weigerde Android 16 de focus ("AudioHardening focus request ... ignored").
+    // De muziek speelde toen zonder focus, en een TikTok-video klonk er dwars doorheen.
+    tearDown(() => zetWachtOpStilteVoorToets(false));
+
+    Future<NowPlayingHandler> klaar(FakePlayer player) async {
+      final handler = NowPlayingHandler(player, null);
+      await _item(handler, '/muziek/01.flac');
+      return handler;
+    }
+
+    test('DE KERN: tijdens het wachten meldt hij "bezig" en niet "gepauzeerd"', () async {
+      final player = FakePlayer()..current = _track('/muziek/01.flac');
+      final handler = await klaar(player);
+
+      zetWachtOpStilteVoorToets(true);
+      final s = handler.playbackState.value;
+      expect(s.playing, isTrue,
+          reason: 'bij "gepauzeerd" verlaat de mediadienst de voorgrond, en dan geeft Android 16 '
+              'bij het hervatten geen focus meer');
+      expect(s.processingState, AudioProcessingState.buffering);
+      expect(s.controls, contains(MediaControl.play), reason: 'er klinkt niets, dus de knop zegt spelen');
+      expect(s.controls, isNot(contains(MediaControl.pause)));
+      expect(s.speed, 0.0, reason: 'de balk op het vergrendelscherm hoort stil te staan');
+
+      zetWachtOpStilteVoorToets(false);
+      final na = handler.playbackState.value;
+      expect(na.playing, isFalse, reason: 'na het wachten is het weer een gewone pauze');
+      expect(na.processingState, AudioProcessingState.ready);
+    });
+
+    test('DE VAL: een tik op de oordopjes in de stilte speelt af', () async {
+      // Het systeem denkt dat er gespeeld wordt, en zou er "pauze" van maken — terwijl je stilte hoort.
+      final player = FakePlayer()..current = _track('/muziek/01.flac');
+      final handler = await klaar(player);
+      zetWachtOpStilteVoorToets(true);
+
+      await handler.click();
+      expect(player.playing, isTrue, reason: 'wie in de stilte op de knop drukt, wil muziek');
+    });
+
+    test('DE GRENS: pauze tijdens het wachten wordt een gewone pauze', () async {
+      final player = FakePlayer()..current = _track('/muziek/01.flac');
+      final handler = await klaar(player);
+      zetWachtOpStilteVoorToets(true);
+
+      await handler.pause();
+      expect(player.toggles, 0, reason: 'hij stond al stil; een schakeling zou hem juist aanzetten');
+      expect(handler.playbackState.value.playing, isFalse);
+      expect(handler.playbackState.value.processingState, AudioProcessingState.ready);
+    });
+
+    test('DE GRENS: klinkt er muziek, dan telt de wachtstand niet', () async {
+      final player = FakePlayer()
+        ..current = _track('/muziek/01.flac')
+        ..playing = true;
+      final handler = await klaar(player);
+      zetWachtOpStilteVoorToets(true);
+
+      expect(handler.playbackState.value.processingState, AudioProcessingState.ready);
+      await handler.click();
+      expect(player.playing, isFalse, reason: 'een tik terwijl er muziek klinkt is gewoon pauze');
+    });
+  });
 }
 
 /// The handler publishes asynchronously — the artwork has to be written to disk first — so wait

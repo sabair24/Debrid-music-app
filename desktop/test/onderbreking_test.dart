@@ -203,6 +203,21 @@ void main() {
       expect(bron, contains('if (event.type == AudioInterruptionType.unknown) startWacht();'),
           reason: 'alleen na een BLIJVEND verlies wachten; een tijdelijk verlies heeft zijn eigen eind');
       expect(bron, contains('if (!Platform.isAndroid || isTv) return;'));
+
+      // De volgorde, gemeten op 22-09-2026: meldt de handler ook maar één keer "gepauzeerd", dan
+      // verlaat de mediadienst de voorgrond, en daarna weigert Android 16 de focus bij het hervatten.
+      final pauze = bron.indexOf('case Onderbreking.pauzeren:');
+      expect(bron.indexOf('startWacht();', pauze), lessThan(bron.indexOf('player.playPause();', pauze)),
+          reason: 'de wachtstand moet aan staan vóór de pauze');
+      final herv = bron.indexOf('case NaVerlies.hervatten:');
+      expect(bron.substring(herv, bron.indexOf('player.playPause();', herv)),
+          isNot(contains('zetWacht(false)')),
+          reason: 'de wachtstand gaat pas uit als de speler weer speelt');
+      expect(bron, contains('if (uitWacht && player.playing) {\n        player.pauzeer();'),
+          reason: 'zonder focus hervat hoort er geen andere app ons meer — dan terug naar pauze');
+      expect(bron, contains('if (player.playing && _wachtOpStilte) _wachtOpStilte = false;'),
+          reason: 'bleef de wachtstand hangen, dan werd de volgende gewone pauze ook "bezig" — '
+              'met de voorgrond en het wakelock erbij, uren lang');
     });
   });
 
