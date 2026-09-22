@@ -148,7 +148,9 @@ Onderbreking bijOnderbreking({
 /// Wat er na een blijvend focusverlies moet gebeuren, per meting.
 enum NaVerlies { wachten, hervatten, opgeven }
 
-/// Of de muziek stilstaat omdat een andere app de focus hield, en we wachten tot het stil is.
+/// Of de muziek stilstaat omdat een andere app geluid maakt, en we van plan zijn terug te komen: na
+/// een blijvend verlies tot het stil is ([StilteWacht]), na een tijdelijk verlies tot het
+/// eindbericht komt.
 ///
 /// Zolang dit aan staat meldt [NowPlayingHandler] aan het systeem "bezig" (bufferen) in plaats van
 /// "gepauzeerd". Dat is geen cosmetica. Bij "gepauzeerd" verlaat de mediadienst de voorgrond, en een
@@ -159,12 +161,18 @@ enum NaVerlies { wachten, hervatten, opgeven }
 ///     startForegroundService() not allowed due to mAllowStartForeground false
 ///
 /// De muziek speelde daarna zonder focus: TikTok vroeg hem op, YouTube verloor hem, en DebridMusic
-/// speelde dwars door de video heen. Alleen tijdens [StilteWacht.venster], en niet bij elke pauze:
+/// speelde dwars door de video heen. En na een TIJDELIJK verlies hetzelfde, nagemeten op 3.9.407:
+/// TikTok pauzeerde de muziek netjes en gaf hem terug, maar de mediadienst was intussen van de
+/// voorgrond af, mocht niet terug ("Background started FGS: Disallowed", twee keer), en de muziek
+/// speelde daarna zonder dienst verder.
+///
+/// Alleen zolang er een onderbreking loopt — hoogstens [StilteWacht.venster] of een half uur — en
+/// niet bij elke pauze:
 /// een dienst die bij élke pauze op de voorgrond blijft, houdt ook zijn wakelock vast
 /// (`exitForegroundState` in audio_service laat dat pas los), en dan slaapt de telefoon niet meer.
-bool _wachtOpStilte = false;
+bool _onderbroken = false;
 
-/// Laat de handler opnieuw publiceren als [_wachtOpStilte] wisselt. Gezet door [NowPlayingHandler].
+/// Laat de handler opnieuw publiceren als [_onderbroken] wisselt. Gezet door [NowPlayingHandler].
 void Function()? _herpubliceer;
 
 /// Stopt het wachten vanuit de handler: een druk op pauze of stop terwijl we wachten.
@@ -172,8 +180,8 @@ void Function(String reden)? _stopWachtVanBuiten;
 
 /// Alleen voor toetsen: de wachtstand zetten zonder platformkanaal.
 @visibleForTesting
-void zetWachtOpStilteVoorToets(bool aan) {
-  _wachtOpStilte = aan;
+void zetOnderbrokenVoorToets(bool aan) {
+  _onderbroken = aan;
   _herpubliceer?.call();
 }
 
@@ -294,8 +302,8 @@ Future<void> _claimAudioFocus(NowPlayingSource player) async {
     var hervatUitWacht = false;
 
     void zetWacht(bool aan) {
-      if (_wachtOpStilte == aan) return;
-      _wachtOpStilte = aan;
+      if (_onderbroken == aan) return;
+      _onderbroken = aan;
       _herpubliceer?.call();
     }
 
@@ -309,7 +317,12 @@ Future<void> _claimAudioFocus(NowPlayingSource player) async {
       _audioLog?.line('HERVATTEN OPGEGEVEN — $reden');
     }
 
-    _stopWachtVanBuiten = stopWacht;
+    // Van buitenaf is het altijd jouw eigen druk op pauze of stop, en dan hoort er ook na het
+    // eindbericht van een gesprek niets meer vanzelf te beginnen — dat belooft [bijOnderbreking].
+    _stopWachtVanBuiten = (reden) {
+      zelfGepauzeerd = false;
+      stopWacht(reden);
+    };
 
     // Moet vóór het pauzeren lopen: de handler publiceert bij die pauze, en ziet hij de wachtstand
     // dan nog niet, dan meldt hij "gepauzeerd" en verlaat de dienst alsnog de voorgrond.
@@ -347,7 +360,7 @@ Future<void> _claimAudioFocus(NowPlayingSource player) async {
                 // is de voorgrond alsnog weg. Komt de speler niet op gang, dan na tien seconden.
                 player.playPause();
                 Timer(const Duration(seconds: 10), () {
-                  if (_wachtOpStilte && !player.playing) {
+                  if (_onderbroken && !player.playing) {
                     hervatUitWacht = false;
                     zetWacht(false);
                     _audioLog?.line('HERVATTEN LUKTE NIET — de speler kwam niet op gang');
@@ -371,6 +384,22 @@ Future<void> _claimAudioFocus(NowPlayingSource player) async {
       });
     }
 
+    // Een TIJDELIJK verlies — TikTok, Reels, een gesprek. Het eindbericht komt vanzelf, maar tot dan
+    // moet de dienst op de voorgrond blijven, anders mag het hervatten daarna niet (zie
+    // [_onderbroken]). Een half uur als vangnet voor een eindbericht dat onderweg zoekraakt.
+    Timer? onderbrekingKlok;
+    void startOnderbreking() {
+      if (!Platform.isAndroid) return;
+      zetWacht(true);
+      onderbrekingKlok?.cancel();
+      onderbrekingKlok = Timer(const Duration(minutes: 30), () {
+        if (_onderbroken && !player.playing && !stilte.wacht) {
+          zetWacht(false);
+          _audioLog?.line('ONDERBREKING duurde een half uur zonder eindbericht — gewone pauze');
+        }
+      });
+    }
+
     session.interruptionEventStream.listen((event) {
       final besluit = bijOnderbreking(
         begint: event.begin,
@@ -387,6 +416,7 @@ Future<void> _claimAudioFocus(NowPlayingSource player) async {
         case Onderbreking.pauzeren:
           zelfGepauzeerd = true;
           if (event.type == AudioInterruptionType.unknown) startWacht();
+          if (event.type == AudioInterruptionType.pause) startOnderbreking();
           player.playPause();
         case Onderbreking.hervatten:
           zelfGepauzeerd = false;
@@ -443,7 +473,9 @@ Future<void> _claimAudioFocus(NowPlayingSource player) async {
       // Een uitgang erbij of eraf na een blijvend verlies: dan is het de auto of de buds, en niet
       // een app die de focus vasthoudt. Dan niet uit zichzelf hervatten — zie [StilteWacht].
       laatsteUitgangswissel = DateTime.now();
-      stopWacht('uitgang veranderde');
+      // Alleen het wachten op STILTE: tijdens een gesprek wisselen de buds zelf van uitgang
+      // (`bluetoothSco` erbij en eraf), en dat hoort het eindbericht van dat gesprek niet te kosten.
+      if (stilte.wacht) stopWacht('uitgang veranderde');
     });
 
     // DE FOCUS OPVRAGEN OP HET MOMENT DAT ER IETS GAAT SPELEN, en niet één keer bij het opstarten.
@@ -472,7 +504,7 @@ Future<void> _claimAudioFocus(NowPlayingSource player) async {
       debugPrint('Audiofocus geweigerd; muziek speelt zonder voorrang.');
       _audioLog?.line('FOCUS GEWEIGERD bij afspelen${uitWacht ? " na hervatten" : ""}');
       // Wat we uit onszelf hervatten, speelt nooit zonder focus door: dan hoort geen enkele andere
-      // app ons nog, en klinkt de volgende video dwars door de muziek heen — zie [_wachtOpStilte].
+      // app ons nog, en klinkt de volgende video dwars door de muziek heen — zie [_onderbroken].
       if (uitWacht && player.playing) {
         player.pauzeer();
         _audioLog?.line('HERVAT TERUGGEDRAAID — zonder focus niet doorspelen');
@@ -489,8 +521,8 @@ Future<void> _claimAudioFocus(NowPlayingSource player) async {
         speeldeAl = false;
       }
       // Speelt hij weer — hervat, of jij drukte zelf op spelen — dan is het wachten voorbij. Pas
-      // hier en niet eerder: zie [_wachtOpStilte].
-      if (player.playing && _wachtOpStilte) _wachtOpStilte = false;
+      // hier en niet eerder: zie [_onderbroken].
+      if (player.playing && _onderbroken) _onderbroken = false;
     });
     if (player.playing) await vraagFocus();
   } catch (e) {
@@ -511,8 +543,8 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
     _onChanged();
   }
 
-  /// Of we op stilte wachten terwijl er niets klinkt. Zie [_wachtOpStilte].
-  bool get _wacht => _wachtOpStilte && !player.speeltErgens;
+  /// Of we op stilte wachten terwijl er niets klinkt. Zie [_onderbroken].
+  bool get _wacht => _onderbroken && !player.speeltErgens;
 
   final NowPlayingSource player;
   final Uint8List? Function(Track)? coverFor;
@@ -604,7 +636,7 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
       androidCompactActionIndices: const [0, 1, 2],
       // Tijdens het wachten op stilte "bezig" en niet "gepauzeerd": dan blijft de mediadienst op de
       // voorgrond, en mag de app straks weer focus vragen. De knop zegt intussen gewoon "speel",
-      // want er klinkt niets. Zie [_wachtOpStilte].
+      // want er klinkt niets. Zie [_onderbroken].
       processingState: _wacht ? AudioProcessingState.buffering : AudioProcessingState.ready,
       playing: player.speeltErgens || _wacht,
       updatePosition: player.positieErgens,
@@ -746,7 +778,7 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
     // Pauze terwijl we op stilte wachten: dan wil je het ook zo laten, en wordt het een gewone pauze.
     if (_wacht) {
       _stopWachtVanBuiten?.call('je drukte zelf op pauze');
-      _wachtOpStilte = false;
+      _onderbroken = false;
       _publishState();
       return;
     }
@@ -775,9 +807,9 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
 
   @override
   Future<void> stop() async {
-    if (_wachtOpStilte) {
+    if (_onderbroken) {
       _stopWachtVanBuiten?.call('gestopt');
-      _wachtOpStilte = false;
+      _onderbroken = false;
     }
     player.pauzeer();
     await super.stop();

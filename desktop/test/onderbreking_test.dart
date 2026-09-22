@@ -206,8 +206,12 @@ void main() {
 
       // De volgorde, gemeten op 22-09-2026: meldt de handler ook maar één keer "gepauzeerd", dan
       // verlaat de mediadienst de voorgrond, en daarna weigert Android 16 de focus bij het hervatten.
+      // Eerst of ze er STAAN: `indexOf` geeft -1 als een aanroep ontbreekt, en -1 is kleiner dan
+      // alles — zo slaagde deze volgordecontrole juist als de aanroep weg was (mutatieproef V9).
       final pauze = bron.indexOf('case Onderbreking.pauzeren:');
-      expect(bron.indexOf('startWacht();', pauze), lessThan(bron.indexOf('player.playPause();', pauze)),
+      final speelt = bron.indexOf('player.playPause();', pauze);
+      expect(pauze, greaterThan(0));
+      expect(bron.indexOf('startWacht();', pauze), inExclusiveRange(pauze, speelt),
           reason: 'de wachtstand moet aan staan vóór de pauze');
       final herv = bron.indexOf('case NaVerlies.hervatten:');
       expect(bron.substring(herv, bron.indexOf('player.playPause();', herv)),
@@ -215,7 +219,17 @@ void main() {
           reason: 'de wachtstand gaat pas uit als de speler weer speelt');
       expect(bron, contains('if (uitWacht && player.playing) {\n        player.pauzeer();'),
           reason: 'zonder focus hervat hoort er geen andere app ons meer — dan terug naar pauze');
-      expect(bron, contains('if (player.playing && _wachtOpStilte) _wachtOpStilte = false;'),
+      // En bij een TIJDELIJK verlies hetzelfde, nagemeten op 3.9.407: na TikTok was de dienst van de
+      // voorgrond af en mocht hij niet terug.
+      expect(bron, contains('if (event.type == AudioInterruptionType.pause) startOnderbreking();'));
+      expect(bron.indexOf('startOnderbreking();', pauze), inExclusiveRange(pauze, speelt),
+          reason: 'ook bij een tijdelijke pauze moet de wachtstand aan staan vóór de pauze');
+      expect(bron, contains("if (stilte.wacht) stopWacht('uitgang veranderde');"),
+          reason: 'tijdens een gesprek wisselen de buds zelf van uitgang; dat mag het hervatten na '
+              'dat gesprek niet kosten');
+      expect(bron, contains('_stopWachtVanBuiten = (reden) {\n      zelfGepauzeerd = false;'),
+          reason: 'wie tijdens een gesprek zelf op pauze drukt, hoort na het gesprek geen muziek');
+      expect(bron, contains('if (player.playing && _onderbroken) _onderbroken = false;'),
           reason: 'bleef de wachtstand hangen, dan werd de volgende gewone pauze ook "bezig" — '
               'met de voorgrond en het wakelock erbij, uren lang');
     });

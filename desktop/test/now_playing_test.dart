@@ -306,7 +306,7 @@ void main() {
     // Gemeten op 22-09-2026 met 3.9.406: bij "gepauzeerd" verliet de mediadienst de voorgrond, en
     // bij het hervatten weigerde Android 16 de focus ("AudioHardening focus request ... ignored").
     // De muziek speelde toen zonder focus, en een TikTok-video klonk er dwars doorheen.
-    tearDown(() => zetWachtOpStilteVoorToets(false));
+    tearDown(() => zetOnderbrokenVoorToets(false));
 
     Future<NowPlayingHandler> klaar(FakePlayer player) async {
       final handler = NowPlayingHandler(player, null);
@@ -318,7 +318,7 @@ void main() {
       final player = FakePlayer()..current = _track('/muziek/01.flac');
       final handler = await klaar(player);
 
-      zetWachtOpStilteVoorToets(true);
+      zetOnderbrokenVoorToets(true);
       final s = handler.playbackState.value;
       expect(s.playing, isTrue,
           reason: 'bij "gepauzeerd" verlaat de mediadienst de voorgrond, en dan geeft Android 16 '
@@ -328,7 +328,7 @@ void main() {
       expect(s.controls, isNot(contains(MediaControl.pause)));
       expect(s.speed, 0.0, reason: 'de balk op het vergrendelscherm hoort stil te staan');
 
-      zetWachtOpStilteVoorToets(false);
+      zetOnderbrokenVoorToets(false);
       final na = handler.playbackState.value;
       expect(na.playing, isFalse, reason: 'na het wachten is het weer een gewone pauze');
       expect(na.processingState, AudioProcessingState.ready);
@@ -338,7 +338,7 @@ void main() {
       // Het systeem denkt dat er gespeeld wordt, en zou er "pauze" van maken — terwijl je stilte hoort.
       final player = FakePlayer()..current = _track('/muziek/01.flac');
       final handler = await klaar(player);
-      zetWachtOpStilteVoorToets(true);
+      zetOnderbrokenVoorToets(true);
 
       await handler.click();
       expect(player.playing, isTrue, reason: 'wie in de stilte op de knop drukt, wil muziek');
@@ -347,7 +347,7 @@ void main() {
     test('DE GRENS: pauze tijdens het wachten wordt een gewone pauze', () async {
       final player = FakePlayer()..current = _track('/muziek/01.flac');
       final handler = await klaar(player);
-      zetWachtOpStilteVoorToets(true);
+      zetOnderbrokenVoorToets(true);
 
       await handler.pause();
       expect(player.toggles, 0, reason: 'hij stond al stil; een schakeling zou hem juist aanzetten');
@@ -360,7 +360,7 @@ void main() {
         ..current = _track('/muziek/01.flac')
         ..playing = true;
       final handler = await klaar(player);
-      zetWachtOpStilteVoorToets(true);
+      zetOnderbrokenVoorToets(true);
 
       expect(handler.playbackState.value.processingState, AudioProcessingState.ready);
       await handler.click();
