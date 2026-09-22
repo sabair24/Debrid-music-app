@@ -11,6 +11,7 @@ import 'models.dart';
 import 'paths.dart';
 import 'schudvolgorde.dart';
 import 'vaste_keuze.dart' show sleutelVoor;
+import 'vooruithalen.dart';
 import 'warm_log.dart';
 
 enum RepeatMode { off, all, one }
@@ -815,6 +816,14 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// zich had liggen. Dit is die vraag, in één draad: url erin, een zin eruit of null.
   Future<String?> Function(String url)? vraagDeBron;
 
+  /// Eén regel in `speler.log`, voor wie buiten deze klasse iets weet wat bij de speler hoort.
+  ///
+  /// Het vooruithalen gebeurt in main.dart — die kent de winkel en de netsoort — maar het HOORT op
+  /// dezelfde tijdlijn als de onderbrekingen en de mislukte openingen. Zonder dat is een sportsessie
+  /// achteraf weer een zwarte doos: je ziet dan wel dat een nummer niet openging, maar niet of het
+  /// volgende al binnen was.
+  void logRegel(String regel) => _log?.line(regel);
+
   /// Het volgende nummer alvast laten klaarzetten op de pc. Ingehangen vanuit main.dart, dat er een
   /// `HEAD` op doet: de server zet dan de hele omzetting klaar en stuurt alleen de kop terug.
   ///
@@ -823,6 +832,13 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// seconden per nummer. Door dat bij het openen van nummer N alvast voor N+1 te vragen wacht je
   /// één keer, bij het aanzetten, en daarna nooit meer.
   void Function(String url)? onKlaarzetten;
+
+  /// Het volgende nummer alvast op de telefoon laten halen. Ingehangen vanuit main.dart, dat weet
+  /// of dit toestel op mobiele data zit en waar de tijdelijke kopieën staan — zie `vooruithalen.dart`.
+  ///
+  /// Anders dan [onKlaarzetten], dat de pc alleen laat omzetten: dit haalt de bytes zelf, zodat een
+  /// gat in de verbinding op de wissel naar het volgende nummer geen stilte meer wordt.
+  void Function(Track? huidig, Track? volgende)? onVooruithalen;
 
   /// Staat er een plafond op de lijn, dan zet de pc eerst om en staat de teller even op 0:00.
   bool _omzetten = false;
@@ -913,6 +929,12 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     });
     _player.stream.position.listen((p) {
       position = p;
+      if (_pcWachtVoor != null && p > Duration.zero) _pcIsTerug();
+      // Het volgende nummer vooruit halen, maar pas als dit nummer echt loopt. Zie [kVooruitNa].
+      if (!_vooruitGevraagd && p > kVooruitNa) {
+        _vooruitGevraagd = true;
+        _meldVooruit();
+      }
       _saveProgress(); // throttled
       // Vóór de rem hieronder: die slaat drie van de vier tikken over, en dan zou een nummer pas na
       // het dubbele van de luistertijd meetellen.
@@ -957,7 +979,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       // Opnieuw proberen heeft alleen zin bij iets dat over kan gaan — een haperende verbinding, een
       // pc die net wakker wordt. Een leeg bestand is over vier seconden nog steeds leeg, en dan is
       // een tweede poging alleen een tweede foutmelding.
-      if (eigen == null) _probeerNogEens();
+      if (eigen == null) _naOpenfout(e);
     });
     // Twee seconden: vaak genoeg om binnen het geduld van de wacht te vallen, zeldzaam genoeg om
     // niets te kosten. Een timer en niet de positiestroom, want het geval dát dit moet vangen is nu
@@ -1024,6 +1046,101 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       _meldStilstand('Nog een poging…');
       unawaited(radioMode ? _openRadioCurrent() : _hervatOpDezelfdePlek());
     });
+  }
+
+  /// Een nummer dat niet openging: wachten, doorgaan, of één herkansing.
+  ///
+  /// Bij een NETWERKfout geldt [naOpenfout]: staat het volgende nummer al op de telefoon, dan
+  /// daarheen; anders elke [kNetTussenpoos] opnieuw, tot [kNetGeduld]. Al het andere houdt zijn ene
+  /// herkansing van [_probeerNogEens] — een bestand dat de pc niet kent wordt van wachten niet beter.
+  ///
+  /// Alleen bij een nummer dat nog niet begon. Een stroom die HALVERWEGE wegvalt loopt via
+  /// [_onCompleted] en [_hervatOpDezelfdePlek], en die komen na drie pogingen ook hier uit: bij het
+  /// volgende nummer, dat dan al op de telefoon staat.
+  void _naOpenfout(String fout) {
+    if (position > Duration.zero) return;
+    if (!isNetwerkfout(fout)) {
+      _probeerNogEens();
+      return;
+    }
+    final t = current;
+    if (t == null || t.path.isEmpty) return;
+    if (_pcWachtVoor != t.path) {
+      _pcKlok?.cancel();
+      _pcKlok = null;
+      _pcWachtVoor = t.path;
+      _pcWachtSinds = DateTime.now();
+      _log?.line('WACHT OP DE PC — ${t.title}');
+    }
+    // mpv meldt per poging van ffmpeg een fout; één klok tegelijk is genoeg.
+    if (_pcKlok != null) return;
+    switch (naOpenfout(
+      sinds: DateTime.now().difference(_pcWachtSinds!),
+      volgendeStaatHier: _volgendeStaatHier(),
+    )) {
+      case NaOpenfout.naarVolgende:
+        _log?.line('NAAR HET VOLGENDE — dat staat al op de telefoon — ${t.title} sla ik over');
+        _stopPcWacht();
+        unawaited(next());
+      case NaOpenfout.opgeven:
+        _log?.line('OPGEGEVEN — ${kNetGeduld.inMinutes} min geen pc — ${t.title}');
+        _stopPcWacht();
+        _meldStilstand('Je pc is niet te bereiken');
+      case NaOpenfout.opnieuw:
+        _meldStilstand('Geen verbinding met je pc — ik blijf het proberen');
+        _pcKlok = Timer(kNetTussenpoos, () {
+          _pcKlok = null;
+          // Intussen doorgeklikt, of speelt hij al? Dan hoort deze poging nergens meer bij.
+          if (current?.path != t.path || position > Duration.zero) return;
+          // Kwam het volgende nummer intussen binnen, dan daarheen in plaats van weer te kloppen.
+          if (_volgendeStaatHier()) {
+            _log?.line('NAAR HET VOLGENDE — dat staat al op de telefoon — ${t.title} sla ik over');
+            _stopPcWacht();
+            unawaited(next());
+            return;
+          }
+          unawaited(_hervatOpDezelfdePlek());
+        });
+    }
+  }
+
+  /// Of het volgende nummer voor dit nummer al gevraagd is. Zie [kVooruitNa].
+  bool _vooruitGevraagd = false;
+
+  void _meldVooruit() {
+    if (radioMode) return;
+    final i = _index + 1;
+    onVooruithalen?.call(current, i >= 0 && i < _order.length ? _order[i] : null);
+  }
+
+  /// Voor welk nummer we op de pc wachten, sinds wanneer, en de klok van de volgende poging.
+  String? _pcWachtVoor;
+  DateTime? _pcWachtSinds;
+  Timer? _pcKlok;
+
+  void _stopPcWacht() {
+    _pcKlok?.cancel();
+    _pcKlok = null;
+    _pcWachtVoor = null;
+    _pcWachtSinds = null;
+  }
+
+  void _pcIsTerug() {
+    final sinds = _pcWachtSinds;
+    _log?.line('PC WEER BEREIKBAAR'
+        '${sinds == null ? "" : " na ${DateTime.now().difference(sinds).inSeconds}s"}'
+        ' — ${current?.title ?? "?"}');
+    _stopPcWacht();
+    _meldStilstand(null);
+  }
+
+  /// Staat het volgende nummer in de rij al op dit toestel? Offline bewaard of vooruitgehaald: in
+  /// beide gevallen geeft [mediaResolver] een pad op de telefoon in plaats van een adres op de pc.
+  bool _volgendeStaatHier() {
+    if (radioMode) return false;
+    final i = _index + 1;
+    if (i < 0 || i >= _order.length) return false;
+    return !mediaResolver(_order[i].path).startsWith('http');
   }
 
   /// De pc vragen wat er mis is, en de melding bijstellen als hij iets weet.
@@ -1651,6 +1768,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     // Een nummer dat je opnieuw aanzet verdient opnieuw een tweede kans. Alleen hier, want dit is
     // de weg voor een NIEUW nummer — de tweede poging zelf loopt langs [_hervatOpDezelfdePlek].
     _tweedePogingVoor = null;
+    // En het wachten op de pc hoort bij het vorige nummer.
+    _stopPcWacht();
+    _vooruitGevraagd = false;
     if (coverResolver != null) currentCover = coverResolver!(t);
     _nieuwVoorDeTelling(t);
     await _player.open(Media(_bron(t.path)), play: true);
@@ -1713,6 +1833,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
 
   @override
   void pauzeer() {
+    // Wie zelf op pauze drukt terwijl we op de pc wachten, wil niet dat het nummer daarna alsnog
+    // begint zodra de verbinding terug is.
+    _stopPcWacht();
     final s = _bijSpeaker;
     if (s != null) {
       if (s.isPlaying) unawaited(s.playPause());

@@ -128,10 +128,20 @@ class OfflineRequest {
 
 /// What this device is holding, and what is on its way.
 class OfflineStore extends ChangeNotifier {
-  OfflineStore({http.Client? client, this.stilte = const Duration(seconds: 45)})
-      : _http = client ?? http.Client();
+  OfflineStore({
+    http.Client? client,
+    this.stilte = const Duration(seconds: 45),
+    this.map = 'offline',
+    this.indexNaam = 'offline.json',
+  }) : _http = client ?? http.Client();
 
   final http.Client _http;
+
+  /// Waar de bytes en de index staan. Standaard je offline-lijst; de vooruitgehaalde nummers
+  /// gebruiken dezelfde machine in een eigen map, zodat ze nooit tussen wat je zelf bewaarde
+  /// verschijnen. Zie `vooruithalen.dart`.
+  final String map;
+  final String indexNaam;
 
   /// Hoe lang er niets mag binnenkomen voordat het ophalen opgegeven wordt.
   ///
@@ -257,8 +267,8 @@ class OfflineStore extends ChangeNotifier {
     return t.file;
   }
 
-  Directory get _dir => appSubdir('offline');
-  File get _index => appFile('offline.json');
+  Directory get _dir => appSubdir(map);
+  File get _index => appFile(indexNaam);
 
   Future<void> load() async {
     if (_loaded) return;
@@ -593,6 +603,43 @@ class OfflineStore extends ChangeNotifier {
       if (await f.exists()) await f.delete();
     } catch (e) {
       debugPrint('Offline file not deleted: $e');
+    }
+    await _save();
+  }
+
+  /// Alles weg behalve [paden] — ook wat nog aan het binnenkomen is.
+  ///
+  /// Voor de vooruitgehaalde nummers: daar horen er hooguit een paar te staan (wat speelt en wat
+  /// erna komt), en de rest is ruimte op je telefoon die niemand meer gebruikt.
+  Future<void> houdAlleen(Set<String> paden) async {
+    final weg = {
+      ..._tracks.keys,
+      ..._jobs.keys,
+      for (final r in _wachtrij) r.libraryPath,
+    }.where((p) => !paden.contains(p)).toList();
+    for (final p in weg) {
+      await remove(p);
+    }
+  }
+
+  /// De hele map leeg, ook wat de index niet kent.
+  ///
+  /// Voor de vooruitgehaalde nummers bij het opstarten. [clear] ruimt alleen op wat in de index
+  /// staat, en een half bestand van een app die midden in het halen werd afgesloten staat daar niet
+  /// in — dat bleef liggen en stapelde zich stil op. Nooit voor je offline-lijst: daar staat wat je
+  /// zelf bewaarde.
+  Future<void> leegMap() async {
+    for (final p in {..._jobs.keys, for (final r in _wachtrij) r.libraryPath}) {
+      cancel(p);
+    }
+    _tracks.clear();
+    notifyListeners();
+    try {
+      for (final f in _dir.listSync()) {
+        f.deleteSync(recursive: true);
+      }
+    } catch (e) {
+      debugPrint('Map $map niet leeg: $e');
     }
     await _save();
   }

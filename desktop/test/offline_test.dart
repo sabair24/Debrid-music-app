@@ -491,4 +491,59 @@ void main() {
       expect(store.has(path), isTrue);
     });
   });
+
+  group('de vooruitgehaalde nummers', () {
+    // 22-09-2026: het volgende nummer alvast op de telefoon, voor de gaten in de verbinding in de
+    // sportschool. Dezelfde machine in een eigen map — zie vooruithalen.dart.
+    OfflineStore vooruitWinkel() {
+      final v = OfflineStore(map: 'vooruit', indexNaam: 'vooruit.json');
+      addTearDown(v.dispose);
+      return v;
+    }
+
+    Future<bool> haal(OfflineStore v, String p) =>
+        v.download(libraryPath: p, url: url.toString(), title: p, artist: '', album: '');
+
+    test('DE KERN: een eigen map en een eigen index, los van je offline-lijst', () async {
+      final vooruit = vooruitWinkel();
+      expect(await haal(vooruit, path), isTrue);
+
+      expect(vooruit.localFor(path),
+          contains('${Platform.pathSeparator}vooruit${Platform.pathSeparator}'));
+      expect(File(vooruit.localFor(path)!).readAsBytesSync(), payload);
+      expect(store.has(path), isFalse,
+          reason: 'een vooruitgehaald nummer is niet iets wat jij zelf bewaarde');
+      expect(File('${scratch.path}${Platform.pathSeparator}vooruit.json').existsSync(), isTrue);
+      expect(File('${scratch.path}${Platform.pathSeparator}offline.json').existsSync(), isFalse,
+          reason: 'je offline-lijst hoort er niets van te merken');
+    });
+
+    test('DE VAL: alleen wat speelt en wat erna komt blijft staan', () async {
+      final vooruit = vooruitWinkel();
+      for (final p in ['a.flac', 'b.flac', 'c.flac']) {
+        expect(await haal(vooruit, p), isTrue);
+      }
+
+      await vooruit.houdAlleen({'b.flac', 'c.flac'});
+      expect(vooruit.has('a.flac'), isFalse);
+      expect(vooruit.has('b.flac'), isTrue);
+      expect(vooruit.has('c.flac'), isTrue);
+      expect(Directory('${scratch.path}${Platform.pathSeparator}vooruit').listSync().length, 2,
+          reason: 'wat weg is, hoort ook van je telefoon af — anders ligt er na een avond sporten '
+              'een gigabyte aan nummers die niemand meer speelt');
+    });
+
+    test('DE GRENS: bij het opstarten gaat ook een half bestand weg dat de index niet kent', () async {
+      final vooruit = vooruitWinkel();
+      final wees = File('${scratch.path}${Platform.pathSeparator}vooruit'
+          '${Platform.pathSeparator}0123456789abcdef.flac.part')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('half');
+
+      await vooruit.leegMap();
+      expect(wees.existsSync(), isFalse,
+          reason: 'een app die midden in het halen werd afgesloten liet dit achter');
+      expect(vooruit.tracks, isEmpty);
+    });
+  });
 }

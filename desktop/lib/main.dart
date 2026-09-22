@@ -95,6 +95,7 @@ import 'echtheid.dart';
 import 'echtheid_oordelen.dart';
 import 'audioformaten.dart';
 import 'vaste_keuze.dart';
+import 'vooruithalen.dart' show vooruitPlan;
 import 'vervangjacht.dart';
 import 'bronzeef.dart';
 import 'player.dart';
@@ -549,6 +550,11 @@ Future<void> main() async {
   // on every track and an empty store would stream a copy that is already here.
   final offline = OfflineStore();
   await offline.load();
+  // Het volgende nummer, alvast op de telefoon voor de gaten in je mobiele verbinding. Dezelfde
+  // machine in een eigen map, zodat het nooit tussen wat je zelf bewaarde staat. Bij het opstarten
+  // leeg: wat er ligt hoort bij een rij van toen. Zie vooruithalen.dart.
+  final vooruit = OfflineStore(map: 'vooruit', indexNaam: 'vooruit.json');
+  await vooruit.leegMap();
 
   // Waar dit toestel op zit, en dus hoeveel de pc mag sturen. Vóór de ClientSession, want die hangt
   // de speelweg in en die leest deze winkel. Zie netsoort.dart.
@@ -567,7 +573,7 @@ Future<void> main() async {
     // PC" is decided once. No screen, and not the player itself, needs to know that offline
     // copies exist.
     applyMediaResolver: (resolver) => player.mediaResolver = (path) {
-      final local = offline.localFor(path);
+      final local = offline.localFor(path) ?? vooruit.localFor(path);
       if (local != null) return local;
       // **Hier en niet in `client.authorized`.** Die wordt ook gebruikt door de knop "Offline
       // bewaren", en een kopie die je op je toestel zet hoort bit-perfect te blijven — die neem je
@@ -710,6 +716,44 @@ Future<void> main() async {
   // daar kijkt de speler rechtstreeks naar het bestand en is er niets te vragen.
   player.vraagDeBron = (url) async => library.remote?.waarom(url);
   player.onKlaarzetten = (url) => unawaited(_zetKlaar(url));
+  // Het volgende nummer alvast op de telefoon, alleen op mobiele data. Zie vooruithalen.dart.
+  player.onVooruithalen = (huidig, volgende) {
+    if (mode.owner) return; // de pc heeft alles zelf al
+    final plan = vooruitPlan(
+      huidig: huidig?.path,
+      volgende: volgende?.path,
+      opMobiel: netStore.net == Netsoort.mobiel,
+      stroomt: (p) => player.mediaResolver(p).startsWith('http'),
+    );
+    unawaited(vooruit.houdAlleen(plan.houden));
+    final halen = plan.halen;
+    if (halen == null || volgende == null) return;
+    player.logRegel('VOORUIT halen — ${volgende.title}');
+    vooruit.bewaarAlles([
+      OfflineRequest(
+        libraryPath: halen,
+        url: player.mediaResolver(halen),
+        title: volgende.title,
+        artist: volgende.artist,
+        album: volgende.album,
+      ),
+    ]);
+  };
+  // En wat ervan terechtkwam, op dezelfde tijdlijn als de onderbrekingen in speler.log.
+  final gemeld = <String>{};
+  vooruit.addListener(() {
+    for (final t in vooruit.tracks) {
+      if (gemeld.add('binnen:${t.path}')) {
+        player.logRegel('VOORUIT binnen — ${t.title} (${(t.bytes / 1e6).round()} MB)');
+      }
+    }
+    for (final j in vooruit.jobs) {
+      final fout = j.error;
+      if (fout != null && gemeld.add('fout:${j.path}:$fout')) {
+        player.logRegel('VOORUIT MISLUKT — ${j.title} — $fout');
+      }
+    }
+  });
   player.addListener(() {
     netStore.volgHetSpelen(speelt: player.playing);
   });
