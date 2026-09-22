@@ -104,11 +104,13 @@ void main() {
           'een bestand dat de pc niet kent, houdt zijn ene herkansing en geen tien minuten');
       staatErin(speler, 'onVooruithalen?.call(current,',
           'zonder deze haak wordt het volgende nummer nooit vooruitgehaald');
-      staatErin(speler, 'if (!_vooruitGevraagd && p > kVooruitNa) {',
-          'pas als dit nummer echt loopt: anders vecht het halen met je eigen buffer, en kost '
-          'doorklikken data voor muziek die je niet hoorde');
+      staatErin(speler, 'if (p > kVooruitNa &&\n          (_vooruitLaatst == null ||',
+          'pas als dit nummer echt loopt, en daarna nog eens: anders vecht het halen met je eigen '
+          'buffer, en blijft een poging die halverwege afbrak liggen');
       staatErin(speler, 'void pauzeer() {\n    _stopPcWacht();',
           'wie zelf op pauze drukt, wil niet dat het nummer alsnog begint als de pc terug is');
+      staatErin(speler, 'Track? uit(int i) => i >= 0 && i < _radio.length ? _radio[i].local : null;',
+          'de radio staat onderweg net zo vaak aan als de wachtrij');
     });
 
     test('DE VAL: main.dart speelt een vooruitgehaald nummer van de telefoon', () {

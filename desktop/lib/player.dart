@@ -930,9 +930,12 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _player.stream.position.listen((p) {
       position = p;
       if (_pcWachtVoor != null && p > Duration.zero) _pcIsTerug();
-      // Het volgende nummer vooruit halen, maar pas als dit nummer echt loopt. Zie [kVooruitNa].
-      if (!_vooruitGevraagd && p > kVooruitNa) {
-        _vooruitGevraagd = true;
+      // Het volgende nummer vooruit halen, maar pas als dit nummer echt loopt, en daarna elke
+      // [kVooruitHerhaal] nog eens — een poging die halverwege afbrak gaat dan verder.
+      if (p > kVooruitNa &&
+          (_vooruitLaatst == null ||
+              DateTime.now().difference(_vooruitLaatst!) > kVooruitHerhaal)) {
+        _vooruitLaatst = DateTime.now();
         _meldVooruit();
       }
       _saveProgress(); // throttled
@@ -1104,11 +1107,19 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     }
   }
 
-  /// Of het volgende nummer voor dit nummer al gevraagd is. Zie [kVooruitNa].
-  bool _vooruitGevraagd = false;
+  /// Wanneer het volgende nummer voor het laatst gevraagd is. Zie [kVooruitNa] en [kVooruitHerhaal].
+  DateTime? _vooruitLaatst;
 
   void _meldVooruit() {
-    if (radioMode) return;
+    if (radioMode) {
+      // Ook de radio, want die staat onderweg net zo vaak aan. Alleen een EIGEN nummer ligt daar
+      // vast genoeg om vooruit te halen: een online bron (Soulseek, YouTube) heeft geen
+      // bibliotheekpad en wordt pas bij het openen opgezocht — zie [_prefetchNext], dat alleen het
+      // ADRES alvast zoekt.
+      Track? uit(int i) => i >= 0 && i < _radio.length ? _radio[i].local : null;
+      onVooruithalen?.call(uit(_radioIndex), uit(_radioIndex + 1));
+      return;
+    }
     final i = _index + 1;
     onVooruithalen?.call(current, i >= 0 && i < _order.length ? _order[i] : null);
   }
@@ -1770,7 +1781,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _tweedePogingVoor = null;
     // En het wachten op de pc hoort bij het vorige nummer.
     _stopPcWacht();
-    _vooruitGevraagd = false;
+    _vooruitLaatst = null;
     if (coverResolver != null) currentCover = coverResolver!(t);
     _nieuwVoorDeTelling(t);
     await _player.open(Media(_bron(t.path)), play: true);

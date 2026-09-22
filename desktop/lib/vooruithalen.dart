@@ -47,6 +47,15 @@ library;
 /// voor muziek die je niet hoorde.
 const kVooruitNa = Duration(seconds: 20);
 
+/// En daarna nog eens kijken, zolang het nummer speelt.
+///
+/// **Waarom herhalen.** Gemeten op 22-09-2026 op de telefoon: "VOORUIT MISLUKT — Beautiful —
+/// afgebroken bij 13 MB van 27 MB", precies in een hapering van de verbinding. Zonder herhaling
+/// blijft die helft liggen tot het nummer voorbij is, terwijl de lijn er tien seconden later weer
+/// was. Het ophalen gaat verder waar het stopte (Range), dus een tweede poging kost alleen wat er
+/// nog ontbreekt.
+const kVooruitHerhaal = Duration(seconds: 30);
+
 /// Hoe lang de app blijft proberen een nummer van de pc te openen als de pc niet antwoordt.
 ///
 /// De blokken in de sportschool duurden tot vijf minuten. Tien is ruim, en daarna is het geen gat
