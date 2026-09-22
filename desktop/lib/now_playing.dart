@@ -22,6 +22,7 @@ import 'auto_hoezen.dart';
 import 'models.dart';
 import 'paths.dart';
 import 'player.dart';
+import 'tv.dart' show isTv;
 import 'warm_log.dart';
 
 /// Waar de boom voor Android Auto vandaan komt. Null = geen bladeren; de app is dan zichtbaar in de
@@ -121,6 +122,7 @@ enum Onderbreking { niets, pauzeren, hervatten, dempen, ontdempen }
 ///   verder waar je was.
 /// * [AudioInterruptionType.unknown] — we weten niet waaróm het stopte. Dan achteraf uit zichzelf
 ///   weer beginnen is erger dan stil blijven: dat is muziek die opeens aangaat in een stille auto.
+///   Op dit bericht komt ook nooit een eind; wat er daarna wél mag, staat bij [StilteWacht].
 ///
 /// [zelfGepauzeerd] is de tweede helft van dezelfde voorzichtigheid: alleen hervatten wat wíj hebben
 /// stilgezet. Wie zelf op pauze drukte terwijl er een gesprek binnenkwam, wil niet dat het daarna
@@ -143,6 +145,96 @@ Onderbreking bijOnderbreking({
   };
 }
 
+/// Wat er na een blijvend focusverlies moet gebeuren, per meting.
+enum NaVerlies { wachten, hervatten, opgeven }
+
+/// Wacht na een blijvend focusverlies tot niemand anders nog geluid maakt, en zegt dan: hervat.
+///
+/// **Waarom dit er is.** Op [AudioInterruptionType.unknown] stuurt Android geen eindbericht, dus
+/// [bijOnderbreking] laat het daarna stil. Geteld op 22-09-2026 in speler.log van de telefoon: 129
+/// blijvende verliezen tijdens het spelen, over 30 dagen. Daarvan vielen er 28 samen met een
+/// uitgangswissel — de auto: Android Auto en de Renault — en **101 met niets**. Nagespeeld met de
+/// buds in: YouTube Shorts vraagt de focus blijvend (`req=1`) en geeft hem na het verlaten van de
+/// app niet terug. `dumpsys audio` toonde YouTube bovenaan de focusstapel zonder één speler; de
+/// muziek wachtte op een bericht dat nooit komt. Instagram Reels en TikTok vragen hem tijdelijk
+/// en werkten al: die sturen wél een eindbericht.
+///
+/// **Alleen als er sindsdien niets aan de uitgangen veranderde**, en daarom blijft de zorg van
+/// [bijOnderbreking] over een stille auto gewoon gelden: daar komt of gaat altijd een uitgang. Dat
+/// bewaakt de aanroeper — die stopt deze wacht bij elke uitgangswissel en bij `becomingNoisy`.
+///
+/// **[stilteNodig] aaneen, en niet de eerste stille meting.** Tussen twee Shorts valt het geluid
+/// korter dan een seconde weg, en een app die de focus vraagt begint pas daarna te spelen. Pakte de
+/// muziek de focus in zo'n gat terug, dan pauzeert de video die jij aan het kijken bent.
+///
+/// **[venster]:** speelt er na tien minuten nog steeds iets anders, dan ben je overgestapt, en dan
+/// komt de muziek niet meer uit zichzelf terug.
+class StilteWacht {
+  StilteWacht({
+    this.stilteNodig = const Duration(seconds: 6),
+    this.venster = const Duration(minutes: 10),
+    this.rustVooraf = const Duration(seconds: 15),
+  });
+
+  final Duration stilteNodig;
+  final Duration venster;
+
+  /// Zo lang moeten de uitgangen vóór het verlies stil gelegen hebben. In de auto komt de wissel
+  /// soms net ervóór: op 22-09-2026 kwam de Renault om 16:39:13 en 16:39:18 erbij, en viel de focus
+  /// om 16:39:24 weg.
+  final Duration rustVooraf;
+  DateTime? _sinds;
+  DateTime? _stilSinds;
+
+  /// Waarom de laatste wacht ophield, voor het logboek.
+  String waarom = '';
+
+  bool get wacht => _sinds != null;
+
+  /// Begint te wachten, tenzij er vlak ervoor een uitgang bij of af kwam — dan is het de auto of de
+  /// buds, en blijft het stil zoals altijd. Geeft terug of er gewacht wordt.
+  bool begin(DateTime nu, {DateTime? laatsteUitgangswissel}) {
+    _stilSinds = null;
+    if (laatsteUitgangswissel != null && nu.difference(laatsteUitgangswissel) < rustVooraf) {
+      _sinds = null;
+      waarom = 'uitgang veranderde ${nu.difference(laatsteUitgangswissel).inSeconds}s ervoor';
+      return false;
+    }
+    _sinds = nu;
+    waarom = '';
+    return true;
+  }
+
+  void stop(String reden) {
+    if (_sinds != null) waarom = reden;
+    _sinds = null;
+    _stilSinds = null;
+  }
+
+  /// Eén meting: [andereSpeelt] is `AudioManager.isMusicActive()` — terwijl wij stil staan telt
+  /// alleen wat een ándere app afspeelt — en [wijSpelen] is de eigen speler.
+  NaVerlies tik(DateTime nu, {required bool andereSpeelt, required bool wijSpelen}) {
+    final sinds = _sinds;
+    if (sinds == null) return NaVerlies.opgeven;
+    if (wijSpelen) {
+      stop('je speelde zelf weer');
+      return NaVerlies.opgeven;
+    }
+    if (nu.difference(sinds) > venster) {
+      stop('na ${venster.inMinutes} min nog steeds bezet');
+      return NaVerlies.opgeven;
+    }
+    if (andereSpeelt) {
+      _stilSinds = null;
+      return NaVerlies.wachten;
+    }
+    final stil = _stilSinds ??= nu;
+    if (nu.difference(stil) < stilteNodig) return NaVerlies.wachten;
+    stop('hervat');
+    return NaVerlies.hervatten;
+  }
+}
+
 Future<void> _claimAudioFocus(NowPlayingSource player) async {
   try {
     final session = await AudioSession.instance;
@@ -162,6 +254,63 @@ Future<void> _claimAudioFocus(NowPlayingSource player) async {
     /// hele rit op een kwart volume.
     Timer? dempingVangnet;
 
+    // Na een blijvend verlies: elke seconde kijken of er nog iemand anders speelt. Zie [StilteWacht].
+    // Alleen op een Android-telefoon: `isMusicActive` bestaat alleen daar, en op een tv is het
+    // hervatten na een film in de woonkamer een andere vraag dan na een filmpje in je oortjes.
+    final stilte = StilteWacht();
+    Timer? stilteKlok;
+    DateTime? laatsteUitgangswissel;
+    void stopWacht(String reden) {
+      stilteKlok?.cancel();
+      stilteKlok = null;
+      if (!stilte.wacht) return;
+      stilte.stop(reden);
+      _audioLog?.line('HERVATTEN OPGEGEVEN — $reden');
+    }
+
+    void startWacht() {
+      if (!Platform.isAndroid || isTv) return;
+      stilteKlok?.cancel();
+      stilteKlok = null;
+      final verloren = DateTime.now();
+      if (!stilte.begin(verloren, laatsteUitgangswissel: laatsteUitgangswissel)) {
+        _audioLog?.line('NIET WACHTEN — ${stilte.waarom}');
+        return;
+      }
+      _audioLog?.line('WACHT OP STILTE na blijvend verlies');
+      var meet = false;
+      stilteKlok = Timer.periodic(const Duration(seconds: 1), (klok) async {
+        if (meet) return;
+        meet = true;
+        try {
+          final ander = await AndroidAudioManager().isMusicActive();
+          if (klok != stilteKlok) return; // intussen gestopt of opnieuw begonnen
+          switch (stilte.tik(DateTime.now(), andereSpeelt: ander, wijSpelen: player.playing)) {
+            case NaVerlies.wachten:
+              break;
+            case NaVerlies.hervatten:
+              klok.cancel();
+              stilteKlok = null;
+              _audioLog?.line('HERVAT — niemand speelt meer,'
+                  ' ${DateTime.now().difference(verloren).inSeconds}s na het verlies');
+              if (zelfGepauzeerd && !player.playing) {
+                zelfGepauzeerd = false;
+                player.playPause();
+              }
+            case NaVerlies.opgeven:
+              klok.cancel();
+              stilteKlok = null;
+              _audioLog?.line('HERVATTEN OPGEGEVEN — ${stilte.waarom}');
+          }
+        } catch (e) {
+          // Kan het systeem het niet zeggen, dan het oude gedrag: stil blijven.
+          stopWacht('isMusicActive faalde: $e');
+        } finally {
+          meet = false;
+        }
+      });
+    }
+
     session.interruptionEventStream.listen((event) {
       final besluit = bijOnderbreking(
         begint: event.begin,
@@ -178,6 +327,7 @@ Future<void> _claimAudioFocus(NowPlayingSource player) async {
         case Onderbreking.pauzeren:
           zelfGepauzeerd = true;
           player.playPause();
+          if (event.type == AudioInterruptionType.unknown) startWacht();
         case Onderbreking.hervatten:
           zelfGepauzeerd = false;
           player.playPause();
@@ -200,6 +350,7 @@ Future<void> _claimAudioFocus(NowPlayingSource player) async {
       // De koptelefoon of de bluetoothspeaker viel weg. Niet hervatten als hij terugkomt: dan
       // begint de muziek uit de telefoonluidspreker in een stille kamer.
       _audioLog?.line('UITGANG VALT WEG (becomingNoisy) speelt=${player.playing}');
+      stopWacht('uitgang viel weg');
       zelfGepauzeerd = false;
       if (player.playing) player.playPause();
     });
@@ -229,6 +380,10 @@ Future<void> _claimAudioFocus(NowPlayingSource player) async {
       // Alleen uitgangen: een microfoon die komt en gaat zegt hier niets en verstopt de rest.
       if (erbij == '-' && eraf == '-') return;
       _audioLog?.line('UITGANG erbij=[$erbij] eraf=[$eraf] speelt=${player.playing}');
+      // Een uitgang erbij of eraf na een blijvend verlies: dan is het de auto of de buds, en niet
+      // een app die de focus vasthoudt. Dan niet uit zichzelf hervatten — zie [StilteWacht].
+      laatsteUitgangswissel = DateTime.now();
+      stopWacht('uitgang veranderde');
     });
 
     // DE FOCUS OPVRAGEN OP HET MOMENT DAT ER IETS GAAT SPELEN, en niet één keer bij het opstarten.
