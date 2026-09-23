@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:debridmusic/catalog.dart';
+import 'package:debridmusic/completeness.dart' show rijSleutel;
 import 'package:debridmusic/editions.dart';
 import 'package:debridmusic/library.dart';
 import 'package:debridmusic/models.dart';
@@ -141,6 +142,106 @@ void main() {
       final plan = lib.planRenumber(album, _official);
       expect(plan.changing, isEmpty);
       expect(plan.safe, isFalse, reason: 'nothing to change means nothing to confirm');
+    });
+  });
+
+  group('een rij die je zelf aanwees', () {
+    // **Gemeten op 23-09-2026 bij En Zo.** Een bestand waarvan de app de titel ten onrechte op
+    // "Voort!" had gezet — de naam van het ALBUM waar het nummer ook op staat. Met de hand op rij 1
+    // gezet (Radio Mix, 3:26 tegen 3:26), en daarna zei "Nummering van deze uitgave overnemen":
+    // "1 niet herkend op deze uitgave". Er was daardoor geen enkele knop die die titel nog kon
+    // rechtzetten — "ik vind geen manier om dit aan te passen".
+    //
+    // Discogs r968580: CD · Belgium · DNCS 2244 · 1995.
+    const single = [
+      ChoiceTrack('1', 'Opzij, Opzij, Opzij (Radio Mix)', 206),
+      ChoiceTrack('2', 'Opzij, Opzij, Opzij (Beuk Mix)', 229),
+    ];
+
+    Track enZo(String titel, {int secs = 206}) => Track(
+          path: r'D:\Flac music 2024\en zo\Voort!\08. Enzo - opzij opzij.flac',
+          title: titel,
+          artist: 'En Zo',
+          album: 'Opzij, Opzij, Opzij',
+          duration: Duration(seconds: secs),
+          isFlac: true,
+        );
+
+    LibraryStore bib() {
+      final root = Directory.systemTemp.createTempSync('rijhand');
+      addTearDown(() {
+        try {
+          root.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      return LibraryStore()..configDirOverride = root.path;
+    }
+
+    test('DE KERN: de rij die je aanwees geeft het nummer ook de titel van die rij', () async {
+      final lib = bib();
+      final t = enZo('Voort!');
+      lib.tracks.add(t);
+      lib.rebuildAlbums();
+      await lib.wijsRijToe(t, rijSleutel(single.first));
+
+      final plan = lib.planRenumber(lib.albums.single, single);
+      final stap = plan.steps.single;
+      expect(stap.official?.title, 'Opzij, Opzij, Opzij (Radio Mix)',
+          reason: 'op titel lijkt "Voort!" op niets; de rij die je zelf aanwees is wat de app weet');
+      expect(stap.newNo, 1);
+      expect(stap.nieuweTitel, 'Opzij, Opzij, Opzij (Radio Mix)');
+
+      await lib.applyRenumber(plan);
+      expect(lib.tracks.single.title, 'Opzij, Opzij, Opzij (Radio Mix)',
+          reason: 'en daarna heet hij zo in de app, niet meer "Voort!"');
+    });
+
+    test('DE VAL: jouw rij wint van een titel die op een ándere rij lijkt', () async {
+      // Heet het bestand als rij 2 maar wees jij rij 1 aan, dan is jouw keuze de waarheid — de
+      // titel is juist het ding dat hier niet klopt.
+      final lib = bib();
+      final t = enZo('Opzij, Opzij, Opzij (Beuk Mix)');
+      lib.tracks.add(t);
+      lib.rebuildAlbums();
+      await lib.wijsRijToe(t, rijSleutel(single.first));
+
+      final stap = lib.planRenumber(lib.albums.single, single).steps.single;
+      expect(stap.newNo, 1, reason: 'de titelvergelijking pikte rij 2 in voordat jouw keuze aan bod kwam');
+    });
+
+    test('DE VAL: de rij die je aanwees kan niet óók nog door een ander bestand geclaimd worden', () async {
+      // Een tweede bestand met precies de titel van rij 1 zou anders ook op 1 landen: twee keer
+      // nummer 1, en dan weigert het venster terecht het hele plan.
+      final lib = bib();
+      final a = enZo('Voort!');
+      final b = Track(
+        path: r'D:\Flac music 2024\en zo\Opzij\01 Opzij, Opzij, Opzij (Radio Mix).flac',
+        title: 'Opzij, Opzij, Opzij (Radio Mix)',
+        artist: 'En Zo',
+        album: 'Opzij, Opzij, Opzij',
+        duration: const Duration(seconds: 206),
+        isFlac: true,
+      );
+      lib.tracks.addAll([a, b]);
+      lib.rebuildAlbums();
+      await lib.wijsRijToe(a, rijSleutel(single.first));
+
+      final plan = lib.planRenumber(lib.albums.single, single);
+      expect(plan.steps.firstWhere((s) => s.track.path == a.path).newNo, 1);
+      expect(plan.collides, isFalse, reason: 'twee keer nummer 1');
+    });
+
+    test('DE GRENS: een rij van een andere persing telt hier niet', () async {
+      // Zo stond het bij En Zo: "1|12", rij 12 van het album Voort! (16 nummers), terwijl de single
+      // er maar twee heeft. Dan valt het bestand terug op de gewone vergelijking.
+      final lib = bib();
+      final t = enZo('Voort!');
+      lib.tracks.add(t);
+      lib.rebuildAlbums();
+      await lib.wijsRijToe(t, '1|12');
+
+      final stap = lib.planRenumber(lib.albums.single, single).steps.single;
+      expect(stap.unmatched, isTrue, reason: 'een rij die hier niet bestaat kan niets aanwijzen');
     });
   });
 

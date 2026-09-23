@@ -4519,16 +4519,35 @@ extension LibraryRenumber on LibraryStore {
     // A pool, so one official entry cannot claim two of our files: whichever matches it best takes
     // it and the other is reported as unmatched rather than silently duplicating a number.
     final pool = [...official];
+
+    // **Wat jij zelf aan een rij hing, gaat vóór de titelvergelijking.** Dezelfde afspraak als in
+    // [matchAlbumTracks.handmatig], en die stond hier niet. Gemeten op 23-09-2026 bij En Zo: een
+    // bestand dat ten onrechte "Voort!" heette, met de hand op rij 1 gezet (*Opzij, Opzij, Opzij
+    // (Radio Mix)*, 3:26 tegen 3:26) — en "Nummering van deze uitgave overnemen" zei daarna "1 niet
+    // herkend op deze uitgave", want op titel lijkt "Voort!" op niets. Juist bij een VERKEERDE
+    // titel is de handmatige rij het enige wat de app weet, en dit is de enige knop die de titel van
+    // die rij ook overneemt. Een rij van een andere persing (een sleutel die hier niet bestaat)
+    // telt niet: dan valt het bestand gewoon terug op de vergelijking.
+    final handmatig = rijToewijzingen(album.tracks);
+    final vast = <String, ChoiceTrack>{};
+    for (final t in album.tracks) {
+      final wil = handmatig[t.path];
+      if (wil == null) continue;
+      final i = pool.indexWhere((o) => rijSleutel(o) == wil);
+      if (i >= 0) vast[t.path] = pool.removeAt(i);
+    }
+
     final steps = <RenumberStep>[];
     for (final t in album.tracks) {
       // The same matcher the album download uses — see matchOfficial in organize.dart. Two answers
       // to "is this the same song?" would be one too many.
-      final best = matchOfficial(pool, t.title, t.duration?.inSeconds ?? 0);
+      final eigen = vast[t.path];
+      final best = eigen ?? matchOfficial(pool, t.title, t.duration?.inSeconds ?? 0);
       if (best == null) {
         steps.add(RenumberStep(t, null, null));
         continue;
       }
-      pool.remove(best);
+      if (eigen == null) pool.remove(best);
       steps.add(RenumberStep(t, best, trackNoFromPosition(best.position, best.disc, official)));
     }
     return RenumberPlan(steps, official.length);
