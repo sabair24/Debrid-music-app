@@ -303,7 +303,7 @@ jobs:
             test/naamschade_test.dart test/no_wav_download_test.dart \
             test/now_playing_test.dart test/nummering_remix_test.dart \
             test/onderbreking_test.dart test/onofficiele_persing_test.dart \
-            test/vooruithalen_test.dart \
+            test/vooruithalen_test.dart test/artiest_hoezen_test.dart \
             test/opnamesleutel_test.dart test/player_cover_test.dart \
             test/player_refresh_test.dart test/potlood_schrijft_bestand_test.dart \
             test/pressing_line_test.dart test/prune_empty_folders_test.dart \

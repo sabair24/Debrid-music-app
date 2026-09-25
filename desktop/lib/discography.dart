@@ -521,6 +521,11 @@ List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
 /// alléén MusicBrainz — dat levert op releasegroep-niveau nooit een hoes, en de Cover Art Archive
 /// evenmin (0 van 25 getoetst).
 ///
+/// **Dat laatste hangt van de artiest af.** Bij Oasis (25-09-2026) hadden 32 van 39 live-opnames
+/// zonder hoes er in het Cover Art Archive wél een, per releasegroep. Daarom vraagt de artiestpagina
+/// het sindsdien per regel na — zie `MusicBrainzService.groepHoes` en [groepenZonderHoes] — en komt
+/// het resultaat via deze zelfde functie binnen.
+///
 /// Aanvullen en niet vervangen: een hoes die er al is blijft staan, ongeacht wat de tabel zegt. Zo
 /// kan deze stap een goede hoes nooit door een mindere vervangen, en is hij idempotent.
 ///
@@ -742,4 +747,41 @@ List<DiscoRelease> sortDiscography(List<DiscoRelease> in_, DiscoSort op, Set<Str
     return a.key.compareTo(b.key);
   });
   return uit;
+}
+
+/// De regels die het Cover Art Archive nog om een hoes mogen vragen, in de volgorde van de pagina.
+///
+/// Alleen regels ZONDER hoes en MET een MusicBrainz-releasegroep: van een groep kent het archief de
+/// voorkant, van een Deezer- of Discogs-nummer niets. Soorten die de pagina toch verbergt (demo's,
+/// video, radio — zie [verborgenSoorten]) blijven buiten: dat zijn verzoeken voor tegels die
+/// niemand ziet. In de volgorde van de blokken, zodat de albums bovenaan het eerst antwoord krijgen.
+List<({String sleutel, String mbid})> groepenZonderHoes(List<DiscoRelease> rijen) {
+  final uit = <({String sleutel, String mbid, int rang})>[];
+  for (final r in rijen) {
+    if (r.cover != null && r.cover!.isNotEmpty) continue;
+    if (verborgenSoorten.contains(r.blok)) continue;
+    final ref = r.refs[DiscoSource.musicbrainz];
+    if (ref == null || ref.source != CatalogSource.musicbrainzGroup || ref.id.isEmpty) continue;
+    uit.add((sleutel: r.key, mbid: ref.id, rang: kindRank(r.blok)));
+  }
+  uit.sort((a, b) => a.rang.compareTo(b.rang));
+  return [for (final u in uit) (sleutel: u.sleutel, mbid: u.mbid)];
+}
+
+/// Hoeveel tegels er naast elkaar passen, met dezelfde som als het raster zelf.
+///
+/// `SliverGridDelegateWithMaxCrossAxisExtent` rekent `(breedte / (max + tussenruimte)).ceil()`. Een
+/// eigen, andere som zou een ingeklapt blok van "twee rijen" soms anderhalve rij laten tonen.
+int kolommenVoor(double breedte, {double max = 180, double tussen = 14}) =>
+    breedte <= 0 ? 1 : (breedte / (max + tussen)).ceil().clamp(1, 1 << 16);
+
+/// Hoeveel regels een blok toont: ingeklapt [rijen] rijen, open alles.
+///
+/// Gevraagd op 25-09-2026 bij Oasis: tweehonderd live-opnames onder elkaar is geen overzicht meer.
+/// Een blok dat al in twee rijen past, toont gewoon alles — een knop "toon alle 9" onder negen
+/// tegels is een knop voor niets.
+int zichtbaarInBlok({required int aantal, required int kolommen, required bool open, int rijen = 2}) {
+  if (open) return aantal;
+  final max = kolommen * rijen;
+  return aantal <= max ? aantal : max;
 }

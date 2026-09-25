@@ -78,6 +78,37 @@ class MbImage {
   }
 }
 
+/// Het kleine plaatje van de voorkant uit een antwoord van het Cover Art Archive, of null.
+///
+/// Alleen de VOORKANT: een achterkant of een schijf als tegel in een discografie leest als een
+/// verkeerde hoes. Het archief zet `front` op het beeld dat het zelf als voorkant ziet.
+String? voorkantUitCaa(Map<String, dynamic> body) {
+  for (final i in body['images'] as List<dynamic>? ?? const []) {
+    if (i is! Map<String, dynamic>) continue;
+    final img = MbImage.from(i);
+    if (img != null && img.isFront) return img.thumb;
+  }
+  return null;
+}
+
+/// Het Discogs-artiestnummer uit de `url-rels` van een MusicBrainz-artiest, of null.
+///
+/// De verwijzing ziet eruit als `https://www.discogs.com/artist/140140`, soms met de naam erachter
+/// (`/artist/140140-Oasis-2`). Alleen het soort `discogs`: een artiest verwijst ook naar zijn
+/// labels, en die staan op dezelfde site.
+int? discogsIdUitRelaties(List<dynamic> relaties) {
+  for (final r in relaties) {
+    if (r is! Map || r['type'] != 'discogs') continue;
+    final bron = ((r['url'] as Map?)?['resource'] as String?)?.trim() ?? '';
+    final stukken = Uri.tryParse(bron)?.pathSegments ?? const <String>[];
+    final i = stukken.indexOf('artist');
+    if (i < 0 || i + 1 >= stukken.length) continue;
+    final m = RegExp(r'^(\d+)').firstMatch(stukken[i + 1]);
+    if (m != null) return int.parse(m.group(1)!);
+  }
+  return null;
+}
+
 class MbTrack {
   final String position, title;
 
@@ -599,6 +630,23 @@ class MusicBrainzService {
     return null;
   }
 
+  /// Het Discogs-nummer van deze artiest, als MusicBrainz er een kent.
+  ///
+  /// **Waarom via MusicBrainz en niet op naam.** Discogs nummert naamgenoten: "Oasis" is daar een
+  /// Belgisch tranceproject (26794), de band uit Manchester heet "Oasis (2)" (140140). De zoektocht
+  /// op naam nam de eerste die EXACT "Oasis" heette — het tranceproject. Gemeten op 25-09-2026: de
+  /// artiestpagina van Oasis kreeg zo "Ook in: Tony Varone · Cl. Sacchi · Peter Peyskens", één
+  /// Discogs-regel in plaats van honderden, en geen enkele Discogs-hoes. MusicBrainz verwijst
+  /// rechtstreeks naar `discogs.com/artist/140140`.
+  ///
+  /// Dezelfde respons als [wikidataId], dus na het eerste bezoek uit de cache en zonder verzoek.
+  Future<int?> discogsArtistId(String mbid) async {
+    final id = mbid.trim();
+    if (id.isEmpty) return null;
+    final body = await _ws('$_root/artist/$id?inc=url-rels&fmt=json');
+    return discogsIdUitRelaties((body?['relations'] as List?) ?? const []);
+  }
+
   // ── Cache ───────────────────────────────────────────────────────────────────
   // The data barely changes and the request budget is the scarce thing, so everything fetched is
   // kept. Once a library has been browsed it can be browsed again offline.
@@ -948,6 +996,23 @@ class MusicBrainzService {
       if (img != null) out.add(img);
     }
     return out;
+  }
+
+  /// De voorkant van een hele plaatgroep, als kleine tegel (250 px), of null.
+  ///
+  /// **Voor de discografie op de artiestpagina**, waar MusicBrainz-regels nooit een hoes hadden: zijn
+  /// bladerlijst noemt alleen groepen, en [art] vraagt per persing. Het archief kent ook een
+  /// voorkant per GROEP — het kiest er zelf een persing bij.
+  ///
+  /// Gemeten op 25-09-2026: van 39 live-opnames van Oasis zonder hoes hadden er 32 er hier wél een.
+  /// Dat spreekt de oude aantekening in `vulHoezenAan` tegen ("0 van 25" bij de verzamelaars van
+  /// Céline Dion): het hangt sterk af van de artiest, en uitproberen kost per regel één verzoek op
+  /// de `caa`-baan, daarna niets meer — een echt antwoord blijft in de cache, een 404 zeven dagen.
+  Future<String?> groepHoes(String groepMbid) async {
+    final id = groepMbid.trim();
+    if (id.isEmpty) return null;
+    final body = await _get('$_caa/release-group/$id', lane: 'caa', gap: _caaGap);
+    return body == null ? null : voorkantUitCaa(body);
   }
 
   /// Every pressing of a record, as choices the picker can offer.

@@ -1193,8 +1193,10 @@ class DiscogsService {
   }
 
   /// What Discogs knows about an act: the write-up, who is in it, and every photo it holds.
-  Future<DiscogsArtist?> artist(String name) async {
-    final id = await artistId(name);
+  /// [id]: het nummer als de aanroeper het al weet — via MusicBrainz, zie
+  /// `DiscographyService.discogsIdVoor`. Op naam zoeken kiest bij naamgenoten de verkeerde.
+  Future<DiscogsArtist?> artist(String name, {int? id}) async {
+    id ??= await artistId(name);
     if (id == null) return null;
     final b = await _get('https://api.discogs.com/artists/$id');
     if (b == null) return null;

@@ -129,6 +129,7 @@ import 'ui/kop.dart';
 import 'ui/leeg.dart';
 import 'ui/maten.dart';
 import 'ui/paginawas.dart';
+import 'ui/plaattegel.dart';
 import 'ui/skelet.dart';
 import 'ui/speelvlak.dart';
 import 'ui/stijl.dart';
@@ -14548,7 +14549,10 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
 }
 
 /// Network cover with a graceful placeholder (album browse / artist photos from Deezer).
-Widget _netCover(String? url, {double size = 160, double radius = 12, bool circle = false}) {
+/// [zonder]: wat er staat als er GEEN hoes is of hij niet laadt. Standaard het grijze vak met een
+/// schijfje; de discografie geeft een [PlaatTegel] mee — zie daar waarom.
+Widget _netCover(String? url,
+    {double size = 160, double radius = 12, bool circle = false, Widget? zonder}) {
   final shape = circle ? BoxShape.circle : BoxShape.rectangle;
   final br = circle ? null : BorderRadius.circular(radius);
   final placeholder = Container(
@@ -14561,13 +14565,13 @@ Widget _netCover(String? url, {double size = 160, double radius = 12, bool circl
     ),
     child: Icon(circle ? Icons.person_rounded : Icons.album_rounded, color: _muted.withValues(alpha: .4), size: size * .34),
   );
-  if (url == null || url.isEmpty) return placeholder;
+  if (url == null || url.isEmpty) return zonder ?? placeholder;
   final beeld = Image.network(url,
       width: size,
       height: size,
       fit: BoxFit.cover,
       cacheWidth: decodeWidth(size),
-      errorBuilder: (_, __, ___) => placeholder,
+      errorBuilder: (_, __, ___) => zonder ?? placeholder,
       loadingBuilder: (c, w, p) => p == null ? w : placeholder,
       // Invaden in plaats van inploppen. Zonder dit springt een tegel in één beeld van de grijze
       // verloop naar het volle plaatje; met vier rijen op het startscherm is dat een minutenlang
@@ -18441,6 +18445,25 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   /// Hoezen die Discogs' zoeksweep kent voor platen die hij zelf niet als regel oplevert.
   Map<String, String> _hoezen = const {};
 
+  /// Hoezen uit het Cover Art Archive voor regels die alleen MusicBrainz kent, op [discoKey].
+  ///
+  /// Begint met de hoezen van het vorige bezoek (uit de cache van de discografie), zodat een tegel
+  /// die toen een hoes kreeg niet even leeg staat terwijl de verse bronnen binnenkomen. Zie
+  /// [_haalGroepHoezen].
+  Map<String, String> _groepHoezen = const {};
+
+  /// Of [_haalGroepHoezen] rond is ÉN iets vond. Pas dán telt het archief mee voor de hoesregel:
+  /// eerder verdwijnt een plaat die zijn antwoord nog niet had, en zonder vondst zou een artiest
+  /// waar het archief niets kent zijn platen verliezen. Niet af te lezen aan [_groepHoezen] zelf —
+  /// die begint met de bewaarde hoezen van het vorige bezoek, ook die van Deezer.
+  bool _groepKlaar = false;
+
+  /// Welke ronde de laatste is, zodat een oudere ronde niets meer overschrijft.
+  int _groepGen = 0;
+
+  /// De blokken die helemaal open staan. Zie [zichtbaarInBlok].
+  final Set<RecordKind> _openBlokken = {};
+
   /// De [discoKey]s van regels die in werkelijkheid andermans plaat zijn.
   ///
   /// Saber wees "Pavarotti & Friends for Cambodia and Tibet" aan tussen de albums van Enrique
@@ -18542,6 +18565,13 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     if (mounted && bewaard != null && bewaard.releases.isNotEmpty) {
       setState(() {
         _dz = bewaard.releases;
+        // De hoezen van toen, ook die uit het archief. Zonder dit vervangen de verse bronnen de
+        // bewaarde regels door regels zónder archiefhoes, en staan die tegels even leeg tot de ronde
+        // ze weer vindt. [vulHoezenAan] vult alleen aan, dus dit kan geen betere hoes verdringen.
+        _groepHoezen = {
+          for (final r in bewaard.releases)
+            if (r.cover != null && r.cover!.isNotEmpty) r.key: r.cover!,
+        };
         _busy = false;
       });
     }
@@ -18561,13 +18591,17 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           (u) { _dz = u.releases; _dzStatus = u.status; }),
       pak(svc.vanMusicBrainz(naam, bekendeMbid: ref.isMb ? ref.id : null),
           (u) { _mb = u.releases; _mbStatus = u.status; }),
-      pak(svc.vanDiscogs(naam),
+      // Met het MusicBrainz-nummer als dat er is: dan kiest Discogs niet op naam — zie
+      // [DiscographyService.discogsIdVoor] voor Oasis en het Belgische tranceproject.
+      pak(svc.vanDiscogs(naam, bekendeMbid: ref.isMb ? ref.id : null),
           (u) { _dg = u.releases; _dgStatus = u.status; _hoezen = u.hoezen; }),
     ]);
 
     if (!mounted) return;
     final alles = vulHoezenAan(mergeDiscography([_dz, _mb, _dg]), _hoezen);
     if (alles.isNotEmpty) unawaited(svc.schrijf(naam, alles));
+    // Op de achtergrond, en niet ervoor: de pagina staat al, dit maakt hem alleen mooier.
+    unawaited(_haalGroepHoezen(naam, alles));
 
     // Pas NA de drie bronnen, want wat MusicBrainz of Discogs ook kent hoeft niet nagevraagd — die
     // twee laten een gastoptreden al vallen. En pas nadat de pagina staat: dit kost een verzoek per
@@ -18577,6 +18611,44 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     setState(() => _gasten = gasten);
     // Opnieuw wegschrijven, zodat een tweede bezoek ze niet eerst weer laat opflitsen.
     unawaited(svc.schrijf(naam, alles.where((r) => !gasten.contains(r.key)).toList()));
+  }
+
+  /// Een hoes uit het Cover Art Archive voor elke regel die alleen MusicBrainz kent.
+  ///
+  /// **Gemeten op 25-09-2026 bij Oasis:** 191 van de 200 live-opnames hadden geen hoes, want
+  /// MusicBrainz levert op releasegroep-niveau er nooit een — en in een steekproef van 39 had het
+  /// archief er 32 wél. Per regel één verzoek op de `caa`-baan (250 ms), op volgorde van de
+  /// blokken; een tweede bezoek komt helemaal uit de cache op schijf.
+  ///
+  /// Tussendoor tekenen, met een tussenpoos van twaalf treffers: bij tweehonderd regels is elke
+  /// treffer een hertekening te veel, en pas aan het eind is een halve minuut niets zien.
+  Future<void> _haalGroepHoezen(String naam, List<DiscoRelease> alles) async {
+    final gen = ++_groepGen;
+    final mb = context.read<MusicBrainzService>();
+    final gevonden = {..._groepHoezen};
+    var nieuw = 0;
+    for (final g in groepenZonderHoes(alles)) {
+      if (!mounted || gen != _groepGen || naam != widget.artist.name) return;
+      String? url;
+      try {
+        url = await mb.groepHoes(g.mbid);
+      } catch (_) {/* dan blijft deze tegel zonder hoes */}
+      if (url == null) continue;
+      gevonden[g.sleutel] = url;
+      if (++nieuw % 12 == 0 && mounted && gen == _groepGen) {
+        setState(() => _groepHoezen = {...gevonden});
+      }
+    }
+    if (!mounted || gen != _groepGen) return;
+    setState(() {
+      _groepHoezen = gevonden;
+      _groepKlaar = nieuw > 0;
+    });
+    // Mét de hoezen wegschrijven, zodat het volgende bezoek ze meteen heeft.
+    if (nieuw > 0) {
+      unawaited(_disco.schrijf(
+          naam, vulHoezenAan(alles, gevonden).where((r) => !_gasten.contains(r.key)).toList()));
+    }
   }
 
   Future<void> _loadBio() async {
@@ -18861,7 +18933,13 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   Future<void> _loadWie() async {
     try {
       final naam = widget.artist.name;
-      final a = await DiscogsService(context.read<AppSettings>()).artist(naam);
+      final ref = widget.artist.ref;
+      // Het nummer via MusicBrainz, net als de discografie. Op naam kreeg Oasis "Ook in: Tony
+      // Varone · Cl. Sacchi · Peter Peyskens" — de leden van een Belgisch tranceproject met dezelfde
+      // naam. Zie [DiscographyService.discogsIdVoor].
+      final id = await _disco.discogsIdVoor(naam, bekendeMbid: ref.isMb ? ref.id : null);
+      if (!mounted) return;
+      final a = await DiscogsService(context.read<AppSettings>()).artist(naam, id: id);
       if (a == null || !mounted || naam != widget.artist.name) return;
       setState(() {
         final echt = a.realname.trim();
@@ -18962,17 +19040,24 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     final eigenPerSleutel = {for (final a in mine) discoKey(a.title): a};
     // Hoezen aanvullen vóór het sorteren, gastoptredens eruit: allebei op de samengevoegde lijst,
     // zodat elke hertekening hetzelfde antwoord geeft ongeacht wat er wanneer binnenkwam.
-    final samen = vouwHeruitgaves(vulHoezenAan(mergeDiscography([_dz, _mb, _dg]), _hoezen)
-        .where((r) => !_gasten.contains(r.key))
-        .toList());
+    // Het archief na Discogs, zodat het wint: dat koppelt op het NUMMER van de releasegroep, Discogs
+    // op de titel.
+    final samen = vouwHeruitgaves(
+        vulHoezenAan(mergeDiscography([_dz, _mb, _dg]), {..._hoezen, ..._groepHoezen})
+            .where((r) => !_gasten.contains(r.key))
+            .toList());
     // De hoesregel alleen als er iets IS om hoezen mee aan te vullen. Zonder Discogs-token draait de
     // zoeksweep niet, en dan zou hij elke plaat wegvegen die alleen MusicBrainz kent — dat zijn bij
     // Michael Jackson Off The Wall, Dangerous en Invincible. Diezelfde voorwaarde vangt ook de race:
     // zolang Discogs nog niet geantwoord heeft is `_hoezen` leeg, en dan verschijnen regels alleen,
     // ze knipperen nooit weg.
+    //
+    // Het archief telt pas mee als zijn ronde rond is ([_groepKlaar]), en alleen als het iets vond:
+    // daarvóór zou een plaat verdwijnen die zijn antwoord nog niet had, en bij een artiest waar het
+    // archief niets kent blijft alles staan — met een [PlaatTegel] in plaats van een grijs vak.
     final zeef = zeefDiscografie(samen,
         toonAlles: _toonAlles,
-        zeefHoezen: _dgStatus != BronStatus.geenToken && _hoezen.isNotEmpty);
+        zeefHoezen: (_dgStatus != BronStatus.geenToken && _hoezen.isNotEmpty) || _groepKlaar);
     final rijen = zeef.rijen;
     // Eén keer opbouwen en twee keer gebruiken: het lint zelf, en de openingszet eronder. Twee keer
     // bouwen zou twee lijsten geven die uit elkaar kunnen lopen zodra er een bron bijkomt.
@@ -19202,13 +19287,55 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                   child: _sectionTitle(blokTitel(blok.soort), '${blok.rijen.length}')),
               SliverPadding(
                 padding: EdgeInsets.fromLTRB(_marge, 0, _marge, 24),
-                sliver: SliverGrid(
-                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: 180, mainAxisSpacing: 14, crossAxisSpacing: 14, childAspectRatio: .74),
-                  delegate: SliverChildBuilderDelegate(
-                      (_, i) => _discoCard(blok.rijen[i], bezit.contains(blok.rijen[i].key)),
-                      childCount: blok.rijen.length),
-                ),
+                // Ingeklapt twee rijen, met "Toon alle" eronder — zie [zichtbaarInBlok]. De albums
+                // niet: daar kijk je als eerste, en een studioplaat achter een knop is er een te veel.
+                sliver: SliverLayoutBuilder(builder: (context, c) {
+                  final altijdOpen = blok.soort == RecordKind.album;
+                  final open = altijdOpen || _openBlokken.contains(blok.soort);
+                  final ingeklapt = zichtbaarInBlok(
+                      aantal: blok.rijen.length,
+                      kolommen: kolommenVoor(c.crossAxisExtent),
+                      open: false);
+                  final n = open ? blok.rijen.length : ingeklapt;
+                  final knop = !altijdOpen && ingeklapt < blok.rijen.length;
+                  return SliverMainAxisGroup(slivers: [
+                    SliverGrid(
+                      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                          maxCrossAxisExtent: 180,
+                          mainAxisSpacing: 14,
+                          crossAxisSpacing: 14,
+                          childAspectRatio: .74),
+                      delegate: SliverChildBuilderDelegate(
+                          (_, i) => _discoCard(blok.rijen[i], bezit.contains(blok.rijen[i].key)),
+                          childCount: n),
+                    ),
+                    if (knop)
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Pressable(
+                              onPressed: () => setState(() => open
+                                  ? _openBlokken.remove(blok.soort)
+                                  : _openBlokken.add(blok.soort)),
+                              borderRadius: BorderRadius.circular(4),
+                              ringOnFocus: true,
+                              scaleOnFocus: false,
+                              child: Text(
+                                open ? 'Minder tonen' : 'Toon alle ${blok.rijen.length}',
+                                style: kTekstNormaal.copyWith(
+                                  fontSize: 12.5,
+                                  decoration: TextDecoration.underline,
+                                  decorationColor: kLijn,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ]);
+                }),
               ),
             ],
           ],
@@ -19413,7 +19540,11 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           Expanded(
             child: LayoutBuilder(
               builder: (_, c) => Stack(children: [
-                _netCover(al.cover, size: c.maxWidth),
+                // Zonder hoes geen grijs vak met een schijfje maar de titel zelf, op een eigen kleur.
+                // Zie [PlaatTegel] voor waarom.
+                _netCover(al.cover,
+                    size: c.maxWidth,
+                    zonder: PlaatTegel(titel: al.title, jaar: al.year, maat: c.maxWidth)),
                 // Which of the discography you already hold — so the gap in the collection is the
                 // thing you can see, rather than something to work out by comparing two lists.
                 if (owned)

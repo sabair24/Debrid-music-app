@@ -201,14 +201,38 @@ class DiscographyService {
     }
   }
 
-  Future<BronUitkomst> vanDiscogs(String naam) async {
+  /// Welke Discogs-artiest deze naam is: eerst via de verwijzing van MusicBrainz, dan pas op naam.
+  ///
+  /// **Op naam kiest bij naamgenoten de verkeerde.** Discogs nummert ze — "Oasis" is daar een
+  /// Belgisch tranceproject, de band heet "Oasis (2)" — en de zoektocht nam de eerste die exact zo
+  /// heette. MusicBrainz verwijst rechtstreeks naar het juiste nummer, en die opvraag ligt na het
+  /// eerste bezoek in de cache. Dezelfde naamtucht als [vanMusicBrainz]: een MusicBrainz-artiest met
+  /// een andere naam telt niet.
+  Future<int?> discogsIdVoor(String naam, {String? bekendeMbid}) async {
+    var mbid = bekendeMbid;
+    if (mbid == null) {
+      try {
+        final a = await mb.resolveArtist(naam);
+        if (a != null && _zelfdeArtiest(naam, a.name)) mbid = a.mbid;
+      } catch (_) {/* dan maar op naam */}
+    }
+    if (mbid != null) {
+      try {
+        final id = await mb.discogsArtistId(mbid);
+        if (id != null) return id;
+      } catch (_) {/* dan maar op naam */}
+    }
+    return discogs.artistId(naam);
+  }
+
+  Future<BronUitkomst> vanDiscogs(String naam, {String? bekendeMbid}) async {
     // De aanroeper MOET dit zelf lezen: zonder token faalt elke aanroep in DiscogsService stil, en dan
     // is "geen token" niet te onderscheiden van "niets gevonden".
     if (!discogs.available) {
       return const BronUitkomst(DiscoSource.discogs, BronStatus.geenToken, []);
     }
     try {
-      final id = await discogs.artistId(naam);
+      final id = await discogsIdVoor(naam, bekendeMbid: bekendeMbid);
       if (id == null) return const BronUitkomst(DiscoSource.discogs, BronStatus.klaar, []);
       // Eén sweep, twee doelen: het formaat van elke master (anders valt die in "Overig") en een
       // miniatuurhoes voor regels die er geen hebben. Hier opgehaald en doorgegeven, zodat hij
