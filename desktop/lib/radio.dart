@@ -232,6 +232,23 @@ List<Radioplek> mengNakomers(List<Radioplek> plan, List<Radioplek> nieuw) {
   return uit;
 }
 
+/// Het plan na het afstemmen: wat al in gang is blijft, de rest wordt vervangen door [nieuw].
+///
+/// **Wat blijft.** Wat speelt of in de rij staat ([Haalstand.inRij]), wat onderweg is of net
+/// geland — daar is al voor betaald, en het hoort bij wat je nu hoort. En wat mislukte, want dat
+/// hoeft niet opnieuw geprobeerd te worden. **Wat weg gaat.** Wat nog wacht en de eigen muziek die
+/// nog niet in de rij stond ([Haalstand.klaar]): die zijn gekozen onder de vorige stand.
+///
+/// Los van [RadioBesturing.stemAf], zodat het zonder speler te beproeven is — net als
+/// [mengNakomers].
+List<Radioplek> stemPlanAf(List<Radioplek> plan, List<Radioplek> nieuw) {
+  final blijft = [
+    for (final p in plan)
+      if (p.stand != Haalstand.wacht && p.stand != Haalstand.klaar) p
+  ];
+  return [...blijft, ...nieuweNakomers(blijft, nieuw)];
+}
+
 class RadioBesturing extends ChangeNotifier {
   RadioBesturing({required this.speler, required this.bron});
 
@@ -248,6 +265,14 @@ class RadioBesturing extends ChangeNotifier {
 
   /// Waarmee de radio zichzelf omschrijft, voor op het scherm.
   String naam = '';
+
+  /// De artiest waar deze radio omheen gebouwd is, of null bij een radio uit een getypte zin — die
+  /// heeft geen artiest om opnieuw op te vragen, en is dus ook niet af te stemmen.
+  String? zaadArtiest;
+
+  /// Het nummer waar de radio vanaf begon, als dat er was. Voor het afstemmen: dat liedje hoort er
+  /// daarna evenmin nog een keer in.
+  Track? zaad;
 
   /// Van een pad naar het gedeelde id, om een oordeel te kunnen terugvinden als het bestand er niet
   /// meer is. Ingehangen vanuit main.dart.
@@ -315,7 +340,8 @@ class RadioBesturing extends ChangeNotifier {
   int get gehaald => _plan.where((p) => p.doorRadio).length;
 
   /// Starten. Geeft null terug als het gelukt is, of de reden waarom niet — in gewone taal.
-  Future<String?> start(List<Radioplek> nieuw, {String naam = ''}) async {
+  Future<String?> start(List<Radioplek> nieuw,
+      {String naam = '', String? zaadArtiest, Track? zaad}) async {
     if (nieuw.isEmpty) return 'Er viel niets te vinden om een radio van te maken.';
 
     // Eerst vragen of het KAN, en pas daarna de lopende radio verlaten. Andersom zou een radio die
@@ -333,6 +359,8 @@ class RadioBesturing extends ChangeNotifier {
     final sessie = ++_sessie;
     _plan = nieuw;
     this.naam = naam;
+    this.zaadArtiest = zaadArtiest;
+    this.zaad = zaad;
     _loopt = true;
     _doorRadio.clear();
     _lopend = RadioSessie(naam: naam, begonnenMs: DateTime.now().millisecondsSinceEpoch);
@@ -387,6 +415,18 @@ class RadioBesturing extends ChangeNotifier {
     if (nieuw.isEmpty) return;
     _plan = mengNakomers(_plan, nieuw);
     notifyListeners();
+  }
+
+  /// De radio opnieuw afstemmen — Bekend, Gemengd of Ontdekken — zonder hem te stoppen.
+  ///
+  /// Wat je nu hoort en wat al onderweg is blijft; de rest van het plan wordt [nieuw]. Zie
+  /// [stemPlanAf]. Hoort [sessie] niet meer bij de radio die loopt, dan gebeurt er niets: dan was
+  /// iemand intussen een andere radio begonnen.
+  void stemAf(int sessie, List<Radioplek> nieuw) {
+    if (sessie != _sessie || !_loopt) return;
+    _plan = stemPlanAf(_plan, nieuw);
+    notifyListeners();
+    _pas(sessie);
   }
 
   /// Stoppen. Laat het plan staan, want daar valt straks nog over te vertellen.

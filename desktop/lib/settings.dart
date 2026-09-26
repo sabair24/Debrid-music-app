@@ -153,6 +153,12 @@ class AppSettings extends ChangeNotifier {
   /// Staat dit uit, dan geldt [stroomThuis] altijd en is er één stand en verder niets.
   bool stroomAdaptief = true;
 
+  /// Hoe de radio kiest: 'bekend', 'gemengd' of 'ontdekken' — zie `radiosmaak.dart`.
+  ///
+  /// Als tekst, om dezelfde reden als [stroomThuis]. Leeg of onbekend leest als 'gemengd': de radio
+  /// zoals hij was voordat deze keuze bestond.
+  String radioSmaak = 'gemengd';
+
   static File file() {
     return appFile('settings.json');
   }
@@ -327,6 +333,7 @@ class AppSettings extends ChangeNotifier {
         stroomThuis = (m['stroom_thuis'] ?? 'max') as String;
         stroomOnderweg = (m['stroom_onderweg'] ?? 'cd') as String;
         stroomAdaptief = (m['stroom_adaptief'] ?? true) as bool;
+        radioSmaak = (m['radio_smaak'] ?? 'gemengd') as String;
     }
   }
 
@@ -367,6 +374,7 @@ class AppSettings extends ChangeNotifier {
         'stroom_thuis': stroomThuis,
         'stroom_onderweg': stroomOnderweg,
         'stroom_adaptief': stroomAdaptief,
+        'radio_smaak': radioSmaak,
       };
 
   /// Write the settings down.

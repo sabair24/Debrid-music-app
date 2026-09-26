@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'deezerbaan.dart';
 import 'radiobuurt.dart';
+import 'radiosmaak.dart';
 
 import 'models.dart' show Track;
 import 'organize.dart' show artistKey;
@@ -107,8 +108,12 @@ class RecTrack {
   /// alleen, en dan wordt een heropname als mindere dubbel van schijf gewist. Zie `TrackTags.seconds`
   /// voor het gemelde Sting-geval.
   final int seconds;
+
+  /// Hoe bekend het nummer is volgens Deezer (`rank`, hoger is bekender) — 0 als de bron het niet
+  /// zei. Zie `radiosmaak.dart`: daarop kiest de radio tussen Bekend en Ontdekken.
+  final int rank;
   const RecTrack(this.artist, this.title, this.cover,
-      {this.album = '', this.albumId = 0, this.seconds = 0});
+      {this.album = '', this.albumId = 0, this.seconds = 0, this.rank = 0});
 
   /// True when there is a record to open rather than only a song to play.
   bool get hasAlbum => albumId > 0 && album.trim().isNotEmpty && artist.trim().isNotEmpty;
@@ -202,6 +207,7 @@ class RecommendService {
               album: ((t['album']?['title']) ?? '') as String,
               albumId: ((t['album']?['id']) as num?)?.toInt() ?? 0,
               seconds: (t['duration'] as num?)?.toInt() ?? 0,
+              rank: (t['rank'] as num?)?.toInt() ?? 0,
             ))
         .where((r) => r.title.isNotEmpty)
         .toList();
@@ -229,7 +235,10 @@ class RecommendService {
   /// + a few related artists' top tracks. Including the seed's own catalogue is what
   /// lets Smart Shuffle lead with tracks the listener already owns (instant playback);
   /// the similar/related tracks are the discovery layer.
-  Future<List<RecTrack>> mixRadio(String artist) async {
+  ///
+  /// [smaak] beslist hoe diep er gegraven wordt — zie `radiosmaak.dart`. [Radiosmaak.gemengd] is de
+  /// radio zoals hij altijd was.
+  Future<List<RecTrack>> mixRadio(String artist, {Radiosmaak smaak = Radiosmaak.gemengd}) async {
     final id = await _artistId(artist);
     if (id == null) return artistRadio(artist);
     final out = <RecTrack>[];
@@ -243,14 +252,15 @@ class RecommendService {
     // Seed's own top tracks + seed "radio" (similar) + related-artist list, concurrently
     // (reusing the one artist id). Deezer's /radio is a similar-artist flow that omits the
     // seed, so /top is needed for the seed's own songs to appear in the queue at all.
-    final topF = _get('$_base/artist/$id/top?limit=15');
+    final m = maatVan(smaak);
+    final topF = _get('$_base/artist/$id/top?limit=${m.zaadAantal}&index=${m.zaadVanaf}');
     final radioF = _get('$_base/artist/$id/radio');
     final relF = _get('$_base/artist/$id/related?limit=20');
     add(_tracks(await topF));
-    add(_tracks(await radioF));
+    add(radioHelft(_tracks(await radioF), (t) => t.rank, smaak));
     final rel = ((await relF)?['data'] as List?) ?? const [];
-    final tops = await Future.wait(
-        kiesBuren(rel, 4, _toeval).map((a) => _get('$_base/artist/${(a as Map)['id']}/top?limit=5')));
+    final tops = await Future.wait(kiesBuren(rel, m.buren, _toeval).map((a) => _get(
+        '$_base/artist/${(a as Map)['id']}/top?limit=${m.burenAantal}&index=${m.burenVanaf}')));
     for (final t in tops) {
       add(_tracks(t));
     }
@@ -269,7 +279,7 @@ class RecommendService {
   /// Dus draait dit apart, ná de start, en schuift het resultaat erbij via
   /// [RadioBesturing.voegBij]. De radio speelt intussen al.
   Future<List<RecTrack>> buurtErbij(String artiest, String? titel, Buurtbron buurt,
-      {void Function(String)? spoor}) async {
+      {void Function(String)? spoor, Radiosmaak smaak = Radiosmaak.gemengd}) async {
     final id = await _artistId(artiest);
     if (id == null) return const [];
     final rel = ((await _get('$_base/artist/$id/related?limit=20'))?['data'] as List?) ?? const [];
@@ -291,7 +301,7 @@ class RecommendService {
       }
     }
 
-    await _uitDeBuurt(b, add, spoor);
+    await _uitDeBuurt(b, add, spoor, smaak);
     out.shuffle(_toeval);
     return out;
   }
@@ -307,10 +317,17 @@ class RecommendService {
   /// "het model hielp" niet te onderscheiden van "de namen vielen allemaal weg": op 12-09-2026 gaf
   /// het model voor Billie Jean onder meer Quincy Jones, Rockwell, Shalamar en The Time, en uit het
   /// logboek was niet op te maken of daar iets van geland was.
-  Future<void> _uitDeBuurt(
-      List<Buurman> buurt, void Function(Iterable<RecTrack>) add, void Function(String)? spoor) async {
+  Future<void> _uitDeBuurt(List<Buurman> buurt, void Function(Iterable<RecTrack>) add,
+      void Function(String)? spoor, Radiosmaak smaak) async {
     if (buurt.isEmpty) return;
-    final gekozen = kiesBuren(buurt, kBurenPerRadio, _toeval);
+    // Bij Gemengd een willekeurige greep, zoals altijd. Anders eerst geschud en dan op volgorde van
+    // [modelVolgorde]: Bekend neemt eerst wie je kent, Ontdekken eerst wie nieuw voor je is.
+    final gekozen = smaak == Radiosmaak.gemengd
+        ? kiesBuren(buurt, kBurenPerRadio, _toeval)
+        : modelVolgorde([...buurt]..shuffle(_toeval), (b) => b.bekend, smaak)
+            .take(kBurenPerRadio)
+            .toList();
+    final m = maatVan(smaak);
     final ids = await Future.wait(gekozen.map((b) => _artistId(b.artiest)));
     final gekend = <String>[], onbekend = <String>[];
     for (var i = 0; i < gekozen.length; i++) {
@@ -318,7 +335,7 @@ class RecommendService {
     }
     final tops = await Future.wait([
       for (final i in ids)
-        if (i != null) _get('$_base/artist/$i/top?limit=4')
+        if (i != null) _get('$_base/artist/$i/top?limit=${m.modelAantal}&index=${m.modelVanaf}')
     ]);
     var erbij = 0;
     for (final t in tops) {

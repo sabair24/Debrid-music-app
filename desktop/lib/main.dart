@@ -24,6 +24,8 @@ import 'aanbevelingplan.dart';
 import 'ai.dart';
 import 'radio.dart';
 import 'radiokeuze.dart';
+import 'radiosmaak.dart';
+import 'radiovoorraad.dart' show Haalstand;
 import 'radiobuurt.dart';
 import 'radioplan.dart';
 import 'oordelen.dart';
@@ -9291,6 +9293,41 @@ class _WachtrijKnop extends StatelessWidget {
 /// dus zette je een radio aan dan bleef dit paneel de lijst van vóór de radio tonen — een lijst die
 /// niet ging klinken. Een radio is geen wachtrij (je kunt er niet in slepen en er niets uit halen)
 /// maar hij lijkt er genoeg op om dezelfde regels te gebruiken; zie [radioAlsRij].
+/// Bekend · Gemengd · Ontdekken, bovenaan het radiopaneel — zie `radiosmaak.dart`.
+///
+/// Hier en niet in de instellingen, want je stemt een radio af terwijl je hem hoort: YouTube Music
+/// zet die keuze ook op de radio zelf. Een tik stemt de lopende radio meteen af zonder het nummer
+/// dat nu speelt te onderbreken, en onthoudt de keuze voor de volgende.
+class _RadioAfstemming extends StatelessWidget {
+  const _RadioAfstemming();
+
+  @override
+  Widget build(BuildContext context) {
+    final nu = Radiosmaak.uit(context.select<AppSettings, String>((s) => s.radioSmaak));
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Wrap(
+        spacing: 6,
+        children: [
+          for (final s in Radiosmaak.values)
+            ChoiceChip(
+              label: Text(s.label, style: const TextStyle(fontSize: 12)),
+              selected: s == nu,
+              onSelected: (_) => stemRadioAf(context, s),
+              backgroundColor: Colors.white.withValues(alpha: .06),
+              selectedColor: _accent,
+              labelStyle: TextStyle(color: s == nu ? Colors.white : _muted),
+              side: BorderSide(color: s == nu ? _accent : Colors.white.withValues(alpha: .12)),
+              shape: const StadiumBorder(),
+              showCheckmark: false,
+              visualDensity: VisualDensity.compact,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class WachtrijPaneelView extends StatelessWidget {
   const WachtrijPaneelView({super.key, this.inBlad = false});
 
@@ -9363,6 +9400,7 @@ class WachtrijPaneelView extends StatelessWidget {
               ],
             ),
           ),
+          if (radio) const _RadioAfstemming(),
           Expanded(
             child: rij.isEmpty
                 ? Center(
@@ -11446,6 +11484,7 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel, Tra
     buurt = (a, t, deezer) async {
       try {
         final b = await ai.maakRadiobuurt(artiest: a, titel: t, profiel: profiel, deezerBuren: deezer);
+        _laatsteBuurt = (artiest: a, namen: b);
         buurtLog.line('radio-buurt: ${b.length} namen van het model, '
             '${b.where((x) => x.bekend).length} bekend — '
             '${b.map((x) => x.bekend ? x.artiest : '${x.artiest}*').join(', ')}');
@@ -11456,9 +11495,11 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel, Tra
       }
     };
   }
+  // Bekend, Gemengd of Ontdekken — zie `radiosmaak.dart`. Staat op het radiopaneel.
+  final smaak = Radiosmaak.uit(cfg.radioSmaak);
   List<RecTrack> recs;
   try {
-    recs = await rec.mixRadio(artist);
+    recs = await rec.mixRadio(artist, smaak: smaak);
   } catch (_) {
     recs = const [];
   }
@@ -11475,7 +11516,7 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel, Tra
           seconden: zaad.duration?.inSeconds,
           eigen: zaad),
     ..._radioplan(recs, lib, zaadArtiest: artist, zaad: zaad),
-  ], naam: artist);
+  ], naam: artist, zaadArtiest: artist, zaad: zaad);
   // En de namen van het model erbij zodra ze er zijn — de radio speelt intussen al.
   //
   // Het model doet er 25 tot 30 seconden over (gemeten 12-09-2026). Daar mag een radio niet op
@@ -11485,7 +11526,7 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel, Tra
   if (buurt != null && reden == null) {
     final sessie = radio.sessie;
     unawaited(rec
-        .buurtErbij(artist, titel, buurt, spoor: buurtSpoor)
+        .buurtErbij(artist, titel, buurt, spoor: buurtSpoor, smaak: smaak)
         .then((extra) => radio.voegBij(
             sessie,
             _radioplan(extra, lib,
@@ -11497,6 +11538,55 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel, Tra
   // precies wat de oude radio op een telefoon deed, en het is niet te onderscheiden van een radio die
   // gewoon niet veel nieuws vindt.
   _srcToast(context, reden);
+}
+
+/// De namen die het taalmodel noemde voor de laatste radio, zodat afstemmen ze niet opnieuw hoeft
+/// te vragen: dat kost een halve minuut en geld, en het antwoord is hetzelfde.
+({String artiest, List<Buurman> namen})? _laatsteBuurt;
+
+/// De lopende radio opnieuw afstemmen op [smaak], en die keuze onthouden voor de volgende.
+///
+/// Stopt niets: wat je hoort en wat al onderweg is blijft staan, en de rest van het plan wordt
+/// opnieuw opgevraagd — zie [RadioBesturing.stemAf]. Een radio uit een getypte zin heeft geen
+/// artiest om opnieuw op te vragen; daar geldt de keuze pas vanaf de volgende radio.
+Future<void> stemRadioAf(BuildContext context, Radiosmaak smaak) async {
+  final cfg = context.read<AppSettings>();
+  final radio = context.read<RadioBesturing>();
+  final lib = context.read<LibraryStore>();
+  if (cfg.radioSmaak == smaak.name) return;
+  cfg.radioSmaak = smaak.name;
+  unawaited(cfg.save());
+  final artist = radio.zaadArtiest;
+  if (!radio.loopt || artist == null) {
+    _srcToast(context, '📻 ${smaak.label} — geldt vanaf de volgende radio');
+    return;
+  }
+  _srcToast(context, '📻 Radio afgestemd: ${smaak.label}');
+  final sessie = radio.sessie;
+  final zaad = radio.zaad;
+  final rec = RecommendService();
+  List<RecTrack> recs;
+  try {
+    recs = await rec.mixRadio(artist, smaak: smaak);
+  } catch (_) {
+    recs = const [];
+  }
+  if (recs.isEmpty) return; // liever de oude afstemming dan een leeg plan
+  final blijft = [
+    for (final p in radio.plan)
+      if (p.stand != Haalstand.wacht && p.stand != Haalstand.klaar) p.artiest
+  ];
+  radio.stemAf(sessie, _radioplan(recs, lib, zaadArtiest: artist, zaad: zaad, al: blijft));
+  final namen = _laatsteBuurt;
+  if (namen == null || namen.artiest != artist || namen.namen.isEmpty) return;
+  try {
+    final extra = await rec.buurtErbij(artist, zaad?.title, (a, t, d) async => namen.namen,
+        smaak: smaak);
+    radio.voegBij(
+        sessie,
+        _radioplan(extra, lib,
+            zaadArtiest: artist, zaad: zaad, al: [for (final p in radio.plan) p.artiest]));
+  } catch (_) {/* de Deezer-helft staat er al; dit is een toegift */}
 }
 
 bool _genericArtist(String s) {
