@@ -2965,6 +2965,18 @@ class DownloadManager extends ChangeNotifier {
           try {
             await stampTags(File(uit.path), gezag);
           } catch (_) {/* het bestand staat goed; een mislukte tagschrijf maakt het niet stuk */}
+          // Zonder jaartal is het gezag niet gezaghebbend en schrijft [stampTags] niets. Heeft het
+          // bestand zelf dan ook geen artiest of titel, dan staat het als "Onbekende artiest" met
+          // de bestandsnaam als titel in de rij — gezien op 26-09-2026 bij "Got To Move Your Body"
+          // en "The Mackenzie Feat. Jessy - Innocence". Alleen die twee velden, en alleen als ze
+          // ontbreken: een album of jaartal dat er wél staat blijft staan.
+          if (!gezag.isAuthoritative) {
+            try {
+              if (radioTagsOntbreken(readTags(File(uit.path)))) {
+                await writeTagFields(File(uit.path), {'TITLE': titel, 'ARTIST': artiest});
+              }
+            } catch (_) {/* zelfde als hierboven */}
+          }
           geland = uit.path;
           return;
         }

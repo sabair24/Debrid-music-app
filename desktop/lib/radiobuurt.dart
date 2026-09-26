@@ -107,6 +107,11 @@ String buurtPrompt({
   return '''
 Je stelt een radio samen rond: $zaad
 
+Blijf in het genre en het tijdvak van DIT nummer. Bijvoorbeeld: rond een eurodanceplaat uit de
+jaren negentig horen eurodance, dance en happy hardcore uit die jaren - geen disco uit de jaren
+zeventig, geen EDM uit de jaren 2010, en geen zanger alleen omdat hij uit hetzelfde land komt. Wat
+hieronder over de luisteraar staat is er om te weten wat hij al KENT, niet om de stijl te kiezen.
+
 Dit weet ik van de luisteraar:
 - Meest in zijn kast: ${profiel.topArtiesten.take(25).join(', ')}
 - Zwaartepunt per decennium: ${decennia.isEmpty ? 'onbekend' : decennia}

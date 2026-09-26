@@ -98,6 +98,23 @@ void main() {
         reason: 'een model dat tracktitels verzint stuurt de radio een half uur naar niets');
   });
 
+  test('DE KERN: de vraag houdt het model bij genre en tijdvak van het nummer', () {
+    // Gemeten op 26-09-2026, radio vanaf Freak Out van 2 Fabiola: tussen de eurodance kwamen Donna
+    // Summer (disco, 1979), Dimitri Vegas & Like Mike en Kayzo (EDM, jaren 2010) en Vanessa Chinitor
+    // (Eurovisiepop). Het profiel van de luisteraar trok de radio weg van het nummer.
+    final vraag = buurtPrompt(
+      artiest: '2 Fabiola',
+      titel: "Freak Out ('97 Remix)",
+      profiel: const SmaakProfiel(
+          topArtiesten: ['Beyoncé (40)'], perDecennium: {2010: 500}, gespeeld: [], genres: []),
+    );
+    expect(vraag, contains('Blijf in het genre en het tijdvak van DIT nummer'));
+    expect(vraag, contains('niet om de stijl te kiezen'),
+        reason: 'het profiel zegt wat hij kent, niet wat er bij dit nummer hoort');
+    expect(vraag.indexOf('Blijf in het genre'), lessThan(vraag.indexOf('Dit weet ik van de luisteraar')),
+        reason: 'eerst het nummer, dan pas de luisteraar');
+  });
+
   group('een naam en geen zin', () {
     // Gemeten op 12-09-2026: het model gaf als vierentwintigste naam letterlijk
     // "Lionel Richie is al genoemd, dus: Al Jarreau" - het schreef zijn redenering in het

@@ -135,6 +135,26 @@ void main() {
       expect(klopt('Mr. President', 'Alive', r'Mr. President\Alive.flac'), isTrue);
     });
 
+    test('een nieuwe versie met een woord naast de titel is het origineel niet, ook met de map erbij',
+        () {
+      // Letterlijk het bestand van 26-09-2026: "Turbo" staat ook in de mapnaam, en die verklaarde
+      // het tot nu toe weg.
+      expect(
+          klopt('Scooter', 'Friends (Single Edit)',
+              r'Scooter - Friends Turbo\Scooter - Friends Turbo - 02 - Friends Turbo.flac'),
+          isFalse);
+      expect(klopt('Scooter', 'Friends (Single Edit)', r'Scooter\Scooter - Friends (Single Edit).flac'),
+          isTrue);
+    });
+
+    test('maar een albumnaam in een eigen stuk mag, net als de artiest ná de titel', () {
+      expect(
+          klopt('Vanessa Chinitor', 'When The Siren Calls',
+              r'Like the Wind\08 - When the siren calls - Vanessa Chinitor - Like the wind.mp3'),
+          isTrue);
+      expect(klopt('2 Fabiola', 'Flashback', r'x\419-2_fabiola-flashback.flac'), isTrue);
+    });
+
     test('een tv-cover en een maxi zijn het origineel niet', () {
       expect(
           klopt('Pat Krimson', 'Silence',
@@ -192,6 +212,14 @@ void main() {
           tags('2 Fabiola feat. Loredana', 'Freak Out (Radio Edit)')), isFalse);
       expect(radioTagsSprekenTegen('Culture Beat', 'Mr. Vain - Radio Edit',
           tags('CULTURE BEAT', 'Mr Vain')), isFalse);
+    });
+
+    test('DE KERN: een bestand zonder artiest of titel krijgt ze van de radio', () {
+      expect(radioTagsOntbreken(null), isTrue);
+      expect(radioTagsOntbreken(tags('', 'Got To Move Your Body')), isTrue);
+      expect(radioTagsOntbreken(tags('Lick', '  ')), isTrue);
+      expect(radioTagsOntbreken(tags('The Mackenzie', 'Innocence')), isFalse,
+          reason: 'wat er wél staat blijft staan');
     });
 
     test('DE GRENS: zonder tags valt er niets tegen te spreken', () {

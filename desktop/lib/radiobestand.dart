@@ -55,6 +55,7 @@ const Set<String> _neutraal = {
 };
 
 final _cijfers = RegExp(r'^\d+$');
+final _extensie = RegExp(r'\.[A-Za-z0-9]{2,4}$');
 
 /// De woorden van de hoofdartiest, zonder gasten en zonder woorden als "DJ" en "The".
 Set<String> _artiestWoorden(String artiest) {
@@ -126,11 +127,42 @@ bool radioBestandKlopt({
     return false;
   }
 
+  // 4b. En in het STUK van de naam waar de titel staat, mag er niets bij dat een andere versie
+  //     aankondigt — ook niet als een map het "verklaart". Gezien op 26-09-2026: voor "Scooter —
+  //     Friends (Single Edit)" kwam "Scooter - Friends Turbo - 02 - Friends Turbo.flac" binnen, uit
+  //     de map "Scooter - Friends Turbo": een latere nieuwe versie. Stukken zijn wat " - " scheidt;
+  //     een albumnaam staat in een eigen stuk ("Cappella - U Got 2 Know - 05 - Move On Baby").
+  final stukken = naam.replaceAll(_extensie, '').replaceAll(_haakjes, ' ').split(' - ');
+  var titelStuk = <String>{};
+  var meest = 0;
+  for (final st in stukken) {
+    final w = fileWords(st);
+    final n = w.intersection(titelWoorden).length;
+    if (n > meest) {
+      meest = n;
+      titelStuk = w;
+    }
+  }
+  final eigen = {...fileWords(artiest), ...fileWords(titel), ..._neutraal};
+  if (titelStuk
+      .difference(titelWoorden)
+      .any((w) => !eigen.contains(w) && !_cijfers.hasMatch(w))) {
+    return false;
+  }
+
   // 5. Ongeveer zo lang als de uitvoering die de catalogus noemt.
   final a = seconden ?? 0, b = padSeconden ?? 0;
   if (a > 0 && b > 0 && (a - b).abs() > speling) return false;
   return true;
 }
+
+/// Mist het binnengehaalde bestand een artiest of een titel in zijn tags?
+///
+/// Dan staat het als "Onbekende artiest" met de bestandsnaam als titel in de rij en in je
+/// bibliotheek — gezien op 26-09-2026 bij "Got To Move Your Body" en "The Mackenzie Feat. Jessy -
+/// Innocence". De radio schrijft ze er dan zelf in.
+bool radioTagsOntbreken(TrackTags? tags) =>
+    tags == null || tags.artist.trim().isEmpty || tags.title.trim().isEmpty;
 
 /// Zeggen de tags van het binnengehaalde bestand dat het een ander nummer is?
 ///
