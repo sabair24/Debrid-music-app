@@ -22,6 +22,7 @@ import 'release_format.dart';
 import 'release_format.dart' as fmt;
 import 'settings.dart';
 import 'paths.dart';
+import 'radiostijl.dart' show DiscogsUitgave, kaleTitel, uitgaveVanArtiest;
 
 /// One image a release or an artist offers. Discogs doesn't say what a picture IS beyond
 /// primary/secondary — a release's secondaries are the back, the disc and the booklet, an artist's
@@ -1016,6 +1017,52 @@ class DiscogsService {
   }
 
   // ── Artists ───────────────────────────────────────────────────────────────
+
+  /// Op welke uitgaven Discogs dit NUMMER vindt: per uitgave jaar, genres en stijlen.
+  ///
+  /// Voor de radio (zie `radiostijl.dart`): het vroegste jaar zegt uit welk tijdvak het nummer is,
+  /// de stijlen wat voor plaat het is. Gemeten op 26-09-2026: "2 Fabiola — Freak Out" gaf acht
+  /// uitgaven, allemaal 1997, Electronic, Euro House/Trance. Null als Discogs niet mee kan doen (geen
+  /// sleutel of geen antwoord) — dat is iets anders dan "niets gevonden", en dat is een lege lijst.
+  ///
+  /// **Hoe er gevraagd wordt — gemeten op 26-09-2026.** De titel zonder haakjes en zonder wat na " - "
+  /// staat: "It's My Life (2011 Version)" vond niets, "It's My Life" wel. Oudste eerst
+  /// (`sort=year`), anders zegt de eerste bladzijde van "Could You Be Loved" 1990 in plaats van 1980.
+  /// En vindt het artiestveld niets, dan nog één keer met een vrije zoekvraag: Snap! en Sash! geven
+  /// met `artist=` nul treffers en met `q=` duizenden — waarvan dan alleen die OVER deze artiest
+  /// tellen (zie [uitgaveVanArtiest]).
+  Future<List<DiscogsUitgave>?> nummerUitgaven(String artiest, String titel) async {
+    if (!available) return null;
+    final kaal = kaleTitel(titel);
+    List<DiscogsUitgave> vanArtiest(Map<String, dynamic> b) {
+      final uit = <DiscogsUitgave>[];
+      for (final r in (b['results'] as List<dynamic>? ?? const [])) {
+        if (r is! Map<String, dynamic>) continue;
+        // Ook bij het artiestveld: dat zoekt op een DEEL van de naam ("Sash!" vond "Leon Sash").
+        if (!uitgaveVanArtiest('${r['title'] ?? ''}', artiest)) continue;
+        List<String> tekst(Object? v) => [for (final x in (v as List? ?? const [])) '$x'];
+        uit.add((
+          jaar: int.tryParse('${r['year'] ?? ''}'),
+          genres: tekst(r['genre']),
+          stijlen: tekst(r['style']),
+        ));
+      }
+      return uit;
+    }
+
+    final b = await _get('https://api.discogs.com/database/search?type=release&per_page=10'
+        '&sort=year&sort_order=asc&artist=${_q(artiest)}&track=${_q(kaal)}');
+    if (b == null) return null;
+    final eerst = vanArtiest(b);
+    if (eerst.isNotEmpty) return eerst;
+    // De vrije zoekvraag op RELEVANTIE en niet op jaar: op jaar stonden bij "Snap! The Power" tien
+    // platen van Steppenwolf en Wings bovenaan, en die van Snap* zelf (1990) vielen erbuiten.
+    final opnieuw = await _get('https://api.discogs.com/database/search?type=release&per_page=25'
+        '&q=${_q('$artiest $kaal')}');
+    // Geen antwoord (429, 5xx, time-out) is iets anders dan niets gevonden: null, en dan onthoudt het
+    // stijlboek niets. Met een lege lijst werd een storing voorgoed "Discogs kent dit niet".
+    return opnieuw == null ? null : vanArtiest(opnieuw);
+  }
 
   Future<int?> artistId(String name) async {
     final b = await _get('https://api.discogs.com/database/search?type=artist&q=${_q(name)}');

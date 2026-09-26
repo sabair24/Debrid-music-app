@@ -165,6 +165,77 @@ void main() {
     });
   });
 
+  group('wat de review van 26-09-2026 op echte namen vond', () {
+    test('DE KERN: een weggelaten apostrof of accent is hetzelfde nummer', () {
+      expect(klopt('Dr. Alban', "It's My Life", r'Dr. Alban - Its My Life (Radio Edit).mp3'), isTrue);
+      expect(klopt('E-Rotic', "Max Don't Have Sex With Your Ex",
+          r'E-Rotic - Max Dont Have Sex With Your Ex.mp3'), isTrue);
+      expect(klopt('Kate Ryan', 'Désenchantée', r'Kate Ryan - Desenchantee.flac'), isTrue);
+      expect(klopt('Mylène Farmer', 'Désenchantée', r'Mylene Farmer - Desenchantee.flac'), isTrue);
+    });
+
+    test('DE KERN: een artiest aan elkaar geschreven is dezelfde artiest', () {
+      expect(klopt('2 Unlimited', 'No Limit', r'2Unlimited - No Limit.mp3'), isTrue);
+      expect(klopt('Mo-Do', 'Eins, Zwei, Polizei', r'Modo - Eins Zwei Polizei.mp3'), isTrue);
+      expect(klopt('Captain Hollywood Project', 'More and More', r'Captain Hollywood - More And More.mp3'),
+          isTrue);
+    });
+
+    test('DE VAL: Robin Schulz is Robin S niet', () {
+      expect(
+          klopt('Robin S', 'Show Me Love', r'Music\Robin Schulz\Uncovered (2017)\05 - Show Me Love.flac',
+              seconden: 255, padSeconden: 269),
+          isFalse);
+      expect(klopt('Robin S', 'Show Me Love', r'Robin S - Show Me Love (Radio Edit).flac'), isTrue);
+    });
+
+    test('DE KERN: de versie van 7" en Single Mix is gewoon, een Rmx niet', () {
+      expect(klopt('Haddaway', 'What Is Love', r'Haddaway - What Is Love (7” Mix).flac'), isTrue);
+      expect(klopt('Haddaway', 'What Is Love', r'05_haddaway_-_what_is_love_(7_inch_mix).flac'), isTrue);
+      expect(klopt('Eiffel 65', 'Blue (Da Ba Dee)', r'Eiffel 65 - Blue (Gabry Ponte Rmx).flac'), isFalse);
+      expect(klopt('Haddaway', 'What Is Love', r'Haddaway - What Is Love (Acappella).flac'), isFalse);
+    });
+
+    test('DE KERN: een versiewoord in de MAP verraadt het bestand', () {
+      expect(klopt('2 Unlimited', 'No Limit', r'2 Unlimited - No Limit (Remixes)\03 - No Limit.flac'),
+          isFalse);
+      expect(klopt('Scooter', 'Hyper Hyper', r'Scooter\Encore - Live And Direct (2002)\05 - Hyper Hyper.flac'),
+          isFalse);
+      expect(
+          klopt('Haddaway', 'What Is Love',
+              r'Karaoke Hits\Karaoke - What Is Love (In the Style of Haddaway).mp3'),
+          isFalse);
+    });
+
+    test('DE KERN: een cover die alleen in de bestandsnaam staat, ook', () {
+      expect(klopt('Haddaway', 'What Is Love', r'Haddaway Hits\What Is Love (Made Famous by Haddaway).mp3'),
+          isFalse);
+    });
+
+    test('DE VAL: maar "Alive" in de map is geen live, en een verzamelaar mag', () {
+      expect(klopt('Mr. President', 'Coco Jamboo', r'Mr. President - Alive (1997)\01 - Coco Jamboo.flac'),
+          isTrue);
+      expect(
+          klopt('Culture Beat', 'Mr. Vain',
+              r'Dance Mix 94\CD1\05. Culture Beat - Mr. Vain (Original Radio Edit).flac'),
+          isTrue);
+    });
+
+    test('DE GRENS: een remix in de TAGS van een gewone plek spreekt het tegen', () {
+      expect(radioTagsSprekenTegen('Eiffel 65', 'Blue (Da Ba Dee)',
+          tags('Eiffel 65', 'Blue (Da Ba Dee) (Hannover Rmx)')), isTrue);
+      expect(radioTagsSprekenTegen('Eiffel 65', 'Blue (Da Ba Dee)',
+          tags('Eiffel 65', 'Blue (Da Ba Dee) (Video Edit)')), isFalse);
+    });
+
+    test('DE GRENS: de echte lengte na het halen', () {
+      expect(radioLengteSpreektTegen(220, 291), isTrue, reason: 'Move On Baby: album voor single');
+      expect(radioLengteSpreektTegen(220, 232), isFalse);
+      expect(radioLengteSpreektTegen(null, 291), isFalse);
+      expect(radioLengteSpreektTegen(220, null), isFalse);
+    });
+  });
+
   group('DE GRENS: de lengte', () {
     test('Move On Baby: de albumversie van 4:51 is de single van 3:40 niet', () {
       expect(

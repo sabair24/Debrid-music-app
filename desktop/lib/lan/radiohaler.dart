@@ -39,6 +39,10 @@ class Radiohaal {
   final String id;
   String stand = 'onderweg';
   String? pad;
+
+  /// Het gedeelde id van het gelande bestand. Daarop zoekt het toestel het terug — niet op artiest +
+  /// titel, want dan vond het soms je eigen exemplaar van hetzelfde nummer. Zie `PcRadiobron.haal`.
+  String? trackId;
   DateTime? klaarOm;
 }
 
@@ -153,6 +157,7 @@ class Radiohaler {
         } catch (_) {/* het bestand ligt er; een scan vindt het later alsnog */}
       }
       haal.pad = pad;
+      if (pad != null) haal.trackId = library.gedeeldId(pad);
       haal.stand = later ? 'later' : (pad == null ? 'mislukt' : 'klaar');
       haal.klaarOm = DateTime.now();
     }());
@@ -166,7 +171,11 @@ class Radiohaler {
     _ruimOp();
     final h = _halen[id];
     if (h == null) return {'stand': 'mislukt'};
-    return {'stand': h.stand, if (h.pad != null) 'pad': h.pad};
+    return {
+      'stand': h.stand,
+      if (h.pad != null) 'pad': h.pad,
+      if (h.trackId != null) 'trackId': h.trackId,
+    };
   }
 
   void _ruimOp() {

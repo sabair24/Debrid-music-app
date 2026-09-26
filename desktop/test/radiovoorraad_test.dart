@@ -172,13 +172,28 @@ void main() {
       expect(b.vooruit, 6);
     });
 
-    test('DE VAL: als er niets anders is, vult hij toch aan', () {
-      // Een radio die stil valt omdat hij te kieskeurig is, is erger dan een radio met herhaling.
+    test('DE VAL: als er niets anders is, vult hij toch aan — tot er twee vooruit staan', () {
+      // Een radio die stil valt omdat hij te kieskeurig is, is erger dan een radio met herhaling. Maar
+      // een radio die met vijf keer dezelfde artiest begint omdat er nog niets anders gekeurd is, is
+      // precies de klacht van 26-09-2026. Twee vooruit is zeven minuten: genoeg om de rest te laten
+      // landen, en de volgende tik vult verder aan.
       final b = voorraadPlan(standen('kkkkkk'),
           artiesten: const ['MJ', 'MJ', 'MJ', 'MJ', 'MJ', 'MJ'], vooruitNu: 0, minVooruit: 6);
 
-      expect(b.inRij, [0, 1, 2, 3, 4, 5]);
-      expect(b.vooruit, 6);
+      expect(b.inRij, [0, 1]);
+      expect(b.vooruit, 2);
+    });
+
+    test('DE GRENS: met twee vooruit en alleen dezelfde artiest komt er niets bij', () {
+      final b = voorraadPlan(standen('kkk'),
+          artiesten: const ['MJ', 'MJ', 'MJ'], staart: const ['MJ'], vooruitNu: 2, minVooruit: 6);
+      expect(b.inRij, isEmpty);
+    });
+
+    test('DE GRENS: met twaalf vooruit wordt er niets nieuws gehaald', () {
+      // Zonder grens haalde de radio zijn hele plan binnen in een minuut of twintig.
+      expect(voorraadPlan(standen('wwww'), vooruitNu: 12).starten, isEmpty);
+      expect(voorraadPlan(standen('wwww'), vooruitNu: 11).starten, [0, 1, 2, 3]);
     });
 
     test('DE KERN: wat net geland is telt mee voor de spreiding', () {

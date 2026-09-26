@@ -1523,6 +1523,10 @@ class SlskSession {
 
   bool get _alive => _conn != null;
 
+  /// Staat de verbinding met de server er nu? Zonder een nieuwe te openen  voor wie wil weten of
+  /// "geen treffers" een antwoord was of een verbinding die er niet is. Zie `_haalVoorRadio`.
+  bool get verbonden => _alive;
+
   /// Is the shared connection logged in? Brings it up if it isn't — but never opens a connection
   /// of its own, so the status check costs nothing when we're already online.
   Future<bool> alive() => _ensure();

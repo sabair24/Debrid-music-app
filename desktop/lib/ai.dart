@@ -14,6 +14,8 @@ import 'package:http/http.dart' as http;
 
 import 'aanbevelingplan.dart';
 import 'radiobuurt.dart';
+import 'radiolijst.dart';
+import 'radiosmaak.dart';
 import 'radioplan.dart';
 
 /// Het model. Klein werk, dus lage inspanning; zie [anthropicBody].
@@ -201,6 +203,51 @@ class AiService {
       werkruimte,
     );
     return leesBuurt(jsonUitAntwoord(body), zaadArtiest: artiest);
+  }
+
+  /// De NUMMERS die het model bij dit zaad zou draaien — zie `radiolijst.dart`.
+  ///
+  /// Zelfde vorm en om dezelfde reden lage inspanning als [maakRadiobuurt]. Geen sleutel is een lege
+  /// lijst: dan is het de radio zoals hij was.
+  Future<List<AiNummer>> maakRadiolijst({
+    required String artiest,
+    String? titel,
+    int? jaar,
+    List<String> stijlen = const [],
+    String? genre,
+    required SmaakProfiel profiel,
+    Radiosmaak smaak = Radiosmaak.gemengd,
+    List<String> alGekozen = const [],
+  }) async {
+    final sleutel = sleutelVan().trim();
+    if (sleutel.isEmpty || artiest.trim().isEmpty) return const [];
+    final body = await _verstuur(
+      {
+        'model': kRadioModel,
+        'max_tokens': kRadioMaxTokens,
+        'output_config': {
+          'effort': 'low',
+          'format': {'type': 'json_schema', 'schema': nummersSchema()},
+        },
+        'messages': [
+          {
+            'role': 'user',
+            'content': nummersPrompt(
+                artiest: artiest,
+                titel: titel,
+                jaar: jaar,
+                stijlen: stijlen,
+                genre: genre,
+                profiel: profiel,
+                smaak: smaak,
+                alGekozen: alGekozen),
+          }
+        ],
+      },
+      sleutel,
+      werkruimteVan().trim(),
+    );
+    return leesNummers(jsonUitAntwoord(body));
   }
 
   /// Werkt deze sleutel? Eén klein verzoek, en een antwoord in gewone taal.

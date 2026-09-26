@@ -147,6 +147,46 @@ void main() {
       expect(File(out.path).existsSync(), isTrue);
     });
 
+    test('DE KERN (radio): met parkeerAltijd gaat je mp3 opzij in plaats van weg, en zegt de uitkomst dat hij iets verving',
+        () async {
+      // Review van 26-09-2026: een radio-FLAC die jouw mp3 opvolgde, wiste die mp3 en gold daarna
+      // als "door de radio gehaald" — en ging bij het opruimen van die radio alsnog weg.
+      final mp3 = placeMp3('03 - D.A.N.C.E..mp3');
+      final out =
+          await placeFileDetailed(staged('x.flac', buildFlac(_tags)), root.path, parkeerAltijd: true);
+      expect(out.how, Placement.moved);
+      expect(out.verving, isTrue, reason: 'zo weet de radio dat dit niet zijn bestand is');
+      expect(mp3.existsSync(), isFalse);
+      final geparkeerd = Directory('${root.path}${Platform.pathSeparator}$parkeerMap')
+          .listSync(recursive: true)
+          .whereType<File>()
+          .where((f) => f.path.endsWith('.mp3'));
+      expect(geparkeerd, hasLength(1), reason: 'je mp3 staat opzij, niet weg');
+    });
+
+    test('DE VAL (radio): verliest de radiodownload, dan gaat hij weg — niet naar _dubbel', () async {
+      // parkeerBinnenkomend: false. Jouw verliezers gaan opzij, maar een radiobestand dat verliest is
+      // afval van die radio; in _dubbel ziet niemand het ooit nog (review van 26-09-2026).
+      final flac = await placeFileDetailed(staged('good.flac', buildFlac(_tags)), root.path);
+      final mp3src = File('${root.path}${Platform.pathSeparator}_inkomend${Platform.pathSeparator}radio.mp3');
+      mp3src.parent.createSync(recursive: true);
+      mp3src.writeAsBytesSync(Uint8List(9999999));
+      final out = await placeFileDetailed(mp3src, root.path,
+          tags: readTags(File(flac.path)), parkeerAltijd: true, parkeerBinnenkomend: false);
+      expect(out.how, Placement.duplicate);
+      expect(mp3src.existsSync(), isFalse);
+      final dubbel = Directory('${root.path}${Platform.pathSeparator}$parkeerMap');
+      expect(dubbel.existsSync() ? dubbel.listSync(recursive: true).whereType<File>() : const <File>[],
+          isEmpty);
+      expect(File(flac.path).existsSync(), isTrue);
+    });
+
+    test('DE GRENS: een nieuw bestand zonder voorganger verving niets', () async {
+      final out = await placeFileDetailed(staged('x.flac', buildFlac(_tags)), root.path, parkeerAltijd: true);
+      expect(out.how, Placement.moved);
+      expect(out.verving, isFalse);
+    });
+
     test('a differing disc prefix still counts as the same track', () async {
       final mp3 = placeMp3('1-03. D.A.N.C.E..mp3');
       final out = await placeFileDetailed(staged('x.flac', buildFlac(_tags)), root.path);

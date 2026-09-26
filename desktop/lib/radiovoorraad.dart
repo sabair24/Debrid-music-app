@@ -82,6 +82,13 @@ const int kMinVooruit = 6;
 /// eigen downloads niet uit te hongeren. Vier plekken blijven dus vrij, wat er ook loopt.
 const int kMaxOnderweg = 8;
 
+/// Hoeveel speelbare nummers er hoogstens vooruit staan voor er niets nieuws meer gehaald wordt.
+///
+/// Twaalf, zo'n drie kwartier muziek, bovenop wat er onderweg is. Zonder grens haalde de radio zijn
+/// hele plan binnen in een minuut of twintig, wat je ook luisterde — en na een kwartier luisteren
+/// stonden er dan tientallen bestanden in het opruimoverzicht (review van 26-09-2026).
+const int kMaxVooruit = 12;
+
 /// Wat er nu bij mag en wat er nu gestart mag worden.
 ///
 /// [vooruitNu] is hoeveel speelbare nummers er ná het lopende nummer in de rij staan.
@@ -131,6 +138,7 @@ Voorraadbesluit voorraadPlan(
   bool rust = false,
   int minVooruit = kMinVooruit,
   int maxOnderweg = kMaxOnderweg,
+  int maxVooruit = kMaxVooruit,
 }) {
   final inRij = <int>[];
   var vooruit = vooruitNu;
@@ -163,6 +171,11 @@ Voorraadbesluit voorraadPlan(
       if (standen[i] != Haalstand.klaar || inRij.contains(i)) continue;
       final a = naam(i);
       if (ronde == 0 && a.isNotEmpty && (vlakErvoor(a) || !gezien.add(a))) continue;
+      // Ook in de tweede ronde niet vlak achter zichzelf zolang er al twee vooruit staan. Zonder dit
+      // begon een radio vanaf Freak Out met vijf keer 2 Fabiola: bij de start is alleen de eigen
+      // muziek van de zaadartiest al gekeurd, en de tweede ronde vulde de rij daarmee op (review van
+      // 26-09-2026). Onder de twee gaat hij er alsnog in: een rij die leegloopt stopt de radio.
+      if (ronde == 1 && vooruit >= 2 && vlakErvoor(a)) continue;
       inRij.add(i);
       rij.add(a);
       vooruit++;
@@ -174,7 +187,7 @@ Voorraadbesluit voorraadPlan(
   final starten = <int>[];
   // [rust]: Soulseek doet even niet mee — zie [RadioLaterOpnieuw]. Wat al geland is gaat hierboven
   // gewoon de rij in; er wordt alleen niets nieuws begonnen.
-  if (ruimte > 0 && !rust) {
+  if (ruimte > 0 && !rust && vooruit < maxVooruit) {
     for (var i = 0; i < standen.length && starten.length < ruimte; i++) {
       if (standen[i] == Haalstand.wacht) starten.add(i);
     }

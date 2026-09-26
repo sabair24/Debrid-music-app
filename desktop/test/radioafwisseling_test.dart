@@ -178,6 +178,39 @@ void main() {
     });
   });
 
+  group('namen splitsen en vergelijken', () {
+    test('DE KERN: "Lil Nas X feat. …" is Lil Nas X — de X aan het eind is geen scheiding', () {
+      expect(artiestDelenTekst('Lil Nas X feat. Jack Harlow').first, 'lil nas x');
+      expect(artiestSleutel('Lil Nas X feat. Jack Harlow'), artiestSleutel('Lil Nas X'));
+    });
+
+    test('DE KERN: een duo met x, & of een komma is een duo', () {
+      expect(artiestDelenTekst('Regard x Raye'), ['regard', 'raye']);
+      expect(artiestDelenTekst('2 Fabiola & Loredana'), ['2 fabiola', 'loredana']);
+      expect(artiestSleutel('2 Fabiola x Loredana'), artiestSleutel('2 Fabiola'));
+    });
+
+    test('DE VAL: een ander schrift houdt zijn letters — ook met een cijfer erbij', () {
+      expect(artiestSleutel('Би-2'), isNot(artiestSleutel('2')));
+      expect(basisTitel('Часть 2'), isNot(basisTitel('Глава 2')));
+      expect(zelfdeArtiest('Кино', 'Кино'), isTrue);
+    });
+  });
+
+  group('radioversies die anders heten', () {
+    test('DE KERN: Airplay, Single en Video Mix zijn de radioversie, geen remix', () {
+      // Review van 26-09-2026: ze telden als remix omdat er "Mix" in staat.
+      expect(uitvoeringVan('Get Ready (Airplay Mix)'), Uitvoering.radio);
+      expect(uitvoeringVan('Somebody (Single Mix)'), Uitvoering.radio);
+      expect(uitvoeringVan("Can't Stop Raving (Video Mix)"), Uitvoering.radio);
+      expect(uitvoeringVan('Dreamer (Short Mix)'), Uitvoering.radio);
+    });
+
+    test('DE VAL: maar een Rmx met "Radio" erbij blijft een remix', () {
+      expect(uitvoeringVan('Blue (Da Ba Dee) (Gabry Ponte Radio Rmx)'), Uitvoering.bewerking);
+    });
+  });
+
   group('wat er nieuw als bewerking telt', () {
     test('een tv-cover, een tribute en een maxi', () {
       expect(uitvoeringVan('Silence - Uit Liefde Voor Muziek'), Uitvoering.bewerking);

@@ -271,6 +271,15 @@ class AlbumInfo {
       );
 }
 
+/// Waar TheAudioDB antwoordt.
+///
+/// **De sleutel "2" is dood.** Gemeten op 26-09-2026: `/json/2/search.php?s=coldplay` gaf
+/// `{"Message":"Not found"}`, voor élke artiest, en `theaudiodb.com` zonder www stuurde eerst een 301.
+/// Met de huidige gratis sleutel "123" op www kwam Coldplay gewoon terug, en 2 Fabiola als "Euro
+/// Dance". Alles wat de app hier ophaalde — artiestbeelden, biografieën, albumhoezen achterop — deed
+/// het dus stil niet meer: een lege lijst en een "Not found" zien er in de code hetzelfde uit.
+const kAudioDbBasis = 'https://www.theaudiodb.com/api/v1/json/123';
+
 /// Fetches missing album covers from Deezer → Discogs → MusicBrainz/CoverArtArchive
 /// and caches them on disk. Ported from the server's enrichment logic.
 class CoverEnricher {
@@ -593,7 +602,7 @@ class CoverEnricher {
     // een lege.
     await _audioDbSlot();
     final r = await http.get(
-      Uri.parse('https://theaudiodb.com/api/v1/json/2/search.php?s=${Uri.encodeComponent(q)}'),
+      Uri.parse('$kAudioDbBasis/search.php?s=${Uri.encodeComponent(q)}'),
       headers: {'User-Agent': _ua},
     ).timeout(const Duration(seconds: 8));
     if (r.statusCode != 200) return null;
@@ -726,6 +735,24 @@ class CoverEnricher {
   /// under three minutes of pacing. Being refused is what costs the user something.
   static const _audioDbGap = Duration(seconds: 3);
 
+  /// Het GENRE van een artiest volgens TheAudioDB ("Euro Dance", "Pop", "R&B"), of null.
+  ///
+  /// Voor de radio — zie `radiostijl.dart`. Op dezelfde rij als alles hier, want het is dezelfde
+  /// host met dezelfde grens. Een fout gooit door: "geen antwoord" is niet hetzelfde als "geen genre",
+  /// en alleen dat laatste mag onthouden worden.
+  static Future<String?> audioDbGenre(String artiest) async {
+    await _audioDbSlot();
+    final r = await http.get(
+      Uri.parse('$kAudioDbBasis/search.php?s=${Uri.encodeComponent(artiest)}'),
+      headers: {'User-Agent': _ua},
+    ).timeout(const Duration(seconds: 8));
+    if (r.statusCode != 200) throw HttpException('TheAudioDB gaf ${r.statusCode}');
+    final lijst = (jsonBody(r)['artists'] as List?) ?? const [];
+    if (lijst.isEmpty) return null;
+    final g = ((lijst.first as Map<String, dynamic>)['strGenre'] as String?)?.trim();
+    return g == null || g.isEmpty || g.toLowerCase() == 'null' ? null : g;
+  }
+
   static Future<void> _audioDbSlot() {
     final slot = _audioDbTurn.then((_) async {
       final since = DateTime.now().difference(_audioDbLast);
@@ -761,7 +788,7 @@ class CoverEnricher {
       final ask = DiscogsService.plainTitle(album);
       await _audioDbSlot();
       final r = await _haal(
-        Uri.parse('https://theaudiodb.com/api/v1/json/2/searchalbum.php'
+        Uri.parse('$kAudioDbBasis/searchalbum.php'
             '?s=${Uri.encodeComponent(artist)}&a=${Uri.encodeComponent(ask)}'),
         headers: {'User-Agent': _ua},
       ).timeout(const Duration(seconds: 8));
@@ -886,7 +913,7 @@ class CoverEnricher {
       // host, en `_enrichArtistsFromWeb` roept ze allebei aan voor zes artiesten tegelijk.
       await _audioDbSlot();
       final r = await http.get(
-        Uri.parse('https://theaudiodb.com/api/v1/json/2/search.php?s=${Uri.encodeComponent(name)}'),
+        Uri.parse('$kAudioDbBasis/search.php?s=${Uri.encodeComponent(name)}'),
         headers: {'User-Agent': _ua},
       ).timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return null;

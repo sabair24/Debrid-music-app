@@ -2,6 +2,8 @@ import 'dart:math';
 
 import 'deezerbaan.dart';
 import 'radiobuurt.dart';
+import 'radiokeuze.dart' show basisTitel, zelfdeArtiest;
+import 'radiolijst.dart';
 import 'radiosmaak.dart';
 
 import 'models.dart' show Track;
@@ -218,6 +220,70 @@ class RecommendService {
   /// De basis van een radio uit een getypte zin: het taalmodel noemt de ARTIESTEN, en hier wordt
   /// opgezocht welke nummers er van hen werkelijk bestaan. Vijfhonderd tracktitels uit het hoofd van
   /// een model zijn voor een deel verzonnen; deze lijst niet.
+  /// De nummers die het taalmodel noemde, opgezocht: wat Deezer niet kent valt af.
+  ///
+  /// Zie `radiolijst.dart`: een model verzint soms een titel, en een verzonnen titel stuurt de radio
+  /// naar Soulseek voor iets wat niet bestaat. Per nummer één zoekvraag, zes tegelijk — Deezer staat
+  /// vijftig per vijf seconden toe, en dit hoort de radio die al speelt niet te hinderen.
+  Future<List<RecTrack>> lijstOpDeezer(List<AiNummer> lijst,
+      {void Function(String)? spoor}) async {
+    final uit = <RecTrack>[];
+    final weg = <String>[];
+    for (var i = 0; i < lijst.length; i += 6) {
+      final stuk = lijst.skip(i).take(6).toList();
+      final antwoorden = await Future.wait([
+        for (final n in stuk)
+          // Gewoon "artiest titel", en niet `artist:"…" track:"…"`: die vorm gaf op 26-09-2026 voor
+          // "Cappella — Move On Baby" nul treffers, de gewone vijf. [besteTreffer] beslist daarna
+          // welke het is.
+          _get('$_base/search?q=${Uri.encodeComponent('${n.artiest} ${n.titel}')}&limit=15')
+      ]);
+      for (var k = 0; k < stuk.length; k++) {
+        final treffers = _tracks(antwoorden[k]);
+        final j = besteTreffer(
+            [
+              for (final t in treffers)
+                (artiest: t.artist, titel: t.title, rang: t.rank, seconden: t.seconds)
+            ],
+            stuk[k].artiest,
+            stuk[k].titel);
+        if (j == null) {
+          weg.add('${stuk[k].artiest} — ${stuk[k].titel}');
+        } else {
+          uit.add(treffers[j]);
+        }
+      }
+    }
+    spoor?.call('radio-lijst: ${uit.length} van ${lijst.length} nummers van het model gevonden'
+        '${weg.isEmpty ? '' : ' | niet gevonden: ${weg.join('; ')}'}');
+    return uit;
+  }
+
+  /// Het jaar van het Deezer-album met dit nummer, of null. Zie `Stijlboek.deezerJaar` voor
+  /// waarom dit de laatste bron is en niet de eerste.
+  Future<int?> albumJaar(String artiest, String titel) async {
+    final zoek = await _get('$_base/search?q=${Uri.encodeComponent('$artiest $titel')}&limit=15');
+    // Geen antwoord is geen jaartal: gooien, dan onthoudt het stijlboek dit niet als "onbekend".
+    if (zoek == null) throw StateError('Deezer gaf geen antwoord');
+    final treffers = _tracks(zoek);
+    final t = basisTitel(titel);
+    // Het VROEGSTE jaar over de albums waar het op staat, en niet het eerste album: gemeten op
+    // 26-09-2026 gaf "Snap! — The Power" als eerste treffer een heruitgave uit 2020, en dan was het
+    // een nummer uit 2020. Kayzo en Sandy Beach staan alleen op albums uit 2026, en die blijven 2026.
+    final ids = <int>{
+      for (final r in treffers)
+        if (zelfdeArtiest(r.artist, artiest) && basisTitel(r.title) == t && r.albumId > 0) r.albumId
+    }.take(6).toList();
+    final albums = await Future.wait([for (final id in ids) _get('$_base/album/$id')]);
+    int? min;
+    for (final album in albums) {
+      final d = '${album?['release_date'] ?? ''}';
+      final j = d.length >= 4 ? int.tryParse(d.substring(0, 4)) : null;
+      if (j != null && j > 1900 && (min == null || j < min)) min = j;
+    }
+    return min;
+  }
+
   Future<List<RecTrack>> topVan(String artiest, {int limit = 15}) async {
     final id = await _artistId(artiest);
     if (id == null) return const [];

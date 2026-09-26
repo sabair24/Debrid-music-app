@@ -24,9 +24,11 @@ import 'aanbevelingplan.dart';
 import 'ai.dart';
 import 'radio.dart';
 import 'radiokeuze.dart';
+import 'radiobestand.dart' show kRadioSpeling;
+import 'radiolijst.dart' show AiNummer;
 import 'radiosmaak.dart';
+import 'radiostijl.dart' show Stijlboek, Stijloordeel, Zaadstijl;
 import 'radiovoorraad.dart' show Haalstand;
-import 'radiobuurt.dart';
 import 'radioplan.dart';
 import 'oordelen.dart';
 import 'prullenbak.dart' show heeftPrullenbak;
@@ -10227,8 +10229,23 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
       if (padVan(g) != null) g
   ];
   if (aanwezig.isEmpty) {
+    // Maar niet als de muziekschijf er gewoon niet is: dan is alles "weg" omdat de schijf los is, en
+    // zou de notitie verdwijnen met de bestanden er nog op.
+    if (!lib.isRemote &&
+        sessie.gehaald.any((g) => g.pad.length >= 3 && !Directory(g.pad.substring(0, 3)).existsSync())) {
+      return;
+    }
     await radio.vergeetOpenstaand();
     return;
+  }
+
+  // Het nummer op het pad van [padVan] — het bestand van de radio zelf. De bescherming (duim omhoog,
+  // favoriet, afspeellijst) hoort op DAT bestand te kijken en niet op het eerste met dezelfde naam:
+  // anders zag een favoriete radiosingle er onbeschermd uit omdat je album-versie geen hart had.
+  final opPad = {for (final t in lib.tracks) t.path: t};
+  Track? nummerOp(Gehaald g) {
+    final p = padVan(g);
+    return p == null ? null : opPad[p];
   }
 
   // In een afspeellijst? Dan blijft hij, wat er verder ook op staat. Een afspeellijst met een gat
@@ -10238,15 +10255,15 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
   Opruimplan maakPlan() => opruimplan(
         gehaald: aanwezig,
         oordeel: (g) {
-          final t = nummerVan(g);
+          final t = nummerOp(g);
           return t != null ? oordelen.vanTrack(t) : oordelen.van(g.id);
         },
         isFavoriet: (g) {
-          final t = nummerVan(g);
+          final t = nummerOp(g);
           return t != null && fav.isFavorietTrack(t);
         },
         inAfspeellijst: (g) {
-          final t = nummerVan(g);
+          final t = nummerOp(g);
           final id = (t != null ? lib.gedeeldId(t.path) : null) ?? g.id;
           return id != null && inLijst.contains(id);
         },
@@ -10368,18 +10385,36 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
 
   final plan = maakPlan();
   final paden = <String>[];
+  final padVanRegel = <Gehaald, String>{};
   for (final g in plan.weg) {
     final pad = padVan(g);
     if (pad == null) continue; // intussen al weg
     paden.add(pad);
+    padVanRegel[g] = pad;
     // Van de verlanglijst af. Zonder dit haalt `sweepLosslessWants` twintig minuten later alsnog de
     // FLAC van een nummer dat je zojuist hebt weggedaan — en dat is niet alleen vervelend maar
     // onbegrijpelijk: je gooide het weg en het staat er weer.
     unawaited(downloads.vergeetWens(g.artiest, g.titel).catchError((_) {}));
   }
-  await radio.vergeetOpenstaand();
-  if (paden.isEmpty) return;
+  if (paden.isEmpty) {
+    await radio.vergeetOpenstaand();
+    return;
+  }
   final weg = await lib.removeTracks(paden, fromDisk: true, naarPrullenbak: true);
+  // Alleen vergeten wat beslist IS: wat blijft, en wat werkelijk van zijn plek is. Wat niet naar de
+  // prullenbak kon — een schijf zonder prullenbak, een bestand dat openstond — staat er nog, en komt
+  // de volgende keer terug in dit overzicht in plaats van voorgoed uit beeld te raken.
+  // Op een gekoppeld toestel: de catalogus is na het verzoek opnieuw geladen, dus wat er nog in staat
+  // kon de pc niet weg (een netwerkschijf, een bestand dat openstond, een oudere pc).
+  final nuInCatalogus = {for (final t in lib.tracks) t.path};
+  final nogEr = {
+    for (final p in paden)
+      if (lib.isRemote ? nuInCatalogus.contains(p) : File(p).existsSync()) p
+  };
+  await radio.houdAlleen(sessie, (g) {
+    final p = padVanRegel[g];
+    return p != null && nogEr.contains(p);
+  });
   if (!context.mounted) return;
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
     content: Text(heeftPrullenbak || lib.isRemote
@@ -10453,12 +10488,18 @@ Future<void> _duimOmlaag(BuildContext context, Track t) async {
   final radio = context.read<RadioBesturing>();
   final oordelen = context.read<Oordelen>();
   final meldingen = ScaffoldMessenger.of(context);
+  final opAfstand = context.read<LibraryStore>().isRemote;
   final naam = '${t.artist} — ${t.title}';
   final id = oordelen.idVanTrack(t);
   if (id != null) unawaited(oordelen.zet(id, null).catchError((_) {}));
-  if (!await radio.gooiWeg(t)) return;
+  final weg = await radio.gooiWeg(t);
+  if (weg == null) return;
   meldingen.showSnackBar(SnackBar(
-    content: Text('$naam is weg — ook van je pc.'),
+    content: Text(weg
+        ? (heeftPrullenbak || opAfstand
+            ? '$naam staat in de prullenbak.'
+            : '$naam is weg — ook van je pc.')
+        : '$naam kon niet naar de prullenbak en staat er nog. Bij het afsluiten van de radio kun je het opnieuw proberen.'),
     duration: const Duration(seconds: 3),
   ));
 }
@@ -11448,7 +11489,7 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
           plekSeconden: r.seconds,
           eigenTitel: t.title,
           eigenSeconden: t.duration?.inSeconds,
-          speling: sameRecordingSlack)) {
+          speling: kRadioSpeling)) {
         return t;
       }
     }
@@ -11465,8 +11506,8 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
   ];
   // De ene weg waarlangs elke radio zijn nummers krijgt, dus de plek waar de versiekeuze hoort. Zie
   // `radiokeuze.dart`: van één liedje één uitvoering, en hoogstens twee bewerkingen per tien.
-  final gekozen = kiesNummers(
-      [for (final r in bruikbaar) (artiest: r.artist, titel: r.title)]);
+  final gekozen = kiesNummers([for (final r in bruikbaar) (artiest: r.artist, titel: r.title)],
+      seconden: [for (final r in bruikbaar) r.seconds]);
   // En afwisseling: niet de hele tijd dezelfde artiest, en nooit twee keer vlak na elkaar.
   final eerder = [...al, if (zaad != null) zaad.artist];
   final volgorde = spreidArtiesten([for (final i in gekozen) bruikbaar[i].artist],
@@ -11498,13 +11539,46 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel, Tra
   final radio = context.read<RadioBesturing>();
   _srcToast(context, '📻 Radio starten voor $artist…');
   final rec = RecommendService();
-  // De buurt die het model erbij zoekt. Alleen op de pc met een sleutel: op een gekoppeld toestel
-  // staat die niet, en dan is dit gewoon de radio zoals hij was. Zie `radiobuurt.dart`.
   final cfg = context.read<AppSettings>();
   final standen = context.read<Speelstanden>();
   final nuMs = DateTime.now().millisecondsSinceEpoch;
-  Buurtbron? buurt;
-  void Function(String)? buurtSpoor;
+  final zaadTitel = zaad?.title ?? titel;
+
+  // Het logboek van de radio: wat het model voorstelde, wat Deezer daarvan kende, en wat de keuring
+  // weerde en waarom. Een eigen bestand, want `warm.log` houdt maar een paar duizend regels en de
+  // regel van een radio van een half uur geleden was er op 26-09-2026 al uit.
+  final log = WarmLog('$appDir${Platform.pathSeparator}radio.log');
+
+  // De keuring — zie `radiostijl.dart`. Het zaad wordt op de achtergrond opgezocht: de radio begint
+  // meteen, en wat er gehaald moet worden wacht in zijn eigen haal op dit antwoord.
+  // Eén stijlboek voor de hele app: elk exemplaar heeft zijn eigen geheugen en schrijver, en twee
+  // radio's na elkaar schreven zo door elkaar heen in hetzelfde bestand (review van 26-09-2026).
+  final stijlboek = _stijlboek ??= Stijlboek(
+    bestand: File('$appDir${Platform.pathSeparator}radiostijl.json'),
+    audioDbGenre: CoverEnricher.audioDbGenre,
+    discogsNummer: DiscogsService(cfg).nummerUitgaven,
+    deezerJaar: RecommendService().albumJaar,
+  );
+  final Future<Zaadstijl> zaadStijl = stijlboek
+      .zaad(artist, zaadTitel, eigenJaar: zaad?.year)
+      .timeout(const Duration(seconds: 40))
+      .then((z) {
+    log.line('radio "$artist${zaadTitel == null ? '' : ' — $zaadTitel'}": zaad '
+        '${z.familie?.name ?? '?'}, ${z.jaar ?? '?'}');
+    return z;
+  // Geen antwoord op tijd: dan weten we het jaar NIET. Het jaartal uit je tags is vaak dat van de
+  // verzamelaar ("90s Hits", 2012) en zou dan de echte jaren negentig weren.
+  }).catchError((Object _) => (familie: null, jaar: null) as Zaadstijl);
+  final keuring = _Radiokeuring(
+      artiest: artist, zaad: zaad, stijlboek: stijlboek, zaadStijl: zaadStijl, log: log);
+  // Deze start is de laatste: alles wat een eerdere start of afstemming nog onderweg heeft, voegt
+  // daarna niets meer toe. Zie [_afstemBeurt].
+  final beurt = ++_afstemBeurt;
+
+  // Het model als samensteller. Alleen op de pc met een sleutel: op een gekoppeld toestel staat die
+  // niet, en dan is het de radio met Deezer en de keuring.
+  AiService? ai;
+  SmaakProfiel? profiel;
   if (!lib.isRemote && cfg.anthropicKey.trim().isNotEmpty) {
     final beurten = <Beurt>[
       for (final t in lib.tracks)
@@ -11516,35 +11590,12 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel, Tra
       final n = meestGespeeldeArtiest(beurten, nuMs: nuMs, overslaan: i);
       if (n != null && !gespeeld.contains(n)) gespeeld.add(n);
     }
-    final profiel = profielUit(
+    profiel = profielUit(
       nummers: [for (final t in lib.tracks) (artiest: t.artist, jaar: t.year, genre: t.genre)],
       gespeeld: gespeeld,
       overslaan: _genericArtist,
     );
-    final ai = AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace);
-    // Opschrijven wat het model zei, want "geen extra buren" is van buiten niet te onderscheiden
-    // van "de vraag is stukgelopen" — precies het soort stilte dat hier al twee keer een avond
-    // heeft gekost. Twee regels per radio, dus het blijft klein.
-    //
-    // ALLE namen, niet de eerste acht. Op 12-09-2026 gaf het model voor Billie Jean onder meer
-    // Quincy Jones, Rockwell, Shalamar en The Time — en uit een afgekapte regel was daarna niet na
-    // te gaan welke daarvan Deezer kende en wat er geland was. Een sterretje betekent: dit is
-    // volgens het model iets NIEUWS voor je; de rest kende je waarschijnlijk al.
-    final buurtLog = WarmLog('$appDir${Platform.pathSeparator}warm.log');
-    buurtSpoor = buurtLog.line;
-    buurt = (a, t, deezer) async {
-      try {
-        final b = await ai.maakRadiobuurt(artiest: a, titel: t, profiel: profiel, deezerBuren: deezer);
-        _laatsteBuurt = (artiest: a, namen: b);
-        buurtLog.line('radio-buurt: ${b.length} namen van het model, '
-            '${b.where((x) => x.bekend).length} bekend — '
-            '${b.map((x) => x.bekend ? x.artiest : '${x.artiest}*').join(', ')}');
-        return b;
-      } catch (e) {
-        buurtLog.line('radio-buurt: het model gaf niets — $e');
-        return const <Buurman>[];
-      }
-    };
+    ai = AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace);
   }
   // Bekend, Gemengd of Ontdekken — zie `radiosmaak.dart`. Staat op het radiopaneel.
   final smaak = Radiosmaak.uit(cfg.radioSmaak);
@@ -11559,6 +11610,12 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel, Tra
     _srcToast(context, 'Geen radio gevonden voor $artist.');
     return;
   }
+  // Eigen muziek gaat zonder halen de rij in, dus ook zonder de keuring in de haal. Die komt er dus
+  // pas bij als hij gekeurd is — zie [_voegGekeurdBij]. Behalve die van de zaadartiest zelf: die
+  // keurt [_Radiokeuring.keur] toch goed, en zo staat er meteen iets in de rij.
+  final plan = _radioplan(recs, lib, zaadArtiest: artist, zaad: zaad);
+  final zelf = artiestSleutel(artist);
+  int? gestart;
   final reden = await radio.start([
     if (zaad != null)
       Radioplek(
@@ -11566,23 +11623,60 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel, Tra
           titel: zaad.title,
           seconden: zaad.duration?.inSeconds,
           eigen: zaad),
-    ..._radioplan(recs, lib, zaadArtiest: artist, zaad: zaad),
-  ], naam: artist, zaadArtiest: artist, zaad: zaad);
-  // En de namen van het model erbij zodra ze er zijn — de radio speelt intussen al.
-  //
-  // Het model doet er 25 tot 30 seconden over (gemeten 12-09-2026). Daar mag een radio niet op
-  // wachten, en de eerste opzet die dat wél deed liet er stil NIETS van doorkomen: acht seconden
-  // geduld liep elke keer af voor het antwoord er was. Zie [RecommendService.buurtErbij] en
-  // [RadioBesturing.voegBij]; die laatste kijkt zelf of de radio nog dezelfde is.
-  if (buurt != null && reden == null) {
-    final sessie = radio.sessie;
-    unawaited(rec
-        .buurtErbij(artist, titel, buurt, spoor: buurtSpoor, smaak: smaak)
-        .then((extra) => radio.voegBij(
-            sessie,
-            _radioplan(extra, lib,
-                zaadArtiest: artist, zaad: zaad, al: [for (final p in radio.plan) p.artiest])))
-        .catchError((_) {}));
+    for (final p in plan)
+      if (p.eigen == null || artiestSleutel(p.artiest) == zelf) p,
+  ], naam: artist, zaadArtiest: artist, zaad: zaad, keur: keuring.keur, bijStart: (s) {
+    gestart = s;
+    _keuring = keuring;
+  });
+  final sessie = gestart;
+  if (reden == null && sessie != null && beurt == _afstemBeurt) {
+    _voegGekeurdBij(radio, sessie, beurt, keuring, [
+      for (final p in plan)
+        if (p.eigen != null && artiestSleutel(p.artiest) != zelf) p
+    ]);
+    // En de nummers van het model erbij zodra ze er zijn — de radio speelt intussen al.
+    //
+    // Het model doet er 25 tot 30 seconden over (gemeten 12-09-2026). Daar mag een radio niet op
+    // wachten; zie [RadioBesturing.voegBij], die zelf kijkt of de radio nog dezelfde is.
+    final model = ai, wie = profiel;
+    if (model != null && wie != null) {
+      unawaited(() async {
+        try {
+          final z = await zaadStijl;
+          // Intussen een andere radio begonnen? Dan deze vraag niet meer stellen — hij kost geld.
+          if (sessie != radio.sessie) return;
+          final stijlen =
+              zaadTitel == null ? const <String>[] : await stijlboek.stijlnamen(artist, zaadTitel);
+          final lijst = await model.maakRadiolijst(
+            artiest: artist,
+            titel: zaadTitel,
+            jaar: z.jaar,
+            stijlen: stijlen,
+            profiel: wie,
+            smaak: smaak,
+            alGekozen: [for (final p in radio.plan) '${p.artiest} - ${p.titel}'],
+          );
+          keuring.onthoud(lijst);
+          log.line('radio-lijst: ${lijst.length} nummers van het model — ${lijst.map((n) => '${n.artiest} – '
+              '${n.titel}${n.jaar == null ? '' : ' (${n.jaar})'}${n.bekend ? '' : '*'}').join('; ')}');
+          // Intussen afgestemd? Dan dezelfde lijst, maar in de volgorde van de stand die nu geldt, en
+          // bij díé afstemming — anders ging hij verloren, en afstemmen gebruikt hem ook.
+          final nu = beurt == _afstemBeurt ? lijst : modelVolgorde(lijst, (n) => n.bekend, Radiosmaak.uit(cfg.radioSmaak));
+          final gevonden = await rec.lijstOpDeezer(nu, spoor: log.line);
+          if (sessie != radio.sessie) return;
+          _voegGekeurdBij(
+              radio,
+              sessie,
+              _afstemBeurt,
+              keuring,
+              _radioplan(gevonden, lib,
+                  zaadArtiest: artist, zaad: zaad, al: [for (final p in radio.plan) p.artiest]));
+        } catch (e) {
+          log.line('radio-lijst: het model gaf niets — $e');
+        }
+      }());
+    }
   }
   if (!context.mounted || reden == null) return;
   // Weigeren en zeggen waarom, in plaats van stilletjes alleen eigen muziek spelen. Dat laatste is
@@ -11591,9 +11685,123 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel, Tra
   _srcToast(context, reden);
 }
 
-/// De namen die het taalmodel noemde voor de laatste radio, zodat afstemmen ze niet opnieuw hoeft
-/// te vragen: dat kost een halve minuut en geld, en het antwoord is hetzelfde.
-({String artiest, List<Buurman> namen})? _laatsteBuurt;
+/// Wat een lopende radio nodig heeft om nummers te keuren, en om er bij het afstemmen nog iets bij
+/// te doen zonder het taalmodel opnieuw te vragen (dat kost een halve minuut en geld).
+class _Radiokeuring {
+  _Radiokeuring({
+    required this.artiest,
+    required this.zaad,
+    required this.stijlboek,
+    required this.zaadStijl,
+    required this.log,
+  });
+
+  final String artiest;
+  final Track? zaad;
+  final Stijlboek stijlboek;
+  final Future<Zaadstijl> zaadStijl;
+  final WarmLog log;
+
+  /// Wat het model voorstelde, en welk jaar het erbij noemde — een hint voor als Discogs het nummer
+  /// niet kent.
+  List<AiNummer> lijst = const [];
+  final Map<String, int> _jaar = {};
+
+  static String _k(String a, String t) => '${artiestSleutel(a)}|${basisTitel(t)}';
+
+  void onthoud(List<AiNummer> nummers) {
+    lijst = nummers;
+    for (final n in nummers) {
+      if (n.jaar case final j?) _jaar[_k(n.artiest, n.titel)] = j;
+    }
+  }
+
+  /// Past [p] bij deze radio? De zaadartiest zelf altijd: die IS de stijl.
+  ///
+  /// Hoogstens [_geduld] lang. De keuring staat in de rij van Discogs (1,1 s per vraag) en TheAudioDB
+  /// (3 s), en die rijen deelt ze met het verrijken op de achtergrond — zonder grens konden alle acht
+  /// haalplekken minutenlang op een oordeel wachten (review van 26-09-2026). Geen antwoord op tijd
+  /// telt als "niets bekend": doorlaten.
+  Future<bool> keur(Radioplek p) async {
+    if (artiestSleutel(p.artiest) == artiestSleutel(artiest)) return true;
+    final z = await zaadStijl;
+    // Over het zaad weten we niets: dan zegt geen enkele regel nee, en hoeft er niets gevraagd.
+    if (z.familie == null && z.jaar == null) return true;
+    // Eigen muziek: het jaar uit je tags is een HINT (Discogs gaat voor), en de stijl wordt gewoon
+    // gekeurd — anders kwam een eigen "Wonderwall" (1995) in een radio vanaf Freak Out (review van
+    // 26-09-2026).
+    final eigenJaar = p.eigen?.year;
+    final hint = _jaar[_k(p.artiest, p.titel)] ?? (eigenJaar != null && eigenJaar > 1900 ? eigenJaar : null);
+    Stijloordeel o;
+    try {
+      o = await stijlboek.keur(p.artiest, p.titel, z, jaarHint: hint).timeout(_geduld);
+    } on TimeoutException {
+      o = (mag: true, waarom: 'geen antwoord binnen ${_geduld.inSeconds} s');
+    }
+    log.line('radio-keuring "${p.artiest} — ${p.titel}": ${o.mag ? 'ja' : 'NEE'} — ${o.waarom}');
+    // Het jaar reist mee naar de download: met een jaar zijn de tags gezaghebbend en schrijft de radio
+    // ze zelf, in plaats van het rommelalbum van de uploader te laten staan.
+    if (o.mag && p.jaar == null && p.eigen == null) {
+      try {
+        // Kort: meestal staat het antwoord al in het geheugen, en een lopende vraag wordt gedeeld.
+        p.jaar = (await stijlboek.nummer(p.artiest, p.titel).timeout(const Duration(seconds: 2))).jaar ??
+            _jaar[_k(p.artiest, p.titel)];
+      } catch (_) {/* zonder jaar gewoon zonder */}
+    }
+    return o.mag;
+  }
+
+  static const _geduld = Duration(seconds: 15);
+}
+
+/// De keuring van de radio die nu loopt, voor [stemRadioAf].
+_Radiokeuring? _keuring;
+
+/// Het gedeelde stijlboek — zie [startRadio].
+Stijlboek? _stijlboek;
+
+/// Telt elke start en elke afstemming. Wat nog onderweg is van een eerdere (een lijst van het model,
+/// eigen muziek die gekeurd wordt, een Deezer-antwoord) kijkt hiernaar voor het iets toevoegt: twee
+/// tikken snel na elkaar op Bekend en Ontdekken mengden anders de uitkomsten van allebei.
+int _afstemBeurt = 0;
+
+/// Plekken erbij — maar eigen muziek pas als hij gekeurd is.
+///
+/// Wat nog gehaald moet worden gaat meteen het plan in: de keuring zit in de haal zelf (zie
+/// [RadioBesturing.start]). Eigen muziek niet, want die gaat zonder halen de rij in. Gezien op
+/// 26-09-2026: "Niels Destadsbader — De Wereld Draait Voor Jou" (2021) stond als zesde in een radio
+/// vanaf Freak Out (1997), omdat je hem had.
+///
+/// [beurt] is de afstemming waar deze plekken bij horen. Is er intussen opnieuw gestart of afgestemd
+/// ([_afstemBeurt] is verder), dan komt er niets meer bij: dat waren nummers voor de vorige stand.
+void _voegGekeurdBij(RadioBesturing radio, int sessie, int beurt, _Radiokeuring? keuring,
+    List<Radioplek> plekken) {
+  if (beurt != _afstemBeurt) return;
+  final halen = [
+    for (final p in plekken)
+      if (p.eigen == null) p
+  ];
+  if (halen.isNotEmpty) radio.voegBij(sessie, halen);
+  final eigen = [
+    for (final p in plekken)
+      if (p.eigen != null) p
+  ];
+  if (eigen.isEmpty) return;
+  if (keuring == null) {
+    radio.voegBij(sessie, eigen);
+    return;
+  }
+  unawaited(() async {
+    for (final p in eigen) {
+      if (sessie != radio.sessie || beurt != _afstemBeurt) return;
+      var mag = true;
+      try {
+        mag = await keuring.keur(p);
+      } catch (_) {/* een keuring die stukloopt is geen nee */}
+      if (mag && beurt == _afstemBeurt) radio.voegBij(sessie, [p]);
+    }
+  }());
+}
 
 /// De lopende radio opnieuw afstemmen op [smaak], en die keuze onthouden voor de volgende.
 ///
@@ -11613,8 +11821,10 @@ Future<void> stemRadioAf(BuildContext context, Radiosmaak smaak) async {
     return;
   }
   _srcToast(context, '📻 Radio afgestemd: ${smaak.label}');
+  final beurt = ++_afstemBeurt;
   final sessie = radio.sessie;
   final zaad = radio.zaad;
+  final keuring = _keuring != null && _keuring!.artiest == artist ? _keuring : null;
   final rec = RecommendService();
   List<RecTrack> recs;
   try {
@@ -11623,19 +11833,34 @@ Future<void> stemRadioAf(BuildContext context, Radiosmaak smaak) async {
     recs = const [];
   }
   if (recs.isEmpty) return; // liever de oude afstemming dan een leeg plan
+  // Intussen nog eens getikt? Dan is dit antwoord voor een stand die niet meer geldt.
+  if (beurt != _afstemBeurt) return;
   final blijft = [
     for (final p in radio.plan)
       if (p.stand != Haalstand.wacht && p.stand != Haalstand.klaar) p.artiest
   ];
-  radio.stemAf(sessie, _radioplan(recs, lib, zaadArtiest: artist, zaad: zaad, al: blijft));
-  final namen = _laatsteBuurt;
-  if (namen == null || namen.artiest != artist || namen.namen.isEmpty) return;
+  final nieuw = _radioplan(recs, lib, zaadArtiest: artist, zaad: zaad, al: blijft);
+  final zelf = artiestSleutel(artist);
+  radio.stemAf(sessie, [
+    for (final p in nieuw)
+      if (p.eigen == null || artiestSleutel(p.artiest) == zelf) p
+  ]);
+  _voegGekeurdBij(radio, sessie, beurt, keuring, [
+    for (final p in nieuw)
+      if (p.eigen != null && artiestSleutel(p.artiest) != zelf) p
+  ]);
+  // De nummers van het model nog eens, in de volgorde die bij de nieuwe stand past.
+  final lijst = keuring?.lijst ?? const <AiNummer>[];
+  if (lijst.isEmpty) return;
   try {
-    final extra = await rec.buurtErbij(artist, zaad?.title, (a, t, d) async => namen.namen,
-        smaak: smaak);
-    radio.voegBij(
+    final gevonden =
+        await rec.lijstOpDeezer(modelVolgorde(lijst, (n) => n.bekend, smaak), spoor: keuring?.log.line);
+    _voegGekeurdBij(
+        radio,
         sessie,
-        _radioplan(extra, lib,
+        beurt,
+        keuring,
+        _radioplan(gevonden, lib,
             zaadArtiest: artist, zaad: zaad, al: [for (final p in radio.plan) p.artiest]));
   } catch (_) {/* de Deezer-helft staat er al; dit is een toegift */}
 }

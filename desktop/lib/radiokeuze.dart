@@ -33,6 +33,7 @@ enum Uitvoering { origineel, radio, bewerking }
 /// nummer, en één van de twee vormen herkennen is hetzelfde als geen van beide herkennen.
 String _staart(String titel) {
   final buf = StringBuffer();
+  titel = _gewoneTekens(titel);
   for (final m in RegExp(r'[\(\[]([^\)\]]*)[\)\]]').allMatches(titel)) {
     buf
       ..write(m.group(1) ?? '')
@@ -42,6 +43,55 @@ String _staart(String titel) {
   if (streep > 0) buf.write(titel.substring(streep + 3));
   return buf.toString().toLowerCase();
 }
+
+/// Typografische tekens terug naar gewone, en een laag streepje naar een spatie.
+///
+/// Gemeten op 26-09-2026: Deezer schrijft "What Is Love (7” Mix)" met een gekrulde ” (U+201D), en
+/// dan herkende niets hier de 7"-versie — hij telde als remix. Soulseek schrijft
+/// "what_is_love_(7_inch_mix)".
+String _gewoneTekens(String s) => s
+    .replaceAll(RegExp('[“”„″]'), '"')
+    .replaceAll(RegExp('[‘’´`]'), "'")
+    .replaceAll('_', ' ');
+
+/// Accenten weg, letters blijven: "Désenchantée" is "desenchantee", "Blümchen" is "blumchen".
+///
+/// Voorheen verdwenen ze helemaal — "Désenchantée" werd "dsenchante" — en dan was een bestand dat
+/// ze zonder accenten schreef een ander nummer.
+String vouw(String s) {
+  const van = 'àáâãäåāçćčèéêëēėęìíîïīñńòóôõöøōùúûüūýÿžźżšśł';
+  const naar = 'aaaaaaaccceeeeeeeiiiiinnoooooooouuuuuyyzzzssl';
+  final buf = StringBuffer();
+  for (final r in s.runes) {
+    final c = String.fromCharCode(r);
+    final l = c.toLowerCase();
+    final i = van.indexOf(l);
+    if (i >= 0) {
+      buf.write(naar[i]);
+    } else if (l == 'æ') {
+      buf.write('ae');
+    } else if (l == 'ß') {
+      buf.write('ss');
+    } else {
+      buf.write(c);
+    }
+  }
+  return buf.toString();
+}
+
+/// Wat een ANDERE versie aankondigt, ook als er "radio" of "edit" bij staat — daarom vóór [_gewoon].
+///
+/// Gemeten op 26-09-2026 op Deezer: "What Is Love - Reloaded (Radio Edit)" (een latere heropname),
+/// "It's My Life (2011 Version)", "Blue (Da Ba Dee) (Hannover Rmx)". Ze telden alle drie als de
+/// gewone versie.
+final RegExp _eerstAnders = RegExp(r'\b(rmx|remix|remixes|reloaded|redux|re-recorded|rerecorded|'
+    r'sped up|slowed|acoustic|megamix|medley|mashup|christmas|xmas|a cappella|acapella|acappella|'
+    r'a-pella)\b|\b(19|20)\d\d (version|mix|edit)\b');
+
+/// Radioversies die anders heten dan "Radio Edit". Gemeten op 26-09-2026: "(Airplay Mix)",
+/// "(Video Edit)" (Eiffel 65 — Blue), "(Single Mix)", en 7" in al zijn spellingen.
+final RegExp _gewoonExtra = RegExp(r'\b(airplay|video (edit|mix|version)|single mix|'
+    r'short (cut|mix|edit|version))\b|\b7\s*("|' "''" r'|inch|in\b)|\b7 (mix|edit|version)\b');
 
 /// Zegt de staart met zoveel woorden dat dit de gewone of de radioversie is?
 ///
@@ -79,6 +129,10 @@ const List<String> _anders = [
   'instrumental',
   'a cappella',
   'acapella',
+  'acappella',
+  // "Kickin' Hard (Klubb-A-Pella)" van Klubbheads, gezien op 26-09-2026: een a-cappellaversie.
+  'a-pella',
+  'apella',
   'karaoke',
   'live',
   'unplugged',
@@ -116,9 +170,11 @@ bool nooitOpRadio(String titel) => _nooit.hasMatch(_staart(titel));
 Uitvoering uitvoeringVan(String titel) {
   final s = _staart(titel);
   if (s.trim().isEmpty) return Uitvoering.origineel;
+  if (_eerstAnders.hasMatch(s)) return Uitvoering.bewerking;
   for (final m in _gewoon) {
     if (s.contains(m)) return Uitvoering.radio;
   }
+  if (_gewoonExtra.hasMatch(s)) return Uitvoering.radio;
   // "(Radio)" op zichzelf, als heel woord. Niet als losse tekst, want dan telt "(Radiohead Remix)"
   // ook mee en dat is nu juist een remix.
   if (RegExp(r'\bradio\b').hasMatch(s)) return Uitvoering.radio;
@@ -132,15 +188,24 @@ Uitvoering uitvoeringVan(String titel) {
 }
 
 /// De titel zonder wat er over de uitvoering in staat: waarop twee versies hetzelfde LIEDJE zijn.
+///
+/// Een lidwoord vooraan telt niet: "Rhythm of the Night" en "The Rhythm Of The Night" zijn één
+/// liedje (Corona, gemeten op 26-09-2026 — zonder "The" vond de radio het niet).
 String basisTitel(String titel) {
-  var x = titel;
+  var x = _gewoneTekens(titel);
   final streep = x.indexOf(' - ');
   if (streep > 0) x = x.substring(0, streep);
-  x = x.replaceAll(RegExp(r'[\(\[][^\)\]]*[\)\]]'), ' ');
+  x = x.replaceAll(RegExp(r'[\(\[][^\)\]]*[\)\]]'), ' ').trim();
+  x = x.replaceFirst(RegExp(r'^(the|a|an)\s+', caseSensitive: false), '');
   return _plat(x);
 }
 
-String _plat(String s) => s.toLowerCase().replaceAll(RegExp('[^a-z0-9]'), '');
+/// Alleen letters en cijfers, klein — ook die van een ander schrift (Кино, Μαρινέλλα). Anders werden
+/// al zulke namen dezelfde lege sleutel: één liedje per radio, en elke artiest "de zaadartiest".
+///
+/// Altijd ALLE letters, na het vouwen van accenten: alleen terugvallen als er geen Latijnse letter is
+/// maakte van "Би-2" een "2", en van "Часть 2" en "Глава 2" hetzelfde liedje (review van 26-09-2026).
+String _plat(String s) => vouw(s).toLowerCase().replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '');
 
 /// Eén regel uit het aanbod: genoeg om te oordelen, niet meer.
 typedef Aanbod = ({String artiest, String titel});
@@ -156,7 +221,17 @@ const int kBewerkingPerTien = 2;
 ///
 /// Geeft INDEXEN terug en geen nieuwe lijst, zodat de aanroeper zijn eigen soort behoudt en er
 /// niets van de gegevens verloren gaat onderweg.
-List<int> kiesNummers(List<Aanbod> aanbod, {int bewerkingPerTien = kBewerkingPerTien}) {
+///
+/// [seconden] mag erbij, in dezelfde volgorde: dan wint bij twee even gewone uitvoeringen de versie
+/// die zo lang duurt als een single (zie `heeftSinglelengte` in radiolijst.dart) — Deezer noemt
+/// "Mr. Vain" ook in de albumversie van 5:36.
+List<int> kiesNummers(List<Aanbod> aanbod,
+    {int bewerkingPerTien = kBewerkingPerTien, List<int>? seconden}) {
+  bool single(int i) {
+    final s = seconden == null || i >= seconden.length ? 0 : seconden[i];
+    return s >= 150 && s <= 270;
+  }
+
   // 1. Per liedje de beste uitvoering. De eerste met de laagste rang wint, zodat de volgorde die
   //    erin ging — bij een radio een geschudde volgorde — bewaard blijft.
   final beste = <String, int>{};
@@ -164,10 +239,12 @@ List<int> kiesNummers(List<Aanbod> aanbod, {int bewerkingPerTien = kBewerkingPer
     if (nooitOpRadio(aanbod[i].titel)) continue;
     final sleutel = '${_plat(aanbod[i].artiest)}|${basisTitel(aanbod[i].titel)}';
     final zit = beste[sleutel];
-    if (zit == null ||
-        uitvoeringVan(aanbod[i].titel).index < uitvoeringVan(aanbod[zit].titel).index) {
+    if (zit == null) {
       beste[sleutel] = i;
+      continue;
     }
+    final ui = uitvoeringVan(aanbod[i].titel).index, uz = uitvoeringVan(aanbod[zit].titel).index;
+    if (ui < uz || (ui == uz && single(i) && !single(zit))) beste[sleutel] = i;
   }
   final houden = beste.values.toSet();
 
@@ -189,12 +266,40 @@ List<int> kiesNummers(List<Aanbod> aanbod, {int bewerkingPerTien = kBewerkingPer
 
 // ── Afwisseling ─────────────────────────────────────────────────────────────────────────────────
 
+/// De losse artiesten van een naam: "Niels Destadsbader & Regi" is {nielsdestadsbader, regi}.
+///
+/// Voor het vergelijken van twee schrijfwijzen van een duo. Een voorvoegsel is daar geen goede maat
+/// — gemeten op 26-09-2026 was "robins" (Robin S) een voorvoegsel van "robinschulz" (Robin Schulz),
+/// en "sash" (Sash!) van "sasha". Hele delen wel.
+Set<String> artiestDelen(String artiest) => {
+      for (final d in artiestDelenTekst(artiest))
+        if (_plat(d) case final k when k.isNotEmpty) k
+    };
+
+final _gastWoord = RegExp(r'\s(feat\.?|ft\.?|featuring|with|vs\.?|versus)\s', caseSensitive: false);
+final _samen = RegExp(r'\s+x\s+|\s*[&,+/]\s*', caseSensitive: false);
+
+/// De losse artiesten van een naam, als tekst, de hoofdartiest eerst.
+///
+/// In twee stappen: eerst "feat.", "with" en "vs", dan pas " x ", "&" en komma's. In één keer
+/// splitste "Lil Nas X feat. Jack Harlow" op " X " en werd de hoofdartiest "Lil Nas" (review van
+/// 26-09-2026); een X aan het eind van een naam heeft geen spatie erachter en blijft zo staan.
+List<String> artiestDelenTekst(String artiest) => [
+      for (final stuk in artiest.toLowerCase().split(_gastWoord))
+        for (final d in stuk.split(_samen))
+          if (d.trim().isNotEmpty) d.trim()
+    ];
+
+/// Zijn dit dezelfde artiest, of een duo met hem erin? Zie [artiestDelen].
+bool zelfdeArtiest(String a, String b) => artiestDelen(a).intersection(artiestDelen(b)).isNotEmpty;
+
 /// Wie een nummer maakt, zoals de afwisseling dat telt: "2 Fabiola feat. Loredana" is 2 Fabiola.
+///
+/// De EERSTE van [artiestDelen]: ook "2 Fabiola & Loredana" en "2 Fabiola x Loredana" zijn 2 Fabiola —
+/// eerst telde alleen "feat.", en dan ontliep een duo het plafond van de zaadartiest.
 String artiestSleutel(String artiest) {
-  var x = artiest.toLowerCase();
-  final f = RegExp(r'\s(feat\.?|ft\.|featuring)\s').firstMatch(x);
-  if (f != null) x = x.substring(0, f.start);
-  return _plat(x);
+  final delen = artiestDelen(artiest);
+  return delen.isEmpty ? '' : delen.first;
 }
 
 /// Tussen twee nummers van dezelfde artiest staan er minstens drie anderen.

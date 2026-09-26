@@ -953,7 +953,14 @@ enum Placement {
 class PlaceOutcome {
   final String path;
   final Placement how;
-  const PlaceOutcome(this.path, this.how);
+
+  /// Verving dit bestand een bestand dat er al lag (dat dan geparkeerd of gewist is)?
+  ///
+  /// Voor de radio: een nummer dat JOUW exemplaar opvolgde is geen radiobestand meer, en mag dus ook
+  /// nooit door het opruimen van die radio weg. Gevonden in de review van 26-09-2026: een FLAC die je
+  /// mp3 van hetzelfde nummer verving, gold als "door de radio gehaald".
+  final bool verving;
+  const PlaceOutcome(this.path, this.how, {this.verving = false});
 }
 
 /// Move [src] into the tidy tree under [root]. Returns the final path (or the original on
@@ -973,7 +980,8 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
     {RelKind? kind,
     TrackTags? tags,
     String? Function(String artist, String title, {int? seconds})? staatAl,
-    bool parkeerAltijd = false}) async {
+    bool parkeerAltijd = false,
+    bool? parkeerBinnenkomend}) async {
   final t = tags ?? readTags(src);
   if (t == null) return PlaceOutcome(src.path, Placement.stuck);
   final base = src.uri.pathSegments.last;
@@ -1050,8 +1058,10 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
 
     final parkeerIn = elders != null || parkeerAltijd ? '$root${Platform.pathSeparator}$parkeerMap' : null;
     // Het binnenkomende dat verliest: weg op de downloadweg, opzij als het al van jou was.
+    // [parkeerBinnenkomend]: wie jouw verliezers wil parkeren maar zijn eigen download niet — de radio.
+    // Een radiobestand dat verliest is afval van die radio, en in `_dubbel` ziet niemand het ooit nog.
     Future<void> ruimBinnenkomendOp() async {
-      if (parkeerAltijd) {
+      if (parkeerBinnenkomend ?? parkeerAltijd) {
         await _parkeer(src, parkeerIn!);
       } else {
         await src.delete().catchError((_) => src);
@@ -1136,7 +1146,7 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
     for (final d in {srcDir, ...loserDirs}) {
       await pruneVacated(d, root);
     }
-    return PlaceOutcome(landed, Placement.moved);
+    return PlaceOutcome(landed, Placement.moved, verving: losers.isNotEmpty);
   } catch (_) {
     return PlaceOutcome(src.path, Placement.stuck); // cross-device or locked — the scan still finds it
   }

@@ -30,6 +30,11 @@ bool get heeftPrullenbak => Platform.isWindows || Platform.isMacOS;
 /// vragen, zonder voortgangsvenster en zonder foutvenster — een verborgen proces met een venster
 /// dat op een klik wacht, wacht voor altijd. [lijst] komt tussen enkele aanhalingstekens, met elke
 /// enkele verdubbeld, zoals PowerShell dat wil.
+///
+/// **Waar geen prullenbak is, wist Windows definitief — en zwijgt.** Een netwerkschijf, de meeste
+/// USB-sticks, een bestand groter dan de prullenbak. Gevonden in de review van 26-09-2026. Daarom:
+/// alleen vaste schijven (`DriveType Fixed`), en `FOF_WANTNUKEWARNING` (0x4000) als laatste net —
+/// dat vraagt het jou alsnog vóór het iets definitief weggooit, ondanks `FOF_NOCONFIRMATION`.
 String prullenbakScript(String lijst) {
   final pad = lijst.replaceAll("'", "''");
   return r'''
@@ -50,13 +55,16 @@ public static class DmPrullenbak {
     var op = new Op();
     op.wFunc = 3;
     op.pFrom = pad + "\0\0";
-    op.fFlags = 0x0040 | 0x0010 | 0x0004 | 0x0400;
+    op.fFlags = 0x0040 | 0x0010 | 0x0004 | 0x0400 | 0x4000;
     return SHFileOperation(ref op);
   }
 }
 '@
 foreach ($p in [System.IO.File]::ReadAllLines(''' "'$pad'" r''', [System.Text.Encoding]::UTF8)) {
-  if ($p -and [System.IO.File]::Exists($p)) { [void][DmPrullenbak]::Weg($p) }
+  if (-not $p -or -not [System.IO.File]::Exists($p)) { continue }
+  try { $schijf = [System.IO.DriveInfo]::new([System.IO.Path]::GetPathRoot($p)) } catch { continue }
+  if ($schijf.DriveType -ne 'Fixed') { continue }
+  [void][DmPrullenbak]::Weg($p)
 }
 ''';
 }
@@ -96,8 +104,18 @@ List<String> prullenmandArgumenten(List<String> paden) => [
 /// wordt zonder iets in een echte prullenbak te gooien.
 typedef Draaier = Future<ProcessResult> Function(String programma, List<String> argumenten);
 
-Future<ProcessResult> _echt(String programma, List<String> argumenten) =>
-    Process.run(programma, argumenten).timeout(const Duration(minutes: 2));
+/// Starten, en na twee minuten echt stoppen. `Process.run(...).timeout` laat het proces doorlopen:
+/// de wachter geeft op, PowerShell niet.
+Future<ProcessResult> _echt(String programma, List<String> argumenten) async {
+  final p = await Process.start(programma, argumenten);
+  final uit = p.stdout.transform(utf8.decoder).join();
+  final fout = p.stderr.transform(utf8.decoder).join();
+  final code = await p.exitCode.timeout(const Duration(minutes: 2), onTimeout: () {
+    p.kill();
+    return -1;
+  });
+  return ProcessResult(p.pid, code, await uit, await fout);
+}
 
 /// Verplaats [paden] naar de prullenbak.
 ///

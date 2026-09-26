@@ -28,6 +28,7 @@ import 'online.dart';
 import 'paths.dart';
 import 'settings.dart';
 import 'player.dart';
+import 'radiokeuze.dart' show artiestSleutel, basisTitel;
 import 'radiosessie.dart';
 import 'radiovoorraad.dart';
 
@@ -54,7 +55,7 @@ class Radioplek {
   /// zie [DownloadManager.haalVoorRadio]: het jaar is wat de tags gezaghebbend maakt (zonder dat
   /// schrijft `stampTags` niets), de looptijd is de Sting-val.
   final int? seconden;
-  final int? jaar;
+  int? jaar;
 
   /// Het bestand. Vanaf het begin gevuld als je het al had, anders zodra het geland is.
   Track? eigen;
@@ -109,7 +110,11 @@ abstract class Radiobron {
   /// **Ook van de verlanglijst**, en dat is geen bijzaak. Landde de haal als mp3, dan staat het nummer
   /// op de lijst voor een betere versie; zonder deze regel haalt `sweepLosslessWants` twintig minuten
   /// later alsnog de FLAC — van een nummer dat je zojuist hebt weggegooid.
-  Future<void> vergeet({required String pad, required String artiest, required String titel});
+  ///
+  /// Geeft terug of het bestand werkelijk van zijn plek is. Kon het niet naar de prullenbak (een
+  /// netwerkschijf, een bestand dat openstaat), dan staat het er nog — en dan mag de radio het niet
+  /// vergeten (review van 26-09-2026).
+  Future<bool> vergeet({required String pad, required String artiest, required String titel});
 }
 
 /// Deze machine haalt zelf: de pc, of een losse installatie zonder koppeling.
@@ -177,10 +182,14 @@ class EigenRadiobron implements Radiobron {
   }
 
   @override
-  Future<void> vergeet(
+  Future<bool> vergeet(
       {required String pad, required String artiest, required String titel}) async {
-    await library.removeTracks([pad], fromDisk: true);
-    await downloads.vergeetWens(artiest, titel);
+    // Naar de prullenbak, niet definitief: een duim is één tik, en een misgetikte tik hoort terug te
+    // draaien te zijn. Zie `prullenbak.dart` voor de dertien nummers van 26-09-2026.
+    final weg = await library.removeTracks([pad], fromDisk: true, naarPrullenbak: true) > 0 ||
+        !File(pad).existsSync();
+    if (weg) await downloads.vergeetWens(artiest, titel);
+    return weg;
   }
 }
 
@@ -195,7 +204,9 @@ class EigenRadiobron implements Radiobron {
 /// en dit is precies de plek waar het stil fout kan gaan: een dubbel nummer in de rij is niet iets
 /// wat een foutmelding oplevert, je hoort het gewoon twee keer.
 List<Radioplek> nieuweNakomers(List<Radioplek> plan, List<Radioplek> extra) {
-  String sleutel(Radioplek p) => '${p.artiest.trim().toLowerCase()}|${p.titel.trim().toLowerCase()}';
+  // Op het LIEDJE en niet op de letterlijke titel: "X" en "X (Radio Edit)" uit twee ladingen zijn
+  // hetzelfde nummer, en dat speelde zo twee keer (review van 26-09-2026).
+  String sleutel(Radioplek p) => '${artiestSleutel(p.artiest)}|${basisTitel(p.titel)}';
   final bekend = <String>{for (final p in plan) sleutel(p)};
   return [
     for (final p in extra)
@@ -217,7 +228,9 @@ List<Radioplek> mengNakomers(List<Radioplek> plan, List<Radioplek> nieuw) {
   if (nieuw.isEmpty) return plan;
   var grens = 0;
   for (var i = 0; i < plan.length; i++) {
-    if (plan[i].stand != Haalstand.wacht) grens = i + 1;
+    // Eigen muziek die nog niet in de rij staat ([Haalstand.klaar]) is nog niet aan de beurt geweest:
+    // die telde eerst mee, en dan kwamen nakomers achter het hele blok terecht.
+    if (plan[i].stand != Haalstand.wacht && plan[i].stand != Haalstand.klaar) grens = i + 1;
   }
   final rest = plan.sublist(grens);
   final uit = [...plan.take(grens)];
@@ -283,6 +296,12 @@ class RadioBesturing extends ChangeNotifier {
 
   /// Tot wanneer er niets nieuws gehaald wordt, na een Soulseek-storing. Zie [RadioLaterOpnieuw].
   DateTime? _rustTot;
+
+  /// De keuring vóór het halen: past deze plek in stijl en tijdvak? Zie `radiostijl.dart`.
+  ///
+  /// Vóór en niet ná, want een haal kost een Soulseek-plek en een minuut, en wat daarna in je
+  /// bibliotheek staat moet je weer opruimen. Null: geen keuring, zoals een radio uit een getypte zin.
+  Future<bool> Function(Radioplek plek)? _keur;
   bool _loopt = false;
 
   bool get loopt => _loopt;
@@ -322,20 +341,69 @@ class RadioBesturing extends ChangeNotifier {
   Future<void> vergeetOpenstaand() async {
     openstaand = null;
     notifyListeners();
-    try {
-      final f = _bestand;
-      if (await f.exists()) await f.delete();
-    } catch (_) {}
+    // Via dezelfde rij als het schrijven, en niet als er een radio loopt: dan staat in dit bestand de
+    // notitie van DIE radio, en die hoort niet weg omdat een oud overzicht is afgehandeld.
+    final beurt = _schrijfBeurt.then((_) async {
+      if (_lopend != null) return;
+      try {
+        final f = _bestand;
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
+    });
+    _schrijfBeurt = beurt;
+    await beurt;
   }
 
-  Future<void> _bewaar(RadioSessie? s) async {
-    if (s == null) return;
-    try {
-      await Directory(appDir).create(recursive: true);
-      final tmp = File('${_bestand.path}.tmp');
-      await tmp.writeAsString(jsonEncode(s.toJson()));
-      await tmp.rename(_bestand.path);
-    } catch (_) {/* de radio speelt door; de notitie is een vangnet, geen voorwaarde */}
+  /// Een deel van de notitie is afgehandeld: houd alleen wat [houd] zegt, en is er niets meer over,
+  /// dan weg ermee.
+  ///
+  /// Voor het overzicht: wat bleef en wat werkelijk in de prullenbak ging is beslist; wat daar NIET
+  /// heen kon staat er nog, en hoort de volgende keer terug te komen in plaats van voorgoed uit beeld
+  /// te raken. Gevonden in de review van 26-09-2026: de hele notitie ging weg vóór het opruimen
+  /// bevestigd was.
+  ///
+  /// Begon er intussen een nieuwe radio — het opruimen naar de prullenbak kan seconden duren — dan zit
+  /// deze notitie al in die radio (zie [start]). Wat hier beslist is, gaat er dan ook daar uit, en het
+  /// is DIE notitie die geschreven wordt; anders kwamen je geredde nummers bij de volgende stop terug
+  /// onder "Deze gaan weg" (review van 26-09-2026).
+  Future<void> houdAlleen(RadioSessie s, bool Function(Gehaald g) houd) async {
+    final beslist = {
+      for (final g in s.gehaald)
+        if (!houd(g)) g.pad
+    };
+    s.gehaald.retainWhere(houd);
+    final lopend = _lopend;
+    if (lopend != null) {
+      if (!identical(lopend, s)) lopend.gehaald.removeWhere((g) => beslist.contains(g.pad));
+      if (identical(openstaand, s)) openstaand = s.leeg ? null : s;
+      notifyListeners();
+      await _bewaar(lopend);
+      return;
+    }
+    if (s.leeg) {
+      if (identical(openstaand, s)) await vergeetOpenstaand();
+      return;
+    }
+    notifyListeners();
+    await _bewaar(s);
+  }
+
+  // Eén schrijver tegelijk: elke landing schrijft de notitie, en twee schrijvers op hetzelfde
+  // `.tmp`-bestand is een race die je niet ziet.
+  Future<void> _schrijfBeurt = Future<void>.value();
+
+  Future<void> _bewaar(RadioSessie? s) {
+    if (s == null) return Future<void>.value();
+    final beurt = _schrijfBeurt.then((_) async {
+      try {
+        await Directory(appDir).create(recursive: true);
+        final tmp = File('${_bestand.path}.tmp');
+        await tmp.writeAsString(jsonEncode(s.toJson()));
+        await tmp.rename(_bestand.path);
+      } catch (_) {/* de radio speelt door; de notitie is een vangnet, geen voorwaarde */}
+    });
+    _schrijfBeurt = beurt;
+    return beurt;
   }
 
   /// Hoeveel er nog opgehaald wordt, en hoeveel er door deze radio binnengekomen is.
@@ -344,7 +412,11 @@ class RadioBesturing extends ChangeNotifier {
 
   /// Starten. Geeft null terug als het gelukt is, of de reden waarom niet — in gewone taal.
   Future<String?> start(List<Radioplek> nieuw,
-      {String naam = '', String? zaadArtiest, Track? zaad}) async {
+      {String naam = '',
+      String? zaadArtiest,
+      Track? zaad,
+      Future<bool> Function(Radioplek plek)? keur,
+      void Function(int sessie)? bijStart}) async {
     if (nieuw.isEmpty) return 'Er viel niets te vinden om een radio van te maken.';
 
     // Eerst vragen of het KAN, en pas daarna de lopende radio verlaten. Andersom zou een radio die
@@ -361,6 +433,7 @@ class RadioBesturing extends ChangeNotifier {
 
     final sessie = ++_sessie;
     _rustTot = null;
+    _keur = keur;
     _plan = nieuw;
     this.naam = naam;
     this.zaadArtiest = zaadArtiest;
@@ -368,6 +441,16 @@ class RadioBesturing extends ChangeNotifier {
     _loopt = true;
     _doorRadio.clear();
     _lopend = RadioSessie(naam: naam, begonnenMs: DateTime.now().millisecondsSinceEpoch);
+    // Stond er nog een overzicht open ("Later beslissen"), dan gaat dat MEE in deze radio. Er is één
+    // notitie op schijf, en de eerste landing van deze radio zou hem anders overschrijven — waarna die
+    // bestanden voor altijd blijven staan zonder dat iemand nog weet dat ze van een radio kwamen.
+    // Het overzicht verschijnt dan ook niet meer over een radio die net begint.
+    final vorige = openstaand;
+    if (vorige != null) {
+      _lopend!.gehaald.addAll(vorige.gehaald);
+      openstaand = null;
+      unawaited(_bewaar(_lopend));
+    }
 
     // De eerste ronde met de hand, want [PlayerStore.voegToeAanRadio] doet niets zolang er nog geen
     // radio loopt.
@@ -386,6 +469,9 @@ class RadioBesturing extends ChangeNotifier {
     speler.bijRadioEinde = (_) {
       if (sessie == _sessie) stop();
     };
+    // Alleen als DEZE start het werd. Een start die ingehaald is geeft ook null terug, en wie dan
+    // [sessie] las, voegde zijn nummers toe aan de radio die hem inhaalde (review van 26-09-2026).
+    bijStart?.call(sessie);
 
     for (final i in besluit.starten) {
       nieuw[i].stand = Haalstand.onderweg;
@@ -478,9 +564,11 @@ class RadioBesturing extends ChangeNotifier {
   ///
   /// Alleen wat DEZE radio ophaalde mag hier weg; bij muziek die je zelf al had staat er geen duim.
   /// Geeft terug of er werkelijk iets weggegooid is.
-  Future<bool> gooiWeg(Track t) async {
+  ///
+  /// Null als dit geen nummer van deze radio is (dan gebeurt er niets), false als het niet weg kon.
+  Future<bool?> gooiWeg(Track t) async {
     final pad = t.path;
-    if (!_doorRadio.remove(pad)) return false;
+    if (!_doorRadio.remove(pad)) return null;
 
     // Eerst uit het plan, want anders zet de eerstvolgende tik van [_pas] hem gewoon weer in de rij.
     // `mislukt` en niet iets nieuws: die stand betekent precies dit — deze plek telt nergens meer in
@@ -499,17 +587,20 @@ class RadioBesturing extends ChangeNotifier {
     // Dan uit de speelrij, en dat is ook wat het bestand loslaat als het net klonk.
     await speler.haalUitRadio(pad);
 
-    // En uit de notitie: wat weg is hoeft bij het afsluiten niet meer nagekeken te worden. Ook uit
-    // een notitie die al klaarligt — een radio die net gestopt is maar waarvan het overzicht nog
-    // openstaat, hoort geen bestand aan te bieden dat er niet meer is.
+    notifyListeners();
+    final weg = await bron.vergeet(pad: pad, artiest: artiest, titel: titel);
+    // Kon het niet weg, dan blijft het in de notitie: het overzicht biedt het straks opnieuw aan, in
+    // plaats van dat het bestand voorgoed op je schijf blijft staan zonder dat iemand weet waarvandaan.
+    if (!weg) return false;
+    // Wat weg is hoeft bij het afsluiten niet meer nagekeken te worden. Ook uit een notitie die al
+    // klaarligt — een radio die net gestopt is maar waarvan het overzicht nog openstaat, hoort geen
+    // bestand aan te bieden dat er niet meer is.
     _lopend?.gehaald.removeWhere((g) => g.pad == pad);
     openstaand?.gehaald.removeWhere((g) => g.pad == pad);
     // Eén schrijfbeurt, en die van de LOPENDE radio wint: zo doet [_haal] het ook, en twee keer naar
     // hetzelfde bestand schrijven is een race die je niet ziet en niet kunt navertellen.
     unawaited(_bewaar(_lopend ?? openstaand));
-
     notifyListeners();
-    await bron.vergeet(pad: pad, artiest: artiest, titel: titel);
     return true;
   }
 
@@ -544,6 +635,21 @@ class RadioBesturing extends ChangeNotifier {
   }
 
   Future<void> _haal(int sessie, Radioplek p) async {
+    final keur = _keur;
+    if (keur != null) {
+      var mag = true;
+      try {
+        mag = await keur(p);
+      } catch (_) {/* een keuring die stukloopt is geen nee */}
+      if (sessie != _sessie) return;
+      if (!mag) {
+        // Geweerd: telt nergens meer in mee, net als een plek die niet te vinden was.
+        p.stand = Haalstand.mislukt;
+        notifyListeners();
+        _pas(sessie);
+        return;
+      }
+    }
     Track? t;
     var later = false;
     try {

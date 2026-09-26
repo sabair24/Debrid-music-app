@@ -94,8 +94,11 @@ class PcRadiobron implements Radiobron {
 
   @override
   Future<Track?> haal(Radioplek plek) async {
+    // Geen pc is geen mislukte plek maar een plek voor straks: op de sportschool valt de pc anderhalf
+    // tot vijf minuten weg (zie `sportschool-pc-onbereikbaar`), en elke keer werd zo het plan
+    // opgebrand — acht plekken per poging. Zie [RadioLaterOpnieuw].
     final c = clientOf();
-    if (c == null) return null;
+    if (c == null) throw const RadioLaterOpnieuw('de pc is niet bereikbaar');
     final ronde = _ronde;
     final String id;
     try {
@@ -109,8 +112,14 @@ class PcRadiobron implements Radiobron {
       final gekregen = a['id'];
       if (gekregen is! String || gekregen.isEmpty) return null;
       id = gekregen;
+    } on RemoteException catch (e) {
+      // Alleen "niet bereikt" is een plek voor straks. Een ANTWOORD van de pc — geen koppeling meer
+      // (401), een weigering — verandert over een minuut niet, en dan zou de radio eindeloos in
+      // pauzes van een minuut blijven hangen (review van 26-09-2026).
+      if (e.statusCode != null) return null;
+      throw const RadioLaterOpnieuw('de pc antwoordde niet');
     } catch (_) {
-      return null;
+      throw const RadioLaterOpnieuw('de pc antwoordde niet');
     }
 
     if (ronde != _ronde) return null;
@@ -139,29 +148,41 @@ class PcRadiobron implements Radiobron {
       } catch (_) {
         return null;
       }
-      // Opzoeken op artiest+titel en niet op het pad dat de pc noemde: op een gekoppeld toestel is
-      // `Track.path` een stream-adres en geen bestandsnaam. Dat het nummer er niet al stond is
-      // hierboven al gegarandeerd — `haalVoorRadio` geeft alleen een pad terug voor een bestand dat
-      // écht nieuw is — dus wat hier gevonden wordt, is wat er net geland is.
+      // Opzoeken op het ID dat de pc noemt, en NIET op artiest + titel. Dat laatste deed dit eerst, en
+      // het vond dan het eerste nummer met die naam: bij een album-versie die je al had en een single
+      // die de radio net ophaalde was dat JOUW album-versie — die dan als "door de radio gehaald"
+      // gold, met een duim omlaag en een plek in het opruimoverzicht. Gevonden in de review van
+      // 26-09-2026. Een oudere pc noemt geen id; dan blijft het zoals het was.
+      final trackId = a['trackId'];
+      if (trackId is String && trackId.isNotEmpty) {
+        for (final t in library.tracks) {
+          if (library.gedeeldId(t.path) == trackId) return t;
+        }
+        return null; // het staat er nog niet — liever een gemiste plek dan een verkeerd bestand
+      }
       return library.ownedTrack(plek.artiest, plek.titel);
     }
     return null;
   }
 
   @override
-  Future<void> vergeet(
+  Future<bool> vergeet(
       {required String pad, required String artiest, required String titel}) async {
     // Twee dingen, en de eerste kan de telefoon zelf: [LibraryStore.removeTracks] stuurt op een
     // gekoppeld toestel een `removeTracks` naar de pc, met het stream-adres vertaald naar het id dat
     // de pc kent. Het bestand gaat daar van de schijf en de catalogus is meteen bij.
-    await library.removeTracks([pad], fromDisk: true);
+    await library.removeTracks([pad], fromDisk: true, naarPrullenbak: true);
+    // De catalogus is na het verzoek opnieuw geladen: staat het er nog, dan kon de pc het niet weg.
+    final weg = !library.tracks.any((t) => t.path == pad);
+    if (!weg) return false;
     // En dan de verlanglijst, want die staat óók op de pc. Zonder dit haalt `sweepLosslessWants`
     // straks alsnog de FLAC van een nummer dat je zojuist hebt weggegooid. Stil bij een fout: het
     // bestand is dan al weg, en daar hoort geen melding meer bij.
     final c = clientOf();
-    if (c == null) return;
+    if (c == null) return true;
     try {
       await c.ask('/api/radio', {'op': 'vergeetwens', 'artiest': artiest, 'titel': titel});
     } catch (_) {/* een oudere pc kent deze op nog niet; het wissen zelf is al gebeurd */}
+    return true;
   }
 }

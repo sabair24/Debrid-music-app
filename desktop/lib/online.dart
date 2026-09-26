@@ -714,6 +714,10 @@ class SoulseekService {
   String get pauseLabel => client.pauseLabel;
   String? get whyNotLogin => client.whyNotLogin;
 
+  /// Is de gedeelde sessie nu echt aangemeld? Een zoekopdracht zonder aanmelding geeft een lege lijst,
+  /// net als een zoekopdracht zonder treffers — en alleen dit onderscheidt ze.
+  bool get verbonden => _session?.verbonden ?? false;
+
   /// Drop every wait standing in the way and let one login through.
   ///
   /// The session's own counters go too. Without them the button cleared the client's back-off and
@@ -2851,6 +2855,12 @@ class DownloadManager extends ChangeNotifier {
       return null;
     }
     if (job.cancelled) return null; // de radio is afgesloten terwijl we zochten
+    // Niets gevonden ZONDER aanmelding is geen antwoord. Een verbinding die niet opkomt (geen net,
+    // een route die wisselt, de server die herstart) zet geen blokkade, dus [whyNotLogin] zegt niets —
+    // en dan brandde de radio zijn plan op aan "0 treffers" (review van 26-09-2026).
+    if (hits.isEmpty && soulseek.available && !soulseek.verbonden) {
+      throw const RadioLaterOpnieuw('geen verbinding met Soulseek');
+    }
     // Alleen wat ECHT dit nummer is, in de gevraagde uitvoering en ongeveer de juiste lengte — zie
     // `radiobestand.dart` voor de zes verkeerde nummers van 26-09-2026 — en niet bij een uploader die
     // het deze radio al liet afweten.
@@ -2892,6 +2902,16 @@ class DownloadManager extends ChangeNotifier {
       album: '',
       trackNo: 0,
       year: jaar,
+      seconds: seconden,
+    );
+    // Opbergen met de tags ZONDER jaar, en pas daarna de gezaghebbende schrijven: met een jaar geldt
+    // alles wat op dezelfde plek ligt als dezelfde opname, zonder naar naam of versie te kijken, en dan
+    // zou een andere opname van jou met dezelfde titel stil opzij gaan (review van 26-09-2026).
+    final plaatsing = TrackTags(
+      title: titel,
+      artist: artiest,
+      album: '',
+      trackNo: 0,
       seconds: seconden,
     );
     String? geland;
@@ -2943,18 +2963,35 @@ class DownloadManager extends ChangeNotifier {
             } catch (_) {/* dan ruimt de wachtmap het later op */}
             continue;
           }
+          // En de ECHTE lengte. Een peer meldt die lang niet altijd, en dan telde de lengte vóór het
+          // halen niet mee — zo kan een albumversie van 5:36 op de plek van een single van 4:17 komen.
+          final echt = looptijdInSeconden(binnen);
+          if (radioLengteSpreektTegen(seconden, echt)) {
+            _log.line('radio "$artiest — $titel": ${f.username} leverde ${echt}s, gevraagd '
+                '${seconden}s — een andere versie, weggegooid, volgende');
+            (_radioNietBij[sleutel] ??= {}).add(f.username);
+            try {
+              await binnen.delete();
+            } catch (_) {/* dan ruimt de wachtmap het later op */}
+            continue;
+          }
 
           // Nog één keer kijken, vlak vóór het filen. Tussen de toets bovenaan en dit moment kan een
           // andere haal — of de jacht op een betere kwaliteit — hetzelfde nummer hebben laten landen.
           final alBekend = mapVanBestaande?.call(artiest, titel, seconds: seconden);
           PlaceOutcome uit;
           try {
+            // [parkeerAltijd]: wat hier verliest, gaat opzij en nooit weg. Zonder dat wiste een radio-FLAC
+            // een mp3 die je al had wanneer de bibliotheek ze niet als dezelfde opname herkende.
             uit = await placeFileDetailed(File(res.path), _downloadsRoot,
-                tags: gezag, staatAl: mapVanBestaande);
+                tags: plaatsing,
+                staatAl: mapVanBestaande,
+                parkeerAltijd: true,
+                parkeerBinnenkomend: false);
           } catch (_) {
             continue;
           }
-          if (alBekend != null || uit.how != Placement.moved) {
+          if (alBekend != null || uit.how != Placement.moved || uit.verving) {
             _log.line('radio "$artiest — $titel": geland op muziek die je al had — '
                 'niet van de radio, wordt straks niet opgeruimd');
             return;
