@@ -212,6 +212,11 @@ void main() {
           isFalse);
     });
 
+    test('DE VAL: de band Live in de mapnaam is geen live-opname', () {
+      expect(klopt('Live', 'Lightning Crashes', r'Live - Throwing Copper (1994)\05 - Lightning Crashes.flac'),
+          isTrue);
+    });
+
     test('DE VAL: maar "Alive" in de map is geen live, en een verzamelaar mag', () {
       expect(klopt('Mr. President', 'Coco Jamboo', r'Mr. President - Alive (1997)\01 - Coco Jamboo.flac'),
           isTrue);

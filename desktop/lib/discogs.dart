@@ -22,7 +22,7 @@ import 'release_format.dart';
 import 'release_format.dart' as fmt;
 import 'settings.dart';
 import 'paths.dart';
-import 'radiostijl.dart' show DiscogsUitgave, kaleTitel, uitgaveVanArtiest;
+import 'radiostijl.dart' show DiscogsUitgave, isBootleg, kaleTitel, samenUitgaven, uitgaveVanArtiest;
 
 /// One image a release or an artist offers. Discogs doesn't say what a picture IS beyond
 /// primary/secondary — a release's secondaries are the back, the disc and the booklet, an artist's
@@ -1034,12 +1034,18 @@ class DiscogsService {
   Future<List<DiscogsUitgave>?> nummerUitgaven(String artiest, String titel) async {
     if (!available) return null;
     final kaal = kaleTitel(titel);
+    final gezien = <Object?>{};
     List<DiscogsUitgave> vanArtiest(Map<String, dynamic> b) {
       final uit = <DiscogsUitgave>[];
       for (final r in (b['results'] as List<dynamic>? ?? const [])) {
         if (r is! Map<String, dynamic>) continue;
         // Ook bij het artiestveld: dat zoekt op een DEEL van de naam ("Sash!" vond "Leon Sash").
         if (!uitgaveVanArtiest('${r['title'] ?? ''}', artiest)) continue;
+        // Een bootleg telt niet mee. Gemeten op 26-09-2026: het vroegste jaar van "Smells Like Teen
+        // Spirit" kwam van een onofficiële "Bleach"-cd uit 1989 met het nummer als bonus — twee jaar
+        // vóór het nummer bestond.
+        if (isBootleg([for (final x in (r['format'] as List? ?? const [])) '$x'])) continue;
+        if (!gezien.add(r['id'] ?? r['title'])) continue;
         List<String> tekst(Object? v) => [for (final x in (v as List? ?? const [])) '$x'];
         uit.add((
           jaar: int.tryParse('${r['year'] ?? ''}'),
@@ -1054,14 +1060,17 @@ class DiscogsService {
         '&sort=year&sort_order=asc&artist=${_q(artiest)}&track=${_q(kaal)}');
     if (b == null) return null;
     final eerst = vanArtiest(b);
-    if (eerst.isNotEmpty) return eerst;
+    // Drie officiële uitgaven is genoeg voor een jaar en een meerderheid. Minder, dan ook de vrije
+    // zoekvraag erbij: "Touch Me I'm Sick" van Mudhoney gaf op het artiestveld alleen een live-album
+    // uit 2018, en het nummer is van 1988.
+    if (eerst.length >= 3) return eerst;
     // De vrije zoekvraag op RELEVANTIE en niet op jaar: op jaar stonden bij "Snap! The Power" tien
     // platen van Steppenwolf en Wings bovenaan, en die van Snap* zelf (1990) vielen erbuiten.
     final opnieuw = await _get('https://api.discogs.com/database/search?type=release&per_page=25'
         '&q=${_q('$artiest $kaal')}');
     // Geen antwoord (429, 5xx, time-out) is iets anders dan niets gevonden: null, en dan onthoudt het
     // stijlboek niets. Met een lege lijst werd een storing voorgoed "Discogs kent dit niet".
-    return opnieuw == null ? null : vanArtiest(opnieuw);
+    return samenUitgaven(eerst, opnieuw == null ? null : vanArtiest(opnieuw));
   }
 
   Future<int?> artistId(String name) async {

@@ -40,6 +40,7 @@ class Radioplek {
     this.seconden,
     this.jaar,
     this.eigen,
+    this.zaad = false,
   }) {
     // Wat je al hebt is meteen klaar: het bestand staat er, er valt niets aan te halen. Dat is de
     // enige plek waar het onderscheid tussen "eigen muziek" en "moet nog komen" gemaakt wordt.
@@ -48,6 +49,12 @@ class Radioplek {
 
   final String artiest;
   final String titel;
+
+  /// Het nummer waar de radio vanaf begon. Afstemmen ([stemPlanAf]) laat het staan, ook als het nog
+  /// wacht: het nieuwe plan weert het zaadnummer met opzet, dus zonder dit verdween het voorgoed
+  /// (tweede beoordeling van 26-09-2026 — een pauze zette de plek terug op wachten, en een tik op
+  /// "Ontdekken" gooide hem weg).
+  final bool zaad;
 
   /// Hoe lang het volgens de catalogus duurt, en uit welk jaar het is.
   ///
@@ -103,6 +110,9 @@ abstract class Radiobron {
   void staak();
 
   /// Eén nummer halen. Geeft het nummer terug zoals het in de bibliotheek staat, of null.
+  ///
+  /// Gooit [RadioLaterOpnieuw] als het nu niet kan maar straks wel, en [AlVanJou] als het nummer er
+  /// is maar van jou — dan klinkt het, maar wordt het nooit door de radio opgeruimd.
   Future<Track?> haal(Radioplek plek);
 
   /// Dit nummer weg: van de schijf, uit de bibliotheek, en van de verlanglijst.
@@ -118,6 +128,16 @@ abstract class Radiobron {
 }
 
 /// Deze machine haalt zelf: de pc, of een losse installatie zonder koppeling.
+/// Wat [Radiobron.haal] gooit als het nummer er nu is, maar niet van de radio: het landde op muziek
+/// die je al had (zie [RadioAlGehad]). Het klinkt gewoon, maar telt niet als "door de radio gehaald"
+/// — geen duim die het weggooit, geen plek in het opruimoverzicht.
+class AlVanJou implements Exception {
+  const AlVanJou(this.nummer);
+  final Track nummer;
+  @override
+  String toString() => 'al van jou: ${nummer.path}';
+}
+
 class EigenRadiobron implements Radiobron {
   EigenRadiobron({
     required this.downloads,
@@ -162,12 +182,20 @@ class EigenRadiobron implements Radiobron {
 
   @override
   Future<Track?> haal(Radioplek plek) async {
-    final pad = await downloads.haalVoorRadio(
-      artiest: plek.artiest,
-      titel: plek.titel,
-      seconden: plek.seconden,
-      jaar: plek.jaar,
-    );
+    final String? pad;
+    try {
+      pad = await downloads.haalVoorRadio(
+        artiest: plek.artiest,
+        titel: plek.titel,
+        seconden: plek.seconden,
+        jaar: plek.jaar,
+      );
+    } on RadioAlGehad catch (e) {
+      // Geland op muziek die je al had: laten klinken, maar als JOUW nummer — zie [AlVanJou].
+      final t = await library.voegBestandToe(e.pad);
+      if (t == null) return null;
+      throw AlVanJou(t);
+    }
     if (pad == null) return null;
     // Eén bestand erbij, en niet de hele muziekmap opnieuw lezen. Zie [LibraryStore.voegBestandToe]:
     // bij acht landingen per kwartier zou een volledige scan vrijwel permanent draaien, en dat merk
@@ -257,7 +285,7 @@ List<Radioplek> mengNakomers(List<Radioplek> plan, List<Radioplek> nieuw) {
 List<Radioplek> stemPlanAf(List<Radioplek> plan, List<Radioplek> nieuw) {
   final blijft = [
     for (final p in plan)
-      if (p.stand != Haalstand.wacht && p.stand != Haalstand.klaar) p
+      if (p.zaad || (p.stand != Haalstand.wacht && p.stand != Haalstand.klaar)) p
   ];
   return [...blijft, ...nieuweNakomers(blijft, nieuw)];
 }
@@ -296,6 +324,15 @@ class RadioBesturing extends ChangeNotifier {
 
   /// Tot wanneer er niets nieuws gehaald wordt, na een Soulseek-storing. Zie [RadioLaterOpnieuw].
   DateTime? _rustTot;
+  String? _rustWaarom;
+  bool _pauzeGemeld = false;
+
+  /// Waarom er nu even niets nieuws gehaald wordt, of null als het ophalen gewoon loopt. Voor het
+  /// radiopaneel: een pauze die niemand ziet, lijkt op een radio die stil ophoudt.
+  String? get pauze {
+    final tot = _rustTot;
+    return tot != null && DateTime.now().isBefore(tot) ? _rustWaarom : null;
+  }
 
   /// De keuring vóór het halen: past deze plek in stijl en tijdvak? Zie `radiostijl.dart`.
   ///
@@ -433,6 +470,8 @@ class RadioBesturing extends ChangeNotifier {
 
     final sessie = ++_sessie;
     _rustTot = null;
+    _rustWaarom = null;
+    _pauzeGemeld = false;
     _keur = keur;
     _plan = nieuw;
     this.naam = naam;
@@ -607,6 +646,12 @@ class RadioBesturing extends ChangeNotifier {
   /// Kijken wat er nu te doen valt, en het doen.
   void _pas(int sessie) {
     if (sessie != _sessie) return;
+    // Is de pauze voorbij, dan het paneel bijwerken: anders bleef "Ophalen staat even stil" staan tot
+    // er toevallig iets anders veranderde — bij een leeg plan nooit.
+    if (_pauzeGemeld && pauze == null) {
+      _pauzeGemeld = false;
+      notifyListeners();
+    }
     final vooruit = speler.radioQueue.length - speler.radioIndex - 1;
     final rij = speler.radioQueue;
     final besluit = voorraadPlan(
@@ -652,10 +697,16 @@ class RadioBesturing extends ChangeNotifier {
     }
     Track? t;
     var later = false;
+    var vanRadio = true;
+    String? waarom;
     try {
       t = await bron.haal(p);
-    } on RadioLaterOpnieuw {
+    } on RadioLaterOpnieuw catch (e) {
       later = true;
+      waarom = e.waarom;
+    } on AlVanJou catch (e) {
+      t = e.nummer;
+      vanRadio = false;
     } catch (_) {
       t = null;
     }
@@ -666,6 +717,10 @@ class RadioBesturing extends ChangeNotifier {
       // acht, die net zo snel stuklopen.
       p.stand = Haalstand.wacht;
       _rustTot = DateTime.now().add(kRadioRust);
+      // Pas hier, ná de toets op de sessie: een late pauze van de vorige radio mag de reden van deze
+      // niet overschrijven (tweede beoordeling van 26-09-2026).
+      _rustWaarom = waarom;
+      _pauzeGemeld = true;
       notifyListeners();
       return;
     }
@@ -673,6 +728,10 @@ class RadioBesturing extends ChangeNotifier {
       // Geen foutmelding en geen gat: deze plek slaat over en het plan schuift door. Een radio die
       // bij elke peer die niet thuis geeft iets op het scherm zet, is onbruikbaar.
       p.stand = Haalstand.mislukt;
+    } else if (!vanRadio) {
+      // Van jou: in de rij, maar niet in de notitie van deze radio — zie [AlVanJou].
+      p.eigen = t;
+      p.stand = Haalstand.geland;
     } else {
       p.eigen = t;
       p.doorRadio = true;

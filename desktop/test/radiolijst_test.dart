@@ -142,6 +142,24 @@ void main() {
           isNull);
     });
 
+    test('DE KERN: een obscure live-opname van single-lengte wint niet van de bekende versie', () {
+      // Kwaliteitscontrole van 26-09-2026: "Stayin' Alive" uit Tokio (3:55, rang 29.823) won van de
+      // Saturday Night Fever-versie (rang 722.791), alleen omdat hij korter was.
+      final t = <T>[
+        (artiest: 'Bee Gees', titel: "Stayin' Alive", rang: 29823, seconden: 235),
+        (artiest: 'Bee Gees', titel: "Stayin' Alive", rang: 722791, seconden: 285),
+      ];
+      expect(besteTreffer(t, 'Bee Gees', "Stayin' Alive"), 1);
+    });
+
+    test('DE KERN: een onbekende toevoeging verliest van de radio-edit', () {
+      final t = <T>[
+        (artiest: 'Mo-Do', titel: 'Eins, Zwei, Polizei (Einstein Dr. Dj Konzept)', rang: 189368, seconden: 242),
+        (artiest: 'Mo-Do', titel: 'Eins, Zwei, Polizei (Radio Edit)', rang: 144731, seconden: 202),
+      ];
+      expect(besteTreffer(t, 'Mo-Do', 'Eins, Zwei, Polizei'), 1);
+    });
+
     test('DE VAL: alleen een lange versie is beter dan niets', () {
       final t = <T>[(artiest: 'Faithless', titel: 'Insomnia', rang: 9, seconden: 526)];
       expect(besteTreffer(t, 'Faithless', 'Insomnia'), 0);

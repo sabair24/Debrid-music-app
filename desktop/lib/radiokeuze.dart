@@ -31,18 +31,52 @@ enum Uitvoering { origineel, radio, bewerking }
 ///
 /// Deezer schrijft het allebei. "Mr. Vain (Radio Edit)" en "Mr. Vain - Radio Edit" zijn hetzelfde
 /// nummer, en één van de twee vormen herkennen is hetzelfde als geen van beide herkennen.
-String _staart(String titel) {
-  final buf = StringBuffer();
+String _staart(String titel) => _staartDelen(titel).join(' ');
+
+/// De delen van [_staart] los: elk paar haakjes apart, en wat er achter de streep staat.
+List<String> _staartDelen(String titel) {
   titel = _gewoneTekens(titel);
-  for (final m in RegExp(r'[\(\[]([^\)\]]*)[\)\]]').allMatches(titel)) {
-    buf
-      ..write(m.group(1) ?? '')
-      ..write(' ');
-  }
   final streep = titel.indexOf(' - ');
-  if (streep > 0) buf.write(titel.substring(streep + 3));
-  return buf.toString().toLowerCase();
+  return [
+    for (final m in _haakjes.allMatches(titel)) (m.group(1) ?? '').toLowerCase(),
+    if (streep > 0) titel.substring(streep + 3).toLowerCase(),
+  ];
 }
+
+final _haakjes = RegExp(r'[\(\[]([^\)\]]*)[\)\]]');
+
+/// Een gast, tot het eind van zijn haakjes — of tot een woord dat weer over de uitvoering gaat.
+///
+/// Gemeten in de eindbeoordeling van 26-09-2026: "(feat. Culture Club)" telde als clubmix en
+/// "(feat. Oliver Heldens)" als live-opname — "club" en "o-live-r" stonden er letterlijk in — en
+/// allebei werden ze geweerd als bewerking. "(feat. X Remix)" blijft wel een remix.
+final _gast = RegExp(r'\b(feat\.?|ft\.?|featuring)\s.*?(?=\s(remix|rmx|mix|edit|version|dub|live)\b|$)');
+
+/// "with" als gast alleen vooraan in de haakjes — "(with Ellie Goulding)"; in "(Dance With Me)" is
+/// het een woord van de titel. Ook hier tot een versiewoord: "(with X Remix)" blijft een remix.
+final _metGast = RegExp(r'^\s*with\s.*?(?=\s(remix|rmx|mix|edit|version|dub|live)\b|$)');
+
+/// De staart zonder gasten, per deel — zie [_gast] en [_metGast].
+///
+/// Behalve een orkest of strijkers: "(with The Royal Philharmonic Orchestra)" is geen gast maar een
+/// nieuwe opname, en die hoort als bewerking te tellen ([_eerstAnders]) en niet als het origineel
+/// (tweede beoordeling van 26-09-2026).
+///
+/// En zonder filmnaam ([_uitFilm]): in `- From "The Breakfast Club" Soundtrack` stond "club", en
+/// dan werd "Don't You (Forget About Me)" een clubmix (derde beoordeling van 26-09-2026).
+List<String> _delenZonderGast(String titel) => [
+      for (final d in _staartDelen(titel))
+        (_orkest.hasMatch(d) ? d : d.replaceFirst(_metGast, '').replaceAll(_gast, ' '))
+            .replaceAll(_uitFilm, ' ')
+    ];
+
+final _orkest = RegExp(r'\b(orchestra|orchestral|philharmonic|symphonic|strings|choir)\b');
+
+String _staartZonderGast(String titel) => _delenZonderGast(titel).join(' ');
+
+/// Een filmnaam achter "from": `- From "Saturday Night Fever" Soundtrack`. De naam van de film zegt
+/// niets over de uitvoering — het is juist de bekendste — dus die woorden tellen niet als onbekend.
+final _uitFilm = RegExp(r'\bfrom\b.*\b(soundtrack|motion picture|film|movie|ost|musical|series)\b.*$');
 
 /// Typografische tekens terug naar gewone, en een laag streepje naar een spatie.
 ///
@@ -84,9 +118,15 @@ String vouw(String s) {
 /// Gemeten op 26-09-2026 op Deezer: "What Is Love - Reloaded (Radio Edit)" (een latere heropname),
 /// "It's My Life (2011 Version)", "Blue (Da Ba Dee) (Hannover Rmx)". Ze telden alle drie als de
 /// gewone versie.
+///
+/// En een repetitie, een demo, een sessie of een live-opname — ook met "Radio" erbij: gemeten in de
+/// kwaliteitscontrole van 26-09-2026 golden "Losing My Religion (Live From … BBC Radio 1)" en
+/// "The Man Who Sold the World (Rehearsal)" als de gewone versie.
 final RegExp _eerstAnders = RegExp(r'\b(rmx|remix|remixes|reloaded|redux|re-recorded|rerecorded|'
     r'sped up|slowed|acoustic|megamix|medley|mashup|christmas|xmas|a cappella|acapella|acappella|'
-    r'a-pella)\b|\b(19|20)\d\d (version|mix|edit)\b');
+    r'a-pella|live|demos?|rehearsals?|sessions?|boom ?box|outtakes?|take \d+|'
+    r'orchestra|orchestral|philharmonic|symphonic|strings|choir)\b|'
+    r'\b(19|20)\d\d (version|mix|edit)\b');
 
 /// Radioversies die anders heten dan "Radio Edit". Gemeten op 26-09-2026: "(Airplay Mix)",
 /// "(Video Edit)" (Eiffel 65 — Blue), "(Single Mix)", en 7" in al zijn spellingen.
@@ -134,7 +174,8 @@ const List<String> _anders = [
   'a-pella',
   'apella',
   'karaoke',
-  'live',
+  // Geen "live" hier: als losse tekst stond het in "Oliver" en "Olive", en de echte live-opname vangt
+  // [_eerstAnders] al als heel woord.
   'unplugged',
   'cover',
   // Een tv-programma waarin artiesten elkaars liedjes zingen. Gezien op 26-09-2026: drie keer Pat
@@ -166,9 +207,9 @@ final RegExp _nooit = RegExp(
 /// Hoort dit nummer nooit op een radio? Zie [_nooit].
 bool nooitOpRadio(String titel) => _nooit.hasMatch(_staart(titel));
 
-/// Wat voor uitvoering dit is, alleen op de titel af.
+/// Wat voor uitvoering dit is, alleen op de titel af. Een gast telt niet mee — zie [_gast].
 Uitvoering uitvoeringVan(String titel) {
-  final s = _staart(titel);
+  final s = _staartZonderGast(titel);
   if (s.trim().isEmpty) return Uitvoering.origineel;
   if (_eerstAnders.hasMatch(s)) return Uitvoering.bewerking;
   for (final m in _gewoon) {
@@ -185,6 +226,39 @@ Uitvoering uitvoeringVan(String titel) {
   // bewerkingen, zodat "Remix Edit" niet als radio-edit doorgaat.
   if (s.contains('edit') || s.contains('short version')) return Uitvoering.radio;
   return Uitvoering.origineel;
+}
+
+/// Woorden die een staart mag bevatten zonder iets onbekends te zeggen.
+///
+/// Ook wat een film of een heruitgave aankondigt: `- From "Saturday Night Fever" Soundtrack` is de
+/// bekendste "Stayin' Alive" die er is, en "(Deluxe Edition)" of "(US Radio Edit)" is geen andere
+/// uitvoering (eindbeoordeling van 26-09-2026).
+const Set<String> _bekendeStaart = {
+  'radio', 'edit', 'version', 'single', 'mix', 'original', 'album', 'remaster', 'remastered',
+  'inch', 'short', 'cut', 'airplay', 'video', 'mono', 'stereo', 'clean', 'explicit', 'main', 'lp',
+  'from', 'the', 'of', 'a', 'digital', 'bonus', 'track', 'uncut', 'vocal', 'full', 'length',
+  'soundtrack', 'theme', 'motion', 'picture', 'ost', 'film', 'movie', 'edition', 'deluxe',
+  'digitally', 'expanded', 'anniversary', 'us', 'uk', 'radioversion', 'singleversion',
+  'albumversion', 'and', 'in',
+};
+
+final _woordgrens = RegExp(r'[^a-z0-9]+');
+final _getal = RegExp(r'^\d+$');
+
+/// Zegt de staart iets wat geen bekende versieaanduiding is — een naam, een "Konzept"?
+///
+/// Gemeten in de kwaliteitscontrole van 26-09-2026: "Eins, Zwei, Polizei (Einstein Dr. Dj Konzept)"
+/// telde als de gewone versie en won van "(Radio Edit)" omdat hij iets bekender was. Een gast
+/// ("feat. …", zie [_gast]) telt niet als onbekend, en een woord dat in [gevraagd] staat evenmin: dan
+/// hoort het bij de naam van het liedje — "Sweet Dreams (Are Made of This)".
+bool vreemdeStaart(String titel, {String gevraagd = ''}) {
+  final eigen = {for (final w in _gewoneTekens(gevraagd).toLowerCase().split(_woordgrens)) w};
+  // Zonder gasten en zonder filmnaam: zie [_delenZonderGast].
+  for (final w in _staartZonderGast(titel).split(_woordgrens)) {
+    if (w.isEmpty || _bekendeStaart.contains(w) || eigen.contains(w) || _getal.hasMatch(w)) continue;
+    return true;
+  }
+  return false;
 }
 
 /// De titel zonder wat er over de uitvoering in staat: waarop twee versies hetzelfde LIEDJE zijn.
@@ -217,36 +291,87 @@ typedef Aanbod = ({String artiest, String titel});
 /// gebeurt en dat was te veel.
 const int kBewerkingPerTien = 2;
 
+/// Duurt dit zo lang als een single? Tweeënhalve tot viereneenhalve minuut.
+///
+/// Gemeten op 26-09-2026: voor "Culture Beat — Mr. Vain" koos de radio de versie van 5:36, voor
+/// "Sash! — Ecuador" 5:55 en voor "Technotronic — Pump Up The Jam" 5:22 — de gewone titel, maar de
+/// albumversie. Singles en radio-edits uit die tijd zitten vrijwel altijd onder de vierenhalve
+/// minuut. Zonder lengte (0) weten we het niet, en dat telt niet als single.
+bool heeftSinglelengte(int seconden) => seconden >= 150 && seconden <= 270;
+
+/// Eén uitvoering van een liedje, om uit te kiezen. [rang] is hoe bekend hij is (Deezer; hoger is
+/// bekender, 0 als het niet bekend is), [seconden] hoe lang (0 als het niet bekend is).
+typedef Versie = ({String titel, int rang, int seconden});
+
+/// Welke van [versies] — allemaal hetzelfde liedje — de radio speelt. De index.
+///
+/// Eén keuze voor elke weg waarlangs de radio nummers krijgt: de Deezer-lijst ([kiesNummers]) en de
+/// lijst van het model (`besteTreffer`). Met twee eigen volgordes kreeg hetzelfde liedje langs de
+/// ene weg een andere uitvoering dan langs de andere (tweede beoordeling van 26-09-2026).
+///
+/// 1. **Singlelengte** ([heeftSinglelengte]) — behalve bij een titel die niets over de uitvoering
+///    zegt en minder dan half zo bekend is als de bekendste: zonder die grens won een live-opname
+///    uit Tokio van 3:55 (rang 29.823), kaal getiteld, van de Saturday Night Fever-versie van
+///    "Stayin' Alive" (722.791). Een versie die zichzelf "Radio Edit" of "7" Version" noemt, telt
+///    altijd: bij de eerste controle koos de radio in 9 van de 25 nummers de albumversie.
+/// 2. **De bekendste** — maar een onbekende toevoeging ([vreemdeStaart], met [gevraagd] als de
+///    gevraagde titel) wijkt voor een versie zonder, zolang die minstens half zo bekend is. Alleen
+///    dan: bekendheid is juist wat een naam als "Einstein Konzept" niet heeft.
+/// 3. Bij gelijke bekendheid de gewone titel vóór de radio-edit, en dan de eerste.
+///
+/// In stappen en niet paarsgewijs, zodat de volgorde van [versies] niets uitmaakt.
+int kiesUitvoering(List<Versie> versies, {String gevraagd = ''}) {
+  if (versies.length < 2) return 0;
+  int hoogste(Iterable<int> ii) => ii.map((i) => versies[i].rang).reduce((a, b) => a > b ? a : b);
+  final alle = [for (var i = 0; i < versies.length; i++) i];
+  final max = hoogste(alle);
+  bool single(int i) =>
+      heeftSinglelengte(versies[i].seconden) &&
+      (uitvoeringVan(versies[i].titel) == Uitvoering.radio || versies[i].rang * 2 >= max);
+  final singles = [for (final i in alle) if (single(i)) i];
+  final kandidaten = singles.isEmpty ? alle : singles;
+  final top = hoogste(kandidaten);
+  final kanshebbers = [for (final i in kandidaten) if (versies[i].rang * 2 >= top) i];
+  final zonder = [
+    for (final i in kanshebbers)
+      if (!vreemdeStaart(versies[i].titel, gevraagd: gevraagd)) i
+  ];
+  final uit = zonder.isEmpty ? kanshebbers : zonder;
+  return uit.reduce((a, b) {
+    if (versies[b].rang != versies[a].rang) return versies[b].rang > versies[a].rang ? b : a;
+    return uitvoeringVan(versies[b].titel).index < uitvoeringVan(versies[a].titel).index ? b : a;
+  });
+}
+
 /// Welke regels uit [aanbod] de radio in mogen, in dezelfde volgorde.
 ///
 /// Geeft INDEXEN terug en geen nieuwe lijst, zodat de aanroeper zijn eigen soort behoudt en er
 /// niets van de gegevens verloren gaat onderweg.
 ///
-/// [seconden] mag erbij, in dezelfde volgorde: dan wint bij twee even gewone uitvoeringen de versie
-/// die zo lang duurt als een single (zie `heeftSinglelengte` in radiolijst.dart) — Deezer noemt
+/// [seconden] en [rang] mogen erbij, in dezelfde volgorde — zie [kiesUitvoering]. Deezer noemt
 /// "Mr. Vain" ook in de albumversie van 5:36.
 List<int> kiesNummers(List<Aanbod> aanbod,
-    {int bewerkingPerTien = kBewerkingPerTien, List<int>? seconden}) {
-  bool single(int i) {
-    final s = seconden == null || i >= seconden.length ? 0 : seconden[i];
-    return s >= 150 && s <= 270;
-  }
+    {int bewerkingPerTien = kBewerkingPerTien, List<int>? seconden, List<int>? rang}) {
+  int op(List<int>? l, int i) => l == null || i >= l.length ? 0 : l[i];
 
-  // 1. Per liedje de beste uitvoering. De eerste met de laagste rang wint, zodat de volgorde die
-  //    erin ging — bij een radio een geschudde volgorde — bewaard blijft.
-  final beste = <String, int>{};
+  // 1. Per liedje één uitvoering, en dezelfde als het model zou krijgen: zie [kiesUitvoering]. Eerst
+  //    had deze weg een eigen volgorde, en dan kreeg "Stayin' Alive" van Deezer een obscure
+  //    live-opname en van het model de Saturday Night Fever-versie (tweede beoordeling van
+  //    26-09-2026). Een bewerking alleen als er van dat liedje niets anders is.
+  //    Per artiest zoals de afwisseling hem telt ([artiestSleutel]): "Freak Out" van "2 Fabiola" en
+  //    van "2 Fabiola feat. Loredana" is één liedje (eindbeoordeling van 26-09-2026).
+  final groepen = <String, List<int>>{};
   for (var i = 0; i < aanbod.length; i++) {
     if (nooitOpRadio(aanbod[i].titel)) continue;
-    final sleutel = '${_plat(aanbod[i].artiest)}|${basisTitel(aanbod[i].titel)}';
-    final zit = beste[sleutel];
-    if (zit == null) {
-      beste[sleutel] = i;
-      continue;
-    }
-    final ui = uitvoeringVan(aanbod[i].titel).index, uz = uitvoeringVan(aanbod[zit].titel).index;
-    if (ui < uz || (ui == uz && single(i) && !single(zit))) beste[sleutel] = i;
+    (groepen['${artiestSleutel(aanbod[i].artiest)}|${basisTitel(aanbod[i].titel)}'] ??= []).add(i);
   }
-  final houden = beste.values.toSet();
+  final houden = <int>{};
+  for (final g in groepen.values) {
+    final gewoon = [for (final i in g) if (uitvoeringVan(aanbod[i].titel) != Uitvoering.bewerking) i];
+    final uit = gewoon.isEmpty ? g : gewoon;
+    houden.add(uit[kiesUitvoering(
+        [for (final i in uit) (titel: aanbod[i].titel, rang: op(rang, i), seconden: op(seconden, i))])]);
+  }
 
   // 2. En dan het rantsoen. De toets is `(bewerkingen + 1) * 10 <= (erin + 1) * perTien`: pas als er
   //    genoeg gewone nummers staan mag er weer een bewerking bij. Daardoor begint een radio nooit
@@ -277,21 +402,127 @@ Set<String> artiestDelen(String artiest) => {
     };
 
 final _gastWoord = RegExp(r'\s(feat\.?|ft\.?|featuring|with|vs\.?|versus)\s', caseSensitive: false);
-final _samen = RegExp(r'\s+x\s+|\s*[&,+/]\s*', caseSensitive: false);
+// Een schuine streep alleen met ruimte eromheen: "AC/DC" is één band, en viel anders uiteen in "ac"
+// en "dc" (eindbeoordeling van 26-09-2026).
+// En "and the" net als "& the": "Prince and The Revolution" is Prince, zoals "Prince & The
+// Revolution" dat al was (vierde beoordeling van 26-09-2026 — anders speelde het zaad "Purple Rain"
+// een tweede keer, en telde het niet mee voor het plafond van de zaadartiest).
+final _samen =
+    RegExp(r'\s+x\s+|\s*[&,+]\s*|\s+/\s*|\s*/\s+|\s+and\s+the\s+', caseSensitive: false);
 
 /// De losse artiesten van een naam, als tekst, de hoofdartiest eerst.
 ///
 /// In twee stappen: eerst "feat.", "with" en "vs", dan pas " x ", "&" en komma's. In één keer
 /// splitste "Lil Nas X feat. Jack Harlow" op " X " en werd de hoofdartiest "Lil Nas" (review van
 /// 26-09-2026); een X aan het eind van een naam heeft geen spatie erachter en blijft zo staan.
+///
+/// Een lidwoord vooraan valt weg: "The Smashing Pumpkins" en "Smashing Pumpkins" zijn één band
+/// (kwaliteitscontrole van 26-09-2026 — de radio vond "1979" niet).
 List<String> artiestDelenTekst(String artiest) => [
       for (final stuk in artiest.toLowerCase().split(_gastWoord))
         for (final d in stuk.split(_samen))
-          if (d.trim().isNotEmpty) d.trim()
+          if (d.trim().replaceFirst(RegExp(r'^the\s+'), '') case final t when t.isNotEmpty) t
     ];
 
 /// Zijn dit dezelfde artiest, of een duo met hem erin? Zie [artiestDelen].
-bool zelfdeArtiest(String a, String b) => artiestDelen(a).intersection(artiestDelen(b)).isNotEmpty;
+///
+/// En als elk woord van de kortste naam een heel woord is van de langste — maar alleen bij minstens
+/// twee woorden: "Hall & Oates" is "Daryl Hall & John Oates", "Queen" is geen "Queen Latifah", en
+/// "Robin S" geen "Robin Schulz" (de "s" is daar geen woord).
+///
+/// Maar niet als de langste naam er een naspeler van maakt: "Smashing Pumpkins Tribute" en "The
+/// Nirvana Experience" zijn andere artiesten die dezelfde liedjes zingen, en de coverwacht kijkt
+/// alleen naar de titel (eindbeoordeling van 26-09-2026). Zie [_naspeler].
+bool zelfdeArtiest(String a, String b) {
+  if (artiestDelen(a).intersection(artiestDelen(b)).isNotEmpty) return true;
+  // Zonder lidwoorden en "and": "Hall and Oates" is {hall, oates}, net als "Hall & Oates" — eerst
+  // telde "and" als een woord van de naam en vond Soulseeks meest gewone spelling niets (derde
+  // beoordeling van 26-09-2026). "of" blijft: zie hieronder.
+  List<String> woordenVan(String deel) => [
+        for (final w in deel.split(RegExp(r'\s+')))
+          if (_plat(w) case final k when k.isNotEmpty && !_lidwoord.contains(k)) k
+      ];
+  Set<String> woorden(String s) => {for (final d in artiestDelenTekst(s)) ...woordenVan(d)};
+  final wa = woorden(a), wb = woorden(b);
+  final kortIsA = wa.length <= wb.length;
+  final kort = kortIsA ? wa : wb, lang = kortIsA ? wb : wa;
+  if (kort.length < 2 || !lang.containsAll(kort)) return false;
+  // Echte bands die zo heten als een naspeler ([_echteBand]) zijn gewoon die artiest.
+  if (_echteBand.contains(artiestSleutel(kortIsA ? b : a))) return true;
+  if (lang.difference(kort).any(_naspeler.contains)) return false;
+  // "Rumours of Fleetwood Mac": een "of" dat de kortste naam niet heeft, is een naspeler die zegt
+  // wíe hij naspeelt.
+  if (lang.contains('of') && !kort.contains('of')) return false;
+  // En per deel van de langste naam dat iets met de kortste deelt, hoogstens één woord erbij — en
+  // dan vooraan (een voornaam: "Daryl Hall") of "band"/"group". "The Australian Pink Floyd Show"
+  // heeft er twee; "Bon Jovi Forever", "The Pink Floyd Project" en "Fleetwood Mac UK" hebben er één
+  // áchter, en zijn andere groepen (tweede en derde beoordeling van 26-09-2026). Een deel dat niets
+  // deelt telt niet mee: "Nick Cave and the Bad Seeds" is Nick Cave.
+  for (final deel in (kortIsA ? b : a).toLowerCase().split(_deelGrens)) {
+    final w = woordenVan(deel);
+    if (!w.any(kort.contains)) continue;
+    final erbij = [for (var i = 0; i < w.length; i++) if (!kort.contains(w[i])) i];
+    if (erbij.length > 1) return false;
+    if (erbij.length == 1) {
+      final i = erbij.single;
+      final vooraan = i < w.indexWhere(kort.contains);
+      if (!vooraan && !_groepWoord.contains(w[i])) return false;
+      // Een land vooraan is geen voornaam: "Australian Pink Floyd", "UK Foo Fighters" (vierde
+      // beoordeling van 26-09-2026).
+      if (vooraan && _landWoord.contains(w[i])) return false;
+    }
+  }
+  return true;
+}
+
+final _deelGrens = RegExp(
+    r'\s(feat\.?|ft\.?|featuring|with|vs\.?|versus|and)\s|\s+x\s+|\s*[&,+]\s*|\s+/\s*|\s*/\s+');
+const Set<String> _lidwoord = {'the', 'a', 'an', 'and', 'de', 'het'};
+const Set<String> _groepWoord = {'band', 'group'};
+const Set<String> _landWoord = {
+  'australian', 'aussie', 'uk', 'us', 'usa', 'brit', 'british', 'american', 'dutch', 'german',
+  'italian', 'canadian', 'belgian', 'french', 'swedish', 'irish', 'scottish', 'danish',
+};
+
+/// Bands die een [_naspeler]-woord in hun eigen naam dragen, als [artiestSleutel]. "The Jimi Hendrix
+/// Experience" is Jimi Hendrix, en geen naspeler van hem (vierde beoordeling van 26-09-2026).
+const Set<String> _echteBand = {
+  'jimihendrixexperience', 'davebrubeckquartet', 'modernjazzquartet', 'electriclightorchestra',
+  'yellowmagicorchestra', 'orchestralmanoeuvresinthedark', 'budapestfestivalorchestra',
+};
+
+/// Woorden waarmee een naam zegt dat hij andermans muziek speelt. Zie [zelfdeArtiest].
+///
+/// Geen "band": "Dave Matthews" is de Dave Matthews Band.
+const Set<String> _naspeler = {
+  'tribute', 'tributes', 'karaoke', 'cover', 'covers', 'experience', 'orchestra', 'quartet',
+  'ensemble', 'players', 'singers', 'allstars', 'lullaby', 'show', 'story', 'legacy', 'revival',
+  'legends', 'salute', 'homage', 'celebration',
+};
+
+/// Is dit het liedje waar de radio vanaf begon — en dus niet nog eens welkom?
+///
+/// Van de zaadartiest zelf altijd: dat is hetzelfde nummer in een andere uitvoering. Van een ander
+/// alleen bij een titel die zo eigen is dat het een cover moet zijn — minstens drie woorden. Tori
+/// Amos' "Smells Like Teen Spirit" hoort niet in een Nirvana-radio, maar "Alive" van Sia wel in een
+/// Pearl Jam-radio en "Creep" van Stone Temple Pilots in een Radiohead-radio: andere liedjes met
+/// dezelfde naam (eindbeoordeling van 26-09-2026 — eerst viel elke gelijke titel weg).
+bool isZaadlied(String artiest, String titel, {required String zaadArtiest, required String zaadTitel}) {
+  final t = basisTitel(titel);
+  if (t.isEmpty || t != basisTitel(zaadTitel)) return false;
+  if (zelfdeArtiest(artiest, zaadArtiest)) return true;
+  return _titelWoorden(zaadTitel) >= 3;
+}
+
+/// Hoeveel woorden de naam van het liedje heeft, zonder wat er over de uitvoering achter staat.
+int _titelWoorden(String titel) {
+  var x = _gewoneTekens(titel);
+  final streep = x.indexOf(' - ');
+  if (streep > 0) x = x.substring(0, streep);
+  // Zonder apostrof: "Don't Cry" is twee woorden, geen drie ("don", "t", "cry").
+  x = x.replaceAll(_haakjes, ' ').replaceAll("'", '');
+  return RegExp(r'[\p{L}\p{N}]+', unicode: true).allMatches(x).length;
+}
 
 /// Wie een nummer maakt, zoals de afwisseling dat telt: "2 Fabiola feat. Loredana" is 2 Fabiola.
 ///
@@ -415,4 +646,30 @@ bool eigenPastOpPlek({
   }
   final a = plekSeconden ?? 0, b = eigenSeconden ?? 0;
   return a <= 0 || b <= 0 || (a - b).abs() <= speling;
+}
+
+/// Welk van je eigen nummers is het liedje [titel] van [artiest], als je een radio vanaf een
+/// aanbeveling start? De index in [eigen], of null.
+///
+/// Dezelfde artiest ([zelfdeArtiest]), hetzelfde liedje ([basisTitel]), en een uitvoering die op de
+/// plek past ([eigenPastOpPlek]): wie "Radio hieruit" op "Freak Out" drukt, wil niet beginnen met je
+/// "Freak Out ('97 Remix)". Nooit iets wat nooit op de radio hoort ([nooitOpRadio]).
+int? eigenZaadIndex(List<({String artiest, String titel, int? seconden})> eigen, String artiest,
+    String titel,
+    {int? seconden, required int speling}) {
+  final t = basisTitel(titel);
+  if (t.isEmpty) return null;
+  for (var i = 0; i < eigen.length; i++) {
+    final e = eigen[i];
+    if (basisTitel(e.titel) != t || !zelfdeArtiest(e.artiest, artiest) || nooitOpRadio(e.titel)) continue;
+    if (eigenPastOpPlek(
+        plekTitel: titel,
+        plekSeconden: seconden,
+        eigenTitel: e.titel,
+        eigenSeconden: e.seconden,
+        speling: speling)) {
+      return i;
+    }
+  }
+  return null;
 }

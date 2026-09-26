@@ -30,7 +30,8 @@
 library;
 
 import 'organize.dart' show TrackTags, baseName, fileWords;
-import 'radiokeuze.dart' show Uitvoering, artiestDelenTekst, nooitOpRadio, uitvoeringVan, vouw;
+import 'radiokeuze.dart'
+    show Uitvoering, artiestDelenTekst, nooitOpRadio, uitvoeringVan, vouw, zelfdeArtiest;
 
 /// Woorden die in een artiestnaam niets zeggen over WIE het is. Anders telt "DJ Dado" als gevonden
 /// in elk pad met "dj" erin, en "The Mackenzie" in elk pad met "the". "Project": Soulseek schrijft
@@ -56,10 +57,88 @@ const Set<String> _neutraal = {
 /// Woorden in een MAPNAAM die zeggen dat wat erin staat niet het origineel is. Gemeten op 26-09-2026
 /// (review op echte Soulseek-namen): "No Limit (Remixes)\03 - No Limit.flac", "Encore - Live And
 /// Direct\05 - Hyper Hyper.flac", "Karaoke Hits\…". Hele woorden: "Alive" is geen live.
+///
+/// Ook wat de titelkant ([uitvoeringVan]) al geen origineel noemt: een akoestische, unplugged,
+/// demo- of sessieplaat (eindbeoordeling van 26-09-2026 — "MTV Unplugged in New York\…" en "BBC
+/// Sessions\…" kwamen er zo door). "Live" staat hier NIET: zie [_mapLive].
 const Set<String> _mapVerraadt = {
-  'remix', 'remixes', 'extended', 'live', 'karaoke', 'tribute', 'instrumental', 'instrumentals',
-  'cover', 'covers', 'acapella', 'acappella', 'acapellas',
+  'remix', 'remixes', 'extended', 'karaoke', 'tribute', 'instrumental', 'instrumentals',
+  'cover', 'covers', 'acapella', 'acappella', 'acapellas', 'acoustic', 'unplugged', 'demo',
+  'demos', 'session', 'sessions', 'rehearsal', 'rehearsals', 'outtakes', 'megamix',
 };
+
+/// Een live-plaat aan zijn mapnaam: het hele woord "live" — "Live After Death", "Live (1992)",
+/// "Familiar To Millions (Live)", "Live And Direct" — en "in concert", "concert", "on stage" of
+/// KISS' "Alive!".
+///
+/// Behalve waar "live" een woord is van een studiotitel: Hole's "Live Through This" is een
+/// studioplaat, en daar viel elk nummer van af (eindbeoordeling van 26-09-2026). Eerst ving een
+/// lijstje vormen ("Live At", "(Live)") de live-platen, en toen glipten "Live After Death", "Live
+/// Killers" en "AC-DC - Live (1992)" erdoor (tweede beoordeling). Nu is het andersom: live, tenzij.
+/// En "Long Live …" is nooit live: Rainbow's "Long Live Rock 'n' Roll", "Long Live the Angels"
+/// (derde beoordeling). Wat van de artiest of de titel zelf is, haalt [_zonderEigen] er eerst uit.
+final _mapLive = RegExp(
+    r"(?<!long )\blive\b(?!\s+(through this|forever|and let die|and die|to tell|wire|your life|"
+    r"like you were dying|it up|it out|a little|and learn|while we're young|to win|and breathe)\b)|"
+    r"\bin concert\b|\bconcerts?\b|\bon stage\b|\balive\s*(!|ii+\b|(19|20)\d\d\b)",
+    caseSensitive: false);
+
+final _jaarVooraan = RegExp(r'^[\(\[]?(19|20)\d\d[\)\]]?\s*[-–—_.]?\s*');
+final _lidwoordVooraan = RegExp(r'^the\s+');
+
+/// [mappen] zonder de naam van de artiest en zonder de titel: de band Live in "Live - Throwing
+/// Copper\…", de titel in "Live and Let Die (Single)\…". Een naam van één woord alleen als hele map
+/// of vooraan gevolgd door een streep — "Live\Live At The Paradiso\…" blijft een live-plaat, en
+/// "Oasis\Familiar To Millions (Live)\…" ook voor "Live Forever". Een langere naam ("2 Live Crew")
+/// overal: die kan niets anders betekenen. Een jaartal of "The" vooraan telt niet mee, en elk soort
+/// streepje wel ("Live – Throwing Copper", "(1994) Live - …") — derde beoordeling van 26-09-2026.
+String _zonderEigen(String mappen, String artiest, String titel) {
+  final a = _gewoneTekens(artiest).toLowerCase().trim().replaceFirst(_lidwoordVooraan, '');
+  final t = _gewoneTekens(_titelZonderStaart(titel)).toLowerCase().replaceAll(_haakjes, ' ').trim();
+  final vooraan = a.isEmpty ? null : RegExp('^${RegExp.escape(a)}' r'\s*[-–—_]+\s*');
+  final stukken = [
+    for (final m in _gewoneTekens(mappen).toLowerCase().split(_scheiding))
+      _zonderArtiestVooraan(m.trim(), a, vooraan)
+  ];
+  var x = stukken.join('/');
+  if (a.contains(' ')) x = _zonderZin(x, a);
+  return _zonderZin(x, t);
+}
+
+String _zonderArtiestVooraan(String map, String a, RegExp? vooraan) {
+  if (vooraan == null) return map;
+  final kaal = map.replaceFirst(_jaarVooraan, '').replaceFirst(_lidwoordVooraan, '');
+  // "Live (Band)", "Live [US]": wat Soulseek achter een naam zet om hem uit elkaar te houden.
+  if (kaal == a || kaal.replaceFirst(_staartHaakjes, '') == a) return '';
+  final m = vooraan.firstMatch(kaal);
+  final uit = m == null ? map : kaal.substring(m.end);
+  // En "The Best Of Live", "Greatest Hits by Live": dat is de naam, geen live-plaat (vierde
+  // beoordeling van 26-09-2026).
+  return uit.replaceAll(RegExp(r'\b(of|by)\s+' '${RegExp.escape(a)}' r'(?![a-z0-9])'), ' ');
+}
+
+final _staartHaakjes = RegExp(r'\s*[\(\[][^\)\]]*[\)\]]\s*$');
+
+/// [s] (klein geschreven) zonder [zin] waar die als hele woorden in staat. Alleen de eerste keer
+/// als [eenmaal]: in "Tribute - Tenacious D Tribute.mp3" is de tweede "Tribute" van de peer.
+String _zonderZin(String s, String zin, {bool eenmaal = false}) {
+  if (zin.isEmpty) return s;
+  final r = RegExp('(?<![a-z0-9])${RegExp.escape(zin)}(?![a-z0-9])');
+  return eenmaal ? s.replaceFirst(r, ' ') : s.replaceAll(r, ' ');
+}
+
+/// De bestandsnaam zonder de titel en de artiest, voor [nooitOpRadio]. "01 - Tribute.flac" van
+/// Tenacious D is geen tribute — en werd zo toch geweigerd: achter de streep stond "Tribute", en dat
+/// las de coverwacht als een aankondiging (derde controle van 26-09-2026). Wat er dan nog staat,
+/// "(Karaoke Version)", is wel van de peer. Elk één keer: de plek van de titel, niet elk woord dat
+/// er toevallig op lijkt.
+String _naamZonderEigen(String naam, String artiest, String titel) {
+  final t = _gewoneTekens(_titelZonderStaart(titel)).toLowerCase().replaceAll(_haakjes, ' ').trim();
+  final a = _gewoneTekens(artiest).toLowerCase().trim();
+  return _zonderZin(_zonderZin(_gewoneTekens(naam).toLowerCase(), t, eenmaal: true), a, eenmaal: true);
+}
+
+String _gewoneTekens(String s) => s.replaceAll(RegExp('[‘’´`]'), "'").replaceAll('_', ' ');
 
 /// Hoeveel seconden een radiobestand van de catalogus mag afwijken. Eén getal voor "mag dit bestand
 /// op deze plek" én "heb je dit al" — met twee getallen (15 en 5) werd een bewaard radionummer dat
@@ -134,7 +213,16 @@ bool _artiestInPad(String artiest, String pad) {
     return true;
   }
   final k = tokens.join();
-  return k.length >= 4 && _sleutel(pad).contains(k);
+  if (k.length >= 4 && _sleutel(pad).contains(k)) return true;
+  // En een stuk van het pad dat volgens de Deezer-kant dezelfde artiest is ([zelfdeArtiest]): een
+  // duo onder zijn korte naam. "Hall & Oates - Greatest Hits\…" voor "Daryl Hall & John Oates" viel
+  // hier af, terwijl de lijst van het model hem wel zo noemt (eindbeoordeling van 26-09-2026).
+  for (final map in pad.split(_scheiding)) {
+    for (final stuk in map.replaceAll(_extensie, '').split(' - ')) {
+      if (stuk.trim().isNotEmpty && zelfdeArtiest(stuk, artiest)) return true;
+    }
+  }
+  return false;
 }
 
 /// De woorden van [s] zonder wat er tussen haakjes staat.
@@ -175,10 +263,14 @@ bool radioBestandKlopt({
   // 1. Een gewone plek krijgt geen bewerking — niet in de naam, en niet als de MAP het zegt. En een
   //    cover of karaoke nergens.
   if (gewonePlek && _bewerkingInHaakjes(naam)) return false;
-  if (nooitOpRadio(naam.replaceAll(_extensie, ''))) return false;
+  if (nooitOpRadio(_naamZonderEigen(naam.replaceAll(_extensie, ''), artiest, titel))) return false;
   final mapWoorden = _woorden(mappen.replaceAll(_scheiding, ' '));
+  // Zonder de woorden van de artiest en de titel zelf: "The Acoustic" of "Demo Song" zeggen dan
+  // niets over de map. Voor live gaat het preciezer — zie [_zonderEigen].
+  final eigenWoorden = {..._woorden(artiest), ..._woorden(titel)};
   if (gewonePlek &&
-      (mapWoorden.any(_mapVerraadt.contains) ||
+      (mapWoorden.difference(eigenWoorden).any(_mapVerraadt.contains) ||
+          _mapLive.hasMatch(_zonderEigen(mappen, artiest, titel)) ||
           mappen.toLowerCase().contains('in the style of'))) {
     return false;
   }

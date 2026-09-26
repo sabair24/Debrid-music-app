@@ -141,47 +141,30 @@ List<AiNummer> leesNummers(Object? json) {
   return uit;
 }
 
-/// Duurt dit zo lang als een single? Tweeënhalve tot viereneenhalve minuut.
-///
-/// Gemeten op 26-09-2026: voor "Culture Beat — Mr. Vain" koos de radio de versie van 5:36, voor
-/// "Sash! — Ecuador" 5:55 en voor "Technotronic — Pump Up The Jam" 5:22 — de gewone titel, maar de
-/// albumversie. Singles en radio-edits uit die tijd zitten vrijwel altijd onder de vierenhalve
-/// minuut. Zonder lengte (0) weten we het niet, en dat telt niet als single.
-bool heeftSinglelengte(int seconden) => seconden >= 150 && seconden <= 270;
-
 /// Welke Deezer-treffer is het nummer dat het model bedoelde? De index, of null als er geen is.
 ///
 /// Zelfde artiest (gasten tellen niet), zelfde liedje (op [basisTitel]), en nooit een bewerking of
-/// een cover — het model vroeg om het origineel of de radioversie. Van wat overblijft eerst wat zo
-/// lang duurt als een single ([heeftSinglelengte]), dan de gewoonste uitvoering, en bij gelijke
-/// stand de bekendste. Geen treffer is een antwoord: dan bestond het nummer niet zoals het model het
+/// een cover — het model vroeg om het origineel of de radioversie. Van wat overblijft kiest
+/// [kiesUitvoering]. Geen treffer is een antwoord: dan bestond het nummer niet zoals het model het
 /// noemde, en dat is precies wat deze toets moet vangen.
 int? besteTreffer(List<({String artiest, String titel, int rang, int seconden})> treffers,
     String artiest, String titel) {
   final t = basisTitel(titel);
   if (t.isEmpty || artiestDelen(artiest).isEmpty) return null;
-  int? beste;
-  for (var i = 0; i < treffers.length; i++) {
-    final x = treffers[i];
-    // Een duo dat Deezer onder één naam zet ("Niels Destadsbader" voor "Niels Destadsbader & Regi")
-    // is hetzelfde nummer — zie [zelfdeArtiest]; Robin S en Robin Schulz niet.
-    if (!zelfdeArtiest(x.artiest, artiest) || basisTitel(x.titel) != t) continue;
-    final u = uitvoeringVan(x.titel);
-    if (u == Uitvoering.bewerking || nooitOpRadio(x.titel)) continue;
-    final b = beste;
-    if (b == null) {
-      beste = i;
-      continue;
-    }
-    // Gewoon en radio zijn hier even goed — het model vroeg om het origineel OF de radioversie. De
-    // lengte beslist: gemeten op 26-09-2026 was bij 9 van 25 bekende hits de gewone titel de
-    // albumversie en de "(Radio Edit)" de single.
-    final sx = heeftSinglelengte(x.seconden), sb = heeftSinglelengte(treffers[b].seconden);
-    if (sx != sb) {
-      if (sx) beste = i;
-      continue;
-    }
-    if (x.rang > treffers[b].rang) beste = i;
-  }
-  return beste;
+  // Eerst alles wat in aanmerking komt: dezelfde artiest (een duo dat Deezer onder één naam zet is
+  // hetzelfde nummer — zie [zelfdeArtiest]), hetzelfde liedje, geen bewerking en geen cover.
+  final goed = [
+    for (var i = 0; i < treffers.length; i++)
+      if (zelfdeArtiest(treffers[i].artiest, artiest) &&
+          basisTitel(treffers[i].titel) == t &&
+          uitvoeringVan(treffers[i].titel) != Uitvoering.bewerking &&
+          !nooitOpRadio(treffers[i].titel))
+        i
+  ];
+  if (goed.isEmpty) return null;
+  // Welke van die uitvoeringen: zie [kiesUitvoering] — dezelfde keuze als voor de Deezer-lijst.
+  final k = kiesUitvoering(
+      [for (final i in goed) (titel: treffers[i].titel, rang: treffers[i].rang, seconden: treffers[i].seconden)],
+      gevraagd: titel);
+  return goed[k];
 }

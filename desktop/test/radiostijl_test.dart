@@ -84,6 +84,45 @@ void main() {
     });
   });
 
+  group('rock is niet één ding (kwaliteitscontrole van 26-09-2026)', () {
+    test('DE KERN: grunge en alternatief tegenover hardrock en ballads', () {
+      expect(rockTak(['Grunge', 'Alternative Rock']), 'alternatief');
+      expect(rockTak(['Hard Rock', 'Arena Rock']), 'klassiek');
+      expect(rockTak(['Pop Rock', 'Ballad']), 'klassiek');
+      expect(rockTak(['Euro House']), isNull);
+      expect(meerderheidTak(['alternatief', 'klassiek', 'alternatief', null]), 'alternatief');
+      expect(meerderheidTak(['alternatief', 'klassiek']), isNull);
+    });
+
+    test('DE KERN: een Nirvana-radio weert Bon Jovi en houdt Pearl Jam', () async {
+      final map = Directory.systemTemp.createTempSync('dm_rock_');
+      addTearDown(() {
+        try {
+          map.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final b = Stijlboek(
+        bestand: File('${map.path}${Platform.pathSeparator}radiostijl.json'),
+        audioDbGenre: (_) async => 'Rock',
+        discogsNummer: (a, t) async => switch (a) {
+          'Bon Jovi' => [(jaar: 1992, genres: ['Rock'], stijlen: ['Hard Rock', 'Arena Rock'])],
+          'Pearl Jam' => [(jaar: 1991, genres: ['Rock'], stijlen: ['Grunge', 'Alternative Rock'])],
+          _ => const <DiscogsUitgave>[],
+        },
+      );
+      const zaad = (familie: Stijlfamilie.rock, jaar: 1991);
+      expect((await b.keur('Bon Jovi', 'Keep the Faith', zaad, zaadTak: 'alternatief')).mag, isFalse);
+      expect((await b.keur('Pearl Jam', 'Alive', zaad, zaadTak: 'alternatief')).mag, isTrue);
+      expect((await b.keur('Onbekend', 'Iets', zaad, zaadTak: 'alternatief')).mag, isTrue,
+          reason: 'weet Discogs de tak niet, dan geen nee');
+    });
+
+    test('DE KERN: een bootleg telt niet', () {
+      expect(isBootleg(['CD', 'Album', 'Unofficial Release']), isTrue);
+      expect(isBootleg(['CD', 'Maxi-Single']), isFalse);
+    });
+  });
+
   group('welke Discogs-uitgave van deze artiest is', () {
     test('DE KERN: een hele naam, geen deel — Leon Sash is Sash! niet', () {
       expect(uitgaveVanArtiest('Leon Sash - I Remember Newport', 'Sash!'), isFalse);

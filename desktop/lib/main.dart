@@ -27,7 +27,7 @@ import 'radiokeuze.dart';
 import 'radiobestand.dart' show kRadioSpeling;
 import 'radiolijst.dart' show AiNummer;
 import 'radiosmaak.dart';
-import 'radiostijl.dart' show Stijlboek, Stijloordeel, Zaadstijl;
+import 'radiostijl.dart' show Stijlboek, Stijlfamilie, Stijloordeel, Zaadstijl;
 import 'radiovoorraad.dart' show Haalstand;
 import 'radioplan.dart';
 import 'oordelen.dart';
@@ -9313,23 +9313,37 @@ class _RadioAfstemming extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final nu = Radiosmaak.uit(context.select<AppSettings, String>((s) => s.radioSmaak));
+    // Waarom het ophalen even stilstaat, als dat zo is — zie [RadioBesturing.pauze]. Zonder deze regel
+    // liep een radio met een verlopen koppeling stil leeg, en niemand zag waarom.
+    final pauze = context.select<RadioBesturing, String?>((r) => r.pauze);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-      child: Wrap(
-        spacing: 6,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (final s in Radiosmaak.values)
-            ChoiceChip(
-              label: Text(s.label, style: const TextStyle(fontSize: 12)),
-              selected: s == nu,
-              onSelected: (_) => stemRadioAf(context, s),
-              backgroundColor: Colors.white.withValues(alpha: .06),
-              selectedColor: _accent,
-              labelStyle: TextStyle(color: s == nu ? Colors.white : _muted),
-              side: BorderSide(color: s == nu ? _accent : Colors.white.withValues(alpha: .12)),
-              shape: const StadiumBorder(),
-              showCheckmark: false,
-              visualDensity: VisualDensity.compact,
+          Wrap(
+            spacing: 6,
+            children: [
+              for (final s in Radiosmaak.values)
+                ChoiceChip(
+                  label: Text(s.label, style: const TextStyle(fontSize: 12)),
+                  selected: s == nu,
+                  onSelected: (_) => stemRadioAf(context, s),
+                  backgroundColor: Colors.white.withValues(alpha: .06),
+                  selectedColor: _accent,
+                  labelStyle: TextStyle(color: s == nu ? Colors.white : _muted),
+                  side: BorderSide(color: s == nu ? _accent : Colors.white.withValues(alpha: .12)),
+                  shape: const StadiumBorder(),
+                  showCheckmark: false,
+                  visualDensity: VisualDensity.compact,
+                ),
+            ],
+          ),
+          if (pauze != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text('Ophalen staat even stil: $pauze',
+                  style: const TextStyle(color: _muted, fontSize: 12)),
             ),
         ],
       ),
@@ -10416,11 +10430,20 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
     return p != null && nogEr.contains(p);
   });
   if (!context.mounted) return;
+  // En zeggen wat er NIET kon, en waarom. Zonder dat kwam het overzicht na elke radio terug met
+  // dezelfde nummers, zonder uitleg (eindbeoordeling van 26-09-2026). Wie ze wil houden, zet ze de
+  // volgende keer bij "Houden".
+  final bleef = nogEr.length;
+  final gedaan = heeftPrullenbak || lib.isRemote
+      ? '$weg ${weg == 1 ? "nummer" : "nummers"} naar de prullenbak.'
+      : '$weg ${weg == 1 ? "nummer" : "nummers"} opgeruimd.';
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-    content: Text(heeftPrullenbak || lib.isRemote
-        ? '$weg ${weg == 1 ? "nummer" : "nummers"} naar de prullenbak.'
-        : '$weg ${weg == 1 ? "nummer" : "nummers"} opgeruimd.'),
-    duration: const Duration(seconds: 4),
+    content: Text(bleef == 0
+        ? gedaan
+        : '$gedaan $bleef ${bleef == 1 ? "kon" : "konden"} niet — een schijf zonder prullenbak of '
+            'een bestand dat openstond. Ze staan er nog, en komen de volgende keer terug in dit '
+            'overzicht.'),
+    duration: Duration(seconds: bleef == 0 ? 4 : 10),
   ));
 }
 
@@ -11473,10 +11496,12 @@ void _srcToastAction(BuildContext context, String m, String label, VoidCallback 
 /// hebt — de Sting-val uit `organize.dart`.
 ///
 /// [zaadArtiest] is de artiest waar de radio omheen gebouwd is, [zaad] het nummer waar hij vanaf
-/// begon; dat liedje komt er niet nóg een keer in, ook niet in een andere uitvoering. [al] is wat er
-/// al in de radio staat, voor het plafond per artiest — zie [spreidArtiesten].
+/// begon, en [zaadTitel] de titel daarvan als er geen eigen nummer is (een radio vanaf een
+/// aanbeveling); dat liedje komt er niet nóg een keer in, ook niet in een andere uitvoering — zie
+/// [isZaadlied]. [al] is wat er al in de radio staat, voor het plafond per artiest — zie
+/// [spreidArtiesten].
 List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
-    {String? zaadArtiest, Track? zaad, Iterable<String> al = const []}) {
+    {String? zaadArtiest, Track? zaad, String? zaadTitel, Iterable<String> al = const []}) {
   final index = <String, List<Track>>{};
   for (final t in lib.tracks) {
     (index['${recNorm(t.artist)}|${recNorm(t.title)}'] ??= []).add(t);
@@ -11496,20 +11521,23 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
     return null;
   }
 
-  final zaadLied = zaad == null ? null : '${artiestSleutel(zaad.artist)}|${basisTitel(zaad.title)}';
+  // Het zaadnummer komt er niet nóg eens in, en een cover ervan evenmin (Tori Amos' "Smells Like Teen
+  // Spirit" in een Nirvana-radio, gezien in de kwaliteitscontrole van 26-09-2026) — zie [isZaadlied].
+  final zaadNaam = zaadTitel ?? zaad?.title;
+  final zaadWie = zaadArtiest ?? zaad?.artist ?? '';
   final bruikbaar = [
     for (final r in recs)
       if (r.title.trim().isNotEmpty &&
           r.artist.trim().isNotEmpty &&
-          '${artiestSleutel(r.artist)}|${basisTitel(r.title)}' != zaadLied)
+          (zaadNaam == null || !isZaadlied(r.artist, r.title, zaadArtiest: zaadWie, zaadTitel: zaadNaam)))
         r
   ];
   // De ene weg waarlangs elke radio zijn nummers krijgt, dus de plek waar de versiekeuze hoort. Zie
   // `radiokeuze.dart`: van één liedje één uitvoering, en hoogstens twee bewerkingen per tien.
   final gekozen = kiesNummers([for (final r in bruikbaar) (artiest: r.artist, titel: r.title)],
-      seconden: [for (final r in bruikbaar) r.seconds]);
+      seconden: [for (final r in bruikbaar) r.seconds], rang: [for (final r in bruikbaar) r.rank]);
   // En afwisseling: niet de hele tijd dezelfde artiest, en nooit twee keer vlak na elkaar.
-  final eerder = [...al, if (zaad != null) zaad.artist];
+  final eerder = [...al, if (zaad != null) zaad.artist else if (zaadNaam != null && zaadArtiest != null) zaadArtiest];
   final volgorde = spreidArtiesten([for (final i in gekozen) bruikbaar[i].artist],
       zaad: zaadArtiest, al: eerder, ervoor: al.isEmpty ? eerder : const []);
   return [
@@ -11534,8 +11562,25 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
 /// [zaad] is het nummer uit je bibliotheek waar je de radio vanaf startte, en dat klinkt als EERSTE.
 /// Gemeten op 26-09-2026: "Radio vanaf hier" op Freak Out van 2 Fabiola begon met Cappella — het
 /// nummer zelf zat nergens in de rij, want het plan kwam helemaal van Deezer.
-Future<void> startRadio(BuildContext context, String artist, {String? titel, Track? zaad}) async {
+///
+/// Zonder [zaad] maar met [titel] — "Radio hieruit" op een aanbeveling — is het zaad je eigen
+/// uitvoering als je die hebt, en anders het eerste dat gehaald wordt, [seconden] lang. Eerst viel
+/// het liedje daar helemaal weg: het plan weert het zaadnummer, en alleen een eigen nummer werd er
+/// vooraan weer in gezet (eindbeoordeling van 26-09-2026).
+Future<void> startRadio(BuildContext context, String artist,
+    {String? titel, Track? zaad, int? seconden}) async {
   final lib = context.read<LibraryStore>();
+  if (zaad == null && titel != null) {
+    final eigen = lib.tracks;
+    final i = eigenZaadIndex(
+        [for (final t in eigen) (artiest: t.artist, titel: t.title, seconden: t.duration?.inSeconds)],
+        artist,
+        titel,
+        seconden: seconden,
+        speling: kRadioSpeling);
+    if (i != null) zaad = eigen[i];
+  }
+  final haalTitel = zaad == null && titel != null && titel.trim().isNotEmpty ? titel : null;
   final radio = context.read<RadioBesturing>();
   _srcToast(context, '📻 Radio starten voor $artist…');
   final rec = RecommendService();
@@ -11570,7 +11615,12 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel, Tra
   // verzamelaar ("90s Hits", 2012) en zou dan de echte jaren negentig weren.
   }).catchError((Object _) => (familie: null, jaar: null) as Zaadstijl);
   final keuring = _Radiokeuring(
-      artiest: artist, zaad: zaad, stijlboek: stijlboek, zaadStijl: zaadStijl, log: log);
+      artiest: artist,
+      zaad: zaad,
+      zaadTitel: zaadTitel,
+      stijlboek: stijlboek,
+      zaadStijl: zaadStijl,
+      log: log);
   // Deze start is de laatste: alles wat een eerdere start of afstemming nog onderweg heeft, voegt
   // daarna niets meer toe. Zie [_afstemBeurt].
   final beurt = ++_afstemBeurt;
@@ -11613,7 +11663,7 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel, Tra
   // Eigen muziek gaat zonder halen de rij in, dus ook zonder de keuring in de haal. Die komt er dus
   // pas bij als hij gekeurd is — zie [_voegGekeurdBij]. Behalve die van de zaadartiest zelf: die
   // keurt [_Radiokeuring.keur] toch goed, en zo staat er meteen iets in de rij.
-  final plan = _radioplan(recs, lib, zaadArtiest: artist, zaad: zaad);
+  final plan = _radioplan(recs, lib, zaadArtiest: artist, zaad: zaad, zaadTitel: zaadTitel);
   final zelf = artiestSleutel(artist);
   int? gestart;
   final reden = await radio.start([
@@ -11622,7 +11672,14 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel, Tra
           artiest: zaad.artist,
           titel: zaad.title,
           seconden: zaad.duration?.inSeconds,
-          eigen: zaad),
+          eigen: zaad,
+          zaad: true)
+    else if (haalTitel != null)
+      Radioplek(
+          artiest: artist,
+          titel: haalTitel,
+          seconden: seconden != null && seconden > 0 ? seconden : null,
+          zaad: true),
     for (final p in plan)
       if (p.eigen == null || artiestSleutel(p.artiest) == zelf) p,
   ], naam: artist, zaadArtiest: artist, zaad: zaad, keur: keuring.keur, bijStart: (s) {
@@ -11671,7 +11728,7 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel, Tra
               _afstemBeurt,
               keuring,
               _radioplan(gevonden, lib,
-                  zaadArtiest: artist, zaad: zaad, al: [for (final p in radio.plan) p.artiest]));
+                  zaadArtiest: artist, zaad: zaad, zaadTitel: zaadTitel, al: [for (final p in radio.plan) p.artiest]));
         } catch (e) {
           log.line('radio-lijst: het model gaf niets — $e');
         }
@@ -11691,6 +11748,7 @@ class _Radiokeuring {
   _Radiokeuring({
     required this.artiest,
     required this.zaad,
+    required this.zaadTitel,
     required this.stijlboek,
     required this.zaadStijl,
     required this.log,
@@ -11698,6 +11756,7 @@ class _Radiokeuring {
 
   final String artiest;
   final Track? zaad;
+  final String? zaadTitel;
   final Stijlboek stijlboek;
   final Future<Zaadstijl> zaadStijl;
   final WarmLog log;
@@ -11734,7 +11793,9 @@ class _Radiokeuring {
     final hint = _jaar[_k(p.artiest, p.titel)] ?? (eigenJaar != null && eigenJaar > 1900 ? eigenJaar : null);
     Stijloordeel o;
     try {
-      o = await stijlboek.keur(p.artiest, p.titel, z, jaarHint: hint).timeout(_geduld);
+      o = await stijlboek
+          .keur(p.artiest, p.titel, z, jaarHint: hint, zaadTak: await _zaadTak)
+          .timeout(_geduld);
     } on TimeoutException {
       o = (mag: true, waarom: 'geen antwoord binnen ${_geduld.inSeconds} s');
     }
@@ -11752,6 +11813,14 @@ class _Radiokeuring {
   }
 
   static const _geduld = Duration(seconds: 15);
+
+  /// De rocktak van het zaad, als het een rocknummer is — zie `rockTak`. Uit het geheugen: het zaad
+  /// is al opgezocht.
+  Future<String?> get _zaadTak => _zaadTakF ??= zaadStijl.then((z) async {
+        final t = zaadTitel;
+        return z.familie == Stijlfamilie.rock && t != null ? await stijlboek.tak(artiest, t) : null;
+      });
+  Future<String?>? _zaadTakF;
 }
 
 /// De keuring van de radio die nu loopt, voor [stemRadioAf].
@@ -11839,7 +11908,7 @@ Future<void> stemRadioAf(BuildContext context, Radiosmaak smaak) async {
     for (final p in radio.plan)
       if (p.stand != Haalstand.wacht && p.stand != Haalstand.klaar) p.artiest
   ];
-  final nieuw = _radioplan(recs, lib, zaadArtiest: artist, zaad: zaad, al: blijft);
+  final nieuw = _radioplan(recs, lib, zaadArtiest: artist, zaad: zaad, zaadTitel: keuring?.zaadTitel, al: blijft);
   final zelf = artiestSleutel(artist);
   radio.stemAf(sessie, [
     for (final p in nieuw)
@@ -11861,7 +11930,7 @@ Future<void> stemRadioAf(BuildContext context, Radiosmaak smaak) async {
         beurt,
         keuring,
         _radioplan(gevonden, lib,
-            zaadArtiest: artist, zaad: zaad, al: [for (final p in radio.plan) p.artiest]));
+            zaadArtiest: artist, zaad: zaad, zaadTitel: keuring?.zaadTitel, al: [for (final p in radio.plan) p.artiest]));
   } catch (_) {/* de Deezer-helft staat er al; dit is een toegift */}
 }
 
@@ -12962,7 +13031,7 @@ class _OntdekViewState extends State<OntdekView> {
                       height: 48,
                       child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))))
                   : TvLabelled(label: 'Afspelen', child: IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, tooltip: 'Afspelen', onPressed: () => _play(i, t))),
-              TvLabelled(label: 'Radio', child: IconButton(icon: const Icon(Icons.radio_rounded, size: 20), color: _muted, tooltip: 'Radio hieruit', onPressed: () => startRadio(context, t.artist, titel: t.title))),
+              TvLabelled(label: 'Radio', child: IconButton(icon: const Icon(Icons.radio_rounded, size: 20), color: _muted, tooltip: 'Radio hieruit', onPressed: () => startRadio(context, t.artist, titel: t.title, seconden: t.seconds))),
               // Niet op een tv: daar is dit scherm er om een aanbeveling te laten klínken, en het
               // ophalen doe je op een pc of telefoon. Afspelen en Radio hiernaast blijven staan.
               if (!isTv)

@@ -58,6 +58,19 @@ class RadioLaterOpnieuw implements Exception {
   String toString() => 'Soulseek doet even niet mee: $waarom';
 }
 
+/// De haal landde op muziek die je AL HAD: het bestand op [pad] is van jou, niet van de radio.
+///
+/// Een binnengekomen FLAC die je mp3 opvolgde, of een tweede exemplaar van een nummer dat er al lag.
+/// Het mag wel klinken — daarvoor werd het gehaald — maar nooit bij het opruimen van de radio weg.
+/// Eerst gaf de haal dan niets terug, en bleef er een lege plek in de radio (eindbeoordeling van
+/// 26-09-2026).
+class RadioAlGehad implements Exception {
+  const RadioAlGehad(this.pad);
+  final String pad;
+  @override
+  String toString() => 'al van jou: $pad';
+}
+
 /// Hoe lang de radio na zo'n storing niets nieuws start. Eén minuut, net als de blokkade die de
 /// Soulseek-kant zelf aanhoudt na een login zonder antwoord.
 const Duration kRadioRust = Duration(seconds: 60);

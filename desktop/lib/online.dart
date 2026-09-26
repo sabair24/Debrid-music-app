@@ -9,7 +9,7 @@ import 'organize.dart';
 import 'lossless_want.dart';
 import 'quality.dart';
 import 'radiobestand.dart';
-import 'radiovoorraad.dart' show RadioLaterOpnieuw, kMaxWacht;
+import 'radiovoorraad.dart' show RadioAlGehad, RadioLaterOpnieuw, kMaxWacht;
 import 'rutracker.dart';
 import 'search.dart';
 import 'settings.dart';
@@ -2829,7 +2829,15 @@ class DownloadManager extends ChangeNotifier {
     if (!soulseek.available) return null;
     // Heb je dit al? Dan valt er niets te halen — en, net zo belangrijk, dan mag het straks ook niet
     // opgeruimd worden. De toets staat hier VOORAF, want achteraf is het onderscheid weg.
-    if (mapVanBestaande?.call(artiest, titel, seconds: seconden) != null) return null;
+    //
+    // En wat je al hebt, klinkt dan ook — als jouw nummer ([RadioAlGehad]). Eerst werd het een lege
+    // plek, en na een pauze midden in een haal zelfs een bestand dat de radio nog binnenhaalde maar
+    // in geen enkele notitie meer stond (derde beoordeling van 26-09-2026).
+    final al = mapVanBestaande?.call(artiest, titel, seconds: seconden);
+    if (al != null) {
+      if (File(al).existsSync()) throw RadioAlGehad(al);
+      return null;
+    }
 
     // Vanaf hier is er iets te stoppen, dus vanaf hier staat het in de lijst — ook tijdens het
     // zoeken. Een zoekopdracht duurt seconden, maar het is wél het moment waarop de meeste haaltjes
@@ -2994,6 +3002,9 @@ class DownloadManager extends ChangeNotifier {
           if (alBekend != null || uit.how != Placement.moved || uit.verving) {
             _log.line('radio "$artiest — $titel": geland op muziek die je al had — '
                 'niet van de radio, wordt straks niet opgeruimd');
+            // Wel laten klinken: daarvoor werd het gehaald. Zie [RadioAlGehad] — eerst bleef hier een
+            // lege plek in de radio.
+            if (uit.how != Placement.stuck && File(uit.path).existsSync()) throw RadioAlGehad(uit.path);
             return;
           }
           // Pas NA het landen, en dit ontbrak op de hele downloadweg: `rebuildAlbums` groepeert op de
@@ -3021,6 +3032,8 @@ class DownloadManager extends ChangeNotifier {
     } on RadioLaterOpnieuw catch (e) {
       _log.line('radio "$artiest — $titel": Soulseek doet even niet mee (${e.waarom}) — later opnieuw');
       rethrow;
+    } on RadioAlGehad {
+      rethrow; // geen storing: het nummer is er, alleen niet van de radio
     } catch (_) {
       // Niets verloren: deze plek in het plan mislukt gewoon — tenzij het aan de aanmelding lag.
       final waarom = soulseek.whyNotLogin;

@@ -17,7 +17,7 @@ import 'dart:async';
 import '../library.dart';
 import '../settings.dart';
 import '../online.dart';
-import '../radiovoorraad.dart' show RadioLaterOpnieuw;
+import '../radiovoorraad.dart' show RadioAlGehad, RadioLaterOpnieuw;
 
 /// Hoe lang een afgelopen haal opvraagbaar blijft.
 ///
@@ -43,6 +43,9 @@ class Radiohaal {
   /// Het gedeelde id van het gelande bestand. Daarop zoekt het toestel het terug — niet op artiest +
   /// titel, want dan vond het soms je eigen exemplaar van hetzelfde nummer. Zie `PcRadiobron.haal`.
   String? trackId;
+
+  /// Landde op muziek die je al had — zie [RadioAlGehad].
+  bool eigen = false;
   DateTime? klaarOm;
 }
 
@@ -143,6 +146,14 @@ class Radiohaler {
             artiest: artiest, titel: titel, seconden: seconden, jaar: jaar);
       } on RadioLaterOpnieuw {
         later = true; // Soulseek op de pc doet even niet mee; het toestel probeert het straks weer
+      } on RadioAlGehad catch (e) {
+        // Geland op muziek die je al had: het toestel laat het klinken, maar als jouw nummer — zie
+        // [RadioAlGehad]. Een eigen stand en geen 'klaar' met een vlag erbij: een ouder toestel
+        // kende die vlag niet, zag 'klaar', en behandelde JOUW bestand als radionummer — met een duim
+        // die het weggooit (tweede beoordeling van 26-09-2026). Alles wat niet 'klaar' is, is daar
+        // een gemiste plek, en dat is veilig.
+        pad = e.pad;
+        haal.eigen = true;
       } catch (_) {
         pad = null;
       }
@@ -158,7 +169,7 @@ class Radiohaler {
       }
       haal.pad = pad;
       if (pad != null) haal.trackId = library.gedeeldId(pad);
-      haal.stand = later ? 'later' : (pad == null ? 'mislukt' : 'klaar');
+      haal.stand = later ? 'later' : (pad == null ? 'mislukt' : (haal.eigen ? 'eigen' : 'klaar'));
       haal.klaarOm = DateTime.now();
     }());
     return haal;

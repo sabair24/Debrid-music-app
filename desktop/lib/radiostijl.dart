@@ -124,6 +124,79 @@ Set<Stijlfamilie> familiesVan(Iterable<String> namen) => {
         if (familieVan(n) case final f?) f
     };
 
+/// Binnen rock: alternatief of klassiek? Op de stijlen van één uitgave; null als ze het niet zeggen.
+///
+/// Gemeten in de kwaliteitscontrole van 26-09-2026: een radio vanaf "Smells Like Teen Spirit" liet
+/// Bon Jovi en Bryan Adams door, want "rock" is rock. Op Discogs' stijlen gesplitst landen alle
+/// achttien goede buren (Pearl Jam, Soundgarden, Pixies, Hole…) bij alternatief, en Bon Jovi, Bryan
+/// Adams, Metallica en Guns N' Roses bij klassiek.
+///
+/// Een uitgave die van allebei iets zegt, is 'gemengd': "Grunge, Hard Rock, Heavy Metal" is hoe
+/// Discogs Alice in Chains, Candlebox en Collective Soul beschrijft, en op een meerderheid van losse
+/// stijlen werden ze klassiek en vielen ze uit een Nirvana-radio (eindbeoordeling van 26-09-2026).
+/// Gemengd telt wél mee in [meerderheidTak] — als stem voor geen van beide.
+String? rockTak(Iterable<String> stijlen) {
+  var alt = 0, klassiek = 0;
+  for (final s in stijlen) {
+    final x = s.toLowerCase();
+    if (_altStijl.hasMatch(x)) {
+      alt++;
+    } else if (_klassiekStijl.hasMatch(x)) {
+      klassiek++;
+    }
+  }
+  if (alt > 0 && klassiek > 0) return 'gemengd';
+  if (alt > 0) return 'alternatief';
+  return klassiek > 0 ? 'klassiek' : null;
+}
+
+// Geen "Art Rock" en geen "Experimental": dat is Pink Floyd en Roxy Music net zo goed als
+// Radiohead, en die heeft ook "Alternative Rock" (derde beoordeling van 26-09-2026).
+final _altStijl = RegExp(r'grunge|alternative|indie|punk|noise|britpop|stoner|'
+    r'funk metal|shoegaze|emo|lo-fi');
+final _klassiekStijl = RegExp(r'hard rock|glam|heavy metal|thrash|speed metal|aor|soft rock|pop rock|'
+    r'blues rock|ballad|arena rock|classic rock|southern rock');
+
+/// Is deze uitgave volgens Discogs een bootleg? Die tellen niet mee voor het jaar of de stijl — zie
+/// `DiscogsService.nummerUitgaven`.
+bool isBootleg(Iterable<String> formaten) =>
+    formaten.any((f) => f.toLowerCase().contains('unofficial'));
+
+/// De tak van één uitgave voor [meerderheidTak]: [rockTak], en een rockuitgave die van geen tak iets
+/// zegt ("Prog Rock", "Psychedelic Rock") telt als 'gemengd' — een stem voor geen van beide.
+///
+/// Anders besliste de minderheid: Pink Floyd met acht uitgaven "Prog Rock" en twee "Prog Rock, Art
+/// Rock" werd alternatief op twee van twee, en viel uit een Led Zeppelin-radio (derde beoordeling
+/// van 26-09-2026).
+String? takVanUitgave(DiscogsUitgave u) {
+  final t = rockTak(u.stijlen);
+  if (t != null) return t;
+  final rock = [...u.genres, ...u.stijlen].any((g) => g.toLowerCase().contains('rock'));
+  return rock ? 'gemengd' : null;
+}
+
+/// De tak van een nummer: de tak die vaker voorkomt dan de andere, en op minstens een DERDE van
+/// alle rockuitgaven staat. Een gemengde of takloze uitgave ([takVanUitgave]) telt mee in dat totaal.
+///
+/// Geijkt op Discogs, 26-09-2026 — uitgaven klassiek / alternatief / gemengd:
+///
+///     Bon Jovi — Keep the Faith          4 / 0 / 5    klassiek (en dus uit een Nirvana-radio)
+///     Pink Floyd — Comfortably Numb      4 / 0 / 6    klassiek
+///     Alice in Chains — Would?           0 / 3 / 7    geen: past overal
+///     Nirvana, Pearl Jam, Soundgarden    alles alternatief
+///
+/// Eerst woog alleen wie een tak had, en dan besliste één zuivere uitgave tussen twintig gemengde
+/// (tweede beoordeling). Daarna een meerderheid van ALLES, en toen kwam Bon Jovi weer door (vier van
+/// negen is geen helft — gemeten, niet bedacht). Een derde scheidt ze allebei.
+String? meerderheidTak(List<String?> perUitgave) {
+  final alt = perUitgave.where((t) => t == 'alternatief').length;
+  final kl = perUitgave.where((t) => t == 'klassiek').length;
+  final rock = alt + kl + perUitgave.where((t) => t == 'gemengd').length;
+  if (alt > kl && alt * 3 >= rock) return 'alternatief';
+  if (kl > alt && kl * 3 >= rock) return 'klassiek';
+  return null;
+}
+
 /// De familie die op de MEESTE uitgaven staat, als dat er één is; anders niets.
 ///
 /// Niet alles bij elkaar, en dat was de fout. Gemeten op 26-09-2026: één "Electronic"-remixsingle
@@ -233,6 +306,24 @@ List<String> meesteStijlen(Iterable<String> stijlen, {int hoeveel = 3}) {
 /// Wat Discogs over één nummer zegt: per gevonden uitgave het jaar, de genres en de stijlen.
 typedef DiscogsUitgave = ({int? jaar, List<String> genres, List<String> stijlen});
 
+/// De uitgaven van de twee zoekvragen samen — zie `DiscogsService.nummerUitgaven` — of null als de
+/// tweede geen antwoord gaf ([tweede] is null: een 429, een 5xx, een time-out).
+///
+/// Dan ook NIET de halve lijst van de eerste. Die was bij Mudhoney precies het live-album van 2018,
+/// en een [Stijlboek] bewaart wat hij krijgt: "Touch Me I'm Sick" stond dan voorgoed als 2018
+/// geboekt, en viel uit elke radio van 1991 (eindbeoordeling van 26-09-2026). Null wordt niet
+/// onthouden, dus de volgende keer wordt het opnieuw gevraagd.
+List<DiscogsUitgave>? samenUitgaven(List<DiscogsUitgave> eerst, List<DiscogsUitgave>? tweede) =>
+    tweede == null ? null : [...eerst, ...tweede];
+
+/// Welke regels het geheugen van [Stijlboek] volgt. Omhoog zodra een regel verandert die bepaalt wat
+/// er onthouden wordt — [rockTak], [meerderheid], de filters in `DiscogsService.nummerUitgaven` —
+/// want wat onder de oude regels opgezocht is, wordt anders nooit meer opnieuw bekeken.
+///
+/// 2: [rockTak] telt alleen nog zuivere uitgaven, en een half antwoord van Discogs wordt niet meer
+/// bewaard (26-09-2026).
+const int kStijlboekVersie = 2;
+
 /// De feiten ophalen en onthouden. De bronnen zijn haken, zodat een toets ze kan invullen.
 ///
 /// Onthouden op schijf, en ook wat NIET gevonden werd: een obscure artiest die TheAudioDB niet kent,
@@ -265,12 +356,23 @@ class Stijlboek {
   Future<Map<String, dynamic>>? _laden;
   Future<void> _schrijfBeurt = Future<void>.value();
 
+  // Een geheugen van een oudere [kStijlboekVersie]: dan zijn de regels voor een NUMMER veranderd, en
+  // een nummer dat al eens opgezocht was zou anders nooit meer onder de nieuwe regels vallen. Alleen
+  // die ("n:") weg: het genre van een artiest en het jaar van een Deezer-album zijn nog waar, en elke
+  // vraag aan TheAudioDB kost drie seconden — na een update liep zo elke keuring tegen zijn
+  // tijdslimiet, en een keuring zonder antwoord laat alles door (tweede beoordeling van 26-09-2026).
   Future<Map<String, dynamic>> _lees() => _laden ??= () async {
         try {
           final j = jsonDecode(await bestand.readAsString());
-          if (j is Map<String, dynamic>) return j;
+          if (j is Map<String, dynamic>) {
+            if (j['_versie'] != kStijlboekVersie) {
+              j.removeWhere((k, _) => k.startsWith('n:'));
+              j['_versie'] = kStijlboekVersie;
+            }
+            return j;
+          }
         } catch (_) {/* geen geheugen is een leeg geheugen */}
-        return <String, dynamic>{};
+        return <String, dynamic>{'_versie': kStijlboekVersie};
       }();
 
   Future<void> _bewaar() {
@@ -359,9 +461,17 @@ class Stijlboek {
       'f': [for (final f in n.families) f.name],
       'j': n.jaar,
       's': meesteStijlen([for (final u in uit) ...u.stijlen]),
+      't': meerderheidTak([for (final u in uit) takVanUitgave(u)]),
     };
     await _bewaar();
     return n;
+  }
+
+  /// De rocktak van dit nummer ([rockTak], meerderheid over de uitgaven), of null. Alleen uit het
+  /// geheugen: vraag eerst [nummer].
+  Future<String?> tak(String artiest, String titel) async {
+    final zit = (await _lees())['n:${_sleutel(artiest)}|${_sleutel(titel)}'];
+    return zit is Map ? zit['t'] as String? : null;
   }
 
   /// De stijlnamen die Discogs het vaakst bij dit nummer zet ("Euro House", "Trance") — voor de
@@ -410,6 +520,10 @@ class Stijlboek {
       // Het VROEGSTE van je tag en Discogs: een tag zegt vaak het jaar van de verzamelaar waar je het
       // nummer van hebt ("90s Hits", 2012), en dan zou de radio de echte jaren negentig weren.
       jaar = vroegsteJaar([jaar, n.jaar]);
+      // En zonder tag en zonder Discogs het Deezer-album: een radio vanaf een aanbeveling heeft geen
+      // tag, en zonder jaar van het zaad is er helemaal geen tijdvakkeuring (tweede beoordeling van
+      // 26-09-2026).
+      jaar ??= await _deezerJaar(artiest, titel);
     }
     f ??= await this.artiest(artiest);
     return (familie: f, jaar: jaar);
@@ -420,14 +534,26 @@ class Stijlboek {
   /// Eerst Discogs, want dat weet het jaar én vaak de stijl in één vraag, en dan is TheAudioDB — drie
   /// seconden per vraag — niet meer nodig. Alleen als Discogs de stijl van het zaad niet noemt, wordt
   /// ook de artiest bij TheAudioDB nagevraagd: één bron die "ja" zegt is genoeg.
-  Future<Stijloordeel> keur(String artiest, String titel, Zaadstijl zaad, {int? jaarHint}) async {
+  ///
+  /// [zaadTak]: bij een rockzaad de tak ervan ([rockTak]). Zegt Discogs van dit nummer de ándere tak,
+  /// dan valt het af; weet het niets, dan niet.
+  Future<Stijloordeel> keur(String artiest, String titel, Zaadstijl zaad,
+      {int? jaarHint, String? zaadTak}) async {
     final n = await nummer(artiest, titel);
     final jaar = n.jaar ?? jaarHint ?? (zaad.jaar == null ? null : await _deezerJaar(artiest, titel));
     final eerst = keurStijl(zaad, (families: const {}, jaar: jaar));
     if (!eerst.mag) return eerst;
     final zf = zaad.familie;
-    if (zf == null || n.families.contains(zf)) return keurStijl(zaad, (families: n.families, jaar: jaar));
-    final a = await this.artiest(artiest);
-    return keurStijl(zaad, (families: {...n.families, if (a != null) a}, jaar: jaar));
+    final Stijloordeel o;
+    if (zf == null || n.families.contains(zf)) {
+      o = keurStijl(zaad, (families: n.families, jaar: jaar));
+    } else {
+      final a = await this.artiest(artiest);
+      o = keurStijl(zaad, (families: {...n.families, if (a != null) a}, jaar: jaar));
+    }
+    if (!o.mag || zf != Stijlfamilie.rock || zaadTak == null) return o;
+    final t = await tak(artiest, titel);
+    if (t != null && t != zaadTak) return (mag: false, waarom: 'rock, maar $t en niet $zaadTak');
+    return o;
   }
 }

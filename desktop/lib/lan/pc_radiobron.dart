@@ -30,11 +30,40 @@ const Duration _peilritme = Duration(seconds: 3);
 /// niet dít getal is dat een haal afkapt. Dit is het vangnet voor een pc die halverwege verdwijnt.
 const Duration _geduld = Duration(minutes: 8);
 
+/// Hoe vaak de catalogus opnieuw geladen wordt als een net gehaald nummer er nog niet in staat.
+const int kCatalogusPogingen = 3;
+
+/// Welk antwoord van de pc een plek voor STRAKS is, en waarom — of null als het een antwoord over
+/// dit ene nummer is, en die plek dus mag overslaan.
+///
+/// Niet bereikt (geen status), een pc die zich even verslikt (5xx), te druk (429) of te traag (408):
+/// dat is over een minuut anders, en elke poging brandde zo acht plekken van het plan op. En een
+/// koppeling die niet meer geldt (401/403) evenmin een mislukt nummer: dan faalt ELK nummer, en de
+/// radio liep stil leeg zonder dat iemand zei waarom (eindbeoordeling van 26-09-2026). Nu pauzeert
+/// het ophalen en staat de reden in het radiopaneel; na opnieuw koppelen gaat het vanzelf verder.
+String? radioLaterBijStatus(int? status) {
+  if (status == null) return 'de pc antwoordde niet';
+  if (status == 401 || status == 403) return 'de koppeling met je pc geldt niet meer — koppel opnieuw';
+  if (status >= 500 || status == 408 || status == 429) return 'de pc kan het even niet aan';
+  return null;
+}
+
 class PcRadiobron implements Radiobron {
-  PcRadiobron({required this.library, required this.clientOf});
+  PcRadiobron({
+    required this.library,
+    required this.clientOf,
+    this.peilritme = _peilritme,
+    this.catalogusRitme = const Duration(seconds: 2),
+  });
 
   final LibraryStore library;
   final RemoteClient? Function() clientOf;
+
+  /// Zie [_peilritme]; een toets zet ze korter.
+  final Duration peilritme;
+
+  /// Hoe lang tussen twee pogingen om een net gehaald nummer in de catalogus te vinden.
+  final Duration catalogusRitme;
 
   bool _begonnen = false;
 
@@ -63,6 +92,10 @@ class PcRadiobron implements Radiobron {
       if (e.statusCode == HttpStatus.notFound) {
         return 'Op je pc draait een oudere versie van de app, die de radio nog niet kent. '
             'Werk hem eerst bij — dan kan hij nummers voor je ophalen.';
+      }
+      if (e.isUnauthorized) {
+        return 'De koppeling met je pc geldt niet meer. Koppel dit toestel opnieuw, dan kan hij weer '
+            'nummers voor je ophalen.';
       }
       return 'Je pc antwoordde niet: ${e.message}';
     } catch (e) {
@@ -113,11 +146,9 @@ class PcRadiobron implements Radiobron {
       if (gekregen is! String || gekregen.isEmpty) return null;
       id = gekregen;
     } on RemoteException catch (e) {
-      // Alleen "niet bereikt" is een plek voor straks. Een ANTWOORD van de pc — geen koppeling meer
-      // (401), een weigering — verandert over een minuut niet, en dan zou de radio eindeloos in
-      // pauzes van een minuut blijven hangen (review van 26-09-2026).
-      if (e.statusCode != null) return null;
-      throw const RadioLaterOpnieuw('de pc antwoordde niet');
+      final later = radioLaterBijStatus(e.statusCode);
+      if (later == null) return null;
+      throw RadioLaterOpnieuw(later);
     } catch (_) {
       throw const RadioLaterOpnieuw('de pc antwoordde niet');
     }
@@ -126,41 +157,71 @@ class PcRadiobron implements Radiobron {
 
     final tot = DateTime.now().add(_geduld);
     while (DateTime.now().isBefore(tot)) {
-      await Future<void>.delayed(_peilritme);
+      await Future<void>.delayed(peilritme);
       if (ronde != _ronde) return null; // de radio is intussen afgesloten
       Map<String, dynamic> a;
       try {
         a = await c.ask('/api/radio', {'op': 'stand', 'id': id});
-      } catch (_) {
+      } on RemoteException catch (e) {
+        // Een koppeling die onderweg verloopt is geen gemiste peiling: dan hoort de pc ons niet meer,
+        // en bleef deze plek acht minuten bezet (tweede beoordeling van 26-09-2026).
+        if (e.isUnauthorized) throw RadioLaterOpnieuw(radioLaterBijStatus(e.statusCode)!);
         continue; // een gemiste peiling is geen mislukte haal
+      } catch (_) {
+        continue;
       }
       final stand = a['stand'];
       if (stand == 'onderweg') continue;
       // Soulseek op de pc doet even niet mee: geen mislukte plek, straks opnieuw. Een oudere pc kent
       // dit antwoord niet en zegt 'mislukt', en dan is het zoals het altijd was.
       if (stand == 'later') throw const RadioLaterOpnieuw('Soulseek op de pc doet even niet mee');
-      if (stand != 'klaar') return null;
+      // 'eigen': geland op muziek die je al had — zie `RadioAlGehad` aan de kant van de pc. Klinken
+      // wel, opruimen nooit: zie [AlVanJou].
+      final eigen = stand == 'eigen';
+      if (stand != 'klaar' && !eigen) return null;
 
       // Het bestand staat op de PC, dus komt het hierheen via de catalogus. Stil verversen: dit
       // gebeurt terwijl je luistert, en een scanbalk over het scherm hoort daar niet bij.
-      try {
-        await library.loadRemote(quiet: true);
-      } catch (_) {
-        return null;
-      }
+      //
       // Opzoeken op het ID dat de pc noemt, en NIET op artiest + titel. Dat laatste deed dit eerst, en
       // het vond dan het eerste nummer met die naam: bij een album-versie die je al had en een single
       // die de radio net ophaalde was dat JOUW album-versie — die dan als "door de radio gehaald"
       // gold, met een duim omlaag en een plek in het opruimoverzicht. Gevonden in de review van
       // 26-09-2026. Een oudere pc noemt geen id; dan blijft het zoals het was.
       final trackId = a['trackId'];
-      if (trackId is String && trackId.isNotEmpty) {
-        for (final t in library.tracks) {
-          if (library.gedeeldId(t.path) == trackId) return t;
+      if (trackId is! String || trackId.isEmpty) {
+        try {
+          await library.loadRemote(quiet: true);
+        } catch (_) {
+          return null;
         }
-        return null; // het staat er nog niet — liever een gemiste plek dan een verkeerd bestand
+        // Een oudere pc noemt geen id, en dan is op naam niet te zeggen of dit het gehaalde bestand
+        // is of JOUW exemplaar met dezelfde naam — een oudere pc haalt juist wanneer je een ANDERE
+        // lengte hebt (Move On Baby: jouw album van 4:51, de single van 3:40). Dus klinken wel, maar
+        // als van jou: nooit een duim die het weggooit, nooit in het opruimoverzicht (derde
+        // beoordeling van 26-09-2026 — eerst ging zo je albumversie standaard naar de prullenbak).
+        final t = library.ownedTrack(plek.artiest, plek.titel);
+        if (t != null) throw AlVanJou(t);
+        return null;
       }
-      return library.ownedTrack(plek.artiest, plek.titel);
+      // Een paar keer, en niet één: staat het er nog niet, dan is dat een catalogus die achterloopt,
+      // en een plek die dan opgeeft laat een bestand op de pc achter dat nergens meer genoteerd staat
+      // — geen duim, geen opruimen (eindbeoordeling van 26-09-2026).
+      for (var poging = 0; poging < kCatalogusPogingen; poging++) {
+        if (poging > 0) await Future<void>.delayed(catalogusRitme);
+        if (ronde != _ronde) return null;
+        try {
+          await library.loadRemote(quiet: true);
+        } catch (_) {
+          continue;
+        }
+        for (final t in library.tracks) {
+          if (library.gedeeldId(t.path) != trackId) continue;
+          if (eigen) throw AlVanJou(t);
+          return t;
+        }
+      }
+      return null; // het staat er nog steeds niet — liever een gemiste plek dan een verkeerd bestand
     }
     return null;
   }

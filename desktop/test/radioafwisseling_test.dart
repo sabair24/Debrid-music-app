@@ -197,6 +197,37 @@ void main() {
     });
   });
 
+  group('uit de kwaliteitscontrole met drie zaden (26-09-2026)', () {
+    test('DE KERN: live, een repetitie, een demo of een sessie is het origineel niet — ook met "Radio"', () {
+      expect(uitvoeringVan('Losing My Religion (Live From BBC Radio 1)'), Uitvoering.bewerking);
+      expect(uitvoeringVan('The Man Who Sold the World (Rehearsal)'), Uitvoering.bewerking);
+      expect(uitvoeringVan('Heart-Shaped Box (Demo)'), Uitvoering.bewerking);
+      expect(uitvoeringVan('Lithium (BBC Session)'), Uitvoering.bewerking);
+      expect(uitvoeringVan('Alive'), Uitvoering.origineel, reason: 'alleen in de staart, niet in de titel');
+    });
+
+    test('DE KERN: een onbekende toevoeging is vreemd, een radio-edit of een gast niet', () {
+      expect(vreemdeStaart('Eins, Zwei, Polizei (Einstein Dr. Dj Konzept)'), isTrue);
+      expect(vreemdeStaart('Eins, Zwei, Polizei (Radio Edit)'), isFalse);
+      expect(vreemdeStaart('Mr. Vain (Original Radio Edit)'), isFalse);
+      expect(vreemdeStaart('Lift U Up (feat. Loredana)'), isFalse);
+      expect(vreemdeStaart('Freak Out'), isFalse);
+    });
+
+    test('DE KERN: "Hall & Oates" is "Daryl Hall & John Oates", en "The" vooraan telt niet', () {
+      expect(zelfdeArtiest('Hall & Oates', 'Daryl Hall & John Oates'), isTrue);
+      expect(zelfdeArtiest('Smashing Pumpkins', 'The Smashing Pumpkins'), isTrue);
+      expect(zelfdeArtiest('Prodigy', 'The Prodigy'), isTrue,
+          reason: 'één woord: hier helpt alleen het weglaten van "The"');
+      expect(artiestSleutel('The Mackenzie'), artiestSleutel('Mackenzie'));
+    });
+
+    test('DE VAL: maar Queen is geen Queen Latifah, en Robin S geen Robin Schulz', () {
+      expect(zelfdeArtiest('Queen', 'Queen Latifah'), isFalse);
+      expect(zelfdeArtiest('Robin S', 'Robin Schulz'), isFalse);
+    });
+  });
+
   group('radioversies die anders heten', () {
     test('DE KERN: Airplay, Single en Video Mix zijn de radioversie, geen remix', () {
       // Review van 26-09-2026: ze telden als remix omdat er "Mix" in staat.
