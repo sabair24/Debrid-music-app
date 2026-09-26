@@ -38,6 +38,13 @@ class _Speler implements PlayerStore {
   @override
   int get radioIndex => 0;
 
+  // Nog niets geladen: dan weet de radio de resttijd niet, en telt hij nummers zoals voorheen.
+  @override
+  Duration duration = Duration.zero;
+
+  @override
+  Duration get positieErgens => Duration.zero;
+
   @override
   Future<void> playRadio(List<RadioItem> items, {int start = 0}) async {
     rij

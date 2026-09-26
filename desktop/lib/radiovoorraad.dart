@@ -95,6 +95,14 @@ const int kMinVooruit = 6;
 /// eigen downloads niet uit te hongeren. Vier plekken blijven dus vrij, wat er ook loopt.
 const int kMaxOnderweg = 8;
 
+/// Hoeveel seconden muziek er nog moet klinken voordat dezelfde artiest vlak achter zichzelf mag —
+/// zie [voorraadPlan]. Een minuut: de eerste halen landen na acht tot dertig seconden (gemeten op
+/// 26-09-2026), en onder de minuut is een tweede nummer van dezelfde artiest beter dan stilte.
+const int kRuimeRest = 60;
+
+/// Hoe lang een plek zonder bekende lengte meetelt: een gewone single.
+const int kOnbekendeLengte = 180;
+
 /// Hoeveel speelbare nummers er hoogstens vooruit staan voor er niets nieuws meer gehaald wordt.
 ///
 /// Twaalf, zo'n drie kwartier muziek, bovenop wat er onderweg is. Zonder grens haalde de radio zijn
@@ -142,6 +150,14 @@ const int kMaxVooruit = 12;
 /// Soulseek levert, en die kiest niemand. Staat dezelfde artiest in de laatste [afstand] − 1, dan
 /// blijft het nummer [Haalstand.geland] en gaat het een tik later mee, zodra er iets anders tussen
 /// staat. Nooit als er minder dan twee nummers vooruit staan: afwisseling is geen reden voor stilte.
+///
+/// **Maar "twee nummers" is de verkeerde maat als de TIJD bekend is.** [restSeconden] is hoeveel
+/// muziek er nog klinkt voor de rij leeg is — de rest van het huidige nummer plus wat erachter staat
+/// — en [seconden] per plek hoe lang die duurt. Zolang er minstens [kRuimeRest] klinkt, komt dezelfde
+/// artiest nooit vlak achter zichzelf. Gemeten op 26-09-2026, 17:15, radio vanaf Freak Out: bij de
+/// start stond alleen het zaad in de rij — nul nummers vooruit — en dus mocht Flashback van 2 Fabiola
+/// er meteen achter, en Let The Music Play erna; vier keer 2 Fabiola in de eerste tien. Terwijl het
+/// zaad zelf 3:35 duurde en de eerste haal na acht seconden landde.
 Voorraadbesluit voorraadPlan(
   List<Haalstand> standen, {
   required int vooruitNu,
@@ -152,9 +168,21 @@ Voorraadbesluit voorraadPlan(
   int minVooruit = kMinVooruit,
   int maxOnderweg = kMaxOnderweg,
   int maxVooruit = kMaxVooruit,
+  int? restSeconden,
+  List<int?> seconden = const [],
 }) {
   final inRij = <int>[];
   var vooruit = vooruitNu;
+  var rest = restSeconden;
+  // Is er genoeg om op te wachten tot er een andere artiest klaarstaat? Zie hierboven.
+  bool ruim() {
+    final r = rest;
+    return vooruit >= 2 || (r != null && r >= kRuimeRest);
+  }
+  void erbij(int i) {
+    final r = rest;
+    if (r != null) rest = r + (i < seconden.length ? seconden[i] ?? kOnbekendeLengte : kOnbekendeLengte);
+  }
   String naam(int i) => i < artiesten.length ? artiestSleutel(artiesten[i]) : '';
   final rij = [for (final a in staart) artiestSleutel(a)];
   bool vlakErvoor(String a) {
@@ -169,10 +197,11 @@ Voorraadbesluit voorraadPlan(
   for (var i = 0; i < standen.length; i++) {
     if (standen[i] != Haalstand.geland) continue;
     final a = naam(i);
-    if (vooruit >= 2 && vlakErvoor(a)) continue;
+    if (ruim() && vlakErvoor(a)) continue;
     inRij.add(i);
     rij.add(a);
     vooruit++;
+    erbij(i);
   }
   // En daarna eigen muziek, maar alleen zoveel als er nodig is om het gat te dichten.
   //
@@ -188,10 +217,11 @@ Voorraadbesluit voorraadPlan(
       // begon een radio vanaf Freak Out met vijf keer 2 Fabiola: bij de start is alleen de eigen
       // muziek van de zaadartiest al gekeurd, en de tweede ronde vulde de rij daarmee op (review van
       // 26-09-2026). Onder de twee gaat hij er alsnog in: een rij die leegloopt stopt de radio.
-      if (ronde == 1 && vooruit >= 2 && vlakErvoor(a)) continue;
+      if (ronde == 1 && ruim() && vlakErvoor(a)) continue;
       inRij.add(i);
       rij.add(a);
       vooruit++;
+      erbij(i);
     }
   }
 

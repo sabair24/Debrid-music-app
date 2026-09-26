@@ -2890,8 +2890,12 @@ class DownloadManager extends ChangeNotifier {
     // Lossless eerst, precies zoals overal in deze app. Maar niet lossless-of-niets: een
     // eurodance-single uit 1993 bestaat op dit netwerk soms alleen als mp3, en dan is die mp3 beter
     // dan stilte. `_rankSlsk` heeft de beste al vooraan gezet.
+    //
+    // En binnen lossless eerst wat de app kan taggen (FLAC): een AIFF of WAV zonder tags staat anders
+    // als "Onbekende artiest" in je bibliotheek — zie [radioZonderTags].
     final kandidaten = [
-      ...bruikbaar.where(isLossless),
+      ...bruikbaar.where((f) => isLossless(f) && radioTagsSchrijfbaar(f.filename)),
+      ...bruikbaar.where((f) => isLossless(f) && !radioTagsSchrijfbaar(f.filename)),
       ...bruikbaar.where((f) => !isLossless(f)),
     ];
     if (kandidaten.isEmpty) {
@@ -2965,6 +2969,17 @@ class DownloadManager extends ChangeNotifier {
           if (radioTagsSprekenTegen(artiest, titel, t)) {
             _log.line('radio "$artiest — $titel": ${f.username} leverde een ander nummer '
                 '(${t?.artist} — ${t?.title}) — weggegooid, volgende');
+            (_radioNietBij[sleutel] ??= {}).add(f.username);
+            try {
+              await binnen.delete();
+            } catch (_) {/* dan ruimt de wachtmap het later op */}
+            continue;
+          }
+          // Geen tags, en ze zijn er ook niet in te zetten (AIFF, WAV): dan blijft het voor altijd
+          // "Onbekende artiest". Liever de volgende uploader — zie [radioZonderTags].
+          if (radioZonderTags(t, binnen.path)) {
+            _log.line('radio "$artiest — $titel": ${f.username} leverde een bestand zonder tags dat de '
+                'app niet kan beschrijven — weggegooid, volgende');
             (_radioNietBij[sleutel] ??= {}).add(f.username);
             try {
               await binnen.delete();

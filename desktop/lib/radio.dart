@@ -493,8 +493,13 @@ class RadioBesturing extends ChangeNotifier {
 
     // De eerste ronde met de hand, want [PlayerStore.voegToeAanRadio] doet niets zolang er nog geen
     // radio loopt.
+    // Met de tijd erbij: er klinkt nog niets, en wat er in gaat telt op — zie `kRuimeRest`. Zonder
+    // dat kwam er bij de start meteen een tweede nummer van de zaadartiest achter het zaad.
     final besluit = voorraadPlan([for (final p in nieuw) p.stand],
-        artiesten: [for (final p in nieuw) p.artiest], vooruitNu: 0);
+        artiesten: [for (final p in nieuw) p.artiest],
+        vooruitNu: 0,
+        restSeconden: 0,
+        seconden: [for (final p in nieuw) _lengte(p)]);
     final eerste = <RadioItem>[];
     for (final i in besluit.inRij) {
       nieuw[i].stand = Haalstand.inRij;
@@ -591,6 +596,24 @@ class RadioBesturing extends ChangeNotifier {
     super.dispose();
   }
 
+  static int? _lengte(Radioplek p) => p.eigen?.duration?.inSeconds ?? p.seconden;
+
+  /// Hoeveel seconden muziek er nog klinkt voor de rij leeg is: de rest van het huidige nummer plus
+  /// wat erachter staat. Null als de speler het niet weet (nog niets geladen).
+  int? _restSeconden() {
+    final rij = speler.radioQueue;
+    final i = speler.radioIndex;
+    final lengte = speler.duration.inSeconds;
+    if (i < 0 || i >= rij.length || lengte <= 0) return null;
+    var rest = lengte - speler.positieErgens.inSeconds;
+    if (rest < 0) rest = 0;
+    for (final it in rij.skip(i + 1)) {
+      final s = it.local?.duration?.inSeconds;
+      rest += s != null && s > 0 ? s : kOnbekendeLengte;
+    }
+    return rest;
+  }
+
   RadioItem _itemVan(Radioplek p) => RadioItem(artist: p.artiest, title: p.titel, local: p.eigen);
 
   /// Duim omlaag: dit nummer NU weg. Uit de rij, uit het plan, van de schijf.
@@ -662,6 +685,8 @@ class RadioBesturing extends ChangeNotifier {
       staart: [for (final it in rij.skip(rij.length > 8 ? rij.length - 8 : 0)) it.artist],
       vooruitNu: vooruit < 0 ? 0 : vooruit,
       rust: _rustTot != null && DateTime.now().isBefore(_rustTot!),
+      restSeconden: _restSeconden(),
+      seconden: [for (final p in _plan) _lengte(p)],
     );
 
     if (besluit.inRij.isNotEmpty) {

@@ -348,6 +348,20 @@ bool radioLengteSpreektTegen(int? seconden, int? bestand, {int speling = kRadioS
 bool radioTagsOntbreken(TrackTags? tags) =>
     tags == null || tags.artist.trim().isEmpty || tags.title.trim().isEmpty;
 
+/// Kan de app de tags van dit bestand schrijven? Alleen FLAC en MP3 — zie `writeTagFields`.
+bool radioTagsSchrijfbaar(String pad) {
+  final p = pad.toLowerCase();
+  return p.endsWith('.flac') || p.endsWith('.mp3');
+}
+
+/// Onbruikbaar voor de radio: geen artiest of titel in de tags, en die zijn er ook niet in te zetten.
+///
+/// Gemeten op 26-09-2026, 17:17: "01 Haddaway - What Is Love.aiff" landde zonder tags, en stond
+/// daarna als "What Is Love (7" Mix) — Onbekende artiest" in de rij. De app schrijft alleen FLAC en
+/// MP3; een AIFF of WAV zonder tags blijft zo voor altijd naamloos in je bibliotheek.
+bool radioZonderTags(TrackTags? tags, String pad) =>
+    radioTagsOntbreken(tags) && !radioTagsSchrijfbaar(pad);
+
 /// Zeggen de tags van het binnengehaalde bestand dat het een ander nummer is — of een andere versie?
 ///
 /// Het tweede net, ná het halen: een peer kan een bestand goed noemen en iets anders laten

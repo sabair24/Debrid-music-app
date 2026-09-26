@@ -10,10 +10,12 @@ library;
 
 import 'dart:io';
 
+import 'package:debridmusic/organize.dart' show TrackTags;
 import 'package:debridmusic/radiobestand.dart';
 import 'package:debridmusic/radiokeuze.dart';
 import 'package:debridmusic/radiolijst.dart';
 import 'package:debridmusic/radiostijl.dart';
+import 'package:debridmusic/radiovoorraad.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 typedef _T = ({String artiest, String titel, int rang, int seconden});
@@ -537,6 +539,61 @@ void main() {
       expect(klopt('Daft Punk', 'Around the World', r'Daft Punk\2007 - Alive 2007\05 - Around the World.flac'),
           isFalse);
       expect(klopt('Pearl Jam', 'Alive', r'Pearl Jam\Alive (Single)\01 - Alive.flac'), isTrue);
+    });
+  });
+
+  // ── Live gevolgd op het scherm, 26-09-2026 17:15 — radio vanaf Freak Out ─────────────────────
+
+  group('de zaadartiest klontert niet aan het begin', () {
+    // Zo stond de radio bij de start: het zaad, twee eigen nummers van 2 Fabiola die al klaar zijn,
+    // en drie plekken die nog gehaald moeten worden.
+    final standen = [
+      Haalstand.klaar, Haalstand.klaar, Haalstand.wacht, Haalstand.klaar, Haalstand.wacht, Haalstand.wacht,
+    ];
+    final artiesten = ['2 Fabiola', '2 Fabiola', 'Cappella', '2 Fabiola', 'Haddaway', 'Corona'];
+    final seconden = [215, 200, 220, 210, 240, 260];
+
+    test('DE KERN: met het zaad van 3:35 in de rij komt er geen tweede 2 Fabiola achter', () {
+      final b = voorraadPlan(standen,
+          artiesten: artiesten, vooruitNu: 0, restSeconden: 0, seconden: seconden);
+      expect(b.inRij, [0],
+          reason: 'eerst: Freak Out, Flashback, Let The Music Play — vier keer 2 Fabiola in de eerste tien');
+      expect(b.starten, [2, 4, 5]);
+    });
+
+    test('DE VAL: onder de minuut liever dezelfde artiest dan stilte', () {
+      final b = voorraadPlan([Haalstand.klaar, Haalstand.wacht],
+          artiesten: ['2 Fabiola', 'Cappella'], staart: ['2 Fabiola'], vooruitNu: 0, restSeconden: 40,
+          seconden: [200, 220]);
+      expect(b.inRij, [0]);
+    });
+
+    test('DE GRENS: een net geland nummer van dezelfde artiest wacht ook', () {
+      final b = voorraadPlan([Haalstand.geland],
+          artiesten: ['2 Fabiola'], staart: ['2 Fabiola'], vooruitNu: 0, restSeconden: 190, seconden: [210]);
+      expect(b.inRij, isEmpty, reason: '"I\'m On Fire" landde en stond meteen achter het zaad');
+      final zonderTijd = voorraadPlan([Haalstand.geland], artiesten: ['2 Fabiola'], staart: ['2 Fabiola'], vooruitNu: 0);
+      expect(zonderTijd.inRij, [0], reason: 'zonder tijd telt hij nummers, zoals voorheen');
+    });
+  });
+
+  group('een bestand dat de app niet kan beschrijven', () {
+    TrackTags tags(String artiest, String titel) =>
+        TrackTags(title: titel, artist: artiest, album: '', trackNo: 0);
+
+    test('DE KERN: een AIFF zonder tags is onbruikbaar, een FLAC niet', () {
+      expect(radioZonderTags(null, r'D:\x\01 Haddaway - What Is Love.aiff'), isTrue,
+          reason: 'die stond als "Onbekende artiest" in de rij');
+      expect(radioZonderTags(null, r'D:\x\01 Haddaway - What Is Love.flac'), isFalse,
+          reason: 'die tags schrijft de radio er zelf in');
+      expect(radioZonderTags(tags('Haddaway', 'What Is Love'), r'D:\x\What Is Love.aiff'), isFalse);
+    });
+
+    test('DE GRENS: alleen FLAC en MP3 zijn te taggen', () {
+      expect(radioTagsSchrijfbaar('a.FLAC'), isTrue);
+      expect(radioTagsSchrijfbaar('a.mp3'), isTrue);
+      expect(radioTagsSchrijfbaar('a.wav'), isFalse);
+      expect(radioTagsSchrijfbaar('a.aiff'), isFalse);
     });
   });
 }
