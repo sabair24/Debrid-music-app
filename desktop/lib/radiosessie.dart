@@ -133,3 +133,28 @@ Opruimplan opruimplan({
   }
   return (blijft: blijft, weg: weg);
 }
+
+/// Welk bestand hoort bij [g] — of null als het er niet meer is.
+///
+/// [eigenPad] en [eigenId] zijn van het nummer dat de bibliotheek op artiest + titel vindt. Dat telt
+/// alleen als het HETZELFDE bestand is: hetzelfde pad, of hetzelfde gedeelde id (het is verhuisd).
+/// Een ander bestand met dezelfde artiest en titel kan je eigen exemplaar zijn, en dat mag een
+/// radio nooit opruimen. Gezien op 26-09-2026: van de 19 regels in het overzicht stonden er 6 al in
+/// de prullenbak, en de oude opzoeking op artiest + titel alleen had voor zo'n regel een eigen
+/// "I'm on Fire" of "Redemption" kunnen vinden.
+///
+/// [opAfstand]: de bibliotheek staat op de pc. Dan valt er hier niets te controleren en beslist de
+/// pc — die wist alleen paden die hij kent.
+String? bestandVanGehaald(
+  Gehaald g, {
+  String? eigenPad,
+  String? eigenId,
+  required bool opAfstand,
+  required bool Function(String pad) bestaat,
+}) {
+  if (eigenPad != null && (eigenPad == g.pad || (g.id != null && eigenId == g.id))) {
+    return eigenPad;
+  }
+  if (opAfstand) return g.pad;
+  return bestaat(g.pad) ? g.pad : null;
+}

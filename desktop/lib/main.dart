@@ -29,6 +29,7 @@ import 'radiovoorraad.dart' show Haalstand;
 import 'radiobuurt.dart';
 import 'radioplan.dart';
 import 'oordelen.dart';
+import 'prullenbak.dart' show heeftPrullenbak;
 import 'radiosessie.dart';
 import 'ui/duim.dart';
 import 'lan/pc_radiobron.dart';
@@ -1895,13 +1896,19 @@ class _HomeShellState extends State<HomeShell> {
   RadioBesturing? _radio;
   bool _overzichtOpen = false;
 
+  /// De notitie die al getoond is. "Later beslissen" laat hem staan — bij de volgende START komt
+  /// hij terug — maar niet bij de volgende melding van de radio: die komt bij elke tik, en op
+  /// 26-09-2026 sprong het overzicht zo op over een radio die net begon.
+  RadioSessie? _getoond;
+
   /// Er is een radio afgesloten met iets erin dat nagekeken moet worden.
   ///
   /// Op de HOOFDnavigator en na het frame: dit vuurt vanuit `notifyListeners()`, dus midden in een
   /// opbouw, en een blad openen tijdens het tekenen is precies waar Flutter over valt.
   void _kijkNaarRadio() {
     final s = _radio?.openstaand;
-    if (s == null || _overzichtOpen || !mounted) return;
+    if (s == null || _overzichtOpen || !mounted || identical(s, _getoond)) return;
+    _getoond = s;
     _overzichtOpen = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) {
@@ -10202,12 +10209,34 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
 
   Track? nummerVan(Gehaald g) => lib.ownedTrack(g.artiest, g.titel);
 
+  // Welk bestand hoort bij deze regel? Zie [bestandVanGehaald]: nooit zomaar iets met dezelfde
+  // artiest en titel, want dat kan je eigen exemplaar zijn. Null: weg.
+  String? padVan(Gehaald g) {
+    final t = nummerVan(g);
+    return bestandVanGehaald(g,
+        eigenPad: t?.path,
+        eigenId: t == null ? null : lib.gedeeldId(t.path),
+        opAfstand: lib.isRemote,
+        bestaat: (p) => File(p).existsSync());
+  }
+
+  // Alleen wat er nog IS: een regel voor een bestand dat al weg is valt niets meer aan te beslissen,
+  // en telde wel mee in "Afsluiten en 19 opruimen".
+  final aanwezig = [
+    for (final g in sessie.gehaald)
+      if (padVan(g) != null) g
+  ];
+  if (aanwezig.isEmpty) {
+    await radio.vergeetOpenstaand();
+    return;
+  }
+
   // In een afspeellijst? Dan blijft hij, wat er verder ook op staat. Een afspeellijst met een gat
   // erin is stuk, en dat merk je pas maanden later.
   final inLijst = <String>{for (final l in lijsten.lijsten) ...l.trackIds};
 
   Opruimplan maakPlan() => opruimplan(
-        gehaald: sessie.gehaald,
+        gehaald: aanwezig,
         oordeel: (g) {
           final t = nummerVan(g);
           return t != null ? oordelen.vanTrack(t) : oordelen.van(g.id);
@@ -10258,8 +10287,8 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
                               fontSize: 25, fontWeight: FontWeight.w700, letterSpacing: -.4)),
                       const SizedBox(height: kRuimte6),
                       Text(
-                          'Deze radio haalde ${sessie.gehaald.length} '
-                          '${sessie.gehaald.length == 1 ? "nummer" : "nummers"} voor je op.',
+                          'Deze radio haalde ${aanwezig.length} '
+                          '${aanwezig.length == 1 ? "nummer" : "nummers"} voor je op.',
                           style: const TextStyle(fontSize: 13.5, color: _muted, height: 1.4)),
                     ],
                   ),
@@ -10287,22 +10316,40 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Text(
-                          'Weggaan is van je pc af, niet alleen uit deze lijst. Wat je zelf al had '
-                          'blijft hoe dan ook staan — die raakt de radio niet aan.',
-                          style: TextStyle(fontSize: 11.5, color: _muted, height: 1.45)),
+                      Text(
+                          heeftPrullenbak || lib.isRemote
+                              ? 'Opruimen zet ze in de prullenbak: daar haal je ze terug zolang je '
+                                  'die niet leegt. Wat je zelf al had blijft hoe dan ook staan — die '
+                                  'raakt de radio niet aan.'
+                              : 'Weggaan is van dit toestel af, niet alleen uit deze lijst. Wat je '
+                                  'zelf al had blijft hoe dan ook staan — die raakt de radio niet aan.',
+                          style: const TextStyle(fontSize: 11.5, color: _muted, height: 1.45)),
                       const SizedBox(height: kRuimte12),
-                      FilledButton(
-                        onPressed: () => Navigator.pop(blad, true),
-                        child: Text(plan.weg.isEmpty
-                            ? 'Afsluiten'
-                            : 'Afsluiten en ${plan.weg.length} opruimen'),
-                      ),
-                      const SizedBox(height: kRuimte6),
-                      TextButton(
-                        onPressed: () => Navigator.pop(blad, false),
-                        style: TextButton.styleFrom(foregroundColor: _muted),
-                        child: const Text('Later beslissen'),
+                      // NAAST elkaar en niet onder elkaar. Op 26-09-2026 stonden ze twintig punten
+                      // boven elkaar, en een klik die voor "Later beslissen" bedoeld was werd
+                      // "Afsluiten en 19 opruimen". Naast elkaar kan een klik die een paar punten te
+                      // hoog of te laag valt nooit de andere knop worden. En "Later" links: de kant
+                      // waar je begint te lezen is de kant die niets kapotmaakt.
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.pop(blad, false),
+                              child: const Text('Later beslissen'),
+                            ),
+                          ),
+                          const SizedBox(width: kRuimte16),
+                          Expanded(
+                            child: FilledButton(
+                              onPressed: () => Navigator.pop(blad, true),
+                              child: Text(
+                                  plan.weg.isEmpty
+                                      ? 'Afsluiten'
+                                      : '${plan.weg.length} naar de prullenbak',
+                                  textAlign: TextAlign.center),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -10322,7 +10369,9 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
   final plan = maakPlan();
   final paden = <String>[];
   for (final g in plan.weg) {
-    paden.add(nummerVan(g)?.path ?? g.pad);
+    final pad = padVan(g);
+    if (pad == null) continue; // intussen al weg
+    paden.add(pad);
     // Van de verlanglijst af. Zonder dit haalt `sweepLosslessWants` twintig minuten later alsnog de
     // FLAC van een nummer dat je zojuist hebt weggedaan — en dat is niet alleen vervelend maar
     // onbegrijpelijk: je gooide het weg en het staat er weer.
@@ -10330,10 +10379,12 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
   }
   await radio.vergeetOpenstaand();
   if (paden.isEmpty) return;
-  final weg = await lib.removeTracks(paden, fromDisk: true);
+  final weg = await lib.removeTracks(paden, fromDisk: true, naarPrullenbak: true);
   if (!context.mounted) return;
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-    content: Text('$weg ${weg == 1 ? "nummer" : "nummers"} opgeruimd.'),
+    content: Text(heeftPrullenbak || lib.isRemote
+        ? '$weg ${weg == 1 ? "nummer" : "nummers"} naar de prullenbak.'
+        : '$weg ${weg == 1 ? "nummer" : "nummers"} opgeruimd.'),
     duration: const Duration(seconds: 4),
   ));
 }

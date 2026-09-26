@@ -26,6 +26,7 @@ import 'mojibake.dart';
 import 'models.dart';
 import 'mp3_duur.dart';
 import 'mp3_tags.dart';
+import 'prullenbak.dart' as pb;
 import 'echtheid.dart';
 import 'echtheid_meter.dart';
 import 'echtheid_oordelen.dart';
@@ -1701,16 +1702,33 @@ class LibraryStore extends ChangeNotifier {
   /// in `main.dart`, naast de andere haken.
   Future<void> Function(List<String> paden)? speelNietMeer;
 
+  /// Waar [removeTracks] met `naarPrullenbak` heen gaat, en of dat hier kan. Haken, zodat een toets
+  /// niets in een echte prullenbak gooit — en op de Linux-bouwstraat hetzelfde toetst als op Windows.
+  Future<Set<String>> Function(List<String> paden) prullenbak = pb.naarPrullenbak;
+  bool heeftPrullenbak = pb.heeftPrullenbak;
+
   /// Remove tracks from the library. With [fromDisk] the files are DELETED permanently;
   /// otherwise they're only excluded from the library and stay on disk.
   /// Returns how many files were actually deleted from disk.
-  Future<int> removeTracks(Iterable<String> paths, {required bool fromDisk}) async {
+  ///
+  /// Met [naarPrullenbak] gaan ze naar de prullenbak in plaats van weg — zie `prullenbak.dart` voor
+  /// de dertien radionummers die op 26-09-2026 met één verkeerde klik onherroepelijk verdwenen. Wat
+  /// daar niet heen kon blijft dan staan, in de bibliotheek én op de schijf: wie om een weg terug
+  /// vraagt, krijgt nooit alsnog een definitieve. Alleen op een systeem zonder prullenbak wordt het
+  /// gewoon gewist, want anders kan er daar nooit meer iets opgeruimd worden.
+  Future<int> removeTracks(Iterable<String> paths,
+      {required bool fromDisk, bool naarPrullenbak = false}) async {
     if (isRemote) {
       final ids = [
         for (final p in paths)
           if (_remoteTrackId(p) case final id?) id,
       ];
-      await _editOnPc({'op': 'removeTracks', 'trackIds': ids, 'fromDisk': fromDisk});
+      await _editOnPc({
+        'op': 'removeTracks',
+        'trackIds': ids,
+        'fromDisk': fromDisk,
+        if (naarPrullenbak) 'naarPrullenbak': true,
+      });
       // What the PC deleted from disk is its count to give; the caller only shows it.
       return fromDisk ? ids.length : 0;
     }
@@ -1726,13 +1744,17 @@ class LibraryStore extends ChangeNotifier {
     // staan: een radio van vijfhonderd nummers laat anders honderden lege `Singles/<Artiest>`-mappen
     // achter, en die zie je pas als je zelf in je muziekmap gaat kijken.
     final mappen = <String>{};
+    // Bij de prullenbak: alleen wat daar werkelijk terechtkwam. Null is "gewoon wissen".
+    final Set<String>? inPrullenbak =
+        fromDisk && naarPrullenbak && heeftPrullenbak ? await prullenbak(list) : null;
     if (fromDisk) {
       for (final p in list) {
         try {
           final f = File(p);
-          if (await f.exists()) {
+          final weg = inPrullenbak != null ? inPrullenbak.contains(p) : await f.exists();
+          if (weg) {
             mappen.add(f.parent.path);
-            await f.delete();
+            if (inPrullenbak == null) await f.delete();
             deleted++;
             // Het bestand is weg, dus de meting slaat nergens meer op. Zonder dit blijft ze staan
             // en telt "701 onderzocht" spoken mee — en erger: een pad dat later opnieuw gebruikt
@@ -1758,7 +1780,9 @@ class LibraryStore extends ChangeNotifier {
       _hidden.addAll(list);
     }
     await _saveHidden();
-    tracks.removeWhere((t) => list.contains(t.path));
+    // Wat niet naar de prullenbak kon staat er nog, en hoort dan ook in de bibliotheek te blijven.
+    tracks.removeWhere((t) =>
+        list.contains(t.path) && (inPrullenbak == null || inPrullenbak.contains(t.path)));
     rebuildAlbums();
     _bumpMeta();
     notifyListeners();

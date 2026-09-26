@@ -1532,7 +1532,9 @@ class LanServer {
             if (t != null) paths.add(t.path);
           }
           if (paths.isEmpty) return _json(req.response, {'ok': false, 'reason': 'niets gevonden'});
-          await library.removeTracks(paths, fromDisk: body['fromDisk'] == true);
+          await library.removeTracks(paths,
+              fromDisk: body['fromDisk'] == true,
+              naarPrullenbak: body['naarPrullenbak'] == true);
         default:
           return _json(req.response, {'error': 'Onbekende bewerking: $op'},
               status: HttpStatus.badRequest);

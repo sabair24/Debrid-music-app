@@ -459,6 +459,20 @@ void main() {
       expect(c.edits.single['fromDisk'], isFalse);
     });
 
+    test('DE KERN: "naar de prullenbak" reist mee naar de pc', () async {
+      // Een radio op de telefoon ruimt op via de pc. Viel deze vlag onderweg weg, dan wiste de pc
+      // alsnog definitief — precies de dertien nummers van 26-09-2026, maar dan vanaf de telefoon.
+      final pc = _pc();
+      final c = _client(pc.library);
+      await c.library.loadRemote();
+      final track = c.library.tracks.firstWhere((t) => t.title == 'Sour Times');
+
+      await c.library.removeTracks([track.path], fromDisk: true, naarPrullenbak: true);
+
+      expect(c.edits.single['fromDisk'], isTrue);
+      expect(c.edits.single['naarPrullenbak'], isTrue);
+    });
+
     test('an edit the PC refuses changes nothing here', () async {
       final pc = _pc(twoPressings: true);
       final c = _client(pc.library, editStatus: 500);
