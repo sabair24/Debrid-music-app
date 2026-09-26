@@ -83,11 +83,34 @@ const List<String> _anders = [
   'live',
   'unplugged',
   'cover',
+  // Een tv-programma waarin artiesten elkaars liedjes zingen. Gezien op 26-09-2026: drie keer Pat
+  // Krimson "… - Uit Liefde Voor Muziek" in een eurodanceradio — geen enkel origineel.
+  'uit liefde voor muziek',
+  'liefde voor muziek',
+  'tribute',
+  // "(Original Maxi)": de maxisingle, de lange versie. Het woord "original" maakt hem niet de gewone
+  // — Sash! Mysterious Times duurt zo zes minuten in plaats van drieënhalf.
+  'maxi',
   '12"',
   "12''",
   '12 inch',
   'mix',
 ];
+
+/// Wat NOOIT op de radio hoort, ook niet als er geen andere versie van is: iemand anders die
+/// andermans liedje zingt.
+///
+/// Gemeten op 26-09-2026: in de Deezer-top van 2 Fabiola staan vier nummers van Pat Krimson uit het
+/// tv-programma *Uit Liefde Voor Muziek* — Pat Krimson is een van de twee, en Deezer rekent ze dus
+/// mee. Een bewerking mag in het rantsoen (twee op de tien), maar dit is geen bewerking van een
+/// origineel dat er ook had kunnen staan; het is een cover. Saber: "ik wil vooral originele nummers
+/// horen."
+final RegExp _nooit = RegExp(
+    r'\b(uit liefde voor muziek|liefde voor muziek|tribute|karaoke|cover|in the style of|'
+    r'originally performed|made famous)\b');
+
+/// Hoort dit nummer nooit op een radio? Zie [_nooit].
+bool nooitOpRadio(String titel) => _nooit.hasMatch(_staart(titel));
 
 /// Wat voor uitvoering dit is, alleen op de titel af.
 Uitvoering uitvoeringVan(String titel) {
@@ -138,6 +161,7 @@ List<int> kiesNummers(List<Aanbod> aanbod, {int bewerkingPerTien = kBewerkingPer
   //    erin ging — bij een radio een geschudde volgorde — bewaard blijft.
   final beste = <String, int>{};
   for (var i = 0; i < aanbod.length; i++) {
+    if (nooitOpRadio(aanbod[i].titel)) continue;
     final sleutel = '${_plat(aanbod[i].artiest)}|${basisTitel(aanbod[i].titel)}';
     final zit = beste[sleutel];
     if (zit == null ||
@@ -161,4 +185,129 @@ List<int> kiesNummers(List<Aanbod> aanbod, {int bewerkingPerTien = kBewerkingPer
     uit.add(i);
   }
   return uit;
+}
+
+// ── Afwisseling ─────────────────────────────────────────────────────────────────────────────────
+
+/// Wie een nummer maakt, zoals de afwisseling dat telt: "2 Fabiola feat. Loredana" is 2 Fabiola.
+String artiestSleutel(String artiest) {
+  var x = artiest.toLowerCase();
+  final f = RegExp(r'\s(feat\.?|ft\.|featuring)\s').firstMatch(x);
+  if (f != null) x = x.substring(0, f.start);
+  return _plat(x);
+}
+
+/// Tussen twee nummers van dezelfde artiest staan er minstens drie anderen.
+const int kArtiestAfstand = 4;
+
+/// De artiest waar de radio omheen gebouwd is: hoogstens één op de tien plekken, en minstens twee.
+///
+/// Gemeten op 26-09-2026, radio vanaf "Freak Out" van 2 Fabiola: Deezer levert voor de zaadartiest
+/// vijftien toppers en daarnaast nog een handvol in de artiestenradio, dus een derde van het plan was
+/// 2 Fabiola, twee keer vlak na elkaar. Saber: *"ik hoor nu al heel de tijd 2fabiola, mag maar niet
+/// heel de tijd."* Een radio "vanaf" iemand is een radio in zijn buurt, geen verzamelalbum van hem.
+const int kZaadPerTien = 1;
+
+/// En van elke andere artiest hoogstens drie.
+const int kMaxPerArtiest = 3;
+
+/// Welke regels de radio in mogen en in welke volgorde, zodat er afwisseling in zit.
+///
+/// Twee dingen:
+///
+/// 1. **Een plafond per artiest**, in de volgorde waarin ze erin gingen: wie te vaak voorkomt verliest
+///    zijn láátste nummers. [zaad] is de artiest waar de radio omheen gebouwd is en krijgt
+///    [kZaadPerTien]; de rest [maxPerArtiest]. [al] telt mee — wat er al in de radio staat — zodat
+///    een nakomer het plafond niet opnieuw kan beginnen.
+/// 2. **Een minimale afstand**: een artiest komt pas terug als er [afstand] − 1 anderen tussen
+///    stonden. [ervoor] is wat er direct vóór deze lijst klinkt — bij een radio vanaf een nummer is
+///    dat het nummer zelf. Lukt het niet meer (alleen nog één artiest over), dan de regel die het
+///    langst weg is: dat is zo min mogelijk dicht op elkaar, en er valt niets extra weg.
+///
+/// Geeft INDEXEN terug, net als [kiesNummers]. Zonder toeval: het plan is al geschud, en de eerste
+/// die past wint.
+List<int> spreidArtiesten(
+  List<String> artiesten, {
+  String? zaad,
+  Iterable<String> al = const [],
+  Iterable<String> ervoor = const [],
+  int afstand = kArtiestAfstand,
+  int maxPerArtiest = kMaxPerArtiest,
+}) {
+  final sleutels = [for (final a in artiesten) artiestSleutel(a)];
+  final z = zaad == null ? '' : artiestSleutel(zaad);
+  final geteld = <String, int>{};
+  for (final a in al) {
+    final s = artiestSleutel(a);
+    geteld[s] = (geteld[s] ?? 0) + 1;
+  }
+  final totaal = artiesten.length + geteld.values.fold(0, (a, b) => a + b);
+  var zaadMax = (totaal * kZaadPerTien + 9) ~/ 10;
+  if (zaadMax < 2) zaadMax = 2;
+
+  // 1. Het plafond.
+  final rest = <int>[];
+  for (var i = 0; i < sleutels.length; i++) {
+    final s = sleutels[i];
+    if (s.isNotEmpty) {
+      final n = geteld[s] ?? 0;
+      if (n >= (s == z ? zaadMax : maxPerArtiest)) continue;
+      geteld[s] = n + 1;
+    }
+    rest.add(i);
+  }
+
+  // 2. De afstand.
+  final laatst = <String, int>{};
+  var plek = 0;
+  for (final a in ervoor) {
+    laatst[artiestSleutel(a)] = plek++;
+  }
+  final uit = <int>[];
+  while (rest.isNotEmpty) {
+    var kies = 0;
+    var verst = -1;
+    for (var k = 0; k < rest.length; k++) {
+      final s = sleutels[rest[k]];
+      final vorige = s.isEmpty ? null : laatst[s];
+      final weg = vorige == null ? afstand : plek - vorige;
+      if (weg >= afstand) {
+        kies = k;
+        break;
+      }
+      if (weg > verst) {
+        verst = weg;
+        kies = k;
+      }
+    }
+    final i = rest.removeAt(kies);
+    if (sleutels[i].isNotEmpty) laatst[sleutels[i]] = plek;
+    plek++;
+    uit.add(i);
+  }
+  return uit;
+}
+
+// ── Wat je al hebt ──────────────────────────────────────────────────────────────────────────────
+
+/// Mag een nummer dat je AL HEBT deze radioplek vullen?
+///
+/// Tot nu toe telde artiest + titel zonder haakjes: "Freak Out" werd gevuld met je eigen "Freak Out
+/// ('97 Remix)", en "Move On Baby" met de albumversie van *U Got 2 Know* — 4:51, terwijl de single
+/// die Deezer bedoelde 3:40 duurt (gemeten 26-09-2026). Nu moet het dezelfde soort uitvoering zijn,
+/// en ongeveer even lang. [speling] is die van de bibliotheek (`sameRecordingSlack`), zodat de radio
+/// en `LibraryStore.fileOfRecording` hetzelfde antwoord geven op "heb je dit al".
+bool eigenPastOpPlek({
+  required String plekTitel,
+  int? plekSeconden,
+  required String eigenTitel,
+  int? eigenSeconden,
+  required int speling,
+}) {
+  if (uitvoeringVan(eigenTitel) == Uitvoering.bewerking &&
+      uitvoeringVan(plekTitel) != Uitvoering.bewerking) {
+    return false;
+  }
+  final a = plekSeconden ?? 0, b = eigenSeconden ?? 0;
+  return a <= 0 || b <= 0 || (a - b).abs() <= speling;
 }

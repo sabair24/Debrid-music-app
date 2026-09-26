@@ -234,6 +234,7 @@ jobs:
             test/radiovoorraad_test.dart test/radiosessie_test.dart \
             test/oordelen_test.dart test/duim_test.dart test/radioplan_test.dart \
             test/radiokeuze_test.dart test/recommend_test.dart \
+            test/radiobestand_test.dart test/radioafwisseling_test.dart \
             test/vrije_naam_test.dart test/vastgezette_hoes_test.dart \
             test/kale_flac_test.dart test/audioformaten_test.dart \
             test/gastartiest_test.dart test/kapot_bestand_test.dart \

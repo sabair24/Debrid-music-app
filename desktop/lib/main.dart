@@ -9133,7 +9133,7 @@ ItemMenu _nummerMenu(BuildContext context, Track t,
           MenuRegel(Icons.album_rounded, 'Ga naar album',
               () => openOp(nav, (_) => AlbumDetailPage(album: album))),
         MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, t.artist)),
-        MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, t.artist, titel: t.title)),
+        MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, t.artist, titel: t.title, zaad: t)),
       ],
       [
         // Dezelfde lijst die "Ontbrekende downloaden" gebruikt, alleen dan voor een nummer dat je al
@@ -11341,26 +11341,54 @@ void _srcToastAction(BuildContext context, String m, String label, VoidCallback 
 /// De looptijd gaat mee, en die stond er eerst niet in. Hij reist door tot in het gezag van de
 /// download, en zonder hem denkt de bibliotheek op artiest + titel alleen al dat je een heropname
 /// hebt — de Sting-val uit `organize.dart`.
-List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib) {
-  final index = <String, Track>{};
+///
+/// [zaadArtiest] is de artiest waar de radio omheen gebouwd is, [zaad] het nummer waar hij vanaf
+/// begon; dat liedje komt er niet nóg een keer in, ook niet in een andere uitvoering. [al] is wat er
+/// al in de radio staat, voor het plafond per artiest — zie [spreidArtiesten].
+List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
+    {String? zaadArtiest, Track? zaad, Iterable<String> al = const []}) {
+  final index = <String, List<Track>>{};
   for (final t in lib.tracks) {
-    index.putIfAbsent('${recNorm(t.artist)}|${recNorm(t.title)}', () => t);
+    (index['${recNorm(t.artist)}|${recNorm(t.title)}'] ??= []).add(t);
   }
+  // Van wat je hebt alleen wat dezelfde uitvoering is, en even lang — zie [eigenPastOpPlek].
+  Track? eigenVoor(RecTrack r) {
+    for (final t in index['${recNorm(r.artist)}|${recNorm(r.title)}'] ?? const <Track>[]) {
+      if (eigenPastOpPlek(
+          plekTitel: r.title,
+          plekSeconden: r.seconds,
+          eigenTitel: t.title,
+          eigenSeconden: t.duration?.inSeconds,
+          speling: sameRecordingSlack)) {
+        return t;
+      }
+    }
+    return null;
+  }
+
+  final zaadLied = zaad == null ? null : '${artiestSleutel(zaad.artist)}|${basisTitel(zaad.title)}';
   final bruikbaar = [
     for (final r in recs)
-      if (r.title.trim().isNotEmpty && r.artist.trim().isNotEmpty) r
+      if (r.title.trim().isNotEmpty &&
+          r.artist.trim().isNotEmpty &&
+          '${artiestSleutel(r.artist)}|${basisTitel(r.title)}' != zaadLied)
+        r
   ];
   // De ene weg waarlangs elke radio zijn nummers krijgt, dus de plek waar de versiekeuze hoort. Zie
   // `radiokeuze.dart`: van één liedje één uitvoering, en hoogstens twee bewerkingen per tien.
   final gekozen = kiesNummers(
       [for (final r in bruikbaar) (artiest: r.artist, titel: r.title)]);
+  // En afwisseling: niet de hele tijd dezelfde artiest, en nooit twee keer vlak na elkaar.
+  final eerder = [...al, if (zaad != null) zaad.artist];
+  final volgorde = spreidArtiesten([for (final i in gekozen) bruikbaar[i].artist],
+      zaad: zaadArtiest, al: eerder, ervoor: al.isEmpty ? eerder : const []);
   return [
-    for (final i in gekozen)
+    for (final v in volgorde)
       Radioplek(
-        artiest: bruikbaar[i].artist,
-        titel: bruikbaar[i].title,
-        seconden: bruikbaar[i].seconds > 0 ? bruikbaar[i].seconds : null,
-        eigen: index['${recNorm(bruikbaar[i].artist)}|${recNorm(bruikbaar[i].title)}'],
+        artiest: bruikbaar[gekozen[v]].artist,
+        titel: bruikbaar[gekozen[v]].title,
+        seconden: bruikbaar[gekozen[v]].seconds > 0 ? bruikbaar[gekozen[v]].seconds : null,
+        eigen: eigenVoor(bruikbaar[gekozen[v]]),
       ),
   ];
 }
@@ -11372,7 +11400,11 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib) {
 /// nergens in je bibliotheek terechtkwam, en op een gekoppeld toestel zelfs dat niet. Nu wordt het via
 /// Soulseek OPGEHAALD terwijl je luistert, en komt het pas in de rij als het bestand er werkelijk
 /// staat. Zie `radio.dart`.
-Future<void> startRadio(BuildContext context, String artist, {String? titel}) async {
+///
+/// [zaad] is het nummer uit je bibliotheek waar je de radio vanaf startte, en dat klinkt als EERSTE.
+/// Gemeten op 26-09-2026: "Radio vanaf hier" op Freak Out van 2 Fabiola begon met Cappella — het
+/// nummer zelf zat nergens in de rij, want het plan kwam helemaal van Deezer.
+Future<void> startRadio(BuildContext context, String artist, {String? titel, Track? zaad}) async {
   final lib = context.read<LibraryStore>();
   final radio = context.read<RadioBesturing>();
   _srcToast(context, '📻 Radio starten voor $artist…');
@@ -11435,7 +11467,15 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel}) as
     _srcToast(context, 'Geen radio gevonden voor $artist.');
     return;
   }
-  final reden = await radio.start(_radioplan(recs, lib), naam: artist);
+  final reden = await radio.start([
+    if (zaad != null)
+      Radioplek(
+          artiest: zaad.artist,
+          titel: zaad.title,
+          seconden: zaad.duration?.inSeconds,
+          eigen: zaad),
+    ..._radioplan(recs, lib, zaadArtiest: artist, zaad: zaad),
+  ], naam: artist);
   // En de namen van het model erbij zodra ze er zijn — de radio speelt intussen al.
   //
   // Het model doet er 25 tot 30 seconden over (gemeten 12-09-2026). Daar mag een radio niet op
@@ -11446,7 +11486,10 @@ Future<void> startRadio(BuildContext context, String artist, {String? titel}) as
     final sessie = radio.sessie;
     unawaited(rec
         .buurtErbij(artist, titel, buurt, spoor: buurtSpoor)
-        .then((extra) => radio.voegBij(sessie, _radioplan(extra, lib)))
+        .then((extra) => radio.voegBij(
+            sessie,
+            _radioplan(extra, lib,
+                zaadArtiest: artist, zaad: zaad, al: [for (final p in radio.plan) p.artiest])))
         .catchError((_) {}));
   }
   if (!context.mounted || reden == null) return;

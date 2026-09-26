@@ -473,9 +473,13 @@ class RadioBesturing extends ChangeNotifier {
   void _pas(int sessie) {
     if (sessie != _sessie) return;
     final vooruit = speler.radioQueue.length - speler.radioIndex - 1;
+    final rij = speler.radioQueue;
     final besluit = voorraadPlan(
       [for (final p in _plan) p.stand],
       artiesten: [for (final p in _plan) p.artiest],
+      // Wat er achteraan de rij staat, zodat een net geland nummer niet vlak achter zijn eigen
+      // artiest belandt.
+      staart: [for (final it in rij.skip(rij.length > 8 ? rij.length - 8 : 0)) it.artist],
       vooruitNu: vooruit < 0 ? 0 : vooruit,
     );
 

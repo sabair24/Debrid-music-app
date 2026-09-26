@@ -195,4 +195,62 @@ void main() {
           [0, 1, 2, 3, 4, 5]);
     });
   });
+
+  group('een net geland nummer landt niet vlak achter zijn eigen artiest', () {
+    // Gemeten op 26-09-2026: twee nummers van 2 Fabiola na elkaar, omdat ze na elkaar LANDDEN. De
+    // volgorde van de rij is de volgorde waarin Soulseek levert, en die kiest niemand. Saber: 'ik hoor
+    // nu al heel de tijd 2fabiola'.
+    test('DE KERN: staat de artiest achteraan de rij, dan wacht het nummer een tik', () {
+      final b = voorraadPlan(standen('gg'),
+          artiesten: const ['2 Fabiola', 'Cappella'],
+          staart: const ['Haddaway', '2 Fabiola'],
+          vooruitNu: 4);
+      expect(b.inRij, [1], reason: '2 Fabiola stond net achteraan; Cappella mag wel');
+    });
+
+    test('DE KERN: twee gelande van dezelfde artiest gaan niet samen de rij in', () {
+      final b = voorraadPlan(standen('gg'),
+          artiesten: const ['2 Fabiola', '2 Fabiola'], staart: const ['Snap!'], vooruitNu: 4);
+      expect(b.inRij, [0]);
+    });
+
+    test('DE KERN: ook als hij twee plekken terug staat', () {
+      final b = voorraadPlan(standen('g'),
+          artiesten: const ['2 Fabiola'],
+          staart: const ['2 Fabiola', 'Snap!', 'Cappella'],
+          vooruitNu: 4);
+      expect(b.inRij, isEmpty, reason: 'twee anderen ertussen is te weinig; het moeten er drie zijn');
+    });
+
+    test('DE VAL: met drie anderen ertussen mag hij weer', () {
+      final b = voorraadPlan(standen('g'),
+          artiesten: const ['2 Fabiola'],
+          staart: const ['2 Fabiola', 'Snap!', 'Cappella', 'Haddaway'],
+          vooruitNu: 4);
+      expect(b.inRij, [0]);
+    });
+
+    test('DE VAL: afwisseling is geen reden voor stilte', () {
+      // Minder dan twee nummers vooruit: dan gaat hij er toch in, want een rij die leegloopt
+      // stopt de radio.
+      final b = voorraadPlan(standen('g'),
+          artiesten: const ['2 Fabiola'], staart: const ['2 Fabiola'], vooruitNu: 1);
+      expect(b.inRij, [0]);
+    });
+
+    test('DE KERN: ook de vulling kijkt achteraan de rij', () {
+      final b = voorraadPlan(standen('kk'),
+          artiesten: const ['2 Fabiola', 'Cappella'],
+          staart: const ['2 Fabiola'],
+          vooruitNu: 4,
+          minVooruit: 5);
+      expect(b.inRij, [1]);
+    });
+
+    test('DE GRENS: gast of hoofdletters maken er geen andere artiest van', () {
+      final b = voorraadPlan(standen('g'),
+          artiesten: const ['2 Fabiola feat. Loredana'], staart: const ['2 FABIOLA'], vooruitNu: 4);
+      expect(b.inRij, isEmpty);
+    });
+  });
 }

@@ -12,6 +12,8 @@
 /// toeval — alleen tellen, want dit is precies het stuk dat kloppen moet.
 library;
 
+import 'radiokeuze.dart' show artiestSleutel, kArtiestAfstand;
+
 /// Wat er met één plek uit het radioplan aan de hand is.
 enum Haalstand {
   /// Er is nog niets mee gedaan.
@@ -94,23 +96,45 @@ const int kMaxOnderweg = 8;
 /// Nu gaat de vulling in twee rondes: eerst alleen artiesten die nog niet in de rij staan, en pas
 /// als het gat daarmee niet dicht is, de rest. Geen [artiesten] meegegeven, dan gedraagt hij zich
 /// exact als voorheen — de eerste ronde pakt dan alles.
+///
+/// **En een net geland nummer wacht even als zijn artiest er vlak voor staat.** [staart] zijn de
+/// artiesten achteraan de speelrij, de laatste het laatst. Gemeten op 26-09-2026: twee nummers van
+/// 2 Fabiola na elkaar, omdat ze na elkaar LANDDEN — de volgorde van de rij is de volgorde waarin
+/// Soulseek levert, en die kiest niemand. Staat dezelfde artiest in de laatste [afstand] − 1, dan
+/// blijft het nummer [Haalstand.geland] en gaat het een tik later mee, zodra er iets anders tussen
+/// staat. Nooit als er minder dan twee nummers vooruit staan: afwisseling is geen reden voor stilte.
 Voorraadbesluit voorraadPlan(
   List<Haalstand> standen, {
   required int vooruitNu,
   List<String> artiesten = const [],
+  List<String> staart = const [],
+  int afstand = kArtiestAfstand,
   int minVooruit = kMinVooruit,
   int maxOnderweg = kMaxOnderweg,
 }) {
   final inRij = <int>[];
   var vooruit = vooruitNu;
+  String naam(int i) => i < artiesten.length ? artiestSleutel(artiesten[i]) : '';
+  final rij = [for (final a in staart) artiestSleutel(a)];
+  bool vlakErvoor(String a) {
+    if (a.isEmpty) return false;
+    for (var k = rij.length - 1; k >= 0 && k >= rij.length - (afstand - 1); k--) {
+      if (rij[k] == a) return true;
+    }
+    return false;
+  }
+
   // Eerst alles wat net binnengekomen is, ongeacht hoeveel er al vooruit staat.
   for (var i = 0; i < standen.length; i++) {
     if (standen[i] != Haalstand.geland) continue;
+    final a = naam(i);
+    if (vooruit >= 2 && vlakErvoor(a)) continue;
     inRij.add(i);
+    rij.add(a);
     vooruit++;
   }
   // En daarna eigen muziek, maar alleen zoveel als er nodig is om het gat te dichten.
-  String naam(int i) => i < artiesten.length ? artiesten[i].trim().toLowerCase() : '';
+  //
   // Wat er net geland is telt mee: staat die artiest er al, dan hoeft zijn eigen werk er niet
   // meteen achteraan.
   final gezien = <String>{for (final i in inRij) naam(i)}..remove('');
@@ -118,8 +142,9 @@ Voorraadbesluit voorraadPlan(
     for (var i = 0; i < standen.length && vooruit < minVooruit; i++) {
       if (standen[i] != Haalstand.klaar || inRij.contains(i)) continue;
       final a = naam(i);
-      if (ronde == 0 && a.isNotEmpty && !gezien.add(a)) continue;
+      if (ronde == 0 && a.isNotEmpty && (vlakErvoor(a) || !gezien.add(a))) continue;
       inRij.add(i);
+      rij.add(a);
       vooruit++;
     }
   }

@@ -8,6 +8,7 @@ import 'models.dart';
 import 'organize.dart';
 import 'lossless_want.dart';
 import 'quality.dart';
+import 'radiobestand.dart';
 import 'radiovoorraad.dart' show kMaxWacht;
 import 'rutracker.dart';
 import 'search.dart';
@@ -2783,6 +2784,16 @@ class DownloadManager extends ChangeNotifier {
   /// er nog een paar achter."
   final Set<DownloadJob> _radiohalen = {};
 
+  /// Per radionummer de uploaders die het deze radio al niet leverden, of iets anders leverden.
+  ///
+  /// Gezien op 26-09-2026: "Pat Krimson — Silence" mislukte drie keer, telkens bij hondo77 met
+  /// "overdracht afgebroken" — want dezelfde zoekvraag zet dezelfde peer steeds weer bovenaan. Leeg
+  /// bij elke nieuwe radio (zie [staakRadiohalen]).
+  final Map<String, Set<String>> _radioNietBij = {};
+
+  static String _radioSleutel(String artiest, String titel) =>
+      '${normKey(artiest)}|${normKey(titel)}';
+
   /// Alles wat er voor de radio loopt onmiddellijk afbreken. Geeft terug hoeveel er weggehaald zijn.
   ///
   /// Het halfbakken bestand ruimt de overdracht zelf op: een afgebroken overdracht eindigt niet als
@@ -2800,6 +2811,7 @@ class DownloadManager extends ChangeNotifier {
       n++;
     }
     _radiohalen.clear();
+    _radioNietBij.clear();
     if (n > 0) _log.line('radio gestopt: $n ${n == 1 ? "haal" : "halen"} afgebroken');
     return n;
   }
@@ -2836,7 +2848,24 @@ class DownloadManager extends ChangeNotifier {
       return null; // geen net of geen aanmelding; deze plek in het plan mislukt gewoon
     }
     if (job.cancelled) return null; // de radio is afgesloten terwijl we zochten
-    final bruikbaar = hits.where((f) => !isMultichannel(f)).toList()..sort(_rankSlsk);
+    // Alleen wat ECHT dit nummer is, in de gevraagde uitvoering en ongeveer de juiste lengte — zie
+    // `radiobestand.dart` voor de zes verkeerde nummers van 26-09-2026 — en niet bij een uploader die
+    // het deze radio al liet afweten.
+    final sleutel = _radioSleutel(artiest, titel);
+    final nietBij = _radioNietBij[sleutel] ?? const <String>{};
+    final passend = [
+      for (final f in hits)
+        if (!isMultichannel(f) &&
+            !nietBij.contains(f.username) &&
+            radioBestandKlopt(
+                artiest: artiest,
+                titel: titel,
+                seconden: seconden,
+                pad: f.filename,
+                padSeconden: f.durationSec))
+          f
+    ];
+    final bruikbaar = passend..sort(_rankSlsk);
     // Lossless eerst, precies zoals overal in deze app. Maar niet lossless-of-niets: een
     // eurodance-single uit 1993 bestaat op dit netwerk soms alleen als mp3, en dan is die mp3 beter
     // dan stilte. `_rankSlsk` heeft de beste al vooraan gezet.
@@ -2845,9 +2874,14 @@ class DownloadManager extends ChangeNotifier {
       ...bruikbaar.where((f) => !isLossless(f)),
     ];
     if (kandidaten.isEmpty) {
-      _log.line('radio "$artiest — $titel": ${hits.length} treffers, niets bruikbaars');
+      _log.line('radio "$artiest — $titel": ${hits.length} treffers, niets bruikbaars'
+          '${hits.isEmpty ? "" : " — geen enkele is dit nummer in deze uitvoering"}');
       return null;
     }
+    // Hoeveel er door de zeef kwam: zonder dit getal is "de radio vindt minder" niet te scheiden van
+    // "Soulseek heeft het niet".
+    _log.line('radio "$artiest — $titel": ${kandidaten.length} van ${hits.length} treffers '
+        'zijn dit nummer${nietBij.isEmpty ? "" : ", ${nietBij.length} uploader(s) overgeslagen"}');
 
     final gezag = TrackTags(
       title: titel,
@@ -2880,8 +2914,24 @@ class DownloadManager extends ChangeNotifier {
           }
           if (job.cancelled) return;
           _log.line('radio "$artiest — $titel": ${f.username} '
-              '${_uitkomst(res)} na ${_kort(DateTime.now().difference(t0))}');
-          if (res is! SlskDone) continue;
+              '${_uitkomst(res)} na ${_kort(DateTime.now().difference(t0))} — ${baseName(f.filename)}');
+          if (res is! SlskDone) {
+            (_radioNietBij[sleutel] ??= {}).add(f.username);
+            continue;
+          }
+          // Het tweede net: wat er IN het bestand staat. Een peer kan een bestand goed noemen en iets
+          // anders laten klinken, en dat hoort nooit in je bibliotheek te landen.
+          final binnen = File(res.path);
+          final t = readTags(binnen);
+          if (radioTagsSprekenTegen(artiest, titel, t)) {
+            _log.line('radio "$artiest — $titel": ${f.username} leverde een ander nummer '
+                '(${t?.artist} — ${t?.title}) — weggegooid, volgende');
+            (_radioNietBij[sleutel] ??= {}).add(f.username);
+            try {
+              await binnen.delete();
+            } catch (_) {/* dan ruimt de wachtmap het later op */}
+            continue;
+          }
 
           // Nog één keer kijken, vlak vóór het filen. Tussen de toets bovenaan en dit moment kan een
           // andere haal — of de jacht op een betere kwaliteit — hetzelfde nummer hebben laten landen.
