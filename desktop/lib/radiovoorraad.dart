@@ -12,7 +12,7 @@
 /// toeval — alleen tellen, want dit is precies het stuk dat kloppen moet.
 library;
 
-import 'radiokeuze.dart' show artiestSleutel, kArtiestAfstand;
+import 'radiokeuze.dart' show artiestSleutel, kArtiestAfstand, kZaadPerTien;
 
 /// Wat er met één plek uit het radioplan aan de hand is.
 enum Haalstand {
@@ -100,6 +100,14 @@ const int kMaxOnderweg = 8;
 /// 26-09-2026), en onder de minuut is een tweede nummer van dezelfde artiest beter dan stilte.
 const int kRuimeRest = 60;
 
+/// Hoe ver twee nummers van de zaadartiest in de speelrij uit elkaar staan — [kZaadPerTien] op de tien.
+///
+/// Gemeten op 26-09-2026 (3.9.417, radio vanaf Freak Out): het PLAN hield zich aan één op de tien,
+/// maar de eigen nummers van 2 Fabiola waren het eerst klaar, en met de gewone afstand van vier
+/// stonden ze op plek 1, 6, 10 en 14 — drie in de eerste tien. Alleen zolang er genoeg klinkt
+/// ([kRuimeRest]); anders liever 2 Fabiola dan stilte.
+const int kZaadAfstand = 10 ~/ kZaadPerTien;
+
 /// Hoe lang een plek zonder bekende lengte meetelt: een gewone single.
 const int kOnbekendeLengte = 180;
 
@@ -170,6 +178,7 @@ Voorraadbesluit voorraadPlan(
   int maxVooruit = kMaxVooruit,
   int? restSeconden,
   List<int?> seconden = const [],
+  String? zaad,
 }) {
   final inRij = <int>[];
   var vooruit = vooruitNu;
@@ -185,9 +194,12 @@ Voorraadbesluit voorraadPlan(
   }
   String naam(int i) => i < artiesten.length ? artiestSleutel(artiesten[i]) : '';
   final rij = [for (final a in staart) artiestSleutel(a)];
+  // De zaadartiest hoogstens één op de tien IN DE RIJ, niet alleen in het plan — zie [kZaadAfstand].
+  final zaadSleutel = zaad == null ? '' : artiestSleutel(zaad);
   bool vlakErvoor(String a) {
     if (a.isEmpty) return false;
-    for (var k = rij.length - 1; k >= 0 && k >= rij.length - (afstand - 1); k--) {
+    final d = a == zaadSleutel ? kZaadAfstand : afstand;
+    for (var k = rij.length - 1; k >= 0 && k >= rij.length - (d - 1); k--) {
       if (rij[k] == a) return true;
     }
     return false;

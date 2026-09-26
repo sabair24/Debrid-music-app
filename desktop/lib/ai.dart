@@ -23,7 +23,10 @@ const String kRadioModel = 'claude-opus-5';
 
 /// Ruim, en dat is nodig: denken staat standaard aan en die tekens tellen mee in `max_tokens`. Te
 /// krap betekent `stop_reason: max_tokens` en een half antwoord dat niet te lezen valt.
-const int kRadioMaxTokens = 4000;
+///
+/// Achtduizend en geen vierduizend: op 26-09-2026 kwam er een keer één nummer terug in plaats van 36
+/// — zie `kMinModelNummers`. Een ruimere grens kost niets zolang hij niet gebruikt wordt.
+const int kRadioMaxTokens = 8000;
 
 /// De vraag zoals hij de deur uitgaat.
 ///
@@ -221,6 +224,32 @@ class AiService {
   }) async {
     final sleutel = sleutelVan().trim();
     if (sleutel.isEmpty || artiest.trim().isEmpty) return const [];
+    // Twee keer als de eerste te weinig bruikbaars gaf, en dan de beste van de twee. Zie
+    // [kMinModelNummers] — en [laatsteStop] voor het logboek, zodat de oorzaak de volgende keer
+    // gemeten is en niet geraden.
+    var beste = const <AiNummer>[];
+    for (var poging = 0; poging < 2; poging++) {
+      final uit = await _radiolijstEenmaal(
+          sleutel, artiest, titel, jaar, stijlen, genre, profiel, smaak, alGekozen);
+      if (uit.length > beste.length) beste = uit;
+      if (beste.length >= kMinModelNummers) break;
+    }
+    return beste;
+  }
+
+  /// Waarom het model de laatste keer ophield (`stop_reason`), of null. Voor het radiologboek.
+  String? laatsteStop;
+
+  Future<List<AiNummer>> _radiolijstEenmaal(
+      String sleutel,
+      String artiest,
+      String? titel,
+      int? jaar,
+      List<String> stijlen,
+      String? genre,
+      SmaakProfiel profiel,
+      Radiosmaak smaak,
+      List<String> alGekozen) async {
     final body = await _verstuur(
       {
         'model': kRadioModel,
@@ -247,6 +276,7 @@ class AiService {
       sleutel,
       werkruimteVan().trim(),
     );
+    laatsteStop = body is Map ? body['stop_reason']?.toString() : null;
     return leesNummers(jsonUitAntwoord(body));
   }
 

@@ -25,7 +25,7 @@ import 'ai.dart';
 import 'radio.dart';
 import 'radiokeuze.dart';
 import 'radiobestand.dart' show kRadioSpeling;
-import 'radiolijst.dart' show AiNummer;
+import 'radiolijst.dart' show AiNummer, kMinModelNummers;
 import 'radiosmaak.dart';
 import 'radiostijl.dart' show Stijlboek, Stijlfamilie, Stijloordeel, Zaadstijl;
 import 'radiovoorraad.dart' show Haalstand;
@@ -11715,7 +11715,9 @@ Future<void> startRadio(BuildContext context, String artist,
             alGekozen: [for (final p in radio.plan) '${p.artiest} - ${p.titel}'],
           );
           keuring.onthoud(lijst);
-          log.line('radio-lijst: ${lijst.length} nummers van het model — ${lijst.map((n) => '${n.artiest} – '
+          log.line('radio-lijst: ${lijst.length} nummers van het model'
+              '${lijst.length < kMinModelNummers ? ' (te weinig; stop: ${model.laatsteStop})' : ''} — '
+              '${lijst.map((n) => '${n.artiest} – '
               '${n.titel}${n.jaar == null ? '' : ' (${n.jaar})'}${n.bekend ? '' : '*'}').join('; ')}');
           // Intussen afgestemd? Dan dezelfde lijst, maar in de volgorde van de stand die nu geldt, en
           // bij díé afstemming — anders ging hij verloren, en afstemmen gebruikt hem ook.

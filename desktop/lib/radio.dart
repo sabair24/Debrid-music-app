@@ -499,7 +499,8 @@ class RadioBesturing extends ChangeNotifier {
         artiesten: [for (final p in nieuw) p.artiest],
         vooruitNu: 0,
         restSeconden: 0,
-        seconden: [for (final p in nieuw) _lengte(p)]);
+        seconden: [for (final p in nieuw) _lengte(p)],
+        zaad: zaadArtiest);
     final eerste = <RadioItem>[];
     for (final i in besluit.inRij) {
       nieuw[i].stand = Haalstand.inRij;
@@ -682,11 +683,13 @@ class RadioBesturing extends ChangeNotifier {
       artiesten: [for (final p in _plan) p.artiest],
       // Wat er achteraan de rij staat, zodat een net geland nummer niet vlak achter zijn eigen
       // artiest belandt.
-      staart: [for (final it in rij.skip(rij.length > 8 ? rij.length - 8 : 0)) it.artist],
+      // Tien, en niet acht: de zaadartiest moet tien plekken terug kunnen kijken ([kZaadAfstand]).
+      staart: [for (final it in rij.skip(rij.length > kZaadAfstand ? rij.length - kZaadAfstand : 0)) it.artist],
       vooruitNu: vooruit < 0 ? 0 : vooruit,
       rust: _rustTot != null && DateTime.now().isBefore(_rustTot!),
       restSeconden: _restSeconden(),
       seconden: [for (final p in _plan) _lengte(p)],
+      zaad: zaadArtiest,
     );
 
     if (besluit.inRij.isNotEmpty) {

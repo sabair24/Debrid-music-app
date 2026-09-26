@@ -8,8 +8,11 @@
 /// naam waaronder het gevonden werd.
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:debridmusic/aanbevelingplan.dart' show SmaakProfiel;
+import 'package:debridmusic/ai.dart';
 import 'package:debridmusic/organize.dart' show TrackTags;
 import 'package:debridmusic/radiobestand.dart';
 import 'package:debridmusic/radiokeuze.dart';
@@ -17,6 +20,8 @@ import 'package:debridmusic/radiolijst.dart';
 import 'package:debridmusic/radiostijl.dart';
 import 'package:debridmusic/radiovoorraad.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 typedef _T = ({String artiest, String titel, int rang, int seconden});
 
@@ -575,6 +580,24 @@ void main() {
       final zonderTijd = voorraadPlan([Haalstand.geland], artiesten: ['2 Fabiola'], staart: ['2 Fabiola'], vooruitNu: 0);
       expect(zonderTijd.inRij, [0], reason: 'zonder tijd telt hij nummers, zoals voorheen');
     });
+
+    test('DE KERN: de zaadartiest hoogstens één op de tien IN DE RIJ', () {
+      // 3.9.417, 17:48: 2 Fabiola op plek 1, 6, 10 en 14 — het plan hield zich aan één op de tien, de
+      // rij niet. Hier staat het zaad vijf plekken terug.
+      const staart = ['2 Fabiola', 'Cappella', 'Haddaway', 'Dune', 'Snap!'];
+      final b = voorraadPlan([Haalstand.klaar, Haalstand.klaar],
+          artiesten: ['2 Fabiola', 'Corona'], staart: staart, vooruitNu: 2, restSeconden: 300,
+          seconden: [200, 240], zaad: '2 Fabiola');
+      expect(b.inRij, [1], reason: 'Corona wel, 2 Fabiola pas na tien plekken');
+      final gewoon = voorraadPlan([Haalstand.klaar, Haalstand.klaar],
+          artiesten: ['2 Fabiola', 'Corona'], staart: staart, vooruitNu: 2, restSeconden: 300,
+          seconden: [200, 240]);
+      expect(gewoon.inRij, [0, 1], reason: 'voor een gewone artiest is vier plekken genoeg');
+      final krap = voorraadPlan([Haalstand.klaar],
+          artiesten: ['2 Fabiola'], staart: staart, vooruitNu: 0, restSeconden: 30, seconden: [200],
+          zaad: '2 Fabiola');
+      expect(krap.inRij, [0], reason: 'onder de minuut liever 2 Fabiola dan stilte');
+    });
   });
 
   group('een bestand dat de app niet kan beschrijven', () {
@@ -594,6 +617,65 @@ void main() {
       expect(radioTagsSchrijfbaar('a.mp3'), isTrue);
       expect(radioTagsSchrijfbaar('a.wav'), isFalse);
       expect(radioTagsSchrijfbaar('a.aiff'), isFalse);
+    });
+  });
+
+  group('het model dat een keer niets geeft', () {
+    http.Response antwoord(List<(String, String)> nummers, String stop) => http.Response(
+        jsonEncode({
+          'content': [
+            {
+              'type': 'text',
+              'text': jsonEncode({
+                'nummers': [
+                  for (final (a, t) in nummers) {'artiest': a, 'titel': t, 'jaar': 1994, 'bekend': true}
+                ]
+              })
+            }
+          ],
+          'stop_reason': stop,
+        }),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'});
+    final twintig = [for (var i = 0; i < 20; i++) ('Artiest $i', 'Nummer $i')];
+
+    // Een verzonnen sleutel: het verzoek gaat naar de nep-client en nergens anders heen.
+    AiService model(http.Response Function(int vraag) wat) {
+      var vraag = 0;
+      return AiService(() => 'sk-ant-toets', client: MockClient((_) async => wat(++vraag)));
+    }
+
+    test('DE KERN: één "placeholder" is geen lijst — de radio vraagt het één keer opnieuw', () async {
+      var vragen = 0;
+      final ai = model((v) {
+        vragen = v;
+        return v == 1 ? antwoord([('技', 'placeholder')], 'max_tokens') : antwoord(twintig, 'end_turn');
+      });
+      final lijst = await ai.maakRadiolijst(artiest: '2 Fabiola', titel: 'Freak Out', profiel: const SmaakProfiel());
+      expect(vragen, 2, reason: 'op 26-09-2026 deed het model zo niet mee, en kwam alles van Deezer');
+      expect(lijst.length, 20);
+      expect(ai.laatsteStop, 'end_turn');
+    });
+
+    test('DE VAL: een goede lijst wordt niet nog eens gevraagd', () async {
+      var vragen = 0;
+      final ai = model((v) {
+        vragen = v;
+        return antwoord(twintig, 'end_turn');
+      });
+      await ai.maakRadiolijst(artiest: '2 Fabiola', profiel: const SmaakProfiel());
+      expect(vragen, 1, reason: 'elke vraag kost geld en twintig seconden');
+    });
+
+    test('DE GRENS: een invulplek is geen nummer', () {
+      final uit = leesNummers({
+        'nummers': [
+          {'artiest': 'Placeholder', 'titel': 'Iets'},
+          {'artiest': 'Snap!', 'titel': 'placeholder'},
+          {'artiest': 'Snap!', 'titel': 'The Power'},
+        ]
+      });
+      expect([for (final n in uit) n.titel], ['The Power']);
     });
   });
 }

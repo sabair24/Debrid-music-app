@@ -18,6 +18,16 @@ import 'radiosmaak.dart';
 /// Hoeveel nummers het model mag noemen. Genoeg voor een uur of twee naast wat Deezer geeft.
 const int kMaxModelNummers = 36;
 
+/// Onder dit aantal bruikbare nummers vraagt de radio het model één keer opnieuw.
+///
+/// Gemeten op 26-09-2026: de eerste radio vanaf Freak Out kreeg 36 nummers, de tweede — zelfde zaad,
+/// een half uur later — één: "技 – placeholder". Dan deed het model niet mee en kwam alles van Deezer.
+const int kMinModelNummers = 12;
+
+/// Woorden die geen artiest of titel zijn maar een invulplek: wat een model teruggeeft als het niets
+/// wist in te vullen. Zie [kMinModelNummers].
+const Set<String> _invulplek = {'placeholder', 'unknown', 'n/a', 'tbd', 'artist', 'title', 'artiest', 'titel'};
+
 /// Eén voorstel van het model.
 class AiNummer {
   const AiNummer(this.artiest, this.titel, {this.jaar, this.bekend = false});
@@ -132,6 +142,7 @@ List<AiNummer> leesNummers(Object? json) {
     final artiest = '${v['artiest'] ?? ''}'.trim();
     final titel = '${v['titel'] ?? ''}'.trim();
     if (!lijktOpArtiest(artiest) || titel.isEmpty || titel.length > 120) continue;
+    if (_invulplek.contains(artiest.toLowerCase()) || _invulplek.contains(titel.toLowerCase())) continue;
     if (!gezien.add('${plat(artiest)}|${plat(titel)}')) continue;
     final j = v['jaar'];
     final jaar = j is num ? j.toInt() : int.tryParse('$j');
