@@ -18,6 +18,7 @@ import 'dart:io' show HttpStatus;
 import '../library.dart';
 import '../models.dart';
 import '../radio.dart';
+import '../radiovoorraad.dart' show RadioLaterOpnieuw;
 import 'client.dart';
 
 /// Hoe vaak er gevraagd wordt hoe het met een haal staat.
@@ -126,6 +127,9 @@ class PcRadiobron implements Radiobron {
       }
       final stand = a['stand'];
       if (stand == 'onderweg') continue;
+      // Soulseek op de pc doet even niet mee: geen mislukte plek, straks opnieuw. Een oudere pc kent
+      // dit antwoord niet en zegt 'mislukt', en dan is het zoals het altijd was.
+      if (stand == 'later') throw const RadioLaterOpnieuw('Soulseek op de pc doet even niet mee');
       if (stand != 'klaar') return null;
 
       // Het bestand staat op de PC, dus komt het hierheen via de catalogus. Stil verversen: dit

@@ -17,6 +17,7 @@ import 'dart:async';
 import '../library.dart';
 import '../settings.dart';
 import '../online.dart';
+import '../radiovoorraad.dart' show RadioLaterOpnieuw;
 
 /// Hoe lang een afgelopen haal opvraagbaar blijft.
 ///
@@ -132,9 +133,12 @@ class Radiohaler {
     _halen[haal.id] = haal;
     unawaited(() async {
       String? pad;
+      var later = false;
       try {
         pad = await downloads?.haalVoorRadio(
             artiest: artiest, titel: titel, seconden: seconden, jaar: jaar);
+      } on RadioLaterOpnieuw {
+        later = true; // Soulseek op de pc doet even niet mee; het toestel probeert het straks weer
       } catch (_) {
         pad = null;
       }
@@ -149,7 +153,7 @@ class Radiohaler {
         } catch (_) {/* het bestand ligt er; een scan vindt het later alsnog */}
       }
       haal.pad = pad;
-      haal.stand = pad == null ? 'mislukt' : 'klaar';
+      haal.stand = later ? 'later' : (pad == null ? 'mislukt' : 'klaar');
       haal.klaarOm = DateTime.now();
     }());
     return haal;

@@ -43,6 +43,25 @@ enum Haalstand {
   mislukt,
 }
 
+/// Soulseek doet even niet mee: geen aanmelding, of de server antwoordt niet. Dat is geen mislukte
+/// plek maar een plek die later opnieuw moet.
+///
+/// **Waarom dit een eigen uitkomst is.** Gemeten op 26-09-2026: om 11:54 moest de verbinding opnieuw
+/// aanmelden en gaf de Soulseek-server vijf keer op rij geen antwoord. Elke radiohaal faalde daarna
+/// binnen nul seconden met "Kan niet inloggen", en elke plek werd afgeschreven: de radio verbrandde
+/// zijn plan aan een storing die niets met de nummers te maken had. En de uploader kreeg de schuld —
+/// die werd voor dat nummer niet meer geprobeerd.
+class RadioLaterOpnieuw implements Exception {
+  const RadioLaterOpnieuw(this.waarom);
+  final String waarom;
+  @override
+  String toString() => 'Soulseek doet even niet mee: $waarom';
+}
+
+/// Hoe lang de radio na zo'n storing niets nieuws start. Eén minuut, net als de blokkade die de
+/// Soulseek-kant zelf aanhoudt na een login zonder antwoord.
+const Duration kRadioRust = Duration(seconds: 60);
+
 /// Wat er nu te doen valt.
 ///
 /// [starten] en [inRij] zijn indexen in dezelfde lijst standen die erin ging, in planvolgorde.
@@ -109,6 +128,7 @@ Voorraadbesluit voorraadPlan(
   List<String> artiesten = const [],
   List<String> staart = const [],
   int afstand = kArtiestAfstand,
+  bool rust = false,
   int minVooruit = kMinVooruit,
   int maxOnderweg = kMaxOnderweg,
 }) {
@@ -152,7 +172,9 @@ Voorraadbesluit voorraadPlan(
   final onderweg = standen.where((s) => s == Haalstand.onderweg).length;
   final ruimte = maxOnderweg - onderweg;
   final starten = <int>[];
-  if (ruimte > 0) {
+  // [rust]: Soulseek doet even niet mee — zie [RadioLaterOpnieuw]. Wat al geland is gaat hierboven
+  // gewoon de rij in; er wordt alleen niets nieuws begonnen.
+  if (ruimte > 0 && !rust) {
     for (var i = 0; i < standen.length && starten.length < ruimte; i++) {
       if (standen[i] == Haalstand.wacht) starten.add(i);
     }

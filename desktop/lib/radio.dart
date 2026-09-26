@@ -280,6 +280,9 @@ class RadioBesturing extends ChangeNotifier {
 
   Timer? _tik;
   int _sessie = 0;
+
+  /// Tot wanneer er niets nieuws gehaald wordt, na een Soulseek-storing. Zie [RadioLaterOpnieuw].
+  DateTime? _rustTot;
   bool _loopt = false;
 
   bool get loopt => _loopt;
@@ -357,6 +360,7 @@ class RadioBesturing extends ChangeNotifier {
     speler.bijRadioEinde = null;
 
     final sessie = ++_sessie;
+    _rustTot = null;
     _plan = nieuw;
     this.naam = naam;
     this.zaadArtiest = zaadArtiest;
@@ -521,6 +525,7 @@ class RadioBesturing extends ChangeNotifier {
       // artiest belandt.
       staart: [for (final it in rij.skip(rij.length > 8 ? rij.length - 8 : 0)) it.artist],
       vooruitNu: vooruit < 0 ? 0 : vooruit,
+      rust: _rustTot != null && DateTime.now().isBefore(_rustTot!),
     );
 
     if (besluit.inRij.isNotEmpty) {
@@ -540,12 +545,24 @@ class RadioBesturing extends ChangeNotifier {
 
   Future<void> _haal(int sessie, Radioplek p) async {
     Track? t;
+    var later = false;
     try {
       t = await bron.haal(p);
+    } on RadioLaterOpnieuw {
+      later = true;
     } catch (_) {
       t = null;
     }
     if (sessie != _sessie) return; // een andere radio; deze landing hoort daar niet bij
+    if (later) {
+      // Geen mislukte plek: Soulseek deed even niet mee. Terug bij wat nog gehaald moet worden, en
+      // een minuut niets nieuws beginnen — anders start de klok van vijf seconden er meteen weer
+      // acht, die net zo snel stuklopen.
+      p.stand = Haalstand.wacht;
+      _rustTot = DateTime.now().add(kRadioRust);
+      notifyListeners();
+      return;
+    }
     if (t == null) {
       // Geen foutmelding en geen gat: deze plek slaat over en het plan schuift door. Een radio die
       // bij elke peer die niet thuis geeft iets op het scherm zet, is onbruikbaar.

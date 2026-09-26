@@ -9,7 +9,7 @@ import 'organize.dart';
 import 'lossless_want.dart';
 import 'quality.dart';
 import 'radiobestand.dart';
-import 'radiovoorraad.dart' show kMaxWacht;
+import 'radiovoorraad.dart' show RadioLaterOpnieuw, kMaxWacht;
 import 'rutracker.dart';
 import 'search.dart';
 import 'settings.dart';
@@ -2845,7 +2845,10 @@ class DownloadManager extends ChangeNotifier {
     try {
       hits = await soulseek.search(zoekvraagVoorNummer(titel, artist: artiest));
     } catch (_) {
-      return null; // geen net of geen aanmelding; deze plek in het plan mislukt gewoon
+      // Geen aanmelding is geen mislukte plek — zie [RadioLaterOpnieuw]. Geen net wel.
+      final waarom = soulseek.whyNotLogin;
+      if (waarom != null) throw RadioLaterOpnieuw(waarom);
+      return null;
     }
     if (job.cancelled) return null; // de radio is afgesloten terwijl we zochten
     // Alleen wat ECHT dit nummer is, in de gevraagde uitvoering en ongeveer de juiste lengte — zie
@@ -2916,6 +2919,14 @@ class DownloadManager extends ChangeNotifier {
           _log.line('radio "$artiest — $titel": ${f.username} '
               '${_uitkomst(res)} na ${_kort(DateTime.now().difference(t0))} — ${baseName(f.filename)}');
           if (res is! SlskDone) {
+            // Kon ONZE kant niet aanmelden, dan ligt het niet aan deze uploader, en ook niet aan de
+            // volgende twee: stoppen en de plek later opnieuw. Gemeten op 26-09-2026: "mislukt: Kan
+            // niet inloggen bij Soulseek na 0s", drie peers achter elkaar, en alle drie werden ze
+            // daarna voor dat nummer overgeslagen.
+            if ((res is SlskFail && res.reason.startsWith('Kan niet inloggen')) ||
+                soulseek.whyNotLogin != null) {
+              throw RadioLaterOpnieuw(soulseek.whyNotLogin ?? 'geen aanmelding');
+            }
             (_radioNietBij[sleutel] ??= {}).add(f.username);
             continue;
           }
@@ -2958,7 +2969,14 @@ class DownloadManager extends ChangeNotifier {
           return;
         }
       });
-    } catch (_) {/* niets verloren: deze plek in het plan mislukt gewoon */}
+    } on RadioLaterOpnieuw catch (e) {
+      _log.line('radio "$artiest — $titel": Soulseek doet even niet mee (${e.waarom}) — later opnieuw');
+      rethrow;
+    } catch (_) {
+      // Niets verloren: deze plek in het plan mislukt gewoon — tenzij het aan de aanmelding lag.
+      final waarom = soulseek.whyNotLogin;
+      if (waarom != null) throw RadioLaterOpnieuw(waarom);
+    }
     return geland;
   }
 
