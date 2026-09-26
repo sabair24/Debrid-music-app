@@ -125,6 +125,22 @@ plaat.
 ''';
 }
 
+/// Tekens die je niet ziet maar die een naam wel anders maken: een spatie zonder breedte, een
+/// woordvoeger, een byte-order-mark.
+final _onzichtbaar = RegExp('[​-‍⁠﻿]');
+
+/// Een voorvoegsel zonder één Latijnse letter of cijfer, gevolgd door " - ": "技​ - Fun Factory".
+final _rommelVooraan = RegExp(r'^[^\sA-Za-z0-9À-ɏ]{1,3}\s*-\s+(.+)$');
+
+/// De artiestnaam zoals het model hem bedoelde. Gemeten op 26-09-2026: "技​ - Fun Factory" (een
+/// Chinees teken, een spatie zonder breedte, een streep) — en daarom vond Deezer "Celebration" niet.
+/// Dezelfde radio een half uur eerder kreeg "技 – placeholder"; zie `kMinModelNummers`.
+String _opgeschoond(String naam) {
+  final zonder = naam.replaceAll(_onzichtbaar, '').trim();
+  final m = _rommelVooraan.firstMatch(zonder);
+  return m == null ? zonder : m.group(1)!.trim();
+}
+
 /// Wat er van het antwoord geloofd wordt. Dit is de enige grens — zie [nummersSchema].
 ///
 /// Dubbels weg (zelfde artiest en titel, anders geschreven), niets dat geen artiestnaam kan zijn,
@@ -139,8 +155,8 @@ List<AiNummer> leesNummers(Object? json) {
   for (final v in lijst) {
     if (uit.length >= kMaxModelNummers) break;
     if (v is! Map) continue;
-    final artiest = '${v['artiest'] ?? ''}'.trim();
-    final titel = '${v['titel'] ?? ''}'.trim();
+    final artiest = _opgeschoond('${v['artiest'] ?? ''}');
+    final titel = '${v['titel'] ?? ''}'.replaceAll(_onzichtbaar, '').trim();
     if (!lijktOpArtiest(artiest) || titel.isEmpty || titel.length > 120) continue;
     if (_invulplek.contains(artiest.toLowerCase()) || _invulplek.contains(titel.toLowerCase())) continue;
     if (!gezien.add('${plat(artiest)}|${plat(titel)}')) continue;

@@ -677,5 +677,19 @@ void main() {
       });
       expect([for (final n in uit) n.titel], ['The Power']);
     });
+
+    test('DE KERN: rommel vóór de naam en onzichtbare tekens gaan eraf', () {
+      final uit = leesNummers({
+        'nummers': [
+          {'artiest': '技​ - Fun Factory', 'titel': 'Celebration'},
+          {'artiest': 'Би-2', 'titel': 'Полковнику никто не пишет'},
+          {'artiest': '2 Unlimited', 'titel': 'No​ Limit'},
+          {'artiest': 'Snap​!', 'titel': 'The Power'},
+        ]
+      });
+      expect([for (final n in uit) n.artiest], ['Fun Factory', 'Би-2', '2 Unlimited', 'Snap!'],
+          reason: '18:21 op 26-09-2026: "技​ - Fun Factory" — en dan vond Deezer "Celebration" niet');
+      expect(uit[2].titel, 'No Limit');
+    });
   });
 }
