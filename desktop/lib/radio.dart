@@ -469,7 +469,7 @@ class RadioBesturing extends ChangeNotifier {
     // De haak weg vóór `playRadio`: die verlaat de oude radio óók, en de haak zou dan de radio
     // afbreken die we net aan het starten zijn. En niet loslaten wat [Radiobron.begin] zojuist
     // genomen heeft — die leen is voor de radio die nu begint.
-    _stop(laatLos: false);
+    final nogLopend = _stop(laatLos: false, naarOverzicht: false);
     speler.bijRadioEinde = null;
 
     final sessie = ++_sessie;
@@ -488,9 +488,13 @@ class RadioBesturing extends ChangeNotifier {
     // notitie op schijf, en de eerste landing van deze radio zou hem anders overschrijven — waarna die
     // bestanden voor altijd blijven staan zonder dat iemand nog weet dat ze van een radio kwamen.
     // Het overzicht verschijnt dan ook niet meer over een radio die net begint.
+    // En net zo wat de radio ophaalde die nog liep toen deze begon — die gaat niet eerst naar het
+    // overzicht, zie [_stop].
     final vorige = openstaand;
-    if (vorige != null) {
-      _lopend!.gehaald.addAll(vorige.gehaald);
+    for (final v in [vorige, nogLopend]) {
+      if (v != null) _lopend!.gehaald.addAll(v.gehaald);
+    }
+    if (vorige != null || nogLopend != null) {
       openstaand = null;
       unawaited(_bewaar(_lopend));
     }
@@ -571,7 +575,9 @@ class RadioBesturing extends ChangeNotifier {
   /// Stoppen. Laat het plan staan, want daar valt straks nog over te vertellen.
   void stop() => _stop(laatLos: true);
 
-  void _stop({required bool laatLos}) {
+  /// [naarOverzicht] onwaar bij een nieuwe start: dan gaat de notitie van deze radio niet naar het
+  /// overzicht maar terug naar de aanroeper, die hem meeneemt in de radio die begint — zie [start].
+  RadioSessie? _stop({required bool laatLos, bool naarOverzicht = true}) {
     _tik?.cancel();
     _tik = null;
     _sessie++; // alles wat nog onderweg is hoort nergens meer bij
@@ -585,12 +591,17 @@ class RadioBesturing extends ChangeNotifier {
     // vragen en hoort er ook geen overzicht te komen — dat zou een venster zijn dat alleen maar in
     // de weg staat.
     final s = _lopend;
-    if (liep && s != null && !s.leeg) {
-      openstaand = s;
-      unawaited(_bewaar(s));
+    final teVertellen = liep && s != null && !s.leeg ? s : null;
+    if (teVertellen != null && naarOverzicht) {
+      openstaand = teVertellen;
+      unawaited(_bewaar(teVertellen));
     }
     _lopend = null;
-    if (liep) notifyListeners();
+    // Niet seinen bij een nieuwe start: het scherm opende dan het overzicht van de vorige radio, en
+    // een tel later was die notitie al meegenomen — maar het venster stond er (27-09-2026, van Sade
+    // naar Zombie: "47 naar de prullenbak" over de radio die net begon). [start] seint zelf.
+    if (liep && naarOverzicht) notifyListeners();
+    return teVertellen;
   }
 
   @override

@@ -187,6 +187,28 @@ void main() {
     expect(radio.pauze, isNull, reason: 'geen pauze voor de hele radio — alleen deze plek wacht');
   });
 
+  test('DE KERN: een nieuwe radio over een lopende opent geen overzicht', () async {
+    final c = _t('Corona');
+    final radio = RadioBesturing(speler: _Speler(), bron: _Bron((p) async => c));
+    addTearDown(radio.stop);
+    await radio.start([Radioplek(artiest: 'Corona', titel: 'The Rhythm of the Night')]);
+    await _totAllesTerug(radio);
+    expect(radio.gehaald, 1);
+
+    var overzichtGezien = false;
+    radio.addListener(() {
+      if (radio.openstaand != null) overzichtGezien = true;
+    });
+    await radio.start([Radioplek(artiest: 'The Cranberries', titel: 'Zombie')]);
+    expect(overzichtGezien, isFalse,
+        reason: '27-09-2026, van Sade naar Zombie: "47 naar de prullenbak" over de radio die net begon');
+    expect(radio.openstaand, isNull);
+
+    radio.stop();
+    expect([for (final g in radio.openstaand!.gehaald) g.pad], contains(c.path),
+        reason: 'wat de vorige radio haalde gaat mee, en komt bij het afsluiten wel in het overzicht');
+  });
+
   test('DE GRENS: een pauze heeft een reden, en de plek wacht', () async {
     final radio = RadioBesturing(
         speler: _Speler(),
