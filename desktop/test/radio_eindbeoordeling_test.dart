@@ -871,6 +871,25 @@ void main() {
       expect(jsonEncode(verstuurd), contains('"weg"'), reason: 'het schema vraagt om "weg"');
     });
 
+    test('DE KERN: bij Sade klinkt je albumversie — de radio haalt de single-edit er niet bij', () {
+      bool past(String plek, int plekS, String eigen, int eigenS, {required bool elkeLengte}) => eigenPastOpPlek(
+          plekTitel: plek,
+          plekSeconden: plekS,
+          eigenTitel: eigen,
+          eigenSeconden: eigenS,
+          speling: kRadioSpeling,
+          elkeLengte: elkeLengte);
+      expect(past('No Ordinary Love (Radio Edit)', 241, 'No Ordinary Love', 440, elkeLengte: true), isTrue,
+          reason: 'je had Love Deluxe (7:20), en de radio haalde de edit van 4:01 erbij');
+      expect(past('Kiss of Life', 251, 'Kiss of Life', 353, elkeLengte: true), isTrue);
+      expect(past('Move On Baby', 220, 'Move On Baby', 291, elkeLengte: false), isFalse,
+          reason: 'bij een dance-zaad blijft de lengte tellen — "niet original"');
+      expect(past('Freak Out', 230, "Freak Out ('97 Remix)", 215, elkeLengte: true), isFalse,
+          reason: 'een remix die je hebt is nooit het origineel');
+      expect(past('Kiss of Life', 251, 'Kiss of Life (Mousse T Radio Edit)', 300, elkeLengte: true), isFalse,
+          reason: 'een benoemde variant die je hebt is niet vanzelf het origineel — dan telt de lengte');
+    });
+
     test('DE GRENS: zonder sleutel of zonder kandidaten geen vraag', () async {
       var vragen = 0;
       final ai = AiService(() => '', client: MockClient((_) async {

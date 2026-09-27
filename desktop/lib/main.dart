@@ -11501,7 +11501,11 @@ void _srcToastAction(BuildContext context, String m, String label, VoidCallback 
 /// [isZaadlied]. [al] is wat er al in de radio staat, voor het plafond per artiest — zie
 /// [spreidArtiesten].
 List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
-    {String? zaadArtiest, Track? zaad, String? zaadTitel, Iterable<String> al = const []}) {
+    {String? zaadArtiest,
+    Track? zaad,
+    String? zaadTitel,
+    Iterable<String> al = const [],
+    bool elkeLengte = false}) {
   // Op het liedje en niet op de hele titel — zie [eigenSleutel]: op de hele titel haalde de radio
   // Haddaway "What Is Love" drie keer, omdat je hem als "(Single Version)" had en niet als "(7" Mix)".
   final index = <String, List<Track>>{};
@@ -11513,15 +11517,22 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
   // titel eerst: heb je "Mr. Vain (Original Radio Edit)" en ook de albumversie, dan wint die.
   Track? eigenVoor(RecTrack r) {
     final exact = recNorm(r.title);
+    // En dan de lengte die het dichtst bij de plek ligt: met [elkeLengte] telt elke gewone versie,
+    // en dan liever je single dan je albumversie als je ze allebei hebt.
+    int verschil(Track t) => ((t.duration?.inSeconds ?? 0) - r.seconds).abs();
     final kandidaten = [...?index[eigenSleutel(r.artist, r.title)]]
-      ..sort((a, b) => (recNorm(a.title) == exact ? 0 : 1).compareTo(recNorm(b.title) == exact ? 0 : 1));
+      ..sort((a, b) {
+        final e = (recNorm(a.title) == exact ? 0 : 1).compareTo(recNorm(b.title) == exact ? 0 : 1);
+        return e != 0 ? e : verschil(a).compareTo(verschil(b));
+      });
     for (final t in kandidaten) {
       if (eigenPastOpPlek(
           plekTitel: r.title,
           plekSeconden: r.seconds,
           eigenTitel: t.title,
           eigenSeconden: t.duration?.inSeconds,
-          speling: kRadioSpeling)) {
+          speling: kRadioSpeling,
+          elkeLengte: elkeLengte)) {
         return t;
       }
     }
@@ -11671,7 +11682,15 @@ Future<void> startRadio(BuildContext context, String artist,
   // Eigen muziek gaat zonder halen de rij in, dus ook zonder de keuring in de haal. Die komt er dus
   // pas bij als hij gekeurd is — zie [_voegGekeurdBij]. Behalve die van de zaadartiest zelf: die
   // keurt [_Radiokeuring.keur] toch goed, en zo staat er meteen iets in de rij.
-  final plan = _radioplan(recs, lib, zaadArtiest: artist, zaad: zaad, zaadTitel: zaadTitel);
+  // Even op de stijl van het zaad wachten — meestal al binnen, want die vraag liep naast die aan
+  // Deezer: zie [_elkeLengte]. Wordt hij later pas bekend, dan geldt hij voor wat erna komt.
+  final zaadNu = await zaadStijl.timeout(const Duration(seconds: 8),
+      onTimeout: () => (familie: null, jaar: null) as Zaadstijl);
+  keuring.elkeLengte = _elkeLengte(zaadNu);
+  unawaited(zaadStijl.then((z) => keuring.elkeLengte = _elkeLengte(z), onError: (Object _) => false));
+  if (!context.mounted) return;
+  final plan = _radioplan(recs, lib,
+      zaadArtiest: artist, zaad: zaad, zaadTitel: zaadTitel, elkeLengte: keuring.elkeLengte);
   // De voorstellen van Deezer ook op sfeer laten keuren — zie [_Radiokeuring.vraagSfeer]. Meteen, zodat
   // het antwoord er is voordat de eerste haal begint.
   keuring.vraagSfeer(plan);
@@ -11741,7 +11760,11 @@ Future<void> startRadio(BuildContext context, String artist,
               _afstemBeurt,
               keuring,
               _radioplan(gevonden, lib,
-                  zaadArtiest: artist, zaad: zaad, zaadTitel: zaadTitel, al: [for (final p in radio.plan) p.artiest]));
+                  zaadArtiest: artist,
+                  zaad: zaad,
+                  zaadTitel: zaadTitel,
+                  al: [for (final p in radio.plan) p.artiest],
+                  elkeLengte: keuring.elkeLengte));
         } catch (e) {
           log.line('radio-lijst: het model gaf niets — $e');
         }
@@ -11874,6 +11897,9 @@ class _Radiokeuring {
     throw const RadioKeuringLater();
   }
 
+  /// Telt je gewone versie van een liedje als het origineel, ongeacht de lengte? Zie [_elkeLengte].
+  bool elkeLengte = false;
+
   /// Het model, als dat er is — voor [vraagSfeer]. Achteraf gezet: de keuring bestaat al voordat
   /// bekend is of er een sleutel is.
   AiService? model;
@@ -11926,6 +11952,17 @@ class _Radiokeuring {
       });
   Future<String?>? _zaadTakF;
 }
+
+/// Telt bij deze radio je gewone versie van een liedje als het origineel, hoe lang ook — of let hij
+/// op de lengte? Zie [eigenPastOpPlek].
+///
+/// Bij een dance-zaad op de lengte: daar is een albumversie vaak een verlengde mix, en die klonk
+/// "niet original" — Move On Baby van Cappella, je album van 4:51 tegen de single van 3:40
+/// (26-09-2026). Bij de rest niet: bij Sade, soul, pop en rock is de albumversie juist het origineel
+/// en de single een inkorting — op 27-09-2026 haalde de radio "No Ordinary Love" en "Kiss of Life"
+/// als single-edit, terwijl je Love Deluxe had. Weten we de stijl niet, dan op de lengte, zoals
+/// voorheen.
+bool _elkeLengte(Zaadstijl z) => z.familie != null && z.familie != Stijlfamilie.dans;
 
 /// De keuring van de radio die nu loopt, voor [stemRadioAf].
 _Radiokeuring? _keuring;
@@ -12012,7 +12049,12 @@ Future<void> stemRadioAf(BuildContext context, Radiosmaak smaak) async {
     for (final p in radio.plan)
       if (p.stand != Haalstand.wacht && p.stand != Haalstand.klaar) p.artiest
   ];
-  final nieuw = _radioplan(recs, lib, zaadArtiest: artist, zaad: zaad, zaadTitel: keuring?.zaadTitel, al: blijft);
+  final nieuw = _radioplan(recs, lib,
+      zaadArtiest: artist,
+      zaad: zaad,
+      zaadTitel: keuring?.zaadTitel,
+      al: blijft,
+      elkeLengte: keuring?.elkeLengte ?? false);
   // Ook na het afstemmen de nieuwe voorstellen van Deezer op sfeer — zie [_Radiokeuring.vraagSfeer].
   keuring?.vraagSfeer(nieuw);
   final zelf = artiestSleutel(artist);
@@ -12036,7 +12078,11 @@ Future<void> stemRadioAf(BuildContext context, Radiosmaak smaak) async {
         beurt,
         keuring,
         _radioplan(gevonden, lib,
-            zaadArtiest: artist, zaad: zaad, zaadTitel: keuring?.zaadTitel, al: [for (final p in radio.plan) p.artiest]));
+            zaadArtiest: artist,
+            zaad: zaad,
+            zaadTitel: keuring?.zaadTitel,
+            al: [for (final p in radio.plan) p.artiest],
+            elkeLengte: keuring?.elkeLengte ?? false));
   } catch (_) {/* de Deezer-helft staat er al; dit is een toegift */}
 }
 

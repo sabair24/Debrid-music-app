@@ -657,6 +657,7 @@ bool eigenPastOpPlek({
   required String eigenTitel,
   int? eigenSeconden,
   required int speling,
+  bool elkeLengte = false,
 }) {
   final eigen = uitvoeringVan(eigenTitel);
   if (eigen == Uitvoering.bewerking && uitvoeringVan(plekTitel) != Uitvoering.bewerking) {
@@ -670,6 +671,12 @@ bool eigenPastOpPlek({
   if (eigen != Uitvoering.bewerking && vreemdeStaart(plekTitel) && !vreemdeStaart(eigenTitel)) {
     return true;
   }
+  // [elkeLengte]: bij deze radio is jouw gewone versie het origineel, hoe lang ook. Gemeten op
+  // 27-09-2026, radio vanaf Sade: je had "No Ordinary Love" (7:20) en "Kiss of Life" (5:53) van Love
+  // Deluxe, en de radio haalde de single-edits (4:01, 4:11) erbij. Saber: "de radio moet ook altijd
+  // kijken of het nummer al in men bibliotheek staat". Wanneer dat geldt, beslist de radio — zie
+  // `_elkeLengte` in main.dart.
+  if (elkeLengte && eigen != Uitvoering.bewerking && !vreemdeStaart(eigenTitel)) return true;
   final a = plekSeconden ?? 0, b = eigenSeconden ?? 0;
   return a <= 0 || b <= 0 || (a - b).abs() <= speling;
 }
