@@ -1,5 +1,6 @@
 import 'package:http/http.dart' as http;
 
+import 'deezerbaan.dart';
 import 'discogs.dart';
 import 'editions.dart';
 import 'json_body.dart';
@@ -202,11 +203,10 @@ class MetadataSearch {
   Future<List<MetaResult>> _deezer(String query, bool track) async {
     final path = track ? 'search' : 'search/album';
     try {
-      final r = await http
-          .get(Uri.parse('https://api.deezer.com/$path?q=${Uri.encodeComponent(query)}&limit=12'))
-          .timeout(const Duration(seconds: 8));
-      if (r.statusCode != 200) return [];
-      final data = (jsonBody(r)['data'] as List?) ?? const [];
+      // Via de gedeelde rijbaan: hierbuiten telde dit niet mee in het budget dat de radio ook
+      // gebruikt — zie `deezerbaan.dart`.
+      final j = await DeezerBaan.haal('https://api.deezer.com/$path?q=${Uri.encodeComponent(query)}&limit=12');
+      final data = (j?['data'] as List?) ?? const [];
       final out = <MetaResult>[];
       for (final e in data) {
         if (track) {

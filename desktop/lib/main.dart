@@ -11832,7 +11832,8 @@ class _Radiokeuring {
   Future<bool> keur(Radioplek p, {bool eigen = false}) async {
     if (artiestSleutel(p.artiest) == artiestSleutel(artiest)) return true;
     final sfeer = _sfeer[_k(p.artiest, p.titel)];
-    var sfeerJa = _vanModel.contains(_k(p.artiest, p.titel));
+    final vanModel = _vanModel.contains(_k(p.artiest, p.titel));
+    var sfeerJa = vanModel;
     if (sfeer != null) {
       bool? past;
       try {
@@ -11860,10 +11861,12 @@ class _Radiokeuring {
       // Heeft het model de sfeer goedgekeurd en is het zaad soul of jazz, dan telt alleen nog het
       // tijdvak — zie [sfeerBeslistFamilie]: Sting "Fields of Gold" hoort bij Sade, ook al noemt
       // Discogs het rock.
+      // En wat het model zelf koos, keurt de rocktak niet — zie [Stijlboek.keur].
       o = await stijlboek
           .keur(p.artiest, p.titel, z,
               jaarHint: hint,
               zaadTak: await _zaadTak,
+              doorModel: vanModel,
               familieTelt: !(sfeerJa && sfeerBeslistFamilie(z.familie)))
           .timeout(eigen ? _geduldEigen : _geduld);
     } on TimeoutException {

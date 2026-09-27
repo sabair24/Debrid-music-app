@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import 'cachesleutel.dart';
 import 'json_body.dart';
+import 'deezerbaan.dart';
 import 'discogs.dart';
 import 'models.dart';
 import 'musicbrainz.dart';
@@ -480,11 +481,11 @@ class CoverEnricher {
   Future<Uint8List?> fetchArtistImage(String name) async {
     if (_generic.contains(name.trim().toLowerCase())) return null;
     try {
-      final r = await http
-          .get(Uri.parse('https://api.deezer.com/search/artist?q=${Uri.encodeComponent(name)}&limit=1'))
-          .timeout(const Duration(seconds: 8));
-      if (r.statusCode != 200) return null;
-      final data = (jsonBody(r)['data'] as List?) ?? const [];
+      // Via de gedeelde rijbaan: hierbuiten telde dit niet mee in het budget van vijftig per vijf
+      // seconden dat de radio ook gebruikt — zie `deezerbaan.dart`.
+      final j = await DeezerBaan.haal(
+          'https://api.deezer.com/search/artist?q=${Uri.encodeComponent(name)}&limit=1');
+      final data = (j?['data'] as List?) ?? const [];
       if (data.isEmpty) return null;
       final url = (data.first['picture_xl'] ?? data.first['picture_big']) as String?;
       if (url == null || url.isEmpty || url.contains(_noPhoto)) return null;
@@ -1051,11 +1052,10 @@ class CoverEnricher {
 
   Future<String?> _deezerCover(String query) async {
     try {
-      final r = await http
-          .get(Uri.parse('https://api.deezer.com/search/album?q=${Uri.encodeComponent(query)}&limit=1'))
-          .timeout(const Duration(seconds: 8));
-      if (r.statusCode != 200) return null;
-      final data = (jsonBody(r)['data'] as List?) ?? const [];
+      // Via de gedeelde rijbaan, zoals [fetchArtistImage]: het verrijken vraagt zes hoezen tegelijk.
+      final j = await DeezerBaan.haal(
+          'https://api.deezer.com/search/album?q=${Uri.encodeComponent(query)}&limit=1');
+      final data = (j?['data'] as List?) ?? const [];
       if (data.isEmpty) return null;
       final a = data.first as Map<String, dynamic>;
       final url = (a['cover_xl'] ?? a['cover_big']) as String?;

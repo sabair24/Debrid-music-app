@@ -356,7 +356,10 @@ List<DiscogsUitgave>? samenUitgaven(List<DiscogsUitgave> eerst, List<DiscogsUitg
 ///
 /// 2: [rockTak] telt alleen nog zuivere uitgaven, en een half antwoord van Discogs wordt niet meer
 /// bewaard (26-09-2026).
-const int kStijlboekVersie = 2;
+///
+/// 3: het jaar van een Deezer-album ("d:") telt geen heruitgave meer — "Stupid Girl" van Garbage was
+/// "uit 2015" door zijn 20th Anniversary Edition (27-09-2026).
+const int kStijlboekVersie = 3;
 
 /// De feiten ophalen en onthouden. De bronnen zijn haken, zodat een toets ze kan invullen.
 ///
@@ -392,15 +395,17 @@ class Stijlboek {
 
   // Een geheugen van een oudere [kStijlboekVersie]: dan zijn de regels voor een NUMMER veranderd, en
   // een nummer dat al eens opgezocht was zou anders nooit meer onder de nieuwe regels vallen. Alleen
-  // die ("n:") weg: het genre van een artiest en het jaar van een Deezer-album zijn nog waar, en elke
-  // vraag aan TheAudioDB kost drie seconden — na een update liep zo elke keuring tegen zijn
-  // tijdslimiet, en een keuring zonder antwoord laat alles door (tweede beoordeling van 26-09-2026).
+  // wat die versie veranderde weg — "n:" onder 2, het Deezer-jaar ("d:") onder 3 — en nooit het genre
+  // van een artiest: elke vraag aan TheAudioDB kost drie seconden, en na een update liep zo elke
+  // keuring tegen zijn tijdslimiet (tweede beoordeling van 26-09-2026).
   Future<Map<String, dynamic>> _lees() => _laden ??= () async {
         try {
           final j = jsonDecode(await bestand.readAsString());
           if (j is Map<String, dynamic>) {
-            if (j['_versie'] != kStijlboekVersie) {
-              j.removeWhere((k, _) => k.startsWith('n:'));
+            final v = j['_versie'];
+            if (v != kStijlboekVersie) {
+              final oud = v is int ? v : 0;
+              j.removeWhere((k, _) => (oud < 2 && k.startsWith('n:')) || (oud < 3 && k.startsWith('d:')));
               j['_versie'] = kStijlboekVersie;
             }
             return j;
@@ -574,8 +579,13 @@ class Stijlboek {
   ///
   /// [familieTelt] onwaar: alleen het tijdvak. Voor een zaad waarvan de SFEER al door het model
   /// gekeurd is — zie [sfeerBeslistFamilie].
+  ///
+  /// [doorModel]: het model koos dit nummer zelf, en dan telt de tak niet. Die is er voor wat Deezer
+  /// erbij doet — Bon Jovi in een Nirvana-radio. Op 27-09-2026, radio vanaf Zombie, noemde Discogs
+  /// "Don't Speak", "You Oughta Know" en "Torn" Pop Rock, en Pop Rock is de klassieke tak: drie
+  /// keuzes van het model die precies in de sfeer van 1993 lagen, eruit.
   Future<Stijloordeel> keur(String artiest, String titel, Zaadstijl zaad,
-      {int? jaarHint, String? zaadTak, bool familieTelt = true}) async {
+      {int? jaarHint, String? zaadTak, bool familieTelt = true, bool doorModel = false}) async {
     final n = await nummer(artiest, titel);
     final jaar = n.jaar ?? jaarHint ?? (zaad.jaar == null ? null : await _deezerJaar(artiest, titel));
     final eerst = keurStijl(zaad, (families: const {}, jaar: jaar));
@@ -588,7 +598,7 @@ class Stijlboek {
       final a = await this.artiest(artiest);
       o = keurStijl(zaad, (families: {...n.families, if (a != null) a}, jaar: jaar));
     }
-    if (!o.mag || zf != Stijlfamilie.rock || zaadTak == null) return o;
+    if (!o.mag || zf != Stijlfamilie.rock || zaadTak == null || doorModel) return o;
     final t = await tak(artiest, titel);
     if (t != null && t != zaadTak) return (mag: false, waarom: 'rock, maar $t en niet $zaadTak');
     return o;

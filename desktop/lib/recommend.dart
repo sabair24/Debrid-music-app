@@ -171,8 +171,27 @@ typedef Buurtbron = Future<List<Buurman>> Function(
 /// keer achter elkaar een andere radio op.
 const int kBurenPerRadio = 12;
 
+/// Deezer telt per vijf seconden (zie `deezerbaan.dart`): wie na een weigering eerder terugkomt,
+/// valt nog in hetzelfde venster.
+const Duration kDeezerAdem = Duration(seconds: 5);
+
+/// Een heruitgave: een album of een track die zegt dat hij later opnieuw uitkwam. Het jaar daarvan is
+/// niet het jaar van het nummer — zie [RecommendService.albumJaar].
+final RegExp _heruitgave = RegExp(
+    r'\b(remaster(ed)?|anniversary|deluxe|expanded|reissue|re-issue)\b',
+    caseSensitive: false);
+
 class RecommendService {
+  /// [haal] en [adem] zijn er voor de toetsen; de app gebruikt de rijbaan en vijf seconden.
+  RecommendService({Future<Map<String, dynamic>?> Function(String url)? haal, this.adem = kDeezerAdem})
+      : _haal = haal ?? DeezerBaan.haal;
+
   static const _base = 'https://api.deezer.com';
+
+  final Future<Map<String, dynamic>?> Function(String url) _haal;
+
+  /// Hoelang [lijstOpDeezer] wacht voor het de nummers zonder antwoord nog eens vraagt.
+  final Duration adem;
 
   /// Waar de laatste aanroep op stukliep, of leeg. Zie [CatalogService.laatsteFout] — dezelfde
   /// reden: een weigering en een lege oogst zagen er van buiten hetzelfde uit.
@@ -182,7 +201,7 @@ class RecommendService {
   /// elkaar af en overschreden zo samen het budget dat elk apart netjes leek te respecteren.
   Future<Map<String, dynamic>?> _get(String url) async {
     try {
-      final j = await DeezerBaan.haal(url);
+      final j = await _haal(url);
       if (j != null) laatsteFout = '';
       return j;
     } on DeezerFout catch (e) {
@@ -225,37 +244,68 @@ class RecommendService {
   /// Zie `radiolijst.dart`: een model verzint soms een titel, en een verzonnen titel stuurt de radio
   /// naar Soulseek voor iets wat niet bestaat. Per nummer één zoekvraag, zes tegelijk — Deezer staat
   /// vijftig per vijf seconden toe, en dit hoort de radio die al speelt niet te hinderen.
+  ///
+  /// **Geen antwoord is niet "niet gevonden".** Op 27-09-2026, radio vanaf Zombie, heetten zeven van
+  /// de 36 "niet gevonden" — Iris, Lovefool, Closing Time — terwijl Deezer ze alle zeven kent. Het
+  /// opzoeken duurde 29 s in plaats van vier, en het hele laatste zestal viel af: Deezer gaf geen
+  /// antwoord, en dat telde als "bestaat niet". Nu wordt dat na [adem] nog één keer gevraagd, en
+  /// wat dan nog zwijgt staat met de reden in het logboek.
   Future<List<RecTrack>> lijstOpDeezer(List<AiNummer> lijst,
       {void Function(String)? spoor}) async {
+    final antwoord = List<Map<String, dynamic>?>.filled(lijst.length, null);
+    final zwijgt = <int, String>{};
+    Future<void> zoek(int i) async {
+      final n = lijst[i];
+      try {
+        // Gewoon "artiest titel", en niet `artist:"…" track:"…"`: die vorm gaf op 26-09-2026 voor
+        // "Cappella — Move On Baby" nul treffers, de gewone vijf. [besteTreffer] beslist daarna
+        // welke het is.
+        final j = await _haal('$_base/search?q=${Uri.encodeComponent('${n.artiest} ${n.titel}')}&limit=15');
+        if (j == null) {
+          zwijgt[i] = 'geen bruikbaar antwoord';
+        } else {
+          antwoord[i] = j;
+          zwijgt.remove(i);
+        }
+      } on DeezerFout catch (e) {
+        zwijgt[i] = e.uitleg;
+      } catch (e) {
+        zwijgt[i] = '$e';
+      }
+    }
+
+    for (var i = 0; i < lijst.length; i += 6) {
+      await Future.wait([for (var k = i; k < min(i + 6, lijst.length); k++) zoek(k)]);
+    }
+    if (zwijgt.isNotEmpty) {
+      spoor?.call('radio-lijst: ${zwijgt.length} zonder antwoord van Deezer '
+          '(${zwijgt.values.toSet().join('; ')}) — over ${adem.inSeconds} s nog eens');
+      await Future<void>.delayed(adem);
+      await Future.wait([for (final i in zwijgt.keys.toList()) zoek(i)]);
+    }
     final uit = <RecTrack>[];
     final weg = <String>[];
-    for (var i = 0; i < lijst.length; i += 6) {
-      final stuk = lijst.skip(i).take(6).toList();
-      final antwoorden = await Future.wait([
-        for (final n in stuk)
-          // Gewoon "artiest titel", en niet `artist:"…" track:"…"`: die vorm gaf op 26-09-2026 voor
-          // "Cappella — Move On Baby" nul treffers, de gewone vijf. [besteTreffer] beslist daarna
-          // welke het is.
-          _get('$_base/search?q=${Uri.encodeComponent('${n.artiest} ${n.titel}')}&limit=15')
-      ]);
-      for (var k = 0; k < stuk.length; k++) {
-        final treffers = _tracks(antwoorden[k]);
-        final j = besteTreffer(
-            [
-              for (final t in treffers)
-                (artiest: t.artist, titel: t.title, rang: t.rank, seconden: t.seconds)
-            ],
-            stuk[k].artiest,
-            stuk[k].titel);
-        if (j == null) {
-          weg.add('${stuk[k].artiest} — ${stuk[k].titel}');
-        } else {
-          uit.add(treffers[j]);
-        }
+    final stil = <String>[];
+    for (var k = 0; k < lijst.length; k++) {
+      final n = lijst[k];
+      if (zwijgt.containsKey(k)) {
+        stil.add('${n.artiest} — ${n.titel}');
+        continue;
+      }
+      final treffers = _tracks(antwoord[k]);
+      final j = besteTreffer(
+          [for (final t in treffers) (artiest: t.artist, titel: t.title, rang: t.rank, seconden: t.seconds)],
+          n.artiest,
+          n.titel);
+      if (j == null) {
+        weg.add('${n.artiest} — ${n.titel}');
+      } else {
+        uit.add(treffers[j]);
       }
     }
     spoor?.call('radio-lijst: ${uit.length} van ${lijst.length} nummers van het model gevonden'
-        '${weg.isEmpty ? '' : ' | niet gevonden: ${weg.join('; ')}'}');
+        '${weg.isEmpty ? '' : ' | niet gevonden: ${weg.join('; ')}'}'
+        '${stil.isEmpty ? '' : ' | geen antwoord: ${stil.join('; ')} (${zwijgt.values.toSet().join('; ')})'}');
     return uit;
   }
 
@@ -270,9 +320,18 @@ class RecommendService {
     // Het VROEGSTE jaar over de albums waar het op staat, en niet het eerste album: gemeten op
     // 26-09-2026 gaf "Snap! — The Power" als eerste treffer een heruitgave uit 2020, en dan was het
     // een nummer uit 2020. Kayzo en Sandy Beach staan alleen op albums uit 2026, en die blijven 2026.
+    //
+    // En nooit een heruitgave: op 27-09-2026 stond "Stupid Girl" van Garbage bij Deezer alleen op de
+    // "20th Anniversary Edition" (2015), en toen weerde een radio vanaf Zombie (1993) een nummer uit
+    // 1995 als "uit 2015". Staat het alleen op heruitgaven, dan weet Deezer het jaar niet: null.
     final ids = <int>{
       for (final r in treffers)
-        if (zelfdeArtiest(r.artist, artiest) && basisTitel(r.title) == t && r.albumId > 0) r.albumId
+        if (zelfdeArtiest(r.artist, artiest) &&
+            basisTitel(r.title) == t &&
+            r.albumId > 0 &&
+            !_heruitgave.hasMatch(r.title) &&
+            !_heruitgave.hasMatch(r.album))
+          r.albumId
     }.take(6).toList();
     final albums = await Future.wait([for (final id in ids) _get('$_base/album/$id')]);
     int? min;

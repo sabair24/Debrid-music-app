@@ -125,6 +125,10 @@ String vouw(String s) {
 final RegExp _eerstAnders = RegExp(r'\b(rmx|remix|remixes|reloaded|redux|re-recorded|rerecorded|'
     r'sped up|slowed|acoustic|megamix|medley|mashup|christmas|xmas|a cappella|acapella|acappella|'
     r'a-pella|live|demos?|rehearsals?|sessions?|boom ?box|outtakes?|take \d+|'
+    // Een radio-UITZENDING is een live-opname, geen radio-edit. Op 27-09-2026 werd "Smells Like Teen
+    // Spirit (Broadcast from Italy) (Remastered Radio Recording)" in een radio vanaf Zombie gekozen
+    // boven die van Nevermind: het woord "Radio" maakte hem de gevraagde versie.
+    r'broadcasts?|broadcasting|radio recordings?|in concert|'
     r'orchestra|orchestral|philharmonic|symphonic|strings|choir)\b|'
     r'\b(19|20)\d\d (version|mix|edit)\b');
 

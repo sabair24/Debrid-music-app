@@ -12,6 +12,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:debridmusic/aanbevelingplan.dart' show SmaakProfiel;
+import 'package:debridmusic/deezerbaan.dart';
 import 'package:debridmusic/ai.dart';
 import 'package:debridmusic/organize.dart' show TrackTags;
 import 'package:debridmusic/radiobestand.dart';
@@ -19,6 +20,7 @@ import 'package:debridmusic/radiokeuze.dart';
 import 'package:debridmusic/radiolijst.dart';
 import 'package:debridmusic/radiostijl.dart';
 import 'package:debridmusic/radiovoorraad.dart';
+import 'package:debridmusic/recommend.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -898,6 +900,165 @@ void main() {
       }));
       expect(await ai.weesSfeer(artiest: 'Sade', kandidaten: kandidaten), isEmpty);
       expect(vragen, 0);
+    });
+  });
+
+  group('radio vanaf Zombie, 27-09-2026', () {
+    late Directory map;
+    setUp(() => map = Directory.systemTemp.createTempSync('dm_zombie_'));
+    tearDown(() {
+      try {
+        map.deleteSync(recursive: true);
+      } catch (_) {}
+    });
+    File geheugen() => File('${map.path}${Platform.pathSeparator}radiostijl.json');
+    const zaad = (familie: Stijlfamilie.rock, jaar: 1993);
+
+    test('DE KERN: wat het model zelf koos, keurt de rocktak niet', () async {
+      final b = Stijlboek(
+        bestand: geheugen(),
+        audioDbGenre: (_) async => 'Rock',
+        // Zoals Discogs het die dag gaf: Torn is Pop Rock en Soft Rock, Keep the Faith Hard Rock.
+        discogsNummer: (a, t) async => switch (a) {
+          'Natalie Imbruglia' => [
+              for (var i = 0; i < 3; i++) (jaar: 1997, genres: ['Rock'], stijlen: ['Pop Rock', 'Soft Rock'])
+            ],
+          'Bon Jovi' => [(jaar: 1992, genres: ['Rock'], stijlen: ['Hard Rock', 'Arena Rock'])],
+          _ => const <DiscogsUitgave>[],
+        },
+      );
+      expect((await b.keur('Natalie Imbruglia', 'Torn', zaad, zaadTak: 'alternatief', doorModel: true)).mag,
+          isTrue, reason: '"rock, maar klassiek en niet alternatief" — voor een keuze van het model zelf');
+      expect((await b.keur('Natalie Imbruglia', 'Torn', zaad, zaadTak: 'alternatief')).mag, isFalse,
+          reason: 'van Deezer blijft de tak gewoon keuren');
+      expect((await b.keur('Bon Jovi', 'Keep the Faith', zaad, zaadTak: 'alternatief')).mag, isFalse,
+          reason: 'daar is de tak voor: Bon Jovi in een Nirvana-radio');
+    });
+
+    test('DE VAL: het jaar van een heruitgave is niet het jaar van het nummer', () async {
+      Map<String, dynamic> track(String titel, String album, int id) => {
+            'title': titel,
+            'artist': {'name': 'Garbage'},
+            'album': {'title': album, 'id': id},
+            'duration': 259,
+            'rank': 680029,
+          };
+      const albums = {
+        1: {'title': 'Garbage (20th Anniversary Edition)', 'release_date': '2015-10-02'},
+        2: {'title': 'Garbage', 'release_date': '1995-08-15'},
+        3: {'title': 'Absolute Garbage', 'release_date': '2007-07-23'},
+      };
+      RecommendService deezer(List<Map<String, dynamic>> treffers) => RecommendService(haal: (url) async {
+            if (url.contains('/album/')) return albums[int.parse(url.split('/album/').last)];
+            return {'data': treffers};
+          });
+      // Zo stond het die dag bij Deezer: alleen de jubileumuitgave.
+      expect(
+          await deezer([track('Stupid Girl (Remastered 2015)', 'Garbage (20th Anniversary Edition)', 1)])
+              .albumJaar('Garbage', 'Stupid Girl (Remastered 2015)'),
+          isNull,
+          reason: '"uit 2015, het zaad is van 1993" — een nummer uit 1995');
+      // Elk van de twee kenmerken apart: de heruitgave in de naam van het album, en in die van de track.
+      expect(await deezer([track('Stupid Girl', 'Garbage (20th Anniversary Edition)', 1)]).albumJaar('Garbage', 'Stupid Girl'),
+          isNull);
+      expect(
+          await deezer([track('Stupid Girl (Remastered 2015)', 'Absolute Garbage', 3)])
+              .albumJaar('Garbage', 'Stupid Girl'),
+          isNull,
+          reason: 'een geremasterde track op een verzamelaar is evenmin van dat jaar');
+      expect(
+          await deezer([
+            track('Stupid Girl (Remastered 2015)', 'Garbage (20th Anniversary Edition)', 1),
+            track('Stupid Girl', 'Garbage', 2),
+          ]).albumJaar('Garbage', 'Stupid Girl'),
+          1995);
+      expect(await deezer([track('Stupid Girl', 'Garbage', 2)]).albumJaar('Garbage', 'Stupid Girl'), 1995,
+          reason: 'een gewoon album houdt zijn jaar');
+    });
+
+    test('DE GRENS: een geheugen van versie 2 vergeet alleen het Deezer-jaar', () async {
+      geheugen().writeAsStringSync(jsonEncode({
+        '_versie': 2,
+        'n:garbage|onlyhappywhenitrains': {'f': ['rock'], 'j': 1995, 's': <String>[], 't': null},
+        'd:garbage|stupidgirlremastered2015': 2015,
+        'a:garbage': 'rock',
+      }));
+      var discogs = 0, deezer = 0, audioDb = 0;
+      final b = Stijlboek(
+        bestand: geheugen(),
+        audioDbGenre: (_) async {
+          audioDb++;
+          return 'Rock';
+        },
+        discogsNummer: (a, t) async {
+          discogs++;
+          return const <DiscogsUitgave>[];
+        },
+        deezerJaar: (a, t) async {
+          deezer++;
+          return null;
+        },
+      );
+      await b.nummer('Garbage', 'Only Happy When It Rains');
+      expect(discogs, 0, reason: 'wat onder versie 2 opgezocht is, is nog waar — en elke vraag kost 1,1 s');
+      expect((await b.keur('Garbage', 'Stupid Girl (Remastered 2015)', zaad)).mag, isTrue);
+      expect(deezer, 1, reason: 'onder versie 2 onthouden als 2015 — dan bleef hij voorgoed "uit 2015"');
+      expect(audioDb, 0, reason: 'het genre van een artiest is nog waar');
+    });
+
+    test('DE VAL: een radio-uitzending is een live-opname, geen radio-edit', () {
+      const uitzending = 'Smells Like Teen Spirit (Broadcast from Italy) (Remastered Radio Recording)';
+      expect(uitvoeringVan(uitzending), Uitvoering.bewerking);
+      const treffers = <_T>[
+        (artiest: 'Nirvana', titel: 'Smells Like Teen Spirit', rang: 985641, seconden: 301),
+        (artiest: 'Nirvana', titel: 'Smells Like Teen Spirit (Live In Del Mar, California/1991)', rang: 580810, seconden: 289),
+        (artiest: 'Nirvana', titel: uitzending, rang: 120000, seconden: 290),
+      ];
+      expect(besteTreffer(treffers, 'Nirvana', 'Smells Like Teen Spirit'), 0,
+          reason: 'het woord "Radio" maakte de uitzending de gevraagde versie, boven die van Nevermind');
+      expect(uitvoeringVan('Smells Like Teen Spirit (Radio Edit)'), Uitvoering.radio);
+      expect(uitvoeringVan('Rhythm Is a Dancer (Radio)'), Uitvoering.radio);
+      expect(uitvoeringVan('Stupid Girl (Remastered 2015)'), Uitvoering.origineel);
+    });
+
+    test('DE KERN: geen antwoord van Deezer is niet "niet gevonden"', () async {
+      var keer = 0;
+      final log = <String>[];
+      final deezer = RecommendService(
+          adem: Duration.zero,
+          haal: (url) async {
+            if (keer++ == 0) throw const DeezerFout('Quota limit exceeded', quota: true);
+            return {
+              'data': [
+                {
+                  'title': 'Iris',
+                  'artist': {'name': 'The Goo Goo Dolls'},
+                  'album': {'title': 'Dizzy up the Girl', 'id': 1},
+                  'duration': 289,
+                  'rank': 900000,
+                }
+              ]
+            };
+          });
+      final uit = await deezer.lijstOpDeezer([AiNummer('Goo Goo Dolls', 'Iris')], spoor: log.add);
+      expect([for (final t in uit) t.title], ['Iris'],
+          reason: 'Iris, Lovefool en Closing Time heetten "niet gevonden" — Deezer kent ze alle drie');
+      expect(log.last, isNot(contains('niet gevonden')));
+    });
+
+    test('DE GRENS: wat blijft zwijgen staat als "geen antwoord" in het logboek, niet als "niet gevonden"', () async {
+      var keer = 0;
+      final log = <String>[];
+      final deezer = RecommendService(
+          adem: Duration.zero,
+          haal: (url) async {
+            keer++;
+            throw const DeezerFout('Deezer gaf 503');
+          });
+      expect(await deezer.lijstOpDeezer([AiNummer('Goo Goo Dolls', 'Iris')], spoor: log.add), isEmpty);
+      expect(keer, 2, reason: 'één keer opnieuw, niet eindeloos');
+      expect(log.last, contains('geen antwoord: Goo Goo Dolls — Iris (Deezer gaf 503)'));
+      expect(log.last, isNot(contains('niet gevonden')));
     });
   });
 }
