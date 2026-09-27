@@ -271,8 +271,26 @@ String basisTitel(String titel) {
   if (streep > 0) x = x.substring(0, streep);
   x = x.replaceAll(RegExp(r'[\(\[][^\)\]]*[\)\]]'), ' ').trim();
   x = x.replaceFirst(RegExp(r'^(the|a|an)\s+', caseSensitive: false), '');
+  // Schrijfwijzen van hetzelfde woord: "Take Me 2 The Limit" is "Take Me to the Limit" — die haalde
+  // de radio op 26-09-2026 twee keer, omdat hij het eerste exemplaar niet als hetzelfde liedje zag.
+  x = [for (final w in x.split(RegExp(r'\s+'))) _zelfdeWoord[w.toLowerCase()] ?? w].join(' ');
   return _plat(x);
 }
+
+/// Zie [basisTitel]. Alleen hele woorden: "U-Turn" en "2 Unlimited" blijven wat ze zijn.
+const Map<String, String> _zelfdeWoord = {
+  '2': 'to', '4': 'for', 'u': 'you', 'ur': 'your', 'n': 'and', "'n'": 'and', "n'": 'and',
+  "'n": 'and', '&': 'and', '+': 'and',
+};
+
+/// Waarop de radio kijkt of je een liedje AL HEBT: dezelfde artiest ([artiestSleutel]) en hetzelfde
+/// liedje ([basisTitel]) — niet de hele titel. Welke uitvoering en hoe lang beslist daarna
+/// [eigenPastOpPlek].
+///
+/// Gemeten op 26-09-2026: Haddaway "What Is Love" drie keer gehaald — je had het als "(Single
+/// Version)", de radio vroeg "(7" Mix)" — en Cappella "U Got 2 Let The Music" twee keer, kaal tegen
+/// "(Brescia Edit)". De vergelijking ging op de volledige titel, versie tussen haakjes incluis.
+String eigenSleutel(String artiest, String titel) => '${artiestSleutel(artiest)}|${basisTitel(titel)}';
 
 /// Alleen letters en cijfers, klein — ook die van een ander schrift (Кино, Μαρινέλλα). Anders werden
 /// al zulke namen dezelfde lege sleutel: één liedje per radio, en elke artiest "de zaadartiest".
@@ -640,9 +658,17 @@ bool eigenPastOpPlek({
   int? eigenSeconden,
   required int speling,
 }) {
-  if (uitvoeringVan(eigenTitel) == Uitvoering.bewerking &&
-      uitvoeringVan(plekTitel) != Uitvoering.bewerking) {
+  final eigen = uitvoeringVan(eigenTitel);
+  if (eigen == Uitvoering.bewerking && uitvoeringVan(plekTitel) != Uitvoering.bewerking) {
     return false;
+  }
+  // Vraagt de plek een benoemde variant — "(Big Dawg Radio Edit)", "(Good Vibes Mix)" — en heb jij
+  // het gewone nummer, dan klinkt JOUW nummer, hoe lang het ook duurt. Gemeten op 26-09-2026: je had
+  // "No Limit" van 2 Unlimited (3:47), en de radio haalde "No Limit (Big Dawg Radio Edit)" erbij.
+  // Een plek zonder naam ("Move On Baby", 3:40) blijft wel op de lengte letten: daar is jouw
+  // albumversie van 4:51 een andere uitvoering.
+  if (eigen != Uitvoering.bewerking && vreemdeStaart(plekTitel) && !vreemdeStaart(eigenTitel)) {
+    return true;
   }
   final a = plekSeconden ?? 0, b = eigenSeconden ?? 0;
   return a <= 0 || b <= 0 || (a - b).abs() <= speling;

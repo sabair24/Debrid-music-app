@@ -692,4 +692,85 @@ void main() {
       expect(uit[2].titel, 'No Limit');
     });
   });
+
+  // ── "De radio moet altijd kijken of het nummer al in men bibliotheek staat" (27-09-2026) ──────
+
+  group('heb je dit al — op het liedje, niet op de titel', () {
+    test('DE KERN: de drie liedjes die de radio op 26-09 opnieuw haalde', () {
+      expect(eigenSleutel('Haddaway', 'What Is Love (Single Version)'),
+          eigenSleutel('Haddaway', 'What Is Love (7” Mix)'),
+          reason: 'drie keer gehaald: 17:17, 18:24 en 18:52');
+      expect(eigenSleutel('T-Spoon', 'Take Me 2 The Limit [Radio Mix]'),
+          eigenSleutel('T-Spoon', 'Take Me to the Limit'),
+          reason: '"2" is "to" — om 11:51 en om 17:49 gehaald');
+      expect(eigenSleutel('Cappella', 'U Got 2 Let The Music'),
+          eigenSleutel('Cappella', 'U Got 2 Let The Music (Brescia Edit)'));
+    });
+
+    test('DE VAL: schrijfwijzen van hetzelfde woord, maar alleen hele woorden', () {
+      expect(basisTitel("Rock 'n' Roll"), basisTitel('Rock & Roll'));
+      expect(basisTitel('Rock and Roll'), basisTitel('Rock & Roll'));
+      expect(basisTitel('U Got 2 Let The Music'), basisTitel('You Got to Let the Music'));
+      expect(basisTitel('U-Turn'), isNot(basisTitel('You Turn')));
+      expect(eigenSleutel('2 Unlimited', 'No Limit'), isNot(eigenSleutel('2 Unlimited', 'Tribal Dance')));
+    });
+
+    test('DE KERN: je eigen origineel wint van een benoemde remix-edit', () {
+      expect(
+          eigenPastOpPlek(
+              plekTitel: 'No Limit (Big Dawg Radio Edit)',
+              plekSeconden: 175,
+              eigenTitel: 'No Limit',
+              eigenSeconden: 227,
+              speling: kRadioSpeling),
+          isTrue,
+          reason: 'je had het origineel van 3:47, en de radio haalde de Big Dawg-edit erbij');
+      expect(
+          eigenPastOpPlek(
+              plekTitel: "Freak Out ('97 Remix)",
+              plekSeconden: 215,
+              eigenTitel: 'Freak Out',
+              eigenSeconden: 230,
+              speling: kRadioSpeling),
+          isTrue);
+    });
+
+    test('DE GRENS: maar een plek zonder naam let op de lengte — Move On Baby', () {
+      expect(
+          eigenPastOpPlek(
+              plekTitel: 'Move On Baby',
+              plekSeconden: 220,
+              eigenTitel: 'Move On Baby',
+              eigenSeconden: 291,
+              speling: kRadioSpeling),
+          isFalse,
+          reason: 'Saber: "move on baby is al niet goed, niet original" — dat was de albumversie');
+      expect(
+          eigenPastOpPlek(
+              plekTitel: 'What Is Love (7” Mix)',
+              plekSeconden: 207,
+              eigenTitel: 'What Is Love (Single Version)',
+              eigenSeconden: 210,
+              speling: kRadioSpeling),
+          isTrue);
+      expect(
+          eigenPastOpPlek(
+              plekTitel: 'Freak Out',
+              plekSeconden: 230,
+              eigenTitel: "Freak Out ('97 Remix)",
+              eigenSeconden: 215,
+              speling: kRadioSpeling),
+          isFalse,
+          reason: 'een remix die je hebt is geen origineel dat gevraagd werd');
+      expect(
+          eigenPastOpPlek(
+              plekTitel: 'No Limit (Big Dawg Radio Edit)',
+              plekSeconden: 175,
+              eigenTitel: 'No Limit (Automatic Radio Edit)',
+              eigenSeconden: 240,
+              speling: kRadioSpeling),
+          isFalse,
+          reason: 'twee benoemde varianten zijn niet vanzelf dezelfde');
+    });
+  });
 }

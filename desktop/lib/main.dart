@@ -11502,13 +11502,20 @@ void _srcToastAction(BuildContext context, String m, String label, VoidCallback 
 /// [spreidArtiesten].
 List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
     {String? zaadArtiest, Track? zaad, String? zaadTitel, Iterable<String> al = const []}) {
+  // Op het liedje en niet op de hele titel — zie [eigenSleutel]: op de hele titel haalde de radio
+  // Haddaway "What Is Love" drie keer, omdat je hem als "(Single Version)" had en niet als "(7" Mix)".
   final index = <String, List<Track>>{};
   for (final t in lib.tracks) {
-    (index['${recNorm(t.artist)}|${recNorm(t.title)}'] ??= []).add(t);
+    if (nooitOpRadio(t.title)) continue;
+    (index[eigenSleutel(t.artist, t.title)] ??= []).add(t);
   }
-  // Van wat je hebt alleen wat dezelfde uitvoering is, en even lang — zie [eigenPastOpPlek].
+  // Van wat je hebt alleen wat dezelfde uitvoering is, en even lang — zie [eigenPastOpPlek]. Dezelfde
+  // titel eerst: heb je "Mr. Vain (Original Radio Edit)" en ook de albumversie, dan wint die.
   Track? eigenVoor(RecTrack r) {
-    for (final t in index['${recNorm(r.artist)}|${recNorm(r.title)}'] ?? const <Track>[]) {
+    final exact = recNorm(r.title);
+    final kandidaten = [...?index[eigenSleutel(r.artist, r.title)]]
+      ..sort((a, b) => (recNorm(a.title) == exact ? 0 : 1).compareTo(recNorm(b.title) == exact ? 0 : 1));
+    for (final t in kandidaten) {
       if (eigenPastOpPlek(
           plekTitel: r.title,
           plekSeconden: r.seconds,
