@@ -51,5 +51,11 @@ void main() {
 
     // With 60 cached covers on disk, the vast majority must be present.
     expect(withCover, greaterThan(40));
-  }, timeout: const Timeout(Duration(minutes: 4)), skip: skipUnlessLibrary);
+  },
+      // De scan plus de eigen grens van de websweep (3 min), met ruimte. Vier minuten was minder dan
+      // die twee samen: gemeten op 27-09-2026 duurt de scan van de echte bibliotheek 80 s, en sinds de
+      // Deezer-hoezen door de gedeelde rijbaan gaan (3.9.423) de sweep 183 s in plaats van 150 s — met
+      // 613 hoezen in plaats van 609, omdat Deezer niets meer stil weigert.
+      timeout: const Timeout(Duration(minutes: 5)),
+      skip: skipUnlessLibrary);
 }
