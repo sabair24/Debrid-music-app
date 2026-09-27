@@ -278,9 +278,21 @@ void main() {
       );
 
       await w.start();
-      // Zo lang duurt de herwek-timer plus de veeg die eruit volgt. Niets in deze test praat met het
-      // netwerk, dus als het na een tiende seconde niet gebeurd is, gebeurt het niet meer.
-      await Future.delayed(const Duration(milliseconds: 100));
+      // Wachten tot de plaat er is, niet tot de klok op is. Hier stond een vaste tiende seconde: zo
+      // lang duren de herwek-timer en de veeg die eruit volgt op een rustige machine. In de volle
+      // lokale ronde van 27-09-2026, met ~330 toetsbestanden naast elkaar, was dat te kort:
+      // "Expected: contains 'Binnengekomen', Actual: ['Eerste']", terwijl hij los drie keer op drie
+      // groen was. Rood zonder dat de code iets verkeerd deed.
+      //
+      // De ruime bovengrens verzwakt niets. De herwek-timer is de enige timer die hier kan afgaan --
+      // de herkansing na een storing staat op een kwartier en start alleen bij een storing, en die
+      // is er hier niet. Komt de plaat niet via DIE weg binnen, dan komt hij er binnen deze toets
+      // helemaal niet. De expect hieronder zegt dan wat er ontbrak.
+      final tot = DateTime.now().add(const Duration(seconds: 5));
+      while (!warmedArt.any((s) => s.split('|')[1] == 'Binnengekomen') &&
+          DateTime.now().isBefore(tot)) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
 
       expect(warmedArt.map((s) => s.split('|')[1]), contains('Binnengekomen'),
           reason: 'de plaat die tijdens de ronde binnenkwam hoort zijn scans nog te krijgen, '
