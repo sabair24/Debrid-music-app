@@ -129,6 +129,10 @@ final RegExp _eerstAnders = RegExp(r'\b(rmx|remix|remixes|reloaded|redux|re-reco
     // Spirit (Broadcast from Italy) (Remastered Radio Recording)" in een radio vanaf Zombie gekozen
     // boven die van Nevermind: het woord "Radio" maakte hem de gevraagde versie.
     r'broadcasts?|broadcasting|radio recordings?|in concert|'
+    // Een pianoversie is een andere opname. Op 27-09-2026 kwam voor "What's Up? (Single Version)" van
+    // 4 Non Blondes "What’s Up! (piano version).flac" binnen: "piano" stond nergens, dus origineel.
+    // Niet "stripped": zo heet het studioalbum van Christina Aguilera, en dat staat in je bibliotheek.
+    r'piano|'
     r'orchestra|orchestral|philharmonic|symphonic|strings|choir)\b|'
     r'\b(19|20)\d\d (version|mix|edit)\b');
 

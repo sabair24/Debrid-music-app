@@ -1096,6 +1096,20 @@ void main() {
           reason: 'het artiestveld zoekt op een deel van de naam');
     });
 
+    test('DE VAL: een pianoversie is geen single', () {
+      expect(uitvoeringVan('What’s Up! (piano version)'), Uitvoering.bewerking);
+      expect(
+          klopt('4 Non Blondes', "What's Up? (Single Version)",
+              r'Muziek\4 Non Blondes - What’s Up!\4 Non Blondes - What’s Up! - 04 - What’s Up! (piano version).flac'),
+          isFalse,
+          reason: 'zo kwam hij binnen voor de single');
+      expect(klopt('4 Non Blondes', "What's Up?", r'4 Non Blondes\Bigger, Better, Faster, More!\02 - What’s Up.flac'),
+          isTrue);
+      expect(uitvoeringVan('Piano Man'), Uitvoering.origineel, reason: 'alleen de staart telt');
+      expect(klopt('Christina Aguilera', 'Beautiful', r'Christina Aguilera\Stripped\11 - Beautiful.flac'), isTrue,
+          reason: 'Stripped is het album, geen uitvoering');
+    });
+
     test('DE VAL: een radio-uitzending is een live-opname, geen radio-edit', () {
       const uitzending = 'Smells Like Teen Spirit (Broadcast from Italy) (Remastered Radio Recording)';
       expect(uitvoeringVan(uitzending), Uitvoering.bewerking);
