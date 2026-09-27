@@ -1066,6 +1066,13 @@ void main() {
       expect(n.audioDb, 0);
     });
 
+    test('DE GRENS: een geheugen van versie 4 vergeet de nummers, niet het Deezer-jaar', () async {
+      final n = await naVersie(4);
+      expect(n.discogs, 2, reason: 'onder versie 4 telde een plaat die het nummer niet draagt — U2 "One" 1983');
+      expect(n.deezer, 0);
+      expect(n.audioDb, 0);
+    });
+
     test('DE VAL: een heruitgave telt voor de stijl, niet voor het jaar', () {
       // Zo gaf Discogs het op 27-09-2026 voor "The Verve — The Drugs Don't Work", met apostrof.
       Map<String, dynamic> regel(String jaar, List<String> formaat, {String titel = 'The Verve - Urban Hymns'}) => {
@@ -1094,6 +1101,123 @@ void main() {
           reason: 'een bootleg telt nergens voor');
       expect(uitgaveUitZoekregel(regel('1968', ['LP'], titel: 'Leon Sash - Sash!'), 'Sash!'), isNull,
           reason: 'het artiestveld zoekt op een deel van de naam');
+    });
+
+    group('U2 "One": Discogs zoekt op woorden', () {
+      // De tracklijst van War (1983), zoals Discogs hem gaf.
+      const war = [
+        'Sunday Bloody Sunday', 'Seconds', "New Year's Day", 'Like A Song...', 'Drowning Man', 'The Refugee',
+        'Two Hearts Beat As One', 'Red Light', 'Surrender', '"40"',
+      ];
+      Zoekregel regel(int id, String plaat, int jaar) =>
+          (uitgave: (jaar: jaar, genres: const ['Rock'], stijlen: const <String>[]), id: id, plaat: plaat);
+
+      test('DE VAL: "One" is niet "Two Hearts Beat As One"', () {
+        expect(draagtNummer(war, 'One'), isFalse, reason: '"uit 1983, het zaad is van 1993" — One is van 1991');
+        expect(draagtNummer(['Zoo Station', 'Even Better Than The Real Thing', 'One'], 'One'), isTrue);
+        expect(draagtNummer(['Open', 'High', 'Friday I´m In Love'], "Friday I'm in Love"), isTrue,
+            reason: 'Wish schrijft een ander apostrof');
+        expect(draagtNummer(["La Cafetería De Tom = Tom's Diner", 'Luka'], "Tom's Diner"), isTrue,
+            reason: 'de Spaanse persing van Solitude Standing');
+        expect(draagtNummer(['La Cena De Tom "Tom\'s Diner"'], "Tom's Diner"), isTrue);
+        expect(draagtNummer(['Zombie (Radio Edit)', 'Away'], 'Zombie'), isTrue);
+      });
+
+      test('DE KERN: drie platen zonder het nummer, dan telt de hele bladzijde niet', () async {
+        final tracklijst = <int, List<String>>{
+          1: war,
+          2: ['Sunday Bloody Sunday', 'Two Hearts Beat As One'],
+          3: ['Two Hearts Beat As One', 'Endless Deep'],
+          4: ["New Year's Day", 'Treasure (Whatever Happened To Pete The Chop)'],
+          9: ['Zoo Station', 'One', 'Until The End Of The World'],
+        };
+        final gevraagd = <int>[];
+        Future<List<String>?> tracks(int id) async {
+          gevraagd.add(id);
+          return tracklijst[id];
+        }
+
+        // Zo gaf Discogs het: alleen 1983, vier platen, War in meer persingen.
+        final bladzijde = [
+          regel(1, 'u2 - war', 1983),
+          regel(11, 'u2 - war', 1983),
+          regel(2, 'u2 - sunday bloody sunday', 1983),
+          regel(3, 'u2 - two hearts beat as one', 1983),
+          regel(4, "u2 - new year's day", 1983),
+        ];
+        expect(await metHetNummer(bladzijde, 'One', tracks), isEmpty,
+            reason: 'dan vindt de vrije zoekvraag het wel');
+        expect(gevraagd, hasLength(3), reason: 'hoogstens drie platen');
+        expect(gevraagd, isNot(contains(11)), reason: 'War maar één keer, niet elke persing');
+
+        gevraagd.clear();
+        final vrij = await metHetNummer([regel(4, "u2 - new year's day", 1983), regel(9, 'u2 - achtung baby', 1991)],
+            'One', tracks);
+        expect(vroegsteJaar([for (final u in vrij!) u.jaar]), 1991);
+        expect(gevraagd, [4, 9]);
+      });
+
+      test('DE GRENS: meestal is één blik genoeg, en zonder antwoord onthoudt niemand iets', () async {
+        var gevraagd = 0;
+        final zombie = [
+          regel(20, 'the cranberries - no need to argue', 1994),
+          regel(21, 'the cranberries - zombie', 1994),
+          regel(22, 'the cranberries - zombie', 1995),
+        ];
+        final z = await metHetNummer(zombie, 'Zombie', (id) async {
+          gevraagd++;
+          return ['Ode To My Family', 'Zombie'];
+        });
+        expect(z, hasLength(3));
+        expect(gevraagd, 1, reason: 'bij 168 van 193 nummers van het model klopte de eerste plaat meteen');
+        expect(await metHetNummer(zombie, 'Zombie', (id) async => null), isNull,
+            reason: 'een half antwoord wordt niet bewaard');
+      });
+    });
+
+    test('DE KERN: wat het model koos en voor de helft rock is, is rock', () async {
+      // Zo gaf Discogs "The Corrs — Runaway" op 27-09-2026: negen uitgaven, zes met Rock, acht met Pop,
+      // alle negen met Folk.
+      const zonder = <String>[];
+      final corrs = <DiscogsUitgave>[
+        (jaar: 1995, genres: ['Pop', 'Folk, World, & Country'], stijlen: zonder),
+        (jaar: 1995, genres: ['Rock', 'Pop'], stijlen: ['Folk Rock', 'Soft Rock', 'Pop Rock']),
+        (jaar: 1995, genres: ['Rock'], stijlen: ['Folk Rock']),
+        (jaar: 1995, genres: ['Rock', 'Pop'], stijlen: ['Folk Rock', 'Soft Rock', 'Pop Rock']),
+        (jaar: 1995, genres: ['Rock', 'Pop'], stijlen: ['Folk Rock', 'Soft Rock', 'Pop Rock']),
+        (jaar: 1995, genres: ['Pop', 'Folk, World, & Country'], stijlen: zonder),
+        (jaar: 1995, genres: ['Rock', 'Pop'], stijlen: ['Folk Rock', 'Soft Rock', 'Pop Rock']),
+        (jaar: 1995, genres: ['Rock', 'Pop'], stijlen: ['Folk Rock', 'Soft Rock', 'Pop Rock']),
+        (jaar: 1995, genres: ['Pop', 'Folk, World, & Country'], stijlen: zonder),
+      ];
+      // Everything But The Girl "Missing": vooral dance, rock op drie van de negen.
+      final missing = <DiscogsUitgave>[
+        for (var i = 0; i < 6; i++) (jaar: 1994, genres: ['Electronic'], stijlen: ['House']),
+        for (var i = 0; i < 3; i++) (jaar: 1994, genres: ['Rock', 'Pop'], stijlen: ['Soft Rock']),
+      ];
+      final b = Stijlboek(
+        bestand: geheugen(),
+        audioDbGenre: (a) async => a == 'The Corrs' ? 'Country' : 'Electronic',
+        discogsNummer: (a, t) async => switch (a) {
+          'The Corrs' => corrs,
+          'Everything But The Girl' => missing,
+          _ => const <DiscogsUitgave>[],
+        },
+      );
+      expect((await b.keur('The Corrs', 'Runaway', zaad, zaadTak: 'alternatief', doorModel: true)).mag, isTrue,
+          reason: '"stijl country, niet rock" — zes van de negen uitgaven zijn rock');
+      // Zonder tak, zodat alleen de familie spreekt.
+      final vanDeezer = await b.keur('The Corrs', 'Runaway', zaad);
+      expect(vanDeezer.mag, isFalse, reason: 'wat Deezer erbij doet, keurt de meerderheid nog');
+      expect(vanDeezer.waarom, startsWith('stijl'));
+      expect(
+          (await b.keur('Everything But The Girl', 'Missing', zaad, zaadTak: 'alternatief', doorModel: true)).mag,
+          isFalse,
+          reason: 'drie van de negen is geen helft');
+      expect(minstensDeHelft([
+        {Stijlfamilie.rock},
+        {Stijlfamilie.popsoul},
+      ]), {Stijlfamilie.rock, Stijlfamilie.popsoul}, reason: 'precies de helft telt');
     });
 
     test('DE VAL: een pianoversie is geen single', () {

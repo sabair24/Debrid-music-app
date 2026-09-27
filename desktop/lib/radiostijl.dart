@@ -33,7 +33,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'radiokeuze.dart' show artiestDelenTekst, vouw;
+import 'radiokeuze.dart' show artiestDelenTekst, basisTitel, vouw;
 
 /// Grove families van genres. Grof met opzet: "Euro House" en "Happy Hardcore" zijn voor een radio
 /// dezelfde familie, "Pop" en "Euro Dance" niet.
@@ -192,6 +192,87 @@ DiscogsUitgave? uitgaveUitZoekregel(Map<String, dynamic> r, String artiest) {
   );
 }
 
+/// Draagt een tracklijst het nummer [titel]? Op [basisTitel], en een HELE titel: Discogs' `track=`
+/// zoekt op woorden, en dat is precies de val — zie [metHetNummer].
+///
+/// Een tweetalige titel telt per taal: "La Cafetería De Tom = Tom's Diner" en `La Cena De Tom "Tom's
+/// Diner"` zijn allebei Tom's Diner (Suzanne Vega, gemeten op 27-09-2026). Een ander apostrof
+/// ("Friday I´m In Love" op Wish) valt al weg in [basisTitel].
+bool draagtNummer(Iterable<String> tracks, String titel) {
+  final t = basisTitel(titel);
+  if (t.isEmpty) return true;
+  for (final tr in tracks) {
+    final delen = [
+      tr,
+      ...tr.split(' = '),
+      for (final m in RegExp('["“”]([^"“”]+)["“”]').allMatches(tr)) m.group(1)!,
+    ];
+    if (delen.any((d) => basisTitel(d) == t)) return true;
+  }
+  return false;
+}
+
+/// Eén regel uit Discogs' zoekantwoord, met waar hij over gaat: de uitgave, haar id en de plaat
+/// ("u2 - war"), zodat [metHetNummer] alle persingen van één plaat samen kan wegstrepen.
+typedef Zoekregel = ({DiscogsUitgave uitgave, int? id, String plaat});
+
+/// Alleen de uitgaven die het nummer echt dragen.
+///
+/// Discogs' `track=` zoekt op WOORDEN. Gemeten op 27-09-2026: `artist=U2&track=One` gaf tien uitgaven
+/// uit 1983 — War, "Sunday Bloody Sunday", "New Year's Day" — allemaal met "Two Hearts Beat As One"
+/// erop, en een radio vanaf Zombie weerde "One" (1991) als "uit 1983". Evenzo Al Jarreau "Mornin'"
+/// (1971 in plaats van 1983) en Maxwell "Ascension" (1995 in plaats van 1996).
+///
+/// Dus de vroegste plaat op haar tracklijst ([draagtNummer]): draagt ze het nummer, dan klopt het
+/// jaar; zo niet, dan valt elke persing van die plaat weg en is de volgende aan de beurt, hoogstens
+/// [hoogstens] platen. Draagt geen van die het nummer, dan is de hele bladzijde woordtreffers en telt
+/// er niets — dan vindt de vrije zoekvraag het wel (U2: 1992). Over 193 nummers van het model
+/// klopte bij 168 de eerste plaat meteen: één verzoek erbij, en dat blijft op schijf bewaard.
+///
+/// Null als een tracklijst geen antwoord gaf: een half antwoord wordt niet bewaard ([samenUitgaven]).
+Future<List<DiscogsUitgave>?> metHetNummer(
+    List<Zoekregel> regels, String titel, Future<List<String>?> Function(int id) tracks,
+    {int hoogstens = 3}) async {
+  final volgorde = [
+    for (final r in regels)
+      if (r.uitgave.jaar != null && r.id != null) r
+  ]..sort((a, b) => a.uitgave.jaar!.compareTo(b.uitgave.jaar!));
+  final weg = <String>{};
+  var gevonden = volgorde.isEmpty;
+  var keer = 0;
+  for (final r in volgorde) {
+    if (weg.contains(r.plaat)) continue;
+    if (keer >= hoogstens) break;
+    keer++;
+    final t = await tracks(r.id!);
+    if (t == null) return null;
+    if (draagtNummer(t, titel)) {
+      gevonden = true;
+      break;
+    }
+    weg.add(r.plaat);
+  }
+  if (!gevonden) return const [];
+  return [
+    for (final r in regels)
+      if (!weg.contains(r.plaat)) r.uitgave
+  ];
+}
+
+/// De families die op minstens de helft van de uitgaven staan. Zie [Stijlboek.keur], `doorModel`.
+Set<Stijlfamilie> minstensDeHelft(List<Set<Stijlfamilie>> perUitgave) {
+  final tel = <Stijlfamilie, int>{};
+  for (final u in perUitgave) {
+    for (final f in u) {
+      tel[f] = (tel[f] ?? 0) + 1;
+    }
+  }
+  return {
+    for (final e in tel.entries)
+      if (e.value * 2 >= perUitgave.length) e.key
+  };
+}
+
 /// Genoeg uitgaven met een jaar om de vrije zoekvraag over te slaan: drie. Een heruitgave telt niet —
 /// anders bleef het bij de drie heruitgaven van The Drugs Don't Work.
 bool genoegVoorEenJaar(List<DiscogsUitgave> uitgaven) => uitgaven.where((u) => u.jaar != null).length >= 3;
@@ -285,7 +366,7 @@ Future<Stijloordeel> naLijstVanModel(Stijloordeel o,
     Duration geduld = const Duration(seconds: 30)}) async {
   if (o.mag || doorModel()) return o;
   final z = await zonderTak();
-  if (!z.mag) return o; // niet de tak zei nee, maar het tijdvak of de familie
+  if (!z.mag) return o; // ook met de vrijstellingen voor het model nee: dan wachten helpt niet
   try {
     await lijst.timeout(geduld);
   } on TimeoutException {
@@ -421,7 +502,10 @@ List<DiscogsUitgave>? samenUitgaven(List<DiscogsUitgave> eerst, List<DiscogsUitg
 ///
 /// 4: ook bij Discogs telt een heruitgave niet voor het jaar ([isHeruitgave]) — "The Drugs Don't Work"
 /// was "uit 2017" (27-09-2026).
-const int kStijlboekVersie = 4;
+///
+/// 5: alleen uitgaven die het nummer dragen ([metHetNummer]) — U2 "One" was "uit 1983" — en per nummer
+/// de families op minstens de helft van de uitgaven ([minstensDeHelft]) (27-09-2026).
+const int kStijlboekVersie = 5;
 
 /// De feiten ophalen en onthouden. De bronnen zijn haken, zodat een toets ze kan invullen.
 ///
@@ -457,7 +541,7 @@ class Stijlboek {
 
   // Een geheugen van een oudere [kStijlboekVersie]: dan zijn de regels voor een NUMMER veranderd, en
   // een nummer dat al eens opgezocht was zou anders nooit meer onder de nieuwe regels vallen. Alleen
-  // wat die versie veranderde weg — "n:" onder 4, het Deezer-jaar ("d:") onder 3 — en nooit het genre
+  // wat die versie veranderde weg — "n:" onder 5, het Deezer-jaar ("d:") onder 3 — en nooit het genre
   // van een artiest: elke vraag aan TheAudioDB kost drie seconden, en na een update liep zo elke
   // keuring tegen zijn tijdslimiet (tweede beoordeling van 26-09-2026).
   Future<Map<String, dynamic>> _lees() => _laden ??= () async {
@@ -467,7 +551,7 @@ class Stijlboek {
             final v = j['_versie'];
             if (v != kStijlboekVersie) {
               final oud = v is int ? v : 0;
-              j.removeWhere((k, _) => (oud < 4 && k.startsWith('n:')) || (oud < 3 && k.startsWith('d:')));
+              j.removeWhere((k, _) => (oud < 5 && k.startsWith('n:')) || (oud < 3 && k.startsWith('d:')));
               j['_versie'] = kStijlboekVersie;
             }
             return j;
@@ -552,14 +636,14 @@ class Stijlboek {
       uit = null;
     }
     if (uit == null) return (families: const <Stijlfamilie>{}, jaar: null);
+    final perUitgave = [for (final u in uit) familiesVan([...u.genres, ...u.stijlen])];
     final n = (
-      families: meerderheid([
-        for (final u in uit) familiesVan([...u.genres, ...u.stijlen])
-      ]),
+      families: meerderheid(perUitgave),
       jaar: vroegsteJaar([for (final u in uit) u.jaar]),
     );
     g[k] = {
       'f': [for (final f in n.families) f.name],
+      'h': [for (final f in minstensDeHelft(perUitgave)) f.name],
       'j': n.jaar,
       's': meesteStijlen([for (final u in uit) ...u.stijlen]),
       't': meerderheidTak([for (final u in uit) takVanUitgave(u)]),
@@ -573,6 +657,17 @@ class Stijlboek {
   Future<String?> tak(String artiest, String titel) async {
     final zit = (await _lees())['n:${_sleutel(artiest)}|${_sleutel(titel)}'];
     return zit is Map ? zit['t'] as String? : null;
+  }
+
+  /// De families op minstens de helft van de uitgaven van dit nummer ([minstensDeHelft]). Alleen uit
+  /// het geheugen: vraag eerst [nummer].
+  Future<Set<Stijlfamilie>> helft(String artiest, String titel) async {
+    final zit = (await _lees())['n:${_sleutel(artiest)}|${_sleutel(titel)}'];
+    return {
+      if (zit is Map)
+        for (final f in (zit['h'] as List? ?? const []))
+          if (_alsFamilie(f) case final x?) x
+    };
   }
 
   /// De stijlnamen die Discogs het vaakst bij dit nummer zet ("Euro House", "Trance") — voor de
@@ -656,6 +751,14 @@ class Stijlboek {
     final Stijloordeel o;
     if (zf == null || familiePast(zf, n.families)) {
       o = keurStijl(zaad, (families: n.families, jaar: jaar));
+    } else if (doorModel && zf == Stijlfamilie.rock && (await helft(artiest, titel)).contains(zf)) {
+      // Koos het model het zelf en staat het op minstens de helft van de uitgaven bij rock, dan is het
+      // rock — ook als Discogs er nog vaker "Pop" bij zet. Gemeten op 27-09-2026, radio vanaf Zombie:
+      // The Corrs "Runaway" staat op 6 van 9 uitgaven bij Rock (Folk Rock, Soft Rock, Pop Rock) en op 8
+      // bij Pop, en viel af als "stijl country". Alleen voor wat het model koos: wat Deezer erbij doet
+      // (Simply Red, 7 van 10) blijft buiten een Zombie-radio. Everything But The Girl "Missing" (3 van
+      // 9) en Björk (0) blijven er ook buiten.
+      o = keurStijl(zaad, (families: {zf}, jaar: jaar));
     } else {
       final a = await this.artiest(artiest);
       o = keurStijl(zaad, (families: {...n.families, if (a != null) a}, jaar: jaar));

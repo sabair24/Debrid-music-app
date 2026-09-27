@@ -22,7 +22,8 @@ import 'release_format.dart';
 import 'release_format.dart' as fmt;
 import 'settings.dart';
 import 'paths.dart';
-import 'radiostijl.dart' show DiscogsUitgave, genoegVoorEenJaar, kaleTitel, samenUitgaven, uitgaveUitZoekregel;
+import 'radiostijl.dart'
+    show DiscogsUitgave, Zoekregel, genoegVoorEenJaar, kaleTitel, metHetNummer, samenUitgaven, uitgaveUitZoekregel;
 
 /// One image a release or an artist offers. Discogs doesn't say what a picture IS beyond
 /// primary/secondary — a release's secondaries are the back, the disc and the booklet, an artist's
@@ -1035,20 +1036,27 @@ class DiscogsService {
     if (!available) return null;
     final kaal = kaleTitel(titel);
     final gezien = <Object?>{};
-    List<DiscogsUitgave> vanArtiest(Map<String, dynamic> b) {
-      final uit = <DiscogsUitgave>[];
+    List<Zoekregel> vanArtiest(Map<String, dynamic> b) {
+      final uit = <Zoekregel>[];
       for (final r in (b['results'] as List<dynamic>? ?? const [])) {
         if (r is! Map<String, dynamic>) continue;
         if (!gezien.add(r['id'] ?? r['title'])) continue;
-        if (uitgaveUitZoekregel(r, artiest) case final u?) uit.add(u);
+        if (uitgaveUitZoekregel(r, artiest) case final u?) {
+          uit.add((uitgave: u, id: (r['id'] as num?)?.toInt(), plaat: '${r['title'] ?? ''}'.toLowerCase()));
+        }
       }
       return uit;
     }
 
+    // De tracklijst van één uitgave, voor [metHetNummer]. Via [release], en dus via de schijf.
+    Future<List<String>?> tracks(int id) async =>
+        (await release(id))?.tracklist.map((t) => t.title).toList();
+
     final b = await _get('https://api.discogs.com/database/search?type=release&per_page=10'
         '&sort=year&sort_order=asc&artist=${_q(artiest)}&track=${_q(kaal)}');
     if (b == null) return null;
-    final eerst = vanArtiest(b);
+    final eerst = await metHetNummer(vanArtiest(b), titel, tracks);
+    if (eerst == null) return null;
     // Drie officiële uitgaven is genoeg voor een jaar en een meerderheid. Minder, dan ook de vrije
     // zoekvraag erbij: "Touch Me I'm Sick" van Mudhoney gaf op het artiestveld alleen een live-album
     // uit 2018, en het nummer is van 1988.
@@ -1059,7 +1067,7 @@ class DiscogsService {
         '&q=${_q('$artiest $kaal')}');
     // Geen antwoord (429, 5xx, time-out) is iets anders dan niets gevonden: null, en dan onthoudt het
     // stijlboek niets. Met een lege lijst werd een storing voorgoed "Discogs kent dit niet".
-    return samenUitgaven(eerst, opnieuw == null ? null : vanArtiest(opnieuw));
+    return samenUitgaven(eerst, opnieuw == null ? null : await metHetNummer(vanArtiest(opnieuw), titel, tracks));
   }
 
   Future<int?> artistId(String name) async {
