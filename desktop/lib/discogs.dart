@@ -22,7 +22,7 @@ import 'release_format.dart';
 import 'release_format.dart' as fmt;
 import 'settings.dart';
 import 'paths.dart';
-import 'radiostijl.dart' show DiscogsUitgave, isBootleg, kaleTitel, samenUitgaven, uitgaveVanArtiest;
+import 'radiostijl.dart' show DiscogsUitgave, genoegVoorEenJaar, kaleTitel, samenUitgaven, uitgaveUitZoekregel;
 
 /// One image a release or an artist offers. Discogs doesn't say what a picture IS beyond
 /// primary/secondary — a release's secondaries are the back, the disc and the booklet, an artist's
@@ -1039,19 +1039,8 @@ class DiscogsService {
       final uit = <DiscogsUitgave>[];
       for (final r in (b['results'] as List<dynamic>? ?? const [])) {
         if (r is! Map<String, dynamic>) continue;
-        // Ook bij het artiestveld: dat zoekt op een DEEL van de naam ("Sash!" vond "Leon Sash").
-        if (!uitgaveVanArtiest('${r['title'] ?? ''}', artiest)) continue;
-        // Een bootleg telt niet mee. Gemeten op 26-09-2026: het vroegste jaar van "Smells Like Teen
-        // Spirit" kwam van een onofficiële "Bleach"-cd uit 1989 met het nummer als bonus — twee jaar
-        // vóór het nummer bestond.
-        if (isBootleg([for (final x in (r['format'] as List? ?? const [])) '$x'])) continue;
         if (!gezien.add(r['id'] ?? r['title'])) continue;
-        List<String> tekst(Object? v) => [for (final x in (v as List? ?? const [])) '$x'];
-        uit.add((
-          jaar: int.tryParse('${r['year'] ?? ''}'),
-          genres: tekst(r['genre']),
-          stijlen: tekst(r['style']),
-        ));
+        if (uitgaveUitZoekregel(r, artiest) case final u?) uit.add(u);
       }
       return uit;
     }
@@ -1063,7 +1052,7 @@ class DiscogsService {
     // Drie officiële uitgaven is genoeg voor een jaar en een meerderheid. Minder, dan ook de vrije
     // zoekvraag erbij: "Touch Me I'm Sick" van Mudhoney gaf op het artiestveld alleen een live-album
     // uit 2018, en het nummer is van 1988.
-    if (eerst.length >= 3) return eerst;
+    if (genoegVoorEenJaar(eerst)) return eerst;
     // De vrije zoekvraag op RELEVANTIE en niet op jaar: op jaar stonden bij "Snap! The Power" tien
     // platen van Steppenwolf en Wings bovenaan, en die van Snap* zelf (1990) vielen erbuiten.
     final opnieuw = await _get('https://api.discogs.com/database/search?type=release&per_page=25'

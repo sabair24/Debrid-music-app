@@ -1023,9 +1023,10 @@ void main() {
           reason: 'een gewoon album houdt zijn jaar');
     });
 
-    test('DE GRENS: een geheugen van versie 2 vergeet alleen het Deezer-jaar', () async {
+    /// Hoe vaak Discogs, Deezer en TheAudioDB opnieuw gevraagd worden na een geheugen van [versie].
+    Future<({int discogs, int deezer, int audioDb, bool mag})> naVersie(int versie) async {
       geheugen().writeAsStringSync(jsonEncode({
-        '_versie': 2,
+        '_versie': versie,
         'n:garbage|onlyhappywhenitrains': {'f': ['rock'], 'j': 1995, 's': <String>[], 't': null},
         'd:garbage|stupidgirlremastered2015': 2015,
         'a:garbage': 'rock',
@@ -1047,10 +1048,52 @@ void main() {
         },
       );
       await b.nummer('Garbage', 'Only Happy When It Rains');
-      expect(discogs, 0, reason: 'wat onder versie 2 opgezocht is, is nog waar — en elke vraag kost 1,1 s');
-      expect((await b.keur('Garbage', 'Stupid Girl (Remastered 2015)', zaad)).mag, isTrue);
-      expect(deezer, 1, reason: 'onder versie 2 onthouden als 2015 — dan bleef hij voorgoed "uit 2015"');
-      expect(audioDb, 0, reason: 'het genre van een artiest is nog waar');
+      final mag = (await b.keur('Garbage', 'Stupid Girl (Remastered 2015)', zaad)).mag;
+      return (discogs: discogs, deezer: deezer, audioDb: audioDb, mag: mag);
+    }
+
+    test('DE GRENS: een geheugen van versie 2 vergeet het Deezer-jaar, en nooit het genre', () async {
+      final n = await naVersie(2);
+      expect(n.deezer, 1, reason: 'onder versie 2 onthouden als 2015 — dan bleef hij voorgoed "uit 2015"');
+      expect(n.mag, isTrue);
+      expect(n.audioDb, 0, reason: 'het genre van een artiest is nog waar — en elke vraag kost drie seconden');
+    });
+
+    test('DE GRENS: een geheugen van versie 3 vergeet de nummers, niet het Deezer-jaar', () async {
+      final n = await naVersie(3);
+      expect(n.discogs, 2, reason: 'onder versie 3 telde een heruitgave nog voor het jaar — The Drugs Don\'t Work "uit 2017"');
+      expect(n.deezer, 0, reason: 'het Deezer-jaar volgde onder versie 3 al de nieuwe regel');
+      expect(n.audioDb, 0);
+    });
+
+    test('DE VAL: een heruitgave telt voor de stijl, niet voor het jaar', () {
+      // Zo gaf Discogs het op 27-09-2026 voor "The Verve — The Drugs Don't Work", met apostrof.
+      Map<String, dynamic> regel(String jaar, List<String> formaat, {String titel = 'The Verve - Urban Hymns'}) => {
+            'title': titel,
+            'year': jaar,
+            'format': formaat,
+            'genre': ['Rock'],
+            'style': ['Alternative Rock', 'Britpop'],
+          };
+      final heruitgaven = [
+        for (final f in [
+          ['CD', 'Album', 'Reissue', 'Remastered', 'Box Set'],
+          ['File', 'AAC', 'Compilation', 'Remastered'],
+          ['CDr', 'Deluxe Edition', 'Promo', 'Reissue'],
+        ])
+          uitgaveUitZoekregel(regel('2017', f), 'The Verve')!
+      ];
+      expect([for (final u in heruitgaven) u.jaar], [null, null, null], reason: '"uit 2017, het zaad is van 1993"');
+      expect(heruitgaven.first.stijlen, contains('Britpop'), reason: 'de stijl van een heruitgave is nog waar');
+      expect(genoegVoorEenJaar(heruitgaven), isFalse,
+          reason: 'dan wordt de vrije zoekvraag ook gesteld — en die vindt de uitgaven van 1997');
+      final origineel = uitgaveUitZoekregel(regel('1997', ['CD', 'Single']), 'The Verve')!;
+      expect(origineel.jaar, 1997);
+      expect(genoegVoorEenJaar([origineel, origineel, origineel]), isTrue);
+      expect(uitgaveUitZoekregel(regel('1997', ['CD', 'Compilation', 'Unofficial Release']), 'The Verve'), isNull,
+          reason: 'een bootleg telt nergens voor');
+      expect(uitgaveUitZoekregel(regel('1968', ['LP'], titel: 'Leon Sash - Sash!'), 'Sash!'), isNull,
+          reason: 'het artiestveld zoekt op een deel van de naam');
     });
 
     test('DE VAL: een radio-uitzending is een live-opname, geen radio-edit', () {

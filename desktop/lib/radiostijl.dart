@@ -163,6 +163,39 @@ final _klassiekStijl = RegExp(r'hard rock|glam|heavy metal|thrash|speed metal|ao
 bool isBootleg(Iterable<String> formaten) =>
     formaten.any((f) => f.toLowerCase().contains('unofficial'));
 
+/// Een heruitgave: het formaat zegt "Reissue" of "Remastered". Die telt mee voor de stijl, maar niet
+/// voor het JAAR — dat is het jaar van de heruitgave en niet dat van het nummer.
+///
+/// Gemeten op 27-09-2026: Discogs gaf voor "The Verve — The Drugs Don't Work" (met apostrof) alleen
+/// drie uitgaven, alle drie de heruitgave van Urban Hymns uit 2017, en een radio vanaf Zombie weerde
+/// het nummer als "uit 2017". Over vijftien gemeten nummers verandert deze regel er twee: The Drugs
+/// Don't Work 2017 → 1997 en No Doubt "Don't Speak" 2001 → 1996. Bon Jovi, Snap!, Mudhoney, Bob
+/// Marley en de rest houden hun jaar.
+bool isHeruitgave(Iterable<String> formaten) =>
+    formaten.any((f) => RegExp('reissue|remaster', caseSensitive: false).hasMatch(f));
+
+/// Eén regel uit Discogs' zoekantwoord als [DiscogsUitgave], of null als hij niet meetelt: niet van
+/// [artiest] (het artiestveld zoekt op een DEEL van de naam — "Sash!" vond "Leon Sash") of een
+/// bootleg ([isBootleg]). Een heruitgave krijgt geen jaar ([isHeruitgave]).
+DiscogsUitgave? uitgaveUitZoekregel(Map<String, dynamic> r, String artiest) {
+  if (!uitgaveVanArtiest('${r['title'] ?? ''}', artiest)) return null;
+  List<String> tekst(Object? v) => [for (final x in (v as List? ?? const [])) '$x'];
+  final formaten = tekst(r['format']);
+  // Een bootleg telt niet mee. Gemeten op 26-09-2026: het vroegste jaar van "Smells Like Teen
+  // Spirit" kwam van een onofficiële "Bleach"-cd uit 1989 met het nummer als bonus — twee jaar vóór
+  // het nummer bestond.
+  if (isBootleg(formaten)) return null;
+  return (
+    jaar: isHeruitgave(formaten) ? null : int.tryParse('${r['year'] ?? ''}'),
+    genres: tekst(r['genre']),
+    stijlen: tekst(r['style']),
+  );
+}
+
+/// Genoeg uitgaven met een jaar om de vrije zoekvraag over te slaan: drie. Een heruitgave telt niet —
+/// anders bleef het bij de drie heruitgaven van The Drugs Don't Work.
+bool genoegVoorEenJaar(List<DiscogsUitgave> uitgaven) => uitgaven.where((u) => u.jaar != null).length >= 3;
+
 /// De tak van één uitgave voor [meerderheidTak]: [rockTak], en een rockuitgave die van geen tak iets
 /// zegt ("Prog Rock", "Psychedelic Rock") telt als 'gemengd' — een stem voor geen van beide.
 ///
@@ -385,7 +418,10 @@ List<DiscogsUitgave>? samenUitgaven(List<DiscogsUitgave> eerst, List<DiscogsUitg
 ///
 /// 3: het jaar van een Deezer-album ("d:") telt geen heruitgave meer — "Stupid Girl" van Garbage was
 /// "uit 2015" door zijn 20th Anniversary Edition (27-09-2026).
-const int kStijlboekVersie = 3;
+///
+/// 4: ook bij Discogs telt een heruitgave niet voor het jaar ([isHeruitgave]) — "The Drugs Don't Work"
+/// was "uit 2017" (27-09-2026).
+const int kStijlboekVersie = 4;
 
 /// De feiten ophalen en onthouden. De bronnen zijn haken, zodat een toets ze kan invullen.
 ///
@@ -421,7 +457,7 @@ class Stijlboek {
 
   // Een geheugen van een oudere [kStijlboekVersie]: dan zijn de regels voor een NUMMER veranderd, en
   // een nummer dat al eens opgezocht was zou anders nooit meer onder de nieuwe regels vallen. Alleen
-  // wat die versie veranderde weg — "n:" onder 2, het Deezer-jaar ("d:") onder 3 — en nooit het genre
+  // wat die versie veranderde weg — "n:" onder 4, het Deezer-jaar ("d:") onder 3 — en nooit het genre
   // van een artiest: elke vraag aan TheAudioDB kost drie seconden, en na een update liep zo elke
   // keuring tegen zijn tijdslimiet (tweede beoordeling van 26-09-2026).
   Future<Map<String, dynamic>> _lees() => _laden ??= () async {
@@ -431,7 +467,7 @@ class Stijlboek {
             final v = j['_versie'];
             if (v != kStijlboekVersie) {
               final oud = v is int ? v : 0;
-              j.removeWhere((k, _) => (oud < 2 && k.startsWith('n:')) || (oud < 3 && k.startsWith('d:')));
+              j.removeWhere((k, _) => (oud < 4 && k.startsWith('n:')) || (oud < 3 && k.startsWith('d:')));
               j['_versie'] = kStijlboekVersie;
             }
             return j;
