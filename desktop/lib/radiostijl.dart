@@ -29,6 +29,7 @@
 /// en onthoudt ze op schijf.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -234,6 +235,31 @@ typedef Nummerstijl = ({Set<Stijlfamilie> families, int? jaar});
 
 /// Het oordeel, met de reden in gewone taal — voor het logboek.
 typedef Stijloordeel = ({bool mag, String waarom});
+
+/// Een nee van alleen de rocktak, voor een nummer van Deezer terwijl de lijst van het model nog
+/// onderweg is: eerst die lijst afwachten (hoogstens [geduld]). Koos het model het nummer zelf, dan
+/// telt de tak niet — zie `Stijlboek.keur`, `doorModel`.
+///
+/// Op 27-09-2026, radio vanaf Zombie: "You Oughta Know" kwam via Deezer elf seconden vóór de lijst van
+/// het model binnen en viel op de tak af. Toen het model hem zelf koos, liet de radio die keuze weg:
+/// het nummer stond al in het plan, afgekeurd.
+///
+/// [zonderTak] is hetzelfde oordeel zonder de tak; [doorModel] kijkt of het model het nummer koos.
+Future<Stijloordeel> naLijstVanModel(Stijloordeel o,
+    {required Future<Stijloordeel> Function() zonderTak,
+    required Future<void> lijst,
+    required bool Function() doorModel,
+    Duration geduld = const Duration(seconds: 30)}) async {
+  if (o.mag || doorModel()) return o;
+  final z = await zonderTak();
+  if (!z.mag) return o; // niet de tak zei nee, maar het tijdvak of de familie
+  try {
+    await lijst.timeout(geduld);
+  } on TimeoutException {
+    return o;
+  }
+  return doorModel() ? z : o;
+}
 
 /// Hoeveel jaar een nummer van het zaad mag liggen, per familie van het zaad.
 ///

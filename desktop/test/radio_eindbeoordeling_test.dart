@@ -8,6 +8,7 @@
 /// naam waaronder het gevonden werd.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -933,6 +934,52 @@ void main() {
           reason: 'van Deezer blijft de tak gewoon keuren');
       expect((await b.keur('Bon Jovi', 'Keep the Faith', zaad, zaadTak: 'alternatief')).mag, isFalse,
           reason: 'daar is de tak voor: Bon Jovi in een Nirvana-radio');
+    });
+
+    group('een nee van de tak vóór de lijst van het model', () {
+      const nee = (mag: false, waarom: 'rock, maar klassiek en niet alternatief');
+      const ja = (mag: true, waarom: 'past');
+
+      test('DE KERN: koos het model het nummer, dan komt het er alsnog in', () async {
+        final lijst = Completer<void>();
+        final gekozen = <String>{};
+        final oordeel = naLijstVanModel(nee,
+            zonderTak: () async => ja,
+            lijst: lijst.future,
+            doorModel: () => gekozen.contains('you oughta know'));
+        // Elf seconden later — hier tien milliseconden: het model noemt hem.
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        gekozen.add('you oughta know');
+        lijst.complete();
+        expect((await oordeel).mag, isTrue,
+            reason: '"You Oughta Know" viel via Deezer af, en daarna liet de radio de keuze van het model weg');
+      });
+
+      test('DE VAL: koos het model hem niet, dan blijft het nee', () async {
+        final lijst = Completer<void>()..complete();
+        expect((await naLijstVanModel(nee, zonderTak: () async => ja, lijst: lijst.future, doorModel: () => false)).mag,
+            isFalse, reason: 'Bon Jovi in een Nirvana-radio blijft eruit');
+      });
+
+      test('DE GRENS: een nee van het tijdvak wacht niet op het model', () async {
+        final nooit = Completer<void>();
+        final o = await naLijstVanModel((mag: false, waarom: 'uit 2003, het zaad is van 1993'),
+            zonderTak: () async => (mag: false, waarom: 'uit 2003, het zaad is van 1993'),
+            lijst: nooit.future,
+            doorModel: () => false,
+            geduld: const Duration(hours: 1));
+        expect(o.mag, isFalse, reason: 'Keane — anders hield elke afwijzing een haalplek bezet');
+      });
+
+      test('DE GRENS: geeft het model niets, dan blijft het nee na het geduld', () async {
+        final nooit = Completer<void>();
+        final o = await naLijstVanModel(nee,
+            zonderTak: () async => ja,
+            lijst: nooit.future,
+            doorModel: () => false,
+            geduld: const Duration(milliseconds: 20));
+        expect(o.mag, isFalse);
+      });
     });
 
     test('DE VAL: het jaar van een heruitgave is niet het jaar van het nummer', () async {

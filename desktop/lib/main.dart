@@ -27,7 +27,7 @@ import 'radiokeuze.dart';
 import 'radiobestand.dart' show kRadioSpeling;
 import 'radiolijst.dart' show AiNummer, kMinModelNummers;
 import 'radiosmaak.dart';
-import 'radiostijl.dart' show Stijlboek, Stijlfamilie, Stijloordeel, Zaadstijl, sfeerBeslistFamilie;
+import 'radiostijl.dart' show Stijlboek, Stijlfamilie, Stijloordeel, Zaadstijl, naLijstVanModel, sfeerBeslistFamilie;
 import 'radiovoorraad.dart' show Haalstand, RadioKeuringLater;
 import 'radioplan.dart';
 import 'oordelen.dart';
@@ -11767,9 +11767,15 @@ Future<void> startRadio(BuildContext context, String artist,
                   elkeLengte: keuring.elkeLengte));
         } catch (e) {
           log.line('radio-lijst: het model gaf niets — $e');
+        } finally {
+          keuring.lijstKlaar();
         }
       }());
+    } else {
+      keuring.lijstKlaar();
     }
+  } else {
+    keuring.lijstKlaar();
   }
   if (!context.mounted || reden == null) return;
   // Weigeren en zeggen waarom, in plaats van stilletjes alleen eigen muziek spelen. Dat laatste is
@@ -11810,6 +11816,13 @@ class _Radiokeuring {
       if (n.jaar case final j?) _jaar[_k(n.artiest, n.titel)] = j;
       _vanModel.add(_k(n.artiest, n.titel));
     }
+    lijstKlaar();
+  }
+
+  /// Klaar zodra het model zijn lijst gaf — of niets gaf, of niet gevraagd wordt. Zie [naLijstVanModel].
+  final Completer<void> _lijstBinnen = Completer<void>();
+  void lijstKlaar() {
+    if (!_lijstBinnen.isCompleted) _lijstBinnen.complete();
   }
 
   /// Wat het model zelf koos: dat koos het al op sfeer — zie [sfeerBeslistFamilie].
@@ -11857,18 +11870,22 @@ class _Radiokeuring {
     final eigenJaar = p.eigen?.year;
     final hint = _jaar[_k(p.artiest, p.titel)] ?? (eigenJaar != null && eigenJaar > 1900 ? eigenJaar : null);
     Stijloordeel o;
+    final tak = await _zaadTak;
+    Future<Stijloordeel> oordeel({required bool doorModel}) => stijlboek.keur(p.artiest, p.titel, z,
+        jaarHint: hint,
+        zaadTak: tak,
+        doorModel: doorModel,
+        familieTelt: !(sfeerJa && sfeerBeslistFamilie(z.familie)));
     try {
       // Heeft het model de sfeer goedgekeurd en is het zaad soul of jazz, dan telt alleen nog het
       // tijdvak — zie [sfeerBeslistFamilie]: Sting "Fields of Gold" hoort bij Sade, ook al noemt
       // Discogs het rock.
-      // En wat het model zelf koos, keurt de rocktak niet — zie [Stijlboek.keur].
-      o = await stijlboek
-          .keur(p.artiest, p.titel, z,
-              jaarHint: hint,
-              zaadTak: await _zaadTak,
-              doorModel: vanModel,
-              familieTelt: !(sfeerJa && sfeerBeslistFamilie(z.familie)))
-          .timeout(eigen ? _geduldEigen : _geduld);
+      // En wat het model zelf koos, keurt de rocktak niet — zie [Stijlboek.keur] en [naLijstVanModel].
+      o = await oordeel(doorModel: vanModel).timeout(eigen ? _geduldEigen : _geduld);
+      o = await naLijstVanModel(o,
+          zonderTak: () => oordeel(doorModel: true),
+          lijst: _lijstBinnen.future,
+          doorModel: () => _vanModel.contains(_k(p.artiest, p.titel)));
     } on TimeoutException {
       _wachtOfDoor(p, 'nog geen antwoord van Discogs', eigen);
       o = (mag: true, waarom: 'geen antwoord${eigen ? '' : ', na ${p.keurUitstel} keer wachten'}');
