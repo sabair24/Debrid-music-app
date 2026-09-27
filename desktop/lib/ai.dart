@@ -280,6 +280,41 @@ class AiService {
     return leesNummers(jsonUitAntwoord(body));
   }
 
+  /// Welke van [kandidaten] breken de sfeer van het zaad? De indexen (vanaf 0). Zie [sfeerPrompt].
+  ///
+  /// Zonder sleutel of zonder kandidaten een lege verzameling, en géén uitzondering: dan keurt de
+  /// radio alleen op stijl en tijdvak, zoals voorheen.
+  Future<Set<int>> weesSfeer({
+    required String artiest,
+    String? titel,
+    int? jaar,
+    List<String> stijlen = const [],
+    required List<({String artiest, String titel})> kandidaten,
+  }) async {
+    final sleutel = sleutelVan().trim();
+    if (sleutel.isEmpty || kandidaten.isEmpty) return const {};
+    final body = await _verstuur(
+      {
+        'model': kRadioModel,
+        'max_tokens': kRadioMaxTokens,
+        'output_config': {
+          'effort': 'low',
+          'format': {'type': 'json_schema', 'schema': sfeerSchema()},
+        },
+        'messages': [
+          {
+            'role': 'user',
+            'content': sfeerPrompt(
+                artiest: artiest, titel: titel, jaar: jaar, stijlen: stijlen, kandidaten: kandidaten),
+          }
+        ],
+      },
+      sleutel,
+      werkruimteVan().trim(),
+    );
+    return leesSfeer(jsonUitAntwoord(body), kandidaten.length);
+  }
+
   /// Werkt deze sleutel? Eén klein verzoek, en een antwoord in gewone taal.
   ///
   /// **Waarom dit er is.** Saber op 12-09-2026, met een schermafdruk van de Console erbij: *"maar ik

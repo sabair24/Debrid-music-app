@@ -27,8 +27,8 @@ import 'radiokeuze.dart';
 import 'radiobestand.dart' show kRadioSpeling;
 import 'radiolijst.dart' show AiNummer, kMinModelNummers;
 import 'radiosmaak.dart';
-import 'radiostijl.dart' show Stijlboek, Stijlfamilie, Stijloordeel, Zaadstijl;
-import 'radiovoorraad.dart' show Haalstand;
+import 'radiostijl.dart' show Stijlboek, Stijlfamilie, Stijloordeel, Zaadstijl, sfeerBeslistFamilie;
+import 'radiovoorraad.dart' show Haalstand, RadioKeuringLater;
 import 'radioplan.dart';
 import 'oordelen.dart';
 import 'prullenbak.dart' show heeftPrullenbak;
@@ -11654,6 +11654,7 @@ Future<void> startRadio(BuildContext context, String artist,
     );
     ai = AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace);
   }
+  keuring.model = ai;
   // Bekend, Gemengd of Ontdekken — zie `radiosmaak.dart`. Staat op het radiopaneel.
   final smaak = Radiosmaak.uit(cfg.radioSmaak);
   List<RecTrack> recs;
@@ -11671,6 +11672,9 @@ Future<void> startRadio(BuildContext context, String artist,
   // pas bij als hij gekeurd is — zie [_voegGekeurdBij]. Behalve die van de zaadartiest zelf: die
   // keurt [_Radiokeuring.keur] toch goed, en zo staat er meteen iets in de rij.
   final plan = _radioplan(recs, lib, zaadArtiest: artist, zaad: zaad, zaadTitel: zaadTitel);
+  // De voorstellen van Deezer ook op sfeer laten keuren — zie [_Radiokeuring.vraagSfeer]. Meteen, zodat
+  // het antwoord er is voordat de eerste haal begint.
+  keuring.vraagSfeer(plan);
   final zelf = artiestSleutel(artist);
   int? gestart;
   final reden = await radio.start([
@@ -11781,8 +11785,12 @@ class _Radiokeuring {
     lijst = nummers;
     for (final n in nummers) {
       if (n.jaar case final j?) _jaar[_k(n.artiest, n.titel)] = j;
+      _vanModel.add(_k(n.artiest, n.titel));
     }
   }
+
+  /// Wat het model zelf koos: dat koos het al op sfeer — zie [sfeerBeslistFamilie].
+  final Set<String> _vanModel = {};
 
   /// Past [p] bij deze radio? De zaadartiest zelf altijd: die IS de stijl.
   ///
@@ -11790,8 +11798,32 @@ class _Radiokeuring {
   /// (3 s), en die rijen deelt ze met het verrijken op de achtergrond — zonder grens konden alle acht
   /// haalplekken minutenlang op een oordeel wachten (review van 26-09-2026). Geen antwoord op tijd
   /// telt als "niets bekend": doorlaten.
-  Future<bool> keur(Radioplek p) async {
+  ///
+  /// Behalve voor een plek die nog gehaald moet worden: die WACHT als er geen antwoord is
+  /// ([RadioKeuringLater]), hoogstens [_kKeurUitstel] keer. Op 27-09-2026, radio vanaf Sade, gingen
+  /// zo veertien nummers ongekeurd door in de eerste minuut, en daar zat "Smooth Criminal" bij. Eigen
+  /// nummers ([eigen]) wachten gewoon langer: die hoeven nergens heen.
+  ///
+  /// En eerst de SFEER, als het model die gaf — zie [vraagSfeer]. Zegt het model nee, dan hoeft
+  /// Discogs niet gevraagd, en die rij is de krapste.
+  Future<bool> keur(Radioplek p, {bool eigen = false}) async {
     if (artiestSleutel(p.artiest) == artiestSleutel(artiest)) return true;
+    final sfeer = _sfeer[_k(p.artiest, p.titel)];
+    var sfeerJa = _vanModel.contains(_k(p.artiest, p.titel));
+    if (sfeer != null) {
+      bool? past;
+      try {
+        past = await sfeer.timeout(eigen ? _geduldEigen : _geduldSfeer);
+      } on TimeoutException {
+        past = null;
+      }
+      if (past == false) {
+        log.line('radio-keuring "${p.artiest} — ${p.titel}": NEE — past niet in de sfeer (het model)');
+        return false;
+      }
+      if (past == null) _wachtOfDoor(p, 'nog geen sfeeroordeel', eigen);
+      if (past == true) sfeerJa = true;
+    }
     final z = await zaadStijl;
     // Over het zaad weten we niets: dan zegt geen enkele regel nee, en hoeft er niets gevraagd.
     if (z.familie == null && z.jaar == null) return true;
@@ -11802,11 +11834,18 @@ class _Radiokeuring {
     final hint = _jaar[_k(p.artiest, p.titel)] ?? (eigenJaar != null && eigenJaar > 1900 ? eigenJaar : null);
     Stijloordeel o;
     try {
+      // Heeft het model de sfeer goedgekeurd en is het zaad soul of jazz, dan telt alleen nog het
+      // tijdvak — zie [sfeerBeslistFamilie]: Sting "Fields of Gold" hoort bij Sade, ook al noemt
+      // Discogs het rock.
       o = await stijlboek
-          .keur(p.artiest, p.titel, z, jaarHint: hint, zaadTak: await _zaadTak)
-          .timeout(_geduld);
+          .keur(p.artiest, p.titel, z,
+              jaarHint: hint,
+              zaadTak: await _zaadTak,
+              familieTelt: !(sfeerJa && sfeerBeslistFamilie(z.familie)))
+          .timeout(eigen ? _geduldEigen : _geduld);
     } on TimeoutException {
-      o = (mag: true, waarom: 'geen antwoord binnen ${_geduld.inSeconds} s');
+      _wachtOfDoor(p, 'nog geen antwoord van Discogs', eigen);
+      o = (mag: true, waarom: 'geen antwoord${eigen ? '' : ', na ${p.keurUitstel} keer wachten'}');
     }
     log.line('radio-keuring "${p.artiest} — ${p.titel}": ${o.mag ? 'ja' : 'NEE'} — ${o.waarom}');
     // Het jaar reist mee naar de download: met een jaar zijn de tags gezaghebbend en schrijft de radio
@@ -11822,6 +11861,62 @@ class _Radiokeuring {
   }
 
   static const _geduld = Duration(seconds: 15);
+  static const _geduldSfeer = Duration(seconds: 30);
+  static const _geduldEigen = Duration(seconds: 90);
+  static const _kKeurUitstel = 4;
+
+  /// Nog geen oordeel: een plek die gehaald moet worden wacht ([RadioKeuringLater]) tot hij
+  /// [_kKeurUitstel] keer gewacht heeft; daarna, en voor eigen muziek, gaat de keuring verder zonder.
+  void _wachtOfDoor(Radioplek p, String waarom, bool eigen) {
+    if (eigen || p.keurUitstel >= _kKeurUitstel) return;
+    p.keurUitstel++;
+    log.line('radio-keuring "${p.artiest} — ${p.titel}": $waarom — straks opnieuw (${p.keurUitstel})');
+    throw const RadioKeuringLater();
+  }
+
+  /// Het model, als dat er is — voor [vraagSfeer]. Achteraf gezet: de keuring bestaat al voordat
+  /// bekend is of er een sleutel is.
+  AiService? model;
+
+  /// Per liedje ([_k]) of het in de sfeer past, zodra het model antwoordde.
+  final Map<String, Future<bool>> _sfeer = {};
+
+  /// Vraag het model welke van [plekken] de SFEER van het zaad breken — zie `sfeerPrompt`. Eén vraag
+  /// voor de hele lijst; [keur] wacht per plek op het antwoord. De zaadartiest en wat al gevraagd is
+  /// gaan niet mee.
+  void vraagSfeer(List<Radioplek> plekken) {
+    final m = model;
+    if (m == null) return;
+    final zelf = artiestSleutel(artiest);
+    final nieuw = [
+      for (final p in plekken)
+        if (artiestSleutel(p.artiest) != zelf && !_sfeer.containsKey(_k(p.artiest, p.titel))) p
+    ];
+    if (nieuw.isEmpty) return;
+    final antwoord = () async {
+      final z = await zaadStijl;
+      final t = zaadTitel;
+      final stijlen = t == null ? const <String>[] : await stijlboek.stijlnamen(artiest, t);
+      final weg = await m.weesSfeer(
+          artiest: artiest,
+          titel: t,
+          jaar: z.jaar,
+          stijlen: stijlen,
+          kandidaten: [for (final p in nieuw) (artiest: p.artiest, titel: p.titel)]);
+      log.line('radio-sfeer: ${weg.length} van ${nieuw.length} passen niet — '
+          '${[for (final i in weg) '${nieuw[i].artiest} — ${nieuw[i].titel}'].join('; ')}');
+      return weg;
+    }();
+    for (var i = 0; i < nieuw.length; i++) {
+      final j = i;
+      _sfeer[_k(nieuw[j].artiest, nieuw[j].titel)] =
+          antwoord.then((weg) => !weg.contains(j), onError: (Object _) => true);
+    }
+    // Een model dat niets zegt, weert niets: dan keurt de radio op stijl en tijdvak zoals voorheen.
+    unawaited(antwoord.then((_) {}, onError: (Object e) {
+      log.line('radio-sfeer: het model gaf geen oordeel — $e');
+    }));
+  }
 
   /// De rocktak van het zaad, als het een rocknummer is — zie `rockTak`. Uit het geheugen: het zaad
   /// is al opgezocht.
@@ -11874,7 +11969,7 @@ void _voegGekeurdBij(RadioBesturing radio, int sessie, int beurt, _Radiokeuring?
       if (sessie != radio.sessie || beurt != _afstemBeurt) return;
       var mag = true;
       try {
-        mag = await keuring.keur(p);
+        mag = await keuring.keur(p, eigen: true);
       } catch (_) {/* een keuring die stukloopt is geen nee */}
       if (mag && beurt == _afstemBeurt) radio.voegBij(sessie, [p]);
     }
@@ -11918,6 +12013,8 @@ Future<void> stemRadioAf(BuildContext context, Radiosmaak smaak) async {
       if (p.stand != Haalstand.wacht && p.stand != Haalstand.klaar) p.artiest
   ];
   final nieuw = _radioplan(recs, lib, zaadArtiest: artist, zaad: zaad, zaadTitel: keuring?.zaadTitel, al: blijft);
+  // Ook na het afstemmen de nieuwe voorstellen van Deezer op sfeer — zie [_Radiokeuring.vraagSfeer].
+  keuring?.vraagSfeer(nieuw);
   final zelf = artiestSleutel(artist);
   radio.stemAf(sessie, [
     for (final p in nieuw)

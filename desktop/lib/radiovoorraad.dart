@@ -58,6 +58,16 @@ class RadioLaterOpnieuw implements Exception {
   String toString() => 'Soulseek doet even niet mee: $waarom';
 }
 
+/// De keuring weet het nog niet: Discogs of het model antwoordde niet op tijd. Dan wacht de plek,
+/// in plaats van ongekeurd door te gaan — zie `RadioBesturing._haal`.
+///
+/// Gemeten op 27-09-2026, radio vanaf Sade: veertien keer "geen antwoord binnen 15 s" in de eerste
+/// minuut (de rij van Discogs is één vraag per 1,1 s, en zestig plekken vragen tegelijk), en elk van
+/// die nummers ging ongekeurd door — zo kwam Michael Jackson "Smooth Criminal" in de radio.
+class RadioKeuringLater implements Exception {
+  const RadioKeuringLater();
+}
+
 /// De haal landde op muziek die je AL HAD: het bestand op [pad] is van jou, niet van de radio.
 ///
 /// Een binnengekomen FLAC die je mp3 opvolgde, of een tweede exemplaar van een nummer dat er al lag.

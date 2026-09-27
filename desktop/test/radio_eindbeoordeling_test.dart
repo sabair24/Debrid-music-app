@@ -773,4 +773,112 @@ void main() {
           reason: 'twee benoemde varianten zijn niet vanzelf dezelfde');
     });
   });
+
+  // ── Radio vanaf Sade "Cherish the Day", 27-09-2026 ────────────────────────────────────────────
+
+  group('soul en jazz: een ruimer tijdvak, en de buren', () {
+    const sade = (familie: Stijlfamilie.jazz, jaar: 1992);
+    const freakOut = (familie: Stijlfamilie.dans, jaar: 1997);
+
+    test('DE KERN: Marvin Gaye (1982) en Amy Winehouse (2006) horen bij Sade', () {
+      expect(keurStijl(sade, (families: {Stijlfamilie.popsoul}, jaar: 1982)).mag, isTrue,
+          reason: 'met acht jaar speling viel "Sexual Healing" eruit');
+      expect(keurStijl(sade, (families: {Stijlfamilie.popsoul}, jaar: 2006)).mag, isTrue);
+      expect(keurStijl(sade, (families: {Stijlfamilie.popsoul}, jaar: 1971)).mag, isFalse,
+          reason: 'ruimer is niet eindeloos');
+    });
+
+    test('DE VAL: eurodance houdt zijn scherpe tijdvak en zijn eigen familie', () {
+      expect(keurStijl(freakOut, (families: {Stijlfamilie.dans}, jaar: 1985)).mag, isFalse);
+      expect(keurStijl(freakOut, (families: {Stijlfamilie.popsoul}, jaar: 1998)).mag, isFalse,
+          reason: 'Britney hoort niet in een eurodanceradio — dat was gemeten goed');
+    });
+
+    test('DE GRENS: welke familie welke buren heeft', () {
+      expect(tijdvakSpeling(Stijlfamilie.jazz), 20);
+      expect(tijdvakSpeling(Stijlfamilie.popsoul), 12);
+      expect(tijdvakSpeling(Stijlfamilie.dans), kTijdvakSpeling);
+      expect(tijdvakSpeling(Stijlfamilie.rock), kTijdvakSpeling);
+      expect(familiePast(Stijlfamilie.jazz, {Stijlfamilie.popsoul}), isTrue);
+      expect(familiePast(Stijlfamilie.dans, {Stijlfamilie.popsoul}), isFalse);
+      expect(sfeerBeslistFamilie(Stijlfamilie.jazz), isTrue);
+      expect(sfeerBeslistFamilie(Stijlfamilie.popsoul), isTrue);
+      expect(sfeerBeslistFamilie(Stijlfamilie.dans), isFalse);
+      expect(sfeerBeslistFamilie(Stijlfamilie.rock), isFalse);
+    });
+
+    test('DE KERN: is de sfeer goed, dan telt bij soul en jazz alleen het tijdvak', () async {
+      final map = Directory.systemTemp.createTempSync('dm_sade_');
+      addTearDown(() {
+        try {
+          map.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final b = Stijlboek(
+        bestand: File('${map.path}${Platform.pathSeparator}radiostijl.json'),
+        audioDbGenre: (_) async => 'Rock',
+        discogsNummer: (a, t) async => switch (a) {
+          'Sting' => [(jaar: 1993, genres: ['Rock'], stijlen: ['Pop Rock'])],
+          _ => [(jaar: 1971, genres: ['Funk / Soul'], stijlen: ['Soul'])],
+        },
+      );
+      expect((await b.keur('Sting', 'Fields of Gold', sade)).mag, isFalse,
+          reason: 'zonder sfeeroordeel beslist de familie, zoals voorheen');
+      expect((await b.keur('Sting', 'Fields of Gold', sade, familieTelt: false)).mag, isTrue,
+          reason: 'het model hoorde dat het bij Sade past; Discogs noemt het rock');
+      expect((await b.keur('Donny Hathaway', 'A Song for You', sade, familieTelt: false)).mag, isFalse,
+          reason: 'het tijdvak blijft gelden');
+    });
+  });
+
+  group('de sfeervraag aan het model', () {
+    const kandidaten = [
+      (artiest: 'Anita Baker', titel: 'Sweet Love'),
+      (artiest: 'Michael Jackson', titel: 'Smooth Criminal'),
+      (artiest: 'Toni Braxton', titel: 'Another Sad Love Song'),
+    ];
+
+    test('DE KERN: de vraag noemt het zaad en elk nummer met een nummer', () {
+      final v = sfeerPrompt(
+          artiest: 'Sade', titel: 'Cherish the Day', jaar: 1992, stijlen: ['Soul-Jazz'], kandidaten: kandidaten);
+      expect(v, contains('Sade - Cherish the Day (uit 1992, stijl Soul-Jazz)'));
+      expect(v, contains('2. Michael Jackson - Smooth Criminal'));
+      expect(v, contains('tempo'));
+    });
+
+    test('DE VAL: alleen nummers die in de lijst kunnen staan, vanaf nul', () {
+      expect(leesSfeer({'weg': [2, 9, 0, '3']}, kandidaten.length), {1, 2});
+      expect(leesSfeer({'nummers': [1]}, 3), isEmpty);
+      expect(leesSfeer(null, 3), isEmpty);
+    });
+
+    test('DE KERN: Smooth Criminal eruit — het antwoord komt als indexen terug', () async {
+      Map<String, dynamic>? verstuurd;
+      final ai = AiService(() => 'sk-ant-toets', client: MockClient((v) async {
+        verstuurd = jsonDecode(v.body) as Map<String, dynamic>;
+        return http.Response(
+            jsonEncode({
+              'content': [
+                {'type': 'text', 'text': jsonEncode({'weg': [2]})}
+              ],
+              'stop_reason': 'end_turn'
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'});
+      }));
+      final weg = await ai.weesSfeer(artiest: 'Sade', titel: 'Cherish the Day', kandidaten: kandidaten);
+      expect(weg, {1}, reason: 'Saber: "smooth criminal van michael jackson ?? is niet dezelfde vibe e"');
+      expect(jsonEncode(verstuurd), contains('"weg"'), reason: 'het schema vraagt om "weg"');
+    });
+
+    test('DE GRENS: zonder sleutel of zonder kandidaten geen vraag', () async {
+      var vragen = 0;
+      final ai = AiService(() => '', client: MockClient((_) async {
+        vragen++;
+        return http.Response('{}', 200);
+      }));
+      expect(await ai.weesSfeer(artiest: 'Sade', kandidaten: kandidaten), isEmpty);
+      expect(vragen, 0);
+    });
+  });
 }

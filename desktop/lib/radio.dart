@@ -56,6 +56,10 @@ class Radioplek {
   /// "Ontdekken" gooide hem weg).
   final bool zaad;
 
+  /// Hoe vaak de keuring deze plek al liet wachten omdat er nog geen antwoord was — zie
+  /// [RadioKeuringLater]. De keuring houdt het bij en geeft na een paar keer toch een oordeel.
+  int keurUitstel = 0;
+
   /// Hoe lang het volgens de catalogus duurt, en uit welk jaar het is.
   ///
   /// Allebei gaan ze mee als GEZAG naar de download, en allebei doen ze er om een eigen reden toe —
@@ -713,6 +717,13 @@ class RadioBesturing extends ChangeNotifier {
       var mag = true;
       try {
         mag = await keur(p);
+      } on RadioKeuringLater {
+        // Nog geen oordeel: terug bij wat nog gehaald moet worden. Geen rust voor de hele radio — de
+        // vraag loopt door, en de volgende tik probeert deze plek opnieuw. Zie [RadioKeuringLater].
+        if (sessie != _sessie) return;
+        p.stand = Haalstand.wacht;
+        notifyListeners();
+        return;
       } catch (_) {/* een keuring die stukloopt is geen nee */}
       if (sessie != _sessie) return;
       if (!mag) {

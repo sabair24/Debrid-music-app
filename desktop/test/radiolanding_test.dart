@@ -169,6 +169,24 @@ void main() {
     expect(nieuw, isNot(contains(ander)));
   });
 
+  test('DE KERN: een keuring zonder antwoord laat de plek wachten, niet ongekeurd door', () async {
+    var gehaald = 0;
+    final radio = RadioBesturing(
+        speler: _Speler(),
+        bron: _Bron((p) async {
+          gehaald++;
+          return null;
+        }));
+    addTearDown(radio.stop);
+    await radio.start([Radioplek(artiest: 'Michael Jackson', titel: 'Smooth Criminal')],
+        keur: (p) async => throw const RadioKeuringLater());
+    await _totAllesTerug(radio);
+    expect(radio.plan.single.stand, Haalstand.wacht,
+        reason: '27-09-2026: veertien nummers gingen zo ongekeurd door, "Smooth Criminal" erbij');
+    expect(gehaald, 0, reason: 'zonder oordeel wordt er niets gehaald');
+    expect(radio.pauze, isNull, reason: 'geen pauze voor de hele radio — alleen deze plek wacht');
+  });
+
   test('DE GRENS: een pauze heeft een reden, en de plek wacht', () async {
     final radio = RadioBesturing(
         speler: _Speler(),

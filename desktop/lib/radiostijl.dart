@@ -235,14 +235,48 @@ typedef Nummerstijl = ({Set<Stijlfamilie> families, int? jaar});
 /// Het oordeel, met de reden in gewone taal — voor het logboek.
 typedef Stijloordeel = ({bool mag, String waarom});
 
-/// Past [n] bij [zaad]? Zie de drie regels bovenaan.
-Stijloordeel keurStijl(Zaadstijl zaad, Nummerstijl n, {int speling = kTijdvakSpeling}) {
+/// Hoeveel jaar een nummer van het zaad mag liggen, per familie van het zaad.
+///
+/// Acht ([kTijdvakSpeling]) is geijkt op eurodance, een genre met een scherp tijdvak — en voor rock
+/// houdt het Nickelback (2001) uit een Nirvana-radio (1991). Maar op 27-09-2026, radio vanaf Sade
+/// "Cherish the Day" (1992), weerde het Marvin Gaye "Sexual Healing" (1982), Eurythmics (1983),
+/// Barry White (1978), Amy Winehouse (2006) en Corinne Bailey Rae (2005): precies wat er bij Sade
+/// hoort. Soul en jazz zijn tijdloos; pop zit ertussen.
+int tijdvakSpeling(Stijlfamilie? zaad) => switch (zaad) {
+      Stijlfamilie.jazz => 20,
+      Stijlfamilie.popsoul => 12,
+      _ => kTijdvakSpeling,
+    };
+
+/// Welke families er naast die van het zaad zelf bij horen. Een jazzy zaad als Sade — Discogs:
+/// Soul-Jazz, Smooth Jazz — hoort bij soul en R&B; eerst viel Jill Scott eruit als "popsoul, niet
+/// jazz" (27-09-2026). Niet andersom voor dance: een eurodanceradio weerde popsoul (Britney, Spice
+/// Girls) terecht.
+const Map<Stijlfamilie, Set<Stijlfamilie>> _buurfamilies = {
+  Stijlfamilie.jazz: {Stijlfamilie.popsoul},
+};
+
+/// Beslist de SFEER — het oordeel van het model — bij dit zaad boven de familie van Discogs?
+///
+/// Bij soul en jazz wel: daar is de familie te grof. Op 27-09-2026, radio vanaf Sade, noemde het
+/// model Sting "Fields of Gold", Everything But The Girl "Missing" en Queen "Cool Cat" passend van
+/// sfeer — en Discogs rock, dance, rock. Bij dance en rock niet: daar houdt de familie Britney uit een
+/// eurodanceradio en Bon Jovi uit een Nirvana-radio, en dat is gemeten goed.
+bool sfeerBeslistFamilie(Stijlfamilie? zaad) => zaad == Stijlfamilie.jazz || zaad == Stijlfamilie.popsoul;
+
+/// Past een nummer met [families] bij een zaad van familie [zaad]? Zie [_buurfamilies].
+bool familiePast(Stijlfamilie zaad, Set<Stijlfamilie> families) =>
+    families.contains(zaad) || families.any((f) => _buurfamilies[zaad]?.contains(f) ?? false);
+
+/// Past [n] bij [zaad]? Zie de drie regels bovenaan. [speling] is standaard die van de familie van
+/// het zaad — zie [tijdvakSpeling].
+Stijloordeel keurStijl(Zaadstijl zaad, Nummerstijl n, {int? speling}) {
   final zj = zaad.jaar, j = n.jaar;
-  if (zj != null && j != null && (zj - j).abs() > speling) {
+  if (zj != null && j != null && (zj - j).abs() > (speling ?? tijdvakSpeling(zaad.familie))) {
     return (mag: false, waarom: 'uit $j, het zaad is van $zj');
   }
   final zf = zaad.familie;
-  if (zf != null && n.families.isNotEmpty && !n.families.contains(zf)) {
+  if (zf != null && n.families.isNotEmpty && !familiePast(zf, n.families)) {
     return (mag: false, waarom: 'stijl ${n.families.map((f) => f.name).join('/')}, niet ${zf.name}');
   }
   return (mag: true, waarom: n.families.isEmpty && j == null ? 'niets bekend' : 'past');
@@ -537,15 +571,18 @@ class Stijlboek {
   ///
   /// [zaadTak]: bij een rockzaad de tak ervan ([rockTak]). Zegt Discogs van dit nummer de ándere tak,
   /// dan valt het af; weet het niets, dan niet.
+  ///
+  /// [familieTelt] onwaar: alleen het tijdvak. Voor een zaad waarvan de SFEER al door het model
+  /// gekeurd is — zie [sfeerBeslistFamilie].
   Future<Stijloordeel> keur(String artiest, String titel, Zaadstijl zaad,
-      {int? jaarHint, String? zaadTak}) async {
+      {int? jaarHint, String? zaadTak, bool familieTelt = true}) async {
     final n = await nummer(artiest, titel);
     final jaar = n.jaar ?? jaarHint ?? (zaad.jaar == null ? null : await _deezerJaar(artiest, titel));
     final eerst = keurStijl(zaad, (families: const {}, jaar: jaar));
-    if (!eerst.mag) return eerst;
+    if (!eerst.mag || !familieTelt) return eerst;
     final zf = zaad.familie;
     final Stijloordeel o;
-    if (zf == null || n.families.contains(zf)) {
+    if (zf == null || familiePast(zf, n.families)) {
       o = keurStijl(zaad, (families: n.families, jaar: jaar));
     } else {
       final a = await this.artiest(artiest);

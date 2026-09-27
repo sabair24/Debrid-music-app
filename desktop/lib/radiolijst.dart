@@ -71,6 +71,67 @@ Map<String, dynamic> nummersSchema() => {
       'additionalProperties': false,
     };
 
+// ── De sfeerkeuring ─────────────────────────────────────────────────────────────────────────────
+
+/// Het antwoord op [sfeerPrompt]: de nummers die weg moeten.
+Map<String, dynamic> sfeerSchema() => {
+      'type': 'object',
+      'properties': {
+        'weg': {
+          'type': 'array',
+          'items': {'type': 'integer'},
+          'description': 'De nummers uit de lijst (1 tot en met het laatste) die NIET in de sfeer passen.',
+        },
+      },
+      'required': ['weg'],
+      'additionalProperties': false,
+    };
+
+/// Welke van [kandidaten] passen niet in de SFEER van het zaad — tempo, energie, stemming?
+///
+/// **Waarom dit er is.** Saber op 27-09-2026, radio vanaf Sade "Cherish the Day": *"smooth criminal
+/// van michael jackson ?? is niet dezelfde vibe e"*. Discogs en TheAudioDB kennen een familie
+/// (pop/soul) en een jaar (1987), en die klopten allebei; wat niet klopte is iets wat in geen enkel
+/// label staat. Het model hoort dat wel. De voorstellen van Deezer gaan daarom als één lijst naar het
+/// model; de eigen lijst van het model niet, want die koos het al op sfeer.
+String sfeerPrompt({
+  required String artiest,
+  String? titel,
+  int? jaar,
+  List<String> stijlen = const [],
+  required List<({String artiest, String titel})> kandidaten,
+}) {
+  final zaad = titel == null || titel.trim().isEmpty ? artiest : '$artiest - $titel';
+  final feiten = [
+    if (jaar != null) 'uit $jaar',
+    if (stijlen.isNotEmpty) 'stijl ${stijlen.join(', ')}',
+  ].join(', ');
+  return '''
+Een radio rond: $zaad${feiten.isEmpty ? '' : ' ($feiten)'}
+
+Een ander systeem stelde de nummers hieronder voor. Welke passen NIET in de sfeer van dit nummer?
+Kijk naar tempo, energie, stemming en klank - niet alleen naar het genre of het jaar. Een radio rond
+een rustig, zwoel soulnummer heeft geen uptempo dancepop; een radio rond een eurodanceplaat heeft geen
+trage ballads. Wees streng: twijfel je of een nummer de sfeer breekt, noem het dan.
+
+${[for (var i = 0; i < kandidaten.length; i++) '${i + 1}. ${kandidaten[i].artiest} - ${kandidaten[i].titel}'].join('\n')}
+
+Geef de nummers terug die weg moeten.
+''';
+}
+
+/// De indexen (vanaf 0) die weg moeten, uit het antwoord op [sfeerPrompt]. Alleen wat in de lijst
+/// van [aantal] kan staan.
+Set<int> leesSfeer(Object? json, int aantal) {
+  if (json is! Map) return const {};
+  final weg = json['weg'];
+  if (weg is! List) return const {};
+  return {
+    for (final v in weg)
+      if ((v is num ? v.toInt() : int.tryParse('$v')) case final n? when n >= 1 && n <= aantal) n - 1
+  };
+}
+
 /// Wat de stand van Bekend ↔ Ontdekken van het model vraagt.
 String _smaakZin(Radiosmaak smaak) => switch (smaak) {
       Radiosmaak.bekend =>
