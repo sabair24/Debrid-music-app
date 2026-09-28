@@ -8979,23 +8979,27 @@ Future<bool> rutrackerControle(BuildContext context) async {
   final online = context.read<OnlineService>();
   final melding = ScaffoldMessenger.of(context);
   final sessie = await doeRutrackerControle(context);
-  if (sessie == null || !sessie.heeftClearance) {
+  if (sessie == null || !sessie.doorgelaten) {
     melding.showSnackBar(const SnackBar(
-      content: Text('Geen doorgang binnengekomen — het venster ging dicht voordat de controle klaar '
-          'was. Probeer het nog eens en wacht tot het vanzelf sluit.'),
+      content: Text('Het venster ging dicht voordat de controle klaar was. Probeer het nog eens en '
+          'wacht tot het vanzelf sluit.'),
       duration: Duration(seconds: 8),
     ));
     return false;
   }
-  settings.rutrackerCookie = doorgangErbij(settings.rutrackerCookie, sessie.cookie);
-  if (sessie.ua.isNotEmpty) settings.rutrackerUa = sessie.ua;
-  await settings.save();
-  var zin = 'Doorgang binnen — RuTracker doet weer mee.';
+  // Doorgelaten. Een verse cf_clearance gaat mee als hij er is; zonder is het venster ook zonder
+  // binnengekomen, en dan werkt het verborgen venster — dezelfde koekjeslade — evengoed.
+  if (sessie.heeftClearance) {
+    settings.rutrackerCookie = doorgangErbij(settings.rutrackerCookie, sessie.cookie);
+    if (sessie.ua.isNotEmpty) settings.rutrackerUa = sessie.ua;
+    await settings.save();
+  }
+  var zin = 'Doorgelaten — RuTracker doet weer mee.';
   if (online is RemoteOnlineService) {
     final pc = await online.stuurRutrackerSessie(settings.rutrackerCookie, settings.rutrackerUa);
     zin = pc.ok
-        ? 'Doorgang binnen — ook op de pc, die het zoeken doet.'
-        : 'Doorgang binnen op dit toestel, maar de pc niet: ${pc.reden}';
+        ? 'Doorgelaten — ook op de pc, die het zoeken doet.'
+        : 'Doorgelaten op dit toestel, maar de pc niet: ${pc.reden}';
   }
   melding.showSnackBar(SnackBar(content: Text(zin), duration: const Duration(seconds: 6)));
   return true;

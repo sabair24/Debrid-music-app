@@ -143,10 +143,16 @@ bool get rutrackerVensterKan =>
 /// bij, zie de uitleg bovenaan.
 @immutable
 class RtSessie {
-  const RtSessie({required this.cookie, required this.ua});
+  const RtSessie({required this.cookie, required this.ua, this.doorgelaten = false});
 
   final String cookie;
   final String ua;
+
+  /// Stond het controlevenster op een echte RuTracker-pagina toen het sloot ([jsDoorgelaten])? Dat is
+  /// het antwoord op de controle — óók zonder `cf_clearance`. Gemeten op 28-09-2026: de app kreeg de
+  /// controle op dat moment niet eens, het venster was binnen twee seconden door, en de melding zei
+  /// "Geen doorgang binnengekomen".
+  final bool doorgelaten;
 
   /// Ben je aangemeld? Zonder `bb_session` heb je alleen een Cloudflare-doorgang en geen account.
   bool get heeftSessie => cookie.contains('bb_session=');
@@ -275,11 +281,14 @@ class _RutrackerLoginPaginaState extends State<RutrackerLoginPagina> {
     if (nieuw != _stand) setState(() => _stand = nieuw);
     if (!door) return;
     final sessie = await _oogst();
-    if (!mounted || sessie == null) return;
+    if (!mounted) return;
     _klaar = true;
     _klok?.cancel();
     await Future<void>.delayed(const Duration(milliseconds: 400));
-    if (mounted) Navigator.of(context).pop(sessie);
+    if (mounted) {
+      Navigator.of(context)
+          .pop(RtSessie(cookie: sessie?.cookie ?? '', ua: sessie?.ua ?? '', doorgelaten: true));
+    }
   }
 
   /// De koekjes en het kenmerk van dit venster, samen.

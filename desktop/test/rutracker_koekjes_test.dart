@@ -278,6 +278,16 @@ void main() {
           allOf(contains('cf_clearance=vers'), contains('bb_session=uit-het-venster')));
     });
 
+    test('DE GRENS: doorgelaten is een antwoord, ook zonder cf_clearance', () {
+      // 28-09-2026: het venster was binnen twee seconden door — de app kreeg de controle niet eens — en
+      // de melding zei "Geen doorgang binnengekomen". Alleen een gesloten venster zonder doorgang telt
+      // als mislukt.
+      expect(const RtSessie(cookie: 'bb_session=s', ua: 'x').doorgelaten, isFalse);
+      const door = RtSessie(cookie: 'bb_session=s', ua: 'x', doorgelaten: true);
+      expect(door.doorgelaten, isTrue);
+      expect(door.heeftClearance, isFalse);
+    });
+
     test('DE VAL: de controle wordt herkend aan de pagina, niet aan de titel', () {
       // Gemeten op 28-09-2026: in een Nederlandse Windows heet de wachtpagina "Even geduld..." — en
       // op de Engelse titel keken zowel FlareSolverr ("Challenge not detected!") als dit venster.
