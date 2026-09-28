@@ -30,6 +30,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import 'rutracker.dart' show rutrackerSpoor;
 import 'rutracker_login.dart';
 
 /// Het adres waar het onzichtbare venster op geparkeerd wordt.
@@ -174,11 +175,14 @@ try {
       await klaar.future.timeout(geduld, onTimeout: () {});
       while (DateTime.now().isBefore(einde)) {
         if (await _isDoorgelaten()) {
+          rutrackerSpoor('venster: opgebouwd en doorgelaten');
           wacht.complete(true);
           return true;
         }
         await Future<void>.delayed(const Duration(milliseconds: 500));
       }
+      rutrackerSpoor('venster: opgebouwd maar NIET doorgelaten na ${geduld.inSeconds} s — '
+          'staat op ${(await _web?.getUrl())?.path ?? '?'}, titel "${await _web?.getTitle() ?? '?'}"');
       // Niet binnengekomen. Het venster blijft staan: een volgende poging heeft er baat bij dat de
       // uitdaging inmiddels wél opgelost is.
       wacht.complete(false);

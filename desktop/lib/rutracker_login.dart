@@ -31,6 +31,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import 'rutracker.dart' show rutrackerSpoor;
+
 /// Waar de aanmelding begint. `login.php` en niet de voorpagina: dan sta je meteen op het formulier.
 const kRutrackerLoginUrl = 'https://rutracker.org/forum/login.php';
 
@@ -254,6 +256,18 @@ class _RutrackerLoginPaginaState extends State<RutrackerLoginPagina> {
     try {
       door = await web.evaluateJavascript(source: jsDoorgelaten) == true;
     } catch (_) {/* een pagina die nog laadt, zegt nog niets */}
+    if (!mounted) return;
+    // Wat het venster ziet, in het logboek — zie [rutrackerSpoor]. Alleen de NAMEN van de koekjes.
+    try {
+      final adres = (await web.getUrl())?.path ?? '?';
+      final titel = await web.getTitle() ?? '?';
+      final oogst = door ? await _oogst() : null;
+      final namen = oogst == null
+          ? '-'
+          : oogst.cookie.split(';').map((d) => d.split('=').first.trim()).where((n) => n.isNotEmpty).join(',');
+      rutrackerSpoor('controle: $adres "$titel" door=$door koekjes=[$namen] '
+          'clearance=${oogst?.heeftClearance ?? false} ua=${oogst?.ua.length ?? 0}');
+    } catch (_) {/* meten mag het venster niet breken */}
     if (!mounted) return;
     final nieuw = door
         ? 'Doorgelaten ✓'

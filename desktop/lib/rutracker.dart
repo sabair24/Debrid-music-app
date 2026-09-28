@@ -39,6 +39,23 @@ class RtLogin {
 
 /// RuTracker torrent source: form login (with CAPTCHA when asked) → cookie →
 /// tracker.php search (scraped). The bb_session cookie is cached in settings.
+/// Eén regel in `rutracker.log`. Openbaar, zodat het verborgen venster en het controlevenster er ook
+/// in schrijven: op 28-09-2026 ging het controlevenster na drie seconden dicht zonder `cf_clearance`,
+/// en het verborgen venster gaf 403 — en geen van beide zei waarom. Nooit de waarde van een koekje.
+void rutrackerSpoor(String s) {
+  try {
+    WarmLog('$appDir${Platform.pathSeparator}rutracker.log').line(s);
+  } catch (_) {/* een logboek mag nooit de zaak breken die het bekijkt */}
+}
+
+/// Wat een opgehaalde pagina is, in een paar woorden voor het logboek: status, lengte, en of het de
+/// Cloudflare-controle was. Zie [RuTrackerService.cloudflareUitdaging].
+String rutrackerPaginaKenmerk(int status, List<int> bytes) {
+  final tekst = latin1.decode(bytes, allowInvalid: true);
+  final controle = RuTrackerService.cloudflareUitdaging(const {}, tekst);
+  return '$status, ${bytes.length} bytes${controle ? ', CONTROLE' : ''}';
+}
+
 class RuTrackerService {
   final AppSettings settings;
   RuTrackerService(this.settings);
@@ -303,11 +320,7 @@ class RuTrackerService {
   /// fout, en het koekje op schijf verandert niet. De app praat aantoonbaar met FlareSolverr — een
   /// open verbinding naar poort 8191, dertig seconden lang — maar wélke stap daarna afketst was
   /// nergens te zien. Elke verklaring bleef een gok, en daar heeft dit huis een logboek voor.
-  void _spoor(String s) {
-    try {
-      WarmLog('$appDir${Platform.pathSeparator}rutracker.log').line(s);
-    } catch (_) {/* een logboek mag nooit de zaak breken die het bekijkt */}
-  }
+  void _spoor(String s) => rutrackerSpoor(s);
 
   /// De pagina waarlangs een verse doorgang gehaald wordt.
   ///
@@ -593,6 +606,8 @@ class RuTrackerService {
     haalReden = '';
     final heeftCurl = await curlBeschikbaar();
     final langsCurl = heeftCurl ? await _haalMetCurl(url, referer: referer) : null;
+    final pad = Uri.tryParse(url)?.path ?? url;
+    _spoor('haal $pad: curl ${langsCurl == null ? (heeftCurl ? 'geen antwoord' : 'niet aanwezig') : rutrackerPaginaKenmerk(langsCurl.status, langsCurl.bytes)}');
     // Een 403 is hier geen antwoord maar een dichte deur: doorlopen naar het venster.
     if (langsCurl != null && langsCurl.status != 403) return langsCurl;
 
@@ -604,6 +619,7 @@ class RuTrackerService {
       _laatsteVersing = DateTime.now();
       if (uitkomst.ok) {
         final nogEens = await _haalMetCurl(url, referer: referer);
+        _spoor('haal $pad: curl na verversen ${nogEens == null ? 'geen antwoord' : rutrackerPaginaKenmerk(nogEens.status, nogEens.bytes)}');
         if (nogEens != null && nogEens.status != 403) return nogEens;
       } else {
         haalReden = 'een vers koekje halen lukte ook niet: ${uitkomst.error}';
@@ -613,6 +629,7 @@ class RuTrackerService {
     final venster = viaVenster;
     if (venster != null) {
       final langsVenster = await venster(url, referer: referer);
+      _spoor('haal $pad: venster ${langsVenster == null ? 'niets (${vensterStand?.call() ?? '?'})' : rutrackerPaginaKenmerk(langsVenster.status, langsVenster.bytes)}');
       if (langsVenster != null) return langsVenster;
       haalReden = vensterStand?.call() ?? 'het browservenster gaf niets terug';
     } else {
