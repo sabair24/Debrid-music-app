@@ -227,4 +227,70 @@ void main() {
       expect(instellingen.rutrackerCookie, 'cf_clearance=c');
     });
   });
+
+  group('DE KERN: na een curl-controle eerst het venster, en een half uur alleen het venster', () {
+    late Directory map;
+    final stappen = <String>[];
+    setUp(() {
+      map = Directory.systemTemp.createTempSync('dm_rtvolgorde_');
+      setAppDirForTest(map.path);
+      stappen.clear();
+      RuTrackerService.curlDichtTot = null;
+      RuTrackerService.curlBeschikbaarVoorTest = true;
+    });
+    tearDown(() {
+      RuTrackerService.viaVenster = null;
+      RuTrackerService.curlVoorTest = null;
+      RuTrackerService.curlBeschikbaarVoorTest = null;
+      RuTrackerService.curlDichtTot = null;
+      try {
+        map.deleteSync(recursive: true);
+      } catch (_) {}
+    });
+    const controle = '<html><head><title>Even geduld...</title></head><body><script>'
+        "window._cf_chl_opt = {cFPWv: 'b'};</script></body></html>";
+    const lijst = '<html><title>RuTracker.org</title><div id="page_container">'
+        '<a href="tracker.php">Tracker</a></div></html>';
+
+    RuTrackerService dienst() => RuTrackerService(AppSettings()
+      ..rutrackerCookie = 'bb_session=s'
+      ..flaresolverrUrl = '');
+    void curl(int status, String lichaam) => RuTrackerService.curlVoorTest = (url) async {
+          stappen.add('curl');
+          return (status: status, bytes: utf8.encode(lichaam));
+        };
+    void venster(int status, String lichaam) => RuTrackerService.viaVenster = (url, {referer}) async {
+          stappen.add('venster');
+          return (status: status, bytes: utf8.encode(lichaam));
+        };
+
+    test('curl krijgt de controle: meteen het venster', () async {
+      curl(403, controle);
+      venster(200, lijst);
+      final rt = dienst();
+      await rt.search('Mad House');
+      expect(stappen, ['curl', 'venster'],
+          reason: '28-09-2026: curl 36 s, FlareSolverr 16 s, venster 0,1 s — samen boven de 50 s');
+      expect(rt.vraagtControle, isFalse);
+      expect(RuTrackerService.curlDichtTot, isNotNull);
+    });
+
+    test('daarna een half uur alleen het venster', () async {
+      curl(403, controle);
+      venster(200, lijst);
+      await dienst().search('Mad House');
+      stappen.clear();
+      await dienst().search('Absolutely Mad');
+      expect(stappen, ['venster'], reason: 'elke curl kost tientallen seconden voor een zekere 403');
+    });
+
+    test('DE GRENS: komt het venster er ook niet door, dan weer de hele weg', () async {
+      RuTrackerService.curlDichtTot = DateTime.now().add(const Duration(minutes: 10));
+      curl(200, lijst);
+      venster(403, controle);
+      await dienst().search('Mad House');
+      expect(stappen, ['venster', 'curl']);
+      expect(RuTrackerService.curlDichtTot, isNull);
+    });
+  });
 }

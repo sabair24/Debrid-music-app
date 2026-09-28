@@ -587,6 +587,16 @@ class RuTrackerService {
   /// het soort melding waar je niets aan hebt.
   static String Function()? vensterStand;
 
+  /// Hoe lang curl overgeslagen wordt nadat hij de Cloudflare-controle kreeg en het venster er wél
+  /// door kwam. Een half uur: een `cf_clearance` die je intussen haalt, maakt curl daarna weer bruikbaar,
+  /// en dan hoort dat binnen afzienbare tijd weer geprobeerd te worden.
+  static const kCurlDicht = Duration(minutes: 30);
+
+  /// Tot wanneer curl overgeslagen wordt — zie [kCurlDicht]. Statisch: er is één curl en één venster
+  /// per app, hoeveel diensten er ook gemaakt worden.
+  @visibleForTesting
+  static DateTime? curlDichtTot;
+
   /// Waarom het laatste ophalen niet lukte. Leeg als er niets misging.
   ///
   /// **Waarom dit er moest komen.** `_haal` gaf `null` terug voor drie verschillende dingen — geen
@@ -602,18 +612,48 @@ class RuTrackerService {
   /// (403 van Cloudflare) of is hij er niet (een telefoon), dan gaat het door het venster, want dat
   /// is een échte browser en lost de uitdaging zelf op. Pas als er ook geen venster is, blijft de
   /// gewone client over — die werkt dan niet beter dan voorheen, maar ook niet slechter.
+  ///
+  /// **Het venster vóór FlareSolverr, en een half uur lang vóór curl.** Gemeten op 28-09-2026, één
+  /// zoekopdracht in `rutracker.log`: curl 403 met de controle na 36 s, FlareSolverr 16 s voor niets,
+  /// het venster 200 in 0,1 s. Samen 52 s — vlak boven de 50 s die `search.dart` een bron gunt. Nu
+  /// gaat het venster eerst zodra curl de controle krijgt, en zolang curl dicht staat
+  /// ([kCurlDicht]) wordt hij helemaal overgeslagen. FlareSolverr blijft de laatste poging.
   Future<({int status, List<int> bytes})?> _haal(String url, {String? referer}) async {
     haalReden = '';
+    final pad = Uri.tryParse(url)?.path ?? url;
+    final venster = viaVenster;
+
+    // Kreeg curl kort geleden de controle en kwam het venster er wél door: meteen het venster.
+    final dicht = curlDichtTot;
+    if (venster != null && dicht != null && DateTime.now().isBefore(dicht)) {
+      final eerst = await venster(url, referer: referer);
+      _spoor('haal $pad: venster (curl staat dicht) ${eerst == null ? 'niets (${vensterStand?.call() ?? '?'})' : rutrackerPaginaKenmerk(eerst.status, eerst.bytes)}');
+      if (eerst != null && eerst.status != 403) return eerst;
+      // Het venster kwam er ook niet door: dan weer de hele weg, curl voorop.
+      curlDichtTot = null;
+    }
+
     final heeftCurl = await curlBeschikbaar();
     final langsCurl = heeftCurl ? await _haalMetCurl(url, referer: referer) : null;
-    final pad = Uri.tryParse(url)?.path ?? url;
     _spoor('haal $pad: curl ${langsCurl == null ? (heeftCurl ? 'geen antwoord' : 'niet aanwezig') : rutrackerPaginaKenmerk(langsCurl.status, langsCurl.bytes)}');
     // Een 403 is hier geen antwoord maar een dichte deur: doorlopen naar het venster.
     if (langsCurl != null && langsCurl.status != 403) return langsCurl;
 
-    // Dichte deur, en er staat een sleutelmaker klaar. Zelf een vers koekje halen scheelt de
-    // gebruiker de hele gang naar zijn browser — en dat is precies wat er tot nu toe gebeurde:
-    // netwerktab open, "Kopieer als cURL", plakken in de instellingen, midden in iets anders.
+    ({int status, List<int> bytes})? langsVenster;
+    if (venster != null) {
+      langsVenster = await venster(url, referer: referer);
+      _spoor('haal $pad: venster ${langsVenster == null ? 'niets (${vensterStand?.call() ?? '?'})' : rutrackerPaginaKenmerk(langsVenster.status, langsVenster.bytes)}');
+      if (langsVenster != null && langsVenster.status != 403) {
+        if (langsCurl?.status == 403) curlDichtTot = DateTime.now().add(kCurlDicht);
+        return langsVenster;
+      }
+      if (langsVenster == null) haalReden = vensterStand?.call() ?? 'het browservenster gaf niets terug';
+    } else {
+      haalReden = 'dit toestel heeft geen ingebouwd browservenster';
+    }
+
+    // Dichte deur, ook voor het venster, en er staat een sleutelmaker klaar. Zelf een vers koekje
+    // halen scheelt de gebruiker de hele gang naar zijn browser.
     if (langsCurl?.status == 403 && heeftCurl && await _magVersen()) {
       final uitkomst = await ververViaFlareSolverr();
       _laatsteVersing = DateTime.now();
@@ -621,20 +661,12 @@ class RuTrackerService {
         final nogEens = await _haalMetCurl(url, referer: referer);
         _spoor('haal $pad: curl na verversen ${nogEens == null ? 'geen antwoord' : rutrackerPaginaKenmerk(nogEens.status, nogEens.bytes)}');
         if (nogEens != null && nogEens.status != 403) return nogEens;
-      } else {
+      } else if (haalReden.isEmpty) {
         haalReden = 'een vers koekje halen lukte ook niet: ${uitkomst.error}';
       }
     }
 
-    final venster = viaVenster;
-    if (venster != null) {
-      final langsVenster = await venster(url, referer: referer);
-      _spoor('haal $pad: venster ${langsVenster == null ? 'niets (${vensterStand?.call() ?? '?'})' : rutrackerPaginaKenmerk(langsVenster.status, langsVenster.bytes)}');
-      if (langsVenster != null) return langsVenster;
-      haalReden = vensterStand?.call() ?? 'het browservenster gaf niets terug';
-    } else {
-      haalReden = 'dit toestel heeft geen ingebouwd browservenster';
-    }
+    if (langsVenster != null) return langsVenster;
     if (langsCurl != null) return langsCurl;
 
     try {
@@ -656,8 +688,13 @@ class RuTrackerService {
     }
   }
 
+  /// Wat curl zou antwoorden, voor een toets: curl zelf is daar niet te sturen. Zie [viaVenster].
+  @visibleForTesting
+  static Future<({int status, List<int> bytes})?> Function(String url)? curlVoorTest;
+
   /// De curl-weg apart, zodat [_haal] de volgorde kan bepalen. Null als curl er niet is of faalde.
   Future<({int status, List<int> bytes})?> _haalMetCurl(String url, {String? referer, int maxSeconden = kCurlSeconden}) async {
+    if (curlVoorTest case final nep?) return nep(url);
     if (await curlBeschikbaar()) {
       Directory? tijdelijk;
       try {
