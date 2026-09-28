@@ -14,7 +14,11 @@
 /// heeft geen symptoom behalve stilte, en dat is precies waarom hij hier vastligt.
 library;
 
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:debridmusic/online.dart';
+import 'package:debridmusic/paths.dart';
 import 'package:debridmusic/rutracker.dart';
 import 'package:debridmusic/search.dart';
 import 'package:debridmusic/settings.dart';
@@ -145,13 +149,82 @@ void main() {
     });
   });
 
-  group('de zin bij een Cloudflare-uitdaging wijst naar het venster', () {
-    test('niet meer naar de plakweg', () {
-      // Het venster ís een echte browser en lost de uitdaging op; een geplakt koekje uit een andere
-      // browser op een ander IP-adres doet dat niet. Naar de oude weg verwijzen stuurt je dus de
-      // verkeerde kant op.
-      expect(RuTrackerService.uitdagingUitleg, contains('Aanmelden'));
-      expect(RuTrackerService.uitdagingUitleg.toLowerCase(), contains('echte browser'));
+  group('de zin bij een Cloudflare-uitdaging wijst naar de controle', () {
+    test('niet meer naar de plakweg, en sinds 28-09-2026 ook niet naar aanmelden', () {
+      // Een geplakt koekje uit een andere browser op een ander IP-adres lost niets op. En sinds de
+      // controle interactief is ("Ik ben geen robot") helpt opnieuw aanmelden evenmin: het
+      // aanmeldvenster sluit zodra je sessie er is, vóór er ooit een cf_clearance komt. De zin
+      // noemt dus de knop die bij de zoekresultaten staat.
+      expect(RuTrackerService.uitdagingUitleg, contains('"Controle doen"'));
+      expect(RuTrackerService.uitdagingUitleg, contains('Ik ben geen robot'));
+      expect(RuTrackerService.uitdagingUitleg, isNot(contains('Koekje uit browser')));
+    });
+  });
+
+  group('DE KERN: vraagt RuTracker om de controle, dan staat de knop er', () {
+    late Directory map;
+    setUp(() {
+      map = Directory.systemTemp.createTempSync('dm_rtcontrole_');
+      setAppDirForTest(map.path);
+      RuTrackerService.curlBeschikbaarVoorTest = false;
+    });
+    tearDown(() {
+      RuTrackerService.viaVenster = null;
+      RuTrackerService.curlBeschikbaarVoorTest = null;
+      try {
+        map.deleteSync(recursive: true);
+      } catch (_) {}
+    });
+    // Zo gaf RuTracker de controle op 28-09-2026, in de taal van de browser.
+    const controle = '<html><head><title>Even geduld...</title></head><body><script>'
+        "window._cf_chl_opt = {cFPWv: 'b'}; var u = 'https://challenges.cloudflare.com';"
+        '</script></body></html>';
+
+    RuTrackerService dienst() => RuTrackerService(AppSettings()..rutrackerCookie = 'bb_session=s');
+
+    test('een 403 met de controle', () async {
+      RuTrackerService.viaVenster = (url, {referer}) async => (status: 403, bytes: utf8.encode(controle));
+      final rt = dienst();
+      expect(await rt.search('Kai Tracid'), isEmpty);
+      expect(rt.vraagtControle, isTrue);
+      expect(rt.lastError, contains('"Controle doen"'));
+    });
+
+    test('een 403 zonder herkenbare pagina is ook de deur', () async {
+      // Een venster dat geen lichaam gaf, of een afgekapte curl: de status alleen moet genoeg zijn.
+      RuTrackerService.viaVenster = (url, {referer}) async => (status: 403, bytes: const <int>[]);
+      final rt = dienst();
+      await rt.search('Kai Tracid');
+      expect(rt.vraagtControle, isTrue);
+    });
+
+    test('een 200 die toch de controle is — tot 28-09-2026 onzichtbaar zonder koppen', () async {
+      RuTrackerService.viaVenster = (url, {referer}) async => (status: 200, bytes: utf8.encode(controle));
+      final rt = dienst();
+      await rt.search('Kai Tracid');
+      expect(rt.vraagtControle, isTrue, reason: 'anders stond er "bevraagd, nul treffers"');
+    });
+
+    test('DE GRENS: een gewone lege zoekpagina vraagt niets — ook niet na een controle', () async {
+      final rt = dienst();
+      RuTrackerService.viaVenster = (url, {referer}) async => (status: 403, bytes: utf8.encode(controle));
+      await rt.search('Kai Tracid');
+      expect(rt.vraagtControle, isTrue);
+      RuTrackerService.viaVenster = (url, {referer}) async => (
+            status: 200,
+            bytes: utf8.encode('<html><title>RuTracker.org</title><div id="page_container">'
+                '<a href="tracker.php">Tracker</a></div></html>')
+          );
+      await rt.search('iets wat niet bestaat');
+      expect(rt.vraagtControle, isFalse, reason: 'de knop hoort weg te gaan zodra het weer werkt');
+    });
+
+    test('DE VAL: een verlopen sessie wist de Cloudflare-doorgang niet', () async {
+      // login.php wordt sinds 28-09-2026 óók uitgedaagd: zonder doorgang komt de app er niet meer in.
+      RuTrackerService.viaVenster = (url, {referer}) async => (status: 302, bytes: const <int>[]);
+      final instellingen = AppSettings()..rutrackerCookie = 'bb_session=s; cf_clearance=c';
+      await RuTrackerService(instellingen).search('Kai Tracid');
+      expect(instellingen.rutrackerCookie, 'cf_clearance=c');
     });
   });
 }

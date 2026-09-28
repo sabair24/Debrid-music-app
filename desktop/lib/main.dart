@@ -8968,6 +8968,39 @@ Widget _bronnenPagina(String titel, String vraag, {TrackTags? tags}) => Scaffold
       body: SingleChildScrollView(child: SourcesView(query: vraag, tags: tags)),
     );
 
+/// De Cloudflare-controle van RuTracker doen en de doorgang bewaren — zie `doeRutrackerControle`.
+///
+/// Eén handeling voor de knop bij de zoekresultaten en die in Instellingen, zodat ze allebei
+/// hetzelfde bewaren: de verse `cf_clearance` met de User-Agent van het venster erbij, en je
+/// aanmelding ongemoeid ([doorgangErbij]). Hangt dit toestel aan een pc, dan gaat de doorgang
+/// daarheen, want dáár wordt gezocht — zelfde reden als bij `_meldAanInVenster`.
+Future<bool> rutrackerControle(BuildContext context) async {
+  final settings = context.read<AppSettings>();
+  final online = context.read<OnlineService>();
+  final melding = ScaffoldMessenger.of(context);
+  final sessie = await doeRutrackerControle(context);
+  if (sessie == null || !sessie.heeftClearance) {
+    melding.showSnackBar(const SnackBar(
+      content: Text('Geen doorgang binnengekomen — het venster ging dicht voordat de controle klaar '
+          'was. Probeer het nog eens en wacht tot het vanzelf sluit.'),
+      duration: Duration(seconds: 8),
+    ));
+    return false;
+  }
+  settings.rutrackerCookie = doorgangErbij(settings.rutrackerCookie, sessie.cookie);
+  if (sessie.ua.isNotEmpty) settings.rutrackerUa = sessie.ua;
+  await settings.save();
+  var zin = 'Doorgang binnen — RuTracker doet weer mee.';
+  if (online is RemoteOnlineService) {
+    final pc = await online.stuurRutrackerSessie(settings.rutrackerCookie, settings.rutrackerUa);
+    zin = pc.ok
+        ? 'Doorgang binnen — ook op de pc, die het zoeken doet.'
+        : 'Doorgang binnen op dit toestel, maar de pc niet: ${pc.reden}';
+  }
+  melding.showSnackBar(SnackBar(content: Text(zin), duration: const Duration(seconds: 6)));
+  return true;
+}
+
 /// Waarom er geen torrents staan — als daar een betere reden voor is dan "die zijn er niet".
 ///
 /// **Waarom dit bestaat.** `RuTrackerService` vult `lastError` bij élke reden om niets terug te
@@ -8993,7 +9026,7 @@ Widget _bronnenPagina(String titel, String vraag, {TrackTags? tags}) => Scaffold
 ///
 /// Daarom zegt hij het nu **altijd**, ook als er niets aan de hand is. Een regel die alleen bij
 /// problemen verschijnt is een regel die je nooit vertrouwt.
-Widget _waaromGeenTorrents(BuildContext context, {required bool leeg}) {
+Widget _waaromGeenTorrents(BuildContext context, {required bool leeg, VoidCallback? opnieuw}) {
   final rt = context.read<OnlineService>().rutracker;
   final reden = rt.lastError;
   final aantal = rt.laatsteAantal;
@@ -9056,6 +9089,18 @@ Widget _waaromGeenTorrents(BuildContext context, {required bool leeg}) {
           Text(
             bronnen.join('  ·  '),
             style: const TextStyle(color: _muted, fontSize: 11.5),
+          ),
+        // De zin zegt wat er scheelt; deze knop is waar je het oplost. Zie [rutrackerControle].
+        if (rt.vraagtControle && rutrackerVensterKan)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: FilledButton.tonalIcon(
+              onPressed: () async {
+                if (await rutrackerControle(context)) opnieuw?.call();
+              },
+              icon: const Icon(Icons.verified_user_outlined, size: 16),
+              label: const Text('Controle doen'),
+            ),
           ),
       ],
     ),
@@ -15367,7 +15412,7 @@ class _SourcesViewState extends State<SourcesView> {
           _filterChipsRow(_filter, (f) => setState(() => _filter = f)),
         _bronChipsRow(bronKeuzes, bron, (b) => setState(() => _bron = b)),
         _sourceHeader('Torrents · TorBox', torrents.length, _tBusy),
-        if (!_tBusy) _waaromGeenTorrents(context, leeg: torrents.isEmpty),
+        if (!_tBusy) _waaromGeenTorrents(context, leeg: torrents.isEmpty, opnieuw: _run),
         ...torrents.map((r) => _torrentTile(context, r)),
         if (ready)
           _soulseekHeader(context, slsk, _sBusy, slsk,
@@ -17058,7 +17103,11 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           }),
         if (torrents.isNotEmpty) _sourceHeader('Torrents · TorBox', torrents.length, _busy),
         // Stond hier helemaal niet: waren er geen torrents, dan was er ook geen kop en geen woord.
-        if (!_busy && _getypt != null) _waaromGeenTorrents(context, leeg: torrents.isEmpty),
+        if (!_busy && _getypt != null)
+          _waaromGeenTorrents(context, leeg: torrents.isEmpty, opnieuw: () {
+            final q = _getypt;
+            if (q != null) _searchDirect(q);
+          }),
         ...torrents.map((r) => _torrentTile(context, r)),
         if (_status == null || _slsk.isNotEmpty || _slskBusy)
           (soulseekReady
@@ -22432,6 +22481,18 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               onPressed: _meldAanInVenster,
                               icon: const Icon(Icons.lock_open_rounded, size: 16),
                               label: const Text('Aanmelden…'),
+                            ),
+                          // De controle "Ik ben geen robot" — sinds 28-09-2026 interactief, dus
+                          // door jou. Zie [rutrackerControle].
+                          if (rutrackerVensterKan)
+                            OutlinedButton.icon(
+                              onPressed: () async {
+                                if (!await rutrackerControle(context) || !mounted) return;
+                                setState(() => _conn['rutracker'] = const ConnResult(
+                                    ConnState.ok, 'Cloudflare-controle gedaan — de doorgang staat klaar'));
+                              },
+                              icon: const Icon(Icons.verified_user_outlined, size: 16),
+                              label: const Text('Cloudflare-controle…'),
                             ),
                           // Blijft staan, en niet als restant: waar geen venster is (een Linux-bouw,
                           // of een platform waar de koekjeslade ontbreekt) is dit de enige weg.

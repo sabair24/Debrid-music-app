@@ -59,8 +59,6 @@ const kZoekGeduld = Duration(seconds: 7);
 /// megabyte, en dat is precies de maat van een volle zoekpagina. In stukken is het simpelweg veilig.
 const kStukGrootte = 200000;
 
-/// De titel die Cloudflare toont terwijl hij je uitdaging nakijkt.
-const _wachtTitel = 'just a moment';
 
 /// Een onzichtbaar browservenster dat RuTracker-pagina's ophaalt.
 ///
@@ -196,14 +194,17 @@ try {
   }
 
   /// Staan we op RuTracker en niet op de wachtpagina van Cloudflare?
+  ///
+  /// Op de pagina gekeken en niet op de titel: die is "Even geduld..." in een Nederlandse Windows, en
+  /// op de Engelse "Just a moment" dacht dit venster tot 28-09-2026 dat het al binnen was. Zie
+  /// [jsDoorgelaten].
   Future<bool> _isDoorgelaten() async {
     final web = _web;
     if (web == null) return false;
     try {
       final adres = (await web.getUrl())?.toString() ?? '';
       if (!adres.contains('rutracker')) return false;
-      final titel = (await web.getTitle() ?? '').toLowerCase();
-      return !titel.contains(_wachtTitel);
+      return await web.evaluateJavascript(source: jsDoorgelaten) == true;
     } catch (_) {
       return false;
     }

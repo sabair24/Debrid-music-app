@@ -257,4 +257,41 @@ void main() {
           reason: 'het uitzetten hoort IN die finally te staan');
     });
   });
+
+  group('de Cloudflare-controle van 28-09-2026', () {
+    test('DE KERN: een verse doorgang erbij breekt de aanmelding niet', () {
+      // Uit het venster komt de verse cf_clearance, maar óók de sessie die het venster nog kende —
+      // en die kan ouder zijn dan wat de app intussen zelf aanmeldde.
+      final samen = doorgangErbij('bb_session=van-de-app; cf_clearance=oud',
+          'cf_clearance=vers; bb_session=uit-het-venster; bb_guid=g');
+      expect(samen, contains('cf_clearance=vers'));
+      expect(samen, contains('bb_session=van-de-app'),
+          reason: 'op 13-09-2026 wiste een aanmelding de doorgang; andersom mag evenmin');
+      expect(samen, contains('bb_guid=g'), reason: 'wat er nog niet stond, komt er gewoon bij');
+      expect(samen, isNot(contains('cf_clearance=oud')));
+      expect(samen, isNot(contains('uit-het-venster')));
+    });
+
+    test('DE GRENS: zonder verse doorgang blijft de oude, en zonder sessie telt die van het venster', () {
+      expect(doorgangErbij('bb_session=s; cf_clearance=oud', 'bb_guid=g'), contains('cf_clearance=oud'));
+      expect(doorgangErbij('', 'cf_clearance=vers; bb_session=uit-het-venster'),
+          allOf(contains('cf_clearance=vers'), contains('bb_session=uit-het-venster')));
+    });
+
+    test('DE VAL: de controle wordt herkend aan de pagina, niet aan de titel', () {
+      // Gemeten op 28-09-2026: in een Nederlandse Windows heet de wachtpagina "Even geduld..." — en
+      // op de Engelse titel keken zowel FlareSolverr ("Challenge not detected!") als dit venster.
+      // Dit stuk JavaScript is zo in een echte Chromium nagemeten: false op de controle, true op
+      // index.php.
+      expect(jsDoorgelaten.toLowerCase(), isNot(contains('title')));
+      expect(jsDoorgelaten.toLowerCase(), isNot(contains('just a moment')));
+      expect(jsDoorgelaten, contains('_cf_chl_opt'));
+      expect(jsDoorgelaten, contains('challenges.cloudflare.com'));
+      expect(jsDoorgelaten, contains('#page_container'));
+      expect(jsDoorgelaten, isNot(contains('challenge-platform')),
+          reason: 'dat script zet Cloudflare óók op de gewone voorpagina');
+      expect(kRutrackerControleUrl, endsWith('/tracker.php'),
+          reason: 'index.php wordt niet uitgedaagd — daar komt nooit een cf_clearance uit');
+    });
+  });
 }

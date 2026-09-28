@@ -85,6 +85,37 @@ curl 'https://rutracker.org/forum/index.php' \
           isTrue);
     });
 
+    // Zo stond het op 28-09-2026 in de pagina's zelf, via curl opgehaald.
+    const controle = '<html><head><title>Just a moment...</title></head><body><script>'
+        "window._cf_chl_opt = {cFPWv: 'b'}; var u = 'https://challenges.cloudflare.com';"
+        '</script><form action="/forum/tracker.php?__cf_chl_f_tk=x"></form></body></html>';
+    const voorpagina = '<html><title>RuTracker.org</title><body><div id="page_container">'
+        "<script>var s = '/cdn-cgi/challenge-platform/scripts/jsd/main.js';</script></div></body></html>";
+
+    test('DE KERN: zonder koppen — de curl-weg — beslist de pagina zelf', () {
+      // Tot 28-09-2026 eiste deze herkenning een `server`-kop, en de curl-weg geeft er geen: een
+      // controlepagina die als 200 binnenkwam, telde daar nooit als controle.
+      expect(RuTrackerService.cloudflareUitdaging(const {}, controle), isTrue);
+      expect(
+          RuTrackerService.cloudflareUitdaging(
+              const {}, controle.replaceFirst('Just a moment...', 'Even geduld...')),
+          isTrue,
+          reason: 'in een Nederlandse browser heet de wachtpagina anders — de kenmerken niet');
+    });
+
+    test('DE VAL: het challenge-platform-script staat óók op de gewone voorpagina', () {
+      expect(RuTrackerService.cloudflareUitdaging(const {}, voorpagina), isFalse,
+          reason: 'dat script zet Cloudflare overal neer; erop letten keurt elke pagina af');
+      expect(RuTrackerService.cloudflareUitdaging({'server': 'cloudflare'}, voorpagina), isFalse);
+    });
+
+    test('DE GRENS: bij een verlopen sessie blijft de Cloudflare-doorgang staan', () {
+      // Want login.php wordt sinds 28-09-2026 óók uitgedaagd: zonder doorgang geen aanmelding.
+      expect(RuTrackerService.alleenDoorgang('bb_session=s; cf_clearance=c; __cf_bm=b; bb_guid=g'),
+          'cf_clearance=c; __cf_bm=b');
+      expect(RuTrackerService.alleenDoorgang('bb_session=s'), isEmpty);
+    });
+
     test('maar niet aan een gewone RuTracker-pagina', () {
       expect(
           RuTrackerService.cloudflareUitdaging({'server': 'cloudflare', 'content-type': 'text/html'},

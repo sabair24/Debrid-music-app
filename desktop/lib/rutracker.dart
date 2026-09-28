@@ -284,6 +284,18 @@ class RuTrackerService {
     return samen.entries.map((e) => '${e.key}=${e.value}').join('; ');
   }
 
+  /// Alleen de Cloudflare-koekjes (`cf_…`, `__cf…`) uit een koekjesregel — wat er overblijft als de
+  /// SESSIE dood is.
+  ///
+  /// **Waarom.** Bij een verlopen sessie wiste de app het hele koekje en meldde zich daarna opnieuw
+  /// aan. Maar sinds 28-09-2026 daagt Cloudflare ook `login.php` uit: zonder `cf_clearance` komt die
+  /// aanmelding er dus niet meer door, en de doorgang die je net met de hand haalde was weg. De
+  /// doorgang hoort niet bij de sessie en blijft staan.
+  static String alleenDoorgang(String koekje) => [
+        for (final deel in koekje.split(';'))
+          if (deel.trim().startsWith('cf_') || deel.trim().startsWith('__cf')) deel.trim()
+      ].join('; ');
+
   /// Eén regel per stap van het verversen, want dit pad was van buiten niet te volgen.
   ///
   /// **Waarom dit erbij moest.** Op 13-09-2026 bleef "Koekje verversen" een verse doorgang ophalen
@@ -404,14 +416,22 @@ class RuTrackerService {
   ///
   /// Drie aanwijzingen, en één is genoeg: de kop die Cloudflare zelf zet, de server die zich noemt,
   /// of de titel van de wachtpagina.
+  ///
+  /// **Zonder koppen beslist de pagina zelf** — de curl-weg geeft er geen mee, en tot 28-09-2026 kon
+  /// deze herkenning daar dus nooit iets zien: hij eiste een `server`-kop die er niet was. En niet op
+  /// de titel alleen: in een Nederlandse browser heet de wachtpagina "Even geduld...". Gemeten op
+  /// 28-09-2026: `_cf_chl_opt`, `challenges.cloudflare.com` en `__cf_chl` staan op de controle
+  /// van `tracker.php` en `login.php`, en op geen enkele gewone pagina. `challenge-platform` staat
+  /// óók op de gewone voorpagina — Cloudflare zet dat script overal — en telt dus niet.
   static bool cloudflareUitdaging(Map<String, String> koppen, String lichaam) {
     if (koppen.keys.any((k) => k.toLowerCase() == 'cf-mitigated')) return true;
-    final server = (koppen['server'] ?? '').toLowerCase();
     final laag = lichaam.toLowerCase();
-    return server.contains('cloudflare') &&
-        (laag.contains('just a moment') ||
-            laag.contains('challenges.cloudflare.com') ||
-            laag.contains('__cf_chl'));
+    final kenmerk = laag.contains('_cf_chl_opt') ||
+        laag.contains('challenges.cloudflare.com') ||
+        laag.contains('__cf_chl');
+    if (koppen.isEmpty) return kenmerk;
+    final server = (koppen['server'] ?? '').toLowerCase();
+    return server.contains('cloudflare') && (kenmerk || laag.contains('just a moment'));
   }
 
   // ── Ophalen langs curl ────────────────────────────────────────────────────
@@ -646,9 +666,9 @@ class RuTrackerService {
 
   /// De zin die daarbij hoort. Eén plek, want hij hoort overal hetzelfde te zijn.
   static const uitdagingUitleg =
-      'Cloudflare houdt de app tegen met een uitdaging die alleen een echte browser kan oplossen — '
-      'het ligt niet aan je gebruikersnaam of wachtwoord. Meld je opnieuw aan bij Instellingen → '
-      'RuTracker → Aanmelden; dat venster ís een echte browser en lost de uitdaging op.';
+      'RuTracker vraagt om de Cloudflare-controle "Ik ben geen robot" — het ligt niet aan je '
+      'gebruikersnaam of wachtwoord, en opnieuw aanmelden helpt niet. Tik op "Controle doen" en vink '
+      'het vakje aan; daarna zoekt de app gewoon verder.';
 
   /// Dezelfde uitdaging, maar mét wat het verborgen browservenster erover te zeggen had.
   ///
@@ -669,8 +689,8 @@ class RuTrackerService {
     // Ligt het aan het venster zelf, dan is opnieuw aanmelden het verkeerde advies: dat venster is
     // juist het gereedschap dat de uitdaging zou oplossen, en het was er niet.
     if (r.contains('browservenster')) {
-      return 'Cloudflare houdt de app tegen met een uitdaging die alleen een echte browser kan '
-          'oplossen. Opnieuw aanmelden helpt hier niet — $r.';
+      return 'RuTracker vraagt om de Cloudflare-controle "Ik ben geen robot". Opnieuw aanmelden helpt '
+          'hier niet — tik op "Controle doen" ($r).';
     }
     return '$uitdagingUitleg Wat er onderweg misging: $r.';
   }
@@ -885,6 +905,11 @@ class RuTrackerService {
   RtCaptcha? pendingCaptcha;
   String lastError = '';
 
+  /// Vraagt RuTracker de laatste keer om de Cloudflare-controle? Dan hoort er bij de zoekresultaten
+  /// een knop te staan die hem opent — zie `doeRutrackerControle`. Een zin alleen was niet genoeg:
+  /// die zei wél wat er scheelde, maar niet waar je het oplost.
+  bool vraagtControle = false;
+
   /// Hoeveel treffers RuTracker de laatste keer opleverde. **-1 betekent: niet bevraagd.**
   ///
   /// **Waarom dit erbij moest, en waarom -1 apart staat.** Er is een reeks meldingen bijgebouwd voor
@@ -903,6 +928,7 @@ class RuTrackerService {
     // Niet bevraagd, tot het tegendeel blijkt. Zie [laatsteAantal].
     laatsteAantal = -1;
     laatsteDoorZeef = -1;
+    vraagtControle = false;
     // Zwijgen is hier duur gebleken: een lege lijst leest als "RuTracker heeft niets", terwijl de
     // reden is dat er niets klaarstaat om mee binnen te komen. Zeg het dus.
     if (settings.rutrackerCookie.isEmpty) {
@@ -941,6 +967,7 @@ class RuTrackerService {
         // het niet heeft opgelost — en dán is "meld je opnieuw aan" het verkeerde advies. Wat het
         // venster erover te zeggen had is het enige dat je verder helpt.
         lastError = uitdagingZin(haalReden);
+        vraagtControle = true;
         return [];
       }
       if (resp.status == 302) {
@@ -950,7 +977,8 @@ class RuTrackerService {
         //
         // We hold the username and the password, so log in again and do the search over. Once —
         // `allowRelogin` stops a broken login from bouncing between the two forever.
-        settings.rutrackerCookie = '';
+        // De sessie weg, de Cloudflare-doorgang niet — zie [alleenDoorgang].
+        settings.rutrackerCookie = alleenDoorgang(settings.rutrackerCookie);
         await settings.save(); // in memory only left a dead cookie on disk until some other save
         if (!allowRelogin) return [];
 
@@ -972,10 +1000,11 @@ class RuTrackerService {
       // "RuTracker heeft niets", en die alledrie een andere handeling van je vragen.
       if (cloudflareUitdaging(const {}, html)) {
         lastError = uitdagingZin(haalReden);
+        vraagtControle = true;
         return [];
       }
       if (html.contains('login_username') && !html.contains('tracker.php')) {
-        settings.rutrackerCookie = '';
+        settings.rutrackerCookie = alleenDoorgang(settings.rutrackerCookie);
         await settings.save();
         lastError = 'Je RuTracker-sessie is verlopen — Instellingen → RuTracker → Aanmelden.';
         return [];

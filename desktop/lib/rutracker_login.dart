@@ -68,6 +68,50 @@ String voegKoekjesSamen(List<List<({String naam, String waarde})>> lijsten) {
   return gezien.entries.map((e) => '${e.key}=${e.value}').join('; ');
 }
 
+/// Waar de Cloudflare-controle staat: de zoekpagina.
+///
+/// **Niet de voorpagina en niet het formulier.** Gemeten op 28-09-2026 in een verse Chromium:
+/// `index.php` en `login.php` gaan gewoon open, `tracker.php` toont "Beveiliging wordt geverifieerd"
+/// met het vakje "Ik ben geen robot". Wie alleen aanmeldt, komt die controle nooit tegen — en heeft
+/// dus nooit een `cf_clearance` om mee te zoeken.
+const kRutrackerControleUrl = 'https://rutracker.org/forum/tracker.php';
+
+/// Staan we op een echte RuTracker-pagina, voorbij de controle? In ELKE taal.
+///
+/// **Waarom niet op de titel.** Cloudflare zet de wachtpagina in de taal van de browser: in een
+/// Nederlandse Windows heet ze "Even geduld...", niet "Just a moment...". Op die Engelse titel keek
+/// zowel FlareSolverr ("Challenge not detected!") als het verborgen venster van deze app — en allebei
+/// dachten ze dat ze binnen waren terwijl ze voor de deur stonden. Gemeten op 28-09-2026.
+///
+/// Dus op wat er op de pagina staat: de controle draagt `window._cf_chl_opt` en het Turnstile-vak,
+/// in elke taal; een echte forumpagina draagt het kader van RuTracker (`#page_container`,
+/// `#main-nav`). Beide moeten kloppen: een halve pagina is geen doorgang.
+const jsDoorgelaten = r'''(function () {
+  var uitdaging = !!(window._cf_chl_opt ||
+    document.querySelector('iframe[src*="challenges.cloudflare.com"], input[name="cf-turnstile-response"], #challenge-form'));
+  var rutracker = !!document.querySelector('#page_container, #main-nav');
+  return rutracker && !uitdaging;
+})()''';
+
+/// Een verse doorgang uit het venster erbij, zonder de aanmelding die er al stond te breken.
+///
+/// Uit het venster komen alleen de koekjes van Cloudflare ([nieuw] met `cf_` of `__cf` vooraan) mee
+/// — die zijn vers. Al het andere, `bb_session` voorop, blijft wat er stond ([oud]): de app kan zich
+/// intussen zelf opnieuw aangemeld hebben, en de sessie in het venster is dan een oudere. Alleen als
+/// er nog niets stond, telt wat het venster had. Zelfde les als op 13-09-2026, toen een aanmelding
+/// de doorgang wiste: het ene koekje mag het andere nooit overschrijven.
+String doorgangErbij(String oud, String nieuw) {
+  bool vanCloudflare(String naam) => naam.startsWith('cf_') || naam.startsWith('__cf');
+  final vers = leesDocumentCookie(nieuw);
+  // De eerste waarde per naam wint: eerst de verse Cloudflare-koekjes, dan alles wat er stond, dan
+  // de rest van het venster.
+  return voegKoekjesSamen([
+    [for (final k in vers) if (vanCloudflare(k.naam)) k],
+    leesDocumentCookie(oud),
+    vers,
+  ]);
+}
+
 /// Een `document.cookie`-regel uitpluizen naar losse paren.
 ///
 /// Dat is de tweede bron naast de koekjeslade: op sommige toestellen geeft de lade minder terug dan
@@ -122,9 +166,30 @@ Future<RtSessie?> meldAanBijRutracker(BuildContext context) {
   );
 }
 
+/// De Cloudflare-controle van RuTracker laten doen, door jou, in een echt venster.
+///
+/// Opent de zoekpagina ([kRutrackerControleUrl]); daar vraagt Cloudflare om het vakje "Ik ben geen
+/// robot". Dat vakje zet jij — niet de app. Zodra de pagina voorbij de controle is ([jsDoorgelaten])
+/// sluit het venster zichzelf en komen de koekjes mee, `cf_clearance` voorop.
+///
+/// **Waarom dit er moest komen.** Sinds 28-09-2026 is de controle op RuTracker interactief: een verse
+/// Chromium bleef na dertien seconden op het vakje staan, en FlareSolverr gaf na zestig seconden
+/// "Error solving the challenge". Geen programma komt daar eerlijk vanzelf langs; één klik van jou
+/// wel, en die doorgang gaat daarna gewoon mee met elke zoekopdracht.
+Future<RtSessie?> doeRutrackerControle(BuildContext context) {
+  if (!rutrackerVensterKan) return Future.value(null);
+  return Navigator.of(context, rootNavigator: true).push<RtSessie>(
+    MaterialPageRoute(builder: (_) => const RutrackerLoginPagina(controle: true), fullscreenDialog: true),
+  );
+}
+
 /// De pagina zelf. Openbaar zodat een toets hem kan bouwen zonder de schil eromheen.
+///
+/// [controle]: niet aanmelden maar de Cloudflare-controle doen — zie [doeRutrackerControle].
 class RutrackerLoginPagina extends StatefulWidget {
-  const RutrackerLoginPagina({super.key});
+  const RutrackerLoginPagina({super.key, this.controle = false});
+
+  final bool controle;
 
   @override
   State<RutrackerLoginPagina> createState() => _RutrackerLoginPaginaState();
@@ -158,6 +223,7 @@ class _RutrackerLoginPaginaState extends State<RutrackerLoginPagina> {
   /// die je zelf nooit ziet, en de aanmelding stuurt daarna nog een keer door.
   Future<void> _kijk() async {
     if (_klaar || !mounted) return;
+    if (widget.controle) return _kijkControle();
     final sessie = await _oogst();
     if (!mounted) return;
     // **Altijd zeggen wat er ligt.** Hier stond een stilzwijgende terugkeer bij een lege oogst, en
@@ -175,6 +241,29 @@ class _RutrackerLoginPaginaState extends State<RutrackerLoginPagina> {
     _klaar = true;
     _klok?.cancel();
     // Even laten staan, anders knippert het venster weg vóór je gezien hebt dat het gelukt is.
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    if (mounted) Navigator.of(context).pop(sessie);
+  }
+
+  /// Voorbij de controle? Dan de oogst mee en dicht. Zie [jsDoorgelaten] voor waarom hier niet op de
+  /// titel gekeken wordt.
+  Future<void> _kijkControle() async {
+    final web = _web;
+    if (web == null) return;
+    bool door = false;
+    try {
+      door = await web.evaluateJavascript(source: jsDoorgelaten) == true;
+    } catch (_) {/* een pagina die nog laadt, zegt nog niets */}
+    if (!mounted) return;
+    final nieuw = door
+        ? 'Doorgelaten ✓'
+        : 'Vink hieronder "Ik ben geen robot" aan — daarna sluit dit venster vanzelf';
+    if (nieuw != _stand) setState(() => _stand = nieuw);
+    if (!door) return;
+    final sessie = await _oogst();
+    if (!mounted || sessie == null) return;
+    _klaar = true;
+    _klok?.cancel();
     await Future<void>.delayed(const Duration(milliseconds: 400));
     if (mounted) Navigator.of(context).pop(sessie);
   }
@@ -237,7 +326,7 @@ class _RutrackerLoginPaginaState extends State<RutrackerLoginPagina> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Aanmelden bij RuTracker'),
+        title: Text(widget.controle ? 'Cloudflare-controle voor RuTracker' : 'Aanmelden bij RuTracker'),
         leading: IconButton(
           icon: const Icon(Icons.close_rounded),
           tooltip: 'Sluiten',
@@ -265,7 +354,7 @@ class _RutrackerLoginPaginaState extends State<RutrackerLoginPagina> {
         ),
       ),
       body: InAppWebView(
-        initialUrlRequest: URLRequest(url: WebUri(kRutrackerLoginUrl)),
+        initialUrlRequest: URLRequest(url: WebUri(widget.controle ? kRutrackerControleUrl : kRutrackerLoginUrl)),
         initialSettings: InAppWebViewSettings(
           // De koekjes zijn het hele doel van dit venster.
           thirdPartyCookiesEnabled: true,
