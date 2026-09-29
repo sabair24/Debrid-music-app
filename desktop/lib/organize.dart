@@ -11,7 +11,9 @@ import 'flac_tags.dart';
 import 'mp3_tags.dart';
 import 'echtheid.dart';
 import 'echtheid_oordelen.dart';
-import 'paths.dart' show torrentWerkMap;
+import 'integriteit.dart';
+import 'keuring.dart';
+import 'paths.dart' show keuringMap, torrentWerkMap;
 import 'vaste_keuze.dart';
 import 'wavpack_kop.dart' show readWvKop;
 
@@ -806,7 +808,7 @@ int formatRank(String path) {
 /// evict a proper stereo master, both here and when tidying the downloads folder — the exact
 /// opposite of "best quality" on a stereo system.
 /// Wat [firstIsBetter] moet weten en niet uit een bestand kan lezen: welke bestanden de gebruiker
-/// zelf koos, en welke bewezen nep zijn.
+/// zelf koos, wat de echtheidsmeter van elk bestand zei, en welke bewezen kapot zijn.
 ///
 /// Bestaat om deze afweging in een ISOLATE te kunnen draaien. Allebei die feiten staan in een kaart
 /// in het geheugen (`vaste_keuze.dart`, `echtheid_oordelen.dart`), en een isolate begint met een lege
@@ -815,38 +817,90 @@ int formatRank(String path) {
 /// winnaar als enig spoor.
 ///
 /// Null betekent "vraag het de winkels zelf", en dat is wat elke aanroeper op de hoofdisolate doet.
-typedef Voorkennis = ({Set<String> vast, Set<String> nep});
+typedef Voorkennis = ({
+  Set<String> vast,
+  Map<String, Echtheidsoordeel> oordelen,
+  Set<String> kapot,
+});
 
+/// Is [a] BEWEZEN beter dan [b]? Onwaar bij gelijk — dan blijft [b], wat er al stond, staan.
+///
+/// **De regel sinds 29-09-2026: eerst de bewezen kwaliteit ([vergelijkKwaliteit] in keuring.dart), en
+/// alleen bij gelijk jouw eigen keuze en stereo boven surround.** Saber, bij Blood On The Dance Floor:
+/// *"als er een slechtere binnenkomt dan wat ik heb moet die weg, en moet mijn betere kwaliteit die ik
+/// al had blijven."* De oude volgorde was: jouw keuze, formaat, stereo, bewezen nep, en dan de
+/// GROOTTE. Daardoor won een nooit gemeten 24/48 van een gemeten opgeschaalde 24/96 (ongemeten telde
+/// als "niet nep"), en won bij gelijke muziek de grootste. Van de 95 bestanden in `_dubbel` hadden er
+/// 47 een opvolger met lagere getallen op de badge.
+///
+/// **Wat er niet meer is: de grootte.** Een mp3 die naar FLAC is omgezet is vaak GROTER dan het
+/// origineel (gemeten 76 MB tegen 34 MB), en een opgeschaalde 24/96 is groter dan dezelfde muziek als
+/// cd. Alleen tussen twee lossy-bestanden van hetzelfde formaat telt ze nog: daar ís groter een hogere
+/// bitrate.
+///
+/// **Jouw eigen keuze beslist bij gelijk, niet meer daarboven.** Hij stond bovenaan sinds Joe Dassin /
+/// L'été indien, waar de handmatig gekozen 3:37 verloor van een 4:16 — op de grootte. Die grond is weg,
+/// en twee kopieën die zo duidelijk verschillen in lengte worden bij het filen niet eens vergeleken
+/// (zie `_duidelijkAndereLengte`). Maar een handmatig gekozen mp3 duwt je FLAC niet meer weg.
+///
+/// Hier en niet bij de aanroepers, want dit is het enige punt waar élke opruimweg langskomt: het filen
+/// van een download, Opruimen, de dubbelveger per album en die over de hele bibliotheek.
 bool firstIsBetter(File a, File b, {Voorkennis? kennis}) {
-  // WAT DE GEBRUIKER ZELF KOOS VERLIEST NIET. Boven alle drie de gronden hieronder, want die gaan
-  // over kwaliteit en dit gaat over iets anders: bij Joe Dassin / L'été indien is de beste kopie een
-  // ánder nummer, en de handmatig gekozen 3:37 verloor van een 4:16 op de laatste grond — grootte.
-  //
-  // Hier en niet bij de aanroepers, want dit is het enige punt waar élke opruimweg langskomt: het
-  // filen van een download, Opruimen, de dubbelveger per album en die over de hele bibliotheek. Vijf
-  // plekken kun je vergeten, één niet.
-  //
-  // Koos hij ze allebéi, dan valt er geen voorkeur af te lezen en beslist de gewone regel.
+  final c = vergelijkKwaliteit(kwaliteitVan(a, kennis: kennis), kwaliteitVan(b, kennis: kennis));
+  if (c != 0) return c > 0;
   final va = kennis == null ? isVasteKeuze(a.path) : kennis.vast.contains(sleutelVoor(a.path));
   final vb = kennis == null ? isVasteKeuze(b.path) : kennis.vast.contains(sleutelVoor(b.path));
   if (va != vb) return va;
-  final ra = formatRank(a.path), rb = formatRank(b.path);
-  if (ra != rb) return ra > rb;
   final ma = _isMultichannelFile(a), mb = _isMultichannelFile(b);
   if (ma != mb) return mb; // the stereo one wins
-  // WAT GEMETEN IS ALS NEP VERLIEST — vlak boven de grootte, want dáár gaat het mis.
-  //
-  // Een mp3 die naar FLAC is omgezet is vaak GROTER dan het origineel: mp3-artefacten comprimeren
-  // slecht. Gemeten met een eigen proef: origineel 34 MB, dezelfde muziek via 320 kbps terug naar FLAC
-  // 76 MB. De regel hieronder koos dus stelselmatig de nep-kopie, en precies dat was Sabers vraag.
-  //
-  // Alleen wat BEWEZEN is telt; een ongemeten bestand mag nooit verliezen van een gemeten, anders
-  // herordent het draaien van een veegbeurt de halve bibliotheek. En vlak boven de grootte, zodat deze
-  // regel uitsluitend vuurt in het geval waar de grootte anders zou beslissen — niets daarbuiten.
-  final na = kennis == null ? bewezenNep(a.path) : kennis.nep.contains(echtheidSleutelVoor(a.path));
-  final nb = kennis == null ? bewezenNep(b.path) : kennis.nep.contains(echtheidSleutelVoor(b.path));
-  if (na != nb) return nb;
-  return a.lengthSync() > b.lengthSync();
+  // Twee lossy-bestanden van hetzelfde formaat: daar is groter echt een hogere bitrate. Met een marge,
+  // want een paar procent is een andere tag of een hoesje.
+  if (formatRank(a.path) < 3 && formatRank(a.path) == formatRank(b.path)) {
+    try {
+      return a.lengthSync() > b.lengthSync() * 1.1;
+    } catch (_) {
+      return false;
+    }
+  }
+  return false;
+}
+
+/// Wat de keuring van dit bestand weet: formaat, de bemonstering uit de kop, het oordeel van de
+/// echtheidsmeter en de decodeerproef. Zie [kwaliteitUit].
+Kwaliteit kwaliteitVan(File f, {Voorkennis? kennis}) {
+  final rang = formatRank(f.path);
+  final kapot = kennis == null ? bekendKapot(f.path) : kennis.kapot.contains(f.path.toLowerCase());
+  final o = kennis == null ? gemeten(f.path) : kennis.oordelen[echtheidSleutelVoor(f.path)];
+  return kwaliteitUit(
+      verliesvrij: rang >= 3, kopRate: _kopRateVan(f), formaat: rang, oordeel: o, kapot: kapot);
+}
+
+/// De bemonstering uit de kop, of 0 als die niet te lezen is. Onthouden per (pad, tijd, grootte), om
+/// dezelfde reden als [_surroundGeheugen]: de dubbelveger vraagt dit tienduizenden keren.
+final Map<String, int> _rateGeheugen = {};
+
+int _kopRateVan(File f) {
+  String? sleutel;
+  try {
+    final st = f.statSync();
+    sleutel = '${f.path}|${st.modified.millisecondsSinceEpoch}|${st.size}';
+    final bewaard = _rateGeheugen[sleutel];
+    if (bewaard != null) return bewaard;
+  } catch (_) {/* niet te statten: gewoon lezen, en niets onthouden */}
+  var rate = 0;
+  try {
+    final laag = f.path.toLowerCase();
+    if (laag.endsWith('.flac')) {
+      rate = readFlacTags(f)?.sampleRate ?? 0;
+    } else if (laag.endsWith('.wv')) {
+      rate = readWvKop(f)?.sampleRate ?? 0;
+    }
+  } catch (_) {/* onleesbaar: 0, en dat is "niets te bewijzen" */}
+  if (sleutel != null) {
+    if (_rateGeheugen.length > 4000) _rateGeheugen.clear();
+    _rateGeheugen[sleutel] = rate;
+  }
+  return rate;
 }
 
 /// Why [keep] beat [drop], read off the same three grounds [firstIsBetter] decides on and in that
@@ -858,26 +912,24 @@ String whyBetter(File keep, File drop) {
     return i < 0 ? '?' : n.substring(i + 1).toUpperCase();
   }
 
-  // In dezelfde volgorde als [firstIsBetter] beslist, dus ook deze grond hoort vooraan te staan —
-  // anders zegt het scherm "32.4 MB tegen 29.1 MB" terwijl de grootte er niets mee te maken had.
+  // In dezelfde volgorde als [firstIsBetter] beslist, zodat de zin nooit iets anders zegt dan de keuze.
+  final kk = kwaliteitVan(keep), kd = kwaliteitVan(drop);
+  final c = vergelijkKwaliteit(kk, kd);
+  if (c != 0) {
+    if (kk.klasse == kd.klasse) return '${ext(keep)} boven ${ext(drop)}';
+    return '${kwaliteitZin(kk)} boven ${kwaliteitZin(kd)}';
+  }
   if (isVasteKeuze(keep.path) != isVasteKeuze(drop.path)) {
     return isVasteKeuze(keep.path) ? 'door jou zelf gekozen' : 'jouw eigen keuze blijft staan';
   }
-  final rk = formatRank(keep.path), rd = formatRank(drop.path);
-  if (rk != rd) return '${ext(keep)} boven ${ext(drop)}';
   if (_isMultichannelFile(keep) != _isMultichannelFile(drop)) return 'stereo boven surround';
-  // Zelfde gronden, zelfde volgorde als [firstIsBetter] — anders zegt het scherm "32,4 MB tegen
-  // 29,1 MB" terwijl de grootte er niets mee te maken had.
-  if (bewezenNep(keep.path) != bewezenNep(drop.path)) {
-    final o = gemeten(drop.path);
-    return o == null ? 'de echte boven de nagemaakte' : 'de echte — de andere: ${waarom(o)}';
+  if (formatRank(keep.path) < 3 && formatRank(keep.path) == formatRank(drop.path)) {
+    try {
+      String mb(File f) => '${(f.lengthSync() / 1024 / 1024).toStringAsFixed(1)} MB';
+      return 'hogere bitrate: ${mb(keep)} tegen ${mb(drop)}';
+    } catch (_) {/* dan de algemene zin */}
   }
-  try {
-    String mb(File f) => '${(f.lengthSync() / 1024 / 1024).toStringAsFixed(1)} MB';
-    return '${mb(keep)} tegen ${mb(drop)}';
-  } catch (_) {
-    return 'groter bestand';
-  }
+  return 'gelijk (${kwaliteitZin(kk)}) — wat er stond blijft staan';
 }
 
 /// De namen die surround verraden, één keer samengesteld.
@@ -1062,7 +1114,7 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
     // Een radiobestand dat verliest is afval van die radio, en in `_dubbel` ziet niemand het ooit nog.
     Future<void> ruimBinnenkomendOp() async {
       if (parkeerBinnenkomend ?? parkeerAltijd) {
-        await _parkeer(src, parkeerIn!);
+        await _parkeer(src, '${parkeerIn!}${Platform.pathSeparator}$parkeerBinnenkomer');
       } else {
         await src.delete().catchError((_) => src);
       }
@@ -1101,7 +1153,8 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
     // Parkeren als we NAAR een bestaand album zijn gestuurd: dan is de verliezer een bestand dat al in
     // de bibliotheek stond, en dat is van jou. Op de gewone downloadweg is de verliezer iets wat deze
     // download zelf net ophaalde, en dat mag gewoon weg — behalve met [parkeerAltijd], zie boven.
-    final landed = await _install(src, dest, losers, parkeerIn: parkeerIn);
+    final landed = await _install(src, dest, losers,
+        parkeerIn: parkeerIn ?? '$root${Platform.pathSeparator}$parkeerMap');
     // Soulseek delivered the audio; the record's identity comes from here. Without this the file
     // sits under the right name in the right folder while its TAGS still say it is track 1 of
     // "The Essential Backstreet Boys" — and the tags are what the library and Roon actually read.
@@ -1876,19 +1929,33 @@ bool _naamDekt(String ruimer, String smaller) {
 /// één naam is en niet twee die kunnen gaan verschillen.
 const parkeerMap = '_dubbel';
 
-/// [f] opzij zetten in [parkeerIn], onder een vrije naam. Nooit overschrijven: twee verliezers met
-/// dezelfde bestandsnaam zijn twee bestanden.
-Future<void> _parkeer(File f, String parkeerIn) async {
+/// Onder [parkeerMap]: wat BINNENKWAM en verloor van wat er al stond.
+///
+/// **Waarom apart, en niet gewoon in `_dubbel`.** Vanaf 29-09-2026 kan er iets teruggezet worden uit
+/// `_dubbel` ([zetGeparkeerdeTerug]): een kopie van jou die ten onrechte werd vervangen. Maar een
+/// binnenkomer die verloor is nooit van jou geweest — die terugzetten zou de keuring precies omdraaien.
+/// In één map zijn de twee niet uit elkaar te houden; in twee mappen wel, en je ziet het zelf ook in de
+/// Verkenner.
+const parkeerBinnenkomer = 'binnengekomen';
+
+/// Onder [parkeerMap]: wat de keuring tegenhield omdat het kapot is. Zelfde reden als hierboven.
+const parkeerAfgekeurd = 'afgekeurd';
+
+/// [f] opzij zetten in [parkeerIn], onder een vrije naam, en het pad teruggeven. Nooit overschrijven:
+/// twee verliezers met dezelfde bestandsnaam zijn twee bestanden.
+Future<String> _parkeer(File f, String parkeerIn) async {
   final naam = f.uri.pathSegments.last;
   await Directory(parkeerIn).create(recursive: true);
   var doel = File('$parkeerIn${Platform.pathSeparator}$naam');
   for (var n = 2; await doel.exists(); n++) {
     doel = File('$parkeerIn${Platform.pathSeparator}($n) $naam');
   }
-  await _move(f, doel);
+  return _move(f, doel);
 }
 
-Future<String> _install(File src, File dest, List<File> losers, {String? parkeerIn}) async {
+/// [parkeerIn] is waar een verliezer heen gaat. Hij moet er zijn: een verliezer is een bestand dat al in
+/// je bibliotheek stond, en dat wordt nooit gewist — zie hieronder.
+Future<String> _install(File src, File dest, List<File> losers, {required String parkeerIn}) async {
   if (losers.isEmpty) return _move(src, dest);
   // Land beside the target first, so nothing is destroyed until the new file is really here.
   final tmp = File('${dest.path}.incoming');
@@ -1900,11 +1967,11 @@ Future<String> _install(File src, File dest, List<File> losers, {String? parkeer
       // geparkeerd in plaats van gewist: de mindere gaat naar `_dubbel`, nooit de vuilnisbak in.
       // Hier stond "zo werkt Opruimen ook", en dat klopte niet: Opruimen gaf geen [parkeerIn] mee en
       // wiste dus. Sinds 19-09-2026 geeft [bergMapOp] — ook de weg van Opruimen — `parkeerAltijd`.
-      if (parkeerIn != null) {
-        await _parkeer(l, parkeerIn);
-      } else {
-        await l.delete();
-      }
+      //
+      // En sinds 29-09-2026 nooit meer wissen, op geen enkele weg. Op de gewone Soulseek-weg gaf
+      // `placeFileDetailed` geen parkeermap mee als de bibliotheek het nummer niet herkende maar er wél
+      // een bestand op de doelplek of in een ander formaat naast lag — en dan werd dát gewist.
+      await _parkeer(l, parkeerIn);
     } catch (_) {/* couldn't remove the old copy — the new one still lands */}
   }
   try {
@@ -1916,7 +1983,14 @@ Future<String> _install(File src, File dest, List<File> losers, {String? parkeer
     herNoemOordeel(landed, at);
     return at;
   } catch (_) {
-    return landed; // still on disk under .incoming; the scan picks it up
+    // Het hernoemen lukte niet (een virusscanner, een speler die het oude bestand vasthield). Dan via
+    // [_move], met herhalen en kopiëren: een bestand dat op `.incoming` blijft staan ziet de scan
+    // NIET — dat is geen audio-extensie — en de verliezer is dan al weg.
+    try {
+      return await _move(File(landed), dest);
+    } catch (_) {
+      return landed;
+    }
   }
 }
 
@@ -1930,6 +2004,62 @@ Future<String> _install(File src, File dest, List<File> losers, {String? parkeer
 /// that loses the race would leave half a record moved.
 Future<String> moveWithRetry(File src, File dest) => _move(src, dest);
 
+/// Een geparkeerde kopie terugzetten op de plek van wat er nu staat; wat er nu staat gaat opzij.
+///
+/// [geparkeerd] staat in `_dubbel`, [huidig] is de kopie die hem verving. Dit is het omgekeerde van een
+/// vervanging en net zo omkeerbaar: [huidig] gaat naar [parkeerIn] — nooit weg — en wie hem terug
+/// wil, kan dat met deze zelfde functie.
+///
+/// Waarom het er is: op 29-09-2026 bleek dat de lossless-wens Sabers opgeschaalde 24/96-kopieën van
+/// Blood On The Dance Floor had ingeruild voor eerlijke 24/48 en 24/44,1 — niets beter, maar hij las
+/// het als "in mindere kwaliteit", en onder de regel van die dag ([firstIsBetter]) was geen van die
+/// ruilen gebeurd.
+///
+/// De naam wordt die van [huidig] met de extensie van [geparkeerd]: een FLAC die een WavPack opvolgt
+/// heet .flac, op de plek waar de WavPack stond. En net als bij [placeFileDetailed] neemt hij de
+/// albumnaam van de buren over, anders staat hij in de goede map en tóch als apart album in beeld.
+/// Geeft het nieuwe pad, of null als het niet lukte — dan staat alles zoals het stond.
+Future<String?> zetGeparkeerdeTerug(File geparkeerd, File huidig, {required String parkeerIn}) async {
+  String ext(String p) {
+    final naam = p.split(Platform.pathSeparator).last;
+    return naam.contains('.') ? naam.substring(naam.lastIndexOf('.')) : '';
+  }
+
+  final h = huidig.path;
+  final stam = ext(h).isEmpty ? h : h.substring(0, h.length - ext(h).length);
+  final doel = File('$stam${ext(geparkeerd.path)}');
+  if (!await geparkeerd.exists() || !await huidig.exists()) return null;
+  // Staat er onder de nieuwe naam al iets anders, dan is dat niet de kopie die hem verving.
+  if (doel.path != h && await doel.exists()) return null;
+  final elders = huidig.parent.path;
+  final String opzij;
+  try {
+    opzij = await _parkeer(huidig, parkeerIn);
+  } catch (_) {
+    return null;
+  }
+  try {
+    final landed = await _move(geparkeerd, doel);
+    final buren = _burenZeggen(elders, landed);
+    final eigen = readTags(File(landed));
+    final velden = <String, String?>{
+      if (buren.album != null) 'ALBUM': buren.album,
+      if (buren.totaal != null) 'TRACKTOTAL': '${buren.totaal}',
+      if (buren.totaal != null) 'TOTALTRACKS': '${buren.totaal}',
+      if (buren.artiest != null && eigen != null && _naamDekt(buren.artiest!, eigen.artist))
+        'ARTIST': buren.artiest,
+    };
+    if (velden.isNotEmpty) await writeTagFields(File(landed), velden);
+    return landed;
+  } catch (_) {
+    // Terug zoals het was: jouw huidige kopie weer op haar plek.
+    try {
+      await _move(File(opzij), huidig);
+    } catch (_) {/* staat dan in _dubbel; niets is weg */}
+    return null;
+  }
+}
+
 Future<String> _move(File src, File dest) async {
   // De bescherming van een handmatige keuze hangt aan het PAD, en dit is de enige plek in de app waar
   // een muziekbestand van pad verandert. Zonder deze regel gold zo'n keuze precies één keer: het filen
@@ -1941,6 +2071,8 @@ Future<String> _move(File src, File dest) async {
     // De meting hangt ook aan het pad, en om precies dezelfde reden: zonder dit geldt een
     // echtheidsmeting maar één keer, want het filen verplaatst het bestand.
     herNoemOordeel(src.path, naar);
+    // En de decodeerproef: zonder dit wordt elk bestand na het filen opnieuw gedecodeerd.
+    herNoemIntegriteit(src.path, naar);
   }
 
   for (var attempt = 0; attempt < 3; attempt++) {
@@ -1963,9 +2095,30 @@ Future<String> _move(File src, File dest) async {
 
 /// Result of tidying a folder.
 class TidyReport {
-  int moved = 0, duplicates = 0, skipped = 0;
+  int moved = 0, duplicates = 0, skipped = 0, afgekeurd = 0;
+
+  /// Wat er met elk bestand gebeurde, onder het pad waar het vandaan kwam.
+  ///
+  /// Voor de downloadlijst. Daar stond na een torrent "Klaar" onder elk nummer, ook onder het nummer
+  /// dat meteen naar `_dubbel` ging omdat je het al beter had — en dan zie je pas weken later dat het
+  /// er niet staat. Sinds 29-09-2026 zegt de lijst per nummer wat de keuring besliste.
+  final Map<String, String> uitkomst = {};
+
+  /// De paden die de keuring tegenhield (zie `keur` bij [bergMapOp]). Ook als het parkeren daarna
+  /// mislukte: wie opruimt wat er nog in de map ligt, moet weten dat deze er NIET uit mogen.
+  final Set<String> tegengehouden = {};
+
   @override
-  String toString() => '$moved verplaatst · $duplicates dubbel opgeruimd · $skipped overgeslagen';
+  String toString() => '$moved verplaatst · $duplicates dubbel opgeruimd · $skipped overgeslagen'
+      '${afgekeurd > 0 ? ' · $afgekeurd afgekeurd' : ''}';
+
+  /// Wat de keuring besliste, in één regel voor een melding op het scherm. Leeg als er niets was.
+  String get keuringZin => [
+        if (moved > 0) '$moved opgeborgen',
+        if (duplicates > 0) '$duplicates had je al minstens even goed',
+        if (afgekeurd > 0) '$afgekeurd afgekeurd (kapot)',
+        if (skipped > 0) '$skipped niet op te bergen',
+      ].join(' · ');
 }
 
 /// Re-file every loose audio file under [downloadsRoot] into the tidy tree, and remove exact
@@ -2018,9 +2171,15 @@ int? looptijdInSeconden(File f) {
   return (d.inMilliseconds / 1000).round();
 }
 
+///
+/// **[keur]: eerst de keuring, dan pas de bibliotheek.** Geeft hij een reden terug, dan gaat het bestand
+/// naar `_dubbel` en niet de bibliotheek in. De torrentweg geeft hier de decodeerproef mee: een afgekapte
+/// FLAC kwam tot 29-09-2026 gewoon binnen, want tot dan toe keek niemand of een bestand wel héél was.
+/// Een keuring die zelf faalt (een uitzondering) houdt niets tegen — niet weten is niet afkeuren.
 Future<TidyReport> bergMapOp(String map, String downloadsRoot,
     {String? Function(String artist, String title, {int? seconds})? staatAl,
-    bool Function(String pad)? slaOver}) async {
+    bool Function(String pad)? slaOver,
+    Future<String?> Function(File f)? keur}) async {
   final report = TidyReport();
   final dir = Directory(map);
   if (!await dir.exists()) return report;
@@ -2039,9 +2198,16 @@ Future<TidyReport> bergMapOp(String map, String downloadsRoot,
     // de hele downloadmap, en liep dus ook dáárdoor. Gemeten op 19-09-2026: 185 bestanden in
     // `_dubbel`, 8 in `_inkomend`, 10 in `_torrentwerk`. Een geparkeerde kopie die nog steeds verloor,
     // werd tot en met 3.9.400 bij elke druk op de knop GEWIST — het vangnet leegde zichzelf.
-    if (e.path.contains('${sep}_inkomend$sep') ||
-        e.path.contains('$sep$parkeerMap$sep') ||
-        e.path.contains('$sep$torrentWerkMap$sep')) {
+    //
+    // **Gemeten ONDER [map], niet over het hele pad.** Sinds 29-09-2026 wacht een torrent in de
+    // keuringsmap (`_keuring`) en wordt hij van daaruit opgeborgen — met deze regel over het hele pad
+    // zou élk bestand daarin als "werkmap van de app" overgeslagen worden, en kwam er nooit iets uit.
+    // Voor "Opruimen" over de hele downloadmap verandert er niets: daar ligt alles onder [map].
+    final onder = '$sep${e.path.substring(dir.path.length)}';
+    if (onder.contains('${sep}_inkomend$sep') ||
+        onder.contains('$sep$parkeerMap$sep') ||
+        onder.contains('$sep$torrentWerkMap$sep') ||
+        onder.contains('$sep$keuringMap$sep')) {
       continue;
     }
     // Wat de aanroeper nog niet af vindt — een download die er nog in schrijft. Zie `_inAanmaak` in
@@ -2058,6 +2224,25 @@ Future<TidyReport> bergMapOp(String map, String downloadsRoot,
   // as "Justice | D.A.N.C.E." — only the album differs — so the live version was thrown away.
   for (final f in files) {
     final before = f.path;
+    if (keur != null) {
+      String? reden;
+      try {
+        reden = await keur(f);
+      } catch (_) {
+        reden = null; // de keuring viel om; dat is geen oordeel over het bestand
+      }
+      if (reden != null) {
+        report.afgekeurd++;
+        report.tegengehouden.add(before);
+        try {
+          await _parkeer(f, '$downloadsRoot$sep$parkeerMap$sep$parkeerAfgekeurd');
+          report.uitkomst[before] = '$reden — niet in je bibliotheek gezet (staat in $parkeerMap)';
+        } catch (_) {
+          report.uitkomst[before] = '$reden — niet in je bibliotheek gezet';
+        }
+        continue;
+      }
+    }
     // **De looptijd uit het bestand zelf, en [staatAl] alleen als die er is.** [staatAl] is de weg
     // waarlangs een betere kopie ÓP het bestand landt dat er al ligt — precies het vervangen waar dit
     // om draait. Maar zonder looptijd antwoordt die weg op niets meer dan artiest + titel, en dat is
@@ -2087,10 +2272,15 @@ Future<TidyReport> bergMapOp(String map, String downloadsRoot,
     switch (out.how) {
       case Placement.moved:
         if (out.path != before) report.moved++;
+        report.uitkomst[before] = out.verving
+            ? 'opgeborgen — verving een mindere kopie (die staat in $parkeerMap)'
+            : 'opgeborgen in je bibliotheek';
       case Placement.duplicate:
         report.duplicates++;
+        report.uitkomst[before] = 'had je al in minstens even goede kwaliteit — deze staat in $parkeerMap';
       case Placement.stuck:
         report.skipped++;
+        report.uitkomst[before] = 'niet op te bergen — de tags zijn niet te lezen';
     }
   }
   return report;

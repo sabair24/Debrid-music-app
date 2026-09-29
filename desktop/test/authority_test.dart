@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:debridmusic/editions.dart';
 import 'package:debridmusic/flac_tags.dart';
+import 'package:debridmusic/integriteit.dart';
 import 'package:debridmusic/organize.dart';
 
 /// A tiny but valid FLAC carrying the tags a Soulseek peer might have written.
@@ -58,6 +59,11 @@ const _release = ReleaseAuthority(
 void main() {
   late Directory root;
   setUp(() => root = Directory.systemTemp.createTempSync('auth'));
+  // **Sinds 29-09-2026 beslist de grootte niet meer.** Deze toetsen zetten een vervanging op om te zien
+  // WAAR de betere kopie landt en welke tags hij meekrijgt; dat die groter was, was tot dan genoeg reden
+  // om te vervangen. Nu moet het bewezen zijn, en dus is de kopie die er ligt hier kapot (de
+  // decodeerproef, zie keuring.dart). Wat getoetst wordt blijft hetzelfde.
+  tearDown(resetIntegriteitVoorTest);
   tearDown(() {
     try {
       root.deleteSync(recursive: true);
@@ -215,10 +221,11 @@ void main() {
       ).forTrack(const ChoiceTrack('11', "Let's Have a Party", 230), 11);
 
       final a = await placeFileDetailed(small, root.path, tags: auth);
+      zetIntegriteitVoorTest(a.path, (heel: false, reden: 'afgekapt'));
       final b = await placeFileDetailed(big, root.path, tags: auth);
 
       expect(a.how, Placement.moved);
-      expect(b.how, Placement.moved, reason: 'the bigger copy wins and replaces');
+      expect(b.how, Placement.moved, reason: 'the whole copy beats the broken one and replaces it');
       // Exactly one file, no "(2)": the peer names differ wildly but the album says both are track 11.
       final dir = Directory(File(a.path).parent.path);
       final flacs = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.flac')).toList();
@@ -255,6 +262,7 @@ void main() {
         ..createSync(recursive: true);
       final oud = File('${bestaandeMap.path}${sep}02 - Baby Be Mine.flac')
         ..writeAsBytesSync(_peerFlac(['TITLE=Baby Be Mine', 'ARTIST=Michael Jackson'], pad: 1000));
+      zetIntegriteitVoorTest(oud.path, (heel: false, reden: 'afgekapt'));
 
       // Wat er binnenkomt: groter, met een andere albumtag.
       final staging = Directory('${root.path}${sep}_in')..createSync();
@@ -317,6 +325,7 @@ void main() {
       final oud = File('${map.path}${sep}02 - Baby Be Mine.flac')
         ..writeAsBytesSync(
             _peerFlac(['TITLE=Baby Be Mine', 'ARTIST=Michael Jackson', 'ALBUM=Thriller (MFSL One Step)']));
+      zetIntegriteitVoorTest(oud.path, (heel: false, reden: 'afgekapt'));
 
       final staging = Directory('${root.path}${sep}_in')..createSync();
       final nieuw = File('${staging.path}${sep}02 - Baby Be Mine.flac')
@@ -364,6 +373,7 @@ void main() {
           'ALBUM=Backstreet\'s Back',
           'TRACKTOTAL=13',
         ]));
+      zetIntegriteitVoorTest(oud.path, (heel: false, reden: 'afgekapt'));
 
       final staging = Directory('${root.path}${sep}_in')..createSync();
       // Zonder tracknummer in de naam, precies zoals de uploaders het aanleveren: zo kwam
@@ -422,6 +432,7 @@ void main() {
       final oud = File('${map.path}${sep}01 - Escape.flac')
         ..writeAsBytesSync(
             _peerFlac(['TITLE=Escape', 'ARTIST=Enrique Iglesias', 'ALBUM=Escape', 'TRACKTOTAL=16']));
+      zetIntegriteitVoorTest(oud.path, (heel: false, reden: 'afgekapt'));
 
       final staging = Directory('${root.path}${sep}_in')..createSync();
       final nieuw = File('${staging.path}${sep}01 - Escape (Album Version).flac')
@@ -452,6 +463,7 @@ void main() {
       }
       final oud = File('${map.path}${sep}05 - Hero.flac')
         ..writeAsBytesSync(_peerFlac(['TITLE=Hero', 'ARTIST=Enrique Iglesias', 'ALBUM=Escape']));
+      zetIntegriteitVoorTest(oud.path, (heel: false, reden: 'afgekapt'));
 
       final staging = Directory('${root.path}${sep}_in')..createSync();
       final nieuw = File('${staging.path}${sep}05 - Hero.flac')

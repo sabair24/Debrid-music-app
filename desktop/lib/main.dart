@@ -1324,6 +1324,12 @@ Future<void> main() async {
     // zijn eigen albumtag volgt en ook niet ernaast onder een andere naam. Zie
     // [LibraryStore.fileOfRecording].
     downloads.mapVanBestaande = library.fileOfRecording;
+    // Een torrent die bij het afsluiten nog in de keuringsmap stond: nu alsnog keuren en opbergen. Na
+    // de regel hierboven, want de keuring vraagt de bibliotheek wat er al ligt. Niet awaited — dat
+    // decodeert en meet, en niemand wacht erop. Zie [DownloadManager.hervatKeuring].
+    unawaited(downloads.hervatKeuring().then((n) {
+      if (n > 0) startLog.line('keuring: $n torrent(s) van de vorige keer nagekeurd');
+    }, onError: (Object e) => startLog.line('keuring hervatten MISLUKT: $e')));
     // Verwijderen is verwijderen: wat je weggooit hoort niet uit te blijven spelen, en een bestand
     // dat mpv open heeft laat zich op Windows niet eens wissen. Zie [PlayerStore.vergeetPaden].
     library.speelNietMeer = player.vergeetPaden;
@@ -13446,21 +13452,34 @@ class _TidalOphalenState extends State<_TidalOphalen> {
           'bijvoorbeeld https://tidal.com/browse/album/103805723');
       return;
     }
-    final map = context.read<AppSettings>().musicRoot;
+    if (context.read<AppSettings>().musicRoot.trim().isEmpty) {
+      setState(() => _fout = 'Er is nog geen muziekmap ingesteld.');
+      return;
+    }
+    // Niet in de muziekmap maar in de keuringsmap, zoals een torrent: pas wat heel is en niet slechter
+    // dan wat je al hebt, gaat de bibliotheek in. Zie [keuringMap] en [DownloadManager.keurBinnengekomen].
+    final dm = context.read<DownloadManager>();
+    final keuring = dm.keuringsmapVoor('TIDAL ${doel.replaceAll('/', ' ')}');
     setState(() {
       _bezig = true;
       _fout = null;
     });
-    final uitslag = await haalVanTidal(doel: doel, map: map, kwaliteit: _kwaliteit);
+    final uitslag = await haalVanTidal(doel: doel, map: keuring.path, kwaliteit: _kwaliteit);
+    // Ook na een fout keuren: tiddl breekt een plaat af bij één nummer dat niet te krijgen is, en wat
+    // er wél binnenkwam hoort niet onzichtbaar in de keuringsmap te blijven staan.
+    final r = await dm.keurBinnengekomen(keuring, 'TIDAL $doel', zichtbaar: dm.tidalRest);
     if (!mounted) return;
     if (uitslag.fout != null) {
       setState(() {
         _bezig = false;
-        _fout = uitslag.fout;
+        _fout = r == null || r.keuringZin.isEmpty
+            ? uitslag.fout
+            : '${uitslag.fout}\n\nWat wél binnenkwam is gekeurd: ${r.keuringZin}.';
       });
       return;
     }
-    Navigator.of(context).pop(uitslag.kwaliteit ?? '');
+    // Een string terug betekent gelukt: de melding die de aanroeper toont.
+    Navigator.of(context).pop(opgehaaldMelding(uitslag.kwaliteit ?? '', keuring: r?.keuringZin));
   }
 
   @override
@@ -13677,13 +13696,13 @@ class DownloadsView extends StatelessWidget {
                 if (_isDesktop && !context.read<LibraryStore>().isRemote)
                   TextButton.icon(
                     onPressed: () async {
-                      // Een string terug betekent gelukt; de inhoud is de kwaliteit die tiddl
-                      // meldde. Null is geannuleerd.
-                      final kwaliteit = await showDialog<String>(
+                      // Een string terug betekent gelukt; de inhoud is de melding, met de kwaliteit
+                      // die tiddl meldde en wat de keuring besliste. Null is geannuleerd. Inlezen
+                      // doet het opbergen zelf al (`onLibraryChanged`).
+                      final melding = await showDialog<String>(
                           context: context, builder: (_) => const _TidalOphalen());
-                      if (kwaliteit == null || !context.mounted) return;
-                      _srcToast(context, opgehaaldMelding(kwaliteit));
-                      unawaited(context.read<LibraryStore>().scan());
+                      if (melding == null || !context.mounted) return;
+                      _srcToast(context, melding);
                     },
                     icon: const Icon(Icons.link_rounded, size: 16),
                     label: const Text('Ophalen van Tidal…'),
@@ -14317,6 +14336,15 @@ class _KwaliteitViewState extends State<KwaliteitView> {
   int _done = 0, _total = 0;
   String? _uitslag;
 
+  /// Wat er in `_dubbel` terug hoort (zie [DownloadManager.zoekTerugzettingen]). Null zolang er niet
+  /// gezocht is, of nadat je de lijst sloot.
+  List<Terugzetting>? _terug;
+
+  /// De voorstellen die je hebt uitgevinkt, op hun pad in `_dubbel`.
+  final Set<String> _terugNiet = {};
+  bool _terugZoekt = false;
+  int _terugGedaan = 0, _terugTotaal = 0;
+
   /// Alleen om de aftelbalk te laten lopen terwijl er niets gebeurt.
   ///
   /// De jacht zelf meldt zich vanzelf via [DownloadManager.jacht]; wat daar NIET uit komt is het
@@ -14423,6 +14451,119 @@ class _KwaliteitViewState extends State<KwaliteitView> {
     });
   }
 
+  /// Nakijken wat er in `_dubbel` ten onrechte vervangen werd. Alleen meten; er verhuist nog niets.
+  ///
+  /// Saber op 29-09-2026, over Blood On The Dance Floor: *"moet mijn betere kwaliteit die ik al had
+  /// blijven."* De regel die dat voortaan garandeert staat in [firstIsBetter]; dit is de weg terug voor
+  /// wat er vóór die dag al geruild was. Zie [DownloadManager.zoekTerugzettingen].
+  Future<void> _zoekTerug() async {
+    final dm = context.read<DownloadManager>();
+    setState(() {
+      _terugZoekt = true;
+      _terug = null;
+      _terugNiet.clear();
+      _terugGedaan = 0;
+      _terugTotaal = 0;
+    });
+    try {
+      final uit = await dm.zoekTerugzettingen(voortgang: (gedaan, totaal) {
+        if (!mounted) return;
+        setState(() {
+          _terugGedaan = gedaan;
+          _terugTotaal = totaal;
+        });
+      });
+      if (!mounted) return;
+      setState(() {
+        _terugZoekt = false;
+        _terug = uit;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _terugZoekt = false;
+        _uitslag = 'Nakijken van $dupeFolder mislukt: $e';
+      });
+    }
+  }
+
+  /// De aangevinkte voorstellen uitvoeren. Geen extra vraag: de lijst ís de vraag, en alles is
+  /// omkeerbaar — wat er nu staat gaat opzij, niet weg.
+  Future<void> _zetTerug() async {
+    final lijst = [
+      for (final v in _terug ?? const <Terugzetting>[])
+        if (!_terugNiet.contains(v.geparkeerd)) v,
+    ];
+    if (lijst.isEmpty) return;
+    final dm = context.read<DownloadManager>();
+    setState(() => _terugZoekt = true);
+    final n = await dm.zetTerug(lijst);
+    if (!mounted) return;
+    setState(() {
+      _terugZoekt = false;
+      _terug = null;
+      _uitslag = n == lijst.length
+          ? '$n teruggezet — wat er stond, staat opzij in $dupeFolder${Platform.pathSeparator}$parkeerBinnenkomer'
+          : '$n van ${lijst.length} teruggezet — de rest staat nog zoals het stond (zie downloads.log)';
+    });
+  }
+
+  Widget _terugBlok(List<Terugzetting> lijst) {
+    final aan = lijst.where((v) => !_terugNiet.contains(v.geparkeerd)).length;
+    String naam(String pad) => pad.split(Platform.pathSeparator).last;
+    return Container(
+      margin: const EdgeInsets.only(top: 10, bottom: 6),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(10)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+              lijst.isEmpty
+                  ? 'Niets ten onrechte vervangen'
+                  : '${lijst.length} kopie(ën) in $dupeFolder horen terug',
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+          const SizedBox(height: 4),
+          Text(
+              lijst.isEmpty
+                  ? 'Wat in $dupeFolder staat is terecht vervangen, of het is niet te bewijzen: niet heel, '
+                      'of niet aantoonbaar dezelfde opname.'
+                  : 'Elk is heel en dezelfde opname, en wat er nu staat is niet bewezen beter. '
+                      'Terugzetten zet wat er nu staat opzij in $dupeFolder — er wordt niets gewist.',
+              style: const TextStyle(color: _muted, fontSize: 12, height: 1.4)),
+          const SizedBox(height: 8),
+          for (final v in lijst)
+            CheckboxListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              value: !_terugNiet.contains(v.geparkeerd),
+              onChanged: (gekozen) => setState(() => gekozen == true
+                  ? _terugNiet.remove(v.geparkeerd)
+                  : _terugNiet.add(v.geparkeerd)),
+              title: Text('${v.artiest} — ${v.titel}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              subtitle: Text('${v.reden}\nterug: ${naam(v.geparkeerd)}  ·  opzij: ${naam(v.huidig)}',
+                  style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.35)),
+            ),
+          const SizedBox(height: 6),
+          Wrap(spacing: 8, runSpacing: 6, children: [
+            if (lijst.isNotEmpty)
+              FilledButton.icon(
+                  onPressed: aan == 0 || _terugZoekt ? null : _zetTerug,
+                  icon: const Icon(Icons.settings_backup_restore_rounded, size: 16),
+                  label: Text('Zet $aan terug')),
+            TextButton(
+                onPressed: _terugZoekt ? null : () => setState(() => _terug = null),
+                child: const Text('Sluiten')),
+          ]),
+        ],
+      ),
+    );
+  }
+
   /// Alles op deze lijst op de verlanglijst zetten.
   ///
   /// Eén knop en geen vraag per rij: wie hier komt heeft de lijst al gezien, en per nummer bevestigen
@@ -14505,6 +14646,20 @@ class _KwaliteitViewState extends State<KwaliteitView> {
                 label: Text('Ook wat je zelf koos (${eigenKeuzes.length})'),
                 style: TextButton.styleFrom(foregroundColor: _muted),
               ),
+            // De omgekeerde weg: wat er ten onrechte UIT je bibliotheek werd geduwd. Zie [_zoekTerug].
+            if (_terugZoekt)
+              Text(
+                  _terugTotaal == 0
+                      ? '$dupeFolder nakijken…'
+                      : '$dupeFolder nakijken… $_terugGedaan van $_terugTotaal',
+                  style: const TextStyle(color: _muted, fontSize: 12.5))
+            else if (!_bezig)
+              TextButton.icon(
+                onPressed: _zoekTerug,
+                icon: const Icon(Icons.settings_backup_restore_rounded, size: 16),
+                label: const Text('Ten onrechte vervangen?'),
+                style: TextButton.styleFrom(foregroundColor: _muted),
+              ),
             if (_uitslag != null)
               Text(_uitslag!, style: const TextStyle(color: _muted, fontSize: 12.5)),
           ],
@@ -14515,6 +14670,7 @@ class _KwaliteitViewState extends State<KwaliteitView> {
           valueListenable: context.read<DownloadManager>().jacht,
           builder: (context, j, _) => VervangJachtStrook(jacht: j, nu: DateTime.now()),
         ),
+        if (_terug != null) _terugBlok(_terug!),
         const SizedBox(height: 6),
         Text(
           rijen.isEmpty
@@ -16181,8 +16337,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   /// Eén resultaat uit de TIDAL-lijst binnenhalen met tiddl.
   ///
   /// Hetzelfde venster als "Ophalen van Tidal…" bij Mijn downloads, alleen met het doel al
-  /// ingevuld: er valt hier niets meer te plakken. Daarna dezelfde scan, want het bestand staat dan
-  /// in de muziekmap en moet nog gevonden worden.
+  /// ingevuld: er valt hier niets meer te plakken. Het venster keurt en bergt ook op, en laat de
+  /// bibliotheek daarna zelf inlezen — zie [DownloadManager.keurBinnengekomen].
   Future<void> _ophalenVanTidal(String? doel, String naam) async {
     if (doel == null) {
       // Kan alleen als TIDAL een id teruggeeft dat niet op een id lijkt. Beter een zin dan een
@@ -16190,11 +16346,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       _srcToast(context, 'Dit resultaat heeft geen bruikbaar Tidal-id.');
       return;
     }
-    final kwaliteit = await showDialog<String>(
+    final melding = await showDialog<String>(
         context: context, builder: (_) => _TidalOphalen(doel: doel, titel: naam));
-    if (kwaliteit == null || !mounted) return;
-    _srcToast(context, opgehaaldMelding(kwaliteit));
-    unawaited(context.read<LibraryStore>().scan());
+    if (melding == null || !mounted) return;
+    _srcToast(context, melding);
   }
 
   /// Append what Discogs has that Deezer does not.

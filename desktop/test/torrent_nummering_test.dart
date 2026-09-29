@@ -192,13 +192,17 @@ void main() {
       expect(erbij, greaterThan(0), reason: 'het halve bestand moet gemarkeerd zijn zolang het groeit');
       expect(eraf, greaterThan(vast),
           reason: 'pas vrijgeven NA de vaste keuze, anders kan een ander hem onbeschermd opbergen');
-      final berg = lijf(online, 'Future<void> _bergTorrentOp(');
+      final berg = lijf(online, 'Future<TidyReport?> _bergTorrentOp(');
       expect(berg, contains('slaOver: _inAanmaak.contains'));
     });
 
     test('DE VAL: ook wat aria2 nog kopieert telt als "nog niet af"', () {
       final v = lijf(online, 'Future<String?> _verhuisNaar(');
-      expect(v.indexOf('_inAanmaak.add(doel.path)'), lessThan(v.indexOf('await bron.copy(doel.path)')),
+      // Sinds 29-09-2026 kopieert hij via een `.part` (zie [hervatKeuring]); het halve bestand heet
+      // dan anders, maar de naam waar het heen gaat moet nog steeds vóór het kopiëren gemarkeerd zijn.
+      final kopie = v.indexOf('await bron.copy(part)');
+      expect(kopie, greaterThan(0), reason: 'de kopie is verdwenen of heet anders');
+      expect(v.indexOf('_inAanmaak.add(doel.path)'), lessThan(kopie),
           reason: 'tijdens het kopiëren staat er een half bestand in de map');
     });
   });

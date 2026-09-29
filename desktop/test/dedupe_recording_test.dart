@@ -1,6 +1,8 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:debridmusic/echtheid.dart';
+import 'package:debridmusic/echtheid_oordelen.dart';
 import 'package:debridmusic/library.dart';
 import 'package:debridmusic/models.dart';
 
@@ -110,7 +112,23 @@ void main() {
 
       final album = lib.albums.single;
       expect(album.tracks, hasLength(1), reason: 'dezelfde take hoort een rij te zijn');
-      expect(album.tracks.single.path, big.path, reason: 'de grootste kopie hoort te winnen');
+      // Sinds 29-09-2026 is groter niet meer beter: zonder bewijs blijft de eerste staan.
+      expect(album.tracks.single.path, small.path, reason: 'gelijk: de eerste blijft, niet de grootste');
+    });
+
+    test('de BEWEZEN betere wint, ook als hij kleiner is', () async {
+      resetEchtheidVoorTest();
+      final small = _mk(root, r'complete\rip-a', '01 - Song.flac',
+          artist: 'X', album: 'Rec', title: 'Song', secs: 200, kb: 100);
+      final big = _mk(root, r'complete\rip-b', '01 - Song.flac',
+          artist: 'X', album: 'Rec', title: 'Song', secs: 202, kb: 400);
+      // De grote is uit een mp3 omgezet: een muur in het spectrum.
+      await onthoudOordeel(big.path, const Echtheidsoordeel(
+          bits: Bitdiepte.spreektNietTegen, boven: Bovenband.onbekend, band: Bandbreedte.afgekapt, afkapHz: 16000));
+      lib.tracks.addAll([big, small]);
+      lib.rebuildAlbums();
+      expect(lib.albums.single.tracks.single.path, small.path, reason: 'een uit mp3 omgezette verliest, hoe groot ook');
+      resetEchtheidVoorTest();
     });
 
     test('een duur die niemand rapporteert houdt het oude gedrag aan', () {

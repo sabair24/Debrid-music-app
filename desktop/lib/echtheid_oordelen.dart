@@ -82,6 +82,10 @@ Set<String> nepSleutels() => {
         if (e.value.isNep) e.key,
     };
 
+/// Alle oordelen, om mee te geven aan een isolate — zie `Voorkennis` in organize.dart. Een kopie:
+/// de isolate hoort niets terug te schrijven.
+Map<String, Echtheidsoordeel> alleOordelen() => Map.of(_oordelen);
+
 /// Dezelfde normalisatie als [bewezenNep] gebruikt, voor wie de verzameling zelf raadpleegt.
 String echtheidSleutelVoor(String pad) => _sleutel(pad);
 

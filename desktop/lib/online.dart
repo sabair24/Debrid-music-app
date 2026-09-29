@@ -25,11 +25,15 @@ import 'meldrem.dart';
 import 'warm_log.dart';
 import 'werkrij.dart';
 import 'paths.dart';
-import 'audioformaten.dart' show isVerliesvrij;
+import 'audioformaten.dart' show isAudioBestand, isVerliesvrij;
 import 'echtheid.dart';
 import 'echtheid_meter.dart';
 import 'echtheid_oordelen.dart';
 import 'flac_tags.dart';
+import 'fingerprint.dart' show Fingerprinter, similarity, maybeSameRecordingScore;
+import 'integriteit.dart';
+import 'keuring.dart' show Heelheid, kwaliteitZin;
+import 'wavpack_kop.dart' show readWvKop;
 import 'torbox_stand.dart';
 import 'vaste_keuze.dart';
 import 'vervangjacht.dart';
@@ -957,6 +961,27 @@ class SoulseekService {
   }
 }
 
+/// Eén voorstel om een kopie uit `_dubbel` terug te zetten. Zie [DownloadManager.zoekTerugzettingen].
+class Terugzetting {
+  /// De kopie in `_dubbel` die terug zou moeten.
+  final String geparkeerd;
+
+  /// Wat er nu op haar plek staat, en opzij gaat.
+  final String huidig;
+  final String artiest, titel;
+
+  /// Waarom, in een zin: "echte hi-res (96 kHz) boven cd-kwaliteit", of "even goed … — de vervanging
+  /// was geen winst".
+  final String reden;
+
+  const Terugzetting(
+      {required this.geparkeerd,
+      required this.huidig,
+      required this.artiest,
+      required this.titel,
+      required this.reden});
+}
+
 class DownloadJob {
   final String name;
   final String? key; // stable id so a specific tile/track row can show THIS job's progress inline
@@ -973,6 +998,14 @@ class DownloadJob {
   /// Only a Soulseek job can actually be stopped mid-flight; a TorBox transfer has no such
   /// handle, and offering a button that silently does nothing is worse than offering none.
   bool canCancel = false;
+
+  /// Waar het binnengekomen bestand op de keuring wacht (de torrentweg, zie [keuringMap]). Na de
+  /// keuring staat in [detail] wat ermee gebeurde: opgeborgen, weggezet omdat je hem al even goed had,
+  /// of afgekeurd omdat hij kapot is.
+  String? keuringsPad;
+
+  /// Wat er na de uitkomst van de keuring nog bij hoort, zoals "deelt nog 72 uur terug".
+  String? naKeuring;
 
   /// De gebruiker heeft deze BRON zelf aangewezen, ook al noemde hij geen los bestand.
   ///
@@ -1058,6 +1091,14 @@ class DownloadManager extends ChangeNotifier {
   /// de bibliotheek (3:00 van de 6:50 speelbaar), omdat een ander nummer uit dezelfde torrent
   /// negen seconden eerder klaar was.
   final Set<String> _inAanmaak = {};
+
+  /// Hoeveel torrentopdrachten er nu in elke keuringsmap werken.
+  ///
+  /// Twee keuzes uit dezelfde torrent delen één keuringsmap. Wat er na het opbergen overblijft — een
+  /// nummer zonder leesbare tags, een .cue, een boekje — gaat terug naar de zichtbare map, maar pas
+  /// als de LAATSTE opdracht klaar is: anders verhuist de eerste een blad waar de tweede nog mee moet
+  /// knippen. Zie [_zetRestZichtbaar].
+  final Map<String, int> _opKeuring = {};
 
   DownloadManager(this.online, this.soulseek, this.musicRoot, this.onLibraryChanged);
 
@@ -1684,18 +1725,69 @@ class DownloadManager extends ChangeNotifier {
   /// is nooit een reden om iets te weigeren.
   Future<Echtheidsoordeel?> _meetEchtheid(File f) async {
     try {
+      // FLAC en WavPack. Die laatste bleef ongemeten, en een ongemeten bestand kan niets bewijzen —
+      // op 29-09-2026 stonden er vier WavPacks van 32/192 in de plaats van FLACs, zonder dat iemand
+      // wist wat erin zat. Een WavPack met zwevende kommagetallen niet: daar zegt proef A niets.
+      int rate, bits;
+      double duur;
       final tags = readFlacTags(f);
-      if (tags == null || tags.sampleRate <= 0) return null;
+      if (tags != null && tags.sampleRate > 0) {
+        rate = tags.sampleRate;
+        bits = tags.bitsPerSample;
+        duur = (tags.duration?.inSeconds ?? 0).toDouble();
+      } else if (f.path.toLowerCase().endsWith('.wv')) {
+        final k = readWvKop(f);
+        if (k == null || k.sampleRate <= 0 || k.zwevend) return null;
+        rate = k.sampleRate;
+        bits = k.bitsPerSample;
+        duur = (k.duration?.inSeconds ?? 0).toDouble();
+      } else {
+        return null;
+      }
       final meter = Echtheidsmeter(cacheMap: '$appDir${Platform.pathSeparator}echtheid');
       if (!meter.available) return null;
-      final o = await meter.van(f.path,
-          kopSampleRate: tags.sampleRate,
-          kopBits: tags.bitsPerSample,
-          duurSeconden: (tags.duration?.inSeconds ?? 0).toDouble());
+      final o = await meter.van(f.path, kopSampleRate: rate, kopBits: bits, duurSeconden: duur);
       if (o != null) await onthoudOordeel(f.path, o);
       return o;
     } catch (_) {
       /* een meting is een verrijking; hij mag een download nooit breken */
+      return null;
+    }
+  }
+
+  /// Maak de vergelijking eerlijk vóór het filen: meet de binnenkomer én wat er al ligt, en geef het
+  /// pad van wat er ligt terug (of null).
+  ///
+  /// **Waarom ook wat er al ligt.** `firstIsBetter` telt alleen wat bewezen is. Een 24/192 in je
+  /// bibliotheek die nooit gemeten werd, geldt daar als "hi-res volgens de kop, niet gemeten" — en dan
+  /// kan een gemeten echte 24/96 er niet van winnen, maar ook niet van verliezen: het is "weet niet",
+  /// en dan blijft jouw bestand staan. Dat is veilig, maar het beste antwoord is gewoon meten. En een
+  /// kapot bestand van jou hoort te verliezen van een heel bestand; ook dat moet eerst bekend zijn.
+  Future<String?> _bereidVergelijkingVoor(File nieuw, TrackTags? gezag) async {
+    await _meetEchtheid(nieuw);
+    final t = gezag ?? readTags(nieuw);
+    if (t == null) return null;
+    final bestaand = mapVanBestaande?.call(t.artist, t.title, seconds: t.seconds);
+    if (bestaand == null || !File(bestaand).existsSync()) return null;
+    if (gemeten(bestaand) == null) await _meetEchtheid(File(bestaand));
+    await controleerHeel(bestaand);
+    return bestaand;
+  }
+
+  /// Is [a] dezelfde opname als [b]? Null als het niet te zeggen valt (geen fpcalc, niet te lezen).
+  ///
+  /// Zelfde titel is geen zelfde nummer: van zes vervangers die ooit binnenkwamen waren er zes een
+  /// radio-edit. De looptijd vangt het meeste, maar een remaster met dezelfde lengte of een andere
+  /// opname van precies even lang ziet alleen de vingerafdruk. Onder [maybeSameRecordingScore] is het
+  /// een andere opname.
+  Future<bool?> _zelfdeOpname(String a, String b) async {
+    try {
+      final fp = Fingerprinter();
+      if (!fp.available) return null;
+      final x = await fp.of(a), y = await fp.of(b);
+      if (x == null || y == null || x.raw.isEmpty || y.raw.isEmpty) return null;
+      return similarity(x.raw, y.raw) >= maybeSameRecordingScore;
+    } catch (_) {
       return null;
     }
   }
@@ -1711,34 +1803,6 @@ class DownloadManager extends ChangeNotifier {
   /// draait pas boven de 48 kHz en proef A pas boven de 16 bits. "Mag blijven" betekent hier dus
   /// "niets sprak het tegen", niet "bewezen echt".
   static bool magBlijven(Echtheidsoordeel? o) => o == null || !o.isNep;
-
-  /// Draagt deze vervanger minstens evenveel ECHTE muziek als wat er al ligt?
-  ///
-  /// **Waarom dit erbij moest, en het is aan het echte werk gemeten.** Bij een proefjacht op
-  /// "Madonna — La Isla Bonita" werden twee opgeschaalde kopieën van 146 MB terecht weggegooid, maar
-  /// de derde die binnenkwam was een eerlijke 16/48 — en die is met 768 op de schaal van
-  /// [echteCapaciteit] MINDER dan wat er al lag (een opgeschaalde 24/96 draagt echte 24 bits op
-  /// 44,1: 1058). Een vervalsing wegdoen is goed; hem inruilen voor minder muziek niet.
-  ///
-  /// **Minstens evenveel, niet méér.** Een eerlijke 24/44.1 is precies gelijk aan de opgeschaalde
-  /// 24/96 die hij vervangt — en dat is nou juist de ruil die gevraagd werd: "download soulseek
-  /// 24/44.1". Op "strikt meer" zou die nooit binnenkomen.
-  ///
-  /// Niet te lezen is GEEN nee. Een `.ape` of een bestand zonder leesbare kop levert geen getal, en
-  /// dan hoort de gewone weg te gelden — net als bij [magBlijven].
-  static bool draagtGenoeg(int? nieuw, int? oud) => nieuw == null || oud == null || nieuw >= oud;
-
-  /// De gemeten capaciteit van een bestand op schijf, of null als er niets van te maken is.
-  int? _capaciteitVan(String pad) {
-    try {
-      final t = readFlacTags(File(pad));
-      if (t == null || t.sampleRate <= 0) return null;
-      return echteCapaciteit(gemeten(pad),
-          kopSampleRate: t.sampleRate, kopBits: t.bitsPerSample);
-    } catch (_) {
-      return null;
-    }
-  }
 
   /// Hoe lang het bestand op dit pad werkelijk duurt, of null als dat niet te lezen valt.
   int? _duurVan(String pad) {
@@ -1816,10 +1880,21 @@ class DownloadManager extends ChangeNotifier {
         //
         // Een halve seconde op een download die seconden tot minuten duurde is onzichtbaar, en een
         // mislukte meting kost niets: dan is er simpelweg geen oordeel.
-        await _meetEchtheid(staged);
-        final uit =
-            await placeFileDetailed(staged, _downloadsRoot, tags: job.authority, staatAl: mapVanBestaande);
+        final bestaand = await _bereidVergelijkingVoor(staged, job.authority);
+        // Een ANDERE opname dan wat je hebt: niet eroverheen, maar ernaast. Zonder dit stuurt
+        // [mapVanBestaande] hem op artiest en titel naar jouw bestand, en dan vergelijkt de keuring
+        // twee verschillende nummers met elkaar.
+        final andere = bestaand != null && await _zelfdeOpname(staged.path, bestaand) == false;
+        if (andere) {
+          _log.line('   ${job.name}: een andere opname dan wat je hebt — ernaast, niet eroverheen');
+        }
+        final uit = await placeFileDetailed(staged, _downloadsRoot,
+            tags: job.authority, staatAl: andere ? null : mapVanBestaande);
         how = uit.how;
+        if (how == Placement.duplicate && bestaand != null) {
+          _log.line('   ${job.name}: niet bewezen beter dan wat je hebt — ${whyBetter(File(uit.path), staged)}; '
+              'de nieuwe is weggegooid');
+        }
         // Pas HIER, want `uit.path` is het bestand dat blijft — bij `moved` de nieuwe kopie (het
         // oordeel is meeverhuisd), bij `duplicate` de kopie die er al lag en gewonnen heeft.
         oordeelVanWatErLigt = gemeten(uit.path);
@@ -1835,7 +1910,7 @@ class DownloadManager extends ChangeNotifier {
       // (and was therefore discarded) reads as "added to your library" when nothing was added.
       job.detail = switch (how) {
         Placement.moved => null,
-        Placement.duplicate => 'had je al — beste versie behouden',
+        Placement.duplicate => 'had je al in minstens even goede kwaliteit — de nieuwe is weggegooid',
         Placement.stuck => 'gedownload, maar tags onleesbaar — staat in _inkomend',
       };
       notifyListeners();
@@ -2444,70 +2519,399 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
-  /// Een binnengekomen torrent opbergen zoals een Soulseek-download dat al werd.
+  /// Een binnengekomen torrent keuren en opbergen zoals een Soulseek-download dat al werd.
   ///
-  /// **Waarom dit er moest komen.** Soulseek en torrent hielden geen rekening met elkaar, en Saber
-  /// zag dat zelf: *"torrent vervangt de soulseek download niet, en anders om ook niet"*. Klopt, en
-  /// de oorzaak was één ontbrekende stap. Een Soulseek-nummer gaat bij binnenkomst door
-  /// [placeFileDetailed] en landt in de albummap, waar [firstIsBetter] kiest wat blijft. Een torrent
-  /// bleef liggen in `DebridMusic Downloads\<torrentnaam>\` tot iemand in Instellingen op
-  /// "Opruimen" drukte — dus stonden de twee nooit tegenover elkaar.
+  /// **Waarom het opbergen er moest komen.** Soulseek en torrent hielden geen rekening met elkaar, en
+  /// Saber zag dat zelf: *"torrent vervangt de soulseek download niet, en anders om ook niet"*. Een
+  /// Soulseek-nummer gaat bij binnenkomst door [placeFileDetailed] en landt in de albummap, waar
+  /// [firstIsBetter] kiest wat blijft; een torrent bleef liggen tot iemand op "Opruimen" drukte.
+  /// Gemeten op 17-09-2026: Culture Beat — Mr. Vain lag sinds 14-09 als schone 24/192 van een torrent
+  /// náást de bibliotheek, terwijl in `Albums\` de als opgeblazen gemeten Soulseek-kopie bleef staan.
   ///
-  /// Gemeten op 17-09-2026: Culture Beat — Mr. Vain lag sinds 14-09 als schone 24/192 van een
-  /// torrent náást de bibliotheek, terwijl in `Albums\` de Soulseek-kopie bleef staan die als
-  /// opgeblazen gemeten was — en Soulseek jaagde er drie dagen later nog op.
+  /// **Waarom er sinds 29-09-2026 eerst gekeurd wordt.** Tot dan kwam een torrent binnen in een map die
+  /// de bibliotheek inleest, en won hij als "jouw keuze" van alles wat je niet zelf koos — ook als hij
+  /// kapot of slechter was. Saber die dag, bij Blood On The Dance Floor: *"als er een slechtere binnenkomt
+  /// dan wat ik heb moet die weg, en moet mijn betere kwaliteit die ik al had blijven."* Nu wacht de
+  /// torrent in de keuringsmap ([keuringMap]), en per bestand:
   ///
-  /// Wie er wint beslist [firstIsBetter], en daar gaat "wat je zelf koos" vóór alles. Een
-  /// torrentbestand IS je eigen keuze — dat regelt [_jouwKeuze] al bij binnenkomst, en `_move`
-  /// neemt die bescherming mee naar de albummap — dus het wint van alles wat je níét zelf koos: ook
-  /// van een eerlijke kopie, en ook als het zelf als nep gemeten wordt. Alleen tegen een ándere
-  /// eigen keuze (een eerdere torrent, een exacte Soulseek-download) beslissen de gewone regels.
-  /// Wat er lag gaat naar `_dubbel` en niet weg. De Soulseek-jacht raakt een torrentbestand nooit.
-  Future<void> _bergTorrentOp(Directory destDir, String naam) async {
+  ///  * kapot (de decodeerproef, [controleerHeel]) — naar `_dubbel`, niet de bibliotheek in;
+  ///  * bewezen slechter of gelijk aan wat er ligt — naar `_dubbel`, en wat je had blijft staan;
+  ///    bij gelijk wint alleen jouw keuze, en een torrent IS jouw keuze ([_jouwKeuze]);
+  ///  * bewezen beter — neemt de plek in, en wat er lag gaat naar `_dubbel` (nooit weg).
+  ///
+  /// Wat niet op te bergen is maar wel heel — een nummer zonder leesbare tags, een .cue, een boekje —
+  /// gaat terug naar `DebridMusic Downloads\<torrent>`, waar het vroeger ook stond ([_zetRestZichtbaar]).
+  /// Onder elk nummer in [binnen] komt te staan wat de keuring besliste.
+  Future<TidyReport?> _bergTorrentOp(Directory destDir, String naam,
+      {Directory? zichtbaar, List<DownloadJob> binnen = const []}) async {
+    TidyReport? r;
     try {
-      // **Meten vóór het opbergen, net als elke Soulseek-landingsweg — maar met een ander gevolg.**
-      // Gemeten op 18-09-2026 met Kings of Leon — Sex On Fire: een 24/192-vinylrip van RuTracker
-      // die de meter van deze app "niets boven 22 kHz — opgeschaald, geen echte hi-res" noemt. Via
-      // de torrent stond hij als "nog niet gemeten" in de bibliotheek; nu is het oordeel er meteen,
-      // en toont het scherm zijn werkelijke resolutie (24/44.1) naast wat de kop belooft.
-      //
-      // **Wat dit NIET doet, en dat stond hier eerst verkeerd.** Het verandert niet welk bestand
-      // blijft staan. Elk torrentbestand is al een vaste keuze vóór het hier aankomt ([_jouwKeuze],
-      // op Sabers eigen verzoek: "als ik manueel download moet dit overheersen"), en in
-      // [firstIsBetter] gaat een vaste keuze vóór "wat als nep gemeten is verliest". Een torrent wint
-      // dus van alles wat je niet zelf koos, ook als hij nep blijkt, en de Soulseek-jacht raakt hem
-      // niet. Nagegaan op 19-09-2026: beide Kings of Leon-nummers staan tussen de vaste keuzes en
-      // kwamen daarom ook niet mee toen de knop "zoek beter" 27 betrapte nummers op de verlanglijst
-      // zette.
-      //
-      // Er wordt dus ook niets geweigerd: een torrent heb je zelf aangewezen. Het oordeel wordt
-      // alleen onthouden.
+      // Meten vóór het opbergen, net als elke Soulseek-landingsweg. Gemeten op 18-09-2026 met Kings of
+      // Leon — Sex On Fire: een 24/192-vinylrip van RuTracker die de meter van deze app "niets boven
+      // 22 kHz — opgeschaald, geen echte hi-res" noemt. Zonder meting geldt hij als "hi-res volgens de
+      // kop, niet bewezen", en dan kan hij niets vervangen — met meting weet de keuring waar hij staat.
       await _meetBinnengekomen(destDir, naam);
-      // **`nietIn: destDir` is wat het opbergen laat werken.** Elk afgerond nummer heeft de
-      // bibliotheek al laten inlezen ([onLibraryChanged] aan het eind van elke loper), dus hier kent
-      // ze het torrentbestand al — in DEZE map. Zonder uitzondering wees "waar staat deze opname al?"
-      // naar het bestand zelf, en dan is er niets te verhuizen. Gemeten op 17 en 18-09-2026: Justin
-      // Bieber (vijf platen), Justin Timberlake en Vanessa Carlton bleven zo naast `Albums` liggen,
-      // elk met "0 verplaatst · 0 dubbel opgeruimd · 0 overgeslagen". Zie
-      // [LibraryStore.fileOfRecording].
+      // **`nietIn: destDir` hoort er nog bij.** De bibliotheek leest de keuringsmap niet, dus daar kan
+      // ze het torrentbestand zelf niet meer aanwijzen. Maar een torrent die vóór 29-09-2026 in de
+      // zichtbare map binnenkwam en nu pas opgeborgen wordt, kent ze wél — en "waar staat deze opname
+      // al?" mag nooit het bestand zelf antwoorden. Gemeten op 17 en 18-09-2026: vijf platen van Justin
+      // Bieber bleven zo liggen met "0 verplaatst". Zie [LibraryStore.fileOfRecording].
       final zoek = mapVanBestaande;
-      final r = await bergMapOp(destDir.path, _downloadsRoot,
+      r = await bergMapOp(destDir.path, _downloadsRoot,
           staatAl: zoek == null
               ? null
               : (artist, title, {int? seconds}) =>
                   zoek(artist, title, seconds: seconds, nietIn: destDir.path),
           // Een ander nummer uit dezelfde torrent dat nog binnenkomt blijft staan; zijn eigen
           // download bergt het op als het klaar is. Zie [_inAanmaak].
-          slaOver: _inAanmaak.contains);
-      _log.line('torrent "$naam" opgeborgen: $r');
-      if (r.moved + r.duplicates == 0) return;
-      await onLibraryChanged();
-      await vergeetWatErAlIs();
+          slaOver: _inAanmaak.contains,
+          keur: _keurVoorBibliotheek);
+      _log.line('torrent "$naam" gekeurd en opgeborgen: $r');
+      for (final p in r.tegengehouden) {
+        _log.line('torrent "$naam": ${p.split(Platform.pathSeparator).last} — ${r.uitkomst[p]}');
+      }
+      // Alleen voor wat een lopende opdracht nog ophaalt: de rest (een geknipt nummer, een restant van
+      // de vorige keer) heeft geen regel in de lijst, en zou hier anders blijven hangen.
+      final wachtend = {
+        for (final j in jobs)
+          if (j.busy && j.keuringsPad != null) j.keuringsPad!,
+      };
+      for (final e in r.uitkomst.entries) {
+        if (!wachtend.contains(e.key)) continue;
+        _gekeurd[e.key] = (zin: e.value, afgekeurd: r.tegengehouden.contains(e.key));
+      }
     } catch (e) {
-      // Blijft liggen waar hij lag. Dat is niet erger dan hoe het was, en de knop "Opruimen" in
-      // Instellingen doet nog altijd hetzelfde werk.
-      _log.line('torrent "$naam" opbergen mislukt: $e — hij blijft in de downloadmap staan');
+      // Blijft liggen waar hij lag — in de keuringsmap, en dus NIET in je bibliotheek. Bij de volgende
+      // start probeert [hervatKeuring] het opnieuw.
+      _log.line('torrent "$naam" keuren of opbergen mislukt: $e — hij wacht in $keuringMap');
     }
+    // Wat er over is terug naar waar het vroeger stond — maar pas als niemand anders meer in deze
+    // keuringsmap werkt. Zie [_opKeuring].
+    var zichtbaarGezet = <String, String>{};
+    // Alleen na een keuring die ook echt liep: viel ze om, dan is "de rest" alles — en dan zou deze stap
+    // ongekeurde bestanden alsnog zichtbaar maken. Die wachten liever tot [hervatKeuring].
+    if (r != null && zichtbaar != null && (_opKeuring[destDir.path] ?? 0) <= 1) {
+      try {
+        zichtbaarGezet = await _zetRestZichtbaar(destDir, zichtbaar, r.tegengehouden);
+      } catch (e) {
+        _log.line('torrent "$naam": de rest terugzetten mislukt: $e');
+      }
+    }
+    for (final j in binnen) {
+      final p = j.keuringsPad;
+      if (p == null || j.cancelled || j.status == 'failed') continue;
+      final u = _gekeurd.remove(p);
+      final elders = zichtbaarGezet[p];
+      final String zin;
+      if (u != null) {
+        zin = elders == null ? u.zin : '${u.zin} — staat in ${zichtbaar!.path}';
+      } else if (elders != null) {
+        zin = 'niet op te bergen — staat in ${zichtbaar!.path}';
+      } else if (!File(p).existsSync()) {
+        // Een image dat in losse nummers geknipt is: die nummers zijn elk apart gekeurd.
+        zin = 'binnen en gekeurd';
+      } else if (r == null) {
+        zin = 'binnen, maar de keuring liep vast — hij wacht in $keuringMap en wordt bij de volgende '
+            'start opnieuw gekeurd';
+      } else {
+        zin = 'binnen, maar nog niet gekeurd — wacht in $keuringMap';
+      }
+      // Niet in je bibliotheek is niet "klaar": afgekeurd, of een keuring die omviel.
+      j.status = (u != null && u.afgekeurd) || (u == null && elders == null && r == null && File(p).existsSync())
+          ? 'failed'
+          : 'done';
+      j.detail = j.naKeuring == null ? zin : '$zin · ${j.naKeuring}';
+    }
+    notifyListeners();
+    final r2 = r;
+    if (r2 == null) return null;
+    if (r2.moved + r2.duplicates + r2.afgekeurd == 0 && zichtbaarGezet.isEmpty) return r2;
+    await onLibraryChanged();
+    await vergeetWatErAlIs();
+    return r2;
+  }
+
+  /// Een nieuwe keuringsmap voor een download die niet via de torrentrij loopt — TIDAL.
+  ///
+  /// Hij telt meteen als "in gebruik" ([_opKeuring]), zodat [hervatKeuring] een download die nog
+  /// binnenkomt niet voor een restant van de vorige keer aanziet. [keurBinnengekomen] geeft hem vrij.
+  Directory keuringsmapVoor(String naam) {
+    final d = Directory('$_downloadsRoot${Platform.pathSeparator}$keuringMap'
+        '${Platform.pathSeparator}${_sanitize(naam)}');
+    d.createSync(recursive: true);
+    _opKeuring.update(d.path, (n) => n + 1, ifAbsent: () => 1);
+    return d;
+  }
+
+  /// Alles in [map] keuren en opbergen, zoals een torrent ([_bergTorrentOp]), en de map vrijgeven.
+  ///
+  /// [jouwKeuze]: je hebt dit zelf opgehaald, dus bij gelijke kwaliteit wint het van wat er lag — net
+  /// als een torrent ([_jouwKeuze]). Wat niet op te bergen is gaat naar [zichtbaar].
+  Future<TidyReport?> keurBinnengekomen(Directory map, String naam,
+      {required Directory zichtbaar, bool jouwKeuze = true}) async {
+    try {
+      if (jouwKeuze && await map.exists()) {
+        await for (final e in map.list(recursive: true, followLinks: false)) {
+          if (e is File && isAudioBestand(e.path)) await _jouwKeuze(e.path);
+        }
+      }
+      return await _bergTorrentOp(map, naam, zichtbaar: zichtbaar);
+    } finally {
+      final over = (_opKeuring[map.path] ?? 1) - 1;
+      if (over <= 0) {
+        _opKeuring.remove(map.path);
+      } else {
+        _opKeuring[map.path] = over;
+      }
+    }
+  }
+
+  /// Waar wat van TIDAL niet op te bergen is terechtkomt: zichtbaar, zoals vroeger alles van tiddl.
+  Directory get tidalRest => Directory('$_downloadsRoot${Platform.pathSeparator}TIDAL');
+
+  /// Zoek in `_dubbel` wat er ten onrechte vervangen werd: kopieën die onder de regel van 29-09-2026
+  /// ([firstIsBetter]) hadden moeten blijven staan. Alleen lezen en meten — er verhuist hier niets.
+  ///
+  /// **Waarom.** Saber, over Blood On The Dance Floor: *"ik kon zweren, dat ik alle liedjes in beste
+  /// kwaliteit had … en nu staan er een paar … in mindere kwaliteit."* Gemeten die dag: van de 95
+  /// kopieën in `_dubbel` hadden er 47 een opvolger met een lager label. Een deel terecht (een
+  /// opgeschaalde 24/192 Material Girl voor een echte 24/96), een deel niet (Is It Scary: een
+  /// opgeschaalde 24/96 voor een eerlijke 24/48 — dezelfde muziek, geen winst).
+  ///
+  /// Per kopie drie bewijzen, anders geen voorstel:
+  ///  * hij is heel ([controleerHeel]) — een kapotte kopie terugzetten is geen herstel;
+  ///  * wat er nu staat is NIET bewezen beter; bij gelijk blijft wat je had, tenzij je de nieuwe zelf
+  ///    koos (dan wint die, zie [firstIsBetter]);
+  ///  * het is dezelfde opname (vingerafdruk) — zelfde titel is geen zelfde nummer. Zonder fpcalc dus
+  ///    geen voorstellen: liever niets dan een gok.
+  ///
+  /// Alleen de bovenste laag van `_dubbel`: daar staat wat VERVANGEN werd. Wat binnenkwam en verloor
+  /// ([parkeerBinnenkomer]) of werd afgekeurd ([parkeerAfgekeurd]) was nooit van jou.
+  Future<List<Terugzetting>> zoekTerugzettingen(
+      {void Function(int gedaan, int totaal)? voortgang}) async {
+    final zoek = mapVanBestaande;
+    final dubbel = Directory('$_downloadsRoot${Platform.pathSeparator}$parkeerMap');
+    if (zoek == null || !await dubbel.exists()) return const [];
+    final kandidaten = <File>[];
+    await for (final e in dubbel.list(followLinks: false)) {
+      if (e is File && isAudioBestand(e.path)) kandidaten.add(e);
+    }
+    final perHuidig = <String, Terugzetting>{};
+    for (var i = 0; i < kandidaten.length; i++) {
+      voortgang?.call(i, kandidaten.length);
+      final p = kandidaten[i];
+      try {
+        final v = await _terugzettingVoor(p, zoek, dubbel.path);
+        if (v == null) continue;
+        // Twee kopieën voor dezelfde plek ("(2) 01 - 7 Years.flac" naast "01 - 7 Years.flac"): de
+        // beste, en bij gelijk de eerste.
+        final eerder = perHuidig[v.huidig];
+        if (eerder != null && !firstIsBetter(p, File(eerder.geparkeerd))) continue;
+        perHuidig[v.huidig] = v;
+      } catch (e) {
+        _log.line('terugzetten: ${p.path} overgeslagen — $e');
+      }
+    }
+    voortgang?.call(kandidaten.length, kandidaten.length);
+    final uit = perHuidig.values.toList()
+      ..sort((a, b) => '${a.artiest} ${a.titel}'.toLowerCase().compareTo('${b.artiest} ${b.titel}'.toLowerCase()));
+    _log.line('terugzetten: ${uit.length} voorstel(len) uit ${kandidaten.length} geparkeerde kopieën');
+    return uit;
+  }
+
+  /// De decodeerproef voor het terugzetten, als veld zodat een toets "niet te zeggen" kan naspelen.
+  ///
+  /// Zonder ffmpeg (of na de tijdslimiet) geeft [controleerHeel] null. Dan is "heel" niet bewezen, en
+  /// een kopie waarvan dat niet vaststaat hoort niet terug in je bibliotheek — ook al zegt de
+  /// kwaliteitsvergelijking dan niets tegen, want zij weet evenmin dat hij kapot is.
+  @visibleForTesting
+  Future<Heelheid?> Function(String pad) decodeerproef = controleerHeel;
+
+  Future<Terugzetting?> _terugzettingVoor(File p,
+      String? Function(String artist, String title, {int? seconds, String? nietIn}) zoek,
+      String dubbel) async {
+    final t = readTags(p);
+    if (t == null) return null;
+    final huidig = zoek(t.artist, t.title, seconds: looptijdInSeconden(p), nietIn: dubbel);
+    if (huidig == null) return null;
+    final c = File(huidig);
+    if (!await c.exists()) return null;
+    final heel = await decodeerproef(p.path);
+    if (heel == null || !heel.heel) return null;
+    await decodeerproef(c.path);
+    if (gemeten(p.path) == null) await _meetEchtheid(p);
+    if (gemeten(c.path) == null) await _meetEchtheid(c);
+    if (firstIsBetter(c, p)) return null;
+    if (await _zelfdeOpname(p.path, c.path) != true) return null;
+    return Terugzetting(
+      geparkeerd: p.path,
+      huidig: c.path,
+      artiest: t.artist,
+      titel: t.title,
+      reden: firstIsBetter(p, c)
+          ? whyBetter(p, c)
+          : 'even goed (${kwaliteitZin(kwaliteitVan(p))}) — de vervanging was geen winst',
+    );
+  }
+
+  /// De gekozen voorstellen uitvoeren. Geeft het aantal dat lukte.
+  ///
+  /// Wat er nu staat gaat naar `_dubbel\binnengekomen` en niet naar `_dubbel` zelf: het is de
+  /// binnenkomer die onder de regel van 29-09-2026 had moeten verliezen. In `_dubbel` zelf zou een
+  /// volgende zoekronde hem als "ten onrechte vervangen" zien, en bij gelijke kwaliteit gingen de twee
+  /// dan eindeloos heen en weer.
+  Future<int> zetTerug(List<Terugzetting> lijst) async {
+    final sep = Platform.pathSeparator;
+    final opzij = '$_downloadsRoot$sep$parkeerMap$sep$parkeerBinnenkomer';
+    var n = 0;
+    for (final v in lijst) {
+      final uit = await zetGeparkeerdeTerug(File(v.geparkeerd), File(v.huidig), parkeerIn: opzij);
+      if (uit == null) {
+        _log.line('terugzetten mislukt: ${v.geparkeerd} — alles staat nog zoals het stond');
+        continue;
+      }
+      n++;
+      _log.line('teruggezet: ${v.artiest} — ${v.titel} (${v.reden})');
+    }
+    if (n > 0) await onLibraryChanged();
+    return n;
+  }
+
+  /// Wat de keuring per pad besliste, voor een opdracht die zijn uitkomst nog niet ophaalde.
+  ///
+  /// Twee keuzes uit dezelfde torrent delen één keuringsmap, en wie het eerst klaar is keurt ook wat de
+  /// ander al binnen had. Zonder dit bleef het nummer van de tweede op "wacht op de keuring" staan,
+  /// terwijl het allang gekeurd en opgeborgen was.
+  final Map<String, ({String zin, bool afgekeurd})> _gekeurd = {};
+
+  /// De keuring van één binnengekomen bestand, vóór het de bibliotheek in mag. Geeft de reden van
+  /// afkeuren terug, of null.
+  ///
+  /// Eerst de decodeerproef ([controleerHeel]): een bestand dat ffmpeg niet tot het einde krijgt is
+  /// kapot, hoe mooi zijn kop ook is. Dat is precies wat er bij Blood On The Dance Floor binnenkwam, en
+  /// tot 29-09-2026 keek niemand ernaar. Kan er niet gedecodeerd worden (geen ffmpeg), dan houdt dit
+  /// niets tegen: niet weten is niet afkeuren.
+  ///
+  /// Daarna wordt gemeten wat er AL ligt, zodat [firstIsBetter] op bewijs vergelijkt: een eigen kopie
+  /// die nooit gemeten werd telt als "weet niet", en dan kan een bewezen betere hem niet vervangen —
+  /// en een kapotte eigen kopie hoort juist te verliezen, ook dat moet eerst bekend zijn.
+  Future<String?> _keurVoorBibliotheek(File f) async {
+    final h = await controleerHeel(f.path);
+    if (h != null && !h.heel) return 'kapot bestand (${h.reden ?? 'decodeert niet tot het einde'})';
+    final t = readTags(f);
+    if (t == null) return null;
+    final bestaand = mapVanBestaande?.call(t.artist, t.title,
+        seconds: looptijdInSeconden(f), nietIn: f.parent.path);
+    if (bestaand != null && File(bestaand).existsSync()) {
+      if (gemeten(bestaand) == null) await _meetEchtheid(File(bestaand));
+      await controleerHeel(bestaand);
+    }
+    return null;
+  }
+
+  /// Wat na het opbergen nog in de keuringsmap ligt, terugzetten waar het vroeger binnenkwam.
+  ///
+  /// Dat is alleen wat de keuring niet tegenhield maar ook niet kon opbergen: een nummer zonder
+  /// leesbare tags, een .cue, een boekje, een logbestand. Tot 29-09-2026 bleef dat in
+  /// `DebridMusic Downloads\<torrent>` liggen en stond zo'n nummer toch in je bibliotheek; zonder deze
+  /// stap zou het nu onzichtbaar in `_keuring` blijven staan.
+  ///
+  /// Nooit wat afgekeurd is ([tegengehouden]) — ook niet als het parkeren daarvan mislukte: dat hoort
+  /// juist níet zichtbaar te worden. En nooit wat nog binnenkomt ([_inAanmaak], een `.part`). Geeft per
+  /// verhuisd bestand het nieuwe pad.
+  Future<Map<String, String>> _zetRestZichtbaar(
+      Directory keuring, Directory zichtbaar, Set<String> tegengehouden) async {
+    final verhuisd = <String, String>{};
+    if (!await keuring.exists()) return verhuisd;
+    final rest = <File>[];
+    await for (final e in keuring.list(recursive: true, followLinks: false)) {
+      if (e is! File) continue;
+      if (_inAanmaak.contains(e.path) || tegengehouden.contains(e.path)) continue;
+      if (e.path.toLowerCase().endsWith('.part')) continue;
+      rest.add(e);
+    }
+    final sep = Platform.pathSeparator;
+    for (final f in rest) {
+      // De submap uit de torrent blijft behouden: "CD1\01.flac" en "CD2\01.flac" horen niet op elkaar.
+      final onder = f.path.substring(keuring.path.length);
+      var doel = File('${zichtbaar.path}$onder');
+      try {
+        await doel.parent.create(recursive: true);
+        final naam = doel.uri.pathSegments.last;
+        for (var n = 2; await doel.exists(); n++) {
+          doel = File('${doel.parent.path}$sep($n) $naam');
+        }
+        verhuisd[f.path] = await moveWithRetry(f, doel);
+      } catch (_) {/* blijft in de keuringsmap; de volgende start probeert het opnieuw */}
+    }
+    await _ruimLegeMappen(keuring);
+    return verhuisd;
+  }
+
+  /// Lege mappen onder (en met) [map] weghalen, diepste eerst. Alleen wat ECHT leeg is: een map
+  /// verwijderen zonder `recursive` weigert zodra er nog iets in staat.
+  Future<void> _ruimLegeMappen(Directory map) async {
+    try {
+      final mappen = <Directory>[];
+      await for (final e in map.list(recursive: true, followLinks: false)) {
+        if (e is Directory) mappen.add(e);
+      }
+      mappen.sort((a, b) => b.path.length.compareTo(a.path.length));
+      for (final d in [...mappen, map]) {
+        try {
+          await d.delete();
+        } catch (_) {/* niet leeg */}
+      }
+    } catch (_) {/* al weg */}
+  }
+
+  /// Wat er bij het afsluiten nog in de keuringsmap stond: alsnog keuren en opbergen.
+  ///
+  /// Een torrent die binnen was maar niet gekeurd — de app ging uit, of viel om midden in het
+  /// opbergen — zou anders voor altijd onzichtbaar in `_keuring` blijven. Eerst gaat wat half is weg:
+  /// een `.part` is een download die niet afkwam ([_download]), en een leeg bestand is een reservering
+  /// zonder inhoud ([_legVast]). Geeft het aantal nagekeurde torrents.
+  Future<int> hervatKeuring() async {
+    final wortel = Directory('$_downloadsRoot${Platform.pathSeparator}$keuringMap');
+    if (!await wortel.exists()) return 0;
+    final mappen = <Directory>[];
+    try {
+      await for (final e in wortel.list(followLinks: false)) {
+        if (e is Directory) mappen.add(e);
+      }
+    } catch (_) {
+      return 0;
+    }
+    var n = 0;
+    for (final m in mappen) {
+      // Al bezig in deze sessie: dan is het geen restant, en keurt zijn eigen opdracht het.
+      if (_opKeuring.containsKey(m.path)) continue;
+      final half = <File>[];
+      try {
+        await for (final e in m.list(recursive: true, followLinks: false)) {
+          if (e is! File) continue;
+          if (e.path.toLowerCase().endsWith('.part') || await e.length() == 0) half.add(e);
+        }
+      } catch (_) {
+        continue;
+      }
+      for (final f in half) {
+        try {
+          await f.delete();
+        } catch (_) {/* in gebruik — dan laat de keuring hem als kapot liggen */}
+      }
+      final naam = m.path.split(Platform.pathSeparator).last;
+      _log.line('keuring: "$naam" lag er nog van de vorige keer — nu alsnog gekeurd');
+      _opKeuring[m.path] = 1;
+      try {
+        await _bergTorrentOp(m, naam,
+            zichtbaar: Directory('$_downloadsRoot${Platform.pathSeparator}$naam'));
+      } finally {
+        _opKeuring.remove(m.path);
+      }
+      n++;
+    }
+    return n;
   }
 
   /// Loop de wensen af die aan de beurt zijn, met een VERSE zoekopdracht per wens.
@@ -2688,19 +3092,27 @@ class DownloadManager extends ChangeNotifier {
           }
 
           // En schoon is niet genoeg: hij moet ook minstens evenveel ECHTE muziek dragen als wat er
-          // al ligt. Zie [draagtGenoeg] — bij de proefjacht kwam er een eerlijke 16/48 binnen voor
+          // al ligt — bij de proefjacht kwam er een eerlijke 16/48 binnen voor
           // een opgeschaalde 24/96 die in werkelijkheid 24 bits op 44,1 draagt, en dat is minder.
-          final bestaand = mapVanBestaande?.call(
-              w.authority?.artist ?? w.artist, w.authority?.title ?? w.title,
-              seconds: w.authority?.seconds);
-          final oud = bestaand == null ? null : _capaciteitVan(bestaand);
-          final nieuw = _capaciteitVan(staged.path);
-          if (!draagtGenoeg(nieuw, oud)) {
-            _log.line('   ${f.username}: schoon, maar draagt minder dan wat er ligt '
-                '($nieuw tegen $oud) — weggegooid, volgende kandidaat');
+          // Sinds 29-09-2026 dezelfde regel als elke andere weg: alleen wat BEWEZEN beter is, vervangt
+          // ([firstIsBetter]). Hier stond een eigen toets, [draagtGenoeg], die "minstens evenveel"
+          // vroeg — en daarmee ruilde de wens Sabers opgeschaalde 24/96 van Is It Scary in voor een
+          // eerlijke 24/48 die niets beter was, en die van Stranger In Moscow voor een 24/44,1. Zijn
+          // woorden: "als er een slechtere binnenkomt dan wat ik heb moet die weg."
+          final bestaand = await _bereidVergelijkingVoor(
+              staged,
+              w.authority ?? TrackTags(title: w.title, artist: w.artist, album: w.album, trackNo: 0));
+          final andereOpname = bestaand != null && await _zelfdeOpname(staged.path, bestaand) == false;
+          final nietBeter = bestaand != null && !firstIsBetter(staged, File(bestaand));
+          if (andereOpname || nietBeter) {
+            final waaromNiet = andereOpname
+                ? 'een andere opname dan wat je hebt'
+                : 'niet bewezen beter: ${kwaliteitZin(kwaliteitVan(staged))} tegen '
+                    '${kwaliteitZin(kwaliteitVan(File(bestaand)))}';
+            _log.line('   ${f.username}: $waaromNiet — weggegooid, volgende kandidaat');
             jacht.value = jacht.value.met(
                 weggegooid: jacht.value.weggegooid + 1,
-                regel: 'Schoon, maar draagt minder dan wat er ligt — weggegooid.');
+                regel: 'Bij ${f.username}: $waaromNiet — weggegooid.');
             betrapt.add(VasteBron(
                 username: f.username,
                 filename: f.filename,
@@ -3003,6 +3415,10 @@ class DownloadManager extends ChangeNotifier {
           // andere haal — of de jacht op een betere kwaliteit — hetzelfde nummer hebben laten landen.
           final alBekend = mapVanBestaande?.call(artiest, titel, seconds: seconden);
           PlaceOutcome uit;
+          // Meten vóór het filen, zoals op elke andere weg — hier gebeurde het niet, en dan besliste de
+          // keuring over een radiobestand zonder te weten wat erin zat. Heel is hij al: dat deed de
+          // overdracht zelf (zie [_cleanStaging]).
+          await _bereidVergelijkingVoor(File(res.path), plaatsing);
           try {
             // [parkeerAltijd]: wat hier verliest, gaat opzij en nooit weg. Zonder dat wiste een radio-FLAC
             // een mp3 die je al had wanneer de bibliotheek ze niet als dezelfde opname herkende.
@@ -3090,6 +3506,9 @@ class DownloadManager extends ChangeNotifier {
         // bescherming wint daar de grootste in plaats van de gekozene.
         try {
           await onthoudVasteKeuze(res.path);
+          // Meten vóór het filen: hier gebeurde dat niet, en dan kon jouw vaste keuze alleen op de
+          // gelijkstand winnen — of verliezen van iets wat nooit gemeten werd.
+          await _bereidVergelijkingVoor(File(res.path), w.authority);
           final uit = await placeFileDetailed(File(res.path), _downloadsRoot,
               tags: w.authority, staatAl: mapVanBestaande);
           if (uit.how == Placement.moved) await onthoudVasteKeuze(uit.path);
@@ -3197,7 +3616,12 @@ class DownloadManager extends ChangeNotifier {
             // zonder meting was er geen oordeel en besliste de grootte. Uitgerekend op deze weg is
             // dat verkeerd om: een opgeschaalde of uit mp3 omgezette kopie is juist GROTER dan het
             // origineel, dus de jacht op iets beters kon de betere kopie weggooien.
-            await _meetEchtheid(staged);
+            final bestaand = await _bereidVergelijkingVoor(staged, job.authority);
+            if (bestaand != null && await _zelfdeOpname(staged.path, bestaand) == false) {
+              _log.line('   ${job.name}: de betere kandidaat is een andere opname — weggegooid');
+              await _discardStaged(staged.path);
+              continue;
+            }
             // The SAME authority as the first landing. Without it the sweep would quietly undo the
             // numbering a quarter of an hour later, using whatever this new peer's tags happen to say.
             how = (await placeFileDetailed(staged, _downloadsRoot, tags: job.authority, staatAl: mapVanBestaande)).how;
@@ -3331,7 +3755,7 @@ class DownloadManager extends ChangeNotifier {
   /// Is dit dezelfde OPNAME, voor zover de lengte daar iets over zegt?
   ///
   /// **Onbekend is JA.** Lang niet elke peer meldt een duur, en een ontbrekende meting mag nooit
-  /// een kandidaat afwijzen — zie [magBlijven] en [draagtGenoeg], dezelfde regel. Wat er zo
+  /// een kandidaat afwijzen — zie [magBlijven] en [firstIsBetter], dezelfde regel. Wat er zo
   /// doorheen glipt wordt ná het binnenhalen alsnog aan het echte bestand gemeten.
   static bool zelfdeLengte(int? gewenst, int? gevonden) =>
       gewenst == null ||
@@ -3375,11 +3799,31 @@ class DownloadManager extends ChangeNotifier {
   /// user's existing collection elsewhere under musicRoot is never touched or moved.
   String get _downloadsRoot => '$musicRoot${Platform.pathSeparator}DebridMusic Downloads';
 
+  /// DE DECODEERPROEF op een afgeronde overdracht, voordat iets anders het bestand te zien krijgt.
+  ///
+  /// Een kapot bestand wordt een mislukte poging ([SlskFail]), en dan probeert de race gewoon de
+  /// volgende peer. Dit zit in [_cleanStaging], de enige doorgang waar élke Soulseek-overdracht
+  /// langskomt — de gewone, de handmatige, het album, de jacht op iets beters, de wens en de radio —
+  /// dus hier hoeft het maar één keer.
+  ///
+  /// Gemeten op 29-09-2026: Just Dance zegt in zijn kop 242,8 s en speelt er 192,9. Aan de kop was dat
+  /// niet te zien; decoderen kost voor acht minuten 24/96 een paar tienden van een seconde. Niet te
+  /// zeggen (geen ffmpeg) is nooit een reden om te weigeren.
+  @visibleForTesting
+  static Future<SlskResult> keurOverdracht(SlskResult res, {void Function(String)? spoor}) async {
+    if (res is! SlskDone) return res;
+    final h = await controleerHeel(res.path);
+    if (h == null || h.heel) return res;
+    spoor?.call('   kapot binnengekomen: ${res.path.split(Platform.pathSeparator).last} — ${h.reden}; '
+        'weggegooid, volgende');
+    return SlskFail('kapot bestand (${h.reden})');
+  }
+
   /// A peer that never delivered leaves an empty staging folder behind; drop it so `_inkomend`
   /// doesn't slowly fill with the name of every uploader we ever tried. Non-recursive on purpose:
   /// a folder that still holds a partial file is left alone.
   Future<SlskResult> _cleanStaging(Directory dir, File dest, Future<SlskResult> transfer) async {
-    final res = await transfer;
+    final res = await keurOverdracht(await transfer, spoor: _log.line);
     // A loser in a race can still have finished: a small file arrives inside one chunk, so the
     // peer was told "no" only after the bytes were already on disk. Nothing downstream looks at a
     // cancelled attempt, so without this the complete file sat in _inkomend forever — and kept the
@@ -3506,45 +3950,62 @@ class DownloadManager extends ChangeNotifier {
                 notifyListeners();
               });
         jobs.remove(prep);
+        final naamMap = _sanitize(torrent.name);
+        // **Binnenkomen in de keuringsmap, niet in de bibliotheek.** Tot 29-09-2026 stond hier
+        // `DebridMusic Downloads\<torrent>` — een map die de bibliotheek inleest — en stond een
+        // afgekapte FLAC dus in je bibliotheek zodra hij binnen was. Nu wacht alles in `_keuring`, en
+        // pas wat de keuring doorstaat gaat naar zijn plek. Zie [keuringMap] en [_bergTorrentOp].
         final destDir = Directory(
-            '$musicRoot${Platform.pathSeparator}DebridMusic Downloads${Platform.pathSeparator}${_sanitize(torrent.name)}');
+            '$_downloadsRoot${Platform.pathSeparator}$keuringMap${Platform.pathSeparator}$naamMap');
+        // Waar de rest heen gaat die niet op te bergen is — de map waar vroeger alles binnenkwam.
+        final zichtbaar = Directory('$_downloadsRoot${Platform.pathSeparator}$naamMap');
         await destDir.create(recursive: true);
-        final nieuwe = <DownloadJob>[];
-        for (final f in files) {
-          final job = DownloadJob(f.label);
-          nieuwe.add(job);
-          jobs.insert(0, job);
-        }
-        // De bladen erbij, zonder eigen regel in de lijst: ze zijn een paar kilobyte groot en het
-        // zou raar staan om "album.cue — klaar" naast je nummers te zien. Zonder deze regel is een
-        // `(image+.cue)` na afloop niet meer op te knippen, want dan ligt het blad er niet.
-        final cues = torrent.files.where((f) => f.isCue).toList();
-        notifyListeners();
-        final lopend = <Future<void>>[];
-        if (torrent.lokaal) {
-          // Eén opdracht voor de hele torrent, niet één per nummer: aria2 kent een torrent aan zijn
-          // infohash en zou een tweede aanmelding van dezelfde plaat als dubbel weigeren. De balken
-          // per nummer komen uit zijn eigen bestandslijst.
-          lopend.add(_inRij(() => _downloadLokaal(torrent, files, destDir, nieuwe,
-              cues: cues, seedNa: bronVraagtSeeden(result.source))));
-        } else {
-          for (var i = 0; i < files.length; i++) {
-            lopend.add(_inRij(() => _download(torrent.id, files[i], destDir, nieuwe[i])));
+        _opKeuring.update(destDir.path, (n) => n + 1, ifAbsent: () => 1);
+        try {
+          final nieuwe = <DownloadJob>[];
+          for (final f in files) {
+            final job = DownloadJob(f.label);
+            nieuwe.add(job);
+            jobs.insert(0, job);
           }
-          for (final c in cues) {
-            // Een eigen taak zonder plek in de lijst: hij mag mislukken zonder dat iemand er iets
-            // van merkt, want dan is er simpelweg niets te knippen.
-            lopend.add(_inRij(() => _download(torrent.id, c, destDir, DownloadJob(c.label))));
+          // De bladen erbij, zonder eigen regel in de lijst: ze zijn een paar kilobyte groot en het
+          // zou raar staan om "album.cue — klaar" naast je nummers te zien. Zonder deze regel is een
+          // `(image+.cue)` na afloop niet meer op te knippen, want dan ligt het blad er niet.
+          final cues = torrent.files.where((f) => f.isCue).toList();
+          notifyListeners();
+          final lopend = <Future<void>>[];
+          if (torrent.lokaal) {
+            // Eén opdracht voor de hele torrent, niet één per nummer: aria2 kent een torrent aan zijn
+            // infohash en zou een tweede aanmelding van dezelfde plaat als dubbel weigeren. De balken
+            // per nummer komen uit zijn eigen bestandslijst.
+            lopend.add(_inRij(() => _downloadLokaal(torrent, files, destDir, nieuwe,
+                cues: cues, seedNa: bronVraagtSeeden(result.source))));
+          } else {
+            for (var i = 0; i < files.length; i++) {
+              lopend.add(_inRij(() => _download(torrent.id, files[i], destDir, nieuwe[i])));
+            }
+            for (final c in cues) {
+              // Een eigen taak zonder plek in de lijst: hij mag mislukken zonder dat iemand er iets
+              // van merkt, want dan is er simpelweg niets te knippen.
+              lopend.add(_inRij(() => _download(torrent.id, c, destDir, DownloadJob(c.label))));
+            }
+          }
+          notifyListeners();
+          // Wachten tot ALLES binnen is, en dan pas kijken of dit een image met een cue was. Eerder
+          // kan niet: het blad en het grote bestand komen langs verschillende wegen binnen.
+          await Future.wait(lopend);
+          await _knipImages(destDir, nieuwe);
+          // Pas NA het knippen: een image met een cue is vóór deze regel één groot bestand, en dat
+          // hoort niet als één nummer in je bibliotheek te belanden.
+          await _bergTorrentOp(destDir, torrent.name, zichtbaar: zichtbaar, binnen: nieuwe);
+        } finally {
+          final over = (_opKeuring[destDir.path] ?? 1) - 1;
+          if (over <= 0) {
+            _opKeuring.remove(destDir.path);
+          } else {
+            _opKeuring[destDir.path] = over;
           }
         }
-        notifyListeners();
-        // Wachten tot ALLES binnen is, en dan pas kijken of dit een image met een cue was. Eerder
-        // kan niet: het blad en het grote bestand komen langs verschillende wegen binnen.
-        await Future.wait(lopend);
-        await _knipImages(destDir, nieuwe);
-        // Pas NA het knippen: een image met een cue is vóór deze regel één groot bestand, en dat
-        // hoort niet als één nummer in je bibliotheek te belanden.
-        await _bergTorrentOp(destDir, torrent.name);
       } catch (e) {
         prep.status = 'failed';
         // `_addOrFind` gooit zinnen die precies zeggen wat er misging ("TorBox nam deze bron niet
@@ -3656,7 +4117,13 @@ class DownloadManager extends ChangeNotifier {
     final gekozen = [...files.map((f) => f.id), ...cues.map((f) => f.id)];
     final hash = (torrent.hash ?? '').toLowerCase();
 
-    final werkMap = Directory(werkMapPad(destDir, hash, torrent.name));
+    // Naast de plaat in de downloadmap, zoals altijd — niet onder de keuringsmap waar [destDir] sinds
+    // 29-09-2026 staat. Een seedende torrent houdt zijn werkmap uren vast, en de keuring hoort die
+    // nooit voor een binnengekomen plaat aan te zien.
+    final werkMap = Directory(werkMapPad(
+        Directory('$_downloadsRoot${Platform.pathSeparator}${_sanitize(torrent.name)}'),
+        hash,
+        torrent.name));
     await werkMap.create(recursive: true);
 
     // EERST KIJKEN OF WE HEM ZELF AL HEBBEN, en pas daarna aanmelden.
@@ -3909,16 +4376,15 @@ class DownloadManager extends ChangeNotifier {
           continue;
         }
         await _jouwKeuze(geland);
-        // Heel, en als jouw keuze vastgelegd: nu mag hij opgeborgen worden. Zie [_inAanmaak].
+        // Heel, en als jouw keuze vastgelegd: nu mag hij gekeurd en opgeborgen worden. Zie
+        // [_inAanmaak].
         _inAanmaak.remove(geland);
-        jobs[i].progress = 1;
-        jobs[i].status = 'done';
         // Zeggen dat er nog gedeeld wordt. Anders staat er "Klaar" terwijl er nog uren
         // bandbreedte weggaat, en dat hoort niemand te ontdekken via zijn router.
-        if (seedMin != null) {
-          jobs[i].detail = 'klaar — deelt nog ${online.settings.seedUren} uur terug '
-              '(besloten tracker)';
-        }
+        _wachtOpKeuring(jobs[i], geland,
+            naKeuring: seedMin == null
+                ? null
+                : 'deelt nog ${online.settings.seedUren} uur terug (besloten tracker)');
       }
       // En de bladen, vóór het opruimen: het opruimen gooit de map weg die aria2 aanmaakte, en
       // een cue die daar blijft staan verdwijnt mét die map — waarna er niets meer te knippen valt.
@@ -3948,7 +4414,9 @@ class DownloadManager extends ChangeNotifier {
       }
       // Het opruimen zelf staat in de `finally` hieronder — daar wordt geteld wie er nog aan deze
       // torrent hangt, en dat is de enige plek waar dat kloppend gebeurt. Zie de uitleg daar.
-      await onLibraryChanged();
+      //
+      // Geen `onLibraryChanged` meer: wat hier binnenkwam staat in de keuringsmap, en die leest de
+      // bibliotheek niet. Het opbergen daarna laat haar inlezen ([_bergTorrentOp]).
     } finally {
       // De torrent uit aria2 halen zodra hij klaar is: hij seedt toch niet (--seed-time=0) en een
       // lijst die volloopt met afgeronde taken maakt elke volgende vraag trager.
@@ -4027,6 +4495,11 @@ class DownloadManager extends ChangeNotifier {
     http.Client? client;
     IOSink? sink;
     File? dest;
+    // Waar de bytes binnenkomen: naast de gereserveerde naam, met `.part` erachter. Pas bij de laatste
+    // byte krijgt het bestand zijn eigen naam. Valt de app midden in een download om, dan ziet
+    // [hervatKeuring] zo wat half is — een halve mp3 is aan zijn inhoud niet te herkennen, een halve
+    // FLAC wel, maar alleen met ffmpeg erbij.
+    File? part;
     // Het pad waar dit bestand terechtkwam, apart bijgehouden. Niet `dest` opnieuw uitlezen na het
     // `finally`: of dat daar nog als "niet null" geldt hangt af van hoe de analyse door een
     // try/catch/finally heen redeneert, en dat is geen ding om een bouw op te laten struikelen.
@@ -4048,7 +4521,8 @@ class DownloadManager extends ChangeNotifier {
       gelandPad = dest.path;
       // Vanaf nu tot hij als jouw keuze vastligt: niet opbergen. Zie [_inAanmaak].
       _inAanmaak.add(gelandPad);
-      sink = dest.openWrite();
+      part = File('${dest.path}.part');
+      sink = part.openWrite();
       var received = 0;
       // De wachtklok staat op de STROOM en niet op het geheel: hij slaat toe als er zólang niets
       // binnenkomt, niet als het lang duurt. Een plaat van een gigabyte mag een uur doen; een
@@ -4070,8 +4544,15 @@ class DownloadManager extends ChangeNotifier {
       }
       // Short of what was announced is a failure, however politely the stream ended. Only when the
       // length was never announced (total <= 0) is "it ended" all we have to go on.
-      complete = total <= 0 ? received > 0 : received >= total;
-      if (!complete) throw 'incompleet: $received van $total bytes';
+      final binnen = total <= 0 ? received > 0 : received >= total;
+      if (!binnen) throw 'incompleet: $received van $total bytes';
+      // Eerst dicht, dan pas hernoemen: op Windows laat een open schrijfhandvat zich niet verplaatsen.
+      await sink.close();
+      sink = null;
+      // Hernoemen vervangt de lege reservering van [_legVast] (gemeten: Dart's `rename` schrijft op
+      // Windows over een bestaand bestand heen).
+      await part.rename(dest.path);
+      complete = true;
     } catch (e) {
       job.status = 'failed';
       // Hier stond alleen "Mislukt" en verder niets. Een download die afbreekt op een 403, op een
@@ -4087,21 +4568,37 @@ class DownloadManager extends ChangeNotifier {
       client?.close();
       // A part-file must not survive: the scanner does not skip this folder, so what is left here
       // ends up in the library as a track that stops halfway.
+      if (!complete && part != null) {
+        await part.delete().catchError((_) => part!);
+      }
       if (!complete && dest != null) {
         await dest.delete().catchError((_) => dest!);
       }
       if (!complete) _inAanmaak.remove(gelandPad);
     }
-    // Jouw keuze, dus hij verliest straks niet van iets wat de app beter vindt. Zie [_jouwKeuze].
+    // Jouw keuze: bij gelijke kwaliteit wint hij van wat er al lag. Zie [_jouwKeuze].
     if (gelandPad.isNotEmpty) await _jouwKeuze(gelandPad);
-    // Pas NU mag hij opgeborgen worden: helemaal binnen, en als jouw keuze vastgelegd. Eén regel
-    // eerder zou een ander nummer uit dezelfde torrent hem kunnen opbergen vóór de bescherming
-    // erop zit — en dan verliest hij van wat er al lag.
+    // Pas NU mag hij gekeurd en opgeborgen worden: helemaal binnen, en als jouw keuze vastgelegd. Eén
+    // regel eerder zou een ander nummer uit dezelfde torrent hem kunnen opbergen vóór de bescherming
+    // erop zit — en dan verliest hij bij gelijke kwaliteit van wat er al lag.
     _inAanmaak.remove(gelandPad);
+    // Geen `onLibraryChanged` meer: hij staat in de keuringsmap, en die leest de bibliotheek niet.
+    _wachtOpKeuring(job, gelandPad);
+  }
+
+  /// Binnen, maar nog niet goedgekeurd.
+  ///
+  /// "Klaar" zou hier liegen: het bestand staat nog niet in je bibliotheek, en óf het er komt beslist
+  /// de keuring pas als de hele plaat binnen is ([_bergTorrentOp]). [naKeuring] komt achter wat de
+  /// keuring zegt — voor wat er daarna nog doorloopt, zoals het terugdelen aan een besloten tracker.
+  void _wachtOpKeuring(DownloadJob job, String pad, {String? naKeuring}) {
+    job.keuringsPad = pad;
+    job.naKeuring = naKeuring;
     job.progress = 1;
-    job.status = 'done';
+    job.status = 'downloading';
+    job.canCancel = false;
+    job.detail = naKeuring == null ? 'binnen — wacht op de keuring' : 'binnen — wacht op de keuring · $naKeuring';
     notifyListeners();
-    await onLibraryChanged();
   }
 
   /// Dit bestand heeft de gebruiker ZELF aangewezen, dus het verliest nooit van een automatische regel.
@@ -4128,6 +4625,10 @@ class DownloadManager extends ChangeNotifier {
   /// en twee downloads die allebei "bestaat hij al?" vragen krijgen allebei "nee" — waarna de een
   /// over de ander heen schrijft. `create(exclusive: true)` kan maar door één van de twee winnen.
   Future<File?> _legVast(Directory destDir, String naam) async {
+    // De map kan intussen weg zijn: het opbergen van een andere keuze uit dezelfde torrent ruimt een
+    // lege keuringsmap op ([pruneVacated]), en dan faalt élke exclusieve aanmaak hieronder — waarna er
+    // "geen vrije naam" stond terwijl er niets in de weg lag.
+    await destDir.create(recursive: true);
     for (final kandidaat in vrijeNamen(_sanitize(naam))) {
       final doel = File('${destDir.path}${Platform.pathSeparator}$kandidaat');
       try {
@@ -4161,6 +4662,8 @@ class DownloadManager extends ChangeNotifier {
     // elkaar onderscheidt zodra de namen erin gelijk zijn.
     final ouder = bron.parent.path;
     final submap = ouder == destDir.path ? '' : laatsteMap(ouder);
+    // Zie [_legVast]: de keuringsmap kan door een ander opbergen al opgeruimd zijn.
+    await destDir.create(recursive: true);
     for (final kandidaat in vrijeNamen(_sanitize(naam), submap: _sanitize(submap))) {
       final doel = File('${destDir.path}${Platform.pathSeparator}$kandidaat');
       if (bron.path == doel.path) return doel.path;
@@ -4168,15 +4671,23 @@ class DownloadManager extends ChangeNotifier {
       // Tijdens het kopiëren staat hier een half bestand. De aanroeper haalt hem uit [_inAanmaak]
       // zodra hij heel is en vastligt — niet deze functie, want die weet niet wanneer dat is.
       _inAanmaak.add(doel.path);
+      // Kopiëren gaat via een `.part`, net als [_download]: valt de app halverwege om, dan weet
+      // [hervatKeuring] dat dit geen heel bestand is.
+      Future<void> kopieerHeel() async {
+        final part = '${doel.path}.part';
+        await bron.copy(part);
+        await File(part).rename(doel.path);
+      }
+
       if (kopieer) {
-        await bron.copy(doel.path);
+        await kopieerHeel();
         return doel.path;
       }
       try {
         await bron.rename(doel.path);
       } catch (_) {
         // Over een schijfgrens heen kan `rename` niet; dan maar kopiëren en de bron opruimen.
-        await bron.copy(doel.path);
+        await kopieerHeel();
         await bron.delete().catchError((_) => bron);
       }
       return doel.path;

@@ -43,11 +43,13 @@ void main() {
   });
 
   group('firstIsBetter', () {
-    test('zonder bescherming wint de grootste — dit is wat er misging', () {
+    test('zonder bescherming wint de grootste NIET meer — gelijk is gelijk', () {
+      // Zo verdween L'été indien: de grootte besliste. Sinds 29-09-2026 beslist die bij verliesvrije
+      // muziek helemaal niet meer, en bij gelijk blijft wat er stond.
       final klein = maak('gekozen.flac', 1000);
       final groot = maak('ander.flac', 2000);
-      expect(firstIsBetter(groot, klein), isTrue);
-      expect(firstIsBetter(klein, groot), isFalse, reason: 'precies zo verdween L\'été indien');
+      expect(firstIsBetter(groot, klein), isFalse);
+      expect(firstIsBetter(klein, groot), isFalse);
     });
 
     test('een handmatige keuze verliest niet van een groter bestand', () async {
@@ -59,35 +61,35 @@ void main() {
       expect(firstIsBetter(groot, gekozen), isFalse);
     });
 
-    test('ook niet van een beter FORMAAT — de bescherming staat boven alle drie de gronden', () async {
-      // Grootte was de aanleiding, maar formaat en stereo/surround zouden hetzelfde doen. Een FLAC die
-      // een handmatig gekozen mp3 verdringt is even ongewenst als een grotere kopie.
+    test('maar een handmatig gekozen mp3 duwt een FLAC niet meer weg', () async {
+      // Tot 29-09-2026 stond de bescherming boven de kwaliteit. Saber die dag: "als er een slechtere
+      // binnenkomt dan wat ik heb moet die weg, en moet mijn betere kwaliteit die ik al had blijven."
+      // Een mp3 is bewezen minder dan een FLAC, ook als je hem zelf koos.
       final gekozen = maak('gekozen.mp3', 1000);
       final flac = maak('ander.flac', 5000);
-      expect(firstIsBetter(flac, gekozen), isTrue, reason: 'FLAC boven mp3, zoals het hoort');
-
       await onthoudVasteKeuze(gekozen.path);
-      expect(firstIsBetter(flac, gekozen), isFalse);
-      expect(firstIsBetter(gekozen, flac), isTrue);
+      expect(firstIsBetter(flac, gekozen), isTrue);
+      expect(firstIsBetter(gekozen, flac), isFalse);
     });
 
-    test('twee handmatige keuzes worden gewoon op kwaliteit vergeleken', () async {
+    test('twee handmatige keuzes: gelijk op kwaliteit, en wat er stond blijft', () async {
       // Dan heeft de gebruiker twee keer gekozen en valt er geen voorkeur af te lezen. Bewust GEEN
       // slot op het bestand: dit is een voorrangsregel, geen bevriezing.
       final a = maak('a.flac', 1000);
       final b = maak('b.flac', 2000);
       await onthoudVasteKeuze(a.path);
       await onthoudVasteKeuze(b.path);
-      expect(firstIsBetter(b, a), isTrue);
+      expect(firstIsBetter(b, a), isFalse);
+      expect(firstIsBetter(a, b), isFalse);
     });
 
     test('vergeten haalt de bescherming er ook echt weer af', () async {
       final gekozen = maak('gekozen.flac', 1000);
       final groot = maak('ander.flac', 2000);
       await onthoudVasteKeuze(gekozen.path);
-      expect(firstIsBetter(groot, gekozen), isFalse);
+      expect(firstIsBetter(gekozen, groot), isTrue, reason: 'bij gelijk beslist jouw keuze');
       await vergeetVasteKeuze(gekozen.path);
-      expect(firstIsBetter(groot, gekozen), isTrue);
+      expect(firstIsBetter(gekozen, groot), isFalse);
     });
   });
 

@@ -248,11 +248,31 @@ void main() {
 
     setUp(() => gevraagdeLooptijden = []);
 
-    test('DE KERN: een echte torrent vervangt de nep Soulseek-kopie', () async {
+    test('DE GRENS: zonder jouw keuze is gelijk gelijk, en blijft wat er stond', () async {
+      // Sinds 29-09-2026 telt alleen wat bewezen beter is. Een opgeschaalde 24/96 draagt een cd, en een
+      // ongemeten torrentkopie ook: gelijk. Dan blijft wat er stond — Saber: "moet mijn betere
+      // kwaliteit die ik al had blijven."
       final oud = schrijf('Albums/Culture Beat/Serenity/02 - Mr. Vain.flac', flac(_mrVain, opvulling: 900000));
       onthoudOordeelVanPc(oud.path, _opgeblazen);
       final torrentMap = '$downloads${sep}Culture Beat';
       schrijf('Culture Beat/02. Mr. Vain.flac', flac(_mrVain));
+
+      await bergMapOp(torrentMap, downloads, staatAl: staatAlVoor(oud.path, 337));
+
+      expect(File(oud.path).lengthSync(), greaterThan(900000), reason: 'wat er stond, blijft');
+      final dubbel = alles('$downloads$sep$parkeerMap');
+      expect(dubbel, hasLength(1), reason: 'de binnenkomer gaat opzij, niet weg');
+      expect(dubbel.single.lengthSync(), lessThan(900000));
+    });
+
+    test('DE KERN: een echte torrent vervangt de nep Soulseek-kopie — omdat jij hem koos', () async {
+      final oud = schrijf('Albums/Culture Beat/Serenity/02 - Mr. Vain.flac', flac(_mrVain, opvulling: 900000));
+      onthoudOordeelVanPc(oud.path, _opgeblazen);
+      final torrentMap = '$downloads${sep}Culture Beat';
+      final t = schrijf('Culture Beat/02. Mr. Vain.flac', flac(_mrVain));
+      // Wat `_jouwKeuze` bij binnenkomst doet: een torrent koos je zelf. Bij gelijke bewezen kwaliteit
+      // beslist dat — en de nep is hier bewezen niet beter dan een cd.
+      await onthoudVasteKeuze(t.path);
 
       final r = await bergMapOp(torrentMap, downloads, staatAl: staatAlVoor(oud.path, 337));
 
@@ -411,7 +431,7 @@ void main() {
 
     test('DE KERN: na het knippen van de images wordt de torrent opgeborgen', () {
       final knip = bron.indexOf('await _knipImages(destDir, nieuwe);');
-      final berg = bron.indexOf('await _bergTorrentOp(destDir, torrent.name);');
+      final berg = bron.indexOf('await _bergTorrentOp(destDir, torrent.name, zichtbaar: zichtbaar, binnen: nieuwe);');
       expect(knip, greaterThan(0));
       expect(berg, greaterThan(knip),
           reason: 'zonder deze aanroep blijft een torrent naast de bibliotheek liggen, zoals voorheen');
@@ -422,7 +442,7 @@ void main() {
     });
 
     test('DE VAL: het opbergen vraagt de bibliotheek waar de opname al staat — BUITEN de torrentmap', () {
-      final i = bron.indexOf('Future<void> _bergTorrentOp(');
+      final i = bron.indexOf('Future<TidyReport?> _bergTorrentOp(');
       expect(i, greaterThan(0));
       final lijf = bron.substring(i, bron.indexOf('\n  }\n', i));
       expect(lijf, contains('mapVanBestaande'),
@@ -442,7 +462,7 @@ void main() {
       // torrent is je eigen keuze en die gaat vóór alles (groep 3). Het oordeel is er meteen, en het
       // verhuist mee met het bestand. En tegen een ándere eigen keuze beslissen de gewone regels, waar
       // "wat als nep gemeten is verliest" wel meetelt — dáár moet de meting er vóór het opbergen zijn.
-      final i = bron.indexOf('Future<void> _bergTorrentOp(');
+      final i = bron.indexOf('Future<TidyReport?> _bergTorrentOp(');
       final lijf = bron.substring(i, bron.indexOf('\n  }\n', i));
       final meet = lijf.indexOf('await _meetBinnengekomen(');
       final berg = lijf.indexOf('await bergMapOp(');
@@ -462,7 +482,7 @@ void main() {
     });
 
     test('DE VAL: en de jacht stopt meteen, niet pas bij de volgende veegbeurt', () {
-      final i = bron.indexOf('Future<void> _bergTorrentOp(');
+      final i = bron.indexOf('Future<TidyReport?> _bergTorrentOp(');
       final lijf = bron.substring(i, bron.indexOf('\n  }\n', i));
       expect(lijf, contains('await vergeetWatErAlIs()'),
           reason: 'anders haalt Soulseek er in de tussentijd nog een kopie van binnen');

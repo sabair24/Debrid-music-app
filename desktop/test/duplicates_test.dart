@@ -92,9 +92,11 @@ void main() {
       expect(r.source.title, 'Backstreet Boys (Special Edition)');
       expect(r.target.title, 'Backstreet Boys');
       expect(r.pairs, hasLength(3));
-      // Every fragment copy is bigger here, so every one wins and will replace what's owned.
-      expect(r.upgrades, 3, reason: 'the higher-bitrate fragment copies are the keepers');
-      expect(r.pairs.every((p) => p.dupWins), isTrue);
+      // Every fragment copy is bigger here — and since 29-09-2026 that proves nothing. A bigger FLAC of
+      // the same music is a worse compression, an upsample or a transcode; none of those is better. So
+      // what's owned stays: "moet mijn betere kwaliteit die ik al had blijven" (Saber).
+      expect(r.upgrades, 0, reason: 'bigger is not proven better');
+      expect(r.pairs.every((p) => !p.dupWins), isTrue);
     });
 
     test('a junk WAV single filed under the wrong artist is still recognised', () {
@@ -190,12 +192,12 @@ void main() {
           .toList();
       expect(flacs, hasLength(13), reason: 'still exactly the 13-track album, no extras');
 
-      // The bigger fragment copies won and are now the ones in the album folder.
+      // The owned copies stay: the bigger fragment copies are not proven better (see above).
       for (final n in ['09', '10', '13']) {
         final kept = flacs.firstWhere((f) => f.uri.pathSegments.last.startsWith(n));
-        expect(kept.lengthSync(), 400 * 1024, reason: 'track $n: the higher-bitrate copy is kept');
+        expect(kept.lengthSync(), 100 * 1024, reason: 'track $n: what was there stays');
       }
-      // The three copies they beat are parked, nothing deleted.
+      // The three fragment copies are parked, nothing deleted.
       final dubbel = Directory('${mainDir.path}${Platform.pathSeparator}$dupeFolder');
       expect(dubbel.existsSync(), isTrue);
       expect(dubbel.listSync().whereType<File>(), hasLength(3));

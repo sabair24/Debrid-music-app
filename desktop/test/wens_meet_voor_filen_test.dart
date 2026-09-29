@@ -14,6 +14,7 @@ library;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/echtheid.dart';
+import 'package:debridmusic/keuring.dart';
 import 'package:debridmusic/lossless_want.dart';
 import 'package:debridmusic/online.dart';
 import 'package:debridmusic/organize.dart';
@@ -98,41 +99,54 @@ void main() {
     });
   });
 
-  /// Schoon zijn is niet genoeg — hij moet ook minstens evenveel ECHTE muziek dragen.
+  /// Schoon zijn is niet genoeg — hij moet BEWEZEN beter zijn dan wat er ligt.
   ///
-  /// GEMETEN aan het echte werk op 08-09-2026. Een proefjacht op "Madonna — La Isla Bonita" gooide
-  /// twee opgeschaalde kopieën van 146 MB terecht weg, maar nam als derde een eerlijke 16/48 aan —
-  /// en die draagt met 768 MINDER dan wat er al lag: een opgeschaalde 24/96 die in werkelijkheid
-  /// echte 24 bits op 44,1 draagt, dus 1058. Een vervalsing wegdoen is goed; hem inruilen voor
-  /// minder muziek niet. Op datzelfde album staan Holiday, Papa Don't Preach en Open Your Heart als
-  /// ECHTE 24/96, dus zo'n kopie bestaat — het loont om door te zoeken.
-  group('een vervanger moet minstens evenveel dragen', () {
+  /// GEMETEN aan het echte werk op 08-09-2026: een proefjacht op "Madonna — La Isla Bonita" nam na twee
+  /// terecht weggegooide opgeschaalde kopieën een eerlijke 16/48 aan, die niets beter was dan de
+  /// opgeschaalde 24/96 die er lag. Daarvoor kwam hier een eigen toets, `draagtGenoeg` ("minstens
+  /// evenveel").
+  ///
+  /// **Sinds 29-09-2026 geldt op de wensweg dezelfde regel als overal: strikt beter, bewezen** — zie
+  /// `keuring.dart`. Met "minstens evenveel" ruilde de wens Sabers opgeschaalde 24/96 van Is It Scary in
+  /// voor een eerlijke 24/48 en die van Stranger In Moscow voor een 24/44,1, en dat las hij als "mindere
+  /// kwaliteit": "als er een slechtere binnenkomt dan wat ik heb moet die weg, en moet mijn betere
+  /// kwaliteit die ik al had blijven." Het is daarmee ook een bewuste terugdraai van een eerdere vraag,
+  /// "download soulseek 24/44.1" — die ruil gaat niet meer, want hij is geen winst.
+  group('een vervanger moet bewezen beter zijn', () {
+    const opgeschaald = Echtheidsoordeel(
+        bits: Bitdiepte.spreektNietTegen, boven: Bovenband.leeg, band: Bandbreedte.doorlopend);
+    const echt96 = Echtheidsoordeel(
+        bits: Bitdiepte.spreektNietTegen, boven: Bovenband.vol, band: Bandbreedte.doorlopend);
+    const uitMp3 = Echtheidsoordeel(
+        bits: Bitdiepte.onbekend, boven: Bovenband.onbekend, band: Bandbreedte.afgekapt, afkapHz: 17200);
+    final opgeschaald96 = kwaliteitUit(verliesvrij: true, kopRate: 96000, formaat: 4, oordeel: opgeschaald);
+
     test('een eerlijke 16/48 vervangt een opgeschaalde 24/96 NIET', () {
-      const eerlijk48 = 48000 * 16 ~/ 1000; // 768
-      const opgeschaald96 = 44100 * 24 ~/ 1000; // 1058 — echte 24 bits, opgerekte bemonstering
-      expect(DownloadManager.draagtGenoeg(eerlijk48, opgeschaald96), isFalse);
+      final eerlijk48 = kwaliteitUit(verliesvrij: true, kopRate: 48000, formaat: 4);
+      expect(vergelijkKwaliteit(eerlijk48, opgeschaald96), 0);
     });
 
-    test('maar een eerlijke 24/44.1 wél — precies de ruil die gevraagd werd', () {
-      // "download soulseek 24/44.1". Gelijk telt hier als genoeg; op "strikt meer" zou juist die
-      // ruil nooit doorgaan.
-      const eerlijk = 44100 * 24 ~/ 1000;
-      const opgeschaald = 44100 * 24 ~/ 1000;
-      expect(DownloadManager.draagtGenoeg(eerlijk, opgeschaald), isTrue);
-      expect(DownloadManager.draagtGenoeg(96000 * 24 ~/ 1000, opgeschaald), isTrue);
+    test('en een eerlijke 24/44.1 sinds 29-09-2026 ook niet meer — gelijk is geen winst', () {
+      final eerlijk = kwaliteitUit(verliesvrij: true, kopRate: 44100, formaat: 4);
+      expect(vergelijkKwaliteit(eerlijk, opgeschaald96), 0);
+    });
+
+    test('maar een GEMETEN echte 24/96 wél', () {
+      final echt = kwaliteitUit(verliesvrij: true, kopRate: 96000, formaat: 4, oordeel: echt96);
+      expect(vergelijkKwaliteit(echt, opgeschaald96), greaterThan(0));
     });
 
     test('en een eerlijke cd vervangt wél een uit mp3 omgezette kopie', () {
-      const cd = 44100 * 16 ~/ 1000; // 705
-      const uitMp3 = 2 * 17200 * 16 ~/ 1000; // 550
-      expect(DownloadManager.draagtGenoeg(cd, uitMp3), isTrue);
+      final cd = kwaliteitUit(verliesvrij: true, kopRate: 44100, formaat: 4);
+      final nep = kwaliteitUit(verliesvrij: true, kopRate: 44100, formaat: 4, oordeel: uitMp3);
+      expect(vergelijkKwaliteit(cd, nep), greaterThan(0));
     });
 
-    test('niet te lezen is GEEN nee', () {
-      // Een `.ape` of een bestand zonder leesbare kop levert geen getal. Dan geldt de gewone weg,
-      // net als bij een mislukte meting.
-      expect(DownloadManager.draagtGenoeg(null, 1058), isTrue);
-      expect(DownloadManager.draagtGenoeg(768, null), isTrue);
+    test('niet te lezen is geen bewijs, en dus geen vervanging', () {
+      // Tot 29-09-2026 was "niet te lezen" hier een ja. Maar niets weten is niets bewijzen, en dan
+      // blijft wat er stond.
+      final onleesbaar = kwaliteitUit(verliesvrij: true, kopRate: 0, formaat: 4);
+      expect(vergelijkKwaliteit(onleesbaar, opgeschaald96), 0);
     });
   });
 

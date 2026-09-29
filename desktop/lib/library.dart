@@ -30,6 +30,7 @@ import 'prullenbak.dart' as pb;
 import 'echtheid.dart';
 import 'echtheid_meter.dart';
 import 'echtheid_oordelen.dart';
+import 'integriteit.dart' show kapotSleutels;
 import 'organize.dart';
 import 'settings.dart';
 import 'vaste_keuze.dart';
@@ -281,6 +282,9 @@ ScanUitslag _scanTags(String root, String? cachePad) {
     if (e.path.contains('${Platform.pathSeparator}$torrentWerkMap${Platform.pathSeparator}')) {
       continue;
     }
+    // En de wachtkamer van de keuring: wat daar staat is binnen maar nog niet goedgekeurd — het kan
+    // afgekapt zijn, of slechter dan wat je al hebt. Zie [keuringMap].
+    if (e.path.contains('${Platform.pathSeparator}$keuringMap${Platform.pathSeparator}')) continue;
     var addedMs = 0, sizeBytes = 0;
     var gestat = false;
     try {
@@ -5002,7 +5006,7 @@ extension LibraryDuplicates on LibraryStore {
           ],
         ),
     ];
-    final kennis = (vast: vasteKeuzeSleutels(), nep: nepSleutels());
+    final kennis = (vast: vasteKeuzeSleutels(), oordelen: alleOordelen(), kapot: kapotSleutels());
 
     final aantalBij = albums.length;
     List<_PlatTreffer> gevonden;

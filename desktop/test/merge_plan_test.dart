@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:debridmusic/integriteit.dart';
 import 'package:debridmusic/library.dart';
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/settings.dart';
@@ -31,6 +32,7 @@ void main() {
     lib = LibraryStore();
   });
   tearDown(() {
+    resetIntegriteitVoorTest();
     try {
       root.deleteSync(recursive: true);
     } catch (_) {}
@@ -64,8 +66,11 @@ void main() {
     });
 
     test('a name collision parks the worse copy in _dubbel, and nothing is lost', () {
-      // Same track name in two folders: a big FLAC and a small one. The big one wins the name.
+      // Same track name in two folders. The better one wins the name. Since 29-09-2026 "better" has to
+      // be proven — size alone no longer decides between two lossless copies — so the small one here is
+      // broken (the decode check, see keuring.dart).
       final small = _mk(root, "Backstreet's Back", '01 - Everybody.flac', kb: 50, no: 1);
+      zetIntegriteitVoorTest(small.path, (heel: false, reden: 'afgekapt'));
       final filler = _mk(root, "Backstreet's Back", '02 - As Long.flac', no: 2);
       final big = _mk(root, 'BSB deluxe', '01 - Everybody.flac', kb: 900, no: 1);
 
@@ -91,6 +96,7 @@ void main() {
       final big = _mk(root, 'BSB deluxe', '01 - Everybody.flac', kb: 900, no: 1);
       final filler = _mk(root, "Backstreet's Back", '02 - As Long.flac', no: 2);
       final small = _mk(root, "Backstreet's Back", '01 - Everybody.flac', kb: 50, no: 1);
+      zetIntegriteitVoorTest(small.path, (heel: false, reden: 'afgekapt'));
 
       final plan = lib.planMerge(_album([big, filler, small]));
 

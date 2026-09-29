@@ -119,23 +119,26 @@ void main() {
       expect(firstIsBetter(nep, echt), isFalse, reason: 'en de betrapte te verliezen');
     });
 
-    test('zonder oordeel beslist de grootte, zoals altijd', () async {
-      // De meting mag alleen iets veranderen als ze er IS. Een ongemeten paar hoort zich precies te
-      // gedragen als vóór dit alles bestond.
+    test('zonder oordeel beslist de grootte NIET meer: gelijk, en wat er stond blijft', () async {
+      // Tot 29-09-2026 besliste hier de grootte. Maar groter is bij verliesvrije muziek geen bewijs van
+      // iets — een opgeschaalde of uit mp3 omgezette kopie is juist groter — en Saber vroeg die dag
+      // met zoveel woorden: "moet mijn betere kwaliteit die ik al had blijven." Bij gelijk blijft dus
+      // wat er stond: [firstIsBetter] zegt dan in beide richtingen nee.
       final groot = schrijf('groot.flac', 60);
       final klein = schrijf('klein.flac', 30);
-      expect(firstIsBetter(groot, klein), isTrue);
+      expect(firstIsBetter(groot, klein), isFalse);
       expect(firstIsBetter(klein, groot), isFalse);
     });
 
-    test('twee betrapte kopieën vallen terug op de grootte', () async {
-      // Geen van beide is beter op grond van de meting, dus mag de oude regel het weer beslissen —
-      // en niet stilzwijgend de eerste of de laatste winnen.
+    test('twee betrapte kopieën: gelijk, en wat er stond blijft', () async {
+      // Geen van beide is beter op grond van de meting. Niet de grootte, en ook niet willekeurig de
+      // eerste of de laatste: de tweede, die er al stond, blijft.
       final a = schrijf('a.flac', 60);
       final b = schrijf('b.flac', 30);
       await onthoudOordeel(a.path, _afgekapt);
       await onthoudOordeel(b.path, _afgekapt);
-      expect(firstIsBetter(a, b), isTrue);
+      expect(firstIsBetter(a, b), isFalse);
+      expect(firstIsBetter(b, a), isFalse);
     });
   });
 }

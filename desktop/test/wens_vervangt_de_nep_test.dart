@@ -6,7 +6,12 @@
 /// verliest* staat bóven de grootte, maar een ONGEMETEN binnenkomer geldt niet als nep. Elke verse
 /// kopie won dus van het bestand in de bibliotheek, wat het ook was.
 ///
-/// Deze toets legt de twee uitkomsten vast die daarna moeten gelden.
+/// Deze toets legt de uitkomsten vast die daarna moeten gelden.
+///
+/// **Bijgewerkt op 29-09-2026.** Toen bleek de wens het omgekeerde te doen van wat Saber wilde: zijn
+/// opgeschaalde 24/96-bestanden werden ingeruild voor eerlijke 24/48 en 24/44,1 die niets beter waren,
+/// en dat las hij als "in mindere kwaliteit". Sindsdien telt alleen wat BEWEZEN beter is (keuring.dart):
+/// een opgeschaalde 24/96 draagt een cd, een eerlijke cd ook — gelijk, en dan blijft wat er stond.
 library;
 
 import 'dart:io';
@@ -56,41 +61,36 @@ void main() {
     return f;
   }
 
-  test('DE KERN: de gemeten cd wint van de opgeschaalde 24/96, ook al is die vier keer groter', () async {
-    // 27 MB tegen 108 MB is geen uitzondering maar de regel: een opgeschaald bestand draagt
-    // dezelfde muziek in vier keer zoveel bytes. GEMETEN over Sabers 158 opgeschaalde nummers:
-    // 20,6 GB waar 4,1 GB volstaat.
+  test('DE KERN: een gemeten cd en een opgeschaalde 24/96 zijn gelijk — wat er stond blijft', () async {
+    // Tot 29-09-2026 won de cd hier. Maar een opgeschaald bestand draagt dezelfde muziek als de cd, in
+    // vier keer zoveel bytes — geen winst om een bestand van Saber voor weg te duwen.
     final opgeschaald = schrijf('opgeschaald.flac', 108);
     final echt = schrijf('echt.flac', 27);
     await onthoudOordeel(opgeschaald.path, _opgeschaald);
     await onthoudOordeel(echt.path, _echteCd);
 
-    expect(firstIsBetter(echt, opgeschaald), isTrue, reason: 'de gemeten cd hoort te winnen');
-    expect(firstIsBetter(opgeschaald, echt), isFalse);
+    expect(firstIsBetter(echt, opgeschaald), isFalse, reason: 'gelijk: de opgeschaalde blijft staan');
+    expect(firstIsBetter(opgeschaald, echt), isFalse, reason: 'en andersom evenmin');
   });
 
-  test('EN DE STORING: een ONGEMETEN binnenkomer won hiervoor gewoon', () async {
-    // Dit is geen wens maar een vaststelling: zó gedraagt `firstIsBetter` zich, en dat is juist
-    // waarom er vóór het opbergen gemeten MOET worden. Zonder oordeel op de binnenkomer verliest
-    // het bewezen neppe bestand — ook als de binnenkomer zelf een vervalsing is.
+  test('DE STORING IS DICHT: een ONGEMETEN binnenkomer wint niet meer', () async {
+    // Hier won hij: zonder meting telde hij niet als nep, en op grootte was hij groter. Nu bewijst een
+    // ongemeten bestand niets, en een bestand dat niets bewijst duwt niets weg.
     final opgeschaald = schrijf('oud.flac', 108);
     final ongemeten = schrijf('nieuw.flac', 120);
     await onthoudOordeel(opgeschaald.path, _opgeschaald);
 
-    expect(firstIsBetter(ongemeten, opgeschaald), isTrue,
-        reason: 'zonder meting telt hij niet als nep — dit is precies het gat');
+    expect(firstIsBetter(ongemeten, opgeschaald), isFalse,
+        reason: '29-09-2026: precies zo verdrong een ongemeten WavPack een FLAC');
   });
 
-  test('twee vervalsingen: de tweede verdringt de eerste niet op grootte alleen', () async {
-    // Zijn ze allebei betrapt, dan vervalt de nep-regel en beslist de grootte — en de grootste is
-    // hier juist de slechtste. Zolang de wensweg geen nep meer binnenlaat ontstaan zulke paren
-    // niet meer; dit legt vast wat de huidige regel doet, zodat een latere capaciteitstrap zichtbaar
-    // iets verandert.
+  test('twee vervalsingen: de tweede verdringt de eerste niet', () async {
+    // De "bekende grens" van hiervoor — de grootte besliste, en de grootste was de slechtste — is weg.
     final eerste = schrijf('nep1.flac', 108);
     final tweede = schrijf('nep2.flac', 120);
     await onthoudOordeel(eerste.path, _opgeschaald);
     await onthoudOordeel(tweede.path, _opgeschaald);
 
-    expect(firstIsBetter(tweede, eerste), isTrue, reason: 'nu nog op grootte — bekende grens');
+    expect(firstIsBetter(tweede, eerste), isFalse);
   });
 }

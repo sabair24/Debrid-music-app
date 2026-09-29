@@ -142,6 +142,16 @@ void main() {
       expect(opgehaaldMelding(''), isNot(contains('(')));
       expect(opgehaaldMelding('24 bit / 48 kHz'), contains('24 bit / 48 kHz'));
     });
+
+    test('na de keuring zegt de melding ook wat er níét in je bibliotheek kwam', () {
+      // Sinds 29-09-2026 komt een plaat van tiddl eerst in de keuringsmap. Een melding die alleen
+      // "opgehaald" zegt terwijl er een nummer kapot binnenkwam, is het groene vinkje waar dit project
+      // al twee keer op stukliep.
+      final m = opgehaaldMelding('24 bit / 96 kHz', keuring: '11 opgeborgen · 1 afgekeurd (kapot)');
+      expect(m, contains('24 bit / 96 kHz'));
+      expect(m, contains('1 afgekeurd (kapot)'));
+      expect(opgehaaldMelding('', keuring: ''), opgehaaldMelding(''), reason: 'niets gekeurd, niets erbij');
+    });
   });
 
   group('ffmpeg meegeven aan tiddl', () {

@@ -4,12 +4,12 @@
 /// gaat en welk er blijft staan; wijkt de isolate ook maar in één paar af, dan verplaatst de app
 /// muziek op andere gronden dan voorheen, zonder dat er iets klapt.
 ///
-/// **De stille val die dit had kunnen worden.** `firstIsBetter` raadpleegt twee kaarten in het
-/// geheugen: `isVasteKeuze` (wat de gebruiker zelf koos) en `bewezenNep` (wat als nagemaakt gemeten
-/// is). Een isolate begint met een LEGE kopie van alle globale staat, dus daar zouden allebei overal
-/// `false` teruggeven — en dan vallen precies de twee regels weg die BOVEN de kwaliteitsgronden
-/// staan. Geen foutmelding, alleen een andere winnaar. Daarom gaan ze als [Voorkennis] mee, en daarom
-/// staan er hieronder twee toetsen die alleen dáárover gaan.
+/// **De stille val die dit had kunnen worden.** `firstIsBetter` raadpleegt drie kaarten in het
+/// geheugen: `isVasteKeuze` (wat de gebruiker zelf koos), de oordelen van de echtheidsmeter, en de
+/// decodeerproef (wat bewezen kapot is). Een isolate begint met een LEGE kopie van alle globale staat,
+/// dus daar zou alles "niet gekozen, niet gemeten, heel" lezen — en dan valt de hele keuring weg. Geen
+/// foutmelding, alleen een andere winnaar. Daarom gaan ze als [Voorkennis] mee, en daarom staan er
+/// hieronder toetsen die alleen dáárover gaan.
 library;
 
 import 'dart:io';
@@ -17,6 +17,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/library.dart';
+import 'package:debridmusic/echtheid.dart';
 import 'package:debridmusic/echtheid_oordelen.dart';
 import 'package:debridmusic/organize.dart';
 import 'package:debridmusic/vaste_keuze.dart';
@@ -38,30 +39,51 @@ void main() {
     File maak(String naam, int bytes) => File('${krab.path}${Platform.pathSeparator}$naam')
       ..writeAsBytesSync(List<int>.filled(bytes, 0));
 
-    test('zonder voorkennis beslist de grootte', () {
+    const leeg = (vast: <String>{}, oordelen: <String, Echtheidsoordeel>{}, kapot: <String>{});
+
+    test('zonder voorkennis beslist de grootte NIET: gelijk, en wat er stond blijft', () {
       final groot = maak('a.flac', 2000);
       final klein = maak('b.flac', 1000);
-      expect(firstIsBetter(groot, klein, kennis: (vast: <String>{}, nep: <String>{})), isTrue);
+      expect(firstIsBetter(groot, klein, kennis: leeg), isFalse);
+      expect(firstIsBetter(klein, groot, kennis: leeg), isFalse);
     });
 
-    test('wat de gebruiker zelf koos verliest niet, ook niet van een groter bestand', () {
-      // Dit is de regel die het hoogst staat. Zou de isolate hem missen, dan gooit een veegbeurt
-      // precies de kopie weg die de gebruiker met de hand had uitgezocht.
+    test('wat de gebruiker zelf koos wint bij gelijk, ook van een groter bestand', () {
+      // Zou de isolate dit missen, dan gooit een veegbeurt precies de kopie weg die de gebruiker met de
+      // hand had uitgezocht.
       final groot = maak('a.flac', 2000);
       final gekozen = maak('b.flac', 1000);
-      final kennis = (vast: <String>{sleutelVoor(gekozen.path)}, nep: <String>{});
+      final kennis = (vast: <String>{sleutelVoor(gekozen.path)}, oordelen: <String, Echtheidsoordeel>{}, kapot: <String>{});
       expect(firstIsBetter(groot, gekozen, kennis: kennis), isFalse);
       expect(firstIsBetter(gekozen, groot, kennis: kennis), isTrue);
     });
 
-    test('wat bewezen nep is verliest, ook al is het groter', () {
+    test('wat bewezen uit mp3 komt verliest, ook al is het groter', () {
       // Een mp3 die naar FLAC is omgezet is vaak GROTER dan het origineel; op grootte alleen zou de
       // nagemaakte kopie stelselmatig winnen.
       final nep = maak('a.flac', 2000);
       final echt = maak('b.flac', 1000);
-      final kennis = (vast: <String>{}, nep: <String>{echtheidSleutelVoor(nep.path)});
+      final kennis = (
+        vast: <String>{},
+        oordelen: <String, Echtheidsoordeel>{
+          echtheidSleutelVoor(nep.path): const Echtheidsoordeel(
+              bits: Bitdiepte.spreektNietTegen,
+              boven: Bovenband.onbekend,
+              band: Bandbreedte.afgekapt,
+              afkapHz: 16000),
+        },
+        kapot: <String>{},
+      );
       expect(firstIsBetter(nep, echt, kennis: kennis), isFalse);
       expect(firstIsBetter(echt, nep, kennis: kennis), isTrue);
+    });
+
+    test('wat bewezen kapot is verliest van alles wat heel is', () {
+      final kapot = maak('a.flac', 2000);
+      final mp3 = maak('b.mp3', 1000);
+      final kennis = (vast: <String>{}, oordelen: <String, Echtheidsoordeel>{}, kapot: <String>{kapot.path.toLowerCase()});
+      expect(firstIsBetter(mp3, kapot, kennis: kennis), isTrue, reason: 'een heel mp3 boven een kapotte FLAC');
+      expect(firstIsBetter(kapot, mp3, kennis: kennis), isFalse);
     });
   });
 

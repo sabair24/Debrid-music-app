@@ -170,3 +170,16 @@ String _fallback() {
 /// uiteenlopen, dan is het gevolg precies dezelfde stilte als hiervoor — vandaar dat hij hier staat,
 /// in het bestand dat ze allebei al kennen.
 const torrentWerkMap = '_torrentwerk';
+
+/// De keuringsmap: waar een torrent wacht tot hij gekeurd is, vóór hij je bibliotheek in mag.
+///
+/// **Waarom er een wachtkamer moest komen.** Tot 29-09-2026 schreef een torrent rechtstreeks in
+/// `DebridMusic Downloads\<torrentnaam>\`, en die map leest de bibliotheek in. Een afgekapte FLAC stond
+/// dus in je bibliotheek zodra hij binnen was, en een mindere kopie van iets wat je al had ook — pas
+/// daarna werd er vergeleken. Saber die dag: "kunnen we niet downloaden virtueel zeg maar voor dat het
+/// op de pc bibliotheek wordt gezet, zodanig dat er eerst een controle is voor het goedgekeurd wordt".
+///
+/// Hier gebeurt precies dat. De scanner slaat deze map over (`_scanTags` in library.dart), en alleen
+/// wat de keuring doorstaat — heel, en niet slechter dan wat je al had — wordt eruit opgeborgen.
+/// Dezelfde reden als bij [torrentWerkMap] voor waarom de naam hier staat.
+const keuringMap = '_keuring';

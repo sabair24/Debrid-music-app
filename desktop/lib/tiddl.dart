@@ -171,8 +171,9 @@ const tidalKwaliteiten = ['max', 'high', 'normal', 'low'];
 /// prijs is dat één nummer dat in jouw land niet te krijgen is de hele plaat afbreekt; dat is de
 /// mindere van de twee kwaden, en de foutmelding zegt wélk nummer.
 ///
-/// `-p` wijst de muziekmap aan zonder aan jouw tiddl-instellingen te komen. De indeling binnen die
-/// map blijft van tiddl zelf: de app scant toch alles wat eronder staat.
+/// `-p` wijst de map aan zonder aan jouw tiddl-instellingen te komen. Sinds 29-09-2026 is dat een
+/// keuringsmap en niet meer de muziekmap: wat tiddl aflevert wordt eerst gedecodeerd en vergeleken met
+/// wat je al hebt, en pas daarna opgeborgen (zie `keuringMap` in paths.dart).
 List<String> tiddlOpdracht({
   required String tool,
   required String doel,
@@ -261,9 +262,16 @@ String? gemeldeKwaliteit(String uitvoer) {
 ///
 /// De kwaliteit staat erbij omdat je die anders pas ontdekt door naar de bitdiepte van je bestand
 /// te kijken — en dat is precies hoe het vandaag ontdekt werd dat `max` 16 bit opleverde.
-String opgehaaldMelding(String kwaliteit) => kwaliteit.isEmpty
-    ? 'Opgehaald — de bibliotheek wordt opnieuw doorzocht'
-    : 'Opgehaald ($kwaliteit) — de bibliotheek wordt opnieuw doorzocht';
+///
+/// [keuring] is wat de keuring besliste (zie `keuringMap` in paths.dart): sinds 29-09-2026 komt een
+/// plaat van tiddl niet meer rechtstreeks in je muziekmap, maar eerst in de keuringsmap. Dan hoort de
+/// melding ook te zeggen wat er níét in je bibliotheek kwam, en waarom.
+String opgehaaldMelding(String kwaliteit, {String? keuring}) {
+  final basis = kwaliteit.isEmpty ? 'Opgehaald' : 'Opgehaald ($kwaliteit)';
+  return keuring == null || keuring.isEmpty
+      ? '$basis — de bibliotheek wordt opnieuw doorzocht'
+      : '$basis en gekeurd: $keuring';
+}
 
 /// Haal [doel] op naar [map]. Null als het lukte, anders de uitleg.
 ///
