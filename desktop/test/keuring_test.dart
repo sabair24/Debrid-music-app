@@ -163,8 +163,24 @@ void main() {
   group('op schijf, met ffmpeg', () {
     late Directory map;
     final ffmpeg = Ffmpeg().pad;
+    // **Aan het eind alles nog eens wissen, tot het weg blijft.** De decodeerproef bewaart zijn uitslagen
+    // zonder erop te wachten (`integriteit.json`), en die late schrijfbeurt houdt de map open of zet hem
+    // terug: gemeten op 29-09-2026 bleven er zo 170 mappen in %TEMP% achter na een dag toetsen. Niet per
+    // toets wachten — dat verschoof ooit de timing van een poorttoets —, maar één keer aan het eind.
+    final teWissen = <Directory>[];
+    tearDownAll(() async {
+      for (var ronde = 0; ronde < 30 && teWissen.any((d) => d.existsSync()); ronde++) {
+        for (final d in teWissen) {
+          try {
+            if (d.existsSync()) d.deleteSync(recursive: true);
+          } catch (_) {/* nog in gebruik; volgende ronde */}
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    });
     setUp(() {
       map = Directory.systemTemp.createTempSync('dm_keuring_');
+      teWissen.add(map);
       setAppDirForTest(map.path);
       resetIntegriteitVoorTest();
     });
