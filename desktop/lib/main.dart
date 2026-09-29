@@ -1324,6 +1324,8 @@ Future<void> main() async {
     // zijn eigen albumtag volgt en ook niet ernaast onder een andere naam. Zie
     // [LibraryStore.fileOfRecording].
     downloads.mapVanBestaande = library.fileOfRecording;
+    // En voor wat onder een ándere titel binnenkomt dan jouw kopie. Zie [LibraryStore.bestandenVanLengte].
+    downloads.opLengte = library.bestandenVanLengte;
     // Een torrent die bij het afsluiten nog in de keuringsmap stond: nu alsnog keuren en opbergen. Na
     // de regel hierboven, want de keuring vraagt de bibliotheek wat er al ligt. Niet awaited — dat
     // decodeert en meet, en niemand wacht erop. Zie [DownloadManager.hervatKeuring].

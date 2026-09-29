@@ -971,6 +971,28 @@ class LibraryStore extends ChangeNotifier {
     return null;
   }
 
+  /// Alle bestanden van deze artiest die (bijna) [seconds] duren, voor de keuring als de titel niets
+  /// oplevert.
+  ///
+  /// **Waarom.** Bij de proef op 29-09-2026 met een mp3-torrent van Blood On The Dance Floor kwam
+  /// "Earth Song (Hani's Club Experience).mp3" je bibliotheek in, naast "Earth Song (Hani's Extended
+  /// Radio Experience).wv". Twee titels, één opname: 475,4 tegen 475,5 seconden, en de vingerafdruk
+  /// gaf 0,91. Op titel vindt [fileOfRecording] hem dus nooit. Dit geeft de kandidaten; of het echt
+  /// dezelfde opname is beslist de vingerafdruk, niet deze lijst.
+  List<String> bestandenVanLengte(String artist, int seconds, {String? nietIn}) {
+    if (seconds <= 0) return const [];
+    final wantArtist = artistKey(splitFeatured(artist, '').main);
+    if (wantArtist.isEmpty) return const [];
+    return [
+      for (final t in tracks)
+        if (!_ligtIn(t.path, nietIn) &&
+            (t.duration?.inSeconds ?? 0) > 0 &&
+            (t.duration!.inSeconds - seconds).abs() <= 2 &&
+            _artistCovers(artistKey(splitFeatured(t.artist, t.title).main), wantArtist))
+          t.path,
+    ];
+  }
+
   /// Is [mine] the artist [want], allowing for extra names credited alongside?
   ///
   /// Whole words only: a file credited to "Daniel Bedingfield, D'N'D Productions" is still that

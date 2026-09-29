@@ -8,6 +8,7 @@ import 'album_facts.dart' show kSidecarName;
 import 'audioformaten.dart';
 import 'editions.dart';
 import 'flac_tags.dart';
+import 'mp3_duur.dart' show readMp3Duur;
 import 'mp3_tags.dart';
 import 'echtheid.dart';
 import 'echtheid_oordelen.dart';
@@ -2155,15 +2156,23 @@ Future<TidyReport> tidyDownloads(String downloadsRoot) async {
 /// de studioversie dezelfde artiest en titel droeg.
 /// Hoe lang dit nummer duurt volgens zijn eigen kop, of null als dat er niet uit te halen valt.
 ///
-/// FLAC uit STREAMINFO, WavPack uit zijn blokkop. De rest levert null, en dat is een antwoord: zie
-/// [bergMapOp] voor wat er dan NIET gebeurt. Een schatting uit de bestandsgrootte zou er hier juist
-/// een gok van maken, en een gok die "dit is dezelfde opname" zegt kost een bestand.
+/// FLAC uit STREAMINFO, WavPack uit zijn blokkop, MP3 uit zijn Xing/Info/VBRI-blok of — bij een
+/// vaste bitsnelheid — uit de eerste framekop ([readMp3Duur], dat bij twijfel null geeft). De rest
+/// levert null, en dat is een antwoord: zie [bergMapOp] voor wat er dan NIET gebeurt. Een schatting uit
+/// de bestandsgrootte zou er hier juist een gok van maken, en een gok die "dit is dezelfde opname" zegt
+/// kost een bestand.
+///
+/// **MP3 kwam er op 29-09-2026 bij**, bij de proef met een mp3-torrent van Blood On The Dance Floor. Van
+/// de dertien mp3's hield de keuring er negen tegen, maar vier kwamen tóch je bibliotheek in, náást de
+/// FLAC die je al had: "02 - Morphine.mp3" naast "Morphine (feat. Slash).flac". Zonder looptijd vraagt
+/// [bergMapOp] de bibliotheek niet waar de opname al staat, en dan beslist alleen de bestandsnaam.
 int? looptijdInSeconden(File f) {
   final laag = f.path.toLowerCase();
   Duration? d;
   try {
     if (laag.endsWith('.flac')) d = readFlacTags(f)?.duration;
     if (laag.endsWith('.wv')) d = readWvKop(f)?.duration;
+    if (laag.endsWith('.mp3')) d = readMp3Duur(f);
   } catch (_) {
     return null;
   }
@@ -2179,7 +2188,8 @@ int? looptijdInSeconden(File f) {
 Future<TidyReport> bergMapOp(String map, String downloadsRoot,
     {String? Function(String artist, String title, {int? seconds})? staatAl,
     bool Function(String pad)? slaOver,
-    Future<String?> Function(File f)? keur}) async {
+    Future<String?> Function(File f)? keur,
+    Future<bool> Function(File f)? alGehad}) async {
   final report = TidyReport();
   final dir = Directory(map);
   if (!await dir.exists()) return report;
@@ -2239,6 +2249,28 @@ Future<TidyReport> bergMapOp(String map, String downloadsRoot,
           report.uitkomst[before] = '$reden — niet in je bibliotheek gezet (staat in $parkeerMap)';
         } catch (_) {
           report.uitkomst[before] = '$reden — niet in je bibliotheek gezet';
+        }
+        continue;
+      }
+    }
+    // **[alGehad]: dezelfde opname staat er al, onder een andere titel, en deze is niet beter.** Dan
+    // vindt [placeFileDetailed] hem nooit — die zoekt op titel en bestandsnaam — en kwam de mindere
+    // kopie er gewoon naast te staan. Zie `LibraryStore.bestandenVanLengte` voor het geval.
+    if (alGehad != null) {
+      var gehad = false;
+      try {
+        gehad = await alGehad(f);
+      } catch (_) {/* niet te zeggen is niet tegenhouden */}
+      if (gehad) {
+        report.duplicates++;
+        try {
+          await _parkeer(f, '$downloadsRoot$sep$parkeerMap$sep$parkeerBinnenkomer');
+          report.uitkomst[before] =
+              'had je al in minstens even goede kwaliteit, onder een andere titel — deze staat in $parkeerMap';
+        } catch (_) {
+          // Niet op te bergen én niet opzij te zetten: dan hoort hij ook niet zichtbaar te worden.
+          report.tegengehouden.add(before);
+          report.uitkomst[before] = 'had je al in minstens even goede kwaliteit, onder een andere titel';
         }
         continue;
       }

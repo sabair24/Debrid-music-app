@@ -18,8 +18,10 @@ import 'dart:io';
 
 import 'package:debridmusic/audioformaten.dart' show kMinimumBytes;
 import 'package:debridmusic/ffmpeg.dart';
+import 'package:debridmusic/fingerprint.dart';
 import 'package:debridmusic/integriteit.dart';
 import 'package:debridmusic/library.dart';
+import 'package:debridmusic/models.dart';
 import 'package:debridmusic/online.dart';
 import 'package:debridmusic/organize.dart';
 import 'package:debridmusic/paths.dart';
@@ -151,6 +153,25 @@ void main() {
       expect(r3.skipped, 1);
       expect(r3.uitkomst[onleesbaar.path], contains('niet op te bergen'));
     });
+  });
+
+  test('de bibliotheek geeft wat van dezelfde artiest bijna even lang duurt', () {
+    // De kandidaten voor "dezelfde opname onder een andere titel". Of het echt dezelfde is, beslist
+    // daarna de vingerafdruk; deze lijst mag ruim zijn, maar niet een andere artiest of lengte geven.
+    Track t(String pad, String artiest, int sec) => Track(
+        path: pad, title: 'x', artist: artiest, album: 'a', trackNo: 1, duration: Duration(seconds: sec), isFlac: true);
+    final lib = LibraryStore()
+      ..tracks.addAll([
+        t('${sep}a${sep}earth.wv', 'Michael Jackson', 476),
+        t('${sep}a${sep}morphine.flac', 'Michael Jackson feat. Slash', 389),
+        t('${sep}a${sep}ander.flac', 'Janet Jackson', 476),
+        t('${sep}a${sep}te-lang.flac', 'Michael Jackson', 480),
+      ]);
+    expect(lib.bestandenVanLengte('Michael Jackson', 475), ['${sep}a${sep}earth.wv']);
+    expect(lib.bestandenVanLengte('Michael Jackson', 389), ['${sep}a${sep}morphine.flac'],
+        reason: 'een gastcredit is dezelfde artiest');
+    expect(lib.bestandenVanLengte('Michael Jackson', 475, nietIn: '${sep}a'), isEmpty);
+    expect(lib.bestandenVanLengte('Michael Jackson', 0), isEmpty);
   });
 
   test('de scanner leest de keuringsmap niet', () async {
@@ -300,6 +321,95 @@ void main() {
       expect(alles('$downloads$sep$parkeerMap'), ['05 - Is It Scary.flac'], reason: 'de kapotte staat opzij');
       expect(bekendKapot('$downloads$sep$parkeerMap${sep}05 - Is It Scary.flac'), isTrue);
     }, skip: zonder);
+
+    test('DE VAL: een mp3 onder een andere naam dan jouw FLAC wordt óók tegengehouden', () async {
+      // Nagespeeld van de proef op 29-09-2026 met een mp3-torrent van Blood On The Dance Floor: negen van
+      // de dertien werden tegengehouden, vier kwamen tóch binnen — naast de FLAC, onder een net andere
+      // naam. Zonder looptijd vroeg het opbergen de bibliotheek niet waar de opname al stond.
+      final oud = await echt('$downloads${sep}Albums${sep}MJ${sep}BOTDF', 'Morphine (feat. Slash).flac', 'Morphine',
+          nr: 2);
+      final inhoud = oud.readAsBytesSync();
+      final mp3 = File('${keuring('BOTDF mp3')}${sep}02 - Morphine.mp3');
+      mp3.parent.createSync(recursive: true);
+      final r = await Process.run(ffmpeg!, [
+        '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'anoisesrc=d=12:c=pink:r=44100:a=0.3:seed=2',
+        '-metadata', 'title=Morphine', '-metadata', 'artist=Michael Jackson',
+        '-metadata', 'album=Blood On The Dance Floor', '-metadata', 'track=2',
+        '-c:a', 'libmp3lame', '-b:a', '320k', mp3.path,
+      ]);
+      expect(r.exitCode, 0, reason: '${r.stderr}');
+
+      await manager(bestaat: (a, t, {seconds, nietIn}) => t == 'Morphine' ? oud.path : null).hervatKeuring();
+
+      expect(oud.readAsBytesSync(), inhoud, reason: 'jouw FLAC is niet aangeraakt');
+      expect(alles('$downloads${sep}Albums'), ['MJ${sep}BOTDF${sep}Morphine (feat. Slash).flac'],
+          reason: 'de mp3 hoort niet naast je FLAC in de bibliotheek te staan');
+      expect(alles('$downloads$sep$parkeerMap'), ['$parkeerBinnenkomer${sep}02 - Morphine.mp3']);
+    }, skip: zonder);
+
+    Future<File> mp3Van(String map, String naam, String titel, {required int zaad}) async {
+      final f = File('$map$sep$naam');
+      f.parent.createSync(recursive: true);
+      final r = await Process.run(ffmpeg!, [
+        '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'anoisesrc=d=12:c=pink:r=44100:a=0.3:seed=$zaad',
+        '-metadata', 'title=$titel', '-metadata', 'artist=Michael Jackson',
+        '-metadata', 'album=Blood On The Dance Floor', '-metadata', 'track=11',
+        '-c:a', 'libmp3lame', '-b:a', '320k', f.path,
+      ]);
+      expect(r.exitCode, 0, reason: '${r.stderr}');
+      return f;
+    }
+
+    final zonderFp = zonder != false ? zonder : (Fingerprinter().available ? false : 'geen fpcalc op deze machine');
+
+    test('DE VAL: dezelfde opname onder een ándere titel wordt óók tegengehouden', () async {
+      // Earth Song, dezelfde proef: "Hani's Club Experience" (mp3) naast "Hani's Extended Radio Experience"
+      // (WavPack) — 475,4 tegen 475,5 seconden, vingerafdruk 0,91. Op titel vindt niemand hem.
+      final oud = await echt('$downloads${sep}Albums${sep}MJ${sep}BOTDF',
+          "11 - Earth Song (Hani's Extended Radio Experience).flac", "Earth Song (Hani's Extended Radio Experience)",
+          nr: 11);
+      await mp3Van(keuring('BOTDF mp3'), "11 - Earth Song (Hani's Club Experience).mp3",
+          "Earth Song (Hani's Club Experience)", zaad: 11);
+      final d = manager(bestaat: (a, t, {seconds, nietIn}) => null)
+        ..opLengte = (a, s, {nietIn}) => a == 'Michael Jackson' && (s - 12).abs() <= 2 ? [oud.path] : const [];
+
+      await d.hervatKeuring();
+
+      expect(alles('$downloads${sep}Albums'), ["MJ${sep}BOTDF${sep}11 - Earth Song (Hani's Extended Radio Experience).flac"],
+          reason: 'de mindere kopie van dezelfde opname hoort niet naast de jouwe');
+      expect(alles('$downloads$sep$parkeerMap'), ["$parkeerBinnenkomer${sep}11 - Earth Song (Hani's Club Experience).mp3"]);
+    }, skip: zonderFp);
+
+    test('DE GRENS: een ándere opname van dezelfde lengte komt er gewoon bij', () async {
+      // Zelfde artiest, zelfde lengte, andere muziek: dat is geen dubbel. De vingerafdruk beslist, niet de klok.
+      final oud = await echt('$downloads${sep}Albums${sep}MJ${sep}BOTDF',
+          "11 - Earth Song (Hani's Extended Radio Experience).flac", "Earth Song (Hani's Extended Radio Experience)",
+          nr: 11);
+      await mp3Van(keuring('BOTDF mp3'), '11 - Iets Anders.mp3', 'Iets Anders', zaad: 99);
+      final d = manager(bestaat: (a, t, {seconds, nietIn}) => null)
+        ..opLengte = (a, s, {nietIn}) => [oud.path];
+
+      await d.hervatKeuring();
+
+      expect(alles('$downloads${sep}Albums').where((p) => p.endsWith('Iets Anders.mp3')), hasLength(1));
+      expect(alles('$downloads$sep$parkeerMap'), isEmpty);
+    }, skip: zonderFp);
+
+    test('DE GRENS: een BETERE kopie onder een andere titel wordt niet tegengehouden', () async {
+      // Tegenhouden is alleen voor wat niet beter is. Een FLAC van een opname die je als mp3 hebt, hoort
+      // binnen te komen — ook als de bron hem anders noemt.
+      final oud = await mp3Van('$downloads${sep}Albums${sep}MJ${sep}BOTDF', "11 - Earth Song (Hani's Club Experience).mp3",
+          "Earth Song (Hani's Club Experience)", zaad: 11);
+      await echt(keuring('BOTDF flac'), "11 - Earth Song (Hani's Extended Radio Experience).flac",
+          "Earth Song (Hani's Extended Radio Experience)", nr: 11);
+      final d = manager(bestaat: (a, t, {seconds, nietIn}) => null)..opLengte = (a, s, {nietIn}) => [oud.path];
+
+      await d.hervatKeuring();
+
+      expect(alles('$downloads${sep}Albums').where((p) => p.endsWith('.flac')), hasLength(1),
+          reason: 'de betere kopie hoort in je bibliotheek');
+      expect(alles('$downloads$sep$parkeerMap'), isEmpty);
+    }, skip: zonderFp);
 
     test('TIDAL: dezelfde keuring, en wat je ophaalde telt als jouw keuze', () async {
       final d = manager();

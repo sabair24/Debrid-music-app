@@ -1081,6 +1081,10 @@ class DownloadManager extends ChangeNotifier {
   /// "wat je al hebt". Zie [_bergTorrentOp].
   String? Function(String artist, String title, {int? seconds, String? nietIn})? mapVanBestaande;
 
+  /// De bibliotheek: welke bestanden van deze artiest ongeveer zo lang duren. Voor de keuring, als een
+  /// binnenkomer onder een andere titel staat dan jouw kopie — zie [_alGehadOnderAndereTitel].
+  List<String> Function(String artist, int seconds, {String? nietIn})? opLengte;
+
   /// Bestanden in een torrentmap die op dit moment nog GESCHREVEN worden — tot ze helemaal binnen
   /// zijn en als jouw keuze vastliggen.
   ///
@@ -2565,7 +2569,8 @@ class DownloadManager extends ChangeNotifier {
           // Een ander nummer uit dezelfde torrent dat nog binnenkomt blijft staan; zijn eigen
           // download bergt het op als het klaar is. Zie [_inAanmaak].
           slaOver: _inAanmaak.contains,
-          keur: _keurVoorBibliotheek);
+          keur: _keurVoorBibliotheek,
+          alGehad: _alGehadOnderAndereTitel);
       _log.line('torrent "$naam" gekeurd en opgeborgen: $r');
       for (final p in r.tegengehouden) {
         _log.line('torrent "$naam": ${p.split(Platform.pathSeparator).last} — ${r.uitkomst[p]}');
@@ -2807,6 +2812,39 @@ class DownloadManager extends ChangeNotifier {
       await controleerHeel(bestaand);
     }
     return null;
+  }
+
+  /// Staat deze opname al in je bibliotheek onder een ANDERE titel, en is de binnenkomer niet beter?
+  ///
+  /// Gevonden bij de proef op 29-09-2026: "Earth Song (Hani's Club Experience).mp3" kwam naast
+  /// "Earth Song (Hani's Extended Radio Experience).wv" te staan — dezelfde opname (475,4 tegen 475,5 s,
+  /// vingerafdruk 0,91), alleen anders getiteld door een andere bron. Het opbergen zoekt op titel en
+  /// bestandsnaam en zag dus niets.
+  ///
+  /// Alleen als de titel NIETS oplevert: vindt de bibliotheek hem op titel, dan vergelijkt het
+  /// opbergen zelf al ([staatAl]). Kandidaten zijn nummers van dezelfde artiest met bijna dezelfde
+  /// lengte ([opLengte]); of het dezelfde opname is beslist de vingerafdruk. Zonder fpcalc of
+  /// zonder leesbare lengte: niets tegenhouden.
+  Future<bool> _alGehadOnderAndereTitel(File f) async {
+    final kandidaten = opLengte;
+    if (kandidaten == null) return false;
+    final t = readTags(f);
+    final sec = looptijdInSeconden(f);
+    if (t == null || sec == null) return false;
+    if (mapVanBestaande?.call(t.artist, t.title, seconds: sec, nietIn: f.parent.path) != null) {
+      return false;
+    }
+    for (final c in kandidaten(t.artist, sec, nietIn: f.parent.path)) {
+      if (!File(c).existsSync()) continue;
+      if (await _zelfdeOpname(f.path, c) != true) continue;
+      if (gemeten(c) == null) await _meetEchtheid(File(c));
+      await controleerHeel(c);
+      if (firstIsBetter(f, File(c))) continue;
+      _log.line('keuring: ${f.uri.pathSegments.last} is dezelfde opname als '
+          '${c.split(Platform.pathSeparator).last} (andere titel) en niet beter — opzij');
+      return true;
+    }
+    return false;
   }
 
   /// Wat na het opbergen nog in de keuringsmap ligt, terugzetten waar het vroeger binnenkwam.
