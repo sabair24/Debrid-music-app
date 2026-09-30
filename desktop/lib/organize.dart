@@ -1318,9 +1318,12 @@ TrackTags _carryVersion(TrackTags t, String filename) {
 }
 
 /// Words that mark a filename as a particular VERSION of a track.
+///
+/// Met meervouden sinds 30-09-2026: de regel wordt tegen losse woorden gehouden, dus "Remixes",
+/// "Sessions" en "Demos" glipten erdoor terwijl ze precies hetzelfde zeggen als hun enkelvoud.
 final _versionWordRe = RegExp(
-    r'\b(live|remix|rmx|edit|extended|radio|demo|instrumental|ac+ap+ell?a|acoustic|reprise|'
-    r'unplugged|version|mix|remaster(ed)?|alternate|alt take|session|karaoke|dub|bonus|'
+    r'\b(live|remix(es|ed)?|rmx|edits?|extended|radio|demos?|instrumentals?|ac+ap+ell?a|acoustic|reprise|'
+    r'unplugged|versions?|mix(es)?|remaster(ed)?|alternate|alt take|sessions?|karaoke|dub|bonus|'
     r'single|club|original|mono|stereo)\b');
 /// Dezelfde woorden, maar dan als SLOT van een naam — zie de staartregel in [versionBrackets].
 final _versionWordEindeRe = RegExp(
@@ -2542,11 +2545,74 @@ String _ext(String name) {
   return i <= 0 || i == name.length - 1 ? '' : name.substring(i + 1);
 }
 
+/// Binnen hoeveel seconden van de officiële lengte een kopie "de" lengte heeft.
+///
+/// Twee rips van dezelfde persing verschillen een tel of twee (een andere gapless-snit, wat stilte
+/// aan het eind); een live-opname, een radio-edit of een andere mix zit daar bijna altijd buiten.
+/// Gemeten op 30-09-2026 met Sam Smith — I'm Not The Only One, officieel 3:59: de studiokopieën bij
+/// de peers stonden op 3:59, de live-opname uit de Royal Albert Hall op 3:54.
+const kLengteExact = 2;
+
+/// Heeft deze kopie de officiële lengte? Onbekend aan een van beide kanten is NEE — dat is geen
+/// weigering (zie [fileOffersTitle] voor de ruime grens), alleen geen voorrang.
+bool lengteKlopt(int? officieel, int? gevonden) =>
+    officieel != null &&
+    gevonden != null &&
+    officieel > 0 &&
+    gevonden > 0 &&
+    (officieel - gevonden).abs() <= kLengteExact;
+
+/// Versiewoorden die in een MAPNAAM iets zeggen over wat erin staat.
+///
+/// Smaller dan [_versionWordRe], en met opzet: "radio", "edit", "mix" en "version" staan in de naam
+/// van talloze gewone verzamelmappen ("Radio 538 Hitzone", "Club Mix 2005"). Deze woorden zeggen in een
+/// map maar één ding. Met meervouden, want mappen heten "Remixes" en "Sessions".
+final _mapVersieRe = RegExp(
+    r'\b(live|concert|unplugged|acoustic|remix(?:es|ed)?|demos?|karaoke|instrumentals?|sessions?|bootleg)\b');
+
+/// Zegt de map van [path] dat dit een ándere uitvoering is dan [title] van [album]?
+///
+/// **Waarom de map, en niet alleen de naam.** [fileOffersTitle] weigerde "(Live …)" al in de
+/// bestandsnaam, maar een live-plaat heet bij veel peers gewoon "04 - I'm Not The Only One.flac" —
+/// het merk staat één laag hoger, in "Gloria (Live From The Royal Albert Hall)". Dat kwam erdoor.
+///
+/// Alleen de laatste drie mappen (plaat, schijf, artiest), en een woord dat ook in de titel, het
+/// album of de artiest staat telt niet: wie *MTV Unplugged* aanvult, hoort unplugged-kopieën te
+/// krijgen, en de band Live heet nu eenmaal zo.
+bool mapVerraadtAndereVersie(String title, String album, String artist, String path) {
+  final delen = path.split(_padScheiding).where((d) => d.isNotEmpty).toList();
+  if (delen.length < 2) return false;
+  final begin = delen.length - 4 < 0 ? 0 : delen.length - 4;
+  final mappen = delen.sublist(begin, delen.length - 1).join(' ').toLowerCase();
+  final bekend = '$title $album $artist'.toLowerCase();
+  for (final m in _mapVersieRe.allMatches(mappen)) {
+    final woord = m.group(1)!;
+    // De stam, zodat "Remixes" in de map wordt verklaard door "(Remix)" in de titel.
+    final stam = woord.startsWith('remix')
+        ? 'remix'
+        : woord.startsWith('demo')
+            ? 'demo'
+            : woord.startsWith('instrumental')
+                ? 'instrumental'
+                : woord.startsWith('session')
+                    ? 'session'
+                    : woord;
+    if (!RegExp('\\b$stam').hasMatch(bekend)) return true;
+  }
+  return false;
+}
+
 /// Does [path] offer the track called [title] by [artist]?
 ///
 /// Unlike [sameRecording] this compares a bare catalogue title against a peer's path, so there is
 /// no second filename to explain the extra words — the artist's own name does that job instead.
-bool fileOffersTitle(String title, int? titleDur, String artist, String path, int? fileDur) {
+///
+/// [album]: als hij bekend is, weigert ook een map die een andere uitvoering verraadt — zie
+/// [mapVerraadtAndereVersie]. Zonder album blijft die toets uit: dan valt "hoort bij wat je vraagt"
+/// niet te onderscheiden van "een andere versie".
+bool fileOffersTitle(String title, int? titleDur, String artist, String path, int? fileDur,
+    {String? album}) {
+  if (album != null && mapVerraadtAndereVersie(title, album, artist, path)) return false;
   // Wat de titel over de VERSIE zegt, kan in de map staan in plaats van in de bestandsnaam. Zie
   // [versieVolgtUitMap]: op *My Songs* heet nummer 7 bij elke peer gewoon "07 Fields of Gold.flac",
   // en het merk "(My Songs Version)" staat één laag hoger. Zonder deze uitzondering werd juist de

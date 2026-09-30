@@ -1842,6 +1842,9 @@ class DownloadManager extends ChangeNotifier {
     final ranked = keuze == null
         ? ([...candidates]..sort(_rankSlsk))
         : [keuze, ...candidates.where((c) => c.username != keuze.username || c.filename != keuze.filename)];
+    // De officiële lengte van wat we zoeken, voor de volgorde van de race en de opwaardeerjacht. Niet bij
+    // jouw eigen keuze: een aangewezen bestand of een zelf gekozen albummap is wat je wilde.
+    final officieel = keuze == null && !vast ? job.authority?.seconds : null;
 
     /// Wat de spectrumproef vindt van het bestand dat er ná dit alles LIGT.
     ///
@@ -1979,8 +1982,8 @@ class DownloadManager extends ChangeNotifier {
     /// window moves on to the next one. Within half a minute every candidate is engaged at once
     /// and whoever comes up first takes it. All of them ride the ONE shared login — twenty peer
     /// sockets, zero extra logins.
-    Future<(SlskDone, SoulseekFile)?> race(List<SoulseekFile> pool, String label) async {
-      final cap = identical(pool, lossy) ? _maxLossyTries : _maxLosslessTries;
+    Future<(SlskDone, SoulseekFile)?> race(List<SoulseekFile> pool, String label, {bool alsLossy = false}) async {
+      final cap = alsLossy ? _maxLossyTries : _maxLosslessTries;
       final order = sweepOrderFor(pool, first: keuze);
       final n = order.length < cap ? order.length : cap;
 
@@ -2116,7 +2119,11 @@ class DownloadManager extends ChangeNotifier {
       // met zoveel woorden gevraagd. De prijs staat erbij en is echt: haal je een mp3-album omdat er
       // op dat moment geen lossless was, dan gaat de app er daarna niet meer zelf achteraan.
       if (vast) return ok;
-      var better = ranked.where((f) => clearlyBetter(f, from)).toList();
+      // "Beter" mag nooit verder van de officiële lengte liggen dan wat er nu ligt: een 24/96 live-opname
+      // van 3:54 is geen opwaardering van een 24/44,1 van 3:59. Zie [lengteKlopt].
+      var better = ranked
+          .where((f) => magOpwaarderen(f, from, officieel))
+          .toList();
       // BETRAPT BIJ HET LANDEN. Dan deugt "beter" niet meer als maatstaf, want de kopie die we
       // namen had juist de MEESTE bits — dat is precies waarom hij won. `clearlyBetter` vindt hier
       // dus niets en de jacht bleef achterwege, terwijl er honderden andere kandidaten klaarstonden.
@@ -2148,8 +2155,38 @@ class DownloadManager extends ChangeNotifier {
       return ok;
     }
 
+    // **Binnen elke bak eerst wat de officiële lengte heeft.** Een race wint wie het eerst VERSTUURT, dus
+    // "het dichtst bij de officiële tijd" kan niet uit een sortering komen — alleen uit wat er meedoet.
+    // Gemeten op 30-09-2026 met Sam Smith — I'm Not The Only One (officieel 3:59): de peers boden 3:59
+    // (24/96 en 24/44,1), 3:54 (de live-opname uit de Royal Albert Hall), 3:43 en 3:40. Allemaal binnen
+    // de twaalf seconden van [fileOffersTitle], dus allemaal in dezelfde race. Nu doen eerst alleen de
+    // 3:59-kopieën mee, en de rest pas als geen van die levert — de rest is niet fout (een andere persing
+    // verschilt ook weleens vijf tellen), maar hij is niet de eerste keus. Zie [lengteDelen].
+    List<List<SoulseekFile>> opLengte(List<SoulseekFile> bak) => lengteDelen(bak, officieel);
+
+    /// Eén bak, in de delen van [opLengte]. Het tweede deel meldt zich, want "hij probeert nu een kopie
+    /// van een andere lengte" hoort op het scherm te staan en niet alleen in het logboek.
+    Future<(SlskDone, SoulseekFile)?> bak(List<SoulseekFile> pool, String label, {bool alsLossy = false}) async {
+      final delen = opLengte(pool);
+      if (delen.length > 1) {
+        _log.line('"${job.name}": ${delen.first.length} kandidaat/kandidaten met de officiële lengte '
+            '(${_mmss(officieel!)}) gaan voor, ${delen.last.length} andere wachten');
+      }
+      for (var i = 0; i < delen.length; i++) {
+        if (i > 0) {
+          if (job.cancelled) return null;
+          job.detail = 'geen kopie van ${_mmss(officieel!)} leverde — nu een van een andere lengte';
+          notifyListeners();
+          _log.line('"${job.name}": geen kopie met de officiële lengte leverde — nu de andere lengtes');
+        }
+        final r = await race(delen[i], i == 0 ? label : '$label, andere lengte', alsLossy: alsLossy);
+        if (r != null) return r;
+      }
+      return null;
+    }
+
     // ── 1. Stereo lossless: the thing you actually want ──────────────────────
-    final first = await race(stereo, 'poging');
+    final first = await bak(stereo, 'poging');
     if (first != null) return finish(first.$1, first.$2);
 
     if (job.cancelled) return false;
@@ -2158,7 +2195,7 @@ class DownloadManager extends ChangeNotifier {
     if (surround.isNotEmpty) {
       job.detail = 'alleen surround beschikbaar — 5.1 als tweede keus';
       notifyListeners();
-      final second = await race(surround, '5.1-poging');
+      final second = await bak(surround, '5.1-poging');
       if (second != null) return finish(second.$1, second.$2);
       if (job.cancelled) return false;
     }
@@ -2167,7 +2204,7 @@ class DownloadManager extends ChangeNotifier {
     if (lossy.isNotEmpty) {
       job.detail = 'geen lossless beschikbaar — MP3 als laatste optie';
       notifyListeners();
-      final third = await race(lossy, 'MP3-poging');
+      final third = await bak(lossy, 'MP3-poging', alsLossy: true);
       if (third != null) return finish(third.$1, third.$2);
     }
 
@@ -3113,7 +3150,8 @@ class DownloadManager extends ChangeNotifier {
           // gewogen (zie [zelfdeLengte]), maar lang niet iedereen meldt er een; hier staat het
           // bestand er, dus hier valt het écht te meten. Zonder deze tweede laag landt een
           // radio-edit als `(2)` naast het origineel en blijft de vervalsing staan.
-          final lengte = _duurVan(staged.path);
+          // FLAC uit zijn kop; elk ander formaat uit de decodeerproef die er net overheen ging.
+          final lengte = _duurVan(staged.path) ?? gedecodeerdeLengte(staged.path)?.round();
           if (!zelfdeLengte(w.authority?.seconds, lengte)) {
             _log.line('   ${f.username}: andere uitgave (${lengte}s tegen '
                 '${w.authority?.seconds}s) — weggegooid, volgende kandidaat');
@@ -3336,7 +3374,8 @@ class DownloadManager extends ChangeNotifier {
                 padSeconden: f.durationSec))
           f
     ];
-    final bruikbaar = passend..sort(_rankSlsk);
+    // De officiële lengte voorop, net als bij elke andere download — zie [opLengteDanRang].
+    final bruikbaar = passend..sort(opLengteDanRang(seconden));
     // Lossless eerst, precies zoals overal in deze app. Maar niet lossless-of-niets: een
     // eurodance-single uit 1993 bestaat op dit netwerk soms alleen als mp3, en dan is die mp3 beter
     // dan stilte. `_rankSlsk` heeft de beste al vooraan gezet.
@@ -3802,17 +3841,62 @@ class DownloadManager extends ChangeNotifier {
       gevonden <= 0 ||
       (gewenst - gevonden).abs() <= _duurSpeling;
 
+  /// Eerst wat de officiële lengte heeft ([lengteKlopt]), dan de rest — en binnen elk van die twee de
+  /// gewone rangorde van [_rankSlsk].
+  ///
+  /// Saber op 30-09-2026, bij Sam Smith — I'm Not The Only One (officieel 3:59, binnengekomen een
+  /// live-opname van 3:54): *"de app moet leren om het nummer te downloaden het meest dichte met de
+  /// officiele tijd van het nummer"*. Tot dan speelde de lengte in de volgorde geen enkele rol: een
+  /// 24/48 van 3:54 scoorde hoger dan een 24/44,1 van 3:59, puur op bits.
+  static Comparator<SoulseekFile> opLengteDanRang(int? officieel) => (a, b) {
+        final la = lengteKlopt(officieel, a.durationSec), lb = lengteKlopt(officieel, b.durationSec);
+        if (la != lb) return la ? -1 : 1;
+        return _rankSlsk(a, b);
+      };
+
+  /// Een bak kandidaten in twee delen: eerst wat de officiële lengte heeft, dan de rest. Eén deel als
+  /// de lengte onbekend is, of als alles (of niets) de lengte heeft — dan valt er niets te kiezen.
+  ///
+  /// Een race wint wie het eerst verstuurt, dus de voorkeur moet uit wat er meedoet komen, niet uit een
+  /// sortering. Zie de race in [_soulseekBest].
+  static List<List<SoulseekFile>> lengteDelen(List<SoulseekFile> bak, int? officieel) {
+    if (officieel == null || officieel <= 0) return [bak];
+    final juist = [for (final f in bak) if (lengteKlopt(officieel, f.durationSec)) f];
+    if (juist.isEmpty || juist.length == bak.length) return [bak];
+    return [juist, [for (final f in bak) if (!lengteKlopt(officieel, f.durationSec)) f]];
+  }
+
+  /// Mag [f] de kopie [van] opwaarderen? Duidelijk beter ([clearlyBetter]) — en nooit verder van de
+  /// officiële lengte dan wat er ligt: een 24/96 live-opname van 3:54 is geen opwaardering van een
+  /// 24/44,1 van 3:59. Heeft wat er ligt de lengte zelf niet, dan telt alleen de kwaliteit.
+  static bool magOpwaarderen(SoulseekFile f, SoulseekFile van, int? officieel) =>
+      clearlyBetter(f, van) &&
+      (!lengteKlopt(officieel, van.durationSec) || lengteKlopt(officieel, f.durationSec));
+
   static List<SoulseekFile> kandidatenVoorWens(LosslessWant w, List<SoulseekFile> hits,
       {Set<String> rustendePeers = const {}}) {
+    // **Ook de TITEL, en niet alleen de lengte.** Hier stond alleen de lengte (±6 s), en zo kwam de
+    // live-opname van Sam Smith binnen: 3:54 tegen 3:59 viel erbinnen, en "(Live From The Royal Albert
+    // Hall)" in de naam telde nergens. Bij een zoekladder die terugvalt op alleen de artiestnaam telde
+    // zelfs élk ander nummer van die artiest van ongeveer dezelfde lengte. Nu dezelfde toets als
+    // "Ontbrekende downloaden" ([fileOffersTitle]), mét de map ([mapVerraadtAndereVersie]).
+    final titel = (w.authority?.title ?? w.title).trim();
+    final artiest = (w.authority?.artist ?? w.artist).trim();
+    final album = (w.authority?.album ?? w.album).trim();
+    bool isDitNummer(SoulseekFile f) =>
+        titel.isEmpty ||
+        fileOffersTitle(titel, w.authority?.seconds, artiest, f.filename, f.durationSec,
+            album: album.isEmpty ? null : album);
     List<SoulseekFile> zeef(bool metRust) => hits
         .where((f) => isLossless(f) && !isMultichannel(f))
         .where((f) => zelfdeLengte(w.authority?.seconds, f.durationSec))
+        .where(isDitNummer)
         .where((f) => !w.refused.containsKey(f.username))
         .where((f) => !metRust || !rustendePeers.contains(f.username))
         .where((f) => !w.nep.any((n) =>
             zelfdeBestand(f.filename, f.size, f.durationSec, n.filename, n.size, n.durationSec)))
         .toList()
-      ..sort(_rankSlsk);
+      ..sort(opLengteDanRang(w.authority?.seconds));
     // Een optimalisatie mag "een paar kandidaten" nooit in "geen enkele" veranderen. Blijft er na
     // het overslaan van de rustende peers niets over, dan tellen ze gewoon weer mee — beter een
     // kansloze poging dan een wens die stilvalt omdat de lijst op is.
@@ -3848,20 +3932,51 @@ class DownloadManager extends ChangeNotifier {
   /// niet te zien; decoderen kost voor acht minuten 24/96 een paar tienden van een seconde. Niet te
   /// zeggen (geen ffmpeg) is nooit een reden om te weigeren.
   @visibleForTesting
-  static Future<SlskResult> keurOverdracht(SlskResult res, {void Function(String)? spoor}) async {
+  ///
+  /// **[verwachtSeconden]: en is het wel het nummer van de goede lengte?** Een peer meldt zijn eigen
+  /// lengte, en lang niet elke peer meldt er een; vóór het binnenhalen telt "onbekend" dus als goed.
+  /// Hier ligt het bestand er, en de decodeerproef heeft het net tot het einde gelezen. Wijkt het meer
+  /// dan [kLengteSpelingNaHalen] af van de officiële lengte, dan is het een andere uitvoering — een
+  /// radio-edit, een live-opname, een extended mix — en dan is dit een mislukte poging, precies als
+  /// een kapot bestand: de race gaat door met de volgende peer.
+  static Future<SlskResult> keurOverdracht(SlskResult res,
+      {void Function(String)? spoor, int? verwachtSeconden}) async {
     if (res is! SlskDone) return res;
     final h = await controleerHeel(res.path);
-    if (h == null || h.heel) return res;
-    spoor?.call('   kapot binnengekomen: ${res.path.split(Platform.pathSeparator).last} — ${h.reden}; '
-        'weggegooid, volgende');
-    return SlskFail('kapot bestand (${h.reden})');
+    final naam = res.path.split(Platform.pathSeparator).last;
+    if (h != null && !h.heel) {
+      spoor?.call('   kapot binnengekomen: $naam — ${h.reden}; weggegooid, volgende');
+      return SlskFail('kapot bestand (${h.reden})');
+    }
+    if (verwachtSeconden != null && verwachtSeconden > 0) {
+      final echt = gedecodeerdeLengte(res.path);
+      if (echt != null && (echt - verwachtSeconden).abs() > kLengteSpelingNaHalen) {
+        spoor?.call('   andere lengte binnengekomen: $naam — ${_mmss(echt)}, officieel '
+            '${_mmss(verwachtSeconden)}; weggegooid, volgende');
+        return SlskFail('andere uitvoering (${_mmss(echt)} in plaats van ${_mmss(verwachtSeconden)})');
+      }
+    }
+    return res;
+  }
+
+  /// Zo ver mag een binnengekomen bestand van de officiële lengte afwijken. Dezelfde twaalf seconden als
+  /// vóór het binnenhalen ([fileOffersTitle]): twee persingen van één plaat verschillen soms zeven, acht
+  /// tellen (gemeten op 30-09-2026 over Sabers bibliotheek: 117 nummers wijken 4 tot 10 s af van hun
+  /// uitgave), en een terecht bestand weigeren omdat de fade-out langer is, is geen winst.
+  static const kLengteSpelingNaHalen = 12;
+
+  /// "3:59" voor 239 seconden.
+  static String _mmss(num seconden) {
+    final s = seconden.round();
+    return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
   }
 
   /// A peer that never delivered leaves an empty staging folder behind; drop it so `_inkomend`
   /// doesn't slowly fill with the name of every uploader we ever tried. Non-recursive on purpose:
   /// a folder that still holds a partial file is left alone.
-  Future<SlskResult> _cleanStaging(Directory dir, File dest, Future<SlskResult> transfer) async {
-    final res = await keurOverdracht(await transfer, spoor: _log.line);
+  Future<SlskResult> _cleanStaging(Directory dir, File dest, Future<SlskResult> transfer,
+      {int? verwachtSeconden}) async {
+    final res = await keurOverdracht(await transfer, spoor: _log.line, verwachtSeconden: verwachtSeconden);
     // A loser in a race can still have finished: a small file arrives inside one chunk, so the
     // peer was told "no" only after the bytes were already on disk. Nothing downstream looks at a
     // cancelled attempt, so without this the complete file sat in _inkomend forever — and kept the
@@ -3945,7 +4060,9 @@ class DownloadManager extends ChangeNotifier {
         _meldVoortgang();
       }
       onQueued();
-    }, waitInQueue: waitInQueue, maxWait: maxWait, cancel: cancel ?? plaatsStop));
+    }, waitInQueue: waitInQueue, maxWait: maxWait, cancel: cancel ?? plaatsStop),
+        // De officiële lengte van wat deze download zoekt — niet bij jouw eigen keuze. Zie [keurOverdracht].
+        verwachtSeconden: job.exact == null && !job.jouwKeuze ? job.authority?.seconds : null);
   }
 
   /// Add a torrent download. Non-blocking: a "preparing" job shows TorBox's fetch progress

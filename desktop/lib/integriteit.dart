@@ -21,6 +21,10 @@ import 'keuring.dart';
 import 'paths.dart';
 
 final Map<String, Heelheid> _uitslagen = {};
+
+/// Hoe lang het bestand werkelijk duurde toen de decodeerproef het tot het einde las, per sleutel. Alleen
+/// in het geheugen: het is voor de keuring van een overdracht die nét binnenkwam, niet voor later.
+final Map<String, double> _duren = {};
 bool _geladen = false;
 Future<void>? _laden;
 
@@ -80,6 +84,20 @@ bool bekendKapot(String pad) {
     return _uitslagen[_sleutelVan(pad, st)]?.heel == false;
   } catch (_) {
     return false;
+  }
+}
+
+/// Hoe lang [pad] werkelijk duurt, volgens de decodeerproef die er net overheen ging — of null als die
+/// niet liep of niets opleverde.
+///
+/// **Waarom dit er is.** De lengte die een peer meldt is zijn eigen bewering, en lang niet elke peer
+/// meldt er een. De decodeerproef leest het bestand toch al tot het einde, dus hier staat de échte
+/// lengte — voor elk formaat, niet alleen FLAC. Zie `keurOverdracht` in online.dart.
+double? gedecodeerdeLengte(String pad) {
+  try {
+    return _duren[_sleutelVan(pad, File(pad).statSync())];
+  } catch (_) {
+    return null;
   }
 }
 
@@ -162,6 +180,7 @@ Future<Heelheid?> controleerHeel(String pad, {Duration limiet = const Duration(m
       gedecodeerdSeconden: uitUs == null ? null : uitUs! / 1e6,
     );
     _uitslagen[sleutel] = u;
+    if (uitUs != null) _duren[sleutel] = uitUs! / 1e6;
     unawaited(_bewaar());
     return u;
   } on TimeoutException {
@@ -176,6 +195,7 @@ Future<Heelheid?> controleerHeel(String pad, {Duration limiet = const Duration(m
 /// Tests delen dit proces.
 void resetIntegriteitVoorTest() {
   _uitslagen.clear();
+  _duren.clear();
   _geladen = false;
   _laden = null;
   laatsteIntegriteitFout = null;

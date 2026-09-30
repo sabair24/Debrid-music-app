@@ -5255,7 +5255,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
   Future<List<SoulseekFile>> _candidatesFor(AlbumSlot s) async {
     final soulseek = context.read<SoulseekService>();
     bool fits(SoulseekFile f) =>
-        f.isAudio && fileOffersTitle(s.title, s.seconds, album.artist, f.filename, f.durationSec);
+        f.isAudio && fileOffersTitle(s.title, s.seconds, album.artist, f.filename, f.durationSec, album: album.title);
     final pool = <String, SoulseekFile>{
       for (final f in (await _albumWide()).where(fits)) '${f.username}|${f.filename}': f
     };
@@ -20759,7 +20759,8 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// Deezer's running time is passed along because the title alone can't tell a track from a
   /// medley that contains it, nor from a remix of about the same length.
   List<SoulseekFile> _slskForTitle(CatalogTrack t) => _albumSlsk
-      .where((f) => f.isAudio && fileOffersTitle(t.title, t.durationSec, widget.artistName, f.filename, f.durationSec))
+      .where((f) => f.isAudio && fileOffersTitle(t.title, t.durationSec, widget.artistName, f.filename, f.durationSec,
+          album: widget.album.title))
       .toList();
 
   /// The copy of this track already in the library (null if we don't have it). Version markers
@@ -20834,7 +20835,8 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       final r = await soulseek.search(soulseekQuery(widget.artistName, t.title));
       for (final f in r) {
         if (!f.isAudio) continue;
-        if (!fileOffersTitle(t.title, t.durationSec, widget.artistName, f.filename, f.durationSec)) {
+        if (!fileOffersTitle(t.title, t.durationSec, widget.artistName, f.filename, f.durationSec,
+            album: widget.album.title)) {
           continue;
         }
         pool.putIfAbsent('${f.username}|${f.filename}', () => f);
