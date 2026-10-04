@@ -13,6 +13,21 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     CreateAndAttachConsole();
   }
 
+  // Wie startte ons, en met welke vensterstand. Een gewone start komt van Verkenner, een start na
+  // het bijwerken van de installer; dat verschil was op 04-10-2026 het enige wat vaststond toen het
+  // venster na een update klein opende. De opstartinfo bepaalt wat de EERSTE ShowWindow werkelijk
+  // doet, ongeacht wat er gevraagd wordt -- vandaar dat die hier staat. Zie StartLogRegel in utils.h.
+  {
+    STARTUPINFOW opstart = {};
+    ::GetStartupInfoW(&opstart);
+    const std::string ouder = OuderProces();
+    StartLogRegel(
+        "runner: proces %lu gestart door %s, nCmdShow=%d, opstartinfo dwFlags=0x%lX "
+        "wShowWindow=%u",
+        ::GetCurrentProcessId(), ouder.empty() ? "?" : ouder.c_str(), show_command,
+        opstart.dwFlags, static_cast<unsigned>(opstart.wShowWindow));
+  }
+
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);

@@ -125,6 +125,7 @@ import 'torbox_stand.dart';
 import 'redacted.dart';
 import 'torznab.dart';
 import 'tv.dart';
+import 'venster_start.dart';
 import 'zoekladder.dart';
 import 'zoek_geheugen.dart';
 import 'updater.dart';
@@ -1108,13 +1109,19 @@ Future<void> main() async {
   // restore size while the window is still being realised, and the app opens in a small frame.
   // Both orderings were tried and both did. So ask after the first frame, and check the answer
   // instead of assuming it: read isMaximized back and retry for about half a second.
+  //
+  // Na een update opende hij toch klein (04-10-2026, twee keer). Elke poging en de stand in de
+  // seconden erna komen daarom in start.log; zie [vulVensterNaEersteBeeld].
   if (_isDesktop) {
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      for (var i = 0; i < 6; i++) {
-        if (await windowManager.isMaximized()) break;
-        await windowManager.maximize();
-        await Future.delayed(const Duration(milliseconds: 100));
-      }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(vulVensterNaEersteBeeld(
+        isGemaximaliseerd: windowManager.isMaximized,
+        maximaliseer: windowManager.maximize,
+        maten: windowManager.getBounds,
+        isZichtbaar: windowManager.isVisible,
+        heeftVoorgrond: windowManager.isFocused,
+        log: startLog.line,
+      ));
       // Hier stond nog een verzoek om de systeemtitelbalk te verbergen, twee keer bijgesteld en
       // twee keer zonder effect. Op Windows regelt de app dat nu zelf, in
       // `windows/runner/flutter_window.cpp`: daar wordt bij WM_NCCALCSIZE de strook waar de

@@ -36,6 +36,15 @@ class FlutterWindow : public Win32Window {
   // uit de kernel terug naar dit venster -- en die kwamen terecht bij een controller die al aan het
   // verdwijnen was. De meting staat in flutter_window.cpp.
   bool tearing_down_ = false;
+
+  // Wanneer dit venster gemaakt werd, en hoeveel regels het al over zichzelf in start.log schreef.
+  // Zie LogVensterBericht in flutter_window.cpp.
+  ULONGLONG gemaakt_op_ = 0;
+  int logregels_ = 0;
+
+  // Schrijft de berichten op die de vensterstand bepalen, alleen in de eerste dertig seconden.
+  void LogVensterBericht(UINT const message, WPARAM const wparam,
+                         LPARAM const lparam);
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

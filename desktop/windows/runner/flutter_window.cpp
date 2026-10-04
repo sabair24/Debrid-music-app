@@ -3,9 +3,14 @@
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "utils.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
-    : project_(project) {}
+    : project_(project) {
+  // In de constructor en niet in OnCreate: CreateWindow stuurt zijn eerste WM_SIZE al vóór
+  // OnCreate, en ook die hoort op de tijdlijn.
+  gemaakt_op_ = ::GetTickCount64();
+}
 
 FlutterWindow::~FlutterWindow() {}
 
@@ -39,6 +44,63 @@ bool FlutterWindow::OnCreate() {
   return true;
 }
 
+// Wat Windows met het venster doet, op dezelfde tijdlijn als de pogingen aan de Dart-kant.
+//
+// Op 04-10-2026 opende het venster na een update klein -- herstelmaat, midden op het scherm -- en na
+// een gewone start niet. Main.dart vraagt na het eerste beeld om te maximaliseren en controleert
+// dat, maar of het venster daarna nog terugsprong, en door wie, was nergens te zien. Hier staat het:
+// elke maatverandering met haar soort, wie er om maximaliseren of herstellen vroeg, wanneer het
+// venster getoond werd en of het actief werd. Alleen de eerste dertig seconden, en hooguit zestig
+// regels, zodat slepen aan de rand het logboek niet volschrijft.
+void FlutterWindow::LogVensterBericht(UINT const message, WPARAM const wparam,
+                                      LPARAM const lparam) {
+  const unsigned long long na =
+      static_cast<unsigned long long>(::GetTickCount64() - gemaakt_op_);
+  if (logregels_ >= 60 || na > 30000ull) {
+    return;
+  }
+  switch (message) {
+    case WM_SIZE: {
+      const int soort = static_cast<int>(wparam);
+      const char* naam = soort == SIZE_MAXIMIZED   ? "gemaximaliseerd"
+                         : soort == SIZE_MINIMIZED ? "geminimaliseerd"
+                         : soort == SIZE_RESTORED  ? "normaal"
+                                                   : "anders";
+      StartLogRegel("runner: WM_SIZE %s %ux%u (+%llu ms na het maken)", naam,
+                    static_cast<unsigned>(LOWORD(lparam)),
+                    static_cast<unsigned>(HIWORD(lparam)), na);
+      break;
+    }
+    case WM_SHOWWINDOW:
+      StartLogRegel("runner: WM_SHOWWINDOW %s (+%llu ms)",
+                    wparam != 0u ? "tonen" : "verbergen", na);
+      break;
+    case WM_SYSCOMMAND: {
+      const int opdracht = static_cast<int>(wparam & 0xFFF0u);
+      const char* naam = opdracht == SC_MAXIMIZE   ? "SC_MAXIMIZE"
+                         : opdracht == SC_RESTORE  ? "SC_RESTORE"
+                         : opdracht == SC_MINIMIZE ? "SC_MINIMIZE"
+                                                   : nullptr;
+      if (naam == nullptr) {
+        return;
+      }
+      StartLogRegel("runner: WM_SYSCOMMAND %s (+%llu ms)", naam, na);
+      break;
+    }
+    case WM_ACTIVATE:
+      StartLogRegel("runner: WM_ACTIVATE %s (+%llu ms)",
+                    LOWORD(wparam) == WA_INACTIVE ? "inactief" : "actief", na);
+      break;
+    case WM_DPICHANGED:
+      StartLogRegel("runner: WM_DPICHANGED naar %u dpi (+%llu ms)",
+                    static_cast<unsigned>(HIWORD(wparam)), na);
+      break;
+    default:
+      return;
+  }
+  ++logregels_;
+}
+
 void FlutterWindow::OnDestroy() {
   // Eerst de vlag, dan pas opruimen: het opruimen zelf brengt ons hieronder terug.
   tearing_down_ = true;
@@ -53,6 +115,10 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  // Alleen kijken, vóór alles hieronder: sommige van deze berichten worden verderop beantwoord en
+  // komen dan nooit verder. Zie LogVensterBericht.
+  LogVensterBericht(message, wparam, lparam);
+
   // GEEN Windows-titelbalk. Hier, en niet meer via het pakket.
   //
   // De app tekent zijn eigen knoppen in de bovenbalk, en er hoort dus geen tweede set boven te

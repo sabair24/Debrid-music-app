@@ -4,6 +4,7 @@
 #include <flutter_windows.h>
 
 #include "resource.h"
+#include "utils.h"
 
 namespace {
 
@@ -150,7 +151,25 @@ bool Win32Window::Create(const std::wstring& title,
 }
 
 bool Win32Window::Show() {
-  return ShowWindow(window_handle_, SW_SHOWNORMAL);
+  // Dit draait één keer: zodra Flutter het eerste beeld getekend heeft (flutter_window.cpp). Maar
+  // het venster staat dan al lang open -- `windowManager.show()` in main.dart toont het eerder -- en
+  // SW_SHOWNORMAL zet een venster dat intussen gemaximaliseerd is terug op zijn herstelmaat. Of dat
+  // de kleine start na een update verklaart (04-10-2026) is niet aangetoond; deze regel moet het
+  // laten zien: de stand vlak ervóór, en die erna.
+  const HWND venster = window_handle_;
+  const bool was_zichtbaar = ::IsWindowVisible(venster) != FALSE;
+  const bool was_gemaximaliseerd = ::IsZoomed(venster) != FALSE;
+  const bool voorgrond = ::GetForegroundWindow() == venster;
+  const BOOL resultaat = ShowWindow(window_handle_, SW_SHOWNORMAL);
+  RECT maat = {};
+  ::GetWindowRect(venster, &maat);
+  StartLogRegel(
+      "runner: eerste beeld getekend, ShowWindow(SW_SHOWNORMAL). Ervoor: zichtbaar=%d "
+      "gemaximaliseerd=%d voorgrond=%d. Erna: gemaximaliseerd=%d, %ld,%ld %ldx%ld fysiek, dpi %u",
+      was_zichtbaar ? 1 : 0, was_gemaximaliseerd ? 1 : 0, voorgrond ? 1 : 0,
+      ::IsZoomed(venster) != FALSE ? 1 : 0, maat.left, maat.top, maat.right - maat.left,
+      maat.bottom - maat.top, FlutterDesktopGetDpiForHWND(venster));
+  return resultaat != FALSE;
 }
 
 // static

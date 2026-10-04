@@ -187,7 +187,7 @@ jobs:
             test/was_test.dart test/binnenkomst_test.dart \
             test/speelvlak_test.dart test/cache_snoei_test.dart \
             test/vastgezette_persing_test.dart test/catalogus_inpakken_test.dart \
-            test/rollen_sync_test.dart test/startsnelheid_test.dart \
+            test/rollen_sync_test.dart test/startsnelheid_test.dart test/venster_start_test.dart \
             test/hoes_sync_test.dart test/oud_albumobject_test.dart \
             test/hoes_navraag_test.dart test/lan_client_test.dart \
             test/acoustid_test.dart test/glasbalk_test.dart \
