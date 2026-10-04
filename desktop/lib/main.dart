@@ -24624,6 +24624,21 @@ class ScanMaatRegel extends StatelessWidget {
   }
 }
 
+/// De ondergrond van de zweeftip met een scan: donker, zoals de rest van de app.
+///
+/// **Op het scherm gezien, 04-10-2026, in 3.9.434:** Flutter's standaardtip is in een donker thema WIT
+/// met zwarte tekst, en de maat onder het grote voorbeeld staat in wit of turkoois — "1200×928 pixels"
+/// stond wit op wit, onleesbaar, precies in het venster dat er was om die maat te tonen. De toetsen waren
+/// groen: die keken of de tekst er stond, niet waarop.
+const kScanTipVlak = BoxDecoration(
+  color: Color(0xF516181F),
+  borderRadius: BorderRadius.all(Radius.circular(10)),
+  border: Border.fromBorderSide(BorderSide(color: Color(0x22FFFFFF))),
+);
+
+/// De uitleg onder het voorbeeld ("Klik: neem deze over…"), leesbaar op [kScanTipVlak].
+const kScanTipTekst = TextStyle(color: Colors.white70, fontSize: 12, height: 1.35);
+
 /// De scan groot, voor de zweeftip in "Uitgave kiezen". Heel in beeld (`contain`), want een achterkant
 /// is zelden vierkant en bijsnijden verbergt precies wat je wilde zien.
 class _ScanVoorbeeld extends StatelessWidget {
@@ -24877,6 +24892,8 @@ class UitgaveRij extends StatelessWidget {
         // nu moet ik blind kiezen"* — een miniatuur van 58 punten zegt niets over hoe scherp de scan
         // erachter is, en de hoes van wat je hier kiest wordt je albumhoes.
         waitDuration: const Duration(milliseconds: 350),
+        decoration: img != null ? kScanTipVlak : null,
+        textStyle: img != null ? kScanTipTekst : null,
         richMessage: img != null
             ? TextSpan(children: [
                 WidgetSpan(child: _ScanVoorbeeld(img: img)),
@@ -25151,6 +25168,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
                                 Expanded(
                                   child: Tooltip(
                                     waitDuration: const Duration(milliseconds: 350),
+                                    decoration: kScanTipVlak,
                                     richMessage: WidgetSpan(child: _ScanVoorbeeld(img: img)),
                                     child: _netCover(img.thumb, size: 150, radius: 8),
                                   ),

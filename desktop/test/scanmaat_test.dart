@@ -15,7 +15,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:debridmusic/editions.dart';
-import 'package:debridmusic/main.dart' show ScanMaatRegel;
+import 'package:debridmusic/main.dart' show ScanMaatRegel, UitgaveRij, kScanTipTekst, kScanTipVlak;
 import 'package:debridmusic/scanmaat.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -49,6 +49,13 @@ Uint8List _jpegMetLaatsteMaat(int w, int h, int vulling) {
     ..add([0xFF, 0xC0, 0x00, 0x11, 0x08, h >> 8, h & 255, w >> 8, w & 255])
     ..add(List<int>.filled(30, 0));
   return b.toBytes();
+}
+
+/// Contrastverhouding volgens WCAG: 4,5 is de ondergrens voor gewone tekst.
+double _contrast(Color a, Color b) {
+  final la = a.computeLuminance(), lb = b.computeLuminance();
+  final (hi, lo) = la > lb ? (la, lb) : (lb, la);
+  return (hi + 0.05) / (lo + 0.05);
 }
 
 /// Een server die reeksen begrijpt, en telt hoe vaak hij gevraagd wordt.
@@ -156,12 +163,90 @@ void main() {
       expect(tester.takeException(), isNull, reason: 'geen overloop');
     });
 
+    // Op het scherm gezien in 3.9.434: de standaardtip van Flutter is in een donker thema WIT, en de maat
+    // in het grote voorbeeld ("1200×928 pixels") stond er wit op — onleesbaar. Alle toetsen hierboven
+    // waren groen, want ze keken of de tekst er stond en niet waarop. Deze opent de tip zoals in de app
+    // (donker thema) en meet het contrast tegen de ondergrond waarop hij werkelijk getekend wordt.
+    testWidgets('DE VAL: de maat in het grote voorbeeld is leesbaar — niet wit op de witte standaardtip',
+        (tester) async {
+      tester.view.physicalSize = const Size(1456 * 2, 900 * 2);
+      tester.view.devicePixelRatio = 2;
+      addTearDown(tester.view.reset);
+      const maten = {
+        'hoes': ChoiceImage('https://x/h.jpg', 'https://x/h.jpg', breedte: 2826, hoogte: 2812),
+        'achter': ChoiceImage('https://x/a.jpg', 'https://x/a.jpg', breedte: 1200, hoogte: 928),
+        'cd': ChoiceImage('https://x/c.jpg', 'https://x/c.jpg', breedte: 300, hoogte: 300),
+      };
+      await tester.pumpWidget(MaterialApp(
+        theme: ThemeData(brightness: Brightness.dark),
+        home: Material(
+          color: const Color(0xFF0B0D14),
+          child: Align(
+            alignment: Alignment.topLeft,
+            // Breed: de toetsletter meet ~2× zo breed als de echte, en de breedte is hier de vraag niet.
+            child: SizedBox(
+              width: 1000,
+              child: UitgaveRij(
+                uitgave: ReleaseChoice(
+                    source: EditionSource.discogs,
+                    releaseId: 1,
+                    format: 'CD',
+                    year: 1999,
+                    front: maten['hoes'],
+                    back: maten['achter'],
+                    disc: maten['cd'],
+                    detailed: true),
+                onKiezen: () {},
+                onScans: () {},
+                onNummering: () {},
+                onKlaarzetten: (_, __, ___) {},
+              ),
+            ),
+          ),
+        ),
+      ));
+      final tips = find.byWidgetPredicate((w) => w is Tooltip && w.richMessage != null);
+      expect(tips, findsNWidgets(3));
+      for (final (i, tekst) in ['2826×2812 pixels', '1200×928 pixels', '300×300 pixels'].indexed) {
+        tester.state<TooltipState>(tips.at(i)).ensureTooltipVisible();
+        await tester.pump(const Duration(milliseconds: 400));
+        final maat = find.text(tekst);
+        expect(maat, findsOneWidget, reason: 'het grote voorbeeld van $tekst');
+        final kleur = tester.widget<Text>(maat).style!.color!;
+        final vlak = tester
+            .widgetList<DecoratedBox>(find.ancestor(of: maat, matching: find.byType(DecoratedBox)))
+            .map((d) => d.decoration)
+            .whereType<BoxDecoration>()
+            .firstWhere((d) => d.color != null)
+            .color!;
+        final onder = Color.alphaBlend(vlak, const Color(0xFF0B0D14));
+        expect(_contrast(Color.alphaBlend(kleur, onder), onder), greaterThanOrEqualTo(4.5),
+            reason: '"$tekst" moet leesbaar zijn op de tip — in 3.9.434 was dat wit op wit');
+        Tooltip.dismissAllToolTips();
+        await tester.pump(const Duration(seconds: 1));
+      }
+    });
+
+    test('elke scherpte is leesbaar op de tip, ook de uitleg eronder', () {
+      final onder = Color.alphaBlend(kScanTipVlak.color!, const Color(0xFF0B0D14));
+      for (final s in Scherpte.values) {
+        expect(_contrast(Color.alphaBlend(ScanMaatRegel.kleurVan(s), onder), onder), greaterThanOrEqualTo(4.5),
+            reason: '$s');
+      }
+      expect(_contrast(Color.alphaBlend(kScanTipTekst.color!, onder), onder), greaterThanOrEqualTo(4.5));
+      // En zo slecht was het: wit70 op Flutter's witte standaardtip.
+      final wit = Color.alphaBlend(Colors.white.withValues(alpha: .9), const Color(0xFF0B0D14));
+      expect(_contrast(Color.alphaBlend(Colors.white70, wit), wit), lessThan(1.5));
+    });
+
     test('de kiezer en "Alle scans" tonen hem allebei', () {
       final main = File('lib/main.dart').readAsStringSync();
       expect(RegExp(r'ScanMaatRegel\(img: img\)').allMatches(main).length, greaterThanOrEqualTo(2));
       expect(main, contains('richMessage: WidgetSpan(child: _ScanVoorbeeld(img: img))'),
           reason: 'en groot in een zweeftip bij "Alle scans"');
       expect(main, contains('WidgetSpan(child: _ScanVoorbeeld(img: img)),'), reason: 'en bij de miniaturen in de rij');
+      expect(RegExp(r'decoration: (img != null \? )?kScanTipVlak').allMatches(main).length, 2,
+          reason: 'beide zweeftips met het grote voorbeeld op de donkere ondergrond');
     });
   });
 }
