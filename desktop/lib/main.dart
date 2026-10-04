@@ -27227,6 +27227,13 @@ class _AlleTitelsDialogState extends State<AlleTitelsDialog> {
 /// Wat je hier vastlegt gaat vóór élke automatische vergelijking — zie [matchAlbumTracks.handmatig].
 /// Het staat per BESTAND vast en niet per plaat: wie één rij rechtzet, hoort de rest niet te
 /// bevriezen op wat er op dat moment toevallig stond.
+/// Onder deze breedte (binnen de rij) staat het bestand onder de titel in plaats van ernaast.
+///
+/// Naast elkaar kost 30 (nummer) + 8 + 250 (bestand) = 288 punten vóór de titel ook maar iets
+/// krijgt; bij 480 houdt de titel er nog ~190 over, genoeg voor "Just Give Me a Reason" op twee
+/// regels. Daaronder wordt hij een smalle zuil, en dat was de storing van 04-10-2026.
+const kToewijsRijSmal = 480.0;
+
 class RijToewijzenDialog extends StatefulWidget {
   final List<ChoiceTrack> official;
   final Album album;
@@ -27326,9 +27333,12 @@ class _RijToewijzenDialogState extends State<RijToewijzenDialog> {
         const Icon(Icons.drag_indicator_rounded, size: 15, color: _muted),
         const SizedBox(width: 5),
         Flexible(
+          // Twee regels in plaats van één: onder de titel op een telefoon is "Just Give Me a Reason
+          // (feat. Nate Ruess)" anders "Just Give Me a…", en dan weet je niet welk bestand je legt.
           child: Text(
             '${t.title}${t.duration == null ? '' : '  ${_fmt(t.duration)}'}',
             style: const TextStyle(fontSize: 12.5),
+            maxLines: 2,
             overflow: TextOverflow.ellipsis,
           ),
         ),
@@ -27413,42 +27423,58 @@ class _RijToewijzenDialogState extends State<RijToewijzenDialog> {
                             border: Border.all(
                                 color: wacht ? _accent.withValues(alpha: .6) : Colors.transparent),
                           ),
-                          child: Row(children: [
-                            SizedBox(
+                          // Op een telefoon het bestand ONDER de titel, niet ernaast.
+                          //
+                          // Saber op 04-10-2026, met een schermafdruk van P!nk op zijn S26: *"op mobile
+                          // gsm staat de text verticaal bij nummers toewijzen, dit is niet werkbaar"*.
+                          // De rij was nummer (30) + titel + bestand (vast 250 breed). In een dialoog
+                          // op 411 punten blijft er binnen de rij ~270 over: 30 + 8 + 250 = 288, dus
+                          // kreeg de titel NUL punten en brak "Are We All We Are" letter voor letter
+                          // af. Gemeten aan de breedte die de rij echt krijgt, niet aan het scherm —
+                          // ook een smal venster op de pc of een iPad in delen hoort zo te ogen.
+                          child: LayoutBuilder(builder: (context, c) {
+                            final nummer = SizedBox(
                               width: 30,
                               child: Text(o.position.isEmpty ? '${i + 1}' : o.position,
                                   style: const TextStyle(color: _muted, fontSize: 12.5)),
-                            ),
-                            Expanded(
-                              child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(o.title, style: const TextStyle(fontSize: 13.5)),
-                                    if (o.artist.trim().isNotEmpty || o.seconds != null)
-                                      Text(
-                                        [
-                                          if (o.artist.trim().isNotEmpty) o.artist.trim(),
-                                          if (o.seconds != null)
-                                            _fmt(Duration(seconds: o.seconds!)),
-                                        ].join('  ·  '),
-                                        style:
-                                            const TextStyle(color: _muted, fontSize: 11.5),
-                                      ),
-                                  ]),
-                            ),
-                            const SizedBox(width: 8),
-                            SizedBox(
-                              width: 250,
-                              child: hier == null
-                                  ? Text(
-                                      _gekozen == null ? 'leeg' : 'hier neerzetten',
-                                      style: TextStyle(
-                                          color: _gekozen == null ? _muted : _accent,
-                                          fontSize: 11.5),
-                                    )
-                                  : _kaart(hier, geplaatst: true),
-                            ),
-                          ]),
+                            );
+                            final titel = Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(o.title, style: const TextStyle(fontSize: 13.5)),
+                                  if (o.artist.trim().isNotEmpty || o.seconds != null)
+                                    Text(
+                                      [
+                                        if (o.artist.trim().isNotEmpty) o.artist.trim(),
+                                        if (o.seconds != null) _fmt(Duration(seconds: o.seconds!)),
+                                      ].join('  ·  '),
+                                      style: const TextStyle(color: _muted, fontSize: 11.5),
+                                    ),
+                                ]);
+                            final plek = hier == null
+                                ? Text(
+                                    _gekozen == null ? 'leeg' : 'hier neerzetten',
+                                    style: TextStyle(
+                                        color: _gekozen == null ? _muted : _accent, fontSize: 11.5),
+                                  )
+                                : _kaart(hier, geplaatst: true);
+                            if (c.maxWidth < kToewijsRijSmal) {
+                              return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                  nummer,
+                                  Expanded(child: titel),
+                                ]),
+                                const SizedBox(height: 6),
+                                Padding(padding: const EdgeInsets.only(left: 30), child: plek),
+                              ]);
+                            }
+                            return Row(children: [
+                              nummer,
+                              Expanded(child: titel),
+                              const SizedBox(width: 8),
+                              SizedBox(width: 250, child: plek),
+                            ]);
+                          }),
                         ),
                       );
                     },

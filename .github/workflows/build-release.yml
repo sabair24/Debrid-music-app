@@ -246,6 +246,7 @@ jobs:
             test/koppelweigering_komt_aan_test.dart test/torrent_en_soulseek_test.dart \
             test/keuring_test.dart test/torrent_keuring_test.dart test/terugzetten_test.dart \
             test/lengte_voorkeur_test.dart test/zoek_en_haal_test.dart test/scanmaat_test.dart test/deezer_toppers_test.dart \
+            test/toewijzen_telefoon_test.dart \
             test/torrent_nummering_test.dart test/verwijderen_en_eigen_keuze_test.dart \
             test/zuinig_test.dart test/accountkoppeling_test.dart \
             test/uitwijk_test.dart test/kantnummer_test.dart \
