@@ -2464,7 +2464,7 @@ extension DiscogsChoices on DiscogsService {
       country: e.country,
       barcode: e.barcode,
       year: e.year,
-      front: hoes == null ? null : ChoiceImage(hoes.uri, hoes.thumb),
+      front: hoes == null ? null : ChoiceImage(hoes.uri, hoes.thumb, breedte: hoes.width, hoogte: hoes.height),
       detailed: false,
     );
   }
@@ -2517,7 +2517,10 @@ extension DiscogsChoices on DiscogsService {
   /// rest to point at the right one.
   Future<List<ChoiceImage>> allImages(int releaseId) async {
     final e = await release(releaseId);
-    return [for (final i in e?.images ?? const <DiscogsImage>[]) ChoiceImage(i.uri, i.thumb)];
+    return [
+      for (final i in e?.images ?? const <DiscogsImage>[])
+        ChoiceImage(i.uri, i.thumb, breedte: i.width, hoogte: i.height)
+    ];
   }
 
   /// One pressing's scans, worked out and labelled. Public so the picker can ask for a row as it
@@ -2539,7 +2542,7 @@ extension DiscogsChoices on DiscogsService {
     final e = await release(row.releaseId);
     if (e == null) return null;
     final imgs = e.images;
-    ChoiceImage of(DiscogsImage i) => ChoiceImage(i.uri, i.thumb);
+    ChoiceImage of(DiscogsImage i) => ChoiceImage(i.uri, i.thumb, breedte: i.width, hoogte: i.height);
 
     DiscogsImage? front, back, disc;
     for (final i in imgs) {

@@ -961,6 +961,9 @@ class SoulseekService {
   }
 }
 
+/// Hoe een [DownloadManager.zoekEnHaal] afliep, zodat het scherm (als het er nog is) het juiste zegt.
+enum ZoekUitkomst { gestart, geenBron, loopt, geannuleerd }
+
 /// Eén voorstel om een kopie uit `_dubbel` terug te zetten. Zie [DownloadManager.zoekTerugzettingen].
 class Terugzetting {
   /// De kopie in `_dubbel` die terug zou moeten.
@@ -1621,6 +1624,59 @@ class DownloadManager extends ChangeNotifier {
       return true;
     }
     return draai();
+  }
+
+  /// Een download die eerst een bron moet zoeken — en daarbij NIET afhangt van het scherm dat hem
+  /// startte.
+  ///
+  /// Saber op 04-10-2026: *"als ik bij soulseek op de download knop klik, en dan uit het venster ga,
+  /// dan wordt de download niet actief, ik moet in het venster blijven tot de download begint"*. Dat
+  /// klopte precies. De albumpagina zocht eerst zélf een bron — een Soulseek-zoekopdracht van tien tot
+  /// dertig seconden — en maakte pas dáárna de download aan, met `if (!mounted) return` ertussen. Wie
+  /// de pagina in die tijd verliet, gooide zijn klik stil weg: geen taak, geen melding, niets.
+  ///
+  /// Nu staat de taak bij de klik al in de downloadlijst ("bron zoeken…"), en zoekt deze functie
+  /// verder, ook als het scherm weg is. [zoek] mag daarom niets nodig hebben dat met het scherm
+  /// verdwijnt: pak de diensten vast vóór je deze functie aanroept, niet erin.
+  ///
+  /// Komt terug zodra de download is AANGEMAAKT, niet als hij klaar is: wie hierop wacht wil weten óf er
+  /// iets loopt, niet een minuut lang niets horen.
+  Future<ZoekUitkomst> zoekEnHaal(
+      {required String naam,
+      required String key,
+      required Future<List<SoulseekFile>> Function() zoek,
+      TrackTags? authority}) async {
+    final bestaand = jobByKey(key);
+    if (bestaand != null && bestaand.busy) return ZoekUitkomst.loopt;
+    final job = DownloadJob(naam, key: key, status: 'preparing')
+      ..detail = 'bron zoeken…'
+      ..canCancel = true
+      ..authority = authority;
+    jobs.insert(0, job);
+    notifyListeners();
+    List<SoulseekFile> kandidaten;
+    try {
+      kandidaten = await zoek();
+    } catch (_) {
+      kandidaten = const [];
+    }
+    // Weggetikt terwijl er gezocht werd: dan heeft `cancelJob` het laatste woord al gezet.
+    if (job.cancelled) return ZoekUitkomst.geannuleerd;
+    jobs.remove(job);
+    if (kandidaten.isEmpty) {
+      job
+        ..status = 'failed'
+        ..detail = 'geen Soulseek-bron gevonden'
+        ..canCancel = false;
+      jobs.insert(0, job);
+      notifyListeners();
+      _log.line('"$naam": geen Soulseek-bron gevonden');
+      return ZoekUitkomst.geenBron;
+    }
+    notifyListeners();
+    // Dezelfde sleutel, zodat de knop op de pagina gewoon doorloopt van "zoeken" naar "bezig".
+    final gestart = await enqueueSoulseekBest(kandidaten, key: key, authority: authority, wachtOpAfloop: false);
+    return gestart ? ZoekUitkomst.gestart : ZoekUitkomst.loopt;
   }
 
   // ── Surviving a restart ───────────────────────────────────────────────────

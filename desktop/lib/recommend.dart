@@ -64,6 +64,17 @@ List<RecTrack> nogNietInBezit(List<RecTrack> recs, Set<String> bezit) =>
 /// niet omdat het model U2 noemde, maar omdat een naam die erop leek nergens te vinden was en U2
 /// vijf miljoen luisteraars heeft. Eén zaadartiest zonder nummers kost niets — er staan er veertig
 /// in een plan — maar de complete discografie van een wildvreemde artiest bederft de hele radio.
+/// Uit zoektreffers de nummers van artiest [id], populairste eerst. Zie `RecommendService._top`:
+/// de terugval voor de dag dat Deezer's `/artist/{id}/top` niets meer teruggaf.
+List<Map> topUitZoeken(List<dynamic> treffers, int id) {
+  final eigen = [
+    for (final t in treffers)
+      if (t is Map && (((t['artist'] as Map?)?['id']) as num?)?.toInt() == id) t
+  ];
+  eigen.sort((a, b) => ((b['rank'] as num?) ?? 0).compareTo((a['rank'] as num?) ?? 0));
+  return eigen;
+}
+
 int? pickArtist(List<dynamic> hits, String wanted) {
   final want = artistKey(wanted);
   final alle = [for (final h in hits) if (h is Map && h['id'] != null) h];
@@ -346,7 +357,27 @@ class RecommendService {
   Future<List<RecTrack>> topVan(String artiest, {int limit = 15}) async {
     final id = await _artistId(artiest);
     if (id == null) return const [];
-    return _tracks(await _get('$_base/artist/$id/top?limit=$limit'));
+    return _tracks(await _top(id, artiest, limit: limit));
+  }
+
+  /// De toppers van één artiest — ook als Deezer's eigen lijst zwijgt.
+  ///
+  /// **Gemeten op 04-10-2026:** `/artist/{id}/top` gaf voor élke artiest `{"data":[],"total":0}` —
+  /// Michael Jackson, Stevie Wonder, Daft Punk — terwijl gewoon zoeken, `/related` en `/radio` werkten.
+  /// Ontdek bleef daardoor leeg (0 nummers uit drie zaadartiesten), en een radio vanaf een artiest
+  /// kreeg geen enkel nummer van die artiest zelf meer. Gevonden doordat `discover_test` omviel, ook op
+  /// de commit van vóór die dag.
+  ///
+  /// Zwijgt de lijst, dan valt dit terug op gewoon zoeken op de naam: alleen wat écht van DEZE
+  /// artiest is (zelfde id — een naamgenoot telt niet), op Deezer's eigen populariteit (`rank`). De
+  /// geavanceerde vorm `artist:"…"` gaf die dag óók niets, vandaar de kale naam.
+  Future<Map<String, dynamic>?> _top(int id, String naam, {required int limit, int index = 0}) async {
+    final j = await _get('$_base/artist/$id/top?limit=$limit&index=$index');
+    final data = (j?['data'] as List?) ?? const [];
+    if (data.isNotEmpty || naam.trim().isEmpty) return j;
+    final z = await _get('$_base/search?q=${Uri.encodeComponent(naam)}&limit=100');
+    final eigen = topUitZoeken((z?['data'] as List?) ?? const [], id);
+    return {'data': eigen.skip(index).take(limit).toList()};
   }
 
   /// Radio (~25 tracks) around an artist — the seed artist mixed with similar ones.
@@ -378,14 +409,15 @@ class RecommendService {
     // (reusing the one artist id). Deezer's /radio is a similar-artist flow that omits the
     // seed, so /top is needed for the seed's own songs to appear in the queue at all.
     final m = maatVan(smaak);
-    final topF = _get('$_base/artist/$id/top?limit=${m.zaadAantal}&index=${m.zaadVanaf}');
+    final topF = _top(id, artist, limit: m.zaadAantal, index: m.zaadVanaf);
     final radioF = _get('$_base/artist/$id/radio');
     final relF = _get('$_base/artist/$id/related?limit=20');
     add(_tracks(await topF));
     add(radioHelft(_tracks(await radioF), (t) => t.rank, smaak));
     final rel = ((await relF)?['data'] as List?) ?? const [];
-    final tops = await Future.wait(kiesBuren(rel, m.buren, _toeval).map((a) => _get(
-        '$_base/artist/${(a as Map)['id']}/top?limit=${m.burenAantal}&index=${m.burenVanaf}')));
+    final tops = await Future.wait(kiesBuren(rel, m.buren, _toeval).map((a) => _top(
+        ((a as Map)['id'] as num).toInt(), '${a['name'] ?? ''}',
+        limit: m.burenAantal, index: m.burenVanaf)));
     for (final t in tops) {
       add(_tracks(t));
     }
@@ -459,8 +491,9 @@ class RecommendService {
       (ids[i] == null ? onbekend : gekend).add(gekozen[i].artiest);
     }
     final tops = await Future.wait([
-      for (final i in ids)
-        if (i != null) _get('$_base/artist/$i/top?limit=${m.modelAantal}&index=${m.modelVanaf}')
+      for (var i = 0; i < ids.length; i++)
+        if (ids[i] != null)
+          _top(ids[i]!, gekozen[i].artiest, limit: m.modelAantal, index: m.modelVanaf)
     ]);
     var erbij = 0;
     for (final t in tops) {
@@ -500,7 +533,7 @@ class RecommendService {
       final rel = ((await _get('$_base/artist/$id/related?limit=20'))?['data'] as List?) ?? const [];
       final pool = [...rel]..shuffle(_toeval);
       final tops = await Future.wait(
-          pool.take(4).map((a) => _get('$_base/artist/${a['id']}/top?limit=6')));
+          pool.take(4).map((a) => _top((a['id'] as num).toInt(), '${a['name'] ?? ''}', limit: 6)));
       for (final t in tops) {
         add(_tracks(t));
       }

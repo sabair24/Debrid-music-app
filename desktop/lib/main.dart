@@ -25,6 +25,7 @@ import 'ai.dart';
 import 'radio.dart';
 import 'radiokeuze.dart';
 import 'radiobestand.dart' show kRadioSpeling;
+import 'scanmaat.dart';
 import 'radiolijst.dart' show AiNummer, kMinModelNummers;
 import 'radiosmaak.dart';
 import 'radiostijl.dart' show Stijlboek, Stijlfamilie, Stijloordeel, Zaadstijl, naLijstVanModel, sfeerBeslistFamilie;
@@ -4813,6 +4814,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
   List<SoulseekFile> _albumSlsk = const [];
   bool _slskLoaded = false;
 
+  /// De albumbrede zoekopdracht die nu loopt, zodat "Ontbrekende downloaden" er voor elk nummer op kan
+  /// wachten in plaats van hem per nummer opnieuw te starten.
+  Future<List<SoulseekFile>>? _albumWideBezig;
+
   /// Hoe ver de tracklijst geschoven is, want daar hangt het glas van de bovenbalk aan.
   ///
   /// Zie [_MeeschuivendGlas]: die balk hoort er alleen te zijn als er werkelijk iets onder hem door
@@ -5237,27 +5242,33 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
     return best.key;
   }
 
-  Future<List<SoulseekFile>> _albumWide() async {
-    if (_slskLoaded) return _albumSlsk;
-    final soulseek = context.read<SoulseekService>();
-    try {
-      final r = await soulseek.search('${album.artist} ${album.title}');
-      if (mounted) setState(() { _albumSlsk = r; _slskLoaded = true; });
-      return r;
-    } catch (_) {
-      return const [];
-    }
+  /// [soulseek] vastgepakt door de aanroeper: deze zoektocht loopt door als de pagina dicht gaat (zie
+  /// [DownloadManager.zoekEnHaal]), en dan is er geen `context` meer om hem uit te lezen.
+  Future<List<SoulseekFile>> _albumWide(SoulseekService soulseek) {
+    if (_slskLoaded) return Future.value(_albumSlsk);
+    return _albumWideBezig ??= () async {
+      try {
+        final r = await soulseek.search('${album.artist} ${album.title}');
+        // De velden ook als de pagina weg is — dat kost niets, en een setState mag dan niet meer.
+        _albumSlsk = r;
+        _slskLoaded = true;
+        if (mounted) setState(() {});
+        return r;
+      } catch (_) {
+        _albumWideBezig = null; // een volgende klik mag het opnieuw proberen
+        return const <SoulseekFile>[];
+      }
+    }();
   }
 
   /// Copies of one missing track: the album-wide search first, then a search aimed at this title.
   /// Both filtered to this exact title and running time, so the pool can never fill with a
   /// different song by the same artist.
-  Future<List<SoulseekFile>> _candidatesFor(AlbumSlot s) async {
-    final soulseek = context.read<SoulseekService>();
+  Future<List<SoulseekFile>> _candidatesFor(AlbumSlot s, SoulseekService soulseek) async {
     bool fits(SoulseekFile f) =>
         f.isAudio && fileOffersTitle(s.title, s.seconds, album.artist, f.filename, f.durationSec, album: album.title);
     final pool = <String, SoulseekFile>{
-      for (final f in (await _albumWide()).where(fits)) '${f.username}|${f.filename}': f
+      for (final f in (await _albumWide(soulseek)).where(fits)) '${f.username}|${f.filename}': f
     };
     if (pool.isEmpty) {
       try {
@@ -5309,18 +5320,25 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
       }
     }
     _srcToast(context, 'Bron zoeken voor “${s.title}”…');
-    final cands = await _candidatesFor(s);
-    if (!mounted) return;
-    if (cands.isEmpty) {
-      _srcToast(context, 'Geen Soulseek-bron gevonden voor “${s.title}”.');
-      return;
-    }
+    // De taak staat meteen in Mijn downloads, en het zoeken loopt door als je deze pagina verlaat. Zie
+    // [DownloadManager.zoekEnHaal] — hier stond eerst het zoeken, dan `if (!mounted) return`, en
+    // pas dan de download: wie wegging gooide zijn klik weg.
     try {
-      final started = await dm.enqueueSoulseekBest(cands,
-          key: jobKey ?? _jobKey(s.index), authority: _authorityFor(s));
-      if (mounted) {
-        _srcToast(context,
-            started ? '“${s.title}” via Soulseek…' : '“${s.title}” loopt al — zie Mijn downloads.');
+      final uit = await dm.zoekEnHaal(
+          naam: s.title,
+          key: jobKey ?? _jobKey(s.index),
+          authority: _authorityFor(s),
+          zoek: () => _candidatesFor(s, soulseek));
+      if (!mounted) return;
+      switch (uit) {
+        case ZoekUitkomst.gestart:
+          _srcToast(context, '“${s.title}” via Soulseek…');
+        case ZoekUitkomst.geenBron:
+          _srcToast(context, 'Geen Soulseek-bron gevonden voor “${s.title}”.');
+        case ZoekUitkomst.loopt:
+          _srcToast(context, '“${s.title}” loopt al — zie Mijn downloads.');
+        case ZoekUitkomst.geannuleerd:
+          break;
       }
     } catch (e) {
       if (mounted) _srcToast(context, 'Download mislukt: $e');
@@ -5370,28 +5388,41 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
       return;
     }
     _srcToast(context, 'Bronnen zoeken voor ${wanted.length} ontbrekende nummers…');
-    final running = <Future<bool>>[];
-    var none = 0;
+    // Elk ontbrekend nummer staat METEEN in Mijn downloads ("bron zoeken…"), en niets hiervan hangt
+    // nog aan deze pagina — zie [DownloadManager.zoekEnHaal]. Het zoeken zelf blijft één voor één,
+    // net als hiervoor: tien zoekopdrachten tegelijk naar Soulseek is een zoekstorm, en daar wordt een
+    // account voor geblokkeerd. De albumbrede zoektocht doet het meeste werk en loopt maar één keer.
+    var vorige = Future<void>.value();
+    final uitkomsten = <Future<ZoekUitkomst>>[];
     for (final s in wanted) {
-      final cands = await _candidatesFor(s);
-      if (!mounted) return;
-      if (cands.isEmpty) {
-        none++;
-        continue;
-      }
-      running.add(dm
-          .enqueueSoulseekBest(cands, key: _jobKey(s.index), authority: _authorityFor(s))
-          .catchError((_) => false));
+      final mijnBeurt = vorige;
+      final klaar = Completer<void>();
+      vorige = klaar.future;
+      uitkomsten.add(dm
+          .zoekEnHaal(
+              naam: s.title,
+              key: _jobKey(s.index),
+              authority: _authorityFor(s),
+              zoek: () async {
+                await mijnBeurt;
+                try {
+                  return await _candidatesFor(s, soulseek);
+                } finally {
+                  klaar.complete();
+                }
+              })
+          .catchError((_) => ZoekUitkomst.geenBron));
     }
+    final alle = await Future.wait(uitkomsten);
     if (!mounted) return;
-    final started = running.length;
+    final started = alle.where((u) => u == ZoekUitkomst.gestart).length;
+    final none = alle.where((u) => u == ZoekUitkomst.geenBron).length;
     _srcToast(
         context,
         started == 0
             ? 'Geen bronnen gevonden voor de ontbrekende nummers.'
             : '$started gestart${none > 0 ? ' · $none zonder bron' : ''}'
                 '${already > 0 ? ' · $already had je al' : ''} — zie Mijn downloads.');
-    await Future.wait(running);
   }
 
   // A correction rebuilds the album list into new objects; re-point at the regrouped
@@ -20826,8 +20857,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// running time, so the pool can never fill with a different song from the same user — which is
   /// what happened when the old path took every audio result the search returned and, after the
   /// query broadened to just the artist, would have downloaded the wrong song under this one's tags.
-  Future<List<SoulseekFile>> _slskCandidatesForTrack(CatalogTrack t) async {
-    final soulseek = context.read<SoulseekService>();
+  Future<List<SoulseekFile>> _slskCandidatesForTrack(CatalogTrack t, SoulseekService soulseek) async {
     final pool = <String, SoulseekFile>{
       for (final f in _slskForTitle(t)) '${f.username}|${f.filename}': f
     };
@@ -20857,17 +20887,24 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       return;
     }
     if (mounted) _srcToast(context, 'Bron zoeken voor “${t.title}”…');
-    final cands = await _slskCandidatesForTrack(t);
-    if (!mounted) return;
-    if (cands.isEmpty) {
-      _srcToast(context, 'Geen Soulseek-bron gevonden voor “${t.title}”.');
-      return;
-    }
+    // Zelfde reparatie als op de albumpagina van je bibliotheek: de taak staat meteen in de lijst, en
+    // wie deze pagina verlaat breekt het zoeken niet meer af. Zie [DownloadManager.zoekEnHaal].
     try {
-      final started = await dm.enqueueSoulseekBest(cands,
-          key: 'alb:${widget.album.ref.keyPart}:$i', authority: _authorityFor(t, i));
-      if (mounted) {
-        _srcToast(context, started ? '“${t.title}” via Soulseek…' : '“${t.title}” loopt al — zie Mijn downloads.');
+      final uit = await dm.zoekEnHaal(
+          naam: t.title,
+          key: 'alb:${widget.album.ref.keyPart}:$i',
+          authority: _authorityFor(t, i),
+          zoek: () => _slskCandidatesForTrack(t, soulseek));
+      if (!mounted) return;
+      switch (uit) {
+        case ZoekUitkomst.gestart:
+          _srcToast(context, '“${t.title}” via Soulseek…');
+        case ZoekUitkomst.geenBron:
+          _srcToast(context, 'Geen Soulseek-bron gevonden voor “${t.title}”.');
+        case ZoekUitkomst.loopt:
+          _srcToast(context, '“${t.title}” loopt al — zie Mijn downloads.');
+        case ZoekUitkomst.geannuleerd:
+          break;
       }
     } catch (e) {
       if (mounted) _srcToast(context, 'Download mislukt: $e');
@@ -24540,6 +24577,87 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
 /// wat er niet bij kan buiten de rij, waar het te zien is noch aan te tikken. Elke keer was een
 /// schermafbeelding van het toestel nodig om het te merken. Een toets die de rij bouwt en omvalt
 /// bij overloop had elk van die vier keren meteen gevonden.
+/// De pixelmaat van een scan, onder zijn miniatuur: "1400×1400", gekleurd naar hoe scherp hij is.
+///
+/// Saber op 04-10-2026, bij "Uitgave kiezen": *"nu moet ik blind kiezen zonder ik weet welke resolutie
+/// het is."* Groen is haarscherp op elk scherm (vanaf 1000 pixels aan de korte kant), wit bruikbaar,
+/// oranje wazig zodra hij groter dan een postzegel getoond wordt. Waar de maat vandaan komt staat in
+/// `scanmaat.dart`; zolang hij niet bekend is staat er niets — liever geen getal dan een verzonnen.
+class ScanMaatRegel extends StatelessWidget {
+  const ScanMaatRegel({super.key, required this.img, this.groot = false});
+
+  final ChoiceImage img;
+
+  /// Voor het grote voorbeeld: dezelfde regel, leesbaar formaat.
+  final bool groot;
+
+  static Color kleurVan(Scherpte s) => switch (s) {
+        Scherpte.scherp => _accent2,
+        Scherpte.bruikbaar => Colors.white70,
+        Scherpte.klein => const Color(0xFFE0B341),
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final bekend = bekendeMaat(img);
+    return FutureBuilder<Maat?>(
+      // Dezelfde Future per adres (zie [scanMaatVan]), dus een hertekening meet niet opnieuw.
+      future: bekend == null ? scanMaatVan(img) : null,
+      initialData: bekend,
+      builder: (context, snap) {
+        final m = snap.data;
+        if (m == null) return SizedBox(height: groot ? 16 : 12);
+        return FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            groot ? '${maatTekst(m)} pixels' : maatTekst(m),
+            key: const Key('scanmaat'),
+            maxLines: 1,
+            softWrap: false,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+                color: kleurVan(scherpteVan(m)), fontSize: groot ? 12.5 : 9.5, fontWeight: FontWeight.w700),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// De scan groot, voor de zweeftip in "Uitgave kiezen". Heel in beeld (`contain`), want een achterkant
+/// is zelden vierkant en bijsnijden verbergt precies wat je wilde zien.
+class _ScanVoorbeeld extends StatelessWidget {
+  const _ScanVoorbeeld({required this.img});
+  final ChoiceImage img;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = img.uri.isNotEmpty ? img.uri : img.thumb;
+    return Padding(
+      padding: const EdgeInsets.only(top: 2, bottom: 4),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: Image.network(url,
+              width: 300,
+              height: 300,
+              fit: BoxFit.contain,
+              cacheWidth: decodeWidth(300),
+              errorBuilder: (_, __, ___) => const SizedBox(width: 300, height: 300),
+              loadingBuilder: (c, w, p) => p == null
+                  ? w
+                  : const SizedBox(
+                      width: 300,
+                      height: 300,
+                      child: Center(child: CircularProgressIndicator(strokeWidth: 2)))),
+        ),
+        const SizedBox(height: 6),
+        ScanMaatRegel(img: img, groot: true),
+      ]),
+    );
+  }
+}
+
 class UitgaveRij extends StatelessWidget {
   const UitgaveRij({
     super.key,
@@ -24755,15 +24873,21 @@ class UitgaveRij extends StatelessWidget {
       onLongPress: onLongPress,
       borderRadius: BorderRadius.circular(6),
       child: Tooltip(
-        message: img != null
-            ? 'Klik: neem deze $label over · Lang indrukken: alle scans van deze uitgave'
+        // GROOT, als je erboven hangt. Saber op 04-10-2026: *"ik wil graag de resolutie groter zien,
+        // nu moet ik blind kiezen"* — een miniatuur van 58 punten zegt niets over hoe scherp de scan
+        // erachter is, en de hoes van wat je hier kiest wordt je albumhoes.
+        waitDuration: const Duration(milliseconds: 350),
+        richMessage: img != null
+            ? TextSpan(children: [
+                WidgetSpan(child: _ScanVoorbeeld(img: img)),
+                const TextSpan(text: '\nKlik: neem deze over · Lang indrukken: alle scans van deze uitgave'),
+              ])
             // "Has none" and "nobody has asked yet" are different statements, and the row now
             // appears before its scans do — so for a second or two the cross was claiming the
             // first while the second was true. The badges beside it already made that distinction;
             // the thumbnails were still saying it flatly.
-            : waiting
-                ? 'De scans van deze uitgave worden opgehaald…'
-                : 'Deze uitgave heeft geen $label',
+            : TextSpan(
+                text: waiting ? 'De scans van deze uitgave worden opgehaald…' : 'Deze uitgave heeft geen $label'),
         child: Column(children: [
           // Een randje van twee punten om een plaatje van 58 was het enige dat "deze heb ik gekozen"
           // zei, en op een scherm vol miniaturen is dat te weinig. Gemeld op 27-08-2026: *"waardoor
@@ -24828,6 +24952,8 @@ class UitgaveRij extends StatelessWidget {
                     fontSize: 10,
                     fontWeight: chosen ? FontWeight.w700 : FontWeight.w400)),
           ),
+          // En hoeveel pixels de scan heeft. Zie `scanmaat.dart`.
+          if (img != null) SizedBox(width: 58, child: ScanMaatRegel(img: img)),
         ]),
       ),
     );
@@ -25013,13 +25139,25 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
                                 maxCrossAxisExtent: 170,
                                 mainAxisSpacing: 14,
                                 crossAxisSpacing: 14,
-                                childAspectRatio: .78),
+                                // Lager dan .78: er staat sinds 04-10-2026 een regel onder met de
+                                // pixelmaat van de scan.
+                                childAspectRatio: .72),
                             itemCount: images.length,
                             itemBuilder: (_, i) {
                               final img = images[i];
                               return Column(children: [
-                                Expanded(child: _netCover(img.thumb, size: 150, radius: 8)),
-                                const SizedBox(height: 6),
+                                // Groot in een zweeftip, en de maat eronder — hier kies je zelf wat je
+                                // albumhoes wordt, en dat hoort niet blind te gaan. Zie [ScanMaatRegel].
+                                Expanded(
+                                  child: Tooltip(
+                                    waitDuration: const Duration(milliseconds: 350),
+                                    richMessage: WidgetSpan(child: _ScanVoorbeeld(img: img)),
+                                    child: _netCover(img.thumb, size: 150, radius: 8),
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                ScanMaatRegel(img: img),
+                                const SizedBox(height: 4),
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [

@@ -100,7 +100,12 @@ class ChoiceImage {
   /// Met deze vlag kan het opslaan eerst de volle scan ophalen — zie `_save` in de uitgavegalerij.
   final bool alleenMiniatuur;
 
-  const ChoiceImage(this.uri, this.thumb, {this.alleenMiniatuur = false});
+  /// De pixelmaat van de volle scan, als de catalogus die meegaf (Discogs doet dat, de Cover Art
+  /// Archive niet). Nul is "niet meegegeven" — zie `scanmaat.dart`, dat hem dan uit het bestand leest.
+  final int breedte, hoogte;
+
+  const ChoiceImage(this.uri, this.thumb,
+      {this.alleenMiniatuur = false, this.breedte = 0, this.hoogte = 0});
 }
 
 /// One line of a pressing's tracklist, as the pressing itself states it.
