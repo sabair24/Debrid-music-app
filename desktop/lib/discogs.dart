@@ -2178,12 +2178,15 @@ extension DiscogsArtwork on DiscogsService {
 
   Future<Uint8List?> fetchImage(String url) async {
     try {
+      // Het token alleen naar Discogs zelf. Deze ophaler kreeg ook adressen van elders aangereikt —
+      // zie `scanBronVan` — en zette het token dan in de kopregel naar die andere dienst.
+      final naarDiscogs = scanBronVan(url) == ScanBron.discogs;
       final r = await http
           .get(
             Uri.parse(url),
             headers: {
               'User-Agent': DiscogsService._ua,
-              'Authorization': 'Discogs token=${settings.discogsToken.trim()}',
+              if (naarDiscogs) 'Authorization': 'Discogs token=${settings.discogsToken.trim()}',
             },
           )
           .timeout(const Duration(seconds: 20));

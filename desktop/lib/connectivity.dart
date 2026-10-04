@@ -1,6 +1,7 @@
 import 'package:http/http.dart' as http;
 
 import 'acoustid.dart';
+import 'audiodb.dart';
 import 'json_body.dart';
 import 'online.dart';
 import 'rutracker.dart';
@@ -169,6 +170,22 @@ class ConnectionChecker {
           ));
     } catch (_) {
       return const ConnResult(ConnState.fail, 'Geen verbinding met api.acoustid.org');
+    }
+  }
+
+  /// Werkt je eigen TheAudioDB-sleutel? Zonder sleutel is er niets mis: dan werkt de gratis, alleen
+  /// zonder volle tracklijst. Getest via v2, waar de sleutel in een kopregel gaat en niet in een adres.
+  Future<ConnResult> audiodbCheck() async {
+    final svc = AudioDbService(settings);
+    if (!svc.premium) {
+      return const ConnResult(ConnState.absent, 'Geen eigen sleutel — de gratis werkt, zonder volle tracklijst');
+    }
+    try {
+      return await svc.sleutelWerkt()
+          ? const ConnResult(ConnState.ok, 'Sleutel aanvaard')
+          : const ConnResult(ConnState.fail, 'TheAudioDB weigerde de sleutel — is het je premium-sleutel?');
+    } on AudioDbFout catch (e) {
+      return ConnResult(ConnState.fail, e.uitleg);
     }
   }
 }

@@ -9,7 +9,24 @@
 /// afterwards that the disc animation has nothing to spin.
 library;
 
-enum EditionSource { musicbrainz, discogs }
+enum EditionSource { musicbrainz, discogs, audiodb }
+
+/// Wie een scan mag ophalen, gezien aan zijn adres.
+///
+/// **Waarom dit een eigen vraag is.** Tot 04-10-2026 koos "Uitgave kiezen" de ophaler met één vraag:
+/// komt hij van het Cover Art Archive? Zo niet, dan ging hij via Discogs — en die zet je
+/// Discogs-token in de kopregel. Met alleen Discogs en MusicBrainz klopte dat toevallig. Een scan van
+/// TheAudioDB zou je token naar een andere dienst hebben gestuurd.
+enum ScanBron { coverArtArchive, discogs, anders }
+
+ScanBron scanBronVan(String url) {
+  final host = (Uri.tryParse(url)?.host ?? '').toLowerCase();
+  if (host == 'coverartarchive.org' || host.endsWith('.coverartarchive.org') || host.endsWith('archive.org')) {
+    return ScanBron.coverArtArchive;
+  }
+  if (host == 'discogs.com' || host.endsWith('.discogs.com')) return ScanBron.discogs;
+  return ScanBron.anders;
+}
 
 /// The four things that name a pressing on the album page.
 typedef Pressing = ({String format, String? catno, String? country, int? year});
@@ -146,6 +163,10 @@ class ReleaseChoice {
   /// The MusicBrainz release id, or null for a Discogs pressing.
   final String? mbid;
 
+  /// Het album bij TheAudioDB, als de rij daarvandaan komt. Een album, geen persing — zie
+  /// `AudioDbAlbum.keuze`.
+  final String? audioDbId;
+
   final String format;
   final String? label, catno, country, barcode;
   final int? year;
@@ -187,6 +208,7 @@ class ReleaseChoice {
     required this.source,
     this.releaseId = 0,
     this.mbid,
+    this.audioDbId,
     this.format = '',
     this.label,
     this.catno,
@@ -218,6 +240,7 @@ class ReleaseChoice {
         source: source,
         releaseId: releaseId,
         mbid: mbid,
+        audioDbId: audioDbId,
         format: format,
         label: label,
         catno: catno,
@@ -236,9 +259,24 @@ class ReleaseChoice {
   bool get hasDisc => disc != null;
   bool get hasTracklist => tracklist.isNotEmpty;
   bool get isMb => source == EditionSource.musicbrainz;
+  bool get isDiscogs => source == EditionSource.discogs;
+  bool get isAudioDb => source == EditionSource.audiodb;
+
+  /// Zoals hij op het bordje van de rij staat.
+  String get bronNaam => switch (source) {
+        EditionSource.musicbrainz => 'MusicBrainz',
+        EditionSource.discogs => 'Discogs',
+        EditionSource.audiodb => 'TheAudioDB',
+      };
 
   /// Identity across both catalogues, for marking the pinned row and for deduping.
-  String get key => isMb ? 'mb:$mbid' : 'dg:$releaseId';
+  // Per bron, niet "MusicBrainz of anders Discogs": elke TheAudioDB-rij zou anders `dg:0` heten en
+  // de lijst hield er maar één van over.
+  String get key => switch (source) {
+        EditionSource.musicbrainz => 'mb:$mbid',
+        EditionSource.discogs => 'dg:$releaseId',
+        EditionSource.audiodb => 'adb:$audioDbId',
+      };
 
   /// "CD · Europe · 19439937972 · 2021"
   String get line => [

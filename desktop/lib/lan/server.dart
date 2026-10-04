@@ -1246,6 +1246,9 @@ class LanServer {
     return _json(req.response, {
       'discogsToken': config.discogsToken,
       'lastfmKey': config.lastfmKey,
+      // Zodat ook de telefoon bij TheAudioDB de volle tracklijst krijgt — "Uitgave kiezen" en
+      // "Metadata corrigeren" vragen daar zelf.
+      'audiodbKey': config.audiodbKey,
     });
   }
 

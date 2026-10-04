@@ -49,6 +49,7 @@ import 'deezerbaan.dart';
 import 'discogs.dart';
 import 'discography.dart';
 import 'discography_service.dart';
+import 'audiodb.dart';
 import 'editions.dart';
 import 'connectivity.dart';
 import 'enrichment.dart';
@@ -6392,8 +6393,11 @@ class _MetadataEditorState extends State<MetadataEditor> {
   ///
   /// Op de MetaResult zelf sleutelen kan niet: die objecten worden bij elke zoekactie opnieuw
   /// gebouwd, dus na "Zoeken" zou alles dichtklappen en opnieuw opgehaald worden.
-  String _sleutel(MetaResult m) =>
-      m.releaseId != null ? 'rel:${m.releaseId}' : (m.mbid != null ? 'mb:${m.mbid}' : 'x:${m.title}·${m.detail ?? ''}');
+  String _sleutel(MetaResult m) => m.releaseId != null
+      ? 'rel:${m.releaseId}'
+      : (m.mbid != null
+          ? 'mb:${m.mbid}'
+          : (m.audioDbId != null ? 'adb:${m.audioDbId}' : 'x:${m.title}·${m.detail ?? ''}'));
 
   Future<void> _klapUit(MetaResult m) async {
     final k = _sleutel(m);
@@ -6415,6 +6419,11 @@ class _MetadataEditorState extends State<MetadataEditor> {
           .timeout(const Duration(seconds: 30));
     } on TimeoutException {
       fout = 'De bron antwoordde niet op tijd. Probeer het zo opnieuw.';
+    } on AudioDbSleutelNodig catch (e) {
+      // Geen storing: opnieuw proberen helpt niet, een sleutel invullen wel.
+      fout = e.uitleg;
+    } on AudioDbFout catch (e) {
+      fout = '${e.uitleg} Probeer het zo opnieuw.';
     } on StateError catch (e) {
       // Een mislukte opvraging, niet een persing zónder tracklijst — zie [tracklistVan]. Dat
       // verschil staat er met opzet, want het eerste is een reden om het opnieuw te proberen en het
@@ -21934,7 +21943,7 @@ class SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
-  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _anthropic, _anthropicWs, _rtUser, _rtPass, _slskPort, _acoustid, _tidalId, _tidalSecret, _torznabUrl, _torznabKey, _redacted;
+  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _anthropic, _anthropicWs, _rtUser, _rtPass, _slskPort, _acoustid, _audiodb, _tidalId, _tidalSecret, _torznabUrl, _torznabKey, _redacted;
 
   @override
   void initState() {
@@ -21949,6 +21958,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _anthropic = TextEditingController(text: s.anthropicKey);
     _anthropicWs = TextEditingController(text: s.anthropicWorkspace);
     _acoustid = TextEditingController(text: s.acoustidKey);
+    _audiodb = TextEditingController(text: s.audiodbKey);
     _tidalId = TextEditingController(text: s.tidalClientId);
     _tidalSecret = TextEditingController(text: s.tidalClientSecret);
     _rtUser = TextEditingController(text: s.rutrackerUser);
@@ -22227,6 +22237,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _anthropic.dispose();
     _anthropicWs.dispose();
     _acoustid.dispose();
+    _audiodb.dispose();
     _tidalId.dispose();
     _tidalSecret.dispose();
     _rtUser.dispose();
@@ -22273,6 +22284,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       ..rutrackerUser = _rtUser.text.trim()
       ..rutrackerPass = _rtPass.text
       ..acoustidKey = _acoustid.text.trim()
+      ..audiodbKey = _audiodb.text.trim()
       ..rutrackerCookie = real.rutrackerCookie; // RuTracker validity depends on the live session
     // Soulseek deliberately uses the app's REAL service, not a probe copy: a probe would have its
     // own client, so testing the connection would open a SECOND login on an account that allows
@@ -22282,7 +22294,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
         context.read<SoulseekService>(), RuTrackerService(probe));
     setState(() {
       _testing = true;
-      for (final k in ['torbox', 'discogs', 'soulseek', 'rutracker', 'acoustid']) {
+      for (final k in ['torbox', 'discogs', 'soulseek', 'rutracker', 'acoustid', 'audiodb']) {
         _conn[k] = const ConnResult(ConnState.checking);
       }
     });
@@ -22297,6 +22309,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       run('soulseek', checker.soulseekCheck),
       run('rutracker', checker.rutrackerCheck),
       run('acoustid', checker.acoustidCheck),
+      run('audiodb', checker.audiodbCheck),
     ]);
     if (mounted) setState(() => _testing = false);
   }
@@ -22902,6 +22915,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
                       'niet. Test hem hieronder.',
                       style: TextStyle(color: _muted, fontSize: 11.5, height: 1.3),
                     ),
+                    const SizedBox(height: 12),
+                    // Verborgen, anders dan de sleutels hierboven: het is een betaalde sleutel, en dit
+                    // venster staat soms open terwijl iemand meekijkt.
+                    _field('TheAudioDB-sleutel (premium, optioneel)', _audiodb, obscure: true),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Van je profiel op theaudiodb.com. Zonder sleutel komen de hoezen en scans van '
+                      'TheAudioDB gewoon; met je eigen sleutel ook de volle tracklijst, en mag de app '
+                      'er vaker per minuut om vragen.',
+                      style: TextStyle(color: _muted, fontSize: 11.5, height: 1.3),
+                    ),
                     const SizedBox(height: 4),
                     const Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
@@ -22931,6 +22955,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                           child: Text(_rtBusy ? 'Bezig…' : 'Inloggen', style: const TextStyle(fontSize: 12.5)),
                         )),
                     _statusRow('AcoustID', 'acoustid'),
+                    _statusRow('TheAudioDB', 'audiodb'),
                     const SizedBox(height: 10),
                     const Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
@@ -23135,6 +23160,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     s.anthropicKey = _anthropic.text.trim();
                     s.anthropicWorkspace = _anthropicWs.text.trim();
                     s.acoustidKey = _acoustid.text.trim();
+                    s.audiodbKey = _audiodb.text.trim();
                     s.tidalClientId = _tidalId.text.trim();
                     s.tidalClientSecret = _tidalSecret.text.trim();
                     s.torznabUrl = _torznabUrl.text.trim();
@@ -23582,6 +23608,18 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
 /// The metadata editor could already pin a release, but it listed them as bare names and said
 /// nothing about their artwork. Choosing blind meant finding out afterwards that a pressing had no
 /// disc scan, and the animation had nothing to spin.
+/// Een scan ophalen bij de dienst waar hij vandaan komt, en alleen DIE zijn sleutel meegeven.
+///
+/// Zie [scanBronVan]: tot 04-10-2026 ging alles wat niet van het Cover Art Archive kwam via Discogs,
+/// met je Discogs-token in de kopregel. Met TheAudioDB erbij zou dat token naar een andere dienst
+/// gaan.
+Future<Uint8List?> haalScan(String url, {required AppSettings settings, required MusicBrainzService mb}) =>
+    switch (scanBronVan(url)) {
+      ScanBron.coverArtArchive => mb.fetchImage(url),
+      ScanBron.discogs => DiscogsService(settings).fetchImage(url),
+      ScanBron.anders => AudioDbService(settings).beeld(url),
+    };
+
 class ReleaseGallery extends StatefulWidget {
   final Album album;
   const ReleaseGallery(this.album, {super.key});
@@ -23731,9 +23769,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       final front = teBewaren['front'];
       if (front != null) {
         // Each catalogue serves its own images, and Discogs wants its token on the request.
-        final bytes = front.uri.contains('coverartarchive.org')
-            ? await mbSvc.fetchImage(front.uri)
-            : await DiscogsService(settings).fetchImage(front.uri);
+        final bytes = await haalScan(front.uri, settings: settings, mb: mbSvc);
         if (bytes != null && bytes.isNotEmpty) {
           await lib.setAlbumCover(widget.album, settings, bytes);
         }
@@ -23766,6 +23802,13 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     _pinSleutel = pinnedMb != null
         ? 'mb:$pinnedMb'
         : (pinnedDg != null ? 'dg:$pinnedDg' : null);
+
+    // TheAudioDB tegelijk met de rest, en bovenaan zodra het er is — niet ergens waar het toevallig
+    // binnenkwam. Eén verzoek; een album, geen persing, met de scherpste hoes die er vaak is
+    // (2160×2160 bij Play en Thriller). Gevraagd op 04-10-2026. Een fout hier laat de rest staan.
+    unawaited(AudioDbService(settings).zoek(widget.album.artist, widget.album.title).then((l) {
+      if (mounted && l.isNotEmpty) _merge([for (final a in l) a.keuze()], opIndex: 0);
+    }).catchError((Object _) {}));
 
     try {
       // Shown as it fills in: the pressings the moment they are named, then their scans as each
@@ -24160,9 +24203,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       Uint8List? front;
       if (c.front != null) {
         // Each catalogue serves its own images; Discogs wants its token on the request.
-        front = c.isMb
-            ? await mbSvc.fetchImage(c.front!.uri)
-            : await DiscogsService(settings).fetchImage(c.front!.uri);
+        front = await haalScan(c.front!.uri, settings: settings, mb: mbSvc);
       }
       if (!mounted) return;
       // Choosing an EDITION means using its scans — all three of them. Any single scan picked
@@ -24177,7 +24218,9 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       }
       await lib.applyCorrection(widget.album, settings,
           coverBytes: front,
-          discogsRelease: c.isMb ? null : c.releaseId,
+          // Een TheAudioDB-rij zet niets vast: het is een album, geen persing. Wat er al vaststond
+          // blijft dus staan; de hoes en de scans komen wél van hier.
+          discogsRelease: c.isDiscogs ? c.releaseId : null,
           mbid: c.isMb ? c.mbid : null);
       if (mounted) Navigator.of(context).pop(true);
     } catch (_) {
@@ -24204,7 +24247,17 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     if (list.isEmpty && c.isMb && c.mbid != null) {
       final full = await mbSvc.release(c.mbid!);
       if (full != null) list = await mbSvc.tracklistOf(full);
-    } else if (list.isEmpty && !c.isMb && c.releaseId > 0) {
+    } else if (list.isEmpty && c.isAudioDb && c.audioDbId != null) {
+      try {
+        list = await AudioDbService(context.read<AppSettings>()).nummers(c.audioDbId!);
+      } on AudioDbSleutelNodig catch (e) {
+        if (mounted) _srcToast(context, e.uitleg);
+        return;
+      } on AudioDbFout catch (e) {
+        if (mounted) _srcToast(context, e.uitleg);
+        return;
+      }
+    } else if (list.isEmpty && c.isDiscogs && c.releaseId > 0) {
       final full = await DiscogsService(context.read<AppSettings>()).release(c.releaseId);
       if (full != null) {
         list = [for (final t in full.tracklist) ChoiceTrack(t.position, t.title, t.seconds)];
@@ -24328,7 +24381,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                   !_dgMeer &&
                   !_dgFailed &&
                   _dgTotaal > 0 &&
-                  (_choices ?? const <ReleaseChoice>[]).any((c) => !c.isMb))
+                  (_choices ?? const <ReleaseChoice>[]).any((c) => c.isDiscogs))
                 const Padding(
                   padding: EdgeInsets.only(top: 8),
                   child: Text('Alles opgehaald — meer heeft Discogs er niet onder dit album.',
@@ -24341,7 +24394,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                       // Twee verschillende dingen, en de oude regel zei altijd het eerste. Kwam er
                       // wél iets van Discogs binnen, dan is "dit zijn alleen de MusicBrainz-uitgaves"
                       // aantoonbaar onwaar terwijl de Discogs-rijen op het scherm staan.
-                      (_choices ?? const <ReleaseChoice>[]).any((c) => !c.isMb)
+                      (_choices ?? const <ReleaseChoice>[]).any((c) => c.isDiscogs)
                           ? 'Een deel van Discogs kwam niet door; deze lijst kan onvolledig zijn.'
                           : 'Discogs was niet bereikbaar — dit zijn alleen de MusicBrainz-uitgaves.',
                       style: const TextStyle(color: _muted, fontSize: 11.5)),
@@ -24838,11 +24891,11 @@ class UitgaveRij extends StatelessWidget {
                     children: [
                       // Which catalogue this row came from. The user asked to choose the source, so
                       // it has to be visible rather than inferred from the row's shape.
-                      _source(c.isMb),
+                      _source(c),
                       // Het nummer van deze uitgave, zichtbaar. Dit is de tegenhanger van het veld
                       // bovenaan: daar type je een nummer in, hier lees je hem af — zo kun je een
                       // rij die je hier vindt terugzoeken op Discogs zelf, en andersom.
-                      if (!c.isMb && c.releaseId > 0)
+                      if (c.isDiscogs && c.releaseId > 0)
                         Text('r${c.releaseId}',
                             style: const TextStyle(color: _muted, fontSize: 10.5)),
                       // Until this pressing has been looked up we do not know whether it has a back
@@ -24985,16 +25038,26 @@ class UitgaveRij extends StatelessWidget {
 
   /// Which catalogue found this pressing. The user asked to be able to choose the source, so the
   /// source has to be readable on the row rather than inferred from what the row happens to carry.
-  Widget _source(bool isMb) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: (isMb ? _accent : _accent2).withValues(alpha: .18),
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Text(isMb ? 'MusicBrainz' : 'Discogs',
-            style: TextStyle(
-                fontSize: 10.5, fontWeight: FontWeight.w600, color: isMb ? _accent : _accent2)),
-      );
+  Widget _source(ReleaseChoice c) {
+    final kleur = kleurVanBron(c.source);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: kleur.withValues(alpha: .18),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(c.bronNaam,
+          style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: kleur)),
+    );
+  }
+
+  /// Per bron een eigen kleur. Met twee bronnen was het "paars of anders turkoois"; een derde zou
+  /// dan als Discogs ogen.
+  static Color kleurVanBron(EditionSource b) => switch (b) {
+        EditionSource.musicbrainz => _accent,
+        EditionSource.discogs => _accent2,
+        EditionSource.audiodb => const Color(0xFFF2A65A),
+      };
 
   /// Present or absent, stated rather than implied — the reason this dialog exists.
   Widget _tag(String text, bool on) => Container(
@@ -25107,9 +25170,16 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
     final settings = context.read<AppSettings>();
     try {
       final c = widget.choice;
-      final list = c.isMb
-          ? [for (final i in await mb.art(c.mbid ?? '')) ChoiceImage(i.full, i.thumb)]
-          : await DiscogsService(settings).allImages(c.releaseId);
+      final list = switch (c.source) {
+        EditionSource.musicbrainz => [
+            for (final i in await mb.art(c.mbid ?? '')) ChoiceImage(i.full, i.thumb)
+          ],
+        EditionSource.discogs => await DiscogsService(settings).allImages(c.releaseId),
+        // Alles wat TheAudioDB van dit album heeft: HQ- en gewone hoes, achterkant, cd, rug, de
+        // 3D-doosjes.
+        EditionSource.audiodb =>
+          (await AudioDbService(settings).album(c.audioDbId ?? ''))?.alleScans ?? const <ChoiceImage>[],
+      };
       if (!mounted) return;
       setState(() {
         _images = list;

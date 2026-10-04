@@ -209,8 +209,10 @@ class ClientSession extends ChangeNotifier {
     final shared = await client.config();
     final discogs = shared['discogsToken'] ?? '';
     final lastfm = shared['lastfmKey'] ?? '';
+    final audiodb = shared['audiodbKey'] ?? '';
     if (discogs.isNotEmpty) settings.discogsToken = discogs;
     if (lastfm.isNotEmpty) settings.lastfmKey = lastfm;
+    if (audiodb.isNotEmpty) settings.audiodbKey = audiodb;
 
     loading = true;
     notifyListeners();
@@ -283,6 +285,7 @@ class ClientSession extends ChangeNotifier {
     // real token on disk and two blanks in memory, waiting for some unrelated save to persist them.
     settings.discogsToken = '';
     settings.lastfmKey = '';
+    settings.audiodbKey = '';
     await settings.save();
     // En de inhoudsopgave van die pc gaat mee. Wie zegt "vergeet die pc" bedoelt niet "maar hou de
     // lijst van mijn muziek nog even".

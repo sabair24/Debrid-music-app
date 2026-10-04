@@ -1,5 +1,6 @@
 import 'package:http/http.dart' as http;
 
+import 'audiodb.dart';
 import 'deezerbaan.dart';
 import 'discogs.dart';
 import 'editions.dart';
@@ -25,6 +26,10 @@ class MetaResult {
   /// [releaseId] rather than replacing it: an MBID is a string and a Discogs id is a number, and
   /// pins already written to disk as numbers have to keep working.
   final String? mbid;
+
+  /// Het album bij TheAudioDB, als de regel daarvandaan komt. Geen persing: TheAudioDB kent er geen,
+  /// dus zet kiezen ook niets vast — wel de naam, en de hoes in hoge resolutie.
+  final String? audioDbId;
 
   /// What this pressing IS, in one line: "CD · Europe · 19439937972 · 2021". Five results reading
   /// "30 — Adele" and nothing else give you nothing to choose between.
@@ -64,6 +69,7 @@ class MetaResult {
     this.coverFullUrl,
     this.releaseId,
     this.mbid,
+    this.audioDbId,
     this.detail,
     this.coverIsMiniatuur = false,
   });
@@ -72,7 +78,10 @@ class MetaResult {
 /// Searches Deezer / Discogs / MusicBrainz for correct metadata + cover art.
 class MetadataSearch {
   final AppSettings settings;
-  MetadataSearch(this.settings);
+  MetadataSearch(this.settings, {AudioDbService? audiodb}) : _adb = audiodb;
+
+  final AudioDbService? _adb;
+  AudioDbService get _audiodb => _adb ?? AudioDbService(settings);
 
   static const _ua = 'DebridMusic/0.1 ( https://github.com/sabair24/Debrid-music-app )';
 
@@ -82,7 +91,11 @@ class MetadataSearch {
   /// precies de kennis die je niet hebt als je een correctie zoekt. Discogs kent de persingen,
   /// MusicBrainz kent de uitgaven, Deezer kent de populaire namen; ze samen bevragen kost één
   /// zoekopdracht in plaats van drie, en de lijst is de vereniging van wat ze weten.
-  static const providers = ['Alles', 'Discogs', 'MusicBrainz', 'Deezer'];
+  ///
+  /// **TheAudioDB erbij op 04-10-2026**, op vraag van Saber: *"waar is the audiodb eigenlijk ?? ik wil
+  /// daar ook alles kunnen selecteren"*. Vóór Deezer: TheAudioDB kent ook geen persingen, maar wel
+  /// hoezen tot 2160×2160 — scherper dan wat Deezer of Discogs hier leveren.
+  static const providers = ['Alles', 'Discogs', 'MusicBrainz', 'TheAudioDB', 'Deezer'];
 
   /// [track] true searches individual tracks (for a single), false searches albums.
   ///
@@ -133,6 +146,7 @@ class MetadataSearch {
             ChoiceTrack(t.position, t.title, t.seconds, artist: t.artists.join(', ')),
       ];
     }
+    if (m.audioDbId != null) return _audiodb.nummers(m.audioDbId!);
     if (m.mbid != null) {
       final mb = MusicBrainzService();
       final r = await mb.release(m.mbid!);
@@ -165,22 +179,28 @@ class MetadataSearch {
       }
 
       final alles = await Future.wait(
-          [veilig('Discogs'), veilig('MusicBrainz'), veilig('Deezer')]);
+          [veilig('Discogs'), veilig('MusicBrainz'), veilig('TheAudioDB'), veilig('Deezer')]);
       // Discogs voorop, want dat is de bron die PERSINGEN kent — cd's, catalogusnummers, landen —
       // en dat is waar in dit venster op gekozen wordt. De andere twee vullen aan wat Discogs niet
       // heeft; dubbele persingen vallen weg in [_merged].
-      return _merged(alles[0], [...alles[1], ...alles[2]]);
+      // TheAudioDB vóór Deezer: zelfde soort regel (een album, geen persing), maar met de scherpere hoes.
+      return _merged(alles[0], [...alles[1], ...alles[2], ...alles[3]]);
     }
     if (query.trim().isEmpty && album.trim().isEmpty) return [];
     final direct = switch (provider) {
       'Discogs' => await _discogs(query, artist: artist, album: album),
       'MusicBrainz' => await _musicbrainz(query, artist: artist, album: album),
+      // Een eigen arm. Zonder viel elke nieuwe bron stil in de Deezer-arm hieronder.
+      'TheAudioDB' => await _audioDb(query, artist: artist, album: album),
       _ => await _deezer(query, track),
     };
     if (track) return direct;
     final viaTrack = switch (provider) {
       'Discogs' => await _discogsByTrack(query),
       'MusicBrainz' => await _musicbrainzByTrack(query),
+      // Zoeken op een liedje kan bij TheAudioDB alleen met de artiest erbij, en de gratis sleutel geeft
+      // er één — dat voegt hier niets toe aan de albumtreffers.
+      'TheAudioDB' => const <MetaResult>[],
       _ => await _deezerByTrack(query),
     };
     return _merged(direct, viaTrack);
@@ -194,11 +214,49 @@ class MetadataSearch {
     final out = <MetaResult>[];
     final seen = <String>{};
     for (final m in [...first, ...then]) {
-      final key = m.mbid ?? (m.releaseId?.toString() ?? '${m.artist}|${m.album}'.toLowerCase());
+      final key = m.mbid ??
+          m.releaseId?.toString() ??
+          (m.audioDbId != null ? 'adb:${m.audioDbId}' : '${m.artist}|${m.album}'.toLowerCase());
       if (seen.add(key)) out.add(m);
     }
     return out;
   }
+
+  /// TheAudioDB vraagt artiest én album, los. Staan die bovenaan het venster, dan zijn ze er; bij een
+  /// single is het album leeg en is de zoekregel "Artiest Titel".
+  Future<List<MetaResult>> _audioDb(String query, {String artist = '', String album = ''}) async {
+    var wie = artist.trim();
+    var wat = album.trim();
+    final q = query.trim();
+    if (wie.isEmpty) {
+      final streep = q.indexOf(' - ');
+      if (streep > 0) {
+        wie = q.substring(0, streep).trim();
+        wat = wat.isEmpty ? q.substring(streep + 3).trim() : wat;
+      }
+    }
+    if (wat.isEmpty) {
+      wat = wie.isNotEmpty && q.toLowerCase().startsWith(wie.toLowerCase()) ? q.substring(wie.length).trim() : q;
+    }
+    final albums = await _audiodb.zoek(wie, wat);
+    return [for (final a in albums) audioDbRegel(a)];
+  }
+
+  /// Een TheAudioDB-album als regel. De bron staat vooraan op de regel, want TheAudioDB levert geen
+  /// persing en zo zie je waarom deze regel geen land of catalogusnummer heeft.
+  static MetaResult audioDbRegel(AudioDbAlbum a) => MetaResult(
+        title: a.titel,
+        artist: a.artiest,
+        album: a.titel,
+        coverUrl: a.besteHoes == null ? null : AudioDbAlbum.klein(a.besteHoes!),
+        coverFullUrl: a.besteHoes,
+        audioDbId: a.id,
+        detail: [
+          'TheAudioDB',
+          if (a.regel.isNotEmpty) a.regel,
+          if (a.hoesHQ != null) 'HQ-hoes',
+        ].join(' · '),
+      );
 
   Future<List<MetaResult>> _deezer(String query, bool track) async {
     final path = track ? 'search' : 'search/album';

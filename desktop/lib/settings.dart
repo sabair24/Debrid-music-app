@@ -32,6 +32,10 @@ class AppSettings extends ChangeNotifier {
   /// no catalogue can name by title — the compilations. Everything else fingerprinting does happens
   /// on this machine and needs no key at all.
   String acoustidKey = '';
+
+  /// Je eigen (premium) sleutel van TheAudioDB, van je profiel op theaudiodb.com. Leeg = de gratis
+  /// sleutel: hoezen en scans komen dan wél, de volle tracklijst niet — zie `audiodb.dart`.
+  String audiodbKey = '';
   String soulseekUser = '';
   String soulseekPass = '';
   /// Port we LISTEN on for incoming Soulseek peers. Soulseek only delivers a firewalled peer's
@@ -253,7 +257,7 @@ class AppSettings extends ChangeNotifier {
 
   /// How many credentials are actually filled in. The measure of "worth keeping".
   static int _filled(Map<String, dynamic> m) => [
-        'discogs_token', 'torbox_token', 'lastfm_key', 'anthropic_key', 'acoustid_key',
+        'discogs_token', 'torbox_token', 'lastfm_key', 'anthropic_key', 'acoustid_key', 'audiodb_key',
         'soulseek_user', 'soulseek_pass',
         'rutracker_user', 'rutracker_pass', 'tidal_client_id', 'tidal_client_secret',
         'tidal_refresh_token', 'lan_token', 'music_root',
@@ -304,6 +308,7 @@ class AppSettings extends ChangeNotifier {
         anthropicKey = (m['anthropic_key'] ?? '') as String;
         anthropicWorkspace = (m['anthropic_workspace'] ?? '') as String;
         acoustidKey = (m['acoustid_key'] ?? '') as String;
+        audiodbKey = (m['audiodb_key'] ?? '') as String;
         soulseekUser = (m['soulseek_user'] ?? '') as String;
         soulseekPass = (m['soulseek_pass'] ?? '') as String;
         soulseekPort = (m['soulseek_port'] ?? 0) as int;
@@ -345,6 +350,7 @@ class AppSettings extends ChangeNotifier {
         'anthropic_key': anthropicKey,
         'anthropic_workspace': anthropicWorkspace,
         'acoustid_key': acoustidKey,
+        'audiodb_key': audiodbKey,
         'soulseek_user': soulseekUser,
         'soulseek_pass': soulseekPass,
         'soulseek_port': soulseekPort,
