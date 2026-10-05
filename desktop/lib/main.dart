@@ -12566,7 +12566,27 @@ class HomeStartView extends StatefulWidget {
 /// Bewust alleen de opgehaalde lijsten en niet de hele widgetboom. Dat laatste (een IndexedStack)
 /// houdt verborgen schermen in de boom, en dan blijven ze meeluisteren en hertekenen — precies wat
 /// er net uitgehaald is.
+/// [albums] in een vaste willekeurige volgorde: dezelfde zolang [zaad] en de verzameling dezelfde
+/// zijn, ongeacht in welke volgorde ze binnenkomen.
+///
+/// **Waarom vast.** Start schudde "Jouw jaren …" en "Lang niet gedraaid" bij ELKE bouw, en Start
+/// bouwt bij elke melding van de bibliotheek — een hoes die binnenkomt, een verrijking die vordert.
+/// De rijen sprongen dus door elkaar terwijl je ernaar keek (gevonden op 05-10-2026, bij "de app moet
+/// snel navigeren"). Eerst op een vaste sleutel sorteren en dan met [zaad] schudden geeft voor
+/// dezelfde platen dezelfde volgorde; [_StartCache.zaad] verandert alleen bij Ververs.
+List<Album> vastGeschud(Iterable<Album> albums, int zaad) {
+  String sleutel(Album a) =>
+      '${a.artist}\u0000${a.title}\u0000${a.tracks.isEmpty ? '' : a.tracks.first.path}';
+  final metSleutel = [for (final a in albums) (sleutel(a), a)]..sort((x, y) => x.$1.compareTo(y.$1));
+  return [for (final (_, a) in metSleutel) a]..shuffle(math.Random(zaad));
+}
+
 class _StartCache {
+  /// Waarmee de eigen rijen geschud worden: elke start anders, en bij elke Ververs ook — zie
+  /// [vastGeschud].
+  static final int _basis = math.Random().nextInt(1 << 30);
+  static int get zaad => _basis + ronde;
+
   static List<CatalogAlbumHit> charts = [];
   static List<CatalogAlbumHit> releases = [];
   static List<RecTrack> forYou = [];
@@ -12914,10 +12934,9 @@ class _HomeStartViewState extends State<HomeStartView> {
     final decennium = zwaartepuntDecennium([for (final a in lib.albums) a.year]);
     final uitDecennium = decennium == null
         ? const <Album>[]
-        : (lib.albums
-            .where((a) => a.year != null && a.year! >= decennium && a.year! < decennium + 10)
-            .toList()
-          ..shuffle());
+        : vastGeschud(
+            lib.albums.where((a) => a.year != null && a.year! >= decennium && a.year! < decennium + 10),
+            _StartCache.zaad);
 
     // Lang niet gedraaid: albums waarvan geen enkel nummer de laatste honderdtachtig dagen is
     // gespeeld. Gemeten in deze bibliotheek: 510 afspeelbeurten over 1239 nummers, 0 favorieten en
@@ -12925,7 +12944,7 @@ class _HomeStartViewState extends State<HomeStartView> {
     // daarom is dit een rij en geen voetnoot.
     final grens = DateTime.now().millisecondsSinceEpoch - const Duration(days: 180).inMilliseconds;
     final standen = context.read<Speelstanden>();
-    final vergeten = [
+    final vergeten = vastGeschud([
       for (final a in lib.albums)
         if (a.tracks.isNotEmpty &&
             a.tracks.every((t) {
@@ -12933,7 +12952,7 @@ class _HomeStartViewState extends State<HomeStartView> {
               return s == null || s.laatstMs < grens;
             }))
           a,
-    ]..shuffle();
+    ], _StartCache.zaad);
     final anyLoading = _chartsLoading || _seedsLoading || (!_seedsRequested && lib.scanning);
     // De balk heet NIEUWE RELEASE, dus staat er alleen iets van dit jaar in. Hij toonde albums uit 2011
     // en 2016 omdat er nergens op jaar gefilterd werd: het nieuwste dat er van een artiest te vinden is,
